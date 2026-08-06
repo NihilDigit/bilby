@@ -63,6 +63,26 @@ class AgentLoopTest {
         assertEquals(5, events.filterIsInstance<AgentEvent.Answer>().single().items.size)
     }
 
+    @Test
+    fun `交卷后的对话记录里每个 tool_call 都有对应的 tool 响应`() = runTest {
+        // 协议要求带 tool_calls 的 assistant 消息后面必须跟上对每个 tool_call_id 的响应。
+        // 缺了在单轮时看不出来,下一轮把这段历史发回去就是 400。
+        val answers = FakeStreamer { messages ->
+            if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")
+            else toolCall("submit_answer", """{"items":[{"bvid":"BV1","reason":"r"}]}""")
+        }
+        var transcript: List<ChatMessage> = emptyList()
+        AgentLoop(answers, ToolRegistry(listOf(FakeTool("search_videos", setOf("BV1")))), json)
+            .run(AgentIntent.Query("随便"), onTurnComplete = { messages, _, _ -> transcript = messages })
+            .toList()
+
+        val pendingCallIds = transcript
+            .flatMap { it.toolCalls.orEmpty() }
+            .map { it.id }
+            .toSet() - transcript.mapNotNull { it.toolCallId }.toSet()
+        assertEquals(emptySet<String>(), pendingCallIds)
+    }
+
     private fun toolCall(name: String, arguments: String): List<LlmDelta> = listOf(
         LlmDelta.ToolCalls(listOf(ToolCall(id = name, function = FunctionCall(name, arguments)))),
         LlmDelta.Done("tool_calls"),

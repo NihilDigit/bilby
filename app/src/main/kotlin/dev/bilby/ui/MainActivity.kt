@@ -25,7 +25,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -39,6 +41,7 @@ import dev.bilby.BilbyApplication
 import dev.bilby.BiliLog
 import dev.bilby.agent.AgentIntent
 import dev.bilby.api.BiliResult
+import kotlinx.coroutines.launch
 import dev.bilby.ui.agent.AgentTraceScreen
 import dev.bilby.ui.agent.AgentViewModel
 import dev.bilby.ui.comment.CommentViewModel
@@ -53,6 +56,7 @@ import dev.bilby.ui.space.SpaceViewModel
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.toview.ToViewScreen
 import dev.bilby.ui.toview.ToViewViewModel
+import dev.bilby.player.AudioPlaybackService
 import dev.bilby.ui.video.VideoScreen
 import dev.bilby.ui.video.VideoViewModel
 
@@ -319,15 +323,19 @@ private fun VideoRoute(
                     container.videoActionRepository,
                     container.settings,
                     container.sponsorBlockRepository,
+                    container.queueSourceRepository,
                 )
             }
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
     val related by vm.related.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val relation by vm.relation.collectAsStateWithLifecycle()
     val favFolders by vm.favFolders.collectAsStateWithLifecycle()
     val sponsorSegments by vm.sponsorSegments.collectAsStateWithLifecycle()
+    val queue by vm.queue.collectAsStateWithLifecycle()
 
     // 评论用 aid 作 oid,要等视频详情回来才知道;拿到之前先不建 ViewModel。
     val aid = state.detail?.aid ?: return
@@ -349,6 +357,21 @@ private fun VideoRoute(
         },
         onQualityChange = vm::setQuality,
         onFindRelated = vm::findRelated,
+        queue = queue,
+        // 点队列里的一条 = 切到那个视频。这是确定性导航,不是推荐。
+        onPlayQueueItem = onOpenVideo,
+        onToggleShuffle = vm::toggleShuffle,
+        // 听视频:先按合集找队列,不属于合集才退到 UP 投稿(DESIGN 2.4b)。
+        // 听视频播的就是页面上这份队列,不重新构造(DESIGN 2.4b:队列不是听视频的特产)。
+        onListen = {
+            val items = queue.items
+            val startIndex = items.indexOfFirst { it.bvid == queue.currentBvid }.coerceAtLeast(0)
+            if (items.isEmpty()) {
+                BiliLog.w("听视频:队列为空,无法开始")
+            } else {
+                AudioPlaybackService.start(context, items, startIndex, queue.shuffled)
+            }
+        },
         onUpClick = onUpClick,
         relation = relation,
         favFolders = favFolders,

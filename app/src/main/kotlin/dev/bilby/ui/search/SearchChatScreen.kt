@@ -87,6 +87,8 @@ sealed interface TurnResult {
     data class Agent(
         val steps: List<AgentStep>,
         val answer: List<AnswerItem>,
+        /** 助理的正文回答。用户问的是问题而不是"给我视频"时,答案在这里。 */
+        val summary: String? = null,
         val running: Boolean = false,
         val error: String? = null,
     ) : TurnResult
@@ -412,8 +414,9 @@ private fun VideoRow(item: SearchVideo, onClick: () -> Unit, modifier: Modifier 
 private fun AgentTurnResult(result: TurnResult.Agent, onVideoClick: (String) -> Unit, onRetry: () -> Unit) {
     // 答案出来前展开过程,答案一出现就自动折叠——但用户随时能点回来看(DESIGN 3.4)。
     var processExpanded by remember { mutableStateOf(true) }
-    LaunchedEffect(result.answer.isNotEmpty()) {
-        if (result.answer.isNotEmpty()) processExpanded = false
+    val hasAnswer = result.answer.isNotEmpty() || result.summary != null
+    LaunchedEffect(hasAnswer) {
+        if (hasAnswer) processExpanded = false
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -426,6 +429,14 @@ private fun AgentTurnResult(result: TurnResult.Agent, onVideoClick: (String) -> 
             if (processExpanded) {
                 result.steps.forEach { step -> StepRow(step = step, onVideoClick = onVideoClick) }
             }
+        }
+
+        result.summary?.let { summary ->
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            )
         }
 
         if (result.answer.isNotEmpty()) {
@@ -596,8 +607,8 @@ private fun AnswerCard(item: AnswerItem, onClick: () -> Unit, modifier: Modifier
                 text = item.reason,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
+                // 不截断:字数在 submit_answer 的 schema 里已经限死 60 字,截断只会
+                // 让本来就短的介绍缺一半。
             )
         }
     }

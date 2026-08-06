@@ -71,7 +71,6 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.compose.PlayerSurface
 import dev.bilby.data.QualityOption
 import kotlinx.coroutines.delay
@@ -89,11 +88,20 @@ private const val PROGRESS_SAVE_INTERVAL_MILLIS = 5_000L
  * 靠 [isFullscreen] 切换布局与控件密度。
  *
  * 这里**不做**任何"下一个视频"的自动跳转(DESIGN 1.3/2.3),全屏下也不做。
+ *
+ * 播放器不归这里所有(DESIGN 2.4b:播放器归后台服务),所以这个 composable 只读状态、发命令,
+ * 不 prepare、不 release。
+ *
+ * @param player 状态与控制的唯一入口,实际传进来的是连到播放服务的 MediaController。
+ * @param surfacePlayer 只用来渲染画面。**MediaController 渲染不了画面**:Media3 不给它
+ *   COMMAND_SET_VIDEO_SURFACE(Surface 是本地对象,递不到 session 那一侧),所以画面必须接
+ *   在真的 ExoPlayer 上。两个参数指向的是同一份播放状态,不会打架。
  */
 @OptIn(UnstableApi::class)
 @Composable
 fun BilbyPlayer(
-    player: ExoPlayer,
+    player: Player,
+    surfacePlayer: Player?,
     qualities: List<QualityOption>,
     currentQuality: Int,
     onQualityChange: (Int) -> Unit,
@@ -111,19 +119,27 @@ fun BilbyPlayer(
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
-            override fun onVideoSizeChanged(videoSize: VideoSize) {
-                val height = videoSize.height
-                if (height > 0 && videoSize.width > 0) {
-                    videoAspect = videoSize.width * videoSize.pixelWidthHeightRatio / height
-                }
-            }
-
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
             }
         }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
+    }
+
+    // 画面尺寸问渲染画面的那个播放器,不问 controller:controller 那边的 videoSize 要等 session
+    // 同步,慢半拍就是画面先按 16:9 铺开再跳一下。
+    DisposableEffect(surfacePlayer) {
+        val listener = object : Player.Listener {
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                videoAspect = videoSize.aspectOr(videoAspect)
+            }
+        }
+        // 接上来时流可能已经在播了(页面重建、或从听视频切回来),那一次 onVideoSizeChanged
+        // 早就发过,只监听会一直停在默认的 16:9。
+        surfacePlayer?.let { videoAspect = it.videoSize.aspectOr(videoAspect) }
+        surfacePlayer?.addListener(listener)
+        onDispose { surfacePlayer?.removeListener(listener) }
     }
 
     var position by remember { mutableLongStateOf(0L) }
@@ -170,10 +186,12 @@ fun BilbyPlayer(
     val displayPosition = dragPosition ?: position
 
     Box(modifier = modifier.background(Color.Black)) {
-        PlayerSurface(
-            player = player,
-            modifier = Modifier.align(Alignment.Center).aspectRatio(videoAspect),
-        )
+        if (surfacePlayer != null) {
+            PlayerSurface(
+                player = surfacePlayer,
+                modifier = Modifier.align(Alignment.Center).aspectRatio(videoAspect),
+            )
+        }
 
         Box(
             modifier = Modifier.fillMaxSize().pointerInput(player) {
@@ -537,6 +555,10 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     is ContextWrapper -> baseContext.findActivity()
     else -> null
 }
+
+/** 尺寸未知时(还没解码出第一帧)返回 [fallback],别把画面压成 0 宽。 */
+private fun VideoSize.aspectOr(fallback: Float): Float =
+    if (width > 0 && height > 0) width * pixelWidthHeightRatio / height else fallback
 
 private fun formatSpeed(speed: Float): String =
     if (speed == speed.toInt().toFloat()) "${speed.toInt()}x" else "${speed}x"

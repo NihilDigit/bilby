@@ -8,6 +8,7 @@ import dev.bilby.agent.AgentIntent
 import dev.bilby.agent.AgentLoop
 import dev.bilby.api.BiliResult
 import dev.bilby.data.SettingsStore
+import dev.bilby.data.QueueSourceRepository
 import dev.bilby.data.SponsorBlockRepository
 import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.flow.first
@@ -46,7 +47,37 @@ class VideoViewModel(
     private val actionRepository: VideoActionRepository,
     private val settings: SettingsStore,
     private val sponsorBlockRepository: SponsorBlockRepository,
+    private val queueSourceRepository: QueueSourceRepository,
 ) : ViewModel() {
+
+    /**
+     * 播放队列。它占的是官方相关推荐的位置,但装的是确定性的有限集合:当前合集,
+     * 没有合集就退到该 UP 的投稿(DESIGN 2.4b)。听视频播的就是这一份,不另建。
+     */
+    private val _queue = MutableStateFlow(QueueUiState(loading = true))
+    val queue: StateFlow<QueueUiState> = _queue.asStateFlow()
+
+    fun toggleShuffle() {
+        val next = !_queue.value.shuffled
+        _queue.update { it.copy(shuffled = next) }
+        viewModelScope.launch {
+            val prefs = settings.playbackPrefs.first()
+            settings.savePlaybackPrefs(prefs.copy(shuffled = next))
+        }
+    }
+
+    private fun loadQueue(detail: VideoDetail) = viewModelScope.launch {
+        val shuffled = settings.playbackPrefs.first().shuffled
+        val built = queueSourceRepository.fromSeason(detail.bvid)
+            ?: queueSourceRepository.fromUpSpace(detail.up.mid, detail.bvid)
+        _queue.value = QueueUiState(
+            items = built?.items.orEmpty(),
+            currentBvid = detail.bvid,
+            sourceLabel = built?.sourceLabel.orEmpty(),
+            shuffled = shuffled,
+            loading = false,
+        )
+    }
 
     /** 赞助/片头片尾片段,默认开启自动跳过。拉取失败就是空列表,不影响播放。 */
     private val _sponsorSegments = MutableStateFlow<List<SponsorSegment>>(emptyList())
@@ -85,7 +116,7 @@ class VideoViewModel(
                         is AgentEvent.Thinking -> current
                         is AgentEvent.ToolStarted -> current.copy(steps = current.steps + event.label)
                         is AgentEvent.ToolFinished -> current
-                        is AgentEvent.Answer -> current.copy(answer = event.items, running = false)
+                        is AgentEvent.Answer -> current.copy(answer = event.items, summary = event.summary, running = false)
                         is AgentEvent.Failed -> current.copy(error = event.message, running = false)
                     }
                 }
@@ -123,6 +154,7 @@ class VideoViewModel(
         when (val detail = repository.getVideoDetail(bvid)) {
             is BiliResult.Ok -> {
                 _state.update { it.copy(detail = detail.value) }
+                loadQueue(detail.value)
                 when (val rel = actionRepository.getRelation(bvid)) {
                     is BiliResult.Ok -> _relation.value = rel.value
                     is BiliResult.ApiError -> BiliLog.w("查互动状态失败(${rel.code}): ${rel.message}")

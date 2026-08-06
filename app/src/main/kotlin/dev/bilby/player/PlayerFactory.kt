@@ -22,6 +22,10 @@ import dev.bilby.api.BiliConstants
 @UnstableApi
 object PlayerFactory {
 
+    /**
+     * **只有 [AudioPlaybackService] 该调它**。全 app 一个播放器(DESIGN 2.4b),UI 要播放器就
+     * 连 MediaController;再调一次这里就又有了两个会同时发声的播放器。
+     */
     fun createPlayer(context: Context): ExoPlayer = ExoPlayer.Builder(context).build()
 
     fun createMediaSource(videoUrl: String, audioUrl: String?): MediaSource {

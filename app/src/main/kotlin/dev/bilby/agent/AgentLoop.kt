@@ -1,12 +1,16 @@
 package dev.bilby.agent
 
 import dev.bilby.BiliLog
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -37,12 +41,19 @@ class AgentLoop(
         intent: AgentIntent,
         history: List<ChatMessage> = emptyList(),
         priorBvids: Set<String> = emptySet(),
-        // 本轮新产生的消息与累积的 bvid 集合,交给调用方落库。不做成事件是因为它属于
-        // 持久化关注点,混进 UI 事件流里每个消费方都要处理一个自己用不上的分支。
-        onTurnComplete: (newMessages: List<ChatMessage>, seenBvids: Set<String>) -> Unit = { _, _ -> },
+        // 上一轮工具返回过的视频展示信息(标题/封面/UP)。同样要跨轮累积:追问上一轮的
+        // 视频时若查不到展示信息,卡片就只剩一个裸 bvid。
+        priorTraces: Map<String, TraceItem> = emptyMap(),
+        // 本轮新产生的消息与累积的状态,交给调用方落库。不做成事件是因为它属于持久化
+        // 关注点,混进 UI 事件流里每个消费方都要处理一个自己用不上的分支。
+        onTurnComplete: (
+            newMessages: List<ChatMessage>,
+            seenBvids: Set<String>,
+            traces: Map<String, TraceItem>,
+        ) -> Unit = { _, _, _ -> },
     ): Flow<AgentEvent> = flow {
         val seenBvids = priorBvids.toMutableSet()
-        val traceByBvid = mutableMapOf<String, TraceItem>()
+        val traceByBvid = priorTraces.toMutableMap()
         val turnStart = if (history.isEmpty()) {
             listOf(ChatMessage(role = ChatMessage.ROLE_SYSTEM, content = SYSTEM_PROMPT))
         } else {
@@ -86,45 +97,68 @@ class AgentLoop(
 
             val answerCall = calls.firstOrNull { it.function.name == SUBMIT_ANSWER }
             if (answerCall != null) {
+                // 协议要求:带 tool_calls 的 assistant 消息后面必须跟上对**每个** tool_call_id
+                // 的 tool 消息。交卷时直接 return 会在历史里留下一段残缺对话,单轮看不出来,
+                // 下一轮把它发回去就是 400。同批次里没执行的其他调用也要一并回。
+                messages += calls.map { call ->
+                    ChatMessage(
+                        role = ChatMessage.ROLE_TOOL,
+                        toolCallId = call.id,
+                        name = call.function.name,
+                        content = if (call.id == answerCall.id) "已记录" else "本轮已交卷,该调用未执行",
+                    )
+                }
                 emit(finalAnswer(answerCall, seenBvids, traceByBvid))
                 return@flow
             }
             if (lastStep) {
                 // 到限还在检索就是不交卷。继续放行等于步数上限不存在。
+                messages += calls.map { call ->
+                    ChatMessage(
+                        role = ChatMessage.ROLE_TOOL,
+                        toolCallId = call.id,
+                        name = call.function.name,
+                        content = "已达检索上限,未执行",
+                    )
+                }
                 emit(AgentEvent.Failed("助理到达检索上限仍未给出结果"))
                 return@flow
             }
 
-            for (call in calls) {
+            // 模型一轮可以要求多个工具(读三个视频的热评就是三个调用)。串行执行等于把
+            // 三次网络往返排队,是等待时间的主要来源;并发跑,结果按原顺序回填。
+            val prepared = calls.map { call ->
                 val tool = tools[call.function.name]
-                if (tool == null) {
-                    messages += ChatMessage(
-                        role = ChatMessage.ROLE_TOOL,
-                        toolCallId = call.id,
-                        name = call.function.name,
-                        content = "没有这个工具",
-                    )
-                    continue
-                }
-
                 val arguments = runCatching { json.parseToJsonElement(call.function.arguments).jsonObject }
                     .getOrElse { buildJsonObject { } }
+                Triple(call, tool, arguments)
+            }
+            prepared.forEach { (_, tool, arguments) ->
+                if (tool != null) emit(AgentEvent.ToolStarted(tool.label(arguments)))
+            }
 
-                emit(AgentEvent.ToolStarted(tool.label(arguments)))
-                val result = runCatching { tool.execute(arguments) }
-                    .getOrElse {
-                        BiliLog.w("工具 ${tool.name} 执行失败", it)
-                        ToolResult(forModel = "工具执行失败: ${it.message}")
+            val results = coroutineScope {
+                prepared.map { (_, tool, arguments) ->
+                    async {
+                        if (tool == null) ToolResult(forModel = "没有这个工具")
+                        else runCatching { tool.execute(arguments) }.getOrElse {
+                            BiliLog.w("工具 ${tool.name} 执行失败", it)
+                            ToolResult(forModel = "工具执行失败: ${it.message}")
+                        }
                     }
+                }.awaitAll()
+            }
 
+            prepared.forEachIndexed { index, (call, tool, arguments) ->
+                val result = results[index]
                 seenBvids += result.bvids
                 result.forUi.forEach { traceByBvid[it.bvid] = it }
-                emit(AgentEvent.ToolFinished(tool.label(arguments), result.forUi))
+                if (tool != null) emit(AgentEvent.ToolFinished(tool.label(arguments), result.forUi))
 
                 messages += ChatMessage(
                     role = ChatMessage.ROLE_TOOL,
                     toolCallId = call.id,
-                    name = tool.name,
+                    name = call.function.name,
                     content = result.forModel,
                 )
             }
@@ -132,8 +166,36 @@ class AgentLoop(
         }
         } finally {
             // 无论正常交卷、失败还是被取消,本轮已经发生的对话都要落库:下一轮追问要接着它。
-            onTurnComplete(messages.drop(newFrom), seenBvids)
+            // 落库前补齐缺失的 tool 响应 —— 中途被取消时工具还没跑完,留下的残缺对话
+            // 会让下一轮请求被服务端拒掉(400 insufficient tool messages)。
+            onTurnComplete(repairToolResponses(messages.drop(newFrom)), seenBvids, traceByBvid)
         }
+    }
+
+    /**
+     * 保证每个带 tool_calls 的 assistant 消息后面都跟着对应的 tool 响应。缺的补一条占位,
+     * 内容如实写明"未执行" —— 编一个假的工具结果会让模型下一轮基于不存在的数据推理。
+     */
+    private fun repairToolResponses(messages: List<ChatMessage>): List<ChatMessage> {
+        val repaired = mutableListOf<ChatMessage>()
+        for ((index, message) in messages.withIndex()) {
+            repaired += message
+            val calls = message.toolCalls ?: continue
+
+            val answered = messages.drop(index + 1)
+                .takeWhile { it.role == ChatMessage.ROLE_TOOL }
+                .mapNotNull { it.toolCallId }
+                .toSet()
+            repaired += calls.filter { it.id !in answered }.map { call ->
+                ChatMessage(
+                    role = ChatMessage.ROLE_TOOL,
+                    toolCallId = call.id,
+                    name = call.function.name,
+                    content = "未执行(本轮被中断)",
+                )
+            }
+        }
+        return repaired
     }
 
     private fun finalAnswer(
@@ -141,8 +203,16 @@ class AgentLoop(
         seenBvids: Set<String>,
         traceByBvid: Map<String, TraceItem>,
     ): AgentEvent {
+        val arguments = runCatching { json.parseToJsonElement(call.function.arguments).jsonObject }
+            .getOrElse {
+                BiliLog.w("submit_answer 参数解析失败", it)
+                return AgentEvent.Failed("助理交回的结果无法解析")
+            }
+
+        val summary = arguments["summary"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+
         val parsed = runCatching {
-            json.parseToJsonElement(call.function.arguments).jsonObject["items"]!!.jsonArray.map { element ->
+            arguments["items"]?.jsonArray.orEmpty().map { element ->
                 val obj = element.jsonObject
                 AnswerItem(
                     bvid = obj["bvid"]!!.jsonPrimitive.content,
@@ -151,8 +221,8 @@ class AgentLoop(
                 )
             }
         }.getOrElse {
-            BiliLog.w("submit_answer 参数解析失败", it)
-            return AgentEvent.Failed("助理交回的结果无法解析")
+            BiliLog.w("submit_answer 的 items 解析失败", it)
+            emptyList()
         }
 
         // 规矩 2:不在本轮工具返回过的 bvid 一律丢弃。
@@ -161,10 +231,11 @@ class AgentLoop(
             .distinctBy { it.bvid }
             .map { it.copy(trace = traceByBvid[it.bvid]) }
 
-        if (verified.isEmpty()) return AgentEvent.Failed("没有找到确实相关的结果")
+        // 纯文本回答是合法的:用户问"这几个评价如何"时,答案本来就不是一串视频。
+        if (verified.isEmpty() && summary == null) return AgentEvent.Failed("没有找到确实相关的结果")
 
         // 规矩 3:条数由代码定,模型只负责排序。
-        return AgentEvent.Answer(verified.take(MAX_RESULTS))
+        return AgentEvent.Answer(summary, verified.take(MAX_RESULTS))
     }
 
     private fun AgentIntent.toPrompt(): String = when (this) {
@@ -192,6 +263,10 @@ class AgentLoop(
 {
   "type": "object",
   "properties": {
+    "summary": {
+      "type": "string",
+      "description": "面向用户的回答正文。用户问的是问题(如「这几个评价怎么样」)时,答案写在这里,items 可以为空;用户要的是找视频时,这里可以留空或写一句总览。"
+    },
     "items": {
       "type": "array",
       "items": {
@@ -200,7 +275,7 @@ class AgentLoop(
           "bvid": { "type": "string" },
           "reason": {
             "type": "string",
-            "description": "面向用户的一两句介绍:这个视频讲什么、有什么值得看的地方。写内容本身,不要写你是怎么找到它的,也不要出现「同一UP主」「同属该系列」「与你在看的相关」这类检索理由。"
+            "description": "面向用户的一两句介绍(**不超过 60 字**):这个视频讲什么、有什么值得看的地方。写内容本身,不要写你是怎么找到它的,也不要出现「同一UP主」「同属该系列」这类检索理由。更长的说明写进 summary。"
           }
         },
         "required": ["bvid"]

@@ -6,6 +6,7 @@ import dev.bilby.agent.AgentEvent
 import dev.bilby.agent.AgentIntent
 import dev.bilby.agent.AgentLoop
 import dev.bilby.agent.ChatMessage
+import dev.bilby.agent.TraceItem
 import dev.bilby.data.AgentSessionRepository
 import dev.bilby.api.BiliResult
 import dev.bilby.data.SearchRepository
@@ -41,12 +42,14 @@ class SearchChatViewModel(
     private var sessionId: Long? = null
     private var history: List<ChatMessage> = emptyList()
     private var seenBvids: Set<String> = emptySet()
+    private var traces: Map<String, TraceItem> = emptyMap()
 
     /** 开新会话:清空上下文。旧会话留在库里,这一版不做会话列表。 */
     fun newSession() {
         sessionId = null
         history = emptyList()
         seenBvids = emptySet()
+        traces = emptyMap()
         _state.value = SearchChatUiState(mode = _state.value.mode)
     }
 
@@ -132,9 +135,11 @@ class SearchChatViewModel(
             intent = AgentIntent.Query(query),
             history = history,
             priorBvids = seenBvids,
-            onTurnComplete = { newMessages, seen ->
+            priorTraces = traces,
+            onTurnComplete = { newMessages, seen, newTraces ->
                 history = history + newMessages
                 seenBvids = seen
+                traces = newTraces
                 // 落库不能阻塞 UI 线程上的收流,单独起一个协程。
                 viewModelScope.launch { sessions.appendMessages(id, newMessages) }
             },
@@ -162,7 +167,7 @@ class SearchChatViewModel(
             },
         )
 
-        is AgentEvent.Answer -> copy(answer = event.items, running = false)
+        is AgentEvent.Answer -> copy(answer = event.items, summary = event.summary, running = false)
         is AgentEvent.Failed -> copy(error = event.message, running = false)
     }
 

@@ -9,7 +9,12 @@ sealed interface AgentEvent {
     /** 中间结果可点:助理翻到一半用户看中了可以直接点走(DESIGN 3.4)。 */
     data class ToolFinished(val label: String, val items: List<TraceItem>) : AgentEvent
 
-    data class Answer(val items: List<AnswerItem>) : AgentEvent
+    /**
+     * @param summary 面向用户的正文。用户问的是问题("这几个评价如何")时,答案就该是一段话;
+     *   强迫它套进视频卡片只会得到一张标题是裸 bvid 的卡。
+     * @param items 推荐的视频,可以为空(纯文本回答)。
+     */
+    data class Answer(val summary: String?, val items: List<AnswerItem>) : AgentEvent
 
     data class Failed(val message: String) : AgentEvent
 }

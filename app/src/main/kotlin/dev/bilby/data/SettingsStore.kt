@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dev.bilby.BuildConfig
@@ -38,6 +39,21 @@ class SettingsStore(context: Context) {
             p[KEY_DEDE_USER_ID] = value.dedeUserId
             p[KEY_DEDE_CK_MD5] = value.dedeUserIdCkMd5
             p[KEY_REFRESH_TOKEN] = value.refreshToken
+        }
+    }
+
+    /** 播放偏好:连播与随机。是用户偏好,不按队列类型猜(DESIGN 2.4b)。 */
+    val playbackPrefs: Flow<PlaybackPrefs> = store.data.map { p ->
+        PlaybackPrefs(
+            autoNext = p[KEY_AUTO_NEXT] ?: false,
+            shuffled = p[KEY_SHUFFLED] ?: false,
+        )
+    }
+
+    suspend fun savePlaybackPrefs(value: PlaybackPrefs) {
+        store.edit { p ->
+            p[KEY_AUTO_NEXT] = value.autoNext
+            p[KEY_SHUFFLED] = value.shuffled
         }
     }
 
@@ -78,6 +94,9 @@ class SettingsStore(context: Context) {
 
         val KEY_ACCESS_KEY = stringPreferencesKey("access_key")
 
+        val KEY_AUTO_NEXT = booleanPreferencesKey("playback_auto_next")
+        val KEY_SHUFFLED = booleanPreferencesKey("playback_shuffled")
+
         val KEY_LLM_BASE_URL = stringPreferencesKey("llm_base_url")
         val KEY_LLM_API_KEY = stringPreferencesKey("llm_api_key")
         val KEY_LLM_MODEL = stringPreferencesKey("llm_model")
@@ -102,6 +121,8 @@ data class Credentials(
 ) {
     val isLoggedIn: Boolean get() = sessdata.isNotEmpty() && dedeUserId.isNotEmpty()
 }
+
+data class PlaybackPrefs(val autoNext: Boolean = false, val shuffled: Boolean = false)
 
 data class LlmConfig(
     val baseUrl: String,

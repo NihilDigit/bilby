@@ -71,6 +71,7 @@ import dev.bilby.data.FavFolder
 import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoStat
+import dev.bilby.player.QueueItem
 import dev.bilby.ui.comment.CommentSection
 import dev.bilby.ui.comment.CommentUiState
 import kotlinx.coroutines.launch
@@ -80,10 +81,24 @@ private const val REFERER = "https://www.bilibili.com"
 /** 「找相关」的状态。started=false 表示用户还没点过,此时只显示按钮。 */
 data class RelatedState(
     val started: Boolean = false,
+    /** 助理的正文回答(用户问的是问题而不是"给我视频"时)。 */
+    val summary: String? = null,
     val running: Boolean = false,
     val steps: List<String> = emptyList(),
     val answer: List<AnswerItem> = emptyList(),
     val error: String? = null,
+)
+
+/**
+ * 播放队列(DESIGN 2.4b):合集分集或该 UP 的其他投稿,同时也是「听视频」要播的队列本身。
+ * currentBvid 驱动列表里的高亮,shuffled 驱动顺序/随机按钮的文案。
+ */
+data class QueueUiState(
+    val items: List<QueueItem> = emptyList(),
+    val currentBvid: String? = null,
+    val sourceLabel: String = "",
+    val shuffled: Boolean = false,
+    val loading: Boolean = false,
 )
 
 /**
@@ -97,6 +112,10 @@ fun VideoTabs(
     related: RelatedState,
     commentState: CommentUiState,
     onFindRelated: () -> Unit,
+    onListen: () -> Unit,
+    queue: QueueUiState,
+    onPlayQueueItem: (bvid: String) -> Unit,
+    onToggleShuffle: () -> Unit,
     onUpClick: () -> Unit,
     relation: VideoRelation?,
     favFolders: List<FavFolder>,
@@ -139,6 +158,10 @@ fun VideoTabs(
                     related = related,
                     onFindRelated = onFindRelated,
                     onUpClick = onUpClick,
+                    onListen = onListen,
+                    queue = queue,
+                    onPlayQueueItem = onPlayQueueItem,
+                    onToggleShuffle = onToggleShuffle,
                     relation = relation,
                     favFolders = favFolders,
                     onLike = onLike,
@@ -173,6 +196,10 @@ private fun IntroTab(
     currentCid: Long,
     related: RelatedState,
     onFindRelated: () -> Unit,
+    onListen: () -> Unit,
+    queue: QueueUiState,
+    onPlayQueueItem: (bvid: String) -> Unit,
+    onToggleShuffle: () -> Unit,
     onUpClick: () -> Unit,
     relation: VideoRelation?,
     favFolders: List<FavFolder>,
@@ -219,6 +246,9 @@ private fun IntroTab(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    // 听视频:队列来自当前合集,不属于合集时退化为该 UP 的投稿
+                    // (DESIGN 2.4b:有限且用户显式选定的集合)。
+                    TextButton(onClick = onListen) { Text("听视频") }
                 }
 
                 ActionButtonsRow(
@@ -262,16 +292,16 @@ private fun IntroTab(
                     )
                 }
 
-                if (detail.seasonEpisodes.isNotEmpty()) {
-                    PartRow(
-                        title = detail.seasonTitle.ifBlank { "合集" },
-                        // 合集的编号语义是"第几集",不是分 P。
-                        prefix = "",
-                        labels = detail.seasonEpisodes.mapIndexed { i, ep -> i + 1 to ep.title },
-                        isCurrent = { index -> detail.seasonEpisodes[index].bvid == detail.bvid },
-                        onClick = { index -> onPlayEpisode(detail.seasonEpisodes[index].bvid) },
-                    )
-                }
+                // 合集的分集 chip 行不再单独显示:内容已经在下面的播放队列列表里,
+                // 重复一遍没有信息量(合集场景下队列来源就是这个合集,见 QueueSourceRepository.fromSeason)。
+
+                QueueSection(
+                    queue = queue,
+                    onPlayQueueItem = onPlayQueueItem,
+                    onToggleShuffle = onToggleShuffle,
+                    onListen = onListen,
+                    modifier = Modifier.padding(top = 16.dp),
+                )
 
                 RelatedSection(
                     related = related,
@@ -520,6 +550,109 @@ private fun PartRow(
 }
 
 /**
+ * 播放队列:合集分集 / 该 UP 的其他投稿(DESIGN 2.4b)。官方在简介下方放算法召回的相关
+ * 推荐,这里放的是确定性的有限集合——合集本身有限,空间投稿也在数据层被截成前后各 25 条
+ * (见 QueueSourceRepository),不是"从推荐池续接",不违反 1.3 的推荐禁令。
+ *
+ * 这个列表同时就是「听视频」要播的队列本身,点条目直接切歌,不需要另外构造队列。
+ * queue.items 为空且不在加载中时不显示这一块——合集/空间投稿都取不到时没有队列可言。
+ */
+@Composable
+private fun QueueSection(
+    queue: QueueUiState,
+    onPlayQueueItem: (String) -> Unit,
+    onToggleShuffle: () -> Unit,
+    onListen: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (!queue.loading && queue.items.isEmpty()) return
+
+    Column(modifier = modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                queue.sourceLabel,
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onToggleShuffle, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                Text(if (queue.shuffled) "随机" else "顺序")
+            }
+            TextButton(onClick = onListen, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                Text("听视频")
+            }
+        }
+
+        if (queue.loading) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                Text(
+                    "加载队列…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+        } else {
+            // 最多 50 条:数据层已经把队列截到这个量级(合集本身有限、空间投稿前后各 25 条),
+            // 这里的 take 是兜底,不是主要的边界控制。
+            Column(modifier = Modifier.padding(top = 4.dp)) {
+                queue.items.take(50).forEach { item ->
+                    QueueItemRow(
+                        item = item,
+                        current = item.bvid == queue.currentBvid,
+                        onClick = { onPlayQueueItem(item.bvid) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueueItemRow(item: QueueItem, current: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(8.dp),
+        color = if (current) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+    ) {
+        Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(item.coverUrl.toHttpsUrl())
+                    .httpHeaders(NetworkHeaders.Builder().add("Referer", REFERER).build())
+                    .build(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(width = 72.dp, height = 45.dp).clip(RoundedCornerShape(4.dp)),
+            )
+            Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
+                Text(
+                    item.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (current) {
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (item.durationSeconds > 0) {
+                    Text(
+                        formatDuration(item.durationSeconds),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
  * 官方在这个位置放相关推荐,我们放助理的「找相关」(DESIGN 2.3)。三态:
  * 未开始只有按钮和一句说明、检索中逐步展示过程、有结果展示带理由的条目。
  * 不做分页——固定一次性给 3–5 条,过程本身(搜了什么、读了谁的热评)是信任来源。
@@ -676,6 +809,12 @@ private fun formatCount(value: Long): String = when {
     value >= 100_000_000 -> "%.1f亿".format(value / 100_000_000.0)
     value >= 10_000 -> "%.1f万".format(value / 10_000.0)
     else -> value.toString()
+}
+
+private fun formatDuration(seconds: Long): String {
+    val m = seconds / 60
+    val s = seconds % 60
+    return "%d:%02d".format(m, s)
 }
 
 private fun formatDate(epochSeconds: Long): String =

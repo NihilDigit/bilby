@@ -15,6 +15,7 @@ import dev.bilby.data.DynamicRepository
 import dev.bilby.data.FingerprintStore
 import dev.bilby.data.CommentRepository
 import dev.bilby.data.HeartbeatReporter
+import dev.bilby.data.QueueSourceRepository
 import dev.bilby.data.SearchRepository
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SpaceRepository
@@ -104,6 +105,10 @@ class AppContainer(context: Context) {
 
     /** 第三方服务,不走 BiliClient(它带 B 站的 Cookie 与 Referer,发给别人既无必要也不合适)。 */
     val sponsorBlockRepository: SponsorBlockRepository by lazy { SponsorBlockRepository(httpClient, json) }
+
+    val queueSourceRepository: QueueSourceRepository by lazy {
+        QueueSourceRepository(spaceRepository, videoRepository)
+    }
 
     private val llmClient: LlmClient by lazy {
         LlmClient(httpClient, json) { settings.llmConfig.first() }
