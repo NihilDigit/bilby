@@ -14,11 +14,11 @@ plugins {
 }
 
 android {
-    namespace = "com.bilby"
+    namespace = "dev.bilby"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.bilby"
+        applicationId = "dev.bilby"
         minSdk = 29
         targetSdk = 37
         versionCode = 1
