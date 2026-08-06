@@ -1,80 +1,71 @@
 # Bilby
 
-[简体中文](README.zh-CN.md)
+[English](README.en.md)
 
-An Android client for bilibili with the recommendation machinery taken out.
+一个移除了推荐机制的 bilibili Android 客户端。
 
-The home screen shows updates from the accounts you follow, newest first. What appears there
-follows from who you follow; scrolling down moves further back in time, and the act of
-scrolling produces nothing on its own. Recommendation feed, related-videos rail, autoplay:
-none of the three.
+首页按时间倒序展示关注账号的更新。内容由关注关系决定，向下滑动只是回到更早的
+时间，滑动这个动作本身不产生新内容。推荐流、相关视频栏、自动连播，这三处都没有。
 
-Wherever the official app hands you the next video, Bilby leaves the choice to you. In the
-slot for related recommendations sits the current video's collection and the uploader's
-other work, a finite set fixed the moment you opened this video. A queue built from it plays
-to the end and stops: its contents are settled when playback starts and stay that way. A
-queue that refills has taken away the moment where you decide whether to keep watching.
+官方客户端主动递出下一个视频的地方，Bilby 一律交给用户选择。放相关推荐的位置，
+这里放的是当前视频所属的合集和该 UP 主的其他投稿，一个在打开视频时就已经确定的
+有限集合。由它组成的播放队列播完即停：队列的内容在开始播放时就定下，播放过程中
+保持不变。会自动补充的队列，等于取消了"是否继续观看"这个决定。
 
-To find something else, say what you want. Search works the usual way, and there is an
-assistant you can describe things to: it searches, reads descriptions and comments, and
-comes back with a few videos and its reasons for each. It knows only what you told it this
-time, by design and permanently.
+要看别的，需要主动提出。搜索照常使用。另外有一个助理，可以向它描述想看的内容：
+它会搜索、阅读简介和评论，然后返回若干视频并分别说明理由。它只知道你这次告诉它
+的内容，这是设计约束，将来也是如此。
 
-Bilby reports to bilibili like any other client, and history, heartbeats, coins, favourites,
-and likes all go through. What it drops is the part that pushes back at you.
+Bilby 与其他客户端一样向 bilibili 上报数据，历史记录、心跳、投币、收藏、点赞都会
+正常提交。移除的只是反过来推送内容的那一部分。
 
-## What it does
+## 功能
 
-Following feed, search, watch-later, and uploader pages.
+关注动态、搜索、稍后再看、UP 主空间。
 
-Playback covers fullscreen, quality switching, speed, long-press fast-forward, drag-to-seek,
-lock, double-tap play/pause, and multi-part videos. Listening mode puts a different UI in
-front of the same player, with background playback, a queue, shuffle, and a sleep timer.
-SponsorBlock segments are skipped by default.
+播放支持全屏、切换清晰度、倍速、长按快进、拖动进度条、锁定、双击暂停或播放、
+多 P 视频。听视频模式在同一播放器之上提供另一套界面，支持后台播放、播放队列、
+随机播放和定时关闭。SponsorBlock 片段默认跳过。
 
-Comments can be read, sorted, expanded into their reply threads, posted, liked, and deleted.
+评论支持浏览、排序、展开楼中楼、发布、点赞和删除。
 
-## Getting it
+## 安装
 
 ```
 ./gradlew installDebug
 ```
 
-Sign in with the TV qrcode flow. One account, once.
+通过 TV 端扫码登录，单账号，登录一次即可。
 
-The assistant needs an OpenAI-compatible endpoint. Put it in `local.properties` for debug
-builds, or fill it in under settings on any build:
+助理需要 OpenAI 兼容的接口。debug 构建可以写入 `local.properties`，任何构建都可以
+在设置页中填写：
 
 ```properties
 LLM_BASE_URL=https://.../v1
 LLM_API_KEY=sk-...
 ```
 
-Requires Android 10 or later. Built on Compose with Material 3, Navigation 3, Media3, Room,
-and Ktor.
+要求 Android 10 或更高版本。基于 Compose、Material 3、Navigation 3、Media3、Room
+和 Ktor 构建。
 
-## Contributing
+## 贡献
 
-Bilby is a personal project that happens to be open source, and its shape comes from one
-person's opinion about how a video client should behave. That opinion is the thing being
-maintained here.
+Bilby 是个人项目，以开源形式发布。它的形态来自一个人对视频客户端应有行为的判断，
+这里维护的正是这个判断。
 
-Bug fixes, crash reports, and small corrections can go straight to a pull request.
+修复 bug、报告崩溃和小规模更正，可以直接提交 PR。
 
-Features and behaviour changes need an RFC first. Open an issue describing what you want,
-what the app does about it today, and what the design would look like, and wait for
-agreement before writing code. The constraints at the top of this page are the ones most
-likely to be at stake; a pull request that moves them without an agreed RFC will be closed
-on those grounds alone.
+新增功能和行为变更需要先经过 RFC：开一个 issue，说明想要什么、应用目前如何处理
+这件事、预期的设计是什么，达成一致后再开始写代码。本文开头的约束是最可能受到影响
+的部分；未经 RFC 达成一致就改动这些约束的 PR，仅凭这一点就会被关闭。
 
-`CLAUDE.md` carries the working conventions worth knowing before a first change.
+首次修改前，建议先阅读 `CLAUDE.md` 中记录的工作约定。
 
-## License
+## 许可
 
-GPL-3.0-or-later, following [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus). See
-[LICENSE](LICENSE).
+GPL-3.0-or-later，与 [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus) 保持
+一致。见 [LICENSE](LICENSE)。
 
-Everything Bilby knows about talking to bilibili it learned from PiliPlus: WBI signing,
-AppSign, the device fingerprint, TV qrcode login, playurl parameters, reporting, and write
-actions are all ported from it. That project has already worked out which endpoints accept
-what, which ones risk control will refuse, and which documented behaviour no longer holds.
+Bilby 与 bilibili 交互所需的全部实现都来自 PiliPlus：WBI 签名、AppSign、设备指纹、
+TV 扫码登录、playurl 参数、数据上报和写操作均移植自该项目。哪些接口接受什么参数、
+哪些会被风控拒绝、哪些文档记载的行为已经失效，该项目都已经逐一验证过。
