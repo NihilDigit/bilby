@@ -17,3 +17,6 @@ captures/
 
 # 设计文档私有,不进公开仓库
 DESIGN.md
+
+# subagent 用过的独立 GRADLE_USER_HOME
+.gradle-agent/
