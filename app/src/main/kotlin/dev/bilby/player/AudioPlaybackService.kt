@@ -45,6 +45,8 @@ data class AudioPlaybackUiState(
     val shuffled: Boolean = false,
     /** 正在取流。这一步要走一次网络,不给反馈的话按下"下一条"后会有一两秒的静默。 */
     val loading: Boolean = false,
+    /** 队列内容。听视频页要列出来,没必要为它再开一个通道。 */
+    val items: List<QueueItem> = emptyList(),
 )
 
 /**
@@ -121,6 +123,10 @@ class AudioPlaybackService : MediaSessionService() {
             pendingQueue = null
             queue = PlaybackQueue(pending.items, pending.startIndex, pending.shuffled)
             playCurrent()
+        }
+        pendingBvid?.let { bvid ->
+            pendingBvid = null
+            if (queue.seekToBvid(bvid) != null) playCurrent()
         }
         return super.onStartCommand(intent, flags, startId)
     }
@@ -261,6 +267,7 @@ class AudioPlaybackService : MediaSessionService() {
             active = queue.size > 0,
             current = queue.current(),
             isPlaying = player.isPlaying,
+            items = queue.itemsNatural(),
             positionInQueue = if (queue.size > 0) queue.currentIndex + 1 else 0,
             queueSize = queue.size,
             shuffled = queue.shuffled,
@@ -469,6 +476,15 @@ class AudioPlaybackService : MediaSessionService() {
                 return
             }
             pendingQueue = PendingQueue(items, startIndex, shuffled)
+            context.startService(Intent(context, AudioPlaybackService::class.java))
+        }
+
+        @Volatile
+        private var pendingBvid: String? = null
+
+        /** 跳到队列里的某一条。和 [start] 一样用静态字段递交,理由见那里的注释。 */
+        fun playFromQueue(context: Context, bvid: String) {
+            pendingBvid = bvid
             context.startService(Intent(context, AudioPlaybackService::class.java))
         }
 

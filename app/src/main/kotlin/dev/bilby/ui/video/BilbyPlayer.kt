@@ -31,6 +31,9 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
@@ -151,6 +154,12 @@ fun BilbyPlayer(
     var isFastForwarding by remember { mutableStateOf(false) }
 
     var controlsVisible by remember { mutableStateOf(true) }
+
+    /**
+     * 锁屏:横屏看视频时手容易碰到画面,一碰就暂停或快进。锁上之后除了解锁按钮,
+     * 所有手势与控件都不响应。
+     */
+    var locked by rememberSaveable { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     // 每次操作控件都让自动隐藏重新计时,靠这个计数把 LaunchedEffect 重启。
     var interactionNonce by remember { mutableIntStateOf(0) }
@@ -194,10 +203,28 @@ fun BilbyPlayer(
         }
 
         Box(
-            modifier = Modifier.fillMaxSize().pointerInput(player) {
+            modifier = Modifier.fillMaxSize().pointerInput(player, locked) {
+                if (locked) {
+                    // 锁上时只留"点一下把解锁按钮唤出来",其余手势一概不接。
+                    detectTapGestures(onTap = { controlsVisible = !controlsVisible })
+                    return@pointerInput
+                }
                 detectTapGestures(
                     onTap = {
                         controlsVisible = !controlsVisible
+                        interactionNonce++
+                    },
+                    onDoubleTap = {
+                        when {
+                            player.isPlaying -> player.pause()
+                            // 播完之后位置停在末尾,直接 play() 不会有反应,应有行为是重播。
+                            player.playbackState == Player.STATE_ENDED -> {
+                                player.seekTo(0)
+                                player.play()
+                            }
+
+                            else -> player.play()
+                        }
                         interactionNonce++
                     },
                     onLongPress = {
@@ -245,8 +272,24 @@ fun BilbyPlayer(
             }
         }
 
+        // 锁按钮:锁上后它是唯一还能点的东西。
         AnimatedVisibility(
             visible = controlsVisible,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = 12.dp),
+        ) {
+            IconButton(onClick = { locked = !locked }) {
+                Icon(
+                    imageVector = if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                    contentDescription = if (locked) "解锁" else "锁定",
+                    tint = Color.White,
+                )
+            }
+        }
+
+        AnimatedVisibility(
+            visible = controlsVisible && !locked,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter),
@@ -260,7 +303,17 @@ fun BilbyPlayer(
                 currentQuality = currentQuality,
                 isFullscreen = isFullscreen,
                 onPlayPause = {
-                    if (player.isPlaying) player.pause() else player.play()
+                    when {
+                        player.isPlaying -> player.pause()
+                        // 播完之后位置停在末尾,直接 play() 无事发生(或在某些实现上直接抛)。
+                        // 应有行为是从头再播一遍。
+                        player.playbackState == Player.STATE_ENDED -> {
+                            player.seekTo(0)
+                            player.play()
+                        }
+
+                        else -> player.play()
+                    }
                     interactionNonce++
                 },
                 onSeekStart = {

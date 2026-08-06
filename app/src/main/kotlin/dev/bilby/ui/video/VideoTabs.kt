@@ -11,11 +11,15 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -557,6 +561,8 @@ private fun PartRow(
  * 这个列表同时就是「听视频」要播的队列本身,点条目直接切歌,不需要另外构造队列。
  * queue.items 为空且不在加载中时不显示这一块——合集/空间投稿都取不到时没有队列可言。
  */
+private val QueueListHeight = 320.dp
+
 @Composable
 private fun QueueSection(
     queue: QueueUiState,
@@ -595,15 +601,34 @@ private fun QueueSection(
                 )
             }
         } else {
-            // 最多 50 条:数据层已经把队列截到这个量级(合集本身有限、空间投稿前后各 25 条),
-            // 这里的 take 是兜底,不是主要的边界控制。
-            Column(modifier = Modifier.padding(top = 4.dp)) {
-                queue.items.take(50).forEach { item ->
+            val listState = rememberLazyListState()
+
+            // 定高列表:高度有界才能嵌在可滚动的简介页里(高度无界的 LazyColumn 会抛)。
+            // 顺带让队列有个固定的占位,不会因为条数不同把下面的内容顶来顶去。
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.padding(top = 4.dp).height(QueueListHeight),
+            ) {
+                items(queue.items, key = { it.bvid }) { item ->
                     QueueItemRow(
                         item = item,
                         current = item.bvid == queue.currentBvid,
                         onClick = { onPlayQueueItem(item.bvid) },
                     )
+                }
+            }
+
+            // 当前项居中:队列是"前后各 25 条",只滚到可见位置的话它会贴在顶或底,
+            // 看不出前后还有多少。
+            LaunchedEffect(queue.currentBvid, queue.items) {
+                val index = queue.items.indexOfFirst { it.bvid == queue.currentBvid }
+                if (index >= 0) {
+                    listState.scrollToItem(index)
+                    val info = listState.layoutInfo
+                    val row = info.visibleItemsInfo.firstOrNull { it.index == index }
+                    if (row != null) {
+                        listState.scrollToItem(index, -(info.viewportSize.height - row.size) / 2)
+                    }
                 }
             }
         }

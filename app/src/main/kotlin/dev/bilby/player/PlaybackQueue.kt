@@ -75,6 +75,18 @@ class PlaybackQueue(
     }
 
     /**
+     * 给 UI 列表用的**自然顺序**。随机只改播放顺序(order),不改列表怎么摆——
+     * 列表跟着重排会让人找不到刚才看的那条在哪。
+     */
+    fun itemsNatural(): List<QueueItem> = items
+
+    /** 跳到指定 bvid,不在队列里返回 null。 */
+    fun seekToBvid(bvid: String): QueueItem? {
+        val position = order.indexOfFirst { items[it].bvid == bvid }
+        return if (position < 0) null else seekTo(position)
+    }
+
+    /**
      * 切换随机。**当前正在播的这条不变**,只重排其余——切换随机是个瞬时动作,如果连带换掉
      * 正在响的声音,用户会以为自己误触了下一首。
      *

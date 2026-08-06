@@ -56,7 +56,14 @@ import dev.bilby.ui.space.SpaceViewModel
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.toview.ToViewScreen
 import dev.bilby.ui.toview.ToViewViewModel
+import androidx.core.content.ContextCompat
+import androidx.core.os.bundleOf
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
 import dev.bilby.player.AudioPlaybackService
+import dev.bilby.ui.listen.ListenScreen
 import dev.bilby.ui.video.VideoScreen
 import dev.bilby.ui.video.VideoViewModel
 
@@ -363,12 +370,14 @@ private fun VideoRoute(
         onToggleShuffle = vm::toggleShuffle,
         // 听视频:先按合集找队列,不属于合集才退到 UP 投稿(DESIGN 2.4b)。
         // 听视频播的就是页面上这份队列,不重新构造(DESIGN 2.4b:队列不是听视频的特产)。
+        // 听视频只是换个界面:同一个播放器、同一份队列,所以这里只做两件事——
+        // 把队列交给服务、跳到听视频页。进度不需要交接,因为播放器根本没换。
         onListen = {
             val items = queue.items
-            val startIndex = items.indexOfFirst { it.bvid == queue.currentBvid }.coerceAtLeast(0)
             if (items.isEmpty()) {
                 BiliLog.w("听视频:队列为空,无法开始")
             } else {
+                val startIndex = items.indexOfFirst { it.bvid == queue.currentBvid }.coerceAtLeast(0)
                 AudioPlaybackService.start(context, items, startIndex, queue.shuffled)
             }
         },

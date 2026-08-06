@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import android.os.Bundle
 import androidx.core.content.ContextCompat
 import androidx.core.os.bundleOf
+import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
@@ -39,6 +40,8 @@ import kotlinx.coroutines.delay
 import dev.bilby.data.VideoRelation
 import dev.bilby.player.AudioPlaybackService
 import dev.bilby.ui.comment.CommentUiState
+import dev.bilby.ui.listen.ListenScreen
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * 播放页。**没有相关推荐栏、没有自动连播**(DESIGN 2.3/1.3);「找相关」占的是官方相关
@@ -83,6 +86,12 @@ fun VideoScreen(
     var controller by remember { mutableStateOf<MediaController?>(null) }
     var fullscreen by rememberSaveable { mutableStateOf(false) }
 
+    /**
+     * 听视频是**页面内的一个状态**,和全屏同构:不是导航目的地,所以页面不离开组合、
+     * 播放器不换、进度不交接 —— 没有任何生命周期需要处理。退出就是把它置回 false。
+     */
+    var listening by rememberSaveable { mutableStateOf(false) }
+
     DisposableEffect(context) {
         val future = MediaController.Builder(context, AudioPlaybackService.sessionToken(context))
             .buildAsync()
@@ -98,9 +107,8 @@ fun VideoScreen(
         onDispose {
             controller?.let { connected ->
                 onSaveProgress(connected.currentPosition, connected.duration.coerceAtLeast(0))
-                // 队列在播说明用户已经切到听视频,离开页面正是那个模式的常态,不能停;
-                // 没有队列就是看视频,离开页面等于不看了。
-                if (!AudioPlaybackService.state.value.active) connected.pause()
+                connected.pause()
+                // 播放页离开就暂停。听视频是页面内的状态,不会走到这里。
             }
             // **不 release 播放器**:它归服务所有,不归这个页面。页面离开只断开连接——
             // 在这里 release 就等于把后台正在听的那条一起掐了,而"页面走了"和"播放结束"
@@ -112,6 +120,9 @@ fun VideoScreen(
 
     // 局部变量是为了让下面的空判断能智能转换,不是随手起的别名。
     val active = controller
+
+    val audioState by AudioPlaybackService.state.collectAsStateWithLifecycle()
+    val sleepTimerState by AudioPlaybackService.sleepTimerState.collectAsStateWithLifecycle()
 
     // 画面必须接在真的 ExoPlayer 上:MediaController 没有 COMMAND_SET_VIDEO_SURFACE
     // (Surface 是本地对象,递不到 session 那侧),这是 Media3 的已知限制。服务与 UI 同进程,
@@ -152,6 +163,37 @@ fun VideoScreen(
                 AudioPlaybackService.EXTRA_COVER_URL to detail?.coverUrl.orEmpty(),
             ),
         )
+    }
+
+    // 听视频时把视频轨关掉:不关的话画面虽然不渲染,流还是照下,白费流量和电。
+    // 用禁轨而不是重建只含音频的媒体源——后者要重新 prepare 和 seek,又把"切模式
+    // 不需要交接"这个性质破坏掉了。
+    LaunchedEffect(active, listening) {
+        val player = active ?: return@LaunchedEffect
+        player.trackSelectionParameters = player.trackSelectionParameters
+            .buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, listening)
+            .build()
+    }
+
+    if (listening && active != null) {
+        ListenScreen(
+            player = active,
+            state = audioState,
+            sleepTimer = sleepTimerState,
+            queue = queue.items,
+            onPlayQueueItem = onPlayQueueItem,
+            onToggleShuffle = onToggleShuffle,
+            onSleepTimer = { minutes ->
+                active.sendCustomCommand(
+                    SessionCommand(AudioPlaybackService.ACTION_SLEEP_TIMER, Bundle.EMPTY),
+                    bundleOf(AudioPlaybackService.EXTRA_SLEEP_MINUTES to minutes),
+                )
+            },
+            onBack = { listening = false },
+            modifier = Modifier.fillMaxSize(),
+        )
+        return
     }
 
     // 全屏时播放器独占整屏,下面的简介/评论整块不参与布局。
@@ -210,7 +252,10 @@ fun VideoScreen(
                 related = related,
                 commentState = commentState,
                 onFindRelated = onFindRelated,
-                onListen = onListen,
+                onListen = {
+                    onListen()
+                    listening = true
+                },
                 queue = queue,
                 onPlayQueueItem = onPlayQueueItem,
                 onToggleShuffle = onToggleShuffle,
