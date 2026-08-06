@@ -1,5 +1,6 @@
 package com.bilby.data
 
+import com.bilby.BiliLog
 import com.bilby.api.BiliClient
 import com.bilby.api.BiliConstants
 import com.bilby.api.BiliResult
@@ -9,6 +10,7 @@ import com.bilby.api.dto.FavFolderDto
 import com.bilby.api.dto.FavFolderListDto
 import com.bilby.api.getData
 import com.bilby.api.map
+import com.bilby.api.pathOnly
 import io.ktor.client.call.body
 
 /** 视频当前是否已赞/已投币/已收藏,来自 archive/relation。 */
@@ -36,9 +38,14 @@ class VideoActionRepository(private val client: BiliClient) {
      * "重复点赞是否报错"的说明,这里不做本地幂等判断,交给调用方按 getRelation 结果决定
      * 要不要调用)。
      */
-    suspend fun like(bvid: String, like: Boolean): BiliResult<Unit> = postAction(
+    /**
+     * 走 app 端。网页端 `x/web-interface/archive/like` 对第三方客户端返回 -403 账号异常,
+     * PiliPlus 也是因此把它注释掉换成这个(notes/auth-model.md)。
+     * 注意 like 的取值与网页端相反:**0 是点赞,1 是取消**(PiliPlus video.dart:441)。
+     */
+    suspend fun like(aid: Long, like: Boolean): BiliResult<Unit> = appPostAction(
         LIKE_URL,
-        mapOf("bvid" to bvid, "like" to if (like) "1" else "2"),
+        mapOf("aid" to aid.toString(), "like" to if (like) "0" else "1"),
     )
 
     /**
@@ -46,13 +53,12 @@ class VideoActionRepository(private val client: BiliClient) {
      * 视频)。select_like 控制投币的同时是否附带点赞。UNSURE: `cross_domain=true` 是公开文档里
      * 记录的固定参数,含义未知(大概率是老版本网页端的 CORS 标记),原样带上。
      */
-    suspend fun coin(bvid: String, count: Int, alsoLike: Boolean): BiliResult<Unit> = postAction(
+    suspend fun coin(aid: Long, count: Int, alsoLike: Boolean): BiliResult<Unit> = appPostAction(
         COIN_URL,
         mapOf(
-            "bvid" to bvid,
+            "aid" to aid.toString(),
             "multiply" to count.toString(),
             "select_like" to if (alsoLike) "1" else "0",
-            "cross_domain" to "true",
         ),
     )
 
@@ -62,12 +68,14 @@ class VideoActionRepository(private val client: BiliClient) {
      * 当成"清空",不确定的情况下宁可不带这个键。
      */
     suspend fun favorite(aid: Long, addMediaIds: List<Long>, delMediaIds: List<Long>): BiliResult<Unit> {
-        val form = buildMap {
-            put("rid", aid.toString())
-            put("type", "2")
-            if (addMediaIds.isNotEmpty()) put("add_media_ids", addMediaIds.joinToString(","))
-            if (delMediaIds.isNotEmpty()) put("del_media_ids", delMediaIds.joinToString(","))
-        }
+        // batch-deal 收的是 resources("aid:type"),不是 rid+type;而且两个 id 列表
+        // **都必须传**,没有的那个传空串。少传或改传 rid/type 都会得到 -400 请求错误。
+        // 照抄 PiliPlus lib/http/fav.dart:633-646 与 common_intro_controller.dart:274-277。
+        val form = mapOf(
+            "resources" to "$aid:$VIDEO_RESOURCE_TYPE",
+            "add_media_ids" to addMediaIds.joinToString(","),
+            "del_media_ids" to delMediaIds.joinToString(","),
+        )
         return postAction(FAV_DEAL_URL, form)
     }
 
@@ -98,14 +106,38 @@ class VideoActionRepository(private val client: BiliClient) {
      */
     private suspend fun postAction(url: String, form: Map<String, String>): BiliResult<Unit> = runCatching {
         val envelope = client.rawPostForm(url, form).body<ActionEnvelopeDto>()
-        if (envelope.code == 0) BiliResult.Ok(Unit) else BiliResult.ApiError(envelope.code, envelope.message)
-    }.getOrElse { BiliResult.Failure(it) }
+        if (envelope.code == 0) {
+            BiliResult.Ok(Unit)
+        } else {
+            BiliLog.w("POST ${url.pathOnly()} 失败(${envelope.code}): ${envelope.message}")
+            BiliResult.ApiError(envelope.code, envelope.message)
+        }
+    }.onFailure { BiliLog.w("POST ${url.pathOnly()} 异常", it) }.getOrElse { BiliResult.Failure(it) }
+
+    /** app 路线:access_key + appkey 签名,不带 Cookie。 */
+    private suspend fun appPostAction(url: String, form: Map<String, String>): BiliResult<Unit> = runCatching {
+        val envelope = client.appPostForm(url, form).body<ActionEnvelopeDto>()
+        if (envelope.code == 0) {
+            BiliResult.Ok(Unit)
+        } else {
+            BiliLog.w("POST ${url.pathOnly()} 失败(${envelope.code}): ${envelope.message}")
+            BiliResult.ApiError(envelope.code, envelope.message)
+        }
+    }.onFailure { BiliLog.w("POST ${url.pathOnly()} 异常", it) }.getOrElse { BiliResult.Failure(it) }
+
+    /** 日志里只留路径,query/表单里可能有签名或账号相关信息,不打印。 */
+    private fun String.pathOnly(): String = substringBefore('?')
 
     private companion object {
+        /** 视频稿件在收藏体系里的资源类型。 */
+        const val VIDEO_RESOURCE_TYPE = 2
+
         const val RELATION_URL = "${BiliConstants.WEB_HOST}/x/web-interface/archive/relation"
-        const val LIKE_URL = "${BiliConstants.WEB_HOST}/x/web-interface/archive/like"
-        const val COIN_URL = "${BiliConstants.WEB_HOST}/x/web-interface/coin/add"
-        const val FAV_DEAL_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/resource/deal"
+        // 点赞/投币走 app 端(网页端被风控),收藏留在网页端但用 batch-deal ——
+        // 三个选择都照抄 PiliPlus lib/http/api.dart:51/80/110。
+        const val LIKE_URL = "${BiliConstants.APP_HOST}/x/v2/view/like"
+        const val COIN_URL = "${BiliConstants.APP_HOST}/x/v2/view/coin/add"
+        const val FAV_DEAL_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/resource/batch-deal"
         const val FAV_FOLDER_LIST_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/folder/created/list-all"
     }
 }

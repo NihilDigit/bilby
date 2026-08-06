@@ -1,14 +1,15 @@
 package com.bilby.ui.video
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.bilby.BiliLog
 import com.bilby.agent.AgentEvent
 import com.bilby.agent.AgentIntent
 import com.bilby.agent.AgentLoop
 import com.bilby.api.BiliResult
-import com.bilby.api.getOrNull
 import com.bilby.data.SettingsStore
+import com.bilby.data.SponsorBlockRepository
+import com.bilby.data.SponsorSegment
 import kotlinx.coroutines.flow.first
 import com.bilby.data.PlayInfo
 import com.bilby.data.FavFolder
@@ -17,6 +18,7 @@ import com.bilby.data.VideoActionRepository
 import com.bilby.data.VideoDetail
 import com.bilby.data.VideoRelation
 import com.bilby.data.VideoRepository
+import com.bilby.data.VideoStat
 import com.bilby.data.db.PlaybackProgressDao
 import com.bilby.data.db.PlaybackProgressEntity
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,7 +45,12 @@ class VideoViewModel(
     private val heartbeatReporter: HeartbeatReporter,
     private val actionRepository: VideoActionRepository,
     private val settings: SettingsStore,
+    private val sponsorBlockRepository: SponsorBlockRepository,
 ) : ViewModel() {
+
+    /** 赞助/片头片尾片段,默认开启自动跳过。拉取失败就是空列表,不影响播放。 */
+    private val _sponsorSegments = MutableStateFlow<List<SponsorSegment>>(emptyList())
+    val sponsorSegments: StateFlow<List<SponsorSegment>> = _sponsorSegments.asStateFlow()
 
     private val _relation = MutableStateFlow<VideoRelation?>(null)
     val relation: StateFlow<VideoRelation?> = _relation.asStateFlow()
@@ -118,8 +125,8 @@ class VideoViewModel(
                 _state.update { it.copy(detail = detail.value) }
                 when (val rel = actionRepository.getRelation(bvid)) {
                     is BiliResult.Ok -> _relation.value = rel.value
-                    is BiliResult.ApiError -> Log.w("Bilby", "查互动状态失败(${rel.code}): ${rel.message}")
-                    is BiliResult.Failure -> Log.w("Bilby", "查互动状态异常: ${rel.cause}")
+                    is BiliResult.ApiError -> BiliLog.w("查互动状态失败(${rel.code}): ${rel.message}")
+                    is BiliResult.Failure -> BiliLog.w("查互动状态异常: ${rel.cause}")
                 }
                 playPart(detail.value.cid)
             }
@@ -132,6 +139,8 @@ class VideoViewModel(
     /** 合集/多 P 的确定性导航(DESIGN 2.3:这是导航不是推荐)。 */
     fun playPart(cid: Long) = viewModelScope.launch {
         _state.update { it.copy(loading = true, error = null, currentCid = cid) }
+        // 片段随 cid 变,换 P 要重拉;放在取流之前不阻塞播放(它自己有超时与静默失败)。
+        launch { _sponsorSegments.value = sponsorBlockRepository.segments(bvid, cid) }
         when (val play = repository.getPlayUrl(bvid, cid)) {
             is BiliResult.Ok -> {
                 val local = progressDao.get(bvid)?.takeIf { it.cid == cid }?.positionMillis ?: 0
@@ -176,18 +185,20 @@ class VideoViewModel(
 
     fun toggleLike() {
         val current = _relation.value ?: return
+        val aid = _state.value.detail?.aid ?: return
         // 乐观更新:点赞是高频动作,等一个来回再变色会让人以为没点上。失败再翻回去。
         _relation.value = current.copy(liked = !current.liked)
+        adjustStat { it.copy(like = it.like + if (current.liked) -1 else 1) }
         viewModelScope.launch {
-            when (val result = actionRepository.like(bvid, !current.liked)) {
+            when (val result = actionRepository.like(aid, !current.liked)) {
                 is BiliResult.Ok -> Unit
                 is BiliResult.ApiError -> {
-                    Log.w("Bilby", "点赞失败(${result.code}): ${result.message}")
+                    BiliLog.w("点赞失败(${result.code}): ${result.message}")
                     _relation.value = current
                 }
 
                 is BiliResult.Failure -> {
-                    Log.w("Bilby", "点赞异常: ${result.cause}")
+                    BiliLog.w("点赞异常: ${result.cause}")
                     _relation.value = current
                 }
             }
@@ -196,12 +207,24 @@ class VideoViewModel(
 
     fun coin(count: Int, alsoLike: Boolean) {
         val current = _relation.value ?: return
+        val aid = _state.value.detail?.aid ?: return
         viewModelScope.launch {
-            if (actionRepository.coin(bvid, count, alsoLike) is BiliResult.Ok) {
-                _relation.value = current.copy(
-                    coined = current.coined + count,
-                    liked = current.liked || alsoLike,
-                )
+            when (val result = actionRepository.coin(aid, count, alsoLike)) {
+                is BiliResult.Ok -> {
+                    _relation.value = current.copy(
+                        coined = current.coined + count,
+                        liked = current.liked || alsoLike,
+                    )
+                    adjustStat {
+                        it.copy(
+                            coin = it.coin + count,
+                            like = if (alsoLike && !current.liked) it.like + 1 else it.like,
+                        )
+                    }
+                }
+
+                is BiliResult.ApiError -> BiliLog.w("投币失败(${result.code}): ${result.message}")
+                is BiliResult.Failure -> BiliLog.w("投币异常: ${result.cause}")
             }
         }
     }
@@ -210,17 +233,48 @@ class VideoViewModel(
         val aid = _state.value.detail?.aid ?: return
         viewModelScope.launch {
             val mid = settings.credentials.first().dedeUserId.toLongOrNull() ?: return@launch
-            _favFolders.value = actionRepository.listFavFolders(mid, aid).getOrNull().orEmpty()
+            when (val result = actionRepository.listFavFolders(mid, aid)) {
+                is BiliResult.Ok -> _favFolders.value = result.value
+                is BiliResult.ApiError -> BiliLog.w("查收藏夹失败(${result.code}): ${result.message}")
+                is BiliResult.Failure -> BiliLog.w("查收藏夹异常: ${result.cause}")
+            }
         }
     }
 
     fun confirmFavorite(addIds: List<Long>, delIds: List<Long>) {
         val aid = _state.value.detail?.aid ?: return
         viewModelScope.launch {
-            if (actionRepository.favorite(aid, addIds, delIds) is BiliResult.Ok) {
-                _relation.update { it?.copy(favored = addIds.isNotEmpty()) }
-                openFavPicker() // 重拉一次,让各收藏夹的勾选状态与服务端一致
+            when (val result = actionRepository.favorite(aid, addIds, delIds)) {
+                is BiliResult.Ok -> {
+                    _relation.update { it?.copy(favored = addIds.isNotEmpty()) }
+                    adjustStat { it.copy(favorite = it.favorite + addIds.size - delIds.size) }
+                    // 本地改勾选状态,不重拉。重拉会把服务端的实时计数盖回来,而热门视频的
+                    // 计数每秒都在变,表现就是刚 +1 的数字又跳一下 —— 乐观更新与重拉只能选一个。
+                    _favFolders.update { folders ->
+                        folders.map { folder ->
+                            when (folder.id) {
+                                in addIds -> folder.copy(containsThis = true, count = folder.count + 1)
+                                in delIds -> folder.copy(containsThis = false, count = folder.count - 1)
+                                else -> folder
+                            }
+                        }
+                    }
+                }
+
+                is BiliResult.ApiError -> BiliLog.w("收藏失败(${result.code}): ${result.message}")
+                is BiliResult.Failure -> BiliLog.w("收藏异常: ${result.cause}")
             }
+        }
+    }
+
+    /**
+     * 计数来自视频详情的静态字段,不会因为你点赞而变。不跟着动的话,点了赞数字纹丝不动,
+     * 看起来就像没生效 —— 所以这里按动作乐观增减。
+     */
+    private fun adjustStat(transform: (VideoStat) -> VideoStat) {
+        _state.update { current ->
+            val detail = current.detail ?: return@update current
+            current.copy(detail = detail.copy(stat = transform(detail.stat)))
         }
     }
 

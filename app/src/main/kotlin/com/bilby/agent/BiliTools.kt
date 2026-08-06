@@ -1,5 +1,6 @@
 package com.bilby.agent
 
+import com.bilby.BiliLog
 import com.bilby.api.BiliClient
 import com.bilby.api.BiliResult
 import com.bilby.data.CommentRepository
@@ -93,7 +94,10 @@ private fun searchVideosTool(searchRepository: SearchRepository) = object : Tool
             }
             else -> result.toFailureResult()
         }
-    }.getOrElse { ToolResult(forModel = "查询失败:${it.message}") }
+    }.getOrElse {
+        BiliLog.w("工具 $name 执行异常", it)
+        ToolResult(forModel = "查询失败:${it.message}")
+    }
 
     private fun SearchVideo.toLine() =
         "$bvid | $title | $upName | $durationText | 播放${playCount.formatCount()}"
@@ -127,7 +131,10 @@ private fun searchUsersTool(searchRepository: SearchRepository) = object : Tool 
             }
             else -> result.toFailureResult()
         }
-    }.getOrElse { ToolResult(forModel = "查询失败:${it.message}") }
+    }.getOrElse {
+        BiliLog.w("工具 $name 执行异常", it)
+        ToolResult(forModel = "查询失败:${it.message}")
+    }
 }
 
 private fun getVideoTool(videoRepository: VideoRepository) = object : Tool {
@@ -167,7 +174,10 @@ private fun getVideoTool(videoRepository: VideoRepository) = object : Tool {
             }
             else -> result.toFailureResult()
         }
-    }.getOrElse { ToolResult(forModel = "查询失败:${it.message}") }
+    }.getOrElse {
+        BiliLog.w("工具 $name 执行异常", it)
+        ToolResult(forModel = "查询失败:${it.message}")
+    }
 }
 
 private fun getUpTool(spaceRepository: SpaceRepository) = object : Tool {
@@ -190,7 +200,10 @@ private fun getUpTool(spaceRepository: SpaceRepository) = object : Tool {
             }
             else -> result.toFailureResult()
         }
-    }.getOrElse { ToolResult(forModel = "查询失败:${it.message}") }
+    }.getOrElse {
+        BiliLog.w("工具 $name 执行异常", it)
+        ToolResult(forModel = "查询失败:${it.message}")
+    }
 }
 
 private fun getUpVideosTool(spaceRepository: SpaceRepository) = object : Tool {
@@ -235,7 +248,10 @@ private fun getUpVideosTool(spaceRepository: SpaceRepository) = object : Tool {
             }
             else -> result.toFailureResult()
         }
-    }.getOrElse { ToolResult(forModel = "查询失败:${it.message}") }
+    }.getOrElse {
+        BiliLog.w("工具 $name 执行异常", it)
+        ToolResult(forModel = "查询失败:${it.message}")
+    }
 }
 
 private fun getCollectionTool(spaceRepository: SpaceRepository) = object : Tool {
@@ -282,7 +298,10 @@ private fun getCollectionTool(spaceRepository: SpaceRepository) = object : Tool 
             }
             else -> result.toFailureResult()
         }
-    }.getOrElse { ToolResult(forModel = "查询失败:${it.message}") }
+    }.getOrElse {
+        BiliLog.w("工具 $name 执行异常", it)
+        ToolResult(forModel = "查询失败:${it.message}")
+    }
 }
 
 private fun getHotCommentsTool(videoRepository: VideoRepository, commentRepository: CommentRepository) = object : Tool {
@@ -329,7 +348,10 @@ private fun getHotCommentsTool(videoRepository: VideoRepository, commentReposito
             }
             else -> detail.toFailureResult()
         }
-    }.getOrElse { ToolResult(forModel = "查询失败:${it.message}") }
+    }.getOrElse {
+        BiliLog.w("工具 $name 执行异常", it)
+        ToolResult(forModel = "查询失败:${it.message}")
+    }
 
 }
 
@@ -362,7 +384,10 @@ private fun getNativeRelatedTool(client: BiliClient) = object : Tool {
             }
             else -> result.toFailureResult()
         }
-    }.getOrElse { ToolResult(forModel = "查询失败:${it.message}") }
+    }.getOrElse {
+        BiliLog.w("工具 $name 执行异常", it)
+        ToolResult(forModel = "查询失败:${it.message}")
+    }
 
 }
 

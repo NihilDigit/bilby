@@ -1,5 +1,6 @@
 package com.bilby.data
 
+import com.bilby.BiliLog
 import com.bilby.api.BiliClient
 import com.bilby.api.BiliConstants
 import com.bilby.api.BiliResponse
@@ -190,8 +191,13 @@ class CommentRepository(
     private suspend fun postFormNoData(url: String, form: Map<String, String>): BiliResult<Unit> =
         runCatching {
             val envelope = client.rawPostForm(url, form).body<BiliResponse<Unit>>()
-            if (envelope.code == 0) BiliResult.Ok(Unit) else BiliResult.ApiError(envelope.code, envelope.message)
-        }.getOrElse { BiliResult.Failure(it) }
+            if (envelope.code == 0) {
+                BiliResult.Ok(Unit)
+            } else {
+                BiliLog.w("POST ${url.substringBefore('?')} 失败(${envelope.code}): ${envelope.message}")
+                BiliResult.ApiError(envelope.code, envelope.message)
+            }
+        }.onFailure { BiliLog.w("POST ${url.substringBefore('?')} 异常", it) }.getOrElse { BiliResult.Failure(it) }
 
     /**
      * `root`/`rpid` 语义:主楼的 root=0,此时把自己的 rpid 当 rootRpid 用(请求楼中楼要用这个值)。

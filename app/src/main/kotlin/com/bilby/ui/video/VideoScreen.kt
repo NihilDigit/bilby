@@ -28,6 +28,8 @@ import androidx.compose.ui.unit.dp
 import androidx.media3.common.util.UnstableApi
 import com.bilby.data.CommentSort
 import com.bilby.data.FavFolder
+import com.bilby.data.SponsorSegment
+import kotlinx.coroutines.delay
 import com.bilby.data.VideoRelation
 import com.bilby.player.PlayerFactory
 import com.bilby.ui.comment.CommentUiState
@@ -42,6 +44,7 @@ fun VideoScreen(
     state: VideoUiState,
     related: RelatedState,
     commentState: CommentUiState,
+    sponsorSegments: List<SponsorSegment>,
     onSaveProgress: (position: Long, duration: Long) -> Unit,
     onQualityChange: (quality: Int, positionMillis: Long) -> Unit,
     onFindRelated: () -> Unit,
@@ -71,6 +74,20 @@ fun VideoScreen(
         onDispose {
             onSaveProgress(player.currentPosition, player.duration.coerceAtLeast(0))
             player.release()
+        }
+    }
+
+    // SponsorBlock:默认开启。轮询而不是用 Player 的事件,是因为跳过要在片段**起点**发生,
+    // 而播放器没有"位置越过某点"的回调。500ms 的粒度足够,漏跳的代价只是多看半秒。
+    var skippedCategory by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(player, sponsorSegments) {
+        if (sponsorSegments.isEmpty()) return@LaunchedEffect
+        while (true) {
+            delay(500)
+            if (!player.isPlaying) continue
+            val target = nextSkipTarget(player.currentPosition, sponsorSegments) ?: continue
+            skippedCategory = sponsorSegments.firstOrNull { player.currentPosition in it.startMillis..it.endMillis }?.category
+            player.seekTo(target)
         }
     }
 
@@ -125,6 +142,9 @@ fun VideoScreen(
 
                 else -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
             }
+
+            // 跳过要让用户看见,否则会以为播放器抽了。
+            SkipToast(skippedCategory, Modifier.align(Alignment.TopCenter).padding(8.dp))
         }
 
         state.detail?.let { detail ->

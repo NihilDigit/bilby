@@ -27,6 +27,7 @@ class SettingsStore(context: Context) {
             dedeUserId = p[KEY_DEDE_USER_ID].orEmpty(),
             dedeUserIdCkMd5 = p[KEY_DEDE_CK_MD5].orEmpty(),
             refreshToken = p[KEY_REFRESH_TOKEN].orEmpty(),
+            accessKey = p[KEY_ACCESS_KEY].orEmpty(),
         )
     }
 
@@ -38,6 +39,11 @@ class SettingsStore(context: Context) {
             p[KEY_DEDE_CK_MD5] = value.dedeUserIdCkMd5
             p[KEY_REFRESH_TOKEN] = value.refreshToken
         }
+    }
+
+    /** app 端接口的凭据,与 Cookie 并存:写操作走 app 路线需要它。 */
+    suspend fun saveAccessKey(value: String) {
+        store.edit { it[KEY_ACCESS_KEY] = value }
     }
 
     suspend fun clearCredentials() {
@@ -70,6 +76,8 @@ class SettingsStore(context: Context) {
         /** 文档里叫 ac_time_value,存在 localStorage;这里就是 cookie 刷新的凭据。 */
         val KEY_REFRESH_TOKEN = stringPreferencesKey("refresh_token")
 
+        val KEY_ACCESS_KEY = stringPreferencesKey("access_key")
+
         val KEY_LLM_BASE_URL = stringPreferencesKey("llm_base_url")
         val KEY_LLM_API_KEY = stringPreferencesKey("llm_api_key")
         val KEY_LLM_MODEL = stringPreferencesKey("llm_model")
@@ -79,6 +87,7 @@ class SettingsStore(context: Context) {
 
         val ALL_CREDENTIAL_KEYS = listOf(
             KEY_SESSDATA, KEY_BILI_JCT, KEY_DEDE_USER_ID, KEY_DEDE_CK_MD5, KEY_REFRESH_TOKEN,
+            KEY_ACCESS_KEY,
         )
     }
 }
@@ -89,6 +98,7 @@ data class Credentials(
     val dedeUserId: String = "",
     val dedeUserIdCkMd5: String = "",
     val refreshToken: String = "",
+    val accessKey: String = "",
 ) {
     val isLoggedIn: Boolean get() = sessdata.isNotEmpty() && dedeUserId.isNotEmpty()
 }

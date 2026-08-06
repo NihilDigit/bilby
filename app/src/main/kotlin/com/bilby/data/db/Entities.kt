@@ -1,6 +1,8 @@
 package com.bilby.data.db
 
 import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
@@ -30,3 +32,73 @@ data class FeedReadPositionEntity(
         const val SINGLE_ROW = 0
     }
 }
+
+/**
+ * 搜索助理的一次会话(DESIGN 3.1)。会话由用户在 UI 显式开启,不自动续接;
+ * title 取自第一轮用户输入的前若干字,给以后的会话列表用。
+ */
+@Entity(tableName = "agent_session")
+data class AgentSessionEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val createdAt: Long,
+    val lastActiveAt: Long,
+    val title: String,
+)
+
+/**
+ * 会话内的一条消息,对应 LlmProtocol.ChatMessage。
+ *
+ * toolCallsJson 直接存 ChatMessage.toolCalls 序列化后的字符串,不拆表:tool_calls 的结构
+ * 由 OpenAI 协议定死,我们不会查询它内部字段,只需要原样回放给模型,拆表除了增加还原成本
+ * 没有别的好处。
+ */
+@Entity(
+    tableName = "agent_message",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentSessionEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["sessionId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("sessionId")],
+)
+data class AgentMessageEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sessionId: Long,
+    val seq: Int,
+    val role: String,
+    val content: String?,
+    val toolCallsJson: String?,
+    val toolCallId: String?,
+    val name: String?,
+    val createdAt: Long,
+)
+
+/**
+ * 某一轮的答案条目(AgentEvent.AnswerItem)。展示信息一并存下来,重新打开会话时不用
+ * 再查一次接口。
+ */
+@Entity(
+    tableName = "agent_answer",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentSessionEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["sessionId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("sessionId"), Index("messageId")],
+)
+data class AgentAnswerEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sessionId: Long,
+    val messageId: Long,
+    val bvid: String,
+    val reason: String,
+    val title: String?,
+    val coverUrl: String?,
+    val upName: String?,
+)

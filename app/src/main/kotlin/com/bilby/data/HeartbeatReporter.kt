@@ -1,6 +1,6 @@
 package com.bilby.data
 
-import android.util.Log
+import com.bilby.BiliLog
 import com.bilby.api.BiliClient
 import com.bilby.api.BiliConstants
 import com.bilby.api.dto.ActionEnvelopeDto
@@ -48,11 +48,11 @@ class HeartbeatReporter(private val client: BiliClient) {
             )
             val envelope = client.rawPostForm(HEARTBEAT_URL, form).body<ActionEnvelopeDto>()
             if (envelope.code != 0) {
-                Log.w("Bilby", "心跳上报失败(${envelope.code}): ${envelope.message}")
+                BiliLog.w("心跳上报失败(${envelope.code}): ${envelope.message}")
             }
         }.onFailure {
             // 心跳失败绝不能打断播放,吞掉,留一行日志方便排查。
-            Log.w("Bilby", "心跳上报异常", it)
+            BiliLog.w("心跳上报异常", it)
         }
     }
 

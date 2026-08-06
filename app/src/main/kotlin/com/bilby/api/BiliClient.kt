@@ -1,5 +1,6 @@
 package com.bilby.api
 
+import com.bilby.BiliLog
 import com.bilby.data.SettingsStore
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -7,6 +8,7 @@ import io.ktor.client.request.forms.submitForm
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
+import io.ktor.client.request.post
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
@@ -25,6 +27,7 @@ class BiliClient(
     val http: HttpClient,
     private val settings: SettingsStore,
     private val wbiSigner: WbiSigner,
+    private val fingerprint: DeviceFingerprint,
 ) {
 
     suspend fun rawGet(
@@ -40,6 +43,40 @@ class BiliClient(
         }
     }
 
+    /**
+     * POST 但参数走 query。passport 下的几个接口(TV 二维码、ticket)只认这种形式:
+     * 参数放进 form body 会得到 `-400 empty ts field` 或 `-101 账号未登录`,
+     * 错误信息完全指不到真因。
+     */
+    suspend fun rawPostQuery(
+        url: String,
+        params: Map<String, String> = emptyMap(),
+        withCsrf: Boolean = true,
+    ): HttpResponse {
+        val credentials = settings.credentials.first()
+        val finalParams = if (withCsrf) params + ("csrf" to credentials.biliJct) else params
+        val cookie = cookieHeader()
+        return http.post(url) {
+            applyCommonHeaders(cookie)
+            finalParams.forEach { (k, v) -> parameter(k, v) }
+        }
+    }
+
+    /**
+     * app 端路线(app.bilibili.com):参数里带 access_key 并做 appkey 签名,**不带 Cookie**。
+     * 网页端与 app 端是两套授权,混着发只会两边都不认。
+     */
+    suspend fun appPostForm(url: String, form: Map<String, String>): HttpResponse {
+        val accessKey = settings.credentials.first().accessKey
+        val signed = AppSign.sign(if (accessKey.isEmpty()) form else form + ("access_key" to accessKey))
+        return http.submitForm(
+            url = url,
+            formParameters = Parameters.build { signed.forEach { (k, v) -> append(k, v) } },
+        ) {
+            header(HttpHeaders.UserAgent, BiliConstants.APP_USER_AGENT)
+        }
+    }
+
     /** 写操作接口一律要 csrf(bili_jct),且是 body 字段不是 header。 */
     suspend fun rawPostForm(
         url: String,
@@ -48,7 +85,7 @@ class BiliClient(
     ): HttpResponse {
         val credentials = settings.credentials.first()
         val fields = if (withCsrf) form + ("csrf" to credentials.biliJct) else form
-        val cookie = credentials.toCookieHeader()
+        val cookie = cookieHeader()
         return http.submitForm(
             url = url,
             formParameters = Parameters.build { fields.forEach { (k, v) -> append(k, v) } },
@@ -72,7 +109,15 @@ class BiliClient(
         if (cookie.isNotEmpty()) header(HttpHeaders.Cookie, cookie)
     }
 
-    private suspend fun cookieHeader(): String = settings.credentials.first().toCookieHeader()
+    /**
+     * 凭据 + 设备指纹。指纹缺失时读接口照常工作,写接口会被风控判成"账号异常"(-403),
+     * 所以这里即使拿不到指纹也不能阻断请求。
+     */
+    private suspend fun cookieHeader(): String {
+        val credentials = settings.credentials.first().toCookieHeader()
+        val device = fingerprint.cookieEntries().map { (k, v) -> "$k=$v" }
+        return (listOf(credentials).filter { it.isNotEmpty() } + device).joinToString("; ")
+    }
 
     @Serializable
     private data class NavData(@SerialName("wbi_img") val wbiImg: WbiImg? = null)
@@ -86,6 +131,13 @@ class BiliClient(
 
 /** img_url 形如 .../wbi/<key>.png,key 就是去掉路径与扩展名的文件名。 */
 private fun String.keyFromUrl(): String = substringAfterLast('/').substringBefore('.')
+
+/**
+ * 日志里只留路径,query 可能带签名(w_rid)或 mid 之类的账号相关信息。
+ * 公开是因为上面那两个 inline 扩展函数要用它 —— inline 函数体会被搬到调用方,
+ * 引用 private 成员编不过。
+ */
+fun String.pathOnly(): String = substringBefore('?')
 
 fun com.bilby.data.Credentials.toCookieHeader(): String = buildList {
     if (sessdata.isNotEmpty()) add("SESSDATA=$sessdata")
@@ -103,10 +155,17 @@ suspend inline fun <reified T> BiliClient.getData(
     .fold(
         onSuccess = { envelope ->
             val data = envelope.data
-            if (envelope.code == 0 && data != null) BiliResult.Ok(data)
-            else BiliResult.ApiError(envelope.code, envelope.message)
+            if (envelope.code == 0 && data != null) {
+                BiliResult.Ok(data)
+            } else {
+                BiliLog.w("GET ${url.pathOnly()} 失败(${envelope.code}): ${envelope.message}")
+                BiliResult.ApiError(envelope.code, envelope.message)
+            }
         },
-        onFailure = { BiliResult.Failure(it) },
+        onFailure = {
+            BiliLog.w("GET ${url.pathOnly()} 异常", it)
+            BiliResult.Failure(it)
+        },
     )
 
 suspend inline fun <reified T> BiliClient.postForm(
@@ -117,8 +176,15 @@ suspend inline fun <reified T> BiliClient.postForm(
     .fold(
         onSuccess = { envelope ->
             val data = envelope.data
-            if (envelope.code == 0 && data != null) BiliResult.Ok(data)
-            else BiliResult.ApiError(envelope.code, envelope.message)
+            if (envelope.code == 0 && data != null) {
+                BiliResult.Ok(data)
+            } else {
+                BiliLog.w("POST ${url.pathOnly()} 失败(${envelope.code}): ${envelope.message}")
+                BiliResult.ApiError(envelope.code, envelope.message)
+            }
         },
-        onFailure = { BiliResult.Failure(it) },
+        onFailure = {
+            BiliLog.w("POST ${url.pathOnly()} 异常", it)
+            BiliResult.Failure(it)
+        },
     )

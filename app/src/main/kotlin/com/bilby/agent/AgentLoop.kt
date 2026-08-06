@@ -1,5 +1,6 @@
 package com.bilby.agent
 
+import com.bilby.BiliLog
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
@@ -47,6 +48,7 @@ class AgentLoop(
             val available = if (lastStep) listOf(submitAnswerSpec()) else tools.specs + submitAnswerSpec()
 
             val deltas = runCatching { llm.stream(messages, available).toList() }.getOrElse {
+                BiliLog.w("LLM 请求失败", it)
                 emit(AgentEvent.Failed(it.message ?: "LLM 请求失败"))
                 return@flow
             }
@@ -90,7 +92,10 @@ class AgentLoop(
 
                 emit(AgentEvent.ToolStarted(tool.label(arguments)))
                 val result = runCatching { tool.execute(arguments) }
-                    .getOrElse { ToolResult(forModel = "工具执行失败: ${it.message}") }
+                    .getOrElse {
+                        BiliLog.w("工具 ${tool.name} 执行失败", it)
+                        ToolResult(forModel = "工具执行失败: ${it.message}")
+                    }
 
                 seenBvids += result.bvids
                 result.forUi.forEach { traceByBvid[it.bvid] = it }
@@ -121,7 +126,10 @@ class AgentLoop(
                     trace = null,
                 )
             }
-        }.getOrElse { return AgentEvent.Failed("助理交回的结果无法解析") }
+        }.getOrElse {
+            BiliLog.w("submit_answer 参数解析失败", it)
+            return AgentEvent.Failed("助理交回的结果无法解析")
+        }
 
         // 规矩 2:不在本轮工具返回过的 bvid 一律丢弃。
         val verified = parsed

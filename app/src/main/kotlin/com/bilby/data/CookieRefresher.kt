@@ -1,5 +1,6 @@
 package com.bilby.data
 
+import com.bilby.BiliLog
 import com.bilby.api.BiliClient
 import com.bilby.api.BiliConstants
 import com.bilby.api.BiliResponse
@@ -48,7 +49,9 @@ class CookieRefresher(
             is BiliResult.Ok -> if (!info.value.refresh) return BiliResult.Ok(false)
         }
 
-        return runCatching { doRefresh(credentials) }.getOrElse { BiliResult.Failure(it) }
+        return runCatching { doRefresh(credentials) }
+            .onFailure { BiliLog.w("cookie 刷新异常", it) }
+            .getOrElse { BiliResult.Failure(it) }
     }
 
     private suspend fun doRefresh(old: Credentials): BiliResult<Boolean> {

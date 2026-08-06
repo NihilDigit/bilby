@@ -1,5 +1,6 @@
 package com.bilby.data
 
+import com.bilby.BiliLog
 import com.bilby.api.BiliClient
 import com.bilby.api.BiliConstants
 import com.bilby.api.BiliResponse
@@ -57,7 +58,7 @@ class AuthRepository(
             POLL_EXPIRED -> BiliResult.Ok(QrPollStatus.Expired)
             else -> BiliResult.ApiError(data.code, data.message)
         }
-    }.getOrElse { BiliResult.Failure(it) }
+    }.onFailure { BiliLog.w("扫码登录轮询异常", it) }.getOrElse { BiliResult.Failure(it) }
 
     suspend fun logout() = settings.clearCredentials()
 

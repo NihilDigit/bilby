@@ -1,5 +1,6 @@
 package com.bilby.agent
 
+import com.bilby.BiliLog
 import com.bilby.data.LlmConfig
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
@@ -60,7 +61,9 @@ class LlmClient(
                 val payload = line.removePrefix(DATA_PREFIX).trim()
                 if (payload == DONE_SENTINEL) break
 
-                val chunk = runCatching { json.decodeFromString<ChatChunk>(payload) }.getOrNull() ?: continue
+                val chunk = runCatching { json.decodeFromString<ChatChunk>(payload) }
+                    .onFailure { BiliLog.w("LLM 响应片段解析失败", it) }
+                    .getOrNull() ?: continue
                 val choice = chunk.choices.firstOrNull() ?: continue
 
                 choice.delta.content?.takeIf { it.isNotEmpty() }?.let { emit(LlmDelta.Text(it)) }

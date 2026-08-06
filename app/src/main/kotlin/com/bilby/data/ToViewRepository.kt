@@ -1,5 +1,6 @@
 package com.bilby.data
 
+import com.bilby.BiliLog
 import com.bilby.api.BiliClient
 import com.bilby.api.BiliConstants
 import com.bilby.api.BiliResult
@@ -76,8 +77,13 @@ class ToViewRepository(private val client: BiliClient) {
      */
     private suspend fun postAction(url: String, form: Map<String, String>): BiliResult<Unit> = runCatching {
         val envelope = client.rawPostForm(url, form).body<ToViewActionEnvelopeDto>()
-        if (envelope.code == 0) BiliResult.Ok(Unit) else BiliResult.ApiError(envelope.code, envelope.message)
-    }.getOrElse { BiliResult.Failure(it) }
+        if (envelope.code == 0) {
+            BiliResult.Ok(Unit)
+        } else {
+            BiliLog.w("POST ${url.substringBefore('?')} 失败(${envelope.code}): ${envelope.message}")
+            BiliResult.ApiError(envelope.code, envelope.message)
+        }
+    }.onFailure { BiliLog.w("POST ${url.substringBefore('?')} 异常", it) }.getOrElse { BiliResult.Failure(it) }
 
     private fun ToViewItemDto.toDomain() = ToViewItem(
         aid = aid,

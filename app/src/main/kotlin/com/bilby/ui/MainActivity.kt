@@ -1,7 +1,6 @@
 package com.bilby.ui
 
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -37,6 +36,7 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import com.bilby.AppContainer
 import com.bilby.BilbyApplication
+import com.bilby.BiliLog
 import com.bilby.agent.AgentIntent
 import com.bilby.api.BiliResult
 import com.bilby.ui.agent.AgentTraceScreen
@@ -44,8 +44,8 @@ import com.bilby.ui.agent.AgentViewModel
 import com.bilby.ui.comment.CommentViewModel
 import com.bilby.ui.feed.FeedScreen
 import com.bilby.ui.feed.FeedViewModel
-import com.bilby.ui.login.LoginScreen
-import com.bilby.ui.login.LoginViewModel
+import com.bilby.ui.login.TvLoginScreen
+import com.bilby.ui.login.TvLoginViewModel
 import com.bilby.ui.search.SearchChatScreen
 import com.bilby.ui.search.SearchChatViewModel
 import com.bilby.ui.space.SpaceScreen
@@ -78,20 +78,26 @@ private fun BilbyApp(container: AppContainer) {
     val loaded = credentials ?: return
 
     if (!loaded.isLoggedIn) {
-        val vm: LoginViewModel = viewModel(
-            factory = viewModelFactory { initializer { LoginViewModel(container.authRepository) } },
+        val vm: TvLoginViewModel = viewModel(
+            factory = viewModelFactory { initializer { TvLoginViewModel(container.tvLoginRepository) } },
         )
         val state by vm.state.collectAsStateWithLifecycle()
-        LoginScreen(state = state, onRefresh = vm::restart)
+        // 登录成功后 credentials 会自己更新,这里不需要额外导航
+        TvLoginScreen(state = state, onRefresh = vm::restart, onDone = {})
         return
     }
 
     // 每次冷启动检查一次是否该刷新 Cookie。cookie/info 自己会判断,不该刷时只是一次极轻的
     // 请求;放在这里而不是每次请求前检查,是因为 B 站的判断粒度本来就是"每日第一次访问"。
     LaunchedEffect(Unit) {
-        val result = container.cookieRefresher.refreshIfNeeded()
-        if (result is BiliResult.ApiError) {
-            Log.w("Bilby", "cookie 刷新失败(${result.code}): ${result.message}")
+        // buvid 激活只需成功一次,失败被内部吞掉:没有设备身份只影响写接口,
+        // 不该让整个 app 打不开。
+        container.deviceFingerprint.activateIfNeeded()
+
+        when (val result = container.cookieRefresher.refreshIfNeeded()) {
+            is BiliResult.ApiError -> BiliLog.w("cookie 刷新失败(${result.code}): ${result.message}")
+            is BiliResult.Failure -> BiliLog.w("cookie 刷新异常", result.cause)
+            is BiliResult.Ok -> Unit
         }
     }
 
@@ -305,6 +311,7 @@ private fun VideoRoute(
                     container.heartbeatReporter,
                     container.videoActionRepository,
                     container.settings,
+                    container.sponsorBlockRepository,
                 )
             }
         },
@@ -313,6 +320,7 @@ private fun VideoRoute(
     val related by vm.related.collectAsStateWithLifecycle()
     val relation by vm.relation.collectAsStateWithLifecycle()
     val favFolders by vm.favFolders.collectAsStateWithLifecycle()
+    val sponsorSegments by vm.sponsorSegments.collectAsStateWithLifecycle()
 
     // 评论用 aid 作 oid,要等视频详情回来才知道;拿到之前先不建 ViewModel。
     val aid = state.detail?.aid ?: return
@@ -326,6 +334,7 @@ private fun VideoRoute(
         state = state,
         related = related,
         commentState = commentState,
+        sponsorSegments = sponsorSegments,
         // 心跳挂在同一个时机上:一次算本地进度(冷启动续播用),一次上报服务端(跨端续播用)。
         onSaveProgress = { position, duration ->
             vm.saveProgress(position, duration)
