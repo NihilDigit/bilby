@@ -221,7 +221,13 @@ private fun SearchRoute(
 ) {
     val vm: SearchChatViewModel = viewModel(
         factory = viewModelFactory {
-            initializer { SearchChatViewModel(container.searchRepository, container.agentLoop) }
+            initializer {
+                SearchChatViewModel(
+                    container.searchRepository,
+                    container.agentLoop,
+                    container.agentSessionRepository,
+                )
+            }
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
@@ -234,6 +240,7 @@ private fun SearchRoute(
         onUserClick = onUserClick,
         onLoadMore = vm::loadMore,
         onRetry = vm::retry,
+        onNewSession = vm::newSession,
     )
 }
 

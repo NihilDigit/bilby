@@ -27,15 +27,35 @@ class AgentLoop(
     private val json: Json,
 ) {
 
-    fun run(intent: AgentIntent): Flow<AgentEvent> = flow {
-        val seenBvids = mutableSetOf<String>()
+    /**
+     * @param history 同一会话之前的对话(DESIGN 3.1 修订:会话内多轮)。**只含本会话的
+     *   对话与工具返回,永不含观看历史** —— 那条约束(3.3 第 4 条)不因多轮而放松。
+     * @param seenBvids 本会话此前工具返回过的 bvid。多轮时溯源校验的白名单要跨轮累积,
+     *   否则用户追问"刚才第二个怎么样"时,模型重提上一轮的视频会被当成编造的丢掉。
+     */
+    fun run(
+        intent: AgentIntent,
+        history: List<ChatMessage> = emptyList(),
+        priorBvids: Set<String> = emptySet(),
+        // 本轮新产生的消息与累积的 bvid 集合,交给调用方落库。不做成事件是因为它属于
+        // 持久化关注点,混进 UI 事件流里每个消费方都要处理一个自己用不上的分支。
+        onTurnComplete: (newMessages: List<ChatMessage>, seenBvids: Set<String>) -> Unit = { _, _ -> },
+    ): Flow<AgentEvent> = flow {
+        val seenBvids = priorBvids.toMutableSet()
         val traceByBvid = mutableMapOf<String, TraceItem>()
-        val messages = mutableListOf(
-            ChatMessage(role = ChatMessage.ROLE_SYSTEM, content = SYSTEM_PROMPT),
-            ChatMessage(role = ChatMessage.ROLE_USER, content = intent.toPrompt()),
-        )
+        val turnStart = if (history.isEmpty()) {
+            listOf(ChatMessage(role = ChatMessage.ROLE_SYSTEM, content = SYSTEM_PROMPT))
+        } else {
+            emptyList()
+        }
+        val messages = (turnStart + history).toMutableList().apply {
+            add(ChatMessage(role = ChatMessage.ROLE_USER, content = intent.toPrompt()))
+        }
+        // 新消息从这里开始(本轮的用户输入也算),用于回传给持久化层
+        val newFrom = messages.size - 1
 
         var step = 0
+        try {
         while (true) {
             val lastStep = step >= MAX_TOOL_STEPS
             if (lastStep) {
@@ -109,6 +129,10 @@ class AgentLoop(
                 )
             }
             step++
+        }
+        } finally {
+            // 无论正常交卷、失败还是被取消,本轮已经发生的对话都要落库:下一轮追问要接着它。
+            onTurnComplete(messages.drop(newFrom), seenBvids)
         }
     }
 

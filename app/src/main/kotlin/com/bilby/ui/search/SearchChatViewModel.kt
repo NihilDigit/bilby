@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import com.bilby.agent.AgentEvent
 import com.bilby.agent.AgentIntent
 import com.bilby.agent.AgentLoop
+import com.bilby.agent.ChatMessage
+import com.bilby.data.AgentSessionRepository
 import com.bilby.api.BiliResult
 import com.bilby.data.SearchRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,7 +31,24 @@ enum class SearchOrder(val apiValue: String, val label: String) {
 class SearchChatViewModel(
     private val searchRepository: SearchRepository,
     private val agentLoop: AgentLoop,
+    private val sessions: AgentSessionRepository,
 ) : ViewModel() {
+
+    /**
+     * 会话内多轮共享的上下文(DESIGN 3.1 修订)。**只含本会话的对话与工具返回**,
+     * 观看历史一个字都不会进来。会话由用户点"新会话"显式开启,不自动续接。
+     */
+    private var sessionId: Long? = null
+    private var history: List<ChatMessage> = emptyList()
+    private var seenBvids: Set<String> = emptySet()
+
+    /** 开新会话:清空上下文。旧会话留在库里,这一版不做会话列表。 */
+    fun newSession() {
+        sessionId = null
+        history = emptyList()
+        seenBvids = emptySet()
+        _state.value = SearchChatUiState(mode = _state.value.mode)
+    }
 
     private val _state = MutableStateFlow(SearchChatUiState())
     val state: StateFlow<SearchChatUiState> = _state.asStateFlow()
@@ -107,8 +126,23 @@ class SearchChatViewModel(
     }
 
     private fun runAgent(turnId: Long, query: String) = viewModelScope.launch {
-        agentLoop.run(AgentIntent.Query(query)).collect { event ->
+        val id = sessionId ?: sessions.newSession(query.take(SESSION_TITLE_LENGTH)).also { sessionId = it }
+
+        agentLoop.run(
+            intent = AgentIntent.Query(query),
+            history = history,
+            priorBvids = seenBvids,
+            onTurnComplete = { newMessages, seen ->
+                history = history + newMessages
+                seenBvids = seen
+                // 落库不能阻塞 UI 线程上的收流,单独起一个协程。
+                viewModelScope.launch { sessions.appendMessages(id, newMessages) }
+            },
+        ).collect { event ->
             updateAgent(turnId) { it.reduce(event) }
+            if (event is AgentEvent.Answer) {
+                viewModelScope.launch { sessions.saveAnswer(id, event.items) }
+            }
         }
         updateAgent(turnId) { it.copy(running = false) }
     }
@@ -153,4 +187,9 @@ class SearchChatViewModel(
 
     private fun BiliResult<List<com.bilby.data.SearchUser>>.usersOrEmpty() =
         (this as? BiliResult.Ok)?.value.orEmpty()
+
+    private companion object {
+        /** 会话标题取第一轮输入的前若干字,给以后的会话列表用。 */
+        const val SESSION_TITLE_LENGTH = 20
+    }
 }

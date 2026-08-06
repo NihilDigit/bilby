@@ -60,8 +60,9 @@ class LoginViewModel(private val auth: AuthRepository) : ViewModel() {
                 }
 
                 // 轮询期间的网络抖动不该让用户重新扫码,继续轮到超时为止。
-                is BiliResult.Failure -> Unit
+                is BiliResult.Failure -> BiliLog.w("扫码登录轮询异常", poll.cause)
                 is BiliResult.ApiError -> {
+                    BiliLog.w("扫码登录轮询失败(${poll.code}): ${poll.message}")
                     _state.value = LoginUiState.Failed("轮询失败(${poll.code}): ${poll.message}")
                     return
                 }

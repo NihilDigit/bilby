@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -115,6 +116,7 @@ fun SearchChatScreen(
     onUserClick: (mid: Long) -> Unit,
     onLoadMore: (turnId: Long) -> Unit,
     onRetry: (turnId: Long) -> Unit,
+    onNewSession: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -143,6 +145,7 @@ fun SearchChatScreen(
         ModeSwitch(
             mode = state.mode,
             onModeChange = onModeChange,
+            onNewSession = onNewSession,
             modifier = Modifier
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.statusBars)
@@ -177,14 +180,29 @@ fun SearchChatScreen(
 }
 
 @Composable
-private fun ModeSwitch(mode: SearchMode, onModeChange: (SearchMode) -> Unit, modifier: Modifier = Modifier) {
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+private fun ModeSwitch(
+    mode: SearchMode,
+    onModeChange: (SearchMode) -> Unit,
+    onNewSession: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
         SearchMode.entries.forEach { candidate ->
             FilterChip(
                 selected = candidate == mode,
                 onClick = { onModeChange(candidate) },
                 label = { Text(candidate.label) },
             )
+        }
+        Spacer(Modifier.weight(1f))
+        // 助理会话在会话内共享上下文,可以追问;开新会话是清空上下文的唯一入口
+        // (DESIGN 3.1:会话必须由用户显式开启)。
+        IconButton(onClick = onNewSession) {
+            Icon(Icons.Filled.Add, contentDescription = "新会话")
         }
     }
 }
@@ -704,6 +722,7 @@ private fun SearchChatScreenNormalPreview() {
             onUserClick = {},
             onLoadMore = {},
             onRetry = {},
+            onNewSession = {},
         )
     }
 }
@@ -742,6 +761,7 @@ private fun SearchChatScreenAgentRunningPreview() {
             onUserClick = {},
             onLoadMore = {},
             onRetry = {},
+            onNewSession = {},
         )
     }
 }
@@ -790,6 +810,7 @@ private fun SearchChatScreenAgentAnswerPreview() {
             onUserClick = {},
             onLoadMore = {},
             onRetry = {},
+            onNewSession = {},
         )
     }
 }

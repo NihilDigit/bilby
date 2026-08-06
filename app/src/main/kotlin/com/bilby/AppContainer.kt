@@ -8,6 +8,7 @@ import com.bilby.agent.createBiliTools
 import com.bilby.api.BiliClient
 import com.bilby.api.DeviceFingerprint
 import com.bilby.api.WbiSigner
+import com.bilby.data.AgentSessionRepository
 import com.bilby.data.AuthRepository
 import com.bilby.data.CookieRefresher
 import com.bilby.data.DynamicRepository
@@ -116,4 +117,6 @@ class AppContainer(context: Context) {
 
     /** 无状态:每次调用都是新的一轮,不跨轮携带任何东西(DESIGN 3.1)。 */
     val agentLoop: AgentLoop by lazy { AgentLoop(llmClient, toolRegistry, json) }
+
+    val agentSessionRepository: AgentSessionRepository by lazy { AgentSessionRepository(database, json) }
 }
