@@ -1,0 +1,16 @@
+# 参考实现,不进本仓库历史
+PiliPlus/
+
+# 改文件前的自动备份
+*.bak
+
+*.iml
+.gradle/
+.kotlin/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild
+.cxx
