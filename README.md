@@ -5,24 +5,23 @@
 An Android client for bilibili with the recommendation machinery taken out.
 
 The home screen shows updates from the accounts you follow, newest first. What appears there
-is decided entirely by who you follow; scrolling down moves further back in time, and
-nothing is inserted along the way. There is no recommendation feed, no related-videos rail,
-and no autoplay.
+follows from who you follow; scrolling down moves further back in time, and the act of
+scrolling produces nothing on its own. Recommendation feed, related-videos rail, autoplay:
+none of the three.
 
-Everything that would normally hand you the next video has been replaced by something you
-choose. Where the official app puts related recommendations, Bilby puts the current video's
-collection and the uploader's other work: a finite set you selected by opening this video. A
-queue built from that set plays to the end and stops. It does not wrap, loop, or refill from
-a recommendation pool, because a queue that refills has quietly removed the moment where you
-decide whether to keep watching.
+Wherever the official app hands you the next video, Bilby leaves the choice to you. In the
+slot for related recommendations sits the current video's collection and the uploader's
+other work, a finite set fixed the moment you opened this video. A queue built from it plays
+to the end and stops: its contents are settled when playback starts and stay that way. A
+queue that refills has taken away the moment where you decide whether to keep watching.
 
 To find something else, say what you want. Search works the usual way, and there is an
 assistant you can describe things to: it searches, reads descriptions and comments, and
-comes back with a few videos and its reasons for each. It has no access to your watch
-history and will not be given any. Its context holds only what you told it this time.
+comes back with a few videos and its reasons for each. It knows only what you told it this
+time, by design and permanently.
 
-Bilby reports to bilibili like any other client. History, heartbeats, coins, favourites, and
-likes all go through. The part it drops is the part that pushes back at you.
+Bilby reports to bilibili like any other client, and history, heartbeats, coins, favourites,
+and likes all go through. What it drops is the part that pushes back at you.
 
 ## What it does
 
