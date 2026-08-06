@@ -55,10 +55,10 @@ Navigation 3, Media3, Room, Ktor 3, and kotlinx.serialization.
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+GPL-3.0-or-later, following [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus). See
+[LICENSE](LICENSE).
 
-The choice is inherited rather than made. The parts that talk to bilibili — WBI signing,
+Everything Bilby knows about talking to bilibili it learned from PiliPlus: WBI signing,
 AppSign, the device fingerprint, TV qrcode login, playurl parameters, reporting, and write
-actions — are ported from [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus), which is
-GPL-3.0. Public documentation for these endpoints lags their live behaviour badly enough
-that a working client is the more reliable reference.
+actions are all ported from it. That project has already worked out which endpoints accept
+what, which ones risk control will refuse, and which documented behaviour no longer holds.
