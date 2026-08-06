@@ -5,10 +5,26 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Subscriptions
+import androidx.compose.material.icons.filled.WatchLater
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import com.bilby.api.BiliResult
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -18,11 +34,24 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import com.bilby.AppContainer
 import com.bilby.BilbyApplication
+import com.bilby.agent.AgentIntent
+import com.bilby.api.BiliResult
+import com.bilby.ui.agent.AgentTraceScreen
+import com.bilby.ui.agent.AgentViewModel
+import com.bilby.ui.comment.CommentViewModel
 import com.bilby.ui.feed.FeedScreen
 import com.bilby.ui.feed.FeedViewModel
 import com.bilby.ui.login.LoginScreen
 import com.bilby.ui.login.LoginViewModel
+import com.bilby.ui.search.SearchChatScreen
+import com.bilby.ui.search.SearchChatViewModel
+import com.bilby.ui.space.SpaceScreen
+import com.bilby.ui.space.SpaceViewModel
 import com.bilby.ui.theme.BilbyTheme
+import com.bilby.ui.toview.ToViewScreen
+import com.bilby.ui.toview.ToViewViewModel
+import com.bilby.ui.video.VideoScreen
+import com.bilby.ui.video.VideoViewModel
 
 class MainActivity : ComponentActivity() {
 
@@ -38,10 +67,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/**
- * 登录态是唯一的根级分支:没有 Cookie 就只有登录页,拿到就直接进动态流。
- * 不做启动页、不做引导页 —— 打开即到要看的东西。
- */
 @Composable
 private fun BilbyApp(container: AppContainer) {
     // DataStore 第一帧是异步的:null 表示还没读出来,此时什么都不画,
@@ -72,13 +97,90 @@ private fun BilbyApp(container: AppContainer) {
         backStack = backStack,
         onBack = { backStack.removeLastOrNull() },
         entryProvider = entryProvider {
-            entry<Home> { HomeScreen(container) }
+            entry<Home> {
+                RootTabs(
+                    container = container,
+                    onVideoClick = { backStack.add(Video(it)) },
+                    onUserClick = { backStack.add(Space(it)) },
+                )
+            }
+            entry<Video> { key ->
+                VideoRoute(
+                    container = container,
+                    bvid = key.bvid,
+                    onUpClick = { backStack.add(Space(it)) },
+                    onFindRelated = { bvid, title, upName -> backStack.add(AgentRelated(bvid, title, upName)) },
+                    onOpenVideo = { backStack.add(Video(it)) },
+                )
+            }
+            entry<AgentSearch> { key ->
+                AgentRoute(
+                    container = container,
+                    intent = AgentIntent.Query(key.query),
+                    onVideoClick = { backStack.add(Video(it)) },
+                )
+            }
+            entry<AgentRelated> { key ->
+                AgentRoute(
+                    container = container,
+                    intent = AgentIntent.Related(key.bvid, key.title, key.upName),
+                    onVideoClick = { backStack.add(Video(it)) },
+                )
+            }
+            entry<Space> { key ->
+                SpaceRoute(container, key.mid, onVideoClick = { backStack.add(Video(it)) }, onBack = { backStack.removeLastOrNull() })
+            }
         },
     )
 }
 
+private enum class RootTab(val label: String, val icon: ImageVector) {
+    Feed("动态", Icons.Filled.Subscriptions),
+    Search("搜索", Icons.Filled.Search),
+    ToView("稍后再看", Icons.Filled.WatchLater),
+}
+
+/**
+ * 三个 tab 都是显式入口:刷更新、搜索、看自己存的。没有"随便看看"那一格
+ * (DESIGN 1.1 的推送式入口那一栏)。
+ *
+ * 三个 pane 各自持有 ViewModel 并常驻,切走再切回保留滚动位置和搜索结果 ——
+ * 每次切 tab 都重新拉一遍等于把"刷完"的状态清零。
+ */
 @Composable
-private fun HomeScreen(container: AppContainer) {
+private fun RootTabs(
+    container: AppContainer,
+    onVideoClick: (String) -> Unit,
+    onUserClick: (Long) -> Unit,
+) {
+    var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
+
+    Scaffold(
+        bottomBar = {
+            NavigationBar {
+                RootTab.entries.forEach { tab ->
+                    NavigationBarItem(
+                        selected = selected == tab,
+                        onClick = { selected = tab },
+                        icon = { Icon(tab.icon, contentDescription = tab.label) },
+                        label = { Text(tab.label) },
+                    )
+                }
+            }
+        },
+    ) { insets ->
+        Box(modifier = Modifier.fillMaxSize().padding(bottom = insets.calculateBottomPadding())) {
+            when (selected) {
+                RootTab.Feed -> FeedRoute(container, onVideoClick)
+                RootTab.Search -> SearchRoute(container, onVideoClick, onUserClick)
+                RootTab.ToView -> ToViewRoute(container, onVideoClick)
+            }
+        }
+    }
+}
+
+@Composable
+private fun FeedRoute(container: AppContainer, onVideoClick: (String) -> Unit) {
     val vm: FeedViewModel = viewModel(
         factory = viewModelFactory { initializer { FeedViewModel(container.dynamicRepository) } },
     )
@@ -87,6 +189,127 @@ private fun HomeScreen(container: AppContainer) {
         state = state,
         onLoadMore = vm::loadMore,
         onRetry = vm::loadFirstPage,
-        onItemClick = { /* M2 播放页 */ },
+        onItemClick = { onVideoClick(it.bvid) },
+    )
+}
+
+@Composable
+private fun SearchRoute(
+    container: AppContainer,
+    onVideoClick: (String) -> Unit,
+    onUserClick: (Long) -> Unit,
+) {
+    val vm: SearchChatViewModel = viewModel(
+        factory = viewModelFactory {
+            initializer { SearchChatViewModel(container.searchRepository, container.agentLoop) }
+        },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    SearchChatScreen(
+        state = state,
+        onInputChange = vm::onInputChange,
+        onModeChange = vm::onModeChange,
+        onSend = vm::send,
+        onVideoClick = onVideoClick,
+        onUserClick = onUserClick,
+        onLoadMore = vm::loadMore,
+        onRetry = vm::retry,
+    )
+}
+
+@Composable
+private fun ToViewRoute(container: AppContainer, onVideoClick: (String) -> Unit) {
+    val vm: ToViewViewModel = viewModel(
+        factory = viewModelFactory { initializer { ToViewViewModel(container.toViewRepository) } },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    ToViewScreen(
+        state = state,
+        onDelete = { vm.delete(it) },
+        onClearFinished = vm::clearFinished,
+        onItemClick = { onVideoClick(it.bvid) },
+        onRetry = vm::retry,
+    )
+}
+
+@Composable
+private fun AgentRoute(container: AppContainer, intent: AgentIntent, onVideoClick: (String) -> Unit) {
+    val vm: AgentViewModel = viewModel(
+        key = "agent-$intent",
+        factory = viewModelFactory { initializer { AgentViewModel(container.agentLoop, intent) } },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    AgentTraceScreen(state = state, onVideoClick = onVideoClick, onRetry = vm::start)
+}
+
+@Composable
+private fun SpaceRoute(
+    container: AppContainer,
+    mid: Long,
+    onVideoClick: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val vm: SpaceViewModel = viewModel(
+        key = "space-$mid",
+        factory = viewModelFactory { initializer { SpaceViewModel(mid, container.spaceRepository) } },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    SpaceScreen(
+        state = state,
+        onTabSelected = vm::onTabSelected,
+        onArchiveOrderChanged = vm::onArchiveOrderChanged,
+        onArchiveKeywordChanged = vm::onArchiveKeywordChanged,
+        onArchiveSearch = vm::onArchiveSearch,
+        onLoadMoreArchives = vm::loadMoreArchives,
+        onLoadMoreDynamics = vm::loadMoreDynamics,
+        onLoadMoreCollections = vm::loadMoreCollections,
+        onCollectionClick = vm::openCollection,
+        onCollectionDetailBack = vm::closeCollectionDetail,
+        onLoadMoreCollectionDetail = vm::loadMoreCollectionDetail,
+        onVideoClick = { onVideoClick(it.bvid) },
+        onRetry = vm::retry,
+    )
+}
+
+@Composable
+private fun VideoRoute(
+    container: AppContainer,
+    bvid: String,
+    onUpClick: (Long) -> Unit,
+    onFindRelated: (bvid: String, title: String, upName: String) -> Unit,
+    onOpenVideo: (String) -> Unit,
+) {
+    val vm: VideoViewModel = viewModel(
+        key = "video-$bvid",
+        factory = viewModelFactory {
+            initializer {
+                VideoViewModel(bvid, container.videoRepository, container.database.playbackProgressDao())
+            }
+        },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+
+    // 评论用 aid 作 oid,要等视频详情回来才知道;拿到之前先不建 ViewModel。
+    val aid = state.detail?.aid ?: return
+    val commentVm: CommentViewModel = viewModel(
+        key = "comment-$aid",
+        factory = viewModelFactory { initializer { CommentViewModel(container.commentRepository, aid) } },
+    )
+    val commentState by commentVm.state.collectAsStateWithLifecycle()
+
+    VideoScreen(
+        state = state,
+        commentState = commentState,
+        onSaveProgress = vm::saveProgress,
+        onFindRelated = { title, upName -> onFindRelated(bvid, title, upName) },
+        onUpClick = onUpClick,
+        onPlayPart = { vm.playPart(it) },
+        onPlayEpisode = onOpenVideo,
+        onCommentSort = commentVm::setSort,
+        onCommentLoadMore = commentVm::loadMore,
+        onExpandReplies = commentVm::expandReplies,
+        onSendComment = commentVm::send,
+        onLikeComment = commentVm::like,
+        onDeleteComment = commentVm::delete,
     )
 }

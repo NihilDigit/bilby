@@ -1,12 +1,23 @@
 package com.bilby
 
 import android.content.Context
+import com.bilby.agent.AgentLoop
+import com.bilby.agent.LlmClient
+import com.bilby.agent.ToolRegistry
+import com.bilby.agent.createBiliTools
 import com.bilby.api.BiliClient
 import com.bilby.api.WbiSigner
 import com.bilby.data.AuthRepository
 import com.bilby.data.CookieRefresher
 import com.bilby.data.DynamicRepository
+import com.bilby.data.CommentRepository
+import com.bilby.data.SearchRepository
 import com.bilby.data.SettingsStore
+import com.bilby.data.SpaceRepository
+import com.bilby.data.ToViewRepository
+import com.bilby.data.VideoRepository
+import com.bilby.data.db.BilbyDatabase
+import kotlinx.coroutines.flow.first
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -25,6 +36,10 @@ class AppContainer(context: Context) {
         ignoreUnknownKeys = true
         coerceInputValues = true
         explicitNulls = false
+        // kotlinx 默认不序列化"值等于默认值"的字段。OpenAI 协议里 tools[].type="function"
+        // 和 stream=true 恰恰都是常量默认值,不开这个开关它们会整个消失,服务端回
+        // 400 missing field `type`。
+        encodeDefaults = true
     }
 
     val httpClient: HttpClient by lazy {
@@ -49,4 +64,29 @@ class AppContainer(context: Context) {
     val cookieRefresher: CookieRefresher by lazy { CookieRefresher(biliClient, settings) }
 
     val dynamicRepository: DynamicRepository by lazy { DynamicRepository(biliClient) }
+
+    val database: BilbyDatabase by lazy { BilbyDatabase.create(appContext) }
+
+    val videoRepository: VideoRepository by lazy { VideoRepository(biliClient) }
+
+    val searchRepository: SearchRepository by lazy { SearchRepository(biliClient) }
+
+    val commentRepository: CommentRepository by lazy { CommentRepository(biliClient, settings) }
+
+    val spaceRepository: SpaceRepository by lazy { SpaceRepository(biliClient) }
+
+    val toViewRepository: ToViewRepository by lazy { ToViewRepository(biliClient) }
+
+    private val llmClient: LlmClient by lazy {
+        LlmClient(httpClient, json) { settings.llmConfig.first() }
+    }
+
+    private val toolRegistry: ToolRegistry by lazy {
+        ToolRegistry(
+            createBiliTools(searchRepository, videoRepository, spaceRepository, commentRepository, biliClient)
+        )
+    }
+
+    /** 无状态:每次调用都是新的一轮,不跨轮携带任何东西(DESIGN 3.1)。 */
+    val agentLoop: AgentLoop by lazy { AgentLoop(llmClient, toolRegistry, json) }
 }

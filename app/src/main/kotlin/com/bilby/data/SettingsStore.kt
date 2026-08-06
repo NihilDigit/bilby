@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.bilby.BuildConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -43,6 +44,23 @@ class SettingsStore(context: Context) {
         store.edit { p -> ALL_CREDENTIAL_KEYS.forEach(p::remove) }
     }
 
+    /** 未配置时回落到 BuildConfig(debug 版从 local.properties 注入),省去每次装机重输。 */
+    val llmConfig: Flow<LlmConfig> = store.data.map { p ->
+        LlmConfig(
+            baseUrl = p[KEY_LLM_BASE_URL] ?: BuildConfig.LLM_BASE_URL,
+            apiKey = p[KEY_LLM_API_KEY] ?: BuildConfig.LLM_API_KEY,
+            model = p[KEY_LLM_MODEL] ?: DEFAULT_LLM_MODEL,
+        )
+    }
+
+    suspend fun saveLlmConfig(value: LlmConfig) {
+        store.edit { p ->
+            p[KEY_LLM_BASE_URL] = value.baseUrl
+            p[KEY_LLM_API_KEY] = value.apiKey
+            p[KEY_LLM_MODEL] = value.model
+        }
+    }
+
     private companion object {
         val KEY_SESSDATA = stringPreferencesKey("sessdata")
         val KEY_BILI_JCT = stringPreferencesKey("bili_jct")
@@ -51,6 +69,13 @@ class SettingsStore(context: Context) {
 
         /** 文档里叫 ac_time_value,存在 localStorage;这里就是 cookie 刷新的凭据。 */
         val KEY_REFRESH_TOKEN = stringPreferencesKey("refresh_token")
+
+        val KEY_LLM_BASE_URL = stringPreferencesKey("llm_base_url")
+        val KEY_LLM_API_KEY = stringPreferencesKey("llm_api_key")
+        val KEY_LLM_MODEL = stringPreferencesKey("llm_model")
+
+        /** 任务简单,用最便宜档即可(DESIGN 3.1)。 */
+        const val DEFAULT_LLM_MODEL = "deepseek-chat"
 
         val ALL_CREDENTIAL_KEYS = listOf(
             KEY_SESSDATA, KEY_BILI_JCT, KEY_DEDE_USER_ID, KEY_DEDE_CK_MD5, KEY_REFRESH_TOKEN,
@@ -66,4 +91,12 @@ data class Credentials(
     val refreshToken: String = "",
 ) {
     val isLoggedIn: Boolean get() = sessdata.isNotEmpty() && dedeUserId.isNotEmpty()
+}
+
+data class LlmConfig(
+    val baseUrl: String,
+    val apiKey: String,
+    val model: String,
+) {
+    val isConfigured: Boolean get() = baseUrl.isNotEmpty() && apiKey.isNotEmpty()
 }

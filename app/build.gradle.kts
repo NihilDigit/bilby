@@ -1,3 +1,11 @@
+import java.util.Properties
+
+// LLM 凭据放 local.properties(不进 git),只注入 debug 版的 BuildConfig 作为默认值;
+// 运行期的真相来源仍是 DataStore,用户可改(DESIGN 4 节)。release 版拿到的是空串。
+val localProperties = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -18,7 +26,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField("String", "LLM_BASE_URL", "\"${localProperties.getProperty("LLM_BASE_URL", "")}\"")
+            buildConfigField("String", "LLM_API_KEY", "\"${localProperties.getProperty("LLM_API_KEY", "")}\"")
+        }
         release {
+            buildConfigField("String", "LLM_BASE_URL", "\"\"")
+            buildConfigField("String", "LLM_API_KEY", "\"\"")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

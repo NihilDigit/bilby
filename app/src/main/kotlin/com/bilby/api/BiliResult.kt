@@ -29,6 +29,16 @@ inline fun <T, R> BiliResult<T>.map(transform: (T) -> R): BiliResult<R> = when (
 
 fun <T> BiliResult<T>.getOrNull(): T? = (this as? BiliResult.Ok)?.value
 
+/**
+ * 把失败原样传给类型参数不同的调用方。合并两个接口的结果时,两条错误分支的 T 不同,
+ * 直接返回会被推断成 BiliResult<Any>;错误分支本来就不携带 T,换成 Nothing 才是准确的。
+ */
+fun BiliResult<*>.propagateFailure(): BiliResult<Nothing> = when (this) {
+    is BiliResult.Ok -> error("Ok 不是失败,不该走到这里")
+    is BiliResult.ApiError -> this
+    is BiliResult.Failure -> this
+}
+
 /** 未登录。Cookie 失效后所有需要登录态的接口都返回它,是触发刷新流程的信号。 */
 const val CODE_NOT_LOGGED_IN = -101
 
