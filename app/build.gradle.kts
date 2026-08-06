@@ -56,6 +56,15 @@ android {
         compose = true
         buildConfig = true
     }
+
+    testOptions {
+        unitTests {
+            // JVM 单测里 android.util.Log 的方法默认抛异常。本项目的纪律是每一处被吞掉的
+            // 失败都要记日志(见 CLAUDE.md),于是任何走到日志的分支在单测里都会炸——
+            // 炸的不是被测逻辑,是日志本身。让这些方法返回默认值,测的才是逻辑。
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 dependencies {

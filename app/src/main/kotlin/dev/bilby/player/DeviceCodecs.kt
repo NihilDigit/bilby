@@ -49,10 +49,14 @@ object DeviceCodecs {
         // 失败在这里只记不打:这个属性是 selectStreams 的默认参数,JVM 单元测试里
         // MediaCodecList 根本不存在,在这里调 BiliLog 会连带把 android.util.Log 拖进来,
         // 让一个纯函数的测试挂在日志上。日志推迟到 logOnce(),那只在真机建播放器时调。
+        // 空列表和抛异常是同一件事:都表示"这台机器没告诉我们它能解什么"。`codecInfos` 是
+        // 平台类型,拿到 null 时不会在这一行炸,而是在后面遍历时炸——所以判断要留在 try 里。
         val infos = try {
-            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos?.takeIf { it.isNotEmpty() }
         } catch (t: Throwable) {
             queryFailure = t
+            null
+        } ?: run {
             // 查不到就当全都支持:宁可保持现状,也不要因为一次查询失败把用户锁死在 AVC。
             return MIME_BY_CODEC_ID.keys
         }

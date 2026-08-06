@@ -36,14 +36,14 @@ class AgentLoopTest {
     fun `工具没返回过的 bvid 会被丢弃`() = runTest {
         val fabricates = FakeStreamer { messages ->
             if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")
-            else toolCall("submit_answer", """{"items":[{"bvid":"BV_REAL","reason":"真的"},{"bvid":"BV_FAKE","reason":"编的"}]}""")
+            else toolCall("submit_answer", """{"answer":"看这条 [[BV1real0000x]],还有这条 [[BV1fake0000x]]"}""")
         }
-        val events = AgentLoop(fabricates, ToolRegistry(listOf(FakeTool("search_videos", setOf("BV_REAL")))), json)
+        val events = AgentLoop(fabricates, ToolRegistry(listOf(FakeTool("search_videos", setOf("BV1real0000x")))), json)
             .run(AgentIntent.Query("随便"))
             .toList()
 
         val answer = events.filterIsInstance<AgentEvent.Answer>().single()
-        assertEquals(listOf("BV_REAL"), answer.items.map { it.bvid })
+        assertEquals(listOf("BV1real0000x"), answer.items.map { it.bvid })
     }
 
     @Test
@@ -53,7 +53,7 @@ class AgentLoopTest {
             if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")
             else toolCall(
                 "submit_answer",
-                """{"items":[${all.joinToString(",") { """{"bvid":"$it","reason":"r"}""" }}]}""",
+                """{"answer":"${all.joinToString("、") { "[[$it]]" }}"}""",
             )
         }
         val events = AgentLoop(greedy, ToolRegistry(listOf(FakeTool("search_videos", all.toSet()))), json)
@@ -64,12 +64,48 @@ class AgentLoopTest {
     }
 
     @Test
+    fun `被丢弃的引用连标记一起抹掉,且不把句子劈成两段`() = runTest {
+        // 丢引用不能丢文字:卡片没了句子还得读得通,而且标记本身绝不能漏到界面上。
+        val cites = FakeStreamer { messages ->
+            if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")
+            else toolCall("submit_answer", """{"answer":"前半句 [[BV1fake0000x]] 后半句,真的这条 [[BV1real0000x]] 收尾"}""")
+        }
+        val events = AgentLoop(cites, ToolRegistry(listOf(FakeTool("search_videos", setOf("BV1real0000x")))), json)
+            .run(AgentIntent.Query("随便"))
+            .toList()
+
+        val blocks = events.filterIsInstance<AgentEvent.Answer>().single().blocks
+        assertEquals(
+            listOf<AnswerBlock>(
+                AnswerBlock.Text("前半句  后半句,真的这条"),
+                AnswerBlock.Video("BV1real0000x", null),
+                AnswerBlock.Text("收尾"),
+            ),
+            blocks,
+        )
+    }
+
+    @Test
+    fun `同一个视频被反复提到也只出一张卡片`() = runTest {
+        val repeats = FakeStreamer { messages ->
+            if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")
+            else toolCall("submit_answer", """{"answer":"先看 [[BV1]],刚才说的 [[BV1]] 值得重看"}""")
+        }
+        val events = AgentLoop(repeats, ToolRegistry(listOf(FakeTool("search_videos", setOf("BV1")))), json)
+            .run(AgentIntent.Query("随便"))
+            .toList()
+
+        val blocks = events.filterIsInstance<AgentEvent.Answer>().single().blocks
+        assertEquals(1, blocks.filterIsInstance<AnswerBlock.Video>().size)
+    }
+
+    @Test
     fun `交卷后的对话记录里每个 tool_call 都有对应的 tool 响应`() = runTest {
         // 协议要求带 tool_calls 的 assistant 消息后面必须跟上对每个 tool_call_id 的响应。
         // 缺了在单轮时看不出来,下一轮把这段历史发回去就是 400。
         val answers = FakeStreamer { messages ->
             if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")
-            else toolCall("submit_answer", """{"items":[{"bvid":"BV1","reason":"r"}]}""")
+            else toolCall("submit_answer", """{"answer":"就这个 [[BV1]]"}""")
         }
         var transcript: List<ChatMessage> = emptyList()
         AgentLoop(answers, ToolRegistry(listOf(FakeTool("search_videos", setOf("BV1")))), json)

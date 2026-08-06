@@ -10,13 +10,32 @@ sealed interface AgentEvent {
     data class ToolFinished(val label: String, val items: List<TraceItem>) : AgentEvent
 
     /**
-     * @param summary 面向用户的正文。用户问的是问题("这几个评价如何")时,答案就该是一段话;
-     *   强迫它套进视频卡片只会得到一张标题是裸 bvid 的卡。
-     * @param items 推荐的视频,可以为空(纯文本回答)。
+     * 答案是**一段可以夹着视频卡片的正文**,不是"一段总结 + 一串卡片"。
+     *
+     * 模型交回的是散文,视频写成 `[[BV1xx]]` 的行内引用;这里把它切成块,引用处就地换成
+     * 卡片。这样"为什么值得看"由引用前后的句子承担,不再需要每张卡片自带一句独立说明——
+     * 那种说明没有上下文可依附,才逼出了"不许写检索理由""不超过 60 字"这类限制。
+     *
+     * 纯文本回答是合法的:用户问"这几个评价如何"时,答案本来就不该是一串视频。
      */
-    data class Answer(val summary: String?, val items: List<AnswerItem>) : AgentEvent
+    data class Answer(val blocks: List<AnswerBlock>) : AgentEvent {
+        /** 过渡用:搜索页还按"总结 + 卡片"渲染。搜索页改成按块渲染后删掉这两个。 */
+        val summary: String? get() = blocks.filterIsInstance<AnswerBlock.Text>()
+            .joinToString("\n") { it.text }
+            .takeIf { it.isNotBlank() }
+
+        val items: List<AnswerItem> get() = blocks.filterIsInstance<AnswerBlock.Video>()
+            .map { AnswerItem(it.bvid, reason = "", trace = it.trace) }
+    }
 
     data class Failed(val message: String) : AgentEvent
+}
+
+sealed interface AnswerBlock {
+    data class Text(val text: String) : AnswerBlock
+
+    /** 引用位置就地插的卡片。文案不在这里,在它前后的 [Text] 里。 */
+    data class Video(val bvid: String, val trace: TraceItem?) : AnswerBlock
 }
 
 data class AnswerItem(val bvid: String, val reason: String, val trace: TraceItem?)

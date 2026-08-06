@@ -209,33 +209,66 @@ class AgentLoop(
                 return AgentEvent.Failed("助理交回的结果无法解析")
             }
 
-        val summary = arguments["summary"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+        val answer = arguments["answer"]?.jsonPrimitive?.content.orEmpty()
+        val blocks = toBlocks(answer, seenBvids, traceByBvid)
 
-        val parsed = runCatching {
-            arguments["items"]?.jsonArray.orEmpty().map { element ->
-                val obj = element.jsonObject
-                AnswerItem(
-                    bvid = obj["bvid"]!!.jsonPrimitive.content,
-                    reason = obj["reason"]?.jsonPrimitive?.content.orEmpty(),
-                    trace = null,
-                )
-            }
-        }.getOrElse {
-            BiliLog.w("submit_answer 的 items 解析失败", it)
-            emptyList()
+        if (blocks.isEmpty()) return AgentEvent.Failed("没有找到确实相关的结果")
+        return AgentEvent.Answer(blocks)
+    }
+
+    /**
+     * 把带 `[[bvid]]` 引用的散文切成块。三条硬规矩全部落在这里,**丢引用不丢文字** ——
+     * 引用被丢掉时只是少一张卡片,前后的句子照常显示,读起来不会断。
+     *
+     *   - 规矩 2:不在工具返回过的集合里的 bvid 丢掉(模型编不出视频)。
+     *   - 规矩 3:卡片数量由代码定,超出上限的引用丢掉。
+     *   - 同一个 bvid 只出卡片一次:模型回指前文时(「刚才那条 [[BV1xx]]」)不该再来一张。
+     */
+    private fun toBlocks(
+        answer: String,
+        seenBvids: Set<String>,
+        traceByBvid: Map<String, TraceItem>,
+    ): List<AnswerBlock> {
+        val blocks = mutableListOf<AnswerBlock>()
+        val used = mutableSetOf<String>()
+
+        // 文字先攒在缓冲里,只有真的要插卡片时才切块。被丢掉的引用**连同标记一起**从正文里
+        // 抹掉,而它两侧的句子仍属于同一段 —— 否则一个被丢的引用会把一句话劈成两块。
+        val text = StringBuilder()
+        var cursor = 0
+
+        fun flushText() {
+            text.toString().trim().takeIf { it.isNotEmpty() }?.let { blocks += AnswerBlock.Text(it) }
+            text.clear()
         }
 
-        // 规矩 2:不在本轮工具返回过的 bvid 一律丢弃。
-        val verified = parsed
-            .filter { it.bvid in seenBvids }
-            .distinctBy { it.bvid }
-            .map { it.copy(trace = traceByBvid[it.bvid]) }
+        for (match in VIDEO_REF.findAll(answer)) {
+            val bvid = match.groupValues[1]
+            text.append(answer, cursor, match.range.first)
+            cursor = match.range.last + 1
 
-        // 纯文本回答是合法的:用户问"这几个评价如何"时,答案本来就不是一串视频。
-        if (verified.isEmpty() && summary == null) return AgentEvent.Failed("没有找到确实相关的结果")
+            val keep = when {
+                bvid !in seenBvids -> {
+                    BiliLog.w("助理引用了工具没返回过的视频,已丢弃:$bvid")
+                    false
+                }
+                bvid in used -> false
+                used.size >= MAX_RESULTS -> {
+                    BiliLog.w("助理引用的视频超过 $MAX_RESULTS 条,多余的已丢弃:$bvid")
+                    false
+                }
+                else -> true
+            }
+            if (!keep) continue
 
-        // 规矩 3:条数由代码定,模型只负责排序。
-        return AgentEvent.Answer(summary, verified.take(MAX_RESULTS))
+            flushText()
+            blocks += AnswerBlock.Video(bvid, traceByBvid[bvid])
+            used += bvid
+        }
+        text.append(answer, cursor, answer.length)
+        flushText()
+
+        return blocks
     }
 
     private fun AgentIntent.toPrompt(): String = when (this) {
@@ -259,30 +292,19 @@ class AgentLoop(
         const val MAX_RESULTS = 5
         const val SUBMIT_ANSWER = "submit_answer"
 
+        /** `[[BV1xx4y1x7xx]]` 形式的行内引用。bvid 的字符集是 base58,这里不收窄,交给白名单校验。 */
+        val VIDEO_REF = Regex("""\[\[(BV[0-9A-Za-z]+)]]""")
+
         const val SUBMIT_ANSWER_SCHEMA = """
 {
   "type": "object",
   "properties": {
-    "summary": {
+    "answer": {
       "type": "string",
-      "description": "面向用户的回答正文。用户问的是问题(如「这几个评价怎么样」)时,答案写在这里,items 可以为空;用户要的是找视频时,这里可以留空或写一句总览。"
-    },
-    "items": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "bvid": { "type": "string" },
-          "reason": {
-            "type": "string",
-            "description": "面向用户的一两句介绍(**不超过 60 字**):这个视频讲什么、有什么值得看的地方。写内容本身,不要写你是怎么找到它的,也不要出现「同一UP主」「同属该系列」这类检索理由。更长的说明写进 summary。"
-          }
-        },
-        "required": ["bvid"]
-      }
+      "description": "面向用户的回答正文,一段自然的话。要提到某个视频时,在句子里写 [[bvid]],例如「入门的话 [[BV1xx4y1x7xx]] 讲得最清楚」——它会被渲染成一张可点的视频卡片,你不需要重复标题、UP主、播放量这些卡片上已有的信息。用户问的是问题时,可以完全不引用视频,直接把答案写成一段话。"
     }
   },
-  "required": ["items"]
+  "required": ["answer"]
 }
 """
 
@@ -296,12 +318,20 @@ class AgentLoop(
 要求:
 - 用工具去查,不要凭记忆回答。热评往往能反映内容质量,值得翻。
 - 去重,不凑数。宁可少给几条,也不要塞进不相关的。
-- 只能提交你在工具返回里真实见过的视频。
+- 只能提到你在工具返回里真实见过的视频。
 - 查完后调用 submit_answer 交卷。
 
-交卷时每条要写一两句**给用户看的介绍**:这个视频讲了什么、有什么值得看的地方,
-必要时可以引用热评里的具体评价。**不要写你的检索理由** —— 用户不关心它是不是
-「同一个 UP 主」或「同属一个系列」,那是你判断相关性的依据,不是他决定点不点开的依据。
+**交卷时写一段自然的话,把视频用 `[[bvid]]` 写在句子里。** 引用会被渲染成一张可点的
+视频卡片,所以不要重复卡片上已有的信息(标题、UP主、播放量、时长),把力气花在
+卡片上没有的东西:它讲了什么、适合什么情况看、热评里提到的具体评价。
+
+例:
+「想从零开始的话,[[BV1xx4y1x7xx]] 把推导过程完整走了一遍,没有跳步;
+评论里不少人提到第 12 分钟那段例子是关键。已经有基础可以直接跳到
+[[BV1yy4y1y7yy]],它默认你知道前置概念,节奏快很多。」
+
+用户问的是问题(比如「这几个的评价怎么样」)时,不引用任何视频、直接把答案写成
+一段话也是对的 —— 强行凑几个视频出来只会让回答变差。
 """
     }
 }
