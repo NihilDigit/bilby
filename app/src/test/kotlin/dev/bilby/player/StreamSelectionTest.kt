@@ -4,7 +4,9 @@ import dev.bilby.api.dto.DashDto
 import dev.bilby.api.dto.DashStreamDto
 import dev.bilby.api.dto.DolbyDto
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -47,6 +49,34 @@ class StreamSelectionTest {
 
         assertEquals("hevc", selected.videoUrl)
         assertEquals("HEVC", selected.codec)
+    }
+
+    @Test
+    fun `本机没有硬解的编码即使排在偏好前面也不选`() {
+        // 偏好首选 AVC,但这台机器只有 HEVC 硬解。选 AVC 就等于自愿软解。
+        val dash = dashOf(
+            video(id = 80, codecid = VideoCodecId.AVC, url = "avc"),
+            video(id = 80, codecid = VideoCodecId.HEVC, url = "hevc", codecs = "hev1.1.6.L120.90"),
+        )
+
+        val selected = selectStreams(
+            dash,
+            preferredQuality = 80,
+            hardwareCodecs = setOf(VideoCodecId.HEVC),
+        )!!
+
+        assertEquals("hevc", selected.videoUrl)
+        assertTrue(selected.hardwareDecoded)
+    }
+
+    @Test
+    fun `一档里没有任何编码能硬解时仍然给出流并标记为软解`() {
+        val dash = dashOf(video(id = 80, codecid = VideoCodecId.AV1, url = "av1", codecs = "av01.0.08M.08"))
+
+        val selected = selectStreams(dash, preferredQuality = 80, hardwareCodecs = emptySet())!!
+
+        assertEquals("av1", selected.videoUrl)
+        assertFalse(selected.hardwareDecoded)
     }
 
     @Test

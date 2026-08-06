@@ -25,6 +25,11 @@ data class SelectedStreams(
     val codec: String,
     /** 实际选中的清晰度 id,可能低于用户偏好(降级),UI 要显示的是这个而不是偏好值。 */
     val qualityId: Int = 0,
+    /**
+     * 选中的编码本机是否有硬解器。false 说明这一档画质本机一个编码都硬解不了,只能软解,
+     * 值得在画质菜单上提示一句——用户看到"卡"和"烫"时应该能知道原因。
+     */
+    val hardwareDecoded: Boolean = true,
 )
 
 /** 服务端 codecid 取值,notes §3.1 / §4.1。 */
@@ -49,6 +54,11 @@ fun selectStreams(
     preferredQuality: Int,
     preferredCodecs: List<Int> = DEFAULT_PREFERRED_CODECS,
     preferredAudioQuality: Int = AUDIO_QUALITY_BEST,
+    /**
+     * 本机有硬解器的编码。默认查真机([DeviceCodecs]),测试里传固定集合。
+     * 作用见下面的选流注释:偏好列表决定"想要哪个",这个集合决定"哪些不许选"。
+     */
+    hardwareCodecs: Set<Int> = DeviceCodecs.hardwareDecodableCodecIds,
 ): SelectedStreams? {
     val videos = dash.video.filter { it.baseUrl.isNotEmpty() }
     if (videos.isEmpty()) return null
@@ -61,9 +71,20 @@ fun selectStreams(
         ?: availableQualities.max()
 
     val candidates = videos.filter { it.id == targetQuality }
+
+    // 先在"本机能硬解"的子集里按偏好挑。Media3 只会照 MediaCodecList 的顺序取第一个可用的
+    // 解码器,某个编码没有硬解时它会静默退到 c2.android.* 软解——不报错、不掉级、只是费电
+    // 且高分辨率下掉帧。所以"别选到软解"这件事只能在这里做,播放器那边没有对应开关。
+    //
+    // 硬解候选为空(整档画质本机一个都硬解不了,比如只发了 AV1 的 8K)时按原逻辑兜底:
+    // 软解播出来也比播不出来强,不能因为省电把视频变成不可播。
+    val hardwareCandidates = candidates.filter { stream ->
+        hardwareCodecs.any { stream.matchesCodec(it) }
+    }
+    val pool = hardwareCandidates.ifEmpty { candidates }
     val video = preferredCodecs.firstNotNullOfOrNull { codecId ->
-        candidates.firstOrNull { it.matchesCodec(codecId) }
-    } ?: candidates.first()
+        pool.firstOrNull { it.matchesCodec(codecId) }
+    } ?: pool.first()
 
     return SelectedStreams(
         videoUrl = video.baseUrl,
@@ -71,6 +92,7 @@ fun selectStreams(
         qualityLabel = videoQualityLabel(video.id),
         codec = codecLabel(video),
         qualityId = video.id,
+        hardwareDecoded = hardwareCandidates.isNotEmpty(),
     )
 }
 

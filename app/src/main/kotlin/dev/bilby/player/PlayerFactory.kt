@@ -4,11 +4,36 @@ import android.content.Context
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.RenderersFactory
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import dev.bilby.api.BiliConstants
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/** 实际生效的解码器,给"解码信息"展示和真机排查用。名字直接来自 MediaCodec。 */
+data class DecoderInfo(
+    /** 如 `c2.qti.avc.decoder`(硬解)或 `c2.android.avc.decoder`(软解)。 */
+    val videoDecoder: String? = null,
+    val audioDecoder: String? = null,
+) {
+    /**
+     * 硬解判定按名字前缀:`c2.android.*` 与 `OMX.google.*` 是 AOSP 的软解实现,其余是厂商的。
+     * 这只用于展示——真正的硬解保证来自选流阶段(见 [DeviceCodecs]),不是这里的字符串判断。
+     */
+    val videoIsHardware: Boolean?
+        get() = videoDecoder?.let {
+            !it.startsWith("c2.android.") && !it.startsWith("OMX.google.")
+        }
+}
 
 /**
  * B 站的 playurl 返回的不是标准 MPD,而是自家 JSON 里两条独立的直链(video 一条、audio 一条)。
@@ -22,11 +47,64 @@ import dev.bilby.api.BiliConstants
 @UnstableApi
 object PlayerFactory {
 
+    private val _decoderInfo = MutableStateFlow(DecoderInfo())
+
+    /** UI 想显示"当前用的什么解码器"时观察这个。空值表示还没开始解码。 */
+    val decoderInfo: StateFlow<DecoderInfo> = _decoderInfo.asStateFlow()
+
     /**
      * **只有 [AudioPlaybackService] 该调它**。全 app 一个播放器(DESIGN 2.4b),UI 要播放器就
      * 连 MediaController;再调一次这里就又有了两个会同时发声的播放器。
      */
-    fun createPlayer(context: Context): ExoPlayer = ExoPlayer.Builder(context).build()
+    fun createPlayer(context: Context): ExoPlayer {
+        DeviceCodecs.logOnce()
+        val algorithm = SpeedAlgorithmSelector.current(context)
+        PlayerLog.d("倍速算法: $algorithm")
+        return ExoPlayer.Builder(context, renderersFactory(context, algorithm))
+            .build()
+            .apply { addAnalyticsListener(DecoderLogger()) }
+    }
+
+    /**
+     * 显式建 [DefaultRenderersFactory] 而不是用 `ExoPlayer.Builder(context)` 的隐式默认值。
+     * 三项设置里只有一项改变了行为,另外两项是把默认值写出来当契约——不写的话,以后有人
+     * 顺手改成 `PREFER_SOFTWARE` 排查问题、忘了改回来,是查不出来的耗电回归。
+     *
+     * - **[MediaCodecSelector.DEFAULT]**:等于 `MediaCodecUtil.getDecoderInfos`,返回的是
+     *   `MediaCodecList` 的原始顺序,而框架保证"好的解码器在前",Android 10 起厂商硬解
+     *   (`c2.qti.*`)排在 AOSP 软解(`c2.android.*`)之前。renderer 之后只按"格式是否被支持"
+     *   再稳定排一次,不改变硬/软的相对次序。**所以硬解优先是 Media3 的既有行为,不需要打开
+     *   什么开关**;需要防的是被人换成 `PREFER_SOFTWARE`。
+     * - **[DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF]**:默认值。扩展 renderer
+     *   (libav1/ffmpeg/opus)是纯软解,而且我们的依赖里根本没有这些 aar,它们是靠反射
+     *   `Class.forName` 加载的,写成 OFF 是防止将来引入某个 aar 后无声地多出一条软解路径。
+     * - **`enableDecoderFallback = true`**:这一项**改变了默认行为**(默认 false)。硬解器
+     *   偶尔会在 configure 阶段抛异常(厂商实现对某些分辨率/profile 的边界情况),默认行为是
+     *   直接抛 `DecoderInitializationException`,在我们这儿会被 `onPlayerError` 当成取流失败
+     *   跳到下一条——一条本可以软解播出来的视频被静默跳过。打开后先试下一个解码器,实在不行才报错。
+     */
+    private fun renderersFactory(context: Context, algorithm: SpeedAlgorithm): RenderersFactory =
+        object : DefaultRenderersFactory(context) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean,
+            ): AudioSink {
+                val builder = DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(enableFloatOutput)
+                    // 保持 false(默认):true 会把倍速交给平台 AudioTrack 的
+                    // PlaybackParams,那条路的时间伸缩由 AudioFlinger 实现,厂商之间音质
+                    // 差异很大且无法审计,还会绕过整条 AudioProcessor 链。
+                    .setEnableAudioOutputPlaybackParameters(enableAudioTrackPlaybackParams)
+                if (algorithm == SpeedAlgorithm.Wsola) {
+                    builder.setAudioProcessorChain(WsolaAudioProcessorChain())
+                }
+                return builder.build()
+            }
+        }
+            .setMediaCodecSelector(MediaCodecSelector.DEFAULT)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+            .setEnableDecoderFallback(true)
 
     fun createMediaSource(videoUrl: String, audioUrl: String?): MediaSource {
         val factory = ProgressiveMediaSource.Factory(httpDataSourceFactory())
@@ -44,4 +122,30 @@ object PlayerFactory {
             )
         )
         .setAllowCrossProtocolRedirects(true)
+
+    /**
+     * 记下实际选中的解码器。这是"到底走没走硬解"唯一可靠的证据来源:选流阶段能保证
+     * "这个编码本机有硬解器",但真正用了哪一个只有 MediaCodec 知道。
+     */
+    private class DecoderLogger : AnalyticsListener {
+        override fun onVideoDecoderInitialized(
+            eventTime: AnalyticsListener.EventTime,
+            decoderName: String,
+            initializedTimestampMs: Long,
+            initializationDurationMs: Long,
+        ) {
+            PlayerLog.d("视频解码器: $decoderName")
+            _decoderInfo.value = _decoderInfo.value.copy(videoDecoder = decoderName)
+        }
+
+        override fun onAudioDecoderInitialized(
+            eventTime: AnalyticsListener.EventTime,
+            decoderName: String,
+            initializedTimestampMs: Long,
+            initializationDurationMs: Long,
+        ) {
+            PlayerLog.d("音频解码器: $decoderName")
+            _decoderInfo.value = _decoderInfo.value.copy(audioDecoder = decoderName)
+        }
+    }
 }
