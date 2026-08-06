@@ -37,14 +37,3 @@ data class FavFolderDto(
     @SerialName("fav_state") val favState: Int = 0,
     @SerialName("media_count") val mediaCount: Int = 0,
 )
-
-/**
- * 点赞/投币/收藏这几个写接口成功时 `data` 通常是 null 或者只有零散提示字段(比如收藏
- * 接口的 `prompt`),不满足 BiliClient.postForm "data 非空才算 Ok" 的判定,所以跟
- * ToViewRepository 一样绕开它,只看外层信封的 code/message。
- */
-@Serializable
-data class ActionEnvelopeDto(
-    val code: Int = 0,
-    val message: String = "",
-)

@@ -28,13 +28,3 @@ data class ToViewItemDto(
 
 @Serializable
 data class ToViewOwnerDto(val mid: Long = 0L, val name: String = "")
-
-/**
- * 写操作(add/del/clear)成功时 `data` 字段通常是 null,不能走 BiliClient.getData/postForm
- * 那套"data 非空才算 Ok"的判定(会把成功也判成 ApiError),所以只取外层信封的 code/message。
- */
-@Serializable
-data class ToViewActionEnvelopeDto(
-    val code: Int = 0,
-    val message: String = "",
-)

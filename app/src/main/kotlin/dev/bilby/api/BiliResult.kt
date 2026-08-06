@@ -12,6 +12,15 @@ data class BiliResponse<T>(
 )
 
 /**
+ * 只取 code/message 的信封。写接口(点赞/投币/收藏/稍后再看/评论删赞)成功时 `data`
+ * 常常是 null,有时又是零散的提示字段,类型并不稳定 —— 拿 [BiliResponse]<Unit> 去解它,
+ * 一旦服务端塞了个非对象进来就会解析失败。这里干脆不声明 data 字段,由
+ * ignoreUnknownKeys 吃掉。
+ */
+@Serializable
+data class BiliEnvelope(val code: Int = 0, val message: String = "")
+
+/**
  * 业务失败(code != 0)和传输失败是两回事,调用方几乎总要分别处理:前者能拿到 B 站的
  * 错误码(-101 未登录、-412 风控),后者只能重试。所以不塞进 Result<T> 里用异常区分。
  */

@@ -12,7 +12,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * TV 扫码登录,现在是**唯一**登录方式,取代原先的网页扫码([AuthRepository])。
+ * TV 扫码登录,现在是**唯一**登录方式。网页扫码那条路(连同它带来的 cookie 刷新流程)
+ * 已于 2026-08-07 整体删除,理由见 notes/auth-model.md §7 ——
+ * **凭据过期就重新扫码,不要再实现 cookie 刷新。**
  *
  * 改用它的原因(notes/auth-model.md §2.5):PiliPlus 的"扫码"登录 tab 本来就是走
  * TV/HD 端接口,不是网页端——一次扫码同时拿到 cookie 和 access_key,不需要"先网页扫码
@@ -100,19 +102,27 @@ class TvLoginRepository(
 
     suspend fun logout() = settings.clearCredentials()
 
-    /** `saveCredentials` 不写 access_key(那是 [SettingsStore.saveAccessKey] 单独管的字段),两次写入都要。 */
+    /**
+     * cookie 与 access_key 一次写完,不分两笔:分开写会让 credentials 流先发出一个
+     * "已登录但 access_key 还是空"的中间态,那一瞬间点赞/投币会走没有 access_key 的
+     * app 请求,失败得毫无道理。
+     *
+     * `token_info.refresh_token` 落的是 [Credentials.appRefreshToken] 而不是
+     * webRefreshToken:它是 app 端 OAuth 的刷新口令,不是网页 cookie 刷新要的
+     * ac_time_value(notes/auth-from-docs.md §2.5),混着用会让 cookie/refresh 回 86095。
+     */
     private suspend fun saveLogin(data: PollData) {
         val cookiesByName = data.cookieInfo.cookies.associateBy { it.name }
-        settings.saveCredentials(
+        settings.saveLogin(
             Credentials(
                 sessdata = cookiesByName["SESSDATA"]?.value.orEmpty(),
                 biliJct = cookiesByName["bili_jct"]?.value.orEmpty(),
                 dedeUserId = cookiesByName["DedeUserID"]?.value.orEmpty(),
                 dedeUserIdCkMd5 = cookiesByName["DedeUserID__ckMd5"]?.value.orEmpty(),
-                refreshToken = data.tokenInfo.refreshToken,
+                appRefreshToken = data.tokenInfo.refreshToken,
+                accessKey = data.tokenInfo.accessToken,
             )
         )
-        settings.saveAccessKey(data.tokenInfo.accessToken)
     }
 
     @Serializable

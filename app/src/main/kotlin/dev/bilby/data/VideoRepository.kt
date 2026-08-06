@@ -3,6 +3,7 @@ package dev.bilby.data
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
+import dev.bilby.api.DmImgParams
 import dev.bilby.api.dto.PlayUrlDto
 import dev.bilby.api.dto.UgcSeasonDto
 import dev.bilby.api.dto.VideoDetailDto
@@ -14,7 +15,6 @@ import dev.bilby.player.DEFAULT_PREFERRED_CODECS
 import dev.bilby.player.SelectedStreams
 import dev.bilby.player.selectStreams
 import dev.bilby.player.videoQualityLabel
-import kotlin.random.Random
 
 /** 播放页要显示的一切。分 P 与合集分集都摊平成列表,cid 已经取好,播放器那边不用再挖嵌套。 */
 data class VideoDetail(
@@ -145,11 +145,7 @@ class VideoRepository(private val client: BiliClient) {
         "web_location" to "1315873",
         // 免登录也能拿 1080P 的开关。
         "try_look" to "1",
-        "dm_img_list" to "[]",
-        "dm_img_str" to randomBase64Like(16, 64),
-        "dm_cover_img_str" to randomBase64Like(32, 128),
-        "dm_img_inter" to """{"ds":[],"wh":[0,0,0],"of":[0,0,0]}""",
-    )
+    ) + DmImgParams.next()
 
     private fun VideoDetailDto.toDomain(): VideoDetail = VideoDetail(
         bvid = bvid,
@@ -236,19 +232,11 @@ class VideoRepository(private val client: BiliClient) {
         )
     }
 
-    private fun randomBase64Like(minLength: Int, maxLength: Int): String {
-        val length = Random.nextInt(minLength, maxLength + 1)
-        return (1..length).map { BASE64_ALPHABET.random() }.joinToString("")
-    }
-
     private companion object {
         const val VIEW_URL = "${BiliConstants.WEB_HOST}/x/web-interface/view"
         const val PLAY_URL = "${BiliConstants.WEB_HOST}/x/player/wbi/playurl"
 
         /** PiliPlus 的默认 qn(notes §1.1),1080P 高清。 */
         const val DEFAULT_QUALITY = 80
-
-        const val BASE64_ALPHABET =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
     }
 }

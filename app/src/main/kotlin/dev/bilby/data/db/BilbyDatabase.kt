@@ -48,9 +48,6 @@ interface AgentSessionDao {
     @Query("SELECT COALESCE(MAX(seq), -1) FROM agent_message WHERE sessionId = :sessionId")
     suspend fun getMaxSeq(sessionId: Long): Int
 
-    @Query("SELECT id FROM agent_message WHERE sessionId = :sessionId ORDER BY seq DESC LIMIT 1")
-    suspend fun getLastMessageId(sessionId: Long): Long?
-
     @Insert
     suspend fun insertAnswers(entities: List<AgentAnswerEntity>)
 
@@ -70,7 +67,7 @@ interface AgentSessionDao {
         AgentMessageEntity::class,
         AgentAnswerEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class BilbyDatabase : RoomDatabase() {

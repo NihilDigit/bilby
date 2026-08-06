@@ -9,8 +9,6 @@ import dev.bilby.api.BiliClient
 import dev.bilby.api.DeviceFingerprint
 import dev.bilby.api.WbiSigner
 import dev.bilby.data.AgentSessionRepository
-import dev.bilby.data.AuthRepository
-import dev.bilby.data.CookieRefresher
 import dev.bilby.data.DynamicRepository
 import dev.bilby.data.FingerprintStore
 import dev.bilby.data.CommentRepository
@@ -74,15 +72,13 @@ class AppContainer(context: Context) {
 
     val biliClient: BiliClient by lazy { BiliClient(httpClient, settings, wbiSigner, deviceFingerprint) }
 
-    val authRepository: AuthRepository by lazy { AuthRepository(biliClient, settings) }
-
     /**
-     * 登录走 TV 扫码:一次扫码同时拿 Cookie 和 access_key。网页扫码只给 Cookie,而写操作
-     * (点赞/投币)必须走 app 端接口、必须有 access_key(notes/auth-model.md §2.5)。
+     * **唯一**的登录方式:TV 扫码,一次扫码同时拿 Cookie 和 access_key。网页扫码只给 Cookie,
+     * 而写操作(点赞/投币)必须走 app 端接口、必须有 access_key(notes/auth-model.md §2.5)。
+     *
+     * 没有 cookie 刷新这一环:凭据过期就重新扫码,理由见 notes/auth-model.md §7。
      */
     val tvLoginRepository: TvLoginRepository by lazy { TvLoginRepository(biliClient, settings) }
-
-    val cookieRefresher: CookieRefresher by lazy { CookieRefresher(biliClient, settings) }
 
 
     val dynamicRepository: DynamicRepository by lazy { DynamicRepository(biliClient) }

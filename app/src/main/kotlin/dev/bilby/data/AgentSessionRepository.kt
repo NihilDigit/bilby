@@ -61,14 +61,11 @@ class AgentSessionRepository(
             )
         }
 
-    /** messageId 取该会话当前最后一条消息(通常是刚写完的这轮助理回复)。 */
     suspend fun saveAnswer(sessionId: Long, items: List<AnswerItem>) {
         if (items.isEmpty()) return
-        val messageId = dao.getLastMessageId(sessionId) ?: return
         val entities = items.map { item ->
             AgentAnswerEntity(
                 sessionId = sessionId,
-                messageId = messageId,
                 bvid = item.bvid,
                 reason = item.reason,
                 title = item.trace?.title,

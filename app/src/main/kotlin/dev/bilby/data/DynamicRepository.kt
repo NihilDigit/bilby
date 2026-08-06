@@ -27,8 +27,7 @@ class DynamicRepository(private val client: BiliClient) {
         val params = buildMap {
             put("type", "video")
             offset?.let { put("offset", it) }
-            // dynFeatures 固定值,笔记第 0 节抄自 PiliPlus lib/common/constants.dart:43。
-            put("features", "itemOpusStyle,listOnlyfans,onlyfansQaCard")
+            put("features", BiliConstants.DYN_FEATURES)
         }
         val result = client.getData<DynamicFeedResponseDto>(FEED_URL, params)
         return when (result) {

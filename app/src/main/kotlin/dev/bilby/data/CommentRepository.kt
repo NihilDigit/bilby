@@ -1,9 +1,7 @@
 package dev.bilby.data
 
-import dev.bilby.BiliLog
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
-import dev.bilby.api.BiliResponse
 import dev.bilby.api.BiliResult
 import dev.bilby.api.dto.ReplyItemDto
 import dev.bilby.api.dto.ReplyMainResponseDto
@@ -11,9 +9,9 @@ import dev.bilby.api.dto.ReplyReplyResponseDto
 import dev.bilby.api.dto.ReplyAddResponseDto
 import dev.bilby.api.getData
 import dev.bilby.api.map
+import dev.bilby.api.postAction
 import dev.bilby.api.postForm
 import dev.bilby.api.toHttpsUrl
-import io.ktor.client.call.body
 import kotlinx.coroutines.flow.first
 
 /** 视频评论排序。数值即请求参数(notes §1.5):未登录传 `mode = ordinal + 2`,已登录直传 `sort`。 */
@@ -170,7 +168,7 @@ class CommentRepository(
     /** 只允许删自己的评论,UI 层已经按 mid 过滤入口,这里不重复校验——服务端本身也会拒绝越权删除。 */
     suspend fun deleteComment(oid: Long, rpid: Long): BiliResult<Unit> {
         val form = mapOf("type" to VIDEO_TYPE.toString(), "oid" to oid.toString(), "rpid" to rpid.toString())
-        return postFormNoData(DEL_URL, form)
+        return client.postAction(DEL_URL, form)
     }
 
     suspend fun likeComment(oid: Long, rpid: Long, like: Boolean): BiliResult<Unit> {
@@ -180,24 +178,8 @@ class CommentRepository(
             "rpid" to rpid.toString(),
             "action" to if (like) "1" else "0",
         )
-        return postFormNoData(LIKE_URL, form)
+        return client.postAction(LIKE_URL, form)
     }
-
-    /**
-     * 删除/点赞这类写操作服务端不保证返回非空 `data`,`postForm<T>` 那套"data==null 就算失败"
-     * 的判定不适用,只能照 CookieRefresher 的先例手动看外层 code(参考
-     * app/src/main/kotlin/com/bilby/data/CookieRefresher.kt 里对 confirm/refresh 的处理)。
-     */
-    private suspend fun postFormNoData(url: String, form: Map<String, String>): BiliResult<Unit> =
-        runCatching {
-            val envelope = client.rawPostForm(url, form).body<BiliResponse<Unit>>()
-            if (envelope.code == 0) {
-                BiliResult.Ok(Unit)
-            } else {
-                BiliLog.w("POST ${url.substringBefore('?')} 失败(${envelope.code}): ${envelope.message}")
-                BiliResult.ApiError(envelope.code, envelope.message)
-            }
-        }.onFailure { BiliLog.w("POST ${url.substringBefore('?')} 异常", it) }.getOrElse { BiliResult.Failure(it) }
 
     /**
      * `root`/`rpid` 语义:主楼的 root=0,此时把自己的 rpid 当 rootRpid 用(请求楼中楼要用这个值)。

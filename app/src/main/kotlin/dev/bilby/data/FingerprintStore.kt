@@ -33,7 +33,21 @@ class FingerprintStore(context: Context) {
             biliTicket = p[KEY_BILI_TICKET].orEmpty(),
             ticketExpiresAt = p[KEY_TICKET_EXPIRES_AT] ?: 0L,
             buvidActivated = p[KEY_BUVID_ACTIVATED] ?: false,
+            serverCookies = p[KEY_SERVER_COOKIES].orEmpty().decodeCookies(),
         )
+    }
+
+    /**
+     * 合并服务端下发的 Cookie。整表编码成一个字符串存,不为每个键开一个 Preferences key ——
+     * B 站会下发哪些键不由我们决定(`b_nut`、`_uuid`、`sid`、`b_lsid`……),给未知键预留
+     * 固定字段是不可能的。
+     */
+    suspend fun mergeServerCookies(incoming: Map<String, String>) {
+        if (incoming.isEmpty()) return
+        store.edit { p ->
+            val merged = p[KEY_SERVER_COOKIES].orEmpty().decodeCookies() + incoming
+            p[KEY_SERVER_COOKIES] = merged.encodeCookies()
+        }
     }
 
     suspend fun saveBuvid(buvid3: String, buvid4: String) {
@@ -61,6 +75,7 @@ class FingerprintStore(context: Context) {
         val KEY_BILI_TICKET = stringPreferencesKey("bili_ticket")
         val KEY_TICKET_EXPIRES_AT = longPreferencesKey("bili_ticket_expires_at")
         val KEY_BUVID_ACTIVATED = booleanPreferencesKey("buvid_activated")
+        val KEY_SERVER_COOKIES = stringPreferencesKey("server_cookies")
     }
 }
 
@@ -70,4 +85,20 @@ data class FingerprintData(
     val biliTicket: String = "",
     val ticketExpiresAt: Long = 0L,
     val buvidActivated: Boolean = false,
+    /** 服务端通过 Set-Cookie 下发、我们原样回带的那些键(b_nut、_uuid、sid……)。 */
+    val serverCookies: Map<String, String> = emptyMap(),
 )
+
+/**
+ * `k=v` 用 `\n` 分隔。Cookie 的值不会包含换行(RFC 6265 的 cookie-value 排除了 CTL),
+ * 所以换行是安全的分隔符,不需要引一个 JSON 依赖进来。
+ */
+private fun Map<String, String>.encodeCookies(): String =
+    entries.joinToString("\n") { "${it.key}=${it.value}" }
+
+private fun String.decodeCookies(): Map<String, String> =
+    if (isEmpty()) emptyMap()
+    else split('\n').mapNotNull { line ->
+        val i = line.indexOf('=')
+        if (i <= 0) null else line.substring(0, i) to line.substring(i + 1)
+    }.toMap()

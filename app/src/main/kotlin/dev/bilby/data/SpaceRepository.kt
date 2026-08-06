@@ -3,6 +3,7 @@ package dev.bilby.data
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
+import dev.bilby.api.DmImgParams
 import dev.bilby.api.dto.DynamicFeedResponseDto
 import dev.bilby.api.dto.DynamicItemDto
 import dev.bilby.api.dto.SeasonArchiveDto
@@ -91,11 +92,19 @@ class SpaceRepository(private val client: BiliClient) {
         }
     }
 
+    /** 参数集与 header 照抄 PiliPlus member.dart:286-312(含空的 token 位)。 */
     private suspend fun loadUserInfo(mid: Long): BiliResult<SpaceUserInfoDto> =
         client.getData(
             "${BiliConstants.WEB_HOST}/x/space/wbi/acc/info",
-            mapOf("mid" to mid.toString()) + fingerprintParams(),
+            mapOf(
+                "mid" to mid.toString(),
+                "token" to "",
+                "platform" to "web",
+                // 与投稿列表的 333.1387 不是同一个值,这个接口用 1550101。
+                "web_location" to "1550101",
+            ) + DmImgParams.next(),
             signed = true,
+            referer = spaceReferer(mid, dynamic = true),
         )
 
     private suspend fun loadRelationStat(mid: Long): BiliResult<RelationStatDto> =
@@ -117,18 +126,22 @@ class SpaceRepository(private val client: BiliClient) {
         val params = buildMap {
             put("mid", mid.toString())
             put("ps", "30")
+            // 分区筛选,0 即不限。PiliPlus 恒定带上(member.dart:363),我们没有分区筛选
+            // 这个功能,但少一个参数就是少一个字段,签名内容也跟着不同。
+            put("tid", "0")
             put("pn", page.toString())
             put("order", order.apiValue)
             put("platform", "web")
             put("web_location", "333.1387")
             put("order_avoided", "true")
             if (!keyword.isNullOrBlank()) put("keyword", keyword)
-            putAll(fingerprintParams())
+            putAll(DmImgParams.next())
         }
         val result = client.getData<ArchiveSearchResponseDto>(
             "${BiliConstants.WEB_HOST}/x/space/wbi/arc/search",
             params,
             signed = true,
+            referer = spaceReferer(mid),
         )
         return result.map { dto ->
             SpaceArchivePage(dto.page.count, dto.list.vlist.map { it.toVideoItem() })
@@ -187,14 +200,18 @@ class SpaceRepository(private val client: BiliClient) {
             put("host_mid", mid.toString())
             put("offset", offset ?: "")
             put("timezone_offset", "-480")
+            // 动态接口都要 features,首页那条(DynamicRepository)一直带着,空间这条漏了。
+            put("features", BiliConstants.DYN_FEATURES)
             put("platform", "web")
             put("web_location", "333.1387")
-            putAll(fingerprintParams())
+            put("x-bili-device-req-json", """{"platform":"web","device":"pc","spmid":"333.1387"}""")
+            putAll(DmImgParams.next())
         }
         val result = client.getData<DynamicFeedResponseDto>(
             "${BiliConstants.WEB_HOST}/x/polymer/web-dynamic/v1/feed/space",
             params,
             signed = true,
+            referer = spaceReferer(mid, dynamic = true),
         )
         return result.map { dto ->
             val items = dto.items.mapNotNull { it.toVideoItem() }
@@ -202,13 +219,16 @@ class SpaceRepository(private val client: BiliClient) {
         }
     }
 
-    /** WBI 接口普遍要求的风控指纹参数,固定值而非真随机——服务端只看有没有,不校验内容(notes 1.1 节)。 */
-    private fun fingerprintParams(): Map<String, String> = mapOf(
-        "dm_img_list" to "[]",
-        "dm_img_str" to "V2ViR0wgMS4wIChPcGVuR0wgRVMgMi4wIENocm9taXVtKQ==",
-        "dm_cover_img_str" to "QU5HTEUgKEdvb2dsZSwgVnVsa2FuKQ==",
-        "dm_img_inter" to """{"ds":[],"wh":[0,0,0],"of":[0,0,0]}""",
-    )
+    /**
+     * 空间接口的 Referer 指向这个人的空间页,而不是站点首页 —— 真实浏览器发这些请求时
+     * 用户就停在这一页上。动态 tab 多一层 `/dynamic`,与 PiliPlus 手写的那几组一致。
+     *
+     * UA 不跟着换:PiliPlus 在这里额外把 UA 覆盖成 BrowserUa.pc,是因为它的全局 UA 是
+     * `Dart/3.6 (dart:io)`,那个必须换掉;我们的全局 UA 本来就是桌面 Chrome,已经满足
+     * "看起来像浏览器"这个真实目的,再换一个 Safari UA 只是徒增不一致。
+     */
+    private fun spaceReferer(mid: Long, dynamic: Boolean = false): String =
+        "${BiliConstants.SPACE_HOST}/$mid" + if (dynamic) "/dynamic" else ""
 
     private fun VListItemDto.toVideoItem() = SpaceVideoItem(
         bvid = bvid,

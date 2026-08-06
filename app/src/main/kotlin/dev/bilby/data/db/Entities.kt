@@ -79,6 +79,12 @@ data class AgentMessageEntity(
 /**
  * 某一轮的答案条目(AgentEvent.AnswerItem)。展示信息一并存下来,重新打开会话时不用
  * 再查一次接口。
+ *
+ * 没有指向具体某条消息的外键:答案事件先于本轮对话落库到达(AgentLoop 在 emit 完
+ * Answer 之后才在 finally 里回调 onTurnComplete),想在存答案时拿到"本轮最后一条消息的 id"
+ * 就得依赖两次异步写入的先后顺序,而第一轮根本没有任何消息可指 —— 那条依赖只会让第一轮的
+ * 答案被静默丢掉。既然读取侧(loadAnswers)本来就是按会话整批取、从不按消息过滤,
+ * 这个字段除了制造这条依赖没有别的用处,直接不要。
  */
 @Entity(
     tableName = "agent_answer",
@@ -90,12 +96,11 @@ data class AgentMessageEntity(
             onDelete = ForeignKey.CASCADE,
         ),
     ],
-    indices = [Index("sessionId"), Index("messageId")],
+    indices = [Index("sessionId")],
 )
 data class AgentAnswerEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val sessionId: Long,
-    val messageId: Long,
     val bvid: String,
     val reason: String,
     val title: String?,

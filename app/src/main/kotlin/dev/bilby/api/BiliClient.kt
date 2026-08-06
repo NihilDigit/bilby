@@ -12,6 +12,7 @@ import io.ktor.client.request.post
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
+import io.ktor.http.setCookie
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -30,36 +31,24 @@ class BiliClient(
     private val fingerprint: DeviceFingerprint,
 ) {
 
+    /**
+     * @param referer 覆盖站内 Referer/Origin。空间那几个接口要指到 `space.bilibili.com/<mid>`
+     *   而不是站点首页(PiliPlus member.dart:305-310/380-385 逐个接口都手写了这一组),
+     *   真实浏览器发这些请求时人就在空间页上,Referer 对不上是最好认的破绽之一。
+     */
     suspend fun rawGet(
         url: String,
         params: Map<String, String> = emptyMap(),
         signed: Boolean = false,
+        referer: String? = null,
     ): HttpResponse {
         val finalParams = if (signed) wbiSigner.sign(params) else params
-        val cookie = cookieHeader()
-        return http.get(url) {
-            applyCommonHeaders(cookie)
-            finalParams.forEach { (k, v) -> parameter(k, v) }
-        }
-    }
-
-    /**
-     * POST 但参数走 query。passport 下的几个接口(TV 二维码、ticket)只认这种形式:
-     * 参数放进 form body 会得到 `-400 empty ts field` 或 `-101 账号未登录`,
-     * 错误信息完全指不到真因。
-     */
-    suspend fun rawPostQuery(
-        url: String,
-        params: Map<String, String> = emptyMap(),
-        withCsrf: Boolean = true,
-    ): HttpResponse {
         val credentials = settings.credentials.first()
-        val finalParams = if (withCsrf) params + ("csrf" to credentials.biliJct) else params
-        val cookie = cookieHeader()
-        return http.post(url) {
-            applyCommonHeaders(cookie)
+        val cookie = cookieHeader(credentials)
+        return http.get(url) {
+            applyCommonHeaders(credentials, cookie, referer)
             finalParams.forEach { (k, v) -> parameter(k, v) }
-        }
+        }.also { fingerprint.rememberCookies(it.setCookie()) }
     }
 
     /**
@@ -80,13 +69,19 @@ class BiliClient(
      * 网页端与 app 端是两套授权,混着发只会两边都不认。
      */
     suspend fun appPostForm(url: String, form: Map<String, String>): HttpResponse {
-        val accessKey = settings.credentials.first().accessKey
+        val credentials = settings.credentials.first()
+        val accessKey = credentials.accessKey
         val signed = AppSign.sign(if (accessKey.isEmpty()) form else form + ("access_key" to accessKey))
         return http.submitForm(
             url = url,
             formParameters = Parameters.build { signed.forEach { (k, v) -> append(k, v) } },
         ) {
             header(HttpHeaders.UserAgent, BiliConstants.APP_USER_AGENT)
+            // app 路线不带 Cookie,但账号 header 与 baseHeaders 照加:PiliPlus 的拦截器
+            // 在分出 app/web 两条路之前就无条件 addAll 了 account.headers 和 referer
+            // (account_mgr.dart:66-68),app 分支只是在这之后跳过 cookie。
+            applyIdentityHeaders(credentials)
+            header(HttpHeaders.Referrer, BiliConstants.REFERER)
         }
     }
 
@@ -98,13 +93,13 @@ class BiliClient(
     ): HttpResponse {
         val credentials = settings.credentials.first()
         val fields = if (withCsrf) form + ("csrf" to credentials.biliJct) else form
-        val cookie = cookieHeader()
+        val cookie = cookieHeader(credentials)
         return http.submitForm(
             url = url,
             formParameters = Parameters.build { fields.forEach { (k, v) -> append(k, v) } },
         ) {
-            applyCommonHeaders(cookie)
-        }
+            applyCommonHeaders(credentials, cookie)
+        }.also { fingerprint.rememberCookies(it.setCookie()) }
     }
 
     suspend fun fetchWbiKeys(): WbiKeys {
@@ -115,21 +110,50 @@ class BiliClient(
         return WbiKeys(imgKey = img.imgUrl.keyFromUrl(), subKey = img.subUrl.keyFromUrl())
     }
 
-    private fun io.ktor.client.request.HttpRequestBuilder.applyCommonHeaders(cookie: String) {
+    private fun io.ktor.client.request.HttpRequestBuilder.applyCommonHeaders(
+        credentials: dev.bilby.data.Credentials,
+        cookie: String,
+        referer: String? = null,
+    ) {
         header(HttpHeaders.UserAgent, BiliConstants.USER_AGENT)
-        header(HttpHeaders.Referrer, BiliConstants.REFERER)
-        header(HttpHeaders.Origin, BiliConstants.ORIGIN)
+        header(HttpHeaders.Referrer, referer ?: BiliConstants.REFERER)
+        // **只在指定了 referer 时才发 Origin**,默认不发。浏览器对同源的 GET 根本不带
+        // Origin,无条件发反而是个破绽;PiliPlus 也没有全局 Origin,只在空间那几个接口
+        // 和一键三连上手写(account_mgr.dart 全局只补 referer,member.dart:305-310 才有
+        // origin)。发的时候值跟着 referer 走同一站点,不会出现 Referer 在空间页而
+        // Origin 还指着首页这种自相矛盾的组合。
+        referer?.let { header(HttpHeaders.Origin, it.originOf()) }
+        applyIdentityHeaders(credentials)
         if (cookie.isNotEmpty()) header(HttpHeaders.Cookie, cookie)
+    }
+
+    /** 从 `https://space.bilibili.com/123/dynamic` 取出 `https://space.bilibili.com`。 */
+    private fun String.originOf(): String {
+        val schemeEnd = indexOf("//").takeIf { it >= 0 }?.plus(2) ?: return this
+        val hostEnd = indexOf('/', schemeEnd).takeIf { it >= 0 } ?: length
+        return substring(0, hostEnd)
+    }
+
+    /** baseHeaders + 账号标识。未登录时不写 mid/eid 两条(PiliPlus 的 NoAccount 同样不写)。 */
+    private fun io.ktor.client.request.HttpRequestBuilder.applyIdentityHeaders(
+        credentials: dev.bilby.data.Credentials,
+    ) {
+        BiliConstants.BASE_HEADERS.forEach { (k, v) -> header(k, v) }
+        val mid = credentials.dedeUserId
+        if (mid.isNotEmpty()) {
+            header("x-bili-mid", mid)
+            header("x-bili-aurora-eid", AuroraEid.of(mid))
+        }
     }
 
     /**
      * 凭据 + 设备指纹。指纹缺失时读接口照常工作,写接口会被风控判成"账号异常"(-403),
      * 所以这里即使拿不到指纹也不能阻断请求。
      */
-    private suspend fun cookieHeader(): String {
-        val credentials = settings.credentials.first().toCookieHeader()
+    private suspend fun cookieHeader(credentials: dev.bilby.data.Credentials): String {
         val device = fingerprint.cookieEntries().map { (k, v) -> "$k=$v" }
-        return (listOf(credentials).filter { it.isNotEmpty() } + device).joinToString("; ")
+        return (listOf(credentials.toCookieHeader()).filter { it.isNotEmpty() } + device)
+            .joinToString("; ")
     }
 
     @Serializable
@@ -159,19 +183,29 @@ fun dev.bilby.data.Credentials.toCookieHeader(): String = buildList {
     if (dedeUserIdCkMd5.isNotEmpty()) add("DedeUserID__ckMd5=$dedeUserIdCkMd5")
 }.joinToString("; ")
 
+/**
+ * `code == 0` 但 `data` 为空是另一回事:接口没报错,只是这个响应形状与我们声明的 T 对不上
+ * (常见于服务端把 data 省成 null,或 DTO 的必填字段写错导致反序列化出 null)。
+ * 照原样打成"失败(0): "会得到一行没有错误码也没有 message 的日志,等于没打。
+ */
+fun BiliResponse<*>.describeFailure(): String =
+    if (code == 0) "(code=0 但 data 为空,可能是响应结构与 DTO 不符)"
+    else "(${code}): $message"
+
 /** 把信封拆开:传输失败、业务失败、成功三分。 */
 suspend inline fun <reified T> BiliClient.getData(
     url: String,
     params: Map<String, String> = emptyMap(),
     signed: Boolean = false,
-): BiliResult<T> = runCatching { rawGet(url, params, signed).body<BiliResponse<T>>() }
+    referer: String? = null,
+): BiliResult<T> = runCatching { rawGet(url, params, signed, referer).body<BiliResponse<T>>() }
     .fold(
         onSuccess = { envelope ->
             val data = envelope.data
             if (envelope.code == 0 && data != null) {
                 BiliResult.Ok(data)
             } else {
-                BiliLog.w("GET ${url.pathOnly()} 失败(${envelope.code}): ${envelope.message}")
+                BiliLog.w("GET ${url.pathOnly()} 失败${envelope.describeFailure()}")
                 BiliResult.ApiError(envelope.code, envelope.message)
             }
         },
@@ -180,6 +214,43 @@ suspend inline fun <reified T> BiliClient.getData(
             BiliResult.Failure(it)
         },
     )
+
+/**
+ * 写接口的统一出口。与 [postForm] 的差别只有一条:**不要求 data 非空**。
+ *
+ * 这条差别此前让四个仓库(VideoAction 两份、ToView、Comment)各抄了一份手写的信封解析,
+ * 连同各自的 `pathOnly` 与日志格式——那正是 DESIGN 8 节要求"一处打点覆盖所有接口"想避免的
+ * 局面:漏抄一处日志,失败就变回静默。
+ */
+suspend fun BiliClient.postAction(
+    url: String,
+    form: Map<String, String> = emptyMap(),
+    withCsrf: Boolean = true,
+): BiliResult<Unit> = envelopeResult(url) { rawPostForm(url, form, withCsrf).body<BiliEnvelope>() }
+
+/** app 路线的写接口(点赞/投币):access_key + appkey 签名,不带 Cookie。 */
+suspend fun BiliClient.appPostAction(
+    url: String,
+    form: Map<String, String> = emptyMap(),
+): BiliResult<Unit> = envelopeResult(url) { appPostForm(url, form).body<BiliEnvelope>() }
+
+private suspend inline fun envelopeResult(
+    url: String,
+    request: () -> BiliEnvelope,
+): BiliResult<Unit> = runCatching(request).fold(
+    onSuccess = { envelope ->
+        if (envelope.code == 0) {
+            BiliResult.Ok(Unit)
+        } else {
+            BiliLog.w("POST ${url.pathOnly()} 失败(${envelope.code}): ${envelope.message}")
+            BiliResult.ApiError(envelope.code, envelope.message)
+        }
+    },
+    onFailure = {
+        BiliLog.w("POST ${url.pathOnly()} 异常", it)
+        BiliResult.Failure(it)
+    },
+)
 
 suspend inline fun <reified T> BiliClient.postForm(
     url: String,
@@ -192,7 +263,7 @@ suspend inline fun <reified T> BiliClient.postForm(
             if (envelope.code == 0 && data != null) {
                 BiliResult.Ok(data)
             } else {
-                BiliLog.w("POST ${url.pathOnly()} 失败(${envelope.code}): ${envelope.message}")
+                BiliLog.w("POST ${url.pathOnly()} 失败${envelope.describeFailure()}")
                 BiliResult.ApiError(envelope.code, envelope.message)
             }
         },
