@@ -1,5 +1,7 @@
 # Bilby
 
+[简体中文](README.zh-CN.md)
+
 An Android client for bilibili with the recommendation machinery taken out.
 
 The home screen shows updates from the accounts you follow, in order, and it ends. When it
