@@ -1,9 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标前景层。画布 108,中心 (54,54),内容落在中心 66dp 安全圆内。
+
+  外轮廓是一个 B:字干 x39..51,上碗 y40..61(r10.5),下碗 y61..84(r11.5)。加上耳朵之后
+  上碗读作头、下碗读作身子,所以只在上碗开眼睛,下碗填实——留着下碗的字怀,肚子上会有一个
+  解释不了的洞。
+
+  眼睛是三层 evenOdd:字身实心 → 豆豆眼挖空 → 高光又是实心的岛。**必须这样挖,不能在上面
+  压一个底色圆**:同一份几何还要用作 monochrome 层,那一层被系统按壁纸取色整体染色,压上去的
+  圆会跟着一起变色,眼睛和高光当场消失。
+
+  几何要点(改之前先读):
+  - 豆豆眼 2.4×2.9 落在 (56,49),比上碗几何中心靠前 1、靠上 1.5。这点偏移就是"在看右边"和
+    "发呆"的全部差别,比放大眼睛管用;正圆在小脑袋上偏呆,所以是竖椭圆。
+  - 高光 r0.85 在眼睛前上方,不在正中——居中会变成怪眼。
+  - 耳朵用圆头笔画而不是描边轮廓:袋狸的耳朵本来就是长而圆的,圆头帽在小尺寸下不会收成尖刺。
+    基点 y=41 压进字身里,让耳朵和 B 长在一起而不是浮在上面。
+  - 耳尖 y=28,算上笔宽最远处半径约 33,正好压在安全圆边上。再长就越界。
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M40,34h16a13,13 0 0 1 0,26h-16zM48,42v10h8a5,5 0 0 0 0,-10zM40,64h18a13,13 0 0 1 0,26h-18zM48,72v10h10a5,5 0 0 0 0,-10z" />
+        android:fillType="evenOdd"
+        android:pathData="M39,40 H54.5 A10.5,10.5 0 0 1 54.5,61 H56.5 A11.5,11.5 0 0 1 56.5,84 H39 Z M56,46.1 A2.4,2.9 0 0 1 56,51.9 A2.4,2.9 0 0 1 56,46.1 Z M57.75,47.9 A0.85,0.85 0 0 1 56.05,47.9 A0.85,0.85 0 0 1 57.75,47.9 Z" />
+
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:pathData="M45,41 C43,35.5 41.5,32 41,28" />
+
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:pathData="M56,41 C58.5,35.5 60.8,31.5 62,28" />
+
 </vector>

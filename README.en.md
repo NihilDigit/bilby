@@ -1,3 +1,5 @@
+<img src="docs/icon.png" alt="" width="88" align="right">
+
 # Bilby
 
 [简体中文](README.md)

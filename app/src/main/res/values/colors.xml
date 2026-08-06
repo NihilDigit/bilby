@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="launch_background">#FFFBFF</color>
+    <!--
+      启动窗口的背景。取值必须等于 Compose 主题的 surface,否则冷启动会先闪一下别的颜色
+      再跳到真正的界面。这两个值和 ui/theme/Color.kt 里的基线色板同源(种子 #4A5C92),
+      改一处就要改另一处 —— 这里是 XML 主题,读不到 Compose 的 ColorScheme。
+    -->
+    <color name="launch_background">#FAF8FF</color>
     <color name="ic_launcher_background">#4A5C92</color>
 </resources>
