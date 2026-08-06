@@ -5,14 +5,14 @@ repository root, which is a local file and not tracked. Read it before changing 
 
 ## Product constraints
 
-Bilby resists compulsive use through structure, not through prompts, timers, or warning
-copy. These are not implementation details to be traded away:
+Bilby resists compulsive use through structure. Every rule below is load-bearing; treat
+them as fixed:
 
 - No recommendation feed, no related-videos rail, no autoplay. Lists must end.
 - The slot where the official app puts related recommendations holds the video's collection
   and the uploader's other work: a finite set the user selected by opening this video. The
-  playback queue is built from that set, which is why the queue is not a listening-mode
-  feature and needs no special handling.
+  playback queue is built from that set, which makes it a general queue and keeps it free of
+  listening-mode special cases.
 - A queue plays to the end and stops. No wrapping, no looping, no refilling from a
   recommendation pool. Bounded selection is the whole reason autoplay is permitted here at
   all; refilling deletes the decision point.
@@ -25,10 +25,10 @@ copy. These are not implementation details to be traded away:
 
 **PiliPlus is the authority on API behaviour.** Its source is in `PiliPlus/`, local and
 gitignored. Public documentation lags live behaviour; where they disagree, follow PiliPlus.
-Three cases already paid for: `bili_ticket` parameters must go in the query, not the body;
-web cookies are blocked by risk control on write actions and must be replaced by a TV
-`access_key`; `batch-deal` for favourites requires both `add_media_ids` and `del_media_ids`
-(empty string when absent) and a `resources` value shaped like `aid:2`.
+Three cases already paid for: `bili_ticket` parameters belong in the query; write actions
+require a TV `access_key`, since risk control refuses web cookies there; `batch-deal` for
+favourites requires both `add_media_ids` and `del_media_ids` (empty string when absent) and
+a `resources` value shaped like `aid:2`.
 
 `notes/auth-model.md` records that the cookie-to-`access_key` path returns `-101` today. Do
 not reimplement it.
@@ -54,13 +54,13 @@ attached to the same-process `currentPlayer` reference because `MediaController`
 the player.
 
 Listening mode is a state inside the video page, structurally identical to fullscreen. The
-page stays composed, the player is not swapped, and no progress is handed over, so there is
-no lifecycle to manage. Three earlier attempts got this wrong by modelling it as a
+page stays composed, the same player keeps running, and progress stays where it is, so there
+is no lifecycle to manage. Three earlier attempts got this wrong by modelling it as a
 navigation destination, adding a `listening` flag on the service, and adding a
 "popped versus covered" judgement at the nav layer.
 
-Multi-part videos and collections are different things. Shuffle changes play order only and
-must not reorder the displayed list; the highlight scrolls instead.
+Multi-part videos and collections are different things. Shuffle changes play order only; the
+displayed list keeps its order and the highlight scrolls.
 
 Navigation 3 has no separate graph: the backstack is a `SnapshotStateList<NavKey>`. `entry`
 is a member extension on `EntryProviderScope` and needs no import; `onBack` is
@@ -79,7 +79,7 @@ needs a `Surface` wrapper or dark mode renders black on black.
 
 Coil 3 requires `OkHttpNetworkFetcherFactory` to be registered explicitly and fails silently
 otherwise. Cover URLs arrive as `http://` and are blocked by the cleartext policy; rewrite
-them to https during mapping rather than enabling `usesCleartextTraffic`.
+them to https during mapping, leaving `usesCleartextTraffic` off.
 
 kotlinx.serialization omits fields equal to their defaults, so tool schemas sent to the LLM
 need `encodeDefaults = true`.

@@ -18,8 +18,8 @@ assistant searches, reads descriptions and comments, and comes back with a few r
 its reasons for each. It has no access to your watch history and will not be given any; its
 context contains only what you told it this time.
 
-None of this is adversarial toward bilibili. History, heartbeats, coins, favourites, and
-likes are all reported normally. What Bilby removes is the part that pushes back at you.
+Bilby reports to bilibili like any other client: history, heartbeats, coins, favourites, and
+likes all go through. The part it drops is the part that pushes back at you.
 
 ## What it does
 
