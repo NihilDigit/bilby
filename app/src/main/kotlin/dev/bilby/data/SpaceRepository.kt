@@ -39,6 +39,7 @@ data class SpaceProfile(
     val sign: String,
     val level: Int,
     val follower: Long,
+    val followState: FollowState,
 )
 
 enum class SpaceArchiveOrder(val apiValue: String) {
@@ -85,6 +86,7 @@ class SpaceRepository(private val client: BiliClient) {
                     sign = info.value.sign,
                     level = info.value.level,
                     follower = stat.value.follower,
+                    followState = FollowState.of(info.value.relation),
                 )
             )
             info !is BiliResult.Ok -> info.propagateFailure()

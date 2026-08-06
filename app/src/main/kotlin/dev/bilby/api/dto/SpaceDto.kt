@@ -16,6 +16,8 @@ data class SpaceUserInfoDto(
     val face: String = "",
     val sign: String = "",
     val level: Int = 0,
+    /** 关注关系属性值:0 未关注、2 已关注、4 互关、128 已拉黑、-1 是自己。见 FollowState。 */
+    val relation: Int = 0,
 )
 
 /** `x/relation/stat`,不需要 WBI。字段名从消费端反推,notes 1.2 节标了 UNSURE。 */

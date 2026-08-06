@@ -85,11 +85,20 @@ class BiliClient(
         }
     }
 
-    /** 写操作接口一律要 csrf(bili_jct),且是 body 字段不是 header。 */
+    /**
+     * 写操作接口一律要 csrf(bili_jct),且是 body 字段不是 header。
+     *
+     * @param params 少数接口的参数是**分开放**的:一部分在 query,一部分在 body。
+     *   `x/relation/modify` 就是这样(statistics 与 x-bili-device-req-json 在 query,
+     *   业务字段在 body),照 PiliPlus 的实际做法,放错位置会被拒。
+     * @param referer 覆盖站内 Referer/Origin,同 [rawGet]。关注要指到 `space.bilibili.com/<mid>`。
+     */
     suspend fun rawPostForm(
         url: String,
         form: Map<String, String> = emptyMap(),
         withCsrf: Boolean = true,
+        params: Map<String, String> = emptyMap(),
+        referer: String? = null,
     ): HttpResponse {
         val credentials = settings.credentials.first()
         val fields = if (withCsrf) form + ("csrf" to credentials.biliJct) else form
@@ -98,7 +107,8 @@ class BiliClient(
             url = url,
             formParameters = Parameters.build { fields.forEach { (k, v) -> append(k, v) } },
         ) {
-            applyCommonHeaders(credentials, cookie)
+            params.forEach { (k, v) -> parameter(k, v) }
+            applyCommonHeaders(credentials, cookie, referer)
         }.also { fingerprint.rememberCookies(it.setCookie()) }
     }
 
@@ -226,7 +236,11 @@ suspend fun BiliClient.postAction(
     url: String,
     form: Map<String, String> = emptyMap(),
     withCsrf: Boolean = true,
-): BiliResult<Unit> = envelopeResult(url) { rawPostForm(url, form, withCsrf).body<BiliEnvelope>() }
+    params: Map<String, String> = emptyMap(),
+    referer: String? = null,
+): BiliResult<Unit> = envelopeResult(url) {
+    rawPostForm(url, form, withCsrf, params, referer).body<BiliEnvelope>()
+}
 
 /** app 路线的写接口(点赞/投币):access_key + appkey 签名,不带 Cookie。 */
 suspend fun BiliClient.appPostAction(

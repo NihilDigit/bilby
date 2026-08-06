@@ -16,6 +16,7 @@ import dev.bilby.data.HeartbeatReporter
 import dev.bilby.data.QueueSourceRepository
 import dev.bilby.data.SearchRepository
 import dev.bilby.data.SettingsStore
+import dev.bilby.data.RelationRepository
 import dev.bilby.data.SpaceRepository
 import dev.bilby.data.SponsorBlockRepository
 import dev.bilby.data.ToViewRepository
@@ -92,6 +93,8 @@ class AppContainer(context: Context) {
     val commentRepository: CommentRepository by lazy { CommentRepository(biliClient, settings) }
 
     val spaceRepository: SpaceRepository by lazy { SpaceRepository(biliClient) }
+
+    val relationRepository: RelationRepository by lazy { RelationRepository(biliClient) }
 
     val toViewRepository: ToViewRepository by lazy { ToViewRepository(biliClient) }
 
