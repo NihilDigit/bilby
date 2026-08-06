@@ -12,7 +12,9 @@ Features and behaviour changes go through an RFC issue before code. If a request
 Bilby resists compulsive use through structure. Every rule below is load-bearing; treat
 them as fixed:
 
-- No recommendation feed, no related-videos rail, no autoplay. Lists must end.
+- No recommendation feed, no related-videos rail, no autoplay. A list's contents follow from
+  what the user already chose (who they follow, which video they opened). Never insert
+  anything into a list as the user scrolls.
 - The slot where the official app puts related recommendations holds the video's collection
   and the uploader's other work: a finite set the user selected by opening this video. The
   playback queue is built from that set, which makes it a general queue and keeps it free of

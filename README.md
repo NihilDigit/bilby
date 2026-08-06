@@ -4,9 +4,10 @@
 
 An Android client for bilibili with the recommendation machinery taken out.
 
-The home screen shows updates from the accounts you follow, in order, and it ends. When it
-ends, there is nothing underneath it. There is no recommendation feed, no related-videos
-rail, and no autoplay.
+The home screen shows updates from the accounts you follow, newest first. What appears there
+is decided entirely by who you follow; scrolling down moves further back in time, and
+nothing is inserted along the way. There is no recommendation feed, no related-videos rail,
+and no autoplay.
 
 Everything that would normally hand you the next video has been replaced by something you
 choose. Where the official app puts related recommendations, Bilby puts the current video's
