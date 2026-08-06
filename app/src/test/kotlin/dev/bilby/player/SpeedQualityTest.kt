@@ -3,45 +3,72 @@ package dev.bilby.player
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.SonicAudioProcessor
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.PI
 import kotlin.math.cos
-import kotlin.math.hypot
 import kotlin.math.log10
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
- * 临时基准,不是回归测试:把同一段人声样信号分别喂给 Media3 默认的 Sonic 和我们的 WSOLA,
- * 量一个和"金属音/毛刺"直接对应的客观指标,再决定要不要换后端。跑完即删。
+ * 倍速后端为什么选 WSOLA 而不是 Media3 默认的 Sonic——判据和数字都在这里,顺带守住一条
+ * 会真的回归的性质。
  *
  * 指标是**谐波纯度**:输入是基频固定的谐波复合音(浊音段的物理模型)。理想的时间伸缩只改
  * 时长不改频谱,输出应当还是那组谐波。接缝处的相位不连续会把能量洒到谐波之间的频点上——
  * 这正是人耳听成"金属感""沙沙声"的东西。于是"非谐波能量 / 谐波能量"就是可听失真的代理量,
- * 越低越好。输入本身的读数作为基线(窗函数泄漏的地板)。
+ * 越低越好;输入自身的读数是基线(窗函数泄漏的地板)。
+ *
+ * 实测结论(见 [benchmark] 的打印):单人声上两者都是透明的,读数等于基线;**两个同时发声的
+ * 基频**(人声压着 BGM 的模型)上 Sonic 崩掉——非谐波能量升到与谐波能量相当甚至更高,而
+ * WSOLA 仍低 13–16 dB。原因在算法前提:Sonic 用 AMDF 估**一个**基音周期再整周期拼接,
+ * 两个周期同时存在时这个前提不成立;WSOLA 不假设周期性,只找波形最像的位置。
+ *
+ * [双人声下 WSOLA 的失真必须显著低于谐波能量] 是唯一的断言。它守的不是"我写的逻辑",
+ * 是"相似度搜索确实在起作用"——搜索一旦写坏(比如相关度没归一化、粗扫步长过大跳过真峰),
+ * 这个数字会立刻掉到 0 dB 附近,而单元测试里的伸缩比断言完全看不出来。
  */
-class SpeedQualityBenchmark {
+class SpeedQualityTest {
 
     @Test
     fun benchmark() {
-        println("speed  algo    非谐波能量(dB)  处理耗时(ms)")
-        for (speed in listOf(1.25f, 1.5f, 2.0f)) {
-            for (vibrato in listOf(false, true)) {
-                val input = voicedSignal(SECONDS, vibrato)
-                val tag = if (vibrato) "(带颤音)" else "(稳态)  "
-                if (speed == 1.25f) {
-                    println("  输入基线$tag ${"%.1f".format(artifactDb(input))} dB")
-                }
+        // 三种输入,分别对应三个假设:
+        //   稳态单人声 —— 两个算法都该是透明的,差别应为零。
+        //   带颤音单人声 —— 真人基频始终在动,Sonic 每块重估基音,这里是它的主场。
+        //   双人声(人声 + BGM 的模型)—— 同时存在两个基频时 AMDF 只能估出一个,
+        //     PSOLA 的前提破了;WSOLA 不假设周期性,理应在这里领先。这是"要不要换"的关键一格。
+        for (case in Case.entries) {
+            val input = voiced(case.f0s, case.vibrato)
+            println("== ${case.label}  输入基线 ${"%.1f".format(artifactDb(input, case.f0s))} dB ==")
+            for (speed in listOf(1.25f, 1.5f, 2.0f)) {
                 val sonic = run(SonicAudioProcessor().apply { setSpeed(speed) }, input)
                 val wsola = run(WsolaAudioProcessor().apply { setSpeed(speed) }, input)
+                val wsolaDb = artifactDb(wsola.pcm, case.f0s)
                 println(
-                    "%.2fx  Sonic$tag %6.1f  %6d".format(speed, artifactDb(sonic.pcm), sonic.millis) +
-                        "   |  WSOLA %6.1f  %6d".format(artifactDb(wsola.pcm), wsola.millis)
+                    "  %.2fx  Sonic %6.1f dB %4d ms   |  WSOLA %6.1f dB %4d ms".format(
+                        speed,
+                        artifactDb(sonic.pcm, case.f0s), sonic.millis,
+                        wsolaDb, wsola.millis,
+                    )
                 )
+                if (case == Case.TwoVoices) {
+                    assertTrue(
+                        "WSOLA 在双音源 $speed× 下的非谐波能量 ${wsolaDb}dB 过高,相似度搜索可能失效",
+                        wsolaDb < -5.0,
+                    )
+                }
             }
         }
+    }
+
+    private enum class Case(val label: String, val f0s: List<Double>, val vibrato: Double) {
+        Steady("稳态单人声 120Hz", listOf(120.0), 0.0),
+        Vibrato("带颤音单人声 120Hz±0.5%", listOf(120.0), 0.005),
+        TwoVoices("双人声 120Hz + 185Hz", listOf(120.0, 185.0), 0.0);
+
     }
 
     private class Result(val pcm: ShortArray, val millis: Long)
@@ -77,28 +104,27 @@ class SpeedQualityBenchmark {
         }
     }
 
-    /**
-     * 浊音段模型:30 次谐波、1/k 衰减。[vibrato] 打开时基频有 ±3% 的慢速起伏——真人说话的基频
-     * 从不恒定,而 Sonic 每块重估基音、WSOLA 用固定步长加搜索,差别正是在基频变动时拉开的。
-     */
-    private fun voicedSignal(seconds: Int, vibrato: Boolean): ShortArray {
-        val frames = SAMPLE_RATE * seconds
+    /** 浊音段模型:每个基频 30 次谐波、1/k 衰减。[vibratoDepth] 是基频起伏的相对幅度。 */
+    private fun voiced(f0s: List<Double>, vibratoDepth: Double): ShortArray {
+        val frames = SAMPLE_RATE * SECONDS
         val pcm = ShortArray(frames * CHANNELS)
-        var phase = 0.0
+        val phases = DoubleArray(f0s.size)
+        val gain = 6000.0 / f0s.size
         for (i in 0 until frames) {
             val t = i.toDouble() / SAMPLE_RATE
-            val f0 = if (vibrato) F0 * (1 + 0.03 * sin(2 * PI * 4.0 * t)) else F0
-            phase += 2 * PI * f0 / SAMPLE_RATE
             var v = 0.0
-            for (k in 1..HARMONICS) v += sin(k * phase) / k
-            val s = (v * 6000).roundToInt().coerceIn(-32768, 32767).toShort()
+            for ((n, f0) in f0s.withIndex()) {
+                phases[n] += 2 * PI * f0 * (1 + vibratoDepth * sin(2 * PI * 4.0 * t)) / SAMPLE_RATE
+                for (k in 1..HARMONICS) v += sin(k * phases[n]) / k
+            }
+            val s = (v * gain).roundToInt().coerceIn(-32768, 32767).toShort()
             repeat(CHANNELS) { pcm[i * CHANNELS + it] = s }
         }
         return pcm
     }
 
     /** 非谐波能量与谐波能量之比,dB。取输出正中间一段,避开首尾的淡入淡出。 */
-    private fun artifactDb(pcm: ShortArray): Double {
+    private fun artifactDb(pcm: ShortArray, f0s: List<Double>): Double {
         val frames = pcm.size / CHANNELS
         val start = (frames - FFT_SIZE) / 2
         val re = DoubleArray(FFT_SIZE)
@@ -113,9 +139,11 @@ class SpeedQualityBenchmark {
         var harmonic = 0.0
         var other = 0.0
         val binPerHz = FFT_SIZE.toDouble() / SAMPLE_RATE
-        val harmonicBins = (1..HARMONICS).flatMap { k ->
-            val center = (k * F0 * binPerHz).roundToInt()
-            (center - HARMONIC_HALF_WIDTH)..(center + HARMONIC_HALF_WIDTH)
+        val harmonicBins = f0s.flatMap { f0 ->
+            (1..HARMONICS).flatMap { k ->
+                val center = (k * f0 * binPerHz).roundToInt()
+                (center - HARMONIC_HALF_WIDTH)..(center + HARMONIC_HALF_WIDTH)
+            }
         }.toSet()
         for (bin in 1 until FFT_SIZE / 2) {
             val power = re[bin] * re[bin] + im[bin] * im[bin]
@@ -159,7 +187,6 @@ class SpeedQualityBenchmark {
             }
             len = len shl 1
         }
-        hypot(0.0, 0.0) // 保持 import 不被清理
     }
 
     private companion object {
@@ -167,10 +194,9 @@ class SpeedQualityBenchmark {
         const val CHANNELS = 2
         const val CHUNK = 1024
         const val SECONDS = 8
-        const val F0 = 120.0
         const val HARMONICS = 30
         const val FFT_SIZE = 32768
-        const val HARMONIC_HALF_WIDTH = 3
+        const val HARMONIC_HALF_WIDTH = 5
         val FORMAT = AudioProcessor.AudioFormat(SAMPLE_RATE, CHANNELS, C.ENCODING_PCM_16BIT)
     }
 }

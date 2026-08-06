@@ -4,7 +4,6 @@ import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
-import dev.bilby.BiliLog
 import java.nio.ByteBuffer
 import kotlin.math.abs
 import kotlin.math.max
@@ -24,14 +23,15 @@ import kotlin.math.sqrt
  *   的那个位置。不依赖基音假设,所以对多声源同样稳定;代价是搜索窗有限,基音周期比搜索窗长的
  *   低沉男声可能对不齐整周期,残留一点"混响感"。
  *
- * 参数取 SoundTouch 的自动档——WSOLA 在语音上被调了二十年的一组经验值:序列长度随倍速线性
- * 收缩(倍速越高每块越短,接缝更密但每块内失真更少),搜索窗与之反向。
+ * 分块参数见 [WsolaTuning]。
  *
  * **不支持变调**:[setSpeed] 只改速度。变调要在时间伸缩之外再做一次重采样,而 Bilby 的倍速
  * 菜单从来只调速度。
  */
 @UnstableApi
-class WsolaAudioProcessor : BaseAudioProcessor() {
+class WsolaAudioProcessor(
+    private val tuning: WsolaTuning = WsolaTuning.Default,
+) : BaseAudioProcessor() {
 
     private var speed = 1f
     private var pendingSpeed = 1f
@@ -70,10 +70,6 @@ class WsolaAudioProcessor : BaseAudioProcessor() {
         pendingSpeed = speed
     }
 
-    fun setPitch(pitch: Float) {
-        if (abs(pitch - 1f) > SPEED_EPSILON) BiliLog.w("WSOLA 不支持变调,忽略 pitch=$pitch")
-    }
-
     /** 播放时长 → 媒体时长。2× 时 1 秒播放对应 2 秒媒体。 */
     fun getMediaDuration(playoutDuration: Long): Long =
         if (producedFrames > MIN_FRAMES_FOR_MEASURED_RATIO) {
@@ -88,9 +84,9 @@ class WsolaAudioProcessor : BaseAudioProcessor() {
     override fun onConfigure(
         inputAudioFormat: AudioProcessor.AudioFormat,
     ): AudioProcessor.AudioFormat {
-        // 只接 16 位整型 PCM。DefaultAudioSink 在 float 输出、直通、tunneling 三种情况下本来就
-        // 绕过整条处理链(shouldApplyAudioProcessorPlaybackParameters),这里拒掉不会让倍速静默失效。
-        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) {
+        // 正常路径下 ResilientSpeedProcessor 会先问 unsupportedReason,不会走到这里;
+        // 这个抛出是给"直接拿 WsolaAudioProcessor 用"的调用方兜底的,别让它静默产出垃圾。
+        if (unsupportedReason(inputAudioFormat) != null) {
             throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
         }
         return inputAudioFormat
@@ -122,7 +118,8 @@ class WsolaAudioProcessor : BaseAudioProcessor() {
         process(drainTail = true)
     }
 
-    override fun onFlush() {
+    /** 倍速改动在这里落地:[setSpeed] 只记下 pendingSpeed,序列长度要等 flush 排空后才好重算。 */
+    override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
         speed = pendingSpeed
         endOfStreamQueued = false
         configureLengths()
@@ -148,14 +145,10 @@ class WsolaAudioProcessor : BaseAudioProcessor() {
     private fun configureLengths() {
         channelCount = inputAudioFormat.channelCount.coerceAtLeast(1)
         val rate = inputAudioFormat.sampleRate
-        val clamped = speed.coerceIn(AUTO_TEMPO_LOW, AUTO_TEMPO_HIGH)
-        val sequenceMs = AUTO_SEQUENCE_C + AUTO_SEQUENCE_K * clamped
-        val seekMs = AUTO_SEEK_C + AUTO_SEEK_K * clamped
-
-        sequenceFrames = (rate * sequenceMs / 1000f).roundToInt()
-        seekFrames = (rate * seekMs / 1000f).roundToInt()
+        sequenceFrames = (rate * tuning.sequenceMsAt(speed) / 1000f).roundToInt()
+        seekFrames = (rate * tuning.seekMsAt(speed) / 1000f).roundToInt()
         // 一块里要放下淡入、淡出两段重叠,否则中间的复制段长度为负。
-        overlapFrames = min((rate * OVERLAP_MS / 1000f).roundToInt(), sequenceFrames / 2 - 1)
+        overlapFrames = min((rate * tuning.overlapMs / 1000f).roundToInt(), sequenceFrames / 2 - 1)
         requiredFrames = sequenceFrames + seekFrames
 
         // 分析步长 = 合成步长 × 倍速;合成步长是每块真正贡献的输出长度(整块减去与下一块重叠的部分)。
@@ -310,17 +303,33 @@ class WsolaAudioProcessor : BaseAudioProcessor() {
         }
     }
 
-    private companion object {
-        /** SoundTouch 自动档:序列 125ms@0.5× → 50ms@2×,搜索窗 25ms@0.5× → 15ms@2×,重叠固定 8ms。 */
-        const val AUTO_TEMPO_LOW = 0.5f
-        const val AUTO_TEMPO_HIGH = 2.0f
-        const val AUTO_SEQUENCE_K = -50f
-        const val AUTO_SEQUENCE_C = 150f
-        const val AUTO_SEEK_K = -20f / 3f
-        const val AUTO_SEEK_C = 25f + 20f / 3f * 0.5f
-        const val OVERLAP_MS = 8f
+    companion object {
+        /**
+         * 这个格式能不能用 WSOLA;不能的话返回一句**具体**的原因,由 [ResilientSpeedProcessor]
+         * 打进日志。返回 null 表示可以。
+         *
+         * 单独抽出来而不是只靠 [onConfigure] 抛异常:回退方要在**调用之前**就知道该不该走这条路,
+         * 靠捕获异常来做正常分支既拿不到原因,又会把真正的 bug 和"格式不支持"混成一类。
+         */
+        fun unsupportedReason(format: AudioProcessor.AudioFormat): String? = when {
+            // 只接 16 位整型 PCM。DefaultAudioSink 在 float 输出、直通、tunneling 三种情况下本来
+            // 就绕过整条处理链(shouldApplyAudioProcessorPlaybackParameters),所以这里拒掉不会
+            // 让倍速静默失效——那几条路上根本没有处理器在工作。
+            format.encoding != C.ENCODING_PCM_16BIT ->
+                "编码不是 16 位整型 PCM(encoding=${format.encoding})"
+            // 低于这个采样率,8ms 的重叠段会短到只剩几帧,相似度搜索失去意义。
+            // 实际上 MediaCodec 输出不会低于 8000,这条是防御性的。
+            format.sampleRate < MIN_SAMPLE_RATE ->
+                "采样率过低(${format.sampleRate}Hz,下限 ${MIN_SAMPLE_RATE}Hz)"
+            format.channelCount !in 1..MAX_CHANNELS ->
+                "声道数超出支持范围(${format.channelCount},支持 1..$MAX_CHANNELS)"
+            else -> null
+        }
 
         const val COARSE_STEP = 4
+
+        const val MIN_SAMPLE_RATE = 8_000
+        const val MAX_CHANNELS = 8
 
         /** 低于这个数说明刚 flush 完没多久,实测比例还没意义,先用标称倍速。 */
         const val MIN_FRAMES_FOR_MEASURED_RATIO = 30_000L

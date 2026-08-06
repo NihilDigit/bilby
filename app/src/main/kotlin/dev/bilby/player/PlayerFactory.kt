@@ -19,11 +19,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** 实际生效的解码器,给"解码信息"展示和真机排查用。名字直接来自 MediaCodec。 */
-data class DecoderInfo(
+/**
+ * 播放链路上"实际用了什么"的一手信息:解码器名、倍速算法。设置页显示这一节,出问题时它是
+ * 第一手材料——"卡/烫"看解码器,"倍速音质不对"看算法和回退原因。
+ */
+data class PlaybackTechInfo(
     /** 如 `c2.qti.avc.decoder`(硬解)或 `c2.android.avc.decoder`(软解)。 */
     val videoDecoder: String? = null,
     val audioDecoder: String? = null,
+    /** 此刻真正在做时间伸缩的算法,不是配置值——回退发生后这里会变成 Sonic。 */
+    val speedAlgorithm: SpeedAlgorithm = SpeedAlgorithm.Wsola,
+    /** 非 null 表示倍速回退过,内容是具体原因。UI 可以只在非 null 时显示这一行。 */
+    val speedFallbackReason: String? = null,
 ) {
     /**
      * 硬解判定按名字前缀:`c2.android.*` 与 `OMX.google.*` 是 AOSP 的软解实现,其余是厂商的。
@@ -47,10 +54,10 @@ data class DecoderInfo(
 @UnstableApi
 object PlayerFactory {
 
-    private val _decoderInfo = MutableStateFlow(DecoderInfo())
+    private val _techInfo = MutableStateFlow(PlaybackTechInfo())
 
-    /** UI 想显示"当前用的什么解码器"时观察这个。空值表示还没开始解码。 */
-    val decoderInfo: StateFlow<DecoderInfo> = _decoderInfo.asStateFlow()
+    /** UI 观察这个。解码器名在开始解码后才有值,倍速算法在音频格式确定后才准。 */
+    val techInfo: StateFlow<PlaybackTechInfo> = _techInfo.asStateFlow()
 
     /**
      * **只有 [AudioPlaybackService] 该调它**。全 app 一个播放器(DESIGN 2.4b),UI 要播放器就
@@ -58,9 +65,9 @@ object PlayerFactory {
      */
     fun createPlayer(context: Context): ExoPlayer {
         DeviceCodecs.logOnce()
-        val algorithm = SpeedAlgorithmSelector.current(context)
-        PlayerLog.d("倍速算法: $algorithm")
-        return ExoPlayer.Builder(context, renderersFactory(context, algorithm))
+        val forced = SpeedAlgorithmSelector.forcedAlgorithm(context)
+        if (forced != null) PlayerLog.d("倍速算法被强制为 $forced(debug 开关)")
+        return ExoPlayer.Builder(context, renderersFactory(context, forced))
             .build()
             .apply { addAnalyticsListener(DecoderLogger()) }
     }
@@ -83,23 +90,29 @@ object PlayerFactory {
      *   直接抛 `DecoderInitializationException`,在我们这儿会被 `onPlayerError` 当成取流失败
      *   跳到下一条——一条本可以软解播出来的视频被静默跳过。打开后先试下一个解码器,实在不行才报错。
      */
-    private fun renderersFactory(context: Context, algorithm: SpeedAlgorithm): RenderersFactory =
+    private fun renderersFactory(context: Context, forced: SpeedAlgorithm?): RenderersFactory =
         object : DefaultRenderersFactory(context) {
             override fun buildAudioSink(
                 context: Context,
                 enableFloatOutput: Boolean,
                 enableAudioTrackPlaybackParams: Boolean,
             ): AudioSink {
-                val builder = DefaultAudioSink.Builder(context)
+                val chain = SpeedAudioProcessorChain(forced)
+                chain.speedProcessor.onStateChanged = { state ->
+                    // 音频线程回调。只在算法真的变化时到达,不是每个缓冲区。
+                    _techInfo.value = _techInfo.value.copy(
+                        speedAlgorithm = state.algorithm,
+                        speedFallbackReason = state.fallbackReason,
+                    )
+                }
+                return DefaultAudioSink.Builder(context)
                     .setEnableFloatOutput(enableFloatOutput)
                     // 保持 false(默认):true 会把倍速交给平台 AudioTrack 的
                     // PlaybackParams,那条路的时间伸缩由 AudioFlinger 实现,厂商之间音质
-                    // 差异很大且无法审计,还会绕过整条 AudioProcessor 链。
+                    // 差异很大且无法审计,还会绕过整条 AudioProcessor 链(连同我们的回退)。
                     .setEnableAudioOutputPlaybackParameters(enableAudioTrackPlaybackParams)
-                if (algorithm == SpeedAlgorithm.Wsola) {
-                    builder.setAudioProcessorChain(WsolaAudioProcessorChain())
-                }
-                return builder.build()
+                    .setAudioProcessorChain(chain)
+                    .build()
             }
         }
             .setMediaCodecSelector(MediaCodecSelector.DEFAULT)
@@ -115,12 +128,10 @@ object PlayerFactory {
 
     private fun httpDataSourceFactory() = DefaultHttpDataSource.Factory()
         .setUserAgent(BiliConstants.USER_AGENT)
-        .setDefaultRequestProperties(
-            mapOf(
-                "Referer" to BiliConstants.REFERER,
-                "Origin" to BiliConstants.ORIGIN,
-            )
-        )
+        // CDN 取流只认 Referer 和 UA。这里曾经还发 Origin,和其余请求一起去掉了:
+        // 真实浏览器的同源请求不带 Origin,带了反而是个可观测的伪装破绽。
+        // 已真机验证去掉后取流正常(state=PLAYING),CDN 不校验它。
+        .setDefaultRequestProperties(mapOf("Referer" to BiliConstants.REFERER))
         .setAllowCrossProtocolRedirects(true)
 
     /**
@@ -135,7 +146,7 @@ object PlayerFactory {
             initializationDurationMs: Long,
         ) {
             PlayerLog.d("视频解码器: $decoderName")
-            _decoderInfo.value = _decoderInfo.value.copy(videoDecoder = decoderName)
+            _techInfo.value = _techInfo.value.copy(videoDecoder = decoderName)
         }
 
         override fun onAudioDecoderInitialized(
@@ -145,7 +156,7 @@ object PlayerFactory {
             initializationDurationMs: Long,
         ) {
             PlayerLog.d("音频解码器: $decoderName")
-            _decoderInfo.value = _decoderInfo.value.copy(audioDecoder = decoderName)
+            _techInfo.value = _techInfo.value.copy(audioDecoder = decoderName)
         }
     }
 }
