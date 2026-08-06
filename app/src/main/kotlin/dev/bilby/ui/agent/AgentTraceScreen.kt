@@ -2,32 +2,24 @@ package dev.bilby.ui.agent
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -37,19 +29,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
-import coil3.network.NetworkHeaders
-import coil3.network.httpHeaders
-import coil3.request.ImageRequest
 import dev.bilby.agent.AnswerItem
 import dev.bilby.agent.TraceItem
+import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.FullScreenError
+import dev.bilby.ui.components.InlineProgress
+import dev.bilby.ui.components.ListCover
+import dev.bilby.ui.components.VideoRow
+import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
+import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.Spacing
 
 data class AgentUiState(
     val intentLabel: String = "",
@@ -65,65 +57,89 @@ data class AgentStep(
     val finished: Boolean,
 )
 
+/**
+ * 助理的独立结果页(搜索慢路、找相关的全屏版)。
+ *
+ * 过程直播是信任的来源,也是等待体验本身(DESIGN 3.4):中间结果可点,
+ * 助理翻到一半用户看中了可以直接点走。答案一出现过程自动折叠,但随时能点回来。
+ */
 @Composable
 fun AgentTraceScreen(
     state: AgentUiState,
     onVideoClick: (bvid: String) -> Unit,
     onRetry: () -> Unit,
+    onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 答案出来前展开过程,答案一出现就自动折叠——但用户随时能点回来看(DESIGN 3.4)。
     var processExpanded by remember { mutableStateOf(true) }
     LaunchedEffect(state.answer.isNotEmpty()) {
         if (state.answer.isNotEmpty()) processExpanded = false
     }
 
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = WindowInsets.systemBars.asPaddingValues(),
-    ) {
-        if (state.intentLabel.isNotEmpty()) {
-            item(key = "intent") {
-                Text(
-                    text = state.intentLabel,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(16.dp),
-                )
-            }
-        }
-
-        if (state.steps.isNotEmpty()) {
-            item(key = "process_header") {
-                ProcessHeader(
-                    expanded = processExpanded,
-                    collapsedSummary = state.steps.lastOrNull()?.label.orEmpty(),
-                    onToggle = { processExpanded = !processExpanded },
-                )
-            }
-            if (processExpanded) {
-                items(state.steps, key = { it.label }) { step ->
-                    StepRow(step = step, onVideoClick = onVideoClick)
+    Scaffold(
+        modifier = modifier,
+        // 意图当标题:这一页存在的理由就是"在找什么",没必要在正文里再印一遍。
+        topBar = { BilbyTopBar(title = state.intentLabel.ifEmpty { "助理" }, onBack = onBack) },
+    ) { insets ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = insets,
+        ) {
+            if (state.steps.isNotEmpty()) {
+                item(key = "process_header") {
+                    ProcessHeader(
+                        expanded = processExpanded,
+                        collapsedSummary = state.steps.lastOrNull()?.label.orEmpty(),
+                        onToggle = { processExpanded = !processExpanded },
+                    )
+                }
+                if (processExpanded) {
+                    items(state.steps, key = { it.label }) { step ->
+                        StepRow(step = step, onVideoClick = onVideoClick)
+                    }
                 }
             }
-        }
 
-        if (state.answer.isNotEmpty()) {
-            item(key = "answer_header") {
-                Text(
-                    text = "为你找到",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                )
+            if (state.answer.isNotEmpty()) {
+                item(key = "answer_header") {
+                    Text(
+                        text = "为你找到",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+                    )
+                }
+                items(state.answer, key = { it.bvid }) { answer ->
+                    VideoRow(
+                        // 理由永远显示:它是助理结果与推荐流的根本区别(DESIGN 3.4)。
+                        item = VideoRowUi(
+                            title = answer.trace?.title ?: answer.bvid,
+                            coverUrl = answer.trace?.coverUrl.orEmpty(),
+                            upName = answer.trace?.upName,
+                            note = answer.reason,
+                            accentNote = true,
+                        ),
+                        onClick = { onVideoClick(answer.bvid) },
+                    )
+                }
             }
-            items(state.answer, key = { it.bvid }) { answer ->
-                AnswerCard(item = answer, onClick = { onVideoClick(answer.bvid) })
-            }
-        }
 
-        item(key = "footer") {
-            when {
-                state.error != null -> ErrorFooter(message = state.error, onRetry = onRetry)
-                state.running -> RunningFooter()
+            item(key = "footer") {
+                when {
+                    state.error != null -> FullScreenError(state.error, onRetry, Modifier.fillMaxWidth())
+
+                    state.running -> InlineProgress(
+                        text = "还在找…",
+                        modifier = Modifier.padding(Spacing.Comfortable),
+                    )
+
+                    // 答完就退场,不留"再找一批"——那正是 DESIGN 1.1 要反的变比率奖励。
+                    state.answer.isEmpty() -> Text(
+                        text = "没找到合适的",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(Spacing.Comfortable),
+                    )
+                }
             }
         }
     }
@@ -140,9 +156,9 @@ private fun ProcessHeader(
         modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onToggle)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
         Text(
             text = if (expanded) "过程" else "过程 · $collapsedSummary",
@@ -162,29 +178,33 @@ private fun ProcessHeader(
 
 @Composable
 private fun StepRow(step: AgentStep, onVideoClick: (String) -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier = modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (step.finished) {
+    Column(
+        modifier = modifier.fillMaxWidth().padding(vertical = Spacing.Hair),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+    ) {
+        if (step.finished) {
+            Row(
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
                 Icon(
                     imageVector = Icons.Default.Check,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(Dimens.IconInline),
                 )
-            } else {
-                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                Text(text = step.label, style = MaterialTheme.typography.bodyMedium)
             }
-            Text(text = step.label, style = MaterialTheme.typography.bodyMedium)
+        } else {
+            InlineProgress(step.label, Modifier.padding(horizontal = Spacing.Comfortable))
         }
+
         if (step.items.isNotEmpty()) {
-            Spacer(Modifier.padding(top = 4.dp))
+            // 中间结果可点:助理翻到一半用户看中了可以直接点走(DESIGN 3.4)。
             LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(horizontal = Spacing.Comfortable),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
             ) {
                 items(step.items, key = { it.bvid }) { trace ->
                     TraceCard(item = trace, onClick = { onVideoClick(trace.bvid) })
@@ -196,126 +216,17 @@ private fun StepRow(step: AgentStep, onVideoClick: (String) -> Unit, modifier: M
 
 @Composable
 private fun TraceCard(item: TraceItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
     Column(
-        modifier = modifier
-            .width(120.dp)
-            .clickable(onClick = onClick),
+        modifier = modifier.width(Dimens.TraceCardWidth).clickable(onClick = onClick),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(8.dp)),
-        ) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(item.coverUrl)
-                    .httpHeaders(NetworkHeaders.Builder().add("Referer", "https://www.bilibili.com").build())
-                    .build(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-        Spacer(Modifier.padding(top = 4.dp))
+        ListCover(url = item.coverUrl, width = Dimens.TraceCardWidth)
         Text(
             text = item.title,
             style = MaterialTheme.typography.bodySmall,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
-    }
-}
-
-@Composable
-private fun AnswerCard(item: AnswerItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .width(140.dp)
-                .aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(8.dp)),
-        ) {
-            if (item.trace != null) {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(item.trace.coverUrl)
-                        .httpHeaders(NetworkHeaders.Builder().add("Referer", "https://www.bilibili.com").build())
-                        .build(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = item.trace?.title ?: item.bvid,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (item.trace != null) {
-                Spacer(Modifier.padding(top = 2.dp))
-                Text(
-                    text = item.trace.upName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Spacer(Modifier.padding(top = 4.dp))
-            // 理由是这个功能与推荐流的根本区别,必须显示,不能只给一排封面(团队指示)。
-            Text(
-                text = item.reason,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-@Composable
-private fun RunningFooter(modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(16.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-        Spacer(Modifier.padding(horizontal = 4.dp))
-        Text(
-            text = "还在找…",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun ErrorFooter(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(message, style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.padding(top = 12.dp))
-        Button(onClick = onRetry) { Text("重试") }
     }
 }
 
@@ -347,6 +258,7 @@ private fun AgentTraceScreenRunningPreview() {
             ),
             onVideoClick = {},
             onRetry = {},
+            onBack = {},
         )
     }
 }
@@ -381,6 +293,7 @@ private fun AgentTraceScreenAnswerPreview() {
             ),
             onVideoClick = {},
             onRetry = {},
+            onBack = {},
         )
     }
 }
@@ -399,6 +312,7 @@ private fun AgentTraceScreenErrorPreview() {
             ),
             onVideoClick = {},
             onRetry = {},
+            onBack = {},
         )
     }
 }

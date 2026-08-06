@@ -17,7 +17,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -55,6 +55,11 @@ import coil3.network.NetworkHeaders
 import coil3.network.httpHeaders
 import coil3.request.ImageRequest
 import dev.bilby.api.toHttpsUrl
+import androidx.compose.material3.Scaffold
+import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.CompactVideoRow
+import dev.bilby.ui.components.VideoCover
+import dev.bilby.ui.theme.Spacing
 import dev.bilby.player.AudioPlaybackUiState
 import dev.bilby.player.QueueItem
 import dev.bilby.player.SleepTimerMode
@@ -64,6 +69,12 @@ import kotlinx.coroutines.delay
 private const val REFERER = "https://www.bilibili.com"
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
 private val SLEEP_TIMER_MINUTES = listOf(15, 30, 60)
+
+/** 封面占屏宽的比例。留出两侧空白,让它看起来是一张唱片而不是一块背景板。 */
+private const val CoverWidthFraction = 0.7f
+
+/** shapes.extraLarge 的值,封面这里直接用 —— VideoCover 收的是 Dp 不是 Shape。 */
+private val LargeCoverRadius = 28.dp
 
 /**
  * 听视频界面。播放器归 [dev.bilby.player.AudioPlaybackService] 所有,这里只读状态、发命令
@@ -113,22 +124,22 @@ fun ListenScreen(
 
     val displayPosition = dragPosition ?: position
 
-    Column(modifier = modifier.fillMaxSize()) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(4.dp)) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Filled.ArrowBack, contentDescription = "返回")
-            }
-            Text("听视频", style = MaterialTheme.typography.titleMedium)
-        }
-
+    // 必须自己给顶栏:听视频是播放页内的一个状态,VideoScreen 在这条分支上提前 return,
+    // 外层那句 windowInsetsPadding(statusBars) 走不到 —— 不处理的话标题和返回箭头
+    // 会直接压在状态栏的时钟上。用 Scaffold 而不是手贴 padding,和其余页面一致。
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        topBar = { BilbyTopBar(title = "听视频", onBack = onBack) },
+    ) { insets ->
+    Column(modifier = Modifier.fillMaxSize().padding(insets)) {
         if (player == null || state.current == null) {
-            Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.fillMaxWidth().padding(Spacing.Spacious), contentAlignment = Alignment.Center) {
                 Text("未在播放", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         } else {
             CoverAndInfo(state)
 
-            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+            Column(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
                 Slider(
                     value = if (duration > 0) (displayPosition.toFloat() / duration).coerceIn(0f, 1f) else 0f,
                     onValueChange = { fraction ->
@@ -184,6 +195,7 @@ fun ListenScreen(
             modifier = Modifier.fillMaxSize(),
         )
     }
+    }
 }
 
 @Composable
@@ -191,38 +203,34 @@ private fun CoverAndInfo(state: AudioPlaybackUiState) {
     val item = state.current ?: return
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxWidth().padding(24.dp),
+        modifier = Modifier.fillMaxWidth().padding(Spacing.Loose),
     ) {
-        AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(item.coverUrl.toHttpsUrl())
-                .httpHeaders(NetworkHeaders.Builder().add("Referer", REFERER).build())
-                .build(),
-            contentDescription = null,
-            modifier = Modifier
-                .fillMaxWidth(0.7f)
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(16.dp)),
+        // 16:9 而不是裁成方形:这是视频的封面,方形唱片是音乐播放器的隐喻,
+        // 在这里会把画面两边切掉,而封面上常常正好写着字。
+        VideoCover(
+            url = item.coverUrl,
+            cornerRadius = LargeCoverRadius,
+            modifier = Modifier.fillMaxWidth(CoverWidthFraction),
         )
         Text(
             item.title,
             style = MaterialTheme.typography.titleMedium,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 16.dp),
+            modifier = Modifier.padding(top = Spacing.Comfortable),
         )
         Text(
             item.upName,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp),
+            modifier = Modifier.padding(top = Spacing.Hair),
         )
         if (state.queueSize > 0) {
             Text(
                 "${state.positionInQueue} / ${state.queueSize}",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
+                modifier = Modifier.padding(top = Spacing.Hair),
             )
         }
     }
@@ -243,7 +251,7 @@ private fun PlaybackControls(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.Tight),
     ) {
         IconButton(onClick = onPrevious, enabled = hasPrevious) {
             Icon(Icons.Filled.SkipPrevious, contentDescription = "上一条", modifier = Modifier.size(32.dp))
@@ -269,7 +277,7 @@ private fun PlaybackControls(
         Box {
             TextButton(onClick = { speedMenuOpen = true }) {
                 Icon(Icons.Filled.Speed, contentDescription = "倍速", modifier = Modifier.size(18.dp))
-                Text(formatSpeed(speed), modifier = Modifier.padding(start = 4.dp))
+                Text(formatSpeed(speed), modifier = Modifier.padding(start = Spacing.Hair))
             }
             DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) {
                 SPEED_OPTIONS.forEach { option ->
@@ -293,18 +301,18 @@ private fun BottomRow(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
     ) {
         TextButton(onClick = onToggleShuffle) {
             Icon(Icons.Filled.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
-            Text(if (shuffled) "随机" else "顺序", modifier = Modifier.padding(start = 4.dp))
+            Text(if (shuffled) "随机" else "顺序", modifier = Modifier.padding(start = Spacing.Hair))
         }
 
         var sleepMenuOpen by remember { mutableStateOf(false) }
         Box {
             TextButton(onClick = { sleepMenuOpen = true }) {
                 Icon(Icons.Filled.Bedtime, contentDescription = null, modifier = Modifier.size(18.dp))
-                Text(sleepTimerLabel(sleepTimer), modifier = Modifier.padding(start = 4.dp))
+                Text(sleepTimerLabel(sleepTimer), modifier = Modifier.padding(start = Spacing.Hair))
             }
             DropdownMenu(expanded = sleepMenuOpen, onDismissRequest = { sleepMenuOpen = false }) {
                 SLEEP_TIMER_MINUTES.forEach { minutes ->
@@ -354,51 +362,16 @@ private fun QueueList(
     LazyColumn(
         state = listState,
         modifier = modifier,
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        contentPadding = PaddingValues(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
     ) {
         items(queue, key = { it.bvid }) { item ->
-            QueueRow(item = item, current = item.bvid == currentBvid, onClick = { onPlayQueueItem(item.bvid) })
-        }
-    }
-}
-
-@Composable
-private fun QueueRow(item: QueueItem, current: Boolean, onClick: () -> Unit) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(8.dp),
-        color = if (current) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-    ) {
-        Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(item.coverUrl.toHttpsUrl())
-                    .httpHeaders(NetworkHeaders.Builder().add("Referer", REFERER).build())
-                    .build(),
-                contentDescription = null,
-                modifier = Modifier.size(width = 72.dp, height = 45.dp).clip(RoundedCornerShape(4.dp)),
+            CompactVideoRow(
+                title = item.title,
+                coverUrl = item.coverUrl,
+                subtitle = item.upName,
+                selected = item.bvid == currentBvid,
+                onClick = { onPlayQueueItem(item.bvid) },
             )
-            Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
-                Text(
-                    item.title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (current) {
-                        MaterialTheme.colorScheme.onSecondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    item.upName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
         }
     }
 }

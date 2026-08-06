@@ -1,62 +1,56 @@
 package dev.bilby.ui.space
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBars
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import coil3.compose.AsyncImage
-import coil3.network.NetworkHeaders
-import coil3.network.httpHeaders
-import coil3.request.ImageRequest
 import dev.bilby.api.BiliResult
 import dev.bilby.data.SpaceArchiveOrder
 import dev.bilby.data.SpaceCollectionItem
 import dev.bilby.data.SpaceProfile
 import dev.bilby.data.SpaceRepository
 import dev.bilby.data.SpaceVideoItem
+import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.EmptyState
+import dev.bilby.ui.components.FullScreenError
+import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.SquareCover
+import dev.bilby.ui.components.VideoRow
+import dev.bilby.ui.components.VideoRowUi
+import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.Spacing
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -71,7 +65,11 @@ import kotlinx.coroutines.launch
 
 // ---------------- 状态 ----------------
 
-enum class SpaceTab { Archives, Dynamics, Collections }
+enum class SpaceTab(val label: String) {
+    Archives("投稿"),
+    Dynamics("动态"),
+    Collections("合集"),
+}
 
 data class SpaceUiState(
     val loading: Boolean = true, // 首次加载 profile
@@ -332,6 +330,13 @@ class SpaceViewModel(
 
 // ---------------- UI ----------------
 
+/**
+ * 个人空间。三个标签是这一页的主要内容分区,直接挂在顶栏下面,所以用 primary tabs
+ * (M3:primary tabs 放在 app bar 之下,表示页面的主内容目的地)。
+ *
+ * 空间是纯拉取式界面,点进来本身带意图,风险为零(DESIGN 2.4)——所以这里可以放搜索、
+ * 放排序,不用担心它变成一个刷不完的池子。
+ */
 @Composable
 fun SpaceScreen(
     state: SpaceUiState,
@@ -346,6 +351,7 @@ fun SpaceScreen(
     onCollectionDetailBack: () -> Unit,
     onLoadMoreCollectionDetail: () -> Unit,
     onVideoClick: (SpaceVideoItem) -> Unit,
+    onBack: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -355,55 +361,53 @@ fun SpaceScreen(
         return
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
-        if (state.profile != null) {
-            SpaceHeader(state.profile)
-        }
-        PrimaryTabRow(selectedTabIndex = state.activeTab.ordinal) {
-            Tab(
-                selected = state.activeTab == SpaceTab.Archives,
-                onClick = { onTabSelected(SpaceTab.Archives) },
-                text = { Text("投稿") },
-            )
-            Tab(
-                selected = state.activeTab == SpaceTab.Dynamics,
-                onClick = { onTabSelected(SpaceTab.Dynamics) },
-                text = { Text("动态") },
-            )
-            Tab(
-                selected = state.activeTab == SpaceTab.Collections,
-                onClick = { onTabSelected(SpaceTab.Collections) },
-                text = { Text("合集") },
-            )
-        }
-        when {
-            state.loading && state.profile == null -> FullScreenLoading()
-            state.error != null && state.profile == null -> FullScreenError(state.error, onRetry)
-            else -> when (state.activeTab) {
-                SpaceTab.Archives -> ArchivesTab(
-                    state.archives,
-                    onArchiveOrderChanged,
-                    onArchiveKeywordChanged,
-                    onArchiveSearch,
-                    onLoadMoreArchives,
-                    onVideoClick,
-                )
+    Scaffold(
+        modifier = modifier,
+        topBar = { BilbyTopBar(title = state.profile?.name ?: "个人空间", onBack = onBack) },
+    ) { insets ->
+        Column(modifier = Modifier.fillMaxSize().padding(insets)) {
+            state.profile?.let { SpaceHeader(it) }
 
-                SpaceTab.Dynamics -> VideoListTab(
-                    items = state.dynamics.items,
-                    appending = state.dynamics.appending,
-                    hasMore = state.dynamics.hasMore,
-                    loading = state.dynamics.loading,
-                    error = state.dynamics.error,
-                    onLoadMore = onLoadMoreDynamics,
-                    onVideoClick = onVideoClick,
-                )
+            PrimaryTabRow(selectedTabIndex = state.activeTab.ordinal) {
+                SpaceTab.entries.forEach { tab ->
+                    Tab(
+                        selected = state.activeTab == tab,
+                        onClick = { onTabSelected(tab) },
+                        text = { Text(tab.label) },
+                    )
+                }
+            }
 
-                SpaceTab.Collections -> CollectionsTab(
-                    state.collections,
-                    onLoadMoreCollections,
-                    onCollectionClick,
-                )
+            when {
+                state.loading && state.profile == null -> FullScreenLoading()
+                state.error != null && state.profile == null -> FullScreenError(state.error, onRetry)
+                else -> when (state.activeTab) {
+                    SpaceTab.Archives -> ArchivesTab(
+                        state.archives,
+                        onArchiveOrderChanged,
+                        onArchiveKeywordChanged,
+                        onArchiveSearch,
+                        onLoadMoreArchives,
+                        onVideoClick,
+                    )
+
+                    SpaceTab.Dynamics -> VideoListTab(
+                        items = state.dynamics.items,
+                        appending = state.dynamics.appending,
+                        hasMore = state.dynamics.hasMore,
+                        loading = state.dynamics.loading,
+                        error = state.dynamics.error,
+                        emptyText = "这位 UP 主还没有视频动态",
+                        onLoadMore = onLoadMoreDynamics,
+                        onVideoClick = onVideoClick,
+                    )
+
+                    SpaceTab.Collections -> CollectionsTab(
+                        state.collections,
+                        onLoadMoreCollections,
+                        onCollectionClick,
+                    )
+                }
             }
         }
     }
@@ -414,33 +418,24 @@ private fun SpaceHeader(profile: SpaceProfile, modifier: Modifier = Modifier) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(WindowInsets.systemBars.asPaddingValues())
-            .padding(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        val context = LocalContext.current
-        AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(profile.faceUrl)
-                .httpHeaders(NetworkHeaders.Builder().add("Referer", "https://www.bilibili.com").build())
-                .build(),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.size(56.dp).clip(CircleShape),
-        )
-        Column {
-            Text(profile.name, style = MaterialTheme.typography.titleMedium)
+        Avatar(url = profile.faceUrl, size = Dimens.AvatarLarge)
+        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
             Text(
-                profile.sign.ifBlank { "这个人很懒,什么都没写" },
+                text = "Lv${profile.level} · ${profile.follower.formatFollower()}粉丝",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
+            // 名字已经在顶栏里,这里不重复。签名可能很长又基本没信息量,给两行封顶。
             Text(
-                "Lv${profile.level} · ${profile.follower.formatFollower()}粉丝",
+                text = profile.sign.ifBlank { "这个人很懒,什么都没写" },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -452,6 +447,16 @@ private fun Long.formatFollower(): String = when {
     else -> toString()
 }
 
+/** 「挖存货」的两条路:按时间看最近的,按播放量看代表作(DESIGN 2.4)。 */
+private val ArchiveOrders = listOf(
+    SpaceArchiveOrder.Pubdate to "最新",
+    SpaceArchiveOrder.Click to "最多播放",
+)
+
+/**
+ * 投稿页。排序用 segmented button(M3 把"排序元素"明确划给它),
+ * 空间内搜索回车才发请求 —— 输入即搜索会让每敲一个字打一次接口。
+ */
 @Composable
 private fun ArchivesTab(
     state: SpaceArchiveTabState,
@@ -463,38 +468,39 @@ private fun ArchivesTab(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        Column(
+            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            FilterChip(
-                selected = state.order == SpaceArchiveOrder.Pubdate,
-                onClick = { onOrderChanged(SpaceArchiveOrder.Pubdate) },
-                label = { Text("最新") },
-            )
-            FilterChip(
-                selected = state.order == SpaceArchiveOrder.Click,
-                onClick = { onOrderChanged(SpaceArchiveOrder.Click) },
-                label = { Text("最多播放") },
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                ArchiveOrders.forEachIndexed { index, pair ->
+                    SegmentedButton(
+                        selected = state.order == pair.first,
+                        onClick = { onOrderChanged(pair.first) },
+                        shape = SegmentedButtonDefaults.itemShape(index, ArchiveOrders.size),
+                        label = { Text(pair.second) },
+                    )
+                }
+            }
+            OutlinedTextField(
+                value = state.keyword,
+                onValueChange = onKeywordChanged,
+                placeholder = { Text("在这个空间内搜索") },
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                singleLine = true,
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier.fillMaxWidth(),
+                keyboardActions = KeyboardActions(onSearch = { onSearch() }),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             )
         }
-        OutlinedTextField(
-            value = state.keyword,
-            onValueChange = onKeywordChanged,
-            label = { Text("在这个空间内搜索") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp),
-            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { onSearch() }),
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                imeAction = androidx.compose.ui.text.input.ImeAction.Search,
-            ),
-        )
         VideoListTab(
             items = state.items,
             appending = state.appending,
             hasMore = state.hasMore,
             loading = state.loading,
             error = state.error,
+            emptyText = if (state.keyword.isBlank()) "这位 UP 主还没有投稿" else "没有匹配的投稿",
             onLoadMore = onLoadMore,
             onVideoClick = onVideoClick,
             modifier = Modifier.weight(1f),
@@ -522,7 +528,10 @@ private fun CollectionsTab(
                     .collect { if (state.hasMore && !state.appending) onLoadMore() }
             }
             LazyColumn(state = listState, modifier = modifier.fillMaxSize()) {
-                itemsIndexed(state.items, key = { _, item -> "${item.isSeason}-${item.id}" }) { _, item ->
+                if (state.items.isEmpty()) {
+                    item(key = "empty") { EmptyState("这位 UP 主没有合集") }
+                }
+                items(state.items, key = { "${it.isSeason}-${it.id}" }) { item ->
                     CollectionRow(item, onClick = { onCollectionClick(item) })
                 }
                 item(key = "footer") {
@@ -533,26 +542,25 @@ private fun CollectionsTab(
     }
 }
 
+/**
+ * 合集用方形封面,和视频行的 16:9 拉开 —— 一眼就能分出「这是一组视频」和「这是一个视频」,
+ * 不用先去读下面那行小字。
+ */
 @Composable
 private fun CollectionRow(item: SpaceCollectionItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
     Row(
-        modifier = modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(item.coverUrl)
-                .httpHeaders(NetworkHeaders.Builder().add("Referer", "https://www.bilibili.com").build())
-                .build(),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.width(120.dp).aspectRatio(1f).clip(RoundedCornerShape(8.dp)),
-        )
-        Column {
+        SquareCover(url = item.coverUrl, size = CollectionCoverSize)
+        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
             Text(item.name, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(
-                "${if (item.isSeason) "合集" else "系列"} · 共${item.total}个视频",
+                text = "${if (item.isSeason) "合集" else "系列"} · 共 ${item.total} 个视频",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -560,7 +568,8 @@ private fun CollectionRow(item: SpaceCollectionItem, onClick: () -> Unit, modifi
     }
 }
 
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+private val CollectionCoverSize = 72.dp
+
 @Composable
 private fun CollectionDetailScreen(
     detail: SpaceCollectionDetailState,
@@ -571,16 +580,7 @@ private fun CollectionDetailScreen(
 ) {
     Scaffold(
         modifier = modifier,
-        topBar = {
-            TopAppBar(
-                title = { Text(detail.collection.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-            )
-        },
+        topBar = { BilbyTopBar(title = detail.collection.name, onBack = onBack) },
     ) { padding ->
         VideoListTab(
             items = detail.items,
@@ -588,6 +588,7 @@ private fun CollectionDetailScreen(
             hasMore = detail.hasMore,
             loading = detail.loading,
             error = detail.error,
+            emptyText = "这个合集是空的",
             onLoadMore = onLoadMore,
             onVideoClick = onVideoClick,
             modifier = Modifier.padding(padding),
@@ -604,6 +605,7 @@ private fun VideoListTab(
     hasMore: Boolean,
     loading: Boolean,
     error: String?,
+    emptyText: String,
     onLoadMore: () -> Unit,
     onVideoClick: (SpaceVideoItem) -> Unit,
     modifier: Modifier = Modifier,
@@ -621,92 +623,25 @@ private fun VideoListTab(
                     .collect { if (hasMore && !appending) onLoadMore() }
             }
             LazyColumn(state = listState, modifier = modifier.fillMaxSize()) {
-                itemsIndexed(items, key = { _, item -> item.bvid }) { _, item ->
-                    VideoRow(item, onClick = { onVideoClick(item) })
+                if (items.isEmpty()) {
+                    item(key = "empty") { EmptyState(emptyText) }
+                }
+                items(items, key = { it.bvid }) { item ->
+                    // 整页都是同一个 UP,不重复印 UP 名(upName 留空)。
+                    VideoRow(
+                        item = VideoRowUi(
+                            title = item.title,
+                            coverUrl = item.coverUrl,
+                            durationText = item.durationText,
+                            meta = "${item.playCountText}播放 · ${item.danmakuCountText}弹幕 · " +
+                                formatDate(item.publishedAtEpochSeconds),
+                        ),
+                        onClick = { onVideoClick(item) },
+                    )
                 }
                 item(key = "footer") { ListFooter(appending, hasMore, items.isNotEmpty()) }
             }
         }
-    }
-}
-
-@Composable
-private fun VideoRow(item: SpaceVideoItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    Row(
-        modifier = modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Box(modifier = Modifier.width(140.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp))) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(item.coverUrl)
-                    .httpHeaders(NetworkHeaders.Builder().add("Referer", "https://www.bilibili.com").build())
-                    .build(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-            if (item.durationText.isNotEmpty()) {
-                Text(
-                    text = item.durationText,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = androidx.compose.ui.graphics.Color.White,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(4.dp)
-                        .background(
-                            androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.6f),
-                            RoundedCornerShape(4.dp),
-                        )
-                        .padding(horizontal = 4.dp, vertical = 1.dp),
-                )
-            }
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(item.title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.padding(top = 4.dp))
-            Text(
-                "${item.playCountText}播放 · ${item.danmakuCountText}弹幕 · ${formatDate(item.publishedAtEpochSeconds)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-@Composable
-private fun ListFooter(appending: Boolean, hasMore: Boolean, hasItems: Boolean) {
-    if (!hasItems) return
-    Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-        when {
-            appending -> CircularProgressIndicator(modifier = Modifier.size(24.dp))
-            !hasMore -> Text(
-                "没有更多了",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun FullScreenLoading(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-}
-
-@Composable
-private fun FullScreenError(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier.fillMaxSize().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text(message, style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.padding(top = 12.dp))
-        Button(onClick = onRetry) { Text("重试") }
     }
 }
 

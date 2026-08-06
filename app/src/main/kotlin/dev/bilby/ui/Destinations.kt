@@ -11,9 +11,6 @@ import kotlinx.serialization.Serializable
 data object Home : NavKey
 
 @Serializable
-data object Login : NavKey
-
-@Serializable
 data object Search : NavKey
 
 @Serializable

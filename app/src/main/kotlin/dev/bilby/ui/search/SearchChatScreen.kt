@@ -1,44 +1,34 @@
 package dev.bilby.ui.search
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,22 +40,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
-import coil3.network.NetworkHeaders
-import coil3.network.httpHeaders
-import coil3.request.ImageRequest
 import dev.bilby.agent.AnswerItem
 import dev.bilby.agent.TraceItem
 import dev.bilby.data.SearchUser
 import dev.bilby.data.SearchVideo
+import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.EmptyState
+import dev.bilby.ui.components.FullScreenError
+import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.InlineProgress
+import dev.bilby.ui.components.ListCover
+import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.VideoRow
+import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
+import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
@@ -107,6 +100,8 @@ data class SearchChatUiState(
 /**
  * 对话式搜索(团队要求的形态):输入在下,一轮轮结果在上,像 Claude App 但内容是视频列表。
  * 结果页只有结果——无历史、无热搜、无"换一批"(DESIGN 2.2/3.4)。
+ *
+ * "新会话"在顶栏(见 MainActivity),不在这一层。
  */
 @Composable
 fun SearchChatScreen(
@@ -118,7 +113,6 @@ fun SearchChatScreen(
     onUserClick: (mid: Long) -> Unit,
     onLoadMore: (turnId: Long) -> Unit,
     onRetry: (turnId: Long) -> Unit,
-    onNewSession: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -147,26 +141,31 @@ fun SearchChatScreen(
         ModeSwitch(
             mode = state.mode,
             onModeChange = onModeChange,
-            onNewSession = onNewSession,
             modifier = Modifier
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
         )
 
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-        ) {
-            itemsIndexed(state.turns, key = { _, turn -> turn.id }) { _, turn ->
-                TurnRow(
-                    turn = turn,
-                    onVideoClick = onVideoClick,
-                    onUserClick = onUserClick,
-                    onRetry = { onRetry(turn.id) },
-                )
+        if (state.turns.isEmpty()) {
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                // 空态说清楚两条路各是什么。这是唯一会解释助理的地方,别让它藏在一个开关后面。
+                EmptyState("普通搜索直接问 B 站要结果。\n助理搜索会翻热评、进空间比对,再给几条带理由的。")
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = PaddingValues(vertical = Spacing.Cozy),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Loose),
+            ) {
+                items(state.turns, key = { it.id }) { turn ->
+                    TurnRow(
+                        turn = turn,
+                        onVideoClick = onVideoClick,
+                        onUserClick = onUserClick,
+                        onRetry = { onRetry(turn.id) },
+                    )
+                }
             }
         }
 
@@ -174,37 +173,30 @@ fun SearchChatScreen(
             input = state.input,
             onInputChange = onInputChange,
             onSend = onSend,
-            modifier = Modifier
-                .fillMaxWidth()
-                ,
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }
 
+/**
+ * 普通 / 助理。用 segmented button 而不是 filter chip:M3 把"切换视图"明确划给 segmented
+ * button,chip 是给动态的、上下文相关的、可以横滚的一组选项用的(比如下面分 P 那一排)。
+ * 这两个选项是固定的两条路,不随内容变,也永远不会变成三个。
+ */
 @Composable
 private fun ModeSwitch(
     mode: SearchMode,
     onModeChange: (SearchMode) -> Unit,
-    onNewSession: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-    ) {
-        SearchMode.entries.forEach { candidate ->
-            FilterChip(
+    SingleChoiceSegmentedButtonRow(modifier = modifier) {
+        SearchMode.entries.forEachIndexed { index, candidate ->
+            SegmentedButton(
                 selected = candidate == mode,
                 onClick = { onModeChange(candidate) },
+                shape = SegmentedButtonDefaults.itemShape(index, SearchMode.entries.size),
                 label = { Text(candidate.label) },
             )
-        }
-        Spacer(Modifier.weight(1f))
-        // 助理会话在会话内共享上下文,可以追问;开新会话是清空上下文的唯一入口
-        // (DESIGN 3.1:会话必须由用户显式开启)。
-        IconButton(onClick = onNewSession) {
-            Icon(Icons.Filled.Add, contentDescription = "新会话")
         }
     }
 }
@@ -217,11 +209,13 @@ private fun TurnRow(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        UserBubble(text = turn.query, modifier = Modifier.padding(horizontal = 16.dp))
-        Spacer(Modifier.padding(top = 12.dp))
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+    ) {
+        UserBubble(text = turn.query, modifier = Modifier.padding(horizontal = Spacing.Comfortable))
         when (val result = turn.result) {
-            is TurnResult.Normal -> NormalTurnResult(result, onVideoClick, onUserClick)
+            is TurnResult.Normal -> NormalTurnResult(result, onVideoClick, onUserClick, onRetry)
             is TurnResult.Agent -> AgentTurnResult(result, onVideoClick, onRetry)
         }
     }
@@ -233,17 +227,21 @@ private fun UserBubble(text: String, modifier: Modifier = Modifier) {
     Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         Surface(
             color = MaterialTheme.colorScheme.primaryContainer,
-            shape = RoundedCornerShape(16.dp),
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            shape = MaterialTheme.shapes.large,
         ) {
             Text(
                 text = text,
                 style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.widthIn(max = 280.dp).padding(horizontal = 14.dp, vertical = 10.dp),
+                modifier = Modifier
+                    .widthIn(max = BubbleMaxWidth)
+                    .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
             )
         }
     }
 }
+
+private val BubbleMaxWidth = 280.dp
 
 // ---- 普通模式 ----
 
@@ -252,43 +250,34 @@ private fun NormalTurnResult(
     result: TurnResult.Normal,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
+    onRetry: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         if (result.users.isNotEmpty()) {
             UserRow(users = result.users, onUserClick = onUserClick)
         }
         when {
-            result.loading && result.videos.isEmpty() -> {
-                Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
+            result.loading && result.videos.isEmpty() ->
+                Box(Modifier.fillMaxWidth().padding(Spacing.Loose), Alignment.Center) {
+                    InlineProgress("搜索中…")
                 }
-            }
-            result.error != null && result.videos.isEmpty() -> {
-                Text(
-                    text = result.error,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-            }
-            result.videos.isEmpty() -> {
-                Text(
-                    text = "没有找到相关结果",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-            }
+
+            result.error != null && result.videos.isEmpty() ->
+                FullScreenError(result.error, onRetry, Modifier.fillMaxWidth())
+
+            result.videos.isEmpty() -> EmptyState("没有找到相关结果")
+
             else -> {
                 // 一轮内的视频用普通 Column 平铺(不是嵌套 LazyColumn),触底翻页由外层
                 // 大列表的滚动状态统一检测(见 SearchChatScreen 里的 LaunchedEffect)。
                 result.videos.forEach { video ->
-                    VideoRow(item = video, onClick = { onVideoClick(video.bvid) })
+                    VideoRow(item = video.toRowUi(), onClick = { onVideoClick(video.bvid) })
                 }
-                if (result.appending) {
-                    Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                    }
-                }
+                ListFooter(
+                    appending = result.appending,
+                    hasMore = result.hasMore,
+                    hasItems = true,
+                )
             }
         }
     }
@@ -297,11 +286,11 @@ private fun NormalTurnResult(
 @Composable
 private fun UserRow(users: List<SearchUser>, onUserClick: (Long) -> Unit) {
     LazyRow(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-        contentPadding = PaddingValues(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.Tight),
+        contentPadding = PaddingValues(horizontal = Spacing.Comfortable),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
     ) {
-        itemsIndexed(users, key = { _, user -> user.mid }) { _, user ->
+        items(users, key = { it.mid }) { user ->
             UserChip(user = user, onClick = { onUserClick(user.mid) })
         }
     }
@@ -309,31 +298,21 @@ private fun UserRow(users: List<SearchUser>, onUserClick: (Long) -> Unit) {
 
 @Composable
 private fun UserChip(user: SearchUser, onClick: () -> Unit) {
-    val context = LocalContext.current
     Row(
         modifier = Modifier.clickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
-        Box(
-            modifier = Modifier
-                .size(32.dp)
-                .clip(CircleShape),
-        ) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(user.avatarUrl)
-                    .httpHeaders(NetworkHeaders.Builder().add("Referer", "https://www.bilibili.com").build())
-                    .build(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+        Avatar(url = user.avatarUrl, size = Dimens.AvatarMedium)
         Column {
-            Text(user.name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
-                "${formatCount(user.fansCount)}粉丝",
+                text = user.name,
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "${formatCount(user.fansCount)}粉丝",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -341,72 +320,13 @@ private fun UserChip(user: SearchUser, onClick: () -> Unit) {
     }
 }
 
-/** 视觉语言沿用现有 SearchScreen 的 VideoRow(封面 + 时长角标 + 标题两行 + UP + 计数)。 */
-@Composable
-private fun VideoRow(item: SearchVideo, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .width(140.dp)
-                .aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(8.dp)),
-        ) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(item.coverUrl)
-                    .httpHeaders(NetworkHeaders.Builder().add("Referer", "https://www.bilibili.com").build())
-                    .build(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-            if (item.durationText.isNotEmpty()) {
-                Text(
-                    text = item.durationText,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(4.dp)
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
-                        .padding(horizontal = 4.dp, vertical = 1.dp),
-                )
-            }
-        }
-
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = item.title,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.padding(top = 4.dp))
-            Text(
-                text = item.upName,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.padding(top = 4.dp))
-            Text(
-                text = "${formatCount(item.playCount)}播放 · ${formatCount(item.danmakuCount)}弹幕",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
+private fun SearchVideo.toRowUi() = VideoRowUi(
+    title = title,
+    coverUrl = coverUrl,
+    durationText = durationText,
+    upName = upName,
+    meta = "${formatCount(playCount)}播放 · ${formatCount(danmakuCount)}弹幕",
+)
 
 // ---- 助理模式 ----
 
@@ -435,27 +355,39 @@ private fun AgentTurnResult(result: TurnResult.Agent, onVideoClick: (String) -> 
             Text(
                 text = summary,
                 style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
             )
         }
 
         if (result.answer.isNotEmpty()) {
             Text(
                 text = "为你找到",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
             )
             result.answer.forEach { answer ->
-                AnswerCard(item = answer, onClick = { onVideoClick(answer.bvid) })
+                VideoRow(item = answer.toRowUi(), onClick = { onVideoClick(answer.bvid) })
             }
         }
 
         when {
-            result.error != null -> ErrorFooter(message = result.error, onRetry = onRetry)
-            result.running -> RunningFooter()
+            result.error != null -> FullScreenError(result.error, onRetry, Modifier.fillMaxWidth())
+            result.running -> InlineProgress(
+                text = "还在找…",
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+            )
         }
     }
 }
+
+/** 推荐理由永远显示、永远不截断:它是助理搜索与推荐流的根本区别(DESIGN 3.4)。 */
+private fun AnswerItem.toRowUi() = VideoRowUi(
+    title = trace?.title ?: bvid,
+    coverUrl = trace?.coverUrl.orEmpty(),
+    upName = trace?.upName,
+    note = reason,
+    accentNote = true,
+)
 
 @Composable
 private fun ProcessHeader(
@@ -468,9 +400,9 @@ private fun ProcessHeader(
         modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onToggle)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
         Text(
             text = if (expanded) "过程" else "过程 · $collapsedSummary",
@@ -490,31 +422,35 @@ private fun ProcessHeader(
 
 @Composable
 private fun StepRow(step: AgentStep, onVideoClick: (String) -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier = modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (step.finished) {
+    Column(
+        modifier = modifier.fillMaxWidth().padding(vertical = Spacing.Hair),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+    ) {
+        if (step.finished) {
+            Row(
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
                 Icon(
                     imageVector = Icons.Default.Check,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(Dimens.IconInline),
                 )
-            } else {
-                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                Text(text = step.label, style = MaterialTheme.typography.bodyMedium)
             }
-            Text(text = step.label, style = MaterialTheme.typography.bodyMedium)
+        } else {
+            InlineProgress(step.label, Modifier.padding(horizontal = Spacing.Comfortable))
         }
+
         if (step.items.isNotEmpty()) {
-            Spacer(Modifier.padding(top = 4.dp))
+            // 中间结果可点:助理翻到一半用户看中了可以直接点走(DESIGN 3.4)。
             LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(horizontal = Spacing.Comfortable),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
             ) {
-                itemsIndexed(step.items, key = { _, item -> item.bvid }) { _, trace ->
+                items(step.items, key = { it.bvid }) { trace ->
                     TraceCard(item = trace, onClick = { onVideoClick(trace.bvid) })
                 }
             }
@@ -524,29 +460,11 @@ private fun StepRow(step: AgentStep, onVideoClick: (String) -> Unit, modifier: M
 
 @Composable
 private fun TraceCard(item: TraceItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
     Column(
-        modifier = modifier
-            .width(120.dp)
-            .clickable(onClick = onClick),
+        modifier = modifier.width(Dimens.TraceCardWidth).clickable(onClick = onClick),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(8.dp)),
-        ) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(item.coverUrl)
-                    .httpHeaders(NetworkHeaders.Builder().add("Referer", "https://www.bilibili.com").build())
-                    .build(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-        Spacer(Modifier.padding(top = 4.dp))
+        ListCover(url = item.coverUrl, width = Dimens.TraceCardWidth)
         Text(
             text = item.title,
             style = MaterialTheme.typography.bodySmall,
@@ -556,98 +474,12 @@ private fun TraceCard(item: TraceItem, onClick: () -> Unit, modifier: Modifier =
     }
 }
 
-@Composable
-private fun AnswerCard(item: AnswerItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .width(140.dp)
-                .aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(8.dp)),
-        ) {
-            if (item.trace != null) {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(item.trace.coverUrl)
-                        .httpHeaders(NetworkHeaders.Builder().add("Referer", "https://www.bilibili.com").build())
-                        .build(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = item.trace?.title ?: item.bvid,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (item.trace != null) {
-                Spacer(Modifier.padding(top = 2.dp))
-                Text(
-                    text = item.trace.upName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Spacer(Modifier.padding(top = 4.dp))
-            // 理由是助理搜索与推荐流的根本区别,必须显示(DESIGN 3.4)。
-            Text(
-                text = item.reason,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-                // 不截断:字数在 submit_answer 的 schema 里已经限死 60 字,截断只会
-                // 让本来就短的介绍缺一半。
-            )
-        }
-    }
-}
-
-@Composable
-private fun RunningFooter(modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(16.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-        Spacer(Modifier.padding(horizontal = 4.dp))
-        Text(
-            text = "还在找…",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun ErrorFooter(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-    ) {
-        Text(message, style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.padding(top = 8.dp))
-        Button(onClick = onRetry) { Text("重试") }
-    }
-}
-
 // ---- 输入框 ----
 
+/**
+ * 输入区固定在底部。底色用 surfaceContainer 而不是 tonalElevation:M3 的做法是靠
+ * surface container 这一族的色阶差表达层次,阴影和 tonal elevation 留给真正浮起来的东西。
+ */
 @Composable
 private fun InputBar(
     input: String,
@@ -655,11 +487,11 @@ private fun InputBar(
     onSend: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Surface(tonalElevation = 2.dp, modifier = modifier) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(Spacing.Tight),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
             OutlinedTextField(
                 value = input,
@@ -667,15 +499,18 @@ private fun InputBar(
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("输入想找的内容") },
                 singleLine = true,
+                shape = MaterialTheme.shapes.large,
             )
-            IconButton(onClick = onSend, enabled = input.isNotBlank()) {
-                Icon(Icons.Default.Send, contentDescription = "发送")
+            // 发送是这一屏的主行动,用实心图标按钮 —— M3 说要提升某个动作的可见度就换成
+            // filled/tonal,并且一屏只留一个。
+            FilledIconButton(onClick = onSend, enabled = input.isNotBlank()) {
+                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送")
             }
         }
     }
 }
 
-/** 搜索接口返回原始整数计数,这里自己做展示折算(与 SearchScreen 一致)。 */
+/** 搜索接口返回原始整数计数,这里自己做展示折算。 */
 private fun formatCount(count: Long): String = when {
     count >= 100_000_000 -> "%.1f亿".format(count / 100_000_000.0)
     count >= 10_000 -> "%.1f万".format(count / 10_000.0)
@@ -703,6 +538,14 @@ private fun previewTrace(bvid: String, title: String) = TraceItem(
     upName = "某知名UP主",
 )
 
+@Preview(showBackground = true, name = "空态")
+@Composable
+private fun SearchChatScreenEmptyPreview() {
+    BilbyTheme {
+        SearchChatScreen(SearchChatUiState(), {}, {}, {}, {}, {}, {}, {})
+    }
+}
+
 @Preview(showBackground = true, name = "普通模式有结果")
 @Composable
 private fun SearchChatScreenNormalPreview() {
@@ -719,60 +562,16 @@ private fun SearchChatScreenNormalPreview() {
                                 previewVideo("BV1aa", "这是一个很长很长需要两行才能显示完的搜索结果标题示例文本内容"),
                                 previewVideo("BV1bb", "第二条搜索结果"),
                             ),
-                            users = listOf(SearchUser(mid = 1L, name = "示例UP主", avatarUrl = "", fansCount = 45_000L, signature = "")),
+                            users = listOf(
+                                SearchUser(mid = 1L, name = "示例UP主", avatarUrl = "", fansCount = 45_000L, signature = ""),
+                            ),
                             hasMore = false,
                         ),
                     ),
                 ),
-                mode = SearchMode.Normal,
             ),
-            onInputChange = {},
-            onModeChange = {},
-            onSend = {},
-            onVideoClick = {},
-            onUserClick = {},
-            onLoadMore = {},
-            onRetry = {},
-            onNewSession = {},
-        )
-    }
-}
-
-@Preview(showBackground = true, name = "助理模式进行中")
-@Composable
-private fun SearchChatScreenAgentRunningPreview() {
-    BilbyTheme {
-        SearchChatScreen(
-            state = SearchChatUiState(
-                turns = listOf(
-                    SearchTurn(
-                        id = 1L,
-                        query = "适合上班摸鱼看的搞笑动画",
-                        mode = SearchMode.Agent,
-                        result = TurnResult.Agent(
-                            steps = listOf(
-                                AgentStep(
-                                    label = "搜索:搞笑动画",
-                                    items = listOf(previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")),
-                                    finished = true,
-                                ),
-                                AgentStep(label = "读取:BV1aa 的热评", items = emptyList(), finished = false),
-                            ),
-                            answer = emptyList(),
-                            running = true,
-                        ),
-                    ),
-                ),
-                mode = SearchMode.Agent,
-            ),
-            onInputChange = {},
-            onModeChange = {},
-            onSend = {},
-            onVideoClick = {},
-            onUserClick = {},
-            onLoadMore = {},
-            onRetry = {},
-            onNewSession = {},
+            onInputChange = {}, onModeChange = {}, onSend = {},
+            onVideoClick = {}, onUserClick = {}, onLoadMore = {}, onRetry = {},
         )
     }
 }
@@ -783,6 +582,7 @@ private fun SearchChatScreenAgentAnswerPreview() {
     BilbyTheme {
         SearchChatScreen(
             state = SearchChatUiState(
+                mode = SearchMode.Agent,
                 turns = listOf(
                     SearchTurn(
                         id = 1L,
@@ -790,11 +590,8 @@ private fun SearchChatScreenAgentAnswerPreview() {
                         mode = SearchMode.Agent,
                         result = TurnResult.Agent(
                             steps = listOf(
-                                AgentStep(
-                                    label = "搜索:搞笑动画",
-                                    items = listOf(previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")),
-                                    finished = true,
-                                ),
+                                AgentStep("搜索:搞笑动画", listOf(previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")), true),
+                                AgentStep("读取:BV1aa 的热评", emptyList(), true),
                             ),
                             answer = listOf(
                                 AnswerItem(
@@ -802,26 +599,13 @@ private fun SearchChatScreenAgentAnswerPreview() {
                                     reason = "时长短、弹幕密度高,评论区反馈「摸鱼时长刚好一集」,符合你的场景。",
                                     trace = previewTrace("BV1aa", "笑到打鸣的搞笑动画合集"),
                                 ),
-                                AnswerItem(
-                                    bvid = "BV1bb",
-                                    reason = "同系列第二集,热评区多人接续讨论第一集内容。",
-                                    trace = previewTrace("BV1bb", "办公室摸鱼指南 · 第二集"),
-                                ),
                             ),
-                            running = false,
                         ),
                     ),
                 ),
-                mode = SearchMode.Agent,
             ),
-            onInputChange = {},
-            onModeChange = {},
-            onSend = {},
-            onVideoClick = {},
-            onUserClick = {},
-            onLoadMore = {},
-            onRetry = {},
-            onNewSession = {},
+            onInputChange = {}, onModeChange = {}, onSend = {},
+            onVideoClick = {}, onUserClick = {}, onLoadMore = {}, onRetry = {},
         )
     }
 }

@@ -11,14 +11,20 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Subscriptions
 import androidx.compose.material.icons.filled.WatchLater
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Subscriptions
+import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,8 +46,8 @@ import dev.bilby.AppContainer
 import dev.bilby.BilbyApplication
 import dev.bilby.BiliLog
 import dev.bilby.agent.AgentIntent
-import dev.bilby.api.BiliResult
 import kotlinx.coroutines.launch
+import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.agent.AgentTraceScreen
 import dev.bilby.ui.agent.AgentViewModel
 import dev.bilby.ui.comment.CommentViewModel
@@ -98,18 +104,10 @@ private fun BilbyApp(container: AppContainer) {
         return
     }
 
-    // 每次冷启动检查一次是否该刷新 Cookie。cookie/info 自己会判断,不该刷时只是一次极轻的
-    // 请求;放在这里而不是每次请求前检查,是因为 B 站的判断粒度本来就是"每日第一次访问"。
     LaunchedEffect(Unit) {
         // buvid 激活只需成功一次,失败被内部吞掉:没有设备身份只影响写接口,
         // 不该让整个 app 打不开。
         container.deviceFingerprint.activateIfNeeded()
-
-        when (val result = container.cookieRefresher.refreshIfNeeded()) {
-            is BiliResult.ApiError -> BiliLog.w("cookie 刷新失败(${result.code}): ${result.message}")
-            is BiliResult.Failure -> BiliLog.w("cookie 刷新异常", result.cause)
-            is BiliResult.Ok -> Unit
-        }
     }
 
     val backStack = rememberNavBackStack(Home)
@@ -138,6 +136,7 @@ private fun BilbyApp(container: AppContainer) {
                     container = container,
                     intent = AgentIntent.Query(key.query),
                     onVideoClick = { backStack.add(Video(it)) },
+                    onBack = { backStack.removeLastOrNull() },
                 )
             }
             entry<AgentRelated> { key ->
@@ -145,6 +144,7 @@ private fun BilbyApp(container: AppContainer) {
                     container = container,
                     intent = AgentIntent.Related(key.bvid, key.title, key.upName),
                     onVideoClick = { backStack.add(Video(it)) },
+                    onBack = { backStack.removeLastOrNull() },
                 )
             }
             entry<Space> { key ->
@@ -154,18 +154,31 @@ private fun BilbyApp(container: AppContainer) {
     )
 }
 
-private enum class RootTab(val label: String, val icon: ImageVector) {
-    Feed("动态", Icons.Filled.Subscriptions),
-    Search("搜索", Icons.Filled.Search),
-    ToView("稍后再看", Icons.Filled.WatchLater),
+/**
+ * M3 的导航栏要求选中项用实心图标、未选中用线性图标(不只是变色)——
+ * 图标形态本身就是一路状态指示,只靠颜色的话色觉障碍用户看不出当前在哪一格。
+ */
+private enum class RootTab(
+    val label: String,
+    val selectedIcon: ImageVector,
+    val unselectedIcon: ImageVector,
+) {
+    Feed("动态", Icons.Filled.Subscriptions, Icons.Outlined.Subscriptions),
+    Search("搜索", Icons.Filled.Search, Icons.Outlined.Search),
+    ToView("稍后再看", Icons.Filled.WatchLater, Icons.Outlined.WatchLater),
 }
 
 /**
  * 三个 tab 都是显式入口:刷更新、搜索、看自己存的。没有"随便看看"那一格
- * (DESIGN 1.1 的推送式入口那一栏)。
+ * (DESIGN 1.1 的推送式入口那一栏)。三格正好落在 M3 导航栏 3–5 个目的地的下限上。
  *
- * 三个 pane 各自持有 ViewModel 并常驻,切走再切回保留滚动位置和搜索结果 ——
- * 每次切 tab 都重新拉一遍等于把"刷完"的状态清零。
+ * 三个 pane 的 ViewModel 提到这一层。它们本来就常驻(`viewModel()` 挂在 Activity 的
+ * ViewModelStore 上,切 tab 不会销毁),提上来是为了让顶栏能直接拿到各页的动作 ——
+ * 顶栏归 Scaffold 管,动作归页面管,不提上来就得把 composable 塞进 state 往上传,
+ * 那样重组作用域会乱。
+ *
+ * 顶栏统一在这一层给:以前三个页面各自拿 systemBars 往内容上贴 padding,三种写法、
+ * 三种留白,滚动时内容还会压到状态栏文字上。
  */
 @Composable
 private fun RootTabs(
@@ -175,17 +188,68 @@ private fun RootTabs(
 ) {
     var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
 
+    val feedVm: FeedViewModel = viewModel(
+        factory = viewModelFactory { initializer { FeedViewModel(container.dynamicRepository) } },
+    )
+    val searchVm: SearchChatViewModel = viewModel(
+        factory = viewModelFactory {
+            initializer {
+                SearchChatViewModel(
+                    container.searchRepository,
+                    container.agentLoop,
+                    container.agentSessionRepository,
+                )
+            }
+        },
+    )
+    val toViewVm: ToViewViewModel = viewModel(
+        factory = viewModelFactory { initializer { ToViewViewModel(container.toViewRepository) } },
+    )
+
+    val feedState by feedVm.state.collectAsStateWithLifecycle()
+    val searchState by searchVm.state.collectAsStateWithLifecycle()
+    val toViewState by toViewVm.state.collectAsStateWithLifecycle()
+
     // IME 退让放在 Scaffold 这一层,让底栏跟着键盘一起上移。放在内层输入框上的话,
     // 底栏仍会在键盘下方占着高度,表现为输入框与键盘之间空一条。
     Scaffold(
         modifier = Modifier.imePadding(),
+        topBar = {
+            BilbyTopBar(title = selected.label) {
+                when (selected) {
+                    // 动态页没有动作:这一页能做的只有往下看,刷新是拉到底自动翻页。
+                    // 放个刷新按钮等于把下拉刷新那套仪式换个位置摆回来(DESIGN 2.1)。
+                    RootTab.Feed -> Unit
+
+                    // 开新会话是清空助理上下文的唯一入口(DESIGN 3.1:会话必须由用户显式开启),
+                    // 属于"改变整页状态"的动作,正是 M3 说该放进顶栏的那一类。
+                    RootTab.Search -> IconButton(onClick = searchVm::newSession) {
+                        Icon(Icons.Filled.Add, contentDescription = "新会话")
+                    }
+
+                    RootTab.ToView -> TextButton(
+                        onClick = toViewVm::clearFinished,
+                        enabled = !toViewState.clearing,
+                    ) {
+                        Text(if (toViewState.clearing) "清空中…" else "清空已看完")
+                    }
+                }
+            }
+        },
         bottomBar = {
             NavigationBar {
                 RootTab.entries.forEach { tab ->
+                    val isSelected = selected == tab
                     NavigationBarItem(
-                        selected = selected == tab,
+                        selected = isSelected,
                         onClick = { selected = tab },
-                        icon = { Icon(tab.icon, contentDescription = tab.label) },
+                        icon = {
+                            Icon(
+                                imageVector = if (isSelected) tab.selectedIcon else tab.unselectedIcon,
+                                // 标签就在图标正下方,读屏再念一遍图标等于每格念两次。
+                                contentDescription = null,
+                            )
+                        },
                         label = { Text(tab.label) },
                     )
                 }
@@ -198,86 +262,53 @@ private fun RootTabs(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .padding(top = insets.calculateTopPadding())
                 .padding(bottom)
                 .consumeWindowInsets(bottom)
         ) {
             when (selected) {
-                RootTab.Feed -> FeedRoute(container, onVideoClick)
-                RootTab.Search -> SearchRoute(container, onVideoClick, onUserClick)
-                RootTab.ToView -> ToViewRoute(container, onVideoClick)
+                RootTab.Feed -> FeedScreen(
+                    state = feedState,
+                    onLoadMore = feedVm::loadMore,
+                    onRetry = feedVm::loadFirstPage,
+                    onItemClick = { onVideoClick(it.bvid) },
+                )
+
+                RootTab.Search -> SearchChatScreen(
+                    state = searchState,
+                    onInputChange = searchVm::onInputChange,
+                    onModeChange = searchVm::onModeChange,
+                    onSend = searchVm::send,
+                    onVideoClick = onVideoClick,
+                    onUserClick = onUserClick,
+                    onLoadMore = searchVm::loadMore,
+                    onRetry = searchVm::retry,
+                )
+
+                RootTab.ToView -> ToViewScreen(
+                    state = toViewState,
+                    onDelete = { toViewVm.delete(it) },
+                    onItemClick = { onVideoClick(it.bvid) },
+                    onRetry = toViewVm::retry,
+                )
             }
         }
     }
 }
 
 @Composable
-private fun FeedRoute(container: AppContainer, onVideoClick: (String) -> Unit) {
-    val vm: FeedViewModel = viewModel(
-        factory = viewModelFactory { initializer { FeedViewModel(container.dynamicRepository) } },
-    )
-    val state by vm.state.collectAsStateWithLifecycle()
-    FeedScreen(
-        state = state,
-        onLoadMore = vm::loadMore,
-        onRetry = vm::loadFirstPage,
-        onItemClick = { onVideoClick(it.bvid) },
-    )
-}
-
-@Composable
-private fun SearchRoute(
+private fun AgentRoute(
     container: AppContainer,
+    intent: AgentIntent,
     onVideoClick: (String) -> Unit,
-    onUserClick: (Long) -> Unit,
+    onBack: () -> Unit,
 ) {
-    val vm: SearchChatViewModel = viewModel(
-        factory = viewModelFactory {
-            initializer {
-                SearchChatViewModel(
-                    container.searchRepository,
-                    container.agentLoop,
-                    container.agentSessionRepository,
-                )
-            }
-        },
-    )
-    val state by vm.state.collectAsStateWithLifecycle()
-    SearchChatScreen(
-        state = state,
-        onInputChange = vm::onInputChange,
-        onModeChange = vm::onModeChange,
-        onSend = vm::send,
-        onVideoClick = onVideoClick,
-        onUserClick = onUserClick,
-        onLoadMore = vm::loadMore,
-        onRetry = vm::retry,
-        onNewSession = vm::newSession,
-    )
-}
-
-@Composable
-private fun ToViewRoute(container: AppContainer, onVideoClick: (String) -> Unit) {
-    val vm: ToViewViewModel = viewModel(
-        factory = viewModelFactory { initializer { ToViewViewModel(container.toViewRepository) } },
-    )
-    val state by vm.state.collectAsStateWithLifecycle()
-    ToViewScreen(
-        state = state,
-        onDelete = { vm.delete(it) },
-        onClearFinished = vm::clearFinished,
-        onItemClick = { onVideoClick(it.bvid) },
-        onRetry = vm::retry,
-    )
-}
-
-@Composable
-private fun AgentRoute(container: AppContainer, intent: AgentIntent, onVideoClick: (String) -> Unit) {
     val vm: AgentViewModel = viewModel(
         key = "agent-$intent",
         factory = viewModelFactory { initializer { AgentViewModel(container.agentLoop, intent) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
-    AgentTraceScreen(state = state, onVideoClick = onVideoClick, onRetry = vm::start)
+    AgentTraceScreen(state = state, onVideoClick = onVideoClick, onRetry = vm::start, onBack = onBack)
 }
 
 @Composable
@@ -305,6 +336,7 @@ private fun SpaceRoute(
         onCollectionDetailBack = vm::closeCollectionDetail,
         onLoadMoreCollectionDetail = vm::loadMoreCollectionDetail,
         onVideoClick = { onVideoClick(it.bvid) },
+        onBack = onBack,
         onRetry = vm::retry,
     )
 }
@@ -331,6 +363,7 @@ private fun VideoRoute(
                     container.settings,
                     container.sponsorBlockRepository,
                     container.queueSourceRepository,
+                    container.toViewRepository,
                 )
             }
         },
@@ -343,6 +376,7 @@ private fun VideoRoute(
     val favFolders by vm.favFolders.collectAsStateWithLifecycle()
     val sponsorSegments by vm.sponsorSegments.collectAsStateWithLifecycle()
     val queue by vm.queue.collectAsStateWithLifecycle()
+    val addedToView by vm.addedToView.collectAsStateWithLifecycle()
 
     // 评论用 aid 作 oid,要等视频详情回来才知道;拿到之前先不建 ViewModel。
     val aid = state.detail?.aid ?: return
@@ -385,6 +419,8 @@ private fun VideoRoute(
         relation = relation,
         favFolders = favFolders,
         onLike = vm::toggleLike,
+        addedToView = addedToView,
+        onAddToView = vm::addToView,
         onCoin = vm::coin,
         onOpenFavPicker = vm::openFavPicker,
         onFavConfirm = vm::confirmFavorite,

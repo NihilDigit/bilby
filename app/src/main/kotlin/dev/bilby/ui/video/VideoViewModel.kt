@@ -10,6 +10,7 @@ import dev.bilby.api.BiliResult
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.QueueSourceRepository
 import dev.bilby.data.SponsorBlockRepository
+import dev.bilby.data.ToViewRepository
 import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.flow.first
 import dev.bilby.data.PlayInfo
@@ -48,7 +49,39 @@ class VideoViewModel(
     private val settings: SettingsStore,
     private val sponsorBlockRepository: SponsorBlockRepository,
     private val queueSourceRepository: QueueSourceRepository,
+    private val toViewRepository: ToViewRepository,
 ) : ViewModel() {
+
+    /**
+     * 是否已加入稍后再看。**只进不出**:没有便宜的办法知道当前视频在不在列表里
+     * (要判断就得把整个列表拉下来),而移除本来就该在稍后再看页面做 —— 那里是个列表,
+     * 划掉一条是自然动作。所以这个状态只从 false 走到 true,不是一个 toggle。
+     */
+    private val _addedToView = MutableStateFlow(false)
+    val addedToView: StateFlow<Boolean> = _addedToView.asStateFlow()
+
+    /**
+     * 加入稍后再看。乐观更新:点了立刻切成已加入态,不等接口回来,也不回头拉列表确认 ——
+     * 重拉会让计数闪两次,和点赞/收藏的处理一致。失败则回滚并留日志
+     * (DESIGN 8:任何被吞掉的失败都必须留下一行能定位的日志)。
+     */
+    fun addToView() {
+        if (_addedToView.value) return
+        _addedToView.value = true
+        viewModelScope.launch {
+            when (val result = toViewRepository.add(bvid)) {
+                is BiliResult.Ok -> Unit
+                is BiliResult.ApiError -> {
+                    _addedToView.value = false
+                    BiliLog.w("toview/add 失败(${result.code}): ${result.message}")
+                }
+                is BiliResult.Failure -> {
+                    _addedToView.value = false
+                    BiliLog.w("toview/add 异常", result.cause)
+                }
+            }
+        }
+    }
 
     /**
      * 播放队列。它占的是官方相关推荐的位置,但装的是确定性的有限集合:当前合集,

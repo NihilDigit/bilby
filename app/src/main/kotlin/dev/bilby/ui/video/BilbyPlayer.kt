@@ -76,6 +76,7 @@ import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.compose.PlayerSurface
 import dev.bilby.data.QualityOption
+import dev.bilby.ui.theme.FixedColors
 import kotlinx.coroutines.delay
 
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
@@ -250,13 +251,13 @@ fun BilbyPlayer(
                     Icon(
                         Icons.Filled.FastForward,
                         contentDescription = null,
-                        tint = Color.White,
+                        tint = FixedColors.OnMedia,
                         modifier = Modifier.size(16.dp),
                     )
                     Text(
                         "  ${formatSpeed(FAST_FORWARD_SPEED)} 快进中",
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color.White,
+                        color = FixedColors.OnMedia,
                     )
                 }
             }
@@ -267,7 +268,7 @@ fun BilbyPlayer(
                 Text(
                     "${formatPlayerTime(displayPosition)} / ${formatPlayerTime(duration)}",
                     style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
+                    color = FixedColors.OnMedia,
                 )
             }
         }
@@ -283,7 +284,7 @@ fun BilbyPlayer(
                 Icon(
                     imageVector = if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
                     contentDescription = if (locked) "解锁" else "锁定",
-                    tint = Color.White,
+                    tint = FixedColors.OnMedia,
                 )
             }
         }
@@ -373,7 +374,7 @@ private fun PlayerControlBar(
     val safeInsets = WindowInsets.displayCutout.union(WindowInsets.systemBars)
     val container = Modifier
         .fillMaxWidth()
-        .background(Color.Black.copy(alpha = 0.45f))
+        .background(FixedColors.PlayerControlScrim)
         // 全屏时系统栏被藏了,但挖孔和手势条的位置照旧,控件贴边会被切掉一半。
         .then(if (isFullscreen) Modifier.windowInsetsPadding(safeInsets) else Modifier)
         .padding(horizontal = if (isFullscreen) 16.dp else 4.dp, vertical = if (isFullscreen) 8.dp else 0.dp)
@@ -387,7 +388,7 @@ private fun PlayerControlBar(
                 "${formatPlayerTime(position)} / ${formatPlayerTime(duration)}",
                 style = if (isFullscreen) MaterialTheme.typography.labelLarge
                 else MaterialTheme.typography.labelSmall,
-                color = Color.White,
+                color = FixedColors.OnMedia,
             )
             Spacer(Modifier.weight(1f))
             SpeedButton(speed, onSpeedChange, onMenuOpenChange, isFullscreen)
@@ -424,7 +425,7 @@ private fun SeekBar(
         colors = SliderDefaults.colors(
             thumbColor = MaterialTheme.colorScheme.primary,
             activeTrackColor = MaterialTheme.colorScheme.primary,
-            inactiveTrackColor = Color.White.copy(alpha = 0.4f),
+            inactiveTrackColor = FixedColors.OnMedia.copy(alpha = 0.4f),
         ),
         modifier = modifier,
     )
@@ -436,7 +437,7 @@ private fun PlayPauseButton(isPlaying: Boolean, onClick: () -> Unit, iconSize: D
         Icon(
             imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
             contentDescription = if (isPlaying) "暂停" else "播放",
-            tint = Color.White,
+            tint = FixedColors.OnMedia,
             modifier = Modifier.size(iconSize),
         )
     }
@@ -448,7 +449,7 @@ private fun FullscreenButton(isFullscreen: Boolean, onClick: () -> Unit, iconSiz
         Icon(
             imageVector = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
             contentDescription = if (isFullscreen) "退出全屏" else "全屏",
-            tint = Color.White,
+            tint = FixedColors.OnMedia,
             modifier = Modifier.size(iconSize),
         )
     }
@@ -533,7 +534,7 @@ private fun ControlButton(
     label: String?,
     icon: @Composable (Color) -> Unit,
 ) {
-    val tint = if (expanded) MaterialTheme.colorScheme.primary else Color.White
+    val tint = if (expanded) MaterialTheme.colorScheme.primary else FixedColors.OnMedia
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
@@ -566,7 +567,7 @@ private fun Overlay(modifier: Modifier = Modifier, content: @Composable () -> Un
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
-            .background(Color.Black.copy(alpha = 0.6f))
+            .background(FixedColors.ScrimOnMedia)
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
         content()

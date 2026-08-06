@@ -5,12 +5,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -18,14 +20,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.api.BiliResult
 import dev.bilby.data.TvLoginRepository
 import dev.bilby.data.TvPollStatus
 import dev.bilby.ui.theme.BilbyTheme
+import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.FixedColors
+import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,8 +52,15 @@ sealed interface TvLoginUiState {
     data object Success : TvLoginUiState
 }
 
-private val QrSize = 220.dp
+private val QrSize = Dimens.QrCode
 
+/**
+ * 扫码登录。整屏只有一件事,所以内容垂直居中、不放顶栏 —— 这一页没有"返回"可去。
+ *
+ * **二维码那块不跟主题**,理由见 [QrCodeImage]。这里配合它的一点是:二维码永远画在一块
+ * 白色 Surface 上,而不是直接落在主题背景上。位图自带 4 模块静区,但静区之外还是主题色;
+ * 深色主题下那圈白边和黑底的硬边界会让部分扫码器把边界当成定位图形的一部分。
+ */
 @Composable
 fun TvLoginScreen(
     state: TvLoginUiState,
@@ -61,73 +73,70 @@ fun TvLoginScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(insets)
-                .padding(24.dp),
+                .padding(Spacing.Loose),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+            verticalArrangement = Arrangement.spacedBy(Spacing.Loose, Alignment.CenterVertically),
         ) {
             Text("扫码登录", style = MaterialTheme.typography.headlineSmall)
-            Spacer(Modifier.padding(top = 24.dp))
 
             Box(contentAlignment = Alignment.Center) {
                 when (state) {
-                    is TvLoginUiState.Requesting -> QrPlaceholder()
-
-                    is TvLoginUiState.WaitingScan ->
-                        QrCodeImage(content = state.url, modifier = Modifier.size(QrSize))
+                    is TvLoginUiState.WaitingScan -> QrSurface { QrCodeImage(state.url, Modifier.size(QrSize)) }
 
                     is TvLoginUiState.ScannedUnconfirmed -> {
-                        QrCodeImage(content = state.url, modifier = Modifier.size(QrSize))
+                        QrSurface { QrCodeImage(state.url, Modifier.size(QrSize)) }
                         QrOverlay {
-                            Text(
-                                "已扫描,请在手机上确认",
-                                color = MaterialTheme.colorScheme.onSurface,
-                                style = MaterialTheme.typography.bodyMedium,
+                            Icon(
+                                Icons.Filled.CheckCircle,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
                             )
+                            Text("已扫描,请在手机上确认", style = MaterialTheme.typography.bodyMedium)
                         }
                     }
 
                     is TvLoginUiState.Expired -> {
-                        QrPlaceholder()
+                        QrPlaceholder(showSpinner = false)
                         QrOverlay {
-                            Text(
-                                "二维码已过期",
-                                color = MaterialTheme.colorScheme.onSurface,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            Button(onClick = onRefresh) { Text("刷新") }
+                            Text("二维码已过期", style = MaterialTheme.typography.bodyMedium)
+                            FilledTonalButton(onClick = onRefresh) { Text("刷新") }
                         }
                     }
 
-                    is TvLoginUiState.Failed -> QrPlaceholder()
-
-                    is TvLoginUiState.Success -> QrPlaceholder()
+                    is TvLoginUiState.Requesting,
+                    is TvLoginUiState.Failed,
+                    is TvLoginUiState.Success,
+                    -> QrPlaceholder(showSpinner = state is TvLoginUiState.Requesting)
                 }
             }
 
-            Spacer(Modifier.padding(top = 16.dp))
-
             when (state) {
                 is TvLoginUiState.WaitingScan ->
-                    Text("用 B 站 App 扫码登录", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        text = "用 B 站 App 扫码登录",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
 
-                is TvLoginUiState.Failed -> {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            state.message,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                        Spacer(Modifier.padding(top = 12.dp))
-                        Button(onClick = onRefresh) { Text("重试") }
-                    }
+                is TvLoginUiState.Failed -> Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                ) {
+                    Text(
+                        text = state.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                    )
+                    FilledTonalButton(onClick = onRefresh) { Text("重试") }
                 }
 
-                is TvLoginUiState.Success -> {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("登录成功", style = MaterialTheme.typography.bodyMedium)
-                        Spacer(Modifier.padding(top = 12.dp))
-                        Button(onClick = onDone) { Text("完成") }
-                    }
+                is TvLoginUiState.Success -> Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                ) {
+                    Text("登录成功", style = MaterialTheme.typography.bodyMedium)
+                    FilledTonalButton(onClick = onDone) { Text("完成") }
                 }
 
                 else -> Unit
@@ -136,34 +145,56 @@ fun TvLoginScreen(
     }
 }
 
+/**
+ * 二维码的白底。**固定白色,不是 surface** —— 这一块是给扫码器看的,不是给人看的,
+ * 跟着主题走会在深色下变成深灰底黑码,B 站客户端直接报"未成功解析到二维码"。
+ * 这条踩过一次,见 [QrCodeImage] 的注释。
+ */
 @Composable
-private fun QrPlaceholder() {
+private fun QrSurface(content: @Composable () -> Unit) {
+    Surface(
+        color = FixedColors.QrBackground,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.size(QrSize),
+    ) {
+        Box(contentAlignment = Alignment.Center) { content() }
+    }
+}
+
+@Composable
+private fun QrPlaceholder(showSpinner: Boolean) {
     Surface(
         modifier = Modifier.size(QrSize),
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = MaterialTheme.shapes.medium,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
+            if (showSpinner) CircularProgressIndicator()
         }
     }
 }
 
+/** 盖在二维码上的状态提示。半透明是为了让下面的码还看得见,表示"码还在,只是状态变了"。 */
 @Composable
 private fun QrOverlay(content: @Composable ColumnScope.() -> Unit) {
     Box(
         modifier = Modifier
             .size(QrSize)
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f), MaterialTheme.shapes.medium),
+            .background(
+                MaterialTheme.colorScheme.surface.copy(alpha = OverlayAlpha),
+                MaterialTheme.shapes.medium,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
             content = content,
         )
     }
 }
+
+private const val OverlayAlpha = 0.92f
 
 class TvLoginViewModel(private val repository: TvLoginRepository) : ViewModel() {
 
