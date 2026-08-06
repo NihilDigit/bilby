@@ -11,10 +11,12 @@ import com.bilby.data.AuthRepository
 import com.bilby.data.CookieRefresher
 import com.bilby.data.DynamicRepository
 import com.bilby.data.CommentRepository
+import com.bilby.data.HeartbeatReporter
 import com.bilby.data.SearchRepository
 import com.bilby.data.SettingsStore
 import com.bilby.data.SpaceRepository
 import com.bilby.data.ToViewRepository
+import com.bilby.data.VideoActionRepository
 import com.bilby.data.VideoRepository
 import com.bilby.data.db.BilbyDatabase
 import kotlinx.coroutines.flow.first
@@ -76,6 +78,10 @@ class AppContainer(context: Context) {
     val spaceRepository: SpaceRepository by lazy { SpaceRepository(biliClient) }
 
     val toViewRepository: ToViewRepository by lazy { ToViewRepository(biliClient) }
+
+    val videoActionRepository: VideoActionRepository by lazy { VideoActionRepository(biliClient) }
+
+    val heartbeatReporter: HeartbeatReporter by lazy { HeartbeatReporter(biliClient) }
 
     private val llmClient: LlmClient by lazy {
         LlmClient(httpClient, json) { settings.llmConfig.first() }

@@ -21,6 +21,8 @@ data class ReplyMainResponseDto(
 @Serializable
 data class ReplyCursorDto(
     @SerialName("is_end") val isEnd: Boolean = false,
+    /** 评论总数。tab 标题显示的是它,不是已渲染条数。 */
+    @SerialName("all_count") val allCount: Int = 0,
     @SerialName("pagination_reply") val paginationReply: ReplyPaginationDto? = null,
 )
 

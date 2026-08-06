@@ -23,6 +23,8 @@ data class CommentUiState(
     val hasMore: Boolean = true,
     val error: String? = null,
     val sending: Boolean = false,
+    /** 服务端给的评论总数,用于 tab 标题;0 表示还没拿到。 */
+    val total: Int = 0,
     // rootRpid -> 展开后的楼中楼全量列表(含继续翻页)。不在这个 map 里的楼层用
     // CommentItem.previewReplies 垫着,展开只在用户点击时才发请求。
     val expandedReplies: Map<Long, ExpandedReplies> = emptyMap(),
@@ -91,6 +93,7 @@ class CommentViewModel(
                             loading = false,
                             appending = false,
                             hasMore = page.hasMore,
+                            total = if (page.total > 0) page.total else current.total,
                             error = null,
                         )
                     }

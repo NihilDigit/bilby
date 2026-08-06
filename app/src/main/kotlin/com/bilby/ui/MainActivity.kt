@@ -7,6 +7,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
@@ -155,7 +158,10 @@ private fun RootTabs(
 ) {
     var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
 
+    // IME 退让放在 Scaffold 这一层,让底栏跟着键盘一起上移。放在内层输入框上的话,
+    // 底栏仍会在键盘下方占着高度,表现为输入框与键盘之间空一条。
     Scaffold(
+        modifier = Modifier.imePadding(),
         bottomBar = {
             NavigationBar {
                 RootTab.entries.forEach { tab ->
@@ -169,7 +175,15 @@ private fun RootTabs(
             }
         },
     ) { insets ->
-        Box(modifier = Modifier.fillMaxSize().padding(bottom = insets.calculateBottomPadding())) {
+        // consumeWindowInsets 是关键:只 padding 不声明消费的话,子层的 imePadding()
+        // 仍按屏幕底边算,会再多退让一个底部栏的高度。
+        val bottom = PaddingValues(bottom = insets.calculateBottomPadding())
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom)
+                .consumeWindowInsets(bottom)
+        ) {
             when (selected) {
                 RootTab.Feed -> FeedRoute(container, onVideoClick)
                 RootTab.Search -> SearchRoute(container, onVideoClick, onUserClick)
@@ -283,11 +297,22 @@ private fun VideoRoute(
         key = "video-$bvid",
         factory = viewModelFactory {
             initializer {
-                VideoViewModel(bvid, container.videoRepository, container.database.playbackProgressDao())
+                VideoViewModel(
+                    bvid,
+                    container.videoRepository,
+                    container.database.playbackProgressDao(),
+                    container.agentLoop,
+                    container.heartbeatReporter,
+                    container.videoActionRepository,
+                    container.settings,
+                )
             }
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    val related by vm.related.collectAsStateWithLifecycle()
+    val relation by vm.relation.collectAsStateWithLifecycle()
+    val favFolders by vm.favFolders.collectAsStateWithLifecycle()
 
     // 评论用 aid 作 oid,要等视频详情回来才知道;拿到之前先不建 ViewModel。
     val aid = state.detail?.aid ?: return
@@ -299,12 +324,25 @@ private fun VideoRoute(
 
     VideoScreen(
         state = state,
+        related = related,
         commentState = commentState,
-        onSaveProgress = vm::saveProgress,
-        onFindRelated = { title, upName -> onFindRelated(bvid, title, upName) },
+        // 心跳挂在同一个时机上:一次算本地进度(冷启动续播用),一次上报服务端(跨端续播用)。
+        onSaveProgress = { position, duration ->
+            vm.saveProgress(position, duration)
+            vm.reportHeartbeat(position, duration, finished = duration > 0 && position >= duration - 1_000)
+        },
+        onQualityChange = vm::setQuality,
+        onFindRelated = vm::findRelated,
         onUpClick = onUpClick,
+        relation = relation,
+        favFolders = favFolders,
+        onLike = vm::toggleLike,
+        onCoin = vm::coin,
+        onOpenFavPicker = vm::openFavPicker,
+        onFavConfirm = vm::confirmFavorite,
         onPlayPart = { vm.playPart(it) },
         onPlayEpisode = onOpenVideo,
+        onRelatedVideoClick = onOpenVideo,
         onCommentSort = commentVm::setSort,
         onCommentLoadMore = commentVm::loadMore,
         onExpandReplies = commentVm::expandReplies,

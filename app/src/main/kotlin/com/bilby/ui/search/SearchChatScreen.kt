@@ -171,8 +171,7 @@ fun SearchChatScreen(
             onSend = onSend,
             modifier = Modifier
                 .fillMaxWidth()
-                .imePadding()
-                .windowInsetsPadding(WindowInsets.navigationBars),
+                ,
         )
     }
 }

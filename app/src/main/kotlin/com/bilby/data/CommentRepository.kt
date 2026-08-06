@@ -53,6 +53,8 @@ data class CommentPage(
     val items: List<CommentItem>,
     val nextCursor: CommentCursor?,
     val hasMore: Boolean,
+    /** 服务端给的评论总数。0 表示这条路径没返回(未登录分支的游标结构里没有总数)。 */
+    val total: Int = 0,
 )
 
 data class SubReplyPage(val items: List<CommentItem>, val nextPage: Int?, val hasMore: Boolean)
@@ -100,6 +102,7 @@ class CommentRepository(
                 items = dto.replies.orEmpty().map { it.toCommentItem(uploaderMid) },
                 nextCursor = if (hasMore) CommentCursor.Offset(nextOffset!!) else null,
                 hasMore = hasMore,
+                total = dto.cursor?.allCount ?: 0,
             )
         }
     }
@@ -121,6 +124,7 @@ class CommentRepository(
                 items = dto.replies.orEmpty().map { it.toCommentItem(uploaderMid) },
                 nextCursor = if (hasMore) CommentCursor.Page(pn + 1) else null,
                 hasMore = hasMore,
+                total = page?.count ?: 0,
             )
         }
     }
