@@ -39,6 +39,12 @@ a `resources` value shaped like `aid:2`.
 `notes/auth-model.md` records that the cookie-to-`access_key` path returns `-101` today. Do
 not reimplement it.
 
+Web login and cookie refresh were removed on purpose. The refresh token this app holds comes
+from TV login and refreshes an app-side token, which is a different thing from what the web
+`cookie/refresh` endpoint wants, and PiliPlus implements no cookie refresh at all: when
+credentials expire, it asks for another qrcode scan. Do the same. A refresh path that looks
+like it works is worse than none, because it stops anyone from handling expiry.
+
 **Logging.** Every failure swallowed by `runCatching` logs path, code, and message through
 `BiliLog`. Credentials never appear in logs: not SESSDATA, `bili_jct`, `access_key`, or the
 LLM key. Cookies may be logged by key name only.
