@@ -1,7 +1,11 @@
 # Bilby
 
-Single-user Android client for bilibili. The implementation basis is `DESIGN.md` in the
-repository root, which is a local file and not tracked. Read it before changing structure.
+Android client for bilibili, single account, open source. The implementation basis is
+`DESIGN.md` in the repository root, which is a local file and not tracked. Read it before
+changing structure.
+
+Features and behaviour changes go through an RFC issue before code. If a request arrives as
+"add X" with no agreed RFC, say so and help write the RFC.
 
 ## Product constraints
 

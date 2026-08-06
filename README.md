@@ -1,6 +1,6 @@
 # Bilby
 
-A single-user Android client for bilibili.
+An Android client for bilibili with the recommendation machinery taken out.
 
 Bilby is smaller than the official app on purpose. It has no recommendation feed, no
 related-videos rail, and no autoplay. The home screen shows updates from the accounts you
@@ -50,8 +50,26 @@ Login goes through the TV qrcode flow. Web cookies are blocked by risk control o
 write action, so likes, coins, and favourites all return `-403 账号异常` under that path; a
 TV `access_key` works.
 
-Targets `compileSdk`/`targetSdk` 37 with `minSdk` 29. Built on Compose with Material 3,
-Navigation 3, Media3, Room, Ktor 3, and kotlinx.serialization.
+One account, signed in once. Targets `compileSdk`/`targetSdk` 37 with `minSdk` 29. Built on
+Compose with Material 3, Navigation 3, Media3, Room, Ktor 3, and kotlinx.serialization.
+
+## Contributing
+
+Bilby is a personal project that happens to be open source, and its shape comes from one
+person's opinion about how a video client should behave. That opinion is the thing being
+maintained here.
+
+Bug fixes, crash reports, and small corrections can go straight to a pull request.
+
+Anything that adds a feature or changes existing behaviour needs an RFC first: open an issue
+describing what you want, what the current structure does about it today, and what the
+design would look like. Wait for agreement before writing code. The constraints in the
+opening section are the ones most likely to be at stake, and a pull request that moves them
+without an agreed RFC will be closed on those grounds alone.
+
+`CLAUDE.md` carries the working conventions: API behaviour follows PiliPlus, every swallowed
+failure logs, credentials never do, and there is exactly one player. Read it before your
+first change.
 
 ## License
 
