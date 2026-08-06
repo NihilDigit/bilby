@@ -27,12 +27,19 @@ android {
 
     buildTypes {
         debug {
+            // 独立包名,debug 与 release 可以并存在同一台机器上。凭据、播放进度、
+            // agent 会话也因此各存各的,不会互相污染。
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
             buildConfigField("String", "LLM_BASE_URL", "\"${localProperties.getProperty("LLM_BASE_URL", "")}\"")
             buildConfigField("String", "LLM_API_KEY", "\"${localProperties.getProperty("LLM_API_KEY", "")}\"")
         }
         release {
             buildConfigField("String", "LLM_BASE_URL", "\"\"")
             buildConfigField("String", "LLM_API_KEY", "\"\"")
+            // 自用单用户应用,不上架,也就没有发布密钥。用 debug 密钥签名只为了 release 包
+            // 能装到机器上真的跑一遍 —— R8 造成的崩溃只在 release 出现,不装就等于没验。
+            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
