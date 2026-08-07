@@ -25,3 +25,6 @@ DESIGN.md
 *.jks
 *.keystore
 *.jks.base64
+
+# 接口调研笔记,本地保留
+notes/
