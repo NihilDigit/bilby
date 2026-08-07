@@ -12,18 +12,20 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * 循环本体,以及 DESIGN 3.3 的三条硬规矩所在地。三条都在代码里,**不在 prompt 里** ——
  * prompt 是请求,代码是保证;模型不遵守 prompt 时没有任何征兆。
  *
- *   1. 步数上限:到限强制交卷,不再给数据工具。
+ *   1. 步数上限:到限把工具整个撤走,模型只剩回话这一条路。
  *   2. 溯源校验:答案里的 bvid 必须在本轮工具返回过的集合内,否则丢弃。模型编不出视频。
  *   3. 条数硬编码:模型只排序,不决定给多少。
  *
- * 答案不解析自由文本,而是要求模型调 submit_answer —— 这样三条规矩全落在同一个入口上,
- * 模型没有第二条输出结论的路径。
+ * **模型每轮只有两种输出:调工具,或者回话。回话即终局。** 这里曾经要求它改调一个
+ * submit_answer 交卷,理由是"把三条规矩收在同一个入口"。那个理由不成立:规矩 2、3 都在
+ * [toBlocks] 里,而 [toBlocks] 吃的本来就是散文,工具参数只是把同一段散文换了个位置装。
+ * 代价却是实打实的——模型说完就停时(finish_reason=stop)整轮判失败,而 tool_choice
+ * 也堵不住:思考模型直接拒掉 "required"。
  */
 class AgentLoop(
     private val llm: LlmStreamer,
@@ -70,13 +72,15 @@ class AgentLoop(
         while (true) {
             val lastStep = step >= MAX_TOOL_STEPS
             if (lastStep) {
-                // 规矩 1:到限只留交卷工具,模型没有继续检索的选项。
                 messages += ChatMessage(
                     role = ChatMessage.ROLE_USER,
-                    content = "已达检索步数上限,现在必须用 submit_answer 交卷,只用已经看过的候选。",
+                    content = "已达检索步数上限,现在直接回答,只用已经看过的候选。",
                 )
             }
-            val available = if (lastStep) listOf(submitAnswerSpec()) else tools.specs + submitAnswerSpec()
+            // 规矩 1:到限就把工具整个撤走,模型没有继续检索的选项 —— 这是**结构上**没有,
+            // 不是提示词劝住的。撤走之后"到限还在调工具"这种状态不存在,原先为它准备的
+            // 那条失败分支也就没有了。
+            val available = if (lastStep) emptyList() else tools.specs
 
             val deltas = runCatching { llm.stream(messages, available).toList() }.getOrElse {
                 BiliLog.w("LLM 请求失败", it)
@@ -85,45 +89,37 @@ class AgentLoop(
             }
 
             val text = deltas.filterIsInstance<LlmDelta.Text>().joinToString("") { it.text }
-            if (text.isNotBlank()) emit(AgentEvent.Thinking(text))
-
             val calls = deltas.filterIsInstance<LlmDelta.ToolCalls>().flatMap { it.calls }
+
+            // 模型每一轮只有两种可能:调工具,或者回话。**回话就是终局**,不需要再有一个
+            // submit_answer 把它包一层。
+            //
+            // 那层封装原先是失败的来源:答案自始至终是"带 [[bvid]] 引用的散文"(见 [toBlocks]),
+            // 写在 content 里和写在工具参数里内容完全一样,却要求模型必须选后者。模型没有
+            // 义务遵守——deepseek-v4-flash 这类思考模型说完就停(finish_reason=stop),而协议上
+            // 也堵不住它:tool_choice:"required" 直接被拒,返回 400
+            // "Thinking mode does not support this tool_choice"。
             if (calls.isEmpty()) {
+                val blocks = toBlocks(text, seenBvids, traceByBvid)
+                if (blocks.isNotEmpty()) {
+                    emit(AgentEvent.Answer(blocks))
+                    return@flow
+                }
+                // 正文里一条能用的引用都没有,才是真的没结果。finish_reason 是这里唯一能分辨
+                // "模型说完了"和"被截断/流没收全"的东西,不留下就无从归因。
+                val finish = deltas.filterIsInstance<LlmDelta.Done>().lastOrNull()?.finishReason
+                BiliLog.w(
+                    "助理没交卷也没可用引用: finish_reason=$finish 正文${text.length}字 " +
+                        "第${step}步 历史${messages.size}条 增量${deltas.size}片",
+                )
                 emit(AgentEvent.Failed("助理没有给出结果"))
                 return@flow
             }
 
-            messages += ChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = text.ifBlank { null }, toolCalls = calls)
+            // 正文与工具调用同在时,正文是过程解说(DESIGN 3.4 的过程直播),不是答案。
+            if (text.isNotBlank()) emit(AgentEvent.Thinking(text))
 
-            val answerCall = calls.firstOrNull { it.function.name == SUBMIT_ANSWER }
-            if (answerCall != null) {
-                // 协议要求:带 tool_calls 的 assistant 消息后面必须跟上对**每个** tool_call_id
-                // 的 tool 消息。交卷时直接 return 会在历史里留下一段残缺对话,单轮看不出来,
-                // 下一轮把它发回去就是 400。同批次里没执行的其他调用也要一并回。
-                messages += calls.map { call ->
-                    ChatMessage(
-                        role = ChatMessage.ROLE_TOOL,
-                        toolCallId = call.id,
-                        name = call.function.name,
-                        content = if (call.id == answerCall.id) "已记录" else "本轮已交卷,该调用未执行",
-                    )
-                }
-                emit(finalAnswer(answerCall, seenBvids, traceByBvid))
-                return@flow
-            }
-            if (lastStep) {
-                // 到限还在检索就是不交卷。继续放行等于步数上限不存在。
-                messages += calls.map { call ->
-                    ChatMessage(
-                        role = ChatMessage.ROLE_TOOL,
-                        toolCallId = call.id,
-                        name = call.function.name,
-                        content = "已达检索上限,未执行",
-                    )
-                }
-                emit(AgentEvent.Failed("助理到达检索上限仍未给出结果"))
-                return@flow
-            }
+            messages += ChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = text.ifBlank { null }, toolCalls = calls)
 
             // 模型一轮可以要求多个工具(读三个视频的热评就是三个调用)。串行执行等于把
             // 三次网络往返排队,是等待时间的主要来源;并发跑,结果按原顺序回填。
@@ -203,23 +199,6 @@ class AgentLoop(
         return repaired
     }
 
-    private fun finalAnswer(
-        call: ToolCall,
-        seenBvids: Set<String>,
-        traceByBvid: Map<String, TraceItem>,
-    ): AgentEvent {
-        val arguments = runCatching { json.parseToJsonElement(call.function.arguments).jsonObject }
-            .getOrElse {
-                BiliLog.w("submit_answer 参数解析失败", it)
-                return AgentEvent.Failed("助理交回的结果无法解析")
-            }
-
-        val answer = arguments["answer"]?.jsonPrimitive?.content.orEmpty()
-        val blocks = toBlocks(answer, seenBvids, traceByBvid)
-
-        if (blocks.isEmpty()) return AgentEvent.Failed("没有找到确实相关的结果")
-        return AgentEvent.Answer(blocks)
-    }
 
     /**
      * 把带 `[[bvid]]` 引用的散文切成块。三条硬规矩全部落在这里,**丢引用不丢文字** ——
@@ -284,34 +263,12 @@ class AgentLoop(
         }
     }
 
-    private fun submitAnswerSpec(): ToolSpec = ToolSpec(
-        function = FunctionSpec(
-            name = SUBMIT_ANSWER,
-            description = "交卷。只能提交你在工具返回里真实见过的视频,给出每条为什么相关。",
-            parameters = json.parseToJsonElement(SUBMIT_ANSWER_SCHEMA),
-        ),
-    )
-
     private companion object {
         const val MAX_TOOL_STEPS = 12
         const val MAX_RESULTS = 5
-        const val SUBMIT_ANSWER = "submit_answer"
 
         /** `[[BV1xx4y1x7xx]]` 形式的行内引用。bvid 的字符集是 base58,这里不收窄,交给白名单校验。 */
         val VIDEO_REF = Regex("""\[\[(BV[0-9A-Za-z]+)]]""")
-
-        const val SUBMIT_ANSWER_SCHEMA = """
-{
-  "type": "object",
-  "properties": {
-    "answer": {
-      "type": "string",
-      "description": "面向用户的回答正文,一段自然的话。要提到某个视频时,在句子里写 [[bvid]],例如「入门的话 [[BV1xx4y1x7xx]] 讲得最清楚」——它会被渲染成一张可点的视频卡片,你不需要重复标题、UP主、播放量这些卡片上已有的信息。用户问的是问题时,可以完全不引用视频,直接把答案写成一段话。"
-    }
-  },
-  "required": ["answer"]
-}
-"""
 
         /**
          * 朴素表达任务即可。防沉迷由结构承担,不由这段文字承担(DESIGN 3.1);
@@ -324,9 +281,9 @@ class AgentLoop(
 - 用工具去查,不要凭记忆回答。热评往往能反映内容质量,值得翻。
 - 去重,不凑数。宁可少给几条,也不要塞进不相关的。
 - 只能提到你在工具返回里真实见过的视频。
-- 查完后调用 submit_answer 交卷。
+- 查完就直接回答。不要再调工具,回答本身就是终点。
 
-**交卷时写一段自然的话,把视频用 `[[bvid]]` 写在句子里。** 引用会被渲染成一张可点的
+**回答写一段自然的话,把视频用 `[[bvid]]` 写在句子里。** 引用会被渲染成一张可点的
 视频卡片,所以不要重复卡片上已有的信息(标题、UP主、播放量、时长),把力气花在
 卡片上没有的东西:它讲了什么、适合什么情况看、热评里提到的具体评价。
 

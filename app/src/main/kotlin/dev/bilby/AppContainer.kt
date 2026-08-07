@@ -8,10 +8,11 @@ import dev.bilby.agent.createBiliTools
 import dev.bilby.api.BiliClient
 import dev.bilby.api.DeviceFingerprint
 import dev.bilby.api.WbiSigner
-import dev.bilby.data.AgentSessionRepository
 import dev.bilby.data.DynamicRepository
 import dev.bilby.data.FingerprintStore
 import dev.bilby.data.CommentRepository
+import dev.bilby.data.FavRepository
+import dev.bilby.data.FollowRepository
 import dev.bilby.data.HeartbeatReporter
 import dev.bilby.data.QueueSourceRepository
 import dev.bilby.data.SearchRepository
@@ -98,6 +99,10 @@ class AppContainer(context: Context) {
 
     val toViewRepository: ToViewRepository by lazy { ToViewRepository(biliClient) }
 
+    val followRepository: FollowRepository by lazy { FollowRepository(biliClient, settings) }
+
+    val favRepository: FavRepository by lazy { FavRepository(biliClient, settings) }
+
     val videoActionRepository: VideoActionRepository by lazy { VideoActionRepository(biliClient) }
 
     val heartbeatReporter: HeartbeatReporter by lazy { HeartbeatReporter(biliClient) }
@@ -122,5 +127,4 @@ class AppContainer(context: Context) {
     /** 无状态:每次调用都是新的一轮,不跨轮携带任何东西(DESIGN 3.1)。 */
     val agentLoop: AgentLoop by lazy { AgentLoop(llmClient, toolRegistry, json) }
 
-    val agentSessionRepository: AgentSessionRepository by lazy { AgentSessionRepository(database, json) }
 }
