@@ -92,7 +92,7 @@ private val ControlScrimBottom = Color(0xB3000000)
 private const val FAST_FORWARD_SPEED = 3f
 
 private const val CONTROLS_HIDE_DELAY_MILLIS = 3_000L
-private const val PROGRESS_SAVE_INTERVAL_MILLIS = 5_000L
+private const val PROGRESS_REPORT_INTERVAL_MILLIS = 5_000L
 
 /**
  * 播放器画面 + 控件。非全屏时被塞进 16:9 容器,全屏时铺满整屏,两种形态共用这一个 composable,
@@ -119,12 +119,12 @@ fun BilbyPlayer(
     isFullscreen: Boolean,
     onFullscreenChange: (Boolean) -> Unit,
     onListen: () -> Unit,
-    onSaveProgress: (positionMillis: Long, durationMillis: Long) -> Unit,
+    onReportProgress: (positionMillis: Long, durationMillis: Long) -> Unit,
     modifier: Modifier = Modifier,
     /** 只在全屏时显示。竖屏下标题就在播放器正下方,再印一遍是多余的。 */
     title: String = "",
 ) {
-    val saveProgress by rememberUpdatedState(onSaveProgress)
+    val reportProgress by rememberUpdatedState(onReportProgress)
 
     // 竖屏视频、4:3 老片都存在,写死 16:9 会把画面拉变形。容器比例由外面定,画面按真实比例
     // 居中,多出来的地方留黑边。
@@ -183,11 +183,12 @@ fun BilbyPlayer(
         }
     }
 
-    // 进程被杀不会走 onDispose,所以播放中也定期落盘一次进度。
+    // 进程被杀不会走 onDispose,所以播放中也定期回传一次进度。服务端那份是续播的唯一来源,
+    // 只在退出时报一次的话,被杀掉的那次观看等于没发生过。
     LaunchedEffect(player) {
         while (true) {
-            delay(PROGRESS_SAVE_INTERVAL_MILLIS)
-            if (player.isPlaying) saveProgress(player.currentPosition, player.duration.coerceAtLeast(0))
+            delay(PROGRESS_REPORT_INTERVAL_MILLIS)
+            if (player.isPlaying) reportProgress(player.currentPosition, player.duration.coerceAtLeast(0))
         }
     }
 
@@ -199,7 +200,9 @@ fun BilbyPlayer(
         }
     }
 
-    FullscreenEffect(isFullscreen)
+    // 传布尔而不是比例本身:比例是浮点,解码过程里会有细微抖动,直接当 DisposableEffect
+    // 的 key 会让全屏反复重设方向。
+    FullscreenEffect(isFullscreen, isPortraitVideo = videoAspect < 1f)
 
     BackHandler(enabled = isFullscreen) { onFullscreenChange(false) }
 
@@ -321,12 +324,13 @@ fun BilbyPlayer(
             }
         }
 
-        // 锁按钮:锁上后它是唯一还能点的东西。
+        // 锁按钮:锁上后它是唯一还能点的东西。放右侧——横屏握持时右手拇指够得到,
+        // 而左侧那个位置和退出全屏的返回箭头在同一边,容易误按成退出。
         AnimatedVisibility(
             visible = controlsVisible,
             enter = fadeIn(),
             exit = fadeOut(),
-            modifier = Modifier.align(Alignment.CenterStart).padding(start = 12.dp),
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp),
         ) {
             IconButton(onClick = { locked = !locked }) {
                 Icon(
@@ -380,7 +384,7 @@ fun BilbyPlayer(
                         position = target
                         dragPosition = null
                         if (resumeAfterDrag) player.play()
-                        saveProgress(target, player.duration.coerceAtLeast(0))
+                        reportProgress(target, player.duration.coerceAtLeast(0))
                     }
                     interactionNonce++
                 },
@@ -636,17 +640,23 @@ private fun Overlay(modifier: Modifier = Modifier, content: @Composable () -> Un
 }
 
 /**
- * 全屏的两件事:Activity 转横屏 + 隐藏系统栏。两者都是 Activity 级的全局状态,离开这个
- * composable 必须还原,否则退到列表页还卡在横屏。
+ * 全屏的两件事:Activity 转到画面朝向 + 隐藏系统栏。两者都是 Activity 级的全局状态,离开
+ * 这个 composable 必须还原,否则退到列表页还卡在横屏。
+ *
+ * **朝向跟着画面走,不是一律横屏。** 竖屏视频转横屏之后画面只能缩到中间一条,两侧全是黑边,
+ * 等于全屏把可视面积改小了;竖屏视频的全屏就该竖着占满。用 SENSOR_* 而不是 USER_*,
+ * 是为了让人仍能把设备翻过来(倒持、左右手)。
  */
 @Composable
-private fun FullscreenEffect(isFullscreen: Boolean) {
+private fun FullscreenEffect(isFullscreen: Boolean, isPortraitVideo: Boolean) {
     val activity = LocalContext.current.findActivity() ?: return
-    DisposableEffect(isFullscreen) {
+    DisposableEffect(isFullscreen, isPortraitVideo) {
         val window = activity.window
         val insets = WindowCompat.getInsetsController(window, window.decorView)
         if (isFullscreen) {
-            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            activity.requestedOrientation =
+                if (isPortraitVideo) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             insets.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             insets.hide(WindowInsetsCompat.Type.systemBars())
