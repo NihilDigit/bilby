@@ -86,9 +86,10 @@ fun selectStreams(
         pool.firstOrNull { it.matchesCodec(codecId) }
     } ?: pool.first()
 
+    val audio = selectAudio(dash, preferredAudioQuality)
     return SelectedStreams(
-        videoUrl = video.baseUrl,
-        audioUrl = selectAudio(dash, preferredAudioQuality)?.baseUrl,
+        videoUrl = preferredStreamUrl(video.baseUrl, video.backupUrls),
+        audioUrl = audio?.let { preferredStreamUrl(it.baseUrl, it.backupUrls) },
         qualityLabel = videoQualityLabel(video.id),
         codec = codecLabel(video),
         qualityId = video.id,
@@ -165,4 +166,32 @@ fun videoQualityLabel(id: Int): String = when (id) {
     6 -> "240P"
     // 表是抄的,服务端将来加新档这里会认不出来,如实显示 id,不按数字猜一个分辨率名字。
     else -> "画质 $id"
+}
+
+/**
+ * 从 `[base_url] + backup_url` 里挑一个真正能连的地址。
+ *
+ * B 站给的第一个地址常常是 PCDN 节点:裸 IP、`*.mcdn.bilivideo.*`、或带 `os=mcdn` 参数的
+ * upos 地址。这类节点对第三方客户端极不稳定——连得上却不给响应头,一直挂到读超时,表现是
+ * "转圈很久然后失败",而不是一个干净的错误码。
+ *
+ * 规则照 PiliPlus 的 `VideoUtils.getCdnUrl`(lib/utils/video_utils.dart):
+ * 优先真正的 upos 镜像,PCDN 一律往后排,一个都没有时才退回原地址(有总比没有强)。
+ * 这里**不做 host 改写**——PiliPlus 那边改写是为了让用户选 CDN 厂商,我们没有这个设置,
+ * 改写只会把一个能连的地址换成一个没验证过的。
+ */
+fun preferredStreamUrl(baseUrl: String, backupUrls: List<String>): String {
+    val all = (listOf(baseUrl) + backupUrls).filter { it.isNotEmpty() }
+    if (all.isEmpty()) return baseUrl
+    return all.firstOrNull { !it.isPcdn() } ?: all.first()
+}
+
+/** 裸 IP 主机、mcdn 域名、以及 `os=mcdn` 的 upos 地址,都是 PCDN。 */
+private fun String.isPcdn(): Boolean {
+    val host = substringAfter("://", "").substringBefore('/').substringBefore(':')
+    if (host.isEmpty()) return false
+    if (host.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))) return true
+    if (host.contains(".mcdn.bilivideo.")) return true
+    if (contains("szbdyd.com")) return true
+    return contains("os=mcdn")
 }

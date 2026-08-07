@@ -105,3 +105,48 @@ class StreamSelectionTest {
 
     private fun audio(id: Int, url: String) = DashStreamDto(id = id, baseUrlCamel = url)
 }
+
+class PreferredStreamUrlTest {
+
+    private val upos = "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/x.m4s?e=1"
+
+    @Test
+    fun `picks the upos mirror over a bare-IP PCDN node`() {
+        val chosen = preferredStreamUrl(
+            baseUrl = "https://120.241.14.7/v1/resource/x.m4s?e=1",
+            backupUrls = listOf(upos),
+        )
+        assertEquals(upos, chosen)
+    }
+
+    @Test
+    fun `picks the upos mirror over an mcdn host`() {
+        val chosen = preferredStreamUrl(
+            baseUrl = "https://cn-sccd-ct-01-06.bilivideo.com.mcdn.bilivideo.cn:4483/v1/resource/x.m4s",
+            backupUrls = listOf(upos),
+        )
+        assertEquals(upos, chosen)
+    }
+
+    /** os=mcdn 的地址主机名是正常的 upos,只有查询参数暴露它是 PCDN。 */
+    @Test
+    fun `rejects an upos host carrying os=mcdn`() {
+        val chosen = preferredStreamUrl(
+            baseUrl = "https://upos-sz-mirrorcoso1.bilivideo.com/upgcxcode/x.m4s?os=mcdn&e=1",
+            backupUrls = listOf(upos),
+        )
+        assertEquals(upos, chosen)
+    }
+
+    /** 全是 PCDN 时退回原地址:连得上的可能性再低,也比没有地址强。 */
+    @Test
+    fun `falls back to the original url when every candidate is pcdn`() {
+        val pcdn = "https://120.241.14.7/v1/resource/x.m4s"
+        assertEquals(pcdn, preferredStreamUrl(pcdn, listOf("https://10.0.0.1/v1/resource/y.m4s")))
+    }
+
+    @Test
+    fun `keeps the base url when it is already a plain mirror`() {
+        assertEquals(upos, preferredStreamUrl(upos, listOf("https://120.241.14.7/v1/resource/x.m4s")))
+    }
+}
