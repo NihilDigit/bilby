@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Bilby"
 include(":app")
+include(":danmaku")
