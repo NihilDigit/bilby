@@ -17,7 +17,7 @@ import kotlinx.serialization.json.jsonObject
  * 循环本体,以及 DESIGN 3.3 的三条硬规矩所在地。三条都在代码里,**不在 prompt 里** ——
  * prompt 是请求,代码是保证;模型不遵守 prompt 时没有任何征兆。
  *
- *   1. 步数上限:到限把工具整个撤走,模型只剩回话这一条路。
+ *   1. 步数上限:到限把工具撤走,再调工具就判失败 —— 撤走是让它不必违规,判失败是它违规了也走不下去。
  *   2. 溯源校验:答案里的 bvid 必须在本轮工具返回过的集合内,否则丢弃。模型编不出视频。
  *   3. 条数硬编码:模型只排序,不决定给多少。
  *
@@ -77,9 +77,8 @@ class AgentLoop(
                     content = "已达检索步数上限,现在直接回答,只用已经看过的候选。",
                 )
             }
-            // 规矩 1:到限就把工具整个撤走,模型没有继续检索的选项 —— 这是**结构上**没有,
-            // 不是提示词劝住的。撤走之后"到限还在调工具"这种状态不存在,原先为它准备的
-            // 那条失败分支也就没有了。
+            // 规矩 1:到限就把工具撤走,模型没有继续检索的选项 —— 这是**结构上**没有,
+            // 不是提示词劝住的。但撤走只是让它不必违规,并不保证它不违规(见下面那条守卫)。
             val available = if (lastStep) emptyList() else tools.specs
 
             val deltas = runCatching { llm.stream(messages, available).toList() }.getOrElse {
@@ -120,6 +119,27 @@ class AgentLoop(
             if (text.isNotBlank()) emit(AgentEvent.Thinking(text))
 
             messages += ChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = text.ifBlank { null }, toolCalls = calls)
+
+            // 到限了还在调工具。撤走 tools 已经让这件事不该发生,但"不该发生"不等于
+            // "不会发生" —— 模型照样能凭上一轮的记忆再发一个调用,而这正是规矩 1 存在的理由:
+            // 步数上限必须由代码保证,不能靠对面守规矩。少了这一段,lastStep 会一直为真,
+            // 循环永远出不去。
+            //
+            // 协议要求:带 tool_calls 的 assistant 消息后面必须跟上对每个 id 的 tool 消息,
+            // 缺一条,这段对话下一轮发回去就是 400。
+            if (lastStep) {
+                messages += calls.map { call ->
+                    ChatMessage(
+                        role = ChatMessage.ROLE_TOOL,
+                        toolCallId = call.id,
+                        name = call.function.name,
+                        content = "已达检索上限,未执行",
+                    )
+                }
+                BiliLog.w("助理到检索上限仍在调工具: ${calls.joinToString { it.function.name }}")
+                emit(AgentEvent.Failed("助理到达检索上限仍未给出结果"))
+                return@flow
+            }
 
             // 模型一轮可以要求多个工具(读三个视频的热评就是三个调用)。串行执行等于把
             // 三次网络往返排队,是等待时间的主要来源;并发跑,结果按原顺序回填。
