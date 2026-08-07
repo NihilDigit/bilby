@@ -66,7 +66,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.bilby.agent.AnswerItem
+import dev.bilby.agent.AnswerBlock
 import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
@@ -76,6 +76,7 @@ import dev.bilby.data.VideoStat
 import dev.bilby.player.QueueItem
 import dev.bilby.ui.comment.CommentSection
 import dev.bilby.ui.comment.CommentUiState
+import dev.bilby.ui.components.AnswerBlocks
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.CompactVideoRow
 import dev.bilby.ui.components.InlineProgress
@@ -90,11 +91,10 @@ import kotlinx.coroutines.launch
 /** 「找相关」的状态。started=false 表示用户还没点过,此时只显示按钮。 */
 data class RelatedState(
     val started: Boolean = false,
-    /** 助理的正文回答(用户问的是问题而不是"给我视频"时)。 */
-    val summary: String? = null,
     val running: Boolean = false,
     val steps: List<String> = emptyList(),
-    val answer: List<AnswerItem> = emptyList(),
+    /** 一段夹着视频卡片的正文,和搜索页共用 AnswerBlocks 渲染。 */
+    val blocks: List<AnswerBlock> = emptyList(),
     val error: String? = null,
 )
 
@@ -848,16 +848,15 @@ private fun RelatedSection(
             else -> {
                 // 检索过程留痕:结果不是凭空出现的,是这些步骤的产物。
                 related.steps.forEach { step -> StepLine(step) }
-                if (related.answer.isEmpty()) {
+                if (related.blocks.isEmpty()) {
                     Text(
                         text = "没找到合适的",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    related.answer.forEach { item ->
-                        RelatedAnswerRow(item, onClick = { onRelatedVideoClick(item.bvid) })
-                    }
+                    // 与搜索页同一个渲染器:同一个助理的同一种输出,两处必须长得一样。
+                    AnswerBlocks(blocks = related.blocks, onVideoClick = onRelatedVideoClick)
                 }
             }
         }
@@ -873,31 +872,6 @@ private fun StepLine(step: String) {
     )
 }
 
-/**
- * 找相关的结果。和列表页用同一个 [VideoRow],只是多带一句理由 ——
- * 理由是这个区块与推荐流的根本区别,永远显示,不折叠、不截断。
- */
-@Composable
-private fun RelatedAnswerRow(item: AnswerItem, onClick: () -> Unit) {
-    VideoRow(
-        item = VideoRowUi(
-            title = item.trace?.title ?: item.bvid,
-            coverUrl = item.trace?.coverUrl.orEmpty(),
-            upName = item.trace?.upName,
-            note = item.reason,
-            accentNote = true,
-        ),
-        onClick = onClick,
-        trailing = {
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.align(Alignment.CenterVertically),
-            )
-        },
-    )
-}
 
 private fun formatCount(value: Long): String = when {
     value >= 100_000_000 -> "%.1f亿".format(value / 100_000_000.0)

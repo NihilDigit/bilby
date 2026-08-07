@@ -42,7 +42,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import dev.bilby.agent.AnswerItem
+import dev.bilby.agent.AnswerBlock
+import dev.bilby.ui.components.AnswerBlocks
 import dev.bilby.agent.TraceItem
 import dev.bilby.data.SearchUser
 import dev.bilby.data.SearchVideo
@@ -79,9 +80,8 @@ sealed interface TurnResult {
 
     data class Agent(
         val steps: List<AgentStep>,
-        val answer: List<AnswerItem>,
-        /** 助理的正文回答。用户问的是问题而不是"给我视频"时,答案在这里。 */
-        val summary: String? = null,
+        /** 一段夹着视频卡片的正文,见 AnswerBlocks。 */
+        val blocks: List<AnswerBlock> = emptyList(),
         val running: Boolean = false,
         val error: String? = null,
     ) : TurnResult
@@ -348,7 +348,7 @@ private fun formatDate(epochSeconds: Long): String =
 private fun AgentTurnResult(result: TurnResult.Agent, onVideoClick: (String) -> Unit, onRetry: () -> Unit) {
     // 答案出来前展开过程,答案一出现就自动折叠——但用户随时能点回来看(DESIGN 3.4)。
     var processExpanded by remember { mutableStateOf(true) }
-    val hasAnswer = result.answer.isNotEmpty() || result.summary != null
+    val hasAnswer = result.blocks.isNotEmpty()
     LaunchedEffect(hasAnswer) {
         if (hasAnswer) processExpanded = false
     }
@@ -365,24 +365,12 @@ private fun AgentTurnResult(result: TurnResult.Agent, onVideoClick: (String) -> 
             }
         }
 
-        result.summary?.let { summary ->
-            Text(
-                text = summary,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-            )
-        }
-
-        if (result.answer.isNotEmpty()) {
-            Text(
-                text = "为你找到",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-            )
-            result.answer.forEach { answer ->
-                VideoRow(item = answer.toRowUi(), onClick = { onVideoClick(answer.bvid) })
-            }
-        }
+        // 正文与视频卡片是同一段话,不再分成"总结"加"为你找到"两块。
+        AnswerBlocks(
+            blocks = result.blocks,
+            onVideoClick = onVideoClick,
+            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+        )
 
         when {
             result.error != null -> FullScreenError(result.error, onRetry, Modifier.fillMaxWidth())
@@ -393,15 +381,6 @@ private fun AgentTurnResult(result: TurnResult.Agent, onVideoClick: (String) -> 
         }
     }
 }
-
-/** 推荐理由永远显示、永远不截断:它是助理搜索与推荐流的根本区别(DESIGN 3.4)。 */
-private fun AnswerItem.toRowUi() = VideoRowUi(
-    title = trace?.title ?: bvid,
-    coverUrl = trace?.coverUrl.orEmpty(),
-    upName = trace?.upName,
-    note = reason,
-    accentNote = true,
-)
 
 @Composable
 private fun ProcessHeader(
@@ -609,12 +588,10 @@ private fun SearchChatScreenAgentAnswerPreview() {
                                 AgentStep("搜索:搞笑动画", listOf(previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")), true),
                                 AgentStep("读取:BV1aa 的热评", emptyList(), true),
                             ),
-                            answer = listOf(
-                                AnswerItem(
-                                    bvid = "BV1aa",
-                                    reason = "时长短、弹幕密度高,评论区反馈「摸鱼时长刚好一集」,符合你的场景。",
-                                    trace = previewTrace("BV1aa", "笑到打鸣的搞笑动画合集"),
-                                ),
+                            blocks = listOf(
+                                AnswerBlock.Text("时长短、弹幕密度高,评论区反馈「摸鱼时长刚好一集」:"),
+                                AnswerBlock.Video("BV1aa", previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")),
+                                AnswerBlock.Text("再往后是同一个 UP 的旧作,节奏一致。"),
                             ),
                         ),
                     ),

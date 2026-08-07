@@ -19,13 +19,8 @@ sealed interface AgentEvent {
      * 纯文本回答是合法的:用户问"这几个评价如何"时,答案本来就不该是一串视频。
      */
     data class Answer(val blocks: List<AnswerBlock>) : AgentEvent {
-        /** 过渡用:搜索页还按"总结 + 卡片"渲染。搜索页改成按块渲染后删掉这两个。 */
-        val summary: String? get() = blocks.filterIsInstance<AnswerBlock.Text>()
-            .joinToString("\n") { it.text }
-            .takeIf { it.isNotBlank() }
-
-        val items: List<AnswerItem> get() = blocks.filterIsInstance<AnswerBlock.Video>()
-            .map { AnswerItem(it.bvid, reason = "", trace = it.trace) }
+        /** 会话持久化只需要提到过哪些视频,不需要正文的结构。 */
+        val bvids: List<String> get() = blocks.filterIsInstance<AnswerBlock.Video>().map { it.bvid }
     }
 
     data class Failed(val message: String) : AgentEvent

@@ -53,7 +53,7 @@ class AgentViewModel(
             },
         )
 
-        is AgentEvent.Answer -> copy(answer = event.items, running = false)
+        is AgentEvent.Answer -> copy(blocks = event.blocks, running = false)
 
         is AgentEvent.Failed -> copy(error = event.message, running = false)
     }

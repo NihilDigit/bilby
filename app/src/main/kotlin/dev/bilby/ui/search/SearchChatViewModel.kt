@@ -146,7 +146,7 @@ class SearchChatViewModel(
         ).collect { event ->
             updateAgent(turnId) { it.reduce(event) }
             if (event is AgentEvent.Answer) {
-                viewModelScope.launch { sessions.saveAnswer(id, event.items) }
+                viewModelScope.launch { sessions.saveAnswer(id, event.blocks) }
             }
         }
         updateAgent(turnId) { it.copy(running = false) }
@@ -167,7 +167,7 @@ class SearchChatViewModel(
             },
         )
 
-        is AgentEvent.Answer -> copy(answer = event.items, summary = event.summary, running = false)
+        is AgentEvent.Answer -> copy(blocks = event.blocks, running = false)
         is AgentEvent.Failed -> copy(error = event.message, running = false)
     }
 

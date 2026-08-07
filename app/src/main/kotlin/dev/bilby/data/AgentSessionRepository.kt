@@ -1,6 +1,6 @@
 package dev.bilby.data
 
-import dev.bilby.agent.AnswerItem
+import dev.bilby.agent.AnswerBlock
 import dev.bilby.agent.ChatMessage
 import dev.bilby.agent.ToolCall
 import dev.bilby.agent.TraceItem
@@ -61,30 +61,37 @@ class AgentSessionRepository(
             )
         }
 
-    suspend fun saveAnswer(sessionId: Long, items: List<AnswerItem>) {
-        if (items.isEmpty()) return
-        val entities = items.map { item ->
+    /**
+     * 记下这一轮提到过哪些视频。**只存 bvid 与展示信息,不存正文** —— 正文在会话消息里
+     * 已经有一份,再存一份必然对不上;这张表的用途是下一轮的溯源白名单和卡片展示。
+     */
+    suspend fun saveAnswer(sessionId: Long, blocks: List<AnswerBlock>) {
+        val videos = blocks.filterIsInstance<AnswerBlock.Video>()
+        if (videos.isEmpty()) return
+        val entities = videos.map { video ->
             AgentAnswerEntity(
                 sessionId = sessionId,
-                bvid = item.bvid,
-                reason = item.reason,
-                title = item.trace?.title,
-                coverUrl = item.trace?.coverUrl,
-                upName = item.trace?.upName,
+                bvid = video.bvid,
+                reason = "",
+                title = video.trace?.title,
+                coverUrl = video.trace?.coverUrl,
+                upName = video.trace?.upName,
             )
         }
         dao.insertAnswers(entities)
     }
 
-    suspend fun loadAnswers(sessionId: Long): List<AnswerItem> =
-        dao.getAnswers(sessionId).map { entity ->
-            val trace = if (entity.title != null && entity.coverUrl != null && entity.upName != null) {
-                TraceItem(bvid = entity.bvid, title = entity.title, coverUrl = entity.coverUrl, upName = entity.upName)
-            } else {
-                null
-            }
-            AnswerItem(bvid = entity.bvid, reason = entity.reason, trace = trace)
-        }
+    /** 恢复上一轮提到过的视频的展示信息,供跨轮追问时的卡片使用。 */
+    suspend fun loadAnswers(sessionId: Long): Map<String, TraceItem> =
+        dao.getAnswers(sessionId).mapNotNull { entity ->
+            if (entity.title == null || entity.coverUrl == null || entity.upName == null) null
+            else entity.bvid to TraceItem(
+                bvid = entity.bvid,
+                title = entity.title,
+                coverUrl = entity.coverUrl,
+                upName = entity.upName,
+            )
+        }.toMap()
 
     suspend fun deleteSession(sessionId: Long) {
         dao.deleteSession(sessionId)

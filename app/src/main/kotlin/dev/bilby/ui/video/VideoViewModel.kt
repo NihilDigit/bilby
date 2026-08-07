@@ -201,7 +201,7 @@ class VideoViewModel(
                         is AgentEvent.Thinking -> current
                         is AgentEvent.ToolStarted -> current.copy(steps = current.steps + event.label)
                         is AgentEvent.ToolFinished -> current
-                        is AgentEvent.Answer -> current.copy(answer = event.items, summary = event.summary, running = false)
+                        is AgentEvent.Answer -> current.copy(blocks = event.blocks, running = false)
                         is AgentEvent.Failed -> current.copy(error = event.message, running = false)
                     }
                 }

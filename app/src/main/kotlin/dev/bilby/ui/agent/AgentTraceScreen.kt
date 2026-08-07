@@ -31,9 +31,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
-import dev.bilby.agent.AnswerItem
+import dev.bilby.agent.AnswerBlock
 import dev.bilby.agent.TraceItem
 import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.AnswerBlocks
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.ListCover
@@ -46,7 +47,7 @@ import dev.bilby.ui.theme.Spacing
 data class AgentUiState(
     val intentLabel: String = "",
     val steps: List<AgentStep> = emptyList(),
-    val answer: List<AnswerItem> = emptyList(),
+    val blocks: List<AnswerBlock> = emptyList(),
     val running: Boolean = false,
     val error: String? = null,
 )
@@ -72,8 +73,8 @@ fun AgentTraceScreen(
     modifier: Modifier = Modifier,
 ) {
     var processExpanded by remember { mutableStateOf(true) }
-    LaunchedEffect(state.answer.isNotEmpty()) {
-        if (state.answer.isNotEmpty()) processExpanded = false
+    LaunchedEffect(state.blocks.isNotEmpty()) {
+        if (state.blocks.isNotEmpty()) processExpanded = false
     }
 
     Scaffold(
@@ -100,25 +101,16 @@ fun AgentTraceScreen(
                 }
             }
 
-            if (state.answer.isNotEmpty()) {
-                item(key = "answer_header") {
-                    Text(
-                        text = "为你找到",
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-                    )
-                }
-                items(state.answer, key = { it.bvid }) { answer ->
-                    VideoRow(
-                        // 理由永远显示:它是助理结果与推荐流的根本区别(DESIGN 3.4)。
-                        item = VideoRowUi(
-                            title = answer.trace?.title ?: answer.bvid,
-                            coverUrl = answer.trace?.coverUrl.orEmpty(),
-                            upName = answer.trace?.upName,
-                            note = answer.reason,
-                            accentNote = true,
+            if (state.blocks.isNotEmpty()) {
+                item(key = "answer") {
+                    // 与搜索页、播放页的找相关共用同一个渲染器。
+                    AnswerBlocks(
+                        blocks = state.blocks,
+                        onVideoClick = onVideoClick,
+                        modifier = Modifier.padding(
+                            horizontal = Spacing.Comfortable,
+                            vertical = Spacing.Cozy,
                         ),
-                        onClick = { onVideoClick(answer.bvid) },
                     )
                 }
             }
@@ -133,7 +125,7 @@ fun AgentTraceScreen(
                     )
 
                     // 答完就退场,不留"再找一批"——那正是 DESIGN 1.1 要反的变比率奖励。
-                    state.answer.isEmpty() -> Text(
+                    state.blocks.isEmpty() -> Text(
                         text = "没找到合适的",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -277,17 +269,11 @@ private fun AgentTraceScreenAnswerPreview() {
                         finished = true,
                     ),
                 ),
-                answer = listOf(
-                    AnswerItem(
-                        bvid = "BV1aa",
-                        reason = "时长短、弹幕密度高,评论区反馈「摸鱼时长刚好一集」,符合你的场景。",
-                        trace = previewTrace("BV1aa", "笑到打鸣的搞笑动画合集"),
-                    ),
-                    AnswerItem(
-                        bvid = "BV1bb",
-                        reason = "同系列第二集,热评区多人接续讨论第一集内容。",
-                        trace = previewTrace("BV1bb", "办公室摸鱼指南 · 第二集"),
-                    ),
+                blocks = listOf(
+                    AnswerBlock.Text("时长短、弹幕密度高,评论区反馈「摸鱼时长刚好一集」:"),
+                    AnswerBlock.Video("BV1aa", previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")),
+                    AnswerBlock.Text("热评里有人接着讨论第二集,想连着看可以直接跳过去:"),
+                    AnswerBlock.Video("BV1bb", previewTrace("BV1bb", "办公室摸鱼指南 · 第二集")),
                 ),
                 running = false,
             ),
