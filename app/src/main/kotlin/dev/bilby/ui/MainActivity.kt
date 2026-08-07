@@ -3,6 +3,9 @@ package dev.bilby.ui
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -63,6 +66,11 @@ import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.agent.AgentTraceScreen
 import dev.bilby.ui.agent.AgentViewModel
 import dev.bilby.ui.comment.CommentViewModel
+import androidx.compose.material.icons.outlined.DeleteSweep
+import dev.bilby.ui.fav.FavFolderScreen
+import dev.bilby.ui.fav.FavFolderViewModel
+import dev.bilby.ui.fav.FavHubScreen
+import dev.bilby.ui.fav.FavHubViewModel
 import dev.bilby.ui.feed.FeedScreen
 import dev.bilby.ui.feed.FeedViewModel
 import dev.bilby.ui.follow.FollowingsScreen
@@ -145,44 +153,42 @@ private fun BilbyApp(container: AppContainer) {
         factory = viewModelFactory { initializer { ToViewViewModel(container.toViewRepository) } },
     )
 
-    // 在 composable 作用域里先取出来:下面几个 transitionSpec 的 lambda 不是 @Composable,
-    // 在里面读不到 MaterialTheme。
-    //
-    // M3 把"东西在空间里移动"和"东西淡入淡出"分成两套 spec:位移带一点回弹才像实体,
-    // 透明度不该回弹(会闪)。
-    val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<IntOffset>()
-    val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+    val favHubVm: FavHubViewModel = viewModel(
+        factory = viewModelFactory { initializer { FavHubViewModel(container.favRepository) } },
+    )
 
     val backStack = rememberNavBackStack(Home)
     NavDisplay(
         backStack = backStack,
         onBack = { backStack.removeLastOrNull() },
-        // Nav3 默认那套是缩放 + 淡入淡出:新页从画面中央放大出来,旧页缩回去。它读起来像
-        // "这一页替换了那一页",而这里发生的是"压进去一层",两者的空间关系对不上;加上默认
-        // 时长偏长,退出时那一下缩小尤其显眼。
+        // 转场用 duration + easing,**不用主题的 spring**。M3 在 transitions 页注明转场仍在
+        // 旧的缓动/时长体系上("M3 transitions use the legacy easing and duration system"),
+        // spring 那套(MotionScheme)是给组件动效的;它本身也只有六个 spring spec,取不到
+        // duration。expressive 的 spatial 阻尼低到会过冲,而 applying-transitions 明说
+        // "Common transitions should not use overt style effects like bouncy springs"。
         //
-        // 换成沿 X 轴的位移。**真正在移动的那一页走整屏,被压住的那页只走 1/4 做视差。**
-        //
-        // 距离一度是反的(进来的走 1/4、让开的走 1/12),结果是返回时上层页只挪了一点就淡没,
-        // 看上去像直接切到了上一屏 —— 动画其实播了,只是没有一页走过足够的距离让人看见。
-        // 视差方向也固定:压进去时新页从右侧来、旧页往左退;返回时整个反过来。
-        //
-        // 淡入淡出只给做视差的那一页。走整屏的那页不能再淡:它会在走完之前就透明掉,
-        // 于是"看不见动画"这件事换个方式又发生一遍。
+        // 形态用 Android 的做法:**两页都只走一小段并淡入淡出**,而不是让一页走整屏。规范原文
+        // "Android uses a fade as screens slide. This reduces the amount of motion, since the
+        // screens don't have to slide the full width of the device." 之前那版是 iOS 的视差
+        // (背景页走得比前景慢),两条路只能选一条,混着用就是现在这个既不像 Android 也不像 iOS
+        // 的东西。
         transitionSpec = {
-            slideInHorizontally(spatial) { it } togetherWith
-                (slideOutHorizontally(spatial) { -it / 4 } + fadeOut(fade))
+            (slideInHorizontally(slideEnter) { it / 5 } + fadeIn(fadeEnter)) togetherWith
+                (slideOutHorizontally(slideExit) { -it / 5 } + fadeOut(fadeExit))
         },
         popTransitionSpec = {
-            (slideInHorizontally(spatial) { -it / 4 } + fadeIn(fade)) togetherWith
-                slideOutHorizontally(spatial) { it }
+            (slideInHorizontally(slideEnter) { -it / 5 } + fadeIn(fadeEnter)) togetherWith
+                (slideOutHorizontally(slideExit) { it / 5 } + fadeOut(fadeExit))
         },
-        // 预测式返回用同一套形状,但**不能带自己的时长**:这一段的进度由手指给,配上 tween
-        // 就成了动画和手势各走各的。用 snap,每一帧都停在手势当前的位置上,松手后由框架接管
-        // 剩下的部分。
+        // 预测式返回这一段的进度由手指给,配 tween 会让动画和手势各走各的,所以用 snap。
+        //
+        // 还差三样规范要求的东西,都卡在 NavDisplay 这个 API 上:progress 要先过一遍
+        // standard decelerate 再用(它由 NavDisplay 内部驱动,这里拿不到)、退出页缩到 90% 与
+        // 进入页从 110% 收回、35% 的 fade through 阈值。见 developer.android.com 的
+        // predictive back 指南。要补齐得绕开 predictivePopTransitionSpec 自己接手势。
         predictivePopTransitionSpec = { _ ->
-            (slideInHorizontally(snap()) { -it / 4 } + fadeIn(snap())) togetherWith
-                slideOutHorizontally(snap()) { it }
+            (slideInHorizontally(snap()) { -it / 5 } + fadeIn(snap())) togetherWith
+                (slideOutHorizontally(snap()) { it / 5 } + fadeOut(snap()))
         },
         entryProvider = entryProvider {
             entry<Home> {
@@ -190,10 +196,13 @@ private fun BilbyApp(container: AppContainer) {
                     feedVm = feedVm,
                     searchVm = searchVm,
                     toViewVm = toViewVm,
+                    favHubVm = favHubVm,
                     onVideoClick = { backStack.add(Video(it)) },
                     onUserClick = { backStack.add(Space(it)) },
                     onSettingsClick = { backStack.add(Settings) },
                     onOpenFollowings = { backStack.add(Followings) },
+                    onOpenToView = { backStack.add(ToViewList) },
+                    onOpenFolder = { id, title -> backStack.add(FavFolderContents(id, title)) },
                 )
             }
             entry<Settings> {
@@ -231,6 +240,22 @@ private fun BilbyApp(container: AppContainer) {
                     onBack = { backStack.removeLastOrNull() },
                 )
             }
+            entry<ToViewList> {
+                ToViewListRoute(
+                    vm = toViewVm,
+                    onVideoClick = { backStack.add(Video(it)) },
+                    onBack = { backStack.removeLastOrNull() },
+                )
+            }
+            entry<FavFolderContents> { key ->
+                FavFolderRoute(
+                    container = container,
+                    mediaId = key.mediaId,
+                    title = key.title,
+                    onVideoClick = { backStack.add(Video(it)) },
+                    onBack = { backStack.removeLastOrNull() },
+                )
+            }
             entry<Followings> {
                 FollowingsRoute(
                     container = container,
@@ -262,7 +287,7 @@ private enum class RootTab(
 ) {
     Feed(R.string.tab_feed, Icons.Filled.Subscriptions, Icons.Outlined.Subscriptions),
     Search(R.string.tab_search, Icons.Filled.Search, Icons.Outlined.Search),
-    ToView(R.string.tab_toview, Icons.Filled.WatchLater, Icons.Outlined.WatchLater),
+    ToView(R.string.tab_saved, Icons.Filled.WatchLater, Icons.Outlined.WatchLater),
 }
 
 /**
@@ -282,16 +307,20 @@ private fun RootTabs(
     feedVm: FeedViewModel,
     searchVm: SearchChatViewModel,
     toViewVm: ToViewViewModel,
+    favHubVm: FavHubViewModel,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onSettingsClick: () -> Unit,
     onOpenFollowings: () -> Unit,
+    onOpenToView: () -> Unit,
+    onOpenFolder: (mediaId: Long, title: String) -> Unit,
 ) {
     var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
 
     val feedState by feedVm.state.collectAsStateWithLifecycle()
     val searchState by searchVm.state.collectAsStateWithLifecycle()
     val toViewState by toViewVm.state.collectAsStateWithLifecycle()
+    val favHubState by favHubVm.state.collectAsStateWithLifecycle()
 
     // IME 退让放在 Scaffold 这一层,让底栏跟着键盘一起上移。放在内层输入框上的话,
     // 底栏仍会在键盘下方占着高度,表现为输入框与键盘之间空一条。
@@ -326,20 +355,9 @@ private fun RootTabs(
                         Unit
                     }
 
-                    RootTab.ToView -> TextButton(
-                        onClick = toViewVm::clearFinished,
-                        enabled = !toViewState.clearing,
-                    ) {
-                        Text(
-                            stringResource(
-                                if (toViewState.clearing) {
-                                    R.string.toview_clearing
-                                } else {
-                                    R.string.toview_clear_finished
-                                },
-                            ),
-                        )
-                    }
+                    // 第三格是入口页,没有页级动作。"清空已看完"跟着稍后再看的列表
+                    // 搬到了它自己那一页 —— 那个动作作用于列表,不作用于这一屏。
+                    RootTab.ToView -> Unit
                 }
             }
         },
@@ -394,11 +412,11 @@ private fun RootTabs(
                     onRetry = searchVm::retry,
                 )
 
-                RootTab.ToView -> ToViewScreen(
-                    state = toViewState,
-                    onDelete = { toViewVm.delete(it) },
-                    onItemClick = { onVideoClick(it.bvid) },
-                    onRetry = toViewVm::retry,
+                RootTab.ToView -> FavHubScreen(
+                    state = favHubState,
+                    toViewCount = toViewState.count,
+                    onOpenToView = onOpenToView,
+                    onOpenFolder = { onOpenFolder(it.id, it.title) },
                 )
             }
         }
@@ -450,6 +468,65 @@ private fun AgentRoute(
 /**
  * 关注列表。二级页面,自带返回的顶栏 —— 它不是根 tab,不该借用 RootTabs 那一层的 Scaffold。
  */
+/**
+ * 稍后再看的列表。"清空已看完"跟着它走,并且按 M3 的 top app bar anatomy 用图标按钮
+ * (规范:headline 之后最多两个 icon button),而不是原来那个带文字的 TextButton ——
+ * 文字按钮的宽度随文案变,切页时顶栏右侧会跳。
+ */
+@Composable
+private fun ToViewListRoute(
+    vm: ToViewViewModel,
+    onVideoClick: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val state by vm.state.collectAsStateWithLifecycle()
+    Scaffold(
+        topBar = {
+            BilbyTopBar(title = stringResource(R.string.tab_toview), onBack = onBack) {
+                IconButton(onClick = vm::clearFinished, enabled = !state.clearing) {
+                    Icon(
+                        Icons.Outlined.DeleteSweep,
+                        contentDescription = stringResource(R.string.toview_clear_finished),
+                    )
+                }
+            }
+        },
+    ) { insets ->
+        Box(modifier = Modifier.padding(insets)) {
+            ToViewScreen(
+                state = state,
+                onDelete = { vm.delete(it) },
+                onItemClick = { onVideoClick(it.bvid) },
+                onRetry = vm::retry,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FavFolderRoute(
+    container: AppContainer,
+    mediaId: Long,
+    title: String,
+    onVideoClick: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val vm: FavFolderViewModel = viewModel(
+        key = "fav-$mediaId",
+        factory = viewModelFactory { initializer { FavFolderViewModel(mediaId, container.favRepository) } },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    Scaffold(topBar = { BilbyTopBar(title = title, onBack = onBack) }) { insets ->
+        FavFolderScreen(
+            state = state,
+            onItemClick = { onVideoClick(it.bvid) },
+            onLoadMore = vm::loadMore,
+            onRetry = vm::retry,
+            contentPadding = insets,
+        )
+    }
+}
+
 @Composable
 private fun FollowingsRoute(
     container: AppContainer,
@@ -519,6 +596,52 @@ private fun VideoRoute(
     onFindRelated: (bvid: String, title: String, upName: String) -> Unit,
     onOpenVideo: (String) -> Unit,
 ) {
+    // 切集**不进 backstack**。合集里的每一集互为平级,换一集是横着挪一格,不是进了一层;
+    // 走 backstack 的话 NavDisplay 只会按下钻处理,方向恒定、还带淡入淡出,而 M3 的 lateral
+    // 恰恰要求整组同向同速滑动且不加 fade —— 淡入淡出会削弱"可以左右滑"的暗示。
+    //
+    // 这也把建模摆正了:压栈过一版(每集攒一层)、替换栈顶过一版(语义仍是导航),两版都是在
+    // 用导航层表达一件页内的事。CLAUDE.md 记着听视频被三次错误地建模成导航目的地,切集是
+    // 同一个坑的另一个入口。
+    var episode by rememberSaveable { mutableStateOf(bvid) }
+    var forward by rememberSaveable { mutableStateOf(true) }
+
+    AnimatedContent(
+        targetState = episode,
+        transitionSpec = {
+            val enter = if (forward) { w: Int -> w } else { w: Int -> -w }
+            val exit = if (forward) { w: Int -> -w } else { w: Int -> w }
+            // 同向同速、不淡:两侧用同一个 spec,读起来才是一组内容整体平移。
+            slideInHorizontally(lateralSlide, enter) togetherWith
+                slideOutHorizontally(lateralSlide, exit)
+        },
+        label = "episode",
+    ) { current ->
+        VideoPane(
+            container = container,
+            bvid = current,
+            startListening = startListening,
+            onUpClick = onUpClick,
+            onFindRelated = onFindRelated,
+            onOpenVideo = onOpenVideo,
+            onSwitchEpisode = { target, isForward ->
+                forward = isForward
+                episode = target
+            },
+        )
+    }
+}
+
+@Composable
+private fun VideoPane(
+    container: AppContainer,
+    bvid: String,
+    startListening: Boolean,
+    onUpClick: (Long) -> Unit,
+    onFindRelated: (bvid: String, title: String, upName: String) -> Unit,
+    onOpenVideo: (String) -> Unit,
+    onSwitchEpisode: (String, Boolean) -> Unit,
+) {
     val vm: VideoViewModel = viewModel(
         key = "video-$bvid",
         factory = viewModelFactory {
@@ -571,7 +694,7 @@ private fun VideoRoute(
         onFindRelated = vm::findRelated,
         queue = queue,
         // 点队列里的一条 = 切到那个视频。这是确定性导航,不是推荐。
-        onPlayQueueItem = onOpenVideo,
+        onSwitchEpisode = onSwitchEpisode,
         onToggleShuffle = vm::toggleShuffle,
         // 听视频:先按合集找队列,不属于合集才退到 UP 投稿(DESIGN 2.4b)。
         // 听视频播的就是页面上这份队列,不重新构造(DESIGN 2.4b:队列不是听视频的特产)。
@@ -610,3 +733,20 @@ private fun VideoRoute(
     )
 }
 
+/**
+ * 转场的时长与缓动。数值来自 M3 的 easing-and-duration/tokens-specs:
+ * emphasized decelerate 是 `PathInterpolator(0.05, 0.7, 0.1, 1)`,medium4 是 400ms
+ * ("transitions that traverse a medium area of the screen")。
+ *
+ * 规范没有为 forward and backward 指定具体档位——那一节只说"用平台默认"。400ms + emphasized
+ * 是照它给的两个同量级例子(FAB 展开 sheet 400ms、卡片展开全屏 500ms)推的,不是规范原文。
+ */
+private val EmphasizedDecelerate = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
+private val EmphasizedAccelerate = CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f)
+private val slideEnter = tween<IntOffset>(400, easing = EmphasizedDecelerate)
+private val slideExit = tween<IntOffset>(400, easing = EmphasizedAccelerate)
+private val fadeEnter = tween<Float>(400, easing = EmphasizedDecelerate)
+private val fadeExit = tween<Float>(400, easing = EmphasizedAccelerate)
+
+/** lateral 用 default 档:它只覆盖屏幕的一部分(内容区),不是整屏转场。 */
+private val lateralSlide = tween<IntOffset>(300, easing = CubicBezierEasing(0.2f, 0f, 0f, 1f))

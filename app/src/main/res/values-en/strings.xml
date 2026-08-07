@@ -202,4 +202,5 @@
     <string name="fav_folder_count">%1$d videos</string>
     <string name="fav_empty">This folder is empty</string>
     <string name="fav_invalid_video">Video unavailable</string>
+    <string name="tab_saved">Saved</string>
 </resources>

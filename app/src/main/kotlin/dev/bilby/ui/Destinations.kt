@@ -58,5 +58,9 @@ data object Followings : NavKey
  * 一个收藏夹的内容。收藏夹与稍后再看在产品上是同一类东西:用户自己挑好的有限存货
  * (DESIGN 1.2 否决点心盒时给的正是这个理由),所以两者并排在第三屏。
  */
+/** 稍后再看的列表本身。第三屏改成入口页之后,它从 tab 里搬到这里。 */
+@Serializable
+data object ToViewList : NavKey
+
 @Serializable
 data class FavFolderContents(val mediaId: Long, val title: String) : NavKey

@@ -72,7 +72,11 @@ fun VideoScreen(
     followState: FollowState,
     onToggleFollow: () -> Unit,
     queue: QueueUiState,
-    onPlayQueueItem: (bvid: String) -> Unit,
+    /**
+     * 切集。**方向在这里算**:队列就在这一层,而调用方(路由)手上没有它。
+     * lateral 转场要靠"往前还是往后"决定滑动方向,恒定方向会让平移读起来像下钻。
+     */
+    onSwitchEpisode: (bvid: String, forward: Boolean) -> Unit,
     onToggleShuffle: () -> Unit,
     onUpClick: (mid: Long) -> Unit,
     relation: VideoRelation?,
@@ -104,6 +108,15 @@ fun VideoScreen(
      * 播放器不换、进度不交接 —— 没有任何生命周期需要处理。退出就是把它置回 false。
      */
     var listening by rememberSaveable { mutableStateOf(startListening) }
+
+    // 队列里的下标决定滑动方向。找不到(队列还没加载完)时按往后处理 —— 那一下的方向
+    // 不重要,重要的是不能崩。
+    val onPlayQueueItem: (String) -> Unit = { target ->
+        val items = queue.items
+        val from = items.indexOfFirst { it.bvid == queue.currentBvid }
+        val to = items.indexOfFirst { it.bvid == target }
+        onSwitchEpisode(target, to < 0 || from < 0 || to > from)
+    }
 
     // DisposableEffect 捕获的是进入组合那一刻的 state,而 onDispose 要问的是离开那一刻:
     // 换 P 会改 currentCid,不跟新就会拿旧 cid 去比。

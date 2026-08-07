@@ -228,4 +228,5 @@
     <string name="fav_folder_count">%1$d 个视频</string>
     <string name="fav_empty">这个收藏夹是空的</string>
     <string name="fav_invalid_video">稿件已失效</string>
+    <string name="tab_saved">收藏</string>
 </resources>
