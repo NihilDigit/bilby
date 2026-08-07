@@ -60,21 +60,22 @@ and Ktor.
 
 ## Contributing
 
-Bilby is maintained by one person; the organisation name is not a committee. Its shape comes
-from one view of how a video client should behave, that view is the thing being maintained
-here, and decisions about direction rest with the maintainer.
+Contributions are welcome. Bug fixes, crash reports, documentation and small corrections can
+go straight to a pull request.
 
-Bug fixes, crash reports, and small corrections can go straight to a pull request.
+For features and breaking changes, **please open an RFC issue first**, describing what you
+want, what the app does about it today, and what the design would look like. This is not an
+approval step; it exists so you do not write code in a direction the project cannot take.
+The constraints at the top of this page are fixed, a pull request that moves them is
+unlikely to land, and finding that out afterwards costs you the work.
 
-Features and behaviour changes need an RFC first. Open an issue describing what you want,
-what the app does about it today, and what the design would look like, and wait for
-agreement before writing code. The constraints at the top of this page are the ones most
-likely to be at stake; a pull request that moves them without an agreed RFC will be closed
-on those grounds alone, whatever the code is like.
+**LLM-assisted code is fine.** The one requirement is that you understand what the code you
+submit does in terms of behaviour — enough to say why it works and what it touches. Writing
+every line by hand is not the bar.
 
-A closed pull request means the idea does not belong in this project, not that it is a bad
-idea. Bilby is GPL-3.0: forking it and following your own judgement is entirely legitimate
-and needs nobody's permission.
+The license follows from what Bilby is built on: the API layer is ported from PiliPlus,
+which is GPL-3.0, so this project cannot move off the GPL. There is no CLA, and you keep
+copyright over what you write.
 
 `CLAUDE.md` carries the working conventions worth knowing before a first change.
 
