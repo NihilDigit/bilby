@@ -9,7 +9,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
+import dev.bilby.R
 import dev.bilby.data.model.FeedItem
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
@@ -85,7 +87,7 @@ private fun FeedList(
         contentPadding = contentPadding,
     ) {
         if (state.items.isEmpty()) {
-            item(key = "empty") { EmptyState("关注的 UP 主还没有新投稿") }
+            item(key = "empty") { EmptyState(stringResource(R.string.feed_empty)) }
         }
         items(state.items, key = { it.bvid }) { item ->
             VideoRow(item = item.toRowUi(), onClick = { onItemClick(item) })
@@ -100,6 +102,9 @@ private fun FeedList(
     }
 }
 
+// @Composable 只为了取字符串资源:相对时间的字面("刚刚""3分钟前")是本地化内容,
+// 不能写死在这里。调用点本来就在 composable 作用域内。
+@Composable
 private fun FeedItem.toRowUi() = VideoRowUi(
     title = title,
     coverUrl = coverUrl,
@@ -112,14 +117,15 @@ private fun FeedItem.toRowUi() = VideoRowUi(
 
 private val AbsoluteDateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
+@Composable
 private fun formatRelativeTime(epochSeconds: Long, nowEpochSeconds: Long = Instant.now().epochSecond): String {
     val diff = nowEpochSeconds - epochSeconds
     return when {
-        diff < 60 -> "刚刚"
-        diff < 3600 -> "${diff / 60}分钟前"
-        diff < 24 * 3600 -> "${diff / 3600}小时前"
-        diff < 2 * 24 * 3600 -> "昨天"
-        diff < 7 * 24 * 3600 -> "${diff / (24 * 3600)}天前"
+        diff < 60 -> stringResource(R.string.time_just_now)
+        diff < 3600 -> stringResource(R.string.time_minutes_ago, diff / 60)
+        diff < 24 * 3600 -> stringResource(R.string.time_hours_ago, diff / 3600)
+        diff < 2 * 24 * 3600 -> stringResource(R.string.time_yesterday)
+        diff < 7 * 24 * 3600 -> stringResource(R.string.time_days_ago, diff / (24 * 3600))
         else -> Instant.ofEpochSecond(epochSeconds).atZone(ZoneId.systemDefault()).format(AbsoluteDateFormatter)
     }
 }

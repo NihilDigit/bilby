@@ -29,8 +29,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import dev.bilby.R
 import dev.bilby.agent.AnswerBlock
 import dev.bilby.agent.TraceItem
 import dev.bilby.ui.components.BilbyTopBar
@@ -80,7 +82,12 @@ fun AgentTraceScreen(
     Scaffold(
         modifier = modifier,
         // 意图当标题:这一页存在的理由就是"在找什么",没必要在正文里再印一遍。
-        topBar = { BilbyTopBar(title = state.intentLabel.ifEmpty { "助理" }, onBack = onBack) },
+        topBar = {
+            BilbyTopBar(
+                title = state.intentLabel.ifEmpty { stringResource(R.string.agent_title) },
+                onBack = onBack,
+            )
+        },
     ) { insets ->
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -120,13 +127,13 @@ fun AgentTraceScreen(
                     state.error != null -> FullScreenError(state.error, onRetry, Modifier.fillMaxWidth())
 
                     state.running -> InlineProgress(
-                        text = "还在找…",
+                        text = stringResource(R.string.agent_running),
                         modifier = Modifier.padding(Spacing.Comfortable),
                     )
 
                     // 答完就退场,不留"再找一批"——那正是 DESIGN 1.1 要反的变比率奖励。
                     state.blocks.isEmpty() -> Text(
-                        text = "没找到合适的",
+                        text = stringResource(R.string.agent_no_result),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(Spacing.Comfortable),
@@ -153,7 +160,11 @@ private fun ProcessHeader(
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
         Text(
-            text = if (expanded) "过程" else "过程 · $collapsedSummary",
+            text = if (expanded) {
+                stringResource(R.string.agent_process)
+            } else {
+                stringResource(R.string.agent_process_collapsed, collapsedSummary)
+            },
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -162,7 +173,9 @@ private fun ProcessHeader(
         )
         Icon(
             imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-            contentDescription = if (expanded) "收起过程" else "展开过程",
+            contentDescription = stringResource(
+                if (expanded) R.string.agent_process_collapse else R.string.agent_process_expand,
+            ),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }

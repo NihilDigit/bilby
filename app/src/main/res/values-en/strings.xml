@@ -1,0 +1,195 @@
+<resources>
+    <string name="action_back">Back</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_clear">Clear</string>
+    <string name="action_close">Close</string>
+    <string name="action_done">Done</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_retry">Retry</string>
+    <string name="action_save">Save</string>
+    <string name="action_send">Send</string>
+
+    <string name="list_no_more">End of list</string>
+    <string name="time_just_now">Just now</string>
+    <string name="time_minutes_ago">%1$dm ago</string>
+    <string name="time_hours_ago">%1$dh ago</string>
+    <string name="time_yesterday">Yesterday</string>
+    <string name="time_days_ago">%1$dd ago</string>
+
+    <integer name="count_divisor_small">1000</integer>
+    <integer name="count_divisor_large">1000000</integer>
+    <string name="count_small">%1$.1fK</string>
+    <string name="count_large">%1$.1fM</string>
+
+    <string name="stat_play">Views</string>
+    <string name="stat_danmaku">Danmaku</string>
+
+    <string name="tab_feed">Feed</string>
+    <string name="tab_search">Search</string>
+    <string name="tab_toview">Watch later</string>
+
+    <string name="follow_none">Follow</string>
+    <string name="follow_following">Following</string>
+    <string name="follow_mutual">Mutual</string>
+
+    <string name="feed_empty">No new videos from the creators you follow</string>
+
+    <string name="search_empty">Search videos and creators</string>
+    <string name="search_agent_empty">Describe what you want to watch</string>
+    <string name="search_no_results">No results</string>
+    <string name="search_loading">Searching…</string>
+    <string name="search_loading_more">Loading more…</string>
+    <string name="search_fans">%1$s followers</string>
+    <string name="search_new_session">New session</string>
+    <string name="search_mode_to_agent">Ask the assistant</string>
+    <string name="search_mode_to_normal">Switch to plain search</string>
+
+    <string name="agent_title">Assistant</string>
+    <string name="agent_process">Steps</string>
+    <string name="agent_process_collapsed">Steps · %1$s</string>
+    <string name="agent_process_expand">Show steps</string>
+    <string name="agent_process_collapse">Hide steps</string>
+    <string name="agent_running">Still looking…</string>
+    <string name="agent_no_result">Nothing that fits</string>
+
+    <string name="toview_empty">Watch later is empty</string>
+    <string name="toview_clear_finished">Clear watched</string>
+    <string name="toview_clearing">Clearing…</string>
+    <string name="toview_capacity">%1$d / %2$d used</string>
+    <string name="toview_finished">Watched</string>
+    <string name="toview_progress">Left off at %1$s</string>
+    <string name="toview_remove">Remove from Watch later: %1$s</string>
+
+    <string name="comment_empty">No comments yet</string>
+    <string name="comment_sort_hot">Top</string>
+    <string name="comment_sort_time">Newest</string>
+    <string name="comment_tag_up">Creator</string>
+    <string name="comment_tag_pinned">Pinned</string>
+    <string name="comment_picture">Comment image</string>
+    <string name="comment_like">Like</string>
+    <string name="comment_unlike">Unlike</string>
+    <string name="comment_reply">Reply</string>
+    <string name="comment_delete">Delete comment</string>
+    <string name="comment_expand_replies">Show %1$d replies</string>
+    <string name="comment_load_more">Load more</string>
+    <string name="comment_replying_to">Replying to @%1$s</string>
+    <string name="comment_input_hint">Say something</string>
+    <string name="comment_input_hint_reply">Reply to %1$s</string>
+
+    <string name="space_title">Profile</string>
+    <string name="space_tab_archives">Videos</string>
+    <string name="space_tab_dynamics">Posts</string>
+    <string name="space_tab_collections">Collections</string>
+    <string name="space_level_followers">Lv%1$d   %2$s followers</string>
+    <string name="space_no_sign">No bio</string>
+    <string name="space_listen_up">Listen to this creator\'s videos</string>
+    <string name="space_order_pubdate">Newest</string>
+    <string name="space_order_click">Most viewed</string>
+    <string name="space_search_hint">Search this profile</string>
+    <string name="space_empty_archives">This creator hasn\'t posted any videos</string>
+    <string name="space_empty_archives_search">No matching videos</string>
+    <string name="space_empty_dynamics">This creator has no video posts</string>
+    <string name="space_empty_collections">This creator has no collections</string>
+    <string name="space_empty_collection_detail">This collection is empty</string>
+    <string name="space_collection_season">Collection</string>
+    <string name="space_collection_series">Series</string>
+    <string name="space_collection_meta">%1$s · %2$d videos</string>
+
+    <string name="video_tab_intro">About</string>
+    <string name="video_tab_comment">Comments</string>
+    <string name="video_tab_comment_count">Comments %1$s</string>
+    <string name="video_intro_expand">Show description</string>
+    <string name="video_intro_collapse">Hide description</string>
+    <string name="video_action_like">Like</string>
+    <string name="video_action_unlike">Unlike</string>
+    <string name="video_action_coin">Coin</string>
+    <string name="video_action_favorite">Favorite</string>
+    <string name="video_action_toview">Later</string>
+    <string name="video_action_toview_added">Added</string>
+    <string name="video_action_toview_desc">Add to Watch later</string>
+    <string name="video_parts">Parts</string>
+    <string name="video_part_label">P%1$d %2$s</string>
+    <string name="video_find_related">Find related</string>
+    <string name="video_queue_loading">Loading queue…</string>
+
+    <string name="action_confirm">Confirm</string>
+    <string name="coin_maxed">2 coins given, no more allowed</string>
+    <string name="coin_count">%1$d coin(s)</string>
+    <string name="coin_also_like">Like as well</string>
+    <string name="coin_warning">Coins cannot be taken back</string>
+    <string name="fav_dialog_title">Add to</string>
+
+    <string name="related_title">Related</string>
+    <string name="related_title_running">Related · searching</string>
+    <string name="related_title_error">Related · failed</string>
+    <string name="related_title_count">Related · %1$d</string>
+    <string name="related_searching">Searching…</string>
+    <string name="related_step">· %1$s</string>
+
+    <string name="player_play">Play</string>
+    <string name="player_pause">Pause</string>
+    <string name="player_previous">Previous</string>
+    <string name="player_next">Next</string>
+    <string name="player_speed">Speed</string>
+    <string name="player_quality">Quality</string>
+    <string name="player_listen">Listen</string>
+    <string name="player_lock">Lock</string>
+    <string name="player_unlock">Unlock</string>
+    <string name="player_fullscreen">Fullscreen</string>
+    <string name="player_exit_fullscreen">Exit fullscreen</string>
+    <string name="player_fast_forwarding">%1$s fast forward</string>
+
+    <string name="listen_title">Listen</string>
+    <string name="listen_not_playing">Nothing playing</string>
+    <string name="listen_queue">Queue</string>
+    <string name="listen_queue_count">Queue · %1$d</string>
+    <string name="queue_order_sequential">In order</string>
+    <string name="queue_order_shuffle">Shuffle</string>
+    <string name="sleep_timer_off">Sleep timer</string>
+    <string name="sleep_timer_minutes">%1$d min</string>
+    <string name="sleep_timer_end_of_item">After this one</string>
+
+    <string name="sponsor_sponsor">Sponsor</string>
+    <string name="sponsor_selfpromo">Self-promotion</string>
+    <string name="sponsor_interaction">Interaction reminder</string>
+    <string name="sponsor_intro">Intro</string>
+    <string name="sponsor_outro">Outro</string>
+    <string name="sponsor_preview">Recap</string>
+    <string name="sponsor_padding">Padding</string>
+    <string name="sponsor_filler">Filler tangent</string>
+    <string name="sponsor_music_offtopic">Non-music</string>
+    <string name="sponsor_skipped">Skipped %1$s</string>
+
+    <string name="login_title">Scan to sign in</string>
+    <string name="login_hint">Scan with the bilibili app</string>
+    <string name="login_scanned">Confirm on your phone</string>
+    <string name="login_qr_expired">QR code expired</string>
+    <string name="login_success">Signed in</string>
+
+    <string name="settings_title">Settings</string>
+    <string name="settings_section_account">Account</string>
+    <string name="settings_uid">UID %1$d</string>
+    <string name="settings_logout">Sign out</string>
+    <string name="settings_logout_subtitle">Clears credentials on this device and stops playback; expired credentials go through here too</string>
+    <string name="settings_logout_message">Clears credentials on this device and stops playback. Signing back in takes another scan.</string>
+    <string name="settings_section_agent">Assistant</string>
+    <string name="settings_llm_base_url">API endpoint</string>
+    <string name="settings_llm_dialog">Assistant API</string>
+    <string name="settings_api_key">API key</string>
+    <string name="settings_model">Model</string>
+    <string name="settings_key_show">Show key</string>
+    <string name="settings_key_hide">Hide key</string>
+    <string name="settings_not_configured">Not set</string>
+    <string name="settings_configured">Set</string>
+    <string name="settings_loading">Loading…</string>
+    <string name="settings_section_player">Player</string>
+    <string name="settings_codec">Codec preference</string>
+    <string name="settings_codec_subtitle">Takes effect on the next video</string>
+    <string name="settings_sponsorblock_toggle">Skip automatically</string>
+    <string name="settings_sponsorblock_toggle_subtitle">Sponsor, intro and outro segments marked by the community</string>
+    <string name="settings_sponsorblock_server">Server URL</string>
+    <string name="settings_sponsorblock_server_dialog">SponsorBlock server</string>
+    <string name="settings_section_about">About</string>
+    <string name="settings_version">Version</string>
+    <string name="settings_license">License</string>
+</resources>

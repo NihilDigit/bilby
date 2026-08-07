@@ -18,9 +18,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.bilby.R
 import dev.bilby.api.BiliResult
 import dev.bilby.data.ToViewItem
 import dev.bilby.data.ToViewRepository
@@ -126,7 +128,7 @@ fun ToViewScreen(
             CapacityMeter(state.count, state.capacity)
             LazyColumn(modifier = Modifier.weight(1f)) {
                 if (state.items.isEmpty()) {
-                    item(key = "empty") { EmptyState("稍后再看是空的。\n在动态、搜索、空间里看到想留着的,丢进来。") }
+                    item(key = "empty") { EmptyState(stringResource(R.string.toview_empty)) }
                 }
                 items(state.items, key = { it.aid }) { item ->
                     VideoRow(
@@ -138,7 +140,7 @@ fun ToViewScreen(
                             IconButton(onClick = { onDelete(item) }) {
                                 Icon(
                                     Icons.Outlined.Close,
-                                    contentDescription = "移出稍后再看:${item.title}",
+                                    contentDescription = stringResource(R.string.toview_remove, item.title),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
@@ -168,7 +170,7 @@ private fun CapacityMeter(count: Int, capacity: Int, modifier: Modifier = Modifi
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "已用 $count / $capacity",
+                text = stringResource(R.string.toview_capacity, count, capacity),
                 style = MaterialTheme.typography.titleSmall,
                 color = if (nearlyFull) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
@@ -182,12 +184,17 @@ private fun CapacityMeter(count: Int, capacity: Int, modifier: Modifier = Modifi
     }
 }
 
+@Composable
 private fun ToViewItem.toRowUi() = VideoRowUi(
     title = title,
     coverUrl = coverUrl,
     durationText = durationText,
     upName = upName,
-    meta = if (isFinished) "已看完" else "看到 ${formatProgress(progressSeconds)}",
+    meta = if (isFinished) {
+        stringResource(R.string.toview_finished)
+    } else {
+        stringResource(R.string.toview_progress, formatProgress(progressSeconds))
+    },
     progressFraction = if (isFinished) 1f else progressFraction(),
 )
 

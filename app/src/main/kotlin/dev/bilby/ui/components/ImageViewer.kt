@@ -33,9 +33,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import dev.bilby.R
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.launch
@@ -101,7 +103,11 @@ fun ImageViewer(
                     .windowInsetsPadding(WindowInsets.systemBars)
                     .padding(Spacing.Tight),
             ) {
-                Icon(Icons.Filled.Close, contentDescription = "关闭", tint = FixedColors.OnMedia)
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = stringResource(R.string.action_close),
+                    tint = FixedColors.OnMedia,
+                )
             }
 
             if (urls.size > 1) {
@@ -192,7 +198,7 @@ private fun ZoomableImage(url: String, onDismiss: () -> Unit, active: Boolean) {
     ) {
         BiliAsyncImage(
             url = url,
-            contentDescription = "评论配图",
+            contentDescription = stringResource(R.string.comment_picture),
             // Fit 而不是 Crop:看图要看全,截图被裁掉边缘正是要在这里解决的问题。
             contentScale = ContentScale.Fit,
             modifier = Modifier

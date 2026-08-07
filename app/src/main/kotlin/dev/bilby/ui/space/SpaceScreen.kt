@@ -1,5 +1,6 @@
 package dev.bilby.ui.space
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -23,6 +24,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.integerResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -35,6 +38,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import dev.bilby.BiliLog
+import dev.bilby.R
 import dev.bilby.api.BiliResult
 import dev.bilby.data.FollowState
 import dev.bilby.data.RelationRepository
@@ -69,10 +73,10 @@ import kotlinx.coroutines.launch
 
 // ---------------- 状态 ----------------
 
-enum class SpaceTab(val label: String) {
-    Archives("投稿"),
-    Dynamics("动态"),
-    Collections("合集"),
+enum class SpaceTab(@param:StringRes val label: Int) {
+    Archives(R.string.space_tab_archives),
+    Dynamics(R.string.space_tab_dynamics),
+    Collections(R.string.space_tab_collections),
 }
 
 data class SpaceUiState(
@@ -395,7 +399,7 @@ fun SpaceScreen(
     Scaffold(
         modifier = modifier,
         // 标题固定"个人空间":名字归下面的头部区,顶栏只是路牌。
-        topBar = { BilbyTopBar(title = "个人空间", onBack = onBack) },
+        topBar = { BilbyTopBar(title = stringResource(R.string.space_title), onBack = onBack) },
     ) { insets ->
         Column(modifier = Modifier.fillMaxSize().padding(insets)) {
             state.profile?.let {
@@ -407,7 +411,7 @@ fun SpaceScreen(
                     Tab(
                         selected = state.activeTab == tab,
                         onClick = { onTabSelected(tab) },
-                        text = { Text(tab.label) },
+                        text = { Text(stringResource(tab.label)) },
                     )
                 }
             }
@@ -431,7 +435,7 @@ fun SpaceScreen(
                         hasMore = state.dynamics.hasMore,
                         loading = state.dynamics.loading,
                         error = state.dynamics.error,
-                        emptyText = "这位 UP 主还没有视频动态",
+                        emptyText = stringResource(R.string.space_empty_dynamics),
                         onLoadMore = onLoadMoreDynamics,
                         onVideoClick = onVideoClick,
                     )
@@ -483,7 +487,11 @@ private fun SpaceHeader(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "Lv${profile.level}   ${profile.follower.formatFollower()}粉丝",
+                    text = stringResource(
+                        R.string.space_level_followers,
+                        profile.level,
+                        formatCount(profile.follower),
+                    ),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
@@ -492,14 +500,17 @@ private fun SpaceHeader(
             // 听这位 UP 的投稿:队列取自当前投稿列表,和播放页那份队列同源
             // (DESIGN 2.4b:有限且用户显式选定的集合)。
             IconButton(onClick = onListenUp) {
-                Icon(Icons.Filled.Headphones, contentDescription = "听这位 UP 的投稿")
+                Icon(
+                    Icons.Filled.Headphones,
+                    contentDescription = stringResource(R.string.space_listen_up),
+                )
             }
             SpaceFollowButton(state = profile.followState, onClick = onToggleFollow)
         }
         // 签名可能很长又基本没信息量,给两行封顶;放在下面一整行是因为它旁边没有头像时
         // 能多放十来个字,而挤在头像右边只剩半行。
         Text(
-            text = profile.sign.ifBlank { "这个人很懒,什么都没写" },
+            text = profile.sign.ifBlank { stringResource(R.string.space_no_sign) },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 2,
@@ -508,16 +519,25 @@ private fun SpaceHeader(
     }
 }
 
-private fun Long.formatFollower(): String = when {
-    this >= 100_000_000 -> "%.1f亿".format(this / 100_000_000.0)
-    this >= 10_000 -> "%.1f万".format(this / 10_000.0)
-    else -> toString()
+/**
+ * 计数折算。分档除数也是本地化资源:中文按万/亿分档,英文按 K/M,
+ * 只翻译单位后缀会让英文差一个量级。
+ */
+@Composable
+private fun formatCount(value: Long): String {
+    val large = integerResource(R.integer.count_divisor_large)
+    val small = integerResource(R.integer.count_divisor_small)
+    return when {
+        value >= large -> stringResource(R.string.count_large, value.toDouble() / large)
+        value >= small -> stringResource(R.string.count_small, value.toDouble() / small)
+        else -> value.toString()
+    }
 }
 
 /** 「挖存货」的两条路:按时间看最近的,按播放量看代表作(DESIGN 2.4)。 */
 private val ArchiveOrders = listOf(
-    SpaceArchiveOrder.Pubdate to "最新",
-    SpaceArchiveOrder.Click to "最多播放",
+    SpaceArchiveOrder.Pubdate to R.string.space_order_pubdate,
+    SpaceArchiveOrder.Click to R.string.space_order_click,
 )
 
 /**
@@ -545,14 +565,14 @@ private fun ArchivesTab(
                         selected = state.order == pair.first,
                         onClick = { onOrderChanged(pair.first) },
                         shape = SegmentedButtonDefaults.itemShape(index, ArchiveOrders.size),
-                        label = { Text(pair.second) },
+                        label = { Text(stringResource(pair.second)) },
                     )
                 }
             }
             SearchField(
                 value = state.keyword,
                 onValueChange = onKeywordChanged,
-                placeholder = "在这个空间内搜索",
+                placeholder = stringResource(R.string.space_search_hint),
                 onSearch = onSearch,
             )
         }
@@ -562,7 +582,13 @@ private fun ArchivesTab(
             hasMore = state.hasMore,
             loading = state.loading,
             error = state.error,
-            emptyText = if (state.keyword.isBlank()) "这位 UP 主还没有投稿" else "没有匹配的投稿",
+            emptyText = stringResource(
+                if (state.keyword.isBlank()) {
+                    R.string.space_empty_archives
+                } else {
+                    R.string.space_empty_archives_search
+                },
+            ),
             onLoadMore = onLoadMore,
             onVideoClick = onVideoClick,
             modifier = Modifier.weight(1f),
@@ -591,7 +617,7 @@ private fun CollectionsTab(
             }
             LazyColumn(state = listState, modifier = modifier.fillMaxSize()) {
                 if (state.items.isEmpty()) {
-                    item(key = "empty") { EmptyState("这位 UP 主没有合集") }
+                    item(key = "empty") { EmptyState(stringResource(R.string.space_empty_collections)) }
                 }
                 items(state.items, key = { "${it.isSeason}-${it.id}" }) { item ->
                     CollectionRow(item, onClick = { onCollectionClick(item) })
@@ -622,7 +648,17 @@ private fun CollectionRow(item: SpaceCollectionItem, onClick: () -> Unit, modifi
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
             Text(item.name, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(
-                text = "${if (item.isSeason) "合集" else "系列"} · 共 ${item.total} 个视频",
+                text = stringResource(
+                    R.string.space_collection_meta,
+                    stringResource(
+                        if (item.isSeason) {
+                            R.string.space_collection_season
+                        } else {
+                            R.string.space_collection_series
+                        },
+                    ),
+                    item.total,
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -650,7 +686,7 @@ private fun CollectionDetailScreen(
             hasMore = detail.hasMore,
             loading = detail.loading,
             error = detail.error,
-            emptyText = "这个合集是空的",
+            emptyText = stringResource(R.string.space_empty_collection_detail),
             onLoadMore = onLoadMore,
             onVideoClick = onVideoClick,
             modifier = Modifier.padding(padding),
@@ -718,8 +754,8 @@ private fun formatDate(epochSeconds: Long): String =
 private fun SpaceFollowButton(state: FollowState, onClick: () -> Unit) {
     when (state) {
         FollowState.Self, FollowState.Blocked -> Unit
-        FollowState.None -> Button(onClick = onClick) { Text("关注") }
-        FollowState.Following -> OutlinedButton(onClick = onClick) { Text("已关注") }
-        FollowState.Mutual -> OutlinedButton(onClick = onClick) { Text("互相关注") }
+        FollowState.None -> Button(onClick = onClick) { Text(stringResource(R.string.follow_none)) }
+        FollowState.Following -> OutlinedButton(onClick = onClick) { Text(stringResource(R.string.follow_following)) }
+        FollowState.Mutual -> OutlinedButton(onClick = onClick) { Text(stringResource(R.string.follow_mutual)) }
     }
 }

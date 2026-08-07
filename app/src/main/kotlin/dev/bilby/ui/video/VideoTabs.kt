@@ -65,9 +65,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.integerResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.bilby.R
 import dev.bilby.agent.AnswerBlock
 import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
@@ -152,8 +155,12 @@ fun VideoTabs(
     modifier: Modifier = Modifier,
 ) {
     // 评论数用服务端给的总数,不是已渲染条数 —— 后者会随翻页一路变大,像个假计数器。
-    val commentLabel = if (commentState.total > 0) "评论 ${formatCount(commentState.total.toLong())}" else "评论"
-    val titles = listOf("简介", commentLabel)
+    val commentLabel = if (commentState.total > 0) {
+        stringResource(R.string.video_tab_comment_count, formatCount(commentState.total.toLong()))
+    } else {
+        stringResource(R.string.video_tab_comment)
+    }
+    val titles = listOf(stringResource(R.string.video_tab_intro), commentLabel)
     val pagerState = rememberPagerState(pageCount = { titles.size })
     val scope = rememberCoroutineScope()
 
@@ -361,7 +368,9 @@ private fun TitleBlock(detail: VideoDetail, expanded: Boolean, onToggle: () -> U
             )
             Icon(
                 imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                contentDescription = if (expanded) "收起简介" else "展开简介",
+                contentDescription = stringResource(
+                    if (expanded) R.string.video_intro_collapse else R.string.video_intro_expand,
+                ),
                 tint = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.size(Dimens.IconInline),
             )
@@ -423,7 +432,9 @@ private fun ActionButtonsRow(
             selected = relation?.liked == true,
             enabled = relation != null,
             label = formatCount(stat.like),
-            contentDescription = if (relation?.liked == true) "取消点赞" else "点赞",
+            contentDescription = stringResource(
+                if (relation?.liked == true) R.string.video_action_unlike else R.string.video_action_like,
+            ),
             selectedIcon = Icons.Filled.ThumbUp,
             icon = Icons.Outlined.ThumbUp,
             onClick = onLike,
@@ -435,7 +446,7 @@ private fun ActionButtonsRow(
             selected = (relation?.coined ?: 0) > 0,
             enabled = relation != null,
             label = formatCount(stat.coin),
-            contentDescription = "投币",
+            contentDescription = stringResource(R.string.video_action_coin),
             selectedIcon = Icons.Filled.MonetizationOn,
             icon = Icons.Outlined.MonetizationOn,
             onClick = { showCoinDialog = true },
@@ -445,7 +456,7 @@ private fun ActionButtonsRow(
             selected = relation?.favored == true,
             enabled = relation != null,
             label = formatCount(stat.favorite),
-            contentDescription = "收藏",
+            contentDescription = stringResource(R.string.video_action_favorite),
             selectedIcon = Icons.Filled.Star,
             icon = Icons.Outlined.StarBorder,
             onClick = {
@@ -459,8 +470,10 @@ private fun ActionButtonsRow(
             modifier = Modifier.weight(1f),
             selected = addedToView,
             enabled = true,
-            label = if (addedToView) "已加入" else "稍后看",
-            contentDescription = "加入稍后再看",
+            label = stringResource(
+                if (addedToView) R.string.video_action_toview_added else R.string.video_action_toview,
+            ),
+            contentDescription = stringResource(R.string.video_action_toview_desc),
             selectedIcon = Icons.Filled.WatchLater,
             icon = Icons.Outlined.WatchLater,
             onClick = { if (!addedToView) onAddToView() },
@@ -555,28 +568,31 @@ private fun CoinDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("投币") },
+        title = { Text(stringResource(R.string.video_action_coin)) },
         text = {
             Column {
                 if (maxedOut) {
-                    Text("已投 2 枚,不能再投了", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        stringResource(R.string.coin_maxed),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 } else {
                     listOf(1, 2).forEach { count ->
                         ChoiceRow(
                             selected = selectedCount == count,
                             onSelect = { selectedCount = count },
-                            label = "$count 枚",
+                            label = stringResource(R.string.coin_count, count),
                         )
                     }
                     ToggleRow(
                         checked = alsoLike,
                         onToggle = { alsoLike = it },
-                        label = "同时点赞",
+                        label = stringResource(R.string.coin_also_like),
                     )
                     // 投币是不可逆的:B 站没有撤销接口,币也不退。误触的代价由用户承担,
                     // 所以这句必须出现在确认之前 —— 这是全应用少数几个用 error 色的地方。
                     Text(
-                        text = "投币不可撤销,币不会退回",
+                        text = stringResource(R.string.coin_warning),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(top = Spacing.Tight),
@@ -586,10 +602,12 @@ private fun CoinDialog(
         },
         confirmButton = {
             TextButton(enabled = !maxedOut, onClick = { onConfirm(selectedCount, alsoLike) }) {
-                Text("确认")
+                Text(stringResource(R.string.action_confirm))
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
     )
 }
 
@@ -651,7 +669,7 @@ private fun FavPickerDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("收藏到") },
+        title = { Text(stringResource(R.string.fav_dialog_title)) },
         text = {
             Column {
                 favFolders.forEach { folder ->
@@ -670,10 +688,12 @@ private fun FavPickerDialog(
                 val delIds = favFolders.filter { selected[it.id] == false && it.containsThis }.map { it.id }
                 onConfirm(addIds, delIds)
             }) {
-                Text("确认")
+                Text(stringResource(R.string.action_confirm))
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
     )
 }
 
@@ -688,14 +708,18 @@ private fun PartRow(
     onClick: (Int) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-        SectionHeader("分 P")
+        SectionHeader(stringResource(R.string.video_parts))
         LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
             itemsIndexed(labels) { index, pair ->
                 FilterChip(
                     selected = isCurrent(index),
                     onClick = { onClick(index) },
                     label = {
-                        Text("P${pair.first} ${pair.second}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            stringResource(R.string.video_part_label, pair.first, pair.second),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     },
                 )
             }
@@ -761,7 +785,7 @@ private fun QueueContent(
             IconButton(onClick = onFindRelated) {
                 Icon(
                     Icons.Filled.AutoAwesome,
-                    contentDescription = "找相关",
+                    contentDescription = stringResource(R.string.video_find_related),
                     modifier = Modifier.size(Dimens.IconInline),
                 )
             }
@@ -770,14 +794,23 @@ private fun QueueContent(
             TextButton(onClick = onToggleShuffle, contentPadding = PaddingValues(horizontal = Spacing.Tight)) {
                 Icon(Icons.Filled.Shuffle, contentDescription = null, modifier = Modifier.size(Dimens.IconInline))
                 Text(
-                    text = if (queue.shuffled) "随机" else "顺序",
+                    text = stringResource(
+                        if (queue.shuffled) {
+                            R.string.queue_order_shuffle
+                        } else {
+                            R.string.queue_order_sequential
+                        },
+                    ),
                     modifier = Modifier.padding(start = Spacing.Hair),
                 )
             }
         }
 
         if (queue.loading) {
-            InlineProgress("加载队列…", Modifier.padding(vertical = Spacing.Tight))
+            InlineProgress(
+                stringResource(R.string.video_queue_loading),
+                Modifier.padding(vertical = Spacing.Tight),
+            )
         } else {
             val listState = rememberLazyListState()
 
@@ -885,10 +918,19 @@ private fun StepLine(step: String) {
 }
 
 
-private fun formatCount(value: Long): String = when {
-    value >= 100_000_000 -> "%.1f亿".format(value / 100_000_000.0)
-    value >= 10_000 -> "%.1f万".format(value / 10_000.0)
-    else -> value.toString()
+/**
+ * 计数折算。分档除数取自资源:中文按万/亿分档,英文按 K/M,
+ * 只翻译单位后缀会让英文差一个量级。
+ */
+@Composable
+private fun formatCount(value: Long): String {
+    val large = integerResource(R.integer.count_divisor_large)
+    val small = integerResource(R.integer.count_divisor_small)
+    return when {
+        value >= large -> stringResource(R.string.count_large, value.toDouble() / large)
+        value >= small -> stringResource(R.string.count_small, value.toDouble() / small)
+        else -> value.toString()
+    }
 }
 
 private fun formatDuration(seconds: Long): String {
@@ -913,8 +955,8 @@ private fun formatDate(epochSeconds: Long): String =
 private fun FollowButton(state: FollowState, onClick: () -> Unit) {
     when (state) {
         FollowState.Self, FollowState.Blocked -> Unit
-        FollowState.None -> Button(onClick = onClick) { Text("关注") }
-        FollowState.Following -> OutlinedButton(onClick = onClick) { Text("已关注") }
-        FollowState.Mutual -> OutlinedButton(onClick = onClick) { Text("互相关注") }
+        FollowState.None -> Button(onClick = onClick) { Text(stringResource(R.string.follow_none)) }
+        FollowState.Following -> OutlinedButton(onClick = onClick) { Text(stringResource(R.string.follow_following)) }
+        FollowState.Mutual -> OutlinedButton(onClick = onClick) { Text(stringResource(R.string.follow_mutual)) }
     }
 }

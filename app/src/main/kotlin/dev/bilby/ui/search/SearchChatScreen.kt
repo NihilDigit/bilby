@@ -41,9 +41,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.integerResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import dev.bilby.R
 import dev.bilby.agent.AnswerBlock
 import dev.bilby.ui.components.AnswerBlocks
 import dev.bilby.agent.TraceItem
@@ -68,7 +71,8 @@ import kotlinx.coroutines.flow.map
 
 private const val PrefetchThreshold = 5
 
-enum class SearchMode(val label: String) { Normal("普通搜索"), Agent("助理搜索") }
+// label 曾经存在但没有任何界面显示它,随抽取一并去掉。
+enum class SearchMode { Normal, Agent }
 
 sealed interface TurnResult {
     data class Agent(
@@ -173,7 +177,7 @@ private fun NormalPane(
 ) {
     if (state.query.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            EmptyState("搜索视频与 UP 主")
+            EmptyState(stringResource(R.string.search_empty))
         }
         return
     }
@@ -201,9 +205,17 @@ private fun NormalPane(
         item(key = "footer") {
             when {
                 state.error != null -> FullScreenError(state.error, onRetry, Modifier.fillMaxWidth())
-                state.loading -> InlineProgress("搜索中…", Modifier.padding(Spacing.Comfortable))
-                state.appending -> InlineProgress("加载更多…", Modifier.padding(Spacing.Comfortable))
-                state.videos.isEmpty() -> EmptyState("没有结果")
+                state.loading -> InlineProgress(
+                    stringResource(R.string.search_loading),
+                    Modifier.padding(Spacing.Comfortable),
+                )
+
+                state.appending -> InlineProgress(
+                    stringResource(R.string.search_loading_more),
+                    Modifier.padding(Spacing.Comfortable),
+                )
+
+                state.videos.isEmpty() -> EmptyState(stringResource(R.string.search_no_results))
             }
         }
     }
@@ -218,7 +230,7 @@ private fun AgentPane(
 ) {
     if (state.turns.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            EmptyState("描述想看的内容")
+            EmptyState(stringResource(R.string.search_agent_empty))
         }
         return
     }
@@ -309,7 +321,7 @@ private fun UserChip(user: SearchUser, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "${formatCount(user.fansCount)}粉丝",
+                text = stringResource(R.string.search_fans, formatCount(user.fansCount)),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -317,6 +329,7 @@ private fun UserChip(user: SearchUser, onClick: () -> Unit) {
     }
 }
 
+@Composable
 private fun SearchVideo.toRowUi() = VideoRowUi(
     title = title,
     coverUrl = coverUrl,
@@ -372,7 +385,7 @@ private fun AgentTurnResult(result: TurnResult.Agent, onVideoClick: (String) -> 
         when {
             result.error != null -> FullScreenError(result.error, onRetry, Modifier.fillMaxWidth())
             result.running -> InlineProgress(
-                text = "还在找…",
+                text = stringResource(R.string.agent_running),
                 modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
             )
         }
@@ -395,7 +408,11 @@ private fun ProcessHeader(
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
         Text(
-            text = if (expanded) "过程" else "过程 · $collapsedSummary",
+            text = if (expanded) {
+                stringResource(R.string.agent_process)
+            } else {
+                stringResource(R.string.agent_process_collapsed, collapsedSummary)
+            },
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -404,7 +421,9 @@ private fun ProcessHeader(
         )
         Icon(
             imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-            contentDescription = if (expanded) "收起过程" else "展开过程",
+            contentDescription = stringResource(
+                if (expanded) R.string.agent_process_collapse else R.string.agent_process_expand,
+            ),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -489,7 +508,9 @@ private fun InputBar(
             SearchField(
                 value = input,
                 onValueChange = onInputChange,
-                placeholder = if (agent) "描述想看的内容" else "输入想找的内容",
+                placeholder = stringResource(
+                    if (agent) R.string.search_agent_empty else R.string.search_empty,
+                ),
                 // 回车即发送。DESIGN 2.2 的快路原话是"输入直接回车 = 原始 B 站搜索",
                 // 换成 SearchField 之前这条根本没实现:OutlinedTextField 的 singleLine
                 // 只是不换行,键盘上那个键什么都不做。
@@ -502,7 +523,9 @@ private fun InputBar(
             IconToggleButton(checked = agent, onCheckedChange = { onModeChange(if (it) SearchMode.Agent else SearchMode.Normal) }) {
                 Icon(
                     imageVector = Icons.Filled.AutoAwesome,
-                    contentDescription = if (agent) "改用普通搜索" else "交给助理",
+                    contentDescription = stringResource(
+                        if (agent) R.string.search_mode_to_normal else R.string.search_mode_to_agent,
+                    ),
                     tint = if (agent) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -510,17 +533,28 @@ private fun InputBar(
             // 发送是这一屏的主行动,用实心图标按钮 —— M3 说要提升某个动作的可见度就换成
             // filled/tonal,并且一屏只留一个。
             FilledIconButton(onClick = onSend, enabled = input.isNotBlank()) {
-                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送")
+                Icon(
+                    Icons.AutoMirrored.Filled.Send,
+                    contentDescription = stringResource(R.string.action_send),
+                )
             }
         }
     }
 }
 
-/** 搜索接口返回原始整数计数,这里自己做展示折算。 */
-private fun formatCount(count: Long): String = when {
-    count >= 100_000_000 -> "%.1f亿".format(count / 100_000_000.0)
-    count >= 10_000 -> "%.1f万".format(count / 10_000.0)
-    else -> count.toString()
+/**
+ * 搜索接口返回原始整数计数,这里自己做展示折算。分档除数取自资源:
+ * 中文按万/亿分档,英文按 K/M,只翻译单位后缀会让英文差一个量级。
+ */
+@Composable
+private fun formatCount(count: Long): String {
+    val large = integerResource(R.integer.count_divisor_large)
+    val small = integerResource(R.integer.count_divisor_small)
+    return when {
+        count >= large -> stringResource(R.string.count_large, count.toDouble() / large)
+        count >= small -> stringResource(R.string.count_small, count.toDouble() / small)
+        else -> count.toString()
+    }
 }
 
 // ---- Preview ----

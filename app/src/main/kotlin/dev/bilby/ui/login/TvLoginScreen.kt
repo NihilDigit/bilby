@@ -20,10 +20,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.bilby.R
 import dev.bilby.api.BiliResult
 import dev.bilby.data.TvLoginRepository
 import dev.bilby.data.TvPollStatus
@@ -77,7 +79,7 @@ fun TvLoginScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(Spacing.Loose, Alignment.CenterVertically),
         ) {
-            Text("扫码登录", style = MaterialTheme.typography.headlineSmall)
+            Text(stringResource(R.string.login_title), style = MaterialTheme.typography.headlineSmall)
 
             Box(contentAlignment = Alignment.Center) {
                 when (state) {
@@ -91,15 +93,23 @@ fun TvLoginScreen(
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
                             )
-                            Text("已扫描,请在手机上确认", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                stringResource(R.string.login_scanned),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
                         }
                     }
 
                     is TvLoginUiState.Expired -> {
                         QrPlaceholder(showSpinner = false)
                         QrOverlay {
-                            Text("二维码已过期", style = MaterialTheme.typography.bodyMedium)
-                            FilledTonalButton(onClick = onRefresh) { Text("刷新") }
+                            Text(
+                                stringResource(R.string.login_qr_expired),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            FilledTonalButton(onClick = onRefresh) {
+                                Text(stringResource(R.string.action_refresh))
+                            }
                         }
                     }
 
@@ -113,7 +123,7 @@ fun TvLoginScreen(
             when (state) {
                 is TvLoginUiState.WaitingScan ->
                     Text(
-                        text = "用 B 站 App 扫码登录",
+                        text = stringResource(R.string.login_hint),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -128,15 +138,15 @@ fun TvLoginScreen(
                         color = MaterialTheme.colorScheme.error,
                         textAlign = TextAlign.Center,
                     )
-                    FilledTonalButton(onClick = onRefresh) { Text("重试") }
+                    FilledTonalButton(onClick = onRefresh) { Text(stringResource(R.string.action_retry)) }
                 }
 
                 is TvLoginUiState.Success -> Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
                 ) {
-                    Text("登录成功", style = MaterialTheme.typography.bodyMedium)
-                    FilledTonalButton(onClick = onDone) { Text("完成") }
+                    Text(stringResource(R.string.login_success), style = MaterialTheme.typography.bodyMedium)
+                    FilledTonalButton(onClick = onDone) { Text(stringResource(R.string.action_done)) }
                 }
 
                 else -> Unit

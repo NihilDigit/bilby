@@ -34,10 +34,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import dev.bilby.BuildConfig
+import dev.bilby.R
 import dev.bilby.data.CodecPreference
 import dev.bilby.data.LlmConfig
 import dev.bilby.data.SettingsStore
@@ -73,48 +75,55 @@ fun SettingsScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        topBar = { BilbyTopBar(title = "设置", onBack = onBack) },
+        topBar = { BilbyTopBar(title = stringResource(R.string.settings_title), onBack = onBack) },
     ) { insets ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(insets),
             contentPadding = PaddingValues(bottom = Spacing.Spacious),
         ) {
             item("account") {
-                SectionTitle("账号")
+                SectionTitle(stringResource(R.string.settings_section_account))
+                val uid = stringResource(R.string.settings_uid, state.account.uid)
                 SettingRow(
-                    title = state.account.name ?: "UID ${state.account.uid}",
-                    subtitle = if (state.account.name != null) "UID ${state.account.uid}" else null,
+                    title = state.account.name ?: uid,
+                    subtitle = if (state.account.name != null) uid else null,
                 )
                 SettingRow(
-                    title = "登出",
-                    subtitle = "清除本机凭据并停止播放。凭据过期同样走这里,重新扫码即可",
+                    title = stringResource(R.string.settings_logout),
+                    subtitle = stringResource(R.string.settings_logout_subtitle),
                     onClick = { confirmingLogout = true },
                 )
             }
 
             item("llm") {
-                SectionTitle("助理")
+                SectionTitle(stringResource(R.string.settings_section_agent))
                 val llm = state.llm
+                val notConfigured = stringResource(R.string.settings_not_configured)
                 SettingRow(
-                    title = "接口地址",
-                    subtitle = llm?.baseUrl?.ifBlank { "未配置" } ?: "读取中…",
+                    title = stringResource(R.string.settings_llm_base_url),
+                    subtitle = llm?.baseUrl?.ifBlank { notConfigured }
+                        ?: stringResource(R.string.settings_loading),
                     onClick = { editingLlm = true },
                 )
                 SettingRow(
-                    title = "API key",
+                    title = stringResource(R.string.settings_api_key),
                     // 永远只显示是否配置,不显示遮蔽后的原文:遮蔽只挡眼睛,截图和录屏挡不住。
-                    subtitle = if (llm?.apiKey.isNullOrEmpty()) "未配置" else "已配置",
+                    subtitle = if (llm?.apiKey.isNullOrEmpty()) {
+                        notConfigured
+                    } else {
+                        stringResource(R.string.settings_configured)
+                    },
                     onClick = { editingLlm = true },
                 )
                 SettingRow(
-                    title = "模型",
+                    title = stringResource(R.string.settings_model),
                     subtitle = llm?.model.orEmpty().ifBlank { SettingsStore.DEFAULT_LLM_MODEL },
                     onClick = { editingLlm = true },
                 )
             }
 
             item("player") {
-                SectionTitle("播放器")
+                SectionTitle(stringResource(R.string.settings_section_player))
                 CodecSection(
                     selected = state.codec,
                     hardwareCodecIds = state.hardwareCodecIds,
@@ -126,15 +135,15 @@ fun SettingsScreen(
                 SectionTitle("SponsorBlock")
                 val prefs = state.sponsorBlock
                 ToggleSettingRow(
-                    title = "自动跳过",
-                    subtitle = "由社区标注的赞助、片头片尾等片段",
+                    title = stringResource(R.string.settings_sponsorblock_toggle),
+                    subtitle = stringResource(R.string.settings_sponsorblock_toggle_subtitle),
                     checked = prefs.enabled,
                     onCheckedChange = { onSponsorBlockChange(prefs.copy(enabled = it)) },
                 )
                 if (prefs.enabled) {
                     CATEGORY_LABELS.forEach { (category, label) ->
                         ToggleSettingRow(
-                            title = label,
+                            title = stringResource(label),
                             checked = category in prefs.categories,
                             onCheckedChange = { checked ->
                                 val next = if (checked) {
@@ -149,7 +158,7 @@ fun SettingsScreen(
                         )
                     }
                     SettingRow(
-                        title = "服务器地址",
+                        title = stringResource(R.string.settings_sponsorblock_server),
                         subtitle = prefs.serverUrl,
                         onClick = { editingServer = true },
                     )
@@ -157,9 +166,15 @@ fun SettingsScreen(
             }
 
             item("about") {
-                SectionTitle("关于")
-                SettingRow(title = "版本", subtitle = "${BuildConfig.VERSION_NAME}(${BuildConfig.APPLICATION_ID})")
-                SettingRow(title = "许可证", subtitle = "GPL-3.0-or-later")
+                SectionTitle(stringResource(R.string.settings_section_about))
+                SettingRow(
+                    title = stringResource(R.string.settings_version),
+                    subtitle = "${BuildConfig.VERSION_NAME}(${BuildConfig.APPLICATION_ID})",
+                )
+                SettingRow(
+                    title = stringResource(R.string.settings_license),
+                    subtitle = "GPL-3.0-or-later",
+                )
             }
         }
     }
@@ -177,7 +192,7 @@ fun SettingsScreen(
 
     if (editingServer) {
         TextFieldDialog(
-            title = "SponsorBlock 服务器",
+            title = stringResource(R.string.settings_sponsorblock_server_dialog),
             initial = state.sponsorBlock.serverUrl,
             // 留空即恢复默认:这是个第三方服务地址,改错了要有一条不用记原值的退路。
             placeholder = SettingsStore.DEFAULT_SB_SERVER,
@@ -196,15 +211,19 @@ fun SettingsScreen(
     if (confirmingLogout) {
         AlertDialog(
             onDismissRequest = { confirmingLogout = false },
-            title = { Text("登出") },
-            text = { Text("会清除本机保存的登录凭据并停止正在播放的内容。重新登录需要再扫一次码。") },
+            title = { Text(stringResource(R.string.settings_logout)) },
+            text = { Text(stringResource(R.string.settings_logout_message)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmingLogout = false
                     onLogout()
-                }) { Text("登出") }
+                }) { Text(stringResource(R.string.settings_logout)) }
             },
-            dismissButton = { TextButton(onClick = { confirmingLogout = false }) { Text("取消") } },
+            dismissButton = {
+                TextButton(onClick = { confirmingLogout = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
         )
     }
 }
@@ -223,9 +242,9 @@ private fun CodecSection(
         option.requiredCodecId()?.let { it in hardwareCodecIds } ?: true
     }
     SettingRow(
-        title = "编解码偏好",
+        title = stringResource(R.string.settings_codec),
         // 说清生效时机:改完不重开当前视频,不为一个设置项打断正在看的东西。
-        subtitle = "决定取哪条流,改动对下一个视频生效",
+        subtitle = stringResource(R.string.settings_codec_subtitle),
     )
     options.forEach { option ->
         Row(
@@ -355,7 +374,7 @@ private fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Llm
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("助理接口") },
+        title = { Text(stringResource(R.string.settings_llm_dialog)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.Cozy)) {
                 OutlinedTextField(
@@ -367,7 +386,7 @@ private fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Llm
                 OutlinedTextField(
                     value = apiKey,
                     onValueChange = { apiKey = it },
-                    label = { Text("API key") },
+                    label = { Text(stringResource(R.string.settings_api_key)) },
                     singleLine = true,
                     // 默认遮蔽。给一个显形按钮是因为长串 key 手输时看不见就没法核对,
                     // 但默认态必须是遮住的 —— 设置页经常是当着别人的面打开的。
@@ -380,7 +399,13 @@ private fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Llm
                         IconButton(onClick = { keyVisible = !keyVisible }) {
                             Icon(
                                 imageVector = if (keyVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                contentDescription = if (keyVisible) "隐藏 key" else "显示 key",
+                                contentDescription = stringResource(
+                                    if (keyVisible) {
+                                        R.string.settings_key_hide
+                                    } else {
+                                        R.string.settings_key_show
+                                    },
+                                ),
                             )
                         }
                     },
@@ -388,7 +413,7 @@ private fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Llm
                 OutlinedTextField(
                     value = model,
                     onValueChange = { model = it },
-                    label = { Text("模型") },
+                    label = { Text(stringResource(R.string.settings_model)) },
                     singleLine = true,
                 )
             }
@@ -402,9 +427,11 @@ private fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Llm
                         model = model.trim().ifBlank { SettingsStore.DEFAULT_LLM_MODEL },
                     ),
                 )
-            }) { Text("保存") }
+            }) { Text(stringResource(R.string.action_save)) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
     )
 }
 
@@ -428,7 +455,11 @@ private fun TextFieldDialog(
                 singleLine = true,
             )
         },
-        confirmButton = { TextButton(onClick = { onConfirm(value) }) { Text("保存") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(value) }) { Text(stringResource(R.string.action_save)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
     )
 }

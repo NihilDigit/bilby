@@ -46,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.text.Placeholder
@@ -57,6 +58,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.bilby.R
 import dev.bilby.data.CommentItem
 import dev.bilby.data.CommentSort
 import dev.bilby.ui.components.Avatar
@@ -133,7 +135,7 @@ fun CommentSection(
             }
 
             if (!state.loading && state.items.isEmpty() && state.topComment == null) {
-                item(key = "empty") { EmptyState("还没有评论") }
+                item(key = "empty") { EmptyState(stringResource(R.string.comment_empty)) }
             }
 
             items(state.items, key = { it.rpid }) { comment ->
@@ -199,7 +201,10 @@ private fun findUname(state: CommentUiState, rpid: Long): String? {
 /** 最热 / 最新是排序,M3 把"排序元素"划给 segmented button;chip 是给动态选项集用的。 */
 @Composable
 private fun SortBar(sort: CommentSort, onSort: (CommentSort) -> Unit) {
-    val options = listOf(CommentSort.HOT to "最热", CommentSort.TIME to "最新")
+    val options = listOf(
+        CommentSort.HOT to R.string.comment_sort_hot,
+        CommentSort.TIME to R.string.comment_sort_time,
+    )
     SingleChoiceSegmentedButtonRow(
         modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
     ) {
@@ -208,7 +213,7 @@ private fun SortBar(sort: CommentSort, onSort: (CommentSort) -> Unit) {
                 selected = sort == pair.first,
                 onClick = { onSort(pair.first) },
                 shape = SegmentedButtonDefaults.itemShape(index, options.size),
-                label = { Text(pair.second) },
+                label = { Text(stringResource(pair.second)) },
             )
         }
     }
@@ -254,10 +259,18 @@ private fun CommentRow(
                     modifier = Modifier.weight(1f, fill = false),
                 )
                 if (comment.isUploader) {
-                    Tag("UP主", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
+                    Tag(
+                        stringResource(R.string.comment_tag_up),
+                        MaterialTheme.colorScheme.primaryContainer,
+                        MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
                 }
                 if (pinned) {
-                    Tag("置顶", MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.colorScheme.onTertiaryContainer)
+                    Tag(
+                        stringResource(R.string.comment_tag_pinned),
+                        MaterialTheme.colorScheme.tertiaryContainer,
+                        MaterialTheme.colorScheme.onTertiaryContainer,
+                    )
                 }
             }
             SubLine(comment)
@@ -348,7 +361,7 @@ private fun PictureGrid(urls: List<String>, onClick: (Int) -> Unit, modifier: Mo
     if (urls.size == 1) {
         BiliAsyncImage(
             url = urls[0],
-            contentDescription = "评论配图,点击查看大图",
+            contentDescription = stringResource(R.string.comment_picture),
             modifier = modifier
                 .fillMaxWidth(SinglePictureWidthFraction)
                 .aspectRatio(4f / 3f)
@@ -366,7 +379,7 @@ private fun PictureGrid(urls: List<String>, onClick: (Int) -> Unit, modifier: Mo
                     val index = urls.indexOf(url).takeIf { it >= 0 } ?: indexInRow
                     BiliAsyncImage(
                         url = url,
-                        contentDescription = "评论配图,点击查看大图",
+                        contentDescription = stringResource(R.string.comment_picture),
                         modifier = Modifier
                             .weight(1f)
                             .aspectRatio(1f)
@@ -407,7 +420,9 @@ private fun CommentActions(
         IconButton(onClick = { onLike(comment.rpid) }) {
             Icon(
                 imageVector = if (comment.liked) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp,
-                contentDescription = if (comment.liked) "取消点赞" else "点赞",
+                contentDescription = stringResource(
+                    if (comment.liked) R.string.comment_unlike else R.string.comment_like,
+                ),
                 tint = if (comment.liked) {
                     MaterialTheme.colorScheme.primary
                 } else {
@@ -421,12 +436,12 @@ private fun CommentActions(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        TextButton(onClick = onReply) { Text("回复") }
+        TextButton(onClick = onReply) { Text(stringResource(R.string.comment_reply)) }
         if (canDelete) {
             IconButton(onClick = { onDelete(comment.rpid) }) {
                 Icon(
                     Icons.Outlined.Delete,
-                    contentDescription = "删除我的评论",
+                    contentDescription = stringResource(R.string.comment_delete),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(SmallIconSize),
                 )
@@ -456,7 +471,7 @@ private fun SubReplies(comment: CommentItem, expanded: ExpandedReplies?, onExpan
             shown.forEach { sub -> SubReplyRow(sub) }
             when {
                 expanded == null && remaining > 0 -> SubReplyMoreButton(
-                    text = "展开 $remaining 条回复",
+                    text = stringResource(R.string.comment_expand_replies, remaining),
                     onClick = { onExpandReplies(comment.rpid) },
                 )
 
@@ -468,7 +483,7 @@ private fun SubReplies(comment: CommentItem, expanded: ExpandedReplies?, onExpan
                 }
 
                 expanded != null && expanded.hasMore -> SubReplyMoreButton(
-                    text = "加载更多",
+                    text = stringResource(R.string.comment_load_more),
                     onClick = { onExpandReplies(comment.rpid) },
                 )
             }
@@ -512,7 +527,11 @@ private fun SubReplyRow(comment: CommentItem) {
             modifier = Modifier.weight(1f, fill = false),
         )
         if (comment.isUploader) {
-            Tag("UP主", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
+            Tag(
+                stringResource(R.string.comment_tag_up),
+                MaterialTheme.colorScheme.primaryContainer,
+                MaterialTheme.colorScheme.onPrimaryContainer,
+            )
         }
     }
     CommentText(
@@ -559,8 +578,11 @@ private fun CommentInputBar(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("回复 @$replyTarget", style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = onCancelReply) { Text("取消") }
+                    Text(
+                        stringResource(R.string.comment_replying_to, replyTarget),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    TextButton(onClick = onCancelReply) { Text(stringResource(R.string.action_cancel)) }
                 }
             }
             Row(
@@ -572,7 +594,15 @@ private fun CommentInputBar(
                     value = text,
                     onValueChange = onTextChange,
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text(if (replyTarget != null) "回复 $replyTarget" else "发条友善的评论") },
+                    placeholder = {
+                        Text(
+                            if (replyTarget != null) {
+                                stringResource(R.string.comment_input_hint_reply, replyTarget)
+                            } else {
+                                stringResource(R.string.comment_input_hint)
+                            },
+                        )
+                    },
                     maxLines = 4,
                     shape = MaterialTheme.shapes.large,
                 )
@@ -580,7 +610,10 @@ private fun CommentInputBar(
                     if (sending) {
                         CircularProgressIndicator(modifier = Modifier.size(Dimens.IconInline), strokeWidth = 2.dp)
                     } else {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送")
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = stringResource(R.string.action_send),
+                        )
                     }
                 }
             }
@@ -659,14 +692,15 @@ private fun CommentText(
 
 private val AbsoluteDateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
+@Composable
 private fun formatRelativeTime(epochSeconds: Long, nowEpochSeconds: Long = Instant.now().epochSecond): String {
     if (epochSeconds <= 0L) return ""
     val diff = nowEpochSeconds - epochSeconds
     return when {
-        diff < 60 -> "刚刚"
-        diff < 3600 -> "${diff / 60}分钟前"
-        diff < 24 * 3600 -> "${diff / 3600}小时前"
-        diff < 7 * 24 * 3600 -> "${diff / (24 * 3600)}天前"
+        diff < 60 -> stringResource(R.string.time_just_now)
+        diff < 3600 -> stringResource(R.string.time_minutes_ago, diff / 60)
+        diff < 24 * 3600 -> stringResource(R.string.time_hours_ago, diff / 3600)
+        diff < 7 * 24 * 3600 -> stringResource(R.string.time_days_ago, diff / (24 * 3600))
         else -> Instant.ofEpochSecond(epochSeconds).atZone(ZoneId.systemDefault()).format(AbsoluteDateFormatter)
     }
 }

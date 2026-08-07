@@ -66,6 +66,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -76,6 +77,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.compose.PlayerSurface
+import dev.bilby.R
 import dev.bilby.data.QualityOption
 import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.theme.FixedColors
@@ -263,7 +265,10 @@ fun BilbyPlayer(
                         modifier = Modifier.size(16.dp),
                     )
                     Text(
-                        "  ${formatSpeed(FAST_FORWARD_SPEED)} 快进中",
+                        "  " + stringResource(
+                            R.string.player_fast_forwarding,
+                            formatSpeed(FAST_FORWARD_SPEED),
+                        ),
                         style = MaterialTheme.typography.labelMedium,
                         color = FixedColors.OnMedia,
                     )
@@ -302,7 +307,7 @@ fun BilbyPlayer(
                 IconButton(onClick = { onFullscreenChange(false) }) {
                     Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "退出全屏",
+                        contentDescription = stringResource(R.string.player_exit_fullscreen),
                         tint = FixedColors.OnMedia,
                     )
                 }
@@ -326,7 +331,9 @@ fun BilbyPlayer(
             IconButton(onClick = { locked = !locked }) {
                 Icon(
                     imageVector = if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
-                    contentDescription = if (locked) "解锁" else "锁定",
+                    contentDescription = stringResource(
+                        if (locked) R.string.player_unlock else R.string.player_lock,
+                    ),
                     tint = FixedColors.OnMedia,
                 )
             }
@@ -455,7 +462,7 @@ private fun PlayerControlBar(
             IconButton(onClick = onListen) {
                 Icon(
                     Icons.Filled.Headphones,
-                    contentDescription = "听视频",
+                    contentDescription = stringResource(R.string.player_listen),
                     tint = FixedColors.OnMedia,
                     modifier = Modifier.size(if (isFullscreen) 26.dp else 22.dp),
                 )
@@ -472,7 +479,9 @@ private fun PlayPauseButton(isPlaying: Boolean, onClick: () -> Unit, iconSize: D
     IconButton(onClick = onClick) {
         Icon(
             imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-            contentDescription = if (isPlaying) "暂停" else "播放",
+            contentDescription = stringResource(
+                if (isPlaying) R.string.player_pause else R.string.player_play,
+            ),
             tint = FixedColors.OnMedia,
             modifier = Modifier.size(iconSize),
         )
@@ -484,7 +493,9 @@ private fun FullscreenButton(isFullscreen: Boolean, onClick: () -> Unit, iconSiz
     IconButton(onClick = onClick) {
         Icon(
             imageVector = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-            contentDescription = if (isFullscreen) "退出全屏" else "全屏",
+            contentDescription = stringResource(
+                if (isFullscreen) R.string.player_exit_fullscreen else R.string.player_fullscreen,
+            ),
             tint = FixedColors.OnMedia,
             modifier = Modifier.size(iconSize),
         )
@@ -504,7 +515,14 @@ private fun SpeedButton(
             expanded = expanded,
             onClick = { expanded = true; onMenuOpenChange(true) },
             label = if (speed == 1f) null else formatSpeed(speed),
-            icon = { tint -> Icon(Icons.Filled.Speed, "倍速", tint = tint, modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp)) },
+            icon = { tint ->
+                Icon(
+                    Icons.Filled.Speed,
+                    stringResource(R.string.player_speed),
+                    tint = tint,
+                    modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp),
+                )
+            },
         )
         DropdownMenu(
             expanded = expanded,
@@ -541,7 +559,14 @@ private fun QualityButton(
             expanded = expanded,
             onClick = { expanded = true; onMenuOpenChange(true) },
             label = if (isFullscreen) currentLabel else null,
-            icon = { tint -> Icon(Icons.Filled.HighQuality, "清晰度", tint = tint, modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp)) },
+            icon = { tint ->
+                Icon(
+                    Icons.Filled.HighQuality,
+                    stringResource(R.string.player_quality),
+                    tint = tint,
+                    modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp),
+                )
+            },
         )
         DropdownMenu(
             expanded = expanded,

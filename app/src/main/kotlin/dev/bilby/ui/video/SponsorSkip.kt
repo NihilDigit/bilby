@@ -15,7 +15,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import dev.bilby.R
 import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.delay
 
@@ -43,16 +45,16 @@ fun nextSkipTarget(positionMillis: Long, segments: List<SponsorSegment>): Long? 
  * 只列 actionType 为 skip 的类别 —— 空降点(poi_highlight)和整片打标
  * (exclusive_access)不是"跳过一段时间"的语义,给它们一个跳过开关是错的。
  */
-val CATEGORY_LABELS = mapOf(
-    "sponsor" to "赞助推广",
-    "selfpromo" to "自我推广",
-    "interaction" to "三连提醒",
-    "intro" to "片头",
-    "outro" to "片尾",
-    "preview" to "预览回顾",
-    "padding" to "填充内容",
-    "filler" to "离题闲聊",
-    "music_offtopic" to "非音乐段落",
+val CATEGORY_LABELS: Map<String, Int> = mapOf(
+    "sponsor" to R.string.sponsor_sponsor,
+    "selfpromo" to R.string.sponsor_selfpromo,
+    "interaction" to R.string.sponsor_interaction,
+    "intro" to R.string.sponsor_intro,
+    "outro" to R.string.sponsor_outro,
+    "preview" to R.string.sponsor_preview,
+    "padding" to R.string.sponsor_padding,
+    "filler" to R.string.sponsor_filler,
+    "music_offtopic" to R.string.sponsor_music_offtopic,
 )
 
 /**
@@ -63,11 +65,12 @@ val CATEGORY_LABELS = mapOf(
 @Composable
 fun SkipToast(category: String?, modifier: Modifier = Modifier) {
     var visible by remember { mutableStateOf(false) }
-    var label by remember { mutableStateOf("") }
+    // 类别名要走资源,取不到就退回接口给的原始 category(至少能看出跳过了什么)。
+    val categoryName = CATEGORY_LABELS[category]?.let { stringResource(it) } ?: category.orEmpty()
+    val label = stringResource(R.string.sponsor_skipped, categoryName)
 
     LaunchedEffect(category) {
         if (category != null) {
-            label = "已跳过${CATEGORY_LABELS[category] ?: category}"
             visible = true
             delay(2500)
             visible = false

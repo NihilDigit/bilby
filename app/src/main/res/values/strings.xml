@@ -1,3 +1,221 @@
 <resources>
-    <string name="app_name">Bilby</string>
+    <!-- 产品名,任何语言下都一样,不进 values-en。 -->
+    <string name="app_name" translatable="false">Bilby</string>
+
+    <!-- 通用动作。同一个动词全 app 一份,别在各页面各写各的。 -->
+    <string name="action_back">返回</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_clear">清空</string>
+    <string name="action_close">关闭</string>
+    <string name="action_done">完成</string>
+    <string name="action_refresh">刷新</string>
+    <string name="action_retry">重试</string>
+    <string name="action_save">保存</string>
+    <string name="action_send">发送</string>
+
+    <!-- 列表与相对时间 -->
+    <string name="list_no_more">没有更多了</string>
+    <string name="time_just_now">刚刚</string>
+    <string name="time_minutes_ago">%1$d分钟前</string>
+    <string name="time_hours_ago">%1$d小时前</string>
+    <string name="time_yesterday">昨天</string>
+    <string name="time_days_ago">%1$d天前</string>
+
+    <!--
+      计数折算。中文按万/亿分档,英文按 K/M,所以除数也是本地化资源 ——
+      只翻译单位后缀的话,英文会显示成 "1.2K" 却按万折算出错一个量级。
+    -->
+    <integer name="count_divisor_small">10000</integer>
+    <integer name="count_divisor_large">100000000</integer>
+    <string name="count_small">%1$.1f万</string>
+    <string name="count_large">%1$.1f亿</string>
+
+    <!-- 统计项的读屏标签:这一行只画图标和数字,没有可见文字 -->
+    <string name="stat_play">播放</string>
+    <string name="stat_danmaku">弹幕</string>
+
+    <!-- 底部导航 -->
+    <string name="tab_feed">动态</string>
+    <string name="tab_search">搜索</string>
+    <string name="tab_toview">稍后再看</string>
+
+    <!-- 关注按钮。三档字面在空间页和播放页共用 -->
+    <string name="follow_none">关注</string>
+    <string name="follow_following">已关注</string>
+    <string name="follow_mutual">互相关注</string>
+
+    <!-- 动态 -->
+    <string name="feed_empty">关注的 UP 主还没有新投稿</string>
+
+    <!-- 搜索 -->
+    <string name="search_empty">搜索视频与 UP 主</string>
+    <string name="search_agent_empty">描述想看的内容</string>
+    <string name="search_no_results">没有结果</string>
+    <string name="search_loading">搜索中…</string>
+    <string name="search_loading_more">加载更多…</string>
+    <string name="search_fans">%1$s粉丝</string>
+    <string name="search_new_session">新会话</string>
+    <string name="search_mode_to_agent">交给助理</string>
+    <string name="search_mode_to_normal">改用普通搜索</string>
+
+    <!-- 助理:搜索页、播放页找相关、独立结果页共用 -->
+    <string name="agent_title">助理</string>
+    <string name="agent_process">过程</string>
+    <string name="agent_process_collapsed">过程 · %1$s</string>
+    <string name="agent_process_expand">展开过程</string>
+    <string name="agent_process_collapse">收起过程</string>
+    <string name="agent_running">还在找…</string>
+    <string name="agent_no_result">没找到合适的</string>
+
+    <!-- 稍后再看 -->
+    <string name="toview_empty">稍后再看是空的</string>
+    <string name="toview_clear_finished">清空已看完</string>
+    <string name="toview_clearing">清空中…</string>
+    <string name="toview_capacity">已用 %1$d / %2$d</string>
+    <string name="toview_finished">已看完</string>
+    <string name="toview_progress">看到 %1$s</string>
+    <string name="toview_remove">移出稍后再看:%1$s</string>
+
+    <!-- 评论 -->
+    <string name="comment_empty">还没有评论</string>
+    <string name="comment_sort_hot">最热</string>
+    <string name="comment_sort_time">最新</string>
+    <string name="comment_tag_up">UP 主</string>
+    <string name="comment_tag_pinned">置顶</string>
+    <string name="comment_picture">评论配图</string>
+    <string name="comment_like">点赞</string>
+    <string name="comment_unlike">取消点赞</string>
+    <string name="comment_reply">回复</string>
+    <string name="comment_delete">删除评论</string>
+    <string name="comment_expand_replies">展开 %1$d 条回复</string>
+    <string name="comment_load_more">加载更多</string>
+    <string name="comment_replying_to">回复 @%1$s</string>
+    <string name="comment_input_hint">说点什么</string>
+    <string name="comment_input_hint_reply">回复 %1$s</string>
+
+    <!-- 个人空间 -->
+    <string name="space_title">个人空间</string>
+    <string name="space_tab_archives">投稿</string>
+    <string name="space_tab_dynamics">动态</string>
+    <string name="space_tab_collections">合集</string>
+    <string name="space_level_followers">Lv%1$d   %2$s粉丝</string>
+    <string name="space_no_sign">还没有签名</string>
+    <string name="space_listen_up">听这位 UP 主的投稿</string>
+    <string name="space_order_pubdate">最新</string>
+    <string name="space_order_click">最多播放</string>
+    <string name="space_search_hint">在这个空间内搜索</string>
+    <string name="space_empty_archives">这位 UP 主还没有投稿</string>
+    <string name="space_empty_archives_search">没有匹配的投稿</string>
+    <string name="space_empty_dynamics">这位 UP 主还没有视频动态</string>
+    <string name="space_empty_collections">这位 UP 主没有合集</string>
+    <string name="space_empty_collection_detail">这个合集是空的</string>
+    <string name="space_collection_season">合集</string>
+    <string name="space_collection_series">系列</string>
+    <string name="space_collection_meta">%1$s · 共 %2$d 个视频</string>
+
+    <!-- 播放页 -->
+    <string name="video_tab_intro">简介</string>
+    <string name="video_tab_comment">评论</string>
+    <string name="video_tab_comment_count">评论 %1$s</string>
+    <string name="video_intro_expand">展开简介</string>
+    <string name="video_intro_collapse">收起简介</string>
+    <string name="video_action_like">点赞</string>
+    <string name="video_action_unlike">取消点赞</string>
+    <string name="video_action_coin">投币</string>
+    <string name="video_action_favorite">收藏</string>
+    <string name="video_action_toview">稍后看</string>
+    <string name="video_action_toview_added">已加入</string>
+    <string name="video_action_toview_desc">加入稍后再看</string>
+    <string name="video_parts">分 P</string>
+    <string name="video_part_label">P%1$d %2$s</string>
+    <string name="video_find_related">找相关</string>
+    <string name="video_queue_loading">加载队列…</string>
+
+    <!-- 投币 / 收藏对话框 -->
+    <string name="action_confirm">确认</string>
+    <string name="coin_maxed">已投 2 枚,不能再投</string>
+    <string name="coin_count">%1$d 枚</string>
+    <string name="coin_also_like">同时点赞</string>
+    <string name="coin_warning">投币不可撤销</string>
+    <string name="fav_dialog_title">收藏到</string>
+
+    <!-- 找相关的 sheet。把手上一行既是标题也是状态 -->
+    <string name="related_title">相关</string>
+    <string name="related_title_running">相关 · 检索中</string>
+    <string name="related_title_error">相关 · 失败</string>
+    <string name="related_title_count">相关 · %1$d 条</string>
+    <string name="related_searching">检索中…</string>
+    <string name="related_step">· %1$s</string>
+
+    <!-- 播放器控件。听视频页和播放页共用同一组 -->
+    <string name="player_play">播放</string>
+    <string name="player_pause">暂停</string>
+    <string name="player_previous">上一条</string>
+    <string name="player_next">下一条</string>
+    <string name="player_speed">倍速</string>
+    <string name="player_quality">清晰度</string>
+    <string name="player_listen">听视频</string>
+    <string name="player_lock">锁定</string>
+    <string name="player_unlock">解锁</string>
+    <string name="player_fullscreen">全屏</string>
+    <string name="player_exit_fullscreen">退出全屏</string>
+    <string name="player_fast_forwarding">%1$s 快进中</string>
+
+    <!-- 听视频 -->
+    <string name="listen_title">听视频</string>
+    <string name="listen_not_playing">未在播放</string>
+    <string name="listen_queue">播放队列</string>
+    <string name="listen_queue_count">播放队列 · %1$d</string>
+    <string name="queue_order_sequential">顺序</string>
+    <string name="queue_order_shuffle">随机</string>
+    <string name="sleep_timer_off">定时关闭</string>
+    <string name="sleep_timer_minutes">%1$d 分钟</string>
+    <string name="sleep_timer_end_of_item">播完当前</string>
+
+    <!-- SponsorBlock。键名对应接口的 category,顺序即设置页里的显示顺序 -->
+    <string name="sponsor_sponsor">赞助推广</string>
+    <string name="sponsor_selfpromo">自我推广</string>
+    <string name="sponsor_interaction">三连提醒</string>
+    <string name="sponsor_intro">片头</string>
+    <string name="sponsor_outro">片尾</string>
+    <string name="sponsor_preview">预览回顾</string>
+    <string name="sponsor_padding">填充内容</string>
+    <string name="sponsor_filler">离题闲聊</string>
+    <string name="sponsor_music_offtopic">非音乐段落</string>
+    <string name="sponsor_skipped">已跳过%1$s</string>
+
+    <!-- 登录 -->
+    <string name="login_title">扫码登录</string>
+    <string name="login_hint">用 B 站 App 扫描</string>
+    <string name="login_scanned">请在手机上确认</string>
+    <string name="login_qr_expired">二维码已过期</string>
+    <string name="login_success">登录成功</string>
+
+    <!-- 设置 -->
+    <string name="settings_title">设置</string>
+    <string name="settings_section_account">账号</string>
+    <string name="settings_uid">UID %1$d</string>
+    <string name="settings_logout">登出</string>
+    <string name="settings_logout_subtitle">清除本机凭据并停止播放,凭据过期也走这里</string>
+    <string name="settings_logout_message">清除本机凭据并停止播放,重新登录需要再扫一次码</string>
+    <string name="settings_section_agent">助理</string>
+    <string name="settings_llm_base_url">接口地址</string>
+    <string name="settings_llm_dialog">助理接口</string>
+    <string name="settings_api_key">API key</string>
+    <string name="settings_model">模型</string>
+    <string name="settings_key_show">显示 key</string>
+    <string name="settings_key_hide">隐藏 key</string>
+    <string name="settings_not_configured">未配置</string>
+    <string name="settings_configured">已配置</string>
+    <string name="settings_loading">读取中…</string>
+    <string name="settings_section_player">播放器</string>
+    <string name="settings_codec">编解码偏好</string>
+    <string name="settings_codec_subtitle">改动对下一个视频生效</string>
+    <string name="settings_sponsorblock_toggle">自动跳过</string>
+    <string name="settings_sponsorblock_toggle_subtitle">由社区标注的赞助、片头片尾等片段</string>
+    <string name="settings_sponsorblock_server">服务器地址</string>
+    <string name="settings_sponsorblock_server_dialog">SponsorBlock 服务器</string>
+    <string name="settings_section_about">关于</string>
+    <string name="settings_version">版本</string>
+    <string name="settings_license">许可证</string>
 </resources>

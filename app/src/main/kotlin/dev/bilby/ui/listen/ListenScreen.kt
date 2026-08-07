@@ -47,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -55,6 +56,7 @@ import coil3.compose.AsyncImage
 import coil3.network.NetworkHeaders
 import coil3.network.httpHeaders
 import coil3.request.ImageRequest
+import dev.bilby.R
 import dev.bilby.api.toHttpsUrl
 import androidx.compose.material3.Scaffold
 import dev.bilby.ui.components.BilbyTopBar
@@ -132,12 +134,15 @@ fun ListenScreen(
     // 会直接压在状态栏的时钟上。用 Scaffold 而不是手贴 padding,和其余页面一致。
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        topBar = { BilbyTopBar(title = "听视频", onBack = onBack) },
+        topBar = { BilbyTopBar(title = stringResource(R.string.listen_title), onBack = onBack) },
     ) { insets ->
     Column(modifier = Modifier.fillMaxSize().padding(insets)) {
         if (player == null || state.current == null) {
             Box(modifier = Modifier.fillMaxWidth().padding(Spacing.Spacious), contentAlignment = Alignment.Center) {
-                Text("未在播放", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    stringResource(R.string.listen_not_playing),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         } else {
             CoverAndInfo(state)
@@ -200,7 +205,11 @@ fun ListenScreen(
         // 分不出"正在放的这一条"和"接下来有哪些"。
         HorizontalDivider(modifier = Modifier.padding(top = Spacing.Tight))
         SectionHeader(
-            title = if (queue.isEmpty()) "播放队列" else "播放队列 · ${queue.size}",
+            title = if (queue.isEmpty()) {
+                stringResource(R.string.listen_queue)
+            } else {
+                stringResource(R.string.listen_queue_count, queue.size)
+            },
             modifier = Modifier.padding(horizontal = Spacing.Comfortable),
         )
         QueueList(
@@ -282,7 +291,11 @@ private fun PlaybackControls(
         modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.Tight),
     ) {
         IconButton(onClick = onPrevious, enabled = hasPrevious) {
-            Icon(Icons.Filled.SkipPrevious, contentDescription = "上一条", modifier = Modifier.size(32.dp))
+            Icon(
+                Icons.Filled.SkipPrevious,
+                contentDescription = stringResource(R.string.player_previous),
+                modifier = Modifier.size(32.dp),
+            )
         }
         if (loading) {
             Box(modifier = Modifier.size(56.dp), contentAlignment = Alignment.Center) {
@@ -292,19 +305,29 @@ private fun PlaybackControls(
             IconButton(onClick = onPlayPause, modifier = Modifier.size(56.dp)) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (isPlaying) "暂停" else "播放",
+                    contentDescription = stringResource(
+                        if (isPlaying) R.string.player_pause else R.string.player_play,
+                    ),
                     modifier = Modifier.size(40.dp),
                 )
             }
         }
         IconButton(onClick = onNext, enabled = hasNext) {
-            Icon(Icons.Filled.SkipNext, contentDescription = "下一条", modifier = Modifier.size(32.dp))
+            Icon(
+                Icons.Filled.SkipNext,
+                contentDescription = stringResource(R.string.player_next),
+                modifier = Modifier.size(32.dp),
+            )
         }
 
         var speedMenuOpen by remember { mutableStateOf(false) }
         Box {
             TextButton(onClick = { speedMenuOpen = true }) {
-                Icon(Icons.Filled.Speed, contentDescription = "倍速", modifier = Modifier.size(18.dp))
+                Icon(
+                    Icons.Filled.Speed,
+                    contentDescription = stringResource(R.string.player_speed),
+                    modifier = Modifier.size(18.dp),
+                )
                 Text(formatSpeed(speed), modifier = Modifier.padding(start = Spacing.Hair))
             }
             DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) {
@@ -333,7 +356,12 @@ private fun BottomRow(
     ) {
         TextButton(onClick = onToggleShuffle) {
             Icon(Icons.Filled.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
-            Text(if (shuffled) "随机" else "顺序", modifier = Modifier.padding(start = Spacing.Hair))
+            Text(
+                stringResource(
+                    if (shuffled) R.string.queue_order_shuffle else R.string.queue_order_sequential,
+                ),
+                modifier = Modifier.padding(start = Spacing.Hair),
+            )
         }
 
         var sleepMenuOpen by remember { mutableStateOf(false) }
@@ -345,17 +373,17 @@ private fun BottomRow(
             DropdownMenu(expanded = sleepMenuOpen, onDismissRequest = { sleepMenuOpen = false }) {
                 SLEEP_TIMER_MINUTES.forEach { minutes ->
                     DropdownMenuItem(
-                        text = { Text("$minutes 分钟") },
+                        text = { Text(stringResource(R.string.sleep_timer_minutes, minutes)) },
                         onClick = { sleepMenuOpen = false; onSleepTimer(minutes) },
                     )
                 }
                 DropdownMenuItem(
-                    text = { Text("播完当前") },
+                    text = { Text(stringResource(R.string.sleep_timer_end_of_item)) },
                     onClick = { sleepMenuOpen = false; onSleepTimer(0) },
                 )
                 if (sleepTimer.mode != SleepTimerMode.Off) {
                     DropdownMenuItem(
-                        text = { Text("取消") },
+                        text = { Text(stringResource(R.string.action_cancel)) },
                         onClick = { sleepMenuOpen = false; onSleepTimer(-1) },
                     )
                 }
@@ -404,10 +432,13 @@ private fun QueueList(
     }
 }
 
+@Composable
 private fun sleepTimerLabel(state: SleepTimerState): String = when (val mode = state.mode) {
-    SleepTimerMode.Off -> "定时关闭"
-    is SleepTimerMode.After -> state.remainingMillis?.let { formatTime(it) } ?: "${mode.minutes} 分钟"
-    SleepTimerMode.EndOfItem -> "播完当前"
+    SleepTimerMode.Off -> stringResource(R.string.sleep_timer_off)
+    is SleepTimerMode.After -> state.remainingMillis?.let { formatTime(it) }
+        ?: stringResource(R.string.sleep_timer_minutes, mode.minutes)
+
+    SleepTimerMode.EndOfItem -> stringResource(R.string.sleep_timer_end_of_item)
 }
 
 private fun formatSpeed(speed: Float): String =

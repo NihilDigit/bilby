@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
@@ -35,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -46,6 +48,7 @@ import androidx.navigation3.ui.NavDisplay
 import dev.bilby.AppContainer
 import dev.bilby.BilbyApplication
 import dev.bilby.BiliLog
+import dev.bilby.R
 import dev.bilby.agent.AgentIntent
 import kotlinx.coroutines.launch
 import dev.bilby.ui.components.BilbyTopBar
@@ -174,13 +177,13 @@ private fun BilbyApp(container: AppContainer) {
  * 图标形态本身就是一路状态指示,只靠颜色的话色觉障碍用户看不出当前在哪一格。
  */
 private enum class RootTab(
-    val label: String,
+    @param:StringRes val label: Int,
     val selectedIcon: ImageVector,
     val unselectedIcon: ImageVector,
 ) {
-    Feed("动态", Icons.Filled.Subscriptions, Icons.Outlined.Subscriptions),
-    Search("搜索", Icons.Filled.Search, Icons.Outlined.Search),
-    ToView("稍后再看", Icons.Filled.WatchLater, Icons.Outlined.WatchLater),
+    Feed(R.string.tab_feed, Icons.Filled.Subscriptions, Icons.Outlined.Subscriptions),
+    Search(R.string.tab_search, Icons.Filled.Search, Icons.Outlined.Search),
+    ToView(R.string.tab_toview, Icons.Filled.WatchLater, Icons.Outlined.WatchLater),
 }
 
 /**
@@ -231,14 +234,17 @@ private fun RootTabs(
     Scaffold(
         modifier = Modifier.imePadding(),
         topBar = {
-            BilbyTopBar(title = selected.label) {
+            BilbyTopBar(title = stringResource(selected.label)) {
                 when (selected) {
                     // 动态页没有内容相关的动作:这一页能做的只有往下看,刷新是拉到底自动翻页。
                     // 放个刷新按钮等于把下拉刷新那套仪式换个位置摆回来(DESIGN 2.1)。
                     // 这里唯一的图标是设置 —— 它需要一个入口,而底部三格是"我要去哪",
                     // 设置不是目的地,只能挂在某个顶栏上,动态页是启动后的第一屏。
                     RootTab.Feed -> IconButton(onClick = onSettingsClick) {
-                        Icon(Icons.Outlined.Settings, contentDescription = "设置")
+                        Icon(
+                            Icons.Outlined.Settings,
+                            contentDescription = stringResource(R.string.settings_title),
+                        )
                     }
 
                     // 开新会话是清空助理上下文的唯一入口(DESIGN 3.1:会话必须由用户显式开启),
@@ -247,7 +253,10 @@ private fun RootTabs(
                     // 只会让人以为自己漏了什么。
                     RootTab.Search -> if (searchState.mode == SearchMode.Agent) {
                         IconButton(onClick = searchVm::newSession) {
-                            Icon(Icons.Filled.Add, contentDescription = "新会话")
+                            Icon(
+                                Icons.Filled.Add,
+                                contentDescription = stringResource(R.string.search_new_session),
+                            )
                         }
                     } else {
                         Unit
@@ -257,7 +266,15 @@ private fun RootTabs(
                         onClick = toViewVm::clearFinished,
                         enabled = !toViewState.clearing,
                     ) {
-                        Text(if (toViewState.clearing) "清空中…" else "清空已看完")
+                        Text(
+                            stringResource(
+                                if (toViewState.clearing) {
+                                    R.string.toview_clearing
+                                } else {
+                                    R.string.toview_clear_finished
+                                },
+                            ),
+                        )
                     }
                 }
             }
@@ -276,7 +293,7 @@ private fun RootTabs(
                                 contentDescription = null,
                             )
                         },
-                        label = { Text(tab.label) },
+                        label = { Text(stringResource(tab.label)) },
                     )
                 }
             }

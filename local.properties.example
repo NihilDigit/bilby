@@ -1,0 +1,4 @@
+# Optional: bake an OpenAI-compatible endpoint into debug builds via BuildConfig.
+# Release builds ignore these values; any build can set them in the settings page.
+LLM_BASE_URL=https://api.example.com/v1
+LLM_API_KEY=sk-...

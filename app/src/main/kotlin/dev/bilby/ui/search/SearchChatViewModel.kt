@@ -16,11 +16,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** 搜索排序。快路默认综合;这几个取值来自 B 站 search/type 的 order 参数。 */
-enum class SearchOrder(val apiValue: String, val label: String) {
-    Comprehensive("totalrank", "综合"),
-    Play("click", "播放"),
-    NewPublished("pubdate", "新发布"),
+/**
+ * 搜索排序。快路默认综合;这几个取值来自 B 站 search/type 的 order 参数。
+ * 界面上还没有排序控件,所以只留 apiValue —— 原来的 label 没有任何地方显示。
+ */
+enum class SearchOrder(val apiValue: String) {
+    Comprehensive("totalrank"),
+    Play("click"),
+    NewPublished("pubdate"),
 }
 
 /**

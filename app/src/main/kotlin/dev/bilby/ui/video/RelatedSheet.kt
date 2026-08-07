@@ -13,7 +13,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import dev.bilby.R
 import dev.bilby.ui.components.AnswerBlocks
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.theme.Spacing
@@ -52,10 +54,10 @@ fun RelatedSheet(
         // 把手上一眼能认出它是什么、找到了几条 —— 翻了两屏评论之后回来时靠的就是这行。
         Text(
             text = when {
-                related.running -> "相关 · 检索中"
-                related.error != null -> "相关 · 失败"
-                videoCount > 0 -> "相关 · $videoCount 条"
-                else -> "相关"
+                related.running -> stringResource(R.string.related_title_running)
+                related.error != null -> stringResource(R.string.related_title_error)
+                videoCount > 0 -> stringResource(R.string.related_title_count, videoCount)
+                else -> stringResource(R.string.related_title)
             },
             style = MaterialTheme.typography.titleMedium,
         )
@@ -68,23 +70,23 @@ fun RelatedSheet(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                TextButton(onClick = onRetry) { Text("重试") }
+                TextButton(onClick = onRetry) { Text(stringResource(R.string.action_retry)) }
             }
 
             related.running -> {
                 // 检索过程留痕:结果不是凭空出现的,是这些步骤的产物。
                 related.steps.forEach { step ->
                     Text(
-                        text = "· $step",
+                        text = stringResource(R.string.related_step, step),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                InlineProgress("检索中…")
+                InlineProgress(stringResource(R.string.related_searching))
             }
 
             related.blocks.isEmpty() -> Text(
-                text = "没找到合适的",
+                text = stringResource(R.string.agent_no_result),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
