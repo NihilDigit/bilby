@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  debug 版的前景层:几何与 main 里那份完全相同,只把颜色反过来 —— 浅底深字。
+  改图标时两份都要改;这里不能只写"引用 main 的那份再换色",vector drawable 没有
+  可以只覆盖颜色的机制,tint 会把挖空的眼睛一起染上。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#4A5C92"
+        android:fillType="evenOdd"
+        android:pathData="M39,40 H54.5 A10.5,10.5 0 0 1 54.5,61 H56.5 A11.5,11.5 0 0 1 56.5,84 H39 Z M56,46.1 A2.4,2.9 0 0 1 56,51.9 A2.4,2.9 0 0 1 56,46.1 Z M57.75,47.9 A0.85,0.85 0 0 1 56.05,47.9 A0.85,0.85 0 0 1 57.75,47.9 Z" />
+
+    <path
+        android:strokeColor="#4A5C92"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:pathData="M45,41 C43,35.5 41.5,32 41,28" />
+
+    <path
+        android:strokeColor="#4A5C92"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:pathData="M56,41 C58.5,35.5 60.8,31.5 62,28" />
+
+</vector>

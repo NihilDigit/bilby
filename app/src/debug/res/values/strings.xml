@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- debug 与 release 并存在同一台机器上,抽屉里两个同名同图标的应用分不出哪个是哪个。 -->
+    <string name="app_name" translatable="false">Bilby-debug</string>
+</resources>

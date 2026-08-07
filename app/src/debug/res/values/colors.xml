@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 反色:底色换成浅色,前景换成品牌蓝(见同目录的 ic_launcher_foreground)。
+         比加角标可靠 —— 缩到 48dp 时角标糊成一团,而整体明暗反转在任何尺寸下都认得出。 -->
+    <color name="ic_launcher_background">#FAF8FF</color>
+</resources>
