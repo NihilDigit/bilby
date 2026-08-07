@@ -2,9 +2,9 @@
 
 # Bilby
 
-[简体中文](README.md)
+### No recommendations. Only what you choose.
 
-No recommendations. Only what you choose.
+[简体中文](README.md)
 
 Bilby is an Android client for bilibili. The home screen carries updates from the uploaders
 you follow, newest first, and scrolling down only takes you further back in time. There is

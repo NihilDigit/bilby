@@ -2,9 +2,9 @@
 
 # Bilby
 
-[English](README.en.md)
+### 没有推荐，只有选择
 
-没有推荐，只有选择。
+[English](README.en.md)
 
 Bilby 是一个 bilibili 第三方 Android 客户端。首页只有关注 UP 主的更新，按时间倒序，
 向下滑动只会到达更早的内容。没有推荐流、相关视频栏和自动连播。
