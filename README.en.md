@@ -4,87 +4,97 @@
 
 [简体中文](README.md)
 
-An Android client for bilibili with the recommendation machinery taken out.
+No recommendations. Only what you choose.
+
+Bilby is an Android client for bilibili. The home screen carries updates from the uploaders
+you follow, newest first, and scrolling down only takes you further back in time. There is
+no recommendation feed, no related-videos rail, and no autoplay.
 
 > **This project is under active development.** The interface and the API layer are both
 > still changing, and neither stability nor compatibility is guaranteed.
 
-The home screen shows updates from the accounts you follow, newest first. What appears there
-follows from who you follow; scrolling down moves further back in time, and the act of
-scrolling produces nothing on its own. Recommendation feed, related-videos rail, autoplay:
-none of the three.
+<table>
+<tr>
+<td><img src="docs/screenshots/feed.png" width="165"></td>
+<td><img src="docs/screenshots/video.png" width="165"></td>
+<td><img src="docs/screenshots/agent-running.png" width="165"></td>
+<td><img src="docs/screenshots/agent-answer.png" width="165"></td>
+<td><img src="docs/screenshots/listen.png" width="165"></td>
+</tr>
+<tr>
+<td align="center">Following feed</td>
+<td align="center">Video page and queue</td>
+<td align="center">Assistant searching</td>
+<td align="center">Assistant's answer</td>
+<td align="center">Listening mode</td>
+</tr>
+</table>
 
-Wherever the official app hands you the next video, Bilby leaves the choice to you. In the
-slot for related recommendations sits the current video's collection and the uploader's
-other work, a finite set fixed the moment you opened this video. A queue built from it plays
-to the end and stops: its contents are settled when playback starts and stay that way. A
-queue that refills has taken away the moment where you decide whether to keep watching.
+On the video page, the slot the official app fills with recommendations holds this video's
+collection and the uploader's other work instead: a set fixed the moment you opened the
+video, played to the end and then stopped.
 
-To find something else, say what you want. Search works the usual way, and there is an
-assistant you can describe things to: it searches, reads descriptions and comments, and
-comes back with a few videos and its reasons for each. It knows only what you told it this
-time, by design and permanently.
+Finding anything else takes asking. Search works the usual way, or hand it to the assistant,
+which searches, reads descriptions and top comments, and comes back with a few videos and
+its reasons for each.
 
-Bilby reports to bilibili like any other client, and history, heartbeats, coins, favourites,
-and likes all go through. What it drops is the part that pushes back at you.
+## Features
 
-## What it does
+Done:
 
-Following feed, search, watch-later, and uploader pages.
+- [x] Following feed, search, watch-later, uploader pages
+- [x] Playback: fullscreen, quality, speed, long-press fast-forward, drag-to-seek, lock, double-tap pause, multi-part videos
+- [x] Listening mode: same player as watching, background playback, notification, lock screen and headset controls, sleep timer
+- [x] Comments: read, sort, expand reply threads, post, like, delete
+- [x] Likes, coins, favourites, following
+- [x] SponsorBlock segments skipped by default
+- [x] Assistant search: searches, reads descriptions and top comments, returns videos with reasons
 
-Playback covers fullscreen, quality switching, speed, long-press fast-forward, drag-to-seek,
-lock, double-tap play/pause, and multi-part videos. Listening mode puts a different UI in
-front of the same player, with background playback, a queue, shuffle, and a sleep timer.
-SponsorBlock segments are skipped by default.
+Planned:
 
-Comments can be read, sorted, expanded into their reply threads, posted, liked, and deleted.
+- [ ] CI regression tests: build and test on pull requests (only the tag-triggered release exists today)
+- [ ] Interface and motion polish
+- [ ] Agent harness work (tools and loop)
+- [ ] Live streams
+- [ ] Picture-in-picture
+- [ ] Following list
+- [ ] Opening and sharing bilibili links
+- [ ] Filtering low-quality comments
+- [ ] Danmaku
 
-## Getting it
+## Install and sign in
 
 ```
 ./gradlew installDebug
 ```
 
-Sign in with the TV qrcode flow. One account, once.
+Sign in by scanning the qrcode with the bilibili app. One account, once.
 
-The assistant needs an OpenAI-compatible endpoint. Put it in `local.properties` for debug
-builds, or fill it in under settings on any build:
+The assistant needs an OpenAI-compatible endpoint. Fill in the address and key under
+Assistant in settings.
 
-```properties
-LLM_BASE_URL=https://.../v1
-LLM_API_KEY=sk-...
-```
-
-Requires Android 10 or later. Built on Compose with Material 3, Navigation 3, Media3, Room,
-and Ktor.
+Requires Android 10 or later.
 
 ## Contributing
 
-Contributions are welcome. Bug fixes, crash reports, documentation and small corrections can
-go straight to a pull request.
+Bug fixes, crash reports, documentation and small corrections can go straight to a pull
+request.
 
-For features and breaking changes, **please open an RFC issue first**, describing what you
-want, what the app does about it today, and what the design would look like. This is not an
-approval step; it exists so you do not write code in a direction the project cannot take.
-The constraints at the top of this page are fixed, a pull request that moves them is
-unlikely to land, and finding that out afterwards costs you the work.
+For features and breaking changes, please open an RFC issue first, describing what you want,
+what the app does about it today, and what the design would look like. It exists so you do
+not write code in a direction the project cannot take: the behaviour described above is
+fixed, a pull request that moves it is unlikely to land, and finding that out afterwards
+costs you the work.
 
-**LLM-assisted code is fine.** The one requirement is that you understand what the code you
-submit does in terms of behaviour — enough to say why it works and what it touches. Writing
-every line by hand is not the bar.
-
-The license follows from what Bilby is built on: the API layer is ported from PiliPlus,
-which is GPL-3.0, so this project cannot move off the GPL. There is no CLA, and you keep
-copyright over what you write.
+LLM-assisted code is fine, on two conditions: you understand what the code you submit does,
+enough to say why it works and what it touches; and you have run it on a real device before
+submitting.
 
 `CLAUDE.md` carries the working conventions worth knowing before a first change.
 
 ## License
 
-GPL-3.0-or-later, following [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus). See
-[LICENSE](LICENSE).
-
-Everything Bilby knows about talking to bilibili it learned from PiliPlus: WBI signing,
-AppSign, the device fingerprint, TV qrcode login, playurl parameters, reporting, and write
-actions are all ported from it. That project has already worked out which endpoints accept
-what, which ones risk control will refuse, and which documented behaviour no longer holds.
+GPL-3.0-or-later, see [LICENSE](LICENSE). The implementation of everything that talks to
+bilibili — WBI signing, AppSign, the device fingerprint, TV qrcode login, playurl parameters,
+reporting and write actions — is ported from
+[PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus) (GPL-3.0).
