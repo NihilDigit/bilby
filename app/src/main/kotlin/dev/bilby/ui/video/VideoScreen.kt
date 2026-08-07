@@ -16,6 +16,7 @@ import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -239,6 +240,11 @@ fun VideoScreen(
     BottomSheetScaffold(
         scaffoldState = sheetState,
         sheetPeekHeight = peek,
+        // M3 给标准 sheet 的容器色是 surface container low,而这一页的队列卡片用的是
+        // surface container —— 两者叠在一起几乎没有色差,边界就消失了。抬高一档并加重
+        // 投影:标准 sheet 没有遮罩,分隔完全靠容器色与阴影承担。
+        sheetContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        sheetShadowElevation = 12.dp,
         sheetContent = {
             RelatedSheet(
                 related = related,
