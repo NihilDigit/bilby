@@ -1,0 +1,14 @@
+# 仓库里统一存 LF,检出时按平台还原。没有这一行时,Windows 上提交的文件会带着 CRLF
+# 进仓库,第一个 Linux 贡献者 clone 下来就是全库行尾差异,一次提交几千行 diff。
+* text=auto eol=lf
+
+# gradlew 是 shell 脚本,在任何平台上都必须是 LF,否则 CI 上 /bin/sh 会报
+# "bad interpreter"。.bat 反过来,必须是 CRLF。
+gradlew   text eol=lf
+gradlew.bat text eol=crlf
+
+# 二进制不做任何行尾转换,转了就是损坏。
+*.png  binary
+*.jar  binary
+*.jks  binary
+*.keystore binary
