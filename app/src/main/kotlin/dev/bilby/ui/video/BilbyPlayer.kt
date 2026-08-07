@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -68,7 +69,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -82,8 +85,12 @@ import androidx.media3.ui.compose.PlayerSurface
 import dev.bilby.R
 import dev.bilby.formatDurationMillis
 import dev.bilby.data.QualityOption
+import dev.bilby.player.SubtitleCue
+import dev.bilby.player.SubtitleTrack
+import dev.bilby.player.cueAt
 import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SeekBarSegment
+import dev.bilby.ui.components.SubtitleTrackMenu
 import dev.bilby.ui.theme.FixedColors
 import kotlinx.coroutines.delay
 import kotlin.math.abs
@@ -134,6 +141,13 @@ fun BilbyPlayer(
     onReportProgress: (positionMillis: Long, durationMillis: Long) -> Unit,
     /** 会被自动跳过的片段。只染在进度条上,不参与交互,见 [SeekBar]。 */
     seekBarSegments: List<SeekBarSegment> = emptyList(),
+    /** 这条(cid)有哪些字幕轨,含 AI 生成的。为空时控制条不出现字幕按钮。 */
+    subtitleTracks: List<SubtitleTrack> = emptyList(),
+    /** 选中轨的语言代码,空字符串是关(默认)。 */
+    currentSubtitleLan: String = "",
+    onSubtitleTrackChange: (String) -> Unit = {},
+    /** 选中轨的正文,按 fromMillis 升序。 */
+    subtitleCues: List<SubtitleCue> = emptyList(),
     modifier: Modifier = Modifier,
     /** 只在全屏时显示。竖屏下标题就在播放器正下方,再印一遍是多余的。 */
     title: String = "",
@@ -153,6 +167,18 @@ fun BilbyPlayer(
         }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
+    }
+
+    // 播放时屏幕常亮,暂停时不常亮——条件看的是播放状态,不是"页面在前台"。
+    //
+    // 作用域只覆盖内嵌与全屏这两种画面可见的形态,不覆盖听视频:后者的全部意义就是
+    // 息屏后台放(DESIGN 2.4b「息屏后台,不能后台就不成立」),常亮会把它变成一个耗电的
+    // 笑话。这里不用另外传一个 listening 标志去关掉它——VideoScreen 在听视频分支上提前
+    // return,BilbyPlayer 根本不会被组合,作用域天然就是对的。
+    val view = LocalView.current
+    DisposableEffect(isPlaying) {
+        view.keepScreenOn = isPlaying
+        onDispose { view.keepScreenOn = false }
     }
 
     // 画面尺寸问渲染画面的那个播放器,不问 controller:controller 那边的 videoSize 要等 session
@@ -271,6 +297,10 @@ fun BilbyPlayer(
     BackHandler(enabled = isFullscreen) { onFullscreenChange(false) }
 
     val displayPosition = dragPosition ?: position
+
+    // 二分查找,不逐帧线性扫:见 SubtitleCue.kt 上的注释。落在两句之间的空档里时是 null,
+    // 什么都不画——句间停顿本来就没有字幕在念。
+    val currentCue = remember(subtitleCues, displayPosition) { subtitleCues.cueAt(displayPosition) }
 
     Box(modifier = modifier.background(Color.Black)) {
         if (surfacePlayer != null) {
@@ -473,6 +503,33 @@ fun BilbyPlayer(
             }
         }
 
+        // 字幕层。**不走 Media3 的 SubtitleConfiguration**:那要求先把 JSON 转成 VTT 再挂到
+        // MediaItem 上,而这里的 MediaItem 是 AudioPlaybackService 拼的 DASH 合并源,插字幕轨
+        // 要动到播放器所有权那一层。还有个更硬的理由:听视频模式下 VideoScreen.kt 那句
+        // `setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true)` 会把视频轨连带的字幕轨一起关掉——
+        // 走播放器原生字幕的话,切到听视频字幕就会跟着消失,而这里的字幕来自独立的接口,不受
+        // 视频轨开关影响。贴底而不是压中间:不挡画面主体,也不常驻遮住控制条位置——控件常驻
+        // 显示时字幕整体上移让开,和进度条那句浮层的处理是同一个思路。
+        currentCue?.let { cue ->
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = if (controlsVisible && !locked) 88.dp else 24.dp)
+                    .padding(horizontal = 24.dp),
+            ) {
+                Text(
+                    cue.text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = FixedColors.OnMedia,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(FixedColors.ScrimOnMedia)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+        }
+
         // 全屏顶栏。全屏下没有别的东西说明"在看什么"和"怎么退出":系统栏是隐藏的,
         // 返回手势在锁屏态下也被吃掉了。竖屏不显示,那里标题就在播放器下面第一行。
         AnimatedVisibility(
@@ -582,6 +639,12 @@ fun BilbyPlayer(
                     onQualityChange(it)
                     interactionNonce++
                 },
+                subtitleTracks = subtitleTracks,
+                currentSubtitleLan = currentSubtitleLan,
+                onSubtitleTrackChange = {
+                    onSubtitleTrackChange(it)
+                    interactionNonce++
+                },
                 onFullscreenToggle = {
                     onFullscreenChange(!isFullscreen)
                     interactionNonce++
@@ -609,6 +672,9 @@ private fun PlayerControlBar(
     onSeekFinished: () -> Unit,
     onSpeedChange: (Float) -> Unit,
     onQualityChange: (Int) -> Unit,
+    subtitleTracks: List<SubtitleTrack>,
+    currentSubtitleLan: String,
+    onSubtitleTrackChange: (String) -> Unit,
     onFullscreenToggle: () -> Unit,
     onListen: () -> Unit,
     onMenuOpenChange: (Boolean) -> Unit,
@@ -647,6 +713,7 @@ private fun PlayerControlBar(
             Spacer(Modifier.weight(1f))
             SpeedButton(speed, onSpeedChange, onMenuOpenChange, isFullscreen)
             QualityButton(qualities, currentQuality, onQualityChange, onMenuOpenChange, isFullscreen)
+            SubtitleButton(subtitleTracks, currentSubtitleLan, onSubtitleTrackChange, onMenuOpenChange, isFullscreen)
             // 听视频和全屏是同一类东西:都是播放页内的状态,都不换播放器、不交接进度。
             // 同构的两个动作放在一起,以前它在下面的简介区,和一堆内容动作混着。
             IconButton(onClick = onListen) {
@@ -774,6 +841,46 @@ private fun QualityButton(
                 )
             }
         }
+    }
+}
+
+/**
+ * 字幕轨选择,和 [SpeedButton]/[QualityButton] 是同一套形状。没有轨(这条视频没有字幕、
+ * 或者还没拉回来)时不出现——一个只有"关闭"一个选项的菜单是纯噪声。
+ */
+@Composable
+private fun SubtitleButton(
+    tracks: List<SubtitleTrack>,
+    currentLan: String,
+    onChange: (String) -> Unit,
+    onMenuOpenChange: (Boolean) -> Unit,
+    isFullscreen: Boolean,
+) {
+    if (tracks.isEmpty()) return
+    var expanded by remember { mutableStateOf(false) }
+    val currentLabel = tracks.firstOrNull { it.lan == currentLan }?.displayName
+    Box {
+        ControlButton(
+            expanded = expanded,
+            onClick = { expanded = true; onMenuOpenChange(true) },
+            label = if (isFullscreen) currentLabel else null,
+            icon = { tint ->
+                Icon(
+                    Icons.Filled.Subtitles,
+                    stringResource(R.string.player_subtitle),
+                    tint = tint,
+                    modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp),
+                )
+            },
+        )
+        // 菜单内容和听视频封面右上角那个按钮共用一份,见 SubtitleTrackMenu 上的注释。
+        SubtitleTrackMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false; onMenuOpenChange(false) },
+            tracks = tracks,
+            currentLan = currentLan,
+            onSelect = onChange,
+        )
     }
 }
 

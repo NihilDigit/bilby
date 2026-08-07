@@ -43,6 +43,9 @@
     <string name="search_new_session">New session</string>
     <string name="search_mode_to_agent">Ask the assistant</string>
     <string name="search_mode_to_normal">Switch to plain search</string>
+    <string name="search_order_comprehensive">Relevance</string>
+    <string name="search_order_click">Most played</string>
+    <string name="search_order_pubdate">Newest</string>
 
     <string name="agent_title">Assistant</string>
     <string name="agent_process">Steps</string>
@@ -80,11 +83,12 @@
     <string name="space_tab_archives">Videos</string>
     <string name="space_tab_dynamics">Posts</string>
     <string name="space_tab_collections">Collections</string>
-    <string name="space_level_followers">Lv%1$d   %2$s followers</string>
+    <string name="space_followers">%1$s followers</string>
     <string name="space_no_sign">This person is lazy and left nothing behind</string>
     <string name="space_listen_up">Listen to this creator\'s videos</string>
     <string name="space_order_pubdate">Newest</string>
     <string name="space_order_click">Most viewed</string>
+    <string name="space_search_action">Search</string>
     <string name="space_search_hint">Search this profile</string>
     <string name="space_empty_archives">This creator hasn\'t posted any videos</string>
     <string name="space_empty_archives_search">No matching videos</string>
@@ -131,6 +135,8 @@
     <string name="player_next">Next</string>
     <string name="player_speed">Speed</string>
     <string name="player_quality">Quality</string>
+    <string name="player_subtitle">Subtitles</string>
+    <string name="player_subtitle_off">Subtitles off</string>
     <string name="player_listen">Listen</string>
     <string name="player_lock">Lock</string>
     <string name="player_unlock">Unlock</string>
@@ -147,6 +153,9 @@
     <string name="sleep_timer_off">Sleep timer</string>
     <string name="sleep_timer_minutes">%1$d min</string>
     <string name="sleep_timer_end_of_item">After this one</string>
+    <string name="sleep_timer_stop_in">Stop in %1$d min</string>
+    <string name="sleep_timer_finish_switch">Stop after this video finishes</string>
+    <string name="sleep_timer_cancel">Cancel timer</string>
 
     <string name="sponsor_sponsor">Sponsor</string>
     <string name="sponsor_selfpromo">Self-promotion</string>

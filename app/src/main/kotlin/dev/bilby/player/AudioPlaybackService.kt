@@ -586,11 +586,8 @@ class AudioPlaybackService : MediaSessionService() {
                 ACTION_NEXT -> if (queue.next() != null) playCurrent()
                 ACTION_PREVIOUS -> if (queue.previous() != null) playCurrent()
                 ACTION_SLEEP_TIMER -> {
-                    when (val minutes = args.getInt(EXTRA_SLEEP_MINUTES, SLEEP_CANCEL)) {
-                        SLEEP_CANCEL -> sleepTimer.cancel()
-                        SLEEP_END_OF_ITEM -> sleepTimer.startEndOfItem()
-                        else -> sleepTimer.startAfter(minutes)
-                    }
+                    val minutes = args.getInt(EXTRA_SLEEP_MINUTES, SLEEP_NO_DURATION).takeIf { it > 0 }
+                    sleepTimer.start(minutes, args.getBoolean(EXTRA_SLEEP_FINISH_CURRENT, false))
                 }
 
                 else -> return super.onCustomCommand(session, controller, customCommand, args)
@@ -633,10 +630,10 @@ class AudioPlaybackService : MediaSessionService() {
 
         const val ACTION_SLEEP_TIMER = "dev.bilby.SLEEP_TIMER"
         const val EXTRA_SLEEP_MINUTES = "minutes"
+        const val EXTRA_SLEEP_FINISH_CURRENT = "finishCurrentItem"
 
-        /** [EXTRA_SLEEP_MINUTES] 的两个哨兵值,其余正数按分钟计。 */
-        const val SLEEP_CANCEL = -1
-        const val SLEEP_END_OF_ITEM = 0
+        /** [EXTRA_SLEEP_MINUTES] 缺省/不设时长时的哨兵值。 */
+        private const val SLEEP_NO_DURATION = -1
 
         const val EXTRA_BVID = "bvid"
         const val EXTRA_CID = "cid"

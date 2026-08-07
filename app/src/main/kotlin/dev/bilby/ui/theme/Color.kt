@@ -112,6 +112,32 @@ object FixedColors {
      */
     val ScrimOnMedia = Color(0x8C000000)
 
+    /**
+     * 听视频歌词页的背景遮罩。**不能和 [ScrimOnMedia] 共用**——那个值是给角标算的,
+     * 一个小标签压在封面角落,对比度要求和整屏铺满逐句歌词完全不是一个量级:真机上按
+     * 0.55 试过,人脸和文字抢注意力,非当前句的灰字在花封面上基本读不动。0.72 是在那基础上
+     * 加到肉眼可读为止,没有再单独算对比度公式。改这个值不会连累封面上的时长角标,反过来
+     * 也一样——这正是分开一个 token 的理由。
+     *
+     * 歌词页在 API 31+ 会额外叠一层 [androidx.compose.ui.draw.blur](`ListenScreen.kt`),
+     * 这个 scrim 值对两种情况都通用:29/30 上拿不到 blur(`Modifier.blur` 在那两个版本上
+     * 静默不生效,不报错也不模糊),只能靠这层遮罩单独扛住可读性。
+     */
+    val ScrimOnLyrics = Color(0xB8000000)
+
+    /**
+     * 听视频页那张黑胶唱片的盘体、纹路与轴孔。
+     *
+     * 不跟主题:黑胶是一个**实物**的写照,浅色主题下把盘体变成浅灰就不再是唱片了 ——
+     * 和登录二维码同一类(风格指南 §1.2),颜色是这个东西本身的属性,不是界面的配色。
+     *
+     * 纹路透明度压得很低:它的作用不是被看清,是让旋转变得**可见**。纯色圆盘转起来
+     * 和静止的完全一样,同心纹路和轴孔才是"在转"的唯一视觉证据。
+     */
+    val VinylBody = Color(0xFF141414)
+    val VinylGroove = Color(0x14FFFFFF)
+    val VinylHole = Color(0xFF2A2A2A)
+
     /** 压在封面/播放画面上的文字与图标。跟着主题走会在深色下变成深灰,压在黑边上看不见。 */
     val OnMedia = Color(0xFFFFFFFF)
 
@@ -139,4 +165,18 @@ object FixedColors {
      */
     val MentionLight = Color(0xFF00739A)
     val MentionDark = Color(0xFF1FA9DF)
+
+    /**
+     * LV 徽章底色,按等级分档,B 站站内固定色 —— 同一个等级在任何用户、任何主题下都是
+     * 同一块颜色,这是它作为"身份标记"的意义所在,不能跟主题或动态取色走。
+     * 取值照 PiliPlus 的 `common/widgets/svg/level_icon.dart` 的 `lookupBackgroundColor`。
+     */
+    fun levelBackground(level: Int): Color = when {
+        level <= 1 -> Color(0xFFC0C0C0)
+        level == 2 -> Color(0xFF8BD29B)
+        level == 3 -> Color(0xFF7BCDEF)
+        level == 4 -> Color(0xFFFEBB8B)
+        level == 5 -> Color(0xFFEE672A)
+        else -> Color(0xFFF04C49)
+    }
 }

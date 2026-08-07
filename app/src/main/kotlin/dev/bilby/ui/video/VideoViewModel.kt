@@ -11,8 +11,13 @@ import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockRepository
 import dev.bilby.data.FollowState
 import dev.bilby.data.RelationRepository
+import dev.bilby.data.SubtitleRepository
 import dev.bilby.data.ToViewRepository
 import dev.bilby.data.SponsorSegment
+import dev.bilby.player.SubtitleCue
+import dev.bilby.player.SubtitleTrack
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -53,6 +58,7 @@ class VideoViewModel(
     private val sponsorBlockRepository: SponsorBlockRepository,
     private val toViewRepository: ToViewRepository,
     private val relationRepository: RelationRepository,
+    private val subtitleRepository: SubtitleRepository,
 ) : ViewModel() {
 
     /** UP 的关注态。视频详情里只有 mid 和名字,关系要另查(PiliPlus 播放页同样单独查)。 */
@@ -151,9 +157,72 @@ class VideoViewModel(
     private val _related = MutableStateFlow(RelatedState())
     val related: StateFlow<RelatedState> = _related.asStateFlow()
 
+    /** 这条视频(当前 cid)有哪些字幕轨,换 P/换视频就重新拉。 */
+    private val _subtitleTracks = MutableStateFlow<List<SubtitleTrack>>(emptyList())
+    val subtitleTracks: StateFlow<List<SubtitleTrack>> = _subtitleTracks.asStateFlow()
+
+    /** 选中轨的语言代码,空字符串是关(默认)。看视频的控制条和听视频的文稿共用这一份状态。 */
+    private val _subtitleLan = MutableStateFlow("")
+    val subtitleLan: StateFlow<String> = _subtitleLan.asStateFlow()
+
+    private val _subtitleCues = MutableStateFlow<List<SubtitleCue>>(emptyList())
+    val subtitleCues: StateFlow<List<SubtitleCue>> = _subtitleCues.asStateFlow()
+
     init {
         load()
         observeCurrentPart()
+        // 先读一次持久化的偏好,再开始跟播放器的 cid 走——顺序反过来的话,轨道清单可能在
+        // 偏好读回来之前就到,那一次找轨会拿着空字符串去比,永远命中"关"。
+        viewModelScope.launch {
+            _subtitleLan.value = settings.subtitlePrefs.first().lan
+            observeSubtitleTracks()
+        }
+    }
+
+    /** 撞 -412 时 [dev.bilby.data.SubtitleRepository] 会退避重试,见 [loadSubtitleTracks]。 */
+    private var subtitleTracksJob: Job? = null
+
+    /**
+     * 字幕轨随 cid 变,原因和 [observeCurrentPart] 一样:分 P 各有各的轨,播放器全 app
+     * 共用,队列走到别的视频上时不该把那一条的轨拉到这一页来。
+     */
+    private suspend fun observeSubtitleTracks() {
+        AudioPlaybackService.state
+            .map { if (it.current?.bvid == bvid) it.currentCid else 0L }
+            .distinctUntilChanged()
+            .collect { cid ->
+                // 换 cid 就取消上一条还没跑完的加载——它可能正卡在限流退避的 delay 里。
+                // 不取消的话,这个 collect 会等旧的退避结束(最坏 2 分钟)才轮到处理新 cid,
+                // 表现为切视频之后字幕迟迟不出来,而退避本来只该拖慢它自己那一条。
+                subtitleTracksJob?.cancel()
+                if (cid != 0L) {
+                    subtitleTracksJob = viewModelScope.launch { loadSubtitleTracks(cid) }
+                }
+            }
+    }
+
+    private suspend fun loadSubtitleTracks(cid: Long) {
+        val tracks = subtitleRepository.getTracks(bvid, cid)
+        _subtitleTracks.value = tracks
+        // 换 P 或换视频之后继续用上次选的那条(按语言代码找);找不到就关掉,不自动挑一条——
+        // "默认关"是产品要求,不是"还没设置过"才关。
+        val track = tracks.firstOrNull { it.lan == _subtitleLan.value }
+        _subtitleCues.value = track?.let { subtitleRepository.getCues(it.subtitleUrl) }.orEmpty()
+    }
+
+    /** 用户在控制条的字幕菜单里选了一条轨(或选了"关")。[lan] 为空字符串表示关。 */
+    fun selectSubtitle(lan: String) {
+        _subtitleLan.value = lan
+        // NonCancellable:选完字幕紧接着退出页面是常见操作,而退出会取消 viewModelScope,
+        // DataStore 的 edit 又是挂起函数——不挡住取消的话这次选择会在写盘前被砍掉。
+        // 和风格指南里"设置的落盘一律 NonCancellable"是同一条规矩。
+        viewModelScope.launch(NonCancellable) { settings.saveSubtitleLan(lan) }
+        val track = _subtitleTracks.value.firstOrNull { it.lan == lan }
+        if (track == null) {
+            _subtitleCues.value = emptyList()
+            return
+        }
+        viewModelScope.launch { _subtitleCues.value = subtitleRepository.getCues(track.subtitleUrl) }
     }
 
     /**

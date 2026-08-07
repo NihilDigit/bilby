@@ -126,6 +126,18 @@ class SettingsStore(context: Context) {
         }
     }
 
+    /**
+     * AI 字幕选的是哪条轨(语言代码),空字符串表示关。**默认关**——字幕默认关闭是产品要求,
+     * 不是"还没设置过"才关;换视频后按语言代码去找同名轨,找不到就照样关掉,不自动挑一条。
+     */
+    val subtitlePrefs: Flow<SubtitlePrefs> = store.data.map { p ->
+        SubtitlePrefs(lan = p[KEY_SUBTITLE_LAN].orEmpty())
+    }
+
+    suspend fun saveSubtitleLan(lan: String) {
+        store.edit { p -> p[KEY_SUBTITLE_LAN] = lan }
+    }
+
     companion object {
         private val KEY_SESSDATA = stringPreferencesKey("sessdata")
         private val KEY_BILI_JCT = stringPreferencesKey("bili_jct")
@@ -169,6 +181,8 @@ class SettingsStore(context: Context) {
         private val KEY_SB_ENABLED = booleanPreferencesKey("sponsorblock_enabled")
         private val KEY_SB_CATEGORIES = stringSetPreferencesKey("sponsorblock_categories")
         private val KEY_SB_SERVER = stringPreferencesKey("sponsorblock_server")
+
+        private val KEY_SUBTITLE_LAN = stringPreferencesKey("subtitle_lan")
 
         const val DEFAULT_SB_SERVER = "https://www.bsbsb.top"
 
@@ -229,6 +243,9 @@ data class SponsorBlockPrefs(
     val categories: Set<String> = SettingsStore.DEFAULT_SB_CATEGORIES,
     val serverUrl: String = SettingsStore.DEFAULT_SB_SERVER,
 )
+
+/** 空字符串是关(默认值)。非空时是某条字幕轨的语言代码,如 `ai-zh`。 */
+data class SubtitlePrefs(val lan: String = "")
 
 data class LlmConfig(
     val baseUrl: String,

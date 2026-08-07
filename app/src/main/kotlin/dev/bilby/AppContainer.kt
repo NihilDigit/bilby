@@ -21,6 +21,7 @@ import dev.bilby.data.SettingsStore
 import dev.bilby.data.RelationRepository
 import dev.bilby.data.SpaceRepository
 import dev.bilby.data.SponsorBlockRepository
+import dev.bilby.data.SubtitleRepository
 import dev.bilby.data.ToViewRepository
 import dev.bilby.data.TvLoginRepository
 import dev.bilby.data.VideoActionRepository
@@ -105,6 +106,8 @@ class AppContainer(context: Context) {
     val favRepository: FavRepository by lazy { FavRepository(biliClient, settings) }
 
     val videoActionRepository: VideoActionRepository by lazy { VideoActionRepository(biliClient) }
+
+    val subtitleRepository: SubtitleRepository by lazy { SubtitleRepository(biliClient) }
 
     val heartbeatReporter: HeartbeatReporter by lazy { HeartbeatReporter(biliClient) }
 

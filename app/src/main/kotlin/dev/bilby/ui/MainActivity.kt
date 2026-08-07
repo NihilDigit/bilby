@@ -424,6 +424,7 @@ private fun RootTabs(
                     state = searchState,
                     onInputChange = searchVm::onInputChange,
                     onModeChange = searchVm::onModeChange,
+                    onOrderChange = searchVm::onOrderChanged,
                     onSend = searchVm::send,
                     onVideoClick = onVideoClick,
                     onUserClick = onUserClick,
@@ -631,7 +632,11 @@ private fun VideoRoute(
     // 这也把建模摆正了:压栈过一版(每集攒一层)、替换栈顶过一版(语义仍是导航),两版都是在
     // 用导航层表达一件页内的事。CLAUDE.md 记着听视频被三次错误地建模成导航目的地,切集是
     // 同一个坑的另一个入口。
-    var episode by rememberSaveable { mutableStateOf(bvid) }
+    //
+    // **`bvid` 必须当 key**:不给 key 的话,导航到另一条视频时这个位置会把上一条的
+    // `episode` 复原回来,而 `VideoPane` 的 ViewModel key 就是它 —— 结果是点开新视频先看到
+    // 上一条的详情页,要等播放器真正切过去、下面那个 LaunchedEffect 才纠正回来。
+    var episode by rememberSaveable(bvid) { mutableStateOf(bvid) }
 
     /**
      * 听视频**提到切集之外**。
@@ -642,7 +647,10 @@ private fun VideoRoute(
      *
      * 提到这里仍然不是导航目的地 —— 它只是换了个持有者,backstack 上依旧只有一个播放页。
      */
-    var listening by rememberSaveable { mutableStateOf(startListening) }
+    //
+    // key 用的是路由参数 `bvid` 而不是上面那个 `episode`:这正好表达了注释说的那条边界 ——
+    // 同一条路由内切集不该退出听视频,而点开**另一条**视频是一次新的进入,该回到 [startListening]。
+    var listening by rememberSaveable(bvid) { mutableStateOf(startListening) }
 
     /**
      * **页面跟着队列走,不是反过来。**
@@ -698,6 +706,7 @@ private fun VideoPane(
                     container.sponsorBlockRepository,
                     container.toViewRepository,
                     container.relationRepository,
+                    container.subtitleRepository,
                 )
             }
         },
@@ -711,6 +720,9 @@ private fun VideoPane(
     val sponsorSegments by vm.sponsorSegments.collectAsStateWithLifecycle()
     val followState by vm.followState.collectAsStateWithLifecycle()
     val addedToView by vm.addedToView.collectAsStateWithLifecycle()
+    val subtitleTracks by vm.subtitleTracks.collectAsStateWithLifecycle()
+    val subtitleLan by vm.subtitleLan.collectAsStateWithLifecycle()
+    val subtitleCues by vm.subtitleCues.collectAsStateWithLifecycle()
 
     // 评论用 aid 作 oid,要等视频详情回来才知道 —— 但**不能拿它卡住整页**。
     //
@@ -757,6 +769,10 @@ private fun VideoPane(
         onDeleteComment = { commentVm?.delete(it) },
         listening = listening,
         onListeningChange = onListeningChange,
+        subtitleTracks = subtitleTracks,
+        subtitleLan = subtitleLan,
+        subtitleCues = subtitleCues,
+        onSelectSubtitle = vm::selectSubtitle,
     )
 }
 

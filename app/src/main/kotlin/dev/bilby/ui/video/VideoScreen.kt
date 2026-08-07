@@ -1,5 +1,6 @@
 package dev.bilby.ui.video
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,6 +54,8 @@ import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.delay
 import dev.bilby.data.VideoRelation
 import dev.bilby.player.AudioPlaybackService
+import dev.bilby.player.SubtitleCue
+import dev.bilby.player.SubtitleTrack
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.listen.ListenScreen
 import dev.bilby.ui.theme.Spacing
@@ -99,6 +102,12 @@ fun VideoScreen(
      */
     listening: Boolean,
     onListeningChange: (Boolean) -> Unit,
+    /** 当前这条(cid)有哪些字幕轨,含 AI 生成的;看视频的控制条和听视频的文稿共用同一份。 */
+    subtitleTracks: List<SubtitleTrack> = emptyList(),
+    /** 选中轨的语言代码,空字符串是关(默认)。 */
+    subtitleLan: String = "",
+    subtitleCues: List<SubtitleCue> = emptyList(),
+    onSelectSubtitle: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -270,6 +279,14 @@ fun VideoScreen(
     // 封面,persistent element 到底是"播放器"还是"封面"需要先定,否则 bounds 两端接的
     // 不是同一个东西。
     if (listening && active != null) {
+        // 听视频时系统返回键/侧滑不会自己落到 ListenScreen 顶栏的 onBack 上——不拦的话它
+        // 直接穿透到 MainActivity 的 backStack.removeLastOrNull(),整个播放页被弹掉、
+        // 人回到动态流而播放器还在后台放。全屏那半边已经有同样一句(BilbyPlayer.kt)。
+        //
+        // 队列 Sheet 打开时不用另外处理:ModalBottomSheet 自己注册的 BackHandler 在组合树里
+        // 更靠后,会先接住那一次返回把 Sheet 关掉,这句退听视频要按第二次才轮到——这个先后
+        // 顺序是被依赖的,不是巧合。
+        BackHandler { onListeningChange(false) }
         ListenScreen(
             player = active,
             state = audioState,
@@ -283,16 +300,26 @@ fun VideoScreen(
             onPrevious = { send(AudioPlaybackService.ACTION_PREVIOUS, Bundle.EMPTY) },
             onToggleShuffle = toggleShuffle,
             onRetry = retryPlayback,
-            onSleepTimer = { minutes ->
+            onSleepTimer = { minutes, finishCurrentItem ->
+                // 哨兵值(不设时长的缺省)只在 AudioPlaybackService 里定义,这里不重复写字面量——
+                // 不带这个 key 就是"没设",取值那边自己有默认。
+                val args = Bundle().apply {
+                    if (minutes != null) putInt(AudioPlaybackService.EXTRA_SLEEP_MINUTES, minutes)
+                    putBoolean(AudioPlaybackService.EXTRA_SLEEP_FINISH_CURRENT, finishCurrentItem)
+                }
                 active.sendCustomCommand(
                     SessionCommand(AudioPlaybackService.ACTION_SLEEP_TIMER, Bundle.EMPTY),
-                    bundleOf(AudioPlaybackService.EXTRA_SLEEP_MINUTES to minutes),
+                    args,
                 )
             },
             // 退出听视频就是把这个壳关掉,**没有第二件事**。队列不动、播放不停、视频轨由上面
             // 那个 LaunchedEffect 自己打开。页面此刻可能已经不是队列当前那一条了(听的时候
             // 连播过去了),跟过去是 VideoRoute 的职责 —— 它盯着队列,不需要这里通知。
             onBack = { onListeningChange(false) },
+            subtitleTracks = subtitleTracks,
+            subtitleLan = subtitleLan,
+            onSelectSubtitle = onSelectSubtitle,
+            subtitleCues = subtitleCues,
             modifier = Modifier.fillMaxSize(),
         )
         return
@@ -315,6 +342,10 @@ fun VideoScreen(
                 onListen = { fullscreen = false; onListeningChange(true) },
                 onReportProgress = onReportProgress,
                 title = state.detail?.title.orEmpty(),
+                subtitleTracks = subtitleTracks,
+                currentSubtitleLan = subtitleLan,
+                onSubtitleTrackChange = onSelectSubtitle,
+                subtitleCues = subtitleCues,
                 modifier = Modifier.fillMaxSize(),
             )
             if (playbackError != null) {
@@ -379,6 +410,10 @@ fun VideoScreen(
                         onListen = { onListeningChange(true) },
                         onReportProgress = onReportProgress,
                 seekBarSegments = sponsorSegments.toSeekBarSegments(),
+                        subtitleTracks = subtitleTracks,
+                        currentSubtitleLan = subtitleLan,
+                        onSubtitleTrackChange = onSelectSubtitle,
+                        subtitleCues = subtitleCues,
                         modifier = Modifier.fillMaxSize(),
                     )
 
