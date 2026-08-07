@@ -88,9 +88,14 @@ error. KGP and KSP versions are overridden in the root `build.gradle.kts` `build
 classpath, where version catalog accessors are unavailable, so changes to
 `libs.versions.toml` must be mirrored there.
 
-M3 Expressive is merged into mainline material3, but `MaterialExpressiveTheme` is
-`internal`; use `MaterialTheme`. `MaterialTheme` sets no `LocalContentColor`, so content
-needs a `Surface` wrapper or dark mode renders black on black.
+M3 Expressive is merged into mainline material3. `MaterialExpressiveTheme` was `internal`
+on 1.4.0 and is public on the pinned alpha; `ui/theme/Theme.kt` uses it. Either theme sets
+no `LocalContentColor`, so content needs a `Surface` wrapper or dark mode renders black on
+black. Expressive-only APIs are not uniformly gated either — `ShortNavigationBar` and
+`ButtonGroup` no longer carry `ExperimentalMaterial3ExpressiveApi` on this version. Check
+the resolved artifact before assuming a symbol is internal or needs an opt-in; the version
+moves and `M3ApiProbe.kt` only catches symbols that disappear, not opt-ins that become
+unnecessary.
 
 Coil 3 requires `OkHttpNetworkFetcherFactory` to be registered explicitly and fails silently
 otherwise. Cover URLs arrive as `http://` and are blocked by the cleartext policy; rewrite

@@ -43,6 +43,7 @@ its reasons for each.
 Done:
 
 - [x] Following feed, search, watch-later, uploader pages
+- [x] Most-visited uploaders and the full following list
 - [x] Playback: fullscreen, quality, speed, long-press fast-forward, drag-to-seek, lock, double-tap pause, multi-part videos
 - [x] Listening mode: same player as watching, background playback, notification, lock screen and headset controls, sleep timer
 - [x] Comments: read, sort, expand reply threads, post, like, delete
@@ -55,10 +56,12 @@ Planned:
 - [ ] Danmaku
 - [ ] CI regression tests
 - [ ] Interface and motion polish
+- [ ] Search refinements
+- [ ] Player refinements
 - [ ] Agent harness work
 - [ ] Live streams
 - [ ] Picture-in-picture
-- [ ] Following list
+- [ ] Columns (articles)
 - [ ] Opening and sharing bilibili links
 - [ ] Filtering low-quality comments
 
