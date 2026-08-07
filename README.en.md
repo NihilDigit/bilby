@@ -6,9 +6,8 @@
 
 An Android client for bilibili with the recommendation machinery taken out.
 
-> **This project is under active development.** No version has been released yet. The
-> interface and the API layer are both still changing, and neither stability nor
-> compatibility is guaranteed.
+> **This project is under active development.** The interface and the API layer are both
+> still changing, and neither stability nor compatibility is guaranteed.
 
 The home screen shows updates from the accounts you follow, newest first. What appears there
 follows from who you follow; scrolling down moves further back in time, and the act of
