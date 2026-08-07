@@ -10,6 +10,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.BottomSheetScaffold
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.rememberBottomSheetScaffoldState
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,7 +56,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * **这里不建播放器**(DESIGN 2.4b:一个播放状态,两个 UI)。播放器归 [AudioPlaybackService]
  * 所有,页面连上去,把要播的流交给它,再通过 MediaController 控制;切到听视频只是换掉这层 UI。
  */
-@OptIn(UnstableApi::class)
+@OptIn(UnstableApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun VideoScreen(
     state: VideoUiState,
@@ -221,72 +226,103 @@ fun VideoScreen(
         return
     }
 
-    Column(modifier = modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
-                .background(Color.Black),
+    // 找相关做成底部 sheet:它是对当前视频问的一句话,不是一个要离开播放页的去处。
+    // 用 BottomSheetScaffold 而不是 ModalBottomSheet —— 后者带遮罩会把视频压暗,而这个
+    // 功能的前提就是"我还在看这个视频";peek 高度天生就能表达「问过之后常驻的把手」。
+    val sheetState = rememberBottomSheetScaffoldState()
+    val scope = rememberCoroutineScope()
+
+    // 把手只在问过之后存在,并活到离开播放页为止:它是**你自己那次提问的记忆**,
+    // 不是打开播放页就在那儿等着的入口。换个视频就是新的 VideoRoute,自动没有。
+    val peek = if (related.started) SheetHandleHeight else 0.dp
+
+    BottomSheetScaffold(
+        scaffoldState = sheetState,
+        sheetPeekHeight = peek,
+        sheetContent = {
+            RelatedSheet(
+                related = related,
+                onVideoClick = onRelatedVideoClick,
+                onRetry = onFindRelated,
+            )
+        },
+    ) { insets ->
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .padding(bottom = insets.calculateBottomPadding())
+                .windowInsetsPadding(WindowInsets.statusBars),
         ) {
-            when {
-                streams != null && active != null -> BilbyPlayer(
-                    player = active,
-                    surfacePlayer = surfacePlayer,
-                    qualities = state.playInfo?.availableQualities.orEmpty(),
-                    currentQuality = state.currentQuality,
-                    onQualityChange = { onQualityChange(it, active.currentPosition) },
-                    isFullscreen = false,
-                    onFullscreenChange = { fullscreen = it },
-                    onListen = { onListen(); listening = true },
-                    onSaveProgress = onSaveProgress,
-                    modifier = Modifier.fillMaxSize(),
-                )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .background(Color.Black),
+            ) {
+                when {
+                    streams != null && active != null -> BilbyPlayer(
+                        player = active,
+                        surfacePlayer = surfacePlayer,
+                        qualities = state.playInfo?.availableQualities.orEmpty(),
+                        currentQuality = state.currentQuality,
+                        onQualityChange = { onQualityChange(it, active.currentPosition) },
+                        isFullscreen = false,
+                        onFullscreenChange = { fullscreen = it },
+                        onListen = { onListen(); listening = true },
+                        onSaveProgress = onSaveProgress,
+                        modifier = Modifier.fillMaxSize(),
+                    )
 
-                state.error != null -> Text(
-                    state.error,
-                    color = Color.White,
-                    modifier = Modifier.align(Alignment.Center).padding(16.dp),
-                )
+                    state.error != null -> Text(
+                        state.error,
+                        color = Color.White,
+                        modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                    )
 
-                else -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                    else -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                }
+
+                SkipToast(skippedCategory, Modifier.align(Alignment.TopCenter).padding(8.dp))
             }
 
-            // 跳过要让用户看见,否则会以为播放器抽了。
-            SkipToast(skippedCategory, Modifier.align(Alignment.TopCenter).padding(8.dp))
-        }
-
-        state.detail?.let { detail ->
-            VideoTabs(
-                detail = detail,
-                currentCid = state.currentCid,
-                related = related,
-                commentState = commentState,
-                onFindRelated = onFindRelated,
-                followState = followState,
-                onToggleFollow = onToggleFollow,
-                queue = queue,
-                onPlayQueueItem = onPlayQueueItem,
-                onToggleShuffle = onToggleShuffle,
-                onUpClick = { onUpClick(detail.up.mid) },
-                relation = relation,
-                favFolders = favFolders,
-                addedToView = addedToView,
-                onLike = onLike,
-                onAddToView = onAddToView,
-                onCoin = onCoin,
-                onOpenFavPicker = onOpenFavPicker,
-                onFavConfirm = onFavConfirm,
-                onPlayPart = onPlayPart,
-                onPlayEpisode = onPlayEpisode,
-                onRelatedVideoClick = onRelatedVideoClick,
-                onCommentSort = onCommentSort,
-                onCommentLoadMore = onCommentLoadMore,
-                onExpandReplies = onExpandReplies,
-                onSendComment = onSendComment,
-                onLikeComment = onLikeComment,
-                onDeleteComment = onDeleteComment,
-                modifier = Modifier.fillMaxSize(),
-            )
+            state.detail?.let { detail ->
+                VideoTabs(
+                    detail = detail,
+                    currentCid = state.currentCid,
+                    related = related,
+                    commentState = commentState,
+                    // 点闪光:没问过就发起检索,问过就只是把 sheet 展开 —— 再点一次重跑
+                    // 会把已有结果冲掉,而用户此刻多半只是想再看一眼。
+                    onFindRelated = {
+                        if (!related.started) onFindRelated()
+                        scope.launch { sheetState.bottomSheetState.expand() }
+                    },
+                    followState = followState,
+                    onToggleFollow = onToggleFollow,
+                    queue = queue,
+                    onPlayQueueItem = onPlayQueueItem,
+                    onToggleShuffle = onToggleShuffle,
+                    onUpClick = { onUpClick(detail.up.mid) },
+                    relation = relation,
+                    favFolders = favFolders,
+                    addedToView = addedToView,
+                    onLike = onLike,
+                    onAddToView = onAddToView,
+                    onCoin = onCoin,
+                    onOpenFavPicker = onOpenFavPicker,
+                    onFavConfirm = onFavConfirm,
+                    onPlayPart = onPlayPart,
+                    onPlayEpisode = onPlayEpisode,
+                    onRelatedVideoClick = onRelatedVideoClick,
+                    onCommentSort = onCommentSort,
+                    onCommentLoadMore = onCommentLoadMore,
+                    onExpandReplies = onExpandReplies,
+                    onSendComment = onSendComment,
+                    onLikeComment = onLikeComment,
+                    onDeleteComment = onDeleteComment,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
     }
 }

@@ -2,7 +2,9 @@ package dev.bilby.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -34,15 +36,23 @@ fun AnswerBlocks(
                     style = MaterialTheme.typography.bodyMedium,
                 )
 
-                is AnswerBlock.Video -> CompactVideoRow(
-                    // 拿不到展示信息时只剩 bvid。这比不显示卡片好:句子里提到了它,
-                    // 少一张卡片会让那句话指向空处。
-                    title = block.trace?.title ?: block.bvid,
-                    coverUrl = block.trace?.coverUrl.orEmpty(),
-                    subtitle = block.trace?.upName,
-                    selected = false,
-                    onClick = { onVideoClick(block.bvid) },
-                )
+                // 卡片套一层容器:它嵌在散文里,不套的话和正文一样贴着左边缘,读起来像
+                // 段落中间突然插了一张图,分不清是"被提到的东西"还是"正文的一部分"。
+                is AnswerBlock.Video -> Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.padding(start = Spacing.Cozy),
+                ) {
+                    CompactVideoRow(
+                        // 拿不到展示信息时只剩 bvid。这比不显示卡片好:句子里提到了它,
+                        // 少一张卡片会让那句话指向空处。
+                        title = block.trace?.title ?: block.bvid,
+                        coverUrl = block.trace?.coverUrl.orEmpty(),
+                        subtitle = block.trace?.upName,
+                        selected = false,
+                        onClick = { onVideoClick(block.bvid) },
+                    )
+                }
             }
         }
     }

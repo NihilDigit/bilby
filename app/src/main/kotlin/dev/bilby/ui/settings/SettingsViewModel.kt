@@ -31,7 +31,6 @@ data class SettingsUiState(
     val llm: LlmConfig? = null,
     val codec: CodecPreference = CodecPreference.Auto,
     val sponsorBlock: SponsorBlockPrefs = SponsorBlockPrefs(),
-    val tech: PlaybackTechInfo = PlaybackTechInfo(),
     /** 本机真有硬解器的编码,决定编解码那一节列出哪几项。 */
     val hardwareCodecIds: Set<Int> = emptySet(),
 )
@@ -68,11 +67,6 @@ class SettingsViewModel(
                     _state.update { it.copy(account = it.account.copy(name = profile.value.name)) }
                 }
             }
-        }
-        // 解码器名在开始解码后才有值,倍速算法在音频格式确定后才准 —— 都得跟着流走,
-        // 不能只在进页面时取一次快照。
-        viewModelScope.launch {
-            PlayerFactory.techInfo.collect { info -> _state.update { it.copy(tech = info) } }
         }
     }
 

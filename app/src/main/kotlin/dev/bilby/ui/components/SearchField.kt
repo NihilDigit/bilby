@@ -25,8 +25,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import dev.bilby.R
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 
@@ -114,7 +116,7 @@ fun SearchField(
             IconButton(onClick = { onValueChange("") }) {
                 Icon(
                     imageVector = Icons.Filled.Close,
-                    contentDescription = "清空",
+                    contentDescription = stringResource(R.string.action_clear),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(Dimens.IconInline),
                 )

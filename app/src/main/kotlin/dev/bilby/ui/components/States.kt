@@ -17,8 +17,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import dev.bilby.R
 import dev.bilby.ui.theme.Spacing
 
 /**
@@ -67,7 +69,7 @@ fun FullScreenError(message: String, onRetry: () -> Unit, modifier: Modifier = M
         )
         // 重试是这一屏唯一能做的事,但它不是"主行动号召"——用 text button,
         // 别把一次失败渲染成一个需要下决心的按钮。
-        TextButton(onClick = onRetry) { Text("重试") }
+        TextButton(onClick = onRetry) { Text(stringResource(R.string.action_retry)) }
     }
 }
 
@@ -106,7 +108,7 @@ fun ListFooter(
         when {
             appending -> CircularProgressIndicator(modifier = Modifier.size(InlineSpinnerSize))
             !hasMore -> Text(
-                text = "没有更多了",
+                text = stringResource(R.string.list_no_more),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

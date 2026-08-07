@@ -16,7 +16,9 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import dev.bilby.R
 import dev.bilby.ui.theme.Spacing
 
 /**
@@ -45,7 +47,10 @@ fun BilbyTopBar(
             if (onBack != null) {
                 IconButton(onClick = onBack) {
                     // AutoMirrored:supportsRtl 开着,RTL 语言下返回箭头必须翻过来。
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.action_back),
+                    )
                 }
             }
         },

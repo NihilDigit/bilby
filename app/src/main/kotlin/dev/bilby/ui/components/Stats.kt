@@ -16,7 +16,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import dev.bilby.R
 import dev.bilby.ui.theme.Spacing
 
 /**
@@ -49,8 +51,8 @@ fun StatRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            playText?.let { Stat(Icons.Outlined.PlayCircle, "播放", it) }
-            danmakuText?.let { Stat(Icons.Outlined.Subtitles, "弹幕", it) }
+            playText?.let { Stat(Icons.Outlined.PlayCircle, stringResource(R.string.stat_play), it) }
+            danmakuText?.let { Stat(Icons.Outlined.Subtitles, stringResource(R.string.stat_danmaku), it) }
             dateText?.let {
                 Text(text = it, style = MaterialTheme.typography.labelSmall, color = color)
             }

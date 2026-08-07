@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material.icons.filled.WatchLater
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.ThumbUp
@@ -42,6 +43,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SecondaryTabRow
@@ -279,18 +281,14 @@ private fun IntroTab(
                 // 重复一遍没有信息量(合集场景下队列来源就是这个合集,
                 // 见 QueueSourceRepository.fromSeason)。
 
+                // 找相关的结果不在这里,在页面底部的 sheet 里(见 VideoScreen):
+                // 它是对当前视频问的一句话,不该把简介页顶下去。
                 QueueSection(
                     queue = queue,
                     onPlayQueueItem = onPlayQueueItem,
                     onToggleShuffle = onToggleShuffle,
-                    modifier = Modifier.padding(top = Spacing.Hair),
-                )
-
-                RelatedSection(
-                    related = related,
                     onFindRelated = onFindRelated,
-                    onRelatedVideoClick = onRelatedVideoClick,
-                    modifier = Modifier.padding(top = Spacing.Tight),
+                    modifier = Modifier.padding(top = Spacing.Hair),
                 )
             }
         }
@@ -729,6 +727,7 @@ private fun QueueSection(
     queue: QueueUiState,
     onPlayQueueItem: (String) -> Unit,
     onToggleShuffle: () -> Unit,
+    onFindRelated: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (!queue.loading && queue.items.isEmpty()) return
@@ -738,7 +737,7 @@ private fun QueueSection(
         shape = MaterialTheme.shapes.large,
         modifier = modifier.fillMaxWidth(),
     ) {
-        QueueContent(queue, onPlayQueueItem, onToggleShuffle)
+        QueueContent(queue, onPlayQueueItem, onToggleShuffle, onFindRelated)
     }
 }
 
@@ -747,12 +746,25 @@ private fun QueueContent(
     queue: QueueUiState,
     onPlayQueueItem: (String) -> Unit,
     onToggleShuffle: () -> Unit,
+    onFindRelated: () -> Unit,
 ) {
     Column(
         modifier = Modifier.padding(Spacing.Tight),
         verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
         SectionHeader(title = queue.sourceLabel) {
+            // 「找相关」长在这份列表上:这个位置在别的客户端是相关推荐,在这里是合集/UP 投稿,
+            // 把"要不要另找几个"做成这份列表的一个小动作,力度正好 —— 可用,但不劝你用。
+            //
+            // 用闪光而不是星形:星形在这个 app 里已经是收藏(动作栏那排),同一界面里两个星星
+            // 表示两件事,用户会以为点了是收藏。闪光是"AI 辅助动作"的通行符号。
+            IconButton(onClick = onFindRelated) {
+                Icon(
+                    Icons.Filled.AutoAwesome,
+                    contentDescription = "找相关",
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+            }
             // 顺序/随机只有两态,是个开关而不是两个选项,所以用带图标的 text button
             // 而不是 segmented button —— 后者会让人以为还有第三格。
             TextButton(onClick = onToggleShuffle, contentPadding = PaddingValues(horizontal = Spacing.Tight)) {

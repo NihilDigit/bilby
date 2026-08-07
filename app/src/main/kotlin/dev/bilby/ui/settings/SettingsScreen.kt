@@ -120,28 +120,6 @@ fun SettingsScreen(
                     hardwareCodecIds = state.hardwareCodecIds,
                     onChange = onCodecChange,
                 )
-                SettingRow(
-                    title = "视频解码器",
-                    subtitle = state.tech.videoDecoder?.let { name ->
-                        val kind = when (state.tech.videoIsHardware) {
-                            true -> "硬解"
-                            false -> "软解"
-                            null -> "未知"
-                        }
-                        "$name($kind)"
-                    } ?: "还没开始解码",
-                )
-                SettingRow(
-                    title = "音频解码器",
-                    subtitle = state.tech.audioDecoder ?: "还没开始解码",
-                )
-                SettingRow(
-                    title = "倍速音频算法",
-                    // 没有开关:WSOLA 默认开且有透明回退,开关能解决的问题已经被回退覆盖。
-                    // 这里只报告此刻真正在做时间伸缩的那一个。
-                    subtitle = state.tech.speedAlgorithm.name +
-                        (state.tech.speedFallbackReason?.let { "(已回退:$it)" } ?: ""),
-                )
             }
 
             item("sponsorblock") {
