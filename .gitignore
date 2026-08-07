@@ -20,3 +20,8 @@ DESIGN.md
 
 # subagent 用过的独立 GRADLE_USER_HOME
 .gradle-agent/
+
+# 签名密钥绝不进仓库
+*.jks
+*.keystore
+*.jks.base64
