@@ -60,9 +60,9 @@ and Ktor.
 
 ## Contributing
 
-Bilby is a personal project that happens to be open source, and its shape comes from one
-person's opinion about how a video client should behave. That opinion is the thing being
-maintained here.
+Bilby is maintained by one person; the organisation name is not a committee. Its shape comes
+from one view of how a video client should behave, that view is the thing being maintained
+here, and decisions about direction rest with the maintainer.
 
 Bug fixes, crash reports, and small corrections can go straight to a pull request.
 
@@ -70,7 +70,11 @@ Features and behaviour changes need an RFC first. Open an issue describing what 
 what the app does about it today, and what the design would look like, and wait for
 agreement before writing code. The constraints at the top of this page are the ones most
 likely to be at stake; a pull request that moves them without an agreed RFC will be closed
-on those grounds alone.
+on those grounds alone, whatever the code is like.
+
+A closed pull request means the idea does not belong in this project, not that it is a bad
+idea. Bilby is GPL-3.0: forking it and following your own judgement is entirely legitimate
+and needs nobody's permission.
 
 `CLAUDE.md` carries the working conventions worth knowing before a first change.
 
