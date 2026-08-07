@@ -73,7 +73,7 @@ class SettingsStore(context: Context) {
     /** 未配置时回落到 BuildConfig(debug 版从 local.properties 注入),省去每次装机重输。 */
     val llmConfig: Flow<LlmConfig> = store.data.map { p ->
         LlmConfig(
-            baseUrl = p[KEY_LLM_BASE_URL] ?: BuildConfig.LLM_BASE_URL,
+            baseUrl = p[KEY_LLM_BASE_URL] ?: BuildConfig.LLM_BASE_URL.ifEmpty { DEFAULT_LLM_BASE_URL },
             apiKey = p[KEY_LLM_API_KEY] ?: BuildConfig.LLM_API_KEY,
             model = p[KEY_LLM_MODEL] ?: DEFAULT_LLM_MODEL,
         )
@@ -81,7 +81,7 @@ class SettingsStore(context: Context) {
 
     suspend fun saveLlmConfig(value: LlmConfig) {
         store.edit { p ->
-            p[KEY_LLM_BASE_URL] = value.baseUrl
+            p[KEY_LLM_BASE_URL] = value.baseUrl.withScheme()
             p[KEY_LLM_API_KEY] = value.apiKey
             p[KEY_LLM_MODEL] = value.model
         }
@@ -153,7 +153,12 @@ class SettingsStore(context: Context) {
         private val KEY_LLM_MODEL = stringPreferencesKey("llm_model")
 
         /** 任务简单,用最便宜档即可(DESIGN 3.1)。 */
-        const val DEFAULT_LLM_MODEL = "deepseek-chat"
+        /**
+         * 默认指向 DeepSeek:填个 key 就能用,不必先去查地址长什么样。改成别的服务只要
+         * 换掉这两项,协议是 OpenAI 兼容的那一套。
+         */
+        const val DEFAULT_LLM_BASE_URL = "https://api.deepseek.com/v1"
+        const val DEFAULT_LLM_MODEL = "dsv4f"
 
         private val KEY_PREFERRED_CODEC = stringPreferencesKey("player_preferred_codec")
         private val KEY_DEFAULT_QUALITY = intPreferencesKey("player_default_quality")
@@ -231,4 +236,18 @@ data class LlmConfig(
     val model: String,
 ) {
     val isConfigured: Boolean get() = baseUrl.isNotEmpty() && apiKey.isNotEmpty()
+}
+
+/**
+ * 补上省略的 scheme。不补的话 Ktor 会当成 http,而应用禁止明文,报出来的是
+ * "CLEARTEXT communication not permitted" —— 这句话完全不提"你少写了 https://",
+ * 用户只会以为是网络策略挡了他。
+ *
+ * 本机地址补 http:自建模型(ollama、LM Studio)监听的就是 http,补成 https 反而连不上。
+ */
+private fun String.withScheme(): String {
+    val value = trim()
+    if (value.isEmpty() || value.contains("://")) return value
+    val local = value.startsWith("localhost") || value.startsWith("127.0.0.1") || value.startsWith("10.0.2.2")
+    return if (local) "http://$value" else "https://$value"
 }

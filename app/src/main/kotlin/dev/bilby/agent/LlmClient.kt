@@ -13,6 +13,9 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.utils.io.readUTF8Line
+import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
@@ -41,6 +44,31 @@ class LlmClient(
         val request = ChatRequest(model = config.model, messages = messages, tools = tools.ifEmpty { null })
         val url = config.baseUrl.trimEnd('/') + "/chat/completions"
 
+        // DeepSeek 限的是并发而不是 RPM,超了直接 429(见 api-docs 的 rate limit 一节)。
+        // 表现就是助理查到一半突然结束,过一会儿重试又好了 —— 不重试的话,一次撞上就是
+        // 整轮作废。只重试 429:其它错误码重试也不会变好,徒增等待。
+        var attempt = 0
+        while (true) {
+            try {
+                streamOnce(url, config, request)
+                return@flow
+            } catch (busy: ServerBusy) {
+                attempt++
+                if (attempt > MAX_RETRIES) {
+                    error("LLM 并发受限,重试 $MAX_RETRIES 次仍未成功")
+                }
+                val wait = RETRY_DELAYS_MS[attempt - 1]
+                BiliLog.w("LLM 返回 429,${wait}ms 后第 $attempt 次重试")
+                delay(wait)
+            }
+        }
+    }
+
+    private suspend fun FlowCollector<LlmDelta>.streamOnce(
+        url: String,
+        config: LlmConfig,
+        request: ChatRequest,
+    ) {
         http.preparePost(url) {
             header(HttpHeaders.Authorization, "Bearer ${config.apiKey}")
             contentType(ContentType.Application.Json)
@@ -48,6 +76,7 @@ class LlmClient(
         }.execute { response ->
             // 非 2xx 的响应体是普通 JSON,一行都不以 data: 开头,不检查的话整个错误会被
             // 当成"没有增量"静默吞掉,上层只能看到"助理没有给出结果"。
+            if (response.status == HttpStatusCode.TooManyRequests) throw ServerBusy()
             if (!response.status.isSuccess()) {
                 error("LLM ${response.status.value}: ${response.bodyAsText().take(500)}")
             }
@@ -100,8 +129,15 @@ class LlmClient(
         }
     }
 
+    /** 429:并发受限,等一会儿再来。只有它值得重试。 */
+    private class ServerBusy : Exception()
+
     private companion object {
         const val DATA_PREFIX = "data:"
         const val DONE_SENTINEL = "[DONE]"
+
+        const val MAX_RETRIES = 3
+        /** 递增而不是固定间隔:并发拥堵通常要几秒才缓过来,连着敲三次只是白等。 */
+        val RETRY_DELAYS_MS = longArrayOf(1_000, 3_000, 6_000)
     }
 }
