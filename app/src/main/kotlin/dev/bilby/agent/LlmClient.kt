@@ -37,6 +37,23 @@ class LlmClient(
     private val configProvider: suspend () -> LlmConfig,
 ) : LlmStreamer {
 
+    /**
+     * 冒烟测试:发一次最小请求,返回耗时。
+     *
+     * 不带回内容 —— 要确认的是地址、key、模型名这三样对不对,能收到回复就已经全部证明了;
+     * 耗时顺带说明这条链路有多快。
+     */
+    suspend fun smokeTest(): Result<Long> = runCatching {
+        val config = configProvider()
+        require(config.isConfigured) { "缺 base URL 或 key" }
+        val started = System.nanoTime()
+        stream(
+            messages = listOf(ChatMessage(role = ChatMessage.ROLE_USER, content = SMOKE_PROMPT)),
+            tools = emptyList(),
+        ).collect { }
+        (System.nanoTime() - started) / 1_000_000
+    }
+
     override fun stream(messages: List<ChatMessage>, tools: List<ToolSpec>): Flow<LlmDelta> = flow {
         val config = configProvider()
         require(config.isConfigured) { "LLM 未配置:缺 base URL 或 key" }
@@ -133,6 +150,7 @@ class LlmClient(
     private class ServerBusy : Exception()
 
     private companion object {
+        const val SMOKE_PROMPT = "1 加 1 等于几?只回答数字。"
         const val DATA_PREFIX = "data:"
         const val DONE_SENTINEL = "[DONE]"
 

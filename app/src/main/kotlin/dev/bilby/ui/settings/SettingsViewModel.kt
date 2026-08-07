@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.api.BiliResult
 import dev.bilby.data.CodecPreference
+import dev.bilby.agent.LlmClient
 import dev.bilby.data.LlmConfig
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SpaceRepository
@@ -29,6 +30,7 @@ data class AccountUiState(
 data class SettingsUiState(
     val account: AccountUiState = AccountUiState(),
     val llm: LlmConfig? = null,
+    val llmTest: LlmTest = LlmTest.Idle,
     val codec: CodecPreference = CodecPreference.Auto,
     val sponsorBlock: SponsorBlockPrefs = SponsorBlockPrefs(),
     /** 本机真有硬解器的编码,决定编解码那一节列出哪几项。 */
@@ -44,7 +46,30 @@ data class SettingsUiState(
 class SettingsViewModel(
     private val settings: SettingsStore,
     private val spaceRepository: SpaceRepository,
+    private val llmClient: LlmClient,
 ) : ViewModel() {
+
+    /**
+     * 冒烟测试:真发一次请求,把回答显示出来。
+     *
+     * 结果**不落盘**:它是这一刻的连通情况,存起来只会在下次进设置页时显示一个过期的
+     * "成功",而那时配置可能已经改过了。
+     */
+    fun smokeTestLlm() {
+        if (_state.value.llmTest is LlmTest.Running) return
+        _state.update { it.copy(llmTest = LlmTest.Running) }
+        viewModelScope.launch {
+            val result = llmClient.smokeTest()
+            _state.update {
+                it.copy(
+                    llmTest = result.fold(
+                        onSuccess = { millis -> LlmTest.Ok(millis) },
+                        onFailure = { error -> LlmTest.Failed(error.message ?: "请求失败") },
+                    ),
+                )
+            }
+        }
+    }
 
     private val _state = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
@@ -113,4 +138,12 @@ fun CodecPreference.requiredCodecId(): Int? = when (this) {
     CodecPreference.Avc -> VideoCodecId.AVC
     CodecPreference.Hevc -> VideoCodecId.HEVC
     CodecPreference.Av1 -> VideoCodecId.AV1
+}
+
+/** 冒烟测试的状态。成功时只给耗时:能回就说明配置是对的,内容不需要看。 */
+sealed interface LlmTest {
+    data object Idle : LlmTest
+    data object Running : LlmTest
+    data class Ok(val millis: Long) : LlmTest
+    data class Failed(val message: String) : LlmTest
 }

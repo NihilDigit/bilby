@@ -191,4 +191,8 @@
     <string name="settings_section_about">About</string>
     <string name="settings_version">Version</string>
     <string name="settings_license">License</string>
+    <string name="settings_llm_test">Test</string>
+    <string name="settings_llm_test_hint">Tap to send one request</string>
+    <string name="settings_llm_test_running">Sending…</string>
+    <string name="settings_llm_test_ok">OK · %1$d ms</string>
 </resources>

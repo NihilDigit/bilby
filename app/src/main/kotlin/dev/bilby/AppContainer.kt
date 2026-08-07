@@ -109,7 +109,7 @@ class AppContainer(context: Context) {
         QueueSourceRepository(spaceRepository, videoRepository)
     }
 
-    private val llmClient: LlmClient by lazy {
+    val llmClient: LlmClient by lazy {
         LlmClient(httpClient, json) { settings.llmConfig.first() }
     }
 

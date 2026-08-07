@@ -217,4 +217,8 @@
     <string name="settings_section_about">关于</string>
     <string name="settings_version">版本</string>
     <string name="settings_license">许可证</string>
+    <string name="settings_llm_test">测试</string>
+    <string name="settings_llm_test_hint">点击发送一次请求</string>
+    <string name="settings_llm_test_running">请求中…</string>
+    <string name="settings_llm_test_ok">正常 · %1$d ms</string>
 </resources>

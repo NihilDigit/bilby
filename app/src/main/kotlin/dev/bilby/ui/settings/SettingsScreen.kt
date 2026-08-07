@@ -63,6 +63,7 @@ import dev.bilby.ui.video.CATEGORY_LABELS
 fun SettingsScreen(
     state: SettingsUiState,
     onLlmChange: (LlmConfig) -> Unit,
+    onSmokeTestLlm: () -> Unit,
     onCodecChange: (CodecPreference) -> Unit,
     onSponsorBlockChange: (SponsorBlockPrefs) -> Unit,
     onLogout: () -> Unit,
@@ -119,6 +120,16 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_model),
                     subtitle = llm?.model.orEmpty().ifBlank { SettingsStore.DEFAULT_LLM_MODEL },
                     onClick = { editingLlm = true },
+                )
+                SettingRow(
+                    title = stringResource(R.string.settings_llm_test),
+                    subtitle = when (val test = state.llmTest) {
+                        LlmTest.Idle -> stringResource(R.string.settings_llm_test_hint)
+                        LlmTest.Running -> stringResource(R.string.settings_llm_test_running)
+                        is LlmTest.Ok -> stringResource(R.string.settings_llm_test_ok, test.millis)
+                        is LlmTest.Failed -> test.message
+                    },
+                    onClick = onSmokeTestLlm,
                 )
             }
 

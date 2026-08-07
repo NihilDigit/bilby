@@ -343,7 +343,7 @@ private fun RootTabs(
 private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
     val vm: SettingsViewModel = viewModel(
         factory = viewModelFactory {
-            initializer { SettingsViewModel(container.settings, container.spaceRepository) }
+            initializer { SettingsViewModel(container.settings, container.spaceRepository, container.llmClient) }
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
@@ -351,6 +351,7 @@ private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
     SettingsScreen(
         state = state,
         onLlmChange = vm::saveLlm,
+        onSmokeTestLlm = vm::smokeTestLlm,
         onCodecChange = vm::setCodec,
         onSponsorBlockChange = vm::updateSponsorBlock,
         // 停播放服务要 Context,所以由这一层做,ViewModel 只管清凭据。

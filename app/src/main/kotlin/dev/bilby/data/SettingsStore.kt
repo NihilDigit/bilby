@@ -158,7 +158,7 @@ class SettingsStore(context: Context) {
          * 换掉这两项,协议是 OpenAI 兼容的那一套。
          */
         const val DEFAULT_LLM_BASE_URL = "https://api.deepseek.com/v1"
-        const val DEFAULT_LLM_MODEL = "dsv4f"
+        const val DEFAULT_LLM_MODEL = "deepseek-v4-flash"
 
         private val KEY_PREFERRED_CODEC = stringPreferencesKey("player_preferred_codec")
         private val KEY_DEFAULT_QUALITY = intPreferencesKey("player_default_quality")
