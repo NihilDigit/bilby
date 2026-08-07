@@ -39,8 +39,8 @@ over web cookies and csrf, with its parameters split between query and body and 
 pointed at the uploader's space page. Risk control is per-action, so never generalise from
 one write action to the next.
 
-`notes/auth-model.md` records that the cookie-to-`access_key` path returns `-101` today. Do
-not reimplement it.
+The cookie-to-`access_key` path returns `-101` today. It was implemented, tested against the
+live API and removed; do not reimplement it.
 
 Web login and cookie refresh were removed on purpose. The refresh token this app holds comes
 from TV login and refreshes an app-side token, which is a different thing from what the web
@@ -98,6 +98,10 @@ them to https during mapping, leaving `usesCleartextTraffic` off.
 
 kotlinx.serialization omits fields equal to their defaults, so tool schemas sent to the LLM
 need `encodeDefaults = true`.
+
+`docs/ui-style-guide.md` carries the interface conventions: the design tokens, which
+component to reach for, and which alpha-only APIs this build depends on. Read it before
+changing anything under `ui/`.
 
 `app/proguard-rules.pro` is short deliberately. Every dependency that R8 would break ships
 consumer rules, and this codebase never looks up a class or member by name. Code that adds
