@@ -7,13 +7,13 @@ import dev.bilby.agent.AgentIntent
 import dev.bilby.agent.AgentLoop
 import dev.bilby.agent.ChatMessage
 import dev.bilby.agent.TraceItem
-import dev.bilby.data.AgentSessionRepository
 import dev.bilby.api.BiliResult
 import dev.bilby.data.SearchRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
@@ -35,21 +35,30 @@ enum class SearchOrder(val apiValue: String) {
 class SearchChatViewModel(
     private val searchRepository: SearchRepository,
     private val agentLoop: AgentLoop,
-    private val sessions: AgentSessionRepository,
 ) : ViewModel() {
 
     /**
      * 会话内多轮共享的上下文(DESIGN 3.1 修订)。**只含本会话的对话与工具返回**,
      * 观看历史一个字都不会进来。会话由用户点"新会话"显式开启,不自动续接。
      */
-    private var sessionId: Long? = null
     private var history: List<ChatMessage> = emptyList()
     private var seenBvids: Set<String> = emptySet()
     private var traces: Map<String, TraceItem> = emptyMap()
 
-    /** 开新会话:清空上下文。旧会话留在库里,这一版不做会话列表。 */
+    /**
+     * 正在跑的那一轮。**开新会话和再次发问都必须先把它取消掉。**
+     *
+     * 循环跑在 [viewModelScope] 上,这是它能扛住切 tab 和翻到播放页的原因(那两处只是
+     * composable 离开组合,ViewModel 还在)。反过来说,不显式取消就没有任何东西会停下它:
+     * 旧会话会继续执行工具、继续把消息写进一个用户已经放弃的上下文,而它的
+     * `updateAgent(turnId)` 还会往刚清空的状态里回写。
+     */
+    private var agentJob: Job? = null
+
+    /** 开新会话:销毁旧的那一轮并丢弃它的上下文。 */
     fun newSession() {
-        sessionId = null
+        agentJob?.cancel()
+        agentJob = null
         history = emptyList()
         seenBvids = emptySet()
         traces = emptyMap()
@@ -62,6 +71,13 @@ class SearchChatViewModel(
     private var nextTurnId = 1L
     /** 普通搜索当前翻到第几页。它只有一份结果,不需要按轮次记。 */
     private var page = 1
+
+    /**
+     * 普通搜索已经收下的 bvid。分页边界上同一条稿件会重出,而 UI 拿 bvid 当 LazyColumn 的
+     * key —— 重复即崩溃(「Key ... was already used」)。仓库那层只能管住单页内部,跨页
+     * 只有这里知道。
+     */
+    private val seenSearchBvids = mutableSetOf<String>()
 
     fun onInputChange(value: String) = _state.update { it.copy(input = value) }
 
@@ -79,6 +95,7 @@ class SearchChatViewModel(
             // 普通搜索是一次查询一份结果,不累积轮次:它就是一个搜索页。留着上一次的结果
             // 只会让人往上翻,而翻上去的东西和这次要找的无关。
             SearchMode.Normal -> {
+                seenSearchBvids.clear()
                 _state.update { it.copy(normal = NormalSearchState(query = query, loading = true)) }
                 runNormal(query, page = 1)
             }
@@ -109,6 +126,7 @@ class SearchChatViewModel(
         when (_state.value.mode) {
             SearchMode.Normal -> {
                 val query = _state.value.normal.query.ifEmpty { return }
+                seenSearchBvids.clear()
                 _state.update { it.copy(normal = it.normal.copy(loading = true, error = null)) }
                 runNormal(query, page = 1)
             }
@@ -126,11 +144,13 @@ class SearchChatViewModel(
         when (val result = searchRepository.searchVideos(keyword = query, page = page, order = order)) {
             is BiliResult.Ok -> {
                 this@SearchChatViewModel.page = page
+                if (page == 1) seenSearchBvids.clear()
+                val fresh = result.value.items.filter { seenSearchBvids.add(it.bvid) }
                 val users = if (page == 1) searchRepository.searchUsers(query).usersOrEmpty() else emptyList()
                 _state.update { state ->
                     state.copy(
                         normal = state.normal.copy(
-                            videos = if (page == 1) result.value.items else state.normal.videos + result.value.items,
+                            videos = if (page == 1) fresh else state.normal.videos + fresh,
                             users = if (page == 1) users else state.normal.users,
                             loading = false,
                             appending = false,
@@ -146,28 +166,33 @@ class SearchChatViewModel(
         }
     }
 
-    private fun runAgent(turnId: Long, query: String) = viewModelScope.launch {
-        val id = sessionId ?: sessions.newSession(query.take(SESSION_TITLE_LENGTH)).also { sessionId = it }
-
-        agentLoop.run(
-            intent = AgentIntent.Query(query),
-            history = history,
-            priorBvids = seenBvids,
-            priorTraces = traces,
-            onTurnComplete = { newMessages, seen, newTraces ->
-                history = history + newMessages
-                seenBvids = seen
-                traces = newTraces
-                // 落库不能阻塞 UI 线程上的收流,单独起一个协程。
-                viewModelScope.launch { sessions.appendMessages(id, newMessages) }
-            },
-        ).collect { event ->
-            updateAgent(turnId) { it.reduce(event) }
-            if (event is AgentEvent.Answer) {
-                viewModelScope.launch { sessions.saveAnswer(id, event.blocks) }
+    /**
+     * 会话只活在内存里,随 ViewModel 生灭,不落库。
+     *
+     * 助理上下文是一次性的:它只含本次意图(DESIGN 3.3 第 4 条),用户开新会话就是明确表示
+     * 不要它了。存下来既没有消费方(这一版没有会话列表),又要为"该不该续接"反复做判断,
+     * 而任何续接都在把上下文变成一份沉淀的画像。
+     */
+    private fun runAgent(turnId: Long, query: String) {
+        // 上一轮还在跑就先停掉:同一个会话里两个循环并行会交替往 history 上追加,
+        // 拼出一段谁也没说过的对话。
+        agentJob?.cancel()
+        agentJob = viewModelScope.launch {
+            agentLoop.run(
+                intent = AgentIntent.Query(query),
+                history = history,
+                priorBvids = seenBvids,
+                priorTraces = traces,
+                onTurnComplete = { newMessages, seen, newTraces ->
+                    history = history + newMessages
+                    seenBvids = seen
+                    traces = newTraces
+                },
+            ).collect { event ->
+                updateAgent(turnId) { it.reduce(event) }
             }
+            updateAgent(turnId) { it.copy(running = false) }
         }
-        updateAgent(turnId) { it.copy(running = false) }
     }
 
     private fun TurnResult.Agent.reduce(event: AgentEvent): TurnResult.Agent = when (event) {
@@ -210,6 +235,5 @@ class SearchChatViewModel(
 
     private companion object {
         /** 会话标题取第一轮输入的前若干字,给以后的会话列表用。 */
-        const val SESSION_TITLE_LENGTH = 20
     }
 }

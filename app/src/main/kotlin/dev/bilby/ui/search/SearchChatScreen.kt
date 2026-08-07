@@ -136,7 +136,28 @@ fun SearchChatScreen(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val inputBar: @Composable () -> Unit = {
+        InputBar(
+            input = state.input,
+            onInputChange = onInputChange,
+            mode = state.mode,
+            onModeChange = onModeChange,
+            onSend = onSend,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+
     Column(modifier = modifier.fillMaxSize()) {
+        // **输入框固定在顶部,两种模式都一样。**
+        //
+        // 它原先贴在底部,那是对话的排布:新内容长在下面,输入框跟着最新一条。但普通搜索是
+        // "提一个问题,拿一页结果" —— 结果从顶部往下长,视线顺着输入框走进第一条再一路下滑,
+        // 和动态流是同一种读法;输入框压在底部,等于把这页信息流的起点放在屏幕下沿。
+        //
+        // 位置由模式决定过一版,切模式时框会从底跳到顶,闪得扎眼。两种模式共用一个框,就该
+        // 只有一个位置 —— 固定在顶部,普通搜索读起来是信息流,助理那串来回也只是从它下面往下长。
+        inputBar()
+
         Box(modifier = Modifier.weight(1f)) {
             when (state.mode) {
                 SearchMode.Normal -> NormalPane(
@@ -154,15 +175,6 @@ fun SearchChatScreen(
                 )
             }
         }
-
-        InputBar(
-            input = state.input,
-            onInputChange = onInputChange,
-            mode = state.mode,
-            onModeChange = onModeChange,
-            onSend = onSend,
-            modifier = Modifier.fillMaxWidth(),
-        )
     }
 }
 

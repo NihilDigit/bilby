@@ -1,5 +1,6 @@
 package dev.bilby.data
 
+import dev.bilby.BiliLog
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
@@ -58,8 +59,17 @@ class SearchRepository(private val client: BiliClient) {
             put("web_location", "1430654")
         }
         return client.getData<SearchVideoResultDto>(SEARCH_URL, params, signed = true).map { dto ->
-            val items = dto.result.map { it.toSearchVideo() }
-            val loaded = (page - 1) * PAGE_SIZE + items.size
+            // 搜索结果里会混进没有 bvid 的条目(非稿件类的卡片)。它们点了也打不开——跳转全按
+            // bvid 走——而留着的直接后果是崩溃:UI 拿 bvid 当 LazyColumn 的 key,两条空串就是
+            // 「Key "" was already used」。丢在产出侧一处,不指望每个消费方各自记得防。
+            val raw = dto.result.map { it.toSearchVideo() }
+            val items = raw.filter { it.bvid.isNotEmpty() }
+            if (items.size != raw.size) {
+                BiliLog.w("搜索结果丢弃 ${raw.size - items.size} 条无 bvid 的条目(keyword=$keyword page=$page)")
+            }
+            // 翻页进度按**服务端给的那一页**算,不按过滤后的条数:过滤掉几条不代表服务端那边
+            // 少发了几条,拿过滤后的数去比 numResults 会让 hasMore 一直为真,翻不到头。
+            val loaded = (page - 1) * PAGE_SIZE + raw.size
             SearchVideoPage(items, hasMore = loaded < dto.numResults)
         }
     }
