@@ -4,8 +4,8 @@ Android client for bilibili, single account, open source. The implementation bas
 `DESIGN.md` in the repository root, which is a local file and not tracked. Read it before
 changing structure.
 
-Features and behaviour changes go through an RFC issue before code. If a request arrives as
-"add X" with no agreed RFC, say so and help write the RFC.
+Features and behaviour changes are agreed in conversation before code, not filed as issues.
+If a request arrives as "add X" with no agreed shape, say so and work the design out first.
 
 ## Product constraints
 
@@ -31,31 +31,27 @@ them as fixed:
 
 **PiliPlus is the authority on API behaviour.** Its source is in `PiliPlus/`, local and
 gitignored. Public documentation lags live behaviour; where they disagree, follow PiliPlus.
-Four cases already paid for: `bili_ticket` parameters belong in the query; likes, coins and
-favourites require a TV `access_key`, since risk control refuses web cookies there;
-`batch-deal` for favourites requires both `add_media_ids` and `del_media_ids` (empty string
-when absent) and a `resources` value shaped like `aid:2`; and following goes the other way,
-over web cookies and csrf, with its parameters split between query and body and its Referer
-pointed at the uploader's space page. Risk control is per-action, so never generalise from
-one write action to the next.
+**Risk control is per-action**: an endpoint that accepts web cookies tells you nothing about
+the next one, and a write path that works over `access_key` tells you nothing about the one
+beside it. Never generalise from one action to the next — check what PiliPlus actually sends
+for that specific call. The parameter, header and signing facts already paid for live in
+`notes/` and at their call sites.
 
-The cookie-to-`access_key` path returns `-101` today. It was implemented, tested against the
-live API and removed; do not reimplement it.
-
-Web login and cookie refresh were removed on purpose. The refresh token this app holds comes
-from TV login and refreshes an app-side token, which is a different thing from what the web
-`cookie/refresh` endpoint wants, and PiliPlus implements no cookie refresh at all: when
-credentials expire, it asks for another qrcode scan. Do the same. A refresh path that looks
-like it works is worse than none, because it stops anyone from handling expiry.
+Two paths were built, tested against the live API, and removed. Do not reimplement either:
+the cookie-to-`access_key` exchange, which returns `-101`; and web login with cookie
+refresh, because the refresh token this app holds comes from TV login and refreshes an
+app-side token, which is a different thing from what the web `cookie/refresh` endpoint
+wants. PiliPlus implements no cookie refresh either — when credentials expire it asks for
+another qrcode scan, and so do we. A refresh path that looks like it works is worse than
+none, because it stops anyone from handling expiry.
 
 **Logging.** Every failure swallowed by `runCatching` logs path, code, and message through
 `BiliLog`. Credentials never appear in logs: not SESSDATA, `bili_jct`, `access_key`, or the
 LLM key. Cookies may be logged by key name only.
 
-**`api/BiliClient.kt` is the only API exit.** Its five routes are distinct: `rawGet`,
-`rawPostForm` (adds csrf), `rawPostQuery` (passport endpoints accept query parameters only),
-`appPostForm` (`access_key` plus AppSign, no cookies, app UA), and `appPostQuery` (TV
-login). Do not issue requests around it.
+**`api/BiliClient.kt` is the only API exit.** Its routes differ in credential, signing and
+UA, and each one exists because some endpoint refused the others. A call that needs a shape
+none of them has gets a new route there — never a request issued around it.
 
 **Optimistic updates exclude refetching.** Likes, coins, and favourites adjust the count
 locally and do not refetch; refetching makes the number flicker twice on popular videos.
@@ -77,9 +73,7 @@ navigation destination, adding a `listening` flag on the service, and adding a
 Multi-part videos and collections are different things. Shuffle changes play order only; the
 displayed list keeps its order and the highlight scrolls.
 
-Navigation 3 has no separate graph: the backstack is a `SnapshotStateList<NavKey>`. `entry`
-is a member extension on `EntryProviderScope` and needs no import; `onBack` is
-`() -> Unit`.
+Navigation 3 has no separate graph: the backstack is a `SnapshotStateList<NavKey>`.
 
 ## Toolchain
 
@@ -88,14 +82,12 @@ error. KGP and KSP versions are overridden in the root `build.gradle.kts` `build
 classpath, where version catalog accessors are unavailable, so changes to
 `libs.versions.toml` must be mirrored there.
 
-M3 Expressive is merged into mainline material3. `MaterialExpressiveTheme` was `internal`
-on 1.4.0 and is public on the pinned alpha; `ui/theme/Theme.kt` uses it. Either theme sets
-no `LocalContentColor`, so content needs a `Surface` wrapper or dark mode renders black on
-black. Expressive-only APIs are not uniformly gated either — `ShortNavigationBar` and
-`ButtonGroup` no longer carry `ExperimentalMaterial3ExpressiveApi` on this version. Check
-the resolved artifact before assuming a symbol is internal or needs an opt-in; the version
-moves and `M3ApiProbe.kt` only catches symbols that disappear, not opt-ins that become
-unnecessary.
+M3 Expressive is merged into mainline material3, and the pinned version is an alpha that
+moves. Check the resolved artifact before assuming a symbol is internal, absent, or needs an
+opt-in — visibility and experimental gating have both changed under this project already,
+and `M3ApiProbe.kt` only catches symbols that disappear, not opt-ins that become
+unnecessary. Neither theme sets `LocalContentColor`, so content needs a `Surface` wrapper or
+dark mode renders black on black.
 
 Coil 3 requires `OkHttpNetworkFetcherFactory` to be registered explicitly and fails silently
 otherwise. Cover URLs arrive as `http://` and are blocked by the cleartext policy; rewrite
@@ -108,9 +100,8 @@ need `encodeDefaults = true`.
 component to reach for, and which alpha-only APIs this build depends on. Read it before
 changing anything under `ui/`.
 
-`app/proguard-rules.pro` is short deliberately. Every dependency that R8 would break ships
-consumer rules, and this codebase never looks up a class or member by name. Code that adds
-name-based reflection must add its keep rule in the same change.
+`app/proguard-rules.pro` is short because this codebase never looks up a class or member by
+name. Code that adds name-based reflection must add its keep rule in the same change.
 
 ## Building and verifying
 
