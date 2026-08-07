@@ -165,6 +165,13 @@
     <string name="listen_not_playing">未在播放</string>
     <string name="listen_queue">播放队列</string>
     <string name="listen_queue_count">播放队列 · %1$d</string>
+    <string name="listen_retrying">%1$s,重试中…</string>
+
+    <!-- 播放失败的原因。摆在界面上,不悄悄跳到下一条。 -->
+    <string name="playback_error_stream">取流失败:%1$s</string>
+    <string name="playback_error_network">网络错误,取流失败</string>
+    <string name="playback_error_detail">读取视频信息失败</string>
+    <string name="playback_error_decode">播放失败(%1$d)</string>
     <string name="queue_order_sequential">顺序</string>
     <string name="queue_order_shuffle">随机</string>
     <string name="sleep_timer_off">定时关闭</string>

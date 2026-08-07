@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.BottomSheetScaffold
@@ -18,10 +19,12 @@ import kotlinx.coroutines.launch
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -31,6 +34,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import android.os.Bundle
 import androidx.core.content.ContextCompat
@@ -40,6 +45,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import dev.bilby.BiliLog
+import dev.bilby.R
 import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
@@ -49,6 +55,7 @@ import dev.bilby.data.VideoRelation
 import dev.bilby.player.AudioPlaybackService
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.listen.ListenScreen
+import dev.bilby.ui.theme.Spacing
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
@@ -66,18 +73,9 @@ fun VideoScreen(
     commentState: CommentUiState,
     sponsorSegments: List<SponsorSegment>,
     onReportProgress: (position: Long, duration: Long) -> Unit,
-    onQualityChange: (quality: Int, positionMillis: Long) -> Unit,
     onFindRelated: () -> Unit,
-    onListen: () -> Unit,
     followState: FollowState,
     onToggleFollow: () -> Unit,
-    queue: QueueUiState,
-    /**
-     * 切集。**方向在这里算**:队列就在这一层,而调用方(路由)手上没有它。
-     * lateral 转场要靠"往前还是往后"决定滑动方向,恒定方向会让平移读起来像下钻。
-     */
-    onSwitchEpisode: (bvid: String, forward: Boolean) -> Unit,
-    onToggleShuffle: () -> Unit,
     onUpClick: (mid: Long) -> Unit,
     relation: VideoRelation?,
     favFolders: List<FavFolder>,
@@ -87,7 +85,6 @@ fun VideoScreen(
     onCoin: (count: Int, alsoLike: Boolean) -> Unit,
     onOpenFavPicker: () -> Unit,
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
-    onPlayPart: (cid: Long) -> Unit,
     onPlayEpisode: (bvid: String) -> Unit,
     onRelatedVideoClick: (bvid: String) -> Unit,
     onCommentSort: (CommentSort) -> Unit,
@@ -96,34 +93,22 @@ fun VideoScreen(
     onSendComment: (String, Long?) -> Unit,
     onLikeComment: (Long) -> Unit,
     onDeleteComment: (Long) -> Unit,
-    startListening: Boolean = false,
+    /**
+     * 听视频开着没有。**状态在上一层**(见 MainActivity 的 VideoRoute):队列往前走一条会
+     * 换掉整个页面,存在这里的话自动连播就会把人踢回有画面的界面。
+     */
+    listening: Boolean,
+    onListeningChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     var controller by remember { mutableStateOf<MediaController?>(null) }
     var fullscreen by rememberSaveable { mutableStateOf(false) }
 
-    /**
-     * 听视频是**页面内的一个状态**,和全屏同构:不是导航目的地,所以页面不离开组合、
-     * 播放器不换、进度不交接 —— 没有任何生命周期需要处理。退出就是把它置回 false。
-     */
-    var listening by rememberSaveable { mutableStateOf(startListening) }
-
-    // 队列里的下标决定滑动方向。找不到(队列还没加载完)时按往后处理 —— 那一下的方向
-    // 不重要,重要的是不能崩。
-    val onPlayQueueItem: (String) -> Unit = { target ->
-        val items = queue.items
-        val from = items.indexOfFirst { it.bvid == queue.currentBvid }
-        val to = items.indexOfFirst { it.bvid == target }
-        onSwitchEpisode(target, to < 0 || from < 0 || to > from)
-    }
-
-    // DisposableEffect 捕获的是进入组合那一刻的 state,而 onDispose 要问的是离开那一刻:
-    // 换 P 会改 currentCid,不跟新就会拿旧 cid 去比。
+    // DisposableEffect 捕获的是进入组合那一刻的 state,而 onDispose 要问的是离开那一刻。
     val latestState by rememberUpdatedState(state)
     val playerHoldsThisPage = {
-        val loaded = AudioPlaybackService.state.value.loaded
-        loaded != null && loaded.bvid == latestState.detail?.bvid && loaded.cid == latestState.currentCid
+        AudioPlaybackService.state.value.current?.bvid == latestState.detail?.bvid
     }
 
     DisposableEffect(context) {
@@ -169,6 +154,83 @@ fun VideoScreen(
     // 所以能直接拿到同一个播放器对象;控制仍然全部走 controller。
     val surfacePlayer = active?.let { AudioPlaybackService.currentPlayer }
 
+    /** 队列的唯一来源是服务。页面只是把它摆出来,不自己攒一份。 */
+    val shownQueue = QueueUiState(
+        items = audioState.items,
+        currentBvid = audioState.current?.bvid,
+        sourceLabel = audioState.sourceLabel,
+        shuffled = audioState.shuffled,
+        loading = audioState.loading && audioState.items.isEmpty(),
+    )
+
+    /** 发一条自定义命令的简写。控制一律走 controller,不碰 currentPlayer。 */
+    val send: (String, Bundle) -> Unit = { action, args ->
+        active?.sendCustomCommand(SessionCommand(action, Bundle.EMPTY), args)
+    }
+
+    /**
+     * 打开这条视频。**这是页面对播放器说的唯一一句话**,而且是幂等的:服务那边队列已经是
+     * 这条、播放器也正装着它时,这条命令什么都不做。
+     *
+     * 于是转屏、退出全屏、从听视频退回、通知栏切过一条之后再回到界面,全都不会重新装载。
+     * 原先页面交的是流地址,"是不是同一次播放"只能靠字符串相等去猜,而 playurl 每次签名
+     * 都不同 —— 那正是重试当初必须再加一个 force 标志位去绕过的东西。
+     */
+    LaunchedEffect(active, state.detail?.bvid) {
+        val detail = state.detail ?: return@LaunchedEffect
+        if (active == null) return@LaunchedEffect
+        send(
+            AudioPlaybackService.ACTION_OPEN_VIDEO,
+            bundleOf(
+                AudioPlaybackService.EXTRA_BVID to detail.bvid,
+                AudioPlaybackService.EXTRA_CID to detail.cid,
+                AudioPlaybackService.EXTRA_MID to detail.up.mid,
+                AudioPlaybackService.EXTRA_TITLE to detail.title,
+                AudioPlaybackService.EXTRA_UP_NAME to detail.up.name,
+                AudioPlaybackService.EXTRA_COVER_URL to detail.coverUrl,
+            ),
+        )
+    }
+
+    val toggleShuffle: () -> Unit = {
+        send(
+            AudioPlaybackService.ACTION_SET_SHUFFLE,
+            bundleOf(AudioPlaybackService.EXTRA_SHUFFLED to !audioState.shuffled),
+        )
+    }
+
+    /** 点队列里的一条 = 让队列跳过去。页面不自己导航,它跟着队列走(见 VideoRoute)。 */
+    val onPlayQueueItem: (String) -> Unit = { target ->
+        send(
+            AudioPlaybackService.ACTION_SEEK_TO_BVID,
+            bundleOf(AudioPlaybackService.EXTRA_BVID to target),
+        )
+    }
+
+    val onPlayPart: (Long) -> Unit = { cid ->
+        send(
+            AudioPlaybackService.ACTION_PLAY_PART,
+            bundleOf(AudioPlaybackService.EXTRA_CID to cid),
+        )
+    }
+
+    /** 切清晰度。位置不用页面带过去了 —— 取流的那一侧就是持有播放器的那一侧。 */
+    val setQuality: (Int) -> Unit = { quality ->
+        send(
+            AudioPlaybackService.ACTION_SET_QUALITY,
+            bundleOf(AudioPlaybackService.EXTRA_QUALITY to quality),
+        )
+    }
+
+    /** 重试只有一个实现了:流归服务取,它自己就能重来。 */
+    val retryPlayback: () -> Unit = { send(AudioPlaybackService.ACTION_RETRY, Bundle.EMPTY) }
+
+    /**
+     * 播放失败的提示。**只在播放器装的确实是本页这一条时显示** —— 播放器全 app 共用一个,
+     * 队列走到别的视频上时,那一条的失败不该盖到这一页上。
+     */
+    val playbackError = audioState.error?.takeIf { audioState.current?.bvid == state.detail?.bvid }
+
     // SponsorBlock:默认开启。轮询而不是用 Player 的事件,是因为跳过要在片段**起点**发生,
     // 而播放器没有"位置越过某点"的回调。500ms 的粒度足够,漏跳的代价只是多看半秒。
     var skippedCategory by remember { mutableStateOf<String?>(null) }
@@ -181,28 +243,6 @@ fun VideoScreen(
             skippedCategory = sponsorSegments.firstOrNull { active.currentPosition in it.startMillis..it.endMillis }?.category
             active.seekTo(target)
         }
-    }
-
-    val streams = state.playInfo?.streams
-    // 换 P、切清晰度都会给出一份新的流地址,都从这里交给服务;续播位置由 ViewModel 给
-    // (切清晰度时它带回来的是切换前的位置)。同一份地址重复交不会重播,服务那边会认出来。
-    LaunchedEffect(active, streams) {
-        if (active == null) return@LaunchedEffect
-        val selected = streams ?: return@LaunchedEffect
-        val detail = state.detail
-        active.sendCustomCommand(
-            SessionCommand(AudioPlaybackService.ACTION_PLAY_VIDEO, Bundle.EMPTY),
-            bundleOf(
-                AudioPlaybackService.EXTRA_BVID to detail?.bvid.orEmpty(),
-                AudioPlaybackService.EXTRA_CID to state.currentCid,
-                AudioPlaybackService.EXTRA_VIDEO_URL to selected.videoUrl,
-                AudioPlaybackService.EXTRA_AUDIO_URL to selected.audioUrl,
-                AudioPlaybackService.EXTRA_START_POSITION to state.resumeAtMillis,
-                AudioPlaybackService.EXTRA_TITLE to detail?.title.orEmpty(),
-                AudioPlaybackService.EXTRA_UP_NAME to detail?.up?.name.orEmpty(),
-                AudioPlaybackService.EXTRA_COVER_URL to detail?.coverUrl.orEmpty(),
-            ),
-        )
     }
 
     // 听视频时把视频轨关掉:不关的话画面虽然不渲染,流还是照下,白费流量和电。
@@ -234,27 +274,25 @@ fun VideoScreen(
             player = active,
             state = audioState,
             sleepTimer = sleepTimerState,
-            queue = queue.items,
+            queue = audioState.items,
             onPlayQueueItem = onPlayQueueItem,
             parts = state.detail?.pages.orEmpty(),
-            currentCid = state.currentCid,
+            currentCid = audioState.currentCid,
             onPlayPart = onPlayPart,
-            onToggleShuffle = onToggleShuffle,
+            onNext = { send(AudioPlaybackService.ACTION_NEXT, Bundle.EMPTY) },
+            onPrevious = { send(AudioPlaybackService.ACTION_PREVIOUS, Bundle.EMPTY) },
+            onToggleShuffle = toggleShuffle,
+            onRetry = retryPlayback,
             onSleepTimer = { minutes ->
                 active.sendCustomCommand(
                     SessionCommand(AudioPlaybackService.ACTION_SLEEP_TIMER, Bundle.EMPTY),
                     bundleOf(AudioPlaybackService.EXTRA_SLEEP_MINUTES to minutes),
                 )
             },
-            // 退回播放页即终止听视频:清掉队列身份,迷你条与通知栏随之消失。
-            // 播放不停 —— 回到的是同一条视频,只是又有画面了。
-            onBack = {
-                listening = false
-                active.sendCustomCommand(
-                    SessionCommand(AudioPlaybackService.ACTION_END_LISTENING, Bundle.EMPTY),
-                    Bundle.EMPTY,
-                )
-            },
+            // 退出听视频就是把这个壳关掉,**没有第二件事**。队列不动、播放不停、视频轨由上面
+            // 那个 LaunchedEffect 自己打开。页面此刻可能已经不是队列当前那一条了(听的时候
+            // 连播过去了),跟过去是 VideoRoute 的职责 —— 它盯着队列,不需要这里通知。
+            onBack = { onListeningChange(false) },
             modifier = Modifier.fillMaxSize(),
         )
         return
@@ -262,20 +300,32 @@ fun VideoScreen(
 
     // 全屏时播放器独占整屏,下面的简介/评论整块不参与布局。
     if (fullscreen && active != null) {
-        BilbyPlayer(
-            player = active,
-            surfacePlayer = surfacePlayer,
-            qualities = state.playInfo?.availableQualities.orEmpty(),
-            currentQuality = state.currentQuality,
-            onQualityChange = { onQualityChange(it, active.currentPosition) },
-            isFullscreen = true,
-            onFullscreenChange = { fullscreen = it },
-            // 全屏下切听视频要先退出全屏,否则听视频界面会顶着一个已经隐藏的系统栏。
-            onListen = { fullscreen = false; onListen(); listening = true },
-            onReportProgress = onReportProgress,
-            title = state.detail?.title.orEmpty(),
-            modifier = Modifier.fillMaxSize().background(Color.Black),
-        )
+        // 全屏也要能看到失败并重试,否则唯一的出路是先退出全屏 —— 而失败时画面是黑的,
+        // 连"退出全屏"那个按钮在哪都不明显。
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+            BilbyPlayer(
+                player = active,
+                surfacePlayer = surfacePlayer,
+                qualities = audioState.playInfo?.availableQualities.orEmpty(),
+                currentQuality = audioState.currentQuality,
+                onQualityChange = { setQuality(it) },
+                isFullscreen = true,
+                onFullscreenChange = { fullscreen = it },
+                // 全屏下切听视频要先退出全屏,否则听视频界面会顶着一个已经隐藏的系统栏。
+                onListen = { fullscreen = false; onListeningChange(true) },
+                onReportProgress = onReportProgress,
+                title = state.detail?.title.orEmpty(),
+                modifier = Modifier.fillMaxSize(),
+            )
+            if (playbackError != null) {
+                PlaybackFailure(
+                    message = playbackError,
+                    retrying = audioState.loading,
+                    onRetry = retryPlayback,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
+        }
         return
     }
 
@@ -318,15 +368,15 @@ fun VideoScreen(
                     .background(Color.Black),
             ) {
                 when {
-                    streams != null && active != null -> BilbyPlayer(
+                    audioState.playInfo != null && active != null -> BilbyPlayer(
                         player = active,
                         surfacePlayer = surfacePlayer,
-                        qualities = state.playInfo?.availableQualities.orEmpty(),
-                        currentQuality = state.currentQuality,
-                        onQualityChange = { onQualityChange(it, active.currentPosition) },
+                        qualities = audioState.playInfo?.availableQualities.orEmpty(),
+                        currentQuality = audioState.currentQuality,
+                        onQualityChange = { setQuality(it) },
                         isFullscreen = false,
                         onFullscreenChange = { fullscreen = it },
-                        onListen = { onListen(); listening = true },
+                        onListen = { onListeningChange(true) },
                         onReportProgress = onReportProgress,
                 seekBarSegments = sponsorSegments.toSeekBarSegments(),
                         modifier = Modifier.fillMaxSize(),
@@ -341,13 +391,27 @@ fun VideoScreen(
                     else -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
 
+                // 盖在画面上而不是排在下面:失败时画面本来就是黑的,而简介区在一屏之外,
+                // 提示放那儿等于没有。state.error 那一支是"流都没取到",两者不会同时出现。
+                if (playbackError != null) {
+                    PlaybackFailure(
+                        message = playbackError,
+                        // 两个 loading 都要看:重取那一步归本页(state.loading),重新装载
+                        // 那一步归服务(audioState.loading)。只看后者的话,重取在飞的那一两秒
+                        // 按钮会重新亮起来,能连按出好几次重取。
+                        retrying = state.loading || audioState.loading,
+                        onRetry = retryPlayback,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+
                 SkipToast(skippedCategory, Modifier.align(Alignment.TopCenter).padding(8.dp))
             }
 
             state.detail?.let { detail ->
                 VideoTabs(
                     detail = detail,
-                    currentCid = state.currentCid,
+                    currentCid = audioState.currentCid,
                     related = related,
                     commentState = commentState,
                     // 点闪光:没问过就发起检索,问过就只是把 sheet 展开 —— 再点一次重跑
@@ -358,9 +422,9 @@ fun VideoScreen(
                     },
                     followState = followState,
                     onToggleFollow = onToggleFollow,
-                    queue = queue,
+                    queue = shownQueue,
                     onPlayQueueItem = onPlayQueueItem,
-                    onToggleShuffle = onToggleShuffle,
+                    onToggleShuffle = toggleShuffle,
                     onUpClick = { onUpClick(detail.up.mid) },
                     relation = relation,
                     favFolders = favFolders,
@@ -381,6 +445,43 @@ fun VideoScreen(
                     onDeleteComment = onDeleteComment,
                     modifier = Modifier.fillMaxSize(),
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 播放失败盖在画面上的那一块。
+ *
+ * 和听视频页那一行是两个实现,因为形态差得远:这里画面是黑的、要盖在正中,那边是一行
+ * 贴着播放控制的小字。共用一个 composable 只会得到一个到处是 if 的壳。
+ */
+@Composable
+private fun PlaybackFailure(
+    message: String,
+    retrying: Boolean,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier.padding(Spacing.Comfortable),
+    ) {
+        Text(
+            text = message,
+            color = Color.White,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+        )
+        // 重试中不给按钮:此刻按下去只会打断已经在跑的那次。
+        if (retrying) {
+            CircularProgressIndicator(
+                color = Color.White,
+                modifier = Modifier.padding(top = Spacing.Cozy).size(24.dp),
+            )
+        } else {
+            TextButton(onClick = onRetry) {
+                Text(stringResource(R.string.action_retry), color = Color.White)
             }
         }
     }

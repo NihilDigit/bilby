@@ -3,7 +3,6 @@ package dev.bilby.ui
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.snap
@@ -65,6 +64,7 @@ import kotlinx.coroutines.launch
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.agent.AgentTraceScreen
 import dev.bilby.ui.agent.AgentViewModel
+import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.comment.CommentViewModel
 import androidx.compose.material.icons.outlined.DeleteSweep
 import dev.bilby.ui.fav.FavFolderScreen
@@ -158,6 +158,25 @@ private fun BilbyApp(container: AppContainer) {
     )
 
     val backStack = rememberNavBackStack(Home)
+
+    /**
+     * 播放器与队列的生命周期到此为止:**backstack 上再没有播放页,就把播放器销毁。**
+     *
+     * 队列从第一个播放页打开时建立,中途从空间页或「找相关」打开别的视频只是重做队列;
+     * 一路返回到没有播放页了,这次播放才算结束。
+     *
+     * 判据是"还有没有播放页"这个纯粹的集合判断,不是"这一页是被弹出还是被覆盖" ——
+     * 后者是导航层的判断,CLAUDE.md 记着它被做错过。
+     *
+     * 划走 app 不走这里:那时整个 composition 都没了,effect 不会跑,后台听视频照常继续
+     * (要不要停由 onTaskRemoved 判断)。转屏同理,backstack 是保存恢复的。
+     */
+    val context = LocalContext.current
+    val hasVideoPage = backStack.any { it is Video }
+    LaunchedEffect(hasVideoPage) {
+        if (!hasVideoPage) AudioPlaybackService.stop(context)
+    }
+
     NavDisplay(
         backStack = backStack,
         onBack = { backStack.removeLastOrNull() },
@@ -595,51 +614,64 @@ private fun VideoRoute(
     onFindRelated: (bvid: String, title: String, upName: String) -> Unit,
     onOpenVideo: (String) -> Unit,
 ) {
-    // 切集**不进 backstack**。合集里的每一集互为平级,换一集是横着挪一格,不是进了一层;
-    // 走 backstack 的话 NavDisplay 只会按下钻处理,方向恒定、还带淡入淡出,而 M3 的 lateral
-    // 恰恰要求整组同向同速滑动且不加 fade —— 淡入淡出会削弱"可以左右滑"的暗示。
+    // 切集**不进 backstack**。合集里的每一集互为平级,换一集不是进了一层;走 backstack 的话
+    // NavDisplay 只会按下钻处理,而这里根本没有层级关系。
     //
     // 这也把建模摆正了:压栈过一版(每集攒一层)、替换栈顶过一版(语义仍是导航),两版都是在
     // 用导航层表达一件页内的事。CLAUDE.md 记着听视频被三次错误地建模成导航目的地,切集是
     // 同一个坑的另一个入口。
     var episode by rememberSaveable { mutableStateOf(bvid) }
-    var forward by rememberSaveable { mutableStateOf(true) }
 
-    AnimatedContent(
-        targetState = episode,
-        transitionSpec = {
-            val enter = if (forward) { w: Int -> w } else { w: Int -> -w }
-            val exit = if (forward) { w: Int -> -w } else { w: Int -> w }
-            // 同向同速、不淡:两侧用同一个 spec,读起来才是一组内容整体平移。
-            slideInHorizontally(lateralSlide, enter) togetherWith
-                slideOutHorizontally(lateralSlide, exit)
-        },
-        label = "episode",
-    ) { current ->
-        VideoPane(
-            container = container,
-            bvid = current,
-            startListening = startListening,
-            onUpClick = onUpClick,
-            onFindRelated = onFindRelated,
-            onOpenVideo = onOpenVideo,
-            onSwitchEpisode = { target, isForward ->
-                forward = isForward
-                episode = target
-            },
-        )
+    /**
+     * 听视频**提到切集之外**。
+     *
+     * 它是播放器的一种模式(把视频轨关掉),不是某一条视频的页面状态:队列往前走一条时
+     * 下面那个 VideoPane 会整个换掉,状态留在里面的话,听着听着自动连播到下一条就会
+     * 被踢回有画面的界面。
+     *
+     * 提到这里仍然不是导航目的地 —— 它只是换了个持有者,backstack 上依旧只有一个播放页。
+     */
+    var listening by rememberSaveable { mutableStateOf(startListening) }
+
+    /**
+     * **页面跟着队列走,不是反过来。**
+     *
+     * 队列在服务那边,推它的可能是通知栏的下一条、耳机线控、听视频里点的某一项、或者
+     * 一条播完自动连播。这些路径没有一条经过界面,所以"这一页在放哪条视频"只能由队列回答。
+     *
+     * 原先没有这一条:听视频里连播到别的视频、退回播放页后,页面还停在进来时那一条 ——
+     * 标题、简介、点赞数全是 A 的,而播放器在放 E。
+     *
+     * **换页不做转场。** 横滑表达的是"我横着挪了一格",那是给用户手势配的;自动连播不是
+     * 用户动作,滑一下会让人以为自己划了屏。而且它恰好和取流、prepare、codec 初始化撞在同一
+     * 瞬间,滑进来的还是一块空页(详情要等一次网络往返)——三样凑在一起,读起来就是卡。
+     */
+    val audioState by AudioPlaybackService.state.collectAsStateWithLifecycle()
+    LaunchedEffect(audioState.current?.bvid) {
+        val target = audioState.current?.bvid ?: return@LaunchedEffect
+        if (target != episode) episode = target
     }
+
+    VideoPane(
+        container = container,
+        bvid = episode,
+        listening = listening,
+        onListeningChange = { listening = it },
+        onUpClick = onUpClick,
+        onFindRelated = onFindRelated,
+        onOpenVideo = onOpenVideo,
+    )
 }
 
 @Composable
 private fun VideoPane(
     container: AppContainer,
     bvid: String,
-    startListening: Boolean,
+    listening: Boolean,
+    onListeningChange: (Boolean) -> Unit,
     onUpClick: (Long) -> Unit,
     onFindRelated: (bvid: String, title: String, upName: String) -> Unit,
     onOpenVideo: (String) -> Unit,
-    onSwitchEpisode: (String, Boolean) -> Unit,
 ) {
     val vm: VideoViewModel = viewModel(
         key = "video-$bvid",
@@ -653,7 +685,6 @@ private fun VideoPane(
                     container.videoActionRepository,
                     container.settings,
                     container.sponsorBlockRepository,
-                    container.queueSourceRepository,
                     container.toViewRepository,
                     container.relationRepository,
                 )
@@ -667,17 +698,21 @@ private fun VideoPane(
     val relation by vm.relation.collectAsStateWithLifecycle()
     val favFolders by vm.favFolders.collectAsStateWithLifecycle()
     val sponsorSegments by vm.sponsorSegments.collectAsStateWithLifecycle()
-    val queue by vm.queue.collectAsStateWithLifecycle()
     val followState by vm.followState.collectAsStateWithLifecycle()
     val addedToView by vm.addedToView.collectAsStateWithLifecycle()
 
-    // 评论用 aid 作 oid,要等视频详情回来才知道;拿到之前先不建 ViewModel。
-    val aid = state.detail?.aid ?: return
-    val commentVm: CommentViewModel = viewModel(
-        key = "comment-$aid",
-        factory = viewModelFactory { initializer { CommentViewModel(container.commentRepository, aid) } },
-    )
-    val commentState by commentVm.state.collectAsStateWithLifecycle()
+    // 评论用 aid 作 oid,要等视频详情回来才知道 —— 但**不能拿它卡住整页**。
+    //
+    // 原先这里是 `val aid = state.detail?.aid ?: return`:详情没回来就整页不画。切集时新页
+    // 要等一次网络往返才有东西,那段时间屏幕上是空的。SoT 之后这个等待已经没必要了 ——
+    // 标题、UP 名、封面队列项里就有,播放器的画面更是早就在放了。
+    val commentVm: CommentViewModel? = state.detail?.aid?.let { aid ->
+        viewModel(
+            key = "comment-$aid",
+            factory = viewModelFactory { initializer { CommentViewModel(container.commentRepository, aid) } },
+        )
+    }
+    val commentState = commentVm?.state?.collectAsStateWithLifecycle()?.value ?: CommentUiState()
 
     VideoScreen(
         state = state,
@@ -689,37 +724,7 @@ private fun VideoPane(
         onReportProgress = { position, duration ->
             vm.reportHeartbeat(position, duration, finished = duration > 0 && position >= duration - 1_000)
         },
-        onQualityChange = vm::setQuality,
         onFindRelated = vm::findRelated,
-        queue = queue,
-        // 点队列里的一条 = 切到那个视频。这是确定性导航,不是推荐。
-        onSwitchEpisode = onSwitchEpisode,
-        onToggleShuffle = vm::toggleShuffle,
-        // 听视频:先按合集找队列,不属于合集才退到 UP 投稿(DESIGN 2.4b)。
-        // 听视频播的就是页面上这份队列,不重新构造(DESIGN 2.4b:队列不是听视频的特产)。
-        // 听视频只是换个界面:同一个播放器、同一份队列,所以这里只做两件事——
-        // 把队列交给服务、跳到听视频页。进度不需要交接,因为播放器根本没换。
-        onListen = {
-            val items = queue.items
-            if (items.isEmpty()) {
-                BiliLog.w("听视频:队列为空,无法开始")
-            } else {
-                val startIndex = items.indexOfFirst { it.bvid == queue.currentBvid }.coerceAtLeast(0)
-                // 起点那一条要带**此刻正在播的 cid**,不能用队列项自带的那个。
-                //
-                // 队列来自合集/UP 投稿,每条视频只占一格,cid 是它的默认分 P(P1)。多 P 视频看到
-                // P3 时交过去的仍是 P1,服务端的 isSameVideoAs 比 cid 后判定"不是同一条",于是
-                // 重新取流、从头开始 —— 表现就是进听视频必掉回 1P 且进度归零。
-                //
-                // 补上之后这一条与播放器装着的完全一致,服务走"同一条"的分支:不重新取流、
-                // 不 seek,只是换了个 UI。这正是 DESIGN 2.4b 说的"切模式不需要交接进度"。
-                val aligned = items.toMutableList().apply {
-                    val start = this[startIndex]
-                    if (state.currentCid != 0L) this[startIndex] = start.copy(cid = state.currentCid)
-                }
-                AudioPlaybackService.start(context, aligned, startIndex, queue.shuffled)
-            }
-        },
         onUpClick = onUpClick,
         followState = followState,
         onToggleFollow = vm::toggleFollow,
@@ -731,16 +736,16 @@ private fun VideoPane(
         onCoin = vm::coin,
         onOpenFavPicker = vm::openFavPicker,
         onFavConfirm = vm::confirmFavorite,
-        onPlayPart = { vm.playPart(it) },
         onPlayEpisode = onOpenVideo,
         onRelatedVideoClick = onOpenVideo,
-        onCommentSort = commentVm::setSort,
-        onCommentLoadMore = commentVm::loadMore,
-        onExpandReplies = commentVm::expandReplies,
-        onSendComment = commentVm::send,
-        onLikeComment = commentVm::like,
-        onDeleteComment = commentVm::delete,
-        startListening = startListening,
+        onCommentSort = { commentVm?.setSort(it) },
+        onCommentLoadMore = { commentVm?.loadMore() },
+        onExpandReplies = { commentVm?.expandReplies(it) },
+        onSendComment = { text, parent -> commentVm?.send(text, parent) },
+        onLikeComment = { commentVm?.like(it) },
+        onDeleteComment = { commentVm?.delete(it) },
+        listening = listening,
+        onListeningChange = onListeningChange,
     )
 }
 
@@ -760,4 +765,3 @@ private val fadeEnter = tween<Float>(400, easing = EmphasizedDecelerate)
 private val fadeExit = tween<Float>(400, easing = EmphasizedAccelerate)
 
 /** lateral 用 default 档:它只覆盖屏幕的一部分(内容区),不是整屏转场。 */
-private val lateralSlide = tween<IntOffset>(300, easing = CubicBezierEasing(0.2f, 0f, 0f, 1f))

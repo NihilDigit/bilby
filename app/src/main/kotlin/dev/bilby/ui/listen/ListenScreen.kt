@@ -110,8 +110,12 @@ fun ListenScreen(
     parts: List<VideoPart> = emptyList(),
     currentCid: Long = 0L,
     onPlayPart: (cid: Long) -> Unit = {},
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
     onToggleShuffle: () -> Unit,
     onSleepTimer: (minutes: Int) -> Unit,
+    /** 手动重试当前这条。退避耗尽之后由用户决定是再试还是按下一条跳过。 */
+    onRetry: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -204,10 +208,16 @@ fun ListenScreen(
                 hasPrevious = state.positionInQueue > 1,
                 hasNext = state.positionInQueue in 1 until state.queueSize,
                 onPlayPause = { if (player.isPlaying) player.pause() else player.play() },
-                onPrevious = { player.seekToPrevious() },
-                onNext = { player.seekToNext() },
+                onPrevious = onPrevious,
+                onNext = onNext,
                 onSpeedChange = { player.setPlaybackSpeed(it) },
             )
+
+            // 失败就摆在控制条底下,不悄悄跳到下一条:跳过之后用户只看到"忽然换了一条",
+            // 而原因一个字都没留下。跳还是再试由这里交回给用户。
+            state.error?.let { message ->
+                FailureRow(message = message, retrying = state.loading, onRetry = onRetry)
+            }
 
             BottomRow(
                 shuffled = state.shuffled,
@@ -361,6 +371,31 @@ private fun PlaybackControls(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 播放失败那一行。重试期间只说明正在重试 —— 退避的那几秒是静默的,不给解释就和"卡住了"
+ * 没有区别;这也是不放进度条上方的原因,它要和播放控制读成一句话。
+ */
+@Composable
+private fun FailureRow(message: String, retrying: Boolean, onRetry: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Comfortable),
+    ) {
+        Text(
+            text = if (retrying) stringResource(R.string.listen_retrying, message) else message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.weight(1f),
+        )
+        // 重试中不给按钮:此刻按下去只会打断已经在跑的那次。
+        if (!retrying) {
+            TextButton(onClick = onRetry) { Text(stringResource(R.string.action_retry)) }
         }
     }
 }

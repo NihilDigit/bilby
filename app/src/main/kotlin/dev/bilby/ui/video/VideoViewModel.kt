@@ -8,14 +8,14 @@ import dev.bilby.agent.AgentIntent
 import dev.bilby.agent.AgentLoop
 import dev.bilby.api.BiliResult
 import dev.bilby.data.SettingsStore
-import dev.bilby.data.QueueSourceRepository
 import dev.bilby.data.SponsorBlockRepository
 import dev.bilby.data.FollowState
 import dev.bilby.data.RelationRepository
 import dev.bilby.data.ToViewRepository
 import dev.bilby.data.SponsorSegment
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
-import dev.bilby.data.PlayInfo
+import kotlinx.coroutines.flow.map
 import dev.bilby.data.FavFolder
 import dev.bilby.data.HeartbeatReporter
 import dev.bilby.data.VideoActionRepository
@@ -23,21 +23,22 @@ import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoRepository
 import dev.bilby.data.VideoStat
-import dev.bilby.data.resumeAtMillisFor
 import dev.bilby.player.AudioPlaybackService
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/**
+ * 播放页自己的东西:这条视频**是什么**。
+ *
+ * **播放状态不在这里。** 正在播哪一 P、画质清单、取流失败、队列——全都归
+ * [AudioPlaybackService.state]。播放器和队列只有一份,页面是壳(DESIGN 2.4b);
+ * 页面再存一份就等于承认有两个真相,而"页面说 A、播放器在放 E"正是那样来的。
+ */
 data class VideoUiState(
     val detail: VideoDetail? = null,
-    val playInfo: PlayInfo? = null,
-    val resumeAtMillis: Long = 0,
-    val currentCid: Long = 0,
-    val currentQuality: Int = 0,
     val loading: Boolean = true,
     val error: String? = null,
 )
@@ -50,7 +51,6 @@ class VideoViewModel(
     private val actionRepository: VideoActionRepository,
     private val settings: SettingsStore,
     private val sponsorBlockRepository: SponsorBlockRepository,
-    private val queueSourceRepository: QueueSourceRepository,
     private val toViewRepository: ToViewRepository,
     private val relationRepository: RelationRepository,
 ) : ViewModel() {
@@ -113,37 +113,6 @@ class VideoViewModel(
         }
     }
 
-    /**
-     * 播放队列。它占的是官方相关推荐的位置,但装的是确定性的有限集合:当前合集,
-     * 没有合集就退到该 UP 的投稿(DESIGN 2.4b)。听视频播的就是这一份,不另建。
-     */
-    private val _queue = MutableStateFlow(QueueUiState(loading = true))
-    val queue: StateFlow<QueueUiState> = _queue.asStateFlow()
-
-    fun toggleShuffle() {
-        val next = !_queue.value.shuffled
-        _queue.update { it.copy(shuffled = next) }
-        // NonCancellable:切了随机就退出页面是常见操作,而 DataStore 的 edit 是挂起函数,
-        // 页面一走 viewModelScope 就取消,写还没落盘。理由同 SettingsViewModel.persist。
-        viewModelScope.launch(NonCancellable) {
-            val prefs = settings.playbackPrefs.first()
-            settings.savePlaybackPrefs(prefs.copy(shuffled = next))
-        }
-    }
-
-    private fun loadQueue(detail: VideoDetail) = viewModelScope.launch {
-        val shuffled = settings.playbackPrefs.first().shuffled
-        val built = queueSourceRepository.fromSeason(detail.bvid)
-            ?: queueSourceRepository.fromUpSpace(detail.up.mid, detail.bvid)
-        _queue.value = QueueUiState(
-            items = built?.items.orEmpty(),
-            currentBvid = detail.bvid,
-            sourceLabel = built?.sourceLabel.orEmpty(),
-            shuffled = shuffled,
-            loading = false,
-        )
-    }
-
     /** 赞助/片头片尾片段,默认开启自动跳过。拉取失败就是空列表,不影响播放。 */
     private val _sponsorSegments = MutableStateFlow<List<SponsorSegment>>(emptyList())
     val sponsorSegments: StateFlow<List<SponsorSegment>> = _sponsorSegments.asStateFlow()
@@ -184,6 +153,7 @@ class VideoViewModel(
 
     init {
         load()
+        observeCurrentPart()
     }
 
     /**
@@ -209,46 +179,10 @@ class VideoViewModel(
         }
     }
 
-    /**
-     * 切清晰度要重新取流。必须带着当前播放位置回来 —— 从头开始是最容易犯也最招人烦的
-     * 错误,而且用户往往是看到一半才觉得画质不够。
-     */
-    fun setQuality(quality: Int, currentPositionMillis: Long) {
-        val cid = _state.value.currentCid
-        if (cid == 0L) return
-        // 在播放页改画质就是改全局默认(DESIGN 2 节):设置页不重复放一个画质选项,
-        // 也就没有"两处能改同一件事"的问题。
-        viewModelScope.launch(NonCancellable) { settings.saveDefaultQuality(quality) }
-        viewModelScope.launch {
-            _state.update { it.copy(loading = true) }
-            when (
-                val play = repository.getPlayUrl(
-                    bvid,
-                    cid,
-                    preferredQuality = quality,
-                    preferredCodecs = settings.playerPrefs.first().codec.codecIds,
-                )
-            ) {
-                is BiliResult.Ok -> _state.update {
-                    it.copy(
-                        playInfo = play.value,
-                        resumeAtMillis = currentPositionMillis,
-                        currentQuality = quality,
-                        loading = false,
-                    )
-                }
-
-                is BiliResult.ApiError -> fail("切换清晰度失败:${play.message}(${play.code})")
-                is BiliResult.Failure -> fail(play.cause.message ?: "网络错误")
-            }
-        }
-    }
-
     private fun load() = viewModelScope.launch {
         when (val detail = repository.getVideoDetail(bvid)) {
             is BiliResult.Ok -> {
-                _state.update { it.copy(detail = detail.value) }
-                loadQueue(detail.value)
+                _state.update { it.copy(detail = detail.value, loading = false) }
                 launch {
                     when (val follow = relationRepository.stateOf(detail.value.up.mid)) {
                         is BiliResult.Ok -> _followState.value = follow.value
@@ -260,7 +194,6 @@ class VideoViewModel(
                     is BiliResult.ApiError -> BiliLog.w("查互动状态失败(${rel.code}): ${rel.message}")
                     is BiliResult.Failure -> BiliLog.w("查互动状态异常: ${rel.cause}")
                 }
-                playPart(detail.value.cid)
             }
 
             is BiliResult.ApiError -> fail("${detail.message}(${detail.code})")
@@ -268,47 +201,33 @@ class VideoViewModel(
         }
     }
 
-    /** 合集/多 P 的确定性导航(DESIGN 2.3:这是导航不是推荐)。 */
-    fun playPart(cid: Long) = viewModelScope.launch {
-        _state.update { it.copy(loading = true, error = null, currentCid = cid) }
-        // 片段随 cid 变,换 P 要重拉;放在取流之前不阻塞播放(它自己有超时与静默失败)。
-        launch { loadSponsorSegments(cid) }
-        val player = settings.playerPrefs.first()
-        when (
-            val play = repository.getPlayUrl(
-                bvid,
-                cid,
-                preferredQuality = player.defaultQuality,
-                preferredCodecs = player.codec.codecIds,
-            )
-        ) {
-            is BiliResult.Ok -> {
-                _state.update {
-                    it.copy(
-                        playInfo = play.value,
-                        resumeAtMillis = play.value.resumeAtMillisFor(cid),
-                        // 画质菜单要显示"当前是哪一档",没有这一行它在换 P 后会退回 0(无选中)。
-                        currentQuality = player.defaultQuality,
-                        loading = false,
-                    )
-                }
-            }
-
-            is BiliResult.ApiError -> fail("取流失败:${play.message}(${play.code})")
-            is BiliResult.Failure -> fail(play.cause.message ?: "网络错误")
-        }
+    /**
+     * 片段随 cid 变,所以跟着服务那边正在播的分 P 重拉,而不是页面自己记一份 cid。
+     *
+     * 只认属于本页这条视频的 cid:播放器是全 app 共用的,队列走到别的视频上时不该把
+     * 那一条的片段拉到这一页来。
+     */
+    private fun observeCurrentPart() = viewModelScope.launch {
+        AudioPlaybackService.state
+            .map { if (it.current?.bvid == bvid) it.currentCid else 0L }
+            .distinctUntilChanged()
+            .collect { cid -> if (cid != 0L) loadSponsorSegments(cid) }
     }
 
     /**
      * 心跳上报。DESIGN 7 节已定案回传:它是跨端续播的必要条件,不是观看画像。
      *
-     * 本地不再另存一份进度,续播只认服务端这一份(见 [resumeAtMillisFor]),所以这里既是
+     * 本地不再另存一份进度,续播只认服务端这一份(服务那边按 playurl 带回的位置续播),所以这里既是
      * 回传也是我们自己下次进来的依据。
      */
     fun reportHeartbeat(positionMillis: Long, durationMillis: Long, finished: Boolean) {
         val detail = _state.value.detail ?: return
-        val cid = _state.value.currentCid.takeIf { it != 0L } ?: return
-        if (!playerHoldsThisPage()) return
+        val playback = AudioPlaybackService.state.value
+        // 播放器装的必须是本页这一条。位置和时长是从播放器读的,而全 app 只有一个播放器
+        // (DESIGN 2.4b):队列翻到下一条时本页的轮询可能还没停,不对身份就会把下一条的进度
+        // 按本页的 aid 报上去。云端那份是续播的唯一来源,报错一次,下次进来就 seek 到不存在的位置。
+        if (playback.current?.bvid != bvid) return
+        val cid = playback.currentCid.takeIf { it != 0L } ?: return
         viewModelScope.launch {
             heartbeatReporter.report(
                 aid = detail.aid,
@@ -416,18 +335,6 @@ class VideoViewModel(
             val detail = current.detail ?: return@update current
             current.copy(detail = detail.copy(stat = transform(detail.stat)))
         }
-    }
-
-    /**
-     * 播放器此刻装的是不是本页这一条。
-     *
-     * 位置和时长是从播放器读的,而全 app 只有一个播放器(DESIGN 2.4b)。翻到新视频时它还装着
-     * 上一条,新页的轮询已经开始跑了——不对身份就会把上一条的进度按本页的 aid/cid 报上去。
-     * 云端那份现在是续播的唯一来源,报错一次,下次进来就会 seek 到一个不存在的位置。
-     */
-    private fun playerHoldsThisPage(): Boolean {
-        val loaded = AudioPlaybackService.state.value.loaded ?: return false
-        return loaded.bvid == bvid && loaded.cid == _state.value.currentCid
     }
 
     private fun fail(message: String) {

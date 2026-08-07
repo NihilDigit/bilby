@@ -22,45 +22,72 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dev.bilby.BilbyApplication
 import dev.bilby.BiliLog
+import dev.bilby.R
 import dev.bilby.api.BiliResult
+import dev.bilby.data.PlayInfo
+import dev.bilby.data.QueueSourceRepository
+import dev.bilby.data.SettingsStore
 import dev.bilby.data.VideoRepository
+import dev.bilby.data.resumeAtMillisFor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-/** UI 需要知道的一切。队列位置是 [positionInQueue] / [queueSize],即 N / M。 */
+/**
+ * 播放的全部真相。三个界面(内嵌播放、全屏、听视频)都只读它、不各自持有一份。
+ *
+ * 队列位置是 [positionInQueue] / [queueSize],即 N / M。
+ */
 data class AudioPlaybackUiState(
-    val active: Boolean = false,
+    /** 队列当前这一条。队列为空(还没打开过任何视频)时为 null。 */
     val current: QueueItem? = null,
+    /** 正在播的分 P。队列装的是视频,cid 是"这条视频放到哪一 P"。 */
+    val currentCid: Long = 0,
     val isPlaying: Boolean = false,
     /** 1-based,直接显示。队列空时为 0。 */
     val positionInQueue: Int = 0,
     val queueSize: Int = 0,
     val shuffled: Boolean = false,
-    /** 正在取流。这一步要走一次网络,不给反馈的话按下"下一条"后会有一两秒的静默。 */
-    val loading: Boolean = false,
-    /** 队列内容。听视频页要列出来,没必要为它再开一个通道。 */
+    /** 队列内容,自然顺序(随机只改播放顺序,不改列表怎么摆)。 */
     val items: List<QueueItem> = emptyList(),
+    /** 队列的来源,如"合集《x》· 共 7 集"。 */
+    val sourceLabel: String = "",
+    /** 正在取流或正在重试。这一步要走一次网络,不给反馈的话按下"下一条"后会有一两秒静默。 */
+    val loading: Boolean = false,
     /**
-     * 播放器此刻真正装着的那一条。和 [current] 不是一回事:[current] 是队列视角,看视频时
-     * 队列为空,它恒为 null。
-     *
-     * 进度回传必须先拿它对一次身份。全 app 只有一个播放器(DESIGN 2.4b),翻到新视频时它还
-     * 装着上一条,而位置和时长都是从播放器读的——不对身份就会把上一条的进度按新页的
-     * bvid/cid 报上去。
+     * 最近一次播放失败的原因,给用户看的一句话。**失败摆在界面上,不悄悄跳过下一条** ——
+     * 跳过让人只看到"忽然换了一条",而真正的原因(直链过期、网络断了、解码器不可用)
+     * 一个字都没留下。重试期间也非空,配合 [loading] 表示"正在重试"。
      */
-    val loaded: QueueItem? = null,
+    val error: String? = null,
+    /** 画质菜单要用的清单,以及正在播的那一份流。取流归服务,页面只读。 */
+    val playInfo: PlayInfo? = null,
+    val currentQuality: Int = 0,
 )
 
 /**
- * 听视频的后台播放服务(DESIGN 2.4b)。息屏继续播、通知栏控制、耳机线控都由
- * MediaSession + 前台服务承担;通知用 Media3 自带的,不手搓。
+ * 播放器与播放队列的唯一持有者(DESIGN 2.4b)。
+ *
+ * **一个播放器,一份队列,三个壳。** 内嵌播放、全屏、听视频都只是 UI 形态:它们读
+ * [state]、发命令,不持有"现在在放什么",也不自己取流。听视频比另外两个多做的只有
+ * 一件事——把视频轨关掉。于是"两个播放器同时发声""切模式要交接进度""页面和播放器
+ * 指着两条不同的视频"这几类问题不是被解决,而是不存在。
+ *
+ * **方向是单向的:队列变,界面跟。** 界面永远不反过来推播放器。通知栏按下一条、耳机线控
+ * 双击、听视频里点队列中的一条,走的都是同一条路——改队列,然后由界面跟到 [state] 上来。
+ *
+ * **打开界面是幂等的。** [ACTION_OPEN_VIDEO] 报的是 bvid 而不是流地址:队列当前就是这条、
+ * 播放器也正装着它时,这条命令什么都不做。转屏、退出全屏、从听视频退回、通知栏切过一条
+ * 之后再回到界面,全都落在这条分支上。
  *
  * **播完即停**:[PlaybackQueue.next] 返回 null 时只是暂停,不循环、不从任何地方续接下一条。
  * 允许连播的前提是集合有限且由用户显式选定,续接推荐池就等于恢复了被禁的自动连播。
@@ -68,10 +95,6 @@ data class AudioPlaybackUiState(
  * **逐条取流**:播到某条时才调 [VideoRepository.getPlayUrl]。playurl 给的是带时效的 CDN
  * 直链,一次性把整个队列的地址取好,排在后面的那些等轮到时早就过期了,表现为播到某条突然
  * 403 而前面几条都正常——这种失败很难归因。这里也不做预取,理由同上:预取越早,过期风险越大。
- *
- * **全 app 只有这一个播放器**(DESIGN 2.4b「一个播放状态,两个 UI」)。播放页不再自己建
- * 播放器,它用 [ACTION_PLAY_VIDEO] 把要播的流交给这里,再通过 MediaController 控制。
- * 于是"两个播放器同时发声""看/听之间交接进度"不是被解决,而是不存在。
  */
 @UnstableApi
 class AudioPlaybackService : MediaSessionService() {
@@ -80,25 +103,38 @@ class AudioPlaybackService : MediaSessionService() {
 
     private lateinit var player: ExoPlayer
     private lateinit var videoRepository: VideoRepository
+    private lateinit var queueSourceRepository: QueueSourceRepository
+    private lateinit var settings: SettingsStore
     private lateinit var sleepTimer: SleepTimer
     private var session: MediaSession? = null
 
     private var queue = PlaybackQueue(emptyList())
+    private var sourceLabel = ""
     private var prepareJob: Job? = null
 
-    /**
-     * 播放页交过来的单条视频。它**不进队列**:队列是听视频模式的东西,而 [AudioPlaybackUiState.active]
-     * 正是靠队列非空来决定要不要显示听视频的迷你条——看视频时把它塞进队列,迷你条就会跟着冒出来。
-     */
-    private var singleItem: QueueItem? = null
+    /** 当前这一条已经连续失败了几次。见 [retryAfterFailure]。真的播出声(STATE_READY)时清零。 */
+    private var failedAttempts = 0
+    private var retryJob: Job? = null
 
-    /** 当前装进播放器的是哪一条、用的哪条流地址。两处"要不要重新装载"的判断都看它,见用处的注释。 */
-    private var loadedItem: QueueItem? = null
-    private var loadedVideoUrl: String? = null
+    /**
+     * 最近一次失败的原因,给界面看。重试期间保留 —— 退避的那几秒是静默的,不给解释就和
+     * "卡住了"没有区别。真的播出声或换到别的内容时清掉。
+     */
+    private var lastError: String? = null
+
+    /** 当前装进播放器的是哪一条视频的哪一 P。幂等判断看它。 */
+    private var loadedBvid: String? = null
+    private var loadedCid: Long = 0
+
+    private var playInfo: PlayInfo? = null
+    private var currentQuality: Int = 0
 
     override fun onCreate() {
         super.onCreate()
-        videoRepository = (application as BilbyApplication).container.videoRepository
+        val container = (application as BilbyApplication).container
+        videoRepository = container.videoRepository
+        queueSourceRepository = container.queueSourceRepository
+        settings = container.settings
 
         player = PlayerFactory.createPlayer(this).apply {
             // 声明成音乐用途并交给播放器处理音频焦点:来电、别的 app 出声时自动暂停/避让。
@@ -125,21 +161,6 @@ class AudioPlaybackService : MediaSessionService() {
             .build()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // 队列经静态字段递交而不是塞进 Intent:QueueItem 列表可能上百条,Intent 有大小上限,
-        // 而服务与 UI 本来就同进程(没有 android:process,MediaController 才是跨进程那条路)。
-        pendingQueue?.let { pending ->
-            pendingQueue = null
-            queue = PlaybackQueue(pending.items, pending.startIndex, pending.shuffled)
-            playCurrent()
-        }
-        pendingBvid?.let { bvid ->
-            pendingBvid = null
-            if (queue.seekToBvid(bvid) != null) playCurrent()
-        }
-        return super.onStartCommand(intent, flags, startId)
-    }
-
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -149,6 +170,7 @@ class AudioPlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         prepareJob?.cancel()
+        retryJob?.cancel()
         scope.cancel()
         session?.release()
         session = null
@@ -159,15 +181,92 @@ class AudioPlaybackService : MediaSessionService() {
         super.onDestroy()
     }
 
-    /** 取当前这条的流并播。取流失败跳到下一条(队列有限,不会无限重试)。 */
-    private fun playCurrent(playWhenReady: Boolean = true) {
+    /**
+     * 播放页打开了一条视频。
+     *
+     * **这条命令是幂等的**,而且是结构性的幂等:它报的是 bvid,不是流地址。队列当前就是这条、
+     * 播放器也正装着它时直接返回 —— 转屏、退出全屏、从听视频退回、通知栏切过一条之后再回到
+     * 界面,走的都是这条分支。原先页面交的是流地址,"是不是同一次播放"只能靠字符串相等去猜,
+     * 而 playurl 每次签名都不同,于是重试还得专门加一个标志位去绕过那道比较。
+     *
+     * 队列里已经有这条(合集里换一集、点队列中的一条)就跳过去;没有就**重做队列**:
+     * 先按合集找,不属于合集才退到 UP 投稿(DESIGN 2.4b),两条都拿不到就退成只有这一条的队列。
+     */
+    private fun openVideo(args: Bundle) {
+        val bvid = args.getString(EXTRA_BVID).orEmpty()
+        if (bvid.isEmpty()) {
+            BiliLog.w("OPEN_VIDEO 没带 bvid,忽略")
+            return
+        }
+        val cid = args.getLong(EXTRA_CID)
+
+        if (queue.current()?.bvid == bvid) {
+            // 同一条视频。换 P 才需要动,否则连状态都不用重发。
+            if (cid != 0L && cid != loadedCid) playPart(cid) else publishState()
+            return
+        }
+        if (queue.seekToBvid(bvid) != null) {
+            playCurrent()
+            return
+        }
+
+        val fallback = QueueItem(
+            bvid = bvid,
+            cid = cid,
+            title = args.getString(EXTRA_TITLE).orEmpty(),
+            upName = args.getString(EXTRA_UP_NAME).orEmpty(),
+            coverUrl = args.getString(EXTRA_COVER_URL).orEmpty(),
+            durationSeconds = 0,
+        )
+        val mid = args.getLong(EXTRA_MID)
+
         prepareJob?.cancel()
-        singleItem = null
+        retryJob?.cancel()
+        publishState(loading = true)
+        prepareJob = scope.launch {
+            val shuffled = settings.playbackPrefs.first().shuffled
+            val built = queueSourceRepository.fromSeason(bvid)
+                ?: queueSourceRepository.fromUpSpace(mid, bvid)
+            if (built != null) {
+                queue = PlaybackQueue(built.items, built.startIndex, shuffled)
+                sourceLabel = built.sourceLabel
+                // 合集给的 cid 是这一集的 P1,而页面可能是带着某一 P 进来的。
+                if (cid != 0L) queue.updateCurrentCid(cid)
+            } else {
+                // 合集和空间投稿都没拿到:仍然要有一份队列,否则"队列是唯一真相"就有了缺口。
+                BiliLog.w("建队列失败,退成单条队列 bvid=$bvid")
+                queue = PlaybackQueue(listOf(fallback))
+                sourceLabel = ""
+            }
+            playCurrent()
+        }
+    }
+
+    /**
+     * 取当前这条的流并播。失败不往下跳,退避后重试同一条,见 [retryAfterFailure]。
+     *
+     * [force] 是重试和切清晰度用的:那两种情况下播放器装着的还是这一条,不强制就会走
+     * "已经是它了"的捷径。重试要连取流一起重来 —— 直链过期(403)正是最常见的那种失败,
+     * 不重取一定还是失败。
+     *
+     * [positionOverrideMillis] 非 null 时用它当起播位置(切清晰度要停在原地),否则用
+     * 服务端的续播点。本地不另存进度,续播只认服务端那一份(DESIGN 7)。
+     */
+    private fun playCurrent(
+        playWhenReady: Boolean = true,
+        force: Boolean = false,
+        positionOverrideMillis: Long? = null,
+    ) {
+        prepareJob?.cancel()
+        retryJob?.cancel()
+        // 换到新的一条就是一份新的额度;重试则要把已经失败的次数带着,否则退避永远停在第一档。
+        if (!force) {
+            failedAttempts = 0
+            lastError = null
+        }
         val item = queue.current() ?: run { stopPlayback(); return }
 
-        // 从播放页点"听视频"时,队列的第一条往往就是正在播的那条。同一个播放器上重新取流重新
-        // prepare 会让声音断一下并回到开头,而这正是"交接进度"本该消失的那个问题。
-        if (loadedItem.isSameVideoAs(item)) {
+        if (!force && loadedBvid == item.bvid && (item.cid == 0L || loadedCid == item.cid)) {
             player.playWhenReady = playWhenReady
             publishState()
             return
@@ -176,132 +275,158 @@ class AudioPlaybackService : MediaSessionService() {
         publishState(loading = true)
         prepareJob = scope.launch {
             // 空间投稿来源的队列项没有 cid(列表接口不返回),约定由这里补:拿着 0 去取流
-            // 会被服务端当成无效 cid,表现是每一条都"取流失败被跳过",队列静默空转。
+            // 会被服务端当成无效 cid,表现是每一条都"取流失败",队列静默空转。
             val cid = item.cid.takeIf { it != 0L } ?: run {
                 when (val detail = videoRepository.getVideoDetail(item.bvid)) {
                     is BiliResult.Ok -> detail.value.cid
                     else -> {
-                        BiliLog.w("听视频补 cid 失败,跳过 bvid=${item.bvid}")
-                        skipAfterFailure(playWhenReady)
+                        BiliLog.w("补 cid 失败 bvid=${item.bvid}")
+                        retryAfterFailure(getString(R.string.playback_error_detail), playWhenReady)
                         return@launch
                     }
                 }
             }
+            queue.updateCurrentCid(cid)
 
-            when (val result = videoRepository.getPlayUrl(item.bvid, cid)) {
+            val prefs = settings.playerPrefs.first()
+            val quality = currentQuality.takeIf { it != 0 } ?: prefs.defaultQuality
+            when (
+                val result = videoRepository.getPlayUrl(
+                    item.bvid,
+                    cid,
+                    preferredQuality = quality,
+                    preferredCodecs = prefs.codec.codecIds,
+                )
+            ) {
                 is BiliResult.Ok -> {
+                    playInfo = result.value
+                    currentQuality = quality
                     val streams = result.value.streams
-                    load(streams.videoUrl, streams.audioUrl, item.copy(cid = cid), startPositionMillis = 0)
+                    load(
+                        streams.videoUrl,
+                        streams.audioUrl,
+                        item.bvid,
+                        cid,
+                        positionOverrideMillis ?: result.value.resumeAtMillisFor(cid),
+                    )
                     player.playWhenReady = playWhenReady
                     publishState()
                 }
+
                 is BiliResult.ApiError -> {
-                    BiliLog.w("听视频取流失败,跳过 bvid=${item.bvid} code=${result.code} ${result.message}")
-                    skipAfterFailure(playWhenReady)
+                    BiliLog.w("取流失败 bvid=${item.bvid} code=${result.code} ${result.message}")
+                    retryAfterFailure(
+                        getString(R.string.playback_error_stream, result.message),
+                        playWhenReady,
+                    )
                 }
+
                 is BiliResult.Failure -> {
-                    BiliLog.w("听视频取流失败,跳过 bvid=${item.bvid}", result.cause)
-                    skipAfterFailure(playWhenReady)
+                    BiliLog.w("取流失败 bvid=${item.bvid}", result.cause)
+                    retryAfterFailure(getString(R.string.playback_error_network), playWhenReady)
                 }
             }
         }
     }
 
-    /**
-     * 播放页交来一条视频。流是播放页那边已经取好的(它还要拿同一份响应填清晰度菜单),这里
-     * 不重复取一次。
-     *
-     * 切清晰度也走这条:播放页换到别的清晰度后会带着新地址和当前位置再发一次。
-     * 于是"换流"这个动作只有一个实现,而且只发生在持有播放器的这一侧。
-     */
-    private fun playSingleVideo(args: Bundle) {
-        val videoUrl = args.getString(EXTRA_VIDEO_URL).orEmpty()
-        if (videoUrl.isEmpty()) {
-            BiliLog.w("播放页交来的流地址为空,忽略")
-            return
-        }
-        val item = QueueItem(
-            bvid = args.getString(EXTRA_BVID).orEmpty(),
-            cid = args.getLong(EXTRA_CID),
-            title = args.getString(EXTRA_TITLE).orEmpty(),
-            upName = args.getString(EXTRA_UP_NAME).orEmpty(),
-            coverUrl = args.getString(EXTRA_COVER_URL).orEmpty(),
-            durationSeconds = 0,
-        )
-
-        // 播放页每次重建(转屏进全屏、进程内返回)都会重连并把同一份流再交一次。地址相同就是
-        // 同一次播放,重新装载只会让画面黑一下并跳回 resume 点——真的换了清晰度地址一定不同。
-        if (loadedVideoUrl == videoUrl) {
-            singleItem = item
-            publishState()
-            return
-        }
-
-        // 队列的取流是异步的,不取消的话它回来时会把播放页刚装上的流盖掉。
-        prepareJob?.cancel()
-
-        // **队列只在换了视频时作废,换分 P 不作废。**
-        //
-        // 两个播放界面都只是这个服务的外壳:它们不持有"现在在放什么",只把要放的流交过来。
-        // 所以"还算不算在队列里"该由这里判断,而不是由交流的那一方宣布。原先无条件清空,
-        // 等于播放页每交一次流就说一句"现在没有队列了" —— 于是在听视频里换个 P,整份合集
-        // 队列就没了,而换 P 根本没有离开这条视频。
-        //
-        // 队列装的是视频(不同 bvid),分 P 是同一条视频内部的结构(同 bvid 不同 cid),
-        // 这条边界在 CLAUDE.md 里已经写明:多 P 视频和合集是两回事。
-        if (queue.current()?.bvid != item.bvid) {
-            queue = PlaybackQueue(emptyList())
-        } else {
-            // 还在队列里,只是换了 P:让这一格跟着记住换到了哪一 P。不更新的话按"下一条"
-            // 再按"上一条"回来,队列会从它自带的默认 cid 出发,把人送回 P1。
-            queue.updateCurrentCid(item.cid)
-        }
-        singleItem = item
-        load(videoUrl, args.getString(EXTRA_AUDIO_URL), item, args.getLong(EXTRA_START_POSITION))
-        player.playWhenReady = true
-        publishState()
-    }
-
-    private fun load(videoUrl: String, audioUrl: String?, item: QueueItem, startPositionMillis: Long) {
+    private fun load(
+        videoUrl: String,
+        audioUrl: String?,
+        bvid: String,
+        cid: Long,
+        startPositionMillis: Long,
+    ) {
         player.setMediaSource(PlayerFactory.createMediaSource(videoUrl, audioUrl))
         player.prepare()
         if (startPositionMillis > 0) player.seekTo(startPositionMillis)
-        loadedItem = item
-        loadedVideoUrl = videoUrl
+        loadedBvid = bvid
+        loadedCid = cid
     }
 
-    /** cid 为 0 的队列项还没补上 cid(见 [QueueItem]),这时只能按 bvid 认。 */
-    private fun QueueItem?.isSameVideoAs(other: QueueItem): Boolean {
-        val loaded = this ?: return false
-        if (loaded.bvid != other.bvid) return false
-        return other.cid == 0L || loaded.cid == other.cid
+    /** 跳到队列里的另一条:点队列中的一项、合集里换一集。 */
+    private fun seekToBvid(bvid: String) {
+        if (queue.current()?.bvid == bvid) return
+        if (queue.seekToBvid(bvid) == null) {
+            BiliLog.w("SEEK_TO_BVID:队列里没有 bvid=$bvid")
+            return
+        }
+        playCurrent()
     }
 
-    private fun skipAfterFailure(playWhenReady: Boolean) {
-        if (queue.next() != null) playCurrent(playWhenReady) else stopPlayback()
+    /** 换分 P。**分 P 是这条视频内部的结构,不是队列里的另一条**(CLAUDE.md),所以不动队列位置。 */
+    private fun playPart(cid: Long) {
+        queue.updateCurrentCid(cid)
+        playCurrent(force = true)
     }
 
-    /** 队列走完。只暂停不停服务:用户可能想按上一条回去重听。 */
     /**
-     * 从听视频退回播放页 —— 音频专属的那一段到此为止。
+     * 切清晰度。在播放页改画质就是改全局默认(DESIGN 2 节):设置页不重复放一个画质选项,
+     * 也就没有"两处能改同一件事"的问题。
      *
-     * **只清队列,不停播放。** 回到的是一个有画面的地方,同一条视频接着放;要停的是
-     * "队列"这个身份:迷你条的可见性判据就是队列非空([AudioPlaybackUiState.active]),
-     * 不清的话用过一次听视频,迷你条和通知栏就在全 app 常驻到进程结束。
-     *
-     * 当前这条从队列挪进 [singleItem],于是播放器装的东西没变、进度没动,变的只是
-     * "它现在是播放页交来的一条,不是一份队列"。
-     *
-     * 划走 app 不走这里(见 [onTaskRemoved]):那种情况下听视频正是要继续的,
-     * 两者是不同的离开。
+     * NonCancellable 落盘:切完清晰度就退出页面是常见操作,而 DataStore 的 edit 是挂起函数。
      */
-    private fun endListening() {
-        if (queue.size == 0) return
-        singleItem = loadedItem
-        queue = PlaybackQueue(emptyList())
+    private fun setQuality(quality: Int) {
+        currentQuality = quality
+        scope.launch(NonCancellable) { settings.saveDefaultQuality(quality) }
+        playCurrent(force = true, positionOverrideMillis = player.currentPosition.coerceAtLeast(0))
+    }
+
+    /**
+     * 当前这一条播不了:**退避重试它,不往下跳**。
+     *
+     * 往下跳是错的。失败里没有哪一位能区分"这条视频没了"和"网络/解码器整体坏了" ——
+     * 取流的 ApiError 和播放器的 4003 在两种情形下长得一样。而后者每一条都会失败,
+     * "跳下一条"以毫秒为单位推进:线上见过一次 SSL 握手失败连跳 42 条、停在队尾,
+     * 用户看到的只是"忽然不放了",队列位置也回不去了。
+     *
+     * 退避是因为失败大多是瞬时的:握手失败、直链过期、解码器被别的进程占着。立刻重试
+     * 只会连着撞上同一个原因,而每档翻倍的等待让重试落在原因可能已经消失的时刻。
+     *
+     * 退到 [MAX_ATTEMPTS] 次仍然失败就停在这一条,把原因摆到界面上,跳还是再试由用户决定。
+     * 这和"播完即停、不从推荐池续接"是同一条约束:决策点不替用户取消。
+     */
+    private fun retryAfterFailure(reason: String, playWhenReady: Boolean) {
+        failedAttempts++
+        lastError = reason
+        if (failedAttempts >= MAX_ATTEMPTS) {
+            BiliLog.w("放弃重试(已失败 $failedAttempts 次): $reason")
+            stopPlayback()
+            return
+        }
+        val delayMillis = RETRY_BASE_DELAY_MILLIS shl (failedAttempts - 1)
+        BiliLog.w("第 $failedAttempts 次失败,${delayMillis}ms 后重试: $reason")
+        publishState(loading = true)
+        retryJob = scope.launch {
+            delay(delayMillis)
+            playCurrent(playWhenReady, force = true)
+        }
+    }
+
+    /** 界面上"重试"按下。手动重试是一份新的额度,退避从头算起。 */
+    private fun retryNow() {
+        failedAttempts = 0
+        lastError = null
+        playCurrent(playWhenReady = true, force = true)
+    }
+
+    /**
+     * 切顺序/随机。队列在服务这边,顺序的真相自然也在这边;页面那份 `shuffled` 只是
+     * "下次新建队列用哪个初值"的偏好。
+     *
+     * 不让 UI 走 MediaController 的 `setShuffleModeEnabled`:那条路的开关值缓存在 controller
+     * 里,而 [QueuePlayer] 截住了 ExoPlayer 的 shuffle、从不发 `onShuffleModeEnabledChanged`,
+     * 缓存永远停在 false —— 第二次点击会被 controller 自己吃掉。
+     */
+    private fun setShuffled(shuffled: Boolean) {
+        queue.setShuffled(shuffled)
+        scope.launch(NonCancellable) {
+            val prefs = settings.playbackPrefs.first()
+            settings.savePlaybackPrefs(prefs.copy(shuffled = shuffled))
+        }
         publishState()
     }
 
+    /** 队列走完。只暂停不停服务:用户可能想按上一条回去重听。 */
     private fun stopPlayback() {
         player.playWhenReady = false
         publishState()
@@ -309,21 +434,24 @@ class AudioPlaybackService : MediaSessionService() {
 
     private fun publishState(loading: Boolean = false) {
         _state.value = AudioPlaybackUiState(
-            active = queue.size > 0,
             current = queue.current(),
+            currentCid = loadedCid,
             isPlaying = player.isPlaying,
             items = queue.itemsNatural(),
             positionInQueue = if (queue.size > 0) queue.currentIndex + 1 else 0,
             queueSize = queue.size,
+            sourceLabel = sourceLabel,
             shuffled = queue.shuffled,
             loading = loading,
-            loaded = loadedItem,
+            error = lastError,
+            playInfo = playInfo,
+            currentQuality = currentQuality,
         )
     }
 
-    /** 通知栏与锁屏显示的元数据。流本身不带 tag,只能由队列(或播放页交来的那条)提供。 */
+    /** 通知栏与锁屏显示的元数据。流本身不带 tag,只能由队列提供。 */
     private fun currentMetadata(): MediaMetadata {
-        val item = queue.current() ?: singleItem ?: return MediaMetadata.EMPTY
+        val item = queue.current() ?: return MediaMetadata.EMPTY
         return MediaMetadata.Builder()
             .setTitle(item.title)
             .setArtist(item.upName)
@@ -336,6 +464,12 @@ class AudioPlaybackService : MediaSessionService() {
     private inner class PlayerListener : Player.Listener {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            // 真的播出声了才算这条链路是好的。清零放在 load() 里是不够的:装载成功、解码失败
+            // 的组合会让每一条都先清零再失败,退避的档位永远停在第一级。
+            if (playbackState == Player.STATE_READY) {
+                failedAttempts = 0
+                lastError = null
+            }
             if (playbackState != Player.STATE_ENDED) {
                 publishState()
                 return
@@ -352,12 +486,12 @@ class AudioPlaybackService : MediaSessionService() {
 
         override fun onPlayerError(error: PlaybackException) {
             // 直链可能在播放途中过期(403),这属于"被吞掉的失败":不留日志的话表现只是
-            // 忽然跳到了下一条。
-            //
-            // 认 loadedItem 而不是 queue.current():播放页交来的那条不进队列(见 singleItem),
-            // 按队列取会打出 bvid=null,而看视频出错恰恰是最需要知道是哪一条的场合。
-            BiliLog.w("播放出错,跳过 bvid=${loadedItem?.bvid} code=${error.errorCode}", error)
-            skipAfterFailure(playWhenReady = true)
+            // 忽然不动了。
+            BiliLog.w("播放出错 bvid=$loadedBvid code=${error.errorCode}", error)
+            retryAfterFailure(
+                getString(R.string.playback_error_decode, error.errorCode),
+                playWhenReady = true,
+            )
         }
     }
 
@@ -365,6 +499,8 @@ class AudioPlaybackService : MediaSessionService() {
      * 播放器只装当前这一条(逐条取流的必然结果),所以"有没有下一条""随机开没开"这些
      * 得由队列回答,而不是由播放器的 timeline 回答。用 ForwardingPlayer 把这几个问题接管过来,
      * MediaSession 拿到的就是队列视角:通知栏的上/下一条按钮、耳机线控的双击三击都能用。
+     *
+     * 队列从打开播放页那一刻起就存在,所以这些按钮不再需要"先进听视频"才活过来。
      */
     private inner class QueuePlayer(player: Player) : ForwardingPlayer(player) {
 
@@ -399,17 +535,15 @@ class AudioPlaybackService : MediaSessionService() {
 
         override fun getShuffleModeEnabled(): Boolean = queue.shuffled
 
-        override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) {
-            queue.setShuffled(shuffleModeEnabled)
-            publishState()
-        }
+        /** 外部控制器(通知栏、车机)走这条;app 内的开关走 [ACTION_SET_SHUFFLE],理由见 [setShuffled]。 */
+        override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) = setShuffled(shuffleModeEnabled)
 
         override fun getRepeatMode(): Int = Player.REPEAT_MODE_OFF
 
         /** 播完即停是产品约束(DESIGN 2.4b),循环不接受外部设置。 */
         override fun setRepeatMode(repeatMode: Int) {
             if (repeatMode != Player.REPEAT_MODE_OFF) {
-                BiliLog.w("听视频不支持循环(DESIGN 2.4b),忽略 repeatMode=$repeatMode")
+                BiliLog.w("不支持循环(DESIGN 2.4b),忽略 repeatMode=$repeatMode")
             }
         }
     }
@@ -423,9 +557,15 @@ class AudioPlaybackService : MediaSessionService() {
             MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(
                     MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                        .add(SessionCommand(ACTION_OPEN_VIDEO, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_SEEK_TO_BVID, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_PLAY_PART, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_SET_QUALITY, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_SET_SHUFFLE, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_RETRY, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_NEXT, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_PREVIOUS, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SLEEP_TIMER, Bundle.EMPTY))
-                        .add(SessionCommand(ACTION_PLAY_VIDEO, Bundle.EMPTY))
-                        .add(SessionCommand(ACTION_END_LISTENING, Bundle.EMPTY))
                         .build()
                 )
                 .build()
@@ -437,6 +577,14 @@ class AudioPlaybackService : MediaSessionService() {
             args: Bundle,
         ): ListenableFuture<SessionResult> {
             when (customCommand.customAction) {
+                ACTION_OPEN_VIDEO -> openVideo(args)
+                ACTION_SEEK_TO_BVID -> seekToBvid(args.getString(EXTRA_BVID).orEmpty())
+                ACTION_PLAY_PART -> playPart(args.getLong(EXTRA_CID))
+                ACTION_SET_QUALITY -> setQuality(args.getInt(EXTRA_QUALITY))
+                ACTION_SET_SHUFFLE -> setShuffled(args.getBoolean(EXTRA_SHUFFLED))
+                ACTION_RETRY -> retryNow()
+                ACTION_NEXT -> if (queue.next() != null) playCurrent()
+                ACTION_PREVIOUS -> if (queue.previous() != null) playCurrent()
                 ACTION_SLEEP_TIMER -> {
                     when (val minutes = args.getInt(EXTRA_SLEEP_MINUTES, SLEEP_CANCEL)) {
                         SLEEP_CANCEL -> sleepTimer.cancel()
@@ -445,22 +593,44 @@ class AudioPlaybackService : MediaSessionService() {
                     }
                 }
 
-                ACTION_PLAY_VIDEO -> playSingleVideo(args)
-                ACTION_END_LISTENING -> endListening()
-
                 else -> return super.onCustomCommand(session, controller, customCommand, args)
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
         }
     }
 
-    private class PendingQueue(
-        val items: List<QueueItem>,
-        val startIndex: Int,
-        val shuffled: Boolean,
-    )
-
     companion object {
+        /** 打开一条视频。幂等,见 [openVideo]。 */
+        const val ACTION_OPEN_VIDEO = "dev.bilby.OPEN_VIDEO"
+
+        /** 跳到队列里的另一条(点队列项、合集换一集)。 */
+        const val ACTION_SEEK_TO_BVID = "dev.bilby.SEEK_TO_BVID"
+
+        /** 换分 P。 */
+        const val ACTION_PLAY_PART = "dev.bilby.PLAY_PART"
+
+        /** 切清晰度。服务重取并停在原位置。 */
+        const val ACTION_SET_QUALITY = "dev.bilby.SET_QUALITY"
+
+        /** 见 [setShuffled]。 */
+        const val ACTION_SET_SHUFFLE = "dev.bilby.SET_SHUFFLE"
+
+        /** 见 [retryNow]。 */
+        const val ACTION_RETRY = "dev.bilby.RETRY"
+
+        /**
+         * 上/下一条。**app 内的按钮走这两条,不走 `player.seekToNext()`。**
+         *
+         * MediaController 会缓存一份 `availableCommands`,而那是它连接那一刻的快照:页面刚
+         * 打开时队列还空着,`COMMAND_SEEK_TO_NEXT` 没被授予;之后队列建起来了,但
+         * [QueuePlayer] 只是覆写了 `getAvailableCommands`,从不发 `onAvailableCommandsChanged`,
+         * controller 那份缓存永远停在旧值 —— 调用被它自己静默丢掉,按钮点了没反应。
+         *
+         * 通知栏和耳机线控不受影响:那条路由 MediaSession 直接打到 [QueuePlayer],不经过缓存。
+         */
+        const val ACTION_NEXT = "dev.bilby.NEXT"
+        const val ACTION_PREVIOUS = "dev.bilby.PREVIOUS"
+
         const val ACTION_SLEEP_TIMER = "dev.bilby.SLEEP_TIMER"
         const val EXTRA_SLEEP_MINUTES = "minutes"
 
@@ -468,21 +638,23 @@ class AudioPlaybackService : MediaSessionService() {
         const val SLEEP_CANCEL = -1
         const val SLEEP_END_OF_ITEM = 0
 
-        /** 播放页把一条视频交给服务播(含切清晰度后重新交)。参数见下面这组 EXTRA。 */
-        const val ACTION_PLAY_VIDEO = "dev.bilby.PLAY_VIDEO"
-
-        /** 见 [endListening]。 */
-        const val ACTION_END_LISTENING = "dev.bilby.END_LISTENING"
         const val EXTRA_BVID = "bvid"
         const val EXTRA_CID = "cid"
-        const val EXTRA_VIDEO_URL = "videoUrl"
-        const val EXTRA_AUDIO_URL = "audioUrl"
-
-        /** 续播位置,只在真正装载新流时生效。 */
-        const val EXTRA_START_POSITION = "startPosition"
+        const val EXTRA_MID = "mid"
+        const val EXTRA_QUALITY = "quality"
+        const val EXTRA_SHUFFLED = "shuffled"
         const val EXTRA_TITLE = "title"
         const val EXTRA_UP_NAME = "upName"
         const val EXTRA_COVER_URL = "coverUrl"
+
+        /**
+         * 同一条最多试几次(含第一次)。3 次意味着最坏等 1 + 2 = 3 秒后放弃 —— 再多几档,
+         * 一条已经删掉的视频要让人干等十几秒才等来那句"播不了"。
+         */
+        private const val MAX_ATTEMPTS = 3
+
+        /** 退避的第一档,之后每次翻倍:1s、2s。 */
+        private const val RETRY_BASE_DELAY_MILLIS = 1_000L
 
         /**
          * 播放页渲染画面用的真实播放器。
@@ -510,43 +682,18 @@ class AudioPlaybackService : MediaSessionService() {
         private val _sleepTimerState = MutableStateFlow(SleepTimerState())
         val sleepTimerState: StateFlow<SleepTimerState> = _sleepTimerState.asStateFlow()
 
-        @Volatile
-        private var pendingQueue: PendingQueue? = null
-
         /**
-         * 开始听视频。用 startService 而不是 startForegroundService:后者要求 5 秒内进前台,
-         * 而这里第一件事是取流(一次网络往返),慢一点就是
-         * ForegroundServiceDidNotStartInTimeException。调用方是前台 UI,普通 startService
-         * 不受后台启动限制,真正进前台由 Media3 在播放开始时完成。
+         * 播放器的生命周期到此为止。
+         *
+         * 队列从第一个播放页打开开始存在,到 backstack 上再没有播放页为止 —— 调用方是
+         * MainActivity,判据是"还有没有播放页",不是"这一页是被弹出还是被覆盖"。
+         * 后者是导航层的判断,CLAUDE.md 记着它被做错过。
          */
-        fun start(
-            context: Context,
-            items: List<QueueItem>,
-            startIndex: Int = 0,
-            shuffled: Boolean = false,
-        ) {
-            if (items.isEmpty()) {
-                BiliLog.w("听视频:队列为空,不启动服务")
-                return
-            }
-            pendingQueue = PendingQueue(items, startIndex, shuffled)
-            context.startService(Intent(context, AudioPlaybackService::class.java))
-        }
-
-        @Volatile
-        private var pendingBvid: String? = null
-
-        /** 跳到队列里的某一条。和 [start] 一样用静态字段递交,理由见那里的注释。 */
-        fun playFromQueue(context: Context, bvid: String) {
-            pendingBvid = bvid
-            context.startService(Intent(context, AudioPlaybackService::class.java))
-        }
-
         fun stop(context: Context) {
             context.stopService(Intent(context, AudioPlaybackService::class.java))
         }
 
-        /** UI 用它建 MediaController(播放/暂停/上下条/随机/定时都走 controller)。 */
+        /** UI 用它建 MediaController(播放/暂停/上下条/随机/定时/打开视频都走 controller)。 */
         fun sessionToken(context: Context): SessionToken =
             SessionToken(context, ComponentName(context, AudioPlaybackService::class.java))
     }
