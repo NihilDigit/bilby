@@ -31,10 +31,13 @@ them as fixed:
 
 **PiliPlus is the authority on API behaviour.** Its source is in `PiliPlus/`, local and
 gitignored. Public documentation lags live behaviour; where they disagree, follow PiliPlus.
-Three cases already paid for: `bili_ticket` parameters belong in the query; write actions
-require a TV `access_key`, since risk control refuses web cookies there; `batch-deal` for
-favourites requires both `add_media_ids` and `del_media_ids` (empty string when absent) and
-a `resources` value shaped like `aid:2`.
+Four cases already paid for: `bili_ticket` parameters belong in the query; likes, coins and
+favourites require a TV `access_key`, since risk control refuses web cookies there;
+`batch-deal` for favourites requires both `add_media_ids` and `del_media_ids` (empty string
+when absent) and a `resources` value shaped like `aid:2`; and following goes the other way,
+over web cookies and csrf, with its parameters split between query and body and its Referer
+pointed at the uploader's space page. Risk control is per-action, so never generalise from
+one write action to the next.
 
 `notes/auth-model.md` records that the cookie-to-`access_key` path returns `-101` today. Do
 not reimplement it.
@@ -107,6 +110,12 @@ name-based reflection must add its keep rule in the same change.
 ./gradlew assembleRelease       # dev.bilby, runs R8
 ./gradlew testDebugUnitTest
 ```
+
+Releases come from a `v` tag through `.github/workflows/release.yml` and nowhere else. The
+version is passed in as `-PbilbyVersion` and derived from the tag, so a local build reports
+`0.0.0-dev`. The signing key exists only as a repository secret; local release builds fall
+back to the debug key so R8 output can still be installed and checked. Unit test tasks exist
+for the debug variant only — `testReleaseUnitTest` does not exist and fails in CI.
 
 Smoke test changes on a real device and watch end-to-end behaviour. `adb shell input tap` is
 a no-op while the screen is off and reads as an unresponsive button, so send
