@@ -82,7 +82,7 @@ fun RelatedSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                InlineProgress(stringResource(R.string.related_searching))
+                InlineProgress(stringResource(R.string.agent_running))
             }
 
             related.blocks.isEmpty() -> Text(

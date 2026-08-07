@@ -90,7 +90,7 @@
     <string name="comment_expand_replies">展开 %1$d 条回复</string>
     <string name="comment_load_more">加载更多</string>
     <string name="comment_replying_to">回复 @%1$s</string>
-    <string name="comment_input_hint">说点什么</string>
+    <string name="comment_input_hint">发条友善的评论</string>
     <string name="comment_input_hint_reply">回复 %1$s</string>
 
     <!-- 个人空间 -->
@@ -99,7 +99,7 @@
     <string name="space_tab_dynamics">动态</string>
     <string name="space_tab_collections">合集</string>
     <string name="space_level_followers">Lv%1$d   %2$s粉丝</string>
-    <string name="space_no_sign">还没有签名</string>
+    <string name="space_no_sign">这个人很懒,什么都没写</string>
     <string name="space_listen_up">听这位 UP 主的投稿</string>
     <string name="space_order_pubdate">最新</string>
     <string name="space_order_click">最多播放</string>
@@ -141,10 +141,9 @@
 
     <!-- 找相关的 sheet。把手上一行既是标题也是状态 -->
     <string name="related_title">相关</string>
-    <string name="related_title_running">相关 · 检索中</string>
+    <string name="related_title_running">相关 · 还在找</string>
     <string name="related_title_error">相关 · 失败</string>
     <string name="related_title_count">相关 · %1$d 条</string>
-    <string name="related_searching">检索中…</string>
     <string name="related_step">· %1$s</string>
 
     <!-- 播放器控件。听视频页和播放页共用同一组 -->
@@ -186,15 +185,15 @@
 
     <!-- 登录 -->
     <string name="login_title">扫码登录</string>
-    <string name="login_hint">用 B 站 App 扫描</string>
-    <string name="login_scanned">请在手机上确认</string>
+    <string name="login_hint">用 B 站 App 扫码登录</string>
+    <string name="login_scanned">已扫描,请在手机上确认</string>
     <string name="login_qr_expired">二维码已过期</string>
     <string name="login_success">登录成功</string>
 
     <!-- 设置 -->
     <string name="settings_title">设置</string>
     <string name="settings_section_account">账号</string>
-    <string name="settings_uid">UID %1$d</string>
+    <string name="settings_uid">UID %1$s</string>
     <string name="settings_logout">登出</string>
     <string name="settings_logout_subtitle">清除本机凭据并停止播放,凭据过期也走这里</string>
     <string name="settings_logout_message">清除本机凭据并停止播放,重新登录需要再扫一次码</string>

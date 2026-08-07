@@ -73,7 +73,7 @@
     <string name="comment_expand_replies">Show %1$d replies</string>
     <string name="comment_load_more">Load more</string>
     <string name="comment_replying_to">Replying to @%1$s</string>
-    <string name="comment_input_hint">Say something</string>
+    <string name="comment_input_hint">Say something nice</string>
     <string name="comment_input_hint_reply">Reply to %1$s</string>
 
     <string name="space_title">Profile</string>
@@ -81,7 +81,7 @@
     <string name="space_tab_dynamics">Posts</string>
     <string name="space_tab_collections">Collections</string>
     <string name="space_level_followers">Lv%1$d   %2$s followers</string>
-    <string name="space_no_sign">No bio</string>
+    <string name="space_no_sign">This person is lazy and left nothing behind</string>
     <string name="space_listen_up">Listen to this creator\'s videos</string>
     <string name="space_order_pubdate">Newest</string>
     <string name="space_order_click">Most viewed</string>
@@ -120,10 +120,9 @@
     <string name="fav_dialog_title">Add to</string>
 
     <string name="related_title">Related</string>
-    <string name="related_title_running">Related · searching</string>
+    <string name="related_title_running">Related · still looking</string>
     <string name="related_title_error">Related · failed</string>
     <string name="related_title_count">Related · %1$d</string>
-    <string name="related_searching">Searching…</string>
     <string name="related_step">· %1$s</string>
 
     <string name="player_play">Play</string>
@@ -161,14 +160,14 @@
     <string name="sponsor_skipped">Skipped %1$s</string>
 
     <string name="login_title">Scan to sign in</string>
-    <string name="login_hint">Scan with the bilibili app</string>
-    <string name="login_scanned">Confirm on your phone</string>
+    <string name="login_hint">Sign in by scanning with the bilibili app</string>
+    <string name="login_scanned">Scanned — confirm on your phone</string>
     <string name="login_qr_expired">QR code expired</string>
     <string name="login_success">Signed in</string>
 
     <string name="settings_title">Settings</string>
     <string name="settings_section_account">Account</string>
-    <string name="settings_uid">UID %1$d</string>
+    <string name="settings_uid">UID %1$s</string>
     <string name="settings_logout">Sign out</string>
     <string name="settings_logout_subtitle">Clears credentials on this device and stops playback; expired credentials go through here too</string>
     <string name="settings_logout_message">Clears credentials on this device and stops playback. Signing back in takes another scan.</string>

@@ -38,10 +38,8 @@ import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -81,7 +79,6 @@ import dev.bilby.data.VideoStat
 import dev.bilby.player.QueueItem
 import dev.bilby.ui.comment.CommentSection
 import dev.bilby.ui.comment.CommentUiState
-import dev.bilby.ui.components.AnswerBlocks
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.CompactVideoRow
 import dev.bilby.ui.components.InlineProgress
@@ -848,75 +845,6 @@ private fun QueueContent(
         }
     }
 }
-
-/**
- * 官方在这个位置放相关推荐,我们放助理的「找相关」(DESIGN 2.3)。三态:
- * 未开始只有按钮和一句说明、检索中逐步展示过程、有结果展示带理由的条目。
- * 不做分页——固定一次性给 3–5 条,过程本身(搜了什么、读了谁的热评)是信任来源。
- */
-@Composable
-private fun RelatedSection(
-    related: RelatedState,
-    onFindRelated: () -> Unit,
-    onRelatedVideoClick: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
-        HorizontalDivider()
-        SectionHeader("找相关")
-        when {
-            related.error != null -> {
-                Text(
-                    text = related.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                TextButton(onClick = onFindRelated) { Text("重试") }
-            }
-
-            !related.started -> {
-                Text(
-                    text = "助理会搜索并翻看相关视频,给出几条带理由的结果——只在你点下面这个按钮时才会检索。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                // 这是整页唯一的"关联入口",而且必须由用户显式发起,所以给它一个真正的按钮,
-                // 不是一行看起来像链接的字。
-                FilledTonalButton(onClick = onFindRelated) { Text("找相关") }
-            }
-
-            related.running -> {
-                related.steps.forEach { step -> StepLine(step) }
-                InlineProgress("检索中…")
-            }
-
-            else -> {
-                // 检索过程留痕:结果不是凭空出现的,是这些步骤的产物。
-                related.steps.forEach { step -> StepLine(step) }
-                if (related.blocks.isEmpty()) {
-                    Text(
-                        text = "没找到合适的",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    // 与搜索页同一个渲染器:同一个助理的同一种输出,两处必须长得一样。
-                    AnswerBlocks(blocks = related.blocks, onVideoClick = onRelatedVideoClick)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun StepLine(step: String) {
-    Text(
-        text = "· $step",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
-
 
 /**
  * 计数折算。分档除数取自资源:中文按万/亿分档,英文按 K/M,
