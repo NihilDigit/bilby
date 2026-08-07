@@ -25,15 +25,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           # compileOptions 是 21,这里不能更低。
           java-version: "21"
 
-      - uses: gradle/actions/setup-gradle@v4
+      # 停在 v5,不跟到 v6。v6 把缓存拆成了闭源的 gradle-actions-caching,升上去
+      # 等于接受 Gradle 的商业 Terms of Use —— 这个仓库是 GPL-3.0,不为了一个
+      # 构建缓存把一份商业条款引进发布链路。v5 与 v4 的差别只是 Node 24。
+      - uses: gradle/actions/setup-gradle@v5
 
       - name: Derive version from tag
         id: version
@@ -76,12 +79,12 @@ jobs:
       # 证明这些文件确实由这个 workflow、从这个 commit 构建。
       # 校验:gh attestation verify bilby-<版本>-<变体>.apk --repo <owner>/<repo>
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*.apk
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: true
           files: dist/*
