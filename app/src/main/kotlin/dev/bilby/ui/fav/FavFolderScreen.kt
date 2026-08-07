@@ -1,5 +1,6 @@
 package dev.bilby.ui.fav
 
+import dev.bilby.formatDurationSeconds
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyColumn
@@ -148,7 +149,7 @@ private fun FavVideo.toRowUi(): VideoRowUi {
     return VideoRowUi(
         title = if (invalid) invalidLabel else title,
         coverUrl = coverUrl,
-        durationText = formatDuration(durationSeconds),
+        durationText = formatDurationSeconds(durationSeconds),
         upName = upName,
         // 收藏夹接口不给收藏时间,也不给弹幕数。传 null 而不是空串 —— StatRow 对 null 是
         // 整项不画,对空串是画个图标后面空着。
@@ -158,9 +159,3 @@ private fun FavVideo.toRowUi(): VideoRowUi {
     )
 }
 
-private fun formatDuration(seconds: Long): String {
-    val minutes = seconds / 60
-    val rest = seconds % 60
-    return if (minutes >= 60) "%d:%02d:%02d".format(minutes / 60, minutes % 60, rest)
-    else "%d:%02d".format(minutes, rest)
-}

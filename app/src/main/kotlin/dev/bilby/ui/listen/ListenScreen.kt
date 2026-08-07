@@ -62,6 +62,7 @@ import coil3.network.NetworkHeaders
 import coil3.network.httpHeaders
 import coil3.request.ImageRequest
 import dev.bilby.R
+import dev.bilby.formatDurationMillis
 import dev.bilby.api.toHttpsUrl
 import androidx.compose.material3.Scaffold
 import dev.bilby.ui.components.BilbyTopBar
@@ -189,12 +190,12 @@ fun ListenScreen(
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
-                        text = formatTime(displayPosition),
+                        text = formatDurationMillis(displayPosition),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
                     Text(
-                        text = formatTime(duration),
+                        text = formatDurationMillis(duration),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
@@ -493,7 +494,7 @@ private fun QueueList(
 @Composable
 private fun sleepTimerLabel(state: SleepTimerState): String = when (val mode = state.mode) {
     SleepTimerMode.Off -> stringResource(R.string.sleep_timer_off)
-    is SleepTimerMode.After -> state.remainingMillis?.let { formatTime(it) }
+    is SleepTimerMode.After -> state.remainingMillis?.let { formatDurationMillis(it) }
         ?: stringResource(R.string.sleep_timer_minutes, mode.minutes)
 
     SleepTimerMode.EndOfItem -> stringResource(R.string.sleep_timer_end_of_item)
@@ -502,12 +503,6 @@ private fun sleepTimerLabel(state: SleepTimerState): String = when (val mode = s
 private fun formatSpeed(speed: Float): String =
     if (speed == speed.toInt().toFloat()) "${speed.toInt()}x" else "${speed}x"
 
-private fun formatTime(millis: Long): String {
-    val totalSeconds = (millis / 1000).coerceAtLeast(0)
-    val minutes = totalSeconds / 60
-    val seconds = totalSeconds % 60
-    return "%d:%02d".format(minutes, seconds)
-}
 
 /**
  * 分 P 选择器。横排而不是竖排:分 P 通常几条到十几条,标题短,横着一行扫得完;

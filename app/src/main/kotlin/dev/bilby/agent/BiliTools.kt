@@ -1,5 +1,6 @@
 package dev.bilby.agent
 
+import dev.bilby.formatDurationSeconds
 import dev.bilby.BiliLog
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliResult
@@ -155,7 +156,7 @@ private fun getVideoTool(videoRepository: VideoRepository) = object : Tool {
                     "${d.bvid} | ${d.title}",
                     "UP: ${d.up.name}(mid=${d.up.mid})",
                     "简介: ${d.description.truncate(100)}",
-                    "时长${d.durationSeconds.formatDuration()} 播放${d.stat.view.formatCount()} 弹幕${d.stat.danmaku.formatCount()} " +
+                    "时长${d.durationSeconds.let(::formatDurationSeconds)} 播放${d.stat.view.formatCount()} 弹幕${d.stat.danmaku.formatCount()} " +
                         "评论${d.stat.reply.formatCount()} 点赞${d.stat.like.formatCount()} 投币${d.stat.coin.formatCount()} 收藏${d.stat.favorite.formatCount()}",
                     "分P数: ${d.pages.size}",
                 )
@@ -375,7 +376,7 @@ private fun getNativeRelatedTool(client: BiliClient) = object : Tool {
                 } else {
                     ToolResult(
                         forModel = items.joinToString("\n") {
-                            "${it.bvid} | ${it.title} | ${it.upName} | ${it.durationSeconds.formatDuration()} | 播放${it.playCount.formatCount()}"
+                            "${it.bvid} | ${it.title} | ${it.upName} | ${it.durationSeconds.let(::formatDurationSeconds)} | 播放${it.playCount.formatCount()}"
                         },
                         forUi = items.map { TraceItem(it.bvid, it.title, it.coverUrl, it.upName) },
                         bvids = items.mapTo(mutableSetOf()) { it.bvid },
@@ -415,8 +416,3 @@ private fun Long.formatCount(): String = when {
     else -> toString()
 }
 
-private fun Long.formatDuration(): String {
-    val minutes = this / 60
-    val seconds = this % 60
-    return "%d:%02d".format(minutes, seconds)
-}

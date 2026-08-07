@@ -69,6 +69,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.bilby.R
+import dev.bilby.formatDurationSeconds
 import dev.bilby.agent.AnswerBlock
 import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
@@ -822,7 +823,7 @@ private fun QueueContent(
                     CompactVideoRow(
                         title = item.title,
                         coverUrl = item.coverUrl,
-                        subtitle = if (item.durationSeconds > 0) formatDuration(item.durationSeconds) else null,
+                        subtitle = if (item.durationSeconds > 0) formatDurationSeconds(item.durationSeconds) else null,
                         selected = item.bvid == queue.currentBvid,
                         onClick = { onPlayQueueItem(item.bvid) },
                     )
@@ -861,11 +862,6 @@ private fun formatCount(value: Long): String {
     }
 }
 
-private fun formatDuration(seconds: Long): String {
-    val m = seconds / 60
-    val s = seconds % 60
-    return "%d:%02d".format(m, s)
-}
 
 private fun formatDate(epochSeconds: Long): String =
     java.time.Instant.ofEpochSecond(epochSeconds)

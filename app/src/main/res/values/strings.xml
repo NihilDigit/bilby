@@ -160,6 +160,14 @@
     <string name="player_exit_fullscreen">退出全屏</string>
     <string name="player_fast_forwarding">%1$s 快进中</string>
 
+    <!-- 播放器手势的浮层。百分比与秒数都由手势实时填。 -->
+    <string name="player_brightness">亮度 %1$d%%</string>
+    <string name="player_volume">音量 %1$d%%</string>
+    <string name="player_seek_forward">快进 %1$d 秒</string>
+    <string name="player_seek_backward">快退 %1$d 秒</string>
+    <string name="player_need_write_settings">调节亮度需要「修改系统设置」权限</string>
+
+
     <!-- 听视频 -->
     <string name="listen_title">听视频</string>
     <string name="listen_not_playing">未在播放</string>

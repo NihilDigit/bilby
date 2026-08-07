@@ -1,5 +1,6 @@
 package dev.bilby.data
 
+import dev.bilby.formatDurationSeconds
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
@@ -248,7 +249,7 @@ class SpaceRepository(private val client: BiliClient) {
         bvid = bvid,
         title = title,
         coverUrl = pic.toHttpsUrl(),
-        durationText = formatDuration(duration),
+        durationText = formatDurationSeconds(duration),
         publishedAtEpochSeconds = pubdate,
         playCountText = stat.view.formatCount(),
         danmakuCountText = stat.danmaku.formatCount(),
@@ -293,11 +294,6 @@ class SpaceRepository(private val client: BiliClient) {
     }
 }
 
-private fun formatDuration(totalSeconds: Long): String {
-    val minutes = totalSeconds / 60
-    val seconds = totalSeconds % 60
-    return "%d:%02d".format(minutes, seconds)
-}
 
 /**
  * 空间动态接口本身就返回 "1.2万" 这类格式化字符串;arc/search 与合集详情返回的是原始数值,

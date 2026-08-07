@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -61,6 +62,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -78,11 +80,14 @@ import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.compose.PlayerSurface
 import dev.bilby.R
+import dev.bilby.formatDurationMillis
 import dev.bilby.data.QualityOption
 import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SeekBarSegment
 import dev.bilby.ui.theme.FixedColors
 import kotlinx.coroutines.delay
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
@@ -93,6 +98,12 @@ private val ControlScrimBottom = Color(0xB3000000)
 private const val FAST_FORWARD_SPEED = 3f
 
 private const val CONTROLS_HIDE_DELAY_MILLIS = 3_000L
+
+/** 双击两侧快进/快退的步长。 */
+private const val DOUBLE_TAP_SEEK_MILLIS = 10_000L
+
+/** 手势提示浮层停留多久。 */
+private const val HINT_VISIBLE_MILLIS = 700L
 private const val PROGRESS_REPORT_INTERVAL_MILLIS = 5_000L
 
 /**
@@ -178,6 +189,56 @@ fun BilbyPlayer(
     // 每次操作控件都让自动隐藏重新计时,靠这个计数把 LaunchedEffect 重启。
     var interactionNonce by remember { mutableIntStateOf(0) }
 
+    val context = LocalContext.current
+    val brightness = rememberSystemBrightness(context)
+    val volume = rememberMediaVolume(context)
+
+    /** 正在进行的手势;横划与纵划在第一段位移里定死,见下面的 onDrag。 */
+    var gesture by remember { mutableStateOf<PlayerGesture?>(null) }
+    var dragStartX by remember { mutableFloatStateOf(0f) }
+
+    /** 纵划时浮层要显示的百分比。 */
+    var adjustValue by remember { mutableFloatStateOf(0f) }
+
+    /** 双击 ±10 秒的短暂提示,非 null 时显示;正负决定文案。 */
+    var seekNudgeMillis by remember { mutableStateOf<Long?>(null) }
+
+    /** 亮度权限没给时的提示。跳设置页是离开应用的动作,不说一声会很突兀。 */
+    var needsWriteSettings by remember { mutableStateOf(false) }
+
+    LaunchedEffect(seekNudgeMillis) {
+        if (seekNudgeMillis == null) return@LaunchedEffect
+        delay(HINT_VISIBLE_MILLIS)
+        seekNudgeMillis = null
+    }
+
+    LaunchedEffect(needsWriteSettings) {
+        if (!needsWriteSettings) return@LaunchedEffect
+        delay(HINT_VISIBLE_MILLIS)
+        needsWriteSettings = false
+    }
+
+    /**
+     * 定下这一次拖拽在做什么。返回 null 表示这次不做事(亮度没权限)。
+     *
+     * 亮度是设备级设置,要 `WRITE_SETTINGS`,而那个权限只能跳系统设置页去拨
+     * (见 [SystemBrightness])。第一次划到它时把人送过去,并留一句提示。
+     */
+    val startGesture: (Boolean, Long) -> PlayerGesture? = start@{ horizontal, playerPosition ->
+        if (horizontal) return@start PlayerGesture.Seek(playerPosition)
+        val onLeftHalf = dragStartX < 0.5f
+        if (onLeftHalf) {
+            if (!brightness.canWrite()) {
+                needsWriteSettings = true
+                brightness.requestPermission()
+                return@start null
+            }
+            PlayerGesture.Adjust(VerticalAdjust.Brightness, brightness.current())
+        } else {
+            PlayerGesture.Adjust(VerticalAdjust.Volume, volume.current())
+        }
+    }
+
     LaunchedEffect(player) {
         while (true) {
             if (dragPosition == null) position = player.currentPosition
@@ -220,46 +281,166 @@ fun BilbyPlayer(
         }
 
         Box(
-            modifier = Modifier.fillMaxSize().pointerInput(player, locked) {
-                if (locked) {
-                    // 锁上时只留"点一下把解锁按钮唤出来",其余手势一概不接。
-                    detectTapGestures(onTap = { controlsVisible = !controlsVisible })
-                    return@pointerInput
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(player, locked) {
+                    if (locked) {
+                        // 锁上时只留"点一下把解锁按钮唤出来",其余手势一概不接。
+                        detectTapGestures(onTap = { controlsVisible = !controlsVisible })
+                        return@pointerInput
+                    }
+                    detectTapGestures(
+                        onTap = {
+                            controlsVisible = !controlsVisible
+                            interactionNonce++
+                        },
+                        // 双击按落点分三段:两侧各三分之一是 ±10 秒,中间那段仍是播放/暂停。
+                        //
+                        // 中间保留下来是因为双击暂停本来就在,直接换掉等于拿走一个已有的常用
+                        // 操作;而三分法是 YouTube 立起来的惯例,两侧那两块也正是横屏握持时
+                        // 拇指自然落到的位置。
+                        onDoubleTap = { offset ->
+                            val third = size.width / 3f
+                            when {
+                                offset.x < third -> nudgeSeek(player, -DOUBLE_TAP_SEEK_MILLIS)
+                                    .also { seekNudgeMillis = -DOUBLE_TAP_SEEK_MILLIS }
+
+                                offset.x > size.width - third -> nudgeSeek(player, DOUBLE_TAP_SEEK_MILLIS)
+                                    .also { seekNudgeMillis = DOUBLE_TAP_SEEK_MILLIS }
+
+                                player.isPlaying -> player.pause()
+                                // 播完之后位置停在末尾,直接 play() 不会有反应,应有行为是重播。
+                                player.playbackState == Player.STATE_ENDED -> {
+                                    player.seekTo(0)
+                                    player.play()
+                                }
+
+                                else -> player.play()
+                            }
+                            interactionNonce++
+                        },
+                        onLongPress = {
+                            isFastForwarding = true
+                            player.setPlaybackSpeed(FAST_FORWARD_SPEED)
+                        },
+                        onPress = {
+                            tryAwaitRelease()
+                            if (isFastForwarding) {
+                                isFastForwarding = false
+                                // 恢复到用户选的倍速而不是 1.0:用户可能本来就在 1.5x 看,
+                                // 长按只是临时叠加,松手不该把他的设置抹掉。
+                                player.setPlaybackSpeed(userSpeed)
+                            }
+                        },
+                    )
                 }
-                detectTapGestures(
-                    onTap = {
-                        controlsVisible = !controlsVisible
-                        interactionNonce++
-                    },
-                    onDoubleTap = {
-                        when {
-                            player.isPlaying -> player.pause()
-                            // 播完之后位置停在末尾,直接 play() 不会有反应,应有行为是重播。
-                            player.playbackState == Player.STATE_ENDED -> {
-                                player.seekTo(0)
-                                player.play()
+                // 拖拽单独一个 pointerInput:和上面的点按检测并列而不是塞进同一个块。
+                // 两者天然互斥 —— 位移超过 touch slop 之后点按检测就不会触发了。
+                .pointerInput(player, locked, duration) {
+                    if (locked) return@pointerInput
+                    val width = size.width.toFloat().coerceAtLeast(1f)
+                    val height = size.height.toFloat().coerceAtLeast(1f)
+                    var accumulated = Offset.Zero
+
+                    detectDragGestures(
+                        onDragStart = { start ->
+                            accumulated = Offset.Zero
+                            dragStartX = start.x / width
+                        },
+                        onDragEnd = {
+                            // 拖拽期间只动本地位置,松手才真 seek:每帧 seek 会让播放器不停丢
+                            // 缓冲重新起播,表现为拖不动。和进度条的处理是同一套。
+                            if (gesture is PlayerGesture.Seek) {
+                                dragPosition?.let { target ->
+                                    player.seekTo(target)
+                                    position = target
+                                    reportProgress(target, player.duration.coerceAtLeast(0))
+                                }
+                            }
+                            gesture = null
+                            dragPosition = null
+                            interactionNonce++
+                        },
+                        onDragCancel = {
+                            gesture = null
+                            dragPosition = null
+                        },
+                    ) { change, delta ->
+                        change.consume()
+                        accumulated += delta
+
+                        // 方向在第一段位移里定下,之后不再改判:不锁轴的话,横划途中手指
+                        // 稍微飘一点就会跳去改音量。
+                        val current = gesture ?: startGesture(
+                            abs(accumulated.x) >= abs(accumulated.y),
+                            player.currentPosition,
+                        )?.also { gesture = it } ?: return@detectDragGestures
+
+                        when (current) {
+                            is PlayerGesture.Seek -> {
+                                // 整屏宽对应多长:按时长的四分之一取,夹在 1 到 5 分钟之间。
+                                // 定长(比如恒定 2 分钟)在长视频里要划很多次;按整段时长又会让
+                                // 长视频一格几十秒,微调不了。
+                                val span = (duration / 4).coerceIn(60_000L, 300_000L)
+                                val target = current.startPositionMillis +
+                                    (accumulated.x / width * span).toLong()
+                                dragPosition = target.coerceIn(0L, duration.coerceAtLeast(0L))
                             }
 
-                            else -> player.play()
+                            is PlayerGesture.Adjust -> {
+                                // 向上是变大,所以减去 y 的位移(屏幕坐标向下为正)。
+                                val value = (current.startValue - accumulated.y / height)
+                                    .coerceIn(0f, 1f)
+                                adjustValue = value
+                                when (current.kind) {
+                                    VerticalAdjust.Brightness -> brightness.set(value)
+                                    VerticalAdjust.Volume -> volume.set(value)
+                                }
+                            }
                         }
-                        interactionNonce++
-                    },
-                    onLongPress = {
-                        isFastForwarding = true
-                        player.setPlaybackSpeed(FAST_FORWARD_SPEED)
-                    },
-                    onPress = {
-                        tryAwaitRelease()
-                        if (isFastForwarding) {
-                            isFastForwarding = false
-                            // 恢复到用户选的倍速而不是 1.0:用户可能本来就在 1.5x 看,
-                            // 长按只是临时叠加,松手不该把他的设置抹掉。
-                            player.setPlaybackSpeed(userSpeed)
-                        }
-                    },
-                )
-            },
+                    }
+                },
         )
+
+        // 纵划的浮层。和快进提示一样贴在正中偏上,不压住底部控件。
+        (gesture as? PlayerGesture.Adjust)?.let { adjust ->
+            Overlay(modifier = Modifier.align(Alignment.Center)) {
+                Text(
+                    stringResource(
+                        when (adjust.kind) {
+                            VerticalAdjust.Brightness -> R.string.player_brightness
+                            VerticalAdjust.Volume -> R.string.player_volume
+                        },
+                        (adjustValue * 100).roundToInt(),
+                    ),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = FixedColors.OnMedia,
+                )
+            }
+        }
+
+        seekNudgeMillis?.let { delta ->
+            Overlay(modifier = Modifier.align(Alignment.Center)) {
+                Text(
+                    stringResource(
+                        if (delta >= 0) R.string.player_seek_forward else R.string.player_seek_backward,
+                        abs(delta) / 1000,
+                    ),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = FixedColors.OnMedia,
+                )
+            }
+        }
+
+        if (needsWriteSettings) {
+            Overlay(modifier = Modifier.align(Alignment.Center)) {
+                Text(
+                    stringResource(R.string.player_need_write_settings),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = FixedColors.OnMedia,
+                )
+            }
+        }
 
         if (isFastForwarding) {
             Overlay(modifier = Modifier.align(Alignment.TopCenter).padding(top = 24.dp)) {
@@ -285,7 +466,7 @@ fun BilbyPlayer(
         if (dragPosition != null) {
             Overlay(modifier = Modifier.align(Alignment.Center)) {
                 Text(
-                    "${formatPlayerTime(displayPosition)} / ${formatPlayerTime(duration)}",
+                    "${formatDurationMillis(displayPosition)} / ${formatDurationMillis(duration)}",
                     style = MaterialTheme.typography.titleMedium,
                     color = FixedColors.OnMedia,
                 )
@@ -458,7 +639,7 @@ private fun PlayerControlBar(
         Row(verticalAlignment = Alignment.CenterVertically) {
             PlayPauseButton(isPlaying, onPlayPause, if (isFullscreen) 30.dp else 22.dp)
             Text(
-                "${formatPlayerTime(position)} / ${formatPlayerTime(duration)}",
+                "${formatDurationMillis(position)} / ${formatDurationMillis(duration)}",
                 style = if (isFullscreen) MaterialTheme.typography.labelLarge
                 else MaterialTheme.typography.labelSmall,
                 color = FixedColors.OnMedia,
@@ -693,11 +874,13 @@ private fun VideoSize.aspectOr(fallback: Float): Float =
 private fun formatSpeed(speed: Float): String =
     if (speed == speed.toInt().toFloat()) "${speed.toInt()}x" else "${speed}x"
 
-private fun formatPlayerTime(millis: Long): String {
-    val totalSeconds = (millis / 1000).coerceAtLeast(0)
-    val hours = totalSeconds / 3600
-    val minutes = (totalSeconds % 3600) / 60
-    val seconds = totalSeconds % 60
-    return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds)
-    else "%d:%02d".format(minutes, seconds)
+
+/**
+ * 双击两侧的定量跳转。夹在 [0, duration] 内 —— 末尾再往前跳会停在结尾并触发播完逻辑,
+ * 那不是用户按这一下的意思。时长未知(还没解析出来)时不夹上界。
+ */
+private fun nudgeSeek(player: Player, deltaMillis: Long) {
+    val duration = player.duration.coerceAtLeast(0)
+    val target = player.currentPosition + deltaMillis
+    player.seekTo(if (duration > 0) target.coerceIn(0L, duration) else target.coerceAtLeast(0L))
 }
