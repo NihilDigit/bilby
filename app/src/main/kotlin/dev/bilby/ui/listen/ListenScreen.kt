@@ -1,6 +1,11 @@
 package dev.bilby.ui.listen
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.layout.widthIn
+import dev.bilby.data.VideoPart
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -94,6 +99,17 @@ fun ListenScreen(
     sleepTimer: SleepTimerState,
     queue: List<QueueItem>,
     onPlayQueueItem: (bvid: String) -> Unit,
+    /**
+     * 当前视频的分 P。**分 P 与队列是两条并列的轴**(CLAUDE.md:多 P 视频和合集是两回事):
+     * 队列装的是不同 bvid 的视频,分 P 是同一个 bvid 下的不同 cid。播放页两条都给,
+     * 听视频这边一度只有队列 —— 于是多 P 视频进来就换不了 P。
+     *
+     * DESIGN 2.4b 说的是"一个播放状态,两个 UI",两个 UI 能去的地方本来就该一样,
+     * 差别只在有没有画面。
+     */
+    parts: List<VideoPart> = emptyList(),
+    currentCid: Long = 0L,
+    onPlayPart: (cid: Long) -> Unit = {},
     onToggleShuffle: () -> Unit,
     onSleepTimer: (minutes: Int) -> Unit,
     onBack: () -> Unit,
@@ -199,6 +215,13 @@ fun ListenScreen(
                 onToggleShuffle = onToggleShuffle,
                 onSleepTimer = onSleepTimer,
             )
+        }
+
+        // 分 P 放在队列**之前**,而且在分隔线之前:它属于"正在放的这一条"的内部结构,
+        // 归到队列标题底下会读成"队列里的东西",而分 P 和队列是两条并列的轴。
+        // 单 P 视频不显示 —— 一个只有 P1 的选择器是纯噪声。
+        if (parts.size > 1) {
+            PartRow(parts = parts, currentCid = currentCid, onPlayPart = onPlayPart)
         }
 
         // 分隔线 + 小节标题:没有它,队列列表看起来只是这一页往下接着写,
@@ -449,4 +472,37 @@ private fun formatTime(millis: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return "%d:%02d".format(minutes, seconds)
+}
+
+/**
+ * 分 P 选择器。横排而不是竖排:分 P 通常几条到十几条,标题短,横着一行扫得完;
+ * 竖排会把它撑成和下面的队列一样重的一块,而它只是当前这条视频的内部结构。
+ */
+@Composable
+private fun PartRow(
+    parts: List<VideoPart>,
+    currentCid: Long,
+    onPlayPart: (cid: Long) -> Unit,
+) {
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = Spacing.Comfortable),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        modifier = Modifier.padding(bottom = Spacing.Cozy),
+    ) {
+        itemsIndexed(parts, key = { _, part -> part.cid }) { index, part ->
+            val selected = part.cid == currentCid
+            FilterChip(
+                selected = selected,
+                onClick = { onPlayPart(part.cid) },
+                label = {
+                    Text(
+                        "P${index + 1} ${part.title}",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 160.dp),
+                    )
+                },
+            )
+        }
+    }
 }

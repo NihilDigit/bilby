@@ -64,3 +64,32 @@ class PlaybackQueueTest {
         )
     }
 }
+
+class UpdateCurrentCidTest {
+
+    private fun item(bvid: String, cid: Long) =
+        QueueItem(bvid, cid, bvid, "up", "", 0)
+
+    /** 换 P 之后走开再回来,应该回到离开时那一 P,而不是队列自带的默认 P1。 */
+    @Test
+    fun `returning to a video restores the part it was left on`() {
+        val queue = PlaybackQueue(listOf(item("A", 1), item("B", 10)))
+        queue.updateCurrentCid(3)
+        queue.next()
+        queue.previous()
+        assertEquals(3L, queue.current()?.cid)
+    }
+
+    @Test
+    fun `updating touches only the current entry`() {
+        val queue = PlaybackQueue(listOf(item("A", 1), item("B", 10)))
+        queue.updateCurrentCid(3)
+        assertEquals(listOf(3L, 10L), queue.itemsNatural().map { it.cid })
+    }
+
+    /** 空队列时是无操作 —— 看视频时队列本来就是空的,这条路每次换 P 都会走到。 */
+    @Test
+    fun `updating an empty queue does nothing`() {
+        PlaybackQueue(emptyList()).updateCurrentCid(3)
+    }
+}

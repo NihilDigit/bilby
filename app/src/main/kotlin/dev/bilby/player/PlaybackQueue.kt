@@ -31,11 +31,17 @@ data class QueueItem(
  * 显示 N / M 来补,这要求剩余条数是确定的。
  */
 class PlaybackQueue(
-    private val items: List<QueueItem>,
+    items: List<QueueItem>,
     startIndex: Int = 0,
     shuffled: Boolean = false,
     private val random: Random = Random.Default,
 ) {
+    /**
+     * 可变只是为了 [updateCurrentCid] —— 队列的**内容和顺序都不会变**,
+     * 变的只有当前这一格记着哪一 P。别拿它当"可以往队列里加东西"的口子:
+     * 队列有限且由用户显式选定,能追加就等于恢复了被禁的自动续接(DESIGN 1.3)。
+     */
+    private val items: MutableList<QueueItem> = items.toMutableList()
     /** 播放顺序:元素是 [items] 的下标。顺序播时是 0..n-1,随机播时是一张乱序表。 */
     private var order: MutableList<Int> = MutableList(items.size) { it }
 
@@ -79,6 +85,17 @@ class PlaybackQueue(
      * 列表跟着重排会让人找不到刚才看的那条在哪。
      */
     fun itemsNatural(): List<QueueItem> = items
+
+    /**
+     * 把当前这一格记的 cid 换成正在播的那一 P。
+     *
+     * 队列装的是**视频**,cid 只是"从哪一 P 起播"的默认值(通常是 P1)。在播放页或听视频页
+     * 换过 P 之后,这一格若还记着默认值,走开再回来就落回 P1 —— 而用户离开时明明在 P3。
+     */
+    fun updateCurrentCid(cid: Long) {
+        val index = order.getOrNull(currentIndex) ?: return
+        items[index] = items[index].copy(cid = cid)
+    }
 
     /** 跳到指定 bvid,不在队列里返回 null。 */
     fun seekToBvid(bvid: String): QueueItem? {

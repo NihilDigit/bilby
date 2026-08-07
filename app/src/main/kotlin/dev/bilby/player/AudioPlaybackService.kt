@@ -239,7 +239,23 @@ class AudioPlaybackService : MediaSessionService() {
 
         // 队列的取流是异步的,不取消的话它回来时会把播放页刚装上的流盖掉。
         prepareJob?.cancel()
-        queue = PlaybackQueue(emptyList())
+
+        // **队列只在换了视频时作废,换分 P 不作废。**
+        //
+        // 两个播放界面都只是这个服务的外壳:它们不持有"现在在放什么",只把要放的流交过来。
+        // 所以"还算不算在队列里"该由这里判断,而不是由交流的那一方宣布。原先无条件清空,
+        // 等于播放页每交一次流就说一句"现在没有队列了" —— 于是在听视频里换个 P,整份合集
+        // 队列就没了,而换 P 根本没有离开这条视频。
+        //
+        // 队列装的是视频(不同 bvid),分 P 是同一条视频内部的结构(同 bvid 不同 cid),
+        // 这条边界在 CLAUDE.md 里已经写明:多 P 视频和合集是两回事。
+        if (queue.current()?.bvid != item.bvid) {
+            queue = PlaybackQueue(emptyList())
+        } else {
+            // 还在队列里,只是换了 P:让这一格跟着记住换到了哪一 P。不更新的话按"下一条"
+            // 再按"上一条"回来,队列会从它自带的默认 cid 出发,把人送回 P1。
+            queue.updateCurrentCid(item.cid)
+        }
         singleItem = item
         load(videoUrl, args.getString(EXTRA_AUDIO_URL), item, args.getLong(EXTRA_START_POSITION))
         player.playWhenReady = true
@@ -266,6 +282,26 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /** 队列走完。只暂停不停服务:用户可能想按上一条回去重听。 */
+    /**
+     * 从听视频退回播放页 —— 音频专属的那一段到此为止。
+     *
+     * **只清队列,不停播放。** 回到的是一个有画面的地方,同一条视频接着放;要停的是
+     * "队列"这个身份:迷你条的可见性判据就是队列非空([AudioPlaybackUiState.active]),
+     * 不清的话用过一次听视频,迷你条和通知栏就在全 app 常驻到进程结束。
+     *
+     * 当前这条从队列挪进 [singleItem],于是播放器装的东西没变、进度没动,变的只是
+     * "它现在是播放页交来的一条,不是一份队列"。
+     *
+     * 划走 app 不走这里(见 [onTaskRemoved]):那种情况下听视频正是要继续的,
+     * 两者是不同的离开。
+     */
+    private fun endListening() {
+        if (queue.size == 0) return
+        singleItem = loadedItem
+        queue = PlaybackQueue(emptyList())
+        publishState()
+    }
+
     private fun stopPlayback() {
         player.playWhenReady = false
         publishState()
@@ -389,6 +425,7 @@ class AudioPlaybackService : MediaSessionService() {
                     MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                         .add(SessionCommand(ACTION_SLEEP_TIMER, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_PLAY_VIDEO, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_END_LISTENING, Bundle.EMPTY))
                         .build()
                 )
                 .build()
@@ -409,6 +446,7 @@ class AudioPlaybackService : MediaSessionService() {
                 }
 
                 ACTION_PLAY_VIDEO -> playSingleVideo(args)
+                ACTION_END_LISTENING -> endListening()
 
                 else -> return super.onCustomCommand(session, controller, customCommand, args)
             }
@@ -432,6 +470,9 @@ class AudioPlaybackService : MediaSessionService() {
 
         /** 播放页把一条视频交给服务播(含切清晰度后重新交)。参数见下面这组 EXTRA。 */
         const val ACTION_PLAY_VIDEO = "dev.bilby.PLAY_VIDEO"
+
+        /** 见 [endListening]。 */
+        const val ACTION_END_LISTENING = "dev.bilby.END_LISTENING"
         const val EXTRA_BVID = "bvid"
         const val EXTRA_CID = "cid"
         const val EXTRA_VIDEO_URL = "videoUrl"

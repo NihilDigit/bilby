@@ -705,7 +705,19 @@ private fun VideoPane(
                 BiliLog.w("听视频:队列为空,无法开始")
             } else {
                 val startIndex = items.indexOfFirst { it.bvid == queue.currentBvid }.coerceAtLeast(0)
-                AudioPlaybackService.start(context, items, startIndex, queue.shuffled)
+                // 起点那一条要带**此刻正在播的 cid**,不能用队列项自带的那个。
+                //
+                // 队列来自合集/UP 投稿,每条视频只占一格,cid 是它的默认分 P(P1)。多 P 视频看到
+                // P3 时交过去的仍是 P1,服务端的 isSameVideoAs 比 cid 后判定"不是同一条",于是
+                // 重新取流、从头开始 —— 表现就是进听视频必掉回 1P 且进度归零。
+                //
+                // 补上之后这一条与播放器装着的完全一致,服务走"同一条"的分支:不重新取流、
+                // 不 seek,只是换了个 UI。这正是 DESIGN 2.4b 说的"切模式不需要交接进度"。
+                val aligned = items.toMutableList().apply {
+                    val start = this[startIndex]
+                    if (state.currentCid != 0L) this[startIndex] = start.copy(cid = state.currentCid)
+                }
+                AudioPlaybackService.start(context, aligned, startIndex, queue.shuffled)
             }
         },
         onUpClick = onUpClick,

@@ -216,6 +216,19 @@ fun VideoScreen(
             .build()
     }
 
+    // TODO(动效):听视频与全屏在 M3 里都属于 container transform 的 "within a screen"
+    // 子类——同一个容器改形态,播放器是 persistent element。现在三种形态是三段各自 return
+    // 的独立子树,没有共同的布局树,`Modifier.animateBounds` 无从下手(它要求同一个
+    // composable 实例在 LookaheadScope 里改变边界)。
+    //
+    // 做的话要先把这三段合成一棵树:一个播放器容器,边界按形态取(内嵌 16:9 / 全屏铺满 /
+    // 听视频的封面位),外面套 LookaheadScope,其余内容按形态显隐。依赖已具备,
+    // compose.animation 解析到 1.12.0-rc01,`SharedTransitionLayout` 与 `animateBounds`
+    // 都在(标 @ExperimentalSharedTransitionApi)。
+    //
+    // 注意听视频这一段与全屏不同:全屏是同一份画面换尺寸,而听视频把视频轨关掉、显示的是
+    // 封面,persistent element 到底是"播放器"还是"封面"需要先定,否则 bounds 两端接的
+    // 不是同一个东西。
     if (listening && active != null) {
         ListenScreen(
             player = active,
@@ -223,6 +236,9 @@ fun VideoScreen(
             sleepTimer = sleepTimerState,
             queue = queue.items,
             onPlayQueueItem = onPlayQueueItem,
+            parts = state.detail?.pages.orEmpty(),
+            currentCid = state.currentCid,
+            onPlayPart = onPlayPart,
             onToggleShuffle = onToggleShuffle,
             onSleepTimer = { minutes ->
                 active.sendCustomCommand(
@@ -230,7 +246,15 @@ fun VideoScreen(
                     bundleOf(AudioPlaybackService.EXTRA_SLEEP_MINUTES to minutes),
                 )
             },
-            onBack = { listening = false },
+            // 退回播放页即终止听视频:清掉队列身份,迷你条与通知栏随之消失。
+            // 播放不停 —— 回到的是同一条视频,只是又有画面了。
+            onBack = {
+                listening = false
+                active.sendCustomCommand(
+                    SessionCommand(AudioPlaybackService.ACTION_END_LISTENING, Bundle.EMPTY),
+                    Bundle.EMPTY,
+                )
+            },
             modifier = Modifier.fillMaxSize(),
         )
         return
