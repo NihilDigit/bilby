@@ -112,6 +112,33 @@ class BiliClient(
         }.also { fingerprint.rememberCookies(it.setCookie()) }
     }
 
+    /**
+     * 收到 -101 时判断凭据是不是真的失效了,失效就清掉登录态 —— `MainActivity` 看的是
+     * `credentials.isLoggedIn`,清掉之后扫码页会自己顶上来。
+     *
+     * **不直接凭一个 -101 就登出**:先拿 `nav` 复核一次。-101 的字面意思是"未登录",
+     * 而个别接口在登录态正常时也会给它(未登录版评论列表就是特意不带 Cookie 调的),
+     * 单凭一次响应就清凭据,代价是让用户莫名其妙地被踢去重新扫码。`nav` 的 `isLogin`
+     * 是这件事的权威答案。
+     *
+     * 复核本身失败(断网之类)时什么都不做:那说明我们现在无法判断,而"无法判断"不该
+     * 被当成"已失效"。
+     */
+    suspend fun invalidateIfLoggedOut() {
+        if (!settings.credentials.first().isLoggedIn) return
+        val stillValid = runCatching {
+            rawGet("${BiliConstants.WEB_HOST}/x/web-interface/nav")
+                .body<BiliResponse<NavData>>()
+                .data
+                ?.isLogin
+        }.onFailure { BiliLog.w("复核登录态失败,保持现状", it) }.getOrNull()
+
+        if (stillValid == false) {
+            BiliLog.w("凭据已失效,清除登录态,需要重新扫码")
+            settings.clearCredentials()
+        }
+    }
+
     suspend fun fetchWbiKeys(): WbiKeys {
         val nav = rawGet("${BiliConstants.WEB_HOST}/x/web-interface/nav")
             .body<BiliResponse<NavData>>()
@@ -167,7 +194,10 @@ class BiliClient(
     }
 
     @Serializable
-    private data class NavData(@SerialName("wbi_img") val wbiImg: WbiImg? = null)
+    private data class NavData(
+        @SerialName("wbi_img") val wbiImg: WbiImg? = null,
+        @SerialName("isLogin") val isLogin: Boolean = false,
+    )
 
     @Serializable
     private data class WbiImg(
@@ -216,6 +246,7 @@ suspend inline fun <reified T> BiliClient.getData(
                 BiliResult.Ok(data)
             } else {
                 BiliLog.w("GET ${url.pathOnly()} 失败${envelope.describeFailure()}")
+                if (envelope.code == CODE_NOT_LOGGED_IN) invalidateIfLoggedOut()
                 BiliResult.ApiError(envelope.code, envelope.message)
             }
         },
@@ -248,7 +279,7 @@ suspend fun BiliClient.appPostAction(
     form: Map<String, String> = emptyMap(),
 ): BiliResult<Unit> = envelopeResult(url) { appPostForm(url, form).body<BiliEnvelope>() }
 
-private suspend inline fun envelopeResult(
+private suspend inline fun BiliClient.envelopeResult(
     url: String,
     request: () -> BiliEnvelope,
 ): BiliResult<Unit> = runCatching(request).fold(
@@ -257,6 +288,7 @@ private suspend inline fun envelopeResult(
             BiliResult.Ok(Unit)
         } else {
             BiliLog.w("POST ${url.pathOnly()} 失败(${envelope.code}): ${envelope.message}")
+            if (envelope.code == CODE_NOT_LOGGED_IN) invalidateIfLoggedOut()
             BiliResult.ApiError(envelope.code, envelope.message)
         }
     },
