@@ -218,7 +218,7 @@ private fun AgentPane(
 ) {
     if (state.turns.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            EmptyState("描述想看的内容,助理会检索后给出几条并说明理由")
+            EmptyState("描述想看的内容")
         }
         return
     }
