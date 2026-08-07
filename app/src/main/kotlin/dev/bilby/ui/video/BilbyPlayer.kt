@@ -95,6 +95,7 @@ import dev.bilby.data.QualityOption
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
 import dev.bilby.player.cueAt
+import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SeekBarSegment
 import dev.bilby.ui.components.SubtitleTrackMenu
@@ -170,6 +171,18 @@ fun BilbyPlayer(
     danmakuPool: List<Danmaku> = emptyList(),
     /** 弹幕池所属的 cid,换一条(切分 P、队列走到下一条)要整池重编,不是接着追加。 */
     danmakuCid: Long = 0L,
+    /**
+     * 播放器此刻装的是不是这一页的视频。**判据是 `AudioPlaybackService.state.current?.bvid`
+     * 是否等于这一页的 bvid**,调用方(`VideoScreen`)算好再传进来。
+     *
+     * 播放器全 app 共用一份、跨页面存活(DESIGN 2.4b),点开新视频到它真正切过去之间有一段
+     * 取流 + prepare 的窗口——这段时间里 `surfacePlayer` 渲染的还是上一条视频的最后几帧。
+     * 为 false 时不挂 [PlayerSurface],改画 [placeholderCoverUrl];为 true 时正常渲染画面。
+     * **不去暂停或销毁播放器**——那会打断后台连续播放,也违反"播放器归服务所有"。
+     */
+    matchesCurrentPage: Boolean = true,
+    /** [matchesCurrentPage] 为 false 时画的占位封面,取这一页自己的封面,不是播放器正在放的那条。 */
+    placeholderCoverUrl: String = "",
     modifier: Modifier = Modifier,
     /** 只在全屏时显示。竖屏下标题就在播放器正下方,再印一遍是多余的。 */
     title: String = "",
@@ -445,12 +458,25 @@ fun BilbyPlayer(
     val currentCue = remember(subtitleCues, displayPosition) { subtitleCues.cueAt(displayPosition) }
 
     Box(modifier = modifier.background(Color.Black)) {
-        if (surfacePlayer != null) {
+        // 播放器装的是不是这一页的视频,决定挂画面还是画占位——不判断的话,点开新视频到
+        // 播放器真正切过去之间那段取流 + prepare 的窗口里,这里会一直显示上一条视频的残留帧
+        // (surfacePlayer 是跨页面存活的同一个播放器,这段时间它还没换流)。占位保持 16:9,
+        // 不跳布局;切回真画面**不做转场**——它和取流、prepare、codec 初始化撞在同一瞬间,
+        // 加动效只会让"卡"更明显,VideoScreen.kt 里"自动换页不做转场"是同一条道理。
+        if (matchesCurrentPage && surfacePlayer != null) {
             PlayerSurface(
                 player = surfacePlayer,
                 modifier = Modifier.align(Alignment.Center).aspectRatio(videoAspect),
             )
+        } else if (placeholderCoverUrl.isNotEmpty()) {
+            BiliAsyncImage(
+                url = placeholderCoverUrl,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
+        // 封面也拿不到(详情还没回来)时退化成纯黑——Box 本身的背景已经是黑的,这里不用
+        // 再多画一层。
 
         Box(
             modifier = Modifier
@@ -1115,8 +1141,10 @@ private fun ControlButton(
                 style = MaterialTheme.typography.labelSmall,
                 color = tint,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 4.dp).widthIn(max = 64.dp),
+                // **不设宽度上限**:这里的标签是画质档名("1080P60"、"1080P 高码率"),
+                // 截断之后两个档看起来一模一样,那正是这个标签唯一要回答的问题。
+                // 只在全屏显示(内嵌时 label 传 null),横屏有的是宽度,不会挤掉别的控件。
+                modifier = Modifier.padding(start = 4.dp),
             )
         }
     }

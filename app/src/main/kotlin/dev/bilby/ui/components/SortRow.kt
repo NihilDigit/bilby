@@ -4,6 +4,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -37,11 +38,18 @@ fun <T> SortRow(
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // **靠右**,不是靠左。排序是这一块内容的次要操作,不是它的标题 —— 摆在左上角会和小节
+    // 标题抢"这块是什么"的位置,而右上角是各处约定俗成放页级/块级动作的地方。
+    //
+    // `fillMaxWidth` 要在 `horizontalScroll` 之前:先把行撑到父宽(否则行只有内容那么宽,
+    // `Arrangement.End` 无处可推),再让内容在超宽时可横滚。
     Row(
         modifier = modifier
+            .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
             .selectableGroup(),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
+        // spacedBy 带 alignment 参数:既保留项间距,又整体靠右。只写 Arrangement.End 会把间距丢掉。
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable, Alignment.End),
     ) {
         options.forEach { (value, labelRes) ->
             val isSelected = value == selected

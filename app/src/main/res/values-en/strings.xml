@@ -31,8 +31,11 @@
     <string name="follow_none">Follow</string>
     <string name="follow_following">Following</string>
     <string name="follow_mutual">Mutual</string>
+    <string name="follow_unfollow_confirm_title">Unfollow</string>
+    <string name="follow_unfollow_confirm_message">You\'ll need to find this person again to follow them once more</string>
 
     <string name="feed_empty">No new videos from the creators you follow</string>
+    <string name="feed_frequent_ups">Most visited</string>
 
     <string name="search_empty">Search videos and creators</string>
     <string name="search_agent_empty">Describe what you want to watch</string>

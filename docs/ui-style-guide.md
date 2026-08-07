@@ -217,6 +217,17 @@ M3 还有两条硬规矩:chip **不能单独出现一个**(必须成组),按钮�
 
 这一条以前是错的(播放页也用了 `PrimaryTabRow`),两处指示条粗细一样,层级读不出来。
 
+**播放页那条 secondary 指示条,宽度贴合文字,不是 M3 默认的通长铺满。** 这是有意的偏离,
+不要照 M3 文档把它"修"回去:默认的 `SecondaryIndicator` 占满整个 Tab 宽度,真机上比 primary
+的贴合宽度还重,和"secondary 该更轻"的语义反着来。做法是用 `TabIndicatorScope.tabIndicatorLayout`
+自己控制指示条的位置,宽度取 `TabPosition.contentWidth`(标签实际渲染宽度,不是整格宽度),
+`left` 按 `left + (width − contentWidth) / 2` 居中。**高度和形状没有跟着改**——高度仍是
+`SecondaryIndicator` 的默认值(secondary/primary 的层级差就是靠它,见上面那条踩过的坑),
+形状仍是直角(圆头是 primary 的标志)。另外这条指示条本身还做了连续跟手:用
+`pagerState.currentPage + pagerState.currentPageOffsetFraction` 在相邻两个 Tab 的位置之间
+插值,不是只认 `selectedTabIndex` 这个整数(那样滑动 `HorizontalPager` 时指示条不跟手,
+要等翻页判定过了 50% 才追上去)。实现在 `ui/video/VideoTabs.kt` 的 `VideoTabs` 里。
+
 ### 2.3 动作栏是图标叠计数的等宽四格,**不用 ButtonGroup**
 
 播放页的 点赞/投币/收藏/稍后再看:一行四格等宽,图标在上、计数在下,未选中 `outline`、

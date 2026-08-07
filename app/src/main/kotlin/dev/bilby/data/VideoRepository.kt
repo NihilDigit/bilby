@@ -4,6 +4,7 @@ import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
 import dev.bilby.api.DmImgParams
+import dev.bilby.api.dto.MemberCardResponseDto
 import dev.bilby.api.dto.PlayUrlDto
 import dev.bilby.api.dto.UgcSeasonDto
 import dev.bilby.api.dto.VideoDetailDto
@@ -37,6 +38,13 @@ data class VideoDetail(
 )
 
 data class VideoUp(val mid: Long, val name: String, val faceUrl: String)
+
+/**
+ * UP 主的等级信息,来自 `x/web-interface/card`——`getVideoDetail` 的 `owner` 只有
+ * mid/name/face,不带等级。独立于 [VideoDetail] 是因为它是独立请求,拿不到不该拖累
+ * 详情页其余部分的展示(见 `VideoRepository.getMemberCard` 的说明)。
+ */
+data class MemberCard(val level: Int, val isSeniorMember: Boolean, val follower: Long)
 
 data class VideoStat(
     val view: Long,
@@ -113,6 +121,18 @@ class VideoRepository(private val client: BiliClient) {
         client.getData<VideoDetailDto>(VIEW_URL, mapOf("bvid" to bvid)).map { it.toDomain() }
 
     /**
+     * UP 主等级(+顺带粉丝数,这一轮不显示,留着给以后用)。公开接口,不需要登录态、
+     * 不需要 WBI 签名——实测抓包确认过(见 [dev.bilby.api.dto.MemberCardResponseDto] 的注释)。
+     *
+     * 每打开一条视频多一次请求,风控上是有代价的(`x/player/wbi/v2` 今天已经因为额外请求
+     * 撞过一次 -412),但这是产品决定要的信息,不是技术上顺手加的。调用方(VideoViewModel)
+     * 要让这次失败独立于视频详情——查不到等级不该连累 UP 名和关注按钮。
+     */
+    suspend fun getMemberCard(mid: Long): BiliResult<MemberCard> =
+        client.getData<MemberCardResponseDto>(CARD_URL, mapOf("mid" to mid.toString(), "photo" to "false"))
+            .map { it.toDomain() }
+
+    /**
      * cid 必须由调用方给:同一个 bvid 下多 P/合集各有各的 cid,这里不替调用方决定播哪一 P。
      */
     suspend fun getPlayUrl(
@@ -182,6 +202,12 @@ class VideoRepository(private val client: BiliClient) {
         // 免登录也能拿 1080P 的开关。
         "try_look" to "1",
     ) + DmImgParams.next()
+
+    private fun MemberCardResponseDto.toDomain() = MemberCard(
+        level = card.levelInfo.currentLevel,
+        isSeniorMember = isSeniorMember == 1,
+        follower = follower,
+    )
 
     private fun VideoDetailDto.toDomain(): VideoDetail = VideoDetail(
         bvid = bvid,
@@ -270,6 +296,7 @@ class VideoRepository(private val client: BiliClient) {
 
     private companion object {
         const val VIEW_URL = "${BiliConstants.WEB_HOST}/x/web-interface/view"
+        const val CARD_URL = "${BiliConstants.WEB_HOST}/x/web-interface/card"
         const val PLAY_URL = "${BiliConstants.WEB_HOST}/x/player/wbi/playurl"
 
         /** PiliPlus 的默认 qn(notes §1.1),1080P 高清。 */

@@ -43,9 +43,13 @@
     <string name="follow_none">关注</string>
     <string name="follow_following">已关注</string>
     <string name="follow_mutual">互相关注</string>
+    <!-- 取关二次确认。关注是可逆的轻动作不用确认,取关会丢掉关系所以要——空间页和播放页共用同一组文案 -->
+    <string name="follow_unfollow_confirm_title">取消关注</string>
+    <string name="follow_unfollow_confirm_message">取消后需要重新找到这个人才能再次关注</string>
 
     <!-- 动态 -->
     <string name="feed_empty">关注的 UP 主还没有新投稿</string>
+    <string name="feed_frequent_ups">最常访问</string>
 
     <!-- 搜索 -->
     <string name="search_empty">搜索视频与 UP 主</string>

@@ -688,8 +688,28 @@ private fun VideoRoute(
      * 瞬间,滑进来的还是一块空页(详情要等一次网络往返)——三样凑在一起,读起来就是卡。
      */
     val audioState by AudioPlaybackService.state.collectAsStateWithLifecycle()
+
+    /**
+     * **但要等队列先追上这一条,才开始跟着它走。**
+     *
+     * 刚点开一条新视频时,服务还在放上一条 —— 队列要重建、取流、prepare,这中间有一段
+     * 几百毫秒到几秒的窗口,`audioState.current` 报的仍是**上一条**。此时若无条件跟随,
+     * 这一句会立刻把 `episode` 从刚请求的 bvid 拽回旧的那条,于是"打开新播放页却在放老视频";
+     * 等新的真正开播,又翻回来 —— 用户看到的是页面自己跳了两次。
+     *
+     * 所以先不跟:直到队列**报出这一条自己**(说明播放确实切过来了)才放行。之后的连播、
+     * 通知栏切歌、耳机线控就都能正常带着页面走。
+     *
+     * 代价是这一条始终没播成(取流失败)时页面不再跟队列 —— 那反而是对的:此刻页面该停在
+     * 用户点开的那一条上显示失败,而不是悄悄变成另一条视频的详情。
+     */
+    var followingQueue by remember(bvid) { mutableStateOf(false) }
     LaunchedEffect(audioState.current?.bvid) {
         val target = audioState.current?.bvid ?: return@LaunchedEffect
+        if (!followingQueue) {
+            if (target == bvid) followingQueue = true
+            return@LaunchedEffect
+        }
         if (target != episode) episode = target
     }
 
@@ -742,6 +762,7 @@ private fun VideoPane(
     val favFolders by vm.favFolders.collectAsStateWithLifecycle()
     val sponsorSegments by vm.sponsorSegments.collectAsStateWithLifecycle()
     val followState by vm.followState.collectAsStateWithLifecycle()
+    val upCard by vm.upCard.collectAsStateWithLifecycle()
     val addedToView by vm.addedToView.collectAsStateWithLifecycle()
     val subtitleTracks by vm.subtitleTracks.collectAsStateWithLifecycle()
     val subtitleLan by vm.subtitleLan.collectAsStateWithLifecycle()
@@ -763,6 +784,7 @@ private fun VideoPane(
     val commentState = commentVm?.state?.collectAsStateWithLifecycle()?.value ?: CommentUiState()
 
     VideoScreen(
+        bvid = bvid,
         state = state,
         related = related,
         commentState = commentState,
@@ -778,6 +800,7 @@ private fun VideoPane(
         onUpClick = onUpClick,
         followState = followState,
         onToggleFollow = vm::toggleFollow,
+        upCard = upCard,
         relation = relation,
         favFolders = favFolders,
         onLike = vm::toggleLike,

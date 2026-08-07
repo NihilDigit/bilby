@@ -50,6 +50,7 @@ import dev.bilby.R
 import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
+import dev.bilby.data.MemberCard
 import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.delay
 import dev.bilby.data.VideoRelation
@@ -72,6 +73,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 @OptIn(UnstableApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun VideoScreen(
+    /**
+     * 这一页在看哪条视频。**故意不用 `state.detail?.bvid`**——详情要等一次网络往返才回来,
+     * 到得比"播放器切没切过来"这个判断晚,会正好错过要遮画面残留的那段窗口(见下面
+     * `matchesCurrentPage` 的用法)。这个值由 `VideoPane` 直接传,它手上现成的路由参数就是它。
+     */
+    bvid: String,
     state: VideoUiState,
     related: RelatedState,
     commentState: CommentUiState,
@@ -80,6 +87,8 @@ fun VideoScreen(
     onFindRelated: () -> Unit,
     followState: FollowState,
     onToggleFollow: () -> Unit,
+    /** UP 主等级,独立请求、独立失败——查不到就是 null,徽章不画(见 VideoViewModel.upCard)。 */
+    upCard: MemberCard?,
     onUpClick: (mid: Long) -> Unit,
     relation: VideoRelation?,
     favFolders: List<FavFolder>,
@@ -168,6 +177,12 @@ fun VideoScreen(
     // (Surface 是本地对象,递不到 session 那侧),这是 Media3 的已知限制。服务与 UI 同进程,
     // 所以能直接拿到同一个播放器对象;控制仍然全部走 controller。
     val surfacePlayer = active?.let { AudioPlaybackService.currentPlayer }
+
+    // 播放器此刻装的是不是这一页的视频。播放器全 app 共用一份、跨页面存活,点开一条新视频
+    // 到播放器真正切过去之间有一段取流 + prepare 的窗口,这段时间 surfacePlayer 渲染的还是
+    // 上一条视频的最后几帧——传给 BilbyPlayer,由它决定挂画面还是画占位(不在这里暂停或
+    // 销毁播放器,那会打断后台连续播放)。
+    val matchesCurrentPage = audioState.current?.bvid == bvid
 
     /** 队列的唯一来源是服务。页面只是把它摆出来,不自己攒一份。 */
     val shownQueue = QueueUiState(
@@ -356,6 +371,8 @@ fun VideoScreen(
                 onDanmakuEnabledChange = onDanmakuEnabledChange,
                 danmakuPool = danmakuPool,
                 danmakuCid = audioState.currentCid,
+                matchesCurrentPage = matchesCurrentPage,
+                placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
                 modifier = Modifier.fillMaxSize(),
             )
             if (playbackError != null) {
@@ -428,6 +445,8 @@ fun VideoScreen(
                         onDanmakuEnabledChange = onDanmakuEnabledChange,
                         danmakuPool = danmakuPool,
                         danmakuCid = audioState.currentCid,
+                        matchesCurrentPage = matchesCurrentPage,
+                        placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
                         modifier = Modifier.fillMaxSize(),
                     )
 
@@ -471,6 +490,7 @@ fun VideoScreen(
                     },
                     followState = followState,
                     onToggleFollow = onToggleFollow,
+                    upCard = upCard,
                     queue = shownQueue,
                     onPlayQueueItem = onPlayQueueItem,
                     onToggleShuffle = toggleShuffle,

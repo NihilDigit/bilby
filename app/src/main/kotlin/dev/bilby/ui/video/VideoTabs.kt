@@ -47,6 +47,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -67,13 +68,16 @@ import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import dev.bilby.R
 import dev.bilby.formatDurationSeconds
 import dev.bilby.agent.AnswerBlock
 import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
+import dev.bilby.data.MemberCard
 import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoStat
@@ -83,6 +87,7 @@ import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.CompactVideoRow
 import dev.bilby.ui.components.InlineProgress
+import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.SectionHeader
 import dev.bilby.ui.components.StatRow
 import dev.bilby.ui.components.VideoRow
@@ -129,6 +134,7 @@ fun VideoTabs(
     onFindRelated: () -> Unit,
     followState: FollowState,
     onToggleFollow: () -> Unit,
+    upCard: MemberCard?,
     queue: QueueUiState,
     onPlayQueueItem: (bvid: String) -> Unit,
     onToggleShuffle: () -> Unit,
@@ -163,7 +169,55 @@ fun VideoTabs(
     val scope = rememberCoroutineScope()
 
     Column(modifier = modifier.fillMaxSize()) {
-        SecondaryTabRow(selectedTabIndex = pagerState.currentPage) {
+        SecondaryTabRow(
+            selectedTabIndex = pagerState.currentPage,
+            // 默认指标器只认 selectedTabIndex(整数),手指拖着 HorizontalPager 滑动时它不跟手——
+            // 要等翻页判定过了 50% 才突然跳一下。这里换成读 pagerState 的连续位置
+            // (currentPage + currentPageOffsetFraction,标准的 pager-tab 同步写法),
+            // 在两个 Tab 的位置之间按同一个进度插值,指示器全程贴着手指走。
+            //
+            // 形状/高度原样用 TabRowDefaults.SecondaryIndicator 的默认值,不跟着改——
+            // 高度是 secondary 和 primary 拉开层级的地方(风格指南 §2.2 记着这一条曾经做错过,
+            // 两处指示条粗细一样,层级读不出来);形状仍是直角,圆头是 primary 的标志,
+            // 这里只是让它变窄,不是变成 primary。
+            //
+            // **宽度贴合文字,不占满整格**:M3 默认的 SecondaryIndicator 通长铺满整个 Tab,
+            // 真机看偏重。TabPosition.contentWidth(标签实际渲染宽度,不是整格宽度)确实存在——
+            // 用 kotlin-metadata-jvm 读 TabPosition.class 的 @Metadata 核实过,是个普通属性,
+            // 不像 tabIndicatorLayout 那样有 member/extension 的歧义。用它替掉原来插值用的
+            // width,left 相应按内容区居中算(left + (width − contentWidth) / 2)——contentWidth
+            // 只决定指示条多宽,不影响它贴着手指走这件事,和下面的连续进度插值是两条独立的账。
+            //
+            // tabIndicatorLayout 是 `Modifier.` 扩展(TabIndicatorScope 内的成员扩展函数,
+            // 接收者是 Modifier),不是"收 Modifier 当第一个参数"的普通函数——第一版写成
+            // tabIndicatorLayout(Modifier) { ... } 编不过,报的正是 receiver 不匹配。用
+            // kotlin-metadata-jvm 读了 TabIndicatorScope.class 的 @Metadata 核实过:
+            // tabIndicatorLayout 的 receiverParameterType 是 Class(name=androidx/compose/ui/Modifier),
+            // 不是凭错误信息反推。
+            indicator = {
+                TabRowDefaults.SecondaryIndicator(
+                    modifier = Modifier.tabIndicatorLayout { measurable, _, positions ->
+                        // 首帧 Tab 还没测量完时 positions 是空的,量出来的宽度撑不住
+                        // coerceIn(0, lastIndex)(lastIndex 是 -1),直接吞掉这一帧不画。
+                        if (positions.isEmpty()) return@tabIndicatorLayout layout(0, 0) {}
+                        val progress = pagerState.currentPage + pagerState.currentPageOffsetFraction
+                        val from = progress.toInt().coerceIn(0, positions.lastIndex)
+                        val to = (from + 1).coerceIn(0, positions.lastIndex)
+                        val fraction = (progress - from).coerceIn(0f, 1f)
+                        val fromPos = positions[from]
+                        val toPos = positions[to]
+                        val fromLeft = fromPos.left + (fromPos.width - fromPos.contentWidth) / 2
+                        val toLeft = toPos.left + (toPos.width - toPos.contentWidth) / 2
+                        val left = lerp(fromLeft, toLeft, fraction)
+                        val width = lerp(fromPos.contentWidth, toPos.contentWidth, fraction)
+                        val placeable = measurable.measure(Constraints.fixedWidth(width.roundToPx()))
+                        layout(placeable.width, placeable.height) {
+                            placeable.placeRelative(x = left.roundToPx(), y = 0)
+                        }
+                    },
+                )
+            },
+        ) {
             titles.forEachIndexed { index, title ->
                 Tab(
                     selected = pagerState.currentPage == index,
@@ -182,6 +236,7 @@ fun VideoTabs(
                     onUpClick = onUpClick,
                     followState = followState,
                     onToggleFollow = onToggleFollow,
+                    upCard = upCard,
                     queue = queue,
                     onPlayQueueItem = onPlayQueueItem,
                     onToggleShuffle = onToggleShuffle,
@@ -224,6 +279,7 @@ private fun IntroTab(
     onFindRelated: () -> Unit,
     followState: FollowState,
     onToggleFollow: () -> Unit,
+    upCard: MemberCard?,
     queue: QueueUiState,
     onPlayQueueItem: (bvid: String) -> Unit,
     onToggleShuffle: () -> Unit,
@@ -257,6 +313,7 @@ private fun IntroTab(
                 UpRow(
                     faceUrl = detail.up.faceUrl,
                     name = detail.up.name,
+                    upCard = upCard,
                     onUpClick = onUpClick,
                     followState = followState,
                     onToggleFollow = onToggleFollow,
@@ -300,10 +357,15 @@ private fun IntroTab(
     }
 }
 
+/**
+ * @param upCard UP 主等级(+粉丝数,这一轮不显示)。null 表示还没查到或查失败——徽章不画,
+ *   不阻断这一行其余部分,和 UP 名/关注按钮相互独立(见 VideoViewModel.upCard 的说明)。
+ */
 @Composable
 private fun UpRow(
     faceUrl: String,
     name: String,
+    upCard: MemberCard?,
     onUpClick: () -> Unit,
     followState: FollowState,
     onToggleFollow: () -> Unit,
@@ -327,7 +389,13 @@ private fun UpRow(
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                // fill = false:徽章跟在名字后面,不因为名字短就被推到这一行更靠右的地方
+                // (同一道理见 ui/profile/ProfileScreen.kt 的 AccountHeader)。
+                modifier = Modifier.weight(1f, fill = false),
             )
+            upCard?.let {
+                LevelBadge(level = it.level, senior = it.isSeniorMember, height = Dimens.LevelBadgeHeight)
+            }
         }
         FollowButton(state = followState, onClick = onToggleFollow)
     }
@@ -874,13 +942,41 @@ private fun formatDate(epochSeconds: Long): String =
  *
  * 已关注用 outlined、未关注用 filled:M3 里强调程度对应动作的主次,已经关注之后"取关"
  * 不该继续抢眼。自己的空间和已拉黑都不显示按钮 —— 前者没有这个动作,后者要先解除拉黑。
+ *
+ * **取关要二次确认,关注不用**:关注是可逆的轻动作,取关会丢掉这条关系(重新关注要
+ * 再找到这个人)。确认放在发起请求之前——`onClick` 是乐观更新 + 发请求的入口
+ * (`VideoViewModel.toggleFollow`),点"取消关注"先弹确认,按钮状态不能先跳过去再跳回来。
+ * 空间页的 `SpaceFollowButton` 是同一套判据,复用同一组字符串。
  */
 @Composable
 private fun FollowButton(state: FollowState, onClick: () -> Unit) {
+    var confirmingUnfollow by remember { mutableStateOf(false) }
     when (state) {
         FollowState.Self, FollowState.Blocked -> Unit
         FollowState.None -> Button(onClick = onClick) { Text(stringResource(R.string.follow_none)) }
-        FollowState.Following -> OutlinedButton(onClick = onClick) { Text(stringResource(R.string.follow_following)) }
-        FollowState.Mutual -> OutlinedButton(onClick = onClick) { Text(stringResource(R.string.follow_mutual)) }
+        FollowState.Following -> OutlinedButton(onClick = { confirmingUnfollow = true }) {
+            Text(stringResource(R.string.follow_following))
+        }
+        FollowState.Mutual -> OutlinedButton(onClick = { confirmingUnfollow = true }) {
+            Text(stringResource(R.string.follow_mutual))
+        }
+    }
+    if (confirmingUnfollow) {
+        AlertDialog(
+            onDismissRequest = { confirmingUnfollow = false },
+            title = { Text(stringResource(R.string.follow_unfollow_confirm_title)) },
+            text = { Text(stringResource(R.string.follow_unfollow_confirm_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmingUnfollow = false
+                    onClick()
+                }) { Text(stringResource(R.string.follow_unfollow_confirm_title)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingUnfollow = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
     }
 }

@@ -37,10 +37,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import dev.bilby.BiliLog
 import dev.bilby.R
 import dev.bilby.api.BiliResult
@@ -827,13 +829,40 @@ private val DateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 private fun formatDate(epochSeconds: Long): String =
     Instant.ofEpochSecond(epochSeconds).atZone(ZoneId.systemDefault()).format(DateFormatter)
 
-/** 与播放页的关注按钮同一套字面与强调规则,见 VideoTabs 里的那份说明。 */
+/**
+ * 与播放页的关注按钮同一套字面与强调规则,见 VideoTabs 里的那份说明。
+ * 取关二次确认同样复用那边的判据和字符串:关注可逆不用确认,取关会丢关系要确认,
+ * 确认放在 `onClick`(乐观更新 + 发请求)之前。
+ */
 @Composable
 private fun SpaceFollowButton(state: FollowState, onClick: () -> Unit) {
+    var confirmingUnfollow by remember { mutableStateOf(false) }
     when (state) {
         FollowState.Self, FollowState.Blocked -> Unit
         FollowState.None -> Button(onClick = onClick) { Text(stringResource(R.string.follow_none)) }
-        FollowState.Following -> OutlinedButton(onClick = onClick) { Text(stringResource(R.string.follow_following)) }
-        FollowState.Mutual -> OutlinedButton(onClick = onClick) { Text(stringResource(R.string.follow_mutual)) }
+        FollowState.Following -> OutlinedButton(onClick = { confirmingUnfollow = true }) {
+            Text(stringResource(R.string.follow_following))
+        }
+        FollowState.Mutual -> OutlinedButton(onClick = { confirmingUnfollow = true }) {
+            Text(stringResource(R.string.follow_mutual))
+        }
+    }
+    if (confirmingUnfollow) {
+        AlertDialog(
+            onDismissRequest = { confirmingUnfollow = false },
+            title = { Text(stringResource(R.string.follow_unfollow_confirm_title)) },
+            text = { Text(stringResource(R.string.follow_unfollow_confirm_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmingUnfollow = false
+                    onClick()
+                }) { Text(stringResource(R.string.follow_unfollow_confirm_title)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingUnfollow = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
     }
 }

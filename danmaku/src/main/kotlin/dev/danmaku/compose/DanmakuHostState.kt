@@ -74,7 +74,12 @@ class DanmakuHostState(
 
             withFrameNanos { frameNanos ->
                 // 跳帧判断整个都在回调内部:不够就只记账,不重新采样、不回调 —— 零状态写入。
-                val capNanos = frameRateCap.minFrameIntervalNanos
+                // 阈值要留余量,**不能严格等于** 1/fps。面板刷新率和上限相等时(60Hz 屏配
+                // FPS_60),vsync 间隔就在 16.66~16.68ms 之间抖,只要某一帧略小于 16.667 就被
+                // 跳掉,下一帧攒到 33.3ms 才过 —— 通过、跳过、通过……实际掉到 30fps 上下,
+                // 而且节奏不均。留 10% 余量之后:60Hz 屏上每个 vsync 都过(真 60),
+                // 120Hz 屏上 8.33ms 仍被跳、16.67ms 通过(也是真 60)。FPS_30 同理。
+                val capNanos = frameRateCap.minFrameIntervalNanos * 9 / 10
                 if (capNanos > 0 && frameNanos - lastFrameNanos < capNanos) return@withFrameNanos
                 lastFrameNanos = frameNanos
 

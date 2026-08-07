@@ -20,6 +20,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -241,6 +242,10 @@ fun ProfileScreen(
             onSettingsClick = onSettingsClick,
             onRetry = onRetryAccount,
         )
+
+        // 账号与下面三节之间断一刀:上面是"我是谁"(含登出、设置这两个页级动作),
+        // 下面是"我攒了什么"。只靠间距的话,历史记录那个小标题会被读成账号信息的一部分。
+        HorizontalDivider()
 
         HistorySection(state.history, onVideoClick, onOpenHistory, onRetryHistory)
         ToViewSection(state.toView, onVideoClick, onOpenToView, onRetryToView)

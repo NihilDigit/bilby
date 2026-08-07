@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import dev.bilby.data.FavFolder
 import dev.bilby.data.HeartbeatReporter
+import dev.bilby.data.MemberCard
 import dev.bilby.data.VideoActionRepository
 import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
@@ -67,6 +68,13 @@ class VideoViewModel(
     /** UP 的关注态。视频详情里只有 mid 和名字,关系要另查(PiliPlus 播放页同样单独查)。 */
     private val _followState = MutableStateFlow(FollowState.None)
     val followState: StateFlow<FollowState> = _followState.asStateFlow()
+
+    /**
+     * UP 的等级(+ 粉丝数,这一轮不显示)。同样是独立请求,独立失败——查不到就是 null,
+     * 徽章不画,不影响 UP 名和关注按钮(见 [load] 里怎么处理这次失败)。
+     */
+    private val _upCard = MutableStateFlow<MemberCard?>(null)
+    val upCard: StateFlow<MemberCard?> = _upCard.asStateFlow()
 
     /**
      * 关注/取关。与点赞投币同样是乐观更新、不重拉:等一个来回再变字会让人以为没点上。
@@ -350,6 +358,13 @@ class VideoViewModel(
                     when (val follow = relationRepository.stateOf(detail.value.up.mid)) {
                         is BiliResult.Ok -> _followState.value = follow.value
                         else -> BiliLog.w("查关注状态失败: $follow")
+                    }
+                }
+                launch {
+                    when (val card = repository.getMemberCard(detail.value.up.mid)) {
+                        is BiliResult.Ok -> _upCard.value = card.value
+                        is BiliResult.ApiError -> BiliLog.w("查 UP 主等级失败(${card.code}): ${card.message}")
+                        is BiliResult.Failure -> BiliLog.w("查 UP 主等级异常", card.cause)
                     }
                 }
                 when (val rel = actionRepository.getRelation(bvid)) {

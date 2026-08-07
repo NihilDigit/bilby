@@ -34,7 +34,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.ui.res.stringResource
+import dev.bilby.ui.components.SectionHeader
+import dev.bilby.ui.theme.Spacing
 import androidx.compose.ui.tooling.preview.Preview
 import dev.bilby.R
 import dev.bilby.data.model.FeedItem
@@ -261,8 +264,15 @@ private fun FrequentUpsRow(
     onUpClick: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
 ) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+    // 小标题:没有它,这一排头像和下面的动态之间只有间距,读起来像同一块内容的一部分。
+    // 加了标题就说清了"这是谁",也顺带把它和时间序流的边界画出来。
+    SectionHeader(
+        title = stringResource(R.string.feed_frequent_ups),
+        modifier = Modifier.padding(horizontal = Spacing.Comfortable),
+    )
     LazyRow(
-        modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
         contentPadding = PaddingValues(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -300,6 +310,10 @@ private fun FrequentUpsRow(
                 }
             }
         }
+    }
+    // 分割线把这一排和下面的时间序流断开。它不只是装饰:这一排是**导航**(点进空间),
+    // 下面是**内容**(时间序动态),两者读法不同,中间没有边界的话整块会被读成一个列表的开头。
+    HorizontalDivider()
     }
 }
 
