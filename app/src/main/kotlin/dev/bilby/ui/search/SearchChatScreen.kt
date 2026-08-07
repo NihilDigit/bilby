@@ -173,7 +173,7 @@ private fun NormalPane(
 ) {
     if (state.query.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            EmptyState("搜索视频与 UP 主。\n点输入框右边的闪光交给助理。")
+            EmptyState("搜索视频与 UP 主")
         }
         return
     }
@@ -218,7 +218,7 @@ private fun AgentPane(
 ) {
     if (state.turns.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            EmptyState("描述想看的内容,助理会检索后给出几条并说明理由。")
+            EmptyState("描述想看的内容,助理会检索后给出几条并说明理由")
         }
         return
     }
