@@ -24,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -64,7 +65,7 @@ fun VideoScreen(
     related: RelatedState,
     commentState: CommentUiState,
     sponsorSegments: List<SponsorSegment>,
-    onSaveProgress: (position: Long, duration: Long) -> Unit,
+    onReportProgress: (position: Long, duration: Long) -> Unit,
     onQualityChange: (quality: Int, positionMillis: Long) -> Unit,
     onFindRelated: () -> Unit,
     onListen: () -> Unit,
@@ -104,6 +105,14 @@ fun VideoScreen(
      */
     var listening by rememberSaveable { mutableStateOf(startListening) }
 
+    // DisposableEffect 捕获的是进入组合那一刻的 state,而 onDispose 要问的是离开那一刻:
+    // 换 P 会改 currentCid,不跟新就会拿旧 cid 去比。
+    val latestState by rememberUpdatedState(state)
+    val playerHoldsThisPage = {
+        val loaded = AudioPlaybackService.state.value.loaded
+        loaded != null && loaded.bvid == latestState.detail?.bvid && loaded.cid == latestState.currentCid
+    }
+
     DisposableEffect(context) {
         val future = MediaController.Builder(context, AudioPlaybackService.sessionToken(context))
             .buildAsync()
@@ -118,9 +127,15 @@ fun VideoScreen(
 
         onDispose {
             controller?.let { connected ->
-                onSaveProgress(connected.currentPosition, connected.duration.coerceAtLeast(0))
-                connected.pause()
-                // 播放页离开就暂停。听视频是页面内的状态,不会走到这里。
+                onReportProgress(connected.currentPosition, connected.duration.coerceAtLeast(0))
+                // 播放页离开就暂停,**但只在播放器装的还是本页这一条时**。听视频是页面内的
+                // 状态,不会走到这里。
+                //
+                // 合集里点下一集是"压上新页、弹掉旧页":新页先组合,把自己的流交给那个唯一的
+                // 播放器并起播,旧页的 onDispose 之后才跑。不认身份就会把刚起播的下一集摁停,
+                // 表现为"进播放页不自动播放"。这与进度串味是同一个毛病——页面对着共享播放器
+                // 发命令,却没问播放器还是不是自己的。
+                if (playerHoldsThisPage()) connected.pause()
             }
             // **不 release 播放器**:它归服务所有,不归这个页面。页面离开只断开连接——
             // 在这里 release 就等于把后台正在听的那条一起掐了,而"页面走了"和"播放结束"
@@ -220,7 +235,7 @@ fun VideoScreen(
             onFullscreenChange = { fullscreen = it },
             // 全屏下切听视频要先退出全屏,否则听视频界面会顶着一个已经隐藏的系统栏。
             onListen = { fullscreen = false; onListen(); listening = true },
-            onSaveProgress = onSaveProgress,
+            onReportProgress = onReportProgress,
             title = state.detail?.title.orEmpty(),
             modifier = Modifier.fillMaxSize().background(Color.Black),
         )
@@ -275,7 +290,7 @@ fun VideoScreen(
                         isFullscreen = false,
                         onFullscreenChange = { fullscreen = it },
                         onListen = { onListen(); listening = true },
-                        onSaveProgress = onSaveProgress,
+                        onReportProgress = onReportProgress,
                         modifier = Modifier.fillMaxSize(),
                     )
 

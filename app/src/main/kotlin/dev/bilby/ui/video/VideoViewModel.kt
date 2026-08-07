@@ -23,8 +23,8 @@ import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoRepository
 import dev.bilby.data.VideoStat
-import dev.bilby.data.db.PlaybackProgressDao
-import dev.bilby.data.db.PlaybackProgressEntity
+import dev.bilby.data.resumeAtMillisFor
+import dev.bilby.player.AudioPlaybackService
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -45,7 +45,6 @@ data class VideoUiState(
 class VideoViewModel(
     private val bvid: String,
     private val repository: VideoRepository,
-    private val progressDao: PlaybackProgressDao,
     private val agentLoop: AgentLoop,
     private val heartbeatReporter: HeartbeatReporter,
     private val actionRepository: VideoActionRepository,
@@ -284,13 +283,10 @@ class VideoViewModel(
             )
         ) {
             is BiliResult.Ok -> {
-                val local = progressDao.get(bvid)?.takeIf { it.cid == cid }?.positionMillis ?: 0
                 _state.update {
                     it.copy(
                         playInfo = play.value,
-                        // 本地进度与服务端 last_play_time 取较大者:我们不上报心跳时服务端那份
-                        // 会停在别的客户端留下的位置,取大的一方总是更接近"我看到哪了"。
-                        resumeAtMillis = maxOf(local, play.value.lastPlayTimeMillis),
+                        resumeAtMillis = play.value.resumeAtMillisFor(cid),
                         // 画质菜单要显示"当前是哪一档",没有这一行它在换 P 后会退回 0(无选中)。
                         currentQuality = player.defaultQuality,
                         loading = false,
@@ -306,12 +302,13 @@ class VideoViewModel(
     /**
      * 心跳上报。DESIGN 7 节已定案回传:它是跨端续播的必要条件,不是观看画像。
      *
-     * 与本地 Room 那份进度是两套并存 —— 本地那份负责冷启动瞬间续播(不能等网络),
-     * 心跳负责让官方端和其他客户端看到同一个位置。
+     * 本地不再另存一份进度,续播只认服务端这一份(见 [resumeAtMillisFor]),所以这里既是
+     * 回传也是我们自己下次进来的依据。
      */
     fun reportHeartbeat(positionMillis: Long, durationMillis: Long, finished: Boolean) {
         val detail = _state.value.detail ?: return
         val cid = _state.value.currentCid.takeIf { it != 0L } ?: return
+        if (!playerHoldsThisPage()) return
         viewModelScope.launch {
             heartbeatReporter.report(
                 aid = detail.aid,
@@ -421,23 +418,20 @@ class VideoViewModel(
         }
     }
 
-    fun saveProgress(positionMillis: Long, durationMillis: Long) {
-        val cid = _state.value.currentCid
-        if (cid == 0L || positionMillis <= 0) return
-        viewModelScope.launch {
-            progressDao.upsert(
-                PlaybackProgressEntity(
-                    bvid = bvid,
-                    cid = cid,
-                    positionMillis = positionMillis,
-                    durationMillis = durationMillis,
-                    updatedAt = System.currentTimeMillis(),
-                )
-            )
-        }
+    /**
+     * 播放器此刻装的是不是本页这一条。
+     *
+     * 位置和时长是从播放器读的,而全 app 只有一个播放器(DESIGN 2.4b)。翻到新视频时它还装着
+     * 上一条,新页的轮询已经开始跑了——不对身份就会把上一条的进度按本页的 aid/cid 报上去。
+     * 云端那份现在是续播的唯一来源,报错一次,下次进来就会 seek 到一个不存在的位置。
+     */
+    private fun playerHoldsThisPage(): Boolean {
+        val loaded = AudioPlaybackService.state.value.loaded ?: return false
+        return loaded.bvid == bvid && loaded.cid == _state.value.currentCid
     }
 
     private fun fail(message: String) {
+        BiliLog.w("播放页失败($bvid): $message")
         _state.update { it.copy(loading = false, error = message) }
     }
 }

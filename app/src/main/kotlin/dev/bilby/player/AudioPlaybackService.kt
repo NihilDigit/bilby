@@ -47,6 +47,15 @@ data class AudioPlaybackUiState(
     val loading: Boolean = false,
     /** 队列内容。听视频页要列出来,没必要为它再开一个通道。 */
     val items: List<QueueItem> = emptyList(),
+    /**
+     * 播放器此刻真正装着的那一条。和 [current] 不是一回事:[current] 是队列视角,看视频时
+     * 队列为空,它恒为 null。
+     *
+     * 进度回传必须先拿它对一次身份。全 app 只有一个播放器(DESIGN 2.4b),翻到新视频时它还
+     * 装着上一条,而位置和时长都是从播放器读的——不对身份就会把上一条的进度按新页的
+     * bvid/cid 报上去。
+     */
+    val loaded: QueueItem? = null,
 )
 
 /**
@@ -272,6 +281,7 @@ class AudioPlaybackService : MediaSessionService() {
             queueSize = queue.size,
             shuffled = queue.shuffled,
             loading = loading,
+            loaded = loadedItem,
         )
     }
 
@@ -307,7 +317,10 @@ class AudioPlaybackService : MediaSessionService() {
         override fun onPlayerError(error: PlaybackException) {
             // 直链可能在播放途中过期(403),这属于"被吞掉的失败":不留日志的话表现只是
             // 忽然跳到了下一条。
-            BiliLog.w("听视频播放出错,跳过 bvid=${queue.current()?.bvid} code=${error.errorCode}", error)
+            //
+            // 认 loadedItem 而不是 queue.current():播放页交来的那条不进队列(见 singleItem),
+            // 按队列取会打出 bvid=null,而看视频出错恰恰是最需要知道是哪一条的场合。
+            BiliLog.w("播放出错,跳过 bvid=${loadedItem?.bvid} code=${error.errorCode}", error)
             skipAfterFailure(playWhenReady = true)
         }
     }

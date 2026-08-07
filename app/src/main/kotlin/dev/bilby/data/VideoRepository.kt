@@ -77,6 +77,36 @@ data class PlayInfo(
 
 data class QualityOption(val quality: Int, val label: String)
 
+/**
+ * 进度条判定为"满"的容差。服务端的 last_play_time 是整秒,时长又有 dash.duration 与
+ * timeLength 两个来源、彼此能差一秒,卡太紧会让真正看完的视频从倒数第二秒接着播。
+ */
+private const val FINISHED_TOLERANCE_MILLIS = 2_000L
+
+/**
+ * 这次从哪儿接着播。**云端那份是唯一来源。**
+ *
+ * 本地曾经另存一份 Room 进度并与云端取较大者,那份是"视频播不动"的根因:全 app 只有一个
+ * 播放器,翻到新视频时它还装着上一条,新页一 compose 就按自己的 bvid 把上一条的位置写了
+ * 下去。一个 780 秒的视频因此拿到 1587 秒的续播点,seek 落到文件末尾之外,CDN 收下连接却
+ * 不给响应头,最后以 SocketTimeout 收场。删掉本地那份之后这类串味无处产生。
+ *
+ * PiliPlus 也是这个分工:网络播放只认 last_play_time,本地缓存只服务离线下载的文件。对我们
+ * 更直接的理由是 last_play_time 和流地址来自同一个 playurl 响应——有流必有进度,本地留一份
+ * 换不到任何东西。
+ *
+ * 两个约束:
+ * - `last_play_time` 属于 `last_play_cid` 那一 P。cid 对不上就不能用,否则多 P 视频互相串。
+ * - 看完的视频要从头播。服务端在看完时给 -1(映射处已归零),但"停在最后两秒"它照样如实
+ *   返回,那种位置续播等于一进来就在片尾。
+ */
+fun PlayInfo.resumeAtMillisFor(cid: Long): Long {
+    if (lastPlayCid != 0L && lastPlayCid != cid) return 0
+    if (lastPlayTimeMillis <= 0) return 0
+    if (durationMillis > 0 && lastPlayTimeMillis >= durationMillis - FINISHED_TOLERANCE_MILLIS) return 0
+    return lastPlayTimeMillis
+}
+
 class VideoRepository(private val client: BiliClient) {
 
     suspend fun getVideoDetail(bvid: String): BiliResult<VideoDetail> =
