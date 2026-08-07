@@ -43,7 +43,7 @@ class AgentLoopTest {
             .toList()
 
         val answer = events.filterIsInstance<AgentEvent.Answer>().single()
-        assertEquals(listOf("BV1real0000x"), answer.items.map { it.bvid })
+        assertEquals(listOf("BV1real0000x"), answer.bvids)
     }
 
     @Test
@@ -60,7 +60,7 @@ class AgentLoopTest {
             .run(AgentIntent.Query("随便"))
             .toList()
 
-        assertEquals(5, events.filterIsInstance<AgentEvent.Answer>().single().items.size)
+        assertEquals(5, events.filterIsInstance<AgentEvent.Answer>().single().bvids.size)
     }
 
     @Test
