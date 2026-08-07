@@ -50,81 +50,96 @@ class SearchChatViewModel(
         history = emptyList()
         seenBvids = emptySet()
         traces = emptyMap()
-        _state.value = SearchChatUiState(mode = _state.value.mode)
+        _state.update { it.copy(agent = AgentSearchState()) }
     }
 
     private val _state = MutableStateFlow(SearchChatUiState())
     val state: StateFlow<SearchChatUiState> = _state.asStateFlow()
 
     private var nextTurnId = 1L
-    private val pages = mutableMapOf<Long, Int>()
+    /** 普通搜索当前翻到第几页。它只有一份结果,不需要按轮次记。 */
+    private var page = 1
 
     fun onInputChange(value: String) = _state.update { it.copy(input = value) }
 
+    /**
+     * 两种模式各有各的状态,切换只是换显示哪一份,**都不清空**。会话要重开有右上角的
+     * 显式入口;切一下模式就丢掉一整段对话,没人会预期。
+     */
     fun onModeChange(mode: SearchMode) = _state.update { it.copy(mode = mode) }
 
     fun send() {
         val query = _state.value.input.trim()
         if (query.isEmpty()) return
-        val mode = _state.value.mode
-        val turnId = nextTurnId++
-
-        val initial = when (mode) {
-            SearchMode.Normal -> TurnResult.Normal(emptyList(), emptyList(), loading = true)
-            SearchMode.Agent -> TurnResult.Agent(emptyList(), emptyList(), running = true)
-        }
-        _state.update {
-            it.copy(turns = it.turns + SearchTurn(turnId, query, mode, initial), input = "")
-        }
-
-        when (mode) {
-            SearchMode.Normal -> runNormal(turnId, query, page = 1)
-            SearchMode.Agent -> runAgent(turnId, query)
-        }
-    }
-
-    fun loadMore(turnId: Long) {
-        val turn = _state.value.turns.firstOrNull { it.id == turnId } ?: return
-        val result = turn.result as? TurnResult.Normal ?: return
-        if (result.appending || !result.hasMore) return
-        updateNormal(turnId) { it.copy(appending = true) }
-        runNormal(turnId, turn.query, page = (pages[turnId] ?: 1) + 1)
-    }
-
-    fun retry(turnId: Long) {
-        val turn = _state.value.turns.firstOrNull { it.id == turnId } ?: return
-        when (turn.mode) {
+        _state.update { it.copy(input = "") }
+        when (_state.value.mode) {
+            // 普通搜索是一次查询一份结果,不累积轮次:它就是一个搜索页。留着上一次的结果
+            // 只会让人往上翻,而翻上去的东西和这次要找的无关。
             SearchMode.Normal -> {
-                updateNormal(turnId) { it.copy(loading = true, error = null) }
-                runNormal(turnId, turn.query, page = 1)
+                _state.update { it.copy(normal = NormalSearchState(query = query, loading = true)) }
+                runNormal(query, page = 1)
             }
 
             SearchMode.Agent -> {
-                updateTurn(turnId) { TurnResult.Agent(emptyList(), emptyList(), running = true) }
-                runAgent(turnId, turn.query)
+                val turnId = nextTurnId++
+                _state.update { state ->
+                    state.copy(
+                        agent = state.agent.copy(
+                            turns = state.agent.turns +
+                                SearchTurn(turnId, query, TurnResult.Agent(emptyList(), running = true)),
+                        ),
+                    )
+                }
+                runAgent(turnId, query)
             }
         }
     }
 
-    private fun runNormal(turnId: Long, query: String, page: Int) = viewModelScope.launch {
-        when (val result = searchRepository.searchVideos(keyword = query, page = page, order = SearchOrder.Comprehensive.apiValue)) {
+    fun loadMore() {
+        val normal = _state.value.normal
+        if (normal.appending || !normal.hasMore || normal.query.isEmpty()) return
+        _state.update { it.copy(normal = it.normal.copy(appending = true)) }
+        runNormal(normal.query, page = page + 1)
+    }
+
+    fun retry() {
+        when (_state.value.mode) {
+            SearchMode.Normal -> {
+                val query = _state.value.normal.query.ifEmpty { return }
+                _state.update { it.copy(normal = it.normal.copy(loading = true, error = null)) }
+                runNormal(query, page = 1)
+            }
+
+            SearchMode.Agent -> {
+                val turn = _state.value.agent.turns.lastOrNull() ?: return
+                updateAgent(turn.id) { TurnResult.Agent(emptyList(), running = true) }
+                runAgent(turn.id, turn.query)
+            }
+        }
+    }
+
+    private fun runNormal(query: String, page: Int) = viewModelScope.launch {
+        val order = SearchOrder.Comprehensive.apiValue
+        when (val result = searchRepository.searchVideos(keyword = query, page = page, order = order)) {
             is BiliResult.Ok -> {
-                pages[turnId] = page
+                this@SearchChatViewModel.page = page
                 val users = if (page == 1) searchRepository.searchUsers(query).usersOrEmpty() else emptyList()
-                updateNormal(turnId) { current ->
-                    current.copy(
-                        videos = if (page == 1) result.value.items else current.videos + result.value.items,
-                        users = if (page == 1) users else current.users,
-                        loading = false,
-                        appending = false,
-                        hasMore = result.value.hasMore,
-                        error = null,
+                _state.update { state ->
+                    state.copy(
+                        normal = state.normal.copy(
+                            videos = if (page == 1) result.value.items else state.normal.videos + result.value.items,
+                            users = if (page == 1) users else state.normal.users,
+                            loading = false,
+                            appending = false,
+                            hasMore = result.value.hasMore,
+                            error = null,
+                        ),
                     )
                 }
             }
 
-            is BiliResult.ApiError -> failNormal(turnId, "${result.message}(${result.code})")
-            is BiliResult.Failure -> failNormal(turnId, result.cause.message ?: "网络错误")
+            is BiliResult.ApiError -> failNormal("${result.message}(${result.code})")
+            is BiliResult.Failure -> failNormal(result.cause.message ?: "网络错误")
         }
     }
 
@@ -171,21 +186,18 @@ class SearchChatViewModel(
         is AgentEvent.Failed -> copy(error = event.message, running = false)
     }
 
-    private fun failNormal(turnId: Long, message: String) =
-        updateNormal(turnId) { it.copy(loading = false, appending = false, error = message) }
+    private fun failNormal(message: String) = _state.update {
+        it.copy(normal = it.normal.copy(loading = false, appending = false, error = message))
+    }
 
-    private inline fun updateNormal(turnId: Long, crossinline block: (TurnResult.Normal) -> TurnResult.Normal) =
-        updateTurn(turnId) { if (it is TurnResult.Normal) block(it) else it }
-
-    private inline fun updateAgent(turnId: Long, crossinline block: (TurnResult.Agent) -> TurnResult.Agent) =
-        updateTurn(turnId) { if (it is TurnResult.Agent) block(it) else it }
-
-    private inline fun updateTurn(turnId: Long, crossinline block: (TurnResult) -> TurnResult) {
+    private inline fun updateAgent(turnId: Long, crossinline block: (TurnResult.Agent) -> TurnResult.Agent) {
         _state.update { state ->
             state.copy(
-                turns = state.turns.map { turn ->
-                    if (turn.id == turnId) turn.copy(result = block(turn.result)) else turn
-                },
+                agent = state.agent.copy(
+                    turns = state.agent.turns.map { turn ->
+                        if (turn.id == turnId) turn.copy(result = block(turn.result)) else turn
+                    },
+                ),
             )
         }
     }

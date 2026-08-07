@@ -153,7 +153,12 @@ class AgentLoop(
                 val result = results[index]
                 seenBvids += result.bvids
                 result.forUi.forEach { traceByBvid[it.bvid] = it }
-                if (tool != null) emit(AgentEvent.ToolFinished(tool.label(arguments), result.forUi))
+                // 按 bvid 去重:同一个工具返回里重复出现同一条是常事(搜索结果里的重复投稿、
+                // 合集列表里的同一集),而 UI 拿它当 LazyRow 的 key,重复会直接崩。
+                // 去重放在产出侧一处,不放在每个消费方 —— 漏一处就是一次崩溃。
+                if (tool != null) {
+                    emit(AgentEvent.ToolFinished(tool.label(arguments), result.forUi.distinctBy { it.bvid }))
+                }
 
                 messages += ChatMessage(
                     role = ChatMessage.ROLE_TOOL,

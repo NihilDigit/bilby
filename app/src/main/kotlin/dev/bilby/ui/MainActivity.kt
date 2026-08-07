@@ -57,6 +57,7 @@ import dev.bilby.ui.feed.FeedViewModel
 import dev.bilby.ui.login.TvLoginScreen
 import dev.bilby.ui.login.TvLoginViewModel
 import dev.bilby.ui.search.SearchChatScreen
+import dev.bilby.ui.search.SearchMode
 import dev.bilby.ui.search.SearchChatViewModel
 import dev.bilby.ui.settings.SettingsScreen
 import dev.bilby.ui.settings.SettingsViewModel
@@ -242,8 +243,14 @@ private fun RootTabs(
 
                     // 开新会话是清空助理上下文的唯一入口(DESIGN 3.1:会话必须由用户显式开启),
                     // 属于"改变整页状态"的动作,正是 M3 说该放进顶栏的那一类。
-                    RootTab.Search -> IconButton(onClick = searchVm::newSession) {
-                        Icon(Icons.Filled.Add, contentDescription = "新会话")
+                    // 「新会话」只属于助理:普通搜索没有会话可开,留一个按不出效果的加号
+                    // 只会让人以为自己漏了什么。
+                    RootTab.Search -> if (searchState.mode == SearchMode.Agent) {
+                        IconButton(onClick = searchVm::newSession) {
+                            Icon(Icons.Filled.Add, contentDescription = "新会话")
+                        }
+                    } else {
+                        Unit
                     }
 
                     RootTab.ToView -> TextButton(

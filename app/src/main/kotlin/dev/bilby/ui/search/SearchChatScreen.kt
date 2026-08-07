@@ -22,7 +22,9 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
@@ -69,15 +71,6 @@ private const val PrefetchThreshold = 5
 enum class SearchMode(val label: String) { Normal("普通搜索"), Agent("助理搜索") }
 
 sealed interface TurnResult {
-    data class Normal(
-        val videos: List<SearchVideo>,
-        val users: List<SearchUser>,
-        val loading: Boolean = false,
-        val appending: Boolean = false,
-        val hasMore: Boolean = true,
-        val error: String? = null,
-    ) : TurnResult
-
     data class Agent(
         val steps: List<AgentStep>,
         /** 一段夹着视频卡片的正文,见 AnswerBlocks。 */
@@ -89,12 +82,36 @@ sealed interface TurnResult {
 
 data class AgentStep(val label: String, val items: List<TraceItem>, val finished: Boolean)
 
-data class SearchTurn(val id: Long, val query: String, val mode: SearchMode, val result: TurnResult)
+/** 助理的一轮对话。普通搜索没有"轮"这个概念,见 [NormalSearchState]。 */
+data class SearchTurn(val id: Long, val query: String, val result: TurnResult.Agent)
 
+/**
+ * 普通搜索的状态:**一次查询一份结果**,不留历史。它就是一个搜索页,上一次搜了什么
+ * 和这一次无关。
+ */
+data class NormalSearchState(
+    val query: String = "",
+    val videos: List<SearchVideo> = emptyList(),
+    val users: List<SearchUser> = emptyList(),
+    val loading: Boolean = false,
+    val appending: Boolean = false,
+    val hasMore: Boolean = true,
+    val error: String? = null,
+)
+
+/** 助理的状态:一段可以追问下去的对话。 */
+data class AgentSearchState(val turns: List<SearchTurn> = emptyList())
+
+/**
+ * 两种模式各持一份状态。合用一条轮次列表时,普通搜索的结果集和助理对话会交替出现,
+ * 两边都读不下去 —— 一个是可翻页的列表,另一个是带工具轨迹的对话,本来就不同构。
+ * 切换模式只是换显示哪一份,两份都留着。
+ */
 data class SearchChatUiState(
-    val turns: List<SearchTurn> = emptyList(),
-    val input: String = "",
     val mode: SearchMode = SearchMode.Normal,
+    val input: String = "",
+    val normal: NormalSearchState = NormalSearchState(),
+    val agent: AgentSearchState = AgentSearchState(),
 )
 
 /**
@@ -111,92 +128,114 @@ fun SearchChatScreen(
     onSend: () -> Unit,
     onVideoClick: (bvid: String) -> Unit,
     onUserClick: (mid: Long) -> Unit,
-    onLoadMore: (turnId: Long) -> Unit,
-    onRetry: (turnId: Long) -> Unit,
+    onLoadMore: () -> Unit,
+    onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val listState = rememberLazyListState()
-
-    // 新一轮出现就滚到底部,像聊天软件那样跟随最新消息。
-    LaunchedEffect(state.turns.size) {
-        if (state.turns.isNotEmpty()) {
-            listState.animateScrollToItem(state.turns.lastIndex)
-        }
-    }
-
-    // 触底翻页:只对最后一轮生效,翻上面轮次不会误触发(轮次一旦定型就不再变化)。
-    LaunchedEffect(listState, state.turns.lastOrNull()?.id) {
-        val lastTurn = state.turns.lastOrNull() ?: return@LaunchedEffect
-        val lastResult = lastTurn.result as? TurnResult.Normal ?: return@LaunchedEffect
-        snapshotFlow { listState.layoutInfo }
-            .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-            .distinctUntilChanged()
-            .filter { (lastVisible, total) -> lastVisible != null && lastVisible >= total - 1 - PrefetchThreshold }
-            .collect {
-                if (lastResult.hasMore && !lastResult.appending) onLoadMore(lastTurn.id)
-            }
-    }
-
     Column(modifier = modifier.fillMaxSize()) {
-        ModeSwitch(
-            mode = state.mode,
-            onModeChange = onModeChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        )
+        Box(modifier = Modifier.weight(1f)) {
+            when (state.mode) {
+                SearchMode.Normal -> NormalPane(
+                    state = state.normal,
+                    onVideoClick = onVideoClick,
+                    onUserClick = onUserClick,
+                    onLoadMore = onLoadMore,
+                    onRetry = onRetry,
+                )
 
-        if (state.turns.isEmpty()) {
-            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                // 空态说清楚两条路各是什么。这是唯一会解释助理的地方,别让它藏在一个开关后面。
-                EmptyState("普通搜索直接问 B 站要结果。\n助理搜索会翻热评、进空间比对,再给几条带理由的。")
-            }
-        } else {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(vertical = Spacing.Cozy),
-                verticalArrangement = Arrangement.spacedBy(Spacing.Loose),
-            ) {
-                items(state.turns, key = { it.id }) { turn ->
-                    TurnRow(
-                        turn = turn,
-                        onVideoClick = onVideoClick,
-                        onUserClick = onUserClick,
-                        onRetry = { onRetry(turn.id) },
-                    )
-                }
+                SearchMode.Agent -> AgentPane(
+                    state = state.agent,
+                    onVideoClick = onVideoClick,
+                    onRetry = onRetry,
+                )
             }
         }
 
         InputBar(
             input = state.input,
             onInputChange = onInputChange,
+            mode = state.mode,
+            onModeChange = onModeChange,
             onSend = onSend,
             modifier = Modifier.fillMaxWidth(),
         )
     }
 }
 
-/**
- * 普通 / 助理。用 segmented button 而不是 filter chip:M3 把"切换视图"明确划给 segmented
- * button,chip 是给动态的、上下文相关的、可以横滚的一组选项用的(比如下面分 P 那一排)。
- * 这两个选项是固定的两条路,不随内容变,也永远不会变成三个。
- */
+/** 普通搜索:一份结果、可翻页,没有"轮次"。翻到底自动续页。 */
 @Composable
-private fun ModeSwitch(
-    mode: SearchMode,
-    onModeChange: (SearchMode) -> Unit,
-    modifier: Modifier = Modifier,
+private fun NormalPane(
+    state: NormalSearchState,
+    onVideoClick: (String) -> Unit,
+    onUserClick: (Long) -> Unit,
+    onLoadMore: () -> Unit,
+    onRetry: () -> Unit,
 ) {
-    SingleChoiceSegmentedButtonRow(modifier = modifier) {
-        SearchMode.entries.forEachIndexed { index, candidate ->
-            SegmentedButton(
-                selected = candidate == mode,
-                onClick = { onModeChange(candidate) },
-                shape = SegmentedButtonDefaults.itemShape(index, SearchMode.entries.size),
-                label = { Text(candidate.label) },
-            )
+    if (state.query.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            EmptyState("直接问 B 站要结果。\n想让助理翻热评、进空间比对再给理由,点输入框右边的闪光。")
+        }
+        return
+    }
+
+    val listState = rememberLazyListState()
+    LaunchedEffect(listState, state.query) {
+        snapshotFlow { listState.layoutInfo }
+            .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
+            .distinctUntilChanged()
+            .filter { (lastVisible, total) -> lastVisible != null && lastVisible >= total - 1 - PrefetchThreshold }
+            .collect { if (state.hasMore && !state.appending) onLoadMore() }
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(vertical = Spacing.Cozy),
+    ) {
+        if (state.users.isNotEmpty()) {
+            item(key = "users") { UserRow(state.users, onUserClick) }
+        }
+        items(state.videos, key = { it.bvid }) { video ->
+            VideoRow(item = video.toRowUi(), onClick = { onVideoClick(video.bvid) })
+        }
+        item(key = "footer") {
+            when {
+                state.error != null -> FullScreenError(state.error, onRetry, Modifier.fillMaxWidth())
+                state.loading -> InlineProgress("搜索中…", Modifier.padding(Spacing.Comfortable))
+                state.appending -> InlineProgress("加载更多…", Modifier.padding(Spacing.Comfortable))
+                state.videos.isEmpty() -> EmptyState("没有结果")
+            }
+        }
+    }
+}
+
+/** 助理:一段可以追问下去的对话,跟随最新一轮。 */
+@Composable
+private fun AgentPane(
+    state: AgentSearchState,
+    onVideoClick: (String) -> Unit,
+    onRetry: () -> Unit,
+) {
+    if (state.turns.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            EmptyState("描述想看的内容,助理会搜索、翻热评、进空间比对,再给几条带理由的。")
+        }
+        return
+    }
+
+    val listState = rememberLazyListState()
+    LaunchedEffect(state.turns.size) {
+        listState.animateScrollToItem(state.turns.lastIndex)
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(vertical = Spacing.Cozy),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Loose),
+    ) {
+        items(state.turns, key = { it.id }) { turn ->
+            TurnRow(turn = turn, onVideoClick = onVideoClick, onRetry = onRetry)
         }
     }
 }
@@ -205,23 +244,19 @@ private fun ModeSwitch(
 private fun TurnRow(
     turn: SearchTurn,
     onVideoClick: (String) -> Unit,
-    onUserClick: (Long) -> Unit,
     onRetry: () -> Unit,
-    modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-    ) {
-        UserBubble(text = turn.query, modifier = Modifier.padding(horizontal = Spacing.Comfortable))
-        when (val result = turn.result) {
-            is TurnResult.Normal -> NormalTurnResult(result, onVideoClick, onUserClick, onRetry)
-            is TurnResult.Agent -> AgentTurnResult(result, onVideoClick, onRetry)
-        }
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Cozy)) {
+        UserBubble(
+            text = turn.query,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Comfortable),
+        )
+        AgentTurnResult(result = turn.result, onVideoClick = onVideoClick, onRetry = onRetry)
     }
 }
 
-/** 用户这次问的话,靠右的气泡,像聊天(团队要求的对话式外观)。 */
 @Composable
 private fun UserBubble(text: String, modifier: Modifier = Modifier) {
     Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -244,44 +279,6 @@ private fun UserBubble(text: String, modifier: Modifier = Modifier) {
 private val BubbleMaxWidth = 280.dp
 
 // ---- 普通模式 ----
-
-@Composable
-private fun NormalTurnResult(
-    result: TurnResult.Normal,
-    onVideoClick: (String) -> Unit,
-    onUserClick: (Long) -> Unit,
-    onRetry: () -> Unit,
-) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        if (result.users.isNotEmpty()) {
-            UserRow(users = result.users, onUserClick = onUserClick)
-        }
-        when {
-            result.loading && result.videos.isEmpty() ->
-                Box(Modifier.fillMaxWidth().padding(Spacing.Loose), Alignment.Center) {
-                    InlineProgress("搜索中…")
-                }
-
-            result.error != null && result.videos.isEmpty() ->
-                FullScreenError(result.error, onRetry, Modifier.fillMaxWidth())
-
-            result.videos.isEmpty() -> EmptyState("没有找到相关结果")
-
-            else -> {
-                // 一轮内的视频用普通 Column 平铺(不是嵌套 LazyColumn),触底翻页由外层
-                // 大列表的滚动状态统一检测(见 SearchChatScreen 里的 LaunchedEffect)。
-                result.videos.forEach { video ->
-                    VideoRow(item = video.toRowUi(), onClick = { onVideoClick(video.bvid) })
-                }
-                ListFooter(
-                    appending = result.appending,
-                    hasMore = result.hasMore,
-                    hasItems = true,
-                )
-            }
-        }
-    }
-}
 
 @Composable
 private fun UserRow(users: List<SearchUser>, onUserClick: (Long) -> Unit) {
@@ -477,9 +474,12 @@ private fun TraceCard(item: TraceItem, onClick: () -> Unit, modifier: Modifier =
 private fun InputBar(
     input: String,
     onInputChange: (String) -> Unit,
+    mode: SearchMode,
+    onModeChange: (SearchMode) -> Unit,
     onSend: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val agent = mode == SearchMode.Agent
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(Spacing.Tight),
@@ -489,13 +489,24 @@ private fun InputBar(
             SearchField(
                 value = input,
                 onValueChange = onInputChange,
-                placeholder = "输入想找的内容",
+                placeholder = if (agent) "描述想看的内容" else "输入想找的内容",
                 // 回车即发送。DESIGN 2.2 的快路原话是"输入直接回车 = 原始 B 站搜索",
                 // 换成 SearchField 之前这条根本没实现:OutlinedTextField 的 singleLine
                 // 只是不换行,键盘上那个键什么都不做。
                 onSearch = onSend,
                 modifier = Modifier.weight(1f),
             )
+            // 闪光亮起 = 这一句交给助理。整个 app 里闪光只表示助理(播放页的「找相关」用的
+            // 是同一个图标),所以它不需要文字解释;放在输入框上是因为要决定的是**这一句话
+            // 由谁回答**,那是输入的属性,不是一个页面级的模式开关。
+            IconToggleButton(checked = agent, onCheckedChange = { onModeChange(if (it) SearchMode.Agent else SearchMode.Normal) }) {
+                Icon(
+                    imageVector = Icons.Filled.AutoAwesome,
+                    contentDescription = if (agent) "改用普通搜索" else "交给助理",
+                    tint = if (agent) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             // 发送是这一屏的主行动,用实心图标按钮 —— M3 说要提升某个动作的可见度就换成
             // filled/tonal,并且一屏只留一个。
             FilledIconButton(onClick = onSend, enabled = input.isNotBlank()) {
@@ -533,35 +544,18 @@ private fun previewTrace(bvid: String, title: String) = TraceItem(
     upName = "某知名UP主",
 )
 
-@Preview(showBackground = true, name = "空态")
-@Composable
-private fun SearchChatScreenEmptyPreview() {
-    BilbyTheme {
-        SearchChatScreen(SearchChatUiState(), {}, {}, {}, {}, {}, {}, {})
-    }
-}
-
-@Preview(showBackground = true, name = "普通模式有结果")
+@Preview
 @Composable
 private fun SearchChatScreenNormalPreview() {
     BilbyTheme {
         SearchChatScreen(
             state = SearchChatUiState(
-                turns = listOf(
-                    SearchTurn(
-                        id = 1L,
-                        query = "泠鸢的新歌",
-                        mode = SearchMode.Normal,
-                        result = TurnResult.Normal(
-                            videos = listOf(
-                                previewVideo("BV1aa", "这是一个很长很长需要两行才能显示完的搜索结果标题示例文本内容"),
-                                previewVideo("BV1bb", "第二条搜索结果"),
-                            ),
-                            users = listOf(
-                                SearchUser(mid = 1L, name = "示例UP主", avatarUrl = "", fansCount = 45_000L, signature = ""),
-                            ),
-                            hasMore = false,
-                        ),
+                mode = SearchMode.Normal,
+                normal = NormalSearchState(
+                    query = "宝可梦",
+                    videos = listOf(
+                        previewVideo("BV1aa", "宝可梦朱紫 全剧情流程"),
+                        previewVideo("BV1bb", "宝可梦对战入门:属性克制"),
                     ),
                 ),
             ),
@@ -571,27 +565,27 @@ private fun SearchChatScreenNormalPreview() {
     }
 }
 
-@Preview(showBackground = true, name = "助理模式已出答案")
+@Preview
 @Composable
 private fun SearchChatScreenAgentAnswerPreview() {
     BilbyTheme {
         SearchChatScreen(
             state = SearchChatUiState(
                 mode = SearchMode.Agent,
-                turns = listOf(
-                    SearchTurn(
-                        id = 1L,
-                        query = "适合上班摸鱼看的搞笑动画",
-                        mode = SearchMode.Agent,
-                        result = TurnResult.Agent(
-                            steps = listOf(
-                                AgentStep("搜索:搞笑动画", listOf(previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")), true),
-                                AgentStep("读取:BV1aa 的热评", emptyList(), true),
-                            ),
-                            blocks = listOf(
-                                AnswerBlock.Text("时长短、弹幕密度高,评论区反馈「摸鱼时长刚好一集」:"),
-                                AnswerBlock.Video("BV1aa", previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")),
-                                AnswerBlock.Text("再往后是同一个 UP 的旧作,节奏一致。"),
+                agent = AgentSearchState(
+                    turns = listOf(
+                        SearchTurn(
+                            id = 1L,
+                            query = "适合上班摸鱼看的搞笑动画",
+                            result = TurnResult.Agent(
+                                steps = listOf(
+                                    AgentStep("搜索:搞笑动画", listOf(previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")), true),
+                                ),
+                                blocks = listOf(
+                                    AnswerBlock.Text("时长短、弹幕密度高,评论区反馈「摸鱼时长刚好一集」:"),
+                                    AnswerBlock.Video("BV1aa", previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")),
+                                    AnswerBlock.Text("再往后是同一个 UP 的旧作,节奏一致。"),
+                                ),
                             ),
                         ),
                     ),
