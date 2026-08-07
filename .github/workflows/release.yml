@@ -86,13 +86,15 @@ jobs:
           draft: true
           files: dist/*
           body: |
-            由 GitHub Actions 从 tag `${{ github.ref_name }}`(commit ${{ github.sha }})构建。
+            ## 安装
 
-            四个 APK 是同一个版本的四种打包,不是四个版本。不知道选哪个就下 `universal`;
-            按架构下能小一些:较新的手机是 `arm64-v8a`,较老的是 `armeabi-v7a`,
-            模拟器一般是 `x86_64`。
+            universal 为通用包;arm64-v8a、armeabi-v7a、x86_64 为对应架构的精简包,体积略小。四者为同一版本的不同打包,架构不匹配时无法安装。
 
-            `SHA256SUMS.txt` 是校验和。构建来源可以用
-            `gh attestation verify <文件> --repo ${{ github.repository }}` 独立验证。
+            ## 校验
 
-            `mapping.txt` 用来还原崩溃栈,报 bug 时不需要你处理它。
+            APK 由 GitHub Actions 从本 tag 构建并签名。
+
+            - 校验和:`SHA256SUMS.txt`
+            - 构建来源:`gh attestation verify <文件> --repo ${{ github.repository }}`
+
+            `mapping.txt` 用于还原崩溃堆栈。
