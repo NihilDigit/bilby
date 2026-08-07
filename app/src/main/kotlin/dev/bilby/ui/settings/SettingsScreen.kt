@@ -39,6 +39,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import dev.bilby.BuildConfig
+import dev.bilby.data.UpdateInfo
+import java.io.File
 import dev.bilby.R
 import dev.bilby.data.CodecPreference
 import dev.bilby.data.LlmConfig
@@ -67,6 +69,9 @@ fun SettingsScreen(
     onCodecChange: (CodecPreference) -> Unit,
     onSponsorBlockChange: (SponsorBlockPrefs) -> Unit,
     onLogout: () -> Unit,
+    onCheckUpdate: () -> Unit,
+    onDownloadUpdate: (UpdateInfo) -> Unit,
+    onInstallUpdate: (File) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -186,6 +191,12 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_license),
                     subtitle = "GPL-3.0-or-later",
                 )
+                UpdateRow(
+                    state = state.update,
+                    onCheck = onCheckUpdate,
+                    onDownload = onDownloadUpdate,
+                    onInstall = onInstallUpdate,
+                )
             }
         }
     }
@@ -283,6 +294,45 @@ private fun CodecSection(
  * would create a simpler visual hierarchy",divider 页则要求 full-width divider 用得
  * sparingly。这一页每组头上本来就有一个带色标题,再压一条线是同一件事说两遍。
  */
+/**
+ * 手动更新那一行。**副标题就是状态本身**,不另开一块区域:检查、下载、可安装、失败
+ * 四种情况读起来都是"这一项现在怎么样了",挤进同一行反而比弹对话框更安静。
+ *
+ * 点击的语义随状态变:空闲/已是最新/失败时是"再查一次",查到新版是"下载",
+ * 下好了是"安装",下载中不响应。
+ */
+@Composable
+private fun UpdateRow(
+    state: UpdateState,
+    onCheck: () -> Unit,
+    onDownload: (UpdateInfo) -> Unit,
+    onInstall: (File) -> Unit,
+) {
+    val subtitle = when (state) {
+        UpdateState.Idle -> stringResource(R.string.settings_update_idle)
+        UpdateState.Checking -> stringResource(R.string.settings_update_checking)
+        UpdateState.UpToDate -> stringResource(R.string.settings_update_latest)
+        is UpdateState.Available ->
+            stringResource(R.string.settings_update_available, state.info.version)
+        is UpdateState.Downloading ->
+            stringResource(R.string.settings_update_downloading, (state.progress * 100).toInt())
+        is UpdateState.Ready ->
+            stringResource(R.string.settings_update_ready, state.info.version)
+        is UpdateState.Failed ->
+            stringResource(R.string.settings_update_failed, state.message)
+    }
+    SettingRow(
+        title = stringResource(R.string.settings_update),
+        subtitle = subtitle,
+        onClick = when (state) {
+            is UpdateState.Available -> ({ onDownload(state.info) })
+            is UpdateState.Ready -> ({ onInstall(state.apk) })
+            UpdateState.Checking, is UpdateState.Downloading -> null
+            else -> onCheck
+        },
+    )
+}
+
 @Composable
 private fun SectionTitle(text: String) {
     Text(

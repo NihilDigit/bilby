@@ -231,6 +231,16 @@
     <string name="settings_sponsorblock_server_dialog">SponsorBlock 服务器</string>
     <string name="settings_section_about">关于</string>
     <string name="settings_version">版本</string>
+    <!-- 手动更新。副标题即状态,见 SettingsScreen 的 UpdateRow。 -->
+    <string name="settings_update">检查更新</string>
+    <string name="settings_update_idle">从 GitHub Releases 获取</string>
+    <string name="settings_update_checking">检查中…</string>
+    <string name="settings_update_latest">已是最新版本</string>
+    <string name="settings_update_available">发现 %1$s,点击下载</string>
+    <string name="settings_update_downloading">下载中 %1$d%%</string>
+    <string name="settings_update_ready">%1$s 已下载,点击安装</string>
+    <string name="settings_update_failed">检查失败:%1$s</string>
+
     <string name="settings_license">许可证</string>
     <string name="settings_llm_test">测试</string>
     <string name="settings_llm_test_hint">点击发送一次请求</string>

@@ -15,6 +15,7 @@ import dev.bilby.data.FavRepository
 import dev.bilby.data.FollowRepository
 import dev.bilby.data.HeartbeatReporter
 import dev.bilby.data.QueueSourceRepository
+import dev.bilby.data.UpdateRepository
 import dev.bilby.data.SearchRepository
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.RelationRepository
@@ -109,6 +110,9 @@ class AppContainer(context: Context) {
 
     /** 第三方服务,不走 BiliClient(它带 B 站的 Cookie 与 Referer,发给别人既无必要也不合适)。 */
     val sponsorBlockRepository: SponsorBlockRepository by lazy { SponsorBlockRepository(httpClient, json) }
+
+    /** 手动更新只在设置页点一下时才用,懒到那一刻再建。 */
+    val updateRepository: UpdateRepository by lazy { UpdateRepository(httpClient, json) }
 
     val queueSourceRepository: QueueSourceRepository by lazy {
         QueueSourceRepository(spaceRepository, videoRepository)

@@ -81,6 +81,7 @@ import dev.bilby.ui.search.SearchChatScreen
 import dev.bilby.ui.search.SearchMode
 import dev.bilby.ui.search.SearchChatViewModel
 import dev.bilby.ui.settings.SettingsScreen
+import dev.bilby.ui.settings.UpdateInstaller
 import dev.bilby.ui.settings.SettingsViewModel
 import dev.bilby.ui.space.SpaceScreen
 import dev.bilby.ui.space.SpaceViewModel
@@ -445,7 +446,14 @@ private fun RootTabs(
 private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
     val vm: SettingsViewModel = viewModel(
         factory = viewModelFactory {
-            initializer { SettingsViewModel(container.settings, container.spaceRepository, container.llmClient) }
+            initializer {
+                SettingsViewModel(
+                    container.settings,
+                    container.spaceRepository,
+                    container.llmClient,
+                    container.updateRepository,
+                )
+            }
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
@@ -456,6 +464,9 @@ private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
         onSmokeTestLlm = vm::smokeTestLlm,
         onCodecChange = vm::setCodec,
         onSponsorBlockChange = vm::updateSponsorBlock,
+        onCheckUpdate = vm::checkUpdate,
+        onDownloadUpdate = { vm.downloadUpdate(it, UpdateInstaller.downloadDir(context)) },
+        onInstallUpdate = { UpdateInstaller.install(context, it) },
         // 停播放服务要 Context,所以由这一层做,ViewModel 只管清凭据。
         // 顺序是先清后停:反过来的话中间那一瞬服务已停但凭据还在,看起来像"没登出但停了"。
         onLogout = {

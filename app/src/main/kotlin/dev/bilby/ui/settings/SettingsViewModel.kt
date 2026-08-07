@@ -1,5 +1,10 @@
 package dev.bilby.ui.settings
 
+import dev.bilby.BuildConfig
+import dev.bilby.data.UpdateCheck
+import dev.bilby.data.UpdateInfo
+import dev.bilby.data.UpdateRepository
+import java.io.File
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.api.BiliResult
@@ -27,6 +32,20 @@ data class AccountUiState(
     val name: String? = null,
 )
 
+/**
+ * 手动更新的状态机。**下载进度和结果都不落盘** —— 它描述的是这一次点击,
+ * 下次进设置页应当是干净的 Idle。
+ */
+sealed interface UpdateState {
+    data object Idle : UpdateState
+    data object Checking : UpdateState
+    data object UpToDate : UpdateState
+    data class Available(val info: UpdateInfo) : UpdateState
+    data class Downloading(val info: UpdateInfo, val progress: Float) : UpdateState
+    data class Ready(val info: UpdateInfo, val apk: File) : UpdateState
+    data class Failed(val message: String) : UpdateState
+}
+
 data class SettingsUiState(
     val account: AccountUiState = AccountUiState(),
     val llm: LlmConfig? = null,
@@ -35,6 +54,7 @@ data class SettingsUiState(
     val sponsorBlock: SponsorBlockPrefs = SponsorBlockPrefs(),
     /** 本机真有硬解器的编码,决定编解码那一节列出哪几项。 */
     val hardwareCodecIds: Set<Int> = emptySet(),
+    val update: UpdateState = UpdateState.Idle,
 )
 
 /**
@@ -47,7 +67,55 @@ class SettingsViewModel(
     private val settings: SettingsStore,
     private val spaceRepository: SpaceRepository,
     private val llmClient: LlmClient,
+    private val updateRepository: UpdateRepository,
 ) : ViewModel() {
+
+    /**
+     * 查更新。**只在用户点这一下时才跑**:没有启动时自动检查,也没有后台轮询 ——
+     * 那属于会主动打扰人的东西,和这个 app 不做红点与推送是同一条约束(DESIGN 1.3)。
+     */
+    fun checkUpdate() {
+        if (_state.value.update is UpdateState.Checking) return
+        _state.update { it.copy(update = UpdateState.Checking) }
+        viewModelScope.launch {
+            val result = when (val check = updateRepository.check(BuildConfig.VERSION_NAME)) {
+                is UpdateCheck.Available -> UpdateState.Available(check.info)
+                UpdateCheck.UpToDate -> UpdateState.UpToDate
+                is UpdateCheck.Failed -> UpdateState.Failed(check.message)
+            }
+            _state.update { it.copy(update = result) }
+        }
+    }
+
+    /**
+     * 下载到应用缓存目录。同名文件先删掉再下:上一次下到一半的残包会让安装器报
+     * "解析包出现问题",而那句提示指不向真正的原因。
+     */
+    fun downloadUpdate(info: UpdateInfo, dir: File) {
+        if (_state.value.update is UpdateState.Downloading) return
+        _state.update { it.copy(update = UpdateState.Downloading(info, 0f)) }
+        viewModelScope.launch {
+            val target = File(dir, info.assetName)
+            if (target.exists()) target.delete()
+            val result = updateRepository.download(info, target) { progress ->
+                _state.update { current ->
+                    if (current.update is UpdateState.Downloading) {
+                        current.copy(update = UpdateState.Downloading(info, progress))
+                    } else {
+                        current
+                    }
+                }
+            }
+            _state.update {
+                it.copy(
+                    update = result.fold(
+                        onSuccess = { apk -> UpdateState.Ready(info, apk) },
+                        onFailure = { error -> UpdateState.Failed(error.message ?: "下载失败") },
+                    )
+                )
+            }
+        }
+    }
 
     /**
      * 冒烟测试:真发一次请求,把回答显示出来。

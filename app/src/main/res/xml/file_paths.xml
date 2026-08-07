@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  只暴露缓存目录下的 updates/ 一个子目录。范围开到 cache-path 根或 files-path 的话,
+  这个 provider 就成了把应用私有数据递给任意应用的通道 —— 而它存在的理由只有一个:
+  把刚下好的那一个 APK 交给系统安装器。
+-->
+<paths>
+    <cache-path name="updates" path="updates/" />
+</paths>
