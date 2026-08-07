@@ -136,9 +136,15 @@ class VideoRepository(private val client: BiliClient) {
                     BiliResult.Ok(
                         PlayInfo(
                             streams = streams,
+                            // **last_play_time 本来就是毫秒,不要再乘 1000。** PiliPlus 是
+                            // `Duration(milliseconds: data.lastPlayTime)`(lib/pages/video/
+                            // controller.dart:843)。乘过一次之后每个位置都远超片长,于是被
+                            // resumeAtMillisFor 的"看完即归零"那道闸吞掉,表现是心跳照常回传、
+                            // 每次进来却都从头开始 —— 一个单位错误伪装成了一个逻辑问题。
+                            //
                             // 服务端在"没进度"和"已看完"时都可能给 <=0(notes §3),统一归零,
                             // 免得 seek 到负数。
-                            lastPlayTimeMillis = dto.lastPlayTime.coerceAtLeast(0) * 1000,
+                            lastPlayTimeMillis = dto.lastPlayTime.coerceAtLeast(0),
                             lastPlayCid = dto.lastPlayCid,
                             availableQualities = dto.qualityOptions(),
                             durationMillis = dto.dash?.duration?.times(1000L) ?: dto.timeLength,
