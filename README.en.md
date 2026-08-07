@@ -52,15 +52,15 @@ Done:
 
 Planned:
 
-- [ ] CI regression tests: build and test on pull requests (only the tag-triggered release exists today)
+- [ ] Danmaku
+- [ ] CI regression tests
 - [ ] Interface and motion polish
-- [ ] Agent harness work (tools and loop)
+- [ ] Agent harness work
 - [ ] Live streams
 - [ ] Picture-in-picture
 - [ ] Following list
 - [ ] Opening and sharing bilibili links
 - [ ] Filtering low-quality comments
-- [ ] Danmaku
 
 ## Install and sign in
 
