@@ -144,7 +144,7 @@ class SpaceViewModel(
     /**
      * 关注/取关。乐观更新、不重拉,与播放页同一套规矩。
      *
-     * 关注态来自 profile(`acc/info` 自带 relation),这里改的也是 profile 里的那一份,
+     * 关注态存在 profile 里(由 [loadFollowState] 填),这里改的也是那一份,
      * 不额外维护第二处状态 —— 两份状态迟早对不上。
      */
     fun toggleFollow() {
@@ -348,9 +348,33 @@ class SpaceViewModel(
         _state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
             when (val result = repository.loadProfile(mid)) {
-                is BiliResult.Ok -> _state.update { it.copy(loading = false, profile = result.value) }
+                is BiliResult.Ok -> {
+                    _state.update { it.copy(loading = false, profile = result.value) }
+                    // 串在 profile 之后,不并发:并发时 profile 后到就会把查到的关注态盖回默认值。
+                    loadFollowState()
+                }
                 else -> _state.update { it.copy(loading = false, error = result.errorText()) }
             }
+        }
+    }
+
+    /**
+     * 关注态**单独查**,不用 profile 里那份。
+     *
+     * 这里曾经直接读 `acc/info` 的 relation 字段,结果是关注按钮永远显示"关注" —— 网页端的
+     * acc/info 不填这个字段,DTO 拿不到就默认 0,而 0 正好是 FollowState.None,一个缺失被
+     * 静默读成了一个确定的答案。PiliPlus 的空间页看着也是读 relation,但它读的是**app 端**
+     * 的空间接口(带 app UA 和 app 参数),和这条不是一回事。
+     *
+     * 用 `x/relation?fid=` —— 播放页一直用的就是它,已经验证过。多一次请求,换一个真值。
+     */
+    private suspend fun loadFollowState() {
+        when (val result = relationRepository.stateOf(mid)) {
+            is BiliResult.Ok -> _state.update { state ->
+                state.copy(profile = state.profile?.copy(followState = result.value))
+            }
+            is BiliResult.ApiError -> BiliLog.w("空间页查关注态失败(${result.code}): ${result.message}")
+            is BiliResult.Failure -> BiliLog.w("空间页查关注态异常", result.cause)
         }
     }
 

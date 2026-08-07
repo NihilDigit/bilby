@@ -86,7 +86,9 @@ class SpaceRepository(private val client: BiliClient) {
                     sign = info.value.sign,
                     level = info.value.level,
                     follower = stat.value.follower,
-                    followState = FollowState.of(info.value.relation),
+                    // 网页端 acc/info **不填** relation,读它只会得到默认的 0(= 未关注),
+                    // 一个缺失被读成确定答案。关注态由 SpaceViewModel 用 x/relation 单独查。
+                    followState = FollowState.None,
                 )
             )
             info !is BiliResult.Ok -> info.propagateFailure()

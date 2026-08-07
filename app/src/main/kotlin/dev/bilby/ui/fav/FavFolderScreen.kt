@@ -150,9 +150,11 @@ private fun FavVideo.toRowUi(): VideoRowUi {
         coverUrl = coverUrl,
         durationText = formatDuration(durationSeconds),
         upName = upName,
-        dateText = "",
+        // 收藏夹接口不给收藏时间,也不给弹幕数。传 null 而不是空串 —— StatRow 对 null 是
+        // 整项不画,对空串是画个图标后面空着。
+        dateText = null,
         playText = playCount.toString(),
-        danmakuText = "",
+        danmakuText = null,
     )
 }
 
