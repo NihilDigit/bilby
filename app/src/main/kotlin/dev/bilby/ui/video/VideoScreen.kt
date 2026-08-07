@@ -56,6 +56,7 @@ import dev.bilby.data.VideoRelation
 import dev.bilby.player.AudioPlaybackService
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
+import dev.danmaku.compose.Danmaku
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.listen.ListenScreen
 import dev.bilby.ui.theme.Spacing
@@ -108,6 +109,11 @@ fun VideoScreen(
     subtitleLan: String = "",
     subtitleCues: List<SubtitleCue> = emptyList(),
     onSelectSubtitle: (String) -> Unit = {},
+    /** 弹幕总开关,默认关。只在看视频时有意义——听视频没有画面挂弹幕层。 */
+    danmakuEnabled: Boolean = false,
+    onDanmakuEnabledChange: (Boolean) -> Unit = {},
+    /** 已拉到的弹幕池,时间轴的编译在 BilbyPlayer 里做(需要 Compose 层的测量与画布宽度)。 */
+    danmakuPool: List<Danmaku> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -346,6 +352,10 @@ fun VideoScreen(
                 currentSubtitleLan = subtitleLan,
                 onSubtitleTrackChange = onSelectSubtitle,
                 subtitleCues = subtitleCues,
+                danmakuEnabled = danmakuEnabled,
+                onDanmakuEnabledChange = onDanmakuEnabledChange,
+                danmakuPool = danmakuPool,
+                danmakuCid = audioState.currentCid,
                 modifier = Modifier.fillMaxSize(),
             )
             if (playbackError != null) {
@@ -414,6 +424,10 @@ fun VideoScreen(
                         currentSubtitleLan = subtitleLan,
                         onSubtitleTrackChange = onSelectSubtitle,
                         subtitleCues = subtitleCues,
+                        danmakuEnabled = danmakuEnabled,
+                        onDanmakuEnabledChange = onDanmakuEnabledChange,
+                        danmakuPool = danmakuPool,
+                        danmakuCid = audioState.currentCid,
                         modifier = Modifier.fillMaxSize(),
                     )
 

@@ -22,8 +22,10 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -127,7 +129,9 @@ data class SearchChatUiState(
  * 对话式搜索(团队要求的形态):输入在下,一轮轮结果在上,像 Claude App 但内容是视频列表。
  * 结果页只有结果——无历史、无热搜、无"换一批"(DESIGN 2.2/3.4)。
  *
- * "新会话"在顶栏(见 MainActivity),不在这一层。
+ * "新会话"长在这一页自己的内容里(根 tab 不再有共用顶栏可借):只在助理模式下才有会话
+ * 可开,所以只在 `mode == Agent` 时画一个靠右的图标,别的时候不占位置——不是"藏起来",
+ * 是普通搜索模式压根没有"会话"这个概念。
  */
 @Composable
 fun SearchChatScreen(
@@ -136,6 +140,7 @@ fun SearchChatScreen(
     onModeChange: (SearchMode) -> Unit,
     onOrderChange: (SearchOrder) -> Unit,
     onSend: () -> Unit,
+    onNewSession: () -> Unit,
     onVideoClick: (bvid: String) -> Unit,
     onUserClick: (mid: Long) -> Unit,
     onLoadMore: () -> Unit,
@@ -154,6 +159,15 @@ fun SearchChatScreen(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
+        // 开新会话是清空助理上下文的唯一入口(DESIGN 3.1:会话必须由用户显式开启),
+        // 属于"改变整页状态"的动作。IconButton 自带 48dp 触摸区,不需要额外撑。
+        if (state.mode == SearchMode.Agent) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                IconButton(onClick = onNewSession) {
+                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.search_new_session))
+                }
+            }
+        }
         Box(modifier = Modifier.weight(1f)) {
             when (state.mode) {
                 SearchMode.Normal -> NormalPane(
@@ -620,7 +634,7 @@ private fun SearchChatScreenNormalPreview() {
                     ),
                 ),
             ),
-            onInputChange = {}, onModeChange = {}, onOrderChange = {}, onSend = {},
+            onInputChange = {}, onModeChange = {}, onOrderChange = {}, onSend = {}, onNewSession = {},
             onVideoClick = {}, onUserClick = {}, onLoadMore = {}, onRetry = {},
         )
     }
@@ -652,7 +666,7 @@ private fun SearchChatScreenAgentAnswerPreview() {
                     ),
                 ),
             ),
-            onInputChange = {}, onModeChange = {}, onOrderChange = {}, onSend = {},
+            onInputChange = {}, onModeChange = {}, onOrderChange = {}, onSend = {}, onNewSession = {},
             onVideoClick = {}, onUserClick = {}, onLoadMore = {}, onRetry = {},
         )
     }

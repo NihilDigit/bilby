@@ -79,6 +79,12 @@
     <string name="toview_progress">看到 %1$s</string>
     <string name="toview_remove">移出稍后再看:%1$s</string>
 
+    <!-- 历史记录 -->
+    <string name="history_title">历史记录</string>
+    <string name="history_empty">还没有历史记录</string>
+    <string name="history_finished">已看完</string>
+    <string name="history_progress">看到 %1$s</string>
+
     <!-- 评论 -->
     <string name="comment_empty">还没有评论</string>
     <string name="comment_sort_hot">最热</string>
@@ -160,6 +166,7 @@
     <string name="player_quality">清晰度</string>
     <string name="player_subtitle">字幕</string>
     <string name="player_subtitle_off">关闭字幕</string>
+    <string name="player_danmaku">弹幕</string>
     <string name="player_listen">听视频</string>
     <string name="player_lock">锁定</string>
     <string name="player_unlock">解锁</string>
@@ -218,10 +225,9 @@
 
     <!-- 设置 -->
     <string name="settings_title">设置</string>
-    <string name="settings_section_account">账号</string>
-    <string name="settings_uid">UID %1$s</string>
+    <!-- 账号信息与登出的入口已经搬到「我的」页,这两条字符串仍在:登出的二次确认对话框
+         (ProfileScreen)复用它们,同一个动作的文案不该有两份。 -->
     <string name="settings_logout">登出</string>
-    <string name="settings_logout_subtitle">清除本机凭据并停止播放,凭据过期也走这里</string>
     <string name="settings_logout_message">清除本机凭据并停止播放,重新登录需要再扫一次码</string>
     <string name="settings_section_agent">助理</string>
     <string name="settings_llm_base_url">接口地址</string>
@@ -236,6 +242,7 @@
     <string name="settings_section_player">播放器</string>
     <string name="settings_codec">编解码偏好</string>
     <string name="settings_codec_subtitle">改动对下一个视频生效</string>
+    <string name="settings_danmaku_toggle">弹幕</string>
     <string name="settings_sponsorblock_toggle">自动跳过</string>
     <string name="settings_sponsorblock_toggle_subtitle">由社区标注的赞助、片头片尾等片段</string>
     <string name="settings_sponsorblock_server">服务器地址</string>
@@ -260,9 +267,14 @@
     <string name="feed_open_followings">关注列表</string>
     <string name="followings_title">关注列表</string>
     <string name="followings_empty">还没有关注任何人</string>
-    <string name="fav_hub_title">稍后再看与收藏夹</string>
     <string name="fav_folder_count">%1$d 个视频</string>
     <string name="fav_empty">这个收藏夹是空的</string>
     <string name="fav_invalid_video">稿件已失效</string>
     <string name="tab_saved">收藏</string>
+
+    <!-- 个人页 -->
+    <string name="tab_profile">我的</string>
+    <string name="profile_logout">登出</string>
+    <string name="profile_view_all">查看全部</string>
+    <string name="profile_favorites_empty">还没有收藏夹</string>
 </resources>

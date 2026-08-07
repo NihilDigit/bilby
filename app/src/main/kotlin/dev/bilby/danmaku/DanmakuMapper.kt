@@ -28,7 +28,14 @@ internal fun RawDanmakuElem.toDanmakuOrNull(): Danmaku? {
         mode = danmakuMode,
         color = color,
         text = content,
-        fontSize = fontSize.takeIf { it > 0 },
+        // 恒 null,不是漏填。protobuf tag 4 这个 fontSize 是 B 站网页播放器自己的字号档位
+        // (18/25/36 = 小/标准/大),单位是以 25 为基准的 CSS px,不是 sp——真实响应量过,
+        // 标准弹幕报的就是 25。当成 sp 直接喂给 Compose 的 TextStyle.fontSize,在高密度屏上
+        // 是几十上百物理像素的字,一条弹幕能盖过标题。字号基准该由渲染层按画面尺寸定
+        // (BilbyPlayer.kt),不是抄一个 B 站自己都没说清单位的数字。字段本身保留:
+        // 将来做"大小弹幕分级"时用得上,但要按相对倍率(biliSize / 25f)乘渲染层的基准字号,
+        // 不是把这个数字原样当绝对值用。
+        fontSize = null,
         isSelf = false, // Bilby 目前没有发弹幕功能(CLAUDE.md),恒 false。
     )
 }

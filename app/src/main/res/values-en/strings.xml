@@ -63,6 +63,11 @@
     <string name="toview_progress">Left off at %1$s</string>
     <string name="toview_remove">Remove from Watch later: %1$s</string>
 
+    <string name="history_title">History</string>
+    <string name="history_empty">No watch history yet</string>
+    <string name="history_finished">Watched</string>
+    <string name="history_progress">Left off at %1$s</string>
+
     <string name="comment_empty">No comments yet</string>
     <string name="comment_sort_hot">Top</string>
     <string name="comment_sort_time">Newest</string>
@@ -137,6 +142,7 @@
     <string name="player_quality">Quality</string>
     <string name="player_subtitle">Subtitles</string>
     <string name="player_subtitle_off">Subtitles off</string>
+    <string name="player_danmaku">Danmaku</string>
     <string name="player_listen">Listen</string>
     <string name="player_lock">Lock</string>
     <string name="player_unlock">Unlock</string>
@@ -175,10 +181,9 @@
     <string name="login_success">Signed in</string>
 
     <string name="settings_title">Settings</string>
-    <string name="settings_section_account">Account</string>
-    <string name="settings_uid">UID %1$s</string>
+    <!-- Account info and sign-out moved to the Profile tab; these two strings stay because
+         the sign-out confirmation dialog there reuses them. -->
     <string name="settings_logout">Sign out</string>
-    <string name="settings_logout_subtitle">Clears credentials on this device and stops playback; expired credentials go through here too</string>
     <string name="settings_logout_message">Clears credentials on this device and stops playback. Signing back in takes another scan.</string>
     <string name="settings_section_agent">Assistant</string>
     <string name="settings_llm_base_url">API endpoint</string>
@@ -193,6 +198,7 @@
     <string name="settings_section_player">Player</string>
     <string name="settings_codec">Codec preference</string>
     <string name="settings_codec_subtitle">Takes effect on the next video</string>
+    <string name="settings_danmaku_toggle">Danmaku</string>
     <string name="settings_sponsorblock_toggle">Skip automatically</string>
     <string name="settings_sponsorblock_toggle_subtitle">Sponsor, intro and outro segments marked by the community</string>
     <string name="settings_sponsorblock_server">Server URL</string>
@@ -207,9 +213,13 @@
     <string name="feed_open_followings">Following</string>
     <string name="followings_title">Following</string>
     <string name="followings_empty">Not following anyone yet</string>
-    <string name="fav_hub_title">Watch later &amp; favourites</string>
     <string name="fav_folder_count">%1$d videos</string>
     <string name="fav_empty">This folder is empty</string>
     <string name="fav_invalid_video">Video unavailable</string>
     <string name="tab_saved">Saved</string>
+
+    <string name="tab_profile">Me</string>
+    <string name="profile_logout">Log out</string>
+    <string name="profile_view_all">View all</string>
+    <string name="profile_favorites_empty">No favourite folders yet</string>
 </resources>

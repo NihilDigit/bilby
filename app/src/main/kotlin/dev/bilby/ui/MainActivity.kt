@@ -20,14 +20,12 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Subscriptions
-import androidx.compose.material.icons.filled.WatchLater
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Subscriptions
-import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -67,18 +65,20 @@ import dev.bilby.ui.agent.AgentViewModel
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.comment.CommentViewModel
 import androidx.compose.material.icons.outlined.DeleteSweep
+import dev.bilby.data.FavFolder
 import dev.bilby.ui.fav.FavFolderScreen
 import dev.bilby.ui.fav.FavFolderViewModel
-import dev.bilby.ui.fav.FavHubScreen
-import dev.bilby.ui.fav.FavHubViewModel
 import dev.bilby.ui.feed.FeedScreen
 import dev.bilby.ui.feed.FeedViewModel
 import dev.bilby.ui.follow.FollowingsScreen
 import dev.bilby.ui.follow.FollowingsViewModel
+import dev.bilby.ui.history.HistoryScreen
+import dev.bilby.ui.history.HistoryViewModel
 import dev.bilby.ui.login.TvLoginScreen
 import dev.bilby.ui.login.TvLoginViewModel
+import dev.bilby.ui.profile.ProfileScreen
+import dev.bilby.ui.profile.ProfileViewModel
 import dev.bilby.ui.search.SearchChatScreen
-import dev.bilby.ui.search.SearchMode
 import dev.bilby.ui.search.SearchChatViewModel
 import dev.bilby.ui.settings.SettingsScreen
 import dev.bilby.ui.settings.UpdateInstaller
@@ -150,12 +150,18 @@ private fun BilbyApp(container: AppContainer) {
             initializer { SearchChatViewModel(container.searchRepository, container.agentLoop) }
         },
     )
-    val toViewVm: ToViewViewModel = viewModel(
-        factory = viewModelFactory { initializer { ToViewViewModel(container.toViewRepository) } },
-    )
-
-    val favHubVm: FavHubViewModel = viewModel(
-        factory = viewModelFactory { initializer { FavHubViewModel(container.favRepository) } },
+    val profileVm: ProfileViewModel = viewModel(
+        factory = viewModelFactory {
+            initializer {
+                ProfileViewModel(
+                    container.settings,
+                    container.accountRepository,
+                    container.historyRepository,
+                    container.toViewRepository,
+                    container.favRepository,
+                )
+            }
+        },
     )
 
     val backStack = rememberNavBackStack(Home)
@@ -215,18 +221,28 @@ private fun BilbyApp(container: AppContainer) {
                 RootTabs(
                     feedVm = feedVm,
                     searchVm = searchVm,
-                    toViewVm = toViewVm,
-                    favHubVm = favHubVm,
+                    profileVm = profileVm,
                     onVideoClick = { backStack.add(Video(it)) },
                     onUserClick = { backStack.add(Space(it)) },
                     onSettingsClick = { backStack.add(Settings) },
                     onOpenFollowings = { backStack.add(Followings) },
+                    onOpenHistory = { backStack.add(History) },
                     onOpenToView = { backStack.add(ToViewList) },
-                    onOpenFolder = { id, title -> backStack.add(FavFolderContents(id, title)) },
+                    onOpenFavFolder = { folder -> backStack.add(FavFolderContents(folder.id, folder.title)) },
+                    // 停播放服务要 Context,顺序先清凭据后停服务(同 SettingsRoute.onLogout 的理由:
+                    // 反过来的话中间那一瞬服务已停但凭据还在,看起来像"没登出但停了")。
+                    onLogout = { profileVm.logout { AudioPlaybackService.stop(context) } },
                 )
             }
             entry<Settings> {
                 SettingsRoute(container, onBack = { backStack.removeLastOrNull() })
+            }
+            entry<History> {
+                HistoryRoute(
+                    container = container,
+                    onVideoClick = { backStack.add(Video(it)) },
+                    onBack = { backStack.removeLastOrNull() },
+                )
             }
             entry<Video> { key ->
                 VideoRoute(
@@ -262,7 +278,7 @@ private fun BilbyApp(container: AppContainer) {
             }
             entry<ToViewList> {
                 ToViewListRoute(
-                    vm = toViewVm,
+                    container = container,
                     onVideoClick = { backStack.add(Video(it)) },
                     onBack = { backStack.removeLastOrNull() },
                 )
@@ -307,7 +323,7 @@ private enum class RootTab(
 ) {
     Feed(R.string.tab_feed, Icons.Filled.Subscriptions, Icons.Outlined.Subscriptions),
     Search(R.string.tab_search, Icons.Filled.Search, Icons.Outlined.Search),
-    ToView(R.string.tab_saved, Icons.Filled.WatchLater, Icons.Outlined.WatchLater),
+    Profile(R.string.tab_profile, Icons.Filled.Person, Icons.Outlined.Person),
 }
 
 /**
@@ -315,70 +331,48 @@ private enum class RootTab(
  * (DESIGN 1.1 的推送式入口那一栏)。三格正好落在 M3 导航栏 3–5 个目的地的下限上。
  *
  * 三个 pane 的 ViewModel 提到这一层。它们本来就常驻(`viewModel()` 挂在 Activity 的
- * ViewModelStore 上,切 tab 不会销毁),提上来是为了让顶栏能直接拿到各页的动作 ——
- * 顶栏归 Scaffold 管,动作归页面管,不提上来就得把 composable 塞进 state 往上传,
- * 那样重组作用域会乱。
+ * ViewModelStore 上,切 tab 不会销毁),提上来是为了让底栏切换时状态不丢——不提上来就得
+ * 把 composable 塞进 state 往上传,那样重组作用域会乱。
  *
- * 顶栏统一在这一层给:以前三个页面各自拿 systemBars 往内容上贴 padding,三种写法、
- * 三种留白,滚动时内容还会压到状态栏文字上。
+ * **没有顶栏。** 三个 tab 都不再有共用的 `BilbyTopBar`,理由和状态栏 inset 的处理见下面
+ * `Scaffold` 调用处的注释。
  */
 @Composable
 private fun RootTabs(
     feedVm: FeedViewModel,
     searchVm: SearchChatViewModel,
-    toViewVm: ToViewViewModel,
-    favHubVm: FavHubViewModel,
+    profileVm: ProfileViewModel,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onSettingsClick: () -> Unit,
     onOpenFollowings: () -> Unit,
+    onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
-    onOpenFolder: (mediaId: Long, title: String) -> Unit,
+    onOpenFavFolder: (FavFolder) -> Unit,
+    onLogout: () -> Unit,
 ) {
     var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
 
     val feedState by feedVm.state.collectAsStateWithLifecycle()
     val searchState by searchVm.state.collectAsStateWithLifecycle()
-    val toViewState by toViewVm.state.collectAsStateWithLifecycle()
-    val favHubState by favHubVm.state.collectAsStateWithLifecycle()
+    val profileState by profileVm.state.collectAsStateWithLifecycle()
 
     // IME 退让放在 Scaffold 这一层,让底栏跟着键盘一起上移。放在内层输入框上的话,
     // 底栏仍会在键盘下方占着高度,表现为输入框与键盘之间空一条。
+    //
+    // **三个根 tab 没有顶栏。** 标题以前和底栏标签逐字重复——底栏已经有标签 + 选中指示器,
+    // 顶栏再写一遍是纯占位;M3 对 top app bar 的定义是"显示信息与操作",标题和操作都没有时
+    // 它就是一段死高度(动态页、搜索页的普通模式正是这种情况)。真正的页级操作(设置齿轮、
+    // 搜索助理模式的"新会话")现在各自长在 `ProfileScreen`/`SearchChatScreen` 自己的内容里,
+    // 不再借用顶栏容器。子页面(播放页、个人空间、历史记录……)不受影响,那些标题是真信息
+    // (你在哪个收藏夹里),而且没有底栏兜底"这是哪一页"。
+    //
+    // 状态栏 inset 没有跟着顶栏一起丢:`ScaffoldDefaults.contentWindowInsets` 默认就是
+    // `WindowInsets.systemBarsForVisualComponents`(读 material3 1.5.0-alpha25 的 aar 核实过,
+    // 不是照文档假设),顶栏不存在时这份 inset 不会被谁消费掉,照样流进下面 `insets` 参数,
+    // 下面内容区那行 `.padding(top = insets.calculateTopPadding())` 不用改。
     Scaffold(
         modifier = Modifier.imePadding(),
-        topBar = {
-            BilbyTopBar(title = stringResource(selected.label)) {
-                when (selected) {
-                    // 设置需要一个入口 —— 它需要一个入口,而底部三格是"我要去哪",
-                    // 设置不是目的地,只能挂在某个顶栏上,动态页是启动后的第一屏。
-                    RootTab.Feed -> IconButton(onClick = onSettingsClick) {
-                        Icon(
-                            Icons.Outlined.Settings,
-                            contentDescription = stringResource(R.string.settings_title),
-                        )
-                    }
-
-                    // 开新会话是清空助理上下文的唯一入口(DESIGN 3.1:会话必须由用户显式开启),
-                    // 属于"改变整页状态"的动作,正是 M3 说该放进顶栏的那一类。
-                    // 「新会话」只属于助理:普通搜索没有会话可开,留一个按不出效果的加号
-                    // 只会让人以为自己漏了什么。
-                    RootTab.Search -> if (searchState.mode == SearchMode.Agent) {
-                        IconButton(onClick = searchVm::newSession) {
-                            Icon(
-                                Icons.Filled.Add,
-                                contentDescription = stringResource(R.string.search_new_session),
-                            )
-                        }
-                    } else {
-                        Unit
-                    }
-
-                    // 第三格是入口页,没有页级动作。"清空已看完"跟着稍后再看的列表
-                    // 搬到了它自己那一页 —— 那个动作作用于列表,不作用于这一屏。
-                    RootTab.ToView -> Unit
-                }
-            }
-        },
         bottomBar = {
             NavigationBar {
                 RootTab.entries.forEach { tab ->
@@ -426,17 +420,25 @@ private fun RootTabs(
                     onModeChange = searchVm::onModeChange,
                     onOrderChange = searchVm::onOrderChanged,
                     onSend = searchVm::send,
+                    onNewSession = searchVm::newSession,
                     onVideoClick = onVideoClick,
                     onUserClick = onUserClick,
                     onLoadMore = searchVm::loadMore,
                     onRetry = searchVm::retry,
                 )
 
-                RootTab.ToView -> FavHubScreen(
-                    state = favHubState,
-                    toViewCount = toViewState.count,
+                RootTab.Profile -> ProfileScreen(
+                    state = profileState,
+                    onVideoClick = onVideoClick,
+                    onOpenHistory = onOpenHistory,
                     onOpenToView = onOpenToView,
-                    onOpenFolder = { onOpenFolder(it.id, it.title) },
+                    onOpenFavFolder = onOpenFavFolder,
+                    onSettingsClick = onSettingsClick,
+                    onLogout = onLogout,
+                    onRetryAccount = profileVm::retryAccount,
+                    onRetryHistory = profileVm::retryHistory,
+                    onRetryToView = profileVm::retryToView,
+                    onRetryFavFolders = profileVm::retryFavFolders,
                 )
             }
         }
@@ -450,7 +452,6 @@ private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
             initializer {
                 SettingsViewModel(
                     container.settings,
-                    container.spaceRepository,
                     container.llmClient,
                     container.updateRepository,
                 )
@@ -464,18 +465,11 @@ private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
         onLlmChange = vm::saveLlm,
         onSmokeTestLlm = vm::smokeTestLlm,
         onCodecChange = vm::setCodec,
+        onDanmakuChange = vm::setDanmakuEnabled,
         onSponsorBlockChange = vm::updateSponsorBlock,
         onCheckUpdate = vm::checkUpdate,
         onDownloadUpdate = { vm.downloadUpdate(it, UpdateInstaller.downloadDir(context)) },
         onInstallUpdate = { UpdateInstaller.install(context, it) },
-        // 停播放服务要 Context,所以由这一层做,ViewModel 只管清凭据。
-        // 顺序是先清后停:反过来的话中间那一瞬服务已停但凭据还在,看起来像"没登出但停了"。
-        onLogout = {
-            vm.logout {
-                AudioPlaybackService.stop(context)
-                onBack()
-            }
-        },
         onBack = onBack,
     )
 }
@@ -496,6 +490,31 @@ private fun AgentRoute(
 }
 
 /**
+ * 历史记录。「我的」页的三个入口之一,独立成页且只待在这一页(DESIGN 2 节)——
+ * 不喂给别的界面,没有"继续观看"式的跳转。
+ */
+@Composable
+private fun HistoryRoute(
+    container: AppContainer,
+    onVideoClick: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val vm: HistoryViewModel = viewModel(
+        factory = viewModelFactory { initializer { HistoryViewModel(container.historyRepository) } },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    Scaffold(topBar = { BilbyTopBar(title = stringResource(R.string.history_title), onBack = onBack) }) { insets ->
+        HistoryScreen(
+            state = state,
+            onItemClick = { onVideoClick(it.bvid) },
+            onLoadMore = vm::loadMore,
+            onRetry = vm::retry,
+            contentPadding = insets,
+        )
+    }
+}
+
+/**
  * 关注列表。二级页面,自带返回的顶栏 —— 它不是根 tab,不该借用 RootTabs 那一层的 Scaffold。
  */
 /**
@@ -505,10 +524,13 @@ private fun AgentRoute(
  */
 @Composable
 private fun ToViewListRoute(
-    vm: ToViewViewModel,
+    container: AppContainer,
     onVideoClick: (String) -> Unit,
     onBack: () -> Unit,
 ) {
+    val vm: ToViewViewModel = viewModel(
+        factory = viewModelFactory { initializer { ToViewViewModel(container.toViewRepository) } },
+    )
     val state by vm.state.collectAsStateWithLifecycle()
     Scaffold(
         topBar = {
@@ -707,6 +729,7 @@ private fun VideoPane(
                     container.toViewRepository,
                     container.relationRepository,
                     container.subtitleRepository,
+                    container.danmakuRepository,
                 )
             }
         },
@@ -723,6 +746,8 @@ private fun VideoPane(
     val subtitleTracks by vm.subtitleTracks.collectAsStateWithLifecycle()
     val subtitleLan by vm.subtitleLan.collectAsStateWithLifecycle()
     val subtitleCues by vm.subtitleCues.collectAsStateWithLifecycle()
+    val danmakuEnabled by vm.danmakuEnabled.collectAsStateWithLifecycle()
+    val danmakuPool by vm.danmakuPool.collectAsStateWithLifecycle()
 
     // 评论用 aid 作 oid,要等视频详情回来才知道 —— 但**不能拿它卡住整页**。
     //
@@ -746,6 +771,8 @@ private fun VideoPane(
         // 响应,本地那份换不到任何东西,却是"新页写下上一条进度"这类串味的唯一入口。
         onReportProgress = { position, duration ->
             vm.reportHeartbeat(position, duration, finished = duration > 0 && position >= duration - 1_000)
+            // 弹幕分段拉取挂在这条已有的回调上,不为它另起一条轮询——见 VideoViewModel 的注释。
+            vm.onDanmakuPlaybackPosition(position)
         },
         onFindRelated = vm::findRelated,
         onUpClick = onUpClick,
@@ -773,6 +800,9 @@ private fun VideoPane(
         subtitleLan = subtitleLan,
         subtitleCues = subtitleCues,
         onSelectSubtitle = vm::selectSubtitle,
+        danmakuEnabled = danmakuEnabled,
+        onDanmakuEnabledChange = vm::setDanmakuEnabled,
+        danmakuPool = danmakuPool,
     )
 }
 

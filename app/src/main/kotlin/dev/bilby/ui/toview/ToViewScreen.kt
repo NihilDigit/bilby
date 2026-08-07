@@ -184,8 +184,9 @@ private fun CapacityMeter(count: Int, capacity: Int, modifier: Modifier = Modifi
     }
 }
 
+/** internal(不是 private):个人页的稍后再看预览区也要用同一份映射,见 ui/profile/ProfileScreen.kt。 */
 @Composable
-private fun ToViewItem.toRowUi() = VideoRowUi(
+internal fun ToViewItem.toRowUi() = VideoRowUi(
     title = title,
     coverUrl = coverUrl,
     durationText = durationText,

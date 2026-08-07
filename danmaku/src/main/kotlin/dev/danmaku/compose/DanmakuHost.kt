@@ -13,6 +13,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.TextLayoutResult
@@ -115,7 +116,14 @@ private fun measureDanmaku(danmaku: Danmaku, style: DanmakuRenderStyle, measurer
 
 /**
  * 测一次、画两遍,共享同一份 [TextLayoutResult]:先描边(`drawStyle = Stroke`),再填充
- * (不传 `drawStyle`,默认即 Fill)。`strokeWidthPx <= 0` 时跳过描边那一遍,不多画。
+ * (`drawStyle = Fill`)。`strokeWidthPx <= 0` 时跳过描边那一遍,不多画。
+ *
+ * **第二遍必须显式传 `drawStyle = Fill`,不能省略。** `drawText` 的 `drawStyle` 参数默认值是
+ * `null`,而这里的 `null` 语义是"不覆盖底层 paragraph 已经设过的绘制方式",不是"用 Fill"——
+ * 两遍共享同一份 [TextLayoutResult],第一遍把 `Stroke` 设进了底层 paragraph,第二遍如果不传
+ * 就会沿用那份 `Stroke` 继续描边,结果是"描了两遍",肉眼看就是空心字。这是个反直觉的坑:
+ * 省略参数在这里不等于"取默认外观",凡是共享 [TextLayoutResult] 做多遍绘制的地方都有这个问题,
+ * 每一遍都要把 `drawStyle` 显式写清楚,不能依赖参数默认值。
  *
  * 透明度逐条通过 `alpha` 参数传给 `drawText`,不套 `Modifier.alpha`——理由见
  * [DanmakuRenderStyle.opacity] 的文档。
@@ -130,7 +138,7 @@ private fun DrawScope.drawDanmaku(layout: TextLayoutResult, topLeft: Offset, col
             drawStyle = Stroke(width = style.strokeWidthPx, miter = 3f, join = StrokeJoin.Round),
         )
     }
-    drawText(textLayoutResult = layout, color = color, topLeft = topLeft, alpha = style.opacity)
+    drawText(textLayoutResult = layout, color = color, topLeft = topLeft, alpha = style.opacity, drawStyle = Fill)
 }
 
 private const val ALPHA_OPAQUE_MASK = 0xFF000000.toInt()

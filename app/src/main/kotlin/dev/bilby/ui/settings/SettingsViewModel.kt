@@ -7,12 +7,10 @@ import dev.bilby.data.UpdateRepository
 import java.io.File
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.bilby.api.BiliResult
 import dev.bilby.data.CodecPreference
 import dev.bilby.agent.LlmClient
 import dev.bilby.data.LlmConfig
 import dev.bilby.data.SettingsStore
-import dev.bilby.data.SpaceRepository
 import dev.bilby.data.SponsorBlockPrefs
 import dev.bilby.player.DeviceCodecs
 import dev.bilby.player.PlaybackTechInfo
@@ -25,12 +23,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-
-data class AccountUiState(
-    val uid: String = "",
-    /** 拉到昵称之前显示 UID,拉不到就一直是 UID —— 这一页不该因为一次接口失败而空着。 */
-    val name: String? = null,
-)
 
 /**
  * 手动更新的状态机。**下载进度和结果都不落盘** —— 它描述的是这一次点击,
@@ -47,25 +39,29 @@ sealed interface UpdateState {
 }
 
 data class SettingsUiState(
-    val account: AccountUiState = AccountUiState(),
     val llm: LlmConfig? = null,
     val llmTest: LlmTest = LlmTest.Idle,
     val codec: CodecPreference = CodecPreference.Auto,
     val sponsorBlock: SponsorBlockPrefs = SponsorBlockPrefs(),
     /** 本机真有硬解器的编码,决定编解码那一节列出哪几项。 */
     val hardwareCodecIds: Set<Int> = emptySet(),
+    /** 弹幕总开关。这不是"默认值",是播放器控制条上那个开关的另一个入口,读写同一份
+     * [dev.bilby.data.SettingsStore.danmakuPrefs]。 */
+    val danmakuEnabled: Boolean = false,
     val update: UpdateState = UpdateState.Idle,
 )
 
 /**
  * 设置页的状态。
  *
- * **凭据不进日志**(DESIGN 8):这个类会经手 LLM 的 API key 与登录凭据,
+ * **账号信息与登出已经搬到「我的」页**(`ui/profile/ProfileViewModel`)——这一页只剩
+ * "怎么做"这一类设置(DESIGN 2 节),不再是登出的入口。
+ *
+ * **凭据不进日志**(DESIGN 8):这个类仍会经手 LLM 的 API key,
  * 全文没有一处 `BiliLog`,新增分支时也不要加 —— 想排查就看 UI 上的值。
  */
 class SettingsViewModel(
     private val settings: SettingsStore,
-    private val spaceRepository: SpaceRepository,
     private val llmClient: LlmClient,
     private val updateRepository: UpdateRepository,
 ) : ViewModel() {
@@ -144,21 +140,14 @@ class SettingsViewModel(
 
     init {
         viewModelScope.launch {
-            val credentials = settings.credentials.first()
-            _state.update { it.copy(account = AccountUiState(uid = credentials.dedeUserId)) }
             _state.update {
                 it.copy(
                     llm = settings.llmConfig.first(),
                     codec = settings.playerPrefs.first().codec,
                     sponsorBlock = settings.sponsorBlockPrefs.first(),
                     hardwareCodecIds = DeviceCodecs.hardwareDecodableCodecIds,
+                    danmakuEnabled = settings.danmakuPrefs.first().enabled,
                 )
-            }
-            credentials.dedeUserId.toLongOrNull()?.let { mid ->
-                val profile = spaceRepository.loadProfile(mid)
-                if (profile is BiliResult.Ok) {
-                    _state.update { it.copy(account = it.account.copy(name = profile.value.name)) }
-                }
             }
         }
     }
@@ -188,15 +177,13 @@ class SettingsViewModel(
     }
 
     /**
-     * 登出。清凭据是一半,另一半是停播放服务 —— 流地址是已经取到的签名直链,
-     * 不停服务的话通知栏那条还能点、点了还能接着放,一个已登出的账号还在放视频没法解释。
-     * 服务由调用方停(它需要 Context),这里只负责凭据。
+     * 弹幕总开关的另一个入口,和播放页控制条上那个写的是同一份
+     * [dev.bilby.data.SettingsStore.danmakuPrefs] —— 不是"设个默认值",两处显示的必须是
+     * 同一个值,所以这里也走 [persist],不额外维护一份"本次会话"状态。
      */
-    fun logout(onDone: () -> Unit) {
-        viewModelScope.launch(NonCancellable) {
-            settings.clearCredentials()
-            onDone()
-        }
+    fun setDanmakuEnabled(enabled: Boolean) {
+        _state.update { it.copy(danmakuEnabled = enabled) }
+        persist { settings.saveDanmakuEnabled(enabled) }
     }
 }
 

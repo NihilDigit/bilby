@@ -26,7 +26,6 @@ class DanmakuHostState(
     private val frameRateCap: DanmakuFrameRateCap = DanmakuFrameRateCap.FPS_60,
 ) {
     private val wake = Channel<Unit>(capacity = Channel.CONFLATED)
-    private val interpolator = PositionInterpolator()
 
     /**
      * [timeline] 编译时用的画布宽度。`DanmakuHost` 拿它跟 Canvas 实际像素宽度比对 ——
@@ -48,8 +47,15 @@ class DanmakuHostState(
     suspend fun run(onFrame: (visible: List<CompiledDanmaku>, positionMillis: Long) -> Unit) {
         val buffer = mutableListOf<CompiledDanmaku>()
         var lastFrameNanos = 0L
-        // 粗粒度、未插值的位置,只用来判断"现在是不是空的",决定要不要挂起 —— 插值需要一个
-        // withFrameNanos 给出的单调时间戳做锚点,循环外还没有这个时间戳。
+        // 直接读 clock.positionMillis,不在这一层再插值。历史上这里有一个按锚点 + 经过时间 ×
+        // 倍速做外推的 PositionInterpolator,理由是"positionMillis 通常是粗粒度轮询来源"——
+        // 那个前提对 Bilby 的播放器不成立:`clock` 包的是 Media3 的 MediaController,它的
+        // `getCurrentPosition()` 本身就是每次调用现算,内部同样按"锚点位置 + 经过时间 × 倍速"
+        // 做外推(`MediaUtils.getUpdatedCurrentPositionMs`,可查 media3-session 源码),
+        // 也就是说这里再插值一层等于叠了第二个各推各的估计器——两层锚点在权威更新落地的
+        // 时刻不同步,倍速刚变化那一小段会互相打架,表现为"抖一下"。既然下层已经连续,
+        // 上层插值不会让位置更平滑,只会多引入一处分歧,删掉即可:`positionMillis` 本身
+        // 就是这里唯一需要的连续读数。
         var coarsePosition = clock.positionMillis
 
         while (true) {
@@ -72,7 +78,7 @@ class DanmakuHostState(
                 if (capNanos > 0 && frameNanos - lastFrameNanos < capNanos) return@withFrameNanos
                 lastFrameNanos = frameNanos
 
-                coarsePosition = interpolator.sample(clock, frameNanos)
+                coarsePosition = clock.positionMillis
                 buffer.clear()
                 timeline.visibleAt(coarsePosition) { buffer.add(it) }
                 onFrame(buffer, coarsePosition)
@@ -101,26 +107,5 @@ class DanmakuHostState(
     private companion object {
         const val IDLE_POLL_FALLBACK_MILLIS = 500L
         const val MIN_PLAYBACK_SPEED = 0.01f
-    }
-}
-
-/**
- * 把 [DanmakuClock] 的粗粒度位置插值到帧级。每次权威采样(`positionMillis` 变化)落地时
- * 重新锚定,避免插值误差随时间累积;锚点之间按 `playbackSpeed` 线性外推,暂停时冻结在锚点。
- */
-private class PositionInterpolator {
-    private var anchorRawMillis = Long.MIN_VALUE
-    private var anchorNanos = 0L
-
-    fun sample(clock: DanmakuClock, nowNanos: Long): Long {
-        val raw = clock.positionMillis
-        if (raw != anchorRawMillis) {
-            anchorRawMillis = raw
-            anchorNanos = nowNanos
-            return raw
-        }
-        if (!clock.isPlaying) return anchorRawMillis
-        val elapsedMillis = (nowNanos - anchorNanos) / 1_000_000L
-        return anchorRawMillis + (elapsedMillis * clock.playbackSpeed).toLong()
     }
 }

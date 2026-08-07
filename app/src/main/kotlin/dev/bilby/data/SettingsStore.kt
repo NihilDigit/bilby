@@ -138,6 +138,15 @@ class SettingsStore(context: Context) {
         store.edit { p -> p[KEY_SUBTITLE_LAN] = lan }
     }
 
+    /** 弹幕开关。**默认关**——和字幕一样,是产品要求,不是"还没设置过"才关。 */
+    val danmakuPrefs: Flow<DanmakuPrefs> = store.data.map { p ->
+        DanmakuPrefs(enabled = p[KEY_DANMAKU_ENABLED] ?: false)
+    }
+
+    suspend fun saveDanmakuEnabled(enabled: Boolean) {
+        store.edit { p -> p[KEY_DANMAKU_ENABLED] = enabled }
+    }
+
     companion object {
         private val KEY_SESSDATA = stringPreferencesKey("sessdata")
         private val KEY_BILI_JCT = stringPreferencesKey("bili_jct")
@@ -183,6 +192,7 @@ class SettingsStore(context: Context) {
         private val KEY_SB_SERVER = stringPreferencesKey("sponsorblock_server")
 
         private val KEY_SUBTITLE_LAN = stringPreferencesKey("subtitle_lan")
+        private val KEY_DANMAKU_ENABLED = booleanPreferencesKey("danmaku_enabled")
 
         const val DEFAULT_SB_SERVER = "https://www.bsbsb.top"
 
@@ -246,6 +256,8 @@ data class SponsorBlockPrefs(
 
 /** 空字符串是关(默认值)。非空时是某条字幕轨的语言代码,如 `ai-zh`。 */
 data class SubtitlePrefs(val lan: String = "")
+
+data class DanmakuPrefs(val enabled: Boolean = false)
 
 data class LlmConfig(
     val baseUrl: String,

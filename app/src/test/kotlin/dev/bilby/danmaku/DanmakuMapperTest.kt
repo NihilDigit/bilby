@@ -43,11 +43,12 @@ class DanmakuMapperTest {
     }
 
     @Test
-    fun `fontSize 为 0 时映射成 null,不是 0`() {
-        // 0 不是一个合法字号,而是"没有这个字段"的默认值;保留 0 会让渲染层把它当成
-        // "调用方显式要求 0 号字号"而不是"跟随全局配置"。
+    fun `fontSize 恒为 null,不透传 B 站原始档位`() {
+        // B 站 protobuf 里的 fontSize 是网页播放器自己的档位(18/25/36 = 小/标准/大),单位是
+        // 以 25 为基准的 CSS px,不是 sp——当成 sp 直接喂渲染层会画出巨大的字(见 DanmakuMapper
+        // 的注释)。字号基准该由渲染层按画面尺寸定,mapper 这一层不该替它做主。
         assertNull(raw(mode = 1, fontSize = 0).toDanmakuOrNull()?.fontSize)
-        assertEquals(18, raw(mode = 1, fontSize = 18).toDanmakuOrNull()?.fontSize)
+        assertNull(raw(mode = 1, fontSize = 25).toDanmakuOrNull()?.fontSize)
     }
 
     private fun raw(

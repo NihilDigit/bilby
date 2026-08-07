@@ -97,8 +97,15 @@ class SpaceRepository(private val client: BiliClient) {
         }
     }
 
-    /** 参数集与 header 照抄 PiliPlus member.dart:286-312(含空的 token 位)。 */
-    private suspend fun loadUserInfo(mid: Long): BiliResult<SpaceUserInfoDto> =
+    /**
+     * 参数集与 header 照抄 PiliPlus member.dart:286-312(含空的 token 位)。
+     *
+     * 不再是 private:`AccountRepository` 也要用它取个性签名 —— `x/web-interface/nav`
+     * 不带 `sign`(PiliPlus 自己的"我的"页 `pages/mine/controller.dart` 同样只用 nav 取
+     * 头像/昵称/等级,`UserInfoData` 模型整个没有 sign 字段,它自己的"我的"页也确实不显示
+     * 签名),要拿签名就得走这条接口,和空间页读同一个人信息是同一件事,没必要另起一份请求。
+     */
+    suspend fun loadUserInfo(mid: Long): BiliResult<SpaceUserInfoDto> =
         client.getData(
             "${BiliConstants.WEB_HOST}/x/space/wbi/acc/info",
             mapOf(

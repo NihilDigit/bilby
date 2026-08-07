@@ -59,7 +59,8 @@ import dev.bilby.ui.video.CATEGORY_LABELS
  * DESIGN 1.3 的结构约束就退化成了自制力工具。看视频时要调的(画质、倍速、连播、
  * 顺序/随机)留在播放页,在那里改即是改全局默认。
  *
- * 入口是动态页顶栏的图标,不进底部导航:底部三格是"我要去哪",设置不是目的地。
+ * 入口是「我的」页顶栏的图标,不进底部导航:底部三格是"我要去哪",设置不是目的地。
+ * 账号信息与登出不在这里 —— 它们归「我的」页头部(`ui/profile/ProfileScreen`)。
  */
 @Composable
 fun SettingsScreen(
@@ -67,8 +68,8 @@ fun SettingsScreen(
     onLlmChange: (LlmConfig) -> Unit,
     onSmokeTestLlm: () -> Unit,
     onCodecChange: (CodecPreference) -> Unit,
+    onDanmakuChange: (Boolean) -> Unit,
     onSponsorBlockChange: (SponsorBlockPrefs) -> Unit,
-    onLogout: () -> Unit,
     onCheckUpdate: () -> Unit,
     onDownloadUpdate: (UpdateInfo) -> Unit,
     onInstallUpdate: (File) -> Unit,
@@ -77,7 +78,6 @@ fun SettingsScreen(
 ) {
     var editingLlm by rememberSaveable { mutableStateOf(false) }
     var editingServer by rememberSaveable { mutableStateOf(false) }
-    var confirmingLogout by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -87,20 +87,6 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxSize().padding(insets),
             contentPadding = PaddingValues(bottom = Spacing.Spacious),
         ) {
-            item("account") {
-                SectionTitle(stringResource(R.string.settings_section_account))
-                val uid = stringResource(R.string.settings_uid, state.account.uid)
-                SettingRow(
-                    title = state.account.name ?: uid,
-                    subtitle = if (state.account.name != null) uid else null,
-                )
-                SettingRow(
-                    title = stringResource(R.string.settings_logout),
-                    subtitle = stringResource(R.string.settings_logout_subtitle),
-                    onClick = { confirmingLogout = true },
-                )
-            }
-
             item("llm") {
                 SectionTitle(stringResource(R.string.settings_section_agent))
                 val llm = state.llm
@@ -144,6 +130,14 @@ fun SettingsScreen(
                     selected = state.codec,
                     hardwareCodecIds = state.hardwareCodecIds,
                     onChange = onCodecChange,
+                )
+                // 和播放器控制条上那个开关是同一份值(见 SettingsViewModel.setDanmakuEnabled
+                // 的注释),文案不写"默认开启"——那会暗示存在"默认值 vs 本次设置"两级,
+                // 而实际只有一个值,这里改了那边立刻跟着变。
+                ToggleSettingRow(
+                    title = stringResource(R.string.settings_danmaku_toggle),
+                    checked = state.danmakuEnabled,
+                    onCheckedChange = onDanmakuChange,
                 )
             }
 
@@ -226,25 +220,6 @@ fun SettingsScreen(
                         serverUrl = value.trim().ifBlank { SettingsStore.DEFAULT_SB_SERVER },
                     ),
                 )
-            },
-        )
-    }
-
-    if (confirmingLogout) {
-        AlertDialog(
-            onDismissRequest = { confirmingLogout = false },
-            title = { Text(stringResource(R.string.settings_logout)) },
-            text = { Text(stringResource(R.string.settings_logout_message)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmingLogout = false
-                    onLogout()
-                }) { Text(stringResource(R.string.settings_logout)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmingLogout = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
             },
         )
     }

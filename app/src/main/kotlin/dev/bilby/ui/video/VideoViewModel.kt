@@ -7,6 +7,7 @@ import dev.bilby.agent.AgentEvent
 import dev.bilby.agent.AgentIntent
 import dev.bilby.agent.AgentLoop
 import dev.bilby.api.BiliResult
+import dev.bilby.danmaku.DanmakuRepository
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockRepository
 import dev.bilby.data.FollowState
@@ -16,6 +17,7 @@ import dev.bilby.data.ToViewRepository
 import dev.bilby.data.SponsorSegment
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
+import dev.danmaku.compose.Danmaku
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -59,6 +61,7 @@ class VideoViewModel(
     private val toViewRepository: ToViewRepository,
     private val relationRepository: RelationRepository,
     private val subtitleRepository: SubtitleRepository,
+    private val danmakuRepository: DanmakuRepository,
 ) : ViewModel() {
 
     /** UP 的关注态。视频详情里只有 mid 和名字,关系要另查(PiliPlus 播放页同样单独查)。 */
@@ -168,14 +171,105 @@ class VideoViewModel(
     private val _subtitleCues = MutableStateFlow<List<SubtitleCue>>(emptyList())
     val subtitleCues: StateFlow<List<SubtitleCue>> = _subtitleCues.asStateFlow()
 
+    /** 弹幕总开关。**默认关**,持久化到 [SettingsStore],看视频与听视频页共用不到——听视频没有画面。 */
+    private val _danmakuEnabled = MutableStateFlow(false)
+    val danmakuEnabled: StateFlow<Boolean> = _danmakuEnabled.asStateFlow()
+
+    /**
+     * 已拉到的弹幕池,累计追加、不去重合并(那是以后的事)。时间轴的编译不在这里——
+     * 它需要 `measureWidth` 和画布像素宽度,两者都只在 Compose 层才有(见 BilbyPlayer.kt)。
+     */
+    private val _danmakuPool = MutableStateFlow<List<Danmaku>>(emptyList())
+    val danmakuPool: StateFlow<List<Danmaku>> = _danmakuPool.asStateFlow()
+
+    /** 当前弹幕池所属的 cid,换 cid 时用来判断在飞的请求是否已经过期。 */
+    private var danmakuCid = 0L
+
+    /** 这一条 cid 已经请求过的分段号(1-based),防止播放进度在同一段内反复轮询时重复拉取。 */
+    private val requestedDanmakuSegments = mutableSetOf<Int>()
+
     init {
         load()
         observeCurrentPart()
+        observeDanmakuCid()
         // 先读一次持久化的偏好,再开始跟播放器的 cid 走——顺序反过来的话,轨道清单可能在
         // 偏好读回来之前就到,那一次找轨会拿着空字符串去比,永远命中"关"。
         viewModelScope.launch {
             _subtitleLan.value = settings.subtitlePrefs.first().lan
             observeSubtitleTracks()
+        }
+        viewModelScope.launch { _danmakuEnabled.value = settings.danmakuPrefs.first().enabled }
+    }
+
+    /**
+     * 弹幕开关。持久化用 NonCancellable,理由与 [selectSubtitle] 相同。
+     *
+     * 打开时补一次段 1 预取:换 cid 那一刻开关还是关的,[observeDanmakuCid] 跳过了预取,
+     * 不补的话要等下一次进度回调(播放中最长 5 秒)才有机会拉到东西——播放中途打开开关会
+     * 有一段空窗。**只在开着的时候才拉**是风控要求:弹幕默认关,不该让每一个不用这个功能
+     * 的用户在每次打开视频时都多背一次请求。
+     */
+    fun setDanmakuEnabled(enabled: Boolean) {
+        _danmakuEnabled.value = enabled
+        viewModelScope.launch(NonCancellable) { settings.saveDanmakuEnabled(enabled) }
+        if (enabled) fetchInitialDanmakuSegment(danmakuCid)
+    }
+
+    /**
+     * 弹幕池随 cid 变,原因和字幕轨、SponsorBlock 片段一样:播放器全 app 共用,队列走到
+     * 别的视频上时不该把那一条的弹幕留在这一页。换 cid 清空已请求分段集合与弹幕池——
+     * 那是另一条视频的弹幕,不是"还没拉完"。
+     *
+     * 预取段 1 只在开关已经打开时才做,理由见 [setDanmakuEnabled]。
+     */
+    private fun observeDanmakuCid() = viewModelScope.launch {
+        AudioPlaybackService.state
+            .map { if (it.current?.bvid == bvid) it.currentCid else 0L }
+            .distinctUntilChanged()
+            .collect { cid ->
+                danmakuCid = cid
+                requestedDanmakuSegments.clear()
+                _danmakuPool.value = emptyList()
+                // 进度也要跟着归零:留着上一条的位置,中途开弹幕会照那个位置去拉段号。
+                lastDanmakuPositionMillis = 0L
+                if (_danmakuEnabled.value) fetchInitialDanmakuSegment(cid)
+            }
+    }
+
+    /**
+     * 拉当前进度所在的那一段,不必等下一次进度回调。
+     *
+     * **不能写死段 1**:换 cid 时进度确实是 0,但用户在第 20 分钟按下开关时,该拉的是第 4 段
+     * 而不是第 1 段 —— 拉错段的表现是"开了弹幕但一条都不来",而它和"这个视频没人发弹幕"
+     * 在画面上完全一样,查不出来。
+     */
+    private fun fetchInitialDanmakuSegment(cid: Long) {
+        if (cid == 0L) return
+        fetchDanmakuSegment(cid, danmakuRepository.segmentIndexFor(lastDanmakuPositionMillis) + 1)
+    }
+
+    /**
+     * 播放进度驱动弹幕分段拉取。**不为此另起轮询**——播放页已经有一份(BilbyPlayer 每 5 秒
+     * 回传一次进度用于心跳),这里挂在同一个回调上,详见 VideoScreen/MainActivity 的接线。
+     */
+    fun onDanmakuPlaybackPosition(positionMillis: Long) {
+        // 位置无条件记下来:开关中途被打开时要靠它知道该从哪一段拉起。
+        lastDanmakuPositionMillis = positionMillis
+        if (!_danmakuEnabled.value || danmakuCid == 0L) return
+        fetchDanmakuSegment(danmakuCid, danmakuRepository.segmentIndexFor(positionMillis) + 1)
+    }
+
+    /** 最近一次进度回传。开关关着时也记,见 [onDanmakuPlaybackPosition]。 */
+    private var lastDanmakuPositionMillis = 0L
+
+    private fun fetchDanmakuSegment(cid: Long, segmentIndex: Int) {
+        if (!requestedDanmakuSegments.add(segmentIndex)) return
+        viewModelScope.launch {
+            val segment = danmakuRepository.getSegment(cid, segmentIndex)
+            // 拉取期间可能已经切到别的 cid(切分 P、队列走到下一条)——那份结果不属于
+            // 当前弹幕池,丢弃,不追加。
+            if (danmakuCid != cid || segment.isEmpty()) return@launch
+            _danmakuPool.update { it + segment }
         }
     }
 

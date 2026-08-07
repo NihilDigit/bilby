@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.automirrored.filled.Comment
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -65,19 +66,25 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
@@ -92,6 +99,14 @@ import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SeekBarSegment
 import dev.bilby.ui.components.SubtitleTrackMenu
 import dev.bilby.ui.theme.FixedColors
+import dev.bilby.ui.theme.Spacing
+import dev.danmaku.compose.Danmaku
+import dev.danmaku.compose.DanmakuClock
+import dev.danmaku.compose.DanmakuHost
+import dev.danmaku.compose.DanmakuHostState
+import dev.danmaku.compose.DanmakuRenderStyle
+import dev.danmaku.compose.DanmakuTimeline
+import dev.danmaku.compose.DanmakuTimelineConfig
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -148,6 +163,13 @@ fun BilbyPlayer(
     onSubtitleTrackChange: (String) -> Unit = {},
     /** 选中轨的正文,按 fromMillis 升序。 */
     subtitleCues: List<SubtitleCue> = emptyList(),
+    /** 弹幕总开关,默认关。关闭时 [DanmakuHost] 整个不进组合——帧循环也就不存在,不是只是不画。 */
+    danmakuEnabled: Boolean = false,
+    onDanmakuEnabledChange: (Boolean) -> Unit = {},
+    /** 已拉到的弹幕池,累计追加。时间轴在这里(Compose 层)编译——见类注释里对时间轴管理的说明。 */
+    danmakuPool: List<Danmaku> = emptyList(),
+    /** 弹幕池所属的 cid,换一条(切分 P、队列走到下一条)要整池重编,不是接着追加。 */
+    danmakuCid: Long = 0L,
     modifier: Modifier = Modifier,
     /** 只在全屏时显示。竖屏下标题就在播放器正下方,再印一遍是多余的。 */
     title: String = "",
@@ -159,14 +181,134 @@ fun BilbyPlayer(
     var videoAspect by remember { mutableFloatStateOf(16f / 9f) }
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
 
+    // ---- 弹幕:时钟、编译输入、时间轴会话 ----
+    //
+    // 时钟包的是 player(MediaController),不是 surfacePlayer——弹幕只要播放位置/状态,
+    // 不碰画面,跟 BilbyPlayer 别处"控制一律走 controller"的约定一致。
+    val danmakuClock = remember(player, surfacePlayer) { PlayerDanmakuClock(controller = player, surfacePlayer = surfacePlayer) }
+    val danmakuMeasurer = rememberTextMeasurer()
+    val danmakuDensity = LocalDensity.current
+
+    // 编译时用的画布宽高。初始 0f 不用先猜一个近似值——首帧布局出来后,宽靠 DanmakuHost 的
+    // onScreenWidthMismatch 纠正,高靠下面挂在同一块 Modifier 上的 onSizeChanged 纠正
+    // (DanmakuHost 本身不对外暴露高度,只在内部拿它换算描边/命中判定)。
+    var danmakuScreenWidthPx by remember { mutableFloatStateOf(0f) }
+    var danmakuCanvasHeightPx by remember { mutableFloatStateOf(0f) }
+
+    // 字号是绝对量,不是画布的函数——它关乎眼睛和屏幕的距离,不关乎播放器窗口开了多大。
+    // 内嵌和全屏各给一个基准(对齐 PiliPlus `danmaku_options.dart` 的默认档:15sp 基准,
+    // 全屏 ×1.2 = 18sp——移动端 `danmakuFontScale` 默认 1.0、`danmakuFontScaleFS` 默认 1.2),
+    // 全屏画面更大但观看距离没变,字可以略大,不是必须大。**反过来"轨道数定死、拿画布高度
+    // 反推字号"是错的**:内嵌播放器只有几百像素高,除以一个固定轨道数会算出偏大的字号——
+    // 这正是上一轮内嵌详情页字明显偏大的原因。
+    val danmakuFontSizeSp = if (isFullscreen) DANMAKU_FONT_SIZE_SP_FULLSCREEN else DANMAKU_FONT_SIZE_SP_EMBEDDED
+    val danmakuStyle = remember(danmakuFontSizeSp, danmakuDensity) {
+        val fontSizePx = danmakuFontSizeSp * danmakuDensity.density * danmakuDensity.fontScale
+        DanmakuRenderStyle(
+            globalFontSizeSp = danmakuFontSizeSp,
+            // 描边宽度跟着字号走(6%),[Stroke] 沿字形轮廓居中描,太粗会把细笔画糊住。
+            strokeWidthPx = fontSizePx * DANMAKU_STROKE_TO_FONT_RATIO,
+            // 行高 = 字号 × 1.6(对齐 PiliPlus `danmakuLineHeight` 默认值),留出上下行距。
+            trackHeightPx = fontSizePx * DANMAKU_LINE_HEIGHT_RATIO,
+        )
+    }
+
+    // 轨道数才是画布相关的量,方向和字号相反:用可用高度(画布高度 × 显示区域比例——弹幕
+    // 最多占用画面上半部分,不铺满整个画面,对齐 PiliPlus `danmakuShowArea` 默认值 0.5)
+    // 除以行高反推,画布越高塞得下的行数越多。画布还没布局出来时先给 1 条占位,不除零——
+    // 和屏宽的 0f 兜底是同一个套路,首帧过后立刻被真实值取代。
+    val danmakuScrollTrackCount = remember(danmakuCanvasHeightPx, danmakuStyle) {
+        danmakuTrackCount(danmakuCanvasHeightPx, danmakuStyle.trackHeightPx)
+    }
+    // 顶/底固定弹幕不需要占用跟滚动弹幕一样多的行——按同一个可用高度算出来的滚动轨道数
+    // 打个折,不再单独给内嵌/全屏各写一个常数(那正是这次要去掉的写死模式)。
+    val danmakuFixedTrackCount = remember(danmakuScrollTrackCount) {
+        (danmakuScrollTrackCount * DANMAKU_FIXED_TRACK_RATIO).roundToInt().coerceAtLeast(1)
+    }
+
+    // 编译时间轴与渲染 Canvas 必须用同一套字体/字号测量(DanmakuHost 类文档)。DanmakuHost
+    // 内部渲染时是拿 style.baseTextStyle 叠一份 fontSize = globalFontSizeSp 再测量
+    // (measureDanmaku 的写法),这里的 measureWidth 要复刻同一份叠加,不能只拿裸的
+    // baseTextStyle 去测——那样量出来的宽度会是 TextStyle.Default 的隐式字号,跟实际画出来
+    // 的宽度对不上,排布(尤其是速度)会跟着算错。
+    val danmakuMeasureWidth = remember(danmakuMeasurer, danmakuStyle, danmakuFontSizeSp) {
+        val measureStyle = danmakuStyle.baseTextStyle.copy(fontSize = danmakuFontSizeSp.sp)
+        // 单独声明成带类型的 val 再返回,不要让 lambda 紧跟在上一行的函数调用后面——那样
+        // Kotlin 会把它解析成上一行 copy(...) 的尾随 lambda 参数,而不是这个 remember 块的
+        // 返回值(TextStyle.copy 恰好也有一个函数类型末位参数,编译器不会报"语法错误",
+        // 只会报一个不明所以的类型不匹配,这个坑不写清楚很难一眼看出来)。
+        val measure: (String) -> Float = { text -> danmakuMeasurer.measure(text = text, style = measureStyle).size.width.toFloat() }
+        measure
+    }
+    var danmakuSession by remember { mutableStateOf<DanmakuSession?>(null) }
+
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
+                danmakuSession?.hostState?.notifyChanged()
+            }
+
+            // 覆盖 seek(拖拽松手、双击 ±10 秒、播完重播)——帧循环空闲挂起时只认这两个
+            // 信号源之一,不追加会导致 seek 之后弹幕要等兜底轮询(最坏 500ms)才跟上。
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int,
+            ) {
+                danmakuSession?.hostState?.notifyChanged()
+            }
+
+            override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
+                danmakuSession?.hostState?.notifyChanged()
             }
         }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
+    }
+
+    // 结构性重建:cid、屏宽、轨道数、字号/描边(danmakuStyle)任一变化都要求整池重编——
+    // measureWidth 的度量基准或轨道容量变了,旧时间轴里的宽度/速度/排布全部作废
+    // (DanmakuHost 的契约、CLAUDE.md「换 cid 清空弹幕池」)。danmakuStyle 单独列进 key 是
+    // 为了兜住一种巧合:轨道数是对画布高度取整算出来的,style 变了但恰好没有跨过取整边界时
+    // 轨道数不变,如果只认轨道数,这次重建就会被跳过,而 measureWidth 其实已经换了字号——
+    // 旧 session 会一直沿用旧字号测出来的宽度。用 LaunchedEffect 而不是 remember(key) 是
+    // 因为下面追加逻辑发现乱序时也要走同一条重建路径,remember(key) 只能被 key 变化触发,
+    // 做不到那条触发。
+    LaunchedEffect(danmakuCid, danmakuScreenWidthPx, danmakuScrollTrackCount, danmakuFixedTrackCount, danmakuStyle) {
+        danmakuSession = buildDanmakuSession(
+            pool = danmakuPool,
+            screenWidthPx = danmakuScreenWidthPx,
+            scrollTrackCount = danmakuScrollTrackCount,
+            fixedTrackCount = danmakuFixedTrackCount,
+            clock = danmakuClock,
+            measureWidth = danmakuMeasureWidth,
+        )
+    }
+
+    // 池增长后追加新条目,不整池重编——DanmakuTimeline.append 就是为这个留的。分段按到达
+    // 顺序通常是递增的,但用户倒着 seek 到一段还没拉过的更早时间时,新分段可能比已经排布
+    // 的条目更早到达,那种情况下 append"只影响尾部"的前提不成立,这里退回整池重编,
+    // 不强行拿乱序数据去追加。
+    LaunchedEffect(danmakuSession, danmakuPool) {
+        val session = danmakuSession ?: return@LaunchedEffect
+        if (danmakuPool.size <= session.appliedCount) return@LaunchedEffect
+        val delta = danmakuPool.subList(session.appliedCount, danmakuPool.size)
+        if (delta.any { it.playTimeMillis < session.maxTimeMillis }) {
+            danmakuSession = buildDanmakuSession(
+                pool = danmakuPool,
+                screenWidthPx = danmakuScreenWidthPx,
+                scrollTrackCount = danmakuScrollTrackCount,
+                fixedTrackCount = danmakuFixedTrackCount,
+                clock = danmakuClock,
+                measureWidth = danmakuMeasureWidth,
+            )
+        } else {
+            delta.sortedBy { it.playTimeMillis }.forEach(session.timeline::append)
+            session.appliedCount = danmakuPool.size
+            session.maxTimeMillis = maxOf(session.maxTimeMillis, delta.maxOf { it.playTimeMillis })
+            session.hostState.notifyChanged()
+        }
     }
 
     // 播放时屏幕常亮,暂停时不常亮——条件看的是播放状态,不是"页面在前台"。
@@ -432,6 +574,36 @@ fun BilbyPlayer(
                 },
         )
 
+        // 弹幕层:压在画面与手势层之上、控制条(下面的 AnimatedVisibility 那几块)之下——
+        // 声明顺序即 z 序。**关闭时整个不进组合**,不是画了个空——DanmakuHostState 的帧循环
+        // 由 LaunchedEffect(state) 驱动,不进组合就没有这个协程,不会白烧一条 vsync 循环。
+        // 没有 pointerInput,不拦截手势,下面的双击/拖拽照常命中。
+        if (danmakuEnabled) {
+            danmakuSession?.let { session ->
+                DanmakuHost(
+                    state = session.hostState,
+                    style = danmakuStyle,
+                    onScreenWidthMismatch = { actualWidthPx -> danmakuScreenWidthPx = actualWidthPx },
+                    // 只留竖向边距,不留横向:上边缘贴视频自带角标/台标,下边缘和字幕(贴底画,
+                    // 见下面 currentCue 那块)、控制条抢位置,留白让轨道从两边缩进来。下边比
+                    // 上边多留——字幕在那儿。横向不能留:横向 padding 会让画布宽度小于编译时
+                    // 用的 screenWidthPx,直接触发 onScreenWidthMismatch 反复重编;滚动弹幕就该
+                    // 从整个宽度的边缘进出,不该在留白处提前截断。
+                    //
+                    // clipToBounds:没有裁剪的话,靠近顶/底轨道的弹幕会画出这块 padding 之外
+                    // (内嵌形态下就是画到下面的简介/评论区上),表现为"边上有奇怪的东西"。
+                    //
+                    // onSizeChanged 放在 padding 之后:量的是留白之后、Canvas 实际拿到的高度,
+                    // 和 DanmakuHost 内部真正用来画的尺寸对齐,不是整个播放器容器的高度。
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = Spacing.Cozy, bottom = Spacing.Loose)
+                        .clipToBounds()
+                        .onSizeChanged { size -> danmakuCanvasHeightPx = size.height.toFloat() },
+                )
+            }
+        }
+
         // 纵划的浮层。和快进提示一样贴在正中偏上,不压住底部控件。
         (gesture as? PlayerGesture.Adjust)?.let { adjust ->
             Overlay(modifier = Modifier.align(Alignment.Center)) {
@@ -651,6 +823,11 @@ fun BilbyPlayer(
                 },
                 onListen = onListen,
                 onMenuOpenChange = { menuOpen = it },
+                danmakuEnabled = danmakuEnabled,
+                onDanmakuEnabledChange = {
+                    onDanmakuEnabledChange(it)
+                    interactionNonce++
+                },
             )
         }
     }
@@ -678,6 +855,8 @@ private fun PlayerControlBar(
     onFullscreenToggle: () -> Unit,
     onListen: () -> Unit,
     onMenuOpenChange: (Boolean) -> Unit,
+    danmakuEnabled: Boolean,
+    onDanmakuEnabledChange: (Boolean) -> Unit,
 ) {
     val safeInsets = WindowInsets.displayCutout.union(WindowInsets.systemBars)
     val container = Modifier
@@ -714,6 +893,7 @@ private fun PlayerControlBar(
             SpeedButton(speed, onSpeedChange, onMenuOpenChange, isFullscreen)
             QualityButton(qualities, currentQuality, onQualityChange, onMenuOpenChange, isFullscreen)
             SubtitleButton(subtitleTracks, currentSubtitleLan, onSubtitleTrackChange, onMenuOpenChange, isFullscreen)
+            DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
             // 听视频和全屏是同一类东西:都是播放页内的状态,都不换播放器、不交接进度。
             // 同构的两个动作放在一起,以前它在下面的简介区,和一堆内容动作混着。
             IconButton(onClick = onListen) {
@@ -884,6 +1064,32 @@ private fun SubtitleButton(
     }
 }
 
+/**
+ * 弹幕开关。和 [SpeedButton]/[QualityButton]/[SubtitleButton] 同一套形状,但不弹菜单——
+ * 只有开/关两态,点一下直接切换。借用 [ControlButton] 的 `expanded` 参数表达"开着"这个
+ * 高亮态,不是真的有下拉菜单要展开。
+ */
+@Composable
+private fun DanmakuButton(
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    isFullscreen: Boolean,
+) {
+    ControlButton(
+        expanded = enabled,
+        onClick = { onEnabledChange(!enabled) },
+        label = null,
+        icon = { tint ->
+            Icon(
+                Icons.AutoMirrored.Filled.Comment,
+                stringResource(R.string.player_danmaku),
+                tint = tint,
+                modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp),
+            )
+        },
+    )
+}
+
 /** 图标按钮,可选地在图标右边挂一小段文字(当前倍速、当前清晰度)。 */
 @Composable
 private fun ControlButton(
@@ -991,3 +1197,132 @@ private fun nudgeSeek(player: Player, deltaMillis: Long) {
     val target = player.currentPosition + deltaMillis
     player.seekTo(if (duration > 0) target.coerceIn(0L, duration) else target.coerceAtLeast(0L))
 }
+
+// ---- 弹幕:时钟适配、时间轴会话 ----
+
+/**
+ * 把 Media3 的 [Player] 包成 [DanmakuClock]。**倍速跟着播放时钟**:2 倍速时 [playbackSpeed]
+ * 报 2,弹幕也跟着 2 倍速滚,排布本身与倍速无关,暂停/seek/变速的同步因此全部免费
+ * (DanmakuClock 类文档)。三个属性都是轮询读取,不需要是 Compose State。
+ *
+ * **三个属性优先读 [surfacePlayer],为空时才退回 [controller]。** [surfacePlayer] 是
+ * `AudioPlaybackService.currentPlayer`——同进程持有的那个 ExoPlayer 本体,`VideoScreen.kt`
+ * 现在只拿它挂画面(`PlayerSurface`)。这里额外把它接给弹幕的位置读数用,理由是绕开
+ * [controller](MediaController)一个真实的实现缺陷:MediaController 是 session 的跨进程
+ * 代理,`getCurrentPosition()` 自己在本地做"锚点位置 + 经过时间 × 倍速"外推
+ * (media3-session:1.10.1,`MediaUtils.getUpdatedCurrentPositionMs`),而 `setPlaybackSpeed()`
+ * 本地立刻 masking 新倍速、却不同步刷新那个锚点——锚点要等 session 跨进程回包才更新,
+ * 倍速刚变的这段窗口里外推值会用新倍速乘上"旧锚点到现在的整段时间"而跳过头,回包落地后
+ * 又被纠正回去,表现为弹幕集体抖一下(根因详见 `DanmakuHostState.kt` 删掉的
+ * `PositionInterpolator` 那段历史注释)。`surfacePlayer` 直接读渲染器的真实进度,不存在
+ * masking,也没有 IPC 延迟,天然满足 [DanmakuClock] 文档要求的"逐帧连续"。
+ *
+ * **读位置不是发命令,不违反"控制一律走 controller,不碰 currentPlayer"那条约定**
+ * (`VideoScreen.kt`)——那条约束的是控制命令:绕开 session 直接对 `currentPlayer` 下命令,
+ * 会让通知栏、耳机线控、界面三方对播放状态各说各话。这里只读不写,不改变任何一方的状态,
+ * 不在那条约束覆盖的范围内。
+ *
+ * `surfacePlayer` 为 null(服务还没绑定,或者听视频切回来的短暂窗口)时退回 [controller]——
+ * 行为退化成上面说的那条有缺陷的路径(抖一下),不是崩溃或空白。
+ */
+private class PlayerDanmakuClock(
+    private val controller: Player,
+    private val surfacePlayer: Player?,
+) : DanmakuClock {
+    private val source: Player get() = surfacePlayer ?: controller
+    override val positionMillis: Long get() = source.currentPosition
+    override val isPlaying: Boolean get() = source.isPlaying
+    override val playbackSpeed: Float get() = source.playbackParameters.speed
+}
+
+/** 一次"整池重编"的产出:时间轴 + host 状态,连同弹幕池追加到第几条的游标。 */
+private class DanmakuSession(
+    val timeline: DanmakuTimeline,
+    val hostState: DanmakuHostState,
+    var appliedCount: Int,
+    var maxTimeMillis: Long,
+)
+
+private fun buildDanmakuSession(
+    pool: List<Danmaku>,
+    screenWidthPx: Float,
+    scrollTrackCount: Int,
+    fixedTrackCount: Int,
+    clock: DanmakuClock,
+    measureWidth: (String) -> Float,
+): DanmakuSession {
+    val timeline = DanmakuTimeline.compile(
+        pool,
+        danmakuTimelineConfig(screenWidthPx, scrollTrackCount, fixedTrackCount),
+        measureWidth,
+    )
+    return DanmakuSession(
+        timeline = timeline,
+        hostState = DanmakuHostState(clock, timeline),
+        appliedCount = pool.size,
+        maxTimeMillis = pool.maxOfOrNull { it.playTimeMillis } ?: Long.MIN_VALUE,
+    )
+}
+
+/**
+ * 轨道数由调用方按"画布高度 × 显示区域比例 ÷ 行高"([danmakuTrackCount])算好再传进来——
+ * 这个函数本身不知道画布多高,只负责把算好的数字和屏宽拼成时间轴需要的配置。
+ */
+private fun danmakuTimelineConfig(
+    screenWidthPx: Float,
+    scrollTrackCount: Int,
+    fixedTrackCount: Int,
+): DanmakuTimelineConfig {
+    // baseSpeedPxPerMillis 按"多少秒滚完一屏"反推,不写死一个像素/毫秒常数——那个数只对
+    // 某个假设宽度的屏幕成立,换一台宽度不同的设备,"几秒滚完一屏"这个用户能直接感知的量
+    // 就会跟着跑偏。screenWidthPx 是 0f(还没布局出来)时算出来的速度也是 0,无害——
+    // 时间轴很快会因为 onScreenWidthMismatch 触发的重建而重新算过。
+    val baseSpeed = screenWidthPx / (DANMAKU_CROSS_SCREEN_SECONDS * 1000f)
+    return DanmakuTimelineConfig(
+        screenWidthPx = screenWidthPx,
+        scrollTrackCount = scrollTrackCount,
+        topTrackCount = fixedTrackCount,
+        bottomTrackCount = fixedTrackCount,
+        baseSpeedPxPerMillis = baseSpeed,
+    )
+}
+
+/**
+ * 画布高度 -> 轨道数,方向和字号相反(字号是绝对量,轨道数才该随画布变)。画布还没布局出来
+ * (`canvasHeightPx <= 0f`)或者 `trackHeightPx` 尚不合法时先给 1 条占位,不除零——首帧过后
+ * 立刻被真实值取代,和屏宽/画布高度的 0f 兜底是同一个套路。
+ */
+private fun danmakuTrackCount(canvasHeightPx: Float, trackHeightPx: Float): Int {
+    if (canvasHeightPx <= 0f || trackHeightPx <= 0f) return 1
+    val availableHeightPx = canvasHeightPx * DANMAKU_SHOW_AREA_RATIO
+    return (availableHeightPx / trackHeightPx).toInt().coerceAtLeast(1)
+}
+
+/**
+ * 字号基准(sp),内嵌/全屏各一档。对齐 PiliPlus `danmaku_options.dart` 的默认档:
+ * 15sp 基准 ×(移动端 `danmakuFontScale` 默认 1.0 / `danmakuFontScaleFS` 默认 1.2)。
+ * 字号是绝对量,不随画布高度变——全屏画面更大但观看距离没变,字略大是审美选择,不是必须。
+ */
+private const val DANMAKU_FONT_SIZE_SP_EMBEDDED = 15f
+private const val DANMAKU_FONT_SIZE_SP_FULLSCREEN = 18f
+
+/** 行高相对字号的倍数,对齐 PiliPlus `danmakuLineHeight` 默认值。 */
+private const val DANMAKU_LINE_HEIGHT_RATIO = 1.6f
+
+/**
+ * 弹幕最多占用画面高度的比例,对齐 PiliPlus `danmakuShowArea` 默认值:只占上半部分,
+ * 不铺满整个画面,给下方的字幕、简介留出空间。以后做"弹幕显示区域"设置项时它就是那个旋钮。
+ */
+private const val DANMAKU_SHOW_AREA_RATIO = 0.5f
+
+/** 顶/底固定弹幕不需要占用跟滚动弹幕一样多的行,按滚动轨道数打个折。 */
+private const val DANMAKU_FIXED_TRACK_RATIO = 0.3f
+
+/**
+ * 描边宽度相对字号的比例。[androidx.compose.ui.graphics.drawscope.Stroke] 沿字形轮廓居中描,
+ * 一半会吃进字里——调太粗会把细笔画糊住,6% 是能看清描边又不糊字的经验值。
+ */
+private const val DANMAKU_STROKE_TO_FONT_RATIO = 0.06f
+
+/** 基准弹幕(参照文本"哈哈哈哈")滚过一屏所需的秒数,贴近 B 站默认手感。 */
+private const val DANMAKU_CROSS_SCREEN_SECONDS = 6f

@@ -64,3 +64,7 @@ data object ToViewList : NavKey
 
 @Serializable
 data class FavFolderContents(val mediaId: Long, val title: String) : NavKey
+
+/** 历史记录。个人页的三个入口之一,DESIGN 2 节:历史只待在它自己这一页。 */
+@Serializable
+data object History : NavKey

@@ -8,12 +8,15 @@ import dev.bilby.agent.createBiliTools
 import dev.bilby.api.BiliClient
 import dev.bilby.api.DeviceFingerprint
 import dev.bilby.api.WbiSigner
+import dev.bilby.data.AccountRepository
 import dev.bilby.data.DynamicRepository
 import dev.bilby.data.FingerprintStore
+import dev.bilby.danmaku.DanmakuRepository
 import dev.bilby.data.CommentRepository
 import dev.bilby.data.FavRepository
 import dev.bilby.data.FollowRepository
 import dev.bilby.data.HeartbeatReporter
+import dev.bilby.data.HistoryRepository
 import dev.bilby.data.QueueSourceRepository
 import dev.bilby.data.UpdateRepository
 import dev.bilby.data.SearchRepository
@@ -101,6 +104,11 @@ class AppContainer(context: Context) {
 
     val toViewRepository: ToViewRepository by lazy { ToViewRepository(biliClient) }
 
+    val historyRepository: HistoryRepository by lazy { HistoryRepository(biliClient) }
+
+    /** 个人页头部的账号身份(头像/名字/等级/签名),来自 `x/web-interface/nav` + `SpaceRepository`。 */
+    val accountRepository: AccountRepository by lazy { AccountRepository(biliClient, spaceRepository) }
+
     val followRepository: FollowRepository by lazy { FollowRepository(biliClient, settings) }
 
     val favRepository: FavRepository by lazy { FavRepository(biliClient, settings) }
@@ -108,6 +116,8 @@ class AppContainer(context: Context) {
     val videoActionRepository: VideoActionRepository by lazy { VideoActionRepository(biliClient) }
 
     val subtitleRepository: SubtitleRepository by lazy { SubtitleRepository(biliClient) }
+
+    val danmakuRepository: DanmakuRepository by lazy { DanmakuRepository(biliClient) }
 
     val heartbeatReporter: HeartbeatReporter by lazy { HeartbeatReporter(biliClient) }
 
