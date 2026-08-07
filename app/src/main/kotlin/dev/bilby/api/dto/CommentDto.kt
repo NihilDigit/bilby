@@ -70,6 +70,9 @@ data class ReplyItemDto(
     val member: ReplyMemberDto = ReplyMemberDto(),
     val content: ReplyContentDto = ReplyContentDto(),
     val replies: List<ReplyItemDto>? = null, // 楼中楼预览,通常只有前几条
+    // reply_control 和 content 是兄弟字段,都挂在评论条目上 —— 真实响应里 item 有这个 key、
+    // content 没有,以前挂在 ReplyContentDto 里是错的,IP 属地因此永远读不到(见 notes §1.4)。
+    @SerialName("reply_control") val replyControl: ReplyControlDto? = null,
 )
 
 @Serializable
@@ -77,6 +80,14 @@ data class ReplyMemberDto(
     val mid: String = "0", // 注意是字符串,跟外层 ReplyItemDto.mid(int)类型不同(notes §1.4)
     val uname: String = "",
     val avatar: String = "",
+    @SerialName("level_info") val levelInfo: ReplyLevelInfoDto = ReplyLevelInfoDto(),
+    // Int,非 0 为真;真实响应里确认存在,不是字符串或布尔。
+    @SerialName("is_senior_member") val isSeniorMember: Int = 0,
+)
+
+@Serializable
+data class ReplyLevelInfoDto(
+    @SerialName("current_level") val currentLevel: Int = 0,
 )
 
 @Serializable
@@ -87,7 +98,6 @@ data class ReplyContentDto(
     // message 里做替换/标注即可,不需要额外解析 members/jump_url(notes §1.4 两者都是未强
     // 类型化的 UNSURE 字段,第一版不依赖它们,只靠正则识别 @ 和链接,详见 CommentSection)。
     val emote: Map<String, ReplyEmoteDto>? = null,
-    @SerialName("reply_control") val replyControl: ReplyControlDto? = null,
 )
 
 @Serializable

@@ -1,7 +1,9 @@
 package dev.bilby.ui.search
 
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.bilby.R
 import dev.bilby.agent.AgentEvent
 import dev.bilby.agent.AgentIntent
 import dev.bilby.agent.AgentLoop
@@ -18,12 +20,11 @@ import kotlinx.coroutines.launch
 
 /**
  * 搜索排序。快路默认综合;这几个取值来自 B 站 search/type 的 order 参数。
- * 界面上还没有排序控件,所以只留 apiValue —— 原来的 label 没有任何地方显示。
  */
-enum class SearchOrder(val apiValue: String) {
-    Comprehensive("totalrank"),
-    Play("click"),
-    NewPublished("pubdate"),
+enum class SearchOrder(val apiValue: String, @StringRes val labelRes: Int) {
+    Comprehensive("totalrank", R.string.search_order_comprehensive),
+    Play("click", R.string.search_order_click),
+    NewPublished("pubdate", R.string.search_order_pubdate),
 }
 
 /**
@@ -93,11 +94,13 @@ class SearchChatViewModel(
         _state.update { it.copy(input = "") }
         when (_state.value.mode) {
             // 普通搜索是一次查询一份结果,不累积轮次:它就是一个搜索页。留着上一次的结果
-            // 只会让人往上翻,而翻上去的东西和这次要找的无关。
+            // 只会让人往上翻,而翻上去的东西和这次要找的无关。排序沿用上一次选的那档 ——
+            // 新起一份 NormalSearchState() 会把它悄悄弹回综合。
             SearchMode.Normal -> {
+                val order = _state.value.normal.order
                 seenSearchBvids.clear()
-                _state.update { it.copy(normal = NormalSearchState(query = query, loading = true)) }
-                runNormal(query, page = 1)
+                _state.update { it.copy(normal = NormalSearchState(query = query, order = order, loading = true)) }
+                runNormal(query, page = 1, order)
             }
 
             SearchMode.Agent -> {
@@ -119,16 +122,41 @@ class SearchChatViewModel(
         val normal = _state.value.normal
         if (normal.appending || !normal.hasMore || normal.query.isEmpty()) return
         _state.update { it.copy(normal = it.normal.copy(appending = true)) }
-        runNormal(normal.query, page = page + 1)
+        runNormal(normal.query, page = page + 1, normal.order)
+    }
+
+    /**
+     * 切排序等于换了一份不同的结果集,不是往当前结果里插队 —— 分页状态(`page`、
+     * `seenSearchBvids`、`hasMore`)必须整套清空重来,只换 order 参数继续 append
+     * 会把两种排序的结果拼在一条列表里。
+     */
+    fun onOrderChanged(order: SearchOrder) {
+        val normal = _state.value.normal
+        if (normal.order == order) return
+        seenSearchBvids.clear()
+        _state.update {
+            it.copy(
+                normal = normal.copy(
+                    order = order,
+                    videos = emptyList(),
+                    users = emptyList(),
+                    hasMore = true,
+                    loading = normal.query.isNotEmpty(),
+                    error = null,
+                ),
+            )
+        }
+        if (normal.query.isNotEmpty()) runNormal(normal.query, page = 1, order)
     }
 
     fun retry() {
         when (_state.value.mode) {
             SearchMode.Normal -> {
-                val query = _state.value.normal.query.ifEmpty { return }
+                val normal = _state.value.normal
+                val query = normal.query.ifEmpty { return }
                 seenSearchBvids.clear()
                 _state.update { it.copy(normal = it.normal.copy(loading = true, error = null)) }
-                runNormal(query, page = 1)
+                runNormal(query, page = 1, normal.order)
             }
 
             SearchMode.Agent -> {
@@ -139,9 +167,8 @@ class SearchChatViewModel(
         }
     }
 
-    private fun runNormal(query: String, page: Int) = viewModelScope.launch {
-        val order = SearchOrder.Comprehensive.apiValue
-        when (val result = searchRepository.searchVideos(keyword = query, page = page, order = order)) {
+    private fun runNormal(query: String, page: Int, order: SearchOrder) = viewModelScope.launch {
+        when (val result = searchRepository.searchVideos(keyword = query, page = page, order = order.apiValue)) {
             is BiliResult.Ok -> {
                 this@SearchChatViewModel.page = page
                 if (page == 1) seenSearchBvids.clear()

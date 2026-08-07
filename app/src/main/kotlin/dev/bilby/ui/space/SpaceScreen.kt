@@ -14,16 +14,19 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -33,6 +36,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,8 +56,10 @@ import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.SearchField
+import dev.bilby.ui.components.SortRow
 import dev.bilby.ui.components.SquareCover
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
@@ -420,10 +426,41 @@ fun SpaceScreen(
         return
     }
 
+    // 空间内搜索是页内的次要动作,不是空间内容本身,所以展开态只是本页的 UI 状态,
+    // 不进 ViewModel —— 离开页面就该忘掉,不需要记住"上次展开过"。
+    var archiveSearchExpanded by remember { mutableStateOf(false) }
+
     Scaffold(
         modifier = modifier,
         // 标题固定"个人空间":名字归下面的头部区,顶栏只是路牌。
-        topBar = { BilbyTopBar(title = stringResource(R.string.space_title), onBack = onBack) },
+        topBar = {
+            BilbyTopBar(
+                title = stringResource(R.string.space_title),
+                onBack = onBack,
+                actions = {
+                    // 只在投稿页给这个入口:动态、合集两个标签没有可搜索的内容。
+                    if (state.activeTab == SpaceTab.Archives) {
+                        IconButton(
+                            onClick = {
+                                // 收起即清空:图标只有两个诚实的状态可言 —— 展开 = 可能在筛,
+                                // 收起 = 一定没筛。只隐藏输入框而留着关键词的话,列表会在看不见
+                                // 筛选条件的情况下继续被筛,读起来像"投稿莫名其妙变少了"。
+                                if (archiveSearchExpanded && state.archives.keyword.isNotEmpty()) {
+                                    onArchiveKeywordChanged("")
+                                    onArchiveSearch()
+                                }
+                                archiveSearchExpanded = !archiveSearchExpanded
+                            },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Search,
+                                contentDescription = stringResource(R.string.space_search_action),
+                            )
+                        }
+                    }
+                },
+            )
+        },
     ) { insets ->
         Column(modifier = Modifier.fillMaxSize().padding(insets)) {
             state.profile?.let {
@@ -446,11 +483,12 @@ fun SpaceScreen(
                 else -> when (state.activeTab) {
                     SpaceTab.Archives -> ArchivesTab(
                         state.archives,
-                        onArchiveOrderChanged,
-                        onArchiveKeywordChanged,
-                        onArchiveSearch,
-                        onLoadMoreArchives,
-                        onVideoClick,
+                        searchExpanded = archiveSearchExpanded,
+                        onOrderChanged = onArchiveOrderChanged,
+                        onKeywordChanged = onArchiveKeywordChanged,
+                        onSearch = onArchiveSearch,
+                        onLoadMore = onLoadMoreArchives,
+                        onVideoClick = onVideoClick,
                     )
 
                     SpaceTab.Dynamics -> VideoListTab(
@@ -510,15 +548,19 @@ private fun SpaceHeader(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = stringResource(
-                        R.string.space_level_followers,
-                        profile.level,
-                        formatCount(profile.follower),
-                    ),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                ) {
+                    // LV 换成真徽章而不是拼进字符串里的"Lv5" ——
+                    // 空间接口没有硬核会员字段,不为这一个装饰性标记单独换接口,传 false。
+                    LevelBadge(level = profile.level, senior = false, height = Dimens.LevelBadgeHeight)
+                    Text(
+                        text = stringResource(R.string.space_followers, formatCount(profile.follower)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
             }
             Spacer(Modifier.weight(1f))
             // 听这位 UP 的投稿:队列取自当前投稿列表,和播放页那份队列同源
@@ -565,12 +607,17 @@ private val ArchiveOrders = listOf(
 )
 
 /**
- * 投稿页。排序用 segmented button(M3 把"排序元素"明确划给它),
- * 空间内搜索回车才发请求 —— 输入即搜索会让每敲一个字打一次接口。
+ * 投稿页。排序用 [SortRow](风格指南 §2.1),空间内搜索回车才发请求 —— 输入即搜索会让
+ * 每敲一个字打一次接口。
+ *
+ * 搜索输入框不再常驻:顶栏的搜索图标(见 [SpaceScreen])才是入口,点开才展开这个输入框,
+ * 收起后连排序都不用跟它分宽度 —— 之前两个占满宽度的控件叠在一起,视觉重量压过了下面
+ * 的投稿列表。
  */
 @Composable
 private fun ArchivesTab(
     state: SpaceArchiveTabState,
+    searchExpanded: Boolean,
     onOrderChanged: (SpaceArchiveOrder) -> Unit,
     onKeywordChanged: (String) -> Unit,
     onSearch: () -> Unit,
@@ -583,22 +630,29 @@ private fun ArchivesTab(
             modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                ArchiveOrders.forEachIndexed { index, pair ->
-                    SegmentedButton(
-                        selected = state.order == pair.first,
-                        onClick = { onOrderChanged(pair.first) },
-                        shape = SegmentedButtonDefaults.itemShape(index, ArchiveOrders.size),
-                        label = { Text(stringResource(pair.second)) },
-                    )
-                }
-            }
-            SearchField(
-                value = state.keyword,
-                onValueChange = onKeywordChanged,
-                placeholder = stringResource(R.string.space_search_hint),
-                onSearch = onSearch,
+            SortRow(
+                options = ArchiveOrders,
+                selected = state.order,
+                onSelect = onOrderChanged,
             )
+            if (searchExpanded) {
+                // 图标的意义是省版面,不是多加一次点击 —— 展开完还要再点一下输入框,
+                // 省下的成本就还回去了。keyboard.show() 是保险:某些机型上 requestFocus
+                // 不是用户手势触发的直接点击,系统不一定会自动弹键盘。
+                val focusRequester = remember { FocusRequester() }
+                val keyboard = LocalSoftwareKeyboardController.current
+                LaunchedEffect(Unit) {
+                    focusRequester.requestFocus()
+                    keyboard?.show()
+                }
+                SearchField(
+                    value = state.keyword,
+                    onValueChange = onKeywordChanged,
+                    placeholder = stringResource(R.string.space_search_hint),
+                    focusRequester = focusRequester,
+                    onSearch = onSearch,
+                )
+            }
         }
         VideoListTab(
             items = state.items,

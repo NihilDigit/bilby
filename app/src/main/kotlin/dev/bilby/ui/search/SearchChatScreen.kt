@@ -60,6 +60,7 @@ import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.ListCover
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.SearchField
+import dev.bilby.ui.components.SortRow
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
@@ -70,6 +71,9 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 
 private const val PrefetchThreshold = 5
+
+/** 综合 / 最多播放 / 最新发布,顺序和取值都照 B 站搜索页本身。 */
+private val SearchOrders = SearchOrder.entries.map { it to it.labelRes }
 
 // label 曾经存在但没有任何界面显示它,随抽取一并去掉。
 enum class SearchMode { Normal, Agent }
@@ -95,6 +99,7 @@ data class SearchTurn(val id: Long, val query: String, val result: TurnResult.Ag
  */
 data class NormalSearchState(
     val query: String = "",
+    val order: SearchOrder = SearchOrder.Comprehensive,
     val videos: List<SearchVideo> = emptyList(),
     val users: List<SearchUser> = emptyList(),
     val loading: Boolean = false,
@@ -129,6 +134,7 @@ fun SearchChatScreen(
     state: SearchChatUiState,
     onInputChange: (String) -> Unit,
     onModeChange: (SearchMode) -> Unit,
+    onOrderChange: (SearchOrder) -> Unit,
     onSend: () -> Unit,
     onVideoClick: (bvid: String) -> Unit,
     onUserClick: (mid: Long) -> Unit,
@@ -152,6 +158,7 @@ fun SearchChatScreen(
             when (state.mode) {
                 SearchMode.Normal -> NormalPane(
                     state = state.normal,
+                    onOrderChange = onOrderChange,
                     onVideoClick = onVideoClick,
                     onUserClick = onUserClick,
                     onLoadMore = onLoadMore,
@@ -179,6 +186,7 @@ fun SearchChatScreen(
 @Composable
 private fun NormalPane(
     state: NormalSearchState,
+    onOrderChange: (SearchOrder) -> Unit,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onLoadMore: () -> Unit,
@@ -205,6 +213,16 @@ private fun NormalPane(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(vertical = Spacing.Cozy),
     ) {
+        // 排序放结果列表上方,随内容一起滚 —— 这个页面对话式布局里没有一块常驻的
+        // "结果区顶部",硬做一个会跟输入在下、结果在上的整体结构对不上。
+        item(key = "order") {
+            SortRow(
+                options = SearchOrders,
+                selected = state.order,
+                onSelect = onOrderChange,
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
+            )
+        }
         if (state.users.isNotEmpty()) {
             item(key = "users") { UserRow(state.users, onUserClick) }
         }
@@ -602,7 +620,7 @@ private fun SearchChatScreenNormalPreview() {
                     ),
                 ),
             ),
-            onInputChange = {}, onModeChange = {}, onSend = {},
+            onInputChange = {}, onModeChange = {}, onOrderChange = {}, onSend = {},
             onVideoClick = {}, onUserClick = {}, onLoadMore = {}, onRetry = {},
         )
     }
@@ -634,7 +652,7 @@ private fun SearchChatScreenAgentAnswerPreview() {
                     ),
                 ),
             ),
-            onInputChange = {}, onModeChange = {}, onSend = {},
+            onInputChange = {}, onModeChange = {}, onOrderChange = {}, onSend = {},
             onVideoClick = {}, onUserClick = {}, onLoadMore = {}, onRetry = {},
         )
     }

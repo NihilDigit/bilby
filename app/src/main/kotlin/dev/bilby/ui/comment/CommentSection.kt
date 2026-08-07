@@ -28,9 +28,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -65,7 +62,9 @@ import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.ImageViewer
 import dev.bilby.ui.components.EmptyState
+import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.SortRow
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.LocalMentionColor
@@ -198,25 +197,19 @@ private fun findUname(state: CommentUiState, rpid: Long): String? {
     return null
 }
 
-/** 最热 / 最新是排序,M3 把"排序元素"划给 segmented button;chip 是给动态选项集用的。 */
+/** 最热 / 最新是排序,风格指南 §2.1 把排序划给 SortRow;segmented button 留给切换视图。 */
 @Composable
 private fun SortBar(sort: CommentSort, onSort: (CommentSort) -> Unit) {
     val options = listOf(
         CommentSort.HOT to R.string.comment_sort_hot,
         CommentSort.TIME to R.string.comment_sort_time,
     )
-    SingleChoiceSegmentedButtonRow(
+    SortRow(
+        options = options,
+        selected = sort,
+        onSelect = onSort,
         modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
-    ) {
-        options.forEachIndexed { index, pair ->
-            SegmentedButton(
-                selected = sort == pair.first,
-                onClick = { onSort(pair.first) },
-                shape = SegmentedButtonDefaults.itemShape(index, options.size),
-                label = { Text(stringResource(pair.second)) },
-            )
-        }
-    }
+    )
 }
 
 @Composable
@@ -258,6 +251,7 @@ private fun CommentRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
+                LevelBadge(level = comment.level, senior = comment.isSeniorMember, height = Dimens.LevelBadgeHeight)
                 if (comment.isUploader) {
                     Tag(
                         stringResource(R.string.comment_tag_up),
@@ -714,6 +708,7 @@ private fun previewComment(
     message: String,
     likes: Int,
     isUp: Boolean = false,
+    level: Int = 4,
 ): CommentItem = CommentItem(
     rpid = rpid,
     rootRpid = rpid,
@@ -722,6 +717,8 @@ private fun previewComment(
     avatarUrl = "",
     isUploader = isUp,
     ipLocation = "IP属地：广东",
+    level = level,
+    isSeniorMember = false,
     ctimeEpochSeconds = Instant.now().epochSecond - 3600,
     likeCount = likes,
     liked = false,

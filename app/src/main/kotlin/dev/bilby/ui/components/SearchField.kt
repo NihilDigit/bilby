@@ -23,6 +23,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
@@ -53,6 +55,9 @@ private val FieldHeight = 48.dp
  * 用它就等于把这个 app 定死的形态换掉。上一轮的判断在这一轮重新核过,结论不变。
  *
  * @param onSearch 键盘上的搜索键。空输入时不回调 —— 否则会打出一次空查询。
+ * @param focusRequester 传入时挂在内层 `BasicTextField` 上,配合调用方的
+ *   `LaunchedEffect(...) { focusRequester.requestFocus() }` 做到"点开即弹键盘"
+ *   (空间页的搜索图标按钮用到了这个)。
  */
 @Composable
 fun SearchField(
@@ -61,6 +66,7 @@ fun SearchField(
     placeholder: String,
     onSearch: () -> Unit,
     modifier: Modifier = Modifier,
+    focusRequester: FocusRequester? = null,
     trailing: @Composable (RowScope.() -> Unit)? = null,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
@@ -109,7 +115,8 @@ fun SearchField(
                         }
                     },
                 ),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth()
+                    .let { if (focusRequester != null) it.focusRequester(focusRequester) else it },
             )
         }
         if (value.isNotEmpty()) {

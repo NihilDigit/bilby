@@ -37,6 +37,8 @@ data class CommentItem(
     val avatarUrl: String,
     val isUploader: Boolean,
     val ipLocation: String,
+    val level: Int,
+    val isSeniorMember: Boolean,
     val ctimeEpochSeconds: Long,
     val likeCount: Int,
     val liked: Boolean,
@@ -195,7 +197,11 @@ class CommentRepository(
             uname = member.uname,
             avatarUrl = member.avatar.toHttpsUrl(),
             isUploader = uploaderMid != 0L && myMid == uploaderMid,
-            ipLocation = content.replyControl?.location.orEmpty(),
+            // reply_control 和 content 是兄弟字段,层级已用真实响应确认(见 CommentDto.kt);
+            // 能不能拿到 location 这个 key 取决于登录态,未登录抓包里 11 分钟内的新评论也没有它。
+            ipLocation = replyControl?.location.orEmpty(),
+            level = member.levelInfo.currentLevel,
+            isSeniorMember = member.isSeniorMember != 0,
             ctimeEpochSeconds = ctime,
             likeCount = like,
             liked = action == 1,
