@@ -5,7 +5,10 @@ import kotlinx.serialization.Serializable
 
 /**
  * Nav3 的 backstack 就是一个 SnapshotStateList<NavKey>,没有独立的图定义。
- * 共五个界面加登录(DESIGN 2 节),没有第六个 —— 新增之前先回 1.1 的机制表检验。
+ *
+ * DESIGN 2 节写的是"五个界面加登录"。[Followings] 与 [FavFolderContents] 是之后加的两个,加之前
+ * 按 1.1 的机制表逐条对过:两者的内容都来自用户自己的选择(关注了谁、收藏了什么),都是有限
+ * 集合、都不排序不推荐,不落在四个机制的任何一条上。**新增第三个之前照样先回去对一遍。**
  */
 @Serializable
 data object Home : NavKey
@@ -43,3 +46,17 @@ data class AgentSearch(val query: String) : NavKey
 
 @Serializable
 data class AgentRelated(val bvid: String, val title: String, val upName: String) : NavKey
+
+/**
+ * 关注列表。入口在动态页顶上那排"最常访问"的右侧 —— 那排只放得下几个人,
+ * 而"我到底关注了谁"是个正当问题,不该只能去官方端看。
+ */
+@Serializable
+data object Followings : NavKey
+
+/**
+ * 一个收藏夹的内容。收藏夹与稍后再看在产品上是同一类东西:用户自己挑好的有限存货
+ * (DESIGN 1.2 否决点心盒时给的正是这个理由),所以两者并排在第三屏。
+ */
+@Serializable
+data class FavFolderContents(val mediaId: Long, val title: String) : NavKey

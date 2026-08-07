@@ -2,15 +2,20 @@ package dev.bilby.ui.feed
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.bilby.BiliLog
 import dev.bilby.api.BiliResult
 import dev.bilby.data.DynamicRepository
+import dev.bilby.data.FollowRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-class FeedViewModel(private val repository: DynamicRepository) : ViewModel() {
+class FeedViewModel(
+    private val repository: DynamicRepository,
+    private val followRepository: FollowRepository,
+) : ViewModel() {
 
     private val _state = MutableStateFlow(FeedUiState(loading = true))
     val state: StateFlow<FeedUiState> = _state.asStateFlow()
@@ -27,12 +32,28 @@ class FeedViewModel(private val repository: DynamicRepository) : ViewModel() {
 
     init {
         loadFirstPage()
+        loadFrequentUps()
+    }
+
+    /**
+     * 与动态流分开取,互不阻塞也互不牵连:这一排失败不该让整页显示错误,动态流失败也不该
+     * 把它一起抹掉。失败就整排不显示 —— 它是快捷方式,没有它这一页照样能做正事。
+     *
+     * 但不显示不等于不留痕:界面上什么都不会有,不打这行日志就再也查不出它为什么没出来。
+     */
+    private fun loadFrequentUps() = viewModelScope.launch {
+        when (val result = followRepository.frequentUps()) {
+            is BiliResult.Ok -> _state.update { it.copy(frequentUps = result.value) }
+            is BiliResult.ApiError -> BiliLog.w("取最常访问失败(${result.code}): ${result.message}")
+            is BiliResult.Failure -> BiliLog.w("取最常访问异常", result.cause)
+        }
     }
 
     fun loadFirstPage() {
         nextOffset = null
         seenBvids.clear()
-        _state.value = FeedUiState(loading = true)
+        // 保留已经拿到的那排 UP:重载的是动态流,把顶上那排一起清掉会让它闪一下。
+        _state.update { FeedUiState(loading = true, frequentUps = it.frequentUps) }
         fetch(append = false)
     }
 

@@ -3,6 +3,30 @@ package dev.bilby.ui.feed
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import dev.bilby.ui.components.BiliAsyncImage
+import dev.bilby.data.UpBrief
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
@@ -33,6 +57,14 @@ data class FeedUiState(
     val appending: Boolean = false, // 追加下一页
     val hasMore: Boolean = true,
     val error: String? = null,
+    /**
+     * 顶上那排"最常访问"的 UP。顺序是服务端给的,本地不排序也不缓存 ——
+     * 它是导航(点进空间),不参与也不影响下面这条时间序动态流。
+     *
+     * 取不到就是空列表,整排消失,不占位、不显示错误:这一排是快捷方式,
+     * 拿不到它不妨碍这一页做正事。
+     */
+    val frequentUps: List<UpBrief> = emptyList(),
 )
 
 private const val PrefetchThreshold = 5
@@ -50,13 +82,15 @@ fun FeedScreen(
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onItemClick: (FeedItem) -> Unit,
+    onUpClick: (Long) -> Unit,
+    onOpenFollowings: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     when {
         state.loading && state.items.isEmpty() -> FullScreenLoading(modifier)
         state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry, modifier)
-        else -> FeedList(state, onLoadMore, onItemClick, modifier, contentPadding)
+        else -> FeedList(state, onLoadMore, onItemClick, onUpClick, onOpenFollowings, modifier, contentPadding)
     }
 }
 
@@ -65,6 +99,8 @@ private fun FeedList(
     state: FeedUiState,
     onLoadMore: () -> Unit,
     onItemClick: (FeedItem) -> Unit,
+    onUpClick: (Long) -> Unit,
+    onOpenFollowings: () -> Unit,
     modifier: Modifier,
     contentPadding: PaddingValues,
 ) {
@@ -86,6 +122,16 @@ private fun FeedList(
         modifier = modifier.fillMaxSize(),
         contentPadding = contentPadding,
     ) {
+        // 跟着列表一起滚,不吸顶:吸顶会让它变成常驻的入口带,而这一页的主体是动态流。
+        if (state.frequentUps.isNotEmpty()) {
+            item(key = "frequent-ups") {
+                FrequentUpsRow(
+                    ups = state.frequentUps,
+                    onUpClick = onUpClick,
+                    onOpenFollowings = onOpenFollowings,
+                )
+            }
+        }
         if (state.items.isEmpty()) {
             item(key = "empty") { EmptyState(stringResource(R.string.feed_empty)) }
         }
@@ -156,7 +202,7 @@ private val previewItems = listOf(
 @Composable
 private fun FeedScreenListPreview() {
     BilbyTheme {
-        FeedScreen(FeedUiState(items = previewItems, hasMore = true), {}, {}, {})
+        FeedScreen(FeedUiState(items = previewItems, hasMore = true), {}, {}, {}, {}, {})
     }
 }
 
@@ -164,7 +210,7 @@ private fun FeedScreenListPreview() {
 @Composable
 private fun FeedScreenNoMorePreview() {
     BilbyTheme {
-        FeedScreen(FeedUiState(items = previewItems, hasMore = false), {}, {}, {})
+        FeedScreen(FeedUiState(items = previewItems, hasMore = false), {}, {}, {}, {}, {})
     }
 }
 
@@ -172,7 +218,7 @@ private fun FeedScreenNoMorePreview() {
 @Composable
 private fun FeedScreenEmptyPreview() {
     BilbyTheme {
-        FeedScreen(FeedUiState(items = emptyList(), hasMore = false), {}, {}, {})
+        FeedScreen(FeedUiState(items = emptyList(), hasMore = false), {}, {}, {}, {}, {})
     }
 }
 
@@ -180,6 +226,94 @@ private fun FeedScreenEmptyPreview() {
 @Composable
 private fun FeedScreenErrorPreview() {
     BilbyTheme {
-        FeedScreen(FeedUiState(error = "网络连接失败"), {}, {}, {})
+        FeedScreen(FeedUiState(error = "网络连接失败"), {}, {}, {}, {}, {})
     }
 }
+
+/**
+ * 顶上那排「最常访问」。
+ *
+ * **这是导航,不是推荐。** 里面每个人都是用户自己关注的,顺序由 B 站按账号给出,本地不排也
+ * 不缓存;点进去是空间页,DESIGN 1.1 把"进空间"列为带意图的入口。它不往动态流里插任何条目,
+ * 也不影响下面那条时间序流的顺序 —— 那条边界是这一排能存在的前提。
+ *
+ * 服务端还给了每个人的"有更新"标记,这里不取也不画:红点在 DESIGN 1.3 的永不实现清单上。
+ */
+@Composable
+private fun FrequentUpsRow(
+    ups: List<UpBrief>,
+    onUpClick: (Long) -> Unit,
+    onOpenFollowings: () -> Unit,
+) {
+    LazyRow(
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(ups, key = { it.mid }) { up ->
+            UpSlot(label = up.name, onClick = { onUpClick(up.mid) }) {
+                BiliAsyncImage(
+                    url = up.faceUrl,
+                    contentDescription = null,
+                    modifier = Modifier.size(AvatarSize).clip(CircleShape),
+                )
+            }
+        }
+        // 入口做成横排的最后一项,而不是浮在右边的一个文字按钮。
+        //
+        // 放在右侧时它和头像不是同一种东西却并排站着:头像是有名字的方格,它是一块悬空的文字,
+        // 还会把最后一个头像压在底下,滚到头也露不全。做成同样的圆形槽位之后,它成了这一排的
+        // 一员 —— 读法是"...还有全部",而不是"这排东西,以及右边那个按钮"。
+        item(key = "open-followings") {
+            UpSlot(
+                label = stringResource(R.string.feed_open_followings),
+                onClick = onOpenFollowings,
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(AvatarSize)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 这一排里的一格:上面是 48dp 的圆,下面一行字,宽度固定,格与格之间才对得齐。 */
+@Composable
+private fun UpSlot(
+    label: String,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp, horizontal = 2.dp)
+            .width(AvatarSlotWidth),
+    ) {
+        content()
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+}
+
+private val AvatarSize = 48.dp
+
+/** 比头像宽一点,让两行字的名字也能各自居中而不互相挤。 */
+private val AvatarSlotWidth = 60.dp

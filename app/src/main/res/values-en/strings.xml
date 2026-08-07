@@ -195,4 +195,11 @@
     <string name="settings_llm_test_hint">Tap to send one request</string>
     <string name="settings_llm_test_running">Sending…</string>
     <string name="settings_llm_test_ok">OK · %1$d ms</string>
+    <string name="feed_open_followings">Following</string>
+    <string name="followings_title">Following</string>
+    <string name="followings_empty">Not following anyone yet</string>
+    <string name="fav_hub_title">Watch later &amp; favourites</string>
+    <string name="fav_folder_count">%1$d videos</string>
+    <string name="fav_empty">This folder is empty</string>
+    <string name="fav_invalid_video">Video unavailable</string>
 </resources>

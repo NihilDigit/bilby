@@ -221,4 +221,11 @@
     <string name="settings_llm_test_hint">点击发送一次请求</string>
     <string name="settings_llm_test_running">请求中…</string>
     <string name="settings_llm_test_ok">正常 · %1$d ms</string>
+    <string name="feed_open_followings">关注列表</string>
+    <string name="followings_title">关注列表</string>
+    <string name="followings_empty">还没有关注任何人</string>
+    <string name="fav_hub_title">稍后再看与收藏夹</string>
+    <string name="fav_folder_count">%1$d 个视频</string>
+    <string name="fav_empty">这个收藏夹是空的</string>
+    <string name="fav_invalid_video">稿件已失效</string>
 </resources>

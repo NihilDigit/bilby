@@ -3,6 +3,12 @@ package dev.bilby.ui
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.activity.enableEdgeToEdge
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
@@ -20,6 +26,7 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Subscriptions
 import androidx.compose.material.icons.outlined.WatchLater
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationBar
@@ -34,6 +41,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -57,6 +65,8 @@ import dev.bilby.ui.agent.AgentViewModel
 import dev.bilby.ui.comment.CommentViewModel
 import dev.bilby.ui.feed.FeedScreen
 import dev.bilby.ui.feed.FeedViewModel
+import dev.bilby.ui.follow.FollowingsScreen
+import dev.bilby.ui.follow.FollowingsViewModel
 import dev.bilby.ui.login.TvLoginScreen
 import dev.bilby.ui.login.TvLoginViewModel
 import dev.bilby.ui.search.SearchChatScreen
@@ -117,17 +127,73 @@ private fun BilbyApp(container: AppContainer) {
         container.deviceFingerprint.activateIfNeeded()
     }
 
+    // 三个根 pane 的 ViewModel 建在 NavDisplay **外面**,宿主是 Activity 的 ViewModelStore。
+    //
+    // 建在 entry<Home> 里面时,作用域取决于 Navigation3 给每个 NavEntry 装的
+    // ViewModelStore 装饰器,而助理循环正跑在 searchVm 的 viewModelScope 上——它能不能扛过
+    // "点开搜索结果里的视频"和"切到动态页",就成了一个依赖框架默认值的问题。提到这里之后
+    // 它们与 backstack 无关:压进播放页、切 tab 都只是 composable 离开组合,循环照跑。
+    val feedVm: FeedViewModel = viewModel(
+        factory = viewModelFactory { initializer { FeedViewModel(container.dynamicRepository, container.followRepository) } },
+    )
+    val searchVm: SearchChatViewModel = viewModel(
+        factory = viewModelFactory {
+            initializer { SearchChatViewModel(container.searchRepository, container.agentLoop) }
+        },
+    )
+    val toViewVm: ToViewViewModel = viewModel(
+        factory = viewModelFactory { initializer { ToViewViewModel(container.toViewRepository) } },
+    )
+
+    // 在 composable 作用域里先取出来:下面几个 transitionSpec 的 lambda 不是 @Composable,
+    // 在里面读不到 MaterialTheme。
+    //
+    // M3 把"东西在空间里移动"和"东西淡入淡出"分成两套 spec:位移带一点回弹才像实体,
+    // 透明度不该回弹(会闪)。
+    val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<IntOffset>()
+    val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+
     val backStack = rememberNavBackStack(Home)
     NavDisplay(
         backStack = backStack,
         onBack = { backStack.removeLastOrNull() },
+        // Nav3 默认那套是缩放 + 淡入淡出:新页从画面中央放大出来,旧页缩回去。它读起来像
+        // "这一页替换了那一页",而这里发生的是"压进去一层",两者的空间关系对不上;加上默认
+        // 时长偏长,退出时那一下缩小尤其显眼。
+        //
+        // 换成沿 X 轴的位移。**真正在移动的那一页走整屏,被压住的那页只走 1/4 做视差。**
+        //
+        // 距离一度是反的(进来的走 1/4、让开的走 1/12),结果是返回时上层页只挪了一点就淡没,
+        // 看上去像直接切到了上一屏 —— 动画其实播了,只是没有一页走过足够的距离让人看见。
+        // 视差方向也固定:压进去时新页从右侧来、旧页往左退;返回时整个反过来。
+        //
+        // 淡入淡出只给做视差的那一页。走整屏的那页不能再淡:它会在走完之前就透明掉,
+        // 于是"看不见动画"这件事换个方式又发生一遍。
+        transitionSpec = {
+            slideInHorizontally(spatial) { it } togetherWith
+                (slideOutHorizontally(spatial) { -it / 4 } + fadeOut(fade))
+        },
+        popTransitionSpec = {
+            (slideInHorizontally(spatial) { -it / 4 } + fadeIn(fade)) togetherWith
+                slideOutHorizontally(spatial) { it }
+        },
+        // 预测式返回用同一套形状,但**不能带自己的时长**:这一段的进度由手指给,配上 tween
+        // 就成了动画和手势各走各的。用 snap,每一帧都停在手势当前的位置上,松手后由框架接管
+        // 剩下的部分。
+        predictivePopTransitionSpec = { _ ->
+            (slideInHorizontally(snap()) { -it / 4 } + fadeIn(snap())) togetherWith
+                slideOutHorizontally(snap()) { it }
+        },
         entryProvider = entryProvider {
             entry<Home> {
                 RootTabs(
-                    container = container,
+                    feedVm = feedVm,
+                    searchVm = searchVm,
+                    toViewVm = toViewVm,
                     onVideoClick = { backStack.add(Video(it)) },
                     onUserClick = { backStack.add(Space(it)) },
                     onSettingsClick = { backStack.add(Settings) },
+                    onOpenFollowings = { backStack.add(Followings) },
                 )
             }
             entry<Settings> {
@@ -140,7 +206,13 @@ private fun BilbyApp(container: AppContainer) {
                     startListening = key.listening,
                     onUpClick = { backStack.add(Space(it)) },
                     onFindRelated = { bvid, title, upName -> backStack.add(AgentRelated(bvid, title, upName)) },
-                    onOpenVideo = { backStack.add(Video(it)) },
+                    // 切集是**重组,不是压栈**:换的是这一页在放哪一条,不是又进了一层。
+                    // 压栈的话看五集就攒五层,返回要一集一集退回去,而合集本来是一个有限集合、
+                    // 用户是在里面平移。替换栈顶之后,从任何一集返回都回到进来时的地方。
+                    //
+                    // 今天那个"点下一集不自动播放"的 bug 也出在这里:压栈时旧页的 onDispose
+                    // 在新页起播之后才跑,把刚起播的下一集暂停了。替换栈顶让这个错位不成立。
+                    onOpenVideo = { backStack[backStack.lastIndex] = Video(it) },
                 )
             }
             entry<AgentSearch> { key ->
@@ -156,6 +228,13 @@ private fun BilbyApp(container: AppContainer) {
                     container = container,
                     intent = AgentIntent.Related(key.bvid, key.title, key.upName),
                     onVideoClick = { backStack.add(Video(it)) },
+                    onBack = { backStack.removeLastOrNull() },
+                )
+            }
+            entry<Followings> {
+                FollowingsRoute(
+                    container = container,
+                    onUpClick = { backStack.add(Space(it)) },
                     onBack = { backStack.removeLastOrNull() },
                 )
             }
@@ -200,30 +279,15 @@ private enum class RootTab(
  */
 @Composable
 private fun RootTabs(
-    container: AppContainer,
+    feedVm: FeedViewModel,
+    searchVm: SearchChatViewModel,
+    toViewVm: ToViewViewModel,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onSettingsClick: () -> Unit,
+    onOpenFollowings: () -> Unit,
 ) {
     var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
-
-    val feedVm: FeedViewModel = viewModel(
-        factory = viewModelFactory { initializer { FeedViewModel(container.dynamicRepository) } },
-    )
-    val searchVm: SearchChatViewModel = viewModel(
-        factory = viewModelFactory {
-            initializer {
-                SearchChatViewModel(
-                    container.searchRepository,
-                    container.agentLoop,
-                    container.agentSessionRepository,
-                )
-            }
-        },
-    )
-    val toViewVm: ToViewViewModel = viewModel(
-        factory = viewModelFactory { initializer { ToViewViewModel(container.toViewRepository) } },
-    )
 
     val feedState by feedVm.state.collectAsStateWithLifecycle()
     val searchState by searchVm.state.collectAsStateWithLifecycle()
@@ -315,6 +379,8 @@ private fun RootTabs(
                     onLoadMore = feedVm::loadMore,
                     onRetry = feedVm::loadFirstPage,
                     onItemClick = { onVideoClick(it.bvid) },
+                    onUpClick = onUserClick,
+                    onOpenFollowings = onOpenFollowings,
                 )
 
                 RootTab.Search -> SearchChatScreen(
@@ -381,6 +447,32 @@ private fun AgentRoute(
     AgentTraceScreen(state = state, onVideoClick = onVideoClick, onRetry = vm::start, onBack = onBack)
 }
 
+/**
+ * 关注列表。二级页面,自带返回的顶栏 —— 它不是根 tab,不该借用 RootTabs 那一层的 Scaffold。
+ */
+@Composable
+private fun FollowingsRoute(
+    container: AppContainer,
+    onUpClick: (Long) -> Unit,
+    onBack: () -> Unit,
+) {
+    val vm: FollowingsViewModel = viewModel(
+        factory = viewModelFactory { initializer { FollowingsViewModel(container.followRepository) } },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    Scaffold(
+        topBar = { BilbyTopBar(title = stringResource(R.string.followings_title), onBack = onBack) },
+    ) { insets ->
+        FollowingsScreen(
+            state = state,
+            onUpClick = onUpClick,
+            onLoadMore = vm::loadMore,
+            onRetry = vm::retry,
+            contentPadding = insets,
+        )
+    }
+}
+
 @Composable
 private fun SpaceRoute(
     container: AppContainer,
@@ -434,7 +526,6 @@ private fun VideoRoute(
                 VideoViewModel(
                     bvid,
                     container.videoRepository,
-                    container.database.playbackProgressDao(),
                     container.agentLoop,
                     container.heartbeatReporter,
                     container.videoActionRepository,
@@ -471,9 +562,9 @@ private fun VideoRoute(
         related = related,
         commentState = commentState,
         sponsorSegments = sponsorSegments,
-        // 心跳挂在同一个时机上:一次算本地进度(冷启动续播用),一次上报服务端(跨端续播用)。
-        onSaveProgress = { position, duration ->
-            vm.saveProgress(position, duration)
+        // 进度只回传服务端一份(DESIGN 7)。本地不再另存:续播位置和流地址来自同一个 playurl
+        // 响应,本地那份换不到任何东西,却是"新页写下上一条进度"这类串味的唯一入口。
+        onReportProgress = { position, duration ->
             vm.reportHeartbeat(position, duration, finished = duration > 0 && position >= duration - 1_000)
         },
         onQualityChange = vm::setQuality,
@@ -518,3 +609,4 @@ private fun VideoRoute(
         startListening = startListening,
     )
 }
+
