@@ -1,0 +1,98 @@
+# 打 tag 发版。构建只发生在这里 —— 本机不产出、也拿不到发布密钥,
+# 所以「这个 APK 是从这份源码编出来的」这句话有据可查。
+#
+# 触发:推一个 `v` 开头的 tag,例如 `git tag v0.1.0 && git push origin v0.1.0`。
+# 版本号取自 tag(去掉 `v`),传给 Gradle 的 -PbilbyVersion,不写在源码里。
+#
+# 需要两个仓库 Secret:
+#   BILBY_KEYSTORE_BASE64  —— 签名库的 base64
+#   BILBY_KEYSTORE_PASSWORD / BILBY_KEY_ALIAS / BILBY_KEY_PASSWORD
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  # 构建来源证明要签名,需要这两项。它是「CI 构建」这句话的凭据本身。
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # compileOptions 是 21,这里不能更低。
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Derive version from tag
+        id: version
+        run: echo "name=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # 密钥只在这一步落到磁盘,用完随 runner 一起销毁。
+      - name: Restore keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.BILBY_KEYSTORE_BASE64 }}
+        run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/bilby.jks"
+
+      # 单测只有 debug 变体有:AGP 按 testBuildType(默认 debug)生成任务,
+      # 写成 testReleaseUnitTest 会在 CI 上报 "Task not found"。
+      - name: Test
+        run: ./gradlew testDebugUnitTest -PbilbyVersion=${{ steps.version.outputs.name }}
+
+      - name: Build
+        env:
+          BILBY_KEYSTORE: ${{ runner.temp }}/bilby.jks
+          BILBY_KEYSTORE_PASSWORD: ${{ secrets.BILBY_KEYSTORE_PASSWORD }}
+          BILBY_KEY_ALIAS: ${{ secrets.BILBY_KEY_ALIAS }}
+          BILBY_KEY_PASSWORD: ${{ secrets.BILBY_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease -PbilbyVersion=${{ steps.version.outputs.name }}
+
+      # 装错架构会装不上,所以文件名必须一眼看出是哪个变体。
+      - name: Collect artifacts
+        id: collect
+        run: |
+          mkdir -p dist
+          version="${{ steps.version.outputs.name }}"
+          for apk in app/build/outputs/apk/release/*.apk; do
+            variant=$(basename "$apk" | sed -E 's/^app-(.*)-release\.apk$/\1/')
+            cp "$apk" "dist/bilby-$version-$variant.apk"
+          done
+          # R8 的 mapping 一起发:release 崩溃栈是混淆过的,没有它谁也读不了用户贴的日志。
+          cp app/build/outputs/mapping/release/mapping.txt "dist/bilby-$version-mapping.txt"
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          ls -l dist
+
+      # 证明这些文件确实由这个 workflow、从这个 commit 构建。
+      # 校验:gh attestation verify bilby-<版本>-<变体>.apk --repo <owner>/<repo>
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*
+          body: |
+            由 GitHub Actions 从 tag `${{ github.ref_name }}`(commit ${{ github.sha }})构建。
+
+            四个 APK 是同一个版本的四种打包,不是四个版本。不知道选哪个就下 `universal`;
+            按架构下能小一些:较新的手机是 `arm64-v8a`,较老的是 `armeabi-v7a`,
+            模拟器一般是 `x86_64`。
+
+            `SHA256SUMS.txt` 是校验和。构建来源可以用
+            `gh attestation verify <文件> --repo ${{ github.repository }}` 独立验证。
+
+            `mapping.txt` 用来还原崩溃栈,报 bug 时不需要你处理它。

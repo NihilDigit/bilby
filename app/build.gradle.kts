@@ -6,6 +6,26 @@ val localProperties = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
 }
 
+/**
+ * 版本号由 tag 决定,不写在源码里 —— 写在源码里就必然会出现"tag 是 v0.2.0、包里是 0.1.0"
+ * 这种对不上的发布。CI 传 `-PbilbyVersion=0.2.0`(取自 `v0.2.0` 这个 tag),本机不传时
+ * 用 0.0.0-dev,一眼能认出这不是发布包。
+ */
+val releaseVersionName: String = (findProperty("bilbyVersion") as String?) ?: "0.0.0-dev"
+
+/**
+ * versionCode 从版本号推出来:`major*10000 + minor*100 + patch`。发布页上三个 ABI 变体
+ * 共用同一个 versionCode——它们是同一个版本的三种打包,不是三个版本,装错了架构是装不上,
+ * 不是"版本更旧"。
+ */
+val releaseVersionCode: Int = releaseVersionName
+    .substringBefore('-')
+    .split('.')
+    .mapNotNull(String::toIntOrNull)
+    .let { (it + listOf(0, 0, 0)).take(3) }
+    .let { (major, minor, patch) -> major * 10000 + minor * 100 + patch }
+    .coerceAtLeast(1)
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -21,8 +41,37 @@ android {
         applicationId = "dev.bilby"
         minSdk = 29
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
+    }
+
+    /**
+     * 按 ABI 拆包,外加一个通用包。三个单架构变体各只带自己那一份 `.so`(media3 与
+     * datastore 都有原生库),体积更小;通用包是给不知道自己该下哪个的人和存档用的,
+     * 侧载分发没有商店替用户挑架构,少了它每次都要先问一句"你的机器是什么架构"。
+     */
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a", "x86_64")
+            isUniversalApk = true
+        }
+    }
+
+    /**
+     * 发布签名从环境变量来,CI 之外没有这些变量时回落到 debug 密钥。
+     *
+     * 回落是有意的:本机 `assembleRelease` 的用途是验证 R8 有没有把东西混淆坏,而未签名的
+     * APK 装不上,装不上就等于没验。发布用的密钥只存在于 CI,本机连一份都不该有。
+     */
+    signingConfigs {
+        create("ci") {
+            storeFile = System.getenv("BILBY_KEYSTORE")?.let(::file)
+            storePassword = System.getenv("BILBY_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("BILBY_KEY_ALIAS")
+            keyPassword = System.getenv("BILBY_KEY_PASSWORD")
+        }
     }
 
     buildTypes {
@@ -37,9 +86,9 @@ android {
         release {
             buildConfigField("String", "LLM_BASE_URL", "\"\"")
             buildConfigField("String", "LLM_API_KEY", "\"\"")
-            // 自用单用户应用,不上架,也就没有发布密钥。用 debug 密钥签名只为了 release 包
-            // 能装到机器上真的跑一遍 —— R8 造成的崩溃只在 release 出现,不装就等于没验。
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(
+                if (System.getenv("BILBY_KEYSTORE") != null) "ci" else "debug",
+            )
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
