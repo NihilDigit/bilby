@@ -1,10 +1,13 @@
 package dev.bilby.ui.comment
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -35,22 +38,30 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import androidx.compose.ui.unit.sp
 import dev.bilby.data.CommentItem
 import dev.bilby.data.CommentSort
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.BiliAsyncImage
+import dev.bilby.ui.components.ImageViewer
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.theme.BilbyTheme
@@ -126,6 +137,17 @@ fun CommentSection(
             }
 
             items(state.items, key = { it.rpid }) { comment ->
+                // **主楼之间画 inset 分割线。** 一条热评加上楼中楼容器可以占到半屏,
+                // 只靠留白的话上一条的楼中楼和下一条的头像挨在一起,读不出哪里换了人。
+                //
+                // 用 inset 而不是 full-width:M3 divider 页把 inset 定义为"分隔一个区块内部
+                // 的相关内容",并要求它对齐头像这类锚定元素的前缘 —— 评论列表正是那一页
+                // 举的"一列邮件"的例子。full-width 是留给不相关的大段内容的,评论条与条之间
+                // 不是那个关系。
+                HorizontalDivider(
+                    modifier = Modifier.padding(start = CommentTextInset, end = Spacing.Comfortable),
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                )
                 CommentRow(
                     comment = comment,
                     pinned = false,
@@ -204,19 +226,33 @@ private fun CommentRow(
     onExpandReplies: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var viewerIndex by remember { mutableStateOf<Int?>(null) }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            .padding(start = Spacing.Comfortable, end = Spacing.Cozy, top = Spacing.Cozy, bottom = Spacing.Hair),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
     ) {
         Avatar(url = comment.avatarUrl, size = Dimens.AvatarSmall)
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(modifier = Modifier.weight(1f)) {
+            // 头部两行(名字 / 时间·属地)是一块整的元信息,照 PiliPlus 的
+            // `reply_item_grpc.dart` 的 _buildHeader。
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
             ) {
-                Text(comment.uname, style = MaterialTheme.typography.labelLarge)
+                // **用户名用 outline,不用满对比度。** 一屏几十条评论,真正要读的是正文;
+                // 名字和正文一样重的话,视线会被每条开头的名字拽住,整片看起来就是一团。
+                // PiliPlus 也是把 member.name 画成 outline 的。
+                Text(
+                    text = comment.uname,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
                 if (comment.isUploader) {
                     Tag("UP主", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
                 }
@@ -224,29 +260,21 @@ private fun CommentRow(
                     Tag("置顶", MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.colorScheme.onTertiaryContainer)
                 }
             }
-            Text(
-                text = "${comment.ipLocation}  ${formatRelativeTime(comment.ctimeEpochSeconds)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(text = highlightMessage(comment.message), style = MaterialTheme.typography.bodyMedium)
+            SubLine(comment)
 
-            if (comment.emotes.isNotEmpty() || comment.pictureUrls.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.padding(top = Spacing.Hair),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                ) {
-                    comment.emotes.values.forEach { url ->
-                        AsyncImage(model = url, contentDescription = null, modifier = Modifier.size(EmoteSize))
-                    }
-                    comment.pictureUrls.forEach { url ->
-                        AsyncImage(
-                            model = url,
-                            contentDescription = "评论配图",
-                            modifier = Modifier.size(PictureSize),
-                        )
-                    }
-                }
+            Spacer(Modifier.height(Spacing.Tight))
+            CommentText(
+                message = comment.message,
+                emotes = comment.emotes,
+                style = CommentBodyStyle,
+            )
+
+            if (comment.pictureUrls.isNotEmpty()) {
+                PictureGrid(
+                    urls = comment.pictureUrls,
+                    onClick = { index -> viewerIndex = index },
+                    modifier = Modifier.padding(top = Spacing.Tight),
+                )
             }
 
             CommentActions(
@@ -259,10 +287,108 @@ private fun CommentRow(
             SubReplies(comment, expanded, onExpandReplies)
         }
     }
+
+    viewerIndex?.let { index ->
+        ImageViewer(
+            urls = comment.pictureUrls,
+            initialIndex = index,
+            onDismiss = { viewerIndex = null },
+        )
+    }
 }
 
-private val EmoteSize = 20.dp
-private val PictureSize = 56.dp
+/** "3 小时前 • IP属地:广东"。11sp,和名字同属元信息那一块。 */
+@Composable
+private fun SubLine(comment: CommentItem) {
+    val text = listOf(formatRelativeTime(comment.ctimeEpochSeconds), comment.ipLocation)
+        .filter { it.isNotBlank() }
+        .joinToString("  •  ")
+    if (text.isEmpty()) return
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+/**
+ * 评论正文的字号与行高。**行高是这一屏可读性的主要杠杆**:`bodyMedium` 是 14/22,
+ * 而 PiliPlus 的评论正文用的是 `TextStyle(height: 1.75, fontSize: 14)`,也就是 14/24.5。
+ * 汉字墨迹几乎占满 em 框,22 的行距在一条五六行的长评论里会糊成一片。这里取 14/24。
+ *
+ * 不改 `Typography` 里的 `bodyMedium`:那一档还给列表标题、队列条目等等用着,
+ * 它们要的是紧凑,不是宽松。行高是按**这段文字有多长**定的,不是按字号定的。
+ */
+private val CommentBodyStyle
+    @Composable get() = MaterialTheme.typography.bodyMedium.copy(lineHeight = 24.sp)
+
+/** 楼中楼正文比主楼小一档,行高同比例收。 */
+private val SubReplyBodyStyle
+    @Composable get() = MaterialTheme.typography.bodySmall.copy(lineHeight = 20.sp)
+
+private val EmoteSize = 20.sp
+
+/** 内联表情的绘制尺寸。占位是按 sp 给的(跟着字号缩放),画的时候要一个 dp。 */
+private val EmoteBoxSize = 20.dp
+private val GridSpacing = 4.dp
+
+/**
+ * 评论配图。张数决定列数,照 PiliPlus 的
+ * `common/widgets/image_grid/image_grid_builder.dart`:1 张单独放大,2 与 4 张走两列,
+ * 其余走三列;格子是正方形,超出的部分裁掉,**点开才看全**。
+ *
+ * 单张那格用 4:3 而不是按原图比例,是因为接口层的 `ReplyPictureDto` 只解析了 `img_src`,
+ * 没有 `img_width`/`img_height` —— 拿不到原始比例就没法像 PiliPlus 那样按比例定尺寸。
+ * 补这两个字段要动 `api/dto`,不在这一轮的边界内。
+ */
+@Composable
+private fun PictureGrid(urls: List<String>, onClick: (Int) -> Unit, modifier: Modifier = Modifier) {
+    if (urls.size == 1) {
+        BiliAsyncImage(
+            url = urls[0],
+            contentDescription = "评论配图,点击查看大图",
+            modifier = modifier
+                .fillMaxWidth(SinglePictureWidthFraction)
+                .aspectRatio(4f / 3f)
+                .clip(MaterialTheme.shapes.small)
+                .clickable { onClick(0) },
+        )
+        return
+    }
+
+    val columns = if (urls.size == 2 || urls.size == 4) 2 else 3
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(GridSpacing)) {
+        urls.chunked(columns).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(GridSpacing), modifier = Modifier.fillMaxWidth()) {
+                row.forEachIndexed { indexInRow, url ->
+                    val index = urls.indexOf(url).takeIf { it >= 0 } ?: indexInRow
+                    BiliAsyncImage(
+                        url = url,
+                        contentDescription = "评论配图,点击查看大图",
+                        modifier = Modifier
+                            .weight(1f)
+                            .aspectRatio(1f)
+                            .clip(MaterialTheme.shapes.small)
+                            .clickable { onClick(index) },
+                    )
+                }
+                // 最后一行不满时补空位,否则两张图会被拉宽到占满整行。
+                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+private const val SinglePictureWidthFraction = 0.7f
+
+/**
+ * 正文相对屏幕左缘的缩进 = 页边距 16 + 头像 36 + 头像与文字的间距 12。
+ * inset 分割线对齐到这里,也就是对齐头像的**后**缘、正文的前缘(M3 divider 页对
+ * inset divider 的要求:与锚定元素对齐)。
+ */
+private val CommentTextInset = Spacing.Comfortable + Dimens.AvatarSmall + Spacing.Cozy
 
 /**
  * 点赞 / 回复 / 删除。三个按钮以前都是 32dp 见方,低于 48dp 的最小触摸目标 ——
@@ -315,58 +441,87 @@ private val SmallIconSize = 16.dp
 private fun SubReplies(comment: CommentItem, expanded: ExpandedReplies?, onExpandReplies: (Long) -> Unit) {
     // 已展开就用展开结果(含翻页累加),否则用主楼自带的预览楼层垫着,避免展开前一片空白。
     val shown = expanded?.items ?: comment.previewReplies
-    if (shown.isEmpty()) return
-    Column(
-        modifier = Modifier.padding(top = Spacing.Hair),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+    val remaining = comment.subReplyCount - shown.size
+    if (shown.isEmpty() && remaining <= 0) return
+
+    // **一个容器装下整组楼中楼,不是每条一张卡片。** 以前每条各套一个 Surface,
+    // 三条回复就是三块圆角色块摞在一起,比主楼本身还抢眼。PiliPlus 的 `replyItemRow`
+    // 也是一个容器里排若干行(`lib/pages/video/reply/widgets/reply_item_grpc.dart`)。
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.small,
+        modifier = Modifier.fillMaxWidth().padding(top = Spacing.Hair),
     ) {
-        shown.forEach { sub -> SubReplyRow(sub) }
-        val remaining = comment.subReplyCount - shown.size
-        when {
-            expanded == null && remaining > 0 ->
-                TextButton(onClick = { onExpandReplies(comment.rpid) }) { Text("展开 $remaining 条回复") }
+        Column(modifier = Modifier.padding(vertical = Spacing.Hair)) {
+            shown.forEach { sub -> SubReplyRow(sub) }
+            when {
+                expanded == null && remaining > 0 -> SubReplyMoreButton(
+                    text = "展开 $remaining 条回复",
+                    onClick = { onExpandReplies(comment.rpid) },
+                )
 
-            expanded != null && expanded.loadingMore ->
-                CircularProgressIndicator(modifier = Modifier.size(SmallIconSize).padding(Spacing.Hair))
+                expanded != null && expanded.loadingMore -> Box(
+                    modifier = Modifier.fillMaxWidth().padding(Spacing.Tight),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(SmallIconSize), strokeWidth = 2.dp)
+                }
 
-            expanded != null && expanded.hasMore ->
-                TextButton(onClick = { onExpandReplies(comment.rpid) }) { Text("加载更多") }
+                expanded != null && expanded.hasMore -> SubReplyMoreButton(
+                    text = "加载更多",
+                    onClick = { onExpandReplies(comment.rpid) },
+                )
+            }
         }
     }
 }
 
+@Composable
+private fun SubReplyMoreButton(text: String, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = Spacing.Tight),
+        modifier = Modifier.padding(start = Spacing.Hair),
+    ) {
+        Text(text, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
 /**
- * 楼中楼。底色用 surfaceContainer 而不是 surfaceVariant:M3 把 surface container 这一族
- * 定义为"容器填充",surfaceVariant 现在主要是给它的 on 色(onSurfaceVariant,低强调文字)
- * 留位置的。拿 surfaceVariant 当底,深色主题下会比周围的 surface 亮出一大截。
+ * 楼中楼的一条。名字和正文排在同一段文字流里(`名字:正文`),不像主楼那样分两行 ——
+ * 楼中楼一屏可能有五六条,每条再占两行的话主楼就被压没了。PiliPlus 同样是把楼中楼
+ * 压成一行起排的紧凑形态。
+ *
+ * 容器色见外层:M3 把 surface container 这一族定义为"容器填充",`surfaceVariant`
+ * 现在主要是给它的 on 色(低强调文字)留位置的,拿它当底在深色主题下会亮出一大截。
  */
 @Composable
 private fun SubReplyRow(comment: CommentItem) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = MaterialTheme.shapes.small,
-        // 撑满宽度而不是包内容:楼中楼是竖着摞的一列,每块各按自己的字数收宽会让右边缘
-        // 参差不齐,看起来像三块没对齐的碎片而不是一组回复。
-        modifier = Modifier.fillMaxWidth(),
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
-        Column(
-            modifier = Modifier.padding(Spacing.Tight),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-                Text(comment.uname, style = MaterialTheme.typography.labelMedium)
-                if (comment.isUploader) {
-                    Tag("UP主", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
-                }
-            }
-            Text(
-                text = highlightMessage(comment.message),
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 5,
-                overflow = TextOverflow.Ellipsis,
-            )
+        Text(
+            text = "${comment.uname}:",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.outline,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        if (comment.isUploader) {
+            Tag("UP主", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
         }
     }
+    CommentText(
+        message = comment.message,
+        emotes = comment.emotes,
+        style = SubReplyBodyStyle,
+        maxLines = 5,
+        modifier = Modifier.padding(start = Spacing.Tight, end = Spacing.Tight, bottom = Spacing.Tight),
+    )
 }
 
 /**
@@ -434,22 +589,72 @@ private fun CommentInputBar(
 }
 
 /**
- * 富文本第一版只做轻量高亮:@提及与跳转链接标成 [LocalMentionColor],表情图片单独在下面一行
- * 展示(notes §1.4:content.members/jumpUrl 都是未强类型化字段,不解析,靠正则识别原文即可,
- * 拿不到结构化数据不等于丢内容——原文一个字不少地照原样显示)。
+ * 正文里要特殊处理的三种东西:表情占位符 `[doge]`、@提及、跳转链接。
+ * 一次扫描全认出来 —— 分成两遍就得处理"第二遍的匹配落在第一遍的替换里"这种交叉。
+ *
+ * 表情键的长度设了上限:`[` 到 `]` 之间不限长的话,一句"[这里省略一万字]看看"会被整段
+ * 当成一个表情键去查表(查不到,原样显示,但白扫一遍)。B 站的表情名都很短。
  */
-private val AtOrLinkRegex = Regex("""@[^\s@]+|https?://\S+""")
+private val RichTokenRegex = Regex("""\[[^\[\]]{1,20}]|@[^\s@]+|https?://\S+""")
 
+/**
+ * 评论正文。
+ *
+ * **表情内联回文字流**,不再是"正文里留着 `[doge]` 三个字、底下另起一行摆一排图标"——
+ * 那样读者得自己把图标和占位符对应回去,而且表情出现两次时下面那排根本对不上。
+ * 走 `InlineTextContent`:占位符在 [AnnotatedString] 里留一个带 id 的空位,
+ * 渲染时把图片填进去,换行、对齐、选中都跟着文字走。
+ *
+ * @提及与链接标成 [LocalMentionColor]。仍然不解析 `content.members`/`jump_url`
+ * (notes §1.4:两者都是未强类型化字段),靠正则认原文——拿不到结构化数据不等于丢内容。
+ */
 @Composable
-private fun highlightMessage(message: String) = buildAnnotatedString {
+private fun CommentText(
+    message: String,
+    emotes: Map<String, String>,
+    style: androidx.compose.ui.text.TextStyle,
+    maxLines: Int = Int.MAX_VALUE,
+    modifier: Modifier = Modifier,
+) {
     val mention = LocalMentionColor.current
-    var last = 0
-    for (match in AtOrLinkRegex.findAll(message)) {
-        append(message.substring(last, match.range.first))
-        withStyle(SpanStyle(color = mention)) { append(match.value) }
-        last = match.range.last + 1
+    val used = remember(message, emotes) { linkedMapOf<String, String>() }
+
+    val text = remember(message, emotes, mention) {
+        used.clear()
+        buildAnnotatedString {
+            var last = 0
+            for (match in RichTokenRegex.findAll(message)) {
+                append(message.substring(last, match.range.first))
+                val token = match.value
+                val emoteUrl = emotes[token]
+                if (emoteUrl != null) {
+                    used[token] = emoteUrl
+                    appendInlineContent(token, token)
+                } else {
+                    withStyle(SpanStyle(color = mention)) { append(token) }
+                }
+                last = match.range.last + 1
+            }
+            append(message.substring(last))
+        }
     }
-    append(message.substring(last))
+
+    val inline = used.mapValues { (_, url) ->
+        InlineTextContent(
+            Placeholder(EmoteSize, EmoteSize, PlaceholderVerticalAlign.TextCenter),
+        ) {
+            BiliAsyncImage(url = url, contentDescription = null, modifier = Modifier.size(EmoteBoxSize))
+        }
+    }
+
+    Text(
+        text = text,
+        style = style,
+        inlineContent = inline,
+        maxLines = maxLines,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier,
+    )
 }
 
 private val AbsoluteDateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")

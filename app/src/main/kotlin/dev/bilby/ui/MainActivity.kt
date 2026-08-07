@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Subscriptions
 import androidx.compose.material.icons.filled.WatchLater
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Subscriptions
 import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.Icon
@@ -57,6 +58,8 @@ import dev.bilby.ui.login.TvLoginScreen
 import dev.bilby.ui.login.TvLoginViewModel
 import dev.bilby.ui.search.SearchChatScreen
 import dev.bilby.ui.search.SearchChatViewModel
+import dev.bilby.ui.settings.SettingsScreen
+import dev.bilby.ui.settings.SettingsViewModel
 import dev.bilby.ui.space.SpaceScreen
 import dev.bilby.ui.space.SpaceViewModel
 import dev.bilby.ui.theme.BilbyTheme
@@ -120,7 +123,11 @@ private fun BilbyApp(container: AppContainer) {
                     container = container,
                     onVideoClick = { backStack.add(Video(it)) },
                     onUserClick = { backStack.add(Space(it)) },
+                    onSettingsClick = { backStack.add(Settings) },
                 )
+            }
+            entry<Settings> {
+                SettingsRoute(container, onBack = { backStack.removeLastOrNull() })
             }
             entry<Video> { key ->
                 VideoRoute(
@@ -185,6 +192,7 @@ private fun RootTabs(
     container: AppContainer,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
+    onSettingsClick: () -> Unit,
 ) {
     var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
 
@@ -217,9 +225,13 @@ private fun RootTabs(
         topBar = {
             BilbyTopBar(title = selected.label) {
                 when (selected) {
-                    // 动态页没有动作:这一页能做的只有往下看,刷新是拉到底自动翻页。
+                    // 动态页没有内容相关的动作:这一页能做的只有往下看,刷新是拉到底自动翻页。
                     // 放个刷新按钮等于把下拉刷新那套仪式换个位置摆回来(DESIGN 2.1)。
-                    RootTab.Feed -> Unit
+                    // 这里唯一的图标是设置 —— 它需要一个入口,而底部三格是"我要去哪",
+                    // 设置不是目的地,只能挂在某个顶栏上,动态页是启动后的第一屏。
+                    RootTab.Feed -> IconButton(onClick = onSettingsClick) {
+                        Icon(Icons.Outlined.Settings, contentDescription = "设置")
+                    }
 
                     // 开新会话是清空助理上下文的唯一入口(DESIGN 3.1:会话必须由用户显式开启),
                     // 属于"改变整页状态"的动作,正是 M3 说该放进顶栏的那一类。
@@ -294,6 +306,32 @@ private fun RootTabs(
             }
         }
     }
+}
+
+@Composable
+private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
+    val vm: SettingsViewModel = viewModel(
+        factory = viewModelFactory {
+            initializer { SettingsViewModel(container.settings, container.spaceRepository) }
+        },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    SettingsScreen(
+        state = state,
+        onLlmChange = vm::saveLlm,
+        onCodecChange = vm::setCodec,
+        onSponsorBlockChange = vm::updateSponsorBlock,
+        // 停播放服务要 Context,所以由这一层做,ViewModel 只管清凭据。
+        // 顺序是先清后停:反过来的话中间那一瞬服务已停但凭据还在,看起来像"没登出但停了"。
+        onLogout = {
+            vm.logout {
+                AudioPlaybackService.stop(context)
+                onBack()
+            }
+        },
+        onBack = onBack,
+    )
 }
 
 @Composable

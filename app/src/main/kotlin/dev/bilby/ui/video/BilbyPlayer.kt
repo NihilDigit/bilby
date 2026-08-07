@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material.icons.filled.LockOpen
@@ -45,8 +46,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -62,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -76,10 +76,14 @@ import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.compose.PlayerSurface
 import dev.bilby.data.QualityOption
+import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.theme.FixedColors
 import kotlinx.coroutines.delay
 
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+
+/** 控件渐变最下面那一档。比 [FixedColors.PlayerControlScrim] 再深一点,兜住时间文字。 */
+private val ControlScrimBottom = Color(0xB3000000)
 
 /** 长按期间的临时倍速。 */
 private const val FAST_FORWARD_SPEED = 3f
@@ -113,6 +117,8 @@ fun BilbyPlayer(
     onFullscreenChange: (Boolean) -> Unit,
     onSaveProgress: (positionMillis: Long, durationMillis: Long) -> Unit,
     modifier: Modifier = Modifier,
+    /** 只在全屏时显示。竖屏下标题就在播放器正下方,再印一遍是多余的。 */
+    title: String = "",
 ) {
     val saveProgress by rememberUpdatedState(onSaveProgress)
 
@@ -273,6 +279,41 @@ fun BilbyPlayer(
             }
         }
 
+        // 全屏顶栏。全屏下没有别的东西说明"在看什么"和"怎么退出":系统栏是隐藏的,
+        // 返回手势在锁屏态下也被吃掉了。竖屏不显示,那里标题就在播放器下面第一行。
+        AnimatedVisibility(
+            visible = isFullscreen && controlsVisible && !locked,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(listOf(ControlScrimBottom, Color.Transparent)),
+                    )
+                    .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.systemBars))
+                    .padding(end = 16.dp, bottom = 16.dp),
+            ) {
+                IconButton(onClick = { onFullscreenChange(false) }) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "退出全屏",
+                        tint = FixedColors.OnMedia,
+                    )
+                }
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = FixedColors.OnMedia,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+
         // 锁按钮:锁上后它是唯一还能点的东西。
         AnimatedVisibility(
             visible = controlsVisible,
@@ -374,10 +415,22 @@ private fun PlayerControlBar(
     val safeInsets = WindowInsets.displayCutout.union(WindowInsets.systemBars)
     val container = Modifier
         .fillMaxWidth()
-        .background(FixedColors.PlayerControlScrim)
+        // 渐变而不是一整条半透明黑。控件底下是画面本身,一条硬边的黑带会把画面横着切一刀,
+        // 而渐变只在最需要对比度的地方(文字所在的下缘)压到最暗。B 站与 PiliPlus 的
+        // 播放器同样是自下而上的渐变。
+        .background(
+            Brush.verticalGradient(
+                listOf(Color.Transparent, FixedColors.PlayerControlScrim, ControlScrimBottom),
+            ),
+        )
         // 全屏时系统栏被藏了,但挖孔和手势条的位置照旧,控件贴边会被切掉一半。
         .then(if (isFullscreen) Modifier.windowInsetsPadding(safeInsets) else Modifier)
-        .padding(horizontal = if (isFullscreen) 16.dp else 4.dp, vertical = if (isFullscreen) 8.dp else 0.dp)
+        .padding(
+            start = if (isFullscreen) 16.dp else 8.dp,
+            end = if (isFullscreen) 16.dp else 8.dp,
+            top = 16.dp,
+            bottom = if (isFullscreen) 8.dp else 0.dp,
+        )
 
     // 进度条独占一行:挤在按钮行里只剩几十 dp 可拖,而拖拽是这里最主要的操作。
     Column(modifier = container) {
@@ -398,38 +451,7 @@ private fun PlayerControlBar(
     }
 }
 
-@Composable
-private fun SeekBar(
-    position: Long,
-    duration: Long,
-    onSeekStart: () -> Unit,
-    onSeekTo: (Long) -> Unit,
-    onSeekFinished: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var dragging by remember { mutableStateOf(false) }
-    Slider(
-        value = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f,
-        onValueChange = { fraction ->
-            if (!dragging) {
-                dragging = true
-                onSeekStart()
-            }
-            onSeekTo((fraction * duration).toLong())
-        },
-        onValueChangeFinished = {
-            dragging = false
-            onSeekFinished()
-        },
-        enabled = duration > 0,
-        colors = SliderDefaults.colors(
-            thumbColor = MaterialTheme.colorScheme.primary,
-            activeTrackColor = MaterialTheme.colorScheme.primary,
-            inactiveTrackColor = FixedColors.OnMedia.copy(alpha = 0.4f),
-        ),
-        modifier = modifier,
-    )
-}
+
 
 @Composable
 private fun PlayPauseButton(isPlaying: Boolean, onClick: () -> Unit, iconSize: Dp) {

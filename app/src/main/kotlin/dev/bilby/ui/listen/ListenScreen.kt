@@ -31,7 +31,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
@@ -58,6 +59,8 @@ import dev.bilby.api.toHttpsUrl
 import androidx.compose.material3.Scaffold
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.CompactVideoRow
+import dev.bilby.ui.components.SeekBar
+import dev.bilby.ui.components.SectionHeader
 import dev.bilby.ui.components.VideoCover
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.player.AudioPlaybackUiState
@@ -140,18 +143,16 @@ fun ListenScreen(
             CoverAndInfo(state)
 
             Column(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
-                Slider(
-                    value = if (duration > 0) (displayPosition.toFloat() / duration).coerceIn(0f, 1f) else 0f,
-                    onValueChange = { fraction ->
-                        if (dragPosition == null) {
-                            resumeAfterDrag = player.isPlaying
-                            player.pause()
-                        }
-                        // 拖拽中只更新本地显示,不 seek:Media3 每帧收到 seek 都要重新起播,
-                        // 频繁调用会让画面/声音卡顿,真正的 seek 留到松手时一次性做。
-                        dragPosition = (fraction * duration).toLong()
+                // 和播放器用同一个进度条组件:两处的拖拽语义完全一样,分开写迟早各自漂移。
+                SeekBar(
+                    position = displayPosition,
+                    duration = duration,
+                    onSeekStart = {
+                        resumeAfterDrag = player.isPlaying
+                        player.pause()
                     },
-                    onValueChangeFinished = {
+                    onSeekTo = { dragPosition = it },
+                    onSeekFinished = {
                         dragPosition?.let { target ->
                             player.seekTo(target)
                             position = target
@@ -159,12 +160,19 @@ fun ListenScreen(
                         }
                         dragPosition = null
                     },
-                    enabled = duration > 0,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(formatTime(displayPosition), style = MaterialTheme.typography.labelSmall)
-                    Text(formatTime(duration), style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        text = formatTime(displayPosition),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                    Text(
+                        text = formatTime(duration),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
                 }
             }
 
@@ -188,6 +196,13 @@ fun ListenScreen(
             )
         }
 
+        // 分隔线 + 小节标题:没有它,队列列表看起来只是这一页往下接着写,
+        // 分不出"正在放的这一条"和"接下来有哪些"。
+        HorizontalDivider(modifier = Modifier.padding(top = Spacing.Tight))
+        SectionHeader(
+            title = if (queue.isEmpty()) "播放队列" else "播放队列 · ${queue.size}",
+            modifier = Modifier.padding(horizontal = Spacing.Comfortable),
+        )
         QueueList(
             queue = queue,
             currentBvid = state.current?.bvid,
@@ -203,35 +218,48 @@ private fun CoverAndInfo(state: AudioPlaybackUiState) {
     val item = state.current ?: return
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxWidth().padding(Spacing.Loose),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Loose, vertical = Spacing.Comfortable),
     ) {
-        // 16:9 而不是裁成方形:这是视频的封面,方形唱片是音乐播放器的隐喻,
+        // 保持封面本身的比例、不裁成方形:这是视频的封面,方形唱片是音乐播放器的隐喻,
         // 在这里会把画面两边切掉,而封面上常常正好写着字。
         VideoCover(
             url = item.coverUrl,
             cornerRadius = LargeCoverRadius,
             modifier = Modifier.fillMaxWidth(CoverWidthFraction),
         )
+        // 整屏的主角是这张封面,标题跟着抬一档到 titleLarge —— 听视频页一屏只有一条内容,
+        // 不像列表要压字号换密度。
         Text(
             item.title,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleLarge,
+            textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = Spacing.Comfortable),
+            modifier = Modifier.padding(top = Spacing.Loose),
         )
-        Text(
-            item.upName,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = Spacing.Hair),
-        )
-        if (state.queueSize > 0) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier.padding(top = Spacing.Tight),
+        ) {
             Text(
-                "${state.positionInQueue} / ${state.queueSize}",
-                style = MaterialTheme.typography.labelMedium,
+                item.upName,
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = Spacing.Hair),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
+            if (state.queueSize > 0) {
+                // 队列位置和 UP 名同行:它是"这是第几条",属于同一句话的后半截,
+                // 单独占一行会让封面和进度条之间空出一整行。
+                Text(
+                    "${state.positionInQueue} / ${state.queueSize}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
         }
     }
 }

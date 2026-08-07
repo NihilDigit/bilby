@@ -42,8 +42,16 @@ class SponsorBlockRepository(
     private val httpClient: HttpClient,
     private val json: Json,
 ) {
-    suspend fun segments(bvid: String, cid: Long): List<SponsorSegment> = runCatching {
-        val response = httpClient.get(SKIP_SEGMENTS_URL) {
+    /**
+     * @param serverUrl 服务器根地址。可配是因为这是社区跑的第三方服务:换域名或长期挂掉时
+     *   我们发不出版本,用户得能自己改(设置页里那一项)。PiliPlus 同样把它做成可配项。
+     */
+    suspend fun segments(
+        bvid: String,
+        cid: Long,
+        serverUrl: String = SettingsStore.DEFAULT_SB_SERVER,
+    ): List<SponsorSegment> = runCatching {
+        val response = httpClient.get("${serverUrl.trimEnd('/')}$SKIP_SEGMENTS_PATH") {
             parameter("videoID", bvid)
             parameter("cid", cid)
         }
@@ -89,6 +97,6 @@ class SponsorBlockRepository(
     }
 
     private companion object {
-        const val SKIP_SEGMENTS_URL = "https://www.bsbsb.top/api/skipSegments"
+        const val SKIP_SEGMENTS_PATH = "/api/skipSegments"
     }
 }

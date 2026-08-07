@@ -35,8 +35,15 @@ fun nextSkipTarget(positionMillis: Long, segments: List<SponsorSegment>): Long? 
     return null
 }
 
-/** category 到中文类别名的映射,取自 BSponsorBlock 的分类定义(与 PiliPlus 的中文文案一致)。 */
-private val CATEGORY_LABELS = mapOf(
+/**
+ * category 到中文类别名的映射,取自 BSponsorBlock 的分类定义
+ * (PiliPlus/lib/models/common/sponsor_block/segment_type.dart 的 shortTitle)。
+ *
+ * 顺序即设置页里的显示顺序,所以用有序的 linked map,不要换成别的容器。
+ * 只列 actionType 为 skip 的类别 —— 空降点(poi_highlight)和整片打标
+ * (exclusive_access)不是"跳过一段时间"的语义,给它们一个跳过开关是错的。
+ */
+val CATEGORY_LABELS = mapOf(
     "sponsor" to "赞助推广",
     "selfpromo" to "自我推广",
     "interaction" to "三连提醒",

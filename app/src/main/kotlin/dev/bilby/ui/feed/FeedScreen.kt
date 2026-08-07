@@ -105,7 +105,9 @@ private fun FeedItem.toRowUi() = VideoRowUi(
     coverUrl = coverUrl,
     durationText = durationText,
     upName = upName,
-    meta = "${playCount}播放 · ${danmakuCount}弹幕 · ${formatRelativeTime(publishedAtEpochSeconds)}",
+    dateText = formatRelativeTime(publishedAtEpochSeconds),
+    playText = playCount,
+    danmakuText = danmakuCount,
 )
 
 private val AbsoluteDateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")

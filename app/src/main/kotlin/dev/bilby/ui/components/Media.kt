@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
@@ -36,17 +37,52 @@ import dev.bilby.ui.theme.Spacing
  * 这两件事以前散在七八个 AsyncImage 调用点上,漏一个就是一张裂图,收到这里来。
  */
 @Composable
-private fun biliImageRequest(url: String) = ImageRequest.Builder(LocalContext.current)
+fun biliImageRequest(url: String) = ImageRequest.Builder(LocalContext.current)
     .data(url.toHttpsUrl())
     .httpHeaders(NetworkHeaders.Builder().add("Referer", "https://www.bilibili.com").build())
     .build()
+
+/**
+ * 通用的 B 站图片。封面/头像之外的地方(评论配图、表情)用它 —— 形状和尺寸各处不同,
+ * 但**必须共用同一个请求构造**,否则就会漏掉 Referer。
+ *
+ * 漏过一次:评论区的配图和表情曾经直接写 `AsyncImage(model = url)`,防盗链一律 403,
+ * 表现是评论里该有图的地方一片空白。
+ */
+@Composable
+fun BiliAsyncImage(
+    url: String,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
+) = AsyncImage(
+    model = biliImageRequest(url),
+    contentDescription = contentDescription,
+    contentScale = contentScale,
+    modifier = modifier,
+)
 
 /** 封面底边那条「看到哪了」的刻度高度。 */
 private val ProgressBarHeight = 3.dp
 
 /**
- * 视频封面。固定 16:9,内容裁切填满 —— B 站封面本身是 16:9,但接口偶尔给别的比例,
- * 用 Fit 的话列表里会出现高矮不齐的行。
+ * 封面圆角。10dp 而不是 shapes.small 的 8dp:PiliPlus 的 `Style.imgRadius` 是 10,
+ * 而封面是整个列表里唯一的大色块,比周围的容器再圆一点点看得出来,也不至于圆到
+ * 像个头像。这个数由图片本身的规格定,不进 shapes 主题槽。
+ */
+val CoverCornerRadius = 10.dp
+
+/**
+ * 视频封面的比例。**16:10,不是 16:9** —— B 站上传的封面原图就是 16:10(1146×717 一类),
+ * 按 16:9 摆再 Crop 等于把上下各切掉一条,而封面顶部常常正好是标题文字。
+ * PiliPlus 的 `common/style.dart` 里 `Style.aspectRatio` 同样是 16/10,只有播放画面那个
+ * 容器才用 16:9。
+ */
+val CoverAspectRatio = 16f / 10f
+
+/**
+ * 视频封面。比例固定,内容裁切填满 —— 接口偶尔给别的比例,用 Fit 的话列表里会出现
+ * 高矮不齐的行。
  *
  * [durationText] 与 [progressFraction] 压在封面上而不是排进下面的文字行:
  * 这两个都是"现在要不要点开"的决策依据,压在图上一眼扫到,排进文字行就得读一遍。
@@ -57,9 +93,10 @@ fun VideoCover(
     modifier: Modifier = Modifier,
     durationText: String = "",
     progressFraction: Float? = null,
-    cornerRadius: Dp = 8.dp,
+    cornerRadius: Dp = CoverCornerRadius,
+    aspectRatio: Float = CoverAspectRatio,
 ) {
-    Box(modifier = modifier.aspectRatio(16f / 9f).clip(RoundedCornerShape(cornerRadius))) {
+    Box(modifier = modifier.aspectRatio(aspectRatio).clip(RoundedCornerShape(cornerRadius))) {
         AsyncImage(
             model = biliImageRequest(url),
             // 封面是装饰:它右边就是同一条视频的标题,读屏再念一遍图片等于把每条读两遍。
@@ -72,15 +109,15 @@ fun VideoCover(
             // 有进度条时把角标抬高一点,否则两者压在同一条底边上,角标正好盖住进度条的末端,
             // 看起来像进度只走到一半就断了。
             val bottomInset = if (progressFraction != null && progressFraction > 0f) {
-                Spacing.Hair + ProgressBarHeight
+                BadgeInset + ProgressBarHeight
             } else {
-                Spacing.Hair
+                BadgeInset
             }
             MediaBadge(
                 text = durationText,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = Spacing.Hair, bottom = bottomInset),
+                    .padding(end = BadgeInset, bottom = bottomInset),
             )
         }
 
@@ -105,19 +142,25 @@ fun VideoCover(
     }
 }
 
+/** 角标离封面边的距离。PiliPlus 的 `PBadge` 取 6,贴到 4 会像是没对齐。 */
+private val BadgeInset = 6.dp
+
 /**
  * 压在图片上的小角标(时长)。底色固定黑色遮罩、文字固定白色,不跟主题 ——
  * 背后是 UP 主上传的任意图片,不是我们能控制的 surface。取值理由见 [FixedColors]。
+ *
+ * 字重加到 Medium 是照 PiliPlus 的 `PBadge`(它用 bold):11sp 的白字压在半透明黑上,
+ * 常规字重的笔画在浅色封面上会被底下的高光吃掉一截。
  */
 @Composable
 fun MediaBadge(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
-        style = MaterialTheme.typography.labelSmall,
+        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
         color = FixedColors.OnMedia,
         modifier = modifier
             .background(FixedColors.ScrimOnMedia, MaterialTheme.shapes.extraSmall)
-            .padding(horizontal = Spacing.Hair, vertical = 1.dp),
+            .padding(horizontal = 4.dp, vertical = 2.dp),
     )
 }
 
@@ -131,7 +174,7 @@ fun SquareCover(url: String, size: Dp, modifier: Modifier = Modifier) {
         model = biliImageRequest(url),
         contentDescription = null,
         contentScale = ContentScale.Crop,
-        modifier = modifier.size(size).clip(RoundedCornerShape(8.dp)),
+        modifier = modifier.size(size).clip(RoundedCornerShape(CoverCornerRadius)),
     )
 }
 
@@ -154,7 +197,7 @@ fun ListCover(
     durationText: String = "",
     progressFraction: Float? = null,
     width: Dp = Dimens.ListCoverWidth,
-    cornerRadius: Dp = 8.dp,
+    cornerRadius: Dp = CoverCornerRadius,
 ) = VideoCover(
     url = url,
     durationText = durationText,

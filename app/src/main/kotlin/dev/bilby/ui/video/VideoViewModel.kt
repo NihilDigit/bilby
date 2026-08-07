@@ -23,6 +23,7 @@ import dev.bilby.data.VideoRepository
 import dev.bilby.data.VideoStat
 import dev.bilby.data.db.PlaybackProgressDao
 import dev.bilby.data.db.PlaybackProgressEntity
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -93,7 +94,9 @@ class VideoViewModel(
     fun toggleShuffle() {
         val next = !_queue.value.shuffled
         _queue.update { it.copy(shuffled = next) }
-        viewModelScope.launch {
+        // NonCancellable:切了随机就退出页面是常见操作,而 DataStore 的 edit 是挂起函数,
+        // 页面一走 viewModelScope 就取消,写还没落盘。理由同 SettingsViewModel.persist。
+        viewModelScope.launch(NonCancellable) {
             val prefs = settings.playbackPrefs.first()
             settings.savePlaybackPrefs(prefs.copy(shuffled = next))
         }
@@ -115,6 +118,25 @@ class VideoViewModel(
     /** 赞助/片头片尾片段,默认开启自动跳过。拉取失败就是空列表,不影响播放。 */
     private val _sponsorSegments = MutableStateFlow<List<SponsorSegment>>(emptyList())
     val sponsorSegments: StateFlow<List<SponsorSegment>> = _sponsorSegments.asStateFlow()
+
+    /**
+     * 关掉时直接不发请求,而不是拉回来再过滤:这是发给第三方服务端的查询,
+     * 用户关掉这个功能的意思里包含"别去问它"。
+     *
+     * 类别过滤发生在仓库合并重叠区间之后,所以极少数跨类别重叠的片段会按合并后那一段的
+     * 类别一起去留。重叠本来就是罕见的边界情况(仓库那边也是这么取舍的),
+     * 为它把过滤下沉到仓库、再让仓库认识用户偏好,不值当。
+     */
+    private suspend fun loadSponsorSegments(cid: Long) {
+        val prefs = settings.sponsorBlockPrefs.first()
+        if (!prefs.enabled) {
+            _sponsorSegments.value = emptyList()
+            return
+        }
+        _sponsorSegments.value = sponsorBlockRepository
+            .segments(bvid, cid, prefs.serverUrl)
+            .filter { it.category in prefs.categories }
+    }
 
     private val _relation = MutableStateFlow<VideoRelation?>(null)
     val relation: StateFlow<VideoRelation?> = _relation.asStateFlow()
@@ -165,9 +187,19 @@ class VideoViewModel(
     fun setQuality(quality: Int, currentPositionMillis: Long) {
         val cid = _state.value.currentCid
         if (cid == 0L) return
+        // 在播放页改画质就是改全局默认(DESIGN 2 节):设置页不重复放一个画质选项,
+        // 也就没有"两处能改同一件事"的问题。
+        viewModelScope.launch(NonCancellable) { settings.saveDefaultQuality(quality) }
         viewModelScope.launch {
             _state.update { it.copy(loading = true) }
-            when (val play = repository.getPlayUrl(bvid, cid, preferredQuality = quality)) {
+            when (
+                val play = repository.getPlayUrl(
+                    bvid,
+                    cid,
+                    preferredQuality = quality,
+                    preferredCodecs = settings.playerPrefs.first().codec.codecIds,
+                )
+            ) {
                 is BiliResult.Ok -> _state.update {
                     it.copy(
                         playInfo = play.value,
@@ -205,8 +237,16 @@ class VideoViewModel(
     fun playPart(cid: Long) = viewModelScope.launch {
         _state.update { it.copy(loading = true, error = null, currentCid = cid) }
         // 片段随 cid 变,换 P 要重拉;放在取流之前不阻塞播放(它自己有超时与静默失败)。
-        launch { _sponsorSegments.value = sponsorBlockRepository.segments(bvid, cid) }
-        when (val play = repository.getPlayUrl(bvid, cid)) {
+        launch { loadSponsorSegments(cid) }
+        val player = settings.playerPrefs.first()
+        when (
+            val play = repository.getPlayUrl(
+                bvid,
+                cid,
+                preferredQuality = player.defaultQuality,
+                preferredCodecs = player.codec.codecIds,
+            )
+        ) {
             is BiliResult.Ok -> {
                 val local = progressDao.get(bvid)?.takeIf { it.cid == cid }?.positionMillis ?: 0
                 _state.update {
@@ -215,6 +255,8 @@ class VideoViewModel(
                         // 本地进度与服务端 last_play_time 取较大者:我们不上报心跳时服务端那份
                         // 会停在别的客户端留下的位置,取大的一方总是更接近"我看到哪了"。
                         resumeAtMillis = maxOf(local, play.value.lastPlayTimeMillis),
+                        // 画质菜单要显示"当前是哪一档",没有这一行它在换 P 后会退回 0(无选中)。
+                        currentQuality = player.defaultQuality,
                         loading = false,
                     )
                 }

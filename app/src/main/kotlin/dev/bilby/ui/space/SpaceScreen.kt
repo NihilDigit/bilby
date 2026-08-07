@@ -10,13 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -29,7 +23,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -46,6 +39,7 @@ import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SquareCover
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
@@ -363,7 +357,8 @@ fun SpaceScreen(
 
     Scaffold(
         modifier = modifier,
-        topBar = { BilbyTopBar(title = state.profile?.name ?: "个人空间", onBack = onBack) },
+        // 标题固定"个人空间":名字归下面的头部区,顶栏只是路牌。
+        topBar = { BilbyTopBar(title = "个人空间", onBack = onBack) },
     ) { insets ->
         Column(modifier = Modifier.fillMaxSize().padding(insets)) {
             state.profile?.let { SpaceHeader(it) }
@@ -413,31 +408,52 @@ fun SpaceScreen(
     }
 }
 
+/**
+ * 空间头部。参照 PiliPlus 的 `pages/member/widget/user_info_card.dart`:头像 + 名字 +
+ * 一行数据 + 签名,签名单独占整行宽度。
+ *
+ * 名字放在这里而不是顶栏:顶栏的标题是路牌("个人空间"),头部才是这个人本身。
+ * 两处都印名字的话同屏出现两遍,而顶栏那一份还会被截断得更早。
+ *
+ * **没有头图**。接口层的 `SpaceProfile` 目前不带 `top_photo`,补它要动 `api/dto`,
+ * 不在这一轮的边界内 —— 见报告里的"需要接口层配合"。
+ */
 @Composable
 private fun SpaceHeader(profile: SpaceProfile, modifier: Modifier = Modifier) {
-    Row(
+    Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
-        Avatar(url = profile.faceUrl, size = Dimens.AvatarLarge)
-        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-            Text(
-                text = "Lv${profile.level} · ${profile.follower.formatFollower()}粉丝",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            // 名字已经在顶栏里,这里不重复。签名可能很长又基本没信息量,给两行封顶。
-            Text(
-                text = profile.sign.ifBlank { "这个人很懒,什么都没写" },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Avatar(url = profile.faceUrl, size = Dimens.AvatarLarge)
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+                Text(
+                    text = profile.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "Lv${profile.level}   ${profile.follower.formatFollower()}粉丝",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
         }
+        // 签名可能很长又基本没信息量,给两行封顶;放在下面一整行是因为它旁边没有头像时
+        // 能多放十来个字,而挤在头像右边只剩半行。
+        Text(
+            text = profile.sign.ifBlank { "这个人很懒,什么都没写" },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -482,16 +498,11 @@ private fun ArchivesTab(
                     )
                 }
             }
-            OutlinedTextField(
+            SearchField(
                 value = state.keyword,
                 onValueChange = onKeywordChanged,
-                placeholder = { Text("在这个空间内搜索") },
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                singleLine = true,
-                shape = MaterialTheme.shapes.large,
-                modifier = Modifier.fillMaxWidth(),
-                keyboardActions = KeyboardActions(onSearch = { onSearch() }),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                placeholder = "在这个空间内搜索",
+                onSearch = onSearch,
             )
         }
         VideoListTab(
@@ -633,8 +644,9 @@ private fun VideoListTab(
                             title = item.title,
                             coverUrl = item.coverUrl,
                             durationText = item.durationText,
-                            meta = "${item.playCountText}播放 · ${item.danmakuCountText}弹幕 · " +
-                                formatDate(item.publishedAtEpochSeconds),
+                            dateText = formatDate(item.publishedAtEpochSeconds),
+                            playText = item.playCountText,
+                            danmakuText = item.danmakuCountText,
                         ),
                         onClick = { onVideoClick(item) },
                     )

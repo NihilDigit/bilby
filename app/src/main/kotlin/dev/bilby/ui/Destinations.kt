@@ -19,6 +19,13 @@ data object ToView : NavKey
 @Serializable
 data class Video(val bvid: String) : NavKey
 
+/**
+ * 设置页。它不是产品面的第六个界面,是必要的杂物间(DESIGN 2 节)——
+ * 所以入口在动态页顶栏的图标,不占底部导航的一格:底部三格是"我要去哪",设置不是目的地。
+ */
+@Serializable
+data object Settings : NavKey
+
 @Serializable
 data class Space(val mid: Long) : NavKey
 

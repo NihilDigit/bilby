@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -54,6 +53,7 @@ import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.ListCover
 import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
@@ -325,8 +325,22 @@ private fun SearchVideo.toRowUi() = VideoRowUi(
     coverUrl = coverUrl,
     durationText = durationText,
     upName = upName,
-    meta = "${formatCount(playCount)}播放 · ${formatCount(danmakuCount)}弹幕",
+    // 搜索结果里发布时间是判据之一(教程类尤其看新旧),和动态、空间保持同一行形态。
+    dateText = formatDate(publishedAtEpochSeconds),
+    playText = formatCount(playCount),
+    danmakuText = formatCount(danmakuCount),
 )
+
+private val DateFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd")
+
+private fun formatDate(epochSeconds: Long): String =
+    if (epochSeconds <= 0) {
+        ""
+    } else {
+        java.time.Instant.ofEpochSecond(epochSeconds)
+            .atZone(java.time.ZoneId.systemDefault())
+            .format(DateFormatter)
+    }
 
 // ---- 助理模式 ----
 
@@ -493,13 +507,15 @@ private fun InputBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            OutlinedTextField(
+            SearchField(
                 value = input,
                 onValueChange = onInputChange,
+                placeholder = "输入想找的内容",
+                // 回车即发送。DESIGN 2.2 的快路原话是"输入直接回车 = 原始 B 站搜索",
+                // 换成 SearchField 之前这条根本没实现:OutlinedTextField 的 singleLine
+                // 只是不换行,键盘上那个键什么都不做。
+                onSearch = onSend,
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("输入想找的内容") },
-                singleLine = true,
-                shape = MaterialTheme.shapes.large,
             )
             // 发送是这一屏的主行动,用实心图标按钮 —— M3 说要提升某个动作的可见度就换成
             // filled/tonal,并且一屏只留一个。

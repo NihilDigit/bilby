@@ -209,6 +209,7 @@ fun VideoScreen(
             isFullscreen = true,
             onFullscreenChange = { fullscreen = it },
             onSaveProgress = onSaveProgress,
+            title = state.detail?.title.orEmpty(),
             modifier = Modifier.fillMaxSize().background(Color.Black),
         )
         return

@@ -5,9 +5,13 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dev.bilby.BuildConfig
+import dev.bilby.player.DEFAULT_PREFERRED_CODECS
+import dev.bilby.player.VideoCodecId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -83,11 +87,50 @@ class SettingsStore(context: Context) {
         }
     }
 
-    private companion object {
-        val KEY_SESSDATA = stringPreferencesKey("sessdata")
-        val KEY_BILI_JCT = stringPreferencesKey("bili_jct")
-        val KEY_DEDE_USER_ID = stringPreferencesKey("dede_user_id")
-        val KEY_DEDE_CK_MD5 = stringPreferencesKey("dede_user_id_ck_md5")
+    /**
+     * 播放器偏好。默认清晰度不在设置页里选,它由播放页那个画质菜单写进来 ——
+     * 在播放时改画质就是在改全局默认(DESIGN 2 节),设置页只放"设一次就不再想"的东西。
+     */
+    val playerPrefs: Flow<PlayerPrefs> = store.data.map { p ->
+        PlayerPrefs(
+            codec = CodecPreference.fromKey(p[KEY_PREFERRED_CODEC]),
+            defaultQuality = p[KEY_DEFAULT_QUALITY] ?: DEFAULT_QUALITY,
+        )
+    }
+
+    suspend fun saveCodecPreference(value: CodecPreference) {
+        store.edit { p -> p[KEY_PREFERRED_CODEC] = value.key }
+    }
+
+    suspend fun saveDefaultQuality(quality: Int) {
+        store.edit { p -> p[KEY_DEFAULT_QUALITY] = quality }
+    }
+
+    /**
+     * SponsorBlock。服务器地址可配是有原因的:它是社区跑的第三方服务,挂掉或换域名时
+     * 我们这边发不出版本,用户得能自己改(PiliPlus 同样把它做成可配项)。
+     */
+    val sponsorBlockPrefs: Flow<SponsorBlockPrefs> = store.data.map { p ->
+        SponsorBlockPrefs(
+            enabled = p[KEY_SB_ENABLED] ?: true,
+            categories = p[KEY_SB_CATEGORIES] ?: DEFAULT_SB_CATEGORIES,
+            serverUrl = p[KEY_SB_SERVER]?.takeIf { it.isNotBlank() } ?: DEFAULT_SB_SERVER,
+        )
+    }
+
+    suspend fun saveSponsorBlockPrefs(value: SponsorBlockPrefs) {
+        store.edit { p ->
+            p[KEY_SB_ENABLED] = value.enabled
+            p[KEY_SB_CATEGORIES] = value.categories
+            p[KEY_SB_SERVER] = value.serverUrl
+        }
+    }
+
+    companion object {
+        private val KEY_SESSDATA = stringPreferencesKey("sessdata")
+        private val KEY_BILI_JCT = stringPreferencesKey("bili_jct")
+        private val KEY_DEDE_USER_ID = stringPreferencesKey("dede_user_id")
+        private val KEY_DEDE_CK_MD5 = stringPreferencesKey("dede_user_id_ck_md5")
 
         /**
          * TV/HD 扫码返回的 `token_info.refresh_token`,app 端 OAuth 那一套的刷新口令。
@@ -98,21 +141,40 @@ class SettingsStore(context: Context) {
          * 丢了就只能让用户重登。它**不是** ac_time_value,不要拿它去调网页端
          * `cookie/refresh` —— 那正是被删掉那条路犯的错。
          */
-        val KEY_APP_REFRESH_TOKEN = stringPreferencesKey("refresh_token")
+        private val KEY_APP_REFRESH_TOKEN = stringPreferencesKey("refresh_token")
 
-        val KEY_ACCESS_KEY = stringPreferencesKey("access_key")
+        private val KEY_ACCESS_KEY = stringPreferencesKey("access_key")
 
-        val KEY_AUTO_NEXT = booleanPreferencesKey("playback_auto_next")
-        val KEY_SHUFFLED = booleanPreferencesKey("playback_shuffled")
+        private val KEY_AUTO_NEXT = booleanPreferencesKey("playback_auto_next")
+        private val KEY_SHUFFLED = booleanPreferencesKey("playback_shuffled")
 
-        val KEY_LLM_BASE_URL = stringPreferencesKey("llm_base_url")
-        val KEY_LLM_API_KEY = stringPreferencesKey("llm_api_key")
-        val KEY_LLM_MODEL = stringPreferencesKey("llm_model")
+        private val KEY_LLM_BASE_URL = stringPreferencesKey("llm_base_url")
+        private val KEY_LLM_API_KEY = stringPreferencesKey("llm_api_key")
+        private val KEY_LLM_MODEL = stringPreferencesKey("llm_model")
 
         /** 任务简单,用最便宜档即可(DESIGN 3.1)。 */
         const val DEFAULT_LLM_MODEL = "deepseek-chat"
 
-        val ALL_CREDENTIAL_KEYS = listOf(
+        private val KEY_PREFERRED_CODEC = stringPreferencesKey("player_preferred_codec")
+        private val KEY_DEFAULT_QUALITY = intPreferencesKey("player_default_quality")
+
+        /** 与 `VideoRepository.DEFAULT_QUALITY` 同值(1080P)。 */
+        const val DEFAULT_QUALITY = 80
+
+        private val KEY_SB_ENABLED = booleanPreferencesKey("sponsorblock_enabled")
+        private val KEY_SB_CATEGORIES = stringSetPreferencesKey("sponsorblock_categories")
+        private val KEY_SB_SERVER = stringPreferencesKey("sponsorblock_server")
+
+        const val DEFAULT_SB_SERVER = "https://www.bsbsb.top"
+
+        /**
+         * 默认跳过哪些类别。只含"跳过整段不会丢内容"的四类,和 BSponsorBlock 浏览器扩展的
+         * 默认一致。离题闲聊(filler)故意不默认开:它按提交者的口味划,激进,漏掉正片的
+         * 代价比多看半分钟大。
+         */
+        val DEFAULT_SB_CATEGORIES = setOf("sponsor", "selfpromo", "interaction", "intro", "outro")
+
+        private val ALL_CREDENTIAL_KEYS = listOf(
             KEY_SESSDATA, KEY_BILI_JCT, KEY_DEDE_USER_ID, KEY_DEDE_CK_MD5,
             KEY_APP_REFRESH_TOKEN, KEY_ACCESS_KEY,
         )
@@ -132,6 +194,36 @@ data class Credentials(
 }
 
 data class PlaybackPrefs(val autoNext: Boolean = false, val shuffled: Boolean = false)
+
+/**
+ * 编解码偏好。选的是"取流时优先要哪一条",不是"用什么解码器" ——
+ * Media3 只要某个编码有硬解就会用硬解,真正的杠杆在选流(见 `player/DeviceCodecs`)。
+ *
+ * [Auto] 是默认值,照抄 PiliPlus 的 `[AVC, AV1]`(它不含 HEVC)。选定某一种时把它排在
+ * 最前,后面仍然跟着兜底顺序 —— 不然遇到只发了另一种编码的视频会直接没流可播。
+ */
+enum class CodecPreference(val key: String, val label: String, val codecIds: List<Int>) {
+    Auto("auto", "自动", DEFAULT_PREFERRED_CODECS),
+    Avc("avc", "AVC / H.264", listOf(VideoCodecId.AVC, VideoCodecId.AV1, VideoCodecId.HEVC)),
+    Hevc("hevc", "HEVC / H.265", listOf(VideoCodecId.HEVC, VideoCodecId.AVC, VideoCodecId.AV1)),
+    Av1("av1", "AV1", listOf(VideoCodecId.AV1, VideoCodecId.AVC, VideoCodecId.HEVC)),
+    ;
+
+    companion object {
+        fun fromKey(key: String?): CodecPreference = entries.firstOrNull { it.key == key } ?: Auto
+    }
+}
+
+data class PlayerPrefs(
+    val codec: CodecPreference = CodecPreference.Auto,
+    val defaultQuality: Int = SettingsStore.DEFAULT_QUALITY,
+)
+
+data class SponsorBlockPrefs(
+    val enabled: Boolean = true,
+    val categories: Set<String> = SettingsStore.DEFAULT_SB_CATEGORIES,
+    val serverUrl: String = SettingsStore.DEFAULT_SB_SERVER,
+)
 
 data class LlmConfig(
     val baseUrl: String,

@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -19,14 +18,13 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MonetizationOn
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.WatchLater
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Shuffle
@@ -37,9 +35,6 @@ import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonGroup
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -48,6 +43,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SecondaryTabRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -81,6 +77,7 @@ import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.CompactVideoRow
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.SectionHeader
+import dev.bilby.ui.components.StatRow
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.Dimens
@@ -230,7 +227,7 @@ private fun IntroTab(
     onPlayEpisode: (String) -> Unit,
     onRelatedVideoClick: (String) -> Unit,
 ) {
-    var descriptionExpanded by rememberSaveable { mutableStateOf(false) }
+    var infoExpanded by rememberSaveable { mutableStateOf(false) }
 
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item {
@@ -238,13 +235,10 @@ private fun IntroTab(
                 modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
                 verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
             ) {
-                Text(detail.title, style = MaterialTheme.typography.titleMedium)
-
-                Text(
-                    text = "${formatCount(detail.stat.view)}播放 · ${formatCount(detail.stat.danmaku)}弹幕 · " +
-                        formatDate(detail.publishedAtEpochSeconds),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                TitleBlock(
+                    detail = detail,
+                    expanded = infoExpanded,
+                    onToggle = { infoExpanded = !infoExpanded },
                 )
 
                 UpRow(
@@ -266,14 +260,6 @@ private fun IntroTab(
                     onFavConfirm = onFavConfirm,
                 )
 
-                if (detail.description.isNotBlank()) {
-                    Description(
-                        text = detail.description,
-                        expanded = descriptionExpanded,
-                        onToggle = { descriptionExpanded = !descriptionExpanded },
-                    )
-                }
-
                 if (detail.pages.size > 1) {
                     PartRow(
                         labels = detail.pages.map { it.index to it.title },
@@ -290,7 +276,7 @@ private fun IntroTab(
                     queue = queue,
                     onPlayQueueItem = onPlayQueueItem,
                     onToggleShuffle = onToggleShuffle,
-                    modifier = Modifier.padding(top = Spacing.Tight),
+                    modifier = Modifier.padding(top = Spacing.Hair),
                 )
 
                 RelatedSection(
@@ -342,46 +328,78 @@ private fun UpRow(
     }
 }
 
-/** 简介默认两行,展开后给一段有界高度可滚,不让它把整页顶到看不见队列。 */
+/**
+ * 标题 + 计数行 + (展开后)bvid 与简介。
+ *
+ * 这三段合成一个可展开的块,是照 PiliPlus 的 `introduction/ugc/view.dart`(它的
+ * `ExpandablePanel` 收起时只给标题两行,展开后才露出 bvid、简介和标签)。
+ * 以前标题不限行数、简介另有一个展开开关,长标题会把 UP 主那一行和动作栏一起顶下去,
+ * 而简介的展开箭头又落在半屏之外 —— 两个开关管的其实是同一件事:这条视频要看多细。
+ *
+ * 展开指示放在计数行右端,不放标题末尾:标题会截断,截断处的箭头看起来像正文的一部分。
+ */
 @Composable
-private fun Description(text: String, expanded: Boolean, onToggle: () -> Unit) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = if (expanded) Int.MAX_VALUE else 2,
-        overflow = TextOverflow.Ellipsis,
+private fun TitleBlock(detail: VideoDetail, expanded: Boolean, onToggle: () -> Unit) {
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .then(
-                if (expanded) {
-                    Modifier.heightIn(max = ExpandedDescriptionMaxHeight).verticalScroll(rememberScrollState())
-                } else {
-                    Modifier
-                },
-            )
             .clickable(onClick = onToggle),
-    )
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    ) {
+        Text(
+            text = detail.title,
+            style = MaterialTheme.typography.titleMedium,
+            maxLines = if (expanded) Int.MAX_VALUE else 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StatRow(
+                modifier = Modifier.weight(1f),
+                playText = formatCount(detail.stat.view),
+                danmakuText = formatCount(detail.stat.danmaku),
+                dateText = formatDate(detail.publishedAtEpochSeconds),
+            )
+            Icon(
+                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "收起简介" else "展开简介",
+                tint = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+        }
+        if (expanded) {
+            Text(
+                text = detail.bvid,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            if (detail.description.isNotBlank()) {
+                Text(
+                    text = detail.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }
 
-private val ExpandedDescriptionMaxHeight = 180.dp
-
 /**
- * 点赞 / 投币 / 收藏 / 稍后再看。
+ * 点赞 / 投币 / 收藏 / 稍后再看。**图标在上、计数在下,四个等宽平分一行**,
+ * 照 PiliPlus 的 `introduction/ugc/widgets/action_item.dart`(它是 48dp 高的 Row,
+ * 每项 `Expanded`,图标 18dp、计数用 labelSmall,未选中取 `outline`、选中取 `primary`)。
  *
- * 用 [ButtonGroup] 而不是自己排一个 Row(material3 1.5.0-alpha25 才有这个组件):
+ * 这里换掉了上一轮的 `ButtonGroup`。换回来的理由不是"更像 B 站",是**四个带计数的动作
+ * 在 360dp 宽的屏上排成横向药丸根本放不下**:一项分到 85dp,而 "赞 12.3万" 这样的
+ * 标签在 labelLarge 下要 90dp 往上,于是 `ButtonGroup` 每次都把最后一两个动作收进溢出
+ * 菜单 —— 投币和收藏藏在一个 ⋮ 后面。图标叠计数的排法把同样的信息压到 55dp 宽,
+ * 四项全部露出,还能各自占满 90dp × 48dp 的触摸区。
  *
- * - **选中态配色归组件管。** 以前是一个裸的 `Column.clickable`,自己 `if (active) primary else
- *   onSurfaceVariant` 调 tint,还得自己撑 48dp 触摸目标。`toggleableItem` 两件事都自带。
- * - **放不下时自动收进溢出菜单。** 四个带计数的动作在 360dp 宽的屏上已经很挤,以前是硬挤,
- *   窄屏或大字号下文字直接截断;现在挤不下的自动进 [overflowIndicator] 的菜单,
- *   而且菜单项用的就是这里给的 label,不用另写一份。
+ * 代价是选中态配色和触摸目标要自己写(`ButtonGroup` 自带),两者都在 [ActionItem] 里。
  *
  * relation 为 null(还没查到当前账号的互动状态)时前三个不可点 ——
  * 避免"看起来能点但语义未知"。稍后再看不依赖 relation:它是只进不出的动作,
  * 不需要知道当前状态就能执行。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ActionButtonsRow(
     stat: VideoStat,
@@ -399,78 +417,53 @@ private fun ActionButtonsRow(
     // 收藏夹列表是异步拉的:点击时先发起请求,等 favFolders 到位再弹框。
     var awaitingFavFolders by rememberSaveable { mutableStateOf(false) }
 
-    ButtonGroup(
-        modifier = modifier.fillMaxWidth(),
-        overflowIndicator = { menuState ->
-            FilledTonalIconButton(onClick = { menuState.show() }) {
-                Icon(Icons.Filled.MoreVert, contentDescription = "更多操作")
-            }
-        },
-    ) {
-        toggleableItem(
-            checked = relation?.liked == true,
-            onCheckedChange = { onLike() },
-            label = "赞 ${formatCount(stat.like)}",
-            icon = {
-                Icon(
-                    imageVector = if (relation?.liked == true) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp,
-                    contentDescription = null,
-                )
-            },
-            weight = 1f,
+    Row(modifier = modifier.fillMaxWidth()) {
+        ActionItem(
+            modifier = Modifier.weight(1f),
+            selected = relation?.liked == true,
             enabled = relation != null,
+            label = formatCount(stat.like),
+            contentDescription = if (relation?.liked == true) "取消点赞" else "点赞",
+            selectedIcon = Icons.Filled.ThumbUp,
+            icon = Icons.Outlined.ThumbUp,
+            onClick = onLike,
         )
-        // 投币也用 toggleableItem。它点下去是弹框(问投几枚)而不是直接投,但"已投币"是一个
-        // 实实在在的可显示状态,而 clickableItem 会渲染成实心按钮 —— 在一排里看起来像主操作,
-        // 而投币恰恰是这排里最不该被误触的那个。
-        toggleableItem(
-            checked = (relation?.coined ?: 0) > 0,
-            onCheckedChange = { showCoinDialog = true },
-            label = "币 ${formatCount(stat.coin)}",
-            icon = {
-                Icon(
-                    imageVector = if ((relation?.coined ?: 0) > 0) {
-                        Icons.Filled.MonetizationOn
-                    } else {
-                        Icons.Outlined.MonetizationOn
-                    },
-                    contentDescription = null,
-                )
-            },
-            weight = 1f,
+        // 投币点下去是弹框(问投几枚)而不是直接投,但"已投币"是一个实实在在的可显示状态,
+        // 所以它和点赞用同一种表达,区别只在点击后发生什么。
+        ActionItem(
+            modifier = Modifier.weight(1f),
+            selected = (relation?.coined ?: 0) > 0,
             enabled = relation != null,
+            label = formatCount(stat.coin),
+            contentDescription = "投币",
+            selectedIcon = Icons.Filled.MonetizationOn,
+            icon = Icons.Outlined.MonetizationOn,
+            onClick = { showCoinDialog = true },
         )
-        // 收藏同样要弹框选收藏夹,但它有明确的"已收藏"状态,所以仍用 toggleableItem 表达状态,
-        // 点击时只负责把框拉起来,真正的增删在框里确认。
-        toggleableItem(
-            checked = relation?.favored == true,
-            onCheckedChange = {
+        ActionItem(
+            modifier = Modifier.weight(1f),
+            selected = relation?.favored == true,
+            enabled = relation != null,
+            label = formatCount(stat.favorite),
+            contentDescription = "收藏",
+            selectedIcon = Icons.Filled.Star,
+            icon = Icons.Outlined.StarBorder,
+            onClick = {
                 awaitingFavFolders = true
                 onOpenFavPicker()
             },
-            label = "藏 ${formatCount(stat.favorite)}",
-            icon = {
-                Icon(
-                    imageVector = if (relation?.favored == true) Icons.Filled.Star else Icons.Outlined.StarBorder,
-                    contentDescription = null,
-                )
-            },
-            weight = 1f,
-            enabled = relation != null,
         )
-        // 稍后再看:**只进不出**。取消勾选不做任何事 —— 移除在稍后再看页面做,
+        // 稍后再看:**只进不出**。已加入后点击不做任何事 —— 移除在稍后再看页面做,
         // 那里是个列表,划掉一条是自然动作;在这里做 toggle 就得先拉整个列表才能知道当前状态。
-        toggleableItem(
-            checked = addedToView,
-            onCheckedChange = { checked -> if (checked) onAddToView() },
+        ActionItem(
+            modifier = Modifier.weight(1f),
+            selected = addedToView,
+            enabled = true,
             label = if (addedToView) "已加入" else "稍后看",
-            icon = {
-                Icon(
-                    imageVector = if (addedToView) Icons.Filled.WatchLater else Icons.Outlined.WatchLater,
-                    contentDescription = null,
-                )
-            },
-            weight = 1f,
+            contentDescription = "加入稍后再看",
+            selectedIcon = Icons.Filled.WatchLater,
+            icon = Icons.Outlined.WatchLater,
+            onClick = { if (!addedToView) onAddToView() },
         )
         // 评论数只在 tab 标题上出现一次:同一个数字在同屏显示两遍没有信息量。
     }
@@ -497,6 +490,57 @@ private fun ActionButtonsRow(
         )
     }
 }
+
+/**
+ * 动作栏里的一项:图标叠计数,整块可点。
+ *
+ * 触摸目标由 `heightIn(min = 48dp)` 加上外面给的 `weight(1f)` 撑起来(360dp 屏上一项
+ * 90dp × 48dp),不靠 `IconButton` 的默认尺寸 —— 那样计数文字会掉到触摸区外面。
+ * 未选中用 `outline` 而不是 `onSurfaceVariant`:这一排四个图标同时出现,再亮一档就会和
+ * 上面的标题抢注意力,而它们本来是"想做才做"的动作。
+ */
+@Composable
+private fun ActionItem(
+    selected: Boolean,
+    enabled: Boolean,
+    label: String,
+    contentDescription: String,
+    icon: ImageVector,
+    selectedIcon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tint = when {
+        !enabled -> MaterialTheme.colorScheme.outlineVariant
+        selected -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.outline
+    }
+    Column(
+        modifier = modifier
+            .clip(MaterialTheme.shapes.small)
+            .clickable(enabled = enabled, onClick = onClick)
+            .heightIn(min = Dimens.MinTouchTarget)
+            .padding(vertical = Spacing.Hair),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(
+            imageVector = if (selected) selectedIcon else icon,
+            contentDescription = contentDescription,
+            tint = tint,
+            modifier = Modifier.size(ActionIconSize),
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = tint,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+private val ActionIconSize = 20.dp
 
 /** 一次最多投 2 枚(VideoActionRepository.coin),已投满时按钮禁用并报告已投数量。 */
 @Composable
@@ -666,6 +710,17 @@ private fun PartRow(
  *
  * 这个列表同时就是「听视频」要播的队列本身,点条目直接切歌,不需要另外构造队列。
  * queue.items 为空且不在加载中时不显示这一块。
+ *
+ * **整块装在一层 [Surface] 容器里**,照 PiliPlus 的 `introduction/ugc/widgets/season.dart`
+ * (它把合集面板包进 `Material(color: onInverseSurface, borderRadius: 6)`)。
+ * 换掉的是"动作栏和队列之间只隔一点空白"——那样队列的标题行看起来像还属于上面那一坨,
+ * 而它其实是另一件事。用容器而不是分割线:这里要表达的是"以下是一组被圈起来的条目",
+ * 分割线只能说"上下不是一回事",说不出边界在哪里结束。
+ *
+ * 底色取 `surfaceContainer` 而不是 `surfaceVariant`(风格指南 §1.1)。不取更浅的
+ * `surfaceContainerLow`:它在浅色主题下和页面的 `surface` 只差一点,真机上那圈边界几乎看不出来,
+ * 等于白做了一个容器。圆角遵守 optical roundness:外 16dp − 内边距 8dp = 内层条目的 8dp
+ * (`shapes.small`)。
  */
 @Composable
 private fun QueueSection(
@@ -676,7 +731,25 @@ private fun QueueSection(
 ) {
     if (!queue.loading && queue.items.isEmpty()) return
 
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.large,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        QueueContent(queue, onPlayQueueItem, onToggleShuffle)
+    }
+}
+
+@Composable
+private fun QueueContent(
+    queue: QueueUiState,
+    onPlayQueueItem: (String) -> Unit,
+    onToggleShuffle: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.padding(Spacing.Tight),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+    ) {
         SectionHeader(title = queue.sourceLabel) {
             // 顺序/随机只有两态,是个开关而不是两个选项,所以用带图标的 text button
             // 而不是 segmented button —— 后者会让人以为还有第三格。
