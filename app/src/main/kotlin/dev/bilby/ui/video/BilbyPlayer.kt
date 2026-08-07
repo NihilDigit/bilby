@@ -36,6 +36,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Pause
@@ -115,6 +116,7 @@ fun BilbyPlayer(
     onQualityChange: (Int) -> Unit,
     isFullscreen: Boolean,
     onFullscreenChange: (Boolean) -> Unit,
+    onListen: () -> Unit,
     onSaveProgress: (positionMillis: Long, durationMillis: Long) -> Unit,
     modifier: Modifier = Modifier,
     /** 只在全屏时显示。竖屏下标题就在播放器正下方,再印一遍是多余的。 */
@@ -388,6 +390,7 @@ fun BilbyPlayer(
                     onFullscreenChange(!isFullscreen)
                     interactionNonce++
                 },
+                onListen = onListen,
                 onMenuOpenChange = { menuOpen = it },
             )
         }
@@ -410,6 +413,7 @@ private fun PlayerControlBar(
     onSpeedChange: (Float) -> Unit,
     onQualityChange: (Int) -> Unit,
     onFullscreenToggle: () -> Unit,
+    onListen: () -> Unit,
     onMenuOpenChange: (Boolean) -> Unit,
 ) {
     val safeInsets = WindowInsets.displayCutout.union(WindowInsets.systemBars)
@@ -446,6 +450,16 @@ private fun PlayerControlBar(
             Spacer(Modifier.weight(1f))
             SpeedButton(speed, onSpeedChange, onMenuOpenChange, isFullscreen)
             QualityButton(qualities, currentQuality, onQualityChange, onMenuOpenChange, isFullscreen)
+            // 听视频和全屏是同一类东西:都是播放页内的状态,都不换播放器、不交接进度。
+            // 同构的两个动作放在一起,以前它在下面的简介区,和一堆内容动作混着。
+            IconButton(onClick = onListen) {
+                Icon(
+                    Icons.Filled.Headphones,
+                    contentDescription = "听视频",
+                    tint = FixedColors.OnMedia,
+                    modifier = Modifier.size(if (isFullscreen) 26.dp else 22.dp),
+                )
+            }
             FullscreenButton(isFullscreen, onFullscreenToggle, if (isFullscreen) 26.dp else 22.dp)
         }
     }

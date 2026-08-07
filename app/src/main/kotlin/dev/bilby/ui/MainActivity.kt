@@ -133,6 +133,7 @@ private fun BilbyApp(container: AppContainer) {
                 VideoRoute(
                     container = container,
                     bvid = key.bvid,
+                    startListening = key.listening,
                     onUpClick = { backStack.add(Space(it)) },
                     onFindRelated = { bvid, title, upName -> backStack.add(AgentRelated(bvid, title, upName)) },
                     onOpenVideo = { backStack.add(Video(it)) },
@@ -155,7 +156,13 @@ private fun BilbyApp(container: AppContainer) {
                 )
             }
             entry<Space> { key ->
-                SpaceRoute(container, key.mid, onVideoClick = { backStack.add(Video(it)) }, onBack = { backStack.removeLastOrNull() })
+                SpaceRoute(
+                    container,
+                    key.mid,
+                    onVideoClick = { backStack.add(Video(it)) },
+                    onListenUp = { backStack.add(Video(it, listening = true)) },
+                    onBack = { backStack.removeLastOrNull() },
+                )
             }
         },
     )
@@ -354,11 +361,12 @@ private fun SpaceRoute(
     container: AppContainer,
     mid: Long,
     onVideoClick: (String) -> Unit,
+    onListenUp: (String) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: SpaceViewModel = viewModel(
         key = "space-$mid",
-        factory = viewModelFactory { initializer { SpaceViewModel(mid, container.spaceRepository) } },
+        factory = viewModelFactory { initializer { SpaceViewModel(mid, container.spaceRepository, container.relationRepository) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
     SpaceScreen(
@@ -374,6 +382,12 @@ private fun SpaceRoute(
         onCollectionDetailBack = vm::closeCollectionDetail,
         onLoadMoreCollectionDetail = vm::loadMoreCollectionDetail,
         onVideoClick = { onVideoClick(it.bvid) },
+        onToggleFollow = vm::toggleFollow,
+        // 听这位 UP 的投稿:挑第一条进播放页并直接以听的状态打开。**宿主只有播放页一个** ——
+        // 空间页不承载听视频界面,否则又会多出一处需要单独维护的生命周期。
+        onListenUp = {
+            state.archives.items.firstOrNull()?.let { onListenUp(it.bvid) }
+        },
         onBack = onBack,
         onRetry = vm::retry,
     )
@@ -383,6 +397,7 @@ private fun SpaceRoute(
 private fun VideoRoute(
     container: AppContainer,
     bvid: String,
+    startListening: Boolean = false,
     onUpClick: (Long) -> Unit,
     onFindRelated: (bvid: String, title: String, upName: String) -> Unit,
     onOpenVideo: (String) -> Unit,
@@ -402,6 +417,7 @@ private fun VideoRoute(
                     container.sponsorBlockRepository,
                     container.queueSourceRepository,
                     container.toViewRepository,
+                    container.relationRepository,
                 )
             }
         },
@@ -414,6 +430,7 @@ private fun VideoRoute(
     val favFolders by vm.favFolders.collectAsStateWithLifecycle()
     val sponsorSegments by vm.sponsorSegments.collectAsStateWithLifecycle()
     val queue by vm.queue.collectAsStateWithLifecycle()
+    val followState by vm.followState.collectAsStateWithLifecycle()
     val addedToView by vm.addedToView.collectAsStateWithLifecycle()
 
     // 评论用 aid 作 oid,要等视频详情回来才知道;拿到之前先不建 ViewModel。
@@ -454,6 +471,8 @@ private fun VideoRoute(
             }
         },
         onUpClick = onUpClick,
+        followState = followState,
+        onToggleFollow = vm::toggleFollow,
         relation = relation,
         favFolders = favFolders,
         onLike = vm::toggleLike,
@@ -471,5 +490,6 @@ private fun VideoRoute(
         onSendComment = commentVm::send,
         onLikeComment = commentVm::like,
         onDeleteComment = commentVm::delete,
+        startListening = startListening,
     )
 }

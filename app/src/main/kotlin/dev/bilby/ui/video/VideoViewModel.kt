@@ -10,6 +10,8 @@ import dev.bilby.api.BiliResult
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.QueueSourceRepository
 import dev.bilby.data.SponsorBlockRepository
+import dev.bilby.data.FollowState
+import dev.bilby.data.RelationRepository
 import dev.bilby.data.ToViewRepository
 import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.flow.first
@@ -51,7 +53,35 @@ class VideoViewModel(
     private val sponsorBlockRepository: SponsorBlockRepository,
     private val queueSourceRepository: QueueSourceRepository,
     private val toViewRepository: ToViewRepository,
+    private val relationRepository: RelationRepository,
 ) : ViewModel() {
+
+    /** UP 的关注态。视频详情里只有 mid 和名字,关系要另查(PiliPlus 播放页同样单独查)。 */
+    private val _followState = MutableStateFlow(FollowState.None)
+    val followState: StateFlow<FollowState> = _followState.asStateFlow()
+
+    /**
+     * 关注/取关。与点赞投币同样是乐观更新、不重拉:等一个来回再变字会让人以为没点上。
+     *
+     * 互关状态下取关要退回"未关注"而不是"已关注" —— 对方关注你这件事不受你取关影响,
+     * 但从你这边看关系确实断了。
+     */
+    fun toggleFollow() {
+        val mid = _state.value.detail?.up?.mid ?: return
+        val current = _followState.value
+        if (current == FollowState.Self || current == FollowState.Blocked) return
+
+        val following = current.isFollowing
+        _followState.value = if (following) FollowState.None else FollowState.Following
+        viewModelScope.launch {
+            val result =
+                if (following) relationRepository.unfollow(mid) else relationRepository.follow(mid)
+            if (result !is BiliResult.Ok) {
+                BiliLog.w("${if (following) "取关" else "关注"}失败: $result")
+                _followState.value = current
+            }
+        }
+    }
 
     /**
      * 是否已加入稍后再看。**只进不出**:没有便宜的办法知道当前视频在不在列表里
@@ -220,6 +250,12 @@ class VideoViewModel(
             is BiliResult.Ok -> {
                 _state.update { it.copy(detail = detail.value) }
                 loadQueue(detail.value)
+                launch {
+                    when (val follow = relationRepository.stateOf(detail.value.up.mid)) {
+                        is BiliResult.Ok -> _followState.value = follow.value
+                        else -> BiliLog.w("查关注状态失败: $follow")
+                    }
+                }
                 when (val rel = actionRepository.getRelation(bvid)) {
                     is BiliResult.Ok -> _relation.value = rel.value
                     is BiliResult.ApiError -> BiliLog.w("查互动状态失败(${rel.code}): ${rel.message}")

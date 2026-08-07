@@ -3,10 +3,13 @@ package dev.bilby.data
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
+import dev.bilby.api.getData
+import dev.bilby.api.map
 import dev.bilby.api.postAction
+import kotlinx.serialization.Serializable
 
 /**
- * 关注状态。取自 `acc/info` 的 `relation` 属性值,不需要单独请求。
+ * 关注状态。空间页从 `acc/info` 的 `relation` 直接拿,播放页要另查 [RelationRepository.stateOf]。
  *
  * **互关是一个独立状态,不要合并进"已关注"** —— B 站用户在意这个区别,把它显示成"已关注"
  * 等于丢掉信息。
@@ -40,6 +43,14 @@ enum class FollowState(val attribute: Int) {
  */
 class RelationRepository(private val client: BiliClient) {
 
+    /**
+     * 单个用户的关注态。空间页不需要它(`acc/info` 自带 relation),播放页需要:
+     * 视频详情里只有 UP 的 mid 和名字,没有关系。PiliPlus 在播放页同样单独查这条。
+     */
+    suspend fun stateOf(mid: Long): BiliResult<FollowState> =
+        client.getData<RelationDto>(STATE, mapOf("fid" to mid.toString()))
+            .map { FollowState.of(it.attribute) }
+
     suspend fun follow(mid: Long): BiliResult<Unit> = modify(mid, ACT_FOLLOW)
 
     suspend fun unfollow(mid: Long): BiliResult<Unit> = modify(mid, ACT_UNFOLLOW)
@@ -62,6 +73,7 @@ class RelationRepository(private val client: BiliClient) {
     )
 
     private companion object {
+        const val STATE = "${BiliConstants.WEB_HOST}/x/relation"
         const val MODIFY = "${BiliConstants.WEB_HOST}/x/relation/modify"
 
         const val ACT_FOLLOW = 1
@@ -74,3 +86,7 @@ class RelationRepository(private val client: BiliClient) {
         const val DEVICE_REQ_JSON = """{"platform":"web","device":"pc","spmid":"333.1387"}"""
     }
 }
+
+/** `x/relation` 只用得上 attribute 一个字段,取值含义见 [FollowState]。 */
+@Serializable
+internal data class RelationDto(val attribute: Int = 0)

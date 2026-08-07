@@ -36,7 +36,9 @@ import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -67,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import dev.bilby.agent.AnswerItem
 import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
+import dev.bilby.data.FollowState
 import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoStat
@@ -121,7 +124,8 @@ fun VideoTabs(
     related: RelatedState,
     commentState: CommentUiState,
     onFindRelated: () -> Unit,
-    onListen: () -> Unit,
+    followState: FollowState,
+    onToggleFollow: () -> Unit,
     queue: QueueUiState,
     onPlayQueueItem: (bvid: String) -> Unit,
     onToggleShuffle: () -> Unit,
@@ -169,7 +173,8 @@ fun VideoTabs(
                     related = related,
                     onFindRelated = onFindRelated,
                     onUpClick = onUpClick,
-                    onListen = onListen,
+                    followState = followState,
+                    onToggleFollow = onToggleFollow,
                     queue = queue,
                     onPlayQueueItem = onPlayQueueItem,
                     onToggleShuffle = onToggleShuffle,
@@ -210,7 +215,8 @@ private fun IntroTab(
     currentCid: Long,
     related: RelatedState,
     onFindRelated: () -> Unit,
-    onListen: () -> Unit,
+    followState: FollowState,
+    onToggleFollow: () -> Unit,
     queue: QueueUiState,
     onPlayQueueItem: (bvid: String) -> Unit,
     onToggleShuffle: () -> Unit,
@@ -245,7 +251,8 @@ private fun IntroTab(
                     faceUrl = detail.up.faceUrl,
                     name = detail.up.name,
                     onUpClick = onUpClick,
-                    onListen = onListen,
+                    followState = followState,
+                    onToggleFollow = onToggleFollow,
                 )
 
                 ActionButtonsRow(
@@ -295,7 +302,8 @@ private fun UpRow(
     faceUrl: String,
     name: String,
     onUpClick: () -> Unit,
-    onListen: () -> Unit,
+    followState: FollowState,
+    onToggleFollow: () -> Unit,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -318,13 +326,7 @@ private fun UpRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        // 听视频:队列来自当前合集,不属于合集时退化为该 UP 的投稿
-        // (DESIGN 2.4b:有限且用户显式选定的集合)。它是这一页的第二主要动作(第一是播放),
-        // 用 tonal button —— M3 说要提升某个动作的可见度就换成 filled/tonal,一屏只留一个。
-        FilledTonalButton(onClick = onListen) {
-            Icon(Icons.Filled.Headphones, contentDescription = null, modifier = Modifier.size(Dimens.IconInline))
-            Text("听视频", modifier = Modifier.padding(start = Spacing.Tight))
-        }
+        FollowButton(state = followState, onClick = onToggleFollow)
     }
 }
 
@@ -913,3 +915,20 @@ private fun formatDate(epochSeconds: Long): String =
     java.time.Instant.ofEpochSecond(epochSeconds)
         .atZone(java.time.ZoneId.systemDefault())
         .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"))
+
+/**
+ * 关注按钮。三种可关注状态各有各的字面:互关不能显示成"已关注",那会把"对方也关注了你"
+ * 这条信息抹掉,而这正是 B 站用户会去看的东西。
+ *
+ * 已关注用 outlined、未关注用 filled:M3 里强调程度对应动作的主次,已经关注之后"取关"
+ * 不该继续抢眼。自己的空间和已拉黑都不显示按钮 —— 前者没有这个动作,后者要先解除拉黑。
+ */
+@Composable
+private fun FollowButton(state: FollowState, onClick: () -> Unit) {
+    when (state) {
+        FollowState.Self, FollowState.Blocked -> Unit
+        FollowState.None -> Button(onClick = onClick) { Text("关注") }
+        FollowState.Following -> OutlinedButton(onClick = onClick) { Text("已关注") }
+        FollowState.Mutual -> OutlinedButton(onClick = onClick) { Text("互相关注") }
+    }
+}

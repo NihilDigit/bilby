@@ -27,7 +27,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
+import dev.bilby.BiliLog
 import dev.bilby.api.BiliResult
+import dev.bilby.data.FollowState
+import dev.bilby.data.RelationRepository
 import dev.bilby.data.SpaceArchiveOrder
 import dev.bilby.data.SpaceCollectionItem
 import dev.bilby.data.SpaceProfile
@@ -124,7 +134,32 @@ data class SpaceCollectionDetailState(
 class SpaceViewModel(
     private val mid: Long,
     private val repository: SpaceRepository,
+    private val relationRepository: RelationRepository,
 ) : ViewModel() {
+
+    /**
+     * 关注/取关。乐观更新、不重拉,与播放页同一套规矩。
+     *
+     * 关注态来自 profile(`acc/info` 自带 relation),这里改的也是 profile 里的那一份,
+     * 不额外维护第二处状态 —— 两份状态迟早对不上。
+     */
+    fun toggleFollow() {
+        val profile = _state.value.profile ?: return
+        val current = profile.followState
+        if (current == FollowState.Self || current == FollowState.Blocked) return
+
+        val following = current.isFollowing
+        val next = if (following) FollowState.None else FollowState.Following
+        _state.update { it.copy(profile = profile.copy(followState = next)) }
+        viewModelScope.launch {
+            val result =
+                if (following) relationRepository.unfollow(mid) else relationRepository.follow(mid)
+            if (result !is BiliResult.Ok) {
+                BiliLog.w("${if (following) "取关" else "关注"}失败: $result")
+                _state.update { it.copy(profile = profile) }
+            }
+        }
+    }
 
     private val _state = MutableStateFlow(SpaceUiState())
     val state: StateFlow<SpaceUiState> = _state.asStateFlow()
@@ -345,6 +380,8 @@ fun SpaceScreen(
     onCollectionDetailBack: () -> Unit,
     onLoadMoreCollectionDetail: () -> Unit,
     onVideoClick: (SpaceVideoItem) -> Unit,
+    onToggleFollow: () -> Unit,
+    onListenUp: () -> Unit,
     onBack: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
@@ -361,7 +398,9 @@ fun SpaceScreen(
         topBar = { BilbyTopBar(title = "个人空间", onBack = onBack) },
     ) { insets ->
         Column(modifier = Modifier.fillMaxSize().padding(insets)) {
-            state.profile?.let { SpaceHeader(it) }
+            state.profile?.let {
+                SpaceHeader(it, onToggleFollow = onToggleFollow, onListenUp = onListenUp)
+            }
 
             PrimaryTabRow(selectedTabIndex = state.activeTab.ordinal) {
                 SpaceTab.entries.forEach { tab ->
@@ -419,7 +458,12 @@ fun SpaceScreen(
  * 不在这一轮的边界内 —— 见报告里的"需要接口层配合"。
  */
 @Composable
-private fun SpaceHeader(profile: SpaceProfile, modifier: Modifier = Modifier) {
+private fun SpaceHeader(
+    profile: SpaceProfile,
+    onToggleFollow: () -> Unit,
+    onListenUp: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -444,6 +488,13 @@ private fun SpaceHeader(profile: SpaceProfile, modifier: Modifier = Modifier) {
                     color = MaterialTheme.colorScheme.outline,
                 )
             }
+            Spacer(Modifier.weight(1f))
+            // 听这位 UP 的投稿:队列取自当前投稿列表,和播放页那份队列同源
+            // (DESIGN 2.4b:有限且用户显式选定的集合)。
+            IconButton(onClick = onListenUp) {
+                Icon(Icons.Filled.Headphones, contentDescription = "听这位 UP 的投稿")
+            }
+            SpaceFollowButton(state = profile.followState, onClick = onToggleFollow)
         }
         // 签名可能很长又基本没信息量,给两行封顶;放在下面一整行是因为它旁边没有头像时
         // 能多放十来个字,而挤在头像右边只剩半行。
@@ -661,3 +712,14 @@ private val DateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
 private fun formatDate(epochSeconds: Long): String =
     Instant.ofEpochSecond(epochSeconds).atZone(ZoneId.systemDefault()).format(DateFormatter)
+
+/** 与播放页的关注按钮同一套字面与强调规则,见 VideoTabs 里的那份说明。 */
+@Composable
+private fun SpaceFollowButton(state: FollowState, onClick: () -> Unit) {
+    when (state) {
+        FollowState.Self, FollowState.Blocked -> Unit
+        FollowState.None -> Button(onClick = onClick) { Text("关注") }
+        FollowState.Following -> OutlinedButton(onClick = onClick) { Text("已关注") }
+        FollowState.Mutual -> OutlinedButton(onClick = onClick) { Text("互相关注") }
+    }
+}

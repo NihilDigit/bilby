@@ -35,6 +35,7 @@ import androidx.media3.session.SessionCommand
 import dev.bilby.BiliLog
 import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
+import dev.bilby.data.FollowState
 import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.delay
 import dev.bilby.data.VideoRelation
@@ -61,6 +62,8 @@ fun VideoScreen(
     onQualityChange: (quality: Int, positionMillis: Long) -> Unit,
     onFindRelated: () -> Unit,
     onListen: () -> Unit,
+    followState: FollowState,
+    onToggleFollow: () -> Unit,
     queue: QueueUiState,
     onPlayQueueItem: (bvid: String) -> Unit,
     onToggleShuffle: () -> Unit,
@@ -82,6 +85,7 @@ fun VideoScreen(
     onSendComment: (String, Long?) -> Unit,
     onLikeComment: (Long) -> Unit,
     onDeleteComment: (Long) -> Unit,
+    startListening: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -92,7 +96,7 @@ fun VideoScreen(
      * 听视频是**页面内的一个状态**,和全屏同构:不是导航目的地,所以页面不离开组合、
      * 播放器不换、进度不交接 —— 没有任何生命周期需要处理。退出就是把它置回 false。
      */
-    var listening by rememberSaveable { mutableStateOf(false) }
+    var listening by rememberSaveable { mutableStateOf(startListening) }
 
     DisposableEffect(context) {
         val future = MediaController.Builder(context, AudioPlaybackService.sessionToken(context))
@@ -208,6 +212,8 @@ fun VideoScreen(
             onQualityChange = { onQualityChange(it, active.currentPosition) },
             isFullscreen = true,
             onFullscreenChange = { fullscreen = it },
+            // 全屏下切听视频要先退出全屏,否则听视频界面会顶着一个已经隐藏的系统栏。
+            onListen = { fullscreen = false; onListen(); listening = true },
             onSaveProgress = onSaveProgress,
             title = state.detail?.title.orEmpty(),
             modifier = Modifier.fillMaxSize().background(Color.Black),
@@ -231,6 +237,7 @@ fun VideoScreen(
                     onQualityChange = { onQualityChange(it, active.currentPosition) },
                     isFullscreen = false,
                     onFullscreenChange = { fullscreen = it },
+                    onListen = { onListen(); listening = true },
                     onSaveProgress = onSaveProgress,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -255,10 +262,8 @@ fun VideoScreen(
                 related = related,
                 commentState = commentState,
                 onFindRelated = onFindRelated,
-                onListen = {
-                    onListen()
-                    listening = true
-                },
+                followState = followState,
+                onToggleFollow = onToggleFollow,
                 queue = queue,
                 onPlayQueueItem = onPlayQueueItem,
                 onToggleShuffle = onToggleShuffle,

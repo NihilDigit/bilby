@@ -16,8 +16,13 @@ data object Search : NavKey
 @Serializable
 data object ToView : NavKey
 
+/**
+ * @param listening 直接以听视频的状态打开。**听视频仍然只有播放页一个宿主** ——
+ *   空间页的「听这位 UP 的投稿」靠这个参数进来,而不是自己再承载一份听视频界面。
+ *   它是目的地身份的一部分(以什么状态打开这个视频),不是可变标志位。
+ */
 @Serializable
-data class Video(val bvid: String) : NavKey
+data class Video(val bvid: String, val listening: Boolean = false) : NavKey
 
 /**
  * 设置页。它不是产品面的第六个界面,是必要的杂物间(DESIGN 2 节)——
