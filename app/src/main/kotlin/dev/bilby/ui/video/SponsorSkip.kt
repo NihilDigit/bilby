@@ -18,6 +18,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.bilby.R
+import androidx.compose.ui.graphics.Color
+import dev.bilby.ui.components.SeekBarSegment
 import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.delay
 
@@ -88,5 +90,31 @@ fun SkipToast(category: String?, modifier: Modifier = Modifier) {
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             )
         }
+    }
+}
+
+/**
+ * 类别配色,取自 SponsorBlock 官方扩展的默认色板 —— 用过那个扩展的人不必重新学一遍颜色。
+ *
+ * 只覆盖 [CATEGORY_LABELS] 里那九个会被跳过的类别;取不到就不染色(返回 null),
+ * 而不是给一个兜底色 —— 染上一个没人认识的颜色比不染更糟。
+ */
+fun sponsorCategoryColor(category: String): Color? = when (category) {
+    "sponsor" -> Color(0xFF00D400)
+    "selfpromo" -> Color(0xFFFFFF00)
+    "interaction" -> Color(0xFFCC00FF)
+    "intro" -> Color(0xFF00FFFF)
+    "outro" -> Color(0xFF0202ED)
+    "preview" -> Color(0xFF008FD6)
+    "padding" -> Color(0xFF2F2F2F)
+    "filler" -> Color(0xFF7300FF)
+    "music_offtopic" -> Color(0xFFFF9900)
+    else -> null
+}
+
+/** 片段转成进度条能画的形状。颜色认不出来的整条丢掉,不占位。 */
+fun List<SponsorSegment>.toSeekBarSegments(): List<SeekBarSegment> = mapNotNull { segment ->
+    sponsorCategoryColor(segment.category)?.let {
+        SeekBarSegment(segment.startMillis, segment.endMillis, it)
     }
 }

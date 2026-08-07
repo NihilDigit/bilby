@@ -80,6 +80,7 @@ import androidx.media3.ui.compose.PlayerSurface
 import dev.bilby.R
 import dev.bilby.data.QualityOption
 import dev.bilby.ui.components.SeekBar
+import dev.bilby.ui.components.SeekBarSegment
 import dev.bilby.ui.theme.FixedColors
 import kotlinx.coroutines.delay
 
@@ -120,6 +121,8 @@ fun BilbyPlayer(
     onFullscreenChange: (Boolean) -> Unit,
     onListen: () -> Unit,
     onReportProgress: (positionMillis: Long, durationMillis: Long) -> Unit,
+    /** 会被自动跳过的片段。只染在进度条上,不参与交互,见 [SeekBar]。 */
+    seekBarSegments: List<SeekBarSegment> = emptyList(),
     modifier: Modifier = Modifier,
     /** 只在全屏时显示。竖屏下标题就在播放器正下方,再印一遍是多余的。 */
     title: String = "",
@@ -350,6 +353,7 @@ fun BilbyPlayer(
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             PlayerControlBar(
+                segments = seekBarSegments,
                 isPlaying = isPlaying,
                 position = displayPosition,
                 duration = duration,
@@ -410,6 +414,7 @@ fun BilbyPlayer(
 
 @Composable
 private fun PlayerControlBar(
+    segments: List<SeekBarSegment>,
     isPlaying: Boolean,
     position: Long,
     duration: Long,
@@ -449,7 +454,7 @@ private fun PlayerControlBar(
 
     // 进度条独占一行:挤在按钮行里只剩几十 dp 可拖,而拖拽是这里最主要的操作。
     Column(modifier = container) {
-        SeekBar(position, duration, onSeekStart, onSeekTo, onSeekFinished, Modifier.fillMaxWidth())
+        SeekBar(position, duration, onSeekStart, onSeekTo, onSeekFinished, Modifier.fillMaxWidth(), segments = segments)
         Row(verticalAlignment = Alignment.CenterVertically) {
             PlayPauseButton(isPlaying, onPlayPause, if (isFullscreen) 30.dp else 22.dp)
             Text(

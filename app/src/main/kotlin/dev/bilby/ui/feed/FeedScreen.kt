@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
@@ -57,6 +58,8 @@ data class FeedUiState(
     val appending: Boolean = false, // 追加下一页
     val hasMore: Boolean = true,
     val error: String? = null,
+    /** 下拉刷新中。与 loading 分开:首屏空白加载和「列表还在、顶上转圈」是两种反馈。 */
+    val refreshing: Boolean = false,
     /**
      * 顶上那排"最常访问"的 UP。顺序是服务端给的,本地不排序也不缓存 ——
      * 它是导航(点进空间),不参与也不影响下面这条时间序动态流。
@@ -70,8 +73,13 @@ data class FeedUiState(
 private const val PrefetchThreshold = 5
 
 /**
- * 动态流。列表本身刻意不做特殊设计(DESIGN 2.1):没有下拉刷新仪式动画、没有红点、
- * 没有未读计数,底部会明确说"没有更多了"—— 时间序动态流天生能刷完,刷完就得看得出来。
+ * 动态流。列表本身刻意不做特殊设计(DESIGN 2.1):没有红点、没有未读计数,底部会明确说
+ * "没有更多了" —— 时间序动态流天生能刷完,刷完就得看得出来。
+ *
+ * **下拉刷新是有的。** 这里一度把它一并禁掉,理由是"下拉刷新属于变比率奖励的仪式"。那条
+ * 推理套错了对象:老虎机的前提是每拉一次都可能掉出新东西,而关注动态是个有限集合,刷出来的
+ * 只有关注的人真的发了的那些,发完就没了——底部那句"没有更多了"就是证据。拒绝刷新并不能让人
+ * 少看,只会让人退出重进,或者干等着不知道有没有更新。
  *
  * @param contentPadding 由外层给的内边距(顶栏和底部导航栏的高度)。用 contentPadding
  *   而不是外层 padding,内容才能滚到栏底下去而静止时又不被遮住。
@@ -79,6 +87,7 @@ private const val PrefetchThreshold = 5
 @Composable
 fun FeedScreen(
     state: FeedUiState,
+    onRefresh: () -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onItemClick: (FeedItem) -> Unit,
@@ -90,13 +99,14 @@ fun FeedScreen(
     when {
         state.loading && state.items.isEmpty() -> FullScreenLoading(modifier)
         state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry, modifier)
-        else -> FeedList(state, onLoadMore, onItemClick, onUpClick, onOpenFollowings, modifier, contentPadding)
+        else -> FeedList(state, onRefresh, onLoadMore, onItemClick, onUpClick, onOpenFollowings, modifier, contentPadding)
     }
 }
 
 @Composable
 private fun FeedList(
     state: FeedUiState,
+    onRefresh: () -> Unit,
     onLoadMore: () -> Unit,
     onItemClick: (FeedItem) -> Unit,
     onUpClick: (Long) -> Unit,
@@ -117,11 +127,16 @@ private fun FeedList(
             }
     }
 
-    LazyColumn(
-        state = listState,
+    PullToRefreshBox(
+        isRefreshing = state.refreshing,
+        onRefresh = onRefresh,
         modifier = modifier.fillMaxSize(),
-        contentPadding = contentPadding,
     ) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = contentPadding,
+        ) {
         // 跟着列表一起滚,不吸顶:吸顶会让它变成常驻的入口带,而这一页的主体是动态流。
         if (state.frequentUps.isNotEmpty()) {
             item(key = "frequent-ups") {
@@ -144,6 +159,7 @@ private fun FeedList(
                 hasMore = state.hasMore,
                 hasItems = state.items.isNotEmpty(),
             )
+            }
         }
     }
 }
@@ -202,7 +218,7 @@ private val previewItems = listOf(
 @Composable
 private fun FeedScreenListPreview() {
     BilbyTheme {
-        FeedScreen(FeedUiState(items = previewItems, hasMore = true), {}, {}, {}, {}, {})
+        FeedScreen(FeedUiState(items = previewItems, hasMore = true), {}, {}, {}, {}, {}, {})
     }
 }
 
@@ -210,7 +226,7 @@ private fun FeedScreenListPreview() {
 @Composable
 private fun FeedScreenNoMorePreview() {
     BilbyTheme {
-        FeedScreen(FeedUiState(items = previewItems, hasMore = false), {}, {}, {}, {}, {})
+        FeedScreen(FeedUiState(items = previewItems, hasMore = false), {}, {}, {}, {}, {}, {})
     }
 }
 
@@ -218,7 +234,7 @@ private fun FeedScreenNoMorePreview() {
 @Composable
 private fun FeedScreenEmptyPreview() {
     BilbyTheme {
-        FeedScreen(FeedUiState(items = emptyList(), hasMore = false), {}, {}, {}, {}, {})
+        FeedScreen(FeedUiState(items = emptyList(), hasMore = false), {}, {}, {}, {}, {}, {})
     }
 }
 
@@ -226,7 +242,7 @@ private fun FeedScreenEmptyPreview() {
 @Composable
 private fun FeedScreenErrorPreview() {
     BilbyTheme {
-        FeedScreen(FeedUiState(error = "网络连接失败"), {}, {}, {}, {}, {})
+        FeedScreen(FeedUiState(error = "网络连接失败"), {}, {}, {}, {}, {}, {})
     }
 }
 

@@ -49,6 +49,16 @@ class FeedViewModel(
         }
     }
 
+    /** 下拉刷新:重拉第一页,顶上那排也一并重取(关注关系可能在别处变过)。 */
+    fun refresh() {
+        if (_state.value.refreshing) return
+        _state.update { it.copy(refreshing = true) }
+        nextOffset = null
+        seenBvids.clear()
+        fetch(append = false)
+        loadFrequentUps()
+    }
+
     fun loadFirstPage() {
         nextOffset = null
         seenBvids.clear()
@@ -75,6 +85,7 @@ class FeedViewModel(
                             items = if (append) current.items + fresh else fresh,
                             loading = false,
                             appending = false,
+                            refreshing = false,
                             hasMore = page.value.hasMore && page.value.nextOffset != null,
                             error = null,
                         )
@@ -89,6 +100,6 @@ class FeedViewModel(
     }
 
     private fun setError(message: String) {
-        _state.update { it.copy(loading = false, appending = false, error = message) }
+        _state.update { it.copy(loading = false, appending = false, refreshing = false, error = message) }
     }
 }

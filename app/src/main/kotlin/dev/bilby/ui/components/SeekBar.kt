@@ -49,6 +49,16 @@ fun SeekBar(
     modifier: Modifier = Modifier,
     activeColor: Color = MaterialTheme.colorScheme.primary,
     inactiveColor: Color = MaterialTheme.colorScheme.surfaceContainerHighest,
+    /**
+     * 会被自动跳过的片段(SponsorBlock)。**只染色,不可交互。**
+     *
+     * 在进度条上多加一种手势会和拖动、点击跳转打架;而"这一段我不想跳"的正确入口是设置里
+     * 关掉那个类别,不是每次现场决定 —— 现场决定等于把一个一次性配置变成反复出现的打断。
+     *
+     * 染色解决的是另一件事:跳过本身有事后提示,但**跳之前看不到哪儿有段、有多长**,
+     * 于是播放器忽然往前一跳这件事只能靠事后解释。染上之后它是可预期的。
+     */
+    segments: List<SeekBarSegment> = emptyList(),
 ) {
     var dragging by remember { mutableStateOf(false) }
     val thumbRadius by animateDpAsState(
@@ -103,6 +113,23 @@ fun SeekBar(
                 strokeWidth = trackPx,
                 cap = StrokeCap.Round,
             )
+            // 片段画在底色之上、已播进度之下:进度条的首要信息是"播到哪了",
+            // 片段是背景标注,盖住进度会本末倒置。
+            if (duration > 0) {
+                segments.forEach { segment ->
+                    val from = (segment.startMillis.toFloat() / duration).coerceIn(0f, 1f)
+                    val to = (segment.endMillis.toFloat() / duration).coerceIn(0f, 1f)
+                    if (to <= from) return@forEach
+                    drawLine(
+                        color = segment.color,
+                        start = Offset(size.width * from, trackY),
+                        end = Offset(size.width * to, trackY),
+                        strokeWidth = trackPx,
+                        // 方头:圆头会让相邻的两段之间露出一道底色,看着像有缝隙。
+                        cap = StrokeCap.Butt,
+                    )
+                }
+            }
             if (fraction > 0f) {
                 drawLine(
                     color = activeColor,
@@ -120,6 +147,9 @@ fun SeekBar(
         }
     }
 }
+
+/** 进度条上要染色的一段。颜色由调用方给 —— 类别到颜色的映射是 SponsorBlock 的领域知识。 */
+data class SeekBarSegment(val startMillis: Long, val endMillis: Long, val color: Color)
 
 private fun Float.toFractionOf(width: Int): Float =
     if (width <= 0) 0f else (this / width).coerceIn(0f, 1f)

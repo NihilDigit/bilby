@@ -304,6 +304,7 @@ fun VideoScreen(
                         onFullscreenChange = { fullscreen = it },
                         onListen = { onListen(); listening = true },
                         onReportProgress = onReportProgress,
+                seekBarSegments = sponsorSegments.toSeekBarSegments(),
                         modifier = Modifier.fillMaxSize(),
                     )
 

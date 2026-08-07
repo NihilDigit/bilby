@@ -329,9 +329,7 @@ private fun RootTabs(
         topBar = {
             BilbyTopBar(title = stringResource(selected.label)) {
                 when (selected) {
-                    // 动态页没有内容相关的动作:这一页能做的只有往下看,刷新是拉到底自动翻页。
-                    // 放个刷新按钮等于把下拉刷新那套仪式换个位置摆回来(DESIGN 2.1)。
-                    // 这里唯一的图标是设置 —— 它需要一个入口,而底部三格是"我要去哪",
+                    // 设置需要一个入口 —— 它需要一个入口,而底部三格是"我要去哪",
                     // 设置不是目的地,只能挂在某个顶栏上,动态页是启动后的第一屏。
                     RootTab.Feed -> IconButton(onClick = onSettingsClick) {
                         Icon(
@@ -396,6 +394,7 @@ private fun RootTabs(
                     state = feedState,
                     onLoadMore = feedVm::loadMore,
                     onRetry = feedVm::loadFirstPage,
+                    onRefresh = feedVm::refresh,
                     onItemClick = { onVideoClick(it.bvid) },
                     onUpClick = onUserClick,
                     onOpenFollowings = onOpenFollowings,
