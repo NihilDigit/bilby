@@ -13,18 +13,34 @@ Bilby 是一个 bilibili 第三方 Android 客户端。首页只有关注 UP 主
 
 <table>
 <tr>
-<td><img src="docs/screenshots/feed.png" width="165"></td>
-<td><img src="docs/screenshots/video.png" width="165"></td>
-<td><img src="docs/screenshots/agent-running.png" width="165"></td>
-<td><img src="docs/screenshots/agent-answer.png" width="165"></td>
-<td><img src="docs/screenshots/listen.png" width="165"></td>
+<td><img src="docs/screenshots/feed.png" width="220"></td>
+<td><img src="docs/screenshots/video.png" width="220"></td>
+<td><img src="docs/screenshots/listen.png" width="220"></td>
 </tr>
 <tr>
-<td align="center">关注动态</td>
-<td align="center">播放页与队列</td>
+<td align="center">关注动态与最常访问</td>
+<td align="center">播放页、分 P 与合集</td>
+<td align="center">听视频</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/agent-running.png" width="220"></td>
+<td><img src="docs/screenshots/agent-answer.png" width="220"></td>
+<td><img src="docs/screenshots/space.png" width="220"></td>
+</tr>
+<tr>
 <td align="center">助理检索中</td>
 <td align="center">助理的回答</td>
-<td align="center">听视频</td>
+<td align="center">个人空间</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/saved.png" width="220"></td>
+<td><img src="docs/screenshots/fav.png" width="220"></td>
+<td><img src="docs/screenshots/followings.png" width="220"></td>
+</tr>
+<tr>
+<td align="center">稍后再看与收藏夹</td>
+<td align="center">收藏夹内容</td>
+<td align="center">关注列表</td>
 </tr>
 </table>
 

@@ -15,18 +15,34 @@ no recommendation feed, no related-videos rail, and no autoplay.
 
 <table>
 <tr>
-<td><img src="docs/screenshots/feed.png" width="165"></td>
-<td><img src="docs/screenshots/video.png" width="165"></td>
-<td><img src="docs/screenshots/agent-running.png" width="165"></td>
-<td><img src="docs/screenshots/agent-answer.png" width="165"></td>
-<td><img src="docs/screenshots/listen.png" width="165"></td>
+<td><img src="docs/screenshots/feed.png" width="220"></td>
+<td><img src="docs/screenshots/video.png" width="220"></td>
+<td><img src="docs/screenshots/listen.png" width="220"></td>
 </tr>
 <tr>
-<td align="center">Following feed</td>
-<td align="center">Video page and queue</td>
-<td align="center">Assistant searching</td>
-<td align="center">Assistant's answer</td>
+<td align="center">Feed and most-visited</td>
+<td align="center">Player, parts and collection</td>
 <td align="center">Listening mode</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/agent-running.png" width="220"></td>
+<td><img src="docs/screenshots/agent-answer.png" width="220"></td>
+<td><img src="docs/screenshots/space.png" width="220"></td>
+</tr>
+<tr>
+<td align="center">Assistant searching</td>
+<td align="center">Assistant answer</td>
+<td align="center">Uploader page</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/saved.png" width="220"></td>
+<td><img src="docs/screenshots/fav.png" width="220"></td>
+<td><img src="docs/screenshots/followings.png" width="220"></td>
+</tr>
+<tr>
+<td align="center">Watch later and favourites</td>
+<td align="center">Inside a folder</td>
+<td align="center">Following list</td>
 </tr>
 </table>
 
