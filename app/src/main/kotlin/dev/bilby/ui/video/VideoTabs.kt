@@ -181,12 +181,9 @@ fun VideoTabs(
             // 两处指示条粗细一样,层级读不出来);形状仍是直角,圆头是 primary 的标志,
             // 这里只是让它变窄,不是变成 primary。
             //
-            // **宽度贴合文字,不占满整格**:M3 默认的 SecondaryIndicator 通长铺满整个 Tab,
-            // 真机看偏重。TabPosition.contentWidth(标签实际渲染宽度,不是整格宽度)确实存在——
-            // 用 kotlin-metadata-jvm 读 TabPosition.class 的 @Metadata 核实过,是个普通属性,
-            // 不像 tabIndicatorLayout 那样有 member/extension 的歧义。用它替掉原来插值用的
-            // width,left 相应按内容区居中算(left + (width − contentWidth) / 2)——contentWidth
-            // 只决定指示条多宽,不影响它贴着手指走这件事,和下面的连续进度插值是两条独立的账。
+            // 宽度**占满整格**,这正是 M3 给 secondary 的形状。试过改成贴合文字宽度
+            // (TabPosition.contentWidth,居中摆放),真机上位置偏了,而且窄指示条本来就更像
+            // primary 的做派——两个理由叠起来不值当,退回默认。
             //
             // tabIndicatorLayout 是 `Modifier.` 扩展(TabIndicatorScope 内的成员扩展函数,
             // 接收者是 Modifier),不是"收 Modifier 当第一个参数"的普通函数——第一版写成
@@ -204,12 +201,8 @@ fun VideoTabs(
                         val from = progress.toInt().coerceIn(0, positions.lastIndex)
                         val to = (from + 1).coerceIn(0, positions.lastIndex)
                         val fraction = (progress - from).coerceIn(0f, 1f)
-                        val fromPos = positions[from]
-                        val toPos = positions[to]
-                        val fromLeft = fromPos.left + (fromPos.width - fromPos.contentWidth) / 2
-                        val toLeft = toPos.left + (toPos.width - toPos.contentWidth) / 2
-                        val left = lerp(fromLeft, toLeft, fraction)
-                        val width = lerp(fromPos.contentWidth, toPos.contentWidth, fraction)
+                        val left = lerp(positions[from].left, positions[to].left, fraction)
+                        val width = lerp(positions[from].width, positions[to].width, fraction)
                         val placeable = measurable.measure(Constraints.fixedWidth(width.roundToPx()))
                         layout(placeable.width, placeable.height) {
                             placeable.placeRelative(x = left.roundToPx(), y = 0)
