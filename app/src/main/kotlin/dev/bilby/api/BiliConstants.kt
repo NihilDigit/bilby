@@ -1,9 +1,13 @@
 package dev.bilby.api
 
+import dev.bilby.BuildConfig
+
 /**
- * 请求约定。PiliPlus 走的是 app 端那套(UA 写死 'Dart/3.6 (dart:io)' 加 app-key header),
- * 对我们要用的网页端接口不适用,所以这里按网页端自己定:桌面浏览器 UA + 站内 Referer。
- * 取流(playurl 拿到的 baseUrl)有防盗链,同样要带这两个头。
+ * 请求约定。web 接口用桌面浏览器 UA([USER_AGENT])加站内 Referer;app 端接口报 B 站官方
+ * 客户端([APP_USER_AGENT],签名里带的是 TV/HD 的 appkey,UA 必须跟它对得上)。
+ * 只有字幕轨那一个接口例外,见 [NON_BROWSER_USER_AGENT]。
+ *
+ * 取流(playurl 拿到的 baseUrl)有防盗链,要 Referer + UA。
  */
 object BiliConstants {
     const val WEB_HOST = "https://api.bilibili.com"
@@ -12,9 +16,32 @@ object BiliConstants {
     const val SPACE_HOST = "https://space.bilibili.com"
     const val APP_HOST = "https://app.bilibili.com"
 
+    /** web 接口的默认 UA。整条默认路线上二十来个接口都靠它,长期工作正常,不要动。 */
     const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
             "Chrome/131.0.0.0 Safari/537.36"
+
+    /**
+     * **只给 `x/player/wbi/v2`(字幕轨)用的 UA,别扩大到别的接口。**
+     *
+     * 那个接口拿浏览器 UA 长期 `-412 request was banned`,字幕从来加载不出来。三轮单变量对照
+     * (同一账号、同一网络、其余 header 与参数全不变):
+     *
+     * | UA | 结果 |
+     * |---|---|
+     * | [USER_AGENT](桌面 Chrome) | -412 |
+     * | `Dart/3.6 (dart:io)`(PiliPlus 的 Dio 默认值) | 通 |
+     * | 本串 | 通 |
+     *
+     * 两个互不相同的非浏览器 UA 都能过,所以判据是"这个接口不接受浏览器 UA",而不是"必须是
+     * 某个特定字符串" —— 于是不必抄 PiliPlus 的值,如实报自己是谁即可。
+     *
+     * **曾经把它设成全局默认,那是错的。** 理由当时是"自称 Chrome 凑不出一个真实客户端:
+     * 同一个请求还带着 app-key、x-bili-aurora-eid 和 TV 扫码换来的 cookie"。推理本身没错,
+     * 但它推不出"所以别的接口也会拒绝浏览器 UA" —— 实际结果是 `x/web-interface/card`
+     * 当场 -352、搜索直接没结果。一个接口的实证只覆盖那一个接口(CLAUDE.md:风控是按动作算的)。
+     */
+    val NON_BROWSER_USER_AGENT = "Bilby/${BuildConfig.VERSION_NAME} (+https://github.com/NihilDigit/bilby)"
     /** app 路线用的 UA,原样抄自 PiliPlus 的 Constants.userAgent(android_hd)。 */
     const val APP_USER_AGENT =
         "Mozilla/5.0 BiliDroid/2.0.1 (bbcallen@gmail.com) os/android model/android_hd " +

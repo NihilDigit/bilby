@@ -472,12 +472,16 @@ private fun SearchPane(
     val vm: SearchChatViewModel = viewModel(
         key = "root-search",
         factory = viewModelFactory {
-            initializer { SearchChatViewModel(container.searchRepository, container.agentLoop) }
+            initializer { SearchChatViewModel(container.searchRepository, container.agentLoop, container.settings) }
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    val history by vm.searchHistory.collectAsStateWithLifecycle()
     SearchChatScreen(
         state = state,
+        searchHistory = history,
+        onHistoryClick = vm::searchFromHistory,
+        onHistoryRemove = vm::removeSearchHistory,
         onInputChange = vm::onInputChange,
         onModeChange = vm::onModeChange,
         onOrderChange = vm::onOrderChanged,

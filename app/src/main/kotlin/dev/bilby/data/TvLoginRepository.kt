@@ -4,6 +4,7 @@ import dev.bilby.BiliLog
 import dev.bilby.api.AppSign
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
+import dev.bilby.api.DeviceFingerprint
 import dev.bilby.api.BiliResponse
 import dev.bilby.api.BiliResult
 import io.ktor.client.call.body
@@ -39,6 +40,7 @@ import kotlinx.serialization.Serializable
 class TvLoginRepository(
     private val client: BiliClient,
     private val settings: SettingsStore,
+    private val fingerprint: DeviceFingerprint,
 ) {
 
     val credentials: Flow<Credentials> = settings.credentials
@@ -100,7 +102,14 @@ class TvLoginRepository(
         }
     }.onFailure { BiliLog.w("TV 登录轮询异常", it) }.getOrElse { BiliResult.Failure(it) }
 
-    suspend fun logout() = settings.clearCredentials()
+    /**
+     * 登出要连会话指纹一起清:`sid` 属于刚刚结束的那次登录,留到下次登录就成了拼接出来的
+     * 会话身份。PiliPlus 的 `delete()` 同样是清空整个 cookie jar 再重新生成 buvid3。
+     */
+    suspend fun logout() {
+        settings.clearCredentials()
+        fingerprint.clearSession()
+    }
 
     /**
      * cookie 与 access_key 一次写完,不分两笔:分开写会让 credentials 流先发出一个
@@ -111,8 +120,18 @@ class TvLoginRepository(
      * webRefreshToken:它是 app 端 OAuth 的刷新口令,不是网页 cookie 刷新要的
      * ac_time_value(notes/auth-from-docs.md §2.5),混着用会让 cookie/refresh 回 86095。
      */
+    /**
+     * **`cookie_info.cookies` 里的每一个都要留下。** 下面按名字取的四个是有专门用途的
+     * (SESSDATA 是登录态、bili_jct 当 csrf、DedeUserID 还要拼 `x-bili-mid`),其余的
+     * ——目前是 `sid`——交给 [DeviceFingerprint] 原样带回。
+     *
+     * 这里曾经只取那四个,剩下的连同 `sid` 一起丢掉。于是之后每个请求交回去的 cookie 组合,
+     * 服务端从来没有这样签发过:少了它自己给的 sid。PiliPlus 不挑字段,整份存进 jar
+     * (`account.dart:217-226`)。
+     */
     private suspend fun saveLogin(data: PollData) {
         val cookiesByName = data.cookieInfo.cookies.associateBy { it.name }
+        fingerprint.rememberCookies(data.cookieInfo.cookies.associate { it.name to it.value })
         settings.saveLogin(
             Credentials(
                 sessdata = cookiesByName["SESSDATA"]?.value.orEmpty(),

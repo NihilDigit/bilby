@@ -5,7 +5,6 @@ import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
 import dev.bilby.api.CODE_RATE_LIMITED
-import dev.bilby.api.DmImgParams
 import dev.bilby.api.dto.PlayerV2Dto
 import dev.bilby.api.dto.SubtitleBodyDto
 import dev.bilby.api.dto.SubtitleTrackDto
@@ -44,7 +43,15 @@ class SubtitleRepository(private val client: BiliClient) {
      */
     private suspend fun fetchTracksWithRetry(bvid: String, cid: Long): List<SubtitleTrackDto> {
         repeat(MAX_RATE_LIMIT_ATTEMPTS) { attempt ->
-            val result = client.getData<PlayerV2Dto>(PLAYER_V2_URL, params = trackParams(bvid, cid), signed = true)
+            val result = client.getData<PlayerV2Dto>(
+                PLAYER_V2_URL,
+                params = trackParams(bvid, cid),
+                signed = true,
+                // 全 app 唯一一处换 UA。这个接口不接受浏览器 UA,判据与实验见
+                // BiliConstants.NON_BROWSER_USER_AGENT —— 别顺手推广到别的接口,
+                // 那样做过一次,`x/web-interface/card` 当场 -352、搜索直接没结果。
+                userAgent = BiliConstants.NON_BROWSER_USER_AGENT,
+            )
             when (result) {
                 is BiliResult.Ok -> return result.value.subtitle?.subtitles.orEmpty()
                 is BiliResult.ApiError -> {
@@ -64,18 +71,19 @@ class SubtitleRepository(private val client: BiliClient) {
     }
 
     /**
-     * `bvid`/`cid` 之外的两个参数是风控埋点,照抄 `VideoRepository.playUrlParams` 那条注释的
-     * 判据:PiliPlus 在同族的 `x/player/wbi/playurl` 上全带了这些,是否必需 UNSURE(它没做过
-     * 省略测试)。这里补的**是推断,不是实证**——playurl 带这些确认能过,但没有对照实验证明
-     * `x/player/wbi/v2` 省略它们也会撞风控;只是按"宁可多带,少带一个字段换来的 -412 很难和
-     * 别的失败区分"这条既有判据补齐,不要理解成"必须带才能过"。`fnval`/`fourk`/`try_look`
-     * 那几个是取流专用参数,不搬过来。
+     * **只有 bvid + cid,别再往里加东西。** PiliPlus 调这个接口就发这些
+     * (`lib/http/video.dart:823-829`,只有 aid/bvid/cid/season_id/ep_id 加 WBI 签名)。
+     *
+     * 这里曾按"宁可多带"的判据补过 `web_location` 与四个 `dm_img_*`,理由是同族的
+     * `x/player/wbi/playurl` 带了它们能过。那是推断:PiliPlus 的 playurl **确实**带
+     * (`video.dart:213-236`),但它在这个接口上一个都不带,而 `dm_img_*` 是网页端塞
+     * WebGL/canvas 指纹的位置——我们填的是随机字节,格式对而来源假。结果是全 app 唯一
+     * 长期回 -412 的接口,恰好就是唯一多带了这些参数的接口。
      */
     private fun trackParams(bvid: String, cid: Long): Map<String, String> = mapOf(
         "bvid" to bvid,
         "cid" to cid.toString(),
-        "web_location" to "1315873",
-    ) + DmImgParams.next()
+    )
 
     /**
      * 一条字幕轨的正文。**这个响应不是 B 站的标准信封**——没有 `code`/`data` 外层,
@@ -108,6 +116,7 @@ class SubtitleRepository(private val client: BiliClient) {
     private companion object {
         const val PLAYER_V2_URL = "${BiliConstants.WEB_HOST}/x/player/wbi/v2"
 
+        
         /** thisHasZh != otherHasZh -> 含 zh 的排前;同等条件下 isAi 排后。 */
         val TRACK_ORDER: Comparator<SubtitleTrack> =
             compareByDescending<SubtitleTrack> { it.lan.contains("zh") }.thenBy { it.isAi }

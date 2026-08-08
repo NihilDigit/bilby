@@ -41,12 +41,13 @@ class BiliClient(
         params: Map<String, String> = emptyMap(),
         signed: Boolean = false,
         referer: String? = null,
+        userAgent: String? = null,
     ): HttpResponse {
         val finalParams = if (signed) wbiSigner.sign(params) else params
         val credentials = settings.credentials.first()
         val cookie = cookieHeader(credentials)
         return http.get(url) {
-            applyCommonHeaders(credentials, cookie, referer)
+            applyCommonHeaders(credentials, cookie, referer, userAgent)
             finalParams.forEach { (k, v) -> parameter(k, v) }
         }.also { fingerprint.rememberCookies(it.setCookie()) }
     }
@@ -99,6 +100,7 @@ class BiliClient(
         withCsrf: Boolean = true,
         params: Map<String, String> = emptyMap(),
         referer: String? = null,
+        userAgent: String? = null,
     ): HttpResponse {
         val credentials = settings.credentials.first()
         val fields = if (withCsrf) form + ("csrf" to credentials.biliJct) else form
@@ -108,7 +110,7 @@ class BiliClient(
             formParameters = Parameters.build { fields.forEach { (k, v) -> append(k, v) } },
         ) {
             params.forEach { (k, v) -> parameter(k, v) }
-            applyCommonHeaders(credentials, cookie, referer)
+            applyCommonHeaders(credentials, cookie, referer, userAgent)
         }.also { fingerprint.rememberCookies(it.setCookie()) }
     }
 
@@ -151,8 +153,9 @@ class BiliClient(
         credentials: dev.bilby.data.Credentials,
         cookie: String,
         referer: String? = null,
+        userAgent: String? = null,
     ) {
-        header(HttpHeaders.UserAgent, BiliConstants.USER_AGENT)
+        header(HttpHeaders.UserAgent, userAgent ?: BiliConstants.USER_AGENT)
         header(HttpHeaders.Referrer, referer ?: BiliConstants.REFERER)
         // **只在指定了 referer 时才发 Origin**,默认不发。浏览器对同源的 GET 根本不带
         // Origin,无条件发反而是个破绽;PiliPlus 也没有全局 Origin,只在空间那几个接口
@@ -238,7 +241,8 @@ suspend inline fun <reified T> BiliClient.getData(
     params: Map<String, String> = emptyMap(),
     signed: Boolean = false,
     referer: String? = null,
-): BiliResult<T> = runCatching { rawGet(url, params, signed, referer).body<BiliResponse<T>>() }
+    userAgent: String? = null,
+): BiliResult<T> = runCatching { rawGet(url, params, signed, referer, userAgent).body<BiliResponse<T>>() }
     .fold(
         onSuccess = { envelope ->
             val data = envelope.data
@@ -269,8 +273,9 @@ suspend fun BiliClient.postAction(
     withCsrf: Boolean = true,
     params: Map<String, String> = emptyMap(),
     referer: String? = null,
+    userAgent: String? = null,
 ): BiliResult<Unit> = envelopeResult(url) {
-    rawPostForm(url, form, withCsrf, params, referer).body<BiliEnvelope>()
+    rawPostForm(url, form, withCsrf, params, referer, userAgent).body<BiliEnvelope>()
 }
 
 /** app 路线的写接口(点赞/投币):access_key + appkey 签名,不带 Cookie。 */

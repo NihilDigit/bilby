@@ -46,6 +46,8 @@
     <string name="feed_exclude_up">Hide %1$s from home</string>
 
     <string name="search_empty">Search videos and creators</string>
+    <string name="search_history_title">Recent searches</string>
+    <string name="search_history_remove">Remove this search</string>
     <string name="search_agent_empty">Describe what you want to watch</string>
     <string name="search_no_results">No results</string>
     <string name="search_loading">Searching…</string>
@@ -165,7 +167,7 @@
     <string name="listen_title">Listen</string>
     <string name="listen_not_playing">Nothing playing</string>
     <string name="listen_queue">Queue</string>
-    <string name="listen_queue_count">Queue · %1$d</string>
+    <string name="listen_queue_title">Queue</string>
     <string name="queue_order_sequential">In order</string>
     <string name="queue_order_shuffle">Shuffle</string>
     <string name="sleep_timer_off">Sleep timer</string>

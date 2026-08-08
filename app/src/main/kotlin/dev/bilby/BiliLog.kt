@@ -25,13 +25,28 @@ object BiliLog {
         Log.w(TAG, message)
     }
 
+    /**
+     * **异常的类型与 message 拼进正文,不只交给栈。** `Log.getStackTraceString` 对
+     * `UnknownHostException` 有特例:遍历 cause 链命中就返回空串(AOSP 为压噪声写死的)。
+     * 于是一次 DNS 失败在 logcat 里只剩一行光秃秃的 message,没有任何原因 —— 正是这个文件
+     * 存在要防的那种"只知道没生效,指不出为什么"。真实代价:一次扫码登录连着七次轮询全失败,
+     * 日志里七行"TV 登录轮询异常",查不出是网络还是接口。
+     */
     fun w(message: String, throwable: Throwable) {
-        Log.w(TAG, message, throwable)
+        Log.w(TAG, "$message: ${throwable.describe()}", throwable)
     }
 
     fun e(message: String, throwable: Throwable? = null) {
-        Log.e(TAG, message, throwable)
+        Log.e(TAG, throwable?.let { "$message: ${it.describe()}" } ?: message, throwable)
     }
+
+    /** 类型 + message,并跟上 cause 链——网络异常的原因常常只在 cause 里。 */
+    private fun Throwable.describe(): String = generateSequence(this) { it.cause }
+        .take(CAUSE_CHAIN_LIMIT)
+        .joinToString(" <- ") { "${it.javaClass.simpleName}(${it.message.orEmpty()})" }
+
+    /** cause 链取前几层就够定位;OkHttp 的链能套十几层,全打出来只会把有用的挤走。 */
+    private const val CAUSE_CHAIN_LIMIT = 3
 
     /** 过程信息,只在 debug 打:它的量足以淹没上面那些真正要看的行。 */
     fun d(message: String) {

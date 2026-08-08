@@ -20,6 +20,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Add
@@ -147,6 +149,10 @@ fun SearchChatScreen(
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onRefresh: () -> Unit = {},
+    /** 最近搜过的词,最近的在前。只在普通搜索、且还没搜过东西时露面。 */
+    searchHistory: List<String> = emptyList(),
+    onHistoryClick: (String) -> Unit = {},
+    onHistoryRemove: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val inputBar: @Composable () -> Unit = {
@@ -186,6 +192,9 @@ fun SearchChatScreen(
                     onUserClick = onUserClick,
                     onLoadMore = onLoadMore,
                     onRetry = onRetry,
+                    history = searchHistory,
+                    onHistoryClick = onHistoryClick,
+                    onHistoryRemove = onHistoryRemove,
                 )
             }
 
@@ -216,10 +225,20 @@ private fun NormalPane(
     onUserClick: (Long) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
+    history: List<String>,
+    onHistoryClick: (String) -> Unit,
+    onHistoryRemove: (String) -> Unit,
 ) {
     if (state.query.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            EmptyState(stringResource(R.string.search_empty))
+        // 还没搜过东西时,这一屏原先只有一句空态。历史摆在这里而不是搜完之后:它的用处是
+        // "再搜一次刚才那个",而那个念头只发生在还没开始搜的时候;结果出来之后再挂一份
+        // 旧关键词,是在把人从当前结果引开。
+        if (history.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                EmptyState(stringResource(R.string.search_empty))
+            }
+        } else {
+            SearchHistoryList(history, onHistoryClick, onHistoryRemove)
         }
         return
     }
@@ -269,6 +288,70 @@ private fun NormalPane(
 
                 state.videos.isEmpty() -> EmptyState(stringResource(R.string.search_no_results))
             }
+        }
+    }
+}
+
+/**
+ * 最近搜过的词。**是自己敲过的字,不是热搜词** —— 后者是把别人的热门查询推给你,属于
+ * DESIGN 2.2 禁掉的推送式入口;这里只是省一次重复输入,点开的还是自己上次找的东西。
+ *
+ * 每条都能单独删,所以不另做「全部清空」:一共至多五条,一个额外的破坏性按钮换不到多少便利,
+ * 反而多一处误触。
+ */
+@Composable
+private fun SearchHistoryList(
+    history: List<String>,
+    onClick: (String) -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    // **从下往上排。** 输入框常驻在这一屏底部,最近搜过的那条应该离手指最近;正常方向下
+     // 五条历史会贴在屏幕顶端,离输入框最远的位置反而放着最可能被点的东西。
+    //
+    // `reverseLayout` 让内容从底边开始往上长,于是发射顺序也跟着倒过来读:先发的在下面。
+    // 所以 items 在前(最近的那条落在最底、紧挨输入框),标题最后发,落在最上面。
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(vertical = Spacing.Cozy),
+        reverseLayout = true,
+    ) {
+        items(history, key = { it }) { query ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onClick(query) }
+                    .padding(start = Spacing.Comfortable, end = Spacing.Tight),
+            ) {
+                Icon(
+                    Icons.Filled.History,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    query,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(start = Spacing.Tight, top = Spacing.Tight, bottom = Spacing.Tight),
+                )
+                IconButton(onClick = { onRemove(query) }) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = stringResource(R.string.search_history_remove),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        item(key = "history_title") {
+            Text(
+                stringResource(R.string.search_history_title),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            )
         }
     }
 }

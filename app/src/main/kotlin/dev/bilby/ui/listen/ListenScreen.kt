@@ -9,21 +9,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
-import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.material3.BottomSheetScaffold
-import androidx.compose.material3.FilterChip
-import androidx.compose.foundation.layout.widthIn
-import dev.bilby.data.VideoPart
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,11 +21,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -48,19 +43,26 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -69,30 +71,31 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
+import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import dev.bilby.R
+import dev.bilby.data.VideoPart
 import dev.bilby.formatDurationMillis
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.rememberBottomSheetScaffoldState
-import dev.bilby.ui.components.BiliAsyncImage
-import dev.bilby.ui.components.BilbyTopBar
-import dev.bilby.ui.components.CompactVideoRow
-import dev.bilby.ui.components.SeekBar
-import dev.bilby.ui.components.SubtitleTrackMenu
-import dev.bilby.ui.theme.FixedColors
-import dev.bilby.ui.theme.Spacing
 import dev.bilby.player.AudioPlaybackUiState
 import dev.bilby.player.QueueItem
 import dev.bilby.player.SleepTimerMode
@@ -100,9 +103,19 @@ import dev.bilby.player.SleepTimerState
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
 import dev.bilby.player.indexNear
+import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.BiliAsyncImage
+import dev.bilby.ui.components.CompactVideoRow
+import dev.bilby.ui.components.SeekBar
+import dev.bilby.ui.components.SubtitleTrackMenu
+import dev.bilby.ui.components.VideoCover
+import dev.bilby.ui.theme.FixedColors
+import dev.bilby.ui.theme.Spacing
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
 
@@ -129,13 +142,23 @@ private const val DiscGrooveWidthPx = 1.2f
 /** 转一圈的时长。真唱片是 33⅓ 转/分,约 1.8 秒一圈——那个速度在手机上像个转盘动画,放慢到这里。 */
 private const val DiscRotationPeriodMillis = 36_000
 
-/** 页面指示器:非当前那个点的呼吸周期。 */
-private const val PageDotPulsePeriodMillis = 1_400
+/** 歌词模式顶栏里那张封面的宽度。高度由 16:10 定,见风格指南 §1.3b。 */
+private val LyricsHeaderCoverWidth = 88.dp
 
-private val PageDotSize = 6.dp
+/** 歌词区上下各留出的空白。 */
+private val LyricsEdgeSpacing = 24.dp
 
-/** 队列把手收起时的高度:够放系统默认抓手 + 一行「队列 · N」,不多不少。 */
-private val QueueHandleHeight = 72.dp
+/** 片头虚拟空行的 key。cue 的 key 是 `fromMillis`(Long),这里用字符串不会撞上。 */
+private const val LeadInKey = "lyrics_lead_in"
+
+/**
+ * 队列把手收起时的高度:系统默认抓手 + 顺序切换那一行 + **露出小半条视频**。
+ *
+ * 原先是 72dp,刚好卡在「队列 · N」那行标签下沿 —— 收起时看到的是一行字,而一行字要读了
+ * 才知道下面是什么。露出半条封面和标题不用读:它自己就说明了下面是一列视频,顺带也说明了
+ * 它能拉。删掉那行标签腾出来的高度正好给这件事。
+ */
+private val QueueHandleHeight = 132.dp
 
 /**
  * 歌词页单独的位置轮询间隔。整页其余部分(进度条、控制行)用的是 500ms
@@ -144,9 +167,6 @@ private val QueueHandleHeight = 72.dp
  * 100ms 对最短也有一两秒的句子够用,不需要拉到帧级——帧级驱动是弹幕那种场景才要的。
  */
 private const val LyricsPollIntervalMillis = 100L
-
-/** 歌词页背景的模糊半径。只在 API 31+ 生效,见 `LyricsView` 里的版本判断。 */
-private val LyricsBackgroundBlurRadius = 24.dp
 
 /**
  * 听视频界面。播放器归 [dev.bilby.player.AudioPlaybackService] 所有,这里只读状态、发命令
@@ -222,12 +242,39 @@ fun ListenScreen(
 
     val displayPosition = dragPosition ?: position
 
+    // **歌词是这一页的一个状态,不是另一页;而且这个状态是推导出来的,不另存一份。**
+    // 入口只有唱片右上角那个字幕按钮:选中一条轨就进歌词,选「无字幕」就回唱片。
+    //
+    // 这里曾经是 HorizontalPager + 圆点指示器 + 点唱片翻页,三个入口。问题不是入口太少而是
+    // 全都看不见:圆点是 0.28 alpha 的 onSurfaceVariant 画在接近白的 surface 上,还压在进度条
+    // 旁边,读起来像播放控件的一部分;呼吸动效也加过,照样没人发现 —— 缺的从来不是动静大小。
+    // 而"选一条字幕轨"和"看字幕"本来就是同一个意图,拆成两步之后,中间那道缝正是没人跨过去
+    // 的地方。
+    //
+    // 推导而不是存 `var showLyrics`:选中态与显示态一旦是两份状态就会分家,唱片页上会出现
+    // 一盏亮着却什么都没显示的灯,换视频、关字幕也各要一个 LaunchedEffect 去同步。
+    // 顺带解决了空窗——`cues` 是选轨之后才去取的,等它到了才切,不会先闪一页空歌词。
+    val showLyrics = subtitleLan.isNotEmpty() && subtitleCues.isNotEmpty()
+
     // 必须自己给顶栏:听视频是播放页内的一个状态,VideoScreen 在这条分支上提前 return,
     // 外层那句 windowInsetsPadding(statusBars) 走不到 —— 不处理的话标题和返回箭头
     // 会直接压在状态栏的时钟上。用 Scaffold 而不是手贴 padding,和其余页面一致。
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        topBar = { BilbyTopBar(title = stringResource(R.string.listen_title), onBack = onBack) },
+        // **两个模式的顶栏不一样,因为它们缺的东西不一样。**
+        //
+        // 唱片模式只要一个退出按钮:那一屏自己说明了在干什么(一张转着的唱片),在听哪一条也
+        // 写在唱片正下方,顶栏再写「听视频」是把画面已经说清的事又说一遍。
+        //
+        // 歌词模式要封面 + 标题:整屏只剩歌词,没有任何地方写着这是哪一条。
+        topBar = {
+            val item = state.current
+            if (showLyrics && item != null) {
+                LyricsHeader(item = item, onBack = onBack)
+            } else {
+                BilbyTopBar(title = "", onBack = onBack)
+            }
+        },
     ) { insets ->
         if (player == null || state.current == null) {
             Box(
@@ -257,7 +304,6 @@ fun ListenScreen(
                 QueueSheetContent(
                     queue = queue,
                     currentBvid = state.current?.bvid,
-                    queueSize = state.queueSize,
                     shuffled = state.shuffled,
                     onToggleShuffle = onToggleShuffle,
                     onPlayQueueItem = onPlayQueueItem,
@@ -273,54 +319,25 @@ fun ListenScreen(
                 // 不用再另外做"整体居中"的特判——weight(1f) 本身就把它撑满了。
                 // 唱片与歌词是**同一块区域的两页**,左右滑动切换。
                 //
-                // 用 HorizontalPager 而不是自己接横向拖拽:点击这个手势在歌词页已经被
-                // "点某句 seek 过去"占掉了,出口只能另找一个手势;而滑动的边界处理
-                // (跟手、越界回弹、松手判定该翻页还是弹回)自己写一遍不会比它好。
-                // 竖向也不冲突——把手是竖向拖拽、歌词是竖向滚动,和横向不同轴。
-                val pagerState = rememberPagerState(pageCount = { if (subtitleCues.isEmpty()) 1 else 2 })
-                val pagerScope = rememberCoroutineScope()
-
-                // 换视频、或者字幕被关掉时退回唱片页。后者不退的话会停在一张空歌词页上,
-                // 而那一页此刻根本不存在(pageCount 变成 1),停在那儿是个没有出口的状态。
-                LaunchedEffect(state.current?.bvid, subtitleCues.isEmpty()) {
-                    if (pagerState.currentPage != 0) pagerState.scrollToPage(0)
-                }
-
-                Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
-                        if (page == 0) {
-                            DiscView(
-                                state = state,
-                                speed = speed,
-                                subtitleTracks = subtitleTracks,
-                                subtitleLan = subtitleLan,
-                                onSelectSubtitle = onSelectSubtitle,
-                                canFlipToLyrics = subtitleCues.isNotEmpty(),
-                                onFlipToLyrics = { pagerScope.launch { pagerState.animateScrollToPage(1) } },
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        } else {
-                            LyricsView(
-                                state = state,
-                                cues = subtitleCues,
-                                player = player,
-                                dragPosition = dragPosition,
-                                onSeekTo = { player.seekTo(it) },
-                                subtitleTracks = subtitleTracks,
-                                subtitleLan = subtitleLan,
-                                onSelectSubtitle = onSelectSubtitle,
-                                onBackgroundClick = { pagerScope.launch { pagerState.animateScrollToPage(0) } },
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        }
-                    }
-                    // 指示器放在 pager **外面**:它描述的是"你在两页中的哪一页",不属于任何一页,
-                    // 放进去会跟着页面一起滑走。
-                    if (subtitleCues.isNotEmpty()) {
-                        PageDots(
-                            current = pagerState.currentPage,
-                            count = 2,
-                            modifier = Modifier.align(Alignment.CenterHorizontally),
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    if (showLyrics) {
+                        LyricsView(
+                            cues = subtitleCues,
+                            player = player,
+                            dragPosition = dragPosition,
+                            onSeekTo = { player.seekTo(it) },
+                            // 退出歌词就是**选中「无字幕」**,不是另一个动作。
+                            onBack = { onSelectSubtitle("") },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        DiscView(
+                            state = state,
+                            speed = speed,
+                            subtitleTracks = subtitleTracks,
+                            subtitleLan = subtitleLan,
+                            onSelectSubtitle = onSelectSubtitle,
+                            modifier = Modifier.fillMaxSize(),
                         )
                     }
                 }
@@ -346,16 +363,34 @@ fun ListenScreen(
                         },
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    // **两个时间自动缩到放得下为止。** 长视频是 `h:mm:ss`,字体缩放调大之后
+                    // 这一行放不下 —— 默认行为是换行,表现成最后一位数字掉到第二行,还把整条
+                    // 控制区顶高一行;禁掉换行则变成截断,一个时间少一位比换行更糟。
+                    //
+                    // 两边各 `weight(1f)`,不是 `SpaceBetween`:autoSize 要有界宽度才知道该缩
+                    // 多少,松约束下它永远认为放得下。对齐改由 textAlign 给,视觉位置不变。
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        val timeAutoSize = TextAutoSize.StepBased(
+                            minFontSize = 9.sp,
+                            maxFontSize = MaterialTheme.typography.labelSmall.fontSize,
+                        )
                         Text(
                             text = formatDurationMillis(displayPosition),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline,
+                            maxLines = 1,
+                            autoSize = timeAutoSize,
+                            textAlign = TextAlign.Start,
+                            modifier = Modifier.weight(1f),
                         )
                         Text(
                             text = formatDurationMillis(duration),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline,
+                            maxLines = 1,
+                            autoSize = timeAutoSize,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.weight(1f),
                         )
                     }
                 }
@@ -391,7 +426,7 @@ fun ListenScreen(
     }
 
     if (sleepSheetOpen) {
-        SleepTimerSheet(
+        SleepTimerDialog(
             sleepTimer = sleepTimer,
             onSet = onSleepTimer,
             onDismiss = { sleepSheetOpen = false },
@@ -421,164 +456,133 @@ private fun DiscView(
     subtitleTracks: List<SubtitleTrack>,
     subtitleLan: String,
     onSelectSubtitle: (String) -> Unit,
-    canFlipToLyrics: Boolean,
-    onFlipToLyrics: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val item = state.current ?: return
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier.padding(horizontal = Spacing.Loose, vertical = Spacing.Comfortable),
-    ) {
-        // BoxWithConstraints 而不是 fillMaxWidth(fraction) + aspectRatio(1f):唱片要占的是
-        // "剩余空间"里较短的那一边,横屏或者窗口矮的时候按宽度定size会把圆形顶出可视区域。
-        BoxWithConstraints(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentAlignment = Alignment.Center,
+    // 外面套一层 Box,只为让字幕按钮的参照物是**传进来的整块区域**,和歌词模式一致。
+    // 挂在下面那个 Column 上不行:它自带 Loose/Comfortable 的内边距,按钮会被一并推进去,
+    // 于是两个模式里同一个按钮仍然落在两个位置 —— 而它是同一个按钮的两个状态,
+    // 来回切时应该原地不动。
+    Box(modifier = modifier) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = Spacing.Loose, vertical = Spacing.Comfortable),
         ) {
-            val discSize = min(maxWidth, maxHeight) * DiscSizeFraction
+            // BoxWithConstraints 而不是 fillMaxWidth(fraction) + aspectRatio(1f):唱片要占的是
+            // "剩余空间"里较短的那一边,横屏或者窗口矮的时候按宽度定size会把圆形顶出可视区域。
+            BoxWithConstraints(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                val discSize = min(maxWidth, maxHeight) * DiscSizeFraction
 
-            // 播放时缓慢转动,暂停时停在当前角度(不归零——归零会让"暂停"看起来像"换了一张")。
-            //
-            // 曾经以"息屏后台是常态,旋转每帧重绘不值"为由不做这个动画。那条理由是错的:
-            // 页面不可见时应用根本不出帧,旋转的开销只存在于用户正盯着它看的时候,
-            // 而那恰好是它唯一有价值的时候。
-            val angle = remember { Animatable(0f) }
-            LaunchedEffect(state.isPlaying, speed) {
-                if (!state.isPlaying) return@LaunchedEffect
-                val rotationPeriod = (DiscRotationPeriodMillis / speed.coerceAtLeast(0.1f))
-                    .roundToInt()
-                    .coerceAtLeast(1)
-                angle.animateTo(
-                    targetValue = angle.value + 360f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(rotationPeriod, easing = LinearEasing),
-                        repeatMode = RepeatMode.Restart,
-                    ),
-                )
-            }
-
-            Box(modifier = Modifier.size(discSize)) {
-                // 盘体、同心纹路、轴孔。纹路的透明度低到几乎看不见是**故意**的:
-                // 它不是给人读的装饰,是让旋转成为可见事实——纯色圆盘转起来和静止的一模一样。
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer { rotationZ = angle.value }
-                        .drawBehind {
-                            val r = size.minDimension / 2f
-                            val c = Offset(size.width / 2f, size.height / 2f)
-                            drawCircle(FixedColors.VinylBody, radius = r, center = c)
-                            // 纹路只画在盘体那一圈(标签纸之外),画进标签底下是白费。
-                            val inner = r * DiscLabelFraction
-                            repeat(DiscGrooveCount) { i ->
-                                val t = (i + 1f) / (DiscGrooveCount + 1f)
-                                drawCircle(
-                                    color = FixedColors.VinylGroove,
-                                    radius = inner + (r - inner) * t,
-                                    center = c,
-                                    style = Stroke(width = DiscGrooveWidthPx),
-                                )
-                            }
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    BiliAsyncImage(
-                        url = item.coverUrl,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .fillMaxSize(DiscLabelFraction)
-                            .clip(CircleShape),
+                // 播放时缓慢转动,暂停时停在当前角度(不归零——归零会让"暂停"看起来像"换了一张")。
+                //
+                // 曾经以"息屏后台是常态,旋转每帧重绘不值"为由不做这个动画。那条理由是错的:
+                // 页面不可见时应用根本不出帧,旋转的开销只存在于用户正盯着它看的时候,
+                // 而那恰好是它唯一有价值的时候。
+                val angle = remember { Animatable(0f) }
+                LaunchedEffect(state.isPlaying, speed) {
+                    if (!state.isPlaying) return@LaunchedEffect
+                    val rotationPeriod = (DiscRotationPeriodMillis / speed.coerceAtLeast(0.1f))
+                        .roundToInt()
+                        .coerceAtLeast(1)
+                    angle.animateTo(
+                        targetValue = angle.value + 360f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(rotationPeriod, easing = LinearEasing),
+                            repeatMode = RepeatMode.Restart,
+                        ),
                     )
-                    // 轴孔压在标签纸中央,是这张唱片"是个实物"的最后一笔。
+                }
+
+                Box(modifier = Modifier.size(discSize)) {
+                    // 盘体、同心纹路、轴孔。纹路的透明度低到几乎看不见是**故意**的:
+                    // 它不是给人读的装饰,是让旋转成为可见事实——纯色圆盘转起来和静止的一模一样。
                     Box(
                         modifier = Modifier
-                            .size(discSize * DiscHoleFraction)
-                            .clip(CircleShape)
-                            .background(FixedColors.VinylHole),
+                            .fillMaxSize()
+                            .graphicsLayer { rotationZ = angle.value }
+                            .drawBehind {
+                                val r = size.minDimension / 2f
+                                val c = Offset(size.width / 2f, size.height / 2f)
+                                drawCircle(FixedColors.VinylBody, radius = r, center = c)
+                                // 纹路只画在盘体那一圈(标签纸之外),画进标签底下是白费。
+                                val inner = r * DiscLabelFraction
+                                repeat(DiscGrooveCount) { i ->
+                                    val t = (i + 1f) / (DiscGrooveCount + 1f)
+                                    drawCircle(
+                                        color = FixedColors.VinylGroove,
+                                        radius = inner + (r - inner) * t,
+                                        center = c,
+                                        style = Stroke(width = DiscGrooveWidthPx),
+                                    )
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        BiliAsyncImage(
+                            url = item.coverUrl,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxSize(DiscLabelFraction)
+                                .clip(CircleShape),
+                        )
+                        // 轴孔压在标签纸中央,是这张唱片"是个实物"的最后一笔。
+                        Box(
+                            modifier = Modifier
+                                .size(discSize * DiscHoleFraction)
+                                .clip(CircleShape)
+                                .background(FixedColors.VinylHole),
+                        )
+                    }
+                }
+            }
+            // 整屏的主角是这张唱片,标题跟着抬一档到 titleLarge —— 听视频页一屏只有一条内容,
+            // 不像列表要压字号换密度。
+            Text(
+                item.title,
+                style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().padding(top = Spacing.Loose),
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                modifier = Modifier.padding(top = Spacing.Tight),
+            ) {
+                Text(
+                    item.upName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (state.queueSize > 0) {
+                    // 队列位置和 UP 名同行:它是"这是第几条",属于同一句话的后半截,
+                    // 单独占一行会让唱片和进度条之间空出一整行。
+                    Text(
+                        "${state.positionInQueue} / ${state.queueSize}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.outline,
                     )
                 }
-                // 点击留作第二条路(主路是左右滑动)。挂在最外层而不是图片上——图片现在
-                // 只占中间那一小块,挂在它身上的话点盘体没反应,而用户看到的是一整张唱片。
-                if (canFlipToLyrics) {
-                    Box(modifier = Modifier.fillMaxSize().clip(CircleShape).clickable(onClick = onFlipToLyrics))
-                }
-                SubtitleTrackCornerButton(
-                    tracks = subtitleTracks,
-                    currentLan = subtitleLan,
-                    onSelect = onSelectSubtitle,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.Hair),
-                )
             }
         }
-        // 整屏的主角是这张唱片,标题跟着抬一档到 titleLarge —— 听视频页一屏只有一条内容,
-        // 不像列表要压字号换密度。
-        Text(
-            item.title,
-            style = MaterialTheme.typography.titleLarge,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().padding(top = Spacing.Loose),
+        SubtitleTrackCornerButton(
+            tracks = subtitleTracks,
+            currentLan = subtitleLan,
+            onSelect = onSelectSubtitle,
+            modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.Cozy),
         )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            modifier = Modifier.padding(top = Spacing.Tight),
-        ) {
-            Text(
-                item.upName,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (state.queueSize > 0) {
-                // 队列位置和 UP 名同行:它是"这是第几条",属于同一句话的后半截,
-                // 单独占一行会让唱片和进度条之间空出一整行。
-                Text(
-                    "${state.positionInQueue} / ${state.queueSize}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.outline,
-                )
-            }
-        }
     }
 }
 
-/**
- * 两页的指示器。非当前那个点做轻微呼吸 —— 左右滑动没有任何天然的可见痕迹,
- * 不给提示的话"这一页右边还有东西"这件事只能靠用户瞎划试出来。
- *
- * 幅度压得很小:它要做的是被余光扫到,不是被盯着看。
- */
-@Composable
-private fun PageDots(current: Int, count: Int, modifier: Modifier = Modifier) {
-    val pulse = rememberInfiniteTransition(label = "page_dot_pulse")
-    val pulseAlpha by pulse.animateFloat(
-        initialValue = 0.28f,
-        targetValue = 0.55f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(PageDotPulsePeriodMillis, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "page_dot_alpha",
-    )
-    val dotColor = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier.padding(vertical = Spacing.Tight),
-    ) {
-        repeat(count) { index ->
-            val alpha = if (index == current) 1f else pulseAlpha
-            Canvas(modifier = Modifier.size(PageDotSize)) {
-                drawCircle(color = dotColor.copy(alpha = alpha), radius = size.minDimension / 2f)
-            }
-        }
-    }
-}
 
 /**
  * 对称五格:`[倍速] [上一条] [▶] [下一条] [定时]`,播放键在几何中心。每一格套一个
@@ -604,14 +608,15 @@ private fun PlaybackControls(
         modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
     ) {
         var speedMenuOpen by remember { mutableStateOf(false) }
+        val speedLabel = stringResource(R.string.player_speed)
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            TextButton(onClick = { speedMenuOpen = true }) {
-                Icon(
-                    Icons.Filled.Speed,
-                    contentDescription = stringResource(R.string.player_speed),
-                    modifier = Modifier.size(18.dp),
-                )
-                Text(formatSpeed(speed), modifier = Modifier.padding(start = Spacing.Hair))
+            // 只有数字,不配图标:「1x」自己已经读得出是倍速,旁边那个表盘图标不添信息,
+            // 却让这一格比同排其余四个纯图标按钮宽出一截。读屏靠 contentDescription 补。
+            TextButton(
+                onClick = { speedMenuOpen = true },
+                modifier = Modifier.semantics { contentDescription = speedLabel },
+            ) {
+                Text(formatSpeed(speed))
             }
             DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) {
                 SPEED_OPTIONS.forEach { option ->
@@ -659,18 +664,41 @@ private fun PlaybackControls(
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
             val label = sleepTimerLabel(sleepTimer)
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            val sleepLabel = stringResource(R.string.sleep_timer_off)
+            // **计时中就只剩数字,图标让位,不是在图标下面再挂一行。** 挂一行的写法会让整条
+            // 控制行在开始计时的那一刻长高一截,播放键跟着往下跳 —— 一个设定动作不该挪动
+            // 旁边四个按钮的位置。换成同一格里图标与数字二选一,行高恒定。
+            if (label != null) {
+                TextButton(
+                    onClick = onOpenSleepTimer,
+                    // **内边距压到最小。** 控制行是五个等宽格子,每格约 1/5 屏宽,而 TextButton
+                    // 默认左右各 24dp —— `1:59:55` 这种 h:mm:ss 在剩下的空间里放不下,默认行为
+                    // 是换行,于是最后一位掉到第二行、整条控制行跟着长高一行。
+                    contentPadding = PaddingValues(horizontal = Spacing.Hair),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = sleepLabel },
+                ) {
+                    Text(
+                        label,
+                        color = MaterialTheme.colorScheme.primary,
+                        // 压完边距仍可能不够(大字号 + h:mm:ss),再让它自己缩。缩比换行和截断
+                        // 都好:时间少一位就是错的信息,而换行会挪动旁边四个按钮。
+                        maxLines = 1,
+                        autoSize = TextAutoSize.StepBased(
+                            minFontSize = 9.sp,
+                            maxFontSize = MaterialTheme.typography.labelLarge.fontSize,
+                        ),
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            } else {
                 IconButton(onClick = onOpenSleepTimer) {
                     Icon(
                         Icons.Filled.Bedtime,
-                        contentDescription = stringResource(R.string.sleep_timer_off),
-                        tint = if (label != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        contentDescription = sleepLabel,
+                        tint = MaterialTheme.colorScheme.onSurface,
                     )
-                }
-                // 定时生效时才占这一行——原来 BottomRow 那个常驻的文字标签挪没了地方,
-                // 只能在图标下面挂一行小字,不生效就不留空。
-                if (label != null) {
-                    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                 }
             }
         }
@@ -715,30 +743,32 @@ private fun FailureRow(message: String, retrying: Boolean, onRetry: () -> Unit) 
 private fun QueueSheetContent(
     queue: List<QueueItem>,
     currentBvid: String?,
-    queueSize: Int,
     shuffled: Boolean,
     onToggleShuffle: () -> Unit,
     onPlayQueueItem: (String) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            stringResource(R.string.listen_queue_count, queueSize),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Comfortable)
-                .padding(bottom = Spacing.Tight),
-        )
-        TextButton(
-            onClick = onToggleShuffle,
-            modifier = Modifier.padding(horizontal = Spacing.Comfortable),
+        // 标题只写名字,**不带条数**。条数在唱片页的「N / M」里,而且它在这里没有可操作性
+        // ——知道有 23 条,既不改变要不要展开,也不改变点哪一条;它原先还独占一整行,
+        // 那一行的高度还不如让队列多露一截出来。
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth().padding(start = Spacing.Comfortable, end = Spacing.Tight),
         ) {
-            Icon(Icons.Filled.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
             Text(
-                stringResource(if (shuffled) R.string.queue_order_shuffle else R.string.queue_order_sequential),
-                modifier = Modifier.padding(start = Spacing.Hair),
+                stringResource(R.string.listen_queue_title),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // 靠右:左边是标题,顺序切换是对整个列表的操作,和标题分列两端读起来是一组。
+            TextButton(onClick = onToggleShuffle) {
+                Icon(Icons.Filled.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(
+                    stringResource(if (shuffled) R.string.queue_order_shuffle else R.string.queue_order_sequential),
+                    modifier = Modifier.padding(start = Spacing.Hair),
+                )
+            }
         }
         QueueList(
             queue = queue,
@@ -750,76 +780,87 @@ private fun QueueSheetContent(
 }
 
 /**
- * 定时关闭 Sheet。用 `ModalBottomSheet` 而不是原来的 `DropdownMenu`——Slider 要横向空间,
- * 菜单那几十 dp 宽放不下。
+ * 定时停止。**是 Dialog 不是 BottomSheet**:定时长是一次性的、要确认的决定,确认完就走;
+ * BottomSheet 暗示的是"可以边看边调"。
  *
- * 时长(Slider)与"播完当前再停"(Switch)各改各的,拖一下/点一下就直接调用 [onSet]
- * 生效,不设"确定"按钮——和播放页其余设置(倍速、画质)一样是即时生效,不是表单。
+ * **值只在「确认」时提交。** 这里原先把 `onSet` 挂在 `Slider` 的 `onValueChange` 上,于是
+ * 值只在滑块**移动**时才生效——打开时停在默认的 30 分钟,想要 30 就必须先拖走再拖回来,
+ * 因为"没动"这个状态永远提交不了。默认值成了唯一选不中的值。顺带那个写法还会在拖动过程中
+ * 每一帧重启一次计时器。
+ *
+ * 5 分钟一档由 `SLEEP_TIMER_STEPS` 保证(10..120 分 22 段),刻度点不画:22 个点连成一串
+ * 比轨道本身还抢眼,而步进是 `SliderState` 自己管的,不靠画出来才生效。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SleepTimerSheet(
+private fun SleepTimerDialog(
     sleepTimer: SleepTimerState,
     onSet: (minutes: Int?, finishCurrentItem: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    // Slider 初始位置取当前生效的时长;没设过时给个居中的默认值,不然一打开就顶在最左端。
     var minutes by remember {
-        mutableFloatStateOf((sleepTimer.mode as? SleepTimerMode.After)?.minutes?.toFloat() ?: SLEEP_TIMER_DEFAULT_MINUTES)
+        mutableFloatStateOf(
+            (sleepTimer.mode as? SleepTimerMode.After)?.minutes?.toFloat() ?: SLEEP_TIMER_DEFAULT_MINUTES,
+        )
     }
     var finishCurrentItem by remember { mutableStateOf(sleepTimer.finishCurrentItem) }
     val active = sleepTimer.mode != SleepTimerMode.Off || sleepTimer.finishCurrentItem
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-        ) {
-            Text(
-                stringResource(R.string.sleep_timer_stop_in, minutes.roundToInt()),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Slider(
-                value = minutes,
-                onValueChange = {
-                    minutes = it
-                    onSet(minutes.roundToInt(), finishCurrentItem)
-                },
-                valueRange = SLEEP_TIMER_RANGE,
-                steps = SLEEP_TIMER_STEPS,
-                // 22 个 step 用默认 track 会画出 22 个刻度点,连成一串比轨道本身还抢眼的
-                // 噪声。步进行为(snap 到 5 分钟一档)是 SliderState 自己管的,不靠这些点
-                // 画出来才生效——只是不画,不是关掉步进。
-                track = { sliderState -> SliderDefaults.Track(sliderState = sliderState, drawTick = { _, _ -> }) },
-            )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth().padding(top = Spacing.Tight),
-            ) {
-                Text(stringResource(R.string.sleep_timer_finish_switch))
-                Switch(
-                    checked = finishCurrentItem,
-                    onCheckedChange = {
-                        finishCurrentItem = it
-                        onSet(minutes.roundToInt(), it)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.sleep_timer_off)) },
+        text = {
+            Column {
+                Text(
+                    stringResource(R.string.sleep_timer_stop_in, minutes.roundToInt()),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Slider(
+                    value = minutes,
+                    onValueChange = { minutes = it },
+                    valueRange = SLEEP_TIMER_RANGE,
+                    steps = SLEEP_TIMER_STEPS,
+                    track = { sliderState ->
+                        SliderDefaults.Track(sliderState = sliderState, drawTick = { _, _ -> })
                     },
                 )
-            }
-            if (active) {
-                TextButton(
-                    onClick = {
-                        onSet(null, false)
-                        onDismiss()
-                    },
-                    modifier = Modifier.align(Alignment.End),
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.Tight),
                 ) {
-                    Text(stringResource(R.string.sleep_timer_cancel))
+                    Text(stringResource(R.string.sleep_timer_finish_switch))
+                    Switch(checked = finishCurrentItem, onCheckedChange = { finishCurrentItem = it })
                 }
             }
-        }
-    }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onSet(minutes.roundToInt(), finishCurrentItem)
+                    onDismiss()
+                },
+            ) {
+                Text(stringResource(R.string.action_confirm))
+            }
+        },
+        dismissButton = {
+            Row {
+                // 已经在计时时,「关闭定时」和「取消」是两件事:前者停掉计时,后者只是关掉
+                // 这个弹窗、什么都不改。没在计时时前者没有对象,不出现。
+                if (active) {
+                    TextButton(
+                        onClick = {
+                            onSet(null, false)
+                            onDismiss()
+                        },
+                    ) {
+                        Text(stringResource(R.string.sleep_timer_cancel))
+                    }
+                }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+            }
+        },
+    )
 }
 
 @Composable
@@ -866,21 +907,59 @@ private fun QueueList(
     }
 }
 
+
 /**
- * 歌词模式:点开唱片后取代它的呈现,封面调暗当底,逐句叠在上面滚动。
+ * 歌词模式的顶栏:返回箭头 + 封面 + 标题(至多三行)。
  *
- * [DiscView] 上那句「不裁成方形、不当背景板」的推翻针对的是**唱片本身作为主角**的情况;
- * 这里反过来——封面本来就要被压暗当背景,被裁掉的边和被 scrim 盖住的字都不再是要传达的
- * 信息,那条约束同样不适用。`ContentScale.Crop` 铺满这块区域,不保 16:10。
+ * 只有这个模式需要它 —— 唱片模式下标题就在唱片正下方,顶栏留一个退出按钮就够。两个模式的
+ * 顶栏因此不一样高,右上角那个字幕按钮的位置会跟着差一截;这是权衡过的:让歌词模式认得出
+ * 在听哪一条,比让一个按钮在两个模式间纹丝不动更值。
  *
- * 标题/UP 名**不叠在封面上**:歌词已经是这块区域唯一的主角,再叠一层文字只会在 scrim 上
- * 摞出第二层视觉噪声,而且深色 scrim 上同时读歌词和标题会分不清谁是谁。挪到区域上方一行,
- * 用正常(非 scrim)配色——和唱片模式下标题排在唱片下面是同一个"标题不抢封面"的判断,
- * 只是这次封面本身让位给了内容,标题只好挪到另一侧而不是消失。
+ * 不用 [BilbyTopBar]:`TopAppBar` 的高度是固定的一行,塞不下封面加三行标题。自己排一个 Row,
+ * 状态栏内边距用 `TopAppBarDefaults.windowInsets` 取,和其余页面的顶栏对齐同一套。
+ */
+@Composable
+private fun LyricsHeader(item: QueueItem, onBack: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surface) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(TopAppBarDefaults.windowInsets)
+                .padding(end = Spacing.Comfortable, top = Spacing.Tight, bottom = Spacing.Tight),
+        ) {
+            IconButton(onClick = onBack) {
+                // AutoMirrored:supportsRtl 开着,RTL 语言下返回箭头必须翻过来。
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.action_back),
+                )
+            }
+            VideoCover(url = item.coverUrl, modifier = Modifier.width(LyricsHeaderCoverWidth))
+            Text(
+                item.title,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+/**
+ * 歌词模式:取代唱片的呈现,逐句滚动。
  *
- * [onBackgroundClick] 挂在最底层的封面/scrim 上,不是整个区域——[LyricsList] 里每一句
- * 自己有 `onSeekTo` 的点击,落在文字上应该跳转不是翻页;点到行与行之间的空白、或者文字块
- * 之外的边距,才会穿透到底层触发翻回唱片。
+ * **不画封面当背景。** 这里曾经是模糊后的封面 + 一层 scrim,代价是可读性变成随机的:底是
+ * 任意一帧视频,遇到亮的那一帧,固定 scrim 压不住,白字直接糊掉;而且深色块从顶栏下方硬起、
+ * 在控制区上方硬停,把整页横着切两刀,一页两套配色 —— 与 §4.1b 给播放器 scrim 得出的结论
+ * 同源。封面在这一页本来也不承载信息(标题和 UP 名就在上面一行,是真文字),它是纯装饰,
+ * 而装饰不该拿可读性去换。去掉之后文字用主题色,对比度由主题保证而不是碰运气。
+ *
+ * [onBack] 语义是**选中「无字幕」**,退出歌词是它的结果。除了右上角那个按钮,文字之外的空白
+ * 也接同一个动作——[LyricsList] 里每一句自己有 `onSeekTo` 的点击,落在文字上应该跳转;点到
+ * 行与行之间、或者文字块之外的边距,才会穿透到底层。
  *
  * 位置不是从外面传 [AudioPlaybackUiState] 或整页那个 500ms 轮询算的,而是这里自己单独起
  * 一个更细的 tick(见下面的 `LaunchedEffect`)——500ms 的量化对进度条够用,但歌词是逐句
@@ -891,21 +970,15 @@ private fun QueueList(
  */
 @Composable
 private fun LyricsView(
-    state: AudioPlaybackUiState,
     cues: List<SubtitleCue>,
     player: Player,
     /** 用户正在拖动下方进度条时的目标位置,和页面顶层 `displayPosition` 用的是同一个值——
      *  拖拽期间要立刻跟手,不能等下一次 100ms 轮询。 */
     dragPosition: Long?,
     onSeekTo: (Long) -> Unit,
-    subtitleTracks: List<SubtitleTrack>,
-    subtitleLan: String,
-    onSelectSubtitle: (String) -> Unit,
-    onBackgroundClick: () -> Unit,
+    onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val item = state.current ?: return
-
     var polledPosition by remember { mutableLongStateOf(player.currentPosition) }
     LaunchedEffect(player) {
         while (true) {
@@ -916,73 +989,31 @@ private fun LyricsView(
     val positionMillis = dragPosition ?: polledPosition
 
     Column(modifier = modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        ) {
-            Text(
-                item.title,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                modifier = Modifier.padding(top = Spacing.Hair),
-            ) {
-                Text(
-                    item.upName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (state.queueSize > 0) {
-                    Text(
-                        "${state.positionInQueue} / ${state.queueSize}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                }
-            }
-        }
-
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            // 模糊只在 API 31+ 生效——`Modifier.blur` 底层是 RenderEffect,minSdk 29 上
-            // 这个调用是静默空操作,不报错也不模糊,不能假设它总生效。29/30 完全靠下面那层
-            // 更重的 ScrimOnLyrics 单独扛住可读性,31+ 是模糊 + 同一层 scrim 一起上。
-            val blurSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-            BiliAsyncImage(
-                url = item.coverUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .let { base -> if (blurSupported) base.blur(LyricsBackgroundBlurRadius) else base }
-                    .clickable(onClick = onBackgroundClick),
-            )
-            // 用专门给歌词页开的 ScrimOnLyrics,不是封面角标那个 ScrimOnMedia——原因见
-            // FixedColors 上的注释:整屏铺满歌词和一个角落的小角标不是一个对比度量级。
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(FixedColors.ScrimOnLyrics)
-                    .clickable(onClick = onBackgroundClick),
-            )
+            // 空白处点一下回唱片。铺在最底层,文字自己的点击(seek)盖在它上面。
+            Box(modifier = Modifier.fillMaxSize().clickable(onClick = onBack))
             LyricsList(
                 cues = cues,
                 positionMillis = positionMillis,
                 onSeekTo = onSeekTo,
-                modifier = Modifier.fillMaxSize(),
+                dragging = dragPosition != null,
+                // 上下留白:歌词原先直接顶着上面的信息行和下面的控制区,滚动的字紧贴着两条
+                // 边界出现和消失,像被裁掉而不是滚出去。留白加在这里而不是 LazyColumn 的
+                // contentPadding 上 —— 后者是给"当前句居中"用的(halfViewport),两者混在
+                // 一个参数里,以后改任何一个都要重新算另一个。
+                modifier = Modifier.fillMaxSize().padding(vertical = LyricsEdgeSpacing),
             )
-            SubtitleTrackCornerButton(
-                tracks = subtitleTracks,
-                currentLan = subtitleLan,
-                onSelect = onSelectSubtitle,
-                modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.Cozy),
-            )
+            // 和唱片页那个字幕按钮同一个位置、同一个图标,亮着表示字幕开着。点它 =
+            // **选中「无字幕」**,退出歌词是这件事的结果,不是另一个动作。
+            // 底下是 surface 不是封面,所以不套 scrim 底、不用 FixedColors —— 那一套是给
+            // "压在画面上"的控件准备的,这一页已经没有画面了。
+            IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.Cozy)) {
+                Icon(
+                    Icons.Filled.Subtitles,
+                    contentDescription = stringResource(R.string.player_subtitle),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
         }
     }
 }
@@ -1004,27 +1035,48 @@ private fun LyricsView(
  * 不再需要等 `LazyColumn` 完成一次布局才能读 `layoutInfo`,`QueueList` 里那个等布局就绪的
  * `snapshotFlow` 也就不需要了(那是给"滚完再读实际高度"这一步准备的,这里没有那一步)。
  *
- * 颜色固定用 [FixedColors.OnMedia] 而不是主题色:背后是调暗后的任意封面,和播放器控件
- * 压在画面上是同一处境(见 FixedColors 上的说明)。降透明度是在这同一个固定色上做的,
- * 不是"不要用 alpha 兑主题容器色"那条(风格指南 §3)禁止的用法——那条防的是主题 surface
- * 色随深浅模式变化导致对比度失控,这里底色是固定的纯黑 scrim,alpha 的效果是可预测的。
- * 非当前句从 0.45 提到 0.6:背景现在多了一层更重的 scrim(加了模糊的机型还多一层模糊),
- * 原来压低透明度是为了不和背景抢,现在背景已经压下去了,压得更低只是白白牺牲可读性。
+ * 颜色用主题色,不再是 [FixedColors.OnMedia] 上兑 alpha。那一套的前提是"背后是调暗后的
+ * 任意封面",封面去掉之后前提没了:底就是 surface,当前句用强调色 `primary`、其余
+ * `onSurfaceVariant`,对比度由主题保证,不随视频封面变化。当前句同时靠颜色和字重两维区分,
+ * 只靠其中一维在小字号或高亮度环境下都不够。
  */
 @Composable
 private fun LyricsList(
     cues: List<SubtitleCue>,
     positionMillis: Long,
     onSeekTo: (Long) -> Unit,
+    /** 用户正按着下面的进度条。跟随方式不同,见下面那个 [LaunchedEffect]。 */
+    dragging: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
     val nearIndex = cues.indexNear(positionMillis)
     val highlightIndex = nearIndex.takeIf { it >= 0 && positionMillis < cues[it].toMillis }
+    // 列表第 0 项是片头那条虚拟空行(见下面 `item`),所以 cue 的下标要整体加一。
+    // 第一句开始之前 [indexNear] 给 -1,加一之后正好落在虚拟行上。
+    val focusIndex = nearIndex + 1
 
-    LaunchedEffect(nearIndex) {
-        if (nearIndex < 0) return@LaunchedEffect
-        listState.animateScrollToItem(nearIndex)
+    // **拖进度条时瞬时定位,不补间。** 平时一句切一次,补间是对的 —— 它让"换了一句"这件事
+    // 看得出来。拖动时 nearIndex 每帧都在变,`animateScrollToItem` 会被不断打断重启,每次
+    // 都从头缓动,结果是歌词追不上拇指、看起来像没跟着拖。松手后 dragging 变回 false,
+    // 这个 effect 重跑一次,用补间落到最终位置。
+    LaunchedEffect(focusIndex, dragging) {
+        if (dragging) listState.scrollToItem(focusIndex) else listState.animateScrollToItem(focusIndex)
+    }
+
+    // **被滚走之后自己回来。** 上面那个 effect 只在 focusIndex 变化时跑,也就是每句一次;
+    // 在两句之间的几秒里,任何把列表推走的东西(拉队列时蹭到的一下滑动、误触的一次惯性滚动)
+    // 都不会被纠正,当前句就那么停在屏幕外,直到下一句才回来 —— 看起来像"高亮丢了"。
+    //
+    // 只在**滚动停下来、且当前句已经不在可见范围内**时才纠正:还看得见就不动,免得跟正在
+    // 往前后翻看的人抢列表。
+    LaunchedEffect(listState, focusIndex) {
+        snapshotFlow { listState.isScrollInProgress }
+            .filter { !it }
+            .collect {
+                val visible = listState.layoutInfo.visibleItemsInfo.any { it.index == focusIndex }
+                if (!visible) listState.animateScrollToItem(focusIndex)
+            }
     }
 
     BoxWithConstraints(modifier = modifier) {
@@ -1035,6 +1087,18 @@ private fun LyricsList(
             horizontalAlignment = Alignment.CenterHorizontally,
             contentPadding = PaddingValues(horizontal = Spacing.Loose, vertical = halfViewport),
         ) {
+            // **片头那段没有歌词的时间轴,焦点落在这条虚拟空行上。**
+            // 它不显示任何东西,但占一整行的高度,于是"当前句永远在正中"这条在片头也成立:
+            // 第一句到来时是从这里平滑滚过去,而不是列表先贴着顶、等第一句出现再顿一下。
+            // 用空串 Text 而不是定高 Spacer —— 行高跟着同一套字号走,字号或 fontScale 变了
+            // 不需要再对一遍魔数。
+            item(key = LeadInKey) {
+                Text(
+                    "",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.Tight),
+                )
+            }
             itemsIndexed(cues, key = { _, cue -> cue.fromMillis }) { index, cue ->
                 val highlighted = index == highlightIndex
                 Text(
@@ -1045,7 +1109,14 @@ private fun LyricsList(
                     } else {
                         MaterialTheme.typography.bodyMedium
                     },
-                    color = if (highlighted) FixedColors.OnMedia else FixedColors.OnMedia.copy(alpha = 0.6f),
+                    // 强调色 + 字号 + 字重三维一起区分。颜色单独一维在强光下不够,
+                    // 字号单独一维在长句折行时看不出来。
+                    fontWeight = if (highlighted) FontWeight.Bold else null,
+                    color = if (highlighted) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onSeekTo(cue.fromMillis) }
@@ -1102,7 +1173,7 @@ private fun SubtitleTrackCornerButton(
 private fun sleepTimerLabel(state: SleepTimerState): String? {
     val duration = when (val mode = state.mode) {
         SleepTimerMode.Off -> null
-        is SleepTimerMode.After -> state.remainingMillis?.let { formatDurationMillis(it) }
+        is SleepTimerMode.After -> state.remainingMillis?.let { formatRemaining(it) }
             ?: stringResource(R.string.sleep_timer_minutes, mode.minutes)
     }
     val finish = if (state.finishCurrentItem) stringResource(R.string.sleep_timer_end_of_item) else null
@@ -1112,6 +1183,18 @@ private fun sleepTimerLabel(state: SleepTimerState): String? {
         finish != null -> finish
         else -> null
     }
+}
+
+/**
+ * 定时剩余用「分:秒」,不是 `formatDurationMillis` 的「时:分:秒」。
+ *
+ * 定时上限是 120 分钟,所以分位最多三位,`120:00` 比 `1:59:55` 短两个字符 —— 而它要挤在控制行
+ * 五等分里的一格,长度就是能不能读全的关键。语义也更直接:这里问的是"还有多久",答案本来就是
+ * 一个分钟数,拆成时和分反而要在心里再加一次。
+ */
+private fun formatRemaining(millis: Long): String {
+    val totalSeconds = (millis / 1000).coerceAtLeast(0)
+    return "%d:%02d".format(totalSeconds / 60, totalSeconds % 60)
 }
 
 private fun formatSpeed(speed: Float): String =

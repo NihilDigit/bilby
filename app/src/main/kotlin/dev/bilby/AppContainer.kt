@@ -85,7 +85,7 @@ class AppContainer(context: Context) {
      *
      * 没有 cookie 刷新这一环:凭据过期就重新扫码,理由见 notes/auth-model.md §7。
      */
-    val tvLoginRepository: TvLoginRepository by lazy { TvLoginRepository(biliClient, settings) }
+    val tvLoginRepository: TvLoginRepository by lazy { TvLoginRepository(biliClient, settings, deviceFingerprint) }
 
 
     val dynamicRepository: DynamicRepository by lazy { DynamicRepository(biliClient) }

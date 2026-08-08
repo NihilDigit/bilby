@@ -5,7 +5,6 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -15,12 +14,15 @@ private val Context.fingerprintDataStore: DataStore<Preferences> by
     preferencesDataStore(name = "bilby_fingerprint")
 
 /**
- * 设备指纹(buvid3/buvid4/bili_ticket)的持久化。单独开一个 DataStore 文件而不是塞进
- * SettingsStore,是因为这两类数据的生命周期不同:登录凭据随账号切换/登出而变,
- * 设备指纹是"这台设备"的身份,理应跨账号、跨登出保留。
+ * 设备指纹的持久化。单独开一个 DataStore 文件而不是塞进 SettingsStore,是因为两类数据的
+ * 生命周期不同:登录凭据随账号切换/登出而变,设备指纹是"这台设备"的身份。
  *
- * buvid3/buvid4 必须固定下来:它们是风控识别设备的依据,每次启动重新生成等于每次
- * 都换一台新设备,新设备在风控眼里天然可疑,只会让写接口的 -403 更频繁而不是更少。
+ * [FingerprintData.buvid3] 必须固定下来:它是风控识别设备的依据,每次启动重新生成等于每次
+ * 都换一台新设备,新设备在风控眼里天然可疑。
+ *
+ * [FingerprintData.serverCookies] 相反,它属于**这一次登录**(`sid` 之类),登出时必须清掉,
+ * 见 [clearSession] —— PiliPlus 登出是 `cookieJar.deleteAll()` 之后重新生成 buvid3
+ * (`account.dart:157-160`),两者的存续期在那边也是分开的。
  */
 class FingerprintStore(context: Context) {
 
@@ -29,9 +31,6 @@ class FingerprintStore(context: Context) {
     val data: Flow<FingerprintData> = store.data.map { p ->
         FingerprintData(
             buvid3 = p[KEY_BUVID3].orEmpty(),
-            buvid4 = p[KEY_BUVID4].orEmpty(),
-            biliTicket = p[KEY_BILI_TICKET].orEmpty(),
-            ticketExpiresAt = p[KEY_TICKET_EXPIRES_AT] ?: 0L,
             buvidActivated = p[KEY_BUVID_ACTIVATED] ?: false,
             serverCookies = p[KEY_SERVER_COOKIES].orEmpty().decodeCookies(),
         )
@@ -50,17 +49,22 @@ class FingerprintStore(context: Context) {
         }
     }
 
-    suspend fun saveBuvid(buvid3: String, buvid4: String) {
-        store.edit { p ->
-            p[KEY_BUVID3] = buvid3
-            p[KEY_BUVID4] = buvid4
-        }
+    suspend fun saveBuvid(buvid3: String) {
+        store.edit { p -> p[KEY_BUVID3] = buvid3 }
     }
 
-    suspend fun saveTicket(ticket: String, expiresAt: Long) {
+    /**
+     * 登出:丢掉这次会话的 cookie 并换一个 buvid3。
+     *
+     * `sid` 是服务端签发给**那一次登录**的,留着它去发下一次登录的请求,交出去的就是一套
+     * 拼接出来的会话。buvid3 一并换掉是照 PiliPlus 的 `delete()`;激活标记跟着 buvid3 走,
+     * 新的 buvid3 没有激活过。
+     */
+    suspend fun clearSession() {
         store.edit { p ->
-            p[KEY_BILI_TICKET] = ticket
-            p[KEY_TICKET_EXPIRES_AT] = expiresAt
+            p.remove(KEY_SERVER_COOKIES)
+            p.remove(KEY_BUVID3)
+            p.remove(KEY_BUVID_ACTIVATED)
         }
     }
 
@@ -71,9 +75,6 @@ class FingerprintStore(context: Context) {
 
     private companion object {
         val KEY_BUVID3 = stringPreferencesKey("buvid3")
-        val KEY_BUVID4 = stringPreferencesKey("buvid4")
-        val KEY_BILI_TICKET = stringPreferencesKey("bili_ticket")
-        val KEY_TICKET_EXPIRES_AT = longPreferencesKey("bili_ticket_expires_at")
         val KEY_BUVID_ACTIVATED = booleanPreferencesKey("buvid_activated")
         val KEY_SERVER_COOKIES = stringPreferencesKey("server_cookies")
     }
@@ -81,9 +82,6 @@ class FingerprintStore(context: Context) {
 
 data class FingerprintData(
     val buvid3: String = "",
-    val buvid4: String = "",
-    val biliTicket: String = "",
-    val ticketExpiresAt: Long = 0L,
     val buvidActivated: Boolean = false,
     /** 服务端通过 Set-Cookie 下发、我们原样回带的那些键(b_nut、_uuid、sid……)。 */
     val serverCookies: Map<String, String> = emptyMap(),

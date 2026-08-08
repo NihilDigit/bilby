@@ -11,9 +11,12 @@ import dev.bilby.agent.ChatMessage
 import dev.bilby.agent.TraceItem
 import dev.bilby.api.BiliResult
 import dev.bilby.data.SearchRepository
+import dev.bilby.data.SettingsStore
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -31,12 +34,31 @@ enum class SearchOrder(val apiValue: String, @StringRes val labelRes: Int) {
  * 两条路共用一个界面(DESIGN 2.2 的"一个框,两条路"):快路直接打 B 站搜索接口瞬时返回,
  * 慢路起 agent 循环。区别只在这里的分派,UI 侧是同一串轮次。
  *
- * 轮次只留在内存里,不落库 —— DESIGN 2.2 明确不做搜索历史。
+ * **轮次只留在内存里,落库的只有普通搜索的关键词。** 这里原先写着"DESIGN 2.2 明确不做搜索
+ * 历史",那是读错了:2.2 禁的是「相关推荐」和「热搜词」,而 DESIGN 的技术选型表里本来就列着
+ * 要存搜索历史。两者不是一回事 —— 热搜词是把别人的热门查询推给你,搜索历史是你自己敲过的字,
+ * 前者是推送式入口,后者只是省一次重复输入。
+ *
+ * 助理那一路的提问**不记**:它的上下文按 DESIGN 3.3 只含本次意图,把提问攒成一份可点的清单
+ * 等于给它做了一份会话历史。
  */
 class SearchChatViewModel(
     private val searchRepository: SearchRepository,
     private val agentLoop: AgentLoop,
+    private val settings: SettingsStore,
 ) : ViewModel() {
+
+    /** 最近搜过的词,最多 [SettingsStore.SEARCH_HISTORY_LIMIT] 条,最近的在前。 */
+    val searchHistory: StateFlow<List<String>> = settings.searchHistory
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun removeSearchHistory(query: String) = viewModelScope.launch { settings.removeSearchHistory(query) }
+
+    /** 点历史里的一条 = 把它填回输入框并直接搜。 */
+    fun searchFromHistory(query: String) {
+        _state.update { it.copy(input = query, mode = SearchMode.Normal) }
+        send()
+    }
 
     /**
      * 会话内多轮共享的上下文(DESIGN 3.1 修订)。**只含本会话的对话与工具返回**,
@@ -98,6 +120,7 @@ class SearchChatViewModel(
             // 新起一份 NormalSearchState() 会把它悄悄弹回综合。
             SearchMode.Normal -> {
                 val order = _state.value.normal.order
+                viewModelScope.launch { settings.addSearchHistory(query) }
                 seenSearchBvids.clear()
                 _state.update { it.copy(normal = NormalSearchState(query = query, order = order, loading = true)) }
                 runNormal(query, page = 1, order)

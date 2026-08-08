@@ -3,22 +3,15 @@ package dev.bilby.api
 import dev.bilby.BiliLog
 import dev.bilby.data.FingerprintStore
 import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.request.forms.submitForm
-import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
-import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
 import io.ktor.http.Cookie
 import io.ktor.http.HttpHeaders
-import io.ktor.http.Parameters
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import java.util.UUID
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 import kotlin.random.Random
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
@@ -28,7 +21,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * 设备指纹:buvid3/buvid4 + bili_ticket + ExClimbWuzhi 激活。
+ * 设备指纹:buvid3 + 服务端下发过的 cookie + ExClimbWuzhi 激活。
+ *
+ * **这里只放服务端认得的东西。** 曾经还自己造过 `buvid4` 和 `bili_ticket`:两者 PiliPlus
+ * 都没有(`notes/auth-model.md §5.1` 逐个 grep 确认零命中),而它们是**以 cookie 的形式交回
+ * 服务端的** —— 等于声称"你给过我这两个值"。加上登录时被丢掉的 `sid`,我们交回去的是一套
+ * 服务端从未这样签发过的组合。
  *
  * 不依赖 BiliClient —— BiliClient 拼 Cookie 要用到这里的 cookieEntries(),
  * 反过来依赖会成环,所以直接拿 HttpClient 自己发请求(同 WbiSigner 断循环依赖的思路)。
@@ -43,18 +41,15 @@ class DeviceFingerprint(
 
     private val mutex = Mutex()
 
-    /** 已解析好的 Cookie 键值对 + 它对应的 ticket 到期时刻。null 表示这个进程还没解析过。 */
+    /** 已解析好的 Cookie 键值对 + 缓存有效到的时刻。null 表示这个进程还没解析过。 */
     private var cached: Pair<Map<String, String>, Long>? = null
-
-    /** 取 ticket 失败后的冷却截止时刻(秒)。 */
-    private var ticketRetryAfter = 0L
 
     /**
      * 返回要拼进 Cookie 的键值对,内部负责获取/刷新/缓存,任何字段缺失就不放进 Map。
      *
      * **每一个 B 站请求都会调这里**,所以必须串行化。不加锁时冷启动的那批并发请求会各自
-     * 看到"buvid3 为空",各自生成一个不同的 buvid3、各自发一次 spi 与 GenWebTicket,
-     * 最后随机一个胜出落盘 —— 结果是同一次启动里发出去的请求带着好几个不同的设备号,
+     * 看到"buvid3 为空"、各自生成一个不同的 buvid3,最后随机一个胜出落盘 ——
+     * 结果是同一次启动里发出去的请求带着好几个不同的设备号,
      * 恰恰是 FingerprintStore 注释里说"绝不能发生"的那件事(风控眼里等于凭空多出几台新设备)。
      */
     suspend fun cookieEntries(): Map<String, String> {
@@ -76,10 +71,21 @@ class DeviceFingerprint(
      * 登录态那四个键不收:它们由登录流程写进 SettingsStore,是唯一权威来源。让某个接口的
      * 响应顺手改写 SESSDATA,出问题时会极难追。
      */
-    suspend fun rememberCookies(cookies: List<Cookie>) {
+    suspend fun rememberCookies(cookies: List<Cookie>) =
+        rememberCookies(cookies.associate { it.name to it.value })
+
+    /**
+     * 同上,但接的是已经拆好的键值对。**TV 扫码登录要用这个**:那批 cookie 来自响应体的
+     * `cookie_info.cookies`,不是响应头,`setCookie()` 收不到。
+     *
+     * 登录返回的 `sid` 就是这么丢掉的 —— 落盘时只按名字挑走了 SESSDATA/bili_jct/DedeUserID/
+     * DedeUserID__ckMd5 四个,剩下的没有任何人接。PiliPlus 把整个 list 原样存进 cookie jar
+     * (`account.dart:217-226`,`for (final i in cookies)`,不挑字段),之后全量带回。
+     */
+    suspend fun rememberCookies(cookies: Map<String, String>) {
         val harvested = cookies
-            .filter { it.name.isNotEmpty() && it.value.isNotEmpty() && it.name !in CREDENTIAL_COOKIE_NAMES }
-            .associate { it.name to it.value }
+            .filterKeys { it.isNotEmpty() && it !in CREDENTIAL_COOKIE_NAMES }
+            .filterValues { it.isNotEmpty() }
         if (harvested.isEmpty()) return
 
         val known = cached?.first
@@ -90,61 +96,31 @@ class DeviceFingerprint(
         mutex.withLock { cached = null }
     }
 
+    /** 登出:清掉这次会话的 cookie 与 buvid3,见 [FingerprintStore.clearSession]。 */
+    suspend fun clearSession() {
+        store.clearSession()
+        mutex.withLock { cached = null }
+    }
+
     private suspend fun resolve(nowSeconds: Long): Map<String, String> {
         val current = store.data.first()
 
-        // 服务端下发过 buvid3 就以它为准:浏览器不会留着旧值不放,而且服务端认的本来就是
-        // 它自己发的那个。这也让下面的"buvid3 为空就去取"不会重复触发。
+        // 服务端下发过 buvid3 就以它为准:服务端认的本来就是它自己发的那个。
         val serverBuvid3 = current.serverCookies["buvid3"].orEmpty()
         var buvid3 = serverBuvid3.ifEmpty { current.buvid3 }
-        var buvid4 = current.serverCookies["buvid4"].orEmpty().ifEmpty { current.buvid4 }
         if (buvid3.isEmpty()) {
-            val fetched = fetchBuvidFromSpi()
-            if (fetched != null) {
-                buvid3 = fetched.first
-                buvid4 = fetched.second
-            } else {
-                // buvid4 没有已知的本地生成算法(PiliPlus 也未实现,笔记里标了 UNSURE),
-                // 接口拿不到就只补 buvid3,buvid4 留空。
-                buvid3 = generateBuvid3Locally()
-            }
-            store.saveBuvid(buvid3, buvid4)
-        }
-
-        var ticket = current.biliTicket
-        var expiresAt = current.ticketExpiresAt
-        val stale = ticket.isEmpty() || nowSeconds >= expiresAt - TICKET_REFRESH_BUFFER_SECONDS
-        if (stale && nowSeconds >= ticketRetryAfter) {
-            val fresh = fetchBiliTicket()
-            if (fresh != null) {
-                ticket = fresh.first
-                expiresAt = fresh.second
-                store.saveTicket(ticket, expiresAt)
-            } else {
-                // 不冷却的话,接口只要在挂,之后每一个 B 站请求都会先赔上一次失败的 ticket 请求。
-                ticketRetryAfter = nowSeconds + TICKET_RETRY_COOLDOWN_SECONDS
-            }
+            buvid3 = generateBuvid3Locally()
+            store.saveBuvid(buvid3)
         }
 
         val entries = buildMap {
-            // 先铺服务端下发的那些(b_nut、_uuid、sid……),再让我们自己维护的三个覆盖上去:
-            // buvid3/buvid4 上面已经把服务端值并进来了,bili_ticket 则是我们自己算 hexsign、
-            // 自己管 TTL 的,以本地这份为准。
+            // 服务端下发过的那些(b_nut、_uuid、sid……)原样带回,再让 buvid3 覆盖上去。
             putAll(current.serverCookies)
             if (buvid3.isNotEmpty()) put("buvid3", buvid3)
-            if (buvid4.isNotEmpty()) put("buvid4", buvid4)
-            if (ticket.isNotEmpty()) put("bili_ticket", ticket)
         }
-        // ticket 拿到了就缓存到该刷新的时刻;没拿到(或还在冷却里用着一张过期的)就按冷却
-        // 时长缓存。后一种情况不能拿 expiresAt 当缓存期限——那是个过去的时间,缓存立刻失效,
-        // 每个请求都会重新抢锁读一遍 DataStore。
-        val ticketUsable = ticket.isNotEmpty() && nowSeconds < expiresAt - TICKET_REFRESH_BUFFER_SECONDS
-        val validUntil = if (ticketUsable) {
-            expiresAt - TICKET_REFRESH_BUFFER_SECONDS
-        } else {
-            maxOf(ticketRetryAfter, nowSeconds + TICKET_RETRY_COOLDOWN_SECONDS)
-        }
-        cached = entries to validUntil
+        // 没有任何本地维护的到期时间了,缓存一直有效,由 [rememberCookies] 在服务端下发新值时
+        // 作废。这里曾按 bili_ticket 的 TTL 算缓存期限,ticket 去掉之后那套算术没有对象了。
+        cached = entries to Long.MAX_VALUE
         return entries
     }
 
@@ -156,53 +132,17 @@ class DeviceFingerprint(
             .onFailure { BiliLog.w("buvid 激活异常", it) }
     }
 
-    private suspend fun fetchBuvidFromSpi(): Pair<String, String>? = runCatching {
-        val resp: HttpResponse = httpClient.get("${BiliConstants.WEB_HOST}/x/frontend/finger/spi") {
-            header(HttpHeaders.UserAgent, BiliConstants.USER_AGENT)
-            header(HttpHeaders.Referrer, BiliConstants.REFERER)
-        }
-        val data = resp.body<BiliResponse<SpiData>>().data ?: return@runCatching null
-        data.b3 to data.b4
-    }.onFailure { BiliLog.w("buvid 获取异常", it) }.getOrNull()?.takeIf { it.first.isNotEmpty() }
-
-    /** PiliPlus 的本地生成算法:UUIDv4 转大写 + [0,100000) 随机数(补零到 5 位) + "infoc"。 */
+    /**
+     * PiliPlus 的本地生成算法:UUIDv4 转大写 + [0,100000) 随机数(补零到 5 位) + "infoc"
+     * (`lib/utils/id_utils.dart:72-74`)。
+     *
+     * **不去 `x/frontend/finger/spi` 要。** 那条路曾经是首选、本地生成只当兜底,理由是
+     * "服务端认它自己发的那个"。但 PiliPlus 从不请求它,登录态和匿名态都是本地生成
+     * (`account.dart:115/137`),多发一次请求换不到任何已知好处。
+     */
     private fun generateBuvid3Locally(): String {
         val random5 = Random.nextInt(100000).toString().padStart(5, '0')
         return "${UUID.randomUUID().toString().uppercase()}${random5}infoc"
-    }
-
-    /**
-     * bili_ticket:HMAC-SHA256(key="XgwSnGZ1p", msg="ts"+timestamp) 取 hex 作为 hexsign。
-     * 有效期文档内前后矛盾(简述段 259260 秒 vs 接口字段表 259200 秒),按字段表取更可能
-     * 准确的 259200 秒;created_at 缺失时退化用请求发出时的时间戳兜底。
-     */
-    private suspend fun fetchBiliTicket(): Pair<String, Long>? = runCatching {
-        val timestamp = System.currentTimeMillis() / 1000
-        val hexsign = hmacSha256Hex(TICKET_HMAC_KEY, "ts$timestamp")
-        // 参数必须放 query:放进 form body 时服务端报 -400 empty `ts` field。
-        val resp = httpClient.post("${BiliConstants.WEB_HOST}/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket") {
-            url {
-                parameters.append("key_id", "ec02")
-                parameters.append("hexsign", hexsign)
-                parameters.append("context[ts]", timestamp.toString())
-            }
-            header(HttpHeaders.UserAgent, BiliConstants.USER_AGENT)
-            header(HttpHeaders.Referrer, BiliConstants.REFERER)
-        }
-        val envelope = resp.body<BiliResponse<TicketData>>()
-        val data = envelope.data
-        if (data == null) {
-            BiliLog.w("bili_ticket 获取失败 status=${resp.status.value} code=${envelope.code}: ${envelope.message}")
-            return@runCatching null
-        }
-        val createdAt = data.createdAt.takeIf { it > 0 } ?: timestamp
-        data.ticket to (createdAt + TICKET_TTL_SECONDS)
-    }.onFailure { BiliLog.w("bili_ticket 请求异常", it) }.getOrNull()
-
-    private fun hmacSha256Hex(key: String, message: String): String {
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(key.toByteArray(Charsets.UTF_8), "HmacSHA256"))
-        return mac.doFinal(message.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
     }
 
     /**
@@ -231,18 +171,6 @@ class DeviceFingerprint(
     }
 
     @Serializable
-    private data class SpiData(
-        @SerialName("b_3") val b3: String = "",
-        @SerialName("b_4") val b4: String = "",
-    )
-
-    @Serializable
-    private data class TicketData(
-        val ticket: String = "",
-        @SerialName("created_at") val createdAt: Long = 0L,
-    )
-
-    @Serializable
     private data class ExClimbWuzhiInner(
         val adca: String = "Linux",
         val bfe9: String,
@@ -259,11 +187,6 @@ class DeviceFingerprint(
     private data class ExClimbWuzhiRequest(val payload: String)
 
     private companion object {
-        const val TICKET_HMAC_KEY = "XgwSnGZ1p"
-        const val TICKET_TTL_SECONDS = 259_200L
-        const val TICKET_REFRESH_BUFFER_SECONDS = 60L
-        const val TICKET_RETRY_COOLDOWN_SECONDS = 60L
-
         /** 登录态的四个键只认登录流程写进 SettingsStore 的那份,不从响应里回收。 */
         val CREDENTIAL_COOKIE_NAMES =
             setOf("SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5")

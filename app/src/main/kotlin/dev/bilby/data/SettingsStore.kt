@@ -174,7 +174,44 @@ class SettingsStore(context: Context) {
         store.edit { p -> p.remove(KEY_EXCLUDED_FEED_MIDS) }
     }
 
+    /**
+     * 普通搜索的历史,最近的在前,至多 [SEARCH_HISTORY_LIMIT] 条。
+     *
+     * **只记普通搜索,不记助理。** 助理的上下文按 DESIGN 3.3 只含本次意图,把提问攒成一份
+     * 可点的清单,等于给它做了一份会话历史 —— 那正是那条约束要避免的东西。
+     *
+     * 用换行拼成一个字符串存,不是 `stringSetPreferencesKey`:Set 不保序,而这份清单的
+     * 全部意义就在顺序(最近的在最上面)。搜索词本身不可能含换行(输入框是单行)。
+     */
+    val searchHistory: Flow<List<String>> = store.data.map { p ->
+        p[KEY_SEARCH_HISTORY].orEmpty().split('\n').filter { it.isNotEmpty() }
+    }
+
+    suspend fun addSearchHistory(query: String) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return
+        store.edit { p ->
+            val previous = p[KEY_SEARCH_HISTORY].orEmpty().split('\n').filter { it.isNotEmpty() }
+            // 搜过的词再搜一次是往上提,不是多一条。
+            val merged = (listOf(trimmed) + previous.filterNot { it == trimmed }).take(SEARCH_HISTORY_LIMIT)
+            p[KEY_SEARCH_HISTORY] = merged.joinToString("\n")
+        }
+    }
+
+    suspend fun removeSearchHistory(query: String) {
+        store.edit { p ->
+            val remaining = p[KEY_SEARCH_HISTORY].orEmpty()
+                .split('\n')
+                .filter { it.isNotEmpty() && it != query }
+            if (remaining.isEmpty()) p.remove(KEY_SEARCH_HISTORY) else p[KEY_SEARCH_HISTORY] = remaining.joinToString("\n")
+        }
+    }
+
     companion object {
+        /** 搜索历史保留几条。显示多少就存多少 —— 存了不显示的部分只是一份用不到的记录。 */
+        const val SEARCH_HISTORY_LIMIT = 5
+
+        private val KEY_SEARCH_HISTORY = stringPreferencesKey("search_history")
         private val KEY_SESSDATA = stringPreferencesKey("sessdata")
         private val KEY_BILI_JCT = stringPreferencesKey("bili_jct")
         private val KEY_DEDE_USER_ID = stringPreferencesKey("dede_user_id")

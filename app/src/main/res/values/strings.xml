@@ -61,6 +61,8 @@
 
     <!-- 搜索 -->
     <string name="search_empty">搜索视频与 UP 主</string>
+    <string name="search_history_title">最近搜索</string>
+    <string name="search_history_remove">删除这条搜索记录</string>
     <string name="search_agent_empty">描述想看的内容</string>
     <string name="search_no_results">没有结果</string>
     <string name="search_loading">搜索中…</string>
@@ -200,7 +202,7 @@
     <string name="listen_not_playing">未在播放</string>
     <string name="listen_queue">播放队列</string>
     <!-- 队列把手收起时露出的那一行,见 ListenScreen.kt 的 QueueSheetContent。 -->
-    <string name="listen_queue_count">播放队列 · %1$d</string>
+    <string name="listen_queue_title">播放队列</string>
     <string name="listen_retrying">%1$s,重试中…</string>
 
     <!-- 播放失败的原因。摆在界面上,不悄悄跳到下一条。 -->
