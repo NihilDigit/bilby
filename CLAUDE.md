@@ -11,8 +11,12 @@ being in the room — it is not advice for contributors, who should still open o
 
 ## Product constraints
 
-Bilby resists compulsive use through structure. Every rule below is load-bearing; treat
-them as fixed:
+Bilby takes an anti-algorithmic stance: what the user sees comes from their own
+subscriptions and from searches they start, never from a ranker deciding on their behalf.
+The point is that the content is worth their attention, not that they spend less time in
+the app — this is not a screen-time tool, and arguments of the form "that would make the
+app too engaging" do not belong here. Every rule below is load-bearing; treat them as
+fixed:
 
 - No recommendation feed, no related-videos rail, no autoplay. A list's contents follow from
   what the user already chose (who they follow, which video they opened). Never insert

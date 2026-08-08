@@ -1,0 +1,56 @@
+# README 顶上那个 APK 体积 badge 的数据源。
+#
+# badge 指向 releases/latest/download/apk-size.json —— 这个地址永远解析到最新一次发布,
+# 所以体积不必写死在 README 里,也不需要往仓库回提交任何东西。
+#
+# 单独一个 workflow 而不是并进 release.yml:这样任何一次已经发出去的 release 都能补,
+# 包括加这个 badge 之前发的那些。发版后会自动跑一次,也可以手动指定 tag 重跑。
+#
+# 不下载 APK:体积从 release API 的 assets[].size 直接读,整个 job 几秒结束。
+name: APK size badge
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "目标 release 的 tag,留空则取最新一次发布"
+        required: false
+        type: string
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Build and upload badge endpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          INPUT_TAG: ${{ inputs.tag }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${EVENT_TAG:-}}"
+          if [ -z "$tag" ]; then
+            tag=$(gh release view --repo "$REPO" --json tagName --jq .tagName)
+          fi
+          echo "target: $tag"
+
+          # 取 arm64 那一份的体积:绝大多数设备实际装的是它,universal 会偏大。
+          bytes=$(gh api "repos/$REPO/releases/tags/$tag" \
+                    --jq '.assets[] | select(.name | endswith("arm64-v8a.apk")) | .size')
+          if [ -z "$bytes" ]; then
+            echo "::error::$tag 里没有 arm64-v8a 的 APK,无法生成 badge"
+            exit 1
+          fi
+
+          size=$(awk -v b="$bytes" 'BEGIN{printf "%.1f", b/1048576}')
+          echo "size: $bytes bytes = $size MB"
+          printf '{"schemaVersion":1,"label":"APK","message":"%s MB","color":"4A5C92"}\n' \
+            "$size" > apk-size.json
+          cat apk-size.json
+
+          gh release upload "$tag" apk-size.json --clobber --repo "$REPO"

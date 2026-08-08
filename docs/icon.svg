@@ -1,9 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108">
   <!--
-    README 用的图标。几何与 app/src/main/res/drawable/ic_launcher_foreground.xml 完全相同,
-    差别只有两处:这里自带圆角底(装到机器上时圆角由 launcher 的遮罩决定,应用不指定),
-    以及内容按 72dp 可见区裁掉了四周的留白,免得在 README 里显得缩成一小团。
-    改图标时两边都要改。
+    README 用的图标。路径与 app/src/main/res/drawable/ic_launcher_foreground.xml 逐字符相同,
+    改路径时两边都要改。但有三处**有意不同**,同步时别一并搬过来:
+
+    - 这里自带圆角底。装到机器上时圆角由 launcher 的遮罩决定,应用不指定。
+    - 内容不套那一层 0.75 缩放。launcher 图标缩小是为了和同屏其他应用的图标对齐视觉重量,
+      而这一张在 README 里单独出现,没有可对齐的对象,缩了只会显得小气。
+    - 画布按 108 直接装内容,不留 launcher 那圈安全区。
   -->
   <rect width="108" height="108" rx="24" fill="#4A5C92"/>
   <path fill="#FFFFFF" fill-rule="evenodd"

@@ -73,6 +73,7 @@ jobs:
           done
           # R8 的 mapping 一起发:release 崩溃栈是混淆过的,没有它谁也读不了用户贴的日志。
           cp app/build/outputs/mapping/release/mapping.txt "dist/bilby-$version-mapping.txt"
+
           (cd dist && sha256sum * > SHA256SUMS.txt)
           ls -l dist
 
