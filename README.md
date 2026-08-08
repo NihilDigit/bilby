@@ -11,25 +11,25 @@ Bilby 是一款安卓原生 bilibili 客户端，提供无推荐流的订阅式�
 ## 订阅式交互体验，远离推荐流打扰
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/feed.png" width="280" height="616" alt="首页：关注动态">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/video.png" width="280" height="616" alt="播放页与播放队列">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/in-video.png" width="280" height="616" alt="点按后 Agent 基于当前视频检索">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/feed.png" width="240" height="528" alt="首页：关注动态">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/video.png" width="240" height="528" alt="播放页与播放队列">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/in-video.png" width="240" height="528" alt="点按后 Agent 基于当前视频检索">
 </p>
 <p align="center">首页只收录关注的 UP 主；播放队列来自所属合集与 UP 主投稿；如有需要，Agent 可以基于当前视频搜索相关内容</p>
 
 ## 重新设计的原生听视频能力支持
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/listen.png" width="280" height="616" alt="听视频界面">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/lyrics.png" width="280" height="616" alt="逐句字幕">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/listen.png" width="240" height="528" alt="听视频界面">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/lyrics.png" width="240" height="528" alt="逐句字幕">
 </p>
 <p align="center">与播放共用同一播放器，随时切换；支持息屏后台、锁屏与线控、定时关闭；字幕逐句跟随，点句跳转</p>
 
 ## 用 Agent 搜索沙里淘金
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-running.png" width="280" height="616" alt="Agent 检索过程">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-answer.png" width="280" height="616" alt="Agent 返回的候选视频">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-running.png" width="240" height="528" alt="Agent 检索过程">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-answer.png" width="240" height="528" alt="Agent 返回的候选视频">
 </p>
 <p align="center">检索全站，阅读简介与热评，返回候选并逐条说明理由</p>
 
