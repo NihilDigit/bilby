@@ -17,11 +17,13 @@ Bilby 是一款安卓原生的 bilibili 客户端，信息流由你掌控：内�
 <td><img src="docs/screenshots/feed.png" width="240"></td>
 <td><img src="docs/screenshots/video.png" width="240"></td>
 <td><img src="docs/screenshots/listen.png" width="240"></td>
+<td><img src="docs/screenshots/lyrics.png" width="240"></td>
 </tr>
 <tr>
 <td align="center">以关注动态组织首页信息</td>
 <td align="center">播放队列来自所属合集与 UP 主投稿</td>
 <td align="center">听视频：独立界面，与普通播放无缝切换</td>
+<td align="center">字幕逐句跟随，点句跳转</td>
 </tr>
 </table>
 
