@@ -4,7 +4,7 @@
 
 ### No recommendations. Only what you choose.
 
-[![APK](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fgithub.com%2FNihilDigit%2Fbilby%2Freleases%2Flatest%2Fdownload%2Fapk-size.json)](https://github.com/NihilDigit/bilby/releases/latest) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NihilDigit/bilby) [![简体中文](https://img.shields.io/badge/README-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-4A5C92?style=flat-square)](README.md)
+[![APK](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fraw.githubusercontent.com%2FNihilDigit%2Fbilby%2Fmain%2F.github%2Fbadges%2Fapk-size.json)](https://github.com/NihilDigit/bilby/releases/latest) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NihilDigit/bilby) [![简体中文](https://img.shields.io/badge/README-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-4A5C92?style=flat-square)](README.md)
 
 Bilby is a native Android client for bilibili, with a feed you control: it carries the
 uploaders you follow and the searches you start. **There is no recommender in the app**,

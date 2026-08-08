@@ -1,7 +1,11 @@
 # README 顶上那个 APK 体积 badge 的数据源。
 #
-# badge 指向 releases/latest/download/apk-size.json —— 这个地址永远解析到最新一次发布,
-# 所以体积不必写死在 README 里,也不需要往仓库回提交任何东西。
+# **文件必须落在仓库里,不能当 release asset。** shields.io 的 endpoint 只认少数几个域名,
+# releases/latest/download/... 会重定向到 objects.githubusercontent.com,它直接回
+# "domain is blocked";raw.githubusercontent.com 则是允许的。这一条试过才知道。
+#
+# 写文件走 Contents API 而不是 checkout + git push:不必拉整个仓库,也不会和期间落在
+# 默认分支上的其它提交打架。
 #
 # 单独一个 workflow 而不是并进 release.yml:这样任何一次已经发出去的 release 都能补,
 # 包括加这个 badge 之前发的那些。发版后会自动跑一次,也可以手动指定 tag 重跑。
@@ -53,4 +57,16 @@ jobs:
             "$size" > apk-size.json
           cat apk-size.json
 
-          gh release upload "$tag" apk-size.json --clobber --repo "$REPO"
+          path=".github/badges/apk-size.json"
+          content=$(base64 -w0 apk-size.json)
+          # 已存在就要带上它的 sha,否则 API 拒绝覆盖。
+          sha=$(gh api "repos/$REPO/contents/$path" --jq .sha 2>/dev/null || true)
+          if [ -n "$sha" ]; then
+            gh api --method PUT "repos/$REPO/contents/$path" \
+              -f message="docs(badge): APK $size MB ($tag)" \
+              -f content="$content" -f sha="$sha" --jq .commit.html_url
+          else
+            gh api --method PUT "repos/$REPO/contents/$path" \
+              -f message="docs(badge): APK $size MB ($tag)" \
+              -f content="$content" --jq .commit.html_url
+          fi

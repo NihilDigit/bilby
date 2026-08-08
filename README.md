@@ -4,7 +4,7 @@
 
 ### 没有推荐，只有选择
 
-[![APK](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fgithub.com%2FNihilDigit%2Fbilby%2Freleases%2Flatest%2Fdownload%2Fapk-size.json)](https://github.com/NihilDigit/bilby/releases/latest) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NihilDigit/bilby) [![English](https://img.shields.io/badge/README-English-4A5C92?style=flat-square)](README.en.md)
+[![APK](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fraw.githubusercontent.com%2FNihilDigit%2Fbilby%2Fmain%2F.github%2Fbadges%2Fapk-size.json)](https://github.com/NihilDigit/bilby/releases/latest) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NihilDigit/bilby) [![English](https://img.shields.io/badge/README-English-4A5C92?style=flat-square)](README.en.md)
 
 Bilby 是一款安卓原生的 bilibili 客户端，信息流由你掌控：内容来自关注的 UP 主，以及主动发起的检索。**应用内没有推荐算法**，不会插入未经你选择的内容。
 
