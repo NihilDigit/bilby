@@ -6,6 +6,7 @@ import dev.bilby.BiliLog
 import dev.bilby.api.BiliResult
 import dev.bilby.data.DynamicRepository
 import dev.bilby.data.FollowRepository
+import dev.bilby.data.SettingsStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,6 +16,7 @@ import kotlinx.coroutines.launch
 class FeedViewModel(
     private val repository: DynamicRepository,
     private val followRepository: FollowRepository,
+    private val settings: SettingsStore,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(FeedUiState(loading = true))
@@ -29,8 +31,24 @@ class FeedViewModel(
      * 时间序流里同一个视频只该占一行。
      */
     private val seenBvids = mutableSetOf<String>()
+    private var excludedMids = emptySet<Long>()
 
     init {
+        viewModelScope.launch {
+            settings.excludedFeedMids.collect { mids ->
+                val restored = excludedMids.any { it !in mids }
+                excludedMids = mids
+                if (restored) {
+                    // 有人被移出名单(设置页那个清空)。光放开过滤没用 —— 他的动态在之前几页
+                    // 就被丢掉了,不重新拉一遍不会自己回来。
+                    loadFirstPage()
+                } else {
+                    _state.update { current ->
+                        current.copy(items = current.items.filterNot { it.upMid in mids })
+                    }
+                }
+            }
+        }
         loadFirstPage()
         loadFrequentUps()
     }
@@ -79,7 +97,9 @@ class FeedViewModel(
             when (val page = repository.loadVideoFeed(nextOffset)) {
                 is BiliResult.Ok -> {
                     nextOffset = page.value.nextOffset
-                    val fresh = page.value.items.filter { seenBvids.add(it.bvid) }
+                    val fresh = page.value.items.filter {
+                        it.upMid !in excludedMids && seenBvids.add(it.bvid)
+                    }
                     _state.update { current ->
                         current.copy(
                             items = if (append) current.items + fresh else fresh,
@@ -101,5 +121,14 @@ class FeedViewModel(
 
     private fun setError(message: String) {
         _state.update { it.copy(loading = false, appending = false, refreshing = false, error = message) }
+    }
+
+    fun excludeUp(mid: Long) {
+        if (mid == 0L) return
+        excludedMids = excludedMids + mid
+        _state.update { current ->
+            current.copy(items = current.items.filterNot { it.upMid == mid })
+        }
+        viewModelScope.launch { settings.excludeFeedMid(mid) }
     }
 }

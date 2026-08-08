@@ -36,6 +36,14 @@
 
     <string name="feed_empty">No new videos from the creators you follow</string>
     <string name="feed_frequent_ups">Most visited</string>
+    <string name="feed_item_actions">Post actions</string>
+    <string name="dynamic_type_draw">Photo post</string>
+    <string name="dynamic_type_article">Article</string>
+    <string name="dynamic_type_word">Text post</string>
+    <string name="dynamic_type_forward">Repost</string>
+    <string name="dynamic_type_live">Live</string>
+    <string name="dynamic_type_other">Post</string>
+    <string name="feed_exclude_up">Hide %1$s from home</string>
 
     <string name="search_empty">Search videos and creators</string>
     <string name="search_agent_empty">Describe what you want to watch</string>
@@ -108,6 +116,7 @@
     <string name="space_collection_meta">%1$s · %2$d videos</string>
 
     <string name="video_tab_intro">About</string>
+    <string name="video_follow_staff">Follow %1$s</string>
     <string name="video_tab_comment">Comments</string>
     <string name="video_tab_comment_count">Comments %1$s</string>
     <string name="video_intro_expand">Show description</string>
@@ -198,10 +207,14 @@
     <string name="settings_not_configured">Not set</string>
     <string name="settings_configured">Set</string>
     <string name="settings_loading">Loading…</string>
+    <string name="settings_section_feed">Home feed</string>
+    <string name="settings_feed_clear_excluded">Clear hidden creators</string>
+    <string name="settings_feed_excluded_count">%1$d hidden right now</string>
     <string name="settings_section_player">Player</string>
     <string name="settings_codec">Codec preference</string>
     <string name="settings_codec_subtitle">Takes effect on the next video</string>
-    <string name="settings_danmaku_toggle">Danmaku</string>
+    <string name="settings_danmaku_opacity">Danmaku opacity</string>
+    <string name="settings_danmaku_opacity_value">%1$d%%</string>
     <string name="settings_sponsorblock_toggle">Skip automatically</string>
     <string name="settings_sponsorblock_toggle_subtitle">Sponsor, intro and outro segments marked by the community</string>
     <string name="settings_sponsorblock_server">Server URL</string>
@@ -209,6 +222,7 @@
     <string name="settings_section_about">About</string>
     <string name="settings_version">Version</string>
     <string name="settings_license">License</string>
+    <string name="settings_github">Project GitHub</string>
     <string name="settings_llm_test">Test</string>
     <string name="settings_llm_test_hint">Tap to send one request</string>
     <string name="settings_llm_test_running">Sending…</string>

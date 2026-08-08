@@ -131,6 +131,7 @@ class AudioPlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        runningService = this
         val container = (application as BilbyApplication).container
         videoRepository = container.videoRepository
         queueSourceRepository = container.queueSourceRepository
@@ -164,8 +165,12 @@ class AudioPlaybackService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // 划掉任务卡片时没在播就收摊;在播就留着——听视频的常态就是划走界面继续听。
-        if (!player.playWhenReady) stopSelf()
+        // 划掉任务卡片时只保留听视频:普通视频没有理由在没界面的情况下继续放。
+        if (!player.playWhenReady || !backgroundPlaybackAllowed) stopSelf()
+    }
+
+    private fun pauseForAppBackground() {
+        if (!backgroundPlaybackAllowed && player.playWhenReady) player.pause()
     }
 
     override fun onDestroy() {
@@ -174,6 +179,9 @@ class AudioPlaybackService : MediaSessionService() {
         scope.cancel()
         session?.release()
         session = null
+        if (runningService === this) runningService = null
+        // 服务都没了，“允许后台播”这个策略也跟着作废，否则下一次开普通视频会继承到上一次听视频的设置。
+        backgroundPlaybackAllowed = false
         currentPlayer = null
         player.release()
         _state.value = AudioPlaybackUiState()
@@ -670,6 +678,38 @@ class AudioPlaybackService : MediaSessionService() {
         @Volatile
         var currentPlayer: ExoPlayer? = null
             private set
+
+        @Volatile
+        private var runningService: AudioPlaybackService? = null
+
+        /**
+         * 允不允许离开应用后继续播。**只有听视频算数**,看视频退到后台就该停。
+         *
+         * 放在这里而不是走 `SessionCommand`:自定义命令是异步投递的,而 [pauseForAppBackground]
+         * 由 `Activity.onStop` 同步调用 —— "打开听视频后立刻锁屏"这条最常见的路径上,命令很
+         * 可能还没到,服务读到的仍是 false,刚开的听视频当场被摁停。同进程的一个 volatile
+         * 字段没有这个窗口,写完立刻可见。
+         *
+         * 这是策略,不是播放控制:播放控制(播/停/切/跳)一律仍走 MediaController。
+         */
+        @Volatile
+        var backgroundPlaybackAllowed: Boolean = false
+            private set
+
+        fun setBackgroundPlaybackAllowed(allowed: Boolean) {
+            backgroundPlaybackAllowed = allowed
+        }
+
+        /**
+         * 应用退到后台。看视频就暂停,听视频继续。
+         *
+         * 这条路由确实绕过了 MediaController,理由和 `currentPlayer` 那条一样:要表达的东西
+         * 在 MediaController 的命令集里没有对应项,而服务与 UI 同进程。服务在这里操作的是
+         * 它自己的播放器,不是外部越过 session 去控制它。
+         */
+        fun pauseForAppBackground() {
+            runningService?.pauseForAppBackground()
+        }
 
         private val _state = MutableStateFlow(AudioPlaybackUiState())
 

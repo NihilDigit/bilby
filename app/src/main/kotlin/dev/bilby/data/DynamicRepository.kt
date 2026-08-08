@@ -14,6 +14,9 @@ data class FeedPage(val items: List<FeedItem>, val nextOffset: String?, val hasM
 /**
  * 首页动态流(DESIGN 2.1:关注 UP 投稿,时间序,只显示视频类动态)。
  * 接口细节全部依据 notes/dynamic-feed.md 第 1 节:`feed/all` 不需要 WBI 签名、不需要 csrf。
+ *
+ * 图文、文字、转发这些非视频动态有地方看,但不在这里:它们只出现在 UP 主空间的动态 tab
+ * (见 SpaceRepository.loadDynamics)。首页是投稿时间序,混进去就成了半个广场。
  */
 class DynamicRepository(private val client: BiliClient) {
 

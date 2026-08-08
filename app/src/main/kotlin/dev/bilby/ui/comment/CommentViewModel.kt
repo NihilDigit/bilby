@@ -3,6 +3,7 @@ package dev.bilby.ui.comment
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.api.BiliResult
+import dev.bilby.ui.appendDistinctBy
 import dev.bilby.data.CommentCursor
 import dev.bilby.data.CommentItem
 import dev.bilby.data.CommentRepository
@@ -89,7 +90,14 @@ class CommentViewModel(
                     _state.update { current ->
                         current.copy(
                             topComment = if (append) current.topComment else page.topComment,
-                            items = if (append) current.items + page.items else page.items,
+                            // 登录态走 `x/v2/reply` 的 pn 分页(见 CommentRepository),服务端每页
+                            // 按当时的热度分重排整个列表,翻页期间有人点赞或发新评论,同一条就会
+                            // 同时出现在上一页尾和下一页首。
+                            items = if (append) {
+                                current.items.appendDistinctBy(page.items) { it.rpid }
+                            } else {
+                                page.items.distinctBy { it.rpid }
+                            },
                             loading = false,
                             appending = false,
                             hasMore = page.hasMore,

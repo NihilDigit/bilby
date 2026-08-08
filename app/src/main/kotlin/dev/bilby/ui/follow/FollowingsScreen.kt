@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
@@ -26,6 +27,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
 import dev.bilby.R
+import dev.bilby.ui.appendDistinctBy
 import dev.bilby.api.BiliResult
 import dev.bilby.data.FollowRepository
 import dev.bilby.data.UpBrief
@@ -48,6 +50,7 @@ data class FollowingsUiState(
     val items: List<UpBrief> = emptyList(),
     val loading: Boolean = true,
     val appending: Boolean = false,
+    val refreshing: Boolean = false,
     val hasMore: Boolean = true,
     val error: String? = null,
 )
@@ -79,9 +82,10 @@ class FollowingsViewModel(private val repository: FollowRepository) : ViewModel(
                     page = next
                     _state.update {
                         it.copy(
-                            items = it.items + result.value,
+                            items = it.items.appendDistinctBy(result.value) { up -> up.mid },
                             loading = false,
                             appending = false,
+                            refreshing = false,
                             // 接口不给 has_more,按"这一页没满就是最后一页"判断。
                             hasMore = result.value.isNotEmpty(),
                             error = null,
@@ -96,14 +100,19 @@ class FollowingsViewModel(private val repository: FollowRepository) : ViewModel(
         }
     }
 
-    fun retry() {
-        _state.update { it.copy(error = null, loading = true, hasMore = true) }
+    fun refresh() {
+        page = 0
+        _state.update {
+            it.copy(items = emptyList(), error = null, loading = true, appending = false, hasMore = true, refreshing = true)
+        }
         loadMore()
     }
 
+    fun retry() = refresh()
+
     private fun fail(message: String) {
         BiliLog.w("取关注列表失败: $message")
-        _state.update { it.copy(loading = false, appending = false, error = message) }
+        _state.update { it.copy(loading = false, appending = false, refreshing = false, error = message) }
     }
 }
 
@@ -113,6 +122,7 @@ fun FollowingsScreen(
     onUpClick: (Long) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
+    onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
@@ -129,16 +139,18 @@ fun FollowingsScreen(
                     .filter { (last, total) -> last != null && last >= total - 3 }
                     .collect { if (state.hasMore && !state.appending) onLoadMore() }
             }
-            LazyColumn(
-                state = listState,
-                modifier = modifier.fillMaxSize(),
-                contentPadding = contentPadding,
-            ) {
-                items(state.items, key = { it.mid }) { up ->
-                    FollowingRow(up, onClick = { onUpClick(up.mid) })
-                }
-                item(key = "footer") {
-                    ListFooter(appending = state.appending, hasMore = state.hasMore, hasItems = true)
+            PullToRefreshBox(isRefreshing = state.refreshing, onRefresh = onRefresh, modifier = modifier.fillMaxSize()) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = contentPadding,
+                ) {
+                    items(state.items, key = { it.mid }) { up ->
+                        FollowingRow(up, onClick = { onUpClick(up.mid) })
+                    }
+                    item(key = "footer") {
+                        ListFooter(appending = state.appending, hasMore = state.hasMore, hasItems = true)
+                    }
                 }
             }
         }

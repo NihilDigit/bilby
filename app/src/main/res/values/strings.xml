@@ -50,6 +50,14 @@
     <!-- 动态 -->
     <string name="feed_empty">关注的 UP 主还没有新投稿</string>
     <string name="feed_frequent_ups">最常访问</string>
+    <string name="feed_item_actions">动态操作</string>
+    <string name="dynamic_type_draw">图文动态</string>
+    <string name="dynamic_type_article">专栏动态</string>
+    <string name="dynamic_type_word">文字动态</string>
+    <string name="dynamic_type_forward">转发动态</string>
+    <string name="dynamic_type_live">直播动态</string>
+    <string name="dynamic_type_other">动态</string>
+    <string name="feed_exclude_up">不再显示 %1$s</string>
 
     <!-- 搜索 -->
     <string name="search_empty">搜索视频与 UP 主</string>
@@ -130,6 +138,7 @@
 
     <!-- 播放页 -->
     <string name="video_tab_intro">简介</string>
+    <string name="video_follow_staff">关注 %1$s</string>
     <string name="video_tab_comment">评论</string>
     <string name="video_tab_comment_count">评论 %1$s</string>
     <string name="video_intro_expand">展开简介</string>
@@ -243,10 +252,14 @@
     <string name="settings_not_configured">未配置</string>
     <string name="settings_configured">已配置</string>
     <string name="settings_loading">读取中…</string>
+    <string name="settings_section_feed">动态</string>
+    <string name="settings_feed_clear_excluded">清空不再显示的 UP 主</string>
+    <string name="settings_feed_excluded_count">当前已隐藏 %1$d 位</string>
     <string name="settings_section_player">播放器</string>
     <string name="settings_codec">编解码偏好</string>
     <string name="settings_codec_subtitle">改动对下一个视频生效</string>
-    <string name="settings_danmaku_toggle">弹幕</string>
+    <string name="settings_danmaku_opacity">弹幕透明度</string>
+    <string name="settings_danmaku_opacity_value">%1$d%%</string>
     <string name="settings_sponsorblock_toggle">自动跳过</string>
     <string name="settings_sponsorblock_toggle_subtitle">由社区标注的赞助、片头片尾等片段</string>
     <string name="settings_sponsorblock_server">服务器地址</string>
@@ -264,6 +277,7 @@
     <string name="settings_update_failed">检查失败:%1$s</string>
 
     <string name="settings_license">许可证</string>
+    <string name="settings_github">项目 GitHub</string>
     <string name="settings_llm_test">测试</string>
     <string name="settings_llm_test_hint">点击发送一次请求</string>
     <string name="settings_llm_test_running">请求中…</string>

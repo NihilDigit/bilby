@@ -1,13 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  主题图标层。几何与 ic_launcher_foreground 完全相同,单独存一份而不是复用前景,
-  因为这两层的约束不一样:前景可以是彩色的、可以分层次,而这一层会被系统按用户壁纸取色
-  **整体染成一个颜色**,只有 alpha 有意义。
+  主题图标层。系统按用户壁纸把这一层**整体染成一个颜色**,只有 alpha 有意义。
 
-  之前的写法是让 <monochrome> 直接指向前景层。那次侥幸能用(前景本来就是纯白单色),
-  但那是巧合不是设计——前景一旦加入第二个颜色,主题图标就会糊成一整块。
+  这一层是线稿,前景层是实心 —— 差别只在 fill/stroke,**几何是同一份**。下面每条 pathData
+  都从 ic_launcher_foreground 逐字符搬过来,改的只有绘制方式:
 
-  这里的 fillColor 用什么颜色无所谓,系统会覆盖;写黑色是惯例,方便在编辑器里预览剪影。
+  - 外轮廓:前景层那条 evenOdd 路径的第一个子路径原样,fill 换成 stroke。
+    **实心版的 B 没有字怀**(注释里写过:留着下碗的洞会让肚子上有个解释不了的孔),
+    描边之后那条轮廓自己就成了上小下大的葫芦 —— 上碗读作头、下碗读作身子,和实心层
+    想表达的是同一件事。y=61 处 54.5→56.5 那 2 单位台阶别抹平,它是脖子,小尺寸下
+    全靠它把头和身子分开。
+  - 眼睛:前景层第二个子路径原样,**不带那个 r0.85 的高光**。前景层里高光是眼睛(挖出的洞)
+    当中的实心岛;线稿这边主体不填充,眼睛本身就得是实心的,高光就只能反过来做成一个洞——
+    再乘上 0.75 之后它连一个单位都不到,小尺寸下不是看不见,就是变成眼睛上的一处缺口。
+    眼睛必须实心:线稿没有可挖的填充,照搬前景层的挖空写法会让眼睛直接消失。
+  - 耳朵:两条曲线原样,只把 strokeWidth 从 8 收到 6,跟轮廓统一成一个笔宽。
+
+  fillColor/strokeColor 用什么颜色无所谓,系统会覆盖;写黑色是惯例,方便在编辑器里预览剪影。
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -15,21 +24,45 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <path
-        android:fillColor="#000000"
-        android:fillType="evenOdd"
-        android:pathData="M39,40 H54.5 A10.5,10.5 0 0 1 54.5,61 H56.5 A11.5,11.5 0 0 1 56.5,84 H39 Z M56,46.1 A2.4,2.9 0 0 1 56,51.9 A2.4,2.9 0 0 1 56,46.1 Z M57.75,47.9 A0.85,0.85 0 0 1 56.05,47.9 A0.85,0.85 0 0 1 57.75,47.9 Z" />
+    <!--
+      **整体缩到 0.75。** 内容原先是照着安全圆的边缘画的(见下面耳尖那条注释),含笔宽高约 62、
+      占画布 57%,而启动器里同排的图标大约只占 45~50% —— 并排看就是这一个顶天立地。安全圆是
+      "不许越过"的上限,不是"应该画到"的目标。
 
-    <path
-        android:strokeColor="#000000"
-        android:strokeWidth="8"
-        android:strokeLineCap="round"
-        android:pathData="M45,41 C43,35.5 41.5,32 41,28" />
+      缩放而不是重算每个坐标:几何要和另一层逐字符保持一致,改坐标就得改两处、从此对不上。
+      pivot 取内容自己的中心 (53.5,56),缩完再平移 (0.5,-2) 把它挪到画布中心 (54,54)。
 
-    <path
-        android:strokeColor="#000000"
-        android:strokeWidth="8"
-        android:strokeLineCap="round"
-        android:pathData="M56,41 C58.5,35.5 60.8,31.5 62,28" />
+      **strokeWidth 不做补偿。** group 的缩放本来就连笔宽一起缩,这正是要的:整体等比缩小,
+      线与形的相对比例和原设计完全一致。补回去反而让线相对图形变粗一圈。
+    -->
+    <group
+        android:pivotX="53.5"
+        android:pivotY="56"
+        android:scaleX="0.75"
+        android:scaleY="0.75"
+        android:translateX="0.5"
+        android:translateY="-2">
+        <path
+            android:strokeColor="#000000"
+            android:strokeWidth="6"
+            android:strokeLineJoin="round"
+            android:pathData="M39,40 H54.5 A10.5,10.5 0 0 1 54.5,61 H56.5 A11.5,11.5 0 0 1 56.5,84 H39 Z" />
+
+        <path
+            android:fillColor="#000000"
+            android:pathData="M56,46.1 A2.4,2.9 0 0 1 56,51.9 A2.4,2.9 0 0 1 56,46.1 Z" />
+
+        <path
+            android:strokeColor="#000000"
+            android:strokeWidth="6"
+            android:strokeLineCap="round"
+            android:pathData="M45,41 C43,35.5 41.5,32 41,28" />
+
+        <path
+            android:strokeColor="#000000"
+            android:strokeWidth="6"
+            android:strokeLineCap="round"
+            android:pathData="M56,41 C58.5,35.5 60.8,31.5 62,28" />
+    </group>
 
 </vector>

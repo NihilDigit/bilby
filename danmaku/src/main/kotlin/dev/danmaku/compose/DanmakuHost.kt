@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.sp
@@ -55,6 +56,8 @@ fun DanmakuHost(
     onScreenWidthMismatch: (actualWidthPx: Float) -> Unit = {},
 ) {
     val measurer = rememberTextMeasurer(cacheSize = 512)
+    // style 一变(字号档位、全屏切换)整张表作废,所以把它挂在 style 上重建。
+    val styleCache = remember(style) { HashMap<Float, TextStyle>() }
     // frame 是复用的普通 list,不是 SnapshotStateList——内容变化本身不会触发重组,
     // frameVersion 才是 Canvas 订阅的信号源,列表只是它背后的数据。
     val frame = remember { mutableListOf<CompiledDanmaku>() }
@@ -84,9 +87,16 @@ fun DanmakuHost(
 
         val screenWidthPx = size.width
         val canvasHeightPx = size.height
+        // 描边参数整帧不变,提到循环外建一次。原先每条弹幕都 new 一个 Stroke,弹幕密集时
+        // 这是最内层绘制循环里唯一的常驻分配源。
+        val strokeStyle = if (style.strokeWidthPx > 0f) {
+            Stroke(width = style.strokeWidthPx, miter = 3f, join = StrokeJoin.Round)
+        } else {
+            null
+        }
 
         for (entry in frame) {
-            val layout = measureDanmaku(entry.danmaku, style, measurer)
+            val layout = measureDanmaku(entry.danmaku, style, measurer, styleCache)
             val y = when (entry.slot.mode) {
                 DanmakuMode.SCROLL, DanmakuMode.TOP -> entry.slot.track * style.trackHeightPx
                 DanmakuMode.BOTTOM -> canvasHeightPx - (entry.slot.track + 1) * style.trackHeightPx
@@ -99,7 +109,7 @@ fun DanmakuHost(
             // danmaku.color 是不带 alpha 的 24 位 RGB,直接塞进 Color(Int) 会被当成
             // 0x00RRGGBB(alpha=0,全透明),必须先把 alpha 字节填满。
             val color = Color(entry.danmaku.color or ALPHA_OPAQUE_MASK)
-            drawDanmaku(layout, Offset(x, y), color, style)
+            drawDanmaku(layout, Offset(x, y), color, style, strokeStyle)
         }
     }
 }
@@ -108,9 +118,21 @@ fun DanmakuHost(
 // 同一句话的不同颜色副本各占一条缓存、白白降低命中率。颜色只在 drawDanmaku 的 drawText
 // 调用里通过 color 参数传入 —— 别把它挪回这里,这是反直觉的地方,之前手写过一版按颜色
 // 分 key 的缓存,命中率反而更差,已经删掉了。
-private fun measureDanmaku(danmaku: Danmaku, style: DanmakuRenderStyle, measurer: TextMeasurer): TextLayoutResult {
+private fun measureDanmaku(
+    danmaku: Danmaku,
+    style: DanmakuRenderStyle,
+    measurer: TextMeasurer,
+    styleCache: MutableMap<Float, TextStyle>,
+): TextLayoutResult {
     val fontSizeSp = danmaku.fontSize?.toFloat() ?: style.globalFontSizeSp
-    val resolvedStyle = if (fontSizeSp != null) style.baseTextStyle.copy(fontSize = fontSizeSp.sp) else style.baseTextStyle
+    // 按字号缓存 TextStyle。`copy` 本身不贵,但它在每条弹幕每一帧都发生,而弹幕字号实际只有
+    // 那么几档 —— 缓存之后这张表最多几个条目,却把最内层循环的分配清零了。
+    // 缓存的是样式,不是排版:排版仍由 TextMeasurer 自己的 LRU 负责(见文件头注释)。
+    val resolvedStyle = if (fontSizeSp != null) {
+        styleCache.getOrPut(fontSizeSp) { style.baseTextStyle.copy(fontSize = fontSizeSp.sp) }
+    } else {
+        style.baseTextStyle
+    }
     return measurer.measure(text = danmaku.text, style = resolvedStyle)
 }
 
@@ -128,14 +150,20 @@ private fun measureDanmaku(danmaku: Danmaku, style: DanmakuRenderStyle, measurer
  * 透明度逐条通过 `alpha` 参数传给 `drawText`,不套 `Modifier.alpha`——理由见
  * [DanmakuRenderStyle.opacity] 的文档。
  */
-private fun DrawScope.drawDanmaku(layout: TextLayoutResult, topLeft: Offset, color: Color, style: DanmakuRenderStyle) {
-    if (style.strokeWidthPx > 0f) {
+private fun DrawScope.drawDanmaku(
+    layout: TextLayoutResult,
+    topLeft: Offset,
+    color: Color,
+    style: DanmakuRenderStyle,
+    strokeStyle: Stroke?,
+) {
+    if (strokeStyle != null) {
         drawText(
             textLayoutResult = layout,
             color = style.strokeColor,
             topLeft = topLeft,
             alpha = style.opacity,
-            drawStyle = Stroke(width = style.strokeWidthPx, miter = 3f, join = StrokeJoin.Round),
+            drawStyle = strokeStyle,
         )
     }
     drawText(textLayoutResult = layout, color = color, topLeft = topLeft, alpha = style.opacity, drawStyle = Fill)

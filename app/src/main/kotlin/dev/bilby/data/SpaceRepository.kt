@@ -50,7 +50,23 @@ enum class SpaceArchiveOrder(val apiValue: String) {
 
 data class SpaceArchivePage(val total: Int, val items: List<SpaceVideoItem>)
 
-data class SpaceDynamicPage(val items: List<SpaceVideoItem>, val nextOffset: String?, val hasMore: Boolean)
+sealed interface SpaceDynamicItem {
+    val key: String
+
+    data class Video(val item: SpaceVideoItem) : SpaceDynamicItem {
+        override val key: String get() = item.bvid
+    }
+
+    /** 类型名是界面文字,按 [type] 在 UI 层取本地化文案,不在数据层写死。 */
+    data class Text(
+        override val key: String,
+        val type: String,
+        val text: String,
+        val publishedAtEpochSeconds: Long,
+    ) : SpaceDynamicItem
+}
+
+data class SpaceDynamicPage(val items: List<SpaceDynamicItem>, val nextOffset: String?, val hasMore: Boolean)
 
 data class SpaceCollectionItem(
     val id: Long,
@@ -205,7 +221,7 @@ class SpaceRepository(private val client: BiliClient) {
     /**
      * 空间动态(notes 1.5 节),需要 WBI。分页游标由服务端驱动:`loadNext == true` 时
      * 用返回的新 offset 再拉一页并拼接(notes 1.5 节,与 DynamicRepository 的 feed/all 不同)。
-     * 只保留视频类动态,行样式才能跟投稿列表一致——这是产品要求的展示形态,不是接口限制。
+     * 视频和非视频动态都保留；非视频动态使用轻量文字行，不进入播放队列。
      */
     suspend fun loadDynamics(mid: Long, offset: String?): BiliResult<SpaceDynamicPage> {
         val params = buildMap {
@@ -226,7 +242,7 @@ class SpaceRepository(private val client: BiliClient) {
             referer = spaceReferer(mid, dynamic = true),
         )
         return result.map { dto ->
-            val items = dto.items.mapNotNull { it.toVideoItem() }
+            val items = dto.items.mapNotNull { it.toDynamicItem() }
             SpaceDynamicPage(items, dto.offset.ifEmpty { null }, dto.hasMore)
         }
     }
@@ -275,28 +291,36 @@ class SpaceRepository(private val client: BiliClient) {
         )
     }
 
-    /**
-     * 只认视频类动态,复用 DynamicRepository 同一套 major 收敛逻辑(notes 里同一份证据),
-     * 图文/转发等类型丢弃——空间动态 tab 的行样式要跟投稿一致(团队分工要求),混入非视频行会破坏这一点。
-     */
-    private fun DynamicItemDto.toVideoItem(): SpaceVideoItem? {
+    private fun DynamicItemDto.toDynamicItem(): SpaceDynamicItem? {
         val archive = when (type) {
             "DYNAMIC_TYPE_AV" -> modules?.moduleDynamic?.major?.archive
             "DYNAMIC_TYPE_UGC_SEASON" -> modules?.moduleDynamic?.major?.ugcSeason
             "DYNAMIC_TYPE_PGC", "DYNAMIC_TYPE_PGC_UNION" -> modules?.moduleDynamic?.major?.pgc
             "DYNAMIC_TYPE_COURSES_SEASON" -> modules?.moduleDynamic?.major?.courses
             else -> null
-        } ?: return null
+        }
         val author = modules?.moduleAuthor ?: return null
-        val bvid = archive.bvid?.takeIf { it.isNotBlank() } ?: return null
-        return SpaceVideoItem(
-            bvid = bvid,
-            title = archive.title,
-            coverUrl = archive.cover.toHttpsUrl(),
-            durationText = archive.durationText,
+        if (archive != null) {
+            val bvid = archive.bvid?.takeIf { it.isNotBlank() } ?: return null
+            return SpaceDynamicItem.Video(
+                SpaceVideoItem(
+                    bvid = bvid,
+                    title = archive.title,
+                    coverUrl = archive.cover.toHttpsUrl(),
+                    durationText = archive.durationText,
+                    publishedAtEpochSeconds = author.pubTs,
+                    playCountText = archive.stat?.play ?: "",
+                    danmakuCountText = archive.stat?.danmaku ?: "",
+                ),
+            )
+        }
+        val text = modules.moduleDynamic?.desc?.text.orEmpty().trim()
+        if (text.isEmpty()) return null
+        return SpaceDynamicItem.Text(
+            key = idStr.ifBlank { "$type-${author.mid}-${author.pubTs}" },
+            type = type,
+            text = text,
             publishedAtEpochSeconds = author.pubTs,
-            playCountText = archive.stat?.play ?: "",
-            danmakuCountText = archive.stat?.danmaku ?: "",
         )
     }
 }

@@ -167,6 +167,9 @@ class SearchChatViewModel(
         }
     }
 
+    /** 重新执行当前搜索/当前助理轮次，供下拉刷新和再次进入搜索页使用。 */
+    fun refresh() = retry()
+
     private fun runNormal(query: String, page: Int, order: SearchOrder) = viewModelScope.launch {
         when (val result = searchRepository.searchVideos(keyword = query, page = page, order = order.apiValue)) {
             is BiliResult.Ok -> {

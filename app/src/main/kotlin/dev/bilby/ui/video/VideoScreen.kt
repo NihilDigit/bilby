@@ -2,6 +2,8 @@ package dev.bilby.ui.video
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
@@ -90,6 +92,9 @@ fun VideoScreen(
     /** UP 主等级,独立请求、独立失败——查不到就是 null,徽章不画(见 VideoViewModel.upCard)。 */
     upCard: MemberCard?,
     onUpClick: (mid: Long) -> Unit,
+    /** 已关注的联合投稿成员;null = 还没查到。 */
+    staffFollowed: Set<Long>?,
+    onFollowStaff: (Long) -> Unit,
     relation: VideoRelation?,
     favFolders: List<FavFolder>,
     addedToView: Boolean,
@@ -121,6 +126,8 @@ fun VideoScreen(
     /** 弹幕总开关,默认关。只在看视频时有意义——听视频没有画面挂弹幕层。 */
     danmakuEnabled: Boolean = false,
     onDanmakuEnabledChange: (Boolean) -> Unit = {},
+    /** 弹幕整体不透明度,由设置页 Slider 持久化。 */
+    danmakuOpacity: Float = 1f,
     /** 已拉到的弹幕池,时间轴的编译在 BilbyPlayer 里做(需要 Compose 层的测量与画布宽度)。 */
     danmakuPool: List<Danmaku> = emptyList(),
     modifier: Modifier = Modifier,
@@ -128,6 +135,16 @@ fun VideoScreen(
     val context = LocalContext.current
     var controller by remember { mutableStateOf<MediaController?>(null) }
     var fullscreen by rememberSaveable { mutableStateOf(false) }
+
+    /**
+     * 控件锁。提到这一层是因为返回键要先解锁再退出全屏(见下面的 BackHandler),而它原先是
+     * BilbyPlayer 内部的 rememberSaveable —— 全屏和非全屏是两个不同的调用点,那份状态本来
+     * 就各存各的,对不上。
+     */
+    var locked by rememberSaveable { mutableStateOf(false) }
+    // 退出全屏一律解锁:锁按钮只在全屏出现,带着 locked 回到内嵌播放器的话,那边的点击手势
+    // 会被静默吞掉,而屏幕上没有任何东西提示它锁着。
+    LaunchedEffect(fullscreen) { if (!fullscreen) locked = false }
 
     // DisposableEffect 捕获的是进入组合那一刻的 state,而 onDispose 要问的是离开那一刻。
     val latestState by rememberUpdatedState(state)
@@ -259,7 +276,25 @@ fun VideoScreen(
      * 播放失败的提示。**只在播放器装的确实是本页这一条时显示** —— 播放器全 app 共用一个,
      * 队列走到别的视频上时,那一条的失败不该盖到这一页上。
      */
-    val playbackError = audioState.error?.takeIf { audioState.current?.bvid == state.detail?.bvid }
+    val rawPlaybackError = audioState.error?.takeIf { audioState.current?.bvid == state.detail?.bvid }
+
+    /**
+     * **失败不立刻报。** 服务在取流路上自己会重试(见 AudioPlaybackService 的重试次数与退避),
+     * 重试期间 error 就已经是有值的了 —— 照直显示的话,一次最终成功的加载中途也会闪一下
+     * "播放失败",而那时它明明还在正常往下走。
+     *
+     * 等它稳定 [PlaybackErrorGraceMillis] 还在,才当成真失败。error 中途消失或换了内容,
+     * 这个 effect 会重启,计时从头开始。
+     */
+    var playbackError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(rawPlaybackError) {
+        if (rawPlaybackError == null) {
+            playbackError = null
+            return@LaunchedEffect
+        }
+        delay(PlaybackErrorGraceMillis)
+        playbackError = rawPlaybackError
+    }
 
     // SponsorBlock:默认开启。轮询而不是用 Player 的事件,是因为跳过要在片段**起点**发生,
     // 而播放器没有"位置越过某点"的回调。500ms 的粒度足够,漏跳的代价只是多看半秒。
@@ -284,6 +319,15 @@ fun VideoScreen(
             .buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, listening)
             .build()
+    }
+
+    // **同步写,不发自定义命令。** 后者是异步投递的,而 Activity.onStop 会同步去读它 ——
+    // "打开听视频后立刻锁屏"是这个功能最常见的用法,那条路径上命令很可能还没送到,
+    // 服务读到的仍是"不允许后台播",刚开的听视频当场被摁停。
+    //
+    // 这不需要等 MediaController 连上:它是一个进程内的策略开关,与 session 无关。
+    LaunchedEffect(listening) {
+        AudioPlaybackService.setBackgroundPlaybackAllowed(listening)
     }
 
     // TODO(动效):听视频与全屏在 M3 里都属于 container transform 的 "within a screen"
@@ -347,6 +391,19 @@ fun VideoScreen(
     }
 
     // 全屏时播放器独占整屏,下面的简介/评论整块不参与布局。
+    // 全屏时返回键的处理顺序照 PiliPlus 的 `onPopInvokedWithResult`
+    // (plugin/pl_player/controller.dart):**先解锁,再退出全屏**,两级各吃一次返回。
+    // 它那边 `canPop` 只看 isFullScreen,锁定态必然伴随全屏(锁按钮只在全屏出现),所以
+    // 这里同样用 isFullscreen 当总开关就够。
+    //
+    // 放在播放页这一层而不是 BilbyPlayer 里:全屏分支要等 MediaController 连上才组合
+    // (`fullscreen && active != null`),连上之前 BilbyPlayer 不在组合里,返回键没人接,
+    // 一按就把整个播放页弹掉了。
+    //
+    // 左右滑动 seek 与这里无关,那是播放器自己的手势,不经过返回分发。
+    BackHandler(enabled = fullscreen) {
+        if (locked) locked = false else fullscreen = false
+    }
     if (fullscreen && active != null) {
         // 全屏也要能看到失败并重试,否则唯一的出路是先退出全屏 —— 而失败时画面是黑的,
         // 连"退出全屏"那个按钮在哪都不明显。
@@ -369,19 +426,26 @@ fun VideoScreen(
                 subtitleCues = subtitleCues,
                 danmakuEnabled = danmakuEnabled,
                 onDanmakuEnabledChange = onDanmakuEnabledChange,
+                danmakuOpacity = danmakuOpacity,
+                locked = locked,
+                onLockedChange = { locked = it },
                 danmakuPool = danmakuPool,
                 danmakuCid = audioState.currentCid,
                 matchesCurrentPage = matchesCurrentPage,
                 placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
                 modifier = Modifier.fillMaxSize(),
             )
-            if (playbackError != null) {
-                PlaybackFailure(
-                    message = playbackError,
+            val shownError = playbackError
+            when {
+                shownError != null -> PlaybackFailure(
+                    message = shownError,
                     retrying = audioState.loading,
                     onRetry = retryPlayback,
                     modifier = Modifier.align(Alignment.Center),
                 )
+
+                audioState.loading || state.loading ->
+                    PlaybackLoading(Modifier.align(Alignment.Center))
             }
         }
         return
@@ -443,6 +507,9 @@ fun VideoScreen(
                         subtitleCues = subtitleCues,
                         danmakuEnabled = danmakuEnabled,
                         onDanmakuEnabledChange = onDanmakuEnabledChange,
+                        danmakuOpacity = danmakuOpacity,
+                        locked = locked,
+                        onLockedChange = { locked = it },
                         danmakuPool = danmakuPool,
                         danmakuCid = audioState.currentCid,
                         matchesCurrentPage = matchesCurrentPage,
@@ -461,9 +528,14 @@ fun VideoScreen(
 
                 // 盖在画面上而不是排在下面:失败时画面本来就是黑的,而简介区在一屏之外,
                 // 提示放那儿等于没有。state.error 那一支是"流都没取到",两者不会同时出现。
-                if (playbackError != null) {
-                    PlaybackFailure(
-                        message = playbackError,
+                //
+                // **取流期间必须有东西在转。** BilbyPlayer 自己只有"画面"和"封面占位"两态,
+                // 都是静止的;而失败提示被压后了 5 秒(见 playbackError),不在这里补一个
+                // 指示器的话,那 5 秒里屏幕上是一张不动的封面,和卡死分不出来。
+                val shownError = playbackError
+                when {
+                    shownError != null -> PlaybackFailure(
+                        message = shownError,
                         // 两个 loading 都要看:重取那一步归本页(state.loading),重新装载
                         // 那一步归服务(audioState.loading)。只看后者的话,重取在飞的那一两秒
                         // 按钮会重新亮起来,能连按出好几次重取。
@@ -471,6 +543,9 @@ fun VideoScreen(
                         onRetry = retryPlayback,
                         modifier = Modifier.align(Alignment.Center),
                     )
+
+                    audioState.loading || state.loading ->
+                        PlaybackLoading(Modifier.align(Alignment.Center))
                 }
 
                 SkipToast(skippedCategory, Modifier.align(Alignment.TopCenter).padding(8.dp))
@@ -494,7 +569,9 @@ fun VideoScreen(
                     queue = shownQueue,
                     onPlayQueueItem = onPlayQueueItem,
                     onToggleShuffle = toggleShuffle,
-                    onUpClick = { onUpClick(detail.up.mid) },
+                    onUpClick = onUpClick,
+                    staffFollowed = staffFollowed,
+                    onFollowStaff = onFollowStaff,
                     relation = relation,
                     favFolders = favFolders,
                     addedToView = addedToView,
@@ -512,10 +589,48 @@ fun VideoScreen(
                     onSendComment = onSendComment,
                     onLikeComment = onLikeComment,
                     onDeleteComment = onDeleteComment,
+                    // 只在播放器装的确实是本页这一条时才跳。队列自动连播走到下一条之后,
+                    // 这一页还停在原来那条的评论区(见页面顶部对 matchesCurrentPage 的说明),
+                    // 不对身份就会拿着 A 的评论里的时间戳去跳 B。
+                    //
+                    // 再夹一次时长:评论里的时间戳可能指向分 P 或者干脆写错,超出末尾的 seek
+                    // 会直接把这一条播完并翻到下一条。
+                    onSeekComment = { millis ->
+                        val controller = active
+                        if (controller != null && matchesCurrentPage) {
+                            val end = controller.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+                            controller.seekTo(millis.coerceIn(0L, end))
+                        }
+                    },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
         }
+    }
+}
+
+/**
+ * 取流/重试期间画面上那个转圈。
+ *
+ * 外观和 [PlaybackFailure] 里的重试指示是同一套(白色、24dp):它们出现在同一个位置,是同
+ * 一件事的两个阶段,长得不一样会读成两个不同的东西。
+ *
+ * 底下垫一层半透明圆:这时候画面上多半是封面图,亮色封面上一个纯白的圈基本看不见。
+ */
+@Composable
+private fun PlaybackLoading(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.4f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(
+            color = Color.White,
+            strokeWidth = 2.dp,
+            modifier = Modifier.size(24.dp),
+        )
     }
 }
 
@@ -555,3 +670,6 @@ private fun PlaybackFailure(
         }
     }
 }
+
+/** 取流失败的宽限期。服务自己的重试最坏花 3 秒，留一点余地。 */
+private const val PlaybackErrorGraceMillis = 5_000L

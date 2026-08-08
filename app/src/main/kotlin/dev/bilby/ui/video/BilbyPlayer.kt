@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -167,6 +166,14 @@ fun BilbyPlayer(
     /** 弹幕总开关,默认关。关闭时 [DanmakuHost] 整个不进组合——帧循环也就不存在,不是只是不画。 */
     danmakuEnabled: Boolean = false,
     onDanmakuEnabledChange: (Boolean) -> Unit = {},
+    /** 弹幕整体不透明度,由设置页 Slider 持久化。 */
+    danmakuOpacity: Float = 1f,
+    /**
+     * 控件锁。横屏看视频时手容易碰到画面,一碰就暂停或快进;锁上之后除了解锁按钮,所有手势
+     * 与控件都不响应。状态提在 VideoScreen,因为返回键要按"先解锁、再退出全屏"的顺序处理它。
+     */
+    locked: Boolean = false,
+    onLockedChange: (Boolean) -> Unit = {},
     /** 已拉到的弹幕池,累计追加。时间轴在这里(Compose 层)编译——见类注释里对时间轴管理的说明。 */
     danmakuPool: List<Danmaku> = emptyList(),
     /** 弹幕池所属的 cid,换一条(切分 P、队列走到下一条)要整池重编,不是接着追加。 */
@@ -215,7 +222,7 @@ fun BilbyPlayer(
     // 反推字号"是错的**:内嵌播放器只有几百像素高,除以一个固定轨道数会算出偏大的字号——
     // 这正是上一轮内嵌详情页字明显偏大的原因。
     val danmakuFontSizeSp = if (isFullscreen) DANMAKU_FONT_SIZE_SP_FULLSCREEN else DANMAKU_FONT_SIZE_SP_EMBEDDED
-    val danmakuStyle = remember(danmakuFontSizeSp, danmakuDensity) {
+    val danmakuStyle = remember(danmakuFontSizeSp, danmakuDensity, danmakuOpacity) {
         val fontSizePx = danmakuFontSizeSp * danmakuDensity.density * danmakuDensity.fontScale
         DanmakuRenderStyle(
             globalFontSizeSp = danmakuFontSizeSp,
@@ -223,6 +230,7 @@ fun BilbyPlayer(
             strokeWidthPx = fontSizePx * DANMAKU_STROKE_TO_FONT_RATIO,
             // 行高 = 字号 × 1.6(对齐 PiliPlus `danmakuLineHeight` 默认值),留出上下行距。
             trackHeightPx = fontSizePx * DANMAKU_LINE_HEIGHT_RATIO,
+            opacity = danmakuOpacity.coerceIn(0.1f, 1f),
         )
     }
 
@@ -361,11 +369,6 @@ fun BilbyPlayer(
 
     var controlsVisible by remember { mutableStateOf(true) }
 
-    /**
-     * 锁屏:横屏看视频时手容易碰到画面,一碰就暂停或快进。锁上之后除了解锁按钮,
-     * 所有手势与控件都不响应。
-     */
-    var locked by rememberSaveable { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     // 每次操作控件都让自动隐藏重新计时,靠这个计数把 LaunchedEffect 重启。
     var interactionNonce by remember { mutableIntStateOf(0) }
@@ -449,8 +452,6 @@ fun BilbyPlayer(
     // 的 key 会让全屏反复重设方向。
     FullscreenEffect(isFullscreen, isPortraitVideo = videoAspect < 1f)
 
-    BackHandler(enabled = isFullscreen) { onFullscreenChange(false) }
-
     val displayPosition = dragPosition ?: position
 
     // 二分查找,不逐帧线性扫:见 SubtitleCue.kt 上的注释。落在两句之间的空档里时是 null,
@@ -492,18 +493,19 @@ fun BilbyPlayer(
                             controlsVisible = !controlsVisible
                             interactionNonce++
                         },
-                        // 双击按落点分三段:两侧各三分之一是 ±10 秒,中间那段仍是播放/暂停。
+                        // 双击按落点分四段:两侧各四分之一是 ±10 秒,中间仍是播放/暂停,
+                        // 对齐 PiliPlus 的左右边缘手势区域。
                         //
                         // 中间保留下来是因为双击暂停本来就在,直接换掉等于拿走一个已有的常用
                         // 操作;而三分法是 YouTube 立起来的惯例,两侧那两块也正是横屏握持时
                         // 拇指自然落到的位置。
                         onDoubleTap = { offset ->
-                            val third = size.width / 3f
+                            val quarter = size.width / 4f
                             when {
-                                offset.x < third -> nudgeSeek(player, -DOUBLE_TAP_SEEK_MILLIS)
+                                offset.x < quarter -> nudgeSeek(player, -DOUBLE_TAP_SEEK_MILLIS)
                                     .also { seekNudgeMillis = -DOUBLE_TAP_SEEK_MILLIS }
 
-                                offset.x > size.width - third -> nudgeSeek(player, DOUBLE_TAP_SEEK_MILLIS)
+                                offset.x > size.width - quarter -> nudgeSeek(player, DOUBLE_TAP_SEEK_MILLIS)
                                     .also { seekNudgeMillis = DOUBLE_TAP_SEEK_MILLIS }
 
                                 player.isPlaying -> player.pause()
@@ -763,15 +765,15 @@ fun BilbyPlayer(
             }
         }
 
-        // 锁按钮:锁上后它是唯一还能点的东西。放右侧——横屏握持时右手拇指够得到,
-        // 而左侧那个位置和退出全屏的返回箭头在同一边,容易误按成退出。
+        // 锁按钮:锁上后它是唯一还能点的东西。只在全屏显示，并放在画面内部左侧，
+        // 对齐 PiliPlus 的全屏播放器手势布局。
         AnimatedVisibility(
-            visible = controlsVisible,
+            visible = isFullscreen && controlsVisible,
             enter = fadeIn(),
             exit = fadeOut(),
-            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp),
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = 12.dp),
         ) {
-            IconButton(onClick = { locked = !locked }) {
+            IconButton(onClick = { onLockedChange(!locked) }) {
                 Icon(
                     imageVector = if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
                     contentDescription = stringResource(

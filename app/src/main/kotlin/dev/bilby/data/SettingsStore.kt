@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -140,11 +141,37 @@ class SettingsStore(context: Context) {
 
     /** 弹幕开关。**默认关**——和字幕一样,是产品要求,不是"还没设置过"才关。 */
     val danmakuPrefs: Flow<DanmakuPrefs> = store.data.map { p ->
-        DanmakuPrefs(enabled = p[KEY_DANMAKU_ENABLED] ?: false)
+        DanmakuPrefs(
+            enabled = p[KEY_DANMAKU_ENABLED] ?: false,
+            opacity = (p[KEY_DANMAKU_OPACITY] ?: DEFAULT_DANMAKU_OPACITY).coerceIn(0.1f, 1f),
+        )
     }
 
     suspend fun saveDanmakuEnabled(enabled: Boolean) {
         store.edit { p -> p[KEY_DANMAKU_ENABLED] = enabled }
+    }
+
+    suspend fun saveDanmakuOpacity(opacity: Float) {
+        store.edit { p -> p[KEY_DANMAKU_OPACITY] = opacity.coerceIn(0.1f, 1f) }
+    }
+
+    /** 首页动态里排除的 UP 主。只影响本机首页，不改变 B 站的关注关系。 */
+    val excludedFeedMids: Flow<Set<Long>> = store.data.map { p ->
+        p[KEY_EXCLUDED_FEED_MIDS].orEmpty().mapNotNull { it.toLongOrNull() }.toSet()
+    }
+
+    suspend fun excludeFeedMid(mid: Long) {
+        store.edit { p ->
+            p[KEY_EXCLUDED_FEED_MIDS] = p[KEY_EXCLUDED_FEED_MIDS].orEmpty() + mid.toString()
+        }
+    }
+
+    /**
+     * 清空首页排除名单。**这是目前唯一的撤销入口** —— 排除是在动态流里单条操作的,
+     * 而那条动态被隐藏之后,再也没有地方能点回去。逐个恢复要另做界面,先给一个全清。
+     */
+    suspend fun clearExcludedFeedMids() {
+        store.edit { p -> p.remove(KEY_EXCLUDED_FEED_MIDS) }
     }
 
     companion object {
@@ -193,6 +220,10 @@ class SettingsStore(context: Context) {
 
         private val KEY_SUBTITLE_LAN = stringPreferencesKey("subtitle_lan")
         private val KEY_DANMAKU_ENABLED = booleanPreferencesKey("danmaku_enabled")
+        private val KEY_DANMAKU_OPACITY = floatPreferencesKey("danmaku_opacity")
+        private val KEY_EXCLUDED_FEED_MIDS = stringSetPreferencesKey("excluded_feed_mids")
+
+        const val DEFAULT_DANMAKU_OPACITY = 1f
 
         const val DEFAULT_SB_SERVER = "https://www.bsbsb.top"
 
@@ -257,7 +288,7 @@ data class SponsorBlockPrefs(
 /** 空字符串是关(默认值)。非空时是某条字幕轨的语言代码,如 `ai-zh`。 */
 data class SubtitlePrefs(val lan: String = "")
 
-data class DanmakuPrefs(val enabled: Boolean = false)
+data class DanmakuPrefs(val enabled: Boolean = false, val opacity: Float = 1f)
 
 data class LlmConfig(
     val baseUrl: String,

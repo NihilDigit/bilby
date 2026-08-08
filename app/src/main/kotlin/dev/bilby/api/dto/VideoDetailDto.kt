@@ -33,6 +33,7 @@ data class VideoDetailDto(
     /** 全片总时长(秒)。多 P 时是各 P 之和。 */
     val duration: Long = 0,
     val owner: VideoOwnerDto? = null,
+    val staff: List<VideoStaffDto> = emptyList(),
     val stat: VideoStatDto? = null,
     /** 分 P 列表。单 P 视频服务端也会给一个元素,不是空数组。 */
     val pages: List<VideoPageDto> = emptyList(),
@@ -42,6 +43,14 @@ data class VideoDetailDto(
 @Serializable
 data class VideoOwnerDto(
     val mid: Long = 0,
+    val name: String = "",
+    val face: String = "",
+)
+
+@Serializable
+data class VideoStaffDto(
+    val mid: Long = 0,
+    val title: String = "",
     val name: String = "",
     val face: String = "",
 )

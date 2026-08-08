@@ -45,9 +45,9 @@ data class SettingsUiState(
     val sponsorBlock: SponsorBlockPrefs = SponsorBlockPrefs(),
     /** 本机真有硬解器的编码,决定编解码那一节列出哪几项。 */
     val hardwareCodecIds: Set<Int> = emptySet(),
-    /** 弹幕总开关。这不是"默认值",是播放器控制条上那个开关的另一个入口,读写同一份
-     * [dev.bilby.data.SettingsStore.danmakuPrefs]。 */
-    val danmakuEnabled: Boolean = false,
+    val danmakuOpacity: Float = SettingsStore.DEFAULT_DANMAKU_OPACITY,
+    /** 首页排除了多少个 UP。为 0 时那一行不显示 —— 没排除过的人不需要看见这个概念。 */
+    val excludedFeedCount: Int = 0,
     val update: UpdateState = UpdateState.Idle,
 )
 
@@ -146,10 +146,20 @@ class SettingsViewModel(
                     codec = settings.playerPrefs.first().codec,
                     sponsorBlock = settings.sponsorBlockPrefs.first(),
                     hardwareCodecIds = DeviceCodecs.hardwareDecodableCodecIds,
-                    danmakuEnabled = settings.danmakuPrefs.first().enabled,
+                    danmakuOpacity = settings.danmakuPrefs.first().opacity,
                 )
             }
         }
+        // 这一项持续跟着走而不是只读一次:清空之后那一行要立刻反映出来。
+        viewModelScope.launch {
+            settings.excludedFeedMids.collect { mids ->
+                _state.update { it.copy(excludedFeedCount = mids.size) }
+            }
+        }
+    }
+
+    fun clearExcludedFeedMids() {
+        persist { settings.clearExcludedFeedMids() }
     }
 
     /**
@@ -176,15 +186,11 @@ class SettingsViewModel(
         persist { settings.saveSponsorBlockPrefs(value) }
     }
 
-    /**
-     * 弹幕总开关的另一个入口,和播放页控制条上那个写的是同一份
-     * [dev.bilby.data.SettingsStore.danmakuPrefs] —— 不是"设个默认值",两处显示的必须是
-     * 同一个值,所以这里也走 [persist],不额外维护一份"本次会话"状态。
-     */
-    fun setDanmakuEnabled(enabled: Boolean) {
-        _state.update { it.copy(danmakuEnabled = enabled) }
-        persist { settings.saveDanmakuEnabled(enabled) }
+    fun setDanmakuOpacity(value: Float) {
+        _state.update { it.copy(danmakuOpacity = value) }
+        persist { settings.saveDanmakuOpacity(value) }
     }
+
 }
 
 /** 本机对某个编码有没有硬解。设置页只列真支持的,不列一个选了也白选的选项。 */

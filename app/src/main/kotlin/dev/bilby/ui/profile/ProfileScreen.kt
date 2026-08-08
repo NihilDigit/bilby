@@ -1,5 +1,6 @@
 package dev.bilby.ui.profile
 
+import android.os.SystemClock
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -102,11 +103,30 @@ class ProfileViewModel(
     private val _state = MutableStateFlow(ProfileUiState())
     val state: StateFlow<ProfileUiState> = _state.asStateFlow()
 
+    private var lastRefreshedAtMillis = 0L
+
     init {
+        refresh()
+    }
+
+    /** 每次重新进入「我的」都重新取四块概览,保证跨页面操作(删稍后再看、看新视频)后能及时反映。 */
+    fun refresh() {
+        lastRefreshedAtMillis = SystemClock.elapsedRealtime()
         retryAccount()
         retryHistory()
         retryToView()
         retryFavFolders()
+    }
+
+    /**
+     * 重新进入这一页时补一次,**刚拉过就跳过**。底栏来回点、或者进子页面看一眼就退回来,
+     * 每次都打四个请求既没有新内容可显示,又让那四块各闪一次骨架。
+     *
+     * 用 elapsedRealtime 而不是墙钟:后者会被对时和时区调整拨动,拨回去就再也刷不了。
+     */
+    fun refreshIfStale() {
+        if (SystemClock.elapsedRealtime() - lastRefreshedAtMillis < RefreshDebounceMillis) return
+        refresh()
     }
 
     fun retryAccount() {
@@ -198,6 +218,9 @@ class ProfileViewModel(
          * 底下两节要滚很久才见得到,那就不再是概览了。
          */
         const val PreviewCount = 3
+
+        /** 概览的重进刷新间隔,见 [refreshIfStale]。 */
+        private const val RefreshDebounceMillis = 30_000L
     }
 }
 

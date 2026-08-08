@@ -70,6 +70,33 @@ class VideoViewModel(
     val followState: StateFlow<FollowState> = _followState.asStateFlow()
 
     /**
+     * 联合投稿里已经关注了的那些 mid。
+     *
+     * **null 表示还没查到,不是"一个都没关注"。** 两者必须分开:头像上的关注加号是"未关注
+     * 才显示",查到之前当成未关注的话,每次打开联合投稿视频都会先冒出一排加号再消失。
+     * PiliPlus 在同一处用一个 `status` 哨兵解决同一个问题。
+     */
+    private val _staffFollowed = MutableStateFlow<Set<Long>?>(null)
+    val staffFollowed: StateFlow<Set<Long>?> = _staffFollowed.asStateFlow()
+
+    /**
+     * 关注联合投稿里的某一位。**只关注,没有取关** —— 加号在关注之后就消失了,取关走那个人
+     * 的空间页。这一排是快捷入口,不是关系管理界面。
+     */
+    fun followStaff(mid: Long) {
+        if (mid == 0L || _staffFollowed.value?.contains(mid) == true) return
+        // 乐观更新:加号立刻消失,和播放页其它写操作同一套规矩。
+        _staffFollowed.update { (it ?: emptySet()) + mid }
+        viewModelScope.launch {
+            val result = relationRepository.follow(mid)
+            if (result !is BiliResult.Ok) {
+                BiliLog.w("关注联合投稿成员失败(mid=$mid): $result")
+                _staffFollowed.update { it?.minus(mid) }
+            }
+        }
+    }
+
+    /**
      * UP 的等级(+ 粉丝数,这一轮不显示)。同样是独立请求,独立失败——查不到就是 null,
      * 徽章不画,不影响 UP 名和关注按钮(见 [load] 里怎么处理这次失败)。
      */
@@ -183,6 +210,10 @@ class VideoViewModel(
     private val _danmakuEnabled = MutableStateFlow(false)
     val danmakuEnabled: StateFlow<Boolean> = _danmakuEnabled.asStateFlow()
 
+    /** 弹幕整体不透明度,和设置页的 Slider 共用持久化状态。 */
+    private val _danmakuOpacity = MutableStateFlow(SettingsStore.DEFAULT_DANMAKU_OPACITY)
+    val danmakuOpacity: StateFlow<Float> = _danmakuOpacity.asStateFlow()
+
     /**
      * 已拉到的弹幕池,累计追加、不去重合并(那是以后的事)。时间轴的编译不在这里——
      * 它需要 `measureWidth` 和画布像素宽度,两者都只在 Compose 层才有(见 BilbyPlayer.kt)。
@@ -206,7 +237,16 @@ class VideoViewModel(
             _subtitleLan.value = settings.subtitlePrefs.first().lan
             observeSubtitleTracks()
         }
-        viewModelScope.launch { _danmakuEnabled.value = settings.danmakuPrefs.first().enabled }
+        viewModelScope.launch {
+            settings.danmakuPrefs
+                .distinctUntilChanged()
+                .collect { prefs ->
+                    val changed = _danmakuEnabled.value != prefs.enabled
+                    _danmakuEnabled.value = prefs.enabled
+                    _danmakuOpacity.value = prefs.opacity
+                    if (changed && prefs.enabled) fetchInitialDanmakuSegment(danmakuCid)
+                }
+        }
     }
 
     /**
@@ -358,6 +398,29 @@ class VideoViewModel(
                     when (val follow = relationRepository.stateOf(detail.value.up.mid)) {
                         is BiliResult.Ok -> _followState.value = follow.value
                         else -> BiliLog.w("查关注状态失败: $follow")
+                    }
+                }
+                // 只有联合投稿才问这一条:单人稿的 staff 是空的,关注态由上面那次 stateOf 负责。
+                //
+                // **UP 主自己也要问。** 联合投稿那一排里他和其他人一样只有一个加号,如果靠
+                // followState 去判断,它初值是"未关注",他头上就会先冒一个加号再消失。
+                val staffMids = detail.value.staff
+                    .map { it.mid }
+                    .let { if (detail.value.staff.isEmpty()) it else it + detail.value.up.mid }
+                    .filter { it != 0L }
+                    .distinct()
+                if (staffMids.isNotEmpty()) {
+                    launch {
+                        when (val followed = relationRepository.followedAmong(staffMids)) {
+                            is BiliResult.Ok -> {
+                                // 只记数量,不记 mid:这一条是给冒烟用的,用来分辨"查通了但一个
+                                // 都没关注"和"根本没查通"——两者在界面上都是一个加号都不显示。
+                                BiliLog.d("联合投稿关注态: ${followed.value.size}/${staffMids.size}")
+                                _staffFollowed.value = followed.value
+                            }
+                            // 查不到就保持 null:宁可一个加号都不显示,也好过把已关注的人显示成未关注。
+                            else -> BiliLog.w("查联合投稿关注状态失败: $followed")
+                        }
                     }
                 }
                 launch {

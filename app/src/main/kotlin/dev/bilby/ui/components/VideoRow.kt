@@ -1,6 +1,7 @@
 package dev.bilby.ui.components
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -64,12 +65,17 @@ fun VideoRow(
     item: VideoRowUi,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * 长按。**给的是次要操作,不能是这一行唯一能做的事** —— 长按没有任何视觉提示,
+     * 只发现得了点击的人必须仍然能用这一行。
+     */
+    onLongClick: (() -> Unit)? = null,
     trailing: (@Composable RowScope.() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
         horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
         verticalAlignment = Alignment.Top,

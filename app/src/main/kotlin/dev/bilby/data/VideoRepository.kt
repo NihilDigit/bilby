@@ -29,6 +29,7 @@ data class VideoDetail(
     val durationSeconds: Long,
     val publishedAtEpochSeconds: Long,
     val up: VideoUp,
+    val staff: List<VideoStaff>,
     val stat: VideoStat,
     /** 单 P 视频这里也有一个元素;UI 判断要不要显示分 P 列表看 size > 1。 */
     val pages: List<VideoPart>,
@@ -38,6 +39,8 @@ data class VideoDetail(
 )
 
 data class VideoUp(val mid: Long, val name: String, val faceUrl: String)
+
+data class VideoStaff(val mid: Long, val title: String, val name: String, val faceUrl: String)
 
 /**
  * UP 主的等级信息,来自 `x/web-interface/card`——`getVideoDetail` 的 `owner` 只有
@@ -223,6 +226,9 @@ class VideoRepository(private val client: BiliClient) {
             name = owner?.name.orEmpty(),
             faceUrl = owner?.face.orEmpty().toHttpsUrl(),
         ),
+        staff = staff.map {
+            VideoStaff(mid = it.mid, title = it.title, name = it.name, faceUrl = it.face.toHttpsUrl())
+        }.filter { it.mid != 0L && it.name.isNotBlank() },
         stat = VideoStat(
             view = stat?.view ?: 0,
             danmaku = stat?.danmaku ?: 0,

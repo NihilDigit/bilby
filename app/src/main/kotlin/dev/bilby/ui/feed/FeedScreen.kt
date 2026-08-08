@@ -8,6 +8,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -32,6 +36,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.material3.HorizontalDivider
@@ -96,13 +104,14 @@ fun FeedScreen(
     onItemClick: (FeedItem) -> Unit,
     onUpClick: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
+    onExcludeUp: (Long) -> Unit = {},
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     when {
         state.loading && state.items.isEmpty() -> FullScreenLoading(modifier)
         state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry, modifier)
-        else -> FeedList(state, onRefresh, onLoadMore, onItemClick, onUpClick, onOpenFollowings, modifier, contentPadding)
+        else -> FeedList(state, onRefresh, onLoadMore, onItemClick, onUpClick, onExcludeUp, onOpenFollowings, modifier, contentPadding)
     }
 }
 
@@ -113,6 +122,7 @@ private fun FeedList(
     onLoadMore: () -> Unit,
     onItemClick: (FeedItem) -> Unit,
     onUpClick: (Long) -> Unit,
+    onExcludeUp: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
     modifier: Modifier,
     contentPadding: PaddingValues,
@@ -154,7 +164,25 @@ private fun FeedList(
             item(key = "empty") { EmptyState(stringResource(R.string.feed_empty)) }
         }
         items(state.items, key = { it.bvid }) { item ->
-            VideoRow(item = item.toRowUi(), onClick = { onItemClick(item) })
+            // 「不再显示」挂在长按上,不占行内位置:这是一个偶尔用一次的操作,而每一行都摆一个
+            // 三点按钮,等于让一个次要动作在整页里重复几十遍,还把标题能用的宽度切掉一块。
+            var menuOpen by remember { mutableStateOf(false) }
+            Box {
+                VideoRow(
+                    item = item.toRowUi(),
+                    onClick = { onItemClick(item) },
+                    onLongClick = { menuOpen = true },
+                )
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.feed_exclude_up, item.upName)) },
+                        onClick = {
+                            menuOpen = false
+                            onExcludeUp(item.upMid)
+                        },
+                    )
+                }
+            }
         }
         item(key = "footer") {
             ListFooter(
@@ -166,6 +194,7 @@ private fun FeedList(
         }
     }
 }
+
 
 // @Composable 只为了取字符串资源:相对时间的字面("刚刚""3分钟前")是本地化内容,
 // 不能写死在这里。调用点本来就在 composable 作用域内。

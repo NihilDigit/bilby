@@ -4,8 +4,10 @@ Android client for bilibili, single account, open source. The implementation bas
 `DESIGN.md` in the repository root, which is a local file and not tracked. Read it before
 changing structure.
 
-Features and behaviour changes are agreed in conversation before code, not filed as issues.
-If a request arrives as "add X" with no agreed shape, say so and work the design out first.
+**This is the owner's own repository**, so features and behaviour changes are agreed in
+conversation before code, not filed as issues. If a request arrives as "add X" with no agreed
+shape, say so and work the design out first. Skipping issues is a consequence of the owner
+being in the room — it is not advice for contributors, who should still open one.
 
 ## Product constraints
 

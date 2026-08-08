@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.ViewModel
@@ -37,6 +38,7 @@ data class FavFolderUiState(
     val items: List<FavVideo> = emptyList(),
     val loading: Boolean = true,
     val appending: Boolean = false,
+    val refreshing: Boolean = false,
     val hasMore: Boolean = true,
     val error: String? = null,
 )
@@ -74,6 +76,7 @@ class FavFolderViewModel(
                             items = it.items + fresh,
                             loading = false,
                             appending = false,
+                            refreshing = false,
                             hasMore = result.value.hasMore,
                             error = null,
                         )
@@ -87,16 +90,25 @@ class FavFolderViewModel(
         }
     }
 
-    fun retry() {
+    fun retry() = reload(refreshing = false)
+
+    /**
+     * 下拉刷新。和 [retry] 是同一件事(整份重来),差别只在指示器:refreshing 得单独记,
+     * 不能用 "loading 且列表非空" 去推 —— 重来的第一步正是把列表清空,那个条件永远不成立,
+     * 指示器一次都不会显示。
+     */
+    fun refresh() = reload(refreshing = true)
+
+    private fun reload(refreshing: Boolean) {
         page = 0
         seenAids.clear()
-        _state.value = FavFolderUiState()
+        _state.value = FavFolderUiState(refreshing = refreshing)
         loadMore()
     }
 
     private fun fail(message: String) {
         BiliLog.w("取收藏夹内容失败(media_id=$mediaId): $message")
-        _state.update { it.copy(loading = false, appending = false, error = message) }
+        _state.update { it.copy(loading = false, appending = false, refreshing = false, error = message) }
     }
 }
 
@@ -106,6 +118,7 @@ fun FavFolderScreen(
     onItemClick: (FavVideo) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
+    onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
@@ -122,21 +135,27 @@ fun FavFolderScreen(
                     .filter { (last, total) -> last != null && last >= total - 3 }
                     .collect { if (state.hasMore && !state.appending) onLoadMore() }
             }
-            LazyColumn(
-                state = listState,
+            PullToRefreshBox(
+                isRefreshing = state.refreshing,
+                onRefresh = onRefresh,
                 modifier = modifier.fillMaxSize(),
-                contentPadding = contentPadding,
             ) {
-                items(state.items, key = { it.aid }) { item ->
-                    VideoRow(
-                        item = item.toRowUi(),
-                        // 失效稿件照常列出但不可点:UP 删稿或转私密之后收藏夹里还留着这一条,
-                        // 悄悄隐藏会让人以为自己记错了收藏过什么。
-                        onClick = { if (!item.invalid) onItemClick(item) },
-                    )
-                }
-                item(key = "footer") {
-                    ListFooter(appending = state.appending, hasMore = state.hasMore, hasItems = true)
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = contentPadding,
+                ) {
+                    items(state.items, key = { it.aid }) { item ->
+                        VideoRow(
+                            item = item.toRowUi(),
+                            // 失效稿件照常列出但不可点:UP 删稿或转私密之后收藏夹里还留着这一条,
+                            // 悄悄隐藏会让人以为自己记错了收藏过什么。
+                            onClick = { if (!item.invalid) onItemClick(item) },
+                        )
+                    }
+                    item(key = "footer") {
+                        ListFooter(appending = state.appending, hasMore = state.hasMore, hasItems = true)
+                    }
                 }
             }
         }
@@ -158,4 +177,3 @@ private fun FavVideo.toRowUi(): VideoRowUi {
         danmakuText = null,
     )
 }
-

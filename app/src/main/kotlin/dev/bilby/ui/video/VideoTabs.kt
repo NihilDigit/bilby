@@ -1,6 +1,10 @@
 package dev.bilby.ui.video
 
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -9,8 +13,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -81,6 +88,7 @@ import dev.bilby.data.MemberCard
 import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoStat
+import dev.bilby.data.VideoStaff
 import dev.bilby.player.QueueItem
 import dev.bilby.ui.comment.CommentSection
 import dev.bilby.ui.comment.CommentUiState
@@ -138,7 +146,9 @@ fun VideoTabs(
     queue: QueueUiState,
     onPlayQueueItem: (bvid: String) -> Unit,
     onToggleShuffle: () -> Unit,
-    onUpClick: () -> Unit,
+    onUpClick: (Long) -> Unit,
+    staffFollowed: Set<Long>?,
+    onFollowStaff: (Long) -> Unit,
     relation: VideoRelation?,
     favFolders: List<FavFolder>,
     addedToView: Boolean,
@@ -156,6 +166,7 @@ fun VideoTabs(
     onSendComment: (String, Long?) -> Unit,
     onLikeComment: (Long) -> Unit,
     onDeleteComment: (Long) -> Unit,
+    onSeekComment: (Long) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // 评论数用服务端给的总数,不是已渲染条数 —— 后者会随翻页一路变大,像个假计数器。
@@ -227,6 +238,8 @@ fun VideoTabs(
                     related = related,
                     onFindRelated = onFindRelated,
                     onUpClick = onUpClick,
+                    staffFollowed = staffFollowed,
+                    onFollowStaff = onFollowStaff,
                     followState = followState,
                     onToggleFollow = onToggleFollow,
                     upCard = upCard,
@@ -254,6 +267,7 @@ fun VideoTabs(
                     onSend = onSendComment,
                     onLike = onLikeComment,
                     onDelete = onDeleteComment,
+                    onSeek = onSeekComment,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -276,7 +290,9 @@ private fun IntroTab(
     queue: QueueUiState,
     onPlayQueueItem: (bvid: String) -> Unit,
     onToggleShuffle: () -> Unit,
-    onUpClick: () -> Unit,
+    onUpClick: (Long) -> Unit,
+    staffFollowed: Set<Long>?,
+    onFollowStaff: (Long) -> Unit,
     relation: VideoRelation?,
     favFolders: List<FavFolder>,
     addedToView: Boolean,
@@ -304,10 +320,14 @@ private fun IntroTab(
                 )
 
                 UpRow(
+                    mid = detail.up.mid,
                     faceUrl = detail.up.faceUrl,
                     name = detail.up.name,
                     upCard = upCard,
                     onUpClick = onUpClick,
+                    staff = detail.staff,
+                    staffFollowed = staffFollowed,
+                    onFollowStaff = onFollowStaff,
                     followState = followState,
                     onToggleFollow = onToggleFollow,
                 )
@@ -356,41 +376,119 @@ private fun IntroTab(
  */
 @Composable
 private fun UpRow(
+    mid: Long,
     faceUrl: String,
     name: String,
     upCard: MemberCard?,
-    onUpClick: () -> Unit,
+    onUpClick: (Long) -> Unit,
+    staff: List<VideoStaff>,
+    /** 已关注的联合投稿成员;null = 还没查到,此时一个加号都不画。 */
+    staffFollowed: Set<Long>?,
+    onFollowStaff: (Long) -> Unit,
     followState: FollowState,
     onToggleFollow: () -> Unit,
 ) {
+    // mid 必须进 key:它是列表第一项的身份,也是点击跳转的目标。漏了它,队列走到同一个 UP
+    // 的另一条视频上时头像和名字都没变,participants 不重建,第一项还指着上一条的 mid。
+    val participants = remember(mid, faceUrl, name, staff) {
+        buildList {
+            add(VideoStaff(mid, "", name, faceUrl))
+            addAll(staff.filter { it.mid != mid })
+        }
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            modifier = Modifier
-                .weight(1f)
-                .clickable(onClick = onUpClick)
-                .heightIn(min = Dimens.MinTouchTarget),
-        ) {
-            Avatar(url = faceUrl, size = Dimens.AvatarMedium)
-            Text(
-                text = name,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                // fill = false:徽章跟在名字后面,不因为名字短就被推到这一行更靠右的地方
-                // (同一道理见 ui/profile/ProfileScreen.kt 的 AccountHeader)。
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            upCard?.let {
-                LevelBadge(level = it.level, senior = it.isSeniorMember, height = Dimens.LevelBadgeHeight)
+        if (staff.isEmpty()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { onUpClick(mid) }
+                    .heightIn(min = Dimens.MinTouchTarget),
+            ) {
+                Avatar(url = faceUrl, size = Dimens.AvatarMedium)
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                upCard?.let {
+                    LevelBadge(level = it.level, senior = it.isSeniorMember, height = Dimens.LevelBadgeHeight)
+                }
+            }
+        } else {
+            LazyRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+            ) {
+                items(participants, key = { "${it.mid}-${it.name}" }) { participant ->
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable { onUpClick(participant.mid) },
+                    ) {
+                        // 关注加号贴在头像右下角。**关注态未知时(staffFollowed 还是 null)不显示**,
+                        // 否则每次打开都会先闪一排加号再消失。
+                        //
+                        // UP 主自己也走这一套,不再另开关注按钮:联合投稿这一排里他只是署名
+                        // 第一位,单独给他一个按钮会让人以为关注的是"这条视频的作者"整体。
+                        val followable = staffFollowed?.contains(participant.mid) == false
+                        Box {
+                            Avatar(url = participant.faceUrl, size = Dimens.AvatarMedium)
+                            if (followable) {
+                                Icon(
+                                    imageVector = Icons.Filled.Add,
+                                    contentDescription = stringResource(R.string.video_follow_staff, participant.name),
+                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        // 往外挪出头像一角:完全压在头像里会盖住脸,而且圆
+                                        // 叠圆的边缘挨得太近,小尺寸下看不出是两个东西。
+                                        .offset(x = StaffFollowBadgeOffset, y = StaffFollowBadgeOffset)
+                                        .size(StaffFollowBadgeSize)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.primary)
+                                        .clickable { onFollowStaff(participant.mid) }
+                                        .padding(1.dp),
+                                )
+                            }
+                        }
+                        // widthIn 而不是固定 width:固定 64dp 是照头像宽度定的,可它要装的是
+                        // 名字 —— "飓多多StormCrew" 这种在 64dp 里只剩四个字加省略号。给一个
+                        // 区间,短名字仍与头像对齐,长名字能多占一截。
+                        Text(
+                            participant.name,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(min = StaffLabelMinWidth, max = StaffLabelMaxWidth),
+                        )
+                        participant.title.takeIf { it.isNotBlank() }?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(min = StaffLabelMinWidth, max = StaffLabelMaxWidth),
+                            )
+                        }
+                    }
+                }
             }
         }
-        FollowButton(state = followState, onClick = onToggleFollow)
+        // 联合投稿没有这个按钮:关注态全部由头像角上的加号表达,一个人一个。留着它就成了
+        // 第二套状态——它只讲 UP 主一个人,而旁边那排讲所有人,两处对同一个人给出两种说法。
+        //
+        // 代价是联合投稿下没有取关入口,取关走那个人的空间页。这一排是署名,不是关系管理。
+        if (staff.isEmpty()) {
+            FollowButton(state = followState, onClick = onToggleFollow)
+        }
     }
 }
 
@@ -973,3 +1071,13 @@ private fun FollowButton(state: FollowState, onClick: () -> Unit) {
         )
     }
 }
+
+/** 关注加号的直径。18dp 是能在头像角上认出来、又不盖住脸的下限。 */
+private val StaffFollowBadgeSize = 18.dp
+
+/** 加号往头像外挪出的距离,横竖同值,让它压在右下角那道弧上。 */
+private val StaffFollowBadgeOffset = 4.dp
+
+/** 名字栏的宽度区间。下限对齐头像，上限防止一个长名字把整排撑开。 */
+private val StaffLabelMinWidth = 56.dp
+private val StaffLabelMaxWidth = 104.dp

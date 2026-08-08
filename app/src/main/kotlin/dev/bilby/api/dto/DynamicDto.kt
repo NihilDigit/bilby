@@ -21,6 +21,7 @@ data class DynamicFeedResponseDto(
 
 @Serializable
 data class DynamicItemDto(
+    @SerialName("id_str") val idStr: String = "",
     /** 字符串枚举,如 DYNAMIC_TYPE_AV / UGC_SEASON / PGC / PGC_UNION / COURSES_SEASON / FORWARD ...(notes 第 4 节)。 */
     val type: String = "",
     val modules: DynamicModulesDto? = null,
@@ -45,6 +46,12 @@ data class ModuleAuthorDto(
 @Serializable
 data class ModuleDynamicDto(
     val major: MajorDto? = null,
+    val desc: DynamicDescDto? = null,
+)
+
+@Serializable
+data class DynamicDescDto(
+    val text: String = "",
 )
 
 /**

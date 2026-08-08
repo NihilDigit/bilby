@@ -7,6 +7,10 @@ import dev.bilby.api.getData
 import dev.bilby.api.map
 import dev.bilby.api.postAction
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonElement
 
 /**
  * 关注状态。空间页从 `acc/info` 的 `relation` 直接拿,播放页要另查 [RelationRepository.stateOf]。
@@ -51,6 +55,41 @@ class RelationRepository(private val client: BiliClient) {
         client.getData<RelationDto>(STATE, mapOf("fid" to mid.toString()))
             .map { FollowState.of(it.attribute) }
 
+    /**
+     * 一次问一批人的关注态,给联合投稿那一排头像用。
+     *
+     * **服务端只把有关系的那些放进返回的 map 里**,没关系的 mid 根本不出现,所以这里返回的是
+     * "已关注的集合"而不是逐个的状态。PiliPlus 也是这么用的(`queryUserStat` 拿 `relations`
+     * 之后直接判断 key 在不在)。
+     *
+     * 这里比它多走一步,按 attribute 过一遍 [FollowState]:拉黑(128)同样会出现在 map 里,
+     * 只看 key 存不存在会把拉黑过的人显示成已关注。
+     */
+    suspend fun followedAmong(mids: List<Long>): BiliResult<Set<Long>> {
+        if (mids.isEmpty()) return BiliResult.Ok(emptySet())
+        return client.getData<JsonElement>(RELATIONS, mapOf("fids" to mids.joinToString(",")))
+            .map { it.followedMids() }
+    }
+
+    /**
+     * **`data` 有两种形状,不能直接当 Map 收。** 有关系时是 `{"<mid>": {"attribute": n, ...}}`,
+     * 一个关系都没有时服务端给的是 `[]` 而不是 `{}` —— 按 `Map<String, _>` 反序列化会在后一种
+     * 情况抛异常。而调用方拿不到结果就整排不画加号,于是"一个人都没关注"反倒成了看不见关注
+     * 入口的那一种人。
+     */
+    private fun JsonElement.followedMids(): Set<Long> {
+        val entries = (this as? JsonObject)?.entries ?: return emptySet()
+        return entries.mapNotNullTo(mutableSetOf()) { (mid, relation) ->
+            val attribute = (relation as? JsonObject)
+                ?.get("attribute")
+                ?.jsonPrimitive
+                ?.intOrNull
+                ?: return@mapNotNullTo null
+            // 按 attribute 过一遍而不是只看 key 在不在:拉黑(128)同样会出现在这份 map 里。
+            mid.toLongOrNull()?.takeIf { FollowState.of(attribute).isFollowing }
+        }
+    }
+
     suspend fun follow(mid: Long): BiliResult<Unit> = modify(mid, ACT_FOLLOW)
 
     suspend fun unfollow(mid: Long): BiliResult<Unit> = modify(mid, ACT_UNFOLLOW)
@@ -74,6 +113,7 @@ class RelationRepository(private val client: BiliClient) {
 
     private companion object {
         const val STATE = "${BiliConstants.WEB_HOST}/x/relation"
+        const val RELATIONS = "${BiliConstants.WEB_HOST}/x/relation/relations"
         const val MODIFY = "${BiliConstants.WEB_HOST}/x/relation/modify"
 
         const val ACT_FOLLOW = 1

@@ -8,12 +8,14 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.R
+import dev.bilby.ui.appendDistinctBy
 import dev.bilby.api.BiliResult
 import dev.bilby.data.HistoryItem
 import dev.bilby.data.HistoryRepository
@@ -42,6 +44,7 @@ data class HistoryUiState(
     val cursorViewAt: Long = 0L,
     val loading: Boolean = false,
     val appending: Boolean = false,
+    val refreshing: Boolean = false,
     val hasMore: Boolean = true,
     val error: String? = null,
 )
@@ -63,6 +66,13 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
 
     fun retry() = loadMore()
 
+    fun refresh() {
+        _state.update {
+            it.copy(items = emptyList(), cursorMax = 0L, cursorViewAt = 0L, hasMore = true, refreshing = true)
+        }
+        loadMore()
+    }
+
     fun loadMore() {
         val current = _state.value
         if (current.loading || current.appending || !current.hasMore) return
@@ -72,16 +82,22 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
             when (val result = repository.loadPage(current.cursorMax, current.cursorViewAt)) {
                 is BiliResult.Ok -> _state.update {
                     it.copy(
-                        items = current.items + result.value.items,
+                        // 读 it 而不是协程外那份 current 快照:刷新会把 items 清空,用陈旧快照
+                        // 拼接等于把清空前的内容又写回去。
+                        //
+                        // 按 oid 去重是必需的:同一个视频重复观看在历史里本来就会再出现一条,
+                        // 游标翻页时上一页的条目会跟着漂到下一页。
+                        items = it.items.appendDistinctBy(result.value.items) { item -> item.oid },
                         cursorMax = result.value.nextMax,
                         cursorViewAt = result.value.nextViewAt,
                         loading = false,
                         appending = false,
+                        refreshing = false,
                         hasMore = !result.value.isEnd,
                     )
                 }
 
-                else -> _state.update { it.copy(loading = false, appending = false, error = result.errorText()) }
+                else -> _state.update { it.copy(loading = false, appending = false, refreshing = false, error = result.errorText()) }
             }
         }
     }
@@ -101,6 +117,7 @@ fun HistoryScreen(
     onItemClick: (HistoryItem) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
+    onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
@@ -117,16 +134,18 @@ fun HistoryScreen(
                     .filter { (last, total) -> last != null && last >= total - 1 - PrefetchThreshold }
                     .collect { if (state.hasMore && !state.appending) onLoadMore() }
             }
-            LazyColumn(
-                state = listState,
-                modifier = modifier.fillMaxSize(),
-                contentPadding = contentPadding,
-            ) {
-                items(state.items, key = { it.oid }) { item ->
-                    VideoRow(item = item.toRowUi(), onClick = { onItemClick(item) })
-                }
-                item(key = "footer") {
-                    ListFooter(appending = state.appending, hasMore = state.hasMore, hasItems = true)
+            PullToRefreshBox(isRefreshing = state.refreshing, onRefresh = onRefresh, modifier = modifier.fillMaxSize()) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = contentPadding,
+                ) {
+                    items(state.items, key = { it.oid }) { item ->
+                        VideoRow(item = item.toRowUi(), onClick = { onItemClick(item) })
+                    }
+                    item(key = "footer") {
+                        ListFooter(appending = state.appending, hasMore = state.hasMore, hasItems = true)
+                    }
                 }
             }
         }

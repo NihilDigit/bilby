@@ -291,6 +291,7 @@ fun ListenScreen(
                         if (page == 0) {
                             DiscView(
                                 state = state,
+                                speed = speed,
                                 subtitleTracks = subtitleTracks,
                                 subtitleLan = subtitleLan,
                                 onSelectSubtitle = onSelectSubtitle,
@@ -416,6 +417,7 @@ fun ListenScreen(
 @Composable
 private fun DiscView(
     state: AudioPlaybackUiState,
+    speed: Float,
     subtitleTracks: List<SubtitleTrack>,
     subtitleLan: String,
     onSelectSubtitle: (String) -> Unit,
@@ -442,12 +444,15 @@ private fun DiscView(
             // 页面不可见时应用根本不出帧,旋转的开销只存在于用户正盯着它看的时候,
             // 而那恰好是它唯一有价值的时候。
             val angle = remember { Animatable(0f) }
-            LaunchedEffect(state.isPlaying) {
+            LaunchedEffect(state.isPlaying, speed) {
                 if (!state.isPlaying) return@LaunchedEffect
+                val rotationPeriod = (DiscRotationPeriodMillis / speed.coerceAtLeast(0.1f))
+                    .roundToInt()
+                    .coerceAtLeast(1)
                 angle.animateTo(
                     targetValue = angle.value + 360f,
                     animationSpec = infiniteRepeatable(
-                        animation = tween(DiscRotationPeriodMillis, easing = LinearEasing),
+                        animation = tween(rotationPeriod, easing = LinearEasing),
                         repeatMode = RepeatMode.Restart,
                     ),
                 )

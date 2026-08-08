@@ -15,6 +15,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -119,33 +120,40 @@ fun ToViewScreen(
     onDelete: (ToViewItem) -> Unit,
     onItemClick: (ToViewItem) -> Unit,
     onRetry: () -> Unit,
+    onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     when {
         state.loading && state.items.isEmpty() -> FullScreenLoading(modifier)
         state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry, modifier)
-        else -> Column(modifier = modifier.fillMaxSize()) {
-            CapacityMeter(state.count, state.capacity)
-            LazyColumn(modifier = Modifier.weight(1f)) {
-                if (state.items.isEmpty()) {
-                    item(key = "empty") { EmptyState(stringResource(R.string.toview_empty)) }
-                }
-                items(state.items, key = { it.aid }) { item ->
-                    VideoRow(
-                        item = item.toRowUi(),
-                        onClick = { onItemClick(item) },
-                        trailing = {
-                            // 图标用 Close 而不是 Delete:这里是"从列表里拿掉",
-                            // 不是把视频删了。垃圾桶图标承诺的破坏性比实际动作大。
-                            IconButton(onClick = { onDelete(item) }) {
-                                Icon(
-                                    Icons.Outlined.Close,
-                                    contentDescription = stringResource(R.string.toview_remove, item.title),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        },
-                    )
+        else -> PullToRefreshBox(
+            isRefreshing = state.loading && state.items.isNotEmpty(),
+            onRefresh = onRefresh,
+            modifier = modifier.fillMaxSize(),
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                CapacityMeter(state.count, state.capacity)
+                LazyColumn(modifier = Modifier.weight(1f)) {
+                    if (state.items.isEmpty()) {
+                        item(key = "empty") { EmptyState(stringResource(R.string.toview_empty)) }
+                    }
+                    items(state.items, key = { it.aid }) { item ->
+                        VideoRow(
+                            item = item.toRowUi(),
+                            onClick = { onItemClick(item) },
+                            trailing = {
+                                // 图标用 Close 而不是 Delete:这里是"从列表里拿掉",
+                                // 不是把视频删了。垃圾桶图标承诺的破坏性比实际动作大。
+                                IconButton(onClick = { onDelete(item) }) {
+                                    Icon(
+                                        Icons.Outlined.Close,
+                                        contentDescription = stringResource(R.string.toview_remove, item.title),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }

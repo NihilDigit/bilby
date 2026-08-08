@@ -1,5 +1,7 @@
 package dev.bilby.ui
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -51,6 +53,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.navigation3.runtime.entryProvider
+import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
+import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import dev.bilby.AppContainer
@@ -99,7 +103,20 @@ import dev.bilby.ui.listen.ListenScreen
 import dev.bilby.ui.video.VideoScreen
 import dev.bilby.ui.video.VideoViewModel
 
+private const val PROJECT_GITHUB_URL = "https://github.com/NihilDigit/bilby"
+
 class MainActivity : ComponentActivity() {
+
+    /**
+     * 退到后台(切走、锁屏)时把普通视频暂停,听视频继续。**判断在服务那边**,这里只负责
+     * 报告"前台没了"——听不听得下去取决于播放器当前装的是什么,那是服务知道的事。
+     *
+     * 转屏不经过这里:manifest 声明了 configChanges,Activity 不重建。
+     */
+    override fun onStop() {
+        super.onStop()
+        AudioPlaybackService.pauseForAppBackground()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -136,34 +153,6 @@ private fun BilbyApp(container: AppContainer) {
         container.deviceFingerprint.activateIfNeeded()
     }
 
-    // 三个根 pane 的 ViewModel 建在 NavDisplay **外面**,宿主是 Activity 的 ViewModelStore。
-    //
-    // 建在 entry<Home> 里面时,作用域取决于 Navigation3 给每个 NavEntry 装的
-    // ViewModelStore 装饰器,而助理循环正跑在 searchVm 的 viewModelScope 上——它能不能扛过
-    // "点开搜索结果里的视频"和"切到动态页",就成了一个依赖框架默认值的问题。提到这里之后
-    // 它们与 backstack 无关:压进播放页、切 tab 都只是 composable 离开组合,循环照跑。
-    val feedVm: FeedViewModel = viewModel(
-        factory = viewModelFactory { initializer { FeedViewModel(container.dynamicRepository, container.followRepository) } },
-    )
-    val searchVm: SearchChatViewModel = viewModel(
-        factory = viewModelFactory {
-            initializer { SearchChatViewModel(container.searchRepository, container.agentLoop) }
-        },
-    )
-    val profileVm: ProfileViewModel = viewModel(
-        factory = viewModelFactory {
-            initializer {
-                ProfileViewModel(
-                    container.settings,
-                    container.accountRepository,
-                    container.historyRepository,
-                    container.toViewRepository,
-                    container.favRepository,
-                )
-            }
-        },
-    )
-
     val backStack = rememberNavBackStack(Home)
 
     /**
@@ -175,8 +164,12 @@ private fun BilbyApp(container: AppContainer) {
      * 判据是"还有没有播放页"这个纯粹的集合判断,不是"这一页是被弹出还是被覆盖" ——
      * 后者是导航层的判断,CLAUDE.md 记着它被做错过。
      *
-     * 划走 app 不走这里:那时整个 composition 都没了,effect 不会跑,后台听视频照常继续
-     * (要不要停由 onTaskRemoved 判断)。转屏同理,backstack 是保存恢复的。
+     * 划走 app 不走这里:那时整个 composition 都没了,effect 不会跑。**退到后台要不要暂停
+     * 是另一件事**,由 `MainActivity.onStop` 交给服务判断(见
+     * [AudioPlaybackService.pauseForAppBackground]):听视频继续,看视频暂停。划掉任务卡片
+     * 又是第三件事,归 `onTaskRemoved`。
+     *
+     * 转屏不受影响:manifest 声明了 configChanges,Activity 不重建,onStop 不会跑。
      */
     val context = LocalContext.current
     val hasVideoPage = backStack.any { it is Video }
@@ -187,6 +180,23 @@ private fun BilbyApp(container: AppContainer) {
     NavDisplay(
         backStack = backStack,
         onBack = { backStack.removeLastOrNull() },
+        // **每个 NavEntry 一个 ViewModelStore。** 默认的 entryDecorators 只有
+        // SaveableStateHolder 一个(反编译 navigation3-ui 1.1.5 核实过),于是 `viewModel()`
+        // 落到 Activity 的 store 上,所有页面的 ViewModel 都活到 Activity 销毁为止 ——
+        // 播放页尤其明显:队列自动连播时 key 是 "video-$episode",走一条攒一个。
+        //
+        // **清理挂在弹出上,不是离开组合上。** `NavEntryDecorator` 的 onPop 和 decorate 是
+        // 两个独立的东西,这个装饰器把 clearKey 挂在前者。所以压播放页时 Home 只是被盖住、
+        // 仍在 backstack,它的 store 不动 —— 助理循环跑在 searchVm 的 viewModelScope 上,
+        // 而 searchVm 就在 Home 这个 entry 里,切 tab 和压页面都打断不了它,内存里的
+        // 结果也不会被清掉。只有 Home 真的出栈(退出应用)才收摊。
+        //
+        // 加它就得连默认那个一起写全:这个参数是整体替换,漏掉 SaveableStateHolder 会让
+        // 所有 rememberSaveable 跟着失效。
+        entryDecorators = listOf(
+            rememberSaveableStateHolderNavEntryDecorator(),
+            rememberViewModelStoreNavEntryDecorator(),
+        ),
         // 转场用 duration + easing,**不用主题的 spring**。M3 在 transitions 页注明转场仍在
         // 旧的缓动/时长体系上("M3 transitions use the legacy easing and duration system"),
         // spring 那套(MotionScheme)是给组件动效的;它本身也只有六个 spring spec,取不到
@@ -219,9 +229,7 @@ private fun BilbyApp(container: AppContainer) {
         entryProvider = entryProvider {
             entry<Home> {
                 RootTabs(
-                    feedVm = feedVm,
-                    searchVm = searchVm,
-                    profileVm = profileVm,
+                    container = container,
                     onVideoClick = { backStack.add(Video(it)) },
                     onUserClick = { backStack.add(Space(it)) },
                     onSettingsClick = { backStack.add(Settings) },
@@ -229,9 +237,6 @@ private fun BilbyApp(container: AppContainer) {
                     onOpenHistory = { backStack.add(History) },
                     onOpenToView = { backStack.add(ToViewList) },
                     onOpenFavFolder = { folder -> backStack.add(FavFolderContents(folder.id, folder.title)) },
-                    // 停播放服务要 Context,顺序先清凭据后停服务(同 SettingsRoute.onLogout 的理由:
-                    // 反过来的话中间那一瞬服务已停但凭据还在,看起来像"没登出但停了")。
-                    onLogout = { profileVm.logout { AudioPlaybackService.stop(context) } },
                 )
             }
             entry<Settings> {
@@ -339,9 +344,7 @@ private enum class RootTab(
  */
 @Composable
 private fun RootTabs(
-    feedVm: FeedViewModel,
-    searchVm: SearchChatViewModel,
-    profileVm: ProfileViewModel,
+    container: AppContainer,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onSettingsClick: () -> Unit,
@@ -349,13 +352,8 @@ private fun RootTabs(
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
     onOpenFavFolder: (FavFolder) -> Unit,
-    onLogout: () -> Unit,
 ) {
     var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
-
-    val feedState by feedVm.state.collectAsStateWithLifecycle()
-    val searchState by searchVm.state.collectAsStateWithLifecycle()
-    val profileState by profileVm.state.collectAsStateWithLifecycle()
 
     // IME 退让放在 Scaffold 这一层,让底栏跟着键盘一起上移。放在内层输入框上的话,
     // 底栏仍会在键盘下方占着高度,表现为输入框与键盘之间空一条。
@@ -404,45 +402,143 @@ private fun RootTabs(
                 .consumeWindowInsets(bottom)
         ) {
             when (selected) {
-                RootTab.Feed -> FeedScreen(
-                    state = feedState,
-                    onLoadMore = feedVm::loadMore,
-                    onRetry = feedVm::loadFirstPage,
-                    onRefresh = feedVm::refresh,
-                    onItemClick = { onVideoClick(it.bvid) },
-                    onUpClick = onUserClick,
-                    onOpenFollowings = onOpenFollowings,
-                )
+                RootTab.Feed -> FeedPane(container, onVideoClick, onUserClick, onOpenFollowings)
 
-                RootTab.Search -> SearchChatScreen(
-                    state = searchState,
-                    onInputChange = searchVm::onInputChange,
-                    onModeChange = searchVm::onModeChange,
-                    onOrderChange = searchVm::onOrderChanged,
-                    onSend = searchVm::send,
-                    onNewSession = searchVm::newSession,
-                    onVideoClick = onVideoClick,
-                    onUserClick = onUserClick,
-                    onLoadMore = searchVm::loadMore,
-                    onRetry = searchVm::retry,
-                )
+                RootTab.Search -> SearchPane(container, onVideoClick, onUserClick)
 
-                RootTab.Profile -> ProfileScreen(
-                    state = profileState,
+                RootTab.Profile -> ProfilePane(
+                    container = container,
                     onVideoClick = onVideoClick,
                     onOpenHistory = onOpenHistory,
                     onOpenToView = onOpenToView,
                     onOpenFavFolder = onOpenFavFolder,
                     onSettingsClick = onSettingsClick,
-                    onLogout = onLogout,
-                    onRetryAccount = profileVm::retryAccount,
-                    onRetryHistory = profileVm::retryHistory,
-                    onRetryToView = profileVm::retryToView,
-                    onRetryFavFolders = profileVm::retryFavFolders,
                 )
             }
         }
     }
+}
+
+/*
+ * 三个根 pane 各自建自己的 ViewModel,**没被选中过的 tab 不建、也就不发请求**。
+ *
+ * 原先三个 VM 都在 NavDisplay 外面无条件创建:冷启动停在动态页时,个人页那四组请求(账号、
+ * 历史、稍后再看、收藏夹)照样打出去,跟动态页自己的两组抢冷启动那几百毫秒,而用户一眼都
+ * 没看见它们。
+ *
+ * **"建过就留着"由宿主保证,不是靠这里。** 这个 NavDisplay 没装 NavEntry 级的
+ * ViewModelStore 装饰器(1.1.5 的 entryDecorators 默认值只有 SaveableStateHolder 一个,
+ * 反编译核对过),`viewModel()` 因此落在 Activity 的 store 上。切走 tab 只是 composable
+ * 离开组合,实例和 viewModelScope 都还在 —— 搜索助理的循环跑在 searchVm 的 scope 上,
+ * 切 tab、压播放页都不打断它,这一点和重构前一样。
+ *
+ * 状态收集跟着下沉:三份 state 以前都在 RootTabs 顶层收,任何一个更新都要重组整个 RootTabs
+ * (含底栏),现在各收各的。
+ */
+@Composable
+private fun FeedPane(
+    container: AppContainer,
+    onVideoClick: (String) -> Unit,
+    onUserClick: (Long) -> Unit,
+    onOpenFollowings: () -> Unit,
+) {
+    val vm: FeedViewModel = viewModel(
+        key = "root-feed",
+        factory = viewModelFactory {
+            initializer {
+                FeedViewModel(container.dynamicRepository, container.followRepository, container.settings)
+            }
+        },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    FeedScreen(
+        state = state,
+        onLoadMore = vm::loadMore,
+        onRetry = vm::loadFirstPage,
+        onRefresh = vm::refresh,
+        onItemClick = { onVideoClick(it.bvid) },
+        onUpClick = onUserClick,
+        onExcludeUp = vm::excludeUp,
+        onOpenFollowings = onOpenFollowings,
+    )
+}
+
+@Composable
+private fun SearchPane(
+    container: AppContainer,
+    onVideoClick: (String) -> Unit,
+    onUserClick: (Long) -> Unit,
+) {
+    val vm: SearchChatViewModel = viewModel(
+        key = "root-search",
+        factory = viewModelFactory {
+            initializer { SearchChatViewModel(container.searchRepository, container.agentLoop) }
+        },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    SearchChatScreen(
+        state = state,
+        onInputChange = vm::onInputChange,
+        onModeChange = vm::onModeChange,
+        onOrderChange = vm::onOrderChanged,
+        onSend = vm::send,
+        onNewSession = vm::newSession,
+        onVideoClick = onVideoClick,
+        onUserClick = onUserClick,
+        onLoadMore = vm::loadMore,
+        onRetry = vm::retry,
+        onRefresh = vm::refresh,
+    )
+}
+
+@Composable
+private fun ProfilePane(
+    container: AppContainer,
+    onVideoClick: (String) -> Unit,
+    onOpenHistory: () -> Unit,
+    onOpenToView: () -> Unit,
+    onOpenFavFolder: (FavFolder) -> Unit,
+    onSettingsClick: () -> Unit,
+) {
+    val vm: ProfileViewModel = viewModel(
+        key = "root-profile",
+        factory = viewModelFactory {
+            initializer {
+                ProfileViewModel(
+                    container.settings,
+                    container.accountRepository,
+                    container.historyRepository,
+                    container.toViewRepository,
+                    container.favRepository,
+                )
+            }
+        },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    // 重新进入这一页时补一次概览。挂在"进组合"上而不是底栏那次点击上:从历史记录、
+    // 稍后再看这些子页面返回时 Home 整个重新进组合,而那正是概览最可能已经过期的时候
+    // (用户刚在那边删了东西),底栏的 onClick 覆盖不到这条路。
+    //
+    // 首次进入由 ViewModel 的 init 负责,refreshIfStale 会因为刚拉过而跳过。
+    LaunchedEffect(Unit) { vm.refreshIfStale() }
+
+    ProfileScreen(
+        state = state,
+        onVideoClick = onVideoClick,
+        onOpenHistory = onOpenHistory,
+        onOpenToView = onOpenToView,
+        onOpenFavFolder = onOpenFavFolder,
+        onSettingsClick = onSettingsClick,
+        // 停播放服务要 Context,顺序先清凭据后停服务(同 SettingsRoute.onLogout 的理由:
+        // 反过来的话中间那一瞬服务已停但凭据还在,看起来像"没登出但停了")。
+        onLogout = { vm.logout { AudioPlaybackService.stop(context) } },
+        onRetryAccount = vm::retryAccount,
+        onRetryHistory = vm::retryHistory,
+        onRetryToView = vm::retryToView,
+        onRetryFavFolders = vm::retryFavFolders,
+    )
 }
 
 @Composable
@@ -465,8 +561,12 @@ private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
         onLlmChange = vm::saveLlm,
         onSmokeTestLlm = vm::smokeTestLlm,
         onCodecChange = vm::setCodec,
-        onDanmakuChange = vm::setDanmakuEnabled,
+        onDanmakuOpacityChange = vm::setDanmakuOpacity,
         onSponsorBlockChange = vm::updateSponsorBlock,
+        onClearExcludedFeed = vm::clearExcludedFeedMids,
+        onOpenGithub = {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PROJECT_GITHUB_URL)))
+        },
         onCheckUpdate = vm::checkUpdate,
         onDownloadUpdate = { vm.downloadUpdate(it, UpdateInstaller.downloadDir(context)) },
         onInstallUpdate = { UpdateInstaller.install(context, it) },
@@ -509,6 +609,7 @@ private fun HistoryRoute(
             onItemClick = { onVideoClick(it.bvid) },
             onLoadMore = vm::loadMore,
             onRetry = vm::retry,
+            onRefresh = vm::refresh,
             contentPadding = insets,
         )
     }
@@ -550,6 +651,7 @@ private fun ToViewListRoute(
                 onDelete = { vm.delete(it) },
                 onItemClick = { onVideoClick(it.bvid) },
                 onRetry = vm::retry,
+                onRefresh = vm::refresh,
             )
         }
     }
@@ -574,6 +676,7 @@ private fun FavFolderRoute(
             onItemClick = { onVideoClick(it.bvid) },
             onLoadMore = vm::loadMore,
             onRetry = vm::retry,
+            onRefresh = vm::refresh,
             contentPadding = insets,
         )
     }
@@ -597,6 +700,7 @@ private fun FollowingsRoute(
             onUpClick = onUpClick,
             onLoadMore = vm::loadMore,
             onRetry = vm::retry,
+            onRefresh = vm::refresh,
             contentPadding = insets,
         )
     }
@@ -636,6 +740,7 @@ private fun SpaceRoute(
         },
         onBack = onBack,
         onRetry = vm::retry,
+        onRefresh = vm::refresh,
     )
 }
 
@@ -768,7 +873,9 @@ private fun VideoPane(
     val subtitleLan by vm.subtitleLan.collectAsStateWithLifecycle()
     val subtitleCues by vm.subtitleCues.collectAsStateWithLifecycle()
     val danmakuEnabled by vm.danmakuEnabled.collectAsStateWithLifecycle()
+    val danmakuOpacity by vm.danmakuOpacity.collectAsStateWithLifecycle()
     val danmakuPool by vm.danmakuPool.collectAsStateWithLifecycle()
+    val staffFollowed by vm.staffFollowed.collectAsStateWithLifecycle()
 
     // 评论用 aid 作 oid,要等视频详情回来才知道 —— 但**不能拿它卡住整页**。
     //
@@ -823,8 +930,11 @@ private fun VideoPane(
         subtitleLan = subtitleLan,
         subtitleCues = subtitleCues,
         onSelectSubtitle = vm::selectSubtitle,
+        staffFollowed = staffFollowed,
+        onFollowStaff = vm::followStaff,
         danmakuEnabled = danmakuEnabled,
         onDanmakuEnabledChange = vm::setDanmakuEnabled,
+        danmakuOpacity = danmakuOpacity,
         danmakuPool = danmakuPool,
     )
 }

@@ -34,6 +34,7 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -145,6 +146,7 @@ fun SearchChatScreen(
     onUserClick: (mid: Long) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
+    onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val inputBar: @Composable () -> Unit = {
@@ -168,9 +170,16 @@ fun SearchChatScreen(
                 }
             }
         }
-        Box(modifier = Modifier.weight(1f)) {
-            when (state.mode) {
-                SearchMode.Normal -> NormalPane(
+        // **只有普通搜索能下拉刷新。** 助理模式下这个手势会重跑一整轮 LLM ——
+        // 用户下拉时想要的是"再查一次同样的东西",而那边一次下拉是一次真金白银的请求,
+        // 而且答案还会变。要重问就用输入框重新问,或者用右上角的新会话。
+        when (state.mode) {
+            SearchMode.Normal -> PullToRefreshBox(
+                isRefreshing = state.normal.loading && state.normal.videos.isNotEmpty(),
+                onRefresh = onRefresh,
+                modifier = Modifier.weight(1f),
+            ) {
+                NormalPane(
                     state = state.normal,
                     onOrderChange = onOrderChange,
                     onVideoClick = onVideoClick,
@@ -178,8 +187,10 @@ fun SearchChatScreen(
                     onLoadMore = onLoadMore,
                     onRetry = onRetry,
                 )
+            }
 
-                SearchMode.Agent -> AgentPane(
+            SearchMode.Agent -> Box(modifier = Modifier.weight(1f)) {
+                AgentPane(
                     state = state.agent,
                     onVideoClick = onVideoClick,
                     onRetry = onRetry,

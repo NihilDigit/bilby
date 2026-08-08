@@ -24,6 +24,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -50,6 +51,7 @@ import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.video.CATEGORY_LABELS
+import kotlin.math.roundToInt
 
 /**
  * 设置页。
@@ -68,8 +70,10 @@ fun SettingsScreen(
     onLlmChange: (LlmConfig) -> Unit,
     onSmokeTestLlm: () -> Unit,
     onCodecChange: (CodecPreference) -> Unit,
-    onDanmakuChange: (Boolean) -> Unit,
+    onDanmakuOpacityChange: (Float) -> Unit,
     onSponsorBlockChange: (SponsorBlockPrefs) -> Unit,
+    onOpenGithub: () -> Unit,
+    onClearExcludedFeed: () -> Unit,
     onCheckUpdate: () -> Unit,
     onDownloadUpdate: (UpdateInfo) -> Unit,
     onInstallUpdate: (File) -> Unit,
@@ -131,14 +135,28 @@ fun SettingsScreen(
                     hardwareCodecIds = state.hardwareCodecIds,
                     onChange = onCodecChange,
                 )
-                // 和播放器控制条上那个开关是同一份值(见 SettingsViewModel.setDanmakuEnabled
-                // 的注释),文案不写"默认开启"——那会暗示存在"默认值 vs 本次设置"两级,
-                // 而实际只有一个值,这里改了那边立刻跟着变。
-                ToggleSettingRow(
-                    title = stringResource(R.string.settings_danmaku_toggle),
-                    checked = state.danmakuEnabled,
-                    onCheckedChange = onDanmakuChange,
+                SliderSettingRow(
+                    title = stringResource(R.string.settings_danmaku_opacity),
+                    value = state.danmakuOpacity,
+                    valueLabel = { stringResource(R.string.settings_danmaku_opacity_value, (it * 100).roundToInt()) },
+                    onChange = onDanmakuOpacityChange,
                 )
+            }
+
+            // 一个都没排除过就整节不显示:没用过这个功能的人不需要先认识"排除名单"这个概念,
+            // 才能看懂设置页里多出来的一行。
+            if (state.excludedFeedCount > 0) {
+                item("feed") {
+                    SectionTitle(stringResource(R.string.settings_section_feed))
+                    SettingRow(
+                        title = stringResource(R.string.settings_feed_clear_excluded),
+                        subtitle = stringResource(
+                            R.string.settings_feed_excluded_count,
+                            state.excludedFeedCount,
+                        ),
+                        onClick = onClearExcludedFeed,
+                    )
+                }
             }
 
             item("sponsorblock") {
@@ -185,6 +203,10 @@ fun SettingsScreen(
                     title = stringResource(R.string.settings_license),
                     subtitle = "GPL-3.0-or-later",
                 )
+                SettingRow(
+                    title = stringResource(R.string.settings_github),
+                    onClick = onOpenGithub,
+                )
                 UpdateRow(
                     state = state.update,
                     onCheck = onCheckUpdate,
@@ -221,6 +243,45 @@ fun SettingsScreen(
                     ),
                 )
             },
+        )
+    }
+}
+
+/**
+ * 拖动中只改本地状态,**松手才回调 [onChange]**。
+ *
+ * `onValueChange` 是逐帧回调的,直接接到持久化上等于把一次拖动变成十几次 DataStore 写;
+ * 而 `danmakuPrefs` 每写一次,所有还活着的播放页 ViewModel 都会被唤醒收一遍。
+ */
+@Composable
+private fun SliderSettingRow(
+    title: String,
+    value: Float,
+    valueLabel: @Composable (Float) -> String,
+    onChange: (Float) -> Unit,
+) {
+    var dragging by remember { mutableStateOf<Float?>(null) }
+    val shown = dragging ?: value
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Text(
+                valueLabel(shown),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Slider(
+            value = shown,
+            onValueChange = { dragging = it },
+            onValueChangeFinished = {
+                dragging?.let(onChange)
+                dragging = null
+            },
+            valueRange = 0.1f..1f,
+            steps = 8,
         )
     }
 }

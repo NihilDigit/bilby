@@ -43,8 +43,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import dev.bilby.BiliLog
 import dev.bilby.R
+import dev.bilby.ui.dynamicTypeLabel
+import dev.bilby.ui.appendDistinctBy
 import dev.bilby.api.BiliResult
 import dev.bilby.data.FollowState
 import dev.bilby.data.RelationRepository
@@ -52,6 +55,7 @@ import dev.bilby.data.SpaceArchiveOrder
 import dev.bilby.data.SpaceCollectionItem
 import dev.bilby.data.SpaceProfile
 import dev.bilby.data.SpaceRepository
+import dev.bilby.data.SpaceDynamicItem
 import dev.bilby.data.SpaceVideoItem
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BilbyTopBar
@@ -92,6 +96,9 @@ data class SpaceUiState(
     val error: String? = null,
     val profile: SpaceProfile? = null,
     val activeTab: SpaceTab = SpaceTab.Archives,
+    /** null = 尚未取合集列表；false = 已确认该 UP 没有合集/系列。 */
+    val collectionsAvailable: Boolean? = null,
+    val refreshing: Boolean = false,
     val archives: SpaceArchiveTabState = SpaceArchiveTabState(),
     val dynamics: SpaceListTabState = SpaceListTabState(),
     val collections: SpaceCollectionsTabState = SpaceCollectionsTabState(),
@@ -110,7 +117,7 @@ data class SpaceArchiveTabState(
 )
 
 data class SpaceListTabState(
-    val items: List<SpaceVideoItem> = emptyList(),
+    val items: List<SpaceDynamicItem> = emptyList(),
     val nextOffset: String? = null,
     val loading: Boolean = false,
     val appending: Boolean = false,
@@ -179,6 +186,7 @@ class SpaceViewModel(
     init {
         loadProfile()
         loadMoreArchives()
+        loadMoreCollections()
     }
 
     fun retry() {
@@ -187,6 +195,54 @@ class SpaceViewModel(
             SpaceTab.Archives -> if (_state.value.archives.items.isEmpty()) loadMoreArchives()
             SpaceTab.Dynamics -> if (_state.value.dynamics.items.isEmpty()) loadMoreDynamics()
             SpaceTab.Collections -> if (_state.value.collections.items.isEmpty()) loadMoreCollections()
+        }
+    }
+
+    fun refresh() {
+        _state.update { it.copy(refreshing = true) }
+        loadProfile()
+        val current = _state.value
+        when {
+            current.collections.detail != null -> {
+                _state.update {
+                    it.copy(
+                        collections = it.collections.copy(
+                            detail = it.collections.detail?.copy(
+                                items = emptyList(), page = 1, total = 0,
+                                loading = false, appending = false, hasMore = true, error = null,
+                            ),
+                        ),
+                    )
+                }
+                loadMoreCollectionDetail()
+            }
+            current.activeTab == SpaceTab.Archives -> {
+                _state.update {
+                    it.copy(archives = it.archives.copy(
+                        items = emptyList(), page = 1, total = 0,
+                        loading = false, appending = false, hasMore = true, error = null,
+                    ))
+                }
+                loadMoreArchives()
+            }
+            current.activeTab == SpaceTab.Dynamics -> {
+                _state.update {
+                    it.copy(dynamics = it.dynamics.copy(
+                        items = emptyList(), nextOffset = null,
+                        loading = false, appending = false, hasMore = true, error = null,
+                    ))
+                }
+                loadMoreDynamics()
+            }
+            else -> {
+                _state.update {
+                    it.copy(collections = it.collections.copy(
+                        items = emptyList(), page = 1, total = 0,
+                        loading = false, appending = false, hasMore = true, error = null,
+                    ))
+                }
+                loadMoreCollections()
+            }
         }
     }
 
@@ -225,8 +281,9 @@ class SpaceViewModel(
         viewModelScope.launch {
             when (val result = repository.loadArchives(mid, current.page, current.order, current.keyword)) {
                 is BiliResult.Ok -> _state.update {
-                    val merged = current.items + result.value.items
+                    val merged = it.archives.items.appendDistinctBy(result.value.items) { v -> v.bvid }
                     it.copy(
+                        refreshing = false,
                         archives = current.copy(
                             items = merged,
                             page = current.page + 1,
@@ -239,7 +296,7 @@ class SpaceViewModel(
                 }
 
                 else -> _state.update {
-                    it.copy(archives = current.copy(loading = false, appending = false, error = result.errorText()))
+                    it.copy(refreshing = false, archives = current.copy(loading = false, appending = false, error = result.errorText()))
                 }
             }
         }
@@ -256,8 +313,9 @@ class SpaceViewModel(
             when (val result = repository.loadDynamics(mid, current.nextOffset)) {
                 is BiliResult.Ok -> _state.update {
                     it.copy(
+                        refreshing = false,
                         dynamics = current.copy(
-                            items = current.items + result.value.items,
+                            items = it.dynamics.items.appendDistinctBy(result.value.items) { d -> d.key },
                             nextOffset = result.value.nextOffset,
                             loading = false,
                             appending = false,
@@ -267,7 +325,7 @@ class SpaceViewModel(
                 }
 
                 else -> _state.update {
-                    it.copy(dynamics = current.copy(loading = false, appending = false, error = result.errorText()))
+                    it.copy(refreshing = false, dynamics = current.copy(loading = false, appending = false, error = result.errorText()))
                 }
             }
         }
@@ -283,8 +341,18 @@ class SpaceViewModel(
         viewModelScope.launch {
             when (val result = repository.loadCollections(mid, current.page)) {
                 is BiliResult.Ok -> _state.update {
-                    val merged = current.items + result.value.items
+                    val merged = it.collections.items
+                        .appendDistinctBy(result.value.items) { c -> "${c.isSeason}-${c.id}" }
                     it.copy(
+                        refreshing = false,
+                        // 不再有"发现是空的就把用户从合集 tab 弹回投稿 tab"那一段:tab 栏现在
+                        // 要等这次探测回来才渲染(见 SpaceScreen),用户根本没机会点进一个
+                        // 不存在的 tab,那段强制切换也就没有触发条件了。
+                        collectionsAvailable = if (current.page == 1) {
+                            result.value.total > 0 || merged.isNotEmpty()
+                        } else {
+                            it.collectionsAvailable
+                        },
                         collections = current.copy(
                             items = merged,
                             page = current.page + 1,
@@ -296,8 +364,15 @@ class SpaceViewModel(
                     )
                 }
 
+                // 探测失败按"有合集"算,tab 照常显示。宁可留一个点进去报错能重试的 tab,
+                // 也不要因为一次网络抖动就把这个 UP 的合集整个藏起来 —— 藏起来之后用户
+                // 没有任何线索知道它存在过。
                 else -> _state.update {
-                    it.copy(collections = current.copy(loading = false, appending = false, error = result.errorText()))
+                    it.copy(
+                        refreshing = false,
+                        collectionsAvailable = it.collectionsAvailable ?: true,
+                        collections = current.copy(loading = false, appending = false, error = result.errorText()),
+                    )
                 }
             }
         }
@@ -326,8 +401,10 @@ class SpaceViewModel(
         viewModelScope.launch {
             when (val result = repository.loadCollectionDetail(mid, detail.collection, detail.page)) {
                 is BiliResult.Ok -> _state.update {
-                    val merged = detail.items + result.value.items
+                    val merged = (it.collections.detail?.items ?: detail.items)
+                        .appendDistinctBy(result.value.items) { v -> v.bvid }
                     it.copy(
+                        refreshing = false,
                         collections = it.collections.copy(
                             detail = detail.copy(
                                 items = merged,
@@ -343,6 +420,7 @@ class SpaceViewModel(
 
                 else -> _state.update {
                     it.copy(
+                        refreshing = false,
                         collections = it.collections.copy(
                             detail = detail.copy(loading = false, appending = false, error = result.errorText()),
                         ),
@@ -356,6 +434,8 @@ class SpaceViewModel(
         _state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
             when (val result = repository.loadProfile(mid)) {
+                // 这里不碰 refreshing:下拉刷新会同时发 profile 和当前 tab 两个请求,谁都清一次
+                // 的话先回来的那个就把指示器关掉了,而列表还在转。指示器跟着列表走。
                 is BiliResult.Ok -> {
                     _state.update { it.copy(loading = false, profile = result.value) }
                     // 串在 profile 之后,不并发:并发时 profile 后到就会把查到的关注态盖回默认值。
@@ -420,11 +500,15 @@ fun SpaceScreen(
     onListenUp: () -> Unit,
     onBack: () -> Unit,
     onRetry: () -> Unit,
+    onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val detail = state.collections.detail
     if (detail != null) {
-        CollectionDetailScreen(detail, onCollectionDetailBack, onLoadMoreCollectionDetail, onVideoClick, modifier)
+        CollectionDetailScreen(
+            detail, onCollectionDetailBack, onLoadMoreCollectionDetail, onVideoClick,
+            onRefresh, state.refreshing, modifier,
+        )
         return
     }
 
@@ -469,20 +553,38 @@ fun SpaceScreen(
                 SpaceHeader(it, onToggleFollow = onToggleFollow, onListenUp = onListenUp)
             }
 
-            PrimaryTabRow(selectedTabIndex = state.activeTab.ordinal) {
-                SpaceTab.entries.forEach { tab ->
-                    Tab(
-                        selected = state.activeTab == tab,
-                        onClick = { onTabSelected(tab) },
-                        text = { Text(stringResource(tab.label)) },
-                    )
+            // **tab 栏等合集探测回来才画。** 先画三个再抽掉一个的话,栏目宽度会重新分配、
+            // 下面整块内容跟着上跳,而这一切发生在用户已经开始看页面之后。合集探测和投稿
+            // 第一页是并发的,等的是两者里慢的那个,通常不额外多花时间。
+            val collectionsKnown = state.collectionsAvailable != null
+            val tabs = SpaceTab.entries.filter { tab ->
+                tab != SpaceTab.Collections || state.collectionsAvailable == true
+            }
+            if (collectionsKnown) {
+                val selectedTabIndex = tabs.indexOf(state.activeTab).coerceAtLeast(0)
+                PrimaryTabRow(selectedTabIndex = selectedTabIndex) {
+                    tabs.forEach { tab ->
+                        Tab(
+                            selected = state.activeTab == tab,
+                            onClick = { onTabSelected(tab) },
+                            text = { Text(stringResource(tab.label)) },
+                        )
+                    }
                 }
             }
 
-            when {
-                state.loading && state.profile == null -> FullScreenLoading()
-                state.error != null && state.profile == null -> FullScreenError(state.error, onRetry)
-                else -> when (state.activeTab) {
+            PullToRefreshBox(
+                isRefreshing = state.refreshing,
+                onRefresh = onRefresh,
+                modifier = Modifier.weight(1f),
+            ) {
+                when {
+                    state.loading && state.profile == null -> FullScreenLoading()
+                    state.error != null && state.profile == null -> FullScreenError(state.error, onRetry)
+                    // tab 栏还没画出来,内容先不画:否则内容会先顶在页头下面,等 tab 栏出现
+                    // 再被推下去一截。
+                    !collectionsKnown -> FullScreenLoading()
+                    else -> when (state.activeTab) {
                     SpaceTab.Archives -> ArchivesTab(
                         state.archives,
                         searchExpanded = archiveSearchExpanded,
@@ -493,13 +595,8 @@ fun SpaceScreen(
                         onVideoClick = onVideoClick,
                     )
 
-                    SpaceTab.Dynamics -> VideoListTab(
-                        items = state.dynamics.items,
-                        appending = state.dynamics.appending,
-                        hasMore = state.dynamics.hasMore,
-                        loading = state.dynamics.loading,
-                        error = state.dynamics.error,
-                        emptyText = stringResource(R.string.space_empty_dynamics),
+                    SpaceTab.Dynamics -> DynamicListTab(
+                        state = state.dynamics,
                         onLoadMore = onLoadMoreDynamics,
                         onVideoClick = onVideoClick,
                     )
@@ -509,6 +606,7 @@ fun SpaceScreen(
                         onLoadMoreCollections,
                         onCollectionClick,
                     )
+                    }
                 }
             }
         }
@@ -754,27 +852,106 @@ private fun CollectionDetailScreen(
     onBack: () -> Unit,
     onLoadMore: () -> Unit,
     onVideoClick: (SpaceVideoItem) -> Unit,
+    onRefresh: () -> Unit,
+    refreshing: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
         modifier = modifier,
         topBar = { BilbyTopBar(title = detail.collection.name, onBack = onBack) },
     ) { padding ->
-        VideoListTab(
-            items = detail.items,
-            appending = detail.appending,
-            hasMore = detail.hasMore,
-            loading = detail.loading,
-            error = detail.error,
-            emptyText = stringResource(R.string.space_empty_collection_detail),
-            onLoadMore = onLoadMore,
-            onVideoClick = onVideoClick,
+        PullToRefreshBox(
+            isRefreshing = refreshing,
+            onRefresh = onRefresh,
             modifier = Modifier.padding(padding),
-        )
+        ) {
+            VideoListTab(
+                items = detail.items,
+                appending = detail.appending,
+                hasMore = detail.hasMore,
+                loading = detail.loading,
+                error = detail.error,
+                emptyText = stringResource(R.string.space_empty_collection_detail),
+                onLoadMore = onLoadMore,
+                onVideoClick = onVideoClick,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 
 private const val PrefetchThreshold = 5
+
+@Composable
+private fun DynamicListTab(
+    state: SpaceListTabState,
+    onLoadMore: () -> Unit,
+    onVideoClick: (SpaceVideoItem) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    when {
+        state.loading && state.items.isEmpty() -> FullScreenLoading(modifier)
+        state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onLoadMore, modifier)
+        else -> {
+            val listState = rememberLazyListState()
+            LaunchedEffect(listState, state.hasMore, state.appending) {
+                snapshotFlow { listState.layoutInfo }
+                    .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
+                    .distinctUntilChanged()
+                    .filter { (last, total) -> last != null && last >= total - 1 - PrefetchThreshold }
+                    .collect { if (state.hasMore && !state.appending) onLoadMore() }
+            }
+            LazyColumn(state = listState, modifier = modifier.fillMaxSize()) {
+                if (state.items.isEmpty()) {
+                    item(key = "empty") { EmptyState(stringResource(R.string.space_empty_dynamics)) }
+                }
+                items(state.items, key = { it.key }) { dynamic ->
+                    when (dynamic) {
+                        is SpaceDynamicItem.Video -> {
+                            val item = dynamic.item
+                            VideoRow(
+                                item = VideoRowUi(
+                                    title = item.title,
+                                    coverUrl = item.coverUrl,
+                                    durationText = item.durationText,
+                                    dateText = formatDate(item.publishedAtEpochSeconds),
+                                    playText = item.playCountText,
+                                    danmakuText = item.danmakuCountText,
+                                ),
+                                onClick = { onVideoClick(item) },
+                            )
+                        }
+
+                        is SpaceDynamicItem.Text -> {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(
+                                    horizontal = Spacing.Comfortable,
+                                    vertical = Spacing.Cozy,
+                                ),
+                            ) {
+                                Text(
+                                    stringResource(dynamicTypeLabel(dynamic.type)),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                Text(dynamic.text, style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    formatDate(dynamic.publishedAtEpochSeconds),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = Spacing.Tight),
+                                )
+                            }
+                        }
+                    }
+                }
+                item(key = "footer") {
+                    ListFooter(state.appending, state.hasMore, state.items.isNotEmpty())
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun VideoListTab(

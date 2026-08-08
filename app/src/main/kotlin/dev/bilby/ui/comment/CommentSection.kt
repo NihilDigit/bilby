@@ -36,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -49,6 +50,10 @@ import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
@@ -92,6 +97,7 @@ fun CommentSection(
     onSend: (text: String, replyTo: Long?) -> Unit,
     onLike: (id: Long) -> Unit,
     onDelete: (id: Long) -> Unit,
+    onSeek: (Long) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var replyTarget by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -129,6 +135,7 @@ fun CommentSection(
                         onLike = onLike,
                         onDelete = onDelete,
                         onExpandReplies = onExpandReplies,
+                        onSeek = onSeek,
                     )
                 }
             }
@@ -158,6 +165,7 @@ fun CommentSection(
                     onLike = onLike,
                     onDelete = onDelete,
                     onExpandReplies = onExpandReplies,
+                    onSeek = onSeek,
                 )
             }
 
@@ -222,6 +230,7 @@ private fun CommentRow(
     onLike: (Long) -> Unit,
     onDelete: (Long) -> Unit,
     onExpandReplies: (Long) -> Unit,
+    onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var viewerIndex by remember { mutableStateOf<Int?>(null) }
@@ -274,6 +283,7 @@ private fun CommentRow(
                 message = comment.message,
                 emotes = comment.emotes,
                 style = CommentBodyStyle,
+                onSeek = onSeek,
             )
 
             if (comment.pictureUrls.isNotEmpty()) {
@@ -291,7 +301,7 @@ private fun CommentRow(
                 onDelete = onDelete,
                 onReply = onReply,
             )
-            SubReplies(comment, expanded, onExpandReplies)
+            SubReplies(comment, expanded, onExpandReplies, onSeek)
         }
     }
 
@@ -447,7 +457,12 @@ private fun CommentActions(
 private val SmallIconSize = 16.dp
 
 @Composable
-private fun SubReplies(comment: CommentItem, expanded: ExpandedReplies?, onExpandReplies: (Long) -> Unit) {
+private fun SubReplies(
+    comment: CommentItem,
+    expanded: ExpandedReplies?,
+    onExpandReplies: (Long) -> Unit,
+    onSeek: (Long) -> Unit,
+) {
     // 已展开就用展开结果(含翻页累加),否则用主楼自带的预览楼层垫着,避免展开前一片空白。
     val shown = expanded?.items ?: comment.previewReplies
     val remaining = comment.subReplyCount - shown.size
@@ -462,7 +477,7 @@ private fun SubReplies(comment: CommentItem, expanded: ExpandedReplies?, onExpan
         modifier = Modifier.fillMaxWidth().padding(top = Spacing.Hair),
     ) {
         Column(modifier = Modifier.padding(vertical = Spacing.Hair)) {
-            shown.forEach { sub -> SubReplyRow(sub) }
+            shown.forEach { sub -> SubReplyRow(sub, onSeek) }
             when {
                 expanded == null && remaining > 0 -> SubReplyMoreButton(
                     text = stringResource(R.string.comment_expand_replies, remaining),
@@ -505,7 +520,7 @@ private fun SubReplyMoreButton(text: String, onClick: () -> Unit) {
  * 现在主要是给它的 on 色(低强调文字)留位置的,拿它当底在深色主题下会亮出一大截。
  */
 @Composable
-private fun SubReplyRow(comment: CommentItem) {
+private fun SubReplyRow(comment: CommentItem, onSeek: (Long) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -533,6 +548,7 @@ private fun SubReplyRow(comment: CommentItem) {
         emotes = comment.emotes,
         style = SubReplyBodyStyle,
         maxLines = 5,
+        onSeek = onSeek,
         modifier = Modifier.padding(start = Spacing.Tight, end = Spacing.Tight, bottom = Spacing.Tight),
     )
 }
@@ -622,7 +638,7 @@ private fun CommentInputBar(
  * 表情键的长度设了上限:`[` 到 `]` 之间不限长的话,一句"[这里省略一万字]看看"会被整段
  * 当成一个表情键去查表(查不到,原样显示,但白扫一遍)。B 站的表情名都很短。
  */
-private val RichTokenRegex = Regex("""\[[^\[\]]{1,20}]|@[^\s@]+|https?://\S+""")
+private val RichTokenRegex = Regex("""\[[^\[\]]{1,20}]|@[^\s@]+|https?://\S+|(?<!\d)(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?!\d)""")
 
 /**
  * 评论正文。
@@ -641,11 +657,19 @@ private fun CommentText(
     emotes: Map<String, String>,
     style: androidx.compose.ui.text.TextStyle,
     maxLines: Int = Int.MAX_VALUE,
+    onSeek: (Long) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val mention = LocalMentionColor.current
     val used = remember(message, emotes) { linkedMapOf<String, String>() }
 
+    // 时间戳走 LinkAnnotation 而不是自己接 pointerInput:点击命中、按压反馈和无障碍(读屏会把
+    // 它读成链接)都由文本层负责。手写那版要把 TextLayoutResult 存进 State 再当 pointerInput
+    // 的 key,于是每次布局都要撤销重建一次手势检测器——评论列表滚动时那是热路径。
+    //
+    // 回调用 rememberUpdatedState 取最新的一份:注解串是 remember 出来的,直接捕获会把第一次
+    // 组合时的 onSeek 焊死在里面,而它捕获着当时的 MediaController。
+    val currentOnSeek by rememberUpdatedState(onSeek)
     val text = remember(message, emotes, mention) {
         used.clear()
         buildAnnotatedString {
@@ -654,11 +678,23 @@ private fun CommentText(
                 append(message.substring(last, match.range.first))
                 val token = match.value
                 val emoteUrl = emotes[token]
-                if (emoteUrl != null) {
-                    used[token] = emoteUrl
-                    appendInlineContent(token, token)
-                } else {
-                    withStyle(SpanStyle(color = mention)) { append(token) }
+                val timestampMillis = if (emoteUrl == null) parseTimestampMillis(token) else null
+                when {
+                    emoteUrl != null -> {
+                        used[token] = emoteUrl
+                        appendInlineContent(token, token)
+                    }
+
+                    timestampMillis != null -> withLink(
+                        LinkAnnotation.Clickable(
+                            tag = "timestamp",
+                            styles = TextLinkStyles(
+                                style = SpanStyle(color = mention, textDecoration = TextDecoration.Underline),
+                            ),
+                        ) { currentOnSeek(timestampMillis) },
+                    ) { append(token) }
+
+                    else -> withStyle(SpanStyle(color = mention)) { append(token) }
                 }
                 last = match.range.last + 1
             }
@@ -682,6 +718,23 @@ private fun CommentText(
         overflow = TextOverflow.Ellipsis,
         modifier = modifier,
     )
+}
+
+private fun parseTimestampMillis(token: String): Long? {
+    val parts = token.split(':').mapNotNull { it.toLongOrNull() }
+    if (parts.size != token.count { it == ':' } + 1) return null
+    val seconds = when (parts.size) {
+        2 -> {
+            if (parts[1] >= 60) return null
+            parts[0] * 60 + parts[1]
+        }
+        3 -> {
+            if (parts[1] >= 60 || parts[2] >= 60) return null
+            parts[0] * 3600 + parts[1] * 60 + parts[2]
+        }
+        else -> return null
+    }
+    return seconds * 1000L
 }
 
 private val AbsoluteDateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
