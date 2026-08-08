@@ -226,23 +226,27 @@ class AudioPlaybackService : MediaSessionService() {
             coverUrl = args.getString(EXTRA_COVER_URL).orEmpty(),
             durationSeconds = 0,
         )
-        val mid = args.getLong(EXTRA_MID)
 
         prepareJob?.cancel()
         retryJob?.cancel()
         publishState(loading = true)
         prepareJob = scope.launch {
             val shuffled = settings.playbackPrefs.first().shuffled
-            val built = queueSourceRepository.fromSeason(bvid)
-                ?: queueSourceRepository.fromUpSpace(mid, bvid)
-            if (built != null) {
-                queue = PlaybackQueue(built.items, built.startIndex, shuffled)
+            val built = queueSourceRepository.forVideo(bvid)
+            // **建出来的队列当前这一格必须就是要打开的这条**,下面 updateCurrentCid 才有意义。
+            // 这里曾经只判 built != null:空间投稿定位不到时它会降级成"从最新 N 条开始",
+            // 那份队列不含要打开的视频,于是 cid 被写到了最新那条头上 —— bvid 与 cid 分属两条
+            // 视频,playurl 回 -404「啥都木有」,而队列界面显示的 Active 是另一条。
+            val candidate = built?.let { PlaybackQueue(it.items, it.startIndex, shuffled) }
+            if (built != null && candidate != null && candidate.current()?.bvid == bvid) {
+                queue = candidate
                 sourceLabel = built.sourceLabel
                 // 合集给的 cid 是这一集的 P1,而页面可能是带着某一 P 进来的。
                 if (cid != 0L) queue.updateCurrentCid(cid)
             } else {
-                // 合集和空间投稿都没拿到:仍然要有一份队列,否则"队列是唯一真相"就有了缺口。
-                BiliLog.w("建队列失败,退成单条队列 bvid=$bvid")
+                // 来源没拿到、或拿到的队列里没有这条:仍然要有一份队列,否则"队列是唯一真相"
+                // 就有了缺口。宁可只有一条也不能是一条错的 —— 后者会静默播错视频。
+                BiliLog.w("建队列失败或来源里没有当前视频,退成单条队列 bvid=$bvid")
                 queue = PlaybackQueue(listOf(fallback))
                 sourceLabel = ""
             }
@@ -645,7 +649,6 @@ class AudioPlaybackService : MediaSessionService() {
 
         const val EXTRA_BVID = "bvid"
         const val EXTRA_CID = "cid"
-        const val EXTRA_MID = "mid"
         const val EXTRA_QUALITY = "quality"
         const val EXTRA_SHUFFLED = "shuffled"
         const val EXTRA_TITLE = "title"

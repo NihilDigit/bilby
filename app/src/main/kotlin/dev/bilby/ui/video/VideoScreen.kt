@@ -231,7 +231,6 @@ fun VideoScreen(
             bundleOf(
                 AudioPlaybackService.EXTRA_BVID to detail.bvid,
                 AudioPlaybackService.EXTRA_CID to detail.cid,
-                AudioPlaybackService.EXTRA_MID to detail.up.mid,
                 AudioPlaybackService.EXTRA_TITLE to detail.title,
                 AudioPlaybackService.EXTRA_UP_NAME to detail.up.name,
                 AudioPlaybackService.EXTRA_COVER_URL to detail.coverUrl,

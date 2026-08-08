@@ -142,7 +142,13 @@ data class SpaceCollectionDetailState(
     val items: List<SpaceVideoItem> = emptyList(),
     val page: Int = 1,
     val total: Int = 0,
-    val loading: Boolean = true,
+    /**
+     * **只表示"有请求在飞",不表示"该画转圈了"。** 这两件事合用一个字段时,默认值必须是
+     * false:[loadMoreCollectionDetail] 拿它当重入闸,而 [openCollection] 是先建状态再拉
+     * 第一页 —— 默认 true 会让第一页被自己的闸挡掉,一个请求都不发,合集详情永远停在初始
+     * 状态。表现是"点进合集打不开",且因为根本没发请求,日志里一个字都没有。
+     */
+    val loading: Boolean = false,
     val appending: Boolean = false,
     val hasMore: Boolean = true,
     val error: String? = null,
