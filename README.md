@@ -75,6 +75,12 @@ Bilby 是一款安卓原生的 bilibili 客户端，信息流由你掌控：内�
 
 到 [Releases](https://github.com/NihilDigit/bilby/releases/latest) 下载 APK。`universal` 适用于所有设备；按架构分包体积更小，当前设备通常为 `arm64-v8a`。
 
+APK 由 GitHub Actions 从对应 tag 构建，随附 SHA256 校验和与构建来源证明。校验某个文件确实由该 workflow、从该 commit 构建：
+
+```
+gh attestation verify bilby-0.5.0-arm64-v8a.apk --repo NihilDigit/bilby
+```
+
 也可以自行构建：
 
 ```

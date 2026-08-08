@@ -80,6 +80,14 @@ Download an APK from [Releases](https://github.com/NihilDigit/bilby/releases/lat
 `universal` runs on any device; the per-architecture builds are smaller, and current
 devices are typically `arm64-v8a`.
 
+The APKs are built by GitHub Actions from the tag, with SHA256 sums and a build
+provenance attestation. To check that a file really came from that workflow and that
+commit:
+
+```
+gh attestation verify bilby-0.5.0-arm64-v8a.apk --repo NihilDigit/bilby
+```
+
 Or build it:
 
 ```
