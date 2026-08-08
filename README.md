@@ -4,7 +4,7 @@
 
 ### 没有推荐，只有选择
 
-[![APK](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fraw.githubusercontent.com%2FNihilDigit%2Fbilby%2Fmain%2F.github%2Fbadges%2Fapk-size.json)](https://github.com/NihilDigit/bilby/releases/latest) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NihilDigit/bilby) [![English](https://img.shields.io/badge/README-English-4A5C92?style=flat-square)](README.en.md)
+[![English](https://img.shields.io/badge/README-English-4A5C92?style=flat-square)](README.en.md) &ensp; [![APK](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fraw.githubusercontent.com%2FNihilDigit%2Fbilby%2Fmain%2F.github%2Fbadges%2Fapk-size.json)](https://github.com/NihilDigit/bilby/releases/latest) &ensp; [![SLSA Build Level 2](https://slsa.dev/images/gh-badge-level2.svg)](https://github.com/NihilDigit/bilby/attestations) &ensp; [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NihilDigit/bilby)
 
 Bilby 是一款安卓原生的 bilibili 客户端，信息流由你掌控：内容来自关注的 UP 主，以及主动发起的检索。**应用内没有推荐算法**，不会插入未经你选择的内容。
 
@@ -75,11 +75,7 @@ Bilby 是一款安卓原生的 bilibili 客户端，信息流由你掌控：内�
 
 到 [Releases](https://github.com/NihilDigit/bilby/releases/latest) 下载 APK。`universal` 适用于所有设备；按架构分包体积更小，当前设备通常为 `arm64-v8a`。
 
-APK 由 GitHub Actions 从对应 tag 构建，随附 SHA256 校验和与构建来源证明。校验某个文件确实由该 workflow、从该 commit 构建：
-
-```
-gh attestation verify bilby-0.5.0-arm64-v8a.apk --repo NihilDigit/bilby
-```
+构建来源可校验：`gh attestation verify <文件> --repo NihilDigit/bilby`。
 
 也可以自行构建：
 

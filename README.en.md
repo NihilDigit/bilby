@@ -4,7 +4,7 @@
 
 ### No recommendations. Only what you choose.
 
-[![APK](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fraw.githubusercontent.com%2FNihilDigit%2Fbilby%2Fmain%2F.github%2Fbadges%2Fapk-size.json)](https://github.com/NihilDigit/bilby/releases/latest) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NihilDigit/bilby) [![简体中文](https://img.shields.io/badge/README-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-4A5C92?style=flat-square)](README.md)
+[![简体中文](https://img.shields.io/badge/README-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-4A5C92?style=flat-square)](README.md) &ensp; [![APK](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fraw.githubusercontent.com%2FNihilDigit%2Fbilby%2Fmain%2F.github%2Fbadges%2Fapk-size.json)](https://github.com/NihilDigit/bilby/releases/latest) &ensp; [![SLSA Build Level 2](https://slsa.dev/images/gh-badge-level2.svg)](https://github.com/NihilDigit/bilby/attestations) &ensp; [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NihilDigit/bilby)
 
 Bilby is a native Android client for bilibili, with a feed you control: it carries the
 uploaders you follow and the searches you start. **There is no recommender in the app**,
@@ -80,13 +80,7 @@ Download an APK from [Releases](https://github.com/NihilDigit/bilby/releases/lat
 `universal` runs on any device; the per-architecture builds are smaller, and current
 devices are typically `arm64-v8a`.
 
-The APKs are built by GitHub Actions from the tag, with SHA256 sums and a build
-provenance attestation. To check that a file really came from that workflow and that
-commit:
-
-```
-gh attestation verify bilby-0.5.0-arm64-v8a.apk --repo NihilDigit/bilby
-```
+Provenance is checkable: `gh attestation verify <file> --repo NihilDigit/bilby`.
 
 Or build it:
 

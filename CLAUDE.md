@@ -123,6 +123,18 @@ version is passed in as `-PbilbyVersion` and derived from the tag, so a local bu
 back to the debug key so R8 output can still be installed and checked. Unit test tasks exist
 for the debug variant only — `testReleaseUnitTest` does not exist and fails in CI.
 
+The workflow writes an install-and-verify section into the release body, and publishes as a
+draft. **`gh release edit --notes-file` replaces the whole body, it does not append** — pass
+the changelog plus that section, or read the existing body back and prepend to it. Getting
+this wrong drops the checksum and `gh attestation verify` instructions from the download
+page, which is where they are of any use. It has happened once.
+
+`.github/workflows/apk-size-badge.yml` refreshes the size badge and runs on its own after a
+release is published; it can also be dispatched against any older tag. It writes
+`.github/badges/apk-size.json`, and that file has to live in the repository: shields.io
+rejects `github.com` as an endpoint host, so serving the JSON as a release asset returns
+`domain is blocked`.
+
 Smoke test changes on a real device and watch end-to-end behaviour. `adb shell input tap` is
 a no-op while the screen is off and reads as an unresponsive button, so send
 `input keyevent KEYCODE_WAKEUP` first. `adb shell input text` is swallowed by the pinyin
