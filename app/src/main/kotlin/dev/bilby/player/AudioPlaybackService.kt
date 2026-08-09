@@ -359,7 +359,7 @@ class AudioPlaybackService : MediaSessionService() {
             return
         }
         if (queue.seekToBvid(bvid) != null) {
-            playCurrent()
+            playCurrent(resumePart = true)
             return
         }
 
@@ -384,7 +384,7 @@ class AudioPlaybackService : MediaSessionService() {
         sourceLabel = ""
         openChain?.mark("tempQueue")
 
-        playCurrent()
+        playCurrent(resumePart = true)
         enrichQueue(bvid)
     }
 
@@ -457,6 +457,7 @@ class AudioPlaybackService : MediaSessionService() {
         playWhenReady: Boolean = true,
         force: Boolean = false,
         positionOverrideMillis: Long? = null,
+        resumePart: Boolean = false,
     ) {
         prepareJob?.cancel()
         retryJob?.cancel()
@@ -512,6 +513,19 @@ class AudioPlaybackService : MediaSessionService() {
             ) {
                 is BiliResult.Ok -> {
                     openChain?.mark("playurlEnd")
+                    // 多 P 视频接着上次那一 P 播。**cid 只能从 playurl 的响应里知道**,而
+                    // playurl 又必须先带一个 cid 去请求,所以这里是"先按 P1 取一次流,发现
+                    // 记录指向别的 P 就换过去重取"——PiliPlus 也是这个次序。
+                    //
+                    // 只在用户打开视频那一次做([resumePart]):自动连播走到下一条时不做,
+                    // 那时用户看的是队列而不是这条视频的历史;手动切 P 更不做,那是明确的
+                    // 选择。递归下去时 resumePart 已经是 false,换不成第二次。
+                    val lastCid = result.value.lastPlayCid
+                    if (resumePart && lastCid != 0L && lastCid != cid && hasPart(item.bvid, lastCid)) {
+                        queue.updateCurrentCid(lastCid)
+                        playCurrent(playWhenReady = playWhenReady, force = true)
+                        return@launch
+                    }
                     playInfo = result.value
                     currentQuality = quality
                     val streams = result.value.streams
@@ -555,6 +569,17 @@ class AudioPlaybackService : MediaSessionService() {
         if (startPositionMillis > 0) player.seekTo(startPositionMillis)
         loadedBvid = bvid
         loadedCid = cid
+    }
+
+    /**
+     * 这条视频有没有这一 P。详情走的是带缓存与并发合并的那条路径,起播时刚请求过,
+     * 这里基本是白拿。
+     *
+     * 单 P 视频直接否掉:`pages` 只有一个元素时,`last_play_cid` 要么就是它、要么是脏数据。
+     */
+    private suspend fun hasPart(bvid: String, cid: Long): Boolean {
+        val detail = videoRepository.getVideoDetail(bvid) as? BiliResult.Ok ?: return false
+        return detail.value.pages.size > 1 && detail.value.pages.any { it.cid == cid }
     }
 
     /** 跳到队列里的另一条:点队列中的一项、合集里换一集。 */
