@@ -339,6 +339,14 @@ class VideoViewModel(
         startVideoJobs()
     }
 
+    /** 详情首屏失败后的显式重试。相同 bvid 的 [switchTo] 是幂等的,不能拿它来重跑。 */
+    fun retry() {
+        generation++
+        videoJob.cancelChildren()
+        resetForNewVideo()
+        startVideoJobs()
+    }
+
     /**
      * 清掉一切属于上一条视频的状态。
      *

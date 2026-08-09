@@ -1,5 +1,6 @@
 package dev.bilby.ui.live
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -7,11 +8,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -38,10 +43,12 @@ import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshotFlow
@@ -55,19 +62,27 @@ import androidx.media3.common.Player
 import dev.bilby.R
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.live.LiveMessage
+import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.BiliAsyncImage
+import dev.bilby.ui.components.EmptyState
+import dev.bilby.ui.components.FullScreenError
+import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.player.ControlButton
 import dev.bilby.ui.player.DanmakuButton
+import dev.bilby.ui.player.MediaBackButton
 import dev.bilby.ui.player.DanmakuFeed
 import dev.bilby.ui.player.DanmakuFontSizeSp
 import dev.bilby.ui.player.PlayerDanmakuLayer
 import dev.bilby.ui.player.PlayerGestureOptions
 import dev.bilby.ui.player.PlayerShell
 import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.FixedColors
 import dev.nihildigit.danmaku.Danmaku
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 
@@ -91,21 +106,35 @@ fun LiveRoomScreen(
     onDanmakuEnabledChange: (Boolean) -> Unit,
     onQualityChange: (Int) -> Unit,
     onLoadMoreGuards: () -> Unit,
+    onRetry: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var fullscreen by remember { mutableStateOf(false) }
     var locked by remember { mutableStateOf(false) }
 
+    // 和普通视频页同一套返回语义:先解锁,再退出沉浸,最后才离开直播间。
+    BackHandler(enabled = fullscreen) {
+        if (locked) locked = false else fullscreen = false
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
-            .then(if (fullscreen) Modifier else Modifier.windowInsetsPadding(WindowInsets.statusBars)),
+            .then(
+                if (fullscreen) Modifier
+                else Modifier.windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.systemBars)),
+            ),
     ) {
         Box(
             modifier = (
                 if (fullscreen) Modifier.fillMaxSize()
-                else Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                // widthIn 在 fillMaxWidth 之前,否则上限夹不动(见 AdaptiveContent 的说明)。
+                else Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .widthIn(max = Breakpoints.MediaWidth)
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
                 ).background(Color.Black),
         ) {
             if (player != null && state.isLive && state.streamUrl != null) {
@@ -158,23 +187,31 @@ fun LiveRoomScreen(
                     },
                 )
             } else {
-                LiveOffline(state, onBack = onBack)
+                LiveOffline(state, onBack = onBack, onRetry = onRetry)
+            }
+
+            if (!fullscreen && player != null && state.isLive && state.streamUrl != null) {
+                // 正在直播时 PlayerShell 没有页面级返回动作,把它放在画面左上角,和普通视频页
+                // 同一条返回路径;顶部渐变保证亮色画面上箭头仍有对比度。
+                MediaBackButton(onBack = onBack)
             }
         }
 
         if (!fullscreen) {
-            LiveRoomTabs(
-                state = state,
-                onLoadMoreGuards = onLoadMoreGuards,
-                modifier = Modifier.fillMaxSize(),
-            )
+            AdaptiveContent(modifier = Modifier.fillMaxSize(), maxWidth = Breakpoints.ReadableWidth) {
+                LiveRoomTabs(
+                    state = state,
+                    onLoadMoreGuards = onLoadMoreGuards,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
     }
 }
 
 /** 未开播、或者流没取到。封面配一句话,不空着一块黑。 */
 @Composable
-private fun LiveOffline(state: LiveRoomUiState, onBack: () -> Unit) {
+private fun LiveOffline(state: LiveRoomUiState, onBack: () -> Unit, onRetry: () -> Unit) {
     Box(modifier = Modifier.fillMaxSize()) {
         if (state.coverUrl.isNotEmpty()) {
             BiliAsyncImage(
@@ -183,20 +220,13 @@ private fun LiveOffline(state: LiveRoomUiState, onBack: () -> Unit) {
                 modifier = Modifier.fillMaxSize(),
             )
         }
-        IconButton(
-            onClick = onBack,
-            modifier = Modifier.align(Alignment.TopStart).padding(Spacing.Tight),
-        ) {
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = stringResource(R.string.action_back),
-                tint = FixedColors.OnMedia,
-            )
-        }
-        Box(
+        // 和正在直播时同一个位置、同一份渐变:开没开播不该改变"怎么离开这一页"。
+        MediaBackButton(onBack = onBack)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
                 .align(Alignment.Center)
-                .clip(RoundedCornerShape(Spacing.Tight))
+                .clip(MaterialTheme.shapes.small)
                 .background(FixedColors.ScrimOnMedia)
                 .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
         ) {
@@ -209,6 +239,12 @@ private fun LiveOffline(state: LiveRoomUiState, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = FixedColors.OnMedia,
             )
+            // 只有失败才给重试。未开播不是错误,再拉一次也还是没开播。
+            if (!state.loading && state.error != null) {
+                TextButton(onClick = onRetry) {
+                    Text(stringResource(R.string.action_retry), color = FixedColors.OnMedia)
+                }
+            }
         }
     }
 }
@@ -279,20 +315,25 @@ private fun LiveRoomTabs(
     modifier: Modifier = Modifier,
 ) {
     val pager = rememberPagerState(pageCount = { 2 })
+    val scope = rememberCoroutineScope()
     Column(modifier = modifier) {
         SecondaryTabRow(selectedTabIndex = pager.currentPage) {
+            // 点标签要真的翻页。原来两个 onClick 都是空的,只有左右滑动能换页 ——
+            // 一个看得见、按得动、什么都不发生的标签,比没有标签更糟。
             Tab(
                 selected = pager.currentPage == 0,
-                onClick = {},
+                onClick = { scope.launch { pager.animateScrollToPage(0) } },
                 text = { Text(stringResource(R.string.live_tab_chat)) },
             )
             Tab(
                 selected = pager.currentPage == 1,
-                onClick = {},
+                onClick = { scope.launch { pager.animateScrollToPage(1) } },
                 text = { Text(stringResource(R.string.live_tab_guard)) },
             )
         }
-        HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
+        // weight 而不是 fillMaxSize:在 Column 里 fillMaxSize 会让 pager 从 tab 栏下面
+        // 再要一整屏,底部被推出可视区。
+        HorizontalPager(state = pager, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
             when (page) {
                 0 -> ChatPane(state)
                 else -> GuardPane(state, onLoadMoreGuards)
@@ -329,7 +370,7 @@ private fun ChatPane(state: LiveRoomUiState) {
         }
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.weight(1f).fillMaxWidth(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
                 horizontal = Spacing.Comfortable,
                 vertical = Spacing.Tight,
@@ -337,16 +378,22 @@ private fun ChatPane(state: LiveRoomUiState) {
             verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
         ) {
             items(state.chat, key = { it.id }) { line ->
-                Row {
+                Row(verticalAlignment = Alignment.Top) {
                     Text(
                         text = line.name + "：",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.outline,
+                        // 名字封顶三分之一行宽:B 站的用户名可以很长,不截断的话正文会被
+                        // 挤到屏幕外,而聊天要看的是正文。
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = ChatNameMaxWidth),
                     )
                     Text(
                         text = line.text,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
                     )
                 }
             }
@@ -396,6 +443,19 @@ private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit) {
                 if (last != null && total > 0 && last >= total - GUARD_PREFETCH) onLoadMore()
             }
     }
+    // 首屏失败给整屏错误,空列表给空态 —— 原来两种情况都只是一片什么都没有的白。
+    if (state.guards.items.isEmpty()) {
+        when {
+            state.guards.error != null ->
+                FullScreenError(state.guards.error, onLoadMore, Modifier.fillMaxSize())
+
+            !state.guards.loading ->
+                EmptyState(stringResource(R.string.live_guard_empty), Modifier.fillMaxSize())
+
+            else -> FullScreenLoading(Modifier.fillMaxSize())
+        }
+        return
+    }
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -407,7 +467,7 @@ private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit) {
                 BiliAsyncImage(
                     url = guard.face,
                     contentDescription = null,
-                    modifier = Modifier.size(Dimens.AvatarSmall).clip(RoundedCornerShape(50)),
+                    modifier = Modifier.size(Dimens.AvatarSmall).clip(CircleShape),
                 )
                 Text(
                     text = guard.username,
@@ -429,17 +489,21 @@ private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit) {
                 )
             }
         }
-        if (state.guards.loading) {
-            item {
-                Box(modifier = Modifier.fillMaxWidth().padding(Spacing.Comfortable)) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.align(Alignment.Center).size(24.dp),
-                    )
-                }
-            }
+        item(key = "footer") {
+            // 翻页失败不清列表,只在底下加一行重试。
+            ListFooter(
+                appending = state.guards.loading,
+                hasMore = true,
+                hasItems = true,
+                error = state.guards.error,
+                onRetry = onLoadMore,
+            )
         }
     }
 }
+
+/** 聊天里用户名的宽度上限。留给正文的空间才是这一栏的主体。 */
+private val ChatNameMaxWidth = 112.dp
 
 private const val GUARD_PREFETCH = 5
 

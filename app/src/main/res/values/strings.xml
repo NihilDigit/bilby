@@ -319,6 +319,7 @@
     <string name="live_guard_governor">总督</string>
     <string name="live_guard_admiral">提督</string>
     <string name="live_guard_captain">舰长</string>
+    <string name="live_guard_empty">还没有大航海成员</string>
     <string name="player_enter_fullscreen">全屏</string>
     <string name="space_live_now">直播中</string>
     <string name="live_quality_dolby">杜比</string>

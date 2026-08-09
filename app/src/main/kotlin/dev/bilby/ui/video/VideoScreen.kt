@@ -2,6 +2,7 @@ package dev.bilby.ui.video
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.height
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -21,6 +23,8 @@ import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -36,6 +40,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -44,6 +49,8 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import android.os.Bundle
 import androidx.core.content.ContextCompat
 import androidx.core.os.bundleOf
@@ -68,6 +75,13 @@ import dev.nihildigit.danmaku.Danmaku
 import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.listen.ListenScreen
+import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.ui.player.MediaBackButton
+import dev.bilby.ui.theme.Breakpoints
+import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -117,6 +131,8 @@ fun VideoScreen(
     onSendComment: (String, Long?) -> Unit,
     onLikeComment: (Long) -> Unit,
     onDeleteComment: (Long) -> Unit,
+    onBack: () -> Unit,
+    onRetry: () -> Unit,
     /**
      * 听视频开着没有。**状态在上一层**(见 MainActivity 的 VideoRoute):队列往前走一条会
      * 换掉整个页面,存在这里的话自动连播就会把人踢回有画面的界面。
@@ -457,6 +473,7 @@ fun VideoScreen(
     // 功能的前提就是"我还在看这个视频";peek 高度天生就能表达「问过之后常驻的把手」。
     val sheetState = rememberBottomSheetScaffoldState()
     val scope = rememberCoroutineScope()
+    val expandedLayout = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
 
     // 把手只在问过之后存在,并活到离开播放页为止:它是**你自己那次提问的记忆**,
     // 不是打开播放页就在那儿等着的入口。换个视频就是新的 VideoRoute,自动没有。
@@ -520,7 +537,19 @@ fun VideoScreen(
             Box(
                 modifier = (
                     if (fullscreen) Modifier.fillMaxSize()
-                    else Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                    // 播放页是信息密集的沉浸式单 pane,expanded 不拆成低密度双栏,只把画面
+                    // 收到舒适宽度,简介与评论仍是一条阅读顺序。
+                    //
+                    // widthIn 必须在 fillMaxWidth **之前**:反过来的话 fillMaxWidth 已经把
+                    // 宽度定死成父宽,widthIn 再夹也夹不动(见 AdaptiveContent 的说明)。
+                    else Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .then(
+                            if (expandedLayout) Modifier.widthIn(max = Breakpoints.MediaWidth)
+                            else Modifier,
+                        )
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 9f)
                     ).background(Color.Black),
             ) {
                 when {
@@ -553,14 +582,17 @@ fun VideoScreen(
                         modifier = Modifier.fillMaxSize(),
                     )
 
-                    state.error != null -> Text(
-                        state.error,
-                        color = Color.White,
-                        modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                    state.error != null -> PlaybackFailure(
+                        message = state.error,
+                        retrying = state.loading,
+                        onRetry = onRetry,
+                        modifier = Modifier.align(Alignment.Center),
                     )
 
                     else -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
+
+                if (!fullscreen) MediaBackButton(onBack = onBack)
 
                 // 盖在画面上而不是排在下面:失败时画面本来就是黑的,而简介区在一屏之外,
                 // 提示放那儿等于没有。state.error 那一支是"流都没取到",两者不会同时出现。
@@ -584,65 +616,69 @@ fun VideoScreen(
                         PlaybackLoading(Modifier.align(Alignment.Center))
                 }
 
-                SkipToast(skippedCategory, Modifier.align(Alignment.TopCenter).padding(8.dp))
+                SkipToast(skippedCategory, Modifier.align(Alignment.TopCenter).padding(Spacing.Tight))
             }
 
             // 全屏时播放器独占整屏,下面的简介/评论整块不参与布局。
             if (!fullscreen) state.detail?.let { detail ->
-                VideoTabs(
-                    detail = detail,
-                    currentCid = (audioState.queue?.currentCid ?: 0L),
-                    related = related,
-                    commentState = commentState,
+                // 播放画面保持 720dp 的沉浸宽度，简介/评论允许更宽一点，但仍不把
+                // 长段落铺满展开屏。两者都保持单 pane，避免把视频阅读顺序拆成两条。
+                AdaptiveContent(modifier = Modifier.fillMaxWidth(), maxWidth = Breakpoints.ReadableWidth) {
+                    VideoTabs(
+                        detail = detail,
+                        currentCid = (audioState.queue?.currentCid ?: 0L),
+                        related = related,
+                        commentState = commentState,
                     // 点闪光:没问过就发起检索,问过就只是把 sheet 展开 —— 再点一次重跑
                     // 会把已有结果冲掉,而用户此刻多半只是想再看一眼。
-                    onActionsTop = { top -> if (actionsTop == 0 && top > 0) actionsTop = top },
-                    onFindRelated = {
-                        if (!related.started) onFindRelated()
-                        scope.launch { sheetState.bottomSheetState.expand() }
-                    },
-                    followState = followState,
-                    onToggleFollow = onToggleFollow,
-                    upCard = upCard,
-                    queue = shownQueue,
-                    onPlayQueueItem = onPlayQueueItem,
-                    onToggleShuffle = toggleShuffle,
-                    onRetryQueue = retryQueue,
-                    onUpClick = onUpClick,
-                    staffFollowed = staffFollowed,
-                    onFollowStaff = onFollowStaff,
-                    relation = relation,
-                    favFolders = favFolders,
-                    addedToView = addedToView,
-                    onLike = onLike,
-                    onAddToView = onAddToView,
-                    onCoin = onCoin,
-                    onOpenFavPicker = onOpenFavPicker,
-                    onFavConfirm = onFavConfirm,
-                    onPlayPart = onPlayPart,
-                    onPlayEpisode = onPlayEpisode,
-                    onRelatedVideoClick = onRelatedVideoClick,
-                    onCommentSort = onCommentSort,
-                    onCommentLoadMore = onCommentLoadMore,
-                    onExpandReplies = onExpandReplies,
-                    onSendComment = onSendComment,
-                    onLikeComment = onLikeComment,
-                    onDeleteComment = onDeleteComment,
+                        onActionsTop = { top -> if (actionsTop == 0 && top > 0) actionsTop = top },
+                        onFindRelated = {
+                            if (!related.started) onFindRelated()
+                            scope.launch { sheetState.bottomSheetState.expand() }
+                        },
+                        followState = followState,
+                        onToggleFollow = onToggleFollow,
+                        upCard = upCard,
+                        queue = shownQueue,
+                        onPlayQueueItem = onPlayQueueItem,
+                        onToggleShuffle = toggleShuffle,
+                        onRetryQueue = retryQueue,
+                        onUpClick = onUpClick,
+                        staffFollowed = staffFollowed,
+                        onFollowStaff = onFollowStaff,
+                        relation = relation,
+                        favFolders = favFolders,
+                        addedToView = addedToView,
+                        onLike = onLike,
+                        onAddToView = onAddToView,
+                        onCoin = onCoin,
+                        onOpenFavPicker = onOpenFavPicker,
+                        onFavConfirm = onFavConfirm,
+                        onPlayPart = onPlayPart,
+                        onPlayEpisode = onPlayEpisode,
+                        onRelatedVideoClick = onRelatedVideoClick,
+                        onCommentSort = onCommentSort,
+                        onCommentLoadMore = onCommentLoadMore,
+                        onExpandReplies = onExpandReplies,
+                        onSendComment = onSendComment,
+                        onLikeComment = onLikeComment,
+                        onDeleteComment = onDeleteComment,
                     // 只在播放器装的确实是本页这一条时才跳。队列自动连播走到下一条之后,
                     // 这一页还停在原来那条的评论区(见页面顶部对 matchesCurrentPage 的说明),
                     // 不对身份就会拿着 A 的评论里的时间戳去跳 B。
                     //
                     // 再夹一次时长:评论里的时间戳可能指向分 P 或者干脆写错,超出末尾的 seek
                     // 会直接把这一条播完并翻到下一条。
-                    onSeekComment = { millis ->
-                        val controller = active
-                        if (controller != null && matchesCurrentPage) {
-                            val end = controller.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
-                            controller.seekTo(millis.coerceIn(0L, end))
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                )
+                        onSeekComment = { millis ->
+                            val controller = active
+                            if (controller != null && matchesCurrentPage) {
+                                val end = controller.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+                                controller.seekTo(millis.coerceIn(0L, end))
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
     }
@@ -651,7 +687,7 @@ fun VideoScreen(
 /**
  * 取流/重试期间画面上那个转圈。
  *
- * 外观和 [PlaybackFailure] 里的重试指示是同一套(白色、24dp):它们出现在同一个位置,是同
+ * 外观和 [PlaybackFailure] 里的重试指示是同一套媒体控件(24dp):它们出现在同一个位置,是同
  * 一件事的两个阶段,长得不一样会读成两个不同的东西。
  *
  * 底下垫一层半透明圆:这时候画面上多半是封面图,亮色封面上一个纯白的圈基本看不见。
@@ -662,11 +698,11 @@ private fun PlaybackLoading(modifier: Modifier = Modifier) {
         modifier = modifier
             .size(44.dp)
             .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.4f)),
+            .background(FixedColors.PlayerControlScrim),
         contentAlignment = Alignment.Center,
     ) {
         CircularProgressIndicator(
-            color = Color.White,
+            color = FixedColors.OnMedia,
             strokeWidth = 2.dp,
             modifier = Modifier.size(24.dp),
         )
@@ -692,19 +728,19 @@ private fun PlaybackFailure(
     ) {
         Text(
             text = message,
-            color = Color.White,
+            color = FixedColors.OnMedia,
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
         )
         // 重试中不给按钮:此刻按下去只会打断已经在跑的那次。
         if (retrying) {
             CircularProgressIndicator(
-                color = Color.White,
+                color = FixedColors.OnMedia,
                 modifier = Modifier.padding(top = Spacing.Cozy).size(24.dp),
             )
         } else {
             TextButton(onClick = onRetry) {
-                Text(stringResource(R.string.action_retry), color = Color.White)
+                Text(stringResource(R.string.action_retry), color = FixedColors.OnMedia)
             }
         }
     }

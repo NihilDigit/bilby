@@ -148,7 +148,6 @@
     <string name="related_title_running">Related · still looking</string>
     <string name="related_title_error">Related · failed</string>
     <string name="related_title_count">Related · %1$d</string>
-    <string name="related_step">· %1$s</string>
 
     <string name="player_play">Play</string>
     <string name="player_pause">Pause</string>
@@ -254,4 +253,5 @@
     <string name="profile_logout">Log out</string>
     <string name="profile_view_all">View all</string>
     <string name="profile_favorites_empty">No favourite folders yet</string>
+    <string name="live_guard_empty">No guard members yet</string>
 </resources>

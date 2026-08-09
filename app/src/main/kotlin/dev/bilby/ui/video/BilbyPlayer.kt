@@ -13,6 +13,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -106,6 +107,7 @@ import dev.bilby.ui.player.PlayerDanmakuLayer
 import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SeekBarSegment
 import dev.bilby.ui.components.SubtitleTrackMenu
+import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.data.DanmakuPrefs
@@ -359,33 +361,116 @@ private fun PlayerControlBar(
         )
 
     // 进度条独占一行:挤在按钮行里只剩几十 dp 可拖,而拖拽是这里最主要的操作。
-    Column(modifier = container) {
-        SeekBar(position, duration, onSeekStart, onSeekTo, onSeekFinished, Modifier.fillMaxWidth(), segments = segments)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            PlayPauseButton(isPlaying, onPlayPause, if (isFullscreen) 30.dp else 22.dp)
-            Text(
-                "${formatDurationMillis(position)} / ${formatDurationMillis(duration)}",
-                style = if (isFullscreen) MaterialTheme.typography.labelLarge
-                else MaterialTheme.typography.labelSmall,
-                color = FixedColors.OnMedia,
+    BoxWithConstraints(modifier = container) {
+        // 按**实际可用宽度**判断要不要把次级设置另起一行,不按"是不是全屏"或设备型号:
+        // 平板分屏后同样窄,竖屏视频全屏时也可能只有 270dp。窄的时候倍速/画质/字幕/弹幕
+        // 会和时间读数、全屏按钮挤在一行里互相压扁。
+        val stacked = maxWidth < Breakpoints.StackedControlBar
+        // 带文字标签的那一档只在"全屏且不窄"时给 —— 标签是画质档名,横屏才放得下。
+        val labelled = isFullscreen && !stacked
+
+        Column {
+            SeekBar(
+                position,
+                duration,
+                onSeekStart,
+                onSeekTo,
+                onSeekFinished,
+                Modifier.fillMaxWidth(),
+                segments = segments,
             )
-            Spacer(Modifier.weight(1f))
-            SpeedButton(speed, onSpeedChange, onMenuOpenChange, isFullscreen)
-            QualityButton(qualities, currentQuality, onQualityChange, onMenuOpenChange, isFullscreen)
-            SubtitleButton(subtitleTracks, currentSubtitleLan, onSubtitleTrackChange, onMenuOpenChange, isFullscreen)
-            DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-            // 听视频和全屏是同一类东西:都是播放页内的状态,都不换播放器、不交接进度。
-            // 同构的两个动作放在一起,以前它在下面的简介区,和一堆内容动作混着。
-            IconButton(onClick = onListen) {
-                Icon(
-                    Icons.Filled.Headphones,
-                    contentDescription = stringResource(R.string.player_listen),
-                    tint = FixedColors.OnMedia,
-                    modifier = Modifier.size(if (isFullscreen) 26.dp else 22.dp),
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PlayPauseButton(isPlaying, onPlayPause, if (isFullscreen) 30.dp else 22.dp)
+                Text(
+                    "${formatDurationMillis(position)} / ${formatDurationMillis(duration)}",
+                    style = if (isFullscreen) MaterialTheme.typography.labelLarge
+                    else MaterialTheme.typography.labelSmall,
+                    color = FixedColors.OnMedia,
                 )
+                Spacer(Modifier.weight(1f))
+                if (!stacked) {
+                    SecondaryControls(
+                        speed = speed,
+                        qualities = qualities,
+                        currentQuality = currentQuality,
+                        subtitleTracks = subtitleTracks,
+                        currentSubtitleLan = currentSubtitleLan,
+                        danmakuEnabled = danmakuEnabled,
+                        labelled = labelled,
+                        isFullscreen = isFullscreen,
+                        onSpeedChange = onSpeedChange,
+                        onQualityChange = onQualityChange,
+                        onSubtitleTrackChange = onSubtitleTrackChange,
+                        onDanmakuEnabledChange = onDanmakuEnabledChange,
+                        onMenuOpenChange = onMenuOpenChange,
+                        onListen = onListen,
+                    )
+                }
+                FullscreenButton(isFullscreen, onFullscreenToggle, if (isFullscreen) 26.dp else 22.dp)
             }
-            FullscreenButton(isFullscreen, onFullscreenToggle, if (isFullscreen) 26.dp else 22.dp)
+
+            if (stacked) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SecondaryControls(
+                        speed = speed,
+                        qualities = qualities,
+                        currentQuality = currentQuality,
+                        subtitleTracks = subtitleTracks,
+                        currentSubtitleLan = currentSubtitleLan,
+                        danmakuEnabled = danmakuEnabled,
+                        labelled = false,
+                        isFullscreen = isFullscreen,
+                        onSpeedChange = onSpeedChange,
+                        onQualityChange = onQualityChange,
+                        onSubtitleTrackChange = onSubtitleTrackChange,
+                        onDanmakuEnabledChange = onDanmakuEnabledChange,
+                        onMenuOpenChange = onMenuOpenChange,
+                        onListen = onListen,
+                    )
+                }
+            }
         }
+    }
+}
+
+/**
+ * 倍速 / 画质 / 字幕 / 弹幕 / 听视频。宽的时候跟在时间读数右边,窄的时候整组挪到下一行 ——
+ * 两处摆的是同一组东西,所以只有一份定义。
+ */
+@Composable
+private fun SecondaryControls(
+    speed: Float,
+    qualities: List<QualityOption>,
+    currentQuality: Int,
+    subtitleTracks: List<SubtitleTrack>,
+    currentSubtitleLan: String,
+    danmakuEnabled: Boolean,
+    labelled: Boolean,
+    isFullscreen: Boolean,
+    onSpeedChange: (Float) -> Unit,
+    onQualityChange: (Int) -> Unit,
+    onSubtitleTrackChange: (String) -> Unit,
+    onDanmakuEnabledChange: (Boolean) -> Unit,
+    onMenuOpenChange: (Boolean) -> Unit,
+    onListen: () -> Unit,
+) {
+    SpeedButton(speed, onSpeedChange, onMenuOpenChange, labelled)
+    QualityButton(qualities, currentQuality, onQualityChange, onMenuOpenChange, labelled)
+    SubtitleButton(subtitleTracks, currentSubtitleLan, onSubtitleTrackChange, onMenuOpenChange, labelled)
+    DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, labelled)
+    // 听视频和全屏是同一类东西:都是播放页内的状态,都不换播放器、不交接进度。
+    // 同构的两个动作放在一起,以前它在下面的简介区,和一堆内容动作混着。
+    IconButton(onClick = onListen) {
+        Icon(
+            Icons.Filled.Headphones,
+            contentDescription = stringResource(R.string.player_listen),
+            tint = FixedColors.OnMedia,
+            modifier = Modifier.size(if (isFullscreen) 26.dp else 22.dp),
+        )
     }
 }
 
