@@ -23,10 +23,9 @@ dependencyResolutionManagement {
 rootProject.name = "Bilby"
 include(":app")
 
-// 弹幕引擎在隔壁仓库(https://github.com/NihilDigit/tdanmaku),两个仓库放同级目录。
-// 库还没发布,而且两边经常一起改,所以走 composite build 而不是 mavenLocal 的 SNAPSHOT:
-// 改库的源码在这边立刻生效,不用每次 publish 一遍。
+// 弹幕引擎(https://github.com/NihilDigit/tdanmaku)已发布到 Maven Central,按坐标解析,
+// 见版本目录里的 `tdanmaku`。
 //
-// 不需要写 dependencySubstitution —— 被包含的构建声明了 group `dev.nihildigit`、
-// rootProject.name `tdanmaku`,Gradle 按这对坐标自动替换掉 app 里那行外部依赖。
-includeBuild("../tdanmaku")
+// 这里曾经是一行 `includeBuild("../tdanmaku")`,让开发期直接吃隔壁仓库的源码。代价是
+// **一个干净的 clone 编不过**:CI 只 checkout 这个仓库,那行会指向一个不存在的目录,
+// 打 v tag 就失败。要临时回到那种模式(两边一起改的时候)就把它加回来,发版前记得撤掉。
