@@ -195,7 +195,6 @@
     <string name="player_volume">音量 %1$d%%</string>
     <string name="player_seek_forward">快进 %1$d 秒</string>
     <string name="player_seek_backward">快退 %1$d 秒</string>
-    <string name="player_need_write_settings">调节亮度需要「修改系统设置」权限</string>
 
 
     <!-- 听视频 -->
@@ -331,4 +330,5 @@
     <string name="live_quality_smooth">流畅</string>
     <string name="settings_fast_forward_speed">长按加速</string>
     <string name="settings_fast_forward_speed_subtitle">按住画面时的临时倍速,松手恢复</string>
+    <string name="player_seek_release_to_cancel">松手取消进退</string>
 </resources>

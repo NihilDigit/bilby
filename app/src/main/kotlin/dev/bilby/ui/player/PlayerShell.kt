@@ -28,8 +28,17 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.VolumeDown
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.BrightnessHigh
+import androidx.compose.material.icons.filled.BrightnessLow
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
+import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,6 +62,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -232,7 +242,7 @@ fun PlayerShell(
     var interactionNonce by remember { mutableIntStateOf(0) }
 
     val context = LocalContext.current
-    val brightness = rememberSystemBrightness(context)
+    val brightness = rememberWindowBrightness()
     val volume = rememberMediaVolume(context)
 
     /** 正在进行的手势;横划与纵划在第一段位移里定死,见下面的 onDrag。 */
@@ -245,8 +255,11 @@ fun PlayerShell(
     /** 双击 ±10 秒的短暂提示,非 null 时显示;正负决定文案。 */
     var seekNudgeMillis by remember { mutableStateOf<Long?>(null) }
 
-    /** 亮度权限没给时的提示。跳设置页是离开应用的动作,不说一声会很突兀。 */
-    var needsWriteSettings by remember { mutableStateOf(false) }
+    /**
+     * 横划 seek 时手指是不是落在了取消区(顶部两角)。非 null 表示"松手就取消"。
+     * null 表示这次拖拽压根不允许取消 —— 见 [SeekCancelZoneFraction] 上的说明。
+     */
+    var seekCancelArmed by remember { mutableStateOf<Boolean?>(null) }
 
     LaunchedEffect(seekNudgeMillis) {
         if (seekNudgeMillis == null) return@LaunchedEffect
@@ -254,18 +267,7 @@ fun PlayerShell(
         seekNudgeMillis = null
     }
 
-    LaunchedEffect(needsWriteSettings) {
-        if (!needsWriteSettings) return@LaunchedEffect
-        delay(HINT_VISIBLE_MILLIS)
-        needsWriteSettings = false
-    }
-
-    /**
-     * 定下这一次拖拽在做什么。返回 null 表示这次不做事(亮度没权限,或这一档手势被关掉)。
-     *
-     * 亮度是设备级设置,要 `WRITE_SETTINGS`,而那个权限只能跳系统设置页去拨。第一次划到它
-     * 时把人送过去,并留一句提示。
-     */
+    /** 定下这一次拖拽在做什么。返回 null 表示这次不做事(这一档手势被关掉)。 */
     val startGesture: (Boolean, Long) -> PlayerGesture? = start@{ horizontal, playerPosition ->
         if (horizontal) {
             return@start if (gestures.seek) PlayerGesture.Seek(playerPosition) else null
@@ -273,11 +275,6 @@ fun PlayerShell(
         if (!gestures.brightnessAndVolume) return@start null
         val onLeftHalf = dragStartX < 0.5f
         if (onLeftHalf) {
-            if (!brightness.canWrite()) {
-                needsWriteSettings = true
-                brightness.requestPermission()
-                return@start null
-            }
             PlayerGesture.Adjust(VerticalAdjust.Brightness, brightness.current())
         } else {
             PlayerGesture.Adjust(VerticalAdjust.Volume, volume.current())
@@ -444,11 +441,16 @@ fun PlayerShell(
                         onDragStart = { start ->
                             accumulated = Offset.Zero
                             dragStartX = start.x / width
+                            // **起手就在取消区里的话,这次拖拽不给取消。** 顶部两角本来就是
+                            // 横屏握持时拇指容易搭上去的地方;不排除的话,从那儿起手的 seek
+                            // 一动就被判成"要取消",而用户根本没往哪儿拖。
+                            seekCancelArmed =
+                                if (inSeekCancelZone(start, width, height)) null else false
                         },
                         onDragEnd = {
                             // 拖拽期间只动本地位置,松手才真 seek:每帧 seek 会让播放器不停丢
                             // 缓冲重新起播,表现为拖不动。和进度条的处理是同一套。
-                            if (gesture is PlayerGesture.Seek) {
+                            if (gesture is PlayerGesture.Seek && seekCancelArmed != true) {
                                 dragPosition?.let { target ->
                                     player.seekTo(target)
                                     position = target
@@ -457,15 +459,20 @@ fun PlayerShell(
                             }
                             gesture = null
                             dragPosition = null
+                            seekCancelArmed = null
                             interactionNonce++
                         },
                         onDragCancel = {
                             gesture = null
                             dragPosition = null
+                            seekCancelArmed = null
                         },
                     ) { change, delta ->
                         change.consume()
                         accumulated += delta
+                        if (seekCancelArmed != null) {
+                            seekCancelArmed = inSeekCancelZone(change.position, width, height)
+                        }
 
                         // 方向在第一段位移里定下,之后不再改判:不锁轴的话,横划途中手指
                         // 稍微飘一点就会跳去改音量。
@@ -504,76 +511,59 @@ fun PlayerShell(
         // 不拦截手势,底下的双击/拖拽照常命中。
         scope.overlay()
 
-        // 纵划的浮层。和快进提示一样贴在正中偏上,不压住底部控件。
-        (gesture as? PlayerGesture.Adjust)?.let { adjust ->
-            Overlay(modifier = Modifier.align(Alignment.Center)) {
-                Text(
-                    stringResource(
-                        when (adjust.kind) {
-                            VerticalAdjust.Brightness -> R.string.player_brightness
-                            VerticalAdjust.Volume -> R.string.player_volume
-                        },
-                        (adjustValue * 100).roundToInt(),
-                    ),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = FixedColors.OnMedia,
-                )
-            }
-        }
-
-        seekNudgeMillis?.let { delta ->
-            Overlay(modifier = Modifier.align(Alignment.Center)) {
-                Text(
-                    stringResource(
-                        if (delta >= 0) R.string.player_seek_forward else R.string.player_seek_backward,
-                        abs(delta) / 1000,
-                    ),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = FixedColors.OnMedia,
-                )
-            }
-        }
-
-        if (needsWriteSettings) {
-            Overlay(modifier = Modifier.align(Alignment.Center)) {
-                Text(
-                    stringResource(R.string.player_need_write_settings),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = FixedColors.OnMedia,
-                )
-            }
-        }
-
-        if (isFastForwarding) {
-            Overlay(modifier = Modifier.align(Alignment.TopCenter).padding(top = Spacing.Loose)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Filled.FastForward,
-                        contentDescription = null,
-                        tint = FixedColors.OnMedia,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Text(
-                        "  " + stringResource(
-                            R.string.player_fast_forwarding,
-                            formatSpeed(fastForwardSpeed),
-                        ),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = FixedColors.OnMedia,
-                    )
+        // 手势反馈只有这一处。四种手势(长按加速、音量、亮度、进退)共用画面正中的同一个框,
+        // 各自只换图标和那一行字 —— 以前它们分散在三个位置、三种字号,同一类操作要学三次。
+        //
+        // 优先级按"哪个正在发生"排:拖拽中的进退最要紧,它还要显示能不能取消。
+        val hint: Pair<ImageVector, String>? = when {
+            dragPosition != null -> {
+                val forward = displayPosition >= position
+                val icon = when {
+                    seekCancelArmed == true -> Icons.Filled.Close
+                    forward -> Icons.Filled.FastForward
+                    else -> Icons.Filled.FastRewind
                 }
+                val text = if (seekCancelArmed == true) {
+                    stringResource(R.string.player_seek_release_to_cancel)
+                } else {
+                    "${formatDurationMillis(displayPosition)} / ${formatDurationMillis(duration)}"
+                }
+                icon to text
             }
-        }
 
-        if (dragPosition != null) {
-            Overlay(modifier = Modifier.align(Alignment.Center)) {
-                Text(
-                    "${formatDurationMillis(displayPosition)} / ${formatDurationMillis(duration)}",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = FixedColors.OnMedia,
-                )
+            (gesture as? PlayerGesture.Adjust)?.kind == VerticalAdjust.Brightness -> {
+                val percent = (adjustValue * 100).roundToInt()
+                val icon =
+                    if (adjustValue >= 0.5f) Icons.Filled.BrightnessHigh else Icons.Filled.BrightnessLow
+                icon to stringResource(R.string.player_brightness, percent)
             }
+
+            (gesture as? PlayerGesture.Adjust)?.kind == VerticalAdjust.Volume -> {
+                val percent = (adjustValue * 100).roundToInt()
+                val icon = when {
+                    adjustValue <= 0f -> Icons.AutoMirrored.Filled.VolumeOff
+                    adjustValue < 0.5f -> Icons.AutoMirrored.Filled.VolumeDown
+                    else -> Icons.AutoMirrored.Filled.VolumeUp
+                }
+                icon to stringResource(R.string.player_volume, percent)
+            }
+
+            isFastForwarding -> Icons.Filled.FastForward to
+                stringResource(R.string.player_fast_forwarding, formatSpeed(fastForwardSpeed))
+
+            seekNudgeMillis != null -> {
+                val delta = seekNudgeMillis ?: 0L
+                val icon = if (delta >= 0) Icons.Filled.Forward10 else Icons.Filled.Replay10
+                val label = stringResource(
+                    if (delta >= 0) R.string.player_seek_forward else R.string.player_seek_backward,
+                    abs(delta) / 1000,
+                )
+                icon to label
+            }
+
+            else -> null
         }
+        hint?.let { (icon, text) -> PlayerHintOverlay(icon = icon, text = text) }
 
         // 全屏顶栏。全屏下没有别的东西说明"在看什么"和"怎么退出":系统栏是隐藏的,
         // 返回手势在锁屏态下也被吃掉了。竖屏不显示,那里标题就在播放器下面第一行。
@@ -761,3 +751,18 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     is ContextWrapper -> baseContext.findActivity()
     else -> null
 }
+
+/**
+ * 手指在不在"松手取消"的角上。左上和右上各取宽高的 15%。
+ *
+ * 取顶部两角而不是某一侧:横划 seek 的位移是横向的,取消动作必须往**垂直方向**走才不会
+ * 和进退本身混淆;而两角都给,是因为左手右手拖的方向不一样,只给一角等于只照顾一只手。
+ */
+private fun inSeekCancelZone(point: Offset, width: Float, height: Float): Boolean {
+    val inTop = point.y <= height * SeekCancelZoneFraction
+    val nearSide = point.x <= width * SeekCancelZoneFraction ||
+        point.x >= width * (1f - SeekCancelZoneFraction)
+    return inTop && nearSide
+}
+
+private const val SeekCancelZoneFraction = 0.15f

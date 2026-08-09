@@ -1,12 +1,15 @@
 package dev.bilby.ui.player
 
+import android.app.Activity
 import android.content.Context
-import android.content.Intent
 import android.media.AudioManager
 import android.provider.Settings
+import android.view.Window
+import android.view.WindowManager
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
-import androidx.core.net.toUri
+import androidx.compose.ui.platform.LocalContext
 import dev.bilby.BiliLog
 import kotlin.math.roundToInt
 
@@ -23,61 +26,61 @@ internal sealed interface PlayerGesture {
 }
 
 /**
- * 系统亮度。**改的是设备级设置,不是窗口级的 `screenBrightness`。**
+ * 播放页的亮度。**只改这个窗口的 `screenBrightness`,不写 `Settings.System`。**
  *
- * 窗口级那种离开页面就还原,而看视频调暗屏幕的人多半是想让它一直暗着 —— 退出播放页
- * 又跳回原亮度会闪一下眼。代价是要 `WRITE_SETTINGS`。
+ * 这一条改过一次:原来调的是设备级亮度,理由是"看视频调暗的人多半想让它一直暗着"。
+ * 代价太大了 —— `WRITE_SETTINGS` 是 `signature|appop` 级,`requestPermissions()` 对它无效,
+ * 唯一路径是把用户整个甩进系统设置的「可修改系统设置」列表页自己找到本应用。为了一个手势
+ * 让人离开应用一趟,而且从此这个应用能改全局亮度,不划算。
  *
- * **`WRITE_SETTINGS` 不是运行时权限**:它是 `signature|appop` 级,`requestPermissions()`
- * 对它无效(API 23 起直接拒绝)。唯一路径是跳 [Settings.ACTION_MANAGE_WRITE_SETTINGS],
- * 那会整个跳到系统设置的「可修改系统设置」列表页,用户自己找到本应用拨开关再返回。
- *
- * **不动 `SCREEN_BRIGHTNESS_MODE`。** 自动亮度开着时写入仍然立即生效,之后系统会按环境光
- * 继续调整 —— 那正是"全局亮度"该有的样子。为了让数值钉死而把用户的自动亮度关掉,
- * 是拿一个设备级开关去换一次手势的确定性,不划算。
+ * 窗口级亮度不需要任何权限,离开播放页自动还原,而"还原"本来就是对的:调暗是为了看这一条
+ * 视频,不是为了改设备。
  */
-internal class SystemBrightness(private val context: Context) {
+internal class WindowBrightness(private val window: Window?) {
 
     /**
-     * 亮度的上限**不是固定 255**。AOSP 默认是 255,但厂商常改成 1023、2047 甚至 4095
-     * (为了低亮度下有更细的档位)。写死 255 的话,在这类设备上一划就顶到天花板的四分之一。
-     *
-     * 框架把真值放在 `config_screenBrightnessSettingMaximum` 里。它是 internal 资源,
-     * 拿不到 `R` 常量,但可以按名字查 —— 这是查资源不是反射类成员,R8 不受影响。
+     * 0..1。窗口没有覆盖值(`BRIGHTNESS_OVERRIDE_NONE`,即 -1)时读系统当前亮度当起点——
+     * 否则第一次上划会从 0 开始,屏幕先黑一下。读系统亮度不需要权限,写才需要。
      */
-    private val max: Int = runCatching {
+    fun current(): Float {
+        val override = window?.attributes?.screenBrightness ?: BRIGHTNESS_NONE
+        if (override >= 0f) return override.coerceIn(0f, 1f)
+        return runCatching {
+            val resolver = window?.context?.contentResolver ?: return@runCatching 0.5f
+            Settings.System.getInt(resolver, Settings.System.SCREEN_BRIGHTNESS).toFloat() / systemMax
+        }.getOrDefault(0.5f).coerceIn(0f, 1f)
+    }
+
+    /** 下限不取 0:全黑之后连"划回去"都看不见。 */
+    fun set(fraction: Float) {
+        val window = window ?: return
+        window.attributes = window.attributes.apply {
+            screenBrightness = fraction.coerceIn(MIN_BRIGHTNESS, 1f)
+        }
+    }
+
+    /** 交还给系统。离开播放页时调。 */
+    fun release() {
+        val window = window ?: return
+        window.attributes = window.attributes.apply { screenBrightness = BRIGHTNESS_NONE }
+    }
+
+    /**
+     * 系统亮度的上限**不是固定 255**:厂商常改成 1023、2047 甚至 4095(为了低亮度下有更细的
+     * 档位)。写死 255 的话,在这类设备上读出来的起点只有真实值的四分之一。
+     * 框架把真值放在 internal 资源 `config_screenBrightnessSettingMaximum` 里,按名字查得到
+     * —— 这是查资源不是反射类成员,R8 不受影响。
+     */
+    private val systemMax: Int = runCatching {
         val res = android.content.res.Resources.getSystem()
         val id = res.getIdentifier("config_screenBrightnessSettingMaximum", "integer", "android")
         if (id != 0) res.getInteger(id) else DEFAULT_MAX
     }.getOrDefault(DEFAULT_MAX).coerceAtLeast(1)
 
-    fun canWrite(): Boolean = Settings.System.canWrite(context)
-
-    fun requestPermission() {
-        val intent = Intent(
-            Settings.ACTION_MANAGE_WRITE_SETTINGS,
-            "package:${context.packageName}".toUri(),
-        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { context.startActivity(intent) }
-            .onFailure { BiliLog.w("跳转「可修改系统设置」失败", it) }
-    }
-
-    /** 0..1。读不到时按中间档,总比按 0 强 —— 后者会让第一次上划从全黑开始。 */
-    fun current(): Float = runCatching {
-        Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
-            .toFloat() / max
-    }.getOrDefault(0.5f).coerceIn(0f, 1f)
-
-    /** 下限取 1 而不是 0:0 在部分设备上是全黑,屏幕黑掉之后连"划回去"都看不见了。 */
-    fun set(fraction: Float) {
-        val value = (fraction.coerceIn(0f, 1f) * max).roundToInt().coerceIn(1, max)
-        runCatching {
-            Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, value)
-        }.onFailure { BiliLog.w("写系统亮度失败(value=$value)", it) }
-    }
-
     private companion object {
         const val DEFAULT_MAX = 255
+        const val BRIGHTNESS_NONE = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        const val MIN_BRIGHTNESS = 0.02f
     }
 }
 
@@ -108,9 +111,14 @@ internal class MediaVolume(context: Context) {
     }
 }
 
+/** 亮度跟着播放页的生命周期走:离开时把覆盖值交还系统,否则整个应用都停在调暗的那一档。 */
 @Composable
-internal fun rememberSystemBrightness(context: Context): SystemBrightness =
-    remember(context) { SystemBrightness(context) }
+internal fun rememberWindowBrightness(): WindowBrightness {
+    val window = (LocalContext.current as? Activity)?.window
+    val brightness = remember(window) { WindowBrightness(window) }
+    DisposableEffect(brightness) { onDispose { brightness.release() } }
+    return brightness
+}
 
 @Composable
 internal fun rememberMediaVolume(context: Context): MediaVolume =

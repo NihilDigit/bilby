@@ -256,4 +256,5 @@
     <string name="live_guard_empty">No guard members yet</string>
     <string name="settings_fast_forward_speed">Press-and-hold speed</string>
     <string name="settings_fast_forward_speed_subtitle">While holding the picture; returns to normal on release</string>
+    <string name="player_seek_release_to_cancel">Release to cancel</string>
 </resources>

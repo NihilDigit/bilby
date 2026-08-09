@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -92,6 +93,45 @@ internal fun BoxScope.MediaBackButton(onBack: () -> Unit) {
 
 /** 够盖住一个 48dp 触摸目标再加一段渐隐,不到画面高度的四分之一。 */
 private val MediaScrimHeight = 72.dp
+
+/**
+ * 手势反馈浮层。**画面中央一个框,图标 + 一句话,四种手势共用这一份。**
+ *
+ * 以前是各画各的:长按加速贴在顶部、音量亮度只有一行百分比、双击快进又是另一段文字。
+ * 手势本身是"同一类东西"(按住画面调整某个量),反馈却在三个位置以三种样子出现,用户要
+ * 分别学三次。合并之后位置固定在正中,眼睛不用找。
+ *
+ * 图标不是装饰:百分比数字回答不了"这是音量还是亮度",而横屏时手指正压在半屏上,
+ * 文字很容易被挡住一半。
+ */
+@Composable
+internal fun BoxScope.PlayerHintOverlay(
+    icon: ImageVector,
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    Overlay(modifier = modifier.align(Alignment.Center)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = FixedColors.OnMedia,
+                modifier = Modifier.size(HintIconSize),
+            )
+            Text(
+                text = text,
+                style = MaterialTheme.typography.titleMedium,
+                color = FixedColors.OnMedia,
+            )
+        }
+    }
+}
+
+/** 比正文大一档,和 titleMedium 的行高对得上。 */
+private val HintIconSize = 22.dp
 
 /** 图标按钮,可选地在图标右边挂一小段文字(当前倍速、当前清晰度)。 */
 @Composable
