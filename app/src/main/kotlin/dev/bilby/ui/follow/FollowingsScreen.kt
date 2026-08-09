@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
@@ -48,7 +49,9 @@ import androidx.compose.runtime.snapshotFlow
 
 data class FollowingsUiState(
     val items: List<UpBrief> = emptyList(),
-    val loading: Boolean = true,
+    // false 而不是 true:loadMore 的并发守卫现在直接读这个字段(见 FollowingsViewModel),
+    // 默认 true 会让 init{} 里的第一次调用把自己挡在门外。首屏 loading 由 loadMore 显式置位。
+    val loading: Boolean = false,
     val appending: Boolean = false,
     val refreshing: Boolean = false,
     val hasMore: Boolean = true,
@@ -65,45 +68,58 @@ class FollowingsViewModel(private val repository: FollowRepository) : ViewModel(
     val state: StateFlow<FollowingsUiState> = _state.asStateFlow()
 
     private var page = 0
-    private var loading = false
+
+    /**
+     * refresh 与 append 共用同一个 page 游标,不能并发改(性能计划 7.2):refresh 把 page
+     * 清零重来,这时一条还在飞的旧 append 落地必须当作过期丢弃,否则它会把清零后的
+     * page 又向前推一格,或者把上一轮的条目拼进刷新后的空列表。
+     */
+    private var generation = 0
+    private var job: Job? = null
 
     init {
         loadMore()
     }
 
     fun loadMore() {
-        if (loading || !_state.value.hasMore) return
-        loading = true
+        val current = _state.value
+        if (current.loading || current.appending || !current.hasMore) return
         val next = page + 1
-        if (next > 1) _state.update { it.copy(appending = true) }
-        viewModelScope.launch {
-            when (val result = repository.followings(next)) {
-                is BiliResult.Ok -> {
-                    page = next
-                    _state.update {
-                        it.copy(
-                            items = it.items.appendDistinctBy(result.value) { up -> up.mid },
-                            loading = false,
-                            appending = false,
-                            refreshing = false,
-                            // 接口不给 has_more,按"这一页没满就是最后一页"判断。
-                            hasMore = result.value.isNotEmpty(),
-                            error = null,
-                        )
+        val gen = generation
+        _state.update { it.copy(loading = next == 1, appending = next > 1) }
+        job = viewModelScope.launch {
+            try {
+                when (val result = repository.followings(next)) {
+                    is BiliResult.Ok -> {
+                        if (gen != generation) return@launch
+                        page = next
+                        _state.update {
+                            it.copy(
+                                items = it.items.appendDistinctBy(result.value) { up -> up.mid },
+                                // 接口不给 has_more,按"这一页没满就是最后一页"判断。
+                                hasMore = result.value.isNotEmpty(),
+                                error = null,
+                            )
+                        }
                     }
-                }
 
-                is BiliResult.ApiError -> fail("${result.message}(${result.code})")
-                is BiliResult.Failure -> fail(result.cause.message ?: "网络错误")
+                    is BiliResult.ApiError -> if (gen == generation) fail("${result.message}(${result.code})")
+                    is BiliResult.Failure -> if (gen == generation) fail(result.cause.message ?: "网络错误")
+                }
+            } finally {
+                if (gen == generation) _state.update { it.copy(loading = false, appending = false, refreshing = false) }
             }
-            loading = false
         }
     }
 
     fun refresh() {
+        generation++
+        job?.cancel()
         page = 0
+        // loading 留 false:loadMore 的并发守卫要看到它才会真的发请求,这里置 true
+        // 反而会把紧跟着的 loadMore() 自己挡在门外(见 loadMore 顶部的守卫)。
         _state.update {
-            it.copy(items = emptyList(), error = null, loading = true, appending = false, hasMore = true, refreshing = true)
+            it.copy(items = emptyList(), error = null, loading = false, appending = false, hasMore = true, refreshing = true)
         }
         loadMore()
     }

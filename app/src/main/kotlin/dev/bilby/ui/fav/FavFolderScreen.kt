@@ -32,11 +32,14 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 data class FavFolderUiState(
     val items: List<FavVideo> = emptyList(),
-    val loading: Boolean = true,
+    // false 而不是 true:loadMore 的并发守卫现在直接读这个字段(见 FavFolderViewModel),
+    // 默认 true 会让 init{} 里的第一次调用把自己挡在门外。首屏 loading 由 loadMore 显式置位。
+    val loading: Boolean = false,
     val appending: Boolean = false,
     val refreshing: Boolean = false,
     val hasMore: Boolean = true,
@@ -52,41 +55,46 @@ class FavFolderViewModel(
     val state: StateFlow<FavFolderUiState> = _state.asStateFlow()
 
     private var page = 0
-    private var loading = false
 
     /** 失效稿件的 bvid 是空的,不能拿它当 key;而 aid 一定有,收藏夹接口就是按 aid 组织的。 */
     private val seenAids = mutableSetOf<Long>()
+
+    /**
+     * reload 与 append 共用同一对游标(page、seenAids),不能并发改(性能计划 7.2):reload
+     * 把它们清空重来,这时一条还在飞的旧 append 落地必须当作过期丢弃,否则它会拿清空前的
+     * seenAids 过滤出的条目拼进 reload 后的空列表。
+     */
+    private var generation = 0
+    private var job: Job? = null
 
     init {
         loadMore()
     }
 
     fun loadMore() {
-        if (loading || !_state.value.hasMore) return
-        loading = true
+        val current = _state.value
+        if (current.loading || current.appending || !current.hasMore) return
         val next = page + 1
-        if (next > 1) _state.update { it.copy(appending = true) }
-        viewModelScope.launch {
-            when (val result = repository.folderContents(mediaId, next)) {
-                is BiliResult.Ok -> {
-                    page = next
-                    val fresh = result.value.items.filter { seenAids.add(it.aid) }
-                    _state.update {
-                        it.copy(
-                            items = it.items + fresh,
-                            loading = false,
-                            appending = false,
-                            refreshing = false,
-                            hasMore = result.value.hasMore,
-                            error = null,
-                        )
+        val gen = generation
+        _state.update { it.copy(loading = next == 1, appending = next > 1) }
+        job = viewModelScope.launch {
+            try {
+                when (val result = repository.folderContents(mediaId, next)) {
+                    is BiliResult.Ok -> {
+                        if (gen != generation) return@launch
+                        page = next
+                        val fresh = result.value.items.filter { seenAids.add(it.aid) }
+                        _state.update {
+                            it.copy(items = it.items + fresh, hasMore = result.value.hasMore, error = null)
+                        }
                     }
-                }
 
-                is BiliResult.ApiError -> fail("${result.message}(${result.code})")
-                is BiliResult.Failure -> fail(result.cause.message ?: "网络错误")
+                    is BiliResult.ApiError -> if (gen == generation) fail("${result.message}(${result.code})")
+                    is BiliResult.Failure -> if (gen == generation) fail(result.cause.message ?: "网络错误")
+                }
+            } finally {
+                if (gen == generation) _state.update { it.copy(loading = false, appending = false, refreshing = false) }
             }
-            loading = false
         }
     }
 
@@ -100,6 +108,8 @@ class FavFolderViewModel(
     fun refresh() = reload(refreshing = true)
 
     private fun reload(refreshing: Boolean) {
+        generation++
+        job?.cancel()
         page = 0
         seenAids.clear()
         _state.value = FavFolderUiState(refreshing = refreshing)

@@ -107,10 +107,14 @@ data class NormalSearchState(
     val order: SearchOrder = SearchOrder.Comprehensive,
     val videos: List<SearchVideo> = emptyList(),
     val users: List<SearchUser> = emptyList(),
-    val loading: Boolean = false,
+    // 视频和用户两路请求并行、互相独立(性能计划 7.1):慢的那路失败或还没回来
+    // 不能挡住已经到手的另一路,所以 loading/error 各记各的,不共用一份粗粒度状态。
+    val videoLoading: Boolean = false,
+    val videoError: String? = null,
+    val userLoading: Boolean = false,
+    val userError: String? = null,
     val appending: Boolean = false,
     val hasMore: Boolean = true,
-    val error: String? = null,
 )
 
 /** 助理的状态:一段可以追问下去的对话。 */
@@ -181,7 +185,7 @@ fun SearchChatScreen(
         // 而且答案还会变。要重问就用输入框重新问,或者用右上角的新会话。
         when (state.mode) {
             SearchMode.Normal -> PullToRefreshBox(
-                isRefreshing = state.normal.loading && state.normal.videos.isNotEmpty(),
+                isRefreshing = state.normal.videoLoading && state.normal.videos.isNotEmpty(),
                 onRefresh = onRefresh,
                 modifier = Modifier.weight(1f),
             ) {
@@ -274,9 +278,11 @@ private fun NormalPane(
             VideoRow(item = video.toRowUi(), onClick = { onVideoClick(video.bvid) })
         }
         item(key = "footer") {
+            // 只看视频这一路的 loading/error:用户那路失败或还没回来不改变视频列表的落地状态,
+            // 表现就是没有用户条,不是整屏错误。
             when {
-                state.error != null -> FullScreenError(state.error, onRetry, Modifier.fillMaxWidth())
-                state.loading -> InlineProgress(
+                state.videoError != null -> FullScreenError(state.videoError, onRetry, Modifier.fillMaxWidth())
+                state.videoLoading -> InlineProgress(
                     stringResource(R.string.search_loading),
                     Modifier.padding(Spacing.Comfortable),
                 )

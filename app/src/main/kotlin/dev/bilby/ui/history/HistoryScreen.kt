@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 data class HistoryUiState(
@@ -60,6 +61,14 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
     private val _state = MutableStateFlow(HistoryUiState())
     val state: StateFlow<HistoryUiState> = _state.asStateFlow()
 
+    /**
+     * refresh 和 append 共用同一对游标(cursorMax/cursorViewAt),不能并发改(性能计划 7.2)。
+     * refresh 把游标清零重来,这时一条还在飞的旧 append 落地必须被当作过期丢弃 ——
+     * 不然它会把清零前的游标重新写回去,或者把上一轮的条目拼进刷新后的空列表。
+     */
+    private var generation = 0
+    private var loadJob: Job? = null
+
     init {
         loadMore()
     }
@@ -67,8 +76,10 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
     fun retry() = loadMore()
 
     fun refresh() {
+        generation++
+        loadJob?.cancel()
         _state.update {
-            it.copy(items = emptyList(), cursorMax = 0L, cursorViewAt = 0L, hasMore = true, refreshing = true)
+            it.copy(items = emptyList(), cursorMax = 0L, cursorViewAt = 0L, hasMore = true, refreshing = true, loading = false, appending = false)
         }
         loadMore()
     }
@@ -77,27 +88,34 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
         val current = _state.value
         if (current.loading || current.appending || !current.hasMore) return
         val firstPage = current.items.isEmpty()
+        val gen = generation
         _state.update { it.copy(loading = firstPage, appending = !firstPage, error = null) }
-        viewModelScope.launch {
-            when (val result = repository.loadPage(current.cursorMax, current.cursorViewAt)) {
-                is BiliResult.Ok -> _state.update {
-                    it.copy(
-                        // 读 it 而不是协程外那份 current 快照:刷新会把 items 清空,用陈旧快照
-                        // 拼接等于把清空前的内容又写回去。
-                        //
-                        // 按 oid 去重是必需的:同一个视频重复观看在历史里本来就会再出现一条,
-                        // 游标翻页时上一页的条目会跟着漂到下一页。
-                        items = it.items.appendDistinctBy(result.value.items) { item -> item.oid },
-                        cursorMax = result.value.nextMax,
-                        cursorViewAt = result.value.nextViewAt,
-                        loading = false,
-                        appending = false,
-                        refreshing = false,
-                        hasMore = !result.value.isEnd,
-                    )
-                }
+        loadJob = viewModelScope.launch {
+            try {
+                when (val result = repository.loadPage(current.cursorMax, current.cursorViewAt)) {
+                    is BiliResult.Ok -> {
+                        if (gen != generation) return@launch
+                        _state.update {
+                            it.copy(
+                                // 读 it 而不是协程外那份 current 快照:刷新会把 items 清空,用陈旧快照
+                                // 拼接等于把清空前的内容又写回去。
+                                //
+                                // 按 oid 去重是必需的:同一个视频重复观看在历史里本来就会再出现一条,
+                                // 游标翻页时上一页的条目会跟着漂到下一页。
+                                items = it.items.appendDistinctBy(result.value.items) { item -> item.oid },
+                                cursorMax = result.value.nextMax,
+                                cursorViewAt = result.value.nextViewAt,
+                                hasMore = !result.value.isEnd,
+                            )
+                        }
+                    }
 
-                else -> _state.update { it.copy(loading = false, appending = false, refreshing = false, error = result.errorText()) }
+                    else -> if (gen == generation) _state.update { it.copy(error = result.errorText()) }
+                }
+            } finally {
+                // 按当前 generation 释放:被 refresh 取消的旧一代不该把刷新刚置上的
+                // loading/refreshing 又扒下来。
+                if (gen == generation) _state.update { it.copy(loading = false, appending = false, refreshing = false) }
             }
         }
     }

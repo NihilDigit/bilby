@@ -102,6 +102,16 @@ class SearchChatViewModel(
      */
     private val seenSearchBvids = mutableSetOf<String>()
 
+    /**
+     * 普通搜索这条路自己的 generation(性能计划 7.2)。query、排序或翻页目标一变就加一,
+     * 旧一代的响应落地前都要先比对这个数,对不上就是迟到的,整条丢弃 —— 包括对
+     * [seenSearchBvids]、[page] 这些跨请求共享状态的写入,不能等到 `_state.update` 才拦。
+     */
+    private var normalGeneration = 0
+
+    /** 当前这一代视频/用户请求所在的父 Job,下一代开始前先取消它,两路子请求跟着一起停。 */
+    private var searchJob: Job? = null
+
     fun onInputChange(value: String) = _state.update { it.copy(input = value) }
 
     /**
@@ -122,7 +132,11 @@ class SearchChatViewModel(
                 val order = _state.value.normal.order
                 viewModelScope.launch { settings.addSearchHistory(query) }
                 seenSearchBvids.clear()
-                _state.update { it.copy(normal = NormalSearchState(query = query, order = order, loading = true)) }
+                _state.update {
+                    it.copy(
+                        normal = NormalSearchState(query = query, order = order, videoLoading = true, userLoading = true),
+                    )
+                }
                 runNormal(query, page = 1, order)
             }
 
@@ -157,6 +171,7 @@ class SearchChatViewModel(
         val normal = _state.value.normal
         if (normal.order == order) return
         seenSearchBvids.clear()
+        val hasQuery = normal.query.isNotEmpty()
         _state.update {
             it.copy(
                 normal = normal.copy(
@@ -164,12 +179,14 @@ class SearchChatViewModel(
                     videos = emptyList(),
                     users = emptyList(),
                     hasMore = true,
-                    loading = normal.query.isNotEmpty(),
-                    error = null,
+                    videoLoading = hasQuery,
+                    userLoading = hasQuery,
+                    videoError = null,
+                    userError = null,
                 ),
             )
         }
-        if (normal.query.isNotEmpty()) runNormal(normal.query, page = 1, order)
+        if (hasQuery) runNormal(normal.query, page = 1, order)
     }
 
     fun retry() {
@@ -178,7 +195,16 @@ class SearchChatViewModel(
                 val normal = _state.value.normal
                 val query = normal.query.ifEmpty { return }
                 seenSearchBvids.clear()
-                _state.update { it.copy(normal = it.normal.copy(loading = true, error = null)) }
+                _state.update {
+                    it.copy(
+                        normal = it.normal.copy(
+                            videoLoading = true,
+                            userLoading = true,
+                            videoError = null,
+                            userError = null,
+                        ),
+                    )
+                }
                 runNormal(query, page = 1, normal.order)
             }
 
@@ -193,29 +219,80 @@ class SearchChatViewModel(
     /** 重新执行当前搜索/当前助理轮次，供下拉刷新和再次进入搜索页使用。 */
     fun refresh() = retry()
 
-    private fun runNormal(query: String, page: Int, order: SearchOrder) = viewModelScope.launch {
-        when (val result = searchRepository.searchVideos(keyword = query, page = page, order = order.apiValue)) {
-            is BiliResult.Ok -> {
-                this@SearchChatViewModel.page = page
-                if (page == 1) seenSearchBvids.clear()
-                val fresh = result.value.items.filter { seenSearchBvids.add(it.bvid) }
-                val users = if (page == 1) searchRepository.searchUsers(query).usersOrEmpty() else emptyList()
-                _state.update { state ->
-                    state.copy(
-                        normal = state.normal.copy(
-                            videos = if (page == 1) fresh else state.normal.videos + fresh,
-                            users = if (page == 1) users else state.normal.users,
-                            loading = false,
-                            appending = false,
-                            hasMore = result.value.hasMore,
-                            error = null,
-                        ),
-                    )
+    /**
+     * 视频和用户两路请求独立发起(性能计划 7.1):视频先回先发布,用户回来了再并进去,
+     * 慢的或失败的那路不拖累已经能看的结果。分页(page > 1)时不重新拉用户 —— 用户结果
+     * 只在第一页有意义,原逻辑就是这样。
+     *
+     * 两路共用同一个父 Job:下一次 query/排序/翻页触发时,取消父 Job 就把两个子协程一起
+     * 停掉,不需要分别记两个 Job 引用。
+     */
+    private fun runNormal(query: String, page: Int, order: SearchOrder) {
+        val gen = ++normalGeneration
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            launch { runVideos(gen, query, page, order) }
+            if (page == 1) launch { runUsers(gen, query) }
+        }
+    }
+
+    private suspend fun runVideos(gen: Int, query: String, page: Int, order: SearchOrder) {
+        try {
+            val result = searchRepository.searchVideos(keyword = query, page = page, order = order.apiValue)
+            // 迟到的响应连 seenSearchBvids/page 这些跨请求共享的字段都不该碰,所以在提交
+            // 之前先拦一次,不能只靠 _state.update 里那道检查。
+            if (gen != normalGeneration) return
+            when (result) {
+                is BiliResult.Ok -> {
+                    this@SearchChatViewModel.page = page
+                    if (page == 1) seenSearchBvids.clear()
+                    val fresh = result.value.items.filter { seenSearchBvids.add(it.bvid) }
+                    _state.update {
+                        it.copy(
+                            normal = it.normal.copy(
+                                videos = if (page == 1) fresh else it.normal.videos + fresh,
+                                hasMore = result.value.hasMore,
+                                videoError = null,
+                            ),
+                        )
+                    }
+                }
+
+                is BiliResult.ApiError -> _state.update {
+                    it.copy(normal = it.normal.copy(videoError = "${result.message}(${result.code})"))
+                }
+
+                is BiliResult.Failure -> _state.update {
+                    it.copy(normal = it.normal.copy(videoError = result.cause.message ?: "网络错误"))
                 }
             }
+        } finally {
+            // 按当前 generation 释放:被取消的旧一代不该把新一代刚置上的 loading 又扒下来。
+            if (gen == normalGeneration) {
+                _state.update { it.copy(normal = it.normal.copy(videoLoading = false, appending = false)) }
+            }
+        }
+    }
 
-            is BiliResult.ApiError -> failNormal("${result.message}(${result.code})")
-            is BiliResult.Failure -> failNormal(result.cause.message ?: "网络错误")
+    private suspend fun runUsers(gen: Int, query: String) {
+        try {
+            val result = searchRepository.searchUsers(query)
+            if (gen != normalGeneration) return
+            when (result) {
+                is BiliResult.Ok -> _state.update {
+                    it.copy(normal = it.normal.copy(users = result.value, userError = null))
+                }
+
+                is BiliResult.ApiError -> _state.update {
+                    it.copy(normal = it.normal.copy(userError = "${result.message}(${result.code})"))
+                }
+
+                is BiliResult.Failure -> _state.update {
+                    it.copy(normal = it.normal.copy(userError = result.cause.message ?: "网络错误"))
+                }
+            }
+        } finally {
+            if (gen == normalGeneration) _state.update { it.copy(normal = it.normal.copy(userLoading = false)) }
         }
     }
 
@@ -267,10 +344,6 @@ class SearchChatViewModel(
         is AgentEvent.Failed -> copy(error = event.message, running = false)
     }
 
-    private fun failNormal(message: String) = _state.update {
-        it.copy(normal = it.normal.copy(loading = false, appending = false, error = message))
-    }
-
     private inline fun updateAgent(turnId: Long, crossinline block: (TurnResult.Agent) -> TurnResult.Agent) {
         _state.update { state ->
             state.copy(
@@ -282,9 +355,6 @@ class SearchChatViewModel(
             )
         }
     }
-
-    private fun BiliResult<List<dev.bilby.data.SearchUser>>.usersOrEmpty() =
-        (this as? BiliResult.Ok)?.value.orEmpty()
 
     private companion object {
         /** 会话标题取第一轮输入的前若干字,给以后的会话列表用。 */
