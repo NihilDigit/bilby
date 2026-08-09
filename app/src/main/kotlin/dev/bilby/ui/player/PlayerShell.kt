@@ -8,8 +8,12 @@ import android.os.Build
 import android.view.ViewTreeObserver
 import android.view.WindowManager
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -68,6 +72,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -186,6 +191,15 @@ fun PlayerShell(
     controlBar: @Composable PlayerShellScope.() -> Unit = {},
 ) {
     val seeked by rememberUpdatedState(onSeeked)
+
+    // 组件动效走 spring,不走转场那套 tween。easing-and-duration 页的注:"In the expressive
+    // update, components and motion now use the motion physics system, which uses springs.
+    // Products should migrate to the new system." 位移用 spatial,透明度用 effects ——
+    // effects 那组是无回弹的,透明度回弹既没有物理意义也看得出来。
+    val spatialSpec = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
+    // scaleIn/scaleOut 动的是 Float,和展开收起不是同一个类型参数。
+    val scaleSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
+    val effectsSpec = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
 
     // 竖屏视频、4:3 老片都存在,写死 16:9 会把画面拉变形。容器比例由外面定,画面按真实比例
     // 居中,多出来的地方留黑边。
@@ -567,10 +581,16 @@ fun PlayerShell(
 
         // 全屏顶栏。全屏下没有别的东西说明"在看什么"和"怎么退出":系统栏是隐藏的,
         // 返回手势在锁屏态下也被吃掉了。竖屏不显示,那里标题就在播放器下面第一行。
+        //
+        // **进出方向由它贴着哪条边决定**,规范原文:"The direction a component enters is informed
+        // by their location on screen, expanding away from the device edge. A menu at the top of
+        // the screen expands downwards";Android 那一档还要求
+        // "components expand and collapse along the x or y axis as they slide on and off screen"。
+        // 所以顶栏是从上边缘展开,而不是原地淡入。
         AnimatedVisibility(
             visible = isFullscreen && controlsVisible && !locked,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = expandVertically(spatialSpec, expandFrom = Alignment.Top) + fadeIn(effectsSpec),
+            exit = shrinkVertically(spatialSpec, shrinkTowards = Alignment.Top) + fadeOut(effectsSpec),
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
             Row(
@@ -602,10 +622,12 @@ fun PlayerShell(
 
         // 锁按钮:锁上后它是唯一还能点的东西。只在全屏显示,并放在画面内部左侧,
         // 对齐 PiliPlus 的全屏播放器手势布局。
+        // 锁按钮浮在画面中间偏左,不贴任何一条边,所以它走的是 enter/exit 里"在主界面语境中
+        // 出现的组件"那一支:缩放加淡入,没有方向可言。
         AnimatedVisibility(
             visible = isFullscreen && controlsVisible,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = scaleIn(scaleSpec) + fadeIn(effectsSpec),
+            exit = scaleOut(scaleSpec) + fadeOut(effectsSpec),
             modifier = Modifier.align(Alignment.CenterStart).padding(start = Spacing.Cozy),
         ) {
             IconButton(onClick = { onLockedChange(!locked) }) {
@@ -619,10 +641,11 @@ fun PlayerShell(
             }
         }
 
+        // 控制条贴着下边缘,所以从下边缘展开。
         AnimatedVisibility(
             visible = controlsVisible && !locked,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = expandVertically(spatialSpec, expandFrom = Alignment.Bottom) + fadeIn(effectsSpec),
+            exit = shrinkVertically(spatialSpec, shrinkTowards = Alignment.Bottom) + fadeOut(effectsSpec),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             scope.controlBar()

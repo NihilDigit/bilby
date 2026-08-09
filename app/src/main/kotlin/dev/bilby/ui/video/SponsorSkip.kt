@@ -1,8 +1,10 @@
 package dev.bilby.ui.video
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -13,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import dev.bilby.R
@@ -106,7 +109,21 @@ fun SkipToast(category: String?, modifier: Modifier = Modifier) {
         }
     }
 
-    AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut(), modifier = modifier) {
+    // 提示浮在画面顶部,所以从上边缘展开 —— 规范:"The direction a component enters is informed
+    // by their location on screen, expanding away from the device edge."
+    // 组件动效用 MotionScheme 的 spring,不用转场那套 tween(见 theme/Motion.kt 的说明)。
+    AnimatedVisibility(
+        visible = visible,
+        enter = expandVertically(
+            MaterialTheme.motionScheme.fastSpatialSpec(),
+            expandFrom = Alignment.Top,
+        ) + fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()),
+        exit = shrinkVertically(
+            MaterialTheme.motionScheme.fastSpatialSpec(),
+            shrinkTowards = Alignment.Top,
+        ) + fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
+        modifier = modifier,
+    ) {
         Surface(
             shape = MaterialTheme.shapes.small,
             color = MaterialTheme.colorScheme.inverseSurface,

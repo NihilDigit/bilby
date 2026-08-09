@@ -628,13 +628,53 @@ DESIGN 1.1 的四个机制在界面层的落点。这些不是没想到,是**想
   文字比封面高时,多出来的高度分到上下两边,不再全堆在封面底下。PiliPlus 那种让封面
   `fillMaxHeight` 跟着内容长的做法仍然没做 —— "找相关"那种带多行推荐理由的行会把封面撑得
   很大,要做得先把带 `note` 的行拆成另一个组件。
-- **组件动效还没收到唯一来源。** `MotionScheme` 已经挂进主题,但
-  `AnimatedVisibility(fadeIn()/fadeOut())` 这类手写 spec 还散在播放器控件和 SponsorBlock
-  提示里,下一轮统一改成 `MaterialTheme.motionScheme.defaultEffectsSpec()`。
-  **页面转场不在此列**:M3 transitions 页注明转场仍在旧的缓动/时长体系上,`MotionScheme`
-  是给组件动效的,它本身也只有六个 spring spec、取不到 duration。
 
-## 6. 响应式
+## 6. 动效
+
+**唯一来源是 `ui/theme/Motion.kt`**,值逐条抄自 M3 的 easing/duration token 表,注释里标了
+token 名。这一节的每条判断都能在镜像的 `styles/motion/` 两页里找到原文。
+
+**先分清转场和组件动效,规范自己划的界**:easing-and-duration 页顶上写着 expressive update
+之后"components and motion now use the motion physics system, which uses springs",但
+"**The easing and duration system is still used for transitions**"。所以:
+
+| 层 | 用什么 | 在哪 |
+|---|---|---|
+| 转场(整屏) | 缓动 + 时长(tween) | `Motion.kt` |
+| 组件(控件显隐、浮层) | spring | `MaterialTheme.motionScheme` |
+
+两边不要互串:spring 取不到 duration,拿它做转场就表达不了"退出比进入短";组件用 tween
+则丢掉 expressive 那套物理感。
+
+**四种模式各自落在哪**:
+
+- **Forward and backward**(压栈/返回,`MainActivity` 的 `NavDisplay`):滑动 + 淡入淡出,
+  两页各走五分之一屏。取的是 Android 平台默认——"Android uses a fade as screens slide.
+  This reduces the amount of motion, since the screens don't have to slide the full width"。
+  400ms(medium4)配 emphasized decelerate / accelerate。
+  **别改成走满整屏**,那是 lateral 的做法,规范明确说它不适合层级导航。
+- **Top level**(底栏或 rail 换根目的地,`RootTabs`):快速淡入淡出,且**淡出走完再淡入**
+  ("quickly fades out **and then** the entering screen fades in",clean fades 那条又要求
+  "Fully fade out content before fading new content in")。曾经是跳切,而跳切被单列为要避免的
+  默认做法。**不要换成横滑**:那会暗示可以左右滑动切 tab,和列表项、carousel 的手势打架。
+- **Lateral**(播放页 简介/评论、直播间两屏):`HorizontalPager` 的默认行为就是对的——
+  整体同向滑动、**不加淡入淡出**("Fading content as it slides makes the peer relationship and
+  swipe gesture less obvious")。所以这里没有自定义 spec。
+- **Enter and exit**(播放器控制条、全屏顶栏、锁按钮、SponsorBlock 提示):
+  **方向由它贴着哪条边决定**——"The direction a component enters is informed by their location
+  on screen, expanding away from the device edge",Android 那一档还要求沿轴展开收起而不是
+  原地淡入。所以底部控制条从下边缘展开、全屏顶栏从上边缘、跳过提示从上边缘;
+  锁按钮不贴边,走缩放 + 淡入。
+
+**减弱动效**要跟随系统:"If that setting is on, transitions should use subtle fades instead of
+intense sliding"。`rememberReducedMotion()` 读 `TRANSITION_ANIMATION_SCALE`,为 0 时转场退成
+纯淡入淡出。组件那侧不用管,Compose 的动画本来就跑在 `MotionDurationScale` 下。
+
+**故意不照做的一条:骨架屏。** transitions 页把 skeleton loader 列为六种模式之一并推荐用它
+稳定布局,而 DESIGN 4.2 明确否决——骨架屏是在假装内容马上就到,把等待包装成期待。首屏就是
+一个转圈。这是本项目对规范的有意偏离,不是遗漏。
+
+## 7. 响应式
 
 断点值和几档最大宽度都在 `ui/theme/Dimens.kt` 的 `Breakpoints` 里,判的是**窗口**能铺多宽,
 不是设备是不是平板 —— 同一台平板分屏之后就该按 compact 排。`rememberBilbyWindowSize()` 读

@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.fadeIn
@@ -93,6 +94,8 @@ import dev.bilby.ui.settings.SettingsViewModel
 import dev.bilby.ui.space.SpaceScreen
 import dev.bilby.ui.space.SpaceViewModel
 import dev.bilby.ui.theme.Breakpoints
+import dev.bilby.ui.theme.Motion
+import dev.bilby.ui.theme.rememberReducedMotion
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.toview.ToViewScreen
 import dev.bilby.ui.toview.ToViewViewModel
@@ -183,6 +186,7 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
         container.deviceFingerprint.activateIfNeeded()
     }
 
+    val reducedMotion = rememberReducedMotion()
     val backStack = rememberNavBackStack(Home)
 
     /**
@@ -255,19 +259,44 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
             rememberSaveableStateHolderNavEntryDecorator(),
             rememberViewModelStoreNavEntryDecorator(),
         ),
-        // 转场用 duration + easing,**不用主题的 spring**。M3 在 transitions 页注明转场仍在
-        // 旧的缓动/时长体系上("M3 transitions use the legacy easing and duration system"),
-        // spring 那套(MotionScheme)是给组件动效的;它本身也只有六个 spring spec,取不到
-        // duration。expressive 的 spatial 阻尼低到会过冲,而 applying-transitions 明说
-        // "Common transitions should not use overt style effects like bouncy springs"。
+        // **Forward and backward**,取 Android 平台默认。transitions 页原文:
+        // "**Android** uses a fade as screens slide. This reduces the amount of motion, since the
+        // screens don't have to slide the full width of the device.",选型那一节又说
+        // "Both Android and iOS should use platform defaults for forward and backward navigation."
         //
-        // 形态使用 M3 的 fade-through 思路：顶层目的地是信息界面，不需要让整页跟着手指
-        // 横移；短淡入淡出能保留"页面换了"的反馈，也不会让长列表在宽屏上产生大幅位移。
+        // 两页都只走五分之一屏:走满整屏是 lateral 的做法,而规范明说别拿 lateral 做层级导航
+        // ——"Sliding content the full width of the screen is excessive for a high frequency
+        // transition. It also implies an equal peer relationship which isn't accurate."
+        //
+        // 时长与缓动都在 `theme/Motion.kt`,那里逐条标了 token 名。
+        //
+        // 系统开了"减弱动效"时退成纯淡入淡出:规范第一条就是
+        // "Use subtle fades instead of intense sliding or scaling animations"。
         transitionSpec = {
-            fadeIn(fadeEnter) togetherWith fadeOut(fadeExit)
+            if (reducedMotion) {
+                fadeIn(Motion.ForwardEnterFade) togetherWith fadeOut(Motion.ForwardExitFade)
+            } else {
+                (
+                    slideInHorizontally(Motion.ForwardEnterSlide) { it / Motion.ForwardSlideFraction } +
+                        fadeIn(Motion.ForwardEnterFade)
+                    ) togetherWith (
+                    slideOutHorizontally(Motion.ForwardExitSlide) { -it / Motion.ForwardSlideFraction } +
+                        fadeOut(Motion.ForwardExitFade)
+                    )
+            }
         },
         popTransitionSpec = {
-            fadeIn(fadeEnter) togetherWith fadeOut(fadeExit)
+            if (reducedMotion) {
+                fadeIn(Motion.ForwardEnterFade) togetherWith fadeOut(Motion.ForwardExitFade)
+            } else {
+                (
+                    slideInHorizontally(Motion.ForwardEnterSlide) { -it / Motion.ForwardSlideFraction } +
+                        fadeIn(Motion.ForwardEnterFade)
+                    ) togetherWith (
+                    slideOutHorizontally(Motion.ForwardExitSlide) { it / Motion.ForwardSlideFraction } +
+                        fadeOut(Motion.ForwardExitFade)
+                    )
+            }
         },
         // 预测式返回这一段的进度由手指给,配 tween 会让动画和手势各走各的,所以用 snap。
         //
@@ -517,19 +546,40 @@ private fun RootTabsContent(
             .consumeWindowInsets(bottom),
         maxWidth = Breakpoints.ReadableWidth,
     ) {
-        when (selected) {
-            RootTab.Feed -> FeedPane(container, onVideoClick, onUserClick, onOpenFollowings)
+        // **Top level**:点底栏或 rail 换根目的地。规范原文
+        // "The exiting screen quickly fades out **and then** the entering screen fades in. Since the
+        // content of top level destinations isn't necessarily related, the motion intentionally does
+        // not use grouping or persistent elements";clean fades 那条又要求
+        // "Fully fade out content before fading new content in."
+        //
+        // 所以是淡出走完再淡入(spec 里进入那一档带着 delay),不是交叉淡化,更不是原来那种
+        // 跳切 —— 跳切被单列为要避免的默认做法:"Instantly transitioning from one screen to the
+        // next offers no clues to help a user orient themselves."
+        //
+        // **不用 lateral(横滑)**:"A lateral transition pattern is not recommended for this type of
+        // navigation. It implies you can swipe between top level destinations which conflicts with
+        // other components like carousels or swipe-able list items." 这个应用里正好有那两样。
+        AnimatedContent(
+            targetState = selected,
+            transitionSpec = {
+                fadeIn(Motion.TopLevelEnterFade) togetherWith fadeOut(Motion.TopLevelExitFade)
+            },
+            label = "rootTab",
+        ) { tab ->
+            when (tab) {
+                RootTab.Feed -> FeedPane(container, onVideoClick, onUserClick, onOpenFollowings)
 
-            RootTab.Search -> SearchPane(container, onVideoClick, onUserClick)
+                RootTab.Search -> SearchPane(container, onVideoClick, onUserClick)
 
-            RootTab.Profile -> ProfilePane(
-                container = container,
-                onVideoClick = onVideoClick,
-                onOpenHistory = onOpenHistory,
-                onOpenToView = onOpenToView,
-                onOpenFavFolder = onOpenFavFolder,
-                onSettingsClick = onSettingsClick,
-            )
+                RootTab.Profile -> ProfilePane(
+                    container = container,
+                    onVideoClick = onVideoClick,
+                    onOpenHistory = onOpenHistory,
+                    onOpenToView = onOpenToView,
+                    onOpenFavFolder = onOpenFavFolder,
+                    onSettingsClick = onSettingsClick,
+                )
+            }
         }
     }
 }
@@ -1085,21 +1135,7 @@ private fun VideoPane(
 }
 
 /**
- * 转场的时长与缓动。
- *
- * **淡出走完再淡入,不是交叉淡化。** M3 transitions 页对 top level 的原话是"The exiting screen
- * quickly fades out **and then** the entering screen fades in",clean fades 那一节又补了一句
- * "Fully fade out content before fading new content in. This avoids the overlap of partially
- * transparent elements"。所以进入那一档要延后一个退出时长,而不是两条同时跑 —— 同时跑的那半
- * 秒里两页都是半透明的,叠在一起最脏。
- *
- * 时长分配照 easing-and-duration 的 enter vs. exit:"Transitions that exit... use shorter
- * durations",退出 90ms、进入 210ms,合起来 300ms(medium2)。
+ * lateral(同级平移)没有在这里定义 spec:它由 `HorizontalPager` 自己承担,而规范要的正是
+ * pager 的默认行为 —— "elements are grouped and slide in unison",并且**不加淡入淡出**
+ * ("Fading content as it slides makes the peer relationship and swipe gesture less obvious")。
  */
-private val fadeExit = tween<Float>(FadeOutMillis)
-private val fadeEnter = tween<Float>(FadeInMillis, delayMillis = FadeOutMillis)
-
-private const val FadeOutMillis = 90
-private const val FadeInMillis = 210
-
-/** lateral 用 default 档:它只覆盖屏幕的一部分(内容区),不是整屏转场。 */
