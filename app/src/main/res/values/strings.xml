@@ -332,4 +332,19 @@
     <string name="settings_fast_forward_speed_subtitle">按住画面时的临时倍速,松手恢复</string>
     <string name="player_seek_release_to_cancel">松手取消进退</string>
     <string name="action_share">分享</string>
+    <string name="sponsor_sponsor_desc">品牌方付钱插进来的口播或贴片</string>
+    <string name="sponsor_selfpromo_desc">UP 主推销自己的周边、社群、别的频道</string>
+    <string name="sponsor_interaction_desc">“一键三连”“记得关注”这类提醒</string>
+    <string name="sponsor_intro_desc">没有内容的开场动画或片头 logo</string>
+    <string name="sponsor_outro_desc">结尾的鸣谢、推荐位、滚动字幕</string>
+    <string name="sponsor_preview_desc">预告接下来讲什么,或回顾上一集</string>
+    <string name="sponsor_padding_desc">为凑时长塞进来的空镜与停顿</string>
+    <string name="sponsor_filler_desc">和主题无关的闲聊、玩笑、跑题</string>
+    <string name="sponsor_music_offtopic_desc">音乐视频里不是音乐的那几段</string>
+    <string name="settings_sponsorblock_group_promo">推广</string>
+    <string name="settings_sponsorblock_group_structure">结构片段</string>
+    <string name="settings_sponsorblock_group_content">内容片段</string>
+    <string name="settings_sponsorblock_enabled_count">已选 %1$d 类,共 %2$d 类</string>
+    <string name="settings_sponsorblock_server_subtitle">社区自建服务,官方站点挂了或换域名时可以改这里</string>
+    <string name="settings_sponsorblock_section_server">服务器</string>
 </resources>

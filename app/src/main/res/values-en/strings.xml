@@ -258,4 +258,19 @@
     <string name="settings_fast_forward_speed_subtitle">While holding the picture; returns to normal on release</string>
     <string name="player_seek_release_to_cancel">Release to cancel</string>
     <string name="action_share">Share</string>
+    <string name="sponsor_sponsor_desc">A paid read or insert from a brand</string>
+    <string name="sponsor_selfpromo_desc">The uploader plugging their own merch, community or channels</string>
+    <string name="sponsor_interaction_desc">"Like and subscribe" reminders</string>
+    <string name="sponsor_intro_desc">An opening animation or logo with no content</string>
+    <string name="sponsor_outro_desc">Credits, end cards, scrolling text</string>
+    <string name="sponsor_preview_desc">A trailer for what is coming, or a recap of last time</string>
+    <string name="sponsor_padding_desc">Dead air and cutaways that pad the running time</string>
+    <string name="sponsor_filler_desc">Tangents and jokes unrelated to the subject</string>
+    <string name="sponsor_music_offtopic_desc">The non-music stretches of a music video</string>
+    <string name="settings_sponsorblock_group_promo">Promotion</string>
+    <string name="settings_sponsorblock_group_structure">Structure</string>
+    <string name="settings_sponsorblock_group_content">Content</string>
+    <string name="settings_sponsorblock_enabled_count">%1$d of %2$d categories</string>
+    <string name="settings_sponsorblock_server_subtitle">A community-run service; change this if the main one is down or moves</string>
+    <string name="settings_sponsorblock_section_server">Server</string>
 </resources>

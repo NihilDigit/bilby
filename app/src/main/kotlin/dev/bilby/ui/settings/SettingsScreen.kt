@@ -59,6 +59,8 @@ import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.video.CATEGORY_DESCRIPTIONS
+import dev.bilby.ui.video.CATEGORY_GROUPS
 import dev.bilby.ui.video.CATEGORY_LABELS
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -345,16 +347,32 @@ private fun SponsorBlockSettingsSection(
 ) {
     SectionTitle("SponsorBlock")
     val prefs = state.sponsorBlock
+    // 总开关的副标题说清"现在有几类在生效"。九个 checkbox 收起来之后,不给这个数就没有任何
+    // 地方能看出自己上次选了什么 —— 而这一页最常见的动作正是"回来确认一下"。
     ToggleSettingRow(
         title = stringResource(R.string.settings_sponsorblock_toggle),
-        subtitle = stringResource(R.string.settings_sponsorblock_toggle_subtitle),
+        subtitle = if (prefs.enabled) {
+            stringResource(
+                R.string.settings_sponsorblock_enabled_count,
+                prefs.categories.count { it in CATEGORY_LABELS },
+                CATEGORY_LABELS.size,
+            )
+        } else {
+            stringResource(R.string.settings_sponsorblock_toggle_subtitle)
+        },
         checked = prefs.enabled,
         onCheckedChange = { onChange(prefs.copy(enabled = it)) },
     )
-    if (prefs.enabled) {
-        CATEGORY_LABELS.forEach { (category, label) ->
+    if (!prefs.enabled) return
+
+    CATEGORY_GROUPS.forEach { (groupTitle, categories) ->
+        GroupLabel(stringResource(groupTitle))
+        categories.forEach { category ->
+            val label = CATEGORY_LABELS[category] ?: return@forEach
             ToggleSettingRow(
                 title = stringResource(label),
+                // 类别名解释不了自己,判断"要不要跳过它"靠的是这一行。
+                subtitle = CATEGORY_DESCRIPTIONS[category]?.let { stringResource(it) },
                 checked = category in prefs.categories,
                 onCheckedChange = { checked ->
                     val next = if (checked) prefs.categories + category else prefs.categories - category
@@ -364,12 +382,34 @@ private fun SponsorBlockSettingsSection(
                 useCheckbox = true,
             )
         }
-        SettingRow(
-            title = stringResource(R.string.settings_sponsorblock_server),
-            subtitle = prefs.serverUrl,
-            onClick = onEditServer,
-        )
     }
+
+    // 服务器地址和上面九个不是一类东西:那九个是"跳什么",这个是"问谁"。混在同一串行里
+    // 会让人以为它也是一个内容选项。
+    GroupLabel(stringResource(R.string.settings_sponsorblock_section_server))
+    SettingRow(
+        title = stringResource(R.string.settings_sponsorblock_server),
+        subtitle = "${prefs.serverUrl}\n${stringResource(R.string.settings_sponsorblock_server_subtitle)}",
+        onClick = onEditServer,
+    )
+}
+
+/**
+ * 组标签。比 [SectionTitle] 轻一档:它分的是同一节内部的几组,不是另起一节。
+ */
+@Composable
+private fun GroupLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(
+            start = Spacing.Comfortable,
+            end = Spacing.Comfortable,
+            top = Spacing.Cozy,
+            bottom = Spacing.Hair,
+        ),
+    )
 }
 
 @Composable

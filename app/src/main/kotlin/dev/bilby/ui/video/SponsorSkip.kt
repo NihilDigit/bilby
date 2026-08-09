@@ -59,6 +59,34 @@ val CATEGORY_LABELS: Map<String, Int> = mapOf(
 )
 
 /**
+ * 每一类到底指什么。**这九个名字自己解释不了自己**:"填充内容""预览回顾""非音乐段落"
+ * 单看都像黑话,而用户要判断的是"我要不要让播放器自动跳过它" —— 判断不了就只能全开或全关,
+ * 那九个开关就白给了。
+ */
+val CATEGORY_DESCRIPTIONS: Map<String, Int> = mapOf(
+    "sponsor" to R.string.sponsor_sponsor_desc,
+    "selfpromo" to R.string.sponsor_selfpromo_desc,
+    "interaction" to R.string.sponsor_interaction_desc,
+    "intro" to R.string.sponsor_intro_desc,
+    "outro" to R.string.sponsor_outro_desc,
+    "preview" to R.string.sponsor_preview_desc,
+    "padding" to R.string.sponsor_padding_desc,
+    "filler" to R.string.sponsor_filler_desc,
+    "music_offtopic" to R.string.sponsor_music_offtopic_desc,
+)
+
+/**
+ * 九类分三组。分组不是为了好看,是为了让"要不要跳"这个判断能一次做一组:推广是别人塞进来的,
+ * 结构片段是这条视频自己的包装,内容片段是 UP 讲的话里偏题的那部分 —— 三种东西的取舍理由
+ * 完全不同,平铺成九行就只剩九个孤立的开关。
+ */
+val CATEGORY_GROUPS: List<Pair<Int, List<String>>> = listOf(
+    R.string.settings_sponsorblock_group_promo to listOf("sponsor", "selfpromo", "interaction"),
+    R.string.settings_sponsorblock_group_structure to listOf("intro", "outro", "preview", "padding"),
+    R.string.settings_sponsorblock_group_content to listOf("filler", "music_offtopic"),
+)
+
+/**
  * 跳过时的一次性提示,几秒后自动消失。否则用户会以为播放器卡住了。
  * category 为 null 表示"这次没有发生跳过",不显示——可见性收在组件内部,
  * 调用方只需要在每次跳过时把新的 category 传进来。
