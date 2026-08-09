@@ -5,7 +5,6 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.fadeIn
@@ -16,6 +15,8 @@ import androidx.compose.animation.togetherWith
 import androidx.activity.enableEdgeToEdge
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -33,6 +34,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -43,7 +46,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -87,6 +90,7 @@ import dev.bilby.ui.settings.UpdateInstaller
 import dev.bilby.ui.settings.SettingsViewModel
 import dev.bilby.ui.space.SpaceScreen
 import dev.bilby.ui.space.SpaceViewModel
+import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.toview.ToViewScreen
 import dev.bilby.ui.toview.ToViewViewModel
@@ -123,6 +127,7 @@ class MainActivity : ComponentActivity() {
         val container = (application as BilbyApplication).container
         setContent {
             BilbyTheme {
+                BilbyWindowChrome()
                 BilbyApp(container)
             }
         }
@@ -202,18 +207,13 @@ private fun BilbyApp(container: AppContainer) {
         // duration。expressive 的 spatial 阻尼低到会过冲,而 applying-transitions 明说
         // "Common transitions should not use overt style effects like bouncy springs"。
         //
-        // 形态用 Android 的做法:**两页都只走一小段并淡入淡出**,而不是让一页走整屏。规范原文
-        // "Android uses a fade as screens slide. This reduces the amount of motion, since the
-        // screens don't have to slide the full width of the device." 之前那版是 iOS 的视差
-        // (背景页走得比前景慢),两条路只能选一条,混着用就是现在这个既不像 Android 也不像 iOS
-        // 的东西。
+        // 形态使用 M3 的 fade-through 思路：顶层目的地是信息界面，不需要让整页跟着手指
+        // 横移；短淡入淡出能保留"页面换了"的反馈，也不会让长列表在宽屏上产生大幅位移。
         transitionSpec = {
-            (slideInHorizontally(slideEnter) { it / 5 } + fadeIn(fadeEnter)) togetherWith
-                (slideOutHorizontally(slideExit) { -it / 5 } + fadeOut(fadeExit))
+            fadeIn(fadeEnter) togetherWith fadeOut(fadeExit)
         },
         popTransitionSpec = {
-            (slideInHorizontally(slideEnter) { -it / 5 } + fadeIn(fadeEnter)) togetherWith
-                (slideOutHorizontally(slideExit) { it / 5 } + fadeOut(fadeExit))
+            fadeIn(fadeEnter) togetherWith fadeOut(fadeExit)
         },
         // 预测式返回这一段的进度由手指给,配 tween 会让动画和手势各走各的,所以用 snap。
         //
@@ -254,6 +254,7 @@ private fun BilbyApp(container: AppContainer) {
                     bvid = key.bvid,
                     startListening = key.listening,
                     onUpClick = { backStack.add(Space(it)) },
+                    onBack = { backStack.removeLastOrNull() },
                     // 切集是**重组,不是压栈**:换的是这一页在放哪一条,不是又进了一层。
                     // 压栈的话看五集就攒五层,返回要一集一集退回去,而合集本来是一个有限集合、
                     // 用户是在里面平移。替换栈顶之后,从任何一集返回都回到进来时的地方。
@@ -344,6 +345,7 @@ private fun RootTabs(
     onOpenFavFolder: (FavFolder) -> Unit,
 ) {
     var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
+    val windowSize = rememberBilbyWindowSize()
 
     // IME 退让放在 Scaffold 这一层,让底栏跟着键盘一起上移。放在内层输入框上的话,
     // 底栏仍会在键盘下方占着高度,表现为输入框与键盘之间空一条。
@@ -359,52 +361,121 @@ private fun RootTabs(
     // `WindowInsets.systemBarsForVisualComponents`(读 material3 1.5.0-alpha25 的 aar 核实过,
     // 不是照文档假设),顶栏不存在时这份 inset 不会被谁消费掉,照样流进下面 `insets` 参数,
     // 下面内容区那行 `.padding(top = insets.calculateTopPadding())` 不用改。
-    Scaffold(
-        modifier = Modifier.imePadding(),
-        bottomBar = {
-            NavigationBar {
+    if (windowSize == BilbyWindowSize.Compact) {
+        Scaffold(
+            modifier = Modifier.imePadding(),
+            bottomBar = {
+                NavigationBar {
+                    RootTab.entries.forEach { tab ->
+                        NavigationBarItem(
+                            selected = selected == tab,
+                            onClick = { selected = tab },
+                            icon = { RootTabIcon(tab, selected == tab) },
+                            label = { RootTabLabel(tab) },
+                        )
+                    }
+                }
+            },
+        ) { insets ->
+            RootTabsContent(
+                insets = insets,
+                selected = selected,
+                container = container,
+                onVideoClick = onVideoClick,
+                onUserClick = onUserClick,
+                onSettingsClick = onSettingsClick,
+                onOpenFollowings = onOpenFollowings,
+                onOpenHistory = onOpenHistory,
+                onOpenToView = onOpenToView,
+                onOpenFavFolder = onOpenFavFolder,
+            )
+        }
+    } else {
+        // medium 起用 rail 换掉底栏:导航贴在边缘,内容拿到完整的横向空间。三个根目的地
+        // 不需要 drawer —— M3 的 navigation rail 页把 rail 作为 drawer 的优先替代。
+        Row(modifier = Modifier.fillMaxSize().imePadding()) {
+            NavigationRail(modifier = Modifier.fillMaxHeight()) {
                 RootTab.entries.forEach { tab ->
-                    val isSelected = selected == tab
-                    NavigationBarItem(
-                        selected = isSelected,
+                    NavigationRailItem(
+                        selected = selected == tab,
                         onClick = { selected = tab },
-                        icon = {
-                            Icon(
-                                imageVector = if (isSelected) tab.selectedIcon else tab.unselectedIcon,
-                                // 标签就在图标正下方,读屏再念一遍图标等于每格念两次。
-                                contentDescription = null,
-                            )
-                        },
-                        label = { Text(stringResource(tab.label)) },
+                        icon = { RootTabIcon(tab, selected == tab) },
+                        label = { RootTabLabel(tab) },
                     )
                 }
             }
-        },
-    ) { insets ->
-        // consumeWindowInsets 是关键:只 padding 不声明消费的话,子层的 imePadding()
-        // 仍按屏幕底边算,会再多退让一个底部栏的高度。
-        val bottom = PaddingValues(bottom = insets.calculateBottomPadding())
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(top = insets.calculateTopPadding())
-                .padding(bottom)
-                .consumeWindowInsets(bottom)
-        ) {
-            when (selected) {
-                RootTab.Feed -> FeedPane(container, onVideoClick, onUserClick, onOpenFollowings)
-
-                RootTab.Search -> SearchPane(container, onVideoClick, onUserClick)
-
-                RootTab.Profile -> ProfilePane(
+            Scaffold(modifier = Modifier.weight(1f)) { insets ->
+                RootTabsContent(
+                    insets = insets,
+                    selected = selected,
                     container = container,
                     onVideoClick = onVideoClick,
+                    onUserClick = onUserClick,
+                    onSettingsClick = onSettingsClick,
+                    onOpenFollowings = onOpenFollowings,
                     onOpenHistory = onOpenHistory,
                     onOpenToView = onOpenToView,
                     onOpenFavFolder = onOpenFavFolder,
-                    onSettingsClick = onSettingsClick,
                 )
             }
+        }
+    }
+}
+
+/**
+ * 底栏和 rail 共用同一份图标与标签规则,不各写一份 —— 两处分头维护的话,选中态用实心图标
+ * 这条迟早只剩一处成立。
+ */
+@Composable
+private fun RootTabIcon(tab: RootTab, selected: Boolean) {
+    Icon(
+        imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
+        // 标签就在图标旁边,读屏再念一遍图标等于每格念两次。
+        contentDescription = null,
+    )
+}
+
+@Composable
+private fun RootTabLabel(tab: RootTab) {
+    Text(stringResource(tab.label))
+}
+
+@Composable
+private fun RootTabsContent(
+    insets: PaddingValues,
+    selected: RootTab,
+    container: AppContainer,
+    onVideoClick: (String) -> Unit,
+    onUserClick: (Long) -> Unit,
+    onSettingsClick: () -> Unit,
+    onOpenFollowings: () -> Unit,
+    onOpenHistory: () -> Unit,
+    onOpenToView: () -> Unit,
+    onOpenFavFolder: (FavFolder) -> Unit,
+) {
+    // 只 padding 不声明消费的话,子层的 imePadding() 会再多退让一个底栏高度。
+    val bottom = PaddingValues(bottom = insets.calculateBottomPadding())
+    AdaptiveContent(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = insets.calculateTopPadding())
+            .padding(bottom)
+            .consumeWindowInsets(bottom),
+        maxWidth = Breakpoints.ReadableWidth,
+    ) {
+        when (selected) {
+            RootTab.Feed -> FeedPane(container, onVideoClick, onUserClick, onOpenFollowings)
+
+            RootTab.Search -> SearchPane(container, onVideoClick, onUserClick)
+
+            RootTab.Profile -> ProfilePane(
+                container = container,
+                onVideoClick = onVideoClick,
+                onOpenHistory = onOpenHistory,
+                onOpenToView = onOpenToView,
+                onOpenFavFolder = onOpenFavFolder,
+                onSettingsClick = onSettingsClick,
+            )
         }
     }
 }
@@ -626,7 +697,10 @@ private fun ToViewListRoute(
     Scaffold(
         topBar = {
             BilbyTopBar(title = stringResource(R.string.tab_toview), onBack = onBack) {
-                IconButton(onClick = vm::clearFinished, enabled = !state.clearing) {
+                IconButton(
+                    onClick = vm::clearFinished,
+                    enabled = !state.clearing && state.items.any { it.isFinished },
+                ) {
                     Icon(
                         Icons.Outlined.DeleteSweep,
                         contentDescription = stringResource(R.string.toview_clear_finished),
@@ -743,6 +817,7 @@ private fun VideoRoute(
     startListening: Boolean = false,
     onUpClick: (Long) -> Unit,
     onOpenVideo: (String) -> Unit,
+    onBack: () -> Unit,
 ) {
     // 切集**不进 backstack**。合集里的每一集互为平级,换一集不是进了一层;走 backstack 的话
     // NavDisplay 只会按下钻处理,而这里根本没有层级关系。
@@ -816,6 +891,7 @@ private fun VideoRoute(
         onListeningChange = { listening = it },
         onUpClick = onUpClick,
         onOpenVideo = onOpenVideo,
+        onBack = onBack,
     )
 }
 
@@ -827,6 +903,7 @@ private fun VideoPane(
     onListeningChange: (Boolean) -> Unit,
     onUpClick: (Long) -> Unit,
     onOpenVideo: (String) -> Unit,
+    onBack: () -> Unit,
 ) {
     // **key 与 bvid 无关,一个播放页只有一个 VideoViewModel。**
     //
@@ -930,6 +1007,8 @@ private fun VideoPane(
         onSendComment = { text, parent -> commentVm?.send(text, parent) },
         onLikeComment = { commentVm?.like(it) },
         onDeleteComment = { commentVm?.delete(it) },
+        onBack = onBack,
+        onRetry = vm::retry,
         listening = listening,
         onListeningChange = onListeningChange,
         subtitleTracks = subtitleTracks,
@@ -946,18 +1025,21 @@ private fun VideoPane(
 }
 
 /**
- * 转场的时长与缓动。数值来自 M3 的 easing-and-duration/tokens-specs:
- * emphasized decelerate 是 `PathInterpolator(0.05, 0.7, 0.1, 1)`,medium4 是 400ms
- * ("transitions that traverse a medium area of the screen")。
+ * 转场的时长与缓动。
  *
- * 规范没有为 forward and backward 指定具体档位——那一节只说"用平台默认"。400ms + emphasized
- * 是照它给的两个同量级例子(FAB 展开 sheet 400ms、卡片展开全屏 500ms)推的,不是规范原文。
+ * **淡出走完再淡入,不是交叉淡化。** M3 transitions 页对 top level 的原话是"The exiting screen
+ * quickly fades out **and then** the entering screen fades in",clean fades 那一节又补了一句
+ * "Fully fade out content before fading new content in. This avoids the overlap of partially
+ * transparent elements"。所以进入那一档要延后一个退出时长,而不是两条同时跑 —— 同时跑的那半
+ * 秒里两页都是半透明的,叠在一起最脏。
+ *
+ * 时长分配照 easing-and-duration 的 enter vs. exit:"Transitions that exit... use shorter
+ * durations",退出 90ms、进入 210ms,合起来 300ms(medium2)。
  */
-private val EmphasizedDecelerate = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
-private val EmphasizedAccelerate = CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f)
-private val slideEnter = tween<IntOffset>(400, easing = EmphasizedDecelerate)
-private val slideExit = tween<IntOffset>(400, easing = EmphasizedAccelerate)
-private val fadeEnter = tween<Float>(400, easing = EmphasizedDecelerate)
-private val fadeExit = tween<Float>(400, easing = EmphasizedAccelerate)
+private val fadeExit = tween<Float>(FadeOutMillis)
+private val fadeEnter = tween<Float>(FadeInMillis, delayMillis = FadeOutMillis)
+
+private const val FadeOutMillis = 90
+private const val FadeInMillis = 210
 
 /** lateral 用 default 档:它只覆盖屏幕的一部分(内容区),不是整屏转场。 */

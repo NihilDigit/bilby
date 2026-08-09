@@ -24,6 +24,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -35,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -56,6 +58,9 @@ import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.SectionHeader
 import dev.bilby.ui.components.VideoRow
+import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.history.toRowUi
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
@@ -266,13 +271,33 @@ fun ProfileScreen(
             onRetry = onRetryAccount,
         )
 
-        // 账号与下面三节之间断一刀:上面是"我是谁"(含登出、设置这两个页级动作),
-        // 下面是"我攒了什么"。只靠间距的话,历史记录那个小标题会被读成账号信息的一部分。
-        HorizontalDivider()
+        // 账号与下面三节之间保留分组边界:上面是"我是谁"(含登出、设置这两个页级动作),
+        // 下面是"我攒了什么"。分割线收进内容边距，避免横贯屏幕把页面切成两块，
+        // 同时比单纯加间距更清楚地表达两个不相属的区域。
+        HorizontalDivider(modifier = Modifier.padding(horizontal = Spacing.Comfortable))
 
-        HistorySection(state.history, onVideoClick, onOpenHistory, onRetryHistory)
-        ToViewSection(state.toView, onVideoClick, onOpenToView, onRetryToView)
-        FavFoldersSection(state.favFolders, onOpenFavFolder, onRetryFavFolders)
+        if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
+            // Expanded 之后把三个低密度预览区分成两个可扫读的 pane：历史和稍后再看是
+            // 同一类视频清单，收藏夹是另一类用户整理内容。Medium 仍保持单列，避免在
+            // 信息密度已经很高的概览页过早拆栏。
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Loose),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    HistorySection(state.history, onVideoClick, onOpenHistory, onRetryHistory)
+                    ToViewSection(state.toView, onVideoClick, onOpenToView, onRetryToView)
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    FavFoldersSection(state.favFolders, onOpenFavFolder, onRetryFavFolders)
+                }
+            }
+        } else {
+            HistorySection(state.history, onVideoClick, onOpenHistory, onRetryHistory)
+            ToViewSection(state.toView, onVideoClick, onOpenToView, onRetryToView)
+            FavFoldersSection(state.favFolders, onOpenFavFolder, onRetryFavFolders)
+        }
 
         Spacer(Modifier.height(Spacing.Comfortable))
     }
@@ -302,7 +327,8 @@ fun ProfileScreen(
  * 不给"这个人很懒"一类的占位文案,那是空间页(`SpaceHeader`)的处理,这里没有那个理由:
  * 签名本来就可能没填,不是"数据还没到"。
  *
- * **设置紧跟在登出右边**,不单独找地方摆:两者同属"这个账号相关的操作"。它不属于
+ * **宽屏设置紧跟在登出右边**,窄屏则把登出移到下一行,避免两个操作挤占名字和签名的正文宽度。
+ * 两者同属"这个账号相关的操作"。它不属于
  * `account != null` 那个分支——账号信息拉不到甚至还在读的时候,设置入口也不该跟着消失,
  * 所以三条分支各自只负责把中段(名字/错误文案/空白)撑到 `weight(1f)`,`IconButton`
  * 本身写在 `when` 外面,始终是这一行最后一个元素。
@@ -317,25 +343,17 @@ private fun AccountHeader(
     onSettingsClick: () -> Unit,
     onRetry: () -> Unit,
 ) {
+    val compact = rememberBilbyWindowSize() == BilbyWindowSize.Compact
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
         verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
-        Row(
-            modifier = Modifier.heightIn(min = Dimens.AvatarLarge),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-        ) {
-            val account = state.account
-            when {
-                account != null -> {
-                    Avatar(url = account.faceUrl, size = Dimens.AvatarLarge)
-                    // 名字和徽章同一行:名字 weight(1f) + 省略号,徽章固定宽度不被挤压——
-                    // 长名字该被截断的是名字自己,不是把徽章挤出屏幕或压扁。
+        state.account?.let { account ->
+            ListItem(
+                headlineContent = {
                     Row(
-                        modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
                     ) {
@@ -346,11 +364,59 @@ private fun AccountHeader(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
                         )
-                        LevelBadge(level = account.level, senior = account.isSeniorMember, height = Dimens.LevelBadgeHeight)
+                        LevelBadge(
+                            level = account.level,
+                            senior = account.isSeniorMember,
+                            height = Dimens.LevelBadgeHeight,
+                        )
                     }
-                    TextButton(onClick = onLogoutClick) { Text(stringResource(R.string.profile_logout)) }
+                },
+                supportingContent = account.sign.takeIf { it.isNotBlank() }?.let { sign ->
+                    {
+                        Text(
+                            text = sign,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                },
+                leadingContent = { Avatar(url = account.faceUrl, size = Dimens.AvatarLarge) },
+                trailingContent = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // 窄屏把登出移到下一行,给名字/签名留下完整的正文宽度。
+                        if (!compact) {
+                            TextButton(onClick = onLogoutClick) {
+                                Text(stringResource(R.string.profile_logout))
+                            }
+                        }
+                        IconButton(onClick = onSettingsClick) {
+                            Icon(
+                                Icons.Outlined.Settings,
+                                contentDescription = stringResource(R.string.settings_title),
+                            )
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (compact) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = onLogoutClick) {
+                        Text(stringResource(R.string.profile_logout))
+                    }
                 }
-
+            }
+        } ?: Row(
+            modifier = Modifier.heightIn(min = Dimens.AvatarLarge),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        ) {
+            when {
                 state.accountError != null -> {
                     Text(
                         text = state.accountError,
@@ -369,15 +435,6 @@ private fun AccountHeader(
             IconButton(onClick = onSettingsClick) {
                 Icon(Icons.Outlined.Settings, contentDescription = stringResource(R.string.settings_title))
             }
-        }
-        state.account?.sign?.takeIf { it.isNotBlank() }?.let { sign ->
-            Text(
-                text = sign,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
         }
     }
 }
@@ -478,31 +535,29 @@ private fun FavFoldersSection(
 
 @Composable
 private fun FavFolderRow(folder: FavFolder, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .heightIn(min = Dimens.MinTouchTarget)
-            .padding(horizontal = Spacing.Comfortable),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-    ) {
-        Icon(Icons.Outlined.Star, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Column(modifier = Modifier.weight(1f)) {
+    ListItem(
+        headlineContent = {
             Text(folder.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        },
+        supportingContent = {
             Text(
                 text = stringResource(R.string.fav_folder_count, folder.count),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-        Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp),
-        )
-    }
+        },
+        leadingContent = {
+            Icon(Icons.Outlined.Star, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        },
+        trailingContent = {
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
+    )
 }
 
 @Composable

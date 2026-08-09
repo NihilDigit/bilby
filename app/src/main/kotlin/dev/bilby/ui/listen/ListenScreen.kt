@@ -84,6 +84,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -109,6 +110,8 @@ import dev.bilby.ui.components.CompactVideoRow
 import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SubtitleTrackMenu
 import dev.bilby.ui.components.VideoCover
+import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import kotlin.math.roundToInt
@@ -281,10 +284,26 @@ fun ListenScreen(
                 modifier = Modifier.fillMaxSize().padding(insets).padding(Spacing.Spacious),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    stringResource(R.string.listen_not_playing),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                when {
+                    state.loading -> CircularProgressIndicator()
+                    state.error != null -> Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    ) {
+                        Text(
+                            text = state.error,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                        TextButton(onClick = onRetry) {
+                            Text(stringResource(R.string.action_retry))
+                        }
+                    }
+                    else -> Text(
+                        stringResource(R.string.listen_not_playing),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             return@Scaffold
         }
@@ -301,20 +320,23 @@ fun ListenScreen(
             modifier = Modifier.fillMaxSize().padding(insets),
             sheetPeekHeight = peek,
             sheetContent = {
-                QueueSheetContent(
-                    queue = queue,
-                    currentBvid = state.queue?.current?.bvid,
-                    shuffled = (state.queue?.shuffled == true),
-                    onToggleShuffle = onToggleShuffle,
-                    onPlayQueueItem = onPlayQueueItem,
-                )
+                AdaptiveContent(modifier = Modifier.fillMaxWidth(), maxWidth = Breakpoints.MediaWidth) {
+                    QueueSheetContent(
+                        queue = queue,
+                        currentBvid = state.queue?.current?.bvid,
+                        shuffled = (state.queue?.shuffled == true),
+                        onToggleShuffle = onToggleShuffle,
+                        onPlayQueueItem = onPlayQueueItem,
+                    )
+                }
             },
         ) { sheetInsets ->
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(bottom = sheetInsets.calculateBottomPadding()),
-            ) {
+            AdaptiveContent(modifier = Modifier.fillMaxSize(), maxWidth = Breakpoints.MediaWidth) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = sheetInsets.calculateBottomPadding()),
+                ) {
                 // 唱片(或歌词)吃掉除控制区之外的全部空间;没有字幕时这里就是空间的唯一主角,
                 // 不用再另外做"整体居中"的特判——weight(1f) 本身就把它撑满了。
                 // 唱片与歌词是**同一块区域的两页**,左右滑动切换。
@@ -420,6 +442,7 @@ fun ListenScreen(
                 // 一个只有 P1 的选择器是纯噪声。
                 if (parts.size > 1) {
                     PartRow(parts = parts, currentCid = currentCid, onPlayPart = onPlayPart)
+                }
                 }
             }
         }
@@ -991,7 +1014,7 @@ private fun LyricsView(
     Column(modifier = modifier.fillMaxWidth()) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             // 空白处点一下回唱片。铺在最底层,文字自己的点击(seek)盖在它上面。
-            Box(modifier = Modifier.fillMaxSize().clickable(onClick = onBack))
+            Box(modifier = Modifier.fillMaxSize().clickable(role = Role.Button, onClick = onBack))
             LyricsList(
                 cues = cues,
                 positionMillis = positionMillis,
@@ -1119,7 +1142,7 @@ private fun LyricsList(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onSeekTo(cue.fromMillis) }
+                        .clickable(role = Role.Button) { onSeekTo(cue.fromMillis) }
                         .padding(vertical = Spacing.Tight),
                 )
             }

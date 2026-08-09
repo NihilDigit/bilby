@@ -6,19 +6,20 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -39,6 +40,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.dp
 import dev.bilby.BuildConfig
 import dev.bilby.data.UpdateInfo
 import java.io.File
@@ -47,11 +49,14 @@ import dev.bilby.data.CodecPreference
 import dev.bilby.data.LlmConfig
 import dev.nihildigit.danmaku.DanmakuDensity
 import dev.nihildigit.danmaku.DanmakuFrameRateCap
-import dev.nihildigit.danmaku.DanmakuViewport
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockPrefs
+import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.components.BilbyTopBar
-import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.video.CATEGORY_LABELS
 import kotlin.math.abs
@@ -94,171 +99,77 @@ fun SettingsScreen(
         modifier = modifier.fillMaxSize(),
         topBar = { BilbyTopBar(title = stringResource(R.string.settings_title), onBack = onBack) },
     ) { insets ->
-        LazyColumn(
+        AdaptiveContent(
             modifier = Modifier.fillMaxSize().padding(insets),
-            contentPadding = PaddingValues(bottom = Spacing.Spacious),
+            maxWidth = Breakpoints.ReadableWidth,
         ) {
-            item("llm") {
-                SectionTitle(stringResource(R.string.settings_section_agent))
-                val llm = state.llm
-                val notConfigured = stringResource(R.string.settings_not_configured)
-                SettingRow(
-                    title = stringResource(R.string.settings_llm_base_url),
-                    subtitle = llm?.baseUrl?.ifBlank { notConfigured }
-                        ?: stringResource(R.string.settings_loading),
-                    onClick = { editingLlm = true },
-                )
-                SettingRow(
-                    title = stringResource(R.string.settings_api_key),
-                    // 永远只显示是否配置,不显示遮蔽后的原文:遮蔽只挡眼睛,截图和录屏挡不住。
-                    subtitle = if (llm?.apiKey.isNullOrEmpty()) {
-                        notConfigured
-                    } else {
-                        stringResource(R.string.settings_configured)
-                    },
-                    onClick = { editingLlm = true },
-                )
-                SettingRow(
-                    title = stringResource(R.string.settings_model),
-                    subtitle = llm?.model.orEmpty().ifBlank { SettingsStore.DEFAULT_LLM_MODEL },
-                    onClick = { editingLlm = true },
-                )
-                SettingRow(
-                    title = stringResource(R.string.settings_llm_test),
-                    subtitle = when (val test = state.llmTest) {
-                        LlmTest.Idle -> stringResource(R.string.settings_llm_test_hint)
-                        LlmTest.Running -> stringResource(R.string.settings_llm_test_running)
-                        is LlmTest.Ok -> stringResource(R.string.settings_llm_test_ok, test.millis)
-                        is LlmTest.Failed -> test.message
-                    },
-                    onClick = onSmokeTestLlm,
-                )
-            }
-
-            item("player") {
-                SectionTitle(stringResource(R.string.settings_section_player))
-                CodecSection(
-                    selected = state.codec,
-                    hardwareCodecIds = state.hardwareCodecIds,
-                    onChange = onCodecChange,
-                )
-                SliderSettingRow(
-                    title = stringResource(R.string.settings_danmaku_opacity),
-                    value = state.danmaku.opacity,
-                    valueLabel = { stringResource(R.string.settings_danmaku_opacity_value, (it * 100).roundToInt()) },
-                    onChange = onDanmakuOpacityChange,
-                )
-                ChoiceSection(
-                    title = stringResource(R.string.settings_danmaku_show_area),
-                    // 说清它不管底部弹幕:调到 25% 之后底部那几条纹丝不动,不写清楚会被当成没生效。
-                    subtitle = stringResource(R.string.settings_danmaku_show_area_subtitle),
-                    options = SCROLL_SHOW_AREA_STEPS,
-                    selected = SCROLL_SHOW_AREA_STEPS.minByOrNull { abs(it - state.danmaku.scrollShowArea) },
-                    label = { stringResource(R.string.settings_danmaku_show_area_value, (it * 100).roundToInt()) },
-                    onChange = onDanmakuScrollShowAreaChange,
-                )
-                ChoiceSection(
-                    title = stringResource(R.string.settings_danmaku_density),
-                    options = DanmakuDensity.entries,
-                    selected = state.danmaku.density,
-                    label = {
-                        stringResource(
-                            when (it) {
-                                DanmakuDensity.STANDARD -> R.string.settings_danmaku_density_standard
-                                DanmakuDensity.UNLIMITED -> R.string.settings_danmaku_density_unlimited
-                            },
-                        )
-                    },
-                    onChange = onDanmakuDensityChange,
-                )
-                ChoiceSection(
-                    title = stringResource(R.string.settings_danmaku_frame_rate),
-                    subtitle = stringResource(R.string.settings_danmaku_frame_rate_subtitle),
-                    options = DanmakuFrameRateCap.entries,
-                    selected = state.danmaku.frameRateCap,
-                    label = {
-                        stringResource(
-                            when (it) {
-                                DanmakuFrameRateCap.FPS_30 -> R.string.settings_danmaku_frame_rate_30
-                                DanmakuFrameRateCap.FPS_60 -> R.string.settings_danmaku_frame_rate_60
-                                DanmakuFrameRateCap.DISPLAY -> R.string.settings_danmaku_frame_rate_display
-                            },
-                        )
-                    },
-                    onChange = onDanmakuFrameRateChange,
-                )
-            }
-
-            // 一个都没排除过就整节不显示:没用过这个功能的人不需要先认识"排除名单"这个概念,
-            // 才能看懂设置页里多出来的一行。
-            if (state.excludedFeedCount > 0) {
-                item("feed") {
-                    SectionTitle(stringResource(R.string.settings_section_feed))
-                    SettingRow(
-                        title = stringResource(R.string.settings_feed_clear_excluded),
-                        subtitle = stringResource(
-                            R.string.settings_feed_excluded_count,
-                            state.excludedFeedCount,
-                        ),
-                        onClick = onClearExcludedFeed,
-                    )
-                }
-            }
-
-            item("sponsorblock") {
-                SectionTitle("SponsorBlock")
-                val prefs = state.sponsorBlock
-                ToggleSettingRow(
-                    title = stringResource(R.string.settings_sponsorblock_toggle),
-                    subtitle = stringResource(R.string.settings_sponsorblock_toggle_subtitle),
-                    checked = prefs.enabled,
-                    onCheckedChange = { onSponsorBlockChange(prefs.copy(enabled = it)) },
-                )
-                if (prefs.enabled) {
-                    CATEGORY_LABELS.forEach { (category, label) ->
-                        ToggleSettingRow(
-                            title = stringResource(label),
-                            checked = category in prefs.categories,
-                            onCheckedChange = { checked ->
-                                val next = if (checked) {
-                                    prefs.categories + category
-                                } else {
-                                    prefs.categories - category
-                                }
-                                onSponsorBlockChange(prefs.copy(categories = next))
-                            },
-                            indent = true,
-                            useCheckbox = true,
-                        )
+            val expanded = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = Spacing.Spacious),
+            ) {
+                if (expanded) {
+                    // 设置是少数真正适合宽屏双栏的页面：每个选项都属于一个明确分组，
+                    // 不需要像视频/评论那样保持一条阅读顺序。Expanded 才拆栏，Medium
+                    // 仍保留单列，给平板竖屏和折叠屏留出连续的焦点移动顺序。
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Loose),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            AgentSettingsSection(state, onEdit = { editingLlm = true }, onSmokeTest = onSmokeTestLlm)
+                            PlayerSettingsSection(
+                                state = state,
+                                onCodecChange = onCodecChange,
+                                onOpacityChange = onDanmakuOpacityChange,
+                                onScrollShowAreaChange = onDanmakuScrollShowAreaChange,
+                                onDensityChange = onDanmakuDensityChange,
+                                onFrameRateChange = onDanmakuFrameRateChange,
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            FeedSettingsSection(state, onClearExcludedFeed)
+                            SponsorBlockSettingsSection(
+                                state = state,
+                                onChange = onSponsorBlockChange,
+                                onEditServer = { editingServer = true },
+                            )
+                            AboutSettingsSection(
+                                state = state,
+                                onOpenGithub = onOpenGithub,
+                                onCheckUpdate = onCheckUpdate,
+                                onDownloadUpdate = onDownloadUpdate,
+                                onInstallUpdate = onInstallUpdate,
+                            )
+                        }
                     }
-                    SettingRow(
-                        title = stringResource(R.string.settings_sponsorblock_server),
-                        subtitle = prefs.serverUrl,
-                        onClick = { editingServer = true },
+                } else {
+                    AgentSettingsSection(state, onEdit = { editingLlm = true }, onSmokeTest = onSmokeTestLlm)
+                    PlayerSettingsSection(
+                        state = state,
+                        onCodecChange = onCodecChange,
+                        onOpacityChange = onDanmakuOpacityChange,
+                        onScrollShowAreaChange = onDanmakuScrollShowAreaChange,
+                        onDensityChange = onDanmakuDensityChange,
+                        onFrameRateChange = onDanmakuFrameRateChange,
+                    )
+                    FeedSettingsSection(state, onClearExcludedFeed)
+                    SponsorBlockSettingsSection(
+                        state = state,
+                        onChange = onSponsorBlockChange,
+                        onEditServer = { editingServer = true },
+                    )
+                    AboutSettingsSection(
+                        state = state,
+                        onOpenGithub = onOpenGithub,
+                        onCheckUpdate = onCheckUpdate,
+                        onDownloadUpdate = onDownloadUpdate,
+                        onInstallUpdate = onInstallUpdate,
                     )
                 }
-            }
-
-            item("about") {
-                SectionTitle(stringResource(R.string.settings_section_about))
-                SettingRow(
-                    title = stringResource(R.string.settings_version),
-                    subtitle = "${BuildConfig.VERSION_NAME}(${BuildConfig.APPLICATION_ID})",
-                )
-                SettingRow(
-                    title = stringResource(R.string.settings_license),
-                    subtitle = "GPL-3.0-or-later",
-                )
-                SettingRow(
-                    title = stringResource(R.string.settings_github),
-                    onClick = onOpenGithub,
-                )
-                UpdateRow(
-                    state = state.update,
-                    onCheck = onCheckUpdate,
-                    onDownload = onDownloadUpdate,
-                    onInstall = onInstallUpdate,
-                )
             }
         }
     }
@@ -291,6 +202,188 @@ fun SettingsScreen(
             },
         )
     }
+}
+
+@Composable
+private fun AgentSettingsSection(
+    state: SettingsUiState,
+    onEdit: () -> Unit,
+    onSmokeTest: () -> Unit,
+) {
+    SectionTitle(stringResource(R.string.settings_section_agent))
+    val llm = state.llm
+    val notConfigured = stringResource(R.string.settings_not_configured)
+    SettingRow(
+        title = stringResource(R.string.settings_llm_base_url),
+        subtitle = llm?.baseUrl?.ifBlank { notConfigured }
+            ?: stringResource(R.string.settings_loading),
+        onClick = onEdit,
+    )
+    SettingRow(
+        title = stringResource(R.string.settings_api_key),
+        // 永远只显示是否配置,不显示遮蔽后的原文:遮蔽只挡眼睛,截图和录屏挡不住。
+        subtitle = if (llm?.apiKey.isNullOrEmpty()) {
+            notConfigured
+        } else {
+            stringResource(R.string.settings_configured)
+        },
+        onClick = onEdit,
+    )
+    SettingRow(
+        title = stringResource(R.string.settings_model),
+        subtitle = llm?.model.orEmpty().ifBlank { SettingsStore.DEFAULT_LLM_MODEL },
+        onClick = onEdit,
+    )
+    SettingRow(
+        title = stringResource(R.string.settings_llm_test),
+        subtitle = when (val test = state.llmTest) {
+            LlmTest.Idle -> stringResource(R.string.settings_llm_test_hint)
+            LlmTest.Running -> stringResource(R.string.settings_llm_test_running)
+            is LlmTest.Ok -> stringResource(R.string.settings_llm_test_ok, test.millis)
+            is LlmTest.Failed -> test.message
+        },
+        onClick = onSmokeTest,
+    )
+}
+
+@Composable
+private fun PlayerSettingsSection(
+    state: SettingsUiState,
+    onCodecChange: (CodecPreference) -> Unit,
+    onOpacityChange: (Float) -> Unit,
+    onScrollShowAreaChange: (Float) -> Unit,
+    onDensityChange: (DanmakuDensity) -> Unit,
+    onFrameRateChange: (DanmakuFrameRateCap) -> Unit,
+) {
+    SectionTitle(stringResource(R.string.settings_section_player))
+    CodecSection(
+        selected = state.codec,
+        hardwareCodecIds = state.hardwareCodecIds,
+        onChange = onCodecChange,
+    )
+    SliderSettingRow(
+        title = stringResource(R.string.settings_danmaku_opacity),
+        value = state.danmaku.opacity,
+        valueLabel = { stringResource(R.string.settings_danmaku_opacity_value, (it * 100).roundToInt()) },
+        onChange = onOpacityChange,
+    )
+    ChoiceSection(
+        title = stringResource(R.string.settings_danmaku_show_area),
+        // 说清它不管底部弹幕:调到 25% 之后底部那几条纹丝不动,不写清楚会被当成没生效。
+        subtitle = stringResource(R.string.settings_danmaku_show_area_subtitle),
+        options = SCROLL_SHOW_AREA_STEPS,
+        selected = SCROLL_SHOW_AREA_STEPS.minByOrNull { abs(it - state.danmaku.scrollShowArea) },
+        label = { stringResource(R.string.settings_danmaku_show_area_value, (it * 100).roundToInt()) },
+        onChange = onScrollShowAreaChange,
+    )
+    ChoiceSection(
+        title = stringResource(R.string.settings_danmaku_density),
+        options = DanmakuDensity.entries,
+        selected = state.danmaku.density,
+        label = {
+            stringResource(
+                when (it) {
+                    DanmakuDensity.STANDARD -> R.string.settings_danmaku_density_standard
+                    DanmakuDensity.UNLIMITED -> R.string.settings_danmaku_density_unlimited
+                },
+            )
+        },
+        onChange = onDensityChange,
+    )
+    ChoiceSection(
+        title = stringResource(R.string.settings_danmaku_frame_rate),
+        subtitle = stringResource(R.string.settings_danmaku_frame_rate_subtitle),
+        options = DanmakuFrameRateCap.entries,
+        selected = state.danmaku.frameRateCap,
+        label = {
+            stringResource(
+                when (it) {
+                    DanmakuFrameRateCap.FPS_30 -> R.string.settings_danmaku_frame_rate_30
+                    DanmakuFrameRateCap.FPS_60 -> R.string.settings_danmaku_frame_rate_60
+                    DanmakuFrameRateCap.DISPLAY -> R.string.settings_danmaku_frame_rate_display
+                },
+            )
+        },
+        onChange = onFrameRateChange,
+    )
+}
+
+@Composable
+private fun FeedSettingsSection(
+    state: SettingsUiState,
+    onClearExcludedFeed: () -> Unit,
+) {
+    if (state.excludedFeedCount <= 0) return
+    SectionTitle(stringResource(R.string.settings_section_feed))
+    SettingRow(
+        title = stringResource(R.string.settings_feed_clear_excluded),
+        subtitle = stringResource(R.string.settings_feed_excluded_count, state.excludedFeedCount),
+        onClick = onClearExcludedFeed,
+    )
+}
+
+@Composable
+private fun SponsorBlockSettingsSection(
+    state: SettingsUiState,
+    onChange: (SponsorBlockPrefs) -> Unit,
+    onEditServer: () -> Unit,
+) {
+    SectionTitle("SponsorBlock")
+    val prefs = state.sponsorBlock
+    ToggleSettingRow(
+        title = stringResource(R.string.settings_sponsorblock_toggle),
+        subtitle = stringResource(R.string.settings_sponsorblock_toggle_subtitle),
+        checked = prefs.enabled,
+        onCheckedChange = { onChange(prefs.copy(enabled = it)) },
+    )
+    if (prefs.enabled) {
+        CATEGORY_LABELS.forEach { (category, label) ->
+            ToggleSettingRow(
+                title = stringResource(label),
+                checked = category in prefs.categories,
+                onCheckedChange = { checked ->
+                    val next = if (checked) prefs.categories + category else prefs.categories - category
+                    onChange(prefs.copy(categories = next))
+                },
+                indent = true,
+                useCheckbox = true,
+            )
+        }
+        SettingRow(
+            title = stringResource(R.string.settings_sponsorblock_server),
+            subtitle = prefs.serverUrl,
+            onClick = onEditServer,
+        )
+    }
+}
+
+@Composable
+private fun AboutSettingsSection(
+    state: SettingsUiState,
+    onOpenGithub: () -> Unit,
+    onCheckUpdate: () -> Unit,
+    onDownloadUpdate: (UpdateInfo) -> Unit,
+    onInstallUpdate: (File) -> Unit,
+) {
+    SectionTitle(stringResource(R.string.settings_section_about))
+    SettingRow(
+        title = stringResource(R.string.settings_version),
+        subtitle = "${BuildConfig.VERSION_NAME}(${BuildConfig.APPLICATION_ID})",
+    )
+    SettingRow(
+        title = stringResource(R.string.settings_license),
+        subtitle = "GPL-3.0-or-later",
+    )
+    SettingRow(
+        title = stringResource(R.string.settings_github),
+        onClick = onOpenGithub,
+    )
+    UpdateRow(
+        state = state.update,
+        onCheck = onCheckUpdate,
+        onDownload = onDownloadUpdate,
+        onInstall = onInstallUpdate,
+    )
 }
 
 /**
@@ -351,21 +444,21 @@ private fun CodecSection(
         subtitle = stringResource(R.string.settings_codec_subtitle),
     )
     options.forEach { option ->
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
+        ListItem(
+            headlineContent = { Text(option.label) },
+            leadingContent = {
+                RadioButton(selected = option == selected, onClick = null)
+            },
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = Dimens.MinTouchTarget)
                 .selectable(
                     selected = option == selected,
                     role = Role.RadioButton,
                     onClick = { onChange(option) },
                 )
-                .padding(start = Spacing.Loose, end = Spacing.Comfortable),
-        ) {
-            RadioButton(selected = option == selected, onClick = null)
-            Text(option.label, modifier = Modifier.padding(start = Spacing.Cozy))
-        }
+                // 单选行是上面那条标题的子项,缩进一档;ListItem 已经给了 16dp 基础边距。
+                .padding(start = Spacing.Tight),
+        )
     }
 }
 
@@ -385,21 +478,21 @@ private fun <T> ChoiceSection(
 ) {
     SettingRow(title = title, subtitle = subtitle)
     options.forEach { option ->
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
+        ListItem(
+            headlineContent = { Text(label(option)) },
+            leadingContent = {
+                RadioButton(selected = option == selected, onClick = null)
+            },
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = Dimens.MinTouchTarget)
                 .selectable(
                     selected = option == selected,
                     role = Role.RadioButton,
                     onClick = { onChange(option) },
                 )
-                .padding(start = Spacing.Loose, end = Spacing.Comfortable),
-        ) {
-            RadioButton(selected = option == selected, onClick = null)
-            Text(label(option), modifier = Modifier.padding(start = Spacing.Cozy))
-        }
+                // 单选行是上面那条标题的子项,缩进一档;ListItem 已经给了 16dp 基础边距。
+                .padding(start = Spacing.Tight),
+        )
     }
 }
 
@@ -477,23 +570,38 @@ private fun SettingRow(
     subtitle: String? = null,
     onClick: (() -> Unit)? = null,
 ) {
-    Column(
+    ListItem(
+        headlineContent = { Text(title, style = MaterialTheme.typography.bodyLarge) },
+        supportingContent = subtitle?.let {
+            {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        trailingContent = if (onClick != null) {
+            {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            null
+        },
         modifier = Modifier
-            .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .heightIn(min = Dimens.MinTouchTarget)
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text(title, style = MaterialTheme.typography.bodyLarge)
-        subtitle?.let {
-            Text(
-                text = it,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(role = Role.Button, onClick = onClick)
+                } else {
+                    Modifier
+                },
             )
-        }
-    }
+            .fillMaxWidth(),
+    )
 }
 
 /**
@@ -509,39 +617,38 @@ private fun ToggleSettingRow(
     indent: Boolean = false,
     useCheckbox: Boolean = false,
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = Dimens.MinTouchTarget)
-            .toggleable(
-                value = checked,
-                role = if (useCheckbox) Role.Checkbox else Role.Switch,
-                onValueChange = onCheckedChange,
-            )
-            .padding(
-                start = if (indent) Spacing.Loose else Spacing.Comfortable,
-                end = Spacing.Comfortable,
-                top = Spacing.Tight,
-                bottom = Spacing.Tight,
-            ),
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
+    ListItem(
+        headlineContent = {
             Text(title, style = MaterialTheme.typography.bodyLarge)
-            subtitle?.let {
+        },
+        supportingContent = subtitle?.let {
+            {
                 Text(
                     text = it,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-        }
-        if (useCheckbox) {
-            Checkbox(checked = checked, onCheckedChange = null)
-        } else {
-            Switch(checked = checked, onCheckedChange = null)
-        }
-    }
+        },
+        trailingContent = {
+            if (useCheckbox) {
+                Checkbox(checked = checked, onCheckedChange = null)
+            } else {
+                Switch(checked = checked, onCheckedChange = null)
+            }
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            // toggleable 在 padding **外面**:反过来的话内边距那一圈不在触摸区里,涟漪也只
+            // 盖住中间一块。ListItem 自带 16dp 横向内边距和 56dp 起的行高,所以这里只补
+            // 子项相对父项的那一档缩进,不再重复给一份左右边距。
+            .toggleable(
+                value = checked,
+                role = if (useCheckbox) Role.Checkbox else Role.Switch,
+                onValueChange = onCheckedChange,
+            )
+            .padding(start = if (indent) Spacing.Tight else 0.dp),
+    )
 }
 
 /**
@@ -563,7 +670,7 @@ private fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Llm
                 OutlinedTextField(
                     value = baseUrl,
                     onValueChange = { baseUrl = it },
-                    label = { Text("Base URL") },
+                    label = { Text(stringResource(R.string.settings_llm_base_url)) },
                     singleLine = true,
                 )
                 OutlinedTextField(
