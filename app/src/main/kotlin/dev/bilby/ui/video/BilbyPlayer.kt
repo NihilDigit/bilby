@@ -102,7 +102,7 @@ import dev.bilby.player.cueAt
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.player.DanmakuFeed
 import dev.bilby.ui.player.DanmakuFontSizeSp
-import dev.bilby.ui.player.DanmakuLayer
+import dev.bilby.ui.player.PlayerDanmakuLayer
 import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SeekBarSegment
 import dev.bilby.ui.components.SubtitleTrackMenu
@@ -233,7 +233,7 @@ fun BilbyPlayer(
         onSeeked = { positionMillis, durationMillis -> reportProgress(positionMillis, durationMillis) },
         overlay = {
             // 弹幕层:字号由这里按形态给,层自己不认识"全屏"。
-            DanmakuLayer(
+            PlayerDanmakuLayer(
                 player = player,
                 surfacePlayer = surfacePlayer,
                 prefs = danmakuPrefs,

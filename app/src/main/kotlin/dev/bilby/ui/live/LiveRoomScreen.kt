@@ -60,7 +60,7 @@ import dev.bilby.ui.player.ControlButton
 import dev.bilby.ui.player.DanmakuButton
 import dev.bilby.ui.player.DanmakuFeed
 import dev.bilby.ui.player.DanmakuFontSizeSp
-import dev.bilby.ui.player.DanmakuLayer
+import dev.bilby.ui.player.PlayerDanmakuLayer
 import dev.bilby.ui.player.PlayerGestureOptions
 import dev.bilby.ui.player.PlayerShell
 import dev.bilby.ui.theme.Dimens
@@ -124,7 +124,7 @@ fun LiveRoomScreen(
                     // 亮度和音量照旧,它们跟内容是什么无关。
                     gestures = PlayerGestureOptions(seek = false, fastForward = false),
                     overlay = {
-                        DanmakuLayer(
+                        PlayerDanmakuLayer(
                             player = player,
                             surfacePlayer = surfacePlayer,
                             prefs = danmakuPrefs,
