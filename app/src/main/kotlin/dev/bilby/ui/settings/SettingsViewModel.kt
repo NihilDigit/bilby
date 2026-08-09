@@ -10,6 +10,9 @@ import androidx.lifecycle.viewModelScope
 import dev.bilby.data.CodecPreference
 import dev.bilby.agent.LlmClient
 import dev.bilby.data.LlmConfig
+import dev.bilby.data.DanmakuPrefs
+import dev.danmaku.compose.DanmakuDensity
+import dev.danmaku.compose.DanmakuFrameRateCap
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockPrefs
 import dev.bilby.player.DeviceCodecs
@@ -45,7 +48,8 @@ data class SettingsUiState(
     val sponsorBlock: SponsorBlockPrefs = SponsorBlockPrefs(),
     /** 本机真有硬解器的编码,决定编解码那一节列出哪几项。 */
     val hardwareCodecIds: Set<Int> = emptySet(),
-    val danmakuOpacity: Float = SettingsStore.DEFAULT_DANMAKU_OPACITY,
+    /** 弹幕设置整体存一份,不为每个档位开一个平行字段——理由同 VideoViewModel 的 danmakuPrefs。 */
+    val danmaku: DanmakuPrefs = DanmakuPrefs(),
     /** 首页排除了多少个 UP。为 0 时那一行不显示 —— 没排除过的人不需要看见这个概念。 */
     val excludedFeedCount: Int = 0,
     val update: UpdateState = UpdateState.Idle,
@@ -146,7 +150,7 @@ class SettingsViewModel(
                     codec = settings.playerPrefs.first().codec,
                     sponsorBlock = settings.sponsorBlockPrefs.first(),
                     hardwareCodecIds = DeviceCodecs.hardwareDecodableCodecIds,
-                    danmakuOpacity = settings.danmakuPrefs.first().opacity,
+                    danmaku = settings.danmakuPrefs.first(),
                 )
             }
         }
@@ -186,9 +190,27 @@ class SettingsViewModel(
         persist { settings.saveSponsorBlockPrefs(value) }
     }
 
+    // 四个设置各自落盘,不合成一次"整份 DanmakuPrefs 写回去"。整份写回会连 enabled 一起写,
+    // 而那一项的真实来源是播放页的弹幕按钮:设置页开着的时候用户在播放页关掉弹幕,这里再拖一下
+    // 透明度,就会把 enabled 按打开设置页那一刻的旧值覆盖回去。
     fun setDanmakuOpacity(value: Float) {
-        _state.update { it.copy(danmakuOpacity = value) }
+        _state.update { it.copy(danmaku = it.danmaku.copy(opacity = value)) }
         persist { settings.saveDanmakuOpacity(value) }
+    }
+
+    fun setDanmakuScrollShowArea(value: Float) {
+        _state.update { it.copy(danmaku = it.danmaku.copy(scrollShowArea = value)) }
+        persist { settings.saveDanmakuScrollShowArea(value) }
+    }
+
+    fun setDanmakuDensity(value: DanmakuDensity) {
+        _state.update { it.copy(danmaku = it.danmaku.copy(density = value)) }
+        persist { settings.saveDanmakuDensity(value) }
+    }
+
+    fun setDanmakuFrameRate(value: DanmakuFrameRateCap) {
+        _state.update { it.copy(danmaku = it.danmaku.copy(frameRateCap = value)) }
+        persist { settings.saveDanmakuFrameRate(value) }
     }
 
 }

@@ -5,7 +5,12 @@ import dev.bilby.api.BiliResult
 import dev.bilby.player.QueueItem
 
 
-data class QueueBuildResult(val items: List<QueueItem>, val startIndex: Int, val sourceLabel: String)
+/**
+ * 建好的队列来源。**不带"当前是第几条"**:调用方按 bvid 自己定位
+ * ([dev.bilby.player.PlaybackQueue.replaceKeeping])。下标在这里算好、到那边再用,中间隔着
+ * 一次网络往返,列表随时可能已经整体挪了一位。
+ */
+data class QueueBuildResult(val items: List<QueueItem>, val sourceLabel: String)
 
 /**
  * "听视频"播放队列的两个来源(DESIGN 2.4b):当前视频所属合集,或退化到 UP 空间投稿。
@@ -21,6 +26,18 @@ class QueueSourceRepository(
     private val spaceRepository: SpaceRepository,
     private val videoRepository: VideoRepository,
 ) {
+
+    /**
+     * `mid:bvid → 页号`,给空间投稿的定位当起点。
+     *
+     * 二分定位一条老投稿要 log2(页数) 次请求(三千条投稿约 7 次),而同一条视频被反复打开是
+     * 常态:退出再进、切集回来、通知栏切回来。
+     *
+     * **存页号而不是绝对下标**,因为页号能当场验证:把那一页拉回来看里面有没有它,没有就照常
+     * 二分。下标没有这种自证方式,UP 发一条新稿它就整体错位,而错位的下标会安静地建出一份
+     * 当前格是邻居的队列。
+     */
+    private val pageHints = ExpiringLruCache<String, Int>(PAGE_HINT_CACHE_SIZE, PAGE_HINT_TTL_NANOS)
 
     /**
      * 打开一条视频时的队列来源:先按合集,不属于合集才退到 UP 空间投稿。
@@ -61,7 +78,6 @@ class QueueSourceRepository(
         }
         return QueueBuildResult(
             items = items,
-            startIndex = startIndex,
             sourceLabel = "合集《${detail.seasonTitle}》· 共 ${items.size} 集",
         )
     }
@@ -100,7 +116,6 @@ class QueueSourceRepository(
         val windowed = span.subList(windowFrom, windowTo + 1)
         return QueueBuildResult(
             items = windowed.map { it.toQueueItem() },
-            startIndex = position - windowFrom,
             sourceLabel = "UP 主投稿 · 共 ${windowed.size} 条",
         )
     }
@@ -140,6 +155,14 @@ class QueueSourceRepository(
          * 三千条投稿约 7 次,且与视频有多老无关。
          */
         suspend fun locate(bvid: String, pubdate: Long): Int? {
+            val hintKey = "$mid:$bvid"
+            pageHints.get(hintKey)?.let { hinted ->
+                val position = load(hinted)?.indexOfFirst { it.bvid == bvid } ?: -1
+                if (position >= 0) return (hinted - 1) * PAGE_SIZE + position
+                // 页号还在,但那一页已经没有它了(UP 又发了几条,把它挤到下一页)。当没命中处理,
+                // 下面照常二分并把新页号写回去。load 的页缓存让这一页不会被再拉一次。
+            }
+
             var low = 1
             var high = 1 // 先取第一页,才知道总共有多少页
             var probes = 0
@@ -151,7 +174,10 @@ class QueueSourceRepository(
                 if (items.isEmpty()) return null
 
                 val position = items.indexOfFirst { it.bvid == bvid }
-                if (position >= 0) return (page - 1) * PAGE_SIZE + position
+                if (position >= 0) {
+                    pageHints.put(hintKey, page)
+                    return (page - 1) * PAGE_SIZE + position
+                }
 
                 val newest = items.first().publishedAtEpochSeconds
                 val oldest = items.last().publishedAtEpochSeconds
@@ -183,5 +209,14 @@ class QueueSourceRepository(
 
         /** 二分的探测上限。2^12 页 = 12 万条投稿,够到不了;它挡的是列表非单调时的死循环。 */
         const val MAX_PROBES = 12
+
+        /** 页号提示的容量。一次会话里来回打开的视频数量级就在这附近。 */
+        const val PAGE_HINT_CACHE_SIZE = 128
+
+        /**
+         * 30 分钟。命中之后还要拉那一页验证一次,所以过期时间不必短;它挡的是"这个 UP 这半天
+         * 发了太多稿,提示页号已经差出好几页"这种整体漂移。
+         */
+        val PAGE_HINT_TTL_NANOS = 30L * 60 * 1_000_000_000L
     }
 }

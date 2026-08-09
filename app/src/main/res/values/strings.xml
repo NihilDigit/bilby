@@ -58,6 +58,7 @@
     <string name="dynamic_type_live">直播动态</string>
     <string name="dynamic_type_other">动态</string>
     <string name="feed_exclude_up">不再显示 %1$s</string>
+    <string name="feed_read_marker">以上是新内容</string>
 
     <!-- 搜索 -->
     <string name="search_empty">搜索视频与 UP 主</string>
@@ -156,6 +157,7 @@
     <string name="video_part_label">P%1$d %2$s</string>
     <string name="video_find_related">找相关</string>
     <string name="video_queue_loading">加载队列…</string>
+    <string name="video_queue_incomplete">队列没建全,只有当前这条</string>
 
     <!-- 投币 / 收藏对话框 -->
     <string name="action_confirm">确认</string>
@@ -262,6 +264,17 @@
     <string name="settings_codec_subtitle">改动对下一个视频生效</string>
     <string name="settings_danmaku_opacity">弹幕透明度</string>
     <string name="settings_danmaku_opacity_value">%1$d%%</string>
+    <string name="settings_danmaku_show_area">滚动弹幕显示区域</string>
+    <string name="settings_danmaku_show_area_subtitle">只影响滚动和顶部弹幕，底部弹幕始终贴画面底沿</string>
+    <string name="settings_danmaku_show_area_value">%1$d%%</string>
+    <string name="settings_danmaku_density">同屏密度</string>
+    <string name="settings_danmaku_density_standard">标准</string>
+    <string name="settings_danmaku_density_unlimited">不限（仍受设备性能限制）</string>
+    <string name="settings_danmaku_frame_rate">弹幕帧率</string>
+    <string name="settings_danmaku_frame_rate_subtitle">只是弹幕层的绘制上限，与视频解码帧率无关</string>
+    <string name="settings_danmaku_frame_rate_30">30 fps</string>
+    <string name="settings_danmaku_frame_rate_60">60 fps</string>
+    <string name="settings_danmaku_frame_rate_display">跟随屏幕</string>
     <string name="settings_sponsorblock_toggle">自动跳过</string>
     <string name="settings_sponsorblock_toggle_subtitle">由社区标注的赞助、片头片尾等片段</string>
     <string name="settings_sponsorblock_server">服务器地址</string>

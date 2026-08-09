@@ -37,8 +37,8 @@ class PlaybackQueue(
     private val random: Random = Random.Default,
 ) {
     /**
-     * 可变只是为了 [updateCurrentCid] —— 队列的**内容和顺序都不会变**,
-     * 变的只有当前这一格记着哪一 P。别拿它当"可以往队列里加东西"的口子:
+     * 可变的两个理由:[updateCurrentCid] 换当前这一格记的分 P,以及 [replaceKeeping] 把起播时
+     * 那份只有一条的临时队列整份换成真正的来源。**别拿它当"可以往队列里加东西"的口子**:
      * 队列有限且由用户显式选定,能追加就等于恢复了被禁的自动续接(DESIGN 1.3)。
      */
     private val items: MutableList<QueueItem> = items.toMutableList()
@@ -95,6 +95,65 @@ class PlaybackQueue(
     fun updateCurrentCid(cid: Long) {
         val index = order.getOrNull(currentIndex) ?: return
         items[index] = items[index].copy(cid = cid)
+    }
+
+    /**
+     * 补当前这一格的展示信息(标题、UP 名、封面)。
+     *
+     * 起播时装的临时队列只有 bvid 和 cid —— 页面在拿到视频详情**之前**就把打开命令发出来了,
+     * 那时它自己也还不知道这条视频叫什么。这三样随后才到,通知栏和队列面板要的正是它们。
+     *
+     * **非空的新值胜出,空值一律不覆盖。** 从队列面板点进来的那条本来就带着完整信息,一次
+     * 空参数不该把它擦掉;而"这一格已经有值了就不再更新"也不对 —— 空间投稿来源的条目 upName
+     * 恒为空,永远等不到被补上。
+     *
+     * 返回是否真的改了什么,调用方据此决定要不要重发状态。
+     */
+    fun fillCurrentMetadata(title: String, upName: String, coverUrl: String): Boolean {
+        val index = order.getOrNull(currentIndex) ?: return false
+        val existing = items[index]
+        val updated = existing.copy(
+            title = title.ifEmpty { existing.title },
+            upName = upName.ifEmpty { existing.upName },
+            coverUrl = coverUrl.ifEmpty { existing.coverUrl },
+        )
+        if (updated == existing) return false
+        items[index] = updated
+        return true
+    }
+
+    /**
+     * 用补全好的完整来源换掉现有内容,当前这条按 [bvid] 重新定位。
+     *
+     * **这不是"往队列里追加"。** 换进来的仍是同一次打开所选定的那个有限集合(合集,或 UP
+     * 投稿里当前视频前后各 25 条),只是起播时先装了一份只有当前视频的临时队列,真正的来源
+     * 随后才建好。播到末尾再续一批仍然是被禁的。
+     *
+     * **按 bvid 定位而不是按下标。** 补全期间投稿列表可能已经变了(UP 发了新稿,整体后移
+     * 一位),照下标换会把当前格换成邻居,而 cid 还记着原来那条 —— bvid 与 cid 分属两条视频,
+     * playurl 回 -404「啥都木有」,队列界面高亮的又是第三条。这条线上出过。
+     *
+     * 新队列里没有 [bvid] 时返回 false 且保持原样,由调用方留在临时队列上。
+     */
+    fun replaceKeeping(bvid: String, newItems: List<QueueItem>): Boolean {
+        val index = newItems.indexOfFirst { it.bvid == bvid }
+        if (index < 0) return false
+        // 已经补到的 cid 跟着走。来源列表给的是这条视频的默认 P1,直接采用会让"正在播第 3 P"
+        // 在队列里被记成 P1,走开再回来就落回 P1。
+        val keptCid = current()?.takeIf { it.bvid == bvid }?.cid ?: 0L
+        val wasShuffled = shuffled
+
+        items.clear()
+        items.addAll(newItems)
+        if (keptCid != 0L) items[index] = items[index].copy(cid = keptCid)
+        order = MutableList(items.size) { it }
+        currentIndex = index
+
+        // 随机表是按旧内容生成的,整份作废。重新打开时 setShuffled 会把当前这条放到表首,
+        // 于是正在响的这条不受影响 —— 与用户手动切随机时的行为是同一条路径。
+        shuffled = false
+        if (wasShuffled) setShuffled(true)
+        return true
     }
 
     /** 跳到指定 bvid,不在队列里返回 null。 */

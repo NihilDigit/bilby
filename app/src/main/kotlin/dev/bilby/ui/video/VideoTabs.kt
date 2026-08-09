@@ -123,7 +123,15 @@ data class QueueUiState(
     val currentBvid: String? = null,
     val sourceLabel: String = "",
     val shuffled: Boolean = false,
-    val loading: Boolean = false,
+    /**
+     * 完整队列还没建好。**此刻 [items] 里那一条不是队列,是占位** —— 起播时先装的临时队列
+     * (见 AudioPlaybackService.openVideo),把它当队列摆出来会读成"这个 UP 只有一条投稿"。
+     *
+     * 这里不再看播放状态里的 `loading`:那一个说的是取流,而取流和建队列现在是并行的两件事。
+     */
+    val enriching: Boolean = false,
+    /** 队列没建成,停在临时队列上。可重试,见 [QueueContent]。 */
+    val incomplete: Boolean = false,
 )
 
 /**
@@ -146,6 +154,7 @@ fun VideoTabs(
     queue: QueueUiState,
     onPlayQueueItem: (bvid: String) -> Unit,
     onToggleShuffle: () -> Unit,
+    onRetryQueue: () -> Unit,
     onUpClick: (Long) -> Unit,
     staffFollowed: Set<Long>?,
     onFollowStaff: (Long) -> Unit,
@@ -246,6 +255,7 @@ fun VideoTabs(
                     queue = queue,
                     onPlayQueueItem = onPlayQueueItem,
                     onToggleShuffle = onToggleShuffle,
+                    onRetryQueue = onRetryQueue,
                     relation = relation,
                     favFolders = favFolders,
                     addedToView = addedToView,
@@ -290,6 +300,7 @@ private fun IntroTab(
     queue: QueueUiState,
     onPlayQueueItem: (bvid: String) -> Unit,
     onToggleShuffle: () -> Unit,
+    onRetryQueue: () -> Unit,
     onUpClick: (Long) -> Unit,
     staffFollowed: Set<Long>?,
     onFollowStaff: (Long) -> Unit,
@@ -363,6 +374,7 @@ private fun IntroTab(
                     onPlayQueueItem = onPlayQueueItem,
                     onToggleShuffle = onToggleShuffle,
                     onFindRelated = onFindRelated,
+                    onRetryQueue = onRetryQueue,
                     modifier = Modifier.padding(top = Spacing.Hair),
                 )
             }
@@ -909,16 +921,17 @@ private fun QueueSection(
     onPlayQueueItem: (String) -> Unit,
     onToggleShuffle: () -> Unit,
     onFindRelated: () -> Unit,
+    onRetryQueue: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    if (!queue.loading && queue.items.isEmpty()) return
+    if (!queue.enriching && !queue.incomplete && queue.items.isEmpty()) return
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = MaterialTheme.shapes.large,
         modifier = modifier.fillMaxWidth(),
     ) {
-        QueueContent(queue, onPlayQueueItem, onToggleShuffle, onFindRelated)
+        QueueContent(queue, onPlayQueueItem, onToggleShuffle, onFindRelated, onRetryQueue)
     }
 }
 
@@ -928,6 +941,7 @@ private fun QueueContent(
     onPlayQueueItem: (String) -> Unit,
     onToggleShuffle: () -> Unit,
     onFindRelated: () -> Unit,
+    onRetryQueue: () -> Unit,
 ) {
     Column(
         modifier = Modifier.padding(Spacing.Tight),
@@ -963,11 +977,33 @@ private fun QueueContent(
             }
         }
 
-        if (queue.loading) {
+        if (queue.enriching) {
             InlineProgress(
                 stringResource(R.string.video_queue_loading),
                 Modifier.padding(vertical = Spacing.Tight),
             )
+        } else if (queue.incomplete) {
+            // 只有一条的队列自己解释不了自己:看不出是"这个 UP 只发过这一条"还是"来源没拉到"。
+            // 说出后者并给一次重试,重试走的是再发一遍 OPEN_VIDEO(见 VideoScreen)。
+            // 文案不染 error 色,重试用 text button —— 一次拉取失败不该被渲染成需要下决心的事
+            // (风格指南 §2.4)。
+            Row(
+                modifier = Modifier.padding(vertical = Spacing.Tight),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                Text(
+                    text = stringResource(R.string.video_queue_incomplete),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(
+                    onClick = onRetryQueue,
+                    contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                ) {
+                    Text(stringResource(R.string.action_retry))
+                }
+            }
         } else {
             val listState = rememberLazyListState()
 

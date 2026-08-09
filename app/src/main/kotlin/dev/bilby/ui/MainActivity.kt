@@ -446,7 +446,13 @@ private fun FeedPane(
         key = "root-feed",
         factory = viewModelFactory {
             initializer {
-                FeedViewModel(container.dynamicRepository, container.followRepository, container.settings)
+                FeedViewModel(
+                    container.dynamicRepository,
+                    container.followRepository,
+                    container.settings,
+                    container.feedReadPositionRepository,
+                    container.feedCacheRepository,
+                )
             }
         },
     )
@@ -460,6 +466,7 @@ private fun FeedPane(
         onUpClick = onUserClick,
         onExcludeUp = vm::excludeUp,
         onOpenFollowings = onOpenFollowings,
+        onScrollPositionChanged = vm::onVisibleTopChanged,
     )
 }
 
@@ -566,6 +573,9 @@ private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
         onSmokeTestLlm = vm::smokeTestLlm,
         onCodecChange = vm::setCodec,
         onDanmakuOpacityChange = vm::setDanmakuOpacity,
+        onDanmakuScrollShowAreaChange = vm::setDanmakuScrollShowArea,
+        onDanmakuDensityChange = vm::setDanmakuDensity,
+        onDanmakuFrameRateChange = vm::setDanmakuFrameRate,
         onSponsorBlockChange = vm::updateSponsorBlock,
         onClearExcludedFeed = vm::clearExcludedFeedMids,
         onOpenGithub = {
@@ -843,8 +853,18 @@ private fun VideoPane(
     onFindRelated: (bvid: String, title: String, upName: String) -> Unit,
     onOpenVideo: (String) -> Unit,
 ) {
+    // **key 与 bvid 无关,一个播放页只有一个 VideoViewModel。**
+    //
+    // 原先是 `key = "video-$bvid"`:切集不进 backstack(见 VideoRoute),所以这个 NavEntry 的
+    // ViewModelStore 在整页出栈之前一直不清 —— key 一变只是**选**了个新实例,旧实例还在 store
+    // 里活着,连播走一条就攒一个,每个都挂着自己那份 AudioPlaybackService.state 的 collect。
+    // Compose 的 key 决定选哪个实例,它不负责删掉旧 key 对应的那个。
+    //
+    // 换视频改由 VideoViewModel.switchTo 表达,它是幂等的,所以下面那句 LaunchedEffect 无脑
+    // 喊即可。多个播放页同时在 backstack 上时互不干扰:每个 NavEntry 有独立的 store,
+    // 常量 key 在各自的 store 里各是各的。
     val vm: VideoViewModel = viewModel(
-        key = "video-$bvid",
+        key = "video",
         factory = viewModelFactory {
             initializer {
                 VideoViewModel(
@@ -863,6 +883,9 @@ private fun VideoPane(
             }
         },
     )
+    // 幂等,所以不需要在这里记"上一次是哪条"——那份状态正是以前散在 Compose 层、却管不了
+    // 旧实例死活的东西。
+    LaunchedEffect(bvid) { vm.switchTo(bvid) }
     val state by vm.state.collectAsStateWithLifecycle()
     val related by vm.related.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -876,9 +899,9 @@ private fun VideoPane(
     val subtitleTracks by vm.subtitleTracks.collectAsStateWithLifecycle()
     val subtitleLan by vm.subtitleLan.collectAsStateWithLifecycle()
     val subtitleCues by vm.subtitleCues.collectAsStateWithLifecycle()
-    val danmakuEnabled by vm.danmakuEnabled.collectAsStateWithLifecycle()
-    val danmakuOpacity by vm.danmakuOpacity.collectAsStateWithLifecycle()
+    val danmakuPrefs by vm.danmakuPrefs.collectAsStateWithLifecycle()
     val danmakuPool by vm.danmakuPool.collectAsStateWithLifecycle()
+    val specialDanmakuPool by vm.specialDanmakuPool.collectAsStateWithLifecycle()
     val staffFollowed by vm.staffFollowed.collectAsStateWithLifecycle()
 
     // 评论用 aid 作 oid,要等视频详情回来才知道 —— 但**不能拿它卡住整页**。
@@ -886,11 +909,15 @@ private fun VideoPane(
     // 原先这里是 `val aid = state.detail?.aid ?: return`:详情没回来就整页不画。切集时新页
     // 要等一次网络往返才有东西,那段时间屏幕上是空的。SoT 之后这个等待已经没必要了 ——
     // 标题、UP 名、封面队列项里就有,播放器的画面更是早就在放了。
+    // key 与 aid 无关,理由同上面的 VideoViewModel:切集不进 backstack,按 aid 分 key 只会在
+    // 同一个 store 里越攒越多。换视频由 switchTo 表达。
     val commentVm: CommentViewModel? = state.detail?.aid?.let { aid ->
-        viewModel(
-            key = "comment-$aid",
+        val commentViewModel: CommentViewModel = viewModel(
+            key = "comment",
             factory = viewModelFactory { initializer { CommentViewModel(container.commentRepository, aid) } },
         )
+        LaunchedEffect(aid) { commentViewModel.switchTo(aid) }
+        commentViewModel
     }
     val commentState = commentVm?.state?.collectAsStateWithLifecycle()?.value ?: CommentUiState()
 
@@ -936,10 +963,10 @@ private fun VideoPane(
         onSelectSubtitle = vm::selectSubtitle,
         staffFollowed = staffFollowed,
         onFollowStaff = vm::followStaff,
-        danmakuEnabled = danmakuEnabled,
+        danmakuPrefs = danmakuPrefs,
         onDanmakuEnabledChange = vm::setDanmakuEnabled,
-        danmakuOpacity = danmakuOpacity,
         danmakuPool = danmakuPool,
+        specialDanmakuPool = specialDanmakuPool,
     )
 }
 

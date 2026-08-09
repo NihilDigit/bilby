@@ -22,6 +22,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dev.bilby.BilbyApplication
 import dev.bilby.BiliLog
+import dev.bilby.PerfTrace
 import dev.bilby.R
 import dev.bilby.api.BiliResult
 import dev.bilby.data.PlayInfo
@@ -52,6 +53,13 @@ data class AudioPlaybackUiState(
     val current: QueueItem? = null,
     /** 正在播的分 P。队列装的是视频,cid 是"这条视频放到哪一 P"。 */
     val currentCid: Long = 0,
+    /**
+     * **播放器此刻真正装着的那条**,与 [current] 不是一回事:队列在收到打开命令的那一刻就
+     * 指向新视频了,而播放器要等取流回来才切过去,这中间画面上还是上一条的最后一帧。
+     *
+     * 播放页据此决定挂画面还是画占位。用队列那一条来判会把上一条视频的残帧当成本页的画面。
+     */
+    val loadedBvid: String? = null,
     val isPlaying: Boolean = false,
     /** 1-based,直接显示。队列空时为 0。 */
     val positionInQueue: Int = 0,
@@ -72,6 +80,17 @@ data class AudioPlaybackUiState(
     /** 画质菜单要用的清单,以及正在播的那一份流。取流归服务,页面只读。 */
     val playInfo: PlayInfo? = null,
     val currentQuality: Int = 0,
+    /**
+     * 队列还在补全,现在这份队列只有正在播的这一条。**播放不等它**,所以这不是"正在加载"
+     * ([loading] 说的是取流);它给队列面板用,免得那一格看起来像"这个 UP 只有一条投稿"。
+     */
+    val queueEnriching: Boolean = false,
+    /**
+     * 队列补全失败了,现在这份队列只有正在播的这一条。**播放本身是好的**,失败的只是"这条
+     * 视频属于哪个集合"。摆出来是因为队列里只剩一条这件事本身看不出是"这个 UP 只有一条投稿"
+     * 还是"来源没拉到",而后者重试一下往往就好了。重试点是再发一次 [ACTION_OPEN_VIDEO]。
+     */
+    val queueIncomplete: Boolean = false,
 )
 
 /**
@@ -111,6 +130,22 @@ class AudioPlaybackService : MediaSessionService() {
     private var queue = PlaybackQueue(emptyList())
     private var sourceLabel = ""
     private var prepareJob: Job? = null
+
+    /**
+     * 队列补全。**和取流那条完全分开**:起播不等它,它失败也只是队列短一格,不影响正在播的
+     * 这一条。合在 [prepareJob] 里的话,取消一个就取消了另一个。
+     */
+    private var enrichJob: Job? = null
+
+    /** 每打开一条新视频 +1。迟到的补全结果靠它作废,见 [enrichQueue]。 */
+    private var openGeneration = 0
+
+    /** 补全在飞/补全失败,两者都表示当前停在只有一条的临时队列上。 */
+    private var queueEnriching = false
+    private var queueIncomplete = false
+
+    /** 起播链路的测量。只在 [openVideo] 起头,只在 [finishOpenChain] 收尾。 */
+    private var openChain: PerfTrace.Chain? = null
 
     /** 当前这一条已经连续失败了几次。见 [retryAfterFailure]。真的播出声(STATE_READY)时清零。 */
     private var failedAttempts = 0
@@ -176,6 +211,9 @@ class AudioPlaybackService : MediaSessionService() {
     override fun onDestroy() {
         prepareJob?.cancel()
         retryJob?.cancel()
+        // 下面的 scope.cancel() 本来就会带走它,列在这里是为了和上面两个 Job 一起读:
+        // 服务没了之后没有任何一个还在飞的请求值得跑完。
+        enrichJob?.cancel()
         scope.cancel()
         session?.release()
         session = null
@@ -197,8 +235,13 @@ class AudioPlaybackService : MediaSessionService() {
      * 界面,走的都是这条分支。原先页面交的是流地址,"是不是同一次播放"只能靠字符串相等去猜,
      * 而 playurl 每次签名都不同,于是重试还得专门加一个标志位去绕过那道比较。
      *
-     * 队列里已经有这条(合集里换一集、点队列中的一条)就跳过去;没有就**重做队列**:
-     * 先按合集找,不属于合集才退到 UP 投稿(DESIGN 2.4b),两条都拿不到就退成只有这一条的队列。
+     * 队列里已经有这条(合集里换一集、点队列中的一条)就跳过去;没有就**先装一份只有这条的
+     * 临时队列并立刻起播**,真正的来源(合集,或退到 UP 投稿,DESIGN 2.4b)由 [enrichQueue]
+     * 在后台补上。
+     *
+     * 起播曾经压在建队列后面。建队列要拉一次视频详情、再二分探测空间投稿(约 log2(页数) 次
+     * 请求),这些都是"这条视频属于哪个集合"的元数据,和"这条视频怎么放出声"没有关系 ——
+     * 每一次点开都要先等完一轮它们。队列仍然是唯一真相,只是它先短一格。
      */
     private fun openVideo(args: Bundle) {
         val bvid = args.getString(EXTRA_BVID).orEmpty()
@@ -209,8 +252,25 @@ class AudioPlaybackService : MediaSessionService() {
         val cid = args.getLong(EXTRA_CID)
 
         if (queue.current()?.bvid == bvid) {
-            // 同一条视频。换 P 才需要动,否则连状态都不用重发。
-            if (cid != 0L && cid != loadedCid) playPart(cid) else publishState()
+            // **这一趟多半是来送元数据的。** 页面拿到 bvid 就发了第一遍命令(那时它还不知道
+            // 这条视频叫什么),详情回来再发第二遍 —— 落到的就是这里。不采纳的话通知栏和队列
+            // 面板上这条永远没有标题和封面。
+            queue.fillCurrentMetadata(
+                title = args.getString(EXTRA_TITLE).orEmpty(),
+                upName = args.getString(EXTRA_UP_NAME).orEmpty(),
+                coverUrl = args.getString(EXTRA_COVER_URL).orEmpty(),
+            )
+            // 换 P 才需要动播放器,否则只重发状态。
+            //
+            // **起播还在飞的时候一律不动。** 第二遍命令带的 cid 正是服务自己会从同一份详情里
+            // 取到的那个,而此刻 loadedCid 还停在上一条视频上,照着它判就成了"要换 P" ——
+            // 结果是把刚发出去的 playurl 取消掉重来一遍,起播反而更慢。真正的换 P 走的是
+            // ACTION_PLAY_PART,不经过这里。
+            val preparing = prepareJob?.isActive == true
+            if (cid != 0L && cid != loadedCid && !preparing) playPart(cid) else publishState()
+            // 上一次补全失败就停在了单条队列上。这条命令在每次回到播放页时都会再发一遍,
+            // 拿它当重试点,不必为此单开一条命令和一个按钮。
+            if (queueIncomplete) enrichQueue(bvid)
             return
         }
         if (queue.seekToBvid(bvid) != null) {
@@ -218,41 +278,85 @@ class AudioPlaybackService : MediaSessionService() {
             return
         }
 
-        val fallback = QueueItem(
-            bvid = bvid,
-            cid = cid,
-            title = args.getString(EXTRA_TITLE).orEmpty(),
-            upName = args.getString(EXTRA_UP_NAME).orEmpty(),
-            coverUrl = args.getString(EXTRA_COVER_URL).orEmpty(),
-            durationSeconds = 0,
-        )
+        finishOpenChain("superseded")
+        openChain = PerfTrace.chain("openVideo").also { it.mark("command") }
 
-        prepareJob?.cancel()
-        retryJob?.cancel()
-        publishState(loading = true)
-        prepareJob = scope.launch {
-            val shuffled = settings.playbackPrefs.first().shuffled
-            val built = queueSourceRepository.forVideo(bvid)
-            // **建出来的队列当前这一格必须就是要打开的这条**,下面 updateCurrentCid 才有意义。
-            // 这里曾经只判 built != null:空间投稿定位不到时它会降级成"从最新 N 条开始",
-            // 那份队列不含要打开的视频,于是 cid 被写到了最新那条头上 —— bvid 与 cid 分属两条
-            // 视频,playurl 回 -404「啥都木有」,而队列界面显示的 Active 是另一条。
-            val candidate = built?.let { PlaybackQueue(it.items, it.startIndex, shuffled) }
-            if (built != null && candidate != null && candidate.current()?.bvid == bvid) {
-                queue = candidate
-                sourceLabel = built.sourceLabel
-                // 合集给的 cid 是这一集的 P1,而页面可能是带着某一 P 进来的。
-                if (cid != 0L) queue.updateCurrentCid(cid)
-            } else {
-                // 来源没拿到、或拿到的队列里没有这条:仍然要有一份队列,否则"队列是唯一真相"
-                // 就有了缺口。宁可只有一条也不能是一条错的 —— 后者会静默播错视频。
-                BiliLog.w("建队列失败或来源里没有当前视频,退成单条队列 bvid=$bvid")
-                queue = PlaybackQueue(listOf(fallback))
-                sourceLabel = ""
-            }
-            playCurrent()
-        }
+        // 临时队列用命令里带着的东西现造,**带多少算多少**:页面在拿到详情之前就发第一遍
+        // 命令了,那时它手里只有 bvid。缺的 cid 由 playCurrent 用详情补,标题和封面由第二遍
+        // 命令补(见上面的幂等分支)。
+        queue = PlaybackQueue(
+            listOf(
+                QueueItem(
+                    bvid = bvid,
+                    cid = cid,
+                    title = args.getString(EXTRA_TITLE).orEmpty(),
+                    upName = args.getString(EXTRA_UP_NAME).orEmpty(),
+                    coverUrl = args.getString(EXTRA_COVER_URL).orEmpty(),
+                    durationSeconds = 0,
+                )
+            )
+        )
+        sourceLabel = ""
+        openChain?.mark("tempQueue")
+
+        playCurrent()
+        enrichQueue(bvid)
     }
+
+    /**
+     * 把临时队列换成真正的来源。与起播并行,失败只是队列短一格。
+     *
+     * **结果要过两道校验才敢用**,各挡一件事:
+     * - generation 挡"补全期间用户又打开了别的视频"。那一次已经装了自己的临时队列并起播,
+     *   这份结果属于上一条,写进去就是把队列换成另一条视频的集合。
+     * - 当前 bvid 再挡一次,因为队列还会被 SEEK_TO_BVID、通知栏的上/下一条移动,那些路径
+     *   不碰 generation。
+     *
+     * 替换本身按 bvid 定位当前项(见 [PlaybackQueue.replaceKeeping]),不依赖来源给的下标:
+     * 定位不到时来源会降级成"从最新 N 条开始",那份列表里根本没有这条视频。
+     */
+    private fun enrichQueue(bvid: String) {
+        enrichJob?.cancel()
+        queueIncomplete = false
+        queueEnriching = true
+        val generation = ++openGeneration
+        val chain = PerfTrace.chain("queueEnrich")
+        enrichJob = scope.launch {
+            val built = queueSourceRepository.forVideo(bvid)
+            chain.mark("built")
+            if (generation != openGeneration || queue.current()?.bvid != bvid) {
+                // 不动 queueEnriching:此刻它属于顶掉这次的那一轮补全。
+                chain.mark("stale")
+                chain.end()
+                return@launch
+            }
+            queueEnriching = false
+            if (built == null || !queue.replaceKeeping(bvid, built.items)) {
+                // 宁可只有一条,也不能换上一份不含这条视频的队列:那会让页面带来的 cid 落到
+                // 别人头上,playurl 回 -404「啥都木有」,而队列界面高亮的是第三条。
+                BiliLog.w("队列补全失败或来源里没有当前视频,留在单条队列 bvid=$bvid")
+                queueIncomplete = true
+                chain.mark("failed")
+                chain.end()
+                publishQueueChange()
+                return@launch
+            }
+            sourceLabel = built.sourceLabel
+            queue.setShuffled(settings.playbackPrefs.first().shuffled)
+            chain.count("items", queue.size.toLong())
+            chain.end()
+            publishQueueChange()
+        }
+        // 补全在飞这件事本身要发出去:上面 playCurrent 发的那一份还是"队列只有一条"。
+        publishQueueChange()
+    }
+
+    /**
+     * 队列变了,但播放没变。**不重新装载**:当前项、cid 和播放位置都没动,播放器不知道这件事
+     * 发生过。loading 沿用上一次发布的值 —— 换队列的时刻取流可能还在飞,顺手清成 false 就是
+     * 在别人的进度上关掉了转圈。
+     */
+    private fun publishQueueChange() = publishState(loading = _state.value.loading)
 
     /**
      * 取当前这条的流并播。失败不往下跳,退避后重试同一条,见 [retryAfterFailure]。
@@ -290,7 +394,17 @@ class AudioPlaybackService : MediaSessionService() {
             // 会被服务端当成无效 cid,表现是每一条都"取流失败",队列静默空转。
             val cid = item.cid.takeIf { it != 0L } ?: run {
                 when (val detail = videoRepository.getVideoDetail(item.bvid)) {
-                    is BiliResult.Ok -> detail.value.cid
+                    is BiliResult.Ok -> {
+                        // 顺手把展示信息补上。**必须赶在 load() 之前**:MediaSession 是在
+                        // 装载那一刻来读 currentMetadata() 的,晚一步通知栏就会挂着一条没有
+                        // 标题的媒体,而之后没有任何播放器事件会让它再读一次。
+                        queue.fillCurrentMetadata(
+                            title = detail.value.title,
+                            upName = detail.value.up.name,
+                            coverUrl = detail.value.coverUrl,
+                        )
+                        detail.value.cid
+                    }
                     else -> {
                         BiliLog.w("补 cid 失败 bvid=${item.bvid}")
                         retryAfterFailure(getString(R.string.playback_error_detail), playWhenReady)
@@ -302,6 +416,7 @@ class AudioPlaybackService : MediaSessionService() {
 
             val prefs = settings.playerPrefs.first()
             val quality = currentQuality.takeIf { it != 0 } ?: prefs.defaultQuality
+            openChain?.mark("playurlStart")
             when (
                 val result = videoRepository.getPlayUrl(
                     item.bvid,
@@ -311,6 +426,7 @@ class AudioPlaybackService : MediaSessionService() {
                 )
             ) {
                 is BiliResult.Ok -> {
+                    openChain?.mark("playurlEnd")
                     playInfo = result.value
                     currentQuality = quality
                     val streams = result.value.streams
@@ -350,6 +466,7 @@ class AudioPlaybackService : MediaSessionService() {
     ) {
         player.setMediaSource(PlayerFactory.createMediaSource(videoUrl, audioUrl))
         player.prepare()
+        openChain?.mark("prepare")
         if (startPositionMillis > 0) player.seekTo(startPositionMillis)
         loadedBvid = bvid
         loadedCid = cid
@@ -398,6 +515,7 @@ class AudioPlaybackService : MediaSessionService() {
      * 这和"播完即停、不从推荐池续接"是同一条约束:决策点不替用户取消。
      */
     private fun retryAfterFailure(reason: String, playWhenReady: Boolean) {
+        finishOpenChain("failed")
         failedAttempts++
         lastError = reason
         if (failedAttempts >= MAX_ATTEMPTS) {
@@ -448,6 +566,7 @@ class AudioPlaybackService : MediaSessionService() {
         _state.value = AudioPlaybackUiState(
             current = queue.current(),
             currentCid = loadedCid,
+            loadedBvid = loadedBvid,
             isPlaying = player.isPlaying,
             items = queue.itemsNatural(),
             positionInQueue = if (queue.size > 0) queue.currentIndex + 1 else 0,
@@ -458,7 +577,23 @@ class AudioPlaybackService : MediaSessionService() {
             error = lastError,
             playInfo = playInfo,
             currentQuality = currentQuality,
+            queueEnriching = queueEnriching,
+            queueIncomplete = queueIncomplete,
         )
+    }
+
+    /**
+     * 起播链路只在这一处收尾,收完就把引用清掉 —— 同一条链路 end 两次会打出两行,而这些行
+     * 是拿来互相对比的。
+     *
+     * 首帧是这条链路真正的终点,但**听视频关掉视频轨之后不会有首帧**,起播失败和被下一次
+     * 打开顶掉也走不到那里。所以那几处各自带着自己的终点事件来收,免得链路永远不落地。
+     */
+    private fun finishOpenChain(event: String) {
+        val chain = openChain ?: return
+        openChain = null
+        chain.mark(event)
+        chain.end()
     }
 
     /** 通知栏与锁屏显示的元数据。流本身不带 tag,只能由队列提供。 */
@@ -479,6 +614,7 @@ class AudioPlaybackService : MediaSessionService() {
             // 真的播出声了才算这条链路是好的。清零放在 load() 里是不够的:装载成功、解码失败
             // 的组合会让每一条都先清零再失败,退避的档位永远停在第一级。
             if (playbackState == Player.STATE_READY) {
+                openChain?.mark("ready")
                 failedAttempts = 0
                 lastError = null
             }
@@ -495,6 +631,9 @@ class AudioPlaybackService : MediaSessionService() {
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) = publishState()
+
+        /** 画面出来了才算这次打开走完。音频先出声,但用户等的是这一帧。 */
+        override fun onRenderedFirstFrame() = finishOpenChain("firstFrame")
 
         override fun onPlayerError(error: PlaybackException) {
             // 直链可能在播放途中过期(403),这属于"被吞掉的失败":不留日志的话表现只是

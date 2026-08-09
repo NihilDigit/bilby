@@ -5,8 +5,10 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * 弹幕帧循环的状态与调度。持有一个 [DanmakuClock] 和一份已编译的 [DanmakuTimeline],
+ * 弹幕帧循环的状态与调度。持有一个 [DanmakuClock] 和一份已编排的 [DanmakuTimeline],
  * 通过 [run] 驱动一个持续到协程被取消为止的帧循环,每次应该重绘时回调一次。
+ *
+ * 这一层是 emitter:只按全局播放时间查询 timeline,不判碰撞、不碰轨道状态。
  *
  * 帧循环在两种情况下整体挂起,不空转 vsync —— `while(true){ withFrameNanos }` 本身会形成
  * 自我维持的循环,而"UI surface 出帧 + 系统合成"这条链路很贵:
@@ -23,16 +25,28 @@ import kotlinx.coroutines.withTimeoutOrNull
 class DanmakuHostState(
     private val clock: DanmakuClock,
     private val timeline: DanmakuTimeline,
-    private val frameRateCap: DanmakuFrameRateCap = DanmakuFrameRateCap.FPS_60,
+    val frameRateCap: DanmakuFrameRateCap = DanmakuFrameRateCap.FPS_60,
 ) {
     private val wake = Channel<Unit>(capacity = Channel.CONFLATED)
 
     /**
-     * [timeline] 编译时用的画布宽度。`DanmakuHost` 拿它跟 Canvas 实际像素宽度比对 ——
-     * 两者不一致时所有滚动弹幕的位置都会算错,而画面上只表现成"位置怪怪的",指不出原因,
-     * 所以这个属性存在的意义就是让那次比对能做起来,不是提供给别的用途。
+     * 排布时用的画布尺寸与视口。`DanmakuHost` 一方面拿它画(轨道 y、裁剪矩形、滚动起点全部
+     * 取自这里,不再各算一份),另一方面拿画布尺寸跟 Canvas 实际尺寸比对——两者不一致时所有
+     * 位置都会算错,而画面上只表现成"位置怪怪的",指不出原因。
      */
-    val compiledScreenWidthPx: Float get() = timeline.config.screenWidthPx
+    val layout: DanmakuLayoutConfig get() = timeline.layout
+
+    /**
+     * 遍历 `positionMillis` 时刻会在屏的弹幕。渲染层拿它做**预热**:提前一两秒把文字排版和
+     * display list 准备好,好让绘制帧一次测量都不做。
+     *
+     * 和 [run] 的帧回调分开是因为两者问的是不同的问题 —— 帧回调问"现在画什么",这里问"马上
+     * 要用到什么"。把预热塞进帧回调的 `visible` 列表里做不到:那个列表按定义只含已经在屏的,
+     * 而预热的全部意义是在上屏**之前**把贵的活干完。
+     */
+    fun forEachVisibleAt(positionMillis: Long, visitor: (DanmakuFlightPlan) -> Unit) {
+        timeline.visibleAt(positionMillis, visitor)
+    }
 
     /** 通知帧循环重新评估当前状态。见类注释:哪些事件需要调用这个。 */
     fun notifyChanged() {
@@ -44,18 +58,16 @@ class DanmakuHostState(
      * Composable 离开组合,由 `LaunchedEffect` 负责取消)。[onFrame] 拿到的 `visible`
      * 列表每次调用前都会被清空重填,不在调用之间保留身份 —— 需要跨帧持有就自己拷贝。
      */
-    suspend fun run(onFrame: (visible: List<CompiledDanmaku>, positionMillis: Long) -> Unit) {
-        val buffer = mutableListOf<CompiledDanmaku>()
-        var lastFrameNanos = 0L
+    suspend fun run(onFrame: (visible: List<DanmakuFlightPlan>, positionMillis: Long) -> Unit) {
+        val buffer = mutableListOf<DanmakuFlightPlan>()
+        val frameScheduler = FrameDeadlineScheduler(frameRateCap.frameIntervalNanos)
         // 直接读 clock.positionMillis,不在这一层再插值。历史上这里有一个按锚点 + 经过时间 ×
         // 倍速做外推的 PositionInterpolator,理由是"positionMillis 通常是粗粒度轮询来源"——
-        // 那个前提对 Bilby 的播放器不成立:`clock` 包的是 Media3 的 MediaController,它的
-        // `getCurrentPosition()` 本身就是每次调用现算,内部同样按"锚点位置 + 经过时间 × 倍速"
-        // 做外推(`MediaUtils.getUpdatedCurrentPositionMs`,可查 media3-session 源码),
-        // 也就是说这里再插值一层等于叠了第二个各推各的估计器——两层锚点在权威更新落地的
-        // 时刻不同步,倍速刚变化那一小段会互相打架,表现为"抖一下"。既然下层已经连续,
-        // 上层插值不会让位置更平滑,只会多引入一处分歧,删掉即可:`positionMillis` 本身
-        // 就是这里唯一需要的连续读数。
+        // 那个前提对 Bilby 的播放器不成立:`clock` 包的是同进程 ExoPlayer 或 MediaController,
+        // 两者的 `getCurrentPosition()` 本身就是每次调用现算,内部同样按"锚点位置 + 经过时间 ×
+        // 倍速"做外推,也就是说这里再插值一层等于叠了第二个各推各的估计器——两层锚点在权威
+        // 更新落地的时刻不同步,倍速刚变化那一小段会互相打架,表现为"抖一下"。既然下层已经
+        // 连续,上层插值不会让位置更平滑,只会多引入一处分歧,删掉即可。
         var coarsePosition = clock.positionMillis
 
         while (true) {
@@ -69,19 +81,14 @@ class DanmakuHostState(
                 onFrame(buffer, coarsePosition)
                 awaitNextWakeUp(coarsePosition)
                 coarsePosition = clock.positionMillis
+                // 挂起期间时间轴上出现了一大段空档,相位要重新对齐,不能拿旧 deadline 补画。
+                frameScheduler.reset()
                 continue
             }
 
             withFrameNanos { frameNanos ->
-                // 跳帧判断整个都在回调内部:不够就只记账,不重新采样、不回调 —— 零状态写入。
-                // 阈值要留余量,**不能严格等于** 1/fps。面板刷新率和上限相等时(60Hz 屏配
-                // FPS_60),vsync 间隔就在 16.66~16.68ms 之间抖,只要某一帧略小于 16.667 就被
-                // 跳掉,下一帧攒到 33.3ms 才过 —— 通过、跳过、通过……实际掉到 30fps 上下,
-                // 而且节奏不均。留 10% 余量之后:60Hz 屏上每个 vsync 都过(真 60),
-                // 120Hz 屏上 8.33ms 仍被跳、16.67ms 通过(也是真 60)。FPS_30 同理。
-                val capNanos = frameRateCap.minFrameIntervalNanos * 9 / 10
-                if (capNanos > 0 && frameNanos - lastFrameNanos < capNanos) return@withFrameNanos
-                lastFrameNanos = frameNanos
+                // 跳帧判断整个都在回调内部:不出帧就只更新 deadline,不重新采样、不回调。
+                if (!frameScheduler.shouldDraw(frameNanos)) return@withFrameNanos
 
                 coarsePosition = clock.positionMillis
                 buffer.clear()
@@ -100,7 +107,7 @@ class DanmakuHostState(
     private suspend fun awaitNextWakeUp(position: Long) {
         val next = timeline.nextEntryAfter(position)
         val scheduledDelay = if (next != null && clock.isPlaying) {
-            ((next.t0Millis - position) / clock.playbackSpeed.coerceAtLeast(MIN_PLAYBACK_SPEED)).toLong()
+            ((next.emitTimeMillis - position) / clock.playbackSpeed.coerceAtLeast(MIN_PLAYBACK_SPEED)).toLong()
         } else {
             null
         }

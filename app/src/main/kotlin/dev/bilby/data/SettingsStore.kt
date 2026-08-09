@@ -13,6 +13,8 @@ import androidx.datastore.preferences.preferencesDataStore
 import dev.bilby.BuildConfig
 import dev.bilby.player.DEFAULT_PREFERRED_CODECS
 import dev.bilby.player.VideoCodecId
+import dev.danmaku.compose.DanmakuDensity
+import dev.danmaku.compose.DanmakuFrameRateCap
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -139,11 +141,19 @@ class SettingsStore(context: Context) {
         store.edit { p -> p[KEY_SUBTITLE_LAN] = lan }
     }
 
-    /** 弹幕开关。**默认关**——和字幕一样,是产品要求,不是"还没设置过"才关。 */
+    /**
+     * 弹幕开关。**默认关**——和字幕一样,是产品要求,不是"还没设置过"才关。
+     *
+     * 滚动弹幕显示区域、同屏密度、帧率三项存的是"用户选了什么",不是引擎内部的轨道数或帧
+     * 间隔:后者会随字号、画布尺寸和面板刷新率变,存进去只会在换设备后变成一份错误的记忆。
+     */
     val danmakuPrefs: Flow<DanmakuPrefs> = store.data.map { p ->
         DanmakuPrefs(
             enabled = p[KEY_DANMAKU_ENABLED] ?: false,
             opacity = (p[KEY_DANMAKU_OPACITY] ?: DEFAULT_DANMAKU_OPACITY).coerceIn(0.1f, 1f),
+            scrollShowArea = (p[KEY_DANMAKU_SCROLL_SHOW_AREA] ?: DEFAULT_DANMAKU_SCROLL_SHOW_AREA).coerceIn(0.1f, 1f),
+            density = danmakuDensityOf(p[KEY_DANMAKU_DENSITY]),
+            frameRateCap = danmakuFrameRateOf(p[KEY_DANMAKU_FRAME_RATE]),
         )
     }
 
@@ -153,6 +163,24 @@ class SettingsStore(context: Context) {
 
     suspend fun saveDanmakuOpacity(opacity: Float) {
         store.edit { p -> p[KEY_DANMAKU_OPACITY] = opacity.coerceIn(0.1f, 1f) }
+    }
+
+    /**
+     * 存比例而不是四个档位的序号:档位是界面的事,加一档不该让旧值全部错位。
+     *
+     * 名字里的 scroll 不是修饰词,是范围:它只管滚动和顶部弹幕能铺到哪儿,底部弹幕照旧贴
+     * 画面底沿。叫"弹幕显示区域"会让下一个人以为它管全部三类。
+     */
+    suspend fun saveDanmakuScrollShowArea(fraction: Float) {
+        store.edit { p -> p[KEY_DANMAKU_SCROLL_SHOW_AREA] = fraction.coerceIn(0.1f, 1f) }
+    }
+
+    suspend fun saveDanmakuDensity(density: DanmakuDensity) {
+        store.edit { p -> p[KEY_DANMAKU_DENSITY] = density.name }
+    }
+
+    suspend fun saveDanmakuFrameRate(cap: DanmakuFrameRateCap) {
+        store.edit { p -> p[KEY_DANMAKU_FRAME_RATE] = cap.name }
     }
 
     /** 首页动态里排除的 UP 主。只影响本机首页，不改变 B 站的关注关系。 */
@@ -258,9 +286,25 @@ class SettingsStore(context: Context) {
         private val KEY_SUBTITLE_LAN = stringPreferencesKey("subtitle_lan")
         private val KEY_DANMAKU_ENABLED = booleanPreferencesKey("danmaku_enabled")
         private val KEY_DANMAKU_OPACITY = floatPreferencesKey("danmaku_opacity")
+        private val KEY_DANMAKU_SCROLL_SHOW_AREA = floatPreferencesKey("danmaku_scroll_show_area")
+        private val KEY_DANMAKU_DENSITY = stringPreferencesKey("danmaku_density")
+        private val KEY_DANMAKU_FRAME_RATE = stringPreferencesKey("danmaku_frame_rate")
         private val KEY_EXCLUDED_FEED_MIDS = stringSetPreferencesKey("excluded_feed_mids")
 
         const val DEFAULT_DANMAKU_OPACITY = 1f
+
+        /**
+         * 滚动弹幕从画面顶部起占 75%,底下 25% 不铺。铺得够满,同时给画面底部留一条不被滚动
+         * 弹幕糊住的带。界面上给 25/50/75/100 四档,存的是比例本身,加减档位不会让旧值错位。
+         */
+        const val DEFAULT_DANMAKU_SCROLL_SHOW_AREA = 0.75f
+
+        /** 认不出来的值(降级、手改、将来删档)一律回到默认档,不抛异常。 */
+        private fun danmakuDensityOf(name: String?): DanmakuDensity =
+            DanmakuDensity.entries.firstOrNull { it.name == name } ?: DanmakuDensity.STANDARD
+
+        private fun danmakuFrameRateOf(name: String?): DanmakuFrameRateCap =
+            DanmakuFrameRateCap.entries.firstOrNull { it.name == name } ?: DanmakuFrameRateCap.FPS_60
 
         const val DEFAULT_SB_SERVER = "https://www.bsbsb.top"
 
@@ -325,7 +369,18 @@ data class SponsorBlockPrefs(
 /** 空字符串是关(默认值)。非空时是某条字幕轨的语言代码,如 `ai-zh`。 */
 data class SubtitlePrefs(val lan: String = "")
 
-data class DanmakuPrefs(val enabled: Boolean = false, val opacity: Float = 1f)
+/**
+ * 弹幕设置。[scrollShowArea] 是**滚动与顶部**弹幕能占画面高度的比例(界面上的 25/50/75/100%
+ * 四档),底部弹幕不受它约束;[density] 决定用哪个调度器排布;[frameRateCap] 是弹幕层自己的
+ * 绘制上限,和视频解码帧率无关。
+ */
+data class DanmakuPrefs(
+    val enabled: Boolean = false,
+    val opacity: Float = 1f,
+    val scrollShowArea: Float = SettingsStore.DEFAULT_DANMAKU_SCROLL_SHOW_AREA,
+    val density: DanmakuDensity = DanmakuDensity.STANDARD,
+    val frameRateCap: DanmakuFrameRateCap = DanmakuFrameRateCap.FPS_60,
+)
 
 data class LlmConfig(
     val baseUrl: String,

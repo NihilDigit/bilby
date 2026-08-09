@@ -16,6 +16,8 @@ import dev.bilby.player.DEFAULT_PREFERRED_CODECS
 import dev.bilby.player.SelectedStreams
 import dev.bilby.player.selectStreams
 import dev.bilby.player.videoQualityLabel
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CompletableDeferred
 
 /** 播放页要显示的一切。分 P 与合集分集都摊平成列表,cid 已经取好,播放器那边不用再挖嵌套。 */
 data class VideoDetail(
@@ -120,8 +122,54 @@ fun PlayInfo.resumeAtMillisFor(cid: Long): Long {
 
 class VideoRepository(private val client: BiliClient) {
 
-    suspend fun getVideoDetail(bvid: String): BiliResult<VideoDetail> =
-        client.getData<VideoDetailDto>(VIEW_URL, mapOf("bvid" to bvid)).map { it.toDomain() }
+    private val detailCache = ExpiringLruCache<String, VideoDetail>(DETAIL_CACHE_SIZE, DETAIL_TTL_NANOS)
+
+    /** 正在飞的详情请求,按 bvid 归并。见 [getVideoDetail]。 */
+    private val detailInFlight = ConcurrentHashMap<String, CompletableDeferred<VideoDetail?>>()
+
+    /**
+     * 视频详情。**同一条视频的并发请求合并成一次,并在很短的时间内复用结果。**
+     *
+     * 打开一条视频时这份详情会被问两遍:播放页要标题、统计和分 P,播放服务建队列要
+     * `ugc_season` 和 UP 的 mid。两次请求几乎同时发出,谁都不知道对方存在,而它们要的是
+     * 同一份响应 —— 多出来的那次纯粹是在风控额度上花钱。
+     *
+     * TTL 只有 [DETAIL_TTL_NANOS],覆盖的就是这个"几乎同时"的窗口。不敢再长:点赞、投币、
+     * 收藏数走的是本地乐观更新、按约定不重拉(CLAUDE.md),缓存留太久会让退出再进来时看到
+     * 一个比刚才更旧的数字。
+     *
+     * 失败不进缓存也不共享:等待方拿到 null 时自己重来一次。把别人的失败当成自己的失败,
+     * 会让"页面报错但播放正常"这类组合无从解释。
+     */
+    suspend fun getVideoDetail(bvid: String): BiliResult<VideoDetail> {
+        while (true) {
+            detailCache.get(bvid)?.let { return BiliResult.Ok(it) }
+
+            val own = CompletableDeferred<VideoDetail?>()
+            val running = detailInFlight.putIfAbsent(bvid, own) ?: own
+            if (running !== own) {
+                running.await()?.let { return BiliResult.Ok(it) }
+                // 那一次被取消或失败了(播放页退出、切集都会取消调用方)。自己重来一遍:
+                // 循环回到开头时 in-flight 那一格已经空出来,这次由自己当发起方。
+                continue
+            }
+
+            var fetched: VideoDetail? = null
+            try {
+                val result = client.getData<VideoDetailDto>(VIEW_URL, mapOf("bvid" to bvid))
+                    .map { it.toDomain() }
+                if (result is BiliResult.Ok) {
+                    fetched = result.value
+                    detailCache.put(bvid, result.value)
+                }
+                return result
+            } finally {
+                // 先摘牌再放人,顺序反过来的话被放出来的等待方会重新等到这块已经作废的牌上。
+                detailInFlight.remove(bvid, own)
+                own.complete(fetched)
+            }
+        }
+    }
 
     /**
      * UP 主等级(+顺带粉丝数,这一轮不显示,留着给以后用)。公开接口,不需要登录态、
@@ -307,5 +355,46 @@ class VideoRepository(private val client: BiliClient) {
 
         /** PiliPlus 的默认 qn(notes §1.1),1080P 高清。 */
         const val DEFAULT_QUALITY = 80
+
+        /** 详情缓存:够装下一个合集里连着看的十几条,再多就是在留没人会回头的东西。 */
+        const val DETAIL_CACHE_SIZE = 16
+
+        /** 30 秒。理由见 [getVideoDetail]:它要盖住的是"同时问两遍"那个窗口,不是省流量。 */
+        val DETAIL_TTL_NANOS = 30L * 1_000_000_000L
+    }
+}
+
+/**
+ * 有上限、会过期的小缓存,按访问顺序淘汰。
+ *
+ * **两条都要有**:只设过期时间的话,连着翻几十条视频就把整批留在内存里等它们自己老去;
+ * 只设容量的话,一份过期数据会因为一直被读到而永远留在表里,并且一直被当成新的。
+ *
+ * 时钟用 [System.nanoTime]:它是单调的,不会被校时拽着走,而这里只做差。
+ */
+internal class ExpiringLruCache<K : Any, V : Any>(
+    private val maxSize: Int,
+    private val ttlNanos: Long,
+) {
+    private class Entry<V>(val value: V, val storedAtNanos: Long)
+
+    private val entries = object : LinkedHashMap<K, Entry<V>>(16, 0.75f, /* accessOrder = */ true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, Entry<V>>): Boolean =
+            size > maxSize
+    }
+
+    @Synchronized
+    fun get(key: K): V? {
+        val entry = entries[key] ?: return null
+        if (System.nanoTime() - entry.storedAtNanos > ttlNanos) {
+            entries.remove(key)
+            return null
+        }
+        return entry.value
+    }
+
+    @Synchronized
+    fun put(key: K, value: V) {
+        entries[key] = Entry(value, System.nanoTime())
     }
 }

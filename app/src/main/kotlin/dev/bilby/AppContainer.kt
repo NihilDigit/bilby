@@ -30,6 +30,8 @@ import dev.bilby.data.TvLoginRepository
 import dev.bilby.data.VideoActionRepository
 import dev.bilby.data.VideoRepository
 import dev.bilby.data.db.BilbyDatabase
+import dev.bilby.data.db.FeedCacheRepository
+import dev.bilby.data.db.FeedReadPositionRepository
 import kotlinx.coroutines.flow.first
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -91,6 +93,14 @@ class AppContainer(context: Context) {
     val dynamicRepository: DynamicRepository by lazy { DynamicRepository(biliClient) }
 
     val database: BilbyDatabase by lazy { BilbyDatabase.create(appContext) }
+
+    val feedReadPositionRepository: FeedReadPositionRepository by lazy {
+        FeedReadPositionRepository(database.feedReadPositionDao())
+    }
+
+    val feedCacheRepository: FeedCacheRepository by lazy {
+        FeedCacheRepository(database.feedCacheItemDao(), database.feedCacheCursorDao())
+    }
 
     val videoRepository: VideoRepository by lazy { VideoRepository(biliClient) }
 

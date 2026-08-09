@@ -30,7 +30,16 @@ class DanmakuMapperTest {
     }
 
     @Test
-    fun `7、8、9(高级、代码、BAS)整条跳过`() {
+    fun `7 不进普通弹幕那一层,8、9 整条丢弃`() {
+        // mode 7 走 special 那条独立的路,这里给它一份合法的 content;8/9 的内容是脚本,
+        // 明确不支持,两者都不该出现在任何一份输出里。
+        val segment = listOf(
+            raw(mode = 7, content = SPECIAL_CONTENT),
+            raw(mode = 8, content = "some script"),
+            raw(mode = 9, content = "def anim{}"),
+        ).toMappedSegment()
+        assertEquals(emptyList<Any>(), segment.normal)
+        assertEquals(1, segment.special.size)
         listOf(7, 8, 9).forEach { mode ->
             assertNull(raw(mode = mode).toDanmakuOrNull())
         }
@@ -56,6 +65,7 @@ class DanmakuMapperTest {
         id: Long = 1,
         idStr: String = "1",
         fontSize: Int = 0,
+        content: String = "test",
     ) = RawDanmakuElem(
         id = id,
         idStr = idStr,
@@ -63,6 +73,11 @@ class DanmakuMapperTest {
         mode = mode,
         fontSize = fontSize,
         color = 0xFFFFFF,
-        content = "test",
+        content = content,
     )
+
+    private companion object {
+        const val SPECIAL_CONTENT =
+            """[100,200,"1-0",4,"hi",0,0,300,400,1000,0,1,"黑体",0]"""
+    }
 }

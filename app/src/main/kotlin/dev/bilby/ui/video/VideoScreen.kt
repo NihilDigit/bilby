@@ -59,7 +59,9 @@ import dev.bilby.data.VideoRelation
 import dev.bilby.player.AudioPlaybackService
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
+import dev.bilby.data.DanmakuPrefs
 import dev.danmaku.compose.Danmaku
+import dev.danmaku.compose.SpecialDanmaku
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.listen.ListenScreen
 import dev.bilby.ui.theme.Spacing
@@ -124,12 +126,12 @@ fun VideoScreen(
     subtitleCues: List<SubtitleCue> = emptyList(),
     onSelectSubtitle: (String) -> Unit = {},
     /** 弹幕总开关,默认关。只在看视频时有意义——听视频没有画面挂弹幕层。 */
-    danmakuEnabled: Boolean = false,
+    danmakuPrefs: DanmakuPrefs = DanmakuPrefs(),
     onDanmakuEnabledChange: (Boolean) -> Unit = {},
     /** 弹幕整体不透明度,由设置页 Slider 持久化。 */
-    danmakuOpacity: Float = 1f,
     /** 已拉到的弹幕池,时间轴的编译在 BilbyPlayer 里做(需要 Compose 层的测量与画布宽度)。 */
     danmakuPool: List<Danmaku> = emptyList(),
+    specialDanmakuPool: List<SpecialDanmaku> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -199,7 +201,11 @@ fun VideoScreen(
     // 到播放器真正切过去之间有一段取流 + prepare 的窗口,这段时间 surfacePlayer 渲染的还是
     // 上一条视频的最后几帧——传给 BilbyPlayer,由它决定挂画面还是画占位(不在这里暂停或
     // 销毁播放器,那会打断后台连续播放)。
-    val matchesCurrentPage = audioState.current?.bvid == bvid
+    //
+    // 判据是**播放器装着的那条**,不是队列指着的那条:打开命令一到队列就指向新视频了,
+    // 而取流还要几百毫秒。拿队列判的话,这段时间画面会被当成本页的挂上去,用户看到的是
+    // 上一条视频冻住的最后一帧。
+    val matchesCurrentPage = audioState.loadedBvid == bvid
 
     /** 队列的唯一来源是服务。页面只是把它摆出来,不自己攒一份。 */
     val shownQueue = QueueUiState(
@@ -207,7 +213,11 @@ fun VideoScreen(
         currentBvid = audioState.current?.bvid,
         sourceLabel = audioState.sourceLabel,
         shuffled = audioState.shuffled,
-        loading = audioState.loading && audioState.items.isEmpty(),
+        // 判据从"取流转圈且队列是空的"换成"完整队列建好了没有"。起播现在不等建队列,队列里
+        // 那一条是临时占位而不是队列内容(见 AudioPlaybackService.openVideo),按旧判据永远
+        // 是"有队列",面板上会摆出一条孤零零的视频。
+        enriching = audioState.queueEnriching,
+        incomplete = audioState.queueIncomplete,
     )
 
     /** 发一条自定义命令的简写。控制一律走 controller,不碰 currentPlayer。 */
@@ -222,10 +232,25 @@ fun VideoScreen(
      * 于是转屏、退出全屏、从听视频退回、通知栏切过一条之后再回到界面,全都不会重新装载。
      * 原先页面交的是流地址,"是不是同一次播放"只能靠字符串相等去猜,而 playurl 每次签名
      * 都不同 —— 那正是重试当初必须再加一个 force 标志位去绕过的东西。
+     *
+     * **这句话发两遍**,因为知道 bvid 和知道这条视频叫什么之间隔着一次网络请求:
+     * 拿到 bvid 就发第一遍,服务据此立刻取流;详情回来再发一遍,补上标题、UP、封面和真正的
+     * cid。第二遍落在服务的"同一条视频"分支上,只补元数据、不重新装载。
      */
+    LaunchedEffect(active, bvid) {
+        if (active == null) return@LaunchedEffect
+        // 不带 cid:服务会用视频详情补,而那份详情正是这个页面此刻也在等的同一份请求
+        // (VideoRepository 按 bvid 合并并发详情请求),不会多打一次接口。
+        send(AudioPlaybackService.ACTION_OPEN_VIDEO, bundleOf(AudioPlaybackService.EXTRA_BVID to bvid))
+    }
+
     LaunchedEffect(active, state.detail?.bvid) {
         val detail = state.detail ?: return@LaunchedEffect
         if (active == null) return@LaunchedEffect
+        // **详情必须是这一页这条视频的。** 视频页现在整页只有一个 ViewModel、靠 switchTo 换
+        // 内容,上一条的详情有可能还挂在状态里;不认身份就会拿旧 bvid 去开播,把用户刚点开的
+        // 这条顶掉。
+        if (detail.bvid != bvid) return@LaunchedEffect
         send(
             AudioPlaybackService.ACTION_OPEN_VIDEO,
             bundleOf(
@@ -234,6 +259,25 @@ fun VideoScreen(
                 AudioPlaybackService.EXTRA_TITLE to detail.title,
                 AudioPlaybackService.EXTRA_UP_NAME to detail.up.name,
                 AudioPlaybackService.EXTRA_COVER_URL to detail.coverUrl,
+            ),
+        )
+    }
+
+    /**
+     * 队列没建全时的重试。**没有专门的命令**:再发一遍 OPEN_VIDEO 就是重试 —— 它落在服务的
+     * "同一条视频"分支,那里看到队列还停在临时队列上就会重新补全一次。
+     */
+    val retryQueue: () -> Unit = {
+        val detail = state.detail
+        // **不带 cid。** 带的话服务会拿它和正在播的那一 P 比,而这里给得出的只有默认 P1 ——
+        // 在多 P 视频的第 3 P 上点一下重试,人会被送回第 1 P。重建队列和播到哪一 P 无关。
+        send(
+            AudioPlaybackService.ACTION_OPEN_VIDEO,
+            bundleOf(
+                AudioPlaybackService.EXTRA_BVID to bvid,
+                AudioPlaybackService.EXTRA_TITLE to detail?.title.orEmpty(),
+                AudioPlaybackService.EXTRA_UP_NAME to detail?.up?.name.orEmpty(),
+                AudioPlaybackService.EXTRA_COVER_URL to detail?.coverUrl.orEmpty(),
             ),
         )
     }
@@ -423,12 +467,12 @@ fun VideoScreen(
                 currentSubtitleLan = subtitleLan,
                 onSubtitleTrackChange = onSelectSubtitle,
                 subtitleCues = subtitleCues,
-                danmakuEnabled = danmakuEnabled,
+                danmakuPrefs = danmakuPrefs,
                 onDanmakuEnabledChange = onDanmakuEnabledChange,
-                danmakuOpacity = danmakuOpacity,
                 locked = locked,
                 onLockedChange = { locked = it },
                 danmakuPool = danmakuPool,
+                specialDanmakuPool = specialDanmakuPool,
                 danmakuCid = audioState.currentCid,
                 matchesCurrentPage = matchesCurrentPage,
                 placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
@@ -504,12 +548,12 @@ fun VideoScreen(
                         currentSubtitleLan = subtitleLan,
                         onSubtitleTrackChange = onSelectSubtitle,
                         subtitleCues = subtitleCues,
-                        danmakuEnabled = danmakuEnabled,
+                        danmakuPrefs = danmakuPrefs,
                         onDanmakuEnabledChange = onDanmakuEnabledChange,
-                        danmakuOpacity = danmakuOpacity,
-                        locked = locked,
+                                locked = locked,
                         onLockedChange = { locked = it },
                         danmakuPool = danmakuPool,
+                        specialDanmakuPool = specialDanmakuPool,
                         danmakuCid = audioState.currentCid,
                         matchesCurrentPage = matchesCurrentPage,
                         placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
@@ -568,6 +612,7 @@ fun VideoScreen(
                     queue = shownQueue,
                     onPlayQueueItem = onPlayQueueItem,
                     onToggleShuffle = toggleShuffle,
+                    onRetryQueue = retryQueue,
                     onUpClick = onUpClick,
                     staffFollowed = staffFollowed,
                     onFollowStaff = onFollowStaff,

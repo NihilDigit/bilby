@@ -18,8 +18,14 @@ internal data class RawDanmakuElem(
 )
 
 /** 解析一条 `DanmakuElem` 消息体(已经是外层 length-delimited 切出来的那一段字节)。 */
-internal fun parseDanmakuElem(bytes: ByteArray): RawDanmakuElem {
-    val reader = DanmakuProtoReader(bytes)
+internal fun parseDanmakuElem(bytes: ByteArray): RawDanmakuElem =
+    parseDanmakuElem(DanmakuProtoReader(bytes))
+
+/**
+ * 解析一条 `DanmakuElem`。入参是限定在这条子消息区间内的 reader,不是切出来的字节副本——
+ * 子消息的边界由 reader 自己的 `end` 保证,见 [DanmakuProtoReader.readMessage]。
+ */
+internal fun parseDanmakuElem(reader: DanmakuProtoReader): RawDanmakuElem {
     var id = 0L
     var idStr = ""
     var progress = 0
@@ -57,7 +63,7 @@ internal fun parseDmSegMobileReply(bytes: ByteArray): List<RawDanmakuElem> {
     while (reader.hasNext()) {
         val (field, wireType) = reader.readTag()
         if (field == 1 && wireType == DanmakuProtoReader.WIRE_LEN) {
-            elems.add(parseDanmakuElem(reader.readLengthDelimited()))
+            elems.add(parseDanmakuElem(reader.readMessage()))
         } else {
             reader.skip(wireType)
         }

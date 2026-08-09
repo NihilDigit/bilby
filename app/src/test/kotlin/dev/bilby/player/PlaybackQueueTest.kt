@@ -2,7 +2,9 @@ package dev.bilby.player
 
 import kotlin.random.Random
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -62,6 +64,81 @@ class PlaybackQueueTest {
             coverUrl = "",
             durationSeconds = 60,
         )
+    }
+}
+
+/**
+ * 起播先装一份只有当前视频的临时队列,完整来源随后换上来(AudioPlaybackService.enrichQueue)。
+ * 这几条覆盖那次替换里会静默播错视频的分支;"替换时没有重新 prepare"由服务那边不调 playCurrent
+ * 保证,在这一层测不到。
+ */
+class ReplaceKeepingTest {
+
+    private fun item(bvid: String, cid: Long = 0) = QueueItem(bvid, cid, bvid, "up", "", 0)
+
+    /** 临时队列换成完整来源:当前这条按 bvid 落位,而不是落在来源列表的开头。 */
+    @Test
+    fun `replacement positions on the current bvid`() {
+        val queue = PlaybackQueue(listOf(item("B", cid = 7)))
+
+        assertTrue(queue.replaceKeeping("B", listOf(item("A"), item("B"), item("C"))))
+        assertEquals("B", queue.current()?.bvid)
+        assertEquals(1, queue.currentIndex)
+        assertEquals(3, queue.size)
+    }
+
+    /** 来源给的是这条视频的默认 P1,而正在播的那一 P 是页面带进来的,不能被它盖掉。 */
+    @Test
+    fun `replacement keeps the part being played`() {
+        val queue = PlaybackQueue(listOf(item("B", cid = 7)))
+
+        queue.replaceKeeping("B", listOf(item("A", cid = 1), item("B", cid = 2)))
+        assertEquals(7L, queue.current()?.cid)
+    }
+
+    /**
+     * 迟到的补全结果不能覆盖当前队列。用户在补全期间换了视频时,服务那边靠 generation 挡;
+     * 这里是第二道:结果里根本没有正在播的这条,说明它属于上一次打开,或者来源定位不到时
+     * 降级成了"从最新 N 条开始"的那份列表。
+     */
+    @Test
+    fun `a result without the current video is refused`() {
+        val queue = PlaybackQueue(listOf(item("B", cid = 7)))
+
+        assertFalse(queue.replaceKeeping("B", listOf(item("X"), item("Y"))))
+        assertEquals("B", queue.current()?.bvid)
+        assertEquals(7L, queue.current()?.cid)
+        assertEquals(1, queue.size)
+    }
+
+    /**
+     * 页面拿到 bvid 就发打开命令,标题和封面要等详情回来才补。空值不覆盖已有值——从队列点进来
+     * 的那条本来就带着完整信息,而后续那几条命令是不带元数据的。
+     */
+    @Test
+    fun `metadata fills in blanks without clobbering what is there`() {
+        val queue = PlaybackQueue(listOf(QueueItem("B", 0, "", "", "", 0)))
+
+        assertTrue(queue.fillCurrentMetadata("标题", "UP", "cover"))
+        assertFalse(queue.fillCurrentMetadata("", "", ""))
+        assertEquals("标题", queue.current()?.title)
+        assertEquals("UP", queue.current()?.upName)
+        assertEquals("cover", queue.current()?.coverUrl)
+    }
+
+    /** 随机是开着的时候补全:表要按新内容重来,而正在响的这条不能被换掉。 */
+    @Test
+    fun `replacement rebuilds the shuffle order without changing what is playing`() {
+        val queue = PlaybackQueue(listOf(item("B")), random = Random(1))
+        queue.setShuffled(true)
+
+        queue.replaceKeeping("B", (0..9).map { item("v$it") } + item("B"))
+
+        assertTrue(queue.shuffled)
+        assertEquals("B", queue.current()?.bvid)
+        assertEquals(11, queue.size)
+        // 打开随机时当前这条被放到表首,于是 N / M 是 1 / 11。
+        assertEquals(0, queue.currentIndex)
     }
 }
 

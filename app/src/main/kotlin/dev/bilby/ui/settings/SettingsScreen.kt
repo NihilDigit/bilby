@@ -45,12 +45,16 @@ import java.io.File
 import dev.bilby.R
 import dev.bilby.data.CodecPreference
 import dev.bilby.data.LlmConfig
+import dev.danmaku.compose.DanmakuDensity
+import dev.danmaku.compose.DanmakuFrameRateCap
+import dev.danmaku.compose.DanmakuViewport
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockPrefs
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.video.CATEGORY_LABELS
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
@@ -71,6 +75,9 @@ fun SettingsScreen(
     onSmokeTestLlm: () -> Unit,
     onCodecChange: (CodecPreference) -> Unit,
     onDanmakuOpacityChange: (Float) -> Unit,
+    onDanmakuScrollShowAreaChange: (Float) -> Unit,
+    onDanmakuDensityChange: (DanmakuDensity) -> Unit,
+    onDanmakuFrameRateChange: (DanmakuFrameRateCap) -> Unit,
     onSponsorBlockChange: (SponsorBlockPrefs) -> Unit,
     onOpenGithub: () -> Unit,
     onClearExcludedFeed: () -> Unit,
@@ -137,9 +144,48 @@ fun SettingsScreen(
                 )
                 SliderSettingRow(
                     title = stringResource(R.string.settings_danmaku_opacity),
-                    value = state.danmakuOpacity,
+                    value = state.danmaku.opacity,
                     valueLabel = { stringResource(R.string.settings_danmaku_opacity_value, (it * 100).roundToInt()) },
                     onChange = onDanmakuOpacityChange,
+                )
+                ChoiceSection(
+                    title = stringResource(R.string.settings_danmaku_show_area),
+                    // 说清它不管底部弹幕:调到 25% 之后底部那几条纹丝不动,不写清楚会被当成没生效。
+                    subtitle = stringResource(R.string.settings_danmaku_show_area_subtitle),
+                    options = SCROLL_SHOW_AREA_STEPS,
+                    selected = SCROLL_SHOW_AREA_STEPS.minByOrNull { abs(it - state.danmaku.scrollShowArea) },
+                    label = { stringResource(R.string.settings_danmaku_show_area_value, (it * 100).roundToInt()) },
+                    onChange = onDanmakuScrollShowAreaChange,
+                )
+                ChoiceSection(
+                    title = stringResource(R.string.settings_danmaku_density),
+                    options = DanmakuDensity.entries,
+                    selected = state.danmaku.density,
+                    label = {
+                        stringResource(
+                            when (it) {
+                                DanmakuDensity.STANDARD -> R.string.settings_danmaku_density_standard
+                                DanmakuDensity.UNLIMITED -> R.string.settings_danmaku_density_unlimited
+                            },
+                        )
+                    },
+                    onChange = onDanmakuDensityChange,
+                )
+                ChoiceSection(
+                    title = stringResource(R.string.settings_danmaku_frame_rate),
+                    subtitle = stringResource(R.string.settings_danmaku_frame_rate_subtitle),
+                    options = DanmakuFrameRateCap.entries,
+                    selected = state.danmaku.frameRateCap,
+                    label = {
+                        stringResource(
+                            when (it) {
+                                DanmakuFrameRateCap.FPS_30 -> R.string.settings_danmaku_frame_rate_30
+                                DanmakuFrameRateCap.FPS_60 -> R.string.settings_danmaku_frame_rate_60
+                                DanmakuFrameRateCap.DISPLAY -> R.string.settings_danmaku_frame_rate_display
+                            },
+                        )
+                    },
+                    onChange = onDanmakuFrameRateChange,
                 )
             }
 
@@ -322,6 +368,46 @@ private fun CodecSection(
         }
     }
 }
+
+/**
+ * 「几档选一」的通用形态:一行标题(可带副标题)加若干单选行。[CodecSection] 是同一个形态,
+ * 但它要按本机硬解能力过滤选项、标签也来自枚举自己,不套进来——为一处特例给通用组件加参数,
+ * 换来的是两边都变难读。
+ */
+@Composable
+private fun <T> ChoiceSection(
+    title: String,
+    options: List<T>,
+    selected: T?,
+    label: @Composable (T) -> String,
+    onChange: (T) -> Unit,
+    subtitle: String? = null,
+) {
+    SettingRow(title = title, subtitle = subtitle)
+    options.forEach { option ->
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = Dimens.MinTouchTarget)
+                .selectable(
+                    selected = option == selected,
+                    role = Role.RadioButton,
+                    onClick = { onChange(option) },
+                )
+                .padding(start = Spacing.Loose, end = Spacing.Comfortable),
+        ) {
+            RadioButton(selected = option == selected, onClick = null)
+            Text(label(option), modifier = Modifier.padding(start = Spacing.Cozy))
+        }
+    }
+}
+
+/**
+ * 滚动弹幕显示区域的四档。存的是连续的 Float(公共 API 不写死成枚举,见 [DanmakuViewport]),
+ * 界面上只给这四档,选中判定按最近档取——将来加档或换成连续滑杆都不必改存储格式。
+ */
+private val SCROLL_SHOW_AREA_STEPS = listOf(0.25f, 0.5f, 0.75f, 1f)
 
 /**
  * 分组标题。**分组之间不画分割线**,靠这行带 primary 色的标题加上它上方的留白分隔。

@@ -2,6 +2,7 @@ package dev.bilby.danmaku
 
 import java.io.ByteArrayOutputStream
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 /**
@@ -74,6 +75,155 @@ class DanmakuProtoReaderTest {
         }.toByteArray()
 
         assertEquals("42-str", parseDanmakuElem(bytes).idStr)
+    }
+
+    @Test
+    fun `固定 fixture - 逐字段核对解析结果`() {
+        // 这条 fixture 的用途是给"子消息不再复制字节"这次改造做基准:同一份字节,改造前后
+        // 必须解析出同一组值。手写字节而不是抓一份真实响应,是为了让 tag 号、多字节 varint、
+        // 未知字段的位置都能在测试里读出来。
+        val reply = ByteArrayOutputStream().apply {
+            writeVarintField(2, 1L) // state,已知但不用的字段
+            writeBytesField(
+                1,
+                ByteArrayOutputStream().apply {
+                    writeVarintField(1, 1_694_000_000_123L) // id,需要多字节 varint
+                    writeVarintField(2, 359_999L)
+                    writeVarintField(3, 5L)
+                    writeVarintField(4, 25L)
+                    writeVarintField(5, 0xFFFFFFL)
+                    writeVarintField(6, 0x1A2B3C4DL) // midHash,跳过
+                    writeStringField(7, "顶端弹幕 with ascii")
+                    writeStringField(12, "1694000000123")
+                }.toByteArray(),
+            )
+            writeBytesField(
+                1,
+                ByteArrayOutputStream().apply {
+                    writeVarintField(2, 1L)
+                    writeVarintField(3, 1L)
+                    writeStringField(7, "")
+                }.toByteArray(),
+            )
+        }.toByteArray()
+
+        val elems = parseDmSegMobileReply(reply)
+
+        assertEquals(2, elems.size)
+        assertEquals(
+            RawDanmakuElem(
+                id = 1_694_000_000_123L,
+                idStr = "1694000000123",
+                progressMillis = 359_999,
+                mode = 5,
+                fontSize = 25,
+                color = 0xFFFFFF,
+                content = "顶端弹幕 with ascii",
+            ),
+            elems[0],
+        )
+        assertEquals(RawDanmakuElem(progressMillis = 1, mode = 1), elems[1])
+    }
+
+    @Test
+    fun `空 reply 与空子消息`() {
+        assertEquals(emptyList<RawDanmakuElem>(), parseDmSegMobileReply(ByteArray(0)))
+
+        // 长度为 0 的子消息:所有字段取默认值,不能因为没有字节可读就抛。
+        val reply = ByteArrayOutputStream().apply { writeBytesField(1, ByteArray(0)) }.toByteArray()
+        assertEquals(listOf(RawDanmakuElem()), parseDmSegMobileReply(reply))
+    }
+
+    @Test
+    fun `截断的 varint 不会读过消息末尾`() {
+        // 0x80 是"后面还有下一组"的延续位,但后面什么都没有。旧写法在这里直接按下标取数组,
+        // 靠 ArrayIndexOutOfBounds 兜底;子 reader 的 end 小于数组长度之后,越界读到的会是
+        // 下一条弹幕的字节,根本不会抛——所以这条要盯的是"抛出来了",不是"抛了什么"。
+        val truncated = byteArrayOf((1 shl 3).toByte(), 0x80.toByte())
+        assertThrows(IllegalStateException::class.java) { parseDanmakuElem(truncated) }
+    }
+
+    @Test
+    fun `声明长度越过消息末尾`() {
+        // content 声称有 100 字节,实际只给了 3 个。
+        val bytes = ByteArrayOutputStream().apply {
+            writeTag(7, DanmakuProtoReader.WIRE_LEN)
+            writeVarint(100L)
+            write(byteArrayOf(1, 2, 3))
+        }.toByteArray()
+        assertThrows(IllegalStateException::class.java) { parseDanmakuElem(bytes) }
+    }
+
+    @Test
+    fun `超出 Int 范围的长度不会翻成负数`() {
+        // varint 能表达远超 Int 的值,toInt() 之后可能是负数;负长度加到 pos 上会让读取位置
+        // 往回跳,构造出无限循环或读到已经解析过的字节。
+        val bytes = ByteArrayOutputStream().apply {
+            writeTag(7, DanmakuProtoReader.WIRE_LEN)
+            writeVarint(0x1_0000_0001L)
+            write(byteArrayOf(1, 2, 3))
+        }.toByteArray()
+        assertThrows(IllegalStateException::class.java) { parseDanmakuElem(bytes) }
+    }
+
+    @Test
+    fun `子消息读不到兄弟消息的字节`() {
+        // 第一条弹幕声称自己的 content 有 40 字节,而它自己的消息体只剩几个字节——如果 reader
+        // 只按整份响应的长度做边界,这一读就会把第二条弹幕的字节当成第一条的正文吃掉,而且
+        // 完全静默。共享底层数组的 bounded reader 正是在这里必须表现得和"切一份副本"一样。
+        val elem = ByteArrayOutputStream().apply {
+            writeTag(7, DanmakuProtoReader.WIRE_LEN)
+            writeVarint(40L)
+            write("短".toByteArray(Charsets.UTF_8))
+        }.toByteArray()
+        val reply = ByteArrayOutputStream().apply {
+            writeBytesField(1, elem)
+            writeBytesField(1, danmakuElemBytes(2, 2000, 1, "第二条".repeat(10)))
+        }.toByteArray()
+
+        assertThrows(IllegalStateException::class.java) { parseDmSegMobileReply(reply) }
+    }
+
+    @Test
+    fun `外层声明的子消息长度越界`() {
+        val reply = ByteArrayOutputStream().apply {
+            writeTag(1, DanmakuProtoReader.WIRE_LEN)
+            writeVarint(1000L)
+            write(danmakuElemBytes(1, 1000, 1, "只有这么多"))
+        }.toByteArray()
+
+        assertThrows(IllegalStateException::class.java) { parseDmSegMobileReply(reply) }
+    }
+
+    @Test
+    fun `十字节以上的 varint 被拒`() {
+        // 全是延续位的一长串字节:不拦的话 shl 的移位量按 mod 64 回绕,高位会盖住已经读进去的
+        // 低位,解出一个看着正常的数值。
+        val bytes = ByteArrayOutputStream().apply {
+            writeTag(1, DanmakuProtoReader.WIRE_VARINT)
+            repeat(11) { write(0x80) }
+            write(0x01)
+        }.toByteArray()
+        assertThrows(IllegalStateException::class.java) { parseDanmakuElem(bytes) }
+    }
+
+    @Test
+    fun `大消息 - 五千条弹幕的边界不串位`() {
+        // 一段 6 分钟的热门视频就是这个量级。条数对不上或者首尾内容错位,说明某处多吃或少吃了
+        // 字节;中间任何一条串位都会一路传导到最后一条。
+        val count = 5000
+        val reply = ByteArrayOutputStream().apply {
+            repeat(count) { i ->
+                writeBytesField(1, danmakuElemBytes(i.toLong(), i * 70, 1, "弹幕$i"))
+            }
+        }.toByteArray()
+
+        val elems = parseDmSegMobileReply(reply)
+
+        assertEquals(count, elems.size)
+        assertEquals("弹幕0", elems.first().content)
+        assertEquals("弹幕${count - 1}", elems.last().content)
+        assertEquals((count - 1) * 70, elems.last().progressMillis)
     }
 
     private fun roundTripVarint(value: Long): Long {

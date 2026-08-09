@@ -1,15 +1,60 @@
 package dev.bilby.danmaku
 
+import dev.bilby.BiliLog
 import dev.danmaku.compose.Danmaku
 import dev.danmaku.compose.DanmakuMode
+import dev.danmaku.compose.SpecialDanmaku
 
 /**
- * B 站原始弹幕 -> `:danmaku` 库的中立模型。映射照 notes/danmaku.md §1.4 的模式号定义:
- * 1/2/3 滚动,4 底端,5 顶端,6 逆向(渲染器不支持逆向,退化成滚动 —— 这是 Animeko 那份解析器
- * 的既有先例,不是 Bilby 自己的权宜),7/8/9(高级/代码/BAS)整条跳过,返回 null。
+ * 一个分段映射完的结果。两类弹幕分开返回,不合成一个列表:它们走两条互不相干的渲染路径
+ * ——普通弹幕要排轨道、判碰撞、受显示区域裁剪,高级弹幕的位置是作者写死的,三样都不适用
+ * (见 [SpecialDanmaku])。合成一个列表只会让下游立刻再按类型拆回来。
+ */
+data class DanmakuSegment(
+    val normal: List<Danmaku>,
+    val special: List<SpecialDanmaku>,
+)
+
+/**
+ * 一个分段的原始弹幕 -> 两类中立模型。模式号照 notes/danmaku.md §1.4:1/2/3 滚动,4 底端,
+ * 5 顶端,6 逆向(渲染器不支持逆向,退化成滚动 —— 这是 Animeko 那份解析器的既有先例,不是
+ * Bilby 自己的权宜),7 走高级弹幕那条独立的路,8(代码)/9(BAS)不支持。
  *
- * 这层映射只在这里出现一次:`DanmakuMode` 只认三态,不认 B 站的原始编号 —— 库不该知道
- * B 站长什么样。
+ * **8 和 9 是明确不做,不是还没做**:它们的内容是可执行脚本,在通用渲染库里执行来源不明的
+ * 脚本是不可接受的(gap 分析 3.5)。丢弃时按分段汇总记一次数,不逐条刷屏。
+ */
+internal fun List<RawDanmakuElem>.toMappedSegment(): DanmakuSegment {
+    val normal = ArrayList<Danmaku>(size)
+    val special = mutableListOf<SpecialDanmaku>()
+    var unsupportedScriptCount = 0
+    forEachIndexed { index, elem ->
+        when (elem.mode) {
+            SPECIAL_MODE -> elem.toSpecialDanmakuOrNull(index)?.let(special::add)
+            CODE_MODE, BAS_MODE -> unsupportedScriptCount++
+            else -> elem.toDanmakuOrNull()?.let(normal::add)
+        }
+    }
+    if (unsupportedScriptCount > 0) {
+        BiliLog.d("丢弃脚本类弹幕(mode 8/9,明确不支持) count=$unsupportedScriptCount")
+    }
+    return DanmakuSegment(normal, special)
+}
+
+private const val SPECIAL_MODE = 7
+private const val CODE_MODE = 8
+private const val BAS_MODE = 9
+
+/**
+ * 渲染层要用 id 做列表 key,idStr 是首选(notes §9.2),id(数字)其次;两个都拿不到的
+ * 极端情况(理论上不该出现,但解析器不该因为脏数据崩掉)拼一个内容相关的兜底值。
+ */
+internal fun RawDanmakuElem.renderId(): String =
+    idStr.ifEmpty { id.takeIf { it != 0L }?.toString() }
+        ?: "$progressMillis:$mode:${content.hashCode()}"
+
+/**
+ * 单条普通弹幕的映射。`DanmakuMode` 只认三态,不认 B 站的原始编号 —— 库不该知道 B 站长什么样。
+ * 认不出来的模式号返回 null。
  */
 internal fun RawDanmakuElem.toDanmakuOrNull(): Danmaku? {
     val danmakuMode = when (mode) {
@@ -18,12 +63,8 @@ internal fun RawDanmakuElem.toDanmakuOrNull(): Danmaku? {
         5 -> DanmakuMode.TOP
         else -> return null
     }
-    // 渲染层要用 id 做列表 key,idStr 是首选(notes §9.2),id(数字)其次;两个都拿不到的
-    // 极端情况(理论上不该出现,但解析器不该因为脏数据崩掉)拼一个内容相关的兜底值。
-    val id = idStr.ifEmpty { id.takeIf { it != 0L }?.toString() }
-        ?: "$progressMillis:$mode:${content.hashCode()}"
     return Danmaku(
-        id = id,
+        id = renderId(),
         playTimeMillis = progressMillis.toLong(),
         mode = danmakuMode,
         color = color,

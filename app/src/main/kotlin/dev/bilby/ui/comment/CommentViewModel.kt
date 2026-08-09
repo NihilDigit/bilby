@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 data class CommentUiState(
@@ -39,8 +40,31 @@ data class ExpandedReplies(
 
 class CommentViewModel(
     private val repository: CommentRepository,
-    private val oid: Long,
+    initialOid: Long,
 ) : ViewModel() {
+
+    /**
+     * 当前评论区挂在哪条视频(aid)上。
+     *
+     * **一个播放页只有一个 CommentViewModel,换视频是 [switchTo]。** 原先靠
+     * `viewModel(key = "comment-$aid")` 选实例,而切集不进 backstack,NavEntry 的
+     * ViewModelStore 到整页出栈才清 —— 连播走一条就攒一个,和 [dev.bilby.ui.video.VideoViewModel]
+     * 是同一个坑的另一个入口。Compose 的 key 决定选哪个实例,不负责删掉旧 key 对应的那个。
+     */
+    var oid: Long = initialOid
+        private set
+
+    /**
+     * 换一条视频的评论区。**幂等**,调用方可以每次重组无脑喊一遍。
+     *
+     * 不需要另做取消和清状态:[loadFirstPage] 本来就要递增 generation、取消主 Job 和全部
+     * 展开 Job、清游标和列表 —— 换 oid 要做的事跟切排序完全一样,复用它而不是再写一份。
+     */
+    fun switchTo(target: Long) {
+        if (target == oid) return
+        oid = target
+        loadFirstPage()
+    }
 
     private val _state = MutableStateFlow(CommentUiState(loading = true))
     val state: StateFlow<CommentUiState> = _state.asStateFlow()
@@ -51,6 +75,16 @@ class CommentViewModel(
     // 楼中楼展开是按 root 各自独立翻页,分别记自己的下一页页码。
     private val subReplyNextPage = mutableMapOf<Long, Int>()
 
+    /**
+     * 主列表(排序切换、首屏重载、append)共用一代 generation。切排序或重载都要让
+     * 一条还在飞的旧响应作废 —— 否则它落地时写的 `cursor` 和拼接出来的 `items` 都是
+     * 上一个排序/上一轮的,跟当前显示对不上(性能计划 7.2)。展开楼中楼是各 root 独立
+     * 翻页,不共用这份 generation,单独用 [expandJobs] 按 root 取消旧请求。
+     */
+    private var generation = 0
+    private var fetchJob: Job? = null
+    private val expandJobs = mutableMapOf<Long, Job>()
+
     init {
         loadFirstPage()
     }
@@ -60,6 +94,10 @@ class CommentViewModel(
     }
 
     fun loadFirstPage() {
+        generation++
+        fetchJob?.cancel()
+        expandJobs.values.forEach { it.cancel() }
+        expandJobs.clear()
         cursor = null
         subReplyNextPage.clear()
         _state.update {
@@ -82,67 +120,100 @@ class CommentViewModel(
 
     private fun fetch(append: Boolean) {
         loadingPage = true
-        viewModelScope.launch {
-            when (val result = repository.loadMainPage(oid, _state.value.sort, cursor)) {
-                is BiliResult.Ok -> {
-                    val page = result.value
-                    cursor = page.nextCursor
-                    _state.update { current ->
-                        current.copy(
-                            topComment = if (append) current.topComment else page.topComment,
-                            // 登录态走 `x/v2/reply` 的 pn 分页(见 CommentRepository),服务端每页
-                            // 按当时的热度分重排整个列表,翻页期间有人点赞或发新评论,同一条就会
-                            // 同时出现在上一页尾和下一页首。
-                            items = if (append) {
-                                current.items.appendDistinctBy(page.items) { it.rpid }
-                            } else {
-                                page.items.distinctBy { it.rpid }
-                            },
-                            loading = false,
-                            appending = false,
-                            hasMore = page.hasMore,
-                            total = if (page.total > 0) page.total else current.total,
-                            error = null,
-                        )
+        val gen = generation
+        // oid 捕获成局部量:协程体里读那个 var 的话,[switchTo] 恰好发生在 launch 之后、
+        // 协程真正开跑之前时,会拿新 oid 发一次注定被 generation 判废的请求。
+        val target = oid
+        fetchJob = viewModelScope.launch {
+            try {
+                when (val result = repository.loadMainPage(target, _state.value.sort, cursor)) {
+                    is BiliResult.Ok -> {
+                        // 迟到的响应不能碰 cursor:排序切换/重载已经把它清成 null,
+                        // 这里再写回去,下一次 loadMore 就会拿旧排序的游标去翻页。
+                        if (gen != generation) return@launch
+                        val page = result.value
+                        cursor = page.nextCursor
+                        _state.update { current ->
+                            current.copy(
+                                topComment = if (append) current.topComment else page.topComment,
+                                // 登录态走 `x/v2/reply` 的 pn 分页(见 CommentRepository),服务端每页
+                                // 按当时的热度分重排整个列表,翻页期间有人点赞或发新评论,同一条就会
+                                // 同时出现在上一页尾和下一页首。
+                                items = if (append) {
+                                    current.items.appendDistinctBy(page.items) { it.rpid }
+                                } else {
+                                    page.items.distinctBy { it.rpid }
+                                },
+                                hasMore = page.hasMore,
+                                total = if (page.total > 0) page.total else current.total,
+                                error = null,
+                            )
+                        }
                     }
-                }
 
-                is BiliResult.ApiError -> setError("${result.message}(${result.code})")
-                is BiliResult.Failure -> setError(result.cause.message ?: "网络错误")
+                    is BiliResult.ApiError -> if (gen == generation) setError("${result.message}(${result.code})")
+                    is BiliResult.Failure -> if (gen == generation) setError(result.cause.message ?: "网络错误")
+                }
+            } finally {
+                // loadingPage 只按当前 generation 释放:loadFirstPage 取消旧 Job 后会
+                // 立刻发起新一轮请求并把它重新置 true,旧 Job 的 finally 迟到执行时
+                // 不能把这个刚置位的 true 又清掉。
+                if (gen == generation) {
+                    loadingPage = false
+                    _state.update { it.copy(loading = false, appending = false) }
+                }
             }
-            loadingPage = false
         }
     }
 
-    /** 首次展开拉第一页;已展开状态下再次调用视为"加载更多楼中楼"。 */
+    /**
+     * 首次展开拉第一页;已展开状态下再次调用视为"加载更多楼中楼"。同一 root 内天然互斥
+     * (loadingMore 挡重复点击),这里额外用 [expandJobs] 记 Job:排序切换或首屏重载时
+     * (见 [loadFirstPage])要能主动取消掉还在飞的旧展开请求,不是等它自己落地再靠
+     * generation 丢弃 —— expandedReplies 那时已经被清空,没必要再让请求空跑。
+     */
     fun expandReplies(rootId: Long) {
         val existing = _state.value.expandedReplies[rootId]
         if (existing?.loadingMore == true) return
         val page = subReplyNextPage[rootId] ?: 1
+        val gen = generation
 
         _state.update { current ->
             val updated = existing?.copy(loadingMore = true) ?: ExpandedReplies(items = emptyList(), loadingMore = true)
             current.copy(expandedReplies = current.expandedReplies + (rootId to updated))
         }
 
-        viewModelScope.launch {
-            when (val result = repository.loadSubReplies(oid, rootId, page)) {
-                is BiliResult.Ok -> {
-                    val sub = result.value
-                    subReplyNextPage[rootId] = sub.nextPage ?: page
+        expandJobs[rootId]?.cancel()
+        expandJobs[rootId] = viewModelScope.launch {
+            try {
+                when (val result = repository.loadSubReplies(oid, rootId, page)) {
+                    is BiliResult.Ok -> {
+                        if (gen != generation) return@launch
+                        val sub = result.value
+                        subReplyNextPage[rootId] = sub.nextPage ?: page
+                        _state.update { current ->
+                            val prevItems = current.expandedReplies[rootId]?.items.orEmpty()
+                            val merged = ExpandedReplies(
+                                items = prevItems + sub.items,
+                                loadingMore = false,
+                                hasMore = sub.hasMore,
+                            )
+                            current.copy(expandedReplies = current.expandedReplies + (rootId to merged))
+                        }
+                    }
+
+                    is BiliResult.ApiError -> if (gen == generation) setError("${result.message}(${result.code})")
+                    is BiliResult.Failure -> if (gen == generation) setError(result.cause.message ?: "网络错误")
+                }
+            } finally {
+                // 失败或取消也要把 loadingMore 收回去,不然这个 root 的展开按钮永远转圈
+                // (原逻辑只在成功分支清过,失败路径漏了)。
+                if (gen == generation) {
                     _state.update { current ->
-                        val prevItems = current.expandedReplies[rootId]?.items.orEmpty()
-                        val merged = ExpandedReplies(
-                            items = prevItems + sub.items,
-                            loadingMore = false,
-                            hasMore = sub.hasMore,
-                        )
-                        current.copy(expandedReplies = current.expandedReplies + (rootId to merged))
+                        val entry = current.expandedReplies[rootId] ?: return@update current
+                        current.copy(expandedReplies = current.expandedReplies + (rootId to entry.copy(loadingMore = false)))
                     }
                 }
-
-                is BiliResult.ApiError -> setError("${result.message}(${result.code})")
-                is BiliResult.Failure -> setError(result.cause.message ?: "网络错误")
             }
         }
     }

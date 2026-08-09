@@ -44,6 +44,7 @@
     <string name="dynamic_type_live">Live</string>
     <string name="dynamic_type_other">Post</string>
     <string name="feed_exclude_up">Hide %1$s from home</string>
+    <string name="feed_read_marker">New since your last visit</string>
 
     <string name="search_empty">Search videos and creators</string>
     <string name="search_history_title">Recent searches</string>
@@ -134,6 +135,7 @@
     <string name="video_part_label">P%1$d %2$s</string>
     <string name="video_find_related">Find related</string>
     <string name="video_queue_loading">Loading queue…</string>
+    <string name="video_queue_incomplete">Queue is incomplete — only this video</string>
 
     <string name="action_confirm">Confirm</string>
     <string name="coin_maxed">2 coins given, no more allowed</string>
@@ -217,6 +219,17 @@
     <string name="settings_codec_subtitle">Takes effect on the next video</string>
     <string name="settings_danmaku_opacity">Danmaku opacity</string>
     <string name="settings_danmaku_opacity_value">%1$d%%</string>
+    <string name="settings_danmaku_show_area">Rolling danmaku area</string>
+    <string name="settings_danmaku_show_area_subtitle">Affects rolling and top danmaku only; bottom danmaku always sits at the bottom edge</string>
+    <string name="settings_danmaku_show_area_value">%1$d%%</string>
+    <string name="settings_danmaku_density">On-screen density</string>
+    <string name="settings_danmaku_density_standard">Standard</string>
+    <string name="settings_danmaku_density_unlimited">Unlimited (still bound by device performance)</string>
+    <string name="settings_danmaku_frame_rate">Danmaku frame rate</string>
+    <string name="settings_danmaku_frame_rate_subtitle">Caps the danmaku layer only; unrelated to video decode frame rate</string>
+    <string name="settings_danmaku_frame_rate_30">30 fps</string>
+    <string name="settings_danmaku_frame_rate_60">60 fps</string>
+    <string name="settings_danmaku_frame_rate_display">Match display</string>
     <string name="settings_sponsorblock_toggle">Skip automatically</string>
     <string name="settings_sponsorblock_toggle_subtitle">Sponsor, intro and outro segments marked by the community</string>
     <string name="settings_sponsorblock_server">Server URL</string>
