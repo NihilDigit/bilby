@@ -27,9 +27,11 @@ import dev.bilby.R
 import dev.bilby.api.BiliResult
 import dev.bilby.data.ToViewItem
 import dev.bilby.data.ToViewRepository
+import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
@@ -91,12 +93,16 @@ class ToViewViewModel(private val repository: ToViewRepository) : ViewModel() {
     }
 
     fun clearFinished() {
-        _state.update { it.copy(clearing = true) }
+        // 清空按钮在没有已看完项目时应当是 no-op，避免空列表上仍发起一次
+        // 没有可见反馈的网络请求。UI 层也会同步禁用入口，但 ViewModel 自己
+        // 仍要守住这个条件，防止重复点击或其它入口绕过 UI。
+        if (_state.value.clearing || _state.value.items.none { it.isFinished }) return
+        _state.update { it.copy(clearing = true, error = null) }
         viewModelScope.launch {
             when (val result = repository.clearFinished()) {
                 is BiliResult.Ok -> _state.update {
                     val remaining = it.items.filterNot { item -> item.isFinished }
-                    it.copy(clearing = false, items = remaining, count = remaining.size)
+                    it.copy(clearing = false, error = null, items = remaining, count = remaining.size)
                 }
 
                 else -> _state.update { it.copy(clearing = false, error = result.errorText()) }
@@ -123,36 +129,56 @@ fun ToViewScreen(
     onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    when {
-        state.loading && state.items.isEmpty() -> FullScreenLoading(modifier)
-        state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry, modifier)
-        else -> PullToRefreshBox(
-            isRefreshing = state.loading && state.items.isNotEmpty(),
-            onRefresh = onRefresh,
-            modifier = modifier.fillMaxSize(),
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                CapacityMeter(state.count, state.capacity)
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    if (state.items.isEmpty()) {
-                        item(key = "empty") { EmptyState(stringResource(R.string.toview_empty)) }
-                    }
-                    items(state.items, key = { it.aid }) { item ->
-                        VideoRow(
-                            item = item.toRowUi(),
-                            onClick = { onItemClick(item) },
-                            trailing = {
-                                // 图标用 Close 而不是 Delete:这里是"从列表里拿掉",
-                                // 不是把视频删了。垃圾桶图标承诺的破坏性比实际动作大。
-                                IconButton(onClick = { onDelete(item) }) {
-                                    Icon(
-                                        Icons.Outlined.Close,
-                                        contentDescription = stringResource(R.string.toview_remove, item.title),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            },
-                        )
+    AdaptiveContent(modifier = modifier) {
+        when {
+            state.loading && state.items.isEmpty() -> FullScreenLoading()
+            state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry)
+            else -> PullToRefreshBox(
+                isRefreshing = state.loading && state.items.isNotEmpty(),
+                onRefresh = onRefresh,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    CapacityMeter(state.count, state.capacity)
+                    LazyColumn(modifier = Modifier.weight(1f)) {
+                        if (state.items.isEmpty()) {
+                            // 让空态填满列表视口，而不是只占一个列表项高度；保留
+                            // LazyColumn 也能确保清空后仍支持下拉刷新。
+                            item(key = "empty") {
+                                EmptyState(
+                                    stringResource(R.string.toview_empty),
+                                    modifier = Modifier.fillParentMaxSize(),
+                                )
+                            }
+                        }
+                        items(state.items, key = { it.aid }) { item ->
+                            VideoRow(
+                                item = item.toRowUi(),
+                                onClick = { onItemClick(item) },
+                                trailing = {
+                                    // 图标用 Close 而不是 Delete:这里是"从列表里拿掉",
+                                    // 不是把视频删了。垃圾桶图标承诺的破坏性比实际动作大。
+                                    IconButton(onClick = { onDelete(item) }) {
+                                        Icon(
+                                            Icons.Outlined.Close,
+                                            contentDescription = stringResource(R.string.toview_remove, item.title),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                            )
+                        }
+                        if (state.error != null) {
+                            item(key = "error") {
+                                ListFooter(
+                                    appending = false,
+                                    hasMore = true,
+                                    hasItems = true,
+                                    error = state.error,
+                                    onRetry = onRetry,
+                                )
+                            }
+                        }
                     }
                 }
             }

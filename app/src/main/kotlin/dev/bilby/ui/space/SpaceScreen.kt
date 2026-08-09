@@ -10,8 +10,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
@@ -30,16 +32,18 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
@@ -49,6 +53,8 @@ import dev.bilby.BiliLog
 import dev.bilby.R
 import dev.bilby.ui.dynamicTypeLabel
 import dev.bilby.ui.appendDistinctBy
+import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.api.BiliResult
 import dev.bilby.data.FollowState
 import dev.bilby.data.RelationRepository
@@ -70,6 +76,9 @@ import dev.bilby.ui.components.SortRow
 import dev.bilby.ui.components.SquareCover
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import java.time.Instant
@@ -165,14 +174,14 @@ data class SpaceCollectionDetailState(
 /**
  * 一次投稿请求的身份。响应回来时用它回答"这份结果还属于列表现在的样子吗"。
  *
- * 三个字段就是接口的全部可变入参:排序、生效中的关键词、页号。用它们而不是自增的 generation,
- * 是因为它们同时也解释了为什么该丢 —— 日志里看到的是"这份响应是按播放量排的,而列表已经切回
- * 最新",不是"generation 3 != 4"。
+ * 三个字段就是接口的全部可变入参:排序、生效中的关键词、页号。再加一个请求代次,处理刷新
+ * 时同一页会重发的情况 —— 这时旧请求和新请求的三个入参完全一样,只靠入参无法区分。
  */
 private data class ArchiveRequest(
     val order: SpaceArchiveOrder,
     val keyword: String,
     val page: Int,
+    val generation: Long,
 ) {
     fun matches(state: SpaceArchiveTabState): Boolean =
         state.order == order && state.appliedKeyword == keyword && state.page == page
@@ -213,6 +222,12 @@ class SpaceViewModel(
     private val _state = MutableStateFlow(SpaceUiState())
     val state: StateFlow<SpaceUiState> = _state.asStateFlow()
 
+    // 刷新/切筛选会重置分页游标。代次让迟到的旧首页即使和新首页参数相同也不能写回。
+    private var archivesGeneration = 0L
+    private var dynamicsGeneration = 0L
+    private var collectionsGeneration = 0L
+    private var collectionDetailGeneration = 0L
+
     init {
         loadProfile()
         loadMoreArchives()
@@ -234,44 +249,48 @@ class SpaceViewModel(
         val current = _state.value
         when {
             current.collections.detail != null -> {
+                collectionDetailGeneration++
                 _state.update {
                     it.copy(
                         collections = it.collections.copy(
                             detail = it.collections.detail?.copy(
-                                items = emptyList(), page = 1, total = 0,
+                                page = 1,
                                 loading = false, appending = false, hasMore = true, error = null,
                             ),
                         ),
                     )
                 }
-                loadMoreCollectionDetail()
+                loadMoreCollectionDetail(replace = true)
             }
             current.activeTab == SpaceTab.Archives -> {
+                archivesGeneration++
                 _state.update {
                     it.copy(archives = it.archives.copy(
-                        items = emptyList(), page = 1, total = 0,
+                        page = 1,
                         loading = false, appending = false, hasMore = true, error = null,
                     ))
                 }
-                loadMoreArchives()
+                loadMoreArchives(replace = true)
             }
             current.activeTab == SpaceTab.Dynamics -> {
+                dynamicsGeneration++
                 _state.update {
                     it.copy(dynamics = it.dynamics.copy(
-                        items = emptyList(), nextOffset = null,
+                        nextOffset = null,
                         loading = false, appending = false, hasMore = true, error = null,
                     ))
                 }
-                loadMoreDynamics()
+                loadMoreDynamics(replace = true)
             }
             else -> {
+                collectionsGeneration++
                 _state.update {
                     it.copy(collections = it.collections.copy(
-                        items = emptyList(), page = 1, total = 0,
+                        page = 1,
                         loading = false, appending = false, hasMore = true, error = null,
                     ))
                 }
-                loadMoreCollections()
+                loadMoreCollections(replace = true)
             }
         }
     }
@@ -287,6 +306,7 @@ class SpaceViewModel(
 
     fun onArchiveOrderChanged(order: SpaceArchiveOrder) {
         if (order == _state.value.archives.order) return
+        archivesGeneration++
         _state.update {
             it.copy(
                 archives = SpaceArchiveTabState(
@@ -311,6 +331,7 @@ class SpaceViewModel(
      * 身份挡下,不会写回来。
      */
     fun onArchiveSearch() {
+        archivesGeneration++
         _state.update {
             it.copy(
                 archives = it.archives.copy(
@@ -338,11 +359,16 @@ class SpaceViewModel(
      * 用户刚选的排序、刚输的关键词一起打回旧值,还会把属于新请求的 loading 标志清掉。
      * 现在对不上就整份丢掉。
      */
-    fun loadMoreArchives() {
+    fun loadMoreArchives(replace: Boolean = false) {
         val current = _state.value.archives
         if (current.loading || current.appending || !current.hasMore) return
-        val firstPage = current.items.isEmpty()
-        val requested = ArchiveRequest(current.order, current.appliedKeyword, current.page)
+        val firstPage = replace || current.items.isEmpty()
+        val requested = ArchiveRequest(
+            order = current.order,
+            keyword = current.appliedKeyword,
+            page = if (replace) 1 else current.page,
+            generation = archivesGeneration,
+        )
         _state.update {
             it.copy(archives = it.archives.copy(loading = firstPage, appending = !firstPage, error = null))
         }
@@ -350,11 +376,15 @@ class SpaceViewModel(
             val result = repository.loadArchives(mid, requested.page, requested.order, requested.keyword)
             _state.update { state ->
                 val archives = state.archives
-                if (!requested.matches(archives)) return@update state
+                if (requested.generation != archivesGeneration || !requested.matches(archives)) return@update state
                 when (result) {
                     is BiliResult.Ok -> {
                         val pageItems = result.value.items
-                        val merged = archives.items.appendDistinctBy(pageItems) { v -> v.bvid }
+                        val merged = if (replace) {
+                            pageItems.distinctBy { it.bvid }
+                        } else {
+                            archives.items.appendDistinctBy(pageItems) { v -> v.bvid }
+                        }
                         state.copy(
                             refreshing = false,
                             archives = archives.copy(
@@ -390,11 +420,12 @@ class SpaceViewModel(
      * 而这里的一页可能真的是空的 —— `toDynamicItem` 会丢掉不认识的动态类型,整页都是转发或
      * 直播预约时过滤完就什么都不剩。把空页当到头会在这种页上停住,而服务端明明说了 hasMore。
      */
-    fun loadMoreDynamics() {
+    fun loadMoreDynamics(replace: Boolean = false) {
         val current = _state.value.dynamics
         if (current.loading || current.appending || !current.hasMore) return
-        val firstPage = current.items.isEmpty()
-        val requestedOffset = current.nextOffset
+        val firstPage = replace || current.items.isEmpty()
+        val requestedOffset = if (replace) null else current.nextOffset
+        val requestedGeneration = dynamicsGeneration
         _state.update {
             it.copy(dynamics = it.dynamics.copy(loading = firstPage, appending = !firstPage, error = null))
         }
@@ -402,12 +433,16 @@ class SpaceViewModel(
             val result = repository.loadDynamics(mid, requestedOffset)
             _state.update { state ->
                 val dynamics = state.dynamics
-                if (dynamics.nextOffset != requestedOffset) return@update state
+                if (requestedGeneration != dynamicsGeneration || dynamics.nextOffset != requestedOffset) return@update state
                 when (result) {
                     is BiliResult.Ok -> state.copy(
                         refreshing = false,
                         dynamics = dynamics.copy(
-                            items = dynamics.items.appendDistinctBy(result.value.items) { d -> d.key },
+                            items = if (replace) {
+                                result.value.items.distinctBy { it.key }
+                            } else {
+                                dynamics.items.appendDistinctBy(result.value.items) { d -> d.key }
+                            },
                             nextOffset = result.value.nextOffset,
                             loading = false,
                             appending = false,
@@ -429,11 +464,12 @@ class SpaceViewModel(
     }
 
     /** 与投稿同一套纪律:空页不推进游标,响应先认领自己那次请求。 */
-    fun loadMoreCollections() {
+    fun loadMoreCollections(replace: Boolean = false) {
         val current = _state.value.collections
         if (current.loading || current.appending || !current.hasMore) return
-        val firstPage = current.items.isEmpty()
-        val requestedPage = current.page
+        val firstPage = replace || current.items.isEmpty()
+        val requestedPage = if (replace) 1 else current.page
+        val requestedGeneration = collectionsGeneration
         _state.update {
             it.copy(collections = it.collections.copy(loading = firstPage, appending = !firstPage, error = null))
         }
@@ -441,12 +477,15 @@ class SpaceViewModel(
             val result = repository.loadCollections(mid, requestedPage)
             _state.update { state ->
                 val collections = state.collections
-                if (collections.page != requestedPage) return@update state
+                if (requestedGeneration != collectionsGeneration || collections.page != requestedPage) return@update state
                 when (result) {
                     is BiliResult.Ok -> {
                         val pageItems = result.value.items
-                        val merged = collections.items
-                            .appendDistinctBy(pageItems) { c -> "${c.isSeason}-${c.id}" }
+                        val merged = if (replace) {
+                            pageItems.distinctBy { c -> "${c.isSeason}-${c.id}" }
+                        } else {
+                            collections.items.appendDistinctBy(pageItems) { c -> "${c.isSeason}-${c.id}" }
+                        }
                         state.copy(
                             refreshing = false,
                             // 不再有"发现是空的就把用户从合集 tab 弹回投稿 tab"那一段:tab 栏现在
@@ -486,11 +525,13 @@ class SpaceViewModel(
     }
 
     fun openCollection(item: SpaceCollectionItem) {
+        collectionDetailGeneration++
         _state.update { it.copy(collections = it.collections.copy(detail = SpaceCollectionDetailState(item))) }
         loadMoreCollectionDetail()
     }
 
     fun closeCollectionDetail() {
+        collectionDetailGeneration++
         _state.update { it.copy(collections = it.collections.copy(detail = null)) }
     }
 
@@ -499,12 +540,13 @@ class SpaceViewModel(
      * 响应不能把它重新支起来。** 原先响应无条件写 `detail = detail.copy(...)`,用户点返回退出
      * 目录后那一页回来,抽屉会自己弹回来。
      */
-    fun loadMoreCollectionDetail() {
+    fun loadMoreCollectionDetail(replace: Boolean = false) {
         val detail = _state.value.collections.detail ?: return
         if (detail.loading || detail.appending || !detail.hasMore) return
-        val firstPage = detail.items.isEmpty()
+        val firstPage = replace || detail.items.isEmpty()
         val requestedCollection = detail.collection
-        val requestedPage = detail.page
+        val requestedPage = if (replace) 1 else detail.page
+        val requestedGeneration = collectionDetailGeneration
         _state.update {
             it.copy(
                 collections = it.collections.copy(
@@ -516,13 +558,21 @@ class SpaceViewModel(
             val result = repository.loadCollectionDetail(mid, requestedCollection, requestedPage)
             _state.update { state ->
                 val current = state.collections.detail ?: return@update state
-                if (current.collection != requestedCollection || current.page != requestedPage) {
+                if (
+                    requestedGeneration != collectionDetailGeneration ||
+                    current.collection != requestedCollection ||
+                    current.page != requestedPage
+                ) {
                     return@update state
                 }
                 when (result) {
                     is BiliResult.Ok -> {
                         val pageItems = result.value.items
-                        val merged = current.items.appendDistinctBy(pageItems) { v -> v.bvid }
+                        val merged = if (replace) {
+                            pageItems.distinctBy { it.bvid }
+                        } else {
+                            current.items.appendDistinctBy(pageItems) { v -> v.bvid }
+                        }
                         state.copy(
                             refreshing = false,
                             collections = state.collections.copy(
@@ -677,15 +727,20 @@ fun SpaceScreen(
             )
         },
     ) { insets ->
-        Column(modifier = Modifier.fillMaxSize().padding(insets)) {
-            state.profile?.let {
-                SpaceHeader(
-                    it,
-                    onToggleFollow = onToggleFollow,
-                    onListenUp = onListenUp,
-                    onLiveClick = onLiveClick,
-                )
-            }
+        AdaptiveContent(
+            modifier = Modifier.fillMaxSize().padding(insets),
+            maxWidth = Breakpoints.ReadableWidth,
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                state.profile?.let {
+                    SpaceHeader(
+                        it,
+                        canListen = state.archives.items.isNotEmpty(),
+                        onToggleFollow = onToggleFollow,
+                        onListenUp = onListenUp,
+                        onLiveClick = onLiveClick,
+                    )
+                }
 
             // **tab 栏等合集探测回来才画。** 先画三个再抽掉一个的话,栏目宽度会重新分配、
             // 下面整块内容跟着上跳,而这一切发生在用户已经开始看页面之后。合集探测和投稿
@@ -707,39 +762,40 @@ fun SpaceScreen(
                 }
             }
 
-            PullToRefreshBox(
-                isRefreshing = state.refreshing,
-                onRefresh = onRefresh,
-                modifier = Modifier.weight(1f),
-            ) {
-                when {
-                    state.loading && state.profile == null -> FullScreenLoading()
-                    state.error != null && state.profile == null -> FullScreenError(state.error, onRetry)
-                    // tab 栏还没画出来,内容先不画:否则内容会先顶在页头下面,等 tab 栏出现
-                    // 再被推下去一截。
-                    !collectionsKnown -> FullScreenLoading()
-                    else -> when (state.activeTab) {
-                    SpaceTab.Archives -> ArchivesTab(
-                        state.archives,
-                        searchExpanded = archiveSearchExpanded,
-                        onOrderChanged = onArchiveOrderChanged,
-                        onKeywordChanged = onArchiveKeywordChanged,
-                        onSearch = onArchiveSearch,
-                        onLoadMore = onLoadMoreArchives,
-                        onVideoClick = onVideoClick,
-                    )
+                PullToRefreshBox(
+                    isRefreshing = state.refreshing,
+                    onRefresh = onRefresh,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    when {
+                        state.loading && state.profile == null -> FullScreenLoading()
+                        state.error != null && state.profile == null -> FullScreenError(state.error, onRetry)
+                        // tab 栏还没画出来,内容先不画:否则内容会先顶在页头下面,等 tab 栏出现
+                        // 再被推下去一截。
+                        !collectionsKnown -> FullScreenLoading()
+                        else -> when (state.activeTab) {
+                            SpaceTab.Archives -> ArchivesTab(
+                                state.archives,
+                                searchExpanded = archiveSearchExpanded,
+                                onOrderChanged = onArchiveOrderChanged,
+                                onKeywordChanged = onArchiveKeywordChanged,
+                                onSearch = onArchiveSearch,
+                                onLoadMore = onLoadMoreArchives,
+                                onVideoClick = onVideoClick,
+                            )
 
-                    SpaceTab.Dynamics -> DynamicListTab(
-                        state = state.dynamics,
-                        onLoadMore = onLoadMoreDynamics,
-                        onVideoClick = onVideoClick,
-                    )
+                            SpaceTab.Dynamics -> DynamicListTab(
+                                state = state.dynamics,
+                                onLoadMore = onLoadMoreDynamics,
+                                onVideoClick = onVideoClick,
+                            )
 
-                    SpaceTab.Collections -> CollectionsTab(
-                        state.collections,
-                        onLoadMoreCollections,
-                        onCollectionClick,
-                    )
+                            SpaceTab.Collections -> CollectionsTab(
+                                state.collections,
+                                onLoadMoreCollections,
+                                onCollectionClick,
+                            )
+                        }
                     }
                 }
             }
@@ -760,11 +816,13 @@ fun SpaceScreen(
 @Composable
 private fun SpaceHeader(
     profile: SpaceProfile,
+    canListen: Boolean,
     onToggleFollow: () -> Unit,
     onListenUp: () -> Unit,
     onLiveClick: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -772,11 +830,15 @@ private fun SpaceHeader(
         verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
         Row(
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Avatar(url = profile.faceUrl, size = Dimens.AvatarLarge)
-            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+            ) {
                 Text(
                     text = profile.name,
                     style = MaterialTheme.typography.titleMedium,
@@ -797,16 +859,23 @@ private fun SpaceHeader(
                     )
                 }
             }
-            Spacer(Modifier.weight(1f))
-            // 听这位 UP 的投稿:队列取自当前投稿列表,和播放页那份队列同源
-            // (DESIGN 2.4b:有限且用户显式选定的集合)。
-            IconButton(onClick = onListenUp) {
-                Icon(
-                    Icons.Filled.Headphones,
-                    contentDescription = stringResource(R.string.space_listen_up),
+            if (wide) {
+                SpaceHeaderActions(
+                    followState = profile.followState,
+                    canListen = canListen,
+                    onToggleFollow = onToggleFollow,
+                    onListenUp = onListenUp,
                 )
             }
-            SpaceFollowButton(state = profile.followState, onClick = onToggleFollow)
+        }
+        if (!wide) {
+            SpaceHeaderActions(
+                followState = profile.followState,
+                canListen = canListen,
+                onToggleFollow = onToggleFollow,
+                onListenUp = onListenUp,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
         // 签名可能很长又基本没信息量,给两行封顶;放在下面一整行是因为它旁边没有头像时
         // 能多放十来个字,而挤在头像右边只剩半行。
@@ -848,9 +917,39 @@ private fun SpaceHeader(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SpaceHeaderActions(
+    followState: FollowState,
+    canListen: Boolean,
+    onToggleFollow: () -> Unit,
+    onListenUp: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // 听这位 UP 的投稿:队列取自当前投稿列表,和播放页那份队列同源
+        // (DESIGN 2.4b:有限且用户显式选定的集合)。
+        IconButton(onClick = onListenUp, enabled = canListen) {
+            Icon(
+                Icons.Filled.Headphones,
+                contentDescription = stringResource(R.string.space_listen_up),
+            )
+        }
+        SpaceFollowButton(state = followState, onClick = onToggleFollow)
     }
 }
 
@@ -971,7 +1070,13 @@ private fun CollectionsTab(
                     CollectionRow(item, onClick = { onCollectionClick(item) })
                 }
                 item(key = "footer") {
-                    ListFooter(state.appending, state.hasMore, state.items.isNotEmpty())
+                    ListFooter(
+                        appending = state.appending,
+                        hasMore = state.hasMore,
+                        hasItems = state.items.isNotEmpty(),
+                        error = state.error,
+                        onRetry = onLoadMore,
+                    )
                 }
             }
         }
@@ -984,17 +1089,11 @@ private fun CollectionsTab(
  */
 @Composable
 private fun CollectionRow(item: SpaceCollectionItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        SquareCover(url = item.coverUrl, size = CollectionCoverSize)
-        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+    ListItem(
+        headlineContent = {
             Text(item.name, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        },
+        supportingContent = {
             Text(
                 text = stringResource(
                     R.string.space_collection_meta,
@@ -1010,8 +1109,10 @@ private fun CollectionRow(item: SpaceCollectionItem, onClick: () -> Unit, modifi
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-    }
+        },
+        leadingContent = { SquareCover(url = item.coverUrl, size = CollectionCoverSize) },
+        modifier = modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
+    )
 }
 
 private val CollectionCoverSize = 72.dp
@@ -1030,22 +1131,27 @@ private fun CollectionDetailScreen(
         modifier = modifier,
         topBar = { BilbyTopBar(title = detail.collection.name, onBack = onBack) },
     ) { padding ->
-        PullToRefreshBox(
-            isRefreshing = refreshing,
-            onRefresh = onRefresh,
-            modifier = Modifier.padding(padding),
+        AdaptiveContent(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            maxWidth = Breakpoints.ReadableWidth,
         ) {
-            VideoListTab(
-                items = detail.items,
-                appending = detail.appending,
-                hasMore = detail.hasMore,
-                loading = detail.loading,
-                error = detail.error,
-                emptyText = stringResource(R.string.space_empty_collection_detail),
-                onLoadMore = onLoadMore,
-                onVideoClick = onVideoClick,
+            PullToRefreshBox(
+                isRefreshing = refreshing,
+                onRefresh = onRefresh,
                 modifier = Modifier.fillMaxSize(),
-            )
+            ) {
+                VideoListTab(
+                    items = detail.items,
+                    appending = detail.appending,
+                    hasMore = detail.hasMore,
+                    loading = detail.loading,
+                    error = detail.error,
+                    emptyText = stringResource(R.string.space_empty_collection_detail),
+                    onLoadMore = onLoadMore,
+                    onVideoClick = onVideoClick,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
     }
 }
@@ -1075,7 +1181,8 @@ private fun DynamicListTab(
                 if (state.items.isEmpty()) {
                     item(key = "empty") { EmptyState(stringResource(R.string.space_empty_dynamics)) }
                 }
-                items(state.items, key = { it.key }) { dynamic ->
+                itemsIndexed(state.items, key = { _, item -> item.key }) { index, dynamic ->
+                    if (index > 0) HorizontalDivider()
                     when (dynamic) {
                         is SpaceDynamicItem.Video -> {
                             val item = dynamic.item
@@ -1116,7 +1223,13 @@ private fun DynamicListTab(
                     }
                 }
                 item(key = "footer") {
-                    ListFooter(state.appending, state.hasMore, state.items.isNotEmpty())
+                    ListFooter(
+                        appending = state.appending,
+                        hasMore = state.hasMore,
+                        hasItems = state.items.isNotEmpty(),
+                        error = state.error,
+                        onRetry = onLoadMore,
+                    )
                 }
             }
         }
@@ -1165,7 +1278,15 @@ private fun VideoListTab(
                         onClick = { onVideoClick(item) },
                     )
                 }
-                item(key = "footer") { ListFooter(appending, hasMore, items.isNotEmpty()) }
+                item(key = "footer") {
+                    ListFooter(
+                        appending = appending,
+                        hasMore = hasMore,
+                        hasItems = items.isNotEmpty(),
+                        error = error,
+                        onRetry = onLoadMore,
+                    )
+                }
             }
         }
     }

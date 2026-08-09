@@ -8,8 +8,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -19,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.bilby.R
 import dev.bilby.ui.theme.Spacing
@@ -49,6 +54,9 @@ fun FullScreenLoading(modifier: Modifier = Modifier) {
 /**
  * 首屏出错。错误文案用 onSurfaceVariant 而不是 error 色:整段话都染成红色会让一次网络抖动
  * 看起来像出了大事,红色留给"投币不可撤销"那种真需要停一下的地方。
+ *
+ * 图标是**状态标识不是插图**:整屏只有一行灰字时,读者要多看一眼才知道这是"出错了"还是
+ * "本来就没有"。它和空态那个图标成对,区分的正是这两种情况。
  */
 @Composable
 fun FullScreenError(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
@@ -57,6 +65,12 @@ fun FullScreenError(message: String, onRetry: () -> Unit, modifier: Modifier = M
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(Spacing.Cozy, Alignment.CenterVertically),
     ) {
+        Icon(
+            imageVector = Icons.Outlined.ErrorOutline,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(StateIconSize),
+        )
         Text(
             text = message,
             style = MaterialTheme.typography.bodyMedium,
@@ -69,34 +83,84 @@ fun FullScreenError(message: String, onRetry: () -> Unit, modifier: Modifier = M
     }
 }
 
-/** 空态。只说事实,不加插图、不加"去逛逛"这类把人推回内容池的引导。 */
+/**
+ * 空态。只说事实,不加"去逛逛"这类把人推回内容池的引导。
+ *
+ * 图标同 [FullScreenError]:它标的是"这里本来就是空的",和"没读到"是两件事,
+ * 不是给空屏配的插画。
+ */
 @Composable
 fun EmptyState(message: String, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier.fillMaxWidth().padding(Spacing.Spacious),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Inbox,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(StateIconSize),
+            )
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }
 
 /**
- * 列表底部。翻页中显示小转圈,没有更多时显示"没有更多了"。
- * [hasItems] 为 false 时什么都不显示 —— 空列表已经有空态在说话了。
+ * 已经有内容时的失败。**不能复用 [FullScreenError]**:它 `fillMaxSize()`,塞进列表底部或
+ * 结果流里会把一条错误撑成整页,把用户已经读到的东西顶出屏幕。
+ */
+@Composable
+fun InlineError(message: String, onRetry: (() -> Unit)?, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    ) {
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        onRetry?.let { retry ->
+            TextButton(onClick = retry) { Text(stringResource(R.string.action_retry)) }
+        }
+    }
+}
+
+/**
+ * 列表底部。翻页中显示小转圈,没有更多时显示"没有更多了";**翻页失败时在原列表下方给一行
+ * 错误和重试,不把已经读到的内容清掉** —— 首屏空列表那种失败仍归 [FullScreenError]。
+ * [hasItems] 为 false 且没有错误时什么都不显示 —— 空列表已经有空态在说话了。
  */
 @Composable
 fun ListFooter(
     appending: Boolean,
     hasMore: Boolean,
     hasItems: Boolean,
+    error: String? = null,
+    onRetry: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    if (!hasItems) return
+    if (!hasItems && error == null) return
+    if (error != null) {
+        InlineError(message = error, onRetry = onRetry, modifier = modifier)
+        return
+    }
     Box(
         modifier = modifier.fillMaxWidth().padding(Spacing.Comfortable),
         contentAlignment = Alignment.Center,
@@ -128,6 +192,9 @@ fun InlineProgress(text: String, modifier: Modifier = Modifier) {
         )
     }
 }
+
+/** 空态与错误态的状态图标。比正文大一档,但远小于插图——它是标识不是画面。 */
+private val StateIconSize = 40.dp
 
 /** 列表底部翻页用。默认 40dp 在一行文字旁边太大。 */
 private val InlineSpinnerSize = 24.dp

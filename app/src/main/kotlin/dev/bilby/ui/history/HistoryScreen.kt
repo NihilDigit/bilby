@@ -2,6 +2,7 @@ package dev.bilby.ui.history
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -16,6 +17,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.R
 import dev.bilby.ui.appendDistinctBy
+import dev.bilby.ui.AdaptiveContent
 import dev.bilby.api.BiliResult
 import dev.bilby.data.HistoryItem
 import dev.bilby.data.HistoryRepository
@@ -63,31 +65,41 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
 
     /**
      * refresh 和 append 共用同一对游标(cursorMax/cursorViewAt),不能并发改(性能计划 7.2)。
-     * refresh 把游标清零重来,这时一条还在飞的旧 append 落地必须被当作过期丢弃 ——
-     * 不然它会把清零前的游标重新写回去,或者把上一轮的条目拼进刷新后的空列表。
+     * refresh 把游标清零重来,但保留屏上的旧列表直到第一页成功;一条还在飞的旧 append
+     * 落地必须被当作过期丢弃,否则它会把清零前的游标写回来,或把上一轮条目拼进新列表。
      */
     private var generation = 0
     private var loadJob: Job? = null
+    private var lastRequestWasReplace = false
 
     init {
         loadMore()
     }
 
-    fun retry() = loadMore()
+    fun retry() = loadMore(replace = lastRequestWasReplace)
 
     fun refresh() {
         generation++
         loadJob?.cancel()
         _state.update {
-            it.copy(items = emptyList(), cursorMax = 0L, cursorViewAt = 0L, hasMore = true, refreshing = true, loading = false, appending = false)
+            it.copy(
+                cursorMax = 0L,
+                cursorViewAt = 0L,
+                hasMore = true,
+                refreshing = true,
+                loading = false,
+                appending = false,
+                error = null,
+            )
         }
-        loadMore()
+        loadMore(replace = true)
     }
 
-    fun loadMore() {
+    fun loadMore(replace: Boolean = false) {
         val current = _state.value
         if (current.loading || current.appending || !current.hasMore) return
-        val firstPage = current.items.isEmpty()
+        lastRequestWasReplace = replace
+        val firstPage = replace || current.items.isEmpty()
         val gen = generation
         _state.update { it.copy(loading = firstPage, appending = !firstPage, error = null) }
         loadJob = viewModelScope.launch {
@@ -97,12 +109,16 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
                         if (gen != generation) return@launch
                         _state.update {
                             it.copy(
-                                // 读 it 而不是协程外那份 current 快照:刷新会把 items 清空,用陈旧快照
-                                // 拼接等于把清空前的内容又写回去。
+                                // 读 it 而不是协程外那份 current 快照:并发刷新时不能把旧列表
+                                // 重新拼回去。
                                 //
                                 // 按 oid 去重是必需的:同一个视频重复观看在历史里本来就会再出现一条,
                                 // 游标翻页时上一页的条目会跟着漂到下一页。
-                                items = it.items.appendDistinctBy(result.value.items) { item -> item.oid },
+                                items = if (replace) {
+                                    result.value.items.distinctBy { item -> item.oid }
+                                } else {
+                                    it.items.appendDistinctBy(result.value.items) { item -> item.oid }
+                                },
                                 cursorMax = result.value.nextMax,
                                 cursorViewAt = result.value.nextViewAt,
                                 hasMore = !result.value.isEnd,
@@ -139,30 +155,44 @@ fun HistoryScreen(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
-    when {
-        state.loading && state.items.isEmpty() -> FullScreenLoading(modifier)
-        state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry, modifier)
-        state.items.isEmpty() -> EmptyState(stringResource(R.string.history_empty))
-        else -> {
-            val listState = rememberLazyListState()
-            LaunchedEffect(listState, state.hasMore, state.appending) {
-                snapshotFlow { listState.layoutInfo }
-                    .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-                    .distinctUntilChanged()
-                    .filter { (last, total) -> last != null && last >= total - 1 - PrefetchThreshold }
-                    .collect { if (state.hasMore && !state.appending) onLoadMore() }
-            }
-            PullToRefreshBox(isRefreshing = state.refreshing, onRefresh = onRefresh, modifier = modifier.fillMaxSize()) {
-                LazyColumn(
-                    state = listState,
+    AdaptiveContent(modifier = modifier) {
+        when {
+            state.loading && state.items.isEmpty() -> FullScreenLoading(Modifier.padding(contentPadding))
+            state.error != null && state.items.isEmpty() ->
+                FullScreenError(state.error, onRetry, Modifier.padding(contentPadding))
+            state.items.isEmpty() ->
+                EmptyState(stringResource(R.string.history_empty), Modifier.fillMaxSize().padding(contentPadding))
+            else -> {
+                val listState = rememberLazyListState()
+                LaunchedEffect(listState, state.hasMore, state.appending) {
+                    snapshotFlow { listState.layoutInfo }
+                        .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
+                        .distinctUntilChanged()
+                        .filter { (last, total) -> last != null && last >= total - 1 - PrefetchThreshold }
+                        .collect { if (state.hasMore && !state.appending) onLoadMore() }
+                }
+                PullToRefreshBox(
+                    isRefreshing = state.refreshing,
+                    onRefresh = onRefresh,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = contentPadding,
                 ) {
-                    items(state.items, key = { it.oid }) { item ->
-                        VideoRow(item = item.toRowUi(), onClick = { onItemClick(item) })
-                    }
-                    item(key = "footer") {
-                        ListFooter(appending = state.appending, hasMore = state.hasMore, hasItems = true)
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = contentPadding,
+                    ) {
+                        items(state.items, key = { it.oid }) { item ->
+                            VideoRow(item = item.toRowUi(), onClick = { onItemClick(item) })
+                        }
+                        item(key = "footer") {
+                            ListFooter(
+                                appending = state.appending,
+                                hasMore = state.hasMore,
+                                hasItems = true,
+                                error = state.error,
+                                onRetry = onRetry,
+                            )
+                        }
                     }
                 }
             }

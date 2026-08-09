@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -45,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.text.Placeholder
@@ -116,7 +118,9 @@ fun CommentSection(
             }
     }
 
-    Column(modifier = modifier) {
+    // 输入栏跟着键盘走。放在这一层而不是输入框上:内层退让的话,输入栏上面那段列表
+    // 不会跟着上移,打字时看不到自己在回复哪一条。
+    Column(modifier = modifier.imePadding()) {
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f),
@@ -140,7 +144,8 @@ fun CommentSection(
                 }
             }
 
-            if (!state.loading && state.items.isEmpty() && state.topComment == null) {
+            // 出错时不叠空态:一次失败不等于"这条视频没人评论",两句话一起出现只会互相拆台。
+            if (!state.loading && state.error == null && state.items.isEmpty() && state.topComment == null) {
                 item(key = "empty") { EmptyState(stringResource(R.string.comment_empty)) }
             }
 
@@ -175,7 +180,13 @@ fun CommentSection(
                         CircularProgressIndicator()
                     }
                 } else {
-                    ListFooter(state.appending, state.hasMore, state.items.isNotEmpty())
+                    ListFooter(
+                        appending = state.appending,
+                        hasMore = state.hasMore,
+                        hasItems = state.items.isNotEmpty() || state.topComment != null,
+                        error = state.error,
+                        onRetry = onLoadMore,
+                    )
                 }
             }
         }
@@ -370,17 +381,18 @@ private fun PictureGrid(urls: List<String>, onClick: (Int) -> Unit, modifier: Mo
                 .fillMaxWidth(SinglePictureWidthFraction)
                 .aspectRatio(4f / 3f)
                 .clip(MaterialTheme.shapes.small)
-                .clickable { onClick(0) },
+                .clickable(role = Role.Button) { onClick(0) },
         )
         return
     }
 
     val columns = if (urls.size == 2 || urls.size == 4) 2 else 3
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(GridSpacing)) {
-        urls.chunked(columns).forEach { row ->
+        // 带上原始下标再分行。用 indexOf 反查会在同一条评论重复配同一张图时全部指回第一张,
+        // 点第三张打开的是第一张。
+        urls.withIndex().chunked(columns).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(GridSpacing), modifier = Modifier.fillMaxWidth()) {
-                row.forEachIndexed { indexInRow, url ->
-                    val index = urls.indexOf(url).takeIf { it >= 0 } ?: indexInRow
+                row.forEach { (index, url) ->
                     BiliAsyncImage(
                         url = url,
                         contentDescription = stringResource(R.string.comment_picture),
@@ -388,7 +400,7 @@ private fun PictureGrid(urls: List<String>, onClick: (Int) -> Unit, modifier: Mo
                             .weight(1f)
                             .aspectRatio(1f)
                             .clip(MaterialTheme.shapes.small)
-                            .clickable { onClick(index) },
+                            .clickable(role = Role.Button) { onClick(index) },
                     )
                 }
                 // 最后一行不满时补空位,否则两张图会被拉宽到占满整行。

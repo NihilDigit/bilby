@@ -3,6 +3,7 @@ package dev.bilby.ui.fav
 import dev.bilby.formatDurationSeconds
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -19,6 +20,7 @@ import dev.bilby.R
 import dev.bilby.api.BiliResult
 import dev.bilby.data.FavRepository
 import dev.bilby.data.FavVideo
+import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
@@ -61,8 +63,8 @@ class FavFolderViewModel(
 
     /**
      * reload 与 append 共用同一对游标(page、seenAids),不能并发改(性能计划 7.2):reload
-     * 把它们清空重来,这时一条还在飞的旧 append 落地必须当作过期丢弃,否则它会拿清空前的
-     * seenAids 过滤出的条目拼进 reload 后的空列表。
+     * 重置游标,这时一条还在飞的旧 append 落地必须当作过期丢弃;刷新成功后用第一页替换
+     * 旧列表,而不是把两轮内容拼在一起。
      */
     private var generation = 0
     private var job: Job? = null
@@ -71,12 +73,17 @@ class FavFolderViewModel(
         loadMore()
     }
 
-    fun loadMore() {
+    fun loadMore(replace: Boolean = false) {
         val current = _state.value
         if (current.loading || current.appending || !current.hasMore) return
-        val next = page + 1
+        val next = if (replace) 1 else page + 1
         val gen = generation
-        _state.update { it.copy(loading = next == 1, appending = next > 1) }
+        _state.update {
+            it.copy(
+                loading = replace || next == 1,
+                appending = !replace && next > 1,
+            )
+        }
         job = viewModelScope.launch {
             try {
                 when (val result = repository.folderContents(mediaId, next)) {
@@ -85,7 +92,11 @@ class FavFolderViewModel(
                         page = next
                         val fresh = result.value.items.filter { seenAids.add(it.aid) }
                         _state.update {
-                            it.copy(items = it.items + fresh, hasMore = result.value.hasMore, error = null)
+                            it.copy(
+                                items = if (replace) fresh else it.items + fresh,
+                                hasMore = result.value.hasMore,
+                                error = null,
+                            )
                         }
                     }
 
@@ -98,12 +109,13 @@ class FavFolderViewModel(
         }
     }
 
-    fun retry() = reload(refreshing = false)
+    fun retry() {
+        if (_state.value.items.isNotEmpty()) loadMore(replace = page == 0) else reload(refreshing = false)
+    }
 
     /**
-     * 下拉刷新。和 [retry] 是同一件事(整份重来),差别只在指示器:refreshing 得单独记,
-     * 不能用 "loading 且列表非空" 去推 —— 重来的第一步正是把列表清空,那个条件永远不成立,
-     * 指示器一次都不会显示。
+     * 下拉刷新。和 [retry] 是同一件事(整份重来),差别只在指示器:refreshing 得单独记。
+     * 刷新期间保留旧列表,避免用户正在读的内容突然消失;成功后再用第一页替换它。
      */
     fun refresh() = reload(refreshing = true)
 
@@ -112,8 +124,16 @@ class FavFolderViewModel(
         job?.cancel()
         page = 0
         seenAids.clear()
-        _state.value = FavFolderUiState(refreshing = refreshing)
-        loadMore()
+        _state.update {
+            it.copy(
+                refreshing = refreshing,
+                error = null,
+                loading = false,
+                appending = false,
+                hasMore = true,
+            )
+        }
+        loadMore(replace = true)
     }
 
     private fun fail(message: String) {
@@ -132,39 +152,50 @@ fun FavFolderScreen(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
-    when {
-        state.loading && state.items.isEmpty() -> FullScreenLoading(modifier)
-        state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry, modifier)
-        state.items.isEmpty() -> EmptyState(stringResource(R.string.fav_empty))
-        else -> {
-            val listState = rememberLazyListState()
-            LaunchedEffect(listState, state.hasMore, state.appending) {
-                snapshotFlow { listState.layoutInfo }
-                    .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-                    .distinctUntilChanged()
-                    .filter { (last, total) -> last != null && last >= total - 3 }
-                    .collect { if (state.hasMore && !state.appending) onLoadMore() }
-            }
-            PullToRefreshBox(
-                isRefreshing = state.refreshing,
-                onRefresh = onRefresh,
-                modifier = modifier.fillMaxSize(),
-            ) {
-                LazyColumn(
-                    state = listState,
+    AdaptiveContent(modifier = modifier) {
+        when {
+            state.loading && state.items.isEmpty() -> FullScreenLoading(Modifier.padding(contentPadding))
+            state.error != null && state.items.isEmpty() ->
+                FullScreenError(state.error, onRetry, Modifier.padding(contentPadding))
+            state.items.isEmpty() ->
+                EmptyState(stringResource(R.string.fav_empty), Modifier.fillMaxSize().padding(contentPadding))
+            else -> {
+                val listState = rememberLazyListState()
+                LaunchedEffect(listState, state.hasMore, state.appending) {
+                    snapshotFlow { listState.layoutInfo }
+                        .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
+                        .distinctUntilChanged()
+                        .filter { (last, total) -> last != null && last >= total - 3 }
+                        .collect { if (state.hasMore && !state.appending) onLoadMore() }
+                }
+                PullToRefreshBox(
+                    isRefreshing = state.refreshing,
+                    onRefresh = onRefresh,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = contentPadding,
                 ) {
-                    items(state.items, key = { it.aid }) { item ->
-                        VideoRow(
-                            item = item.toRowUi(),
-                            // 失效稿件照常列出但不可点:UP 删稿或转私密之后收藏夹里还留着这一条,
-                            // 悄悄隐藏会让人以为自己记错了收藏过什么。
-                            onClick = { if (!item.invalid) onItemClick(item) },
-                        )
-                    }
-                    item(key = "footer") {
-                        ListFooter(appending = state.appending, hasMore = state.hasMore, hasItems = true)
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = contentPadding,
+                    ) {
+                        items(state.items, key = { it.aid }) { item ->
+                            VideoRow(
+                                item = item.toRowUi(),
+                                // 失效稿件照常列出但不可点:UP 删稿或转私密之后收藏夹里还留着这一条,
+                                // 悄悄隐藏会让人以为自己记错了收藏过什么。
+                                enabled = !item.invalid,
+                                onClick = { if (!item.invalid) onItemClick(item) },
+                            )
+                        }
+                        item(key = "footer") {
+                            ListFooter(
+                                appending = state.appending,
+                                hasMore = state.hasMore,
+                                hasItems = true,
+                                error = state.error,
+                                onRetry = onRetry,
+                            )
+                        }
                     }
                 }
             }
