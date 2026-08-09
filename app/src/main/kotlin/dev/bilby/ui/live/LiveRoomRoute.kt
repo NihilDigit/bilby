@@ -7,6 +7,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -21,6 +22,8 @@ import androidx.media3.session.SessionCommand
 import dev.bilby.AppContainer
 import dev.bilby.BiliLog
 import dev.bilby.player.AudioPlaybackService
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
 
 /**
  * 直播间的接线:连 session、把选好的流交给服务、把状态和弹幕流交给界面。
@@ -36,14 +39,12 @@ fun LiveRoomRoute(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val credentials by container.settings.credentials.collectAsStateWithLifecycle(initialValue = null)
-    val selfMid = credentials?.dedeUserId?.toLongOrNull() ?: 0L
-
+    val scope = rememberCoroutineScope()
     val vm: LiveRoomViewModel = viewModel(
         key = "live-$roomId",
         factory = viewModelFactory {
             initializer {
-                LiveRoomViewModel(roomId, container.liveRepository, container.liveDanmakuClient, selfMid)
+                LiveRoomViewModel(roomId, container.liveRepository, container.liveDanmakuClient, container.settings)
             }
         },
     )
@@ -102,6 +103,12 @@ fun LiveRoomRoute(
         // 播放器此刻装的是不是这个房间。和播放页同一个判据,只是标识换成了直播那一套。
         attached = audioState.loadKey == "${AudioPlaybackService.LOAD_KEY_LIVE_PREFIX}$roomId",
         danmakuPrefs = danmakuPrefs,
+        // 弹幕开关是全局设置,不是这个房间的状态 —— 在直播间关掉,回到视频页也是关的,
+        // 这与视频页那边改它的效果一致。
+        onDanmakuEnabledChange = { enabled ->
+            scope.launch(NonCancellable) { container.settings.saveDanmakuEnabled(enabled) }
+        },
+        onQualityChange = vm::setQuality,
         onLoadMoreGuards = vm::loadMoreGuards,
         onBack = onBack,
         modifier = modifier,

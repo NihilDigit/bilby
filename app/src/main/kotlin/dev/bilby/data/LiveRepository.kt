@@ -18,7 +18,10 @@ data class LiveStreamPick(
     val protocolName: String,
     val formatName: String,
     val codecName: String,
+    /** 服务端**实际**给的档位,不一定等于请求的那个:要不到就自己降。 */
     val qn: Int,
+    /** 这个房间能选的档位。空的话界面不出清晰度入口。 */
+    val acceptQn: List<Int>,
 )
 
 /** 房间当前状态。未开播时 [stream] 为 null,调用方据此显示"未开播"而不是报错。 */
@@ -149,6 +152,7 @@ private fun LiveRoomPlayInfoDto.pickStream(): LiveStreamPick? {
         formatName = format,
         codecName = codec.codecName,
         qn = codec.currentQn,
+        acceptQn = codec.acceptQn,
     )
 }
 

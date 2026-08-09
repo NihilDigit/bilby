@@ -58,10 +58,12 @@ internal fun RawDanmakuElem.renderId(): String =
  * 1/2/3 都是滚动;6 是逆向滚动,退化成普通滚动(不实现反向);4 底部、5 顶部。
  * 7(定位/运动)走 [SpecialDanmakuParser] 那条独立的路,8/9(代码/BAS)不支持,都返回 null。
  *
- * 点播与直播共用它:两边拿到的模式号是同一套编码。
+ * **0 只出现在直播的信息流里,含义是普通滚动。** 点播的 protobuf 从 1 起编号,不会给 0;
+ * 而直播那套编码里滚动就是 0 —— 两边共用这个函数,所以两种约定都要认。漏掉它的表现是
+ * 直播一条弹幕都不上屏,而聊天栏正常,因为聊天栏在判模式号之前就已经入列了。
  */
 internal fun danmakuModeOrNull(mode: Int): DanmakuMode? = when (mode) {
-    1, 2, 3, 6 -> DanmakuMode.SCROLL
+    0, 1, 2, 3, 6 -> DanmakuMode.SCROLL
     4 -> DanmakuMode.BOTTOM
     5 -> DanmakuMode.TOP
     else -> null

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -50,6 +51,10 @@ data class LiveRoomUiState(
     /** 未开播时为 false:界面显示封面和一句话,不去连弹幕流。 */
     val isLive: Boolean = false,
     val streamUrl: String? = null,
+    /** 这个房间能选的清晰度档位;空表示不出入口。 */
+    val qualities: List<Int> = emptyList(),
+    /** 服务端实际给的档位。请求 A 拿到 B 是正常的,界面要显示拿到的那个。 */
+    val currentQn: Int = 0,
     val chat: List<LiveChatLine> = emptyList(),
     val superChats: List<LiveMessage.SuperChat> = emptyList(),
     val guards: LiveGuardsState = LiveGuardsState(),
@@ -66,7 +71,7 @@ class LiveRoomViewModel(
     private val roomId: Long,
     private val repository: LiveRepository,
     private val danmakuClient: LiveDanmakuClient,
-    private val selfMid: Long,
+    private val settings: dev.bilby.data.SettingsStore,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LiveRoomUiState())
@@ -116,6 +121,8 @@ class LiveRoomViewModel(
                             loading = false,
                             isLive = value.isLive,
                             streamUrl = value.stream?.url,
+                            qualities = value.stream?.acceptQn.orEmpty(),
+                            currentQn = value.stream?.qn ?: 0,
                             anchorMid = if (value.uid != 0L) value.uid else it.anchorMid,
                         )
                     }
@@ -140,9 +147,16 @@ class LiveRoomViewModel(
      */
     private fun connectDanmaku() {
         viewModelScope.launch {
+            // **登录态在这里现取**,不在构造时捕获:凭据是个 flow,VM 建出来那一刻它可能
+            // 还没发出第一个值,拿到的是 0。用登录态签出来的 token 配一个 uid=0 的认证包,
+            // 服务端有理由拒绝,而被拒之后它只是把连接关掉。
+            val selfMid = settings.credentials.first().dedeUserId.toLongOrNull() ?: 0L
             danmakuClient.messages(roomId, selfMid).collect { message ->
                 when (message) {
                     is LiveMessage.Danmaku -> onDanmaku(message)
+                    // 人气值只有这一个实时来源,房间详情给的那个只在进房那一刻准。
+                    is LiveMessage.Popularity -> _state.update { it.copy(online = message.value) }
+
                     is LiveMessage.SuperChat -> _state.update {
                         // 新的在前:醒目留言是一条一条读的,最新那条该在手边。
                         it.copy(superChats = (listOf(message) + it.superChats).take(MAX_SUPER_CHATS))
@@ -177,6 +191,27 @@ class LiveRoomViewModel(
                 isSelf = message.isSelf,
             ),
         )
+    }
+
+    /**
+     * 换清晰度。重新取一次 playurl 就够 —— 地址换了之后由界面把新地址交给服务,而那条命令
+     * 报的是房间号,服务端认得出是同一个房间的换流,不会当成打开一个新房间。
+     *
+     * **不动弹幕连接**:信息流跟清晰度没关系,断开重连只会白丢几条。
+     */
+    fun setQuality(qn: Int) {
+        viewModelScope.launch {
+            val playback = repository.loadPlayback(roomId, qn)
+            if (playback is BiliResult.Ok) {
+                _state.update {
+                    it.copy(
+                        streamUrl = playback.value.stream?.url,
+                        currentQn = playback.value.stream?.qn ?: it.currentQn,
+                        qualities = playback.value.stream?.acceptQn ?: it.qualities,
+                    )
+                }
+            }
+        }
     }
 
     /** 大航海按页拉。首次进入也走它,所以 [LiveGuardsState.page] 从 0 起。 */

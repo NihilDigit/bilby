@@ -43,6 +43,12 @@ sealed interface LiveMessage {
         val isSelf: Boolean,
     ) : LiveMessage
 
+    /**
+     * 人气值。**它在心跳回包(op=3)里,不是一条业务消息** —— 服务端每次心跳都回一个 4 字节
+     * 大端整数,这是它唯一的来源:房间详情接口给的那个数只在进房那一刻准。
+     */
+    data class Popularity(val value: Long) : LiveMessage
+
     /** 醒目留言。[endTimeSeconds] 到点就该从列表里撤下来,是服务端定的,不是本地计时。 */
     data class SuperChat(
         val id: Long,
@@ -137,8 +143,25 @@ class LiveDanmakuClient(
         val operation = bytes.readInt(8)
 
         when (operation) {
-            OP_HEARTBEAT_REPLY -> return // 人气值,不用
-            OP_AUTH_REPLY -> return
+            OP_HEARTBEAT_REPLY -> {
+                // 载荷是 4 字节大端人气值,没有 JSON。
+                if (bytes.size >= headerSize + 4) {
+                    val popularity = bytes.readInt(headerSize).toLong() and 0xFFFFFFFFL
+                    out.send(LiveMessage.Popularity(popularity))
+                }
+                return
+            }
+            OP_AUTH_REPLY -> {
+                // 认证结果是这条链路上唯一会"安静失败"的一步:被拒之后服务端直接关连接,
+                // 表现成一个没有上下文的 EOF。把回包打出来,免得只能靠猜。
+                val body = if (totalSize in (headerSize + 1)..bytes.size) {
+                    bytes.decodeToString(headerSize, totalSize)
+                } else {
+                    "(空)"
+                }
+                BiliLog.d("直播信息流认证回包 $body")
+                return
+            }
         }
 
         when (protocolVer) {

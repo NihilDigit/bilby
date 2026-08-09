@@ -89,7 +89,9 @@ import androidx.media3.ui.compose.PlayerSurface
 import dev.bilby.BiliLog
 import dev.bilby.R
 import dev.bilby.formatDurationMillis
+import dev.bilby.ui.player.ControlButton
 import dev.bilby.ui.player.ControlScrimBottom
+import dev.bilby.ui.player.DanmakuButton
 import dev.bilby.ui.player.PlayerShell
 import dev.bilby.ui.player.formatSpeed
 import dev.bilby.data.QualityOption
@@ -547,61 +549,6 @@ private fun SubtitleButton(
  * 只有开/关两态,点一下直接切换。借用 [ControlButton] 的 `expanded` 参数表达"开着"这个
  * 高亮态,不是真的有下拉菜单要展开。
  */
-@Composable
-private fun DanmakuButton(
-    enabled: Boolean,
-    onEnabledChange: (Boolean) -> Unit,
-    isFullscreen: Boolean,
-) {
-    ControlButton(
-        expanded = enabled,
-        onClick = { onEnabledChange(!enabled) },
-        label = null,
-        icon = { tint ->
-            Icon(
-                Icons.AutoMirrored.Filled.Comment,
-                stringResource(R.string.player_danmaku),
-                tint = tint,
-                modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp),
-            )
-        },
-    )
-}
-
-/** 图标按钮,可选地在图标右边挂一小段文字(当前倍速、当前清晰度)。 */
-@Composable
-private fun ControlButton(
-    expanded: Boolean,
-    onClick: () -> Unit,
-    label: String?,
-    icon: @Composable (Color) -> Unit,
-) {
-    val tint = if (expanded) MaterialTheme.colorScheme.primary else FixedColors.OnMedia
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
-        modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .clickable(onClick = onClick)
-            .heightIn(min = 40.dp)
-            .padding(horizontal = 8.dp),
-    ) {
-        icon(tint)
-        if (label != null) {
-            Text(
-                label,
-                style = MaterialTheme.typography.labelSmall,
-                color = tint,
-                maxLines = 1,
-                // **不设宽度上限**:这里的标签是画质档名("1080P60"、"1080P 高码率"),
-                // 截断之后两个档看起来一模一样,那正是这个标签唯一要回答的问题。
-                // 只在全屏显示(内嵌时 label 传 null),横屏有的是宽度,不会挤掉别的控件。
-                modifier = Modifier.padding(start = 4.dp),
-            )
-        }
-    }
-}
-
 private val selectedMark: @Composable () -> Unit = {
     Text("·", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
 }

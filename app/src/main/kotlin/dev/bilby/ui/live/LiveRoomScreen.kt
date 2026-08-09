@@ -23,9 +23,14 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -51,6 +56,8 @@ import dev.bilby.R
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.live.LiveMessage
 import dev.bilby.ui.components.BiliAsyncImage
+import dev.bilby.ui.player.ControlButton
+import dev.bilby.ui.player.DanmakuButton
 import dev.bilby.ui.player.DanmakuFeed
 import dev.bilby.ui.player.DanmakuFontSizeSp
 import dev.bilby.ui.player.DanmakuLayer
@@ -81,6 +88,8 @@ fun LiveRoomScreen(
     surfacePlayer: Player?,
     attached: Boolean,
     danmakuPrefs: DanmakuPrefs,
+    onDanmakuEnabledChange: (Boolean) -> Unit,
+    onQualityChange: (Int) -> Unit,
     onLoadMoreGuards: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -110,8 +119,10 @@ fun LiveRoomScreen(
                     locked = locked,
                     onLockedChange = { locked = it },
                     title = state.title,
-                    // 直播不能 seek:那条时间轴上没有往回拖这回事。亮度音量和长按照旧。
-                    gestures = PlayerGestureOptions(seek = false),
+                    // 直播既不能 seek 也不能快进:前者那条时间轴上没有往回拖这回事,后者会把
+                    // 倍速设成 3x —— 在一条一直往前走的流上,那只是冲到最前沿然后卡住等数据。
+                    // 亮度和音量照旧,它们跟内容是什么无关。
+                    gestures = PlayerGestureOptions(seek = false, fastForward = false),
                     overlay = {
                         DanmakuLayer(
                             player = player,
@@ -127,7 +138,20 @@ fun LiveRoomScreen(
                     controlBar = {
                         LiveControlBar(
                             isPlaying = isPlaying,
+                            isFullscreen = isFullscreen,
                             online = state.online,
+                            danmakuEnabled = danmakuPrefs.enabled,
+                            onDanmakuEnabledChange = {
+                                onDanmakuEnabledChange(it)
+                                keepControlsAwake()
+                            },
+                            qualities = state.qualities,
+                            currentQn = state.currentQn,
+                            onQualityChange = {
+                                onQualityChange(it)
+                                keepControlsAwake()
+                            },
+                            onMenuOpenChange = { setMenuOpen(it) },
                             onPlayPause = { togglePlayPause() },
                             onFullscreenToggle = { toggleFullscreen() },
                         )
@@ -189,11 +213,21 @@ private fun LiveOffline(state: LiveRoomUiState, onBack: () -> Unit) {
     }
 }
 
-/** 直播的控制条只有三件事:播放/暂停、在线人数、全屏。没有进度条,没有分 P,没有队列。 */
+/**
+ * 直播的控制条:播放/暂停、人气值、弹幕开关、清晰度、全屏。**没有进度条**,那条时间轴上
+ * 没有位置可拖;也没有分 P 和队列。
+ */
 @Composable
 private fun LiveControlBar(
     isPlaying: Boolean,
+    isFullscreen: Boolean,
     online: Long,
+    danmakuEnabled: Boolean,
+    onDanmakuEnabledChange: (Boolean) -> Unit,
+    qualities: List<Int>,
+    currentQn: Int,
+    onQualityChange: (Int) -> Unit,
+    onMenuOpenChange: (Boolean) -> Unit,
     onPlayPause: () -> Unit,
     onFullscreenToggle: () -> Unit,
 ) {
@@ -216,10 +250,22 @@ private fun LiveControlBar(
             color = FixedColors.OnMedia,
             modifier = Modifier.weight(1f).padding(start = Spacing.Hair),
         )
+        DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+        if (qualities.size > 1) {
+            LiveQualityButton(
+                qualities = qualities,
+                currentQn = currentQn,
+                isFullscreen = isFullscreen,
+                onSelect = onQualityChange,
+                onMenuOpenChange = onMenuOpenChange,
+            )
+        }
         IconButton(onClick = onFullscreenToggle) {
             Icon(
-                imageVector = Icons.Filled.PlayArrow,
-                contentDescription = stringResource(R.string.player_enter_fullscreen),
+                imageVector = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+                contentDescription = stringResource(
+                    if (isFullscreen) R.string.player_exit_fullscreen else R.string.player_fullscreen,
+                ),
                 tint = FixedColors.OnMedia,
             )
         }
@@ -270,10 +316,16 @@ private fun ChatPane(state: LiveRoomUiState) {
 
         val listState = rememberLazyListState()
         // 新的一行追在末尾,列表自己跟到底 —— 直播的聊天栏停在中间就等于没在看直播了。
-        LaunchedEffect(listState) {
-            snapshotFlow { state.chat.size }.collect { size ->
-                if (size > 0) listState.animateScrollToItem(size - 1)
-            }
+        //
+        // key 用**最新一条的 id**,不是条数:列表封顶 200 条,到顶之后条数恒为 200,拿它当
+        // key 就再也不会触发了。也不在 LaunchedEffect 里 snapshotFlow `state` —— 它是普通
+        // 参数不是 State 对象,块里捕获的是启动那一刻那一份。
+        //
+        // 用瞬时的 scrollToItem 而不是 animateScrollToItem:直播消息密集,动画每来一条就被
+        // 取消重来一次,永远走不完,看上去就是不动。
+        val lastId = state.chat.lastOrNull()?.id
+        LaunchedEffect(lastId) {
+            if (lastId != null) listState.scrollToItem(state.chat.lastIndex)
         }
         LazyColumn(
             state = listState,
@@ -390,3 +442,71 @@ private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit) {
 }
 
 private const val GUARD_PREFETCH = 5
+
+/**
+ * 清晰度。档名只在全屏显示 —— 内嵌时控制条窄,一个图标就够,而档名("原画""蓝光")截断之后
+ * 反而分不出档。
+ */
+@Composable
+private fun LiveQualityButton(
+    qualities: List<Int>,
+    currentQn: Int,
+    isFullscreen: Boolean,
+    onSelect: (Int) -> Unit,
+    onMenuOpenChange: (Boolean) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        ControlButton(
+            expanded = expanded,
+            onClick = {
+                expanded = true
+                onMenuOpenChange(true)
+            },
+            label = if (isFullscreen) stringResource(qualityLabel(currentQn)) else null,
+            icon = { tint ->
+                Icon(
+                    Icons.Filled.HighQuality,
+                    contentDescription = stringResource(R.string.player_quality),
+                    tint = tint,
+                    modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp),
+                )
+            },
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = {
+                expanded = false
+                onMenuOpenChange(false)
+            },
+        ) {
+            // 服务端给的顺序是从低到高,菜单里反过来:清晰度菜单上手就该看见最好的那档。
+            qualities.sortedDescending().forEach { qn ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(qualityLabel(qn))) },
+                    onClick = {
+                        expanded = false
+                        onMenuOpenChange(false)
+                        onSelect(qn)
+                    },
+                    trailingIcon = if (qn == currentQn) {
+                        { Text("·", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary) }
+                    } else {
+                        null
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** 档位号到档名。取值见 PiliPlus `api.dart` 对 `getRoomPlayInfo` 的注释。 */
+private fun qualityLabel(qn: Int): Int = when (qn) {
+    30000 -> R.string.live_quality_dolby
+    20000 -> R.string.live_quality_4k
+    10000 -> R.string.live_quality_original
+    400 -> R.string.live_quality_blu_ray
+    250 -> R.string.live_quality_ultra
+    150 -> R.string.live_quality_high
+    else -> R.string.live_quality_smooth
+}

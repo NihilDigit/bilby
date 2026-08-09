@@ -321,4 +321,11 @@
     <string name="live_guard_captain">舰长</string>
     <string name="player_enter_fullscreen">全屏</string>
     <string name="space_live_now">直播中</string>
+    <string name="live_quality_dolby">杜比</string>
+    <string name="live_quality_4k">4K</string>
+    <string name="live_quality_original">原画</string>
+    <string name="live_quality_blu_ray">蓝光</string>
+    <string name="live_quality_ultra">超清</string>
+    <string name="live_quality_high">高清</string>
+    <string name="live_quality_smooth">流畅</string>
 </resources>

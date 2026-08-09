@@ -33,6 +33,7 @@ import dev.nihildigit.danmaku.SpecialDanmakuHost
 import dev.nihildigit.danmaku.SpecialDanmakuHostState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlin.time.TimeSource
 
 /**
  * 弹幕从哪来。两种形态的差别只在这里,时钟、测量、排布、渲染都一样。
@@ -82,9 +83,14 @@ fun DanmakuLayer(
     fontSizeSp: Float,
     modifier: Modifier = Modifier,
 ) {
-    // 时钟包的是 player(MediaController),不是 surfacePlayer 的引用本身 —— 弹幕只要播放
-    // 位置/状态,不碰画面,跟"控制一律走 controller"的约定一致。
-    val clock = remember(player, surfacePlayer) { PlayerDanmakuClock(controller = player, surfacePlayer = surfacePlayer) }
+    // 时钟按输入形态选,见两个实现的类注释。点播那份包的是 player(MediaController),不是
+    // surfacePlayer 的引用本身 —— 弹幕只要播放位置/状态,不碰画面,跟"控制一律走 controller"
+    // 的约定一致。
+    val isLive = feed is DanmakuFeed.Stream
+    val clock = remember(player, surfacePlayer, isLive) {
+        if (isLive) LiveDanmakuClock(player)
+        else PlayerDanmakuClock(controller = player, surfacePlayer = surfacePlayer)
+    }
     val measurer = rememberTextMeasurer()
     // 名字带 Display 是为了和"同屏密度"(prefs.density)分开,这里是屏幕像素密度。
     val displayDensity = LocalDensity.current
@@ -221,9 +227,9 @@ fun DanmakuLayer(
             is DanmakuFeed.Stream -> feed.arrivals.collect { danmaku ->
                 // 到达即打戳。往后挪一点点是给排布留出的最小提前量 —— 排在"此刻"的弹幕
                 // 已经错过了当前这一帧,会被 visibleAt 直接跳过。
-                val at = clock.positionMillis + LIVE_EMIT_LEAD_MILLIS
-                if (current.compiler.append(danmaku.copy(playTimeMillis = at))) {
-                    current.compiler.advanceTo(clock.positionMillis)
+                val position = clock.positionMillis
+                if (current.compiler.append(danmaku.copy(playTimeMillis = position + LIVE_EMIT_LEAD_MILLIS))) {
+                    current.compiler.advanceTo(position)
                     current.hostState.notifyChanged()
                 }
             }
@@ -333,6 +339,28 @@ private class PlayerDanmakuClock(
     override val positionMillis: Long get() = source.currentPosition
     override val isPlaying: Boolean get() = source.isPlaying
     override val playbackSpeed: Float get() = source.playbackParameters.speed
+}
+
+/**
+ * 直播的弹幕时钟:**一条自己的单调时间轴**,和媒体时间轴无关。
+ *
+ * 不能用播放器的位置。直播 HLS 的 `currentPosition` 是相对于**滑动窗口**的,旧分片被丢弃、
+ * 窗口起点前移时这个读数会往回跳,而编排器把"位置回退"理解成 seek:回退到窗口有效区之前
+ * 就整段重建([DanmakuCompiler.advanceTo]),`timeline.clear()` 把屏上所有弹幕一次抹掉;
+ * 同一时间 [DanmakuCompiler.append] 又因为要求时间非降序而开始拒收新的。表现就是弹幕出现
+ * 几秒后集体消失,周期性复现。
+ *
+ * 直播也不需要跟媒体时间轴对齐:弹幕是"此刻到达、此刻显示",没有 seek,没有回看,唯一的
+ * 要求是单调地按 1 倍速往前走。倍速恒 1:直播不变速,而变速本来就只影响弹幕滚多快。
+ *
+ * 暂停时 [isPlaying] 为 false,host 的帧循环会挂起,画面冻在那一刻;恢复时时钟已经走远了,
+ * 屏上那批会一次性过期 —— 这与"恢复即回到直播最前沿"是一致的。
+ */
+private class LiveDanmakuClock(private val player: Player) : DanmakuClock {
+    private val start = TimeSource.Monotonic.markNow()
+    override val positionMillis: Long get() = start.elapsedNow().inWholeMilliseconds
+    override val isPlaying: Boolean get() = player.isPlaying
+    override val playbackSpeed: Float get() = 1f
 }
 
 /** 一次"重建编排"的产出:编排器 + host 状态。弹幕池的游标在编排器里,这里不再记一份。 */
