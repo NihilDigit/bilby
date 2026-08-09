@@ -115,7 +115,6 @@ import dev.nihildigit.danmaku.DanmakuLayoutConfig
 import dev.nihildigit.danmaku.DanmakuRenderStyle
 import dev.nihildigit.danmaku.DanmakuTextSize
 import dev.nihildigit.danmaku.DanmakuViewport
-import dev.nihildigit.danmaku.ProcessingReport
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -363,7 +362,7 @@ fun BilbyPlayer(
         val session = danmakuSession ?: return@LaunchedEffect
         session.compiler.setPool(danmakuPool)
         if (session.compiler.advanceTo(danmakuClock.positionMillis)) {
-            logDanmakuReport(session.compiler.report)
+            logDanmakuReport(session.compiler)
             session.hostState.notifyChanged()
         }
     }
@@ -1344,7 +1343,7 @@ private fun buildDanmakuSession(
     val compiler = DanmakuCompiler(layout, density.createScheduler(layout), measure = measure)
     compiler.setPool(pool)
     compiler.advanceTo(clock.positionMillis)
-    logDanmakuReport(compiler.report)
+    logDanmakuReport(compiler)
     return DanmakuSession(
         compiler = compiler,
         hostState = DanmakuHostState(clock, compiler.timeline, frameRateCap),
@@ -1358,11 +1357,13 @@ private fun buildDanmakuSession(
  * 条数是**当前窗口**的,不是整池的([DanmakuCompiler] 只编排播放位置附近一段)。窗口推进
  * 每秒都在发生,那条路径不打日志——只有重建(建会话、换池子)才打,否则 logcat 里全是它。
  */
-private fun logDanmakuReport(report: ProcessingReport) {
+private fun logDanmakuReport(compiler: DanmakuCompiler) {
+    val report = compiler.report
     if (report.inputCount == 0) return
+    // 峰值同屏要单独问时间轴:它是 O(n log n) 的一次扫描,只有真要打这行日志时才值得算。
     BiliLog.d(
         "弹幕编排 窗口内 ${report.inputCount} 条,上屏 ${report.scheduledCount},布局丢弃 " +
-            "${report.droppedByLayoutCount},峰值同屏 ${report.peakConcurrentCount}," +
+            "${report.droppedByLayoutCount},峰值同屏 ${compiler.timeline.peakConcurrency()}," +
             "耗时 ${report.compileDurationMillis}ms",
     )
 }
