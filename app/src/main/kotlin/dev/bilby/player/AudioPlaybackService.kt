@@ -44,11 +44,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
- * 播放的全部真相。三个界面(内嵌播放、全屏、听视频)都只读它、不各自持有一份。
- *
- * 队列位置是 [positionInQueue] / [queueSize],即 N / M。
- */
-/**
  * 通知栏、锁屏与播放页共用的展示信息。**哪种源都有**,所以它挂在状态顶层而不是队列上 ——
  * 队列曾经兼任元数据来源,那正是直播这类"不是队列"的源塞不进来的原因。
  */
@@ -89,6 +84,9 @@ data class QueueState(
      */
     val incomplete: Boolean = false,
 )
+
+/** 正在播的直播间。房间号是它的身份,元数据来自房间详情而不是队列。 */
+internal class LiveSource(val roomId: Long, val nowPlaying: NowPlaying)
 
 data class AudioPlaybackUiState(
     /** 正在放什么。没打开过任何东西时为 null。 */
@@ -154,6 +152,13 @@ class AudioPlaybackService : MediaSessionService() {
 
     private var queue = PlaybackQueue(emptyList())
     private var sourceLabel = ""
+
+    /**
+     * 正在播的直播间。**非空时播放器装的是直播流,与 [queue] 互斥** —— 直播是单条无限流,
+     * 没有"播完下一条",塞进队列会把"有界集合播完即停"那条约束弄坏,通知栏的上/下一条也会
+     * 指向上一段视频。
+     */
+    private var live: LiveSource? = null
     private var prepareJob: Job? = null
 
     /**
@@ -268,8 +273,63 @@ class AudioPlaybackService : MediaSessionService() {
      * 请求),这些都是"这条视频属于哪个集合"的元数据,和"这条视频怎么放出声"没有关系 ——
      * 每一次点开都要先等完一轮它们。队列仍然是唯一真相,只是它先短一格。
      */
+    /**
+     * 打开一个直播间。
+     *
+     * 和 [openVideo] 一样是幂等的,报的是房间号而不是流地址 —— 页面拿到房间详情后会再发一遍
+     * 带标题的命令,那一趟只该更新元数据,不该把刚起好的流掐掉重来。
+     *
+     * **直播不进队列。** 队列在这里被清空,理由见 [live]:留着的话通知栏的上/下一条还指着
+     * 上一段视频,按下去就从直播间跳走了。
+     */
+    private fun playLive(args: Bundle) {
+        val url = args.getString(EXTRA_LIVE_URL).orEmpty()
+        val roomId = args.getLong(EXTRA_ROOM_ID)
+        if (url.isEmpty() || roomId == 0L) {
+            BiliLog.w("OPEN_LIVE 缺 url 或 roomId,忽略")
+            return
+        }
+        val next = LiveSource(
+            roomId = roomId,
+            nowPlaying = NowPlaying(
+                title = args.getString(EXTRA_TITLE).orEmpty(),
+                subtitle = args.getString(EXTRA_UP_NAME).orEmpty(),
+                coverUrl = args.getString(EXTRA_COVER_URL).orEmpty(),
+            ),
+        )
+        if (live?.roomId == roomId && player.playbackState != Player.STATE_IDLE) {
+            live = next
+            publishState()
+            return
+        }
+
+        prepareJob?.cancel()
+        retryJob?.cancel()
+        enrichJob?.cancel()
+        failedAttempts = 0
+        lastError = null
+        live = next
+        queue = PlaybackQueue(emptyList())
+        sourceLabel = ""
+        queueEnriching = false
+        queueIncomplete = false
+        loadedBvid = null
+        loadedCid = 0
+        // 清晰度菜单读的是视频那套 playInfo,直播的档位不同源,留着上一条视频的会给出一个
+        // 点了没用的菜单。
+        playInfo = null
+        currentQuality = 0
+
+        player.setMediaSource(PlayerFactory.createLiveMediaSource(url))
+        player.prepare()
+        player.playWhenReady = true
+        publishState(loading = true)
+    }
+
     private fun openVideo(args: Bundle) {
         val bvid = args.getString(EXTRA_BVID).orEmpty()
+        // 从直播间回到视频:两种源互斥,先把直播那份摘掉,否则元数据和 loadKey 还指着房间。
+        live = null
         if (bvid.isEmpty()) {
             BiliLog.w("OPEN_VIDEO 没带 bvid,忽略")
             return
@@ -591,13 +651,15 @@ class AudioPlaybackService : MediaSessionService() {
         val current = queue.current()
         _state.value = AudioPlaybackUiState(
             nowPlaying = nowPlaying(),
-            loadKey = loadedBvid,
+            loadKey = live?.let { "$LOAD_KEY_LIVE_PREFIX${it.roomId}" } ?: loadedBvid,
             isPlaying = player.isPlaying,
             loading = loading,
             error = lastError,
             playInfo = playInfo,
             currentQuality = currentQuality,
-            queue = QueueState(
+            // 直播源没有队列。给一个空队列而不是 null 的话,界面分不出"没有下一条"和
+            // "还没打开过东西"。
+            queue = if (live != null) null else QueueState(
                 current = current,
                 currentCid = loadedCid,
                 items = queue.itemsNatural(),
@@ -630,7 +692,7 @@ class AudioPlaybackService : MediaSessionService() {
      * 正在放什么。**通知栏和界面读同一份** —— 这两处曾经各自去问队列,于是"元数据从哪来"
      * 有两个答案,而队列之外的源(直播)一个都答不上。
      */
-    private fun nowPlaying(): NowPlaying? = queue.current()?.let {
+    private fun nowPlaying(): NowPlaying? = live?.nowPlaying ?: queue.current()?.let {
         NowPlaying(title = it.title, subtitle = it.upName, coverUrl = it.coverUrl)
     }
 
@@ -746,6 +808,7 @@ class AudioPlaybackService : MediaSessionService() {
                 .setAvailableSessionCommands(
                     MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                         .add(SessionCommand(ACTION_OPEN_VIDEO, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_OPEN_LIVE, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SEEK_TO_BVID, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_PLAY_PART, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SET_QUALITY, Bundle.EMPTY))
@@ -766,6 +829,7 @@ class AudioPlaybackService : MediaSessionService() {
         ): ListenableFuture<SessionResult> {
             when (customCommand.customAction) {
                 ACTION_OPEN_VIDEO -> openVideo(args)
+                ACTION_OPEN_LIVE -> playLive(args)
                 ACTION_SEEK_TO_BVID -> seekToBvid(args.getString(EXTRA_BVID).orEmpty())
                 ACTION_PLAY_PART -> playPart(args.getLong(EXTRA_CID))
                 ACTION_SET_QUALITY -> setQuality(args.getInt(EXTRA_QUALITY))
@@ -787,6 +851,9 @@ class AudioPlaybackService : MediaSessionService() {
     companion object {
         /** 打开一条视频。幂等,见 [openVideo]。 */
         const val ACTION_OPEN_VIDEO = "dev.bilby.OPEN_VIDEO"
+
+        /** 打开一个直播间。幂等,见 [playLive]。 */
+        const val ACTION_OPEN_LIVE = "dev.bilby.OPEN_LIVE"
 
         /** 跳到队列里的另一条(点队列项、合集换一集)。 */
         const val ACTION_SEEK_TO_BVID = "dev.bilby.SEEK_TO_BVID"
@@ -830,6 +897,11 @@ class AudioPlaybackService : MediaSessionService() {
         const val EXTRA_TITLE = "title"
         const val EXTRA_UP_NAME = "upName"
         const val EXTRA_COVER_URL = "coverUrl"
+        const val EXTRA_LIVE_URL = "liveUrl"
+        const val EXTRA_ROOM_ID = "roomId"
+
+        /** [AudioPlaybackUiState.loadKey] 里直播源的前缀,和 bvid 区分开。 */
+        const val LOAD_KEY_LIVE_PREFIX = "live:"
 
         /**
          * 同一条最多试几次(含第一次)。3 次意味着最坏等 1 + 2 = 3 秒后放弃 —— 再多几档,

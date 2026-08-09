@@ -13,6 +13,7 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import dev.bilby.api.BiliConstants
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -125,6 +126,28 @@ object PlayerFactory {
         val audio = audioUrl?.let { factory.createMediaSource(MediaItem.fromUri(it)) }
         return if (audio == null) video else MergingMediaSource(video, audio)
     }
+
+    /**
+     * 直播流。HLS 走 [HlsMediaSource],其余(FLV)退回 progressive —— Media3 内建的
+     * `FlvExtractor` 能把它当无限流播。**判据是 URL 而不是接口给的 protocol 名**:
+     * 拼出来的地址才是真正要喂给播放器的东西,而 `LiveRepository` 挑流时已经把两者对上了。
+     *
+     * Referer 指到直播站点而不是主站:直播 CDN 的防盗链认的是前者。
+     */
+    fun createLiveMediaSource(url: String): MediaSource {
+        val factory = liveHttpDataSourceFactory()
+        val item = MediaItem.fromUri(url)
+        return if (url.substringBefore('?').endsWith(".m3u8")) {
+            HlsMediaSource.Factory(factory).createMediaSource(item)
+        } else {
+            ProgressiveMediaSource.Factory(factory).createMediaSource(item)
+        }
+    }
+
+    private fun liveHttpDataSourceFactory() = DefaultHttpDataSource.Factory()
+        .setUserAgent(BiliConstants.USER_AGENT)
+        .setDefaultRequestProperties(mapOf("Referer" to BiliConstants.LIVE_REFERER))
+        .setAllowCrossProtocolRedirects(true)
 
     private fun httpDataSourceFactory() = DefaultHttpDataSource.Factory()
         .setUserAgent(BiliConstants.USER_AGENT)
