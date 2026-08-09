@@ -13,9 +13,12 @@ import dev.bilby.player.QueueItem
 data class QueueBuildResult(val items: List<QueueItem>, val sourceLabel: String)
 
 /**
- * "听视频"播放队列的两个来源(DESIGN 2.4b):当前视频所属合集,或退化到 UP 空间投稿。
- * 判据是"有限且用户显式选定的集合"——合集本身有限;空间投稿是无底洞,所以只取当前视频
- * 前后各 25 条,不取全部。
+ * 播放队列的三个来源(DESIGN 2.4b),按顺序退化:当前视频所属合集 → UP 空间投稿 →
+ * UP 动态。判据是"有限且用户显式选定的集合"——合集本身有限;投稿和动态都是无底洞,
+ * 所以只取当前视频前后各 25 条,不取全部。
+ *
+ * 第三条是为**以动态形式发布的视频**加的:它们不在投稿列表里,只走前两条的话,从动态流
+ * 点进去的视频永远只有孤零零一条。
  *
  * **建出来的队列一定含有当前这条视频,否则返回 null。** 调用方拿到队列后会把页面带来的 cid
  * 写到当前那一格上,队列里没有这条视频时那个 cid 就落到了别人头上 —— bvid 与 cid 分属两条
@@ -40,7 +43,8 @@ class QueueSourceRepository(
     private val pageHints = ExpiringLruCache<String, Int>(PAGE_HINT_CACHE_SIZE, PAGE_HINT_TTL_NANOS)
 
     /**
-     * 打开一条视频时的队列来源:先按合集,不属于合集才退到 UP 空间投稿。
+     * 打开一条视频时的队列来源:先按合集,不属于合集退到 UP 空间投稿,投稿列表里也没有
+     * (动态视频)再退到 UP 动态。
      *
      * 详情只取一次。合集要 `ugc_season`、空间定位要 `pubdate` 和 UP 的 mid,三样都在这一份
      * 详情里,分头去取等于为同一条视频问两遍。
@@ -53,7 +57,55 @@ class QueueSourceRepository(
                 return null
             }
         }
-        return fromSeason(bvid, detail) ?: fromUpSpace(bvid, detail)
+        return fromSeason(bvid, detail)
+            ?: fromUpSpace(bvid, detail)
+            ?: fromUpDynamics(bvid, detail)
+    }
+
+    /**
+     * 以**动态**形式发的视频不在投稿列表里,所以 [fromUpSpace] 那条二分永远找不到它,
+     * 队列就停在只有一条。这类视频从动态流点进来是常态,一进去就"没有下一条"。
+     *
+     * 退到这位 UP 自己的动态里找。它和投稿是同一件事的两个列表(都是"这个人发的东西"),
+     * 判据没变:仍然是用户显式选定的那个人,仍然有边界。
+     *
+     * **只翻 [DYNAMIC_SCAN_PAGES] 页就放弃。** 动态接口是 offset 游标不是页号,没法二分,
+     * 只能一页页往前走;而一条两年前的动态视频要翻上百页。翻不到就老实停在单条队列 ——
+     * 那是"这条视频没有可确定的所属集合"的诚实结果,不是退到推荐池的理由。
+     */
+    private suspend fun fromUpDynamics(bvid: String, detail: VideoDetail): QueueBuildResult? {
+        val mid = detail.up.mid
+        if (mid == 0L) return null
+
+        val videos = mutableListOf<SpaceVideoItem>()
+        var offset: String? = null
+        for (round in 1..DYNAMIC_SCAN_PAGES) {
+            val page = when (val result = spaceRepository.loadDynamics(mid, offset)) {
+                is BiliResult.Ok -> result.value
+                else -> {
+                    BiliLog.w("队列:拉取 UP 动态失败,mid=$mid")
+                    return null
+                }
+            }
+            videos += page.items.filterIsInstance<SpaceDynamicItem.Video>().map { it.item }
+            offset = page.nextOffset
+            // 找到了就停:动态按时间倒序,再往前只会更旧。游标没了也停 —— 拿着 null 再请求
+            // 一次等于把第一页重新拉一遍,窗口里会出现两份同样的条目。
+            if (videos.any { it.bvid == bvid } || !page.hasMore || offset == null) break
+        }
+
+        val position = videos.indexOfFirst { it.bvid == bvid }
+        if (position < 0) {
+            BiliLog.w("队列:UP 动态前 $DYNAMIC_SCAN_PAGES 页里没有 bvid=$bvid,保持单条队列")
+            return null
+        }
+        val from = (position - WINDOW_HALF).coerceAtLeast(0)
+        val to = (position + WINDOW_HALF).coerceAtMost(videos.lastIndex)
+        val windowed = videos.subList(from, to + 1)
+        return QueueBuildResult(
+            items = windowed.map { it.toQueueItem() },
+            sourceLabel = "UP 主动态 · 共 ${windowed.size} 条",
+        )
     }
 
     /** 当前视频所属合集的全部分集。不属于合集时返回 null,由调用方退到空间投稿。 */
@@ -209,6 +261,12 @@ class QueueSourceRepository(
 
         /** 二分的探测上限。2^12 页 = 12 万条投稿,够到不了;它挡的是列表非单调时的死循环。 */
         const val MAX_PROBES = 12
+
+        /**
+         * 动态最多往前翻几页(一页约 12 条)。动态接口只有 offset 游标,没有页号也就没法二分,
+         * 只能顺着往前走 —— 上限在这里,不是让它一路翻到 UP 注册那天。
+         */
+        const val DYNAMIC_SCAN_PAGES = 4
 
         /** 页号提示的容量。一次会话里来回打开的视频数量级就在这附近。 */
         const val PAGE_HINT_CACHE_SIZE = 128

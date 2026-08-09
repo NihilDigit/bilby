@@ -178,12 +178,14 @@ class CommentViewModel(
         val page = subReplyNextPage[rootId] ?: 1
         val gen = generation
 
+        // **先取消旧的,再置 loadingMore。** 反过来的话,旧 Job 的 finally 会在取消时跑,
+        // 把刚刚置上的 loadingMore 又抹掉,于是这一次的转圈不显示,而重复点击的守卫也失效。
+        expandJobs[rootId]?.cancel()
         _state.update { current ->
             val updated = existing?.copy(loadingMore = true) ?: ExpandedReplies(items = emptyList(), loadingMore = true)
             current.copy(expandedReplies = current.expandedReplies + (rootId to updated))
         }
 
-        expandJobs[rootId]?.cancel()
         expandJobs[rootId] = viewModelScope.launch {
             try {
                 when (val result = repository.loadSubReplies(oid, rootId, page)) {

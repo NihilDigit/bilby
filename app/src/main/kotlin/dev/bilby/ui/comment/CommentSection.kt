@@ -476,7 +476,11 @@ private fun SubReplies(
     onSeek: (Long) -> Unit,
 ) {
     // 已展开就用展开结果(含翻页累加),否则用主楼自带的预览楼层垫着,避免展开前一片空白。
-    val shown = expanded?.items ?: comment.previewReplies
+    //
+    // **第一页还在飞的时候仍然用预览层**:`expanded` 一被创建就非 null 但 items 是空的,
+    // 直接读它会让已经显示着的两三条回复在点下按钮的瞬间消失,只剩一个转圈 —— 看起来像
+    // "一点就把内容点没了"。
+    val shown = expanded?.items?.takeIf { it.isNotEmpty() } ?: comment.previewReplies
     val remaining = comment.subReplyCount - shown.size
     if (shown.isEmpty() && remaining <= 0) return
 

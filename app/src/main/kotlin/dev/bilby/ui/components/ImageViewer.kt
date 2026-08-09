@@ -6,7 +6,10 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.WindowInsets
@@ -57,9 +60,9 @@ private const val MaxScale = 6f
  * 全屏看图。评论配图点开走这里(PiliPlus 的 `common/widgets/image_grid/image_grid_view.dart`
  * 点击后进 `GalleryViewer`,同样是全屏 + 可缩放 + 左右翻页)。
  *
- * 手写而不是引依赖:要的只有捏合缩放、双击、拖动和翻页四件事,而 Compose 的
- * `detectTransformGestures` 已经把前三件给全了。为这个引 photo-view 一类的库,
- * 换来的是一整套我们用不到的手势策略。
+ * 手写而不是引依赖:要的只有捏合缩放、双击、拖动和翻页四件事。连 `detectTransformGestures`
+ * 都没用上 —— 它把手势里每个事件都消费掉,1x 时的单指横划也不例外,于是永远翻不到下一张。
+ * 为这个引 photo-view 一类的库,换来的是一整套我们用不到的手势策略。
  *
  * **缩放状态按页各存一份并在翻页时归位**:放大着翻到下一张,下一张继承上一张的缩放和位移,
  * 看起来就是"图开在了屏幕外面"。
@@ -210,21 +213,33 @@ private fun ZoomableImage(
                     },
                 )
             }
+            // **手写而不是 `detectTransformGestures`。** 那个组件把手势里的每个事件都消费掉,
+            // 包括 1x 时的单指横划 —— 于是横划永远传不到 HorizontalPager,翻不到相邻的图。
+            // 这里的规矩是:双指(在缩放)或已经放大了才接管并消费,其余原样放行。
             .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    scope.launch {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        val zoom = event.calculateZoom()
+                        val pan = event.calculatePan()
+                        val multiTouch = event.changes.count { it.pressed } > 1
+                        if (!multiTouch && scale.value <= 1f) continue
+
                         val next = (scale.value * zoom).coerceIn(1f, MaxScale)
-                        scale.snapTo(next)
-                        onZoomedChanged(next > 1f)
-                        // 1x 时不接管平移:那时横向拖动应该留给 pager 翻页。
-                        if (next > 1f) {
-                            offsetX.snapTo(clampOffset(offsetX.value + pan.x, boxSize.width, next))
-                            offsetY.snapTo(clampOffset(offsetY.value + pan.y, boxSize.height, next))
-                        } else {
-                            offsetX.snapTo(0f)
-                            offsetY.snapTo(0f)
+                        scope.launch {
+                            scale.snapTo(next)
+                            onZoomedChanged(next > 1f)
+                            if (next > 1f) {
+                                offsetX.snapTo(clampOffset(offsetX.value + pan.x, boxSize.width, next))
+                                offsetY.snapTo(clampOffset(offsetY.value + pan.y, boxSize.height, next))
+                            } else {
+                                offsetX.snapTo(0f)
+                                offsetY.snapTo(0f)
+                            }
                         }
-                    }
+                        event.changes.forEach { if (it.pressed) it.consume() }
+                    } while (event.changes.any { it.pressed })
                 }
             },
         contentAlignment = Alignment.Center,
