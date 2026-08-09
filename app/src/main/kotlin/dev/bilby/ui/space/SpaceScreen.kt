@@ -106,7 +106,14 @@ data class SpaceUiState(
 
 data class SpaceArchiveTabState(
     val order: SpaceArchiveOrder = SpaceArchiveOrder.Pubdate,
+    /** 输入框里的字。**还没生效**,回车/点确认才会被抄进 [appliedKeyword]。 */
     val keyword: String = "",
+    /**
+     * 列表现在反映的是哪个关键词。与 [keyword] 分开是因为响应回来时要判断"这还是当初那次
+     * 筛选吗",而输入框每敲一个字就变一次 —— 拿它当判据的话,翻页途中随手打个字就会把那一页
+     * 丢掉。
+     */
+    val appliedKeyword: String = "",
     val items: List<SpaceVideoItem> = emptyList(),
     val page: Int = 1,
     val total: Int = 0,
@@ -153,6 +160,22 @@ data class SpaceCollectionDetailState(
     val hasMore: Boolean = true,
     val error: String? = null,
 )
+
+/**
+ * 一次投稿请求的身份。响应回来时用它回答"这份结果还属于列表现在的样子吗"。
+ *
+ * 三个字段就是接口的全部可变入参:排序、生效中的关键词、页号。用它们而不是自增的 generation,
+ * 是因为它们同时也解释了为什么该丢 —— 日志里看到的是"这份响应是按播放量排的,而列表已经切回
+ * 最新",不是"generation 3 != 4"。
+ */
+private data class ArchiveRequest(
+    val order: SpaceArchiveOrder,
+    val keyword: String,
+    val page: Int,
+) {
+    fun matches(state: SpaceArchiveTabState): Boolean =
+        state.order == order && state.appliedKeyword == keyword && state.page == page
+}
 
 // ---------------- ViewModel ----------------
 
@@ -263,7 +286,15 @@ class SpaceViewModel(
 
     fun onArchiveOrderChanged(order: SpaceArchiveOrder) {
         if (order == _state.value.archives.order) return
-        _state.update { it.copy(archives = SpaceArchiveTabState(order = order, keyword = it.archives.keyword)) }
+        _state.update {
+            it.copy(
+                archives = SpaceArchiveTabState(
+                    order = order,
+                    keyword = it.archives.keyword,
+                    appliedKeyword = it.archives.appliedKeyword,
+                ),
+            )
+        }
         loadMoreArchives()
     }
 
@@ -271,113 +302,182 @@ class SpaceViewModel(
         _state.update { it.copy(archives = it.archives.copy(keyword = keyword)) }
     }
 
-    /** 空间内搜索复用投稿接口(notes 1.3 节),回车/点确认时才真正发请求,不做输入即请求。 */
+    /**
+     * 空间内搜索复用投稿接口(notes 1.3 节),回车/点确认时才真正发请求,不做输入即请求。
+     *
+     * loading/appending 也要一起清:上一次翻页可能还在飞,不清的话 [loadMoreArchives] 的重入
+     * 闸会把这次搜索整个挡掉 —— 一个请求都不发,列表停在刚被清空的状态。旧那次的响应由请求
+     * 身份挡下,不会写回来。
+     */
     fun onArchiveSearch() {
-        _state.update { it.copy(archives = it.archives.copy(items = emptyList(), page = 1, hasMore = true)) }
+        _state.update {
+            it.copy(
+                archives = it.archives.copy(
+                    appliedKeyword = it.archives.keyword,
+                    items = emptyList(), page = 1, total = 0,
+                    loading = false, appending = false, hasMore = true, error = null,
+                ),
+            )
+        }
         loadMoreArchives()
     }
 
+    /**
+     * 投稿分页。两条纪律,都是线上那个"投稿列表看不到最新几十条"的成因:
+     *
+     * **一、游标只在这一页真的带回了东西时才前进。** 原先无论响应里有什么都写
+     * `page = current.page + 1`,于是一页返回空列表(HTTP 200、`vlist` 为空,空间投稿接口被
+     * 短时风控挡下时就是这个样子)之后,那一页再也没有机会被请求第二次:列表从第二页开始,
+     * 最新的三十条整段消失,而日志里一个失败都没有。从播放页进 UP 空间最容易撞上 —— 队列
+     * 补全刚刚为同一个 mid 连打了七八次同一个接口。现在空页当作到头,用户看到"没有更多",
+     * 下拉刷新能重来。
+     *
+     * **二、响应要先认领自己那次请求。** 排序、关键词、页号在飞行途中都可能已经换了(下拉
+     * 刷新、切排序、空间内搜索都不取消旧请求)。原先拿发请求前的快照当基底 `copy`,等于把
+     * 用户刚选的排序、刚输的关键词一起打回旧值,还会把属于新请求的 loading 标志清掉。
+     * 现在对不上就整份丢掉。
+     */
     fun loadMoreArchives() {
         val current = _state.value.archives
         if (current.loading || current.appending || !current.hasMore) return
         val firstPage = current.items.isEmpty()
+        val requested = ArchiveRequest(current.order, current.appliedKeyword, current.page)
         _state.update {
             it.copy(archives = it.archives.copy(loading = firstPage, appending = !firstPage, error = null))
         }
         viewModelScope.launch {
-            when (val result = repository.loadArchives(mid, current.page, current.order, current.keyword)) {
-                is BiliResult.Ok -> _state.update {
-                    val merged = it.archives.items.appendDistinctBy(result.value.items) { v -> v.bvid }
-                    it.copy(
+            val result = repository.loadArchives(mid, requested.page, requested.order, requested.keyword)
+            _state.update { state ->
+                val archives = state.archives
+                if (!requested.matches(archives)) return@update state
+                when (result) {
+                    is BiliResult.Ok -> {
+                        val pageItems = result.value.items
+                        val merged = archives.items.appendDistinctBy(pageItems) { v -> v.bvid }
+                        state.copy(
+                            refreshing = false,
+                            archives = archives.copy(
+                                items = merged,
+                                // 从请求本身推进,不从状态推进:同一页被请求两次(刷新撞上在飞的
+                                // 首页)时,两份响应都写 `state.page + 1` 会把游标推到第三页。
+                                page = if (pageItems.isEmpty()) archives.page else requested.page + 1,
+                                total = result.value.total,
+                                loading = false,
+                                appending = false,
+                                hasMore = pageItems.isNotEmpty() && merged.size < result.value.total,
+                            ),
+                        )
+                    }
+
+                    else -> state.copy(
                         refreshing = false,
-                        archives = current.copy(
-                            items = merged,
-                            page = current.page + 1,
-                            total = result.value.total,
+                        archives = archives.copy(
                             loading = false,
                             appending = false,
-                            hasMore = merged.size < result.value.total,
+                            error = result.errorText(),
                         ),
                     )
-                }
-
-                else -> _state.update {
-                    it.copy(refreshing = false, archives = current.copy(loading = false, appending = false, error = result.errorText()))
                 }
             }
         }
     }
 
+    /**
+     * 空间动态分页。同样按请求身份认领响应,但**不套"空页即到头"那条判据**:
+     *
+     * 动态的游标由服务端给(`nextOffset`),不是本地算出来的,所以没有"游标白白前进"这回事;
+     * 而这里的一页可能真的是空的 —— `toDynamicItem` 会丢掉不认识的动态类型,整页都是转发或
+     * 直播预约时过滤完就什么都不剩。把空页当到头会在这种页上停住,而服务端明明说了 hasMore。
+     */
     fun loadMoreDynamics() {
         val current = _state.value.dynamics
         if (current.loading || current.appending || !current.hasMore) return
         val firstPage = current.items.isEmpty()
+        val requestedOffset = current.nextOffset
         _state.update {
             it.copy(dynamics = it.dynamics.copy(loading = firstPage, appending = !firstPage, error = null))
         }
         viewModelScope.launch {
-            when (val result = repository.loadDynamics(mid, current.nextOffset)) {
-                is BiliResult.Ok -> _state.update {
-                    it.copy(
+            val result = repository.loadDynamics(mid, requestedOffset)
+            _state.update { state ->
+                val dynamics = state.dynamics
+                if (dynamics.nextOffset != requestedOffset) return@update state
+                when (result) {
+                    is BiliResult.Ok -> state.copy(
                         refreshing = false,
-                        dynamics = current.copy(
-                            items = it.dynamics.items.appendDistinctBy(result.value.items) { d -> d.key },
+                        dynamics = dynamics.copy(
+                            items = dynamics.items.appendDistinctBy(result.value.items) { d -> d.key },
                             nextOffset = result.value.nextOffset,
                             loading = false,
                             appending = false,
                             hasMore = result.value.hasMore && result.value.nextOffset != null,
                         ),
                     )
-                }
 
-                else -> _state.update {
-                    it.copy(refreshing = false, dynamics = current.copy(loading = false, appending = false, error = result.errorText()))
+                    else -> state.copy(
+                        refreshing = false,
+                        dynamics = dynamics.copy(
+                            loading = false,
+                            appending = false,
+                            error = result.errorText(),
+                        ),
+                    )
                 }
             }
         }
     }
 
+    /** 与投稿同一套纪律:空页不推进游标,响应先认领自己那次请求。 */
     fun loadMoreCollections() {
         val current = _state.value.collections
         if (current.loading || current.appending || !current.hasMore) return
         val firstPage = current.items.isEmpty()
+        val requestedPage = current.page
         _state.update {
             it.copy(collections = it.collections.copy(loading = firstPage, appending = !firstPage, error = null))
         }
         viewModelScope.launch {
-            when (val result = repository.loadCollections(mid, current.page)) {
-                is BiliResult.Ok -> _state.update {
-                    val merged = it.collections.items
-                        .appendDistinctBy(result.value.items) { c -> "${c.isSeason}-${c.id}" }
-                    it.copy(
+            val result = repository.loadCollections(mid, requestedPage)
+            _state.update { state ->
+                val collections = state.collections
+                if (collections.page != requestedPage) return@update state
+                when (result) {
+                    is BiliResult.Ok -> {
+                        val pageItems = result.value.items
+                        val merged = collections.items
+                            .appendDistinctBy(pageItems) { c -> "${c.isSeason}-${c.id}" }
+                        state.copy(
+                            refreshing = false,
+                            // 不再有"发现是空的就把用户从合集 tab 弹回投稿 tab"那一段:tab 栏现在
+                            // 要等这次探测回来才渲染(见 SpaceScreen),用户根本没机会点进一个
+                            // 不存在的 tab,那段强制切换也就没有触发条件了。
+                            collectionsAvailable = if (requestedPage == 1) {
+                                result.value.total > 0 || merged.isNotEmpty()
+                            } else {
+                                state.collectionsAvailable
+                            },
+                            collections = collections.copy(
+                                items = merged,
+                                page = if (pageItems.isEmpty()) collections.page else requestedPage + 1,
+                                total = result.value.total,
+                                loading = false,
+                                appending = false,
+                                hasMore = pageItems.isNotEmpty() && merged.size < result.value.total,
+                            ),
+                        )
+                    }
+
+                    // 探测失败按"有合集"算,tab 照常显示。宁可留一个点进去报错能重试的 tab,
+                    // 也不要因为一次网络抖动就把这个 UP 的合集整个藏起来 —— 藏起来之后用户
+                    // 没有任何线索知道它存在过。
+                    else -> state.copy(
                         refreshing = false,
-                        // 不再有"发现是空的就把用户从合集 tab 弹回投稿 tab"那一段:tab 栏现在
-                        // 要等这次探测回来才渲染(见 SpaceScreen),用户根本没机会点进一个
-                        // 不存在的 tab,那段强制切换也就没有触发条件了。
-                        collectionsAvailable = if (current.page == 1) {
-                            result.value.total > 0 || merged.isNotEmpty()
-                        } else {
-                            it.collectionsAvailable
-                        },
-                        collections = current.copy(
-                            items = merged,
-                            page = current.page + 1,
-                            total = result.value.total,
+                        collectionsAvailable = state.collectionsAvailable ?: true,
+                        collections = collections.copy(
                             loading = false,
                             appending = false,
-                            hasMore = merged.size < result.value.total,
+                            error = result.errorText(),
                         ),
-                    )
-                }
-
-                // 探测失败按"有合集"算,tab 照常显示。宁可留一个点进去报错能重试的 tab,
-                // 也不要因为一次网络抖动就把这个 UP 的合集整个藏起来 —— 藏起来之后用户
-                // 没有任何线索知道它存在过。
-                else -> _state.update {
-                    it.copy(
-                        refreshing = false,
-                        collectionsAvailable = it.collectionsAvailable ?: true,
-                        collections = current.copy(loading = false, appending = false, error = result.errorText()),
                     )
                 }
             }
@@ -393,10 +493,17 @@ class SpaceViewModel(
         _state.update { it.copy(collections = it.collections.copy(detail = null)) }
     }
 
+    /**
+     * 合集目录分页。除了那两条纪律,这里的身份校验还多挡一件事:**目录已经被关掉时,迟到的
+     * 响应不能把它重新支起来。** 原先响应无条件写 `detail = detail.copy(...)`,用户点返回退出
+     * 目录后那一页回来,抽屉会自己弹回来。
+     */
     fun loadMoreCollectionDetail() {
         val detail = _state.value.collections.detail ?: return
         if (detail.loading || detail.appending || !detail.hasMore) return
         val firstPage = detail.items.isEmpty()
+        val requestedCollection = detail.collection
+        val requestedPage = detail.page
         _state.update {
             it.copy(
                 collections = it.collections.copy(
@@ -405,30 +512,39 @@ class SpaceViewModel(
             )
         }
         viewModelScope.launch {
-            when (val result = repository.loadCollectionDetail(mid, detail.collection, detail.page)) {
-                is BiliResult.Ok -> _state.update {
-                    val merged = (it.collections.detail?.items ?: detail.items)
-                        .appendDistinctBy(result.value.items) { v -> v.bvid }
-                    it.copy(
+            val result = repository.loadCollectionDetail(mid, requestedCollection, requestedPage)
+            _state.update { state ->
+                val current = state.collections.detail ?: return@update state
+                if (current.collection != requestedCollection || current.page != requestedPage) {
+                    return@update state
+                }
+                when (result) {
+                    is BiliResult.Ok -> {
+                        val pageItems = result.value.items
+                        val merged = current.items.appendDistinctBy(pageItems) { v -> v.bvid }
+                        state.copy(
+                            refreshing = false,
+                            collections = state.collections.copy(
+                                detail = current.copy(
+                                    items = merged,
+                                    page = if (pageItems.isEmpty()) current.page else requestedPage + 1,
+                                    total = result.value.total,
+                                    loading = false,
+                                    appending = false,
+                                    hasMore = pageItems.isNotEmpty() && merged.size < result.value.total,
+                                ),
+                            ),
+                        )
+                    }
+
+                    else -> state.copy(
                         refreshing = false,
-                        collections = it.collections.copy(
-                            detail = detail.copy(
-                                items = merged,
-                                page = detail.page + 1,
-                                total = result.value.total,
+                        collections = state.collections.copy(
+                            detail = current.copy(
                                 loading = false,
                                 appending = false,
-                                hasMore = merged.size < result.value.total,
+                                error = result.errorText(),
                             ),
-                        ),
-                    )
-                }
-
-                else -> _state.update {
-                    it.copy(
-                        refreshing = false,
-                        collections = it.collections.copy(
-                            detail = detail.copy(loading = false, appending = false, error = result.errorText()),
                         ),
                     )
                 }
@@ -537,9 +653,14 @@ fun SpaceScreen(
                                 // 收起即清空:图标只有两个诚实的状态可言 —— 展开 = 可能在筛,
                                 // 收起 = 一定没筛。只隐藏输入框而留着关键词的话,列表会在看不见
                                 // 筛选条件的情况下继续被筛,读起来像"投稿莫名其妙变少了"。
-                                if (archiveSearchExpanded && state.archives.keyword.isNotEmpty()) {
-                                    onArchiveKeywordChanged("")
-                                    onArchiveSearch()
+                                //
+                                // 清输入框和重拉列表是两件事,判据也各是各的:输入框里有字才要
+                                // 清,筛选**真的生效过**才要重拉。合成一个条件时,"打了字没按
+                                // 回车就收起"会白白重拉一次全量,而"把字删空但没按回车再收起"
+                                // 反而留着上一次的筛选不动 —— 正是上面说的那种看不见的筛。
+                                if (archiveSearchExpanded) {
+                                    if (state.archives.keyword.isNotEmpty()) onArchiveKeywordChanged("")
+                                    if (state.archives.appliedKeyword.isNotEmpty()) onArchiveSearch()
                                 }
                                 archiveSearchExpanded = !archiveSearchExpanded
                             },
@@ -766,8 +887,9 @@ private fun ArchivesTab(
             hasMore = state.hasMore,
             loading = state.loading,
             error = state.error,
+            // 空是因为**生效中**的那个关键词没搜到东西,不是因为输入框里现在有什么字。
             emptyText = stringResource(
-                if (state.keyword.isBlank()) {
+                if (state.appliedKeyword.isBlank()) {
                     R.string.space_empty_archives
                 } else {
                     R.string.space_empty_archives_search
