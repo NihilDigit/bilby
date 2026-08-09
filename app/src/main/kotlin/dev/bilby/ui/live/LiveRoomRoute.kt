@@ -111,6 +111,7 @@ fun LiveRoomRoute(
         onQualityChange = vm::setQuality,
         onLoadMoreGuards = vm::loadMoreGuards,
         onRetry = vm::load,
+        roomId = roomId,
         onBack = onBack,
         modifier = modifier,
     )

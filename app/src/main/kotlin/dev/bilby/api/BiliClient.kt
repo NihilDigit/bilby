@@ -9,6 +9,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
+import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
@@ -51,6 +52,19 @@ class BiliClient(
             finalParams.forEach { (k, v) -> parameter(k, v) }
         }.also { fingerprint.rememberCookies(it.setCookie()) }
     }
+
+    /**
+     * 短链展开。**单独一条路线,因为它必须不带 Cookie**:b23.tv 是个跳转器,把登录凭据发给
+     * 它既没有必要,也多一处泄漏面。同理不签名、不带站内 Referer。
+     *
+     * 只要最终落地的地址,不要正文 —— `prepareGet` 拿到响应头就退出,几百 KB 的页面不会读
+     * 进内存。跟跳转由 HttpClient 自己完成,所以读的是 `call.request.url` 而不是 Location:
+     * 短链可能连跳两次(b23.tv → m.bilibili.com → www.bilibili.com)。
+     */
+    suspend fun resolveRedirect(url: String): String =
+        http.prepareGet(url) {
+            header(HttpHeaders.UserAgent, BiliConstants.USER_AGENT)
+        }.execute { response -> response.call.request.url.toString() }
 
     /**
      * app 端路线 + 参数走 query。TV 扫码登录的三个接口用它。

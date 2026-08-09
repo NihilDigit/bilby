@@ -65,6 +65,7 @@ import dev.bilby.BilbyApplication
 import dev.bilby.BiliLog
 import dev.bilby.R
 import dev.bilby.agent.AgentIntent
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.comment.CommentUiState
@@ -122,21 +123,45 @@ class MainActivity : ComponentActivity() {
         AudioPlaybackService.pauseForAppBackground()
     }
 
+    /**
+     * 外面递进来的那条链接。**用 MutableStateFlow 而不是直接读 `intent`**:应用已经在跑时
+     * 系统走的是 [onNewIntent],那时 composition 早就建好了,只读一次 intent 的写法收不到
+     * 第二条链接。
+     */
+    private val incomingLink = MutableStateFlow<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val container = (application as BilbyApplication).container
+        incomingLink.value = linkFrom(intent)
         setContent {
             BilbyTheme {
                 BilbyWindowChrome()
-                BilbyApp(container)
+                BilbyApp(container, incomingLink)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        incomingLink.value = linkFrom(intent)
+    }
+
+    /**
+     * VIEW 递的是链接本身;SEND 递的是一段话,链接埋在里面
+     * (「【标题】 https://b23.tv/xxx 复制这段内容…」)。
+     */
+    private fun linkFrom(intent: Intent?): String? = when (intent?.action) {
+        Intent.ACTION_VIEW -> intent.dataString
+        Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)?.let(BilbyLink::extractUrl)
+        else -> null
     }
 }
 
 @Composable
-private fun BilbyApp(container: AppContainer) {
+private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<String?>) {
     // DataStore 第一帧是异步的:null 表示还没读出来,此时什么都不画,
     // 否则已登录用户每次冷启动都会闪一下登录页。
     val credentials by container.settings.credentials.collectAsStateWithLifecycle(initialValue = null)
@@ -159,6 +184,34 @@ private fun BilbyApp(container: AppContainer) {
     }
 
     val backStack = rememberNavBackStack(Home)
+
+    /**
+     * 外面递进来的链接。短链要先展开一次才知道指向哪儿,所以这一段可能要走一次网络。
+     *
+     * **认不出来就什么都不做**,不吐错误也不跳首页:用户是从别的应用点过来的,这条链接可能
+     * 是番剧(Non-Goal),此刻弹一句"打不开"帮不上任何忙,而应用停在原处至少没有骗人。
+     * 消费掉之后把值清空,免得转屏或返回前台时再压一次同一页。
+     */
+    LaunchedEffect(Unit) {
+        incomingLink.collect { raw ->
+            val link = raw ?: return@collect
+            incomingLink.value = null
+            val resolved = if (BilbyLink.isShortLink(link)) {
+                runCatching { container.biliClient.resolveRedirect(link) }
+                    .onFailure { BiliLog.w("短链展开失败", it) }
+                    .getOrNull() ?: return@collect
+            } else {
+                link
+            }
+            val destination = BilbyLink.destinationOf(resolved)
+            if (destination == null) {
+                BiliLog.w("认不出的链接,忽略")
+                return@collect
+            }
+            // 压栈而不是替换:从别的应用进来时栈里只有 Home,返回该回到首页而不是退出应用。
+            if (backStack.lastOrNull() != destination) backStack.add(destination)
+        }
+    }
 
     /**
      * 播放器与队列的生命周期到此为止:**backstack 上再没有播放页,就把播放器销毁。**
@@ -808,6 +861,7 @@ private fun SpaceRoute(
         },
         onBack = onBack,
         onRetry = vm::retry,
+        mid = mid,
         onRefresh = vm::refresh,
     )
 }

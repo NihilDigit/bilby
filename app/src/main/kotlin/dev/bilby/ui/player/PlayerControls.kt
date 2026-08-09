@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Comment
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -71,7 +72,7 @@ internal fun DanmakuButton(
  * 页面级动作,藏起来就等于没有。
  */
 @Composable
-internal fun BoxScope.MediaBackButton(onBack: () -> Unit) {
+internal fun BoxScope.MediaBackButton(onBack: () -> Unit, onShare: (() -> Unit)? = null) {
     Box(
         modifier = Modifier
             .align(Alignment.TopCenter)
@@ -88,6 +89,21 @@ internal fun BoxScope.MediaBackButton(onBack: () -> Unit) {
             contentDescription = stringResource(R.string.action_back),
             tint = FixedColors.OnMedia,
         )
+    }
+    // 分享和返回一样是页面级动作,所以对称地摆在这条渐变的另一端,而不是塞进四格动作栏
+    // —— 那一行是「对这条视频表态」(赞/币/藏/稍后再看),分享不是表态,而且 M3 也说一处
+    // 按钮不超过三个。
+    onShare?.let { share ->
+        IconButton(
+            onClick = share,
+            modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.Tight),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Share,
+                contentDescription = stringResource(R.string.action_share),
+                tint = FixedColors.OnMedia,
+            )
+        }
     }
 }
 

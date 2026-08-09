@@ -55,6 +55,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,6 +64,7 @@ import dev.bilby.R
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.live.LiveMessage
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.ShareLink
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
@@ -107,11 +109,15 @@ fun LiveRoomScreen(
     onQualityChange: (Int) -> Unit,
     onLoadMoreGuards: () -> Unit,
     onRetry: () -> Unit,
+    /** 分享要给出 `live.bilibili.com/<roomId>`,而房间号不在 [state] 里。 */
+    roomId: Long,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var fullscreen by remember { mutableStateOf(false) }
     var locked by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val share = { ShareLink.liveRoom(context, roomId, state.title) }
 
     // 和普通视频页同一套返回语义:先解锁,再退出沉浸,最后才离开直播间。
     BackHandler(enabled = fullscreen) {
@@ -187,13 +193,16 @@ fun LiveRoomScreen(
                     },
                 )
             } else {
-                LiveOffline(state, onBack = onBack, onRetry = onRetry)
+                LiveOffline(state, onBack = onBack, onShare = share, onRetry = onRetry)
             }
 
             if (!fullscreen && player != null && state.isLive && state.streamUrl != null) {
                 // 正在直播时 PlayerShell 没有页面级返回动作,把它放在画面左上角,和普通视频页
                 // 同一条返回路径;顶部渐变保证亮色画面上箭头仍有对比度。
-                MediaBackButton(onBack = onBack)
+                MediaBackButton(
+                    onBack = onBack,
+                    onShare = { ShareLink.liveRoom(context, roomId, state.title) },
+                )
             }
         }
 
@@ -211,7 +220,12 @@ fun LiveRoomScreen(
 
 /** 未开播、或者流没取到。封面配一句话,不空着一块黑。 */
 @Composable
-private fun LiveOffline(state: LiveRoomUiState, onBack: () -> Unit, onRetry: () -> Unit) {
+private fun LiveOffline(
+    state: LiveRoomUiState,
+    onBack: () -> Unit,
+    onShare: () -> Unit,
+    onRetry: () -> Unit,
+) {
     Box(modifier = Modifier.fillMaxSize()) {
         if (state.coverUrl.isNotEmpty()) {
             BiliAsyncImage(
@@ -221,7 +235,7 @@ private fun LiveOffline(state: LiveRoomUiState, onBack: () -> Unit, onRetry: () 
             )
         }
         // 和正在直播时同一个位置、同一份渐变:开没开播不该改变"怎么离开这一页"。
-        MediaBackButton(onBack = onBack)
+        MediaBackButton(onBack = onBack, onShare = onShare)
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier

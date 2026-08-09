@@ -331,4 +331,5 @@
     <string name="settings_fast_forward_speed">长按加速</string>
     <string name="settings_fast_forward_speed_subtitle">按住画面时的临时倍速,松手恢复</string>
     <string name="player_seek_release_to_cancel">松手取消进退</string>
+    <string name="action_share">分享</string>
 </resources>

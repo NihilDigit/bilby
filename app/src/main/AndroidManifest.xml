@@ -33,6 +33,33 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- B 站链接。**只登记 UGC 会出现的那几个 host**,不登记整个 bilibili.com 的
+                 所有路径:番剧/影视/课堂是 Non-Goal(版权),把它们的链接也抢过来只会得到
+                 一个打不开的页面,而用户已经失去了选择用别的应用打开的机会。
+                 autoVerify 没开:那需要在服务端放 assetlinks.json,而域名不是我们的。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:scheme="http" />
+                <data android:host="b23.tv" />
+                <data android:host="bili2233.cn" />
+                <data android:host="live.bilibili.com" />
+                <data android:host="space.bilibili.com" />
+                <data android:host="www.bilibili.com" android:pathPrefix="/video/" />
+                <data android:host="m.bilibili.com" android:pathPrefix="/video/" />
+                <data android:host="bilibili.com" android:pathPrefix="/video/" />
+            </intent-filter>
+
+            <!-- 从别的应用分享过来的那段文字。B 站客户端复制的是
+                 「【标题】 https://b23.tv/xxx 复制这段内容…」,链接要从里面挑出来。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
         <service
             android:name=".player.AudioPlaybackService"

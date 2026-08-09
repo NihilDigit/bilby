@@ -29,6 +29,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.res.stringResource
@@ -41,6 +42,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
@@ -54,6 +56,7 @@ import dev.bilby.R
 import dev.bilby.ui.dynamicTypeLabel
 import dev.bilby.ui.appendDistinctBy
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.ShareLink
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.api.BiliResult
 import dev.bilby.data.FollowState
@@ -674,9 +677,12 @@ fun SpaceScreen(
     onListenUp: () -> Unit,
     onBack: () -> Unit,
     onRetry: () -> Unit,
+    /** 分享要给出 `space.bilibili.com/<mid>`,而 mid 不在 [state] 里。 */
+    mid: Long,
     onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     val detail = state.collections.detail
     if (detail != null) {
         CollectionDetailScreen(
@@ -722,6 +728,14 @@ fun SpaceScreen(
                                 contentDescription = stringResource(R.string.space_search_action),
                             )
                         }
+                    }
+                    // 分享这位 UP 的主页。放顶栏而不是头部区:头部区那一行是"对这个人的
+                    // 动作"(关注、听他的投稿),分享的是页面本身。
+                    IconButton(onClick = { ShareLink.space(context, mid, state.profile?.name.orEmpty()) }) {
+                        Icon(
+                            imageVector = Icons.Filled.Share,
+                            contentDescription = stringResource(R.string.action_share),
+                        )
                     }
                 },
             )

@@ -77,6 +77,7 @@ import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.listen.ListenScreen
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.ShareLink
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
@@ -596,7 +597,14 @@ fun VideoScreen(
                     else -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
 
-                if (!fullscreen) MediaBackButton(onBack = onBack)
+                if (!fullscreen) {
+                    MediaBackButton(
+                        onBack = onBack,
+                        onShare = {
+                            ShareLink.video(context, bvid, state.detail?.title.orEmpty())
+                        },
+                    )
+                }
 
                 // 盖在画面上而不是排在下面:失败时画面本来就是黑的,而简介区在一屏之外,
                 // 提示放那儿等于没有。state.error 那一支是"流都没取到",两者不会同时出现。
