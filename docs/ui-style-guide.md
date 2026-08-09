@@ -195,17 +195,31 @@ M3 的间距系统是 8dp 起步的线性刻度,4dp 及以下算"嵌套单位"�
 
 | 控件 | 什么时候用 | 本项目用在 |
 |---|---|---|
-| **Segmented button** | 固定的几个选项,切换**视图或模式**,数量不随内容变 | 搜索的 普通/助理 |
-| **SortRow**(`ui/components/SortRow.kt`) | **排序**:低强调、选项数可能随接口变、需要可横滚 | 评论的 最热/最新、空间投稿的 最新/最多播放、搜索结果的 综合/最多播放/最新发布 |
+| **Connected button group** | 固定 2–5 个选项的单选:切换视图、模式**或排序** | 搜索的 普通/助理 |
+| **SortRow**(`ui/components/SortRow.kt`) | 同上,但要**低强调**:选项数可能随接口变、需要可横滚 | 评论的 最热/最新、空间投稿的 最新/最多播放、搜索结果的 综合/最多播放/最新发布 |
 | **Chip** | 动态的、上下文相关的一组,可横滚,是"当前任务的分支路径" | 分 P 那一排(条数从 1 到几百都有) |
 | **Tabs** | 同层级的内容分区 | 空间页三标签、播放页 简介/评论 |
 
-**segmented button 与 SortRow 的判据**:排序永远是"换一种看同一批内容的顺序",不改变
-内容本身,强调该低 —— SortRow 照 PiliPlus 的 `pages/search_panel/video/view.dart`(`SearchText`),
-透明底、无描边、无容器,选中的一项只换字重(`labelLargeEmphasized`)和颜色,不放大不加框。
-segmented button 是"选一种视图/模式",两个选项都需要同等的可见度,才配得上它的描边容器。
-以前评论区、空间投稿页两处排序都用了 segmented button,视觉重量和"综合/普通搜索"这种真正
-切模式的控件长得一样,读不出"这是排序,可以随便点着比较"的轻量感,这一轮改掉了。
+**segmented button 不再是选项。** M3 expressive(2025 年 5 月)把它标为 no longer
+recommended,替代品是 connected button group,原文见镜像的
+`pages/components/segmented-buttons.md` 与 `pages/components/button-groups.md`。
+
+**"排序该低强调"是本项目的判断,不是 M3 的。** 这一条以前写成"判据来自 M3",是错的:
+button groups 页明写 "Connected button groups help people select options, switch views,
+**or sort elements in a page**",segmented button 页对单选的定义同样把 sort 列进去,
+上限是五项。所以拿它做评论排序在规范上完全成立,要争的只有**强调档位**:
+
+- Compose 的 `ToggleButton` 默认取 `FilledButtonTokens`(查 aar 字节码核实过):未选中
+  `surfaceContainer`,选中 **`primary` 实心** + `onPrimary`。一屏几十条评论上面顶一块
+  primary 色块,比列表本身还重。
+- 要用它但不想那么响,`ToggleButtonDefaults` 里还有 `tonalToggleButtonColors` 和
+  `outlinedToggleButtonColors`,该调的是这个,不是退回没有容器的写法。
+- SortRow 的另一面代价也记下来:它照 PiliPlus 的 `SearchText`,透明底、无描边、只靠字重
+  区分选中 —— 在评论区那种密排文字里读不出"这是个能点的控件"。
+
+**结论悬着,等评论区重做那一轮一起定**,连同楼中楼、@提及跳转、暂停时上滑盖住播放器。
+在那之前搜索/空间/评论三处排序保持现状(都是 SortRow),不要只改其中一处 —— 同一件事
+两种视觉重量,正是这一节要避免的。
 
 M3 还有两条硬规矩:chip **不能单独出现一个**(必须成组),按钮一处**不超过 3 个**。
 
@@ -545,6 +559,22 @@ loading 的规矩:**首屏和翻页用不同的粗细** —— 首屏占整屏,�
 全屏另有一条顶栏(返回 + 标题),同样是渐变,方向相反。它只在全屏时出现:全屏下系统栏
 是隐藏的,没有别的东西说明"在看什么"和"怎么退出";竖屏不显示,那里标题就在播放器下面第一行。
 
+**内嵌态左上角另有一个返回**(`ui/player/PlayerControls.kt` 的 `MediaBackButton`,
+视频页与直播间共用一份)。它和上面那条顶栏不是一回事:
+
+- 渐变是必需的而不是装饰。封面是 UP 主上传的任意图片,纯白封面上一个白箭头看不见 ——
+  和 §1.2 的 `ScrimOnMedia` 同一条理由。
+- **它不跟播放器控件一起自动隐藏。** 自动隐藏的是"播放器现在在做什么"那一类控件;
+  离开这一页是页面级动作,藏起来等于没有。§4.3 那条"控件归控件层"判的是**跟谁的生命周期
+  走**,不是"凡是浮在画面上的都归控件层"。
+- 加它的理由是内嵌播放画面往往就是这一页的第一屏,而这一页没有顶栏;从动态或搜索点进来
+  的人此前只剩系统返回可用。
+
+**全屏的挖孔处理写在 `FullscreenEffect` 里,不写进主题。** 进全屏时把窗口的
+`layoutInDisplayCutoutMode` 切成 `SHORT_EDGES`,退出还原;图片查看器同理,改的是它自己那个
+Dialog 的窗口。曾经在 `themes.xml` 里全局开 `shortEdges`,那会让横屏下每一页的正文都可能
+钻到挖孔底下 —— `Scaffold` 默认消费的是 `systemBars`,不含 `displayCutout`,没有谁会替它躲。
+
 ### 4.2 反成瘾靠结构,所以有些"体验优化"故意不做
 
 DESIGN 1.1 的四个机制在界面层的落点。这些不是没想到,是**想过并且否决了**:
@@ -554,6 +584,9 @@ DESIGN 1.1 的四个机制在界面层的落点。这些不是没想到,是**想
   UP 主在此期间的实际投稿。助理模式例外 —— 一次下拉对应一次真实的模型请求。
 - **没有骨架屏。** 骨架屏是在假装内容马上就到,把等待包装成期待。首屏就是一个转圈。
 - **空态不给"去逛逛"。** 空态只说事实。任何把人推回内容池的引导都是在造推送式入口。
+  **空态和错误态各有一个图标**(`Inbox` / `ErrorOutline`,40dp,`onSurfaceVariant`),
+  这不是插图:整屏只有一行灰字时,"这里本来就是空的"和"没读到"读起来一模一样,而这两种
+  情况下用户该做的事完全不同。判据是它有没有在替内容打广告 —— 一个状态标识没有。
 - **助理答完就退场,不留"再找一批"。** 那正是变比率奖励。
 - **没有红点、没有未读计数、没有徽章。** `Badge` 组件存在,不用。
   **这条针对的是制造时效焦虑的注意力标记**——红点和未读数的作用是"有新东西,你该回来看",
@@ -591,12 +624,40 @@ DESIGN 1.1 的四个机制在界面层的落点。这些不是没想到,是**想
 - **空间页没有头图。** PiliPlus 的 `pages/member/widget/user_info_card.dart` 顶上有一张
   banner,Bilby 的 `data/SpaceProfile` 目前不带 `top_photo`,补它要动 `api/dto` 和
   `SpaceRepository`。头部区的布局已经按"将来会有一张头图"留好了结构(整块是一个 Column)。
-- **列表行的封面下方有一小段空白。** 封面固定 128dp 宽(高 80dp),而右边三行文字在
-  fontScale > 1 的机器上会高过它,行高由文字决定,封面底下就空出十几 dp。
-  PiliPlus 的做法是让封面 `fillMaxHeight` 跟着内容走(它的卡片宽度因此是变的)——
-  但那样"找相关"那种带多行推荐理由的行会让封面变得很大,所以这一轮没有照做。
-  真要修,得先把带 `note` 的行拆成另一个组件。
-- **动效目前只是"有了唯一来源",还没有逐处替换。** `MotionScheme` 已经挂进主题,
-  但 `AnimatedVisibility(fadeIn()/fadeOut())` 这类手写 spec 还散在播放器控件和
-  SponsorBlock 提示里。下一轮应当统一改成
-  `MaterialTheme.motionScheme.defaultEffectsSpec()`。
+- ~~**列表行的封面下方有一小段空白。**~~ 这一轮改成整行 `CenterVertically` 了:
+  文字比封面高时,多出来的高度分到上下两边,不再全堆在封面底下。PiliPlus 那种让封面
+  `fillMaxHeight` 跟着内容长的做法仍然没做 —— "找相关"那种带多行推荐理由的行会把封面撑得
+  很大,要做得先把带 `note` 的行拆成另一个组件。
+- **组件动效还没收到唯一来源。** `MotionScheme` 已经挂进主题,但
+  `AnimatedVisibility(fadeIn()/fadeOut())` 这类手写 spec 还散在播放器控件和 SponsorBlock
+  提示里,下一轮统一改成 `MaterialTheme.motionScheme.defaultEffectsSpec()`。
+  **页面转场不在此列**:M3 transitions 页注明转场仍在旧的缓动/时长体系上,`MotionScheme`
+  是给组件动效的,它本身也只有六个 spring spec、取不到 duration。
+
+## 6. 响应式
+
+断点值和几档最大宽度都在 `ui/theme/Dimens.kt` 的 `Breakpoints` 里,判的是**窗口**能铺多宽,
+不是设备是不是平板 —— 同一台平板分屏之后就该按 compact 排。`rememberBilbyWindowSize()` 读
+`LocalWindowInfo.containerSize`,不读 `Configuration.screenWidthDp`(后者的语义在 API 35
+全面 edge-to-edge 之后变过)。
+
+各档做什么:
+
+| 档 | 起点 | 变化 |
+|---|---|---|
+| compact | — | 底部导航,单列,内容全宽 |
+| medium | 600dp | 底栏换 `NavigationRail`,内容开始收窄 |
+| expanded | 840dp | 设置页与个人页拆双栏,播放画面收到 `MediaWidth` |
+
+**`AdaptiveContent` 只做一件事:把多出来的宽度转成两边留白。** 一栏、两栏还是沉浸式播放器
+由页面自己决定。
+
+**踩过一次的顺序问题:`fillMaxWidth().widthIn(max = …)` 的上限完全不生效。**
+`fillMaxWidth` 先把子约束定成 `min = max = 父宽`,而 `widthIn` 是
+`constraints.constrain(...)`,它要把 max 夹进 `[父宽, 父宽]` 里,夹完还是父宽。写成
+`widthIn(max).fillMaxWidth()` 才对:先夹上限,再填满被夹过的那份宽度。这条对播放画面那两处
+`widthIn` 同样适用。
+
+播放控制条按**实际可用宽度**决定要不要把倍速/画质/字幕/弹幕另起一行
+(`Breakpoints.StackedControlBar`),不按"是不是全屏":平板分屏后同样窄,竖屏视频全屏时
+也可能只有 270dp。
