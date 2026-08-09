@@ -16,6 +16,12 @@ object BiliConstants {
     const val SPACE_HOST = "https://space.bilibili.com"
     const val APP_HOST = "https://app.bilibili.com"
 
+    /** 直播接口自成一个域,和 `api.bilibili.com` 不通用。 */
+    const val LIVE_HOST = "https://api.live.bilibili.com"
+
+    /** 直播页的 Referer。取流同样有防盗链,指到站点首页会被拒。 */
+    const val LIVE_REFERER = "https://live.bilibili.com"
+
     /** web 接口的默认 UA。整条默认路线上二十来个接口都靠它,长期工作正常,不要动。 */
     const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +

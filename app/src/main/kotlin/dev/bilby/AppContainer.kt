@@ -17,6 +17,7 @@ import dev.bilby.data.FavRepository
 import dev.bilby.data.FollowRepository
 import dev.bilby.data.HeartbeatReporter
 import dev.bilby.data.HistoryRepository
+import dev.bilby.data.LiveRepository
 import dev.bilby.data.QueueSourceRepository
 import dev.bilby.data.UpdateRepository
 import dev.bilby.data.SearchRepository
@@ -32,10 +33,12 @@ import dev.bilby.data.VideoRepository
 import dev.bilby.data.db.BilbyDatabase
 import dev.bilby.data.db.FeedCacheRepository
 import dev.bilby.data.db.FeedReadPositionRepository
+import dev.bilby.live.LiveDanmakuClient
 import kotlinx.coroutines.flow.first
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 
@@ -63,6 +66,9 @@ class AppContainer(context: Context) {
             install(ContentNegotiation) {
                 json(json)
             }
+            // 直播弹幕长连接。装在这个共享 client 上而不是另起一个:直播那条链路要的超时、
+            // 代理、引擎设置跟其余请求没有区别,分开只会多一份要同步的配置。
+            install(WebSockets)
         }
     }
 
@@ -103,6 +109,12 @@ class AppContainer(context: Context) {
     }
 
     val videoRepository: VideoRepository by lazy { VideoRepository(biliClient) }
+
+    val liveRepository: LiveRepository by lazy { LiveRepository(biliClient) }
+
+    val liveDanmakuClient: LiveDanmakuClient by lazy {
+        LiveDanmakuClient(httpClient, liveRepository, json)
+    }
 
     val searchRepository: SearchRepository by lazy { SearchRepository(biliClient) }
 

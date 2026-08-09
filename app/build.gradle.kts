@@ -140,6 +140,7 @@ dependencies {
 
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.exoplayer.dash)
+    implementation(libs.androidx.media3.exoplayer.hls)
     implementation(libs.androidx.media3.ui.compose)
     implementation(libs.androidx.media3.datasource.okhttp)
     implementation(libs.androidx.media3.session)
@@ -153,6 +154,7 @@ dependencies {
     implementation(libs.ktor.client.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.ktor.client.logging)
+    implementation(libs.ktor.client.websockets)
     implementation(libs.kotlinx.serialization.json)
 
     implementation(libs.coil.compose)

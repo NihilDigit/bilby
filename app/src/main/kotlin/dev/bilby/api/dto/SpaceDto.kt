@@ -18,6 +18,25 @@ data class SpaceUserInfoDto(
     val level: Int = 0,
     /** 关注关系属性值:0 未关注、2 已关注、4 互关、128 已拉黑、-1 是自己。见 FollowState。 */
     val relation: Int = 0,
+    /** 直播间。这个接口本来就带,所以空间页判断"在不在播"不需要额外一次请求。 */
+    @SerialName("live_room") val liveRoom: SpaceLiveRoomDto? = null,
+)
+
+/**
+ * 空间信息里的直播间。**键名是驼峰的**(`roomStatus`/`liveStatus`),和 B 站其余接口一水儿的
+ * 下划线不一样,照抄 PiliPlus 的模型(`models_new/space/space/live.dart`),别顺手改成下划线。
+ *
+ * @param roomStatus 有没有开通直播间,0 表示没有 —— 没开通和开通了没在播是两回事。
+ * @param liveStatus 1 才是正在直播;2 是轮播(录播循环),不当成直播。
+ */
+@Serializable
+data class SpaceLiveRoomDto(
+    val roomStatus: Int = 0,
+    val liveStatus: Int = 0,
+    val roomid: Long = 0L,
+    val title: String = "",
+    val cover: String = "",
+    val online: Long = 0L,
 )
 
 /** `x/relation/stat`,不需要 WBI。字段名从消费端反推,notes 1.2 节标了 UNSURE。 */
