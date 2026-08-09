@@ -451,52 +451,6 @@ fun VideoScreen(
     BackHandler(enabled = fullscreen) {
         if (locked) locked = false else fullscreen = false
     }
-    if (fullscreen && active != null) {
-        // 全屏也要能看到失败并重试,否则唯一的出路是先退出全屏 —— 而失败时画面是黑的,
-        // 连"退出全屏"那个按钮在哪都不明显。
-        Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-            BilbyPlayer(
-                player = active,
-                surfacePlayer = surfacePlayer,
-                qualities = audioState.playInfo?.availableQualities.orEmpty(),
-                currentQuality = audioState.currentQuality,
-                onQualityChange = { setQuality(it) },
-                isFullscreen = true,
-                onFullscreenChange = { fullscreen = it },
-                // 全屏下切听视频要先退出全屏,否则听视频界面会顶着一个已经隐藏的系统栏。
-                onListen = { fullscreen = false; onListeningChange(true) },
-                onReportProgress = onReportProgress,
-                title = state.detail?.title.orEmpty(),
-                subtitleTracks = subtitleTracks,
-                currentSubtitleLan = subtitleLan,
-                onSubtitleTrackChange = onSelectSubtitle,
-                subtitleCues = subtitleCues,
-                danmakuPrefs = danmakuPrefs,
-                onDanmakuEnabledChange = onDanmakuEnabledChange,
-                locked = locked,
-                onLockedChange = { locked = it },
-                danmakuPool = danmakuPool,
-                specialDanmakuPool = specialDanmakuPool,
-                danmakuCid = (audioState.queue?.currentCid ?: 0L),
-                matchesCurrentPage = matchesCurrentPage,
-                placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
-                modifier = Modifier.fillMaxSize(),
-            )
-            val shownError = playbackError
-            when {
-                shownError != null -> PlaybackFailure(
-                    message = shownError,
-                    retrying = audioState.loading,
-                    onRetry = retryPlayback,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-
-                audioState.loading || state.loading ->
-                    PlaybackLoading(Modifier.align(Alignment.Center))
-            }
-        }
-        return
-    }
 
     // 找相关做成底部 sheet:它是对当前视频问的一句话,不是一个要离开播放页的去处。
     // 用 BottomSheetScaffold 而不是 ModalBottomSheet —— 后者带遮罩会把视频压暗,而这个
@@ -525,7 +479,7 @@ fun VideoScreen(
 
     BottomSheetScaffold(
         scaffoldState = sheetState,
-        sheetPeekHeight = peek,
+        sheetPeekHeight = if (fullscreen) 0.dp else peek,
         // M3 给标准 sheet 的容器色是 surface container low,而这一页的队列卡片用的是
         // surface container —— 两者叠在一起几乎没有色差,边界就消失了。抬高一档并加重
         // 投影:标准 sheet 没有遮罩,分隔完全靠容器色与阴影承担。
@@ -548,14 +502,26 @@ fun VideoScreen(
         Column(
             modifier = modifier
                 .fillMaxSize()
-                .padding(bottom = insets.calculateBottomPadding())
-                .windowInsetsPadding(WindowInsets.statusBars),
+                // 全屏不留任何 inset:系统栏是 FullscreenEffect 异步藏掉的,这中间有一两帧
+                // statusBars 还报着高度,带着它会让画面先被顶下去再弹回来。
+                .then(
+                    if (fullscreen) {
+                        Modifier
+                    } else {
+                        Modifier
+                            .padding(bottom = insets.calculateBottomPadding())
+                            .windowInsetsPadding(WindowInsets.statusBars)
+                    },
+                ),
         ) {
+            // 全屏与内嵌是**同一个**播放器调用点,只有容器尺寸和 isFullscreen 不同。分成
+            // 两个分支意味着切全屏时整个播放器卸载重挂:PlayerSurface 销毁重建(画面会闪一下
+            // 被拉大),弹幕整池重编,控件显隐状态清零。
             Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(16f / 9f)
-                    .background(Color.Black),
+                modifier = (
+                    if (fullscreen) Modifier.fillMaxSize()
+                    else Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                    ).background(Color.Black),
             ) {
                 when {
                     audioState.playInfo != null && active != null -> BilbyPlayer(
@@ -564,10 +530,12 @@ fun VideoScreen(
                         qualities = audioState.playInfo?.availableQualities.orEmpty(),
                         currentQuality = audioState.currentQuality,
                         onQualityChange = { setQuality(it) },
-                        isFullscreen = false,
+                        isFullscreen = fullscreen,
                         onFullscreenChange = { fullscreen = it },
-                        onListen = { onListeningChange(true) },
+                        // 全屏下切听视频要先退出全屏,否则听视频界面会顶着一个已经隐藏的系统栏。
+                        onListen = { fullscreen = false; onListeningChange(true) },
                         onReportProgress = onReportProgress,
+                        title = state.detail?.title.orEmpty(),
                 seekBarSegments = sponsorSegments.toSeekBarSegments(),
                         subtitleTracks = subtitleTracks,
                         currentSubtitleLan = subtitleLan,
@@ -619,7 +587,8 @@ fun VideoScreen(
                 SkipToast(skippedCategory, Modifier.align(Alignment.TopCenter).padding(8.dp))
             }
 
-            state.detail?.let { detail ->
+            // 全屏时播放器独占整屏,下面的简介/评论整块不参与布局。
+            if (!fullscreen) state.detail?.let { detail ->
                 VideoTabs(
                     detail = detail,
                     currentCid = (audioState.queue?.currentCid ?: 0L),
