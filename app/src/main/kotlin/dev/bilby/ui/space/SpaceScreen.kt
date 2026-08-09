@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,6 +31,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.integerResource
@@ -76,6 +79,8 @@ import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SortRow
+import dev.bilby.ui.components.BiliAsyncImage
+import dev.bilby.ui.components.ImageViewer
 import dev.bilby.ui.components.SquareCover
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
@@ -1197,44 +1202,7 @@ private fun DynamicListTab(
                 }
                 itemsIndexed(state.items, key = { _, item -> item.key }) { index, dynamic ->
                     if (index > 0) HorizontalDivider()
-                    when (dynamic) {
-                        is SpaceDynamicItem.Video -> {
-                            val item = dynamic.item
-                            VideoRow(
-                                item = VideoRowUi(
-                                    title = item.title,
-                                    coverUrl = item.coverUrl,
-                                    durationText = item.durationText,
-                                    dateText = formatDate(item.publishedAtEpochSeconds),
-                                    playText = item.playCountText,
-                                    danmakuText = item.danmakuCountText,
-                                ),
-                                onClick = { onVideoClick(item) },
-                            )
-                        }
-
-                        is SpaceDynamicItem.Text -> {
-                            Column(
-                                modifier = Modifier.fillMaxWidth().padding(
-                                    horizontal = Spacing.Comfortable,
-                                    vertical = Spacing.Cozy,
-                                ),
-                            ) {
-                                Text(
-                                    stringResource(dynamicTypeLabel(dynamic.type)),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                )
-                                Text(dynamic.text, style = MaterialTheme.typography.bodyLarge)
-                                Text(
-                                    formatDate(dynamic.publishedAtEpochSeconds),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(top = Spacing.Tight),
-                                )
-                            }
-                        }
-                    }
+                    DynamicRow(dynamic = dynamic, onVideoClick = onVideoClick)
                 }
                 item(key = "footer") {
                     ListFooter(
@@ -1247,6 +1215,188 @@ private fun DynamicListTab(
                 }
             }
         }
+    }
+}
+
+/**
+ * 一条动态。**五种形态走同一个入口**,因为转发要把被转发的那条原样嵌进来 —— 分散成五个
+ * 调用点的话,嵌套那一层就得再挑一遍类型,于是同一套判断会有两份。
+ *
+ * [nested] 为真时是"被转发的那一条":收窄一档、不再画自己的日期(外层已经有了),
+ * 也不再允许继续嵌套 —— B 站的转发链最长就是两层,原动态本身若是转发,展示的也是它的正文。
+ */
+@Composable
+private fun DynamicRow(
+    dynamic: SpaceDynamicItem,
+    onVideoClick: (SpaceVideoItem) -> Unit,
+    nested: Boolean = false,
+) {
+    val context = LocalContext.current
+    when (dynamic) {
+        is SpaceDynamicItem.Video -> {
+            val item = dynamic.item
+            VideoRow(
+                item = VideoRowUi(
+                    title = item.title,
+                    coverUrl = item.coverUrl,
+                    durationText = item.durationText,
+                    dateText = formatDate(item.publishedAtEpochSeconds),
+                    playText = item.playCountText,
+                    danmakuText = item.danmakuCountText,
+                ),
+                onClick = { onVideoClick(item) },
+            )
+        }
+
+        is SpaceDynamicItem.Text -> DynamicTextBlock(
+            label = stringResource(dynamicTypeLabel(dynamic.type)),
+            text = dynamic.text,
+            dateText = formatDate(dynamic.publishedAtEpochSeconds).takeIf { !nested },
+        )
+
+        is SpaceDynamicItem.Draw -> Column(
+            modifier = Modifier.fillMaxWidth().padding(
+                horizontal = Spacing.Comfortable,
+                vertical = Spacing.Cozy,
+            ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            if (dynamic.text.isNotEmpty()) {
+                Text(dynamic.text, style = MaterialTheme.typography.bodyLarge)
+            }
+            DynamicImageGrid(dynamic.images)
+            if (!nested) {
+                Text(
+                    formatDate(dynamic.publishedAtEpochSeconds),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        is SpaceDynamicItem.Article -> ListItem(
+            overlineContent = { Text(stringResource(R.string.dynamic_type_article)) },
+            headlineContent = {
+                Text(dynamic.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            },
+            supportingContent = if (dynamic.summary.isNotEmpty()) {
+                {
+                    Text(
+                        text = dynamic.summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            } else {
+                null
+            },
+            leadingContent = if (dynamic.coverUrl.isNotEmpty()) {
+                { SquareCover(url = dynamic.coverUrl, size = CollectionCoverSize) }
+            } else {
+                null
+            },
+            // **正文还没有站内阅读器**,所以先交给浏览器。专栏正文不在动态接口里,要另外一次
+            // 请求并渲染一整套富文本节点;在那之前跳出去至少是能读到的,而画一个点不开的卡片
+            // 不是。
+            modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) {
+                if (dynamic.url.isNotEmpty()) ShareLink.openInBrowser(context, dynamic.url)
+            },
+        )
+
+        is SpaceDynamicItem.Forward -> Column(
+            modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.Tight),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            DynamicTextBlock(
+                label = stringResource(R.string.dynamic_type_forward),
+                text = dynamic.text,
+                dateText = formatDate(dynamic.publishedAtEpochSeconds),
+            )
+            // 被转发的那条装进一个容器里,和转发者说的话分开。**源没了也要画**,
+            // 否则这条动态看起来像转发者对着空气说话。
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Comfortable),
+            ) {
+                val origin = dynamic.origin
+                if (origin == null) {
+                    Text(
+                        text = dynamic.originTips.ifEmpty { stringResource(R.string.dynamic_origin_gone) },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(Spacing.Cozy),
+                    )
+                } else {
+                    DynamicRow(dynamic = origin, onVideoClick = onVideoClick, nested = true)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DynamicTextBlock(label: String, text: String, dateText: String?) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(
+            horizontal = Spacing.Comfortable,
+            vertical = Spacing.Cozy,
+        ),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+        if (text.isNotEmpty()) {
+            Text(text, style = MaterialTheme.typography.bodyLarge)
+        }
+        dateText?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = Spacing.Tight),
+            )
+        }
+    }
+}
+
+/**
+ * 图文动态的配图。**和评论区那个网格是同一套规矩**(单张给宽一点、多张等分方格、点开进
+ * [ImageViewer] 并能左右翻),但没有抽成共用组件:评论那份的列宽判断绑着评论行的缩进,
+ * 抽出来要先把两处的边距参数化,收益不抵读起来多绕的那一层。真要合并,先合边距。
+ */
+@Composable
+private fun DynamicImageGrid(images: List<String>) {
+    var viewerIndex by remember(images) { mutableStateOf<Int?>(null) }
+    val columns = if (images.size == 2 || images.size == 4) 2 else 3
+
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+        images.withIndex().chunked(columns).forEach { row ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                row.forEach { (index, url) ->
+                    BiliAsyncImage(
+                        url = url,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .weight(1f)
+                            .aspectRatio(1f)
+                            .clip(MaterialTheme.shapes.small)
+                            .clickable(role = Role.Button) { viewerIndex = index },
+                    )
+                }
+                // 最后一行不满时补空位,否则两张图会被拉宽到占满整行。
+                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+
+    viewerIndex?.let { index ->
+        ImageViewer(urls = images, initialIndex = index, onDismiss = { viewerIndex = null })
     }
 }
 

@@ -273,4 +273,5 @@
     <string name="settings_sponsorblock_enabled_count">%1$d of %2$d categories</string>
     <string name="settings_sponsorblock_server_subtitle">A community-run service; change this if the main one is down or moves</string>
     <string name="settings_sponsorblock_section_server">Server</string>
+    <string name="dynamic_origin_gone">The original post is no longer available</string>
 </resources>

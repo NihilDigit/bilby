@@ -25,6 +25,12 @@ data class DynamicItemDto(
     /** 字符串枚举,如 DYNAMIC_TYPE_AV / UGC_SEASON / PGC / PGC_UNION / COURSES_SEASON / FORWARD ...(notes 第 4 节)。 */
     val type: String = "",
     val modules: DynamicModulesDto? = null,
+    /**
+     * 被转发的原动态,结构和外层完全一样(递归)。**原动态被删时这里仍在,但 type 是
+     * `DYNAMIC_TYPE_NONE`**,`module_dynamic.major.none.tips` 里写着"源动态已被作者删除" ——
+     * 那种情况要显示成一条失效引用,不能当成解析失败整条丢掉,否则转发者说的话也跟着没了。
+     */
+    val orig: DynamicItemDto? = null,
 )
 
 @Serializable
@@ -64,7 +70,58 @@ data class MajorDto(
     @SerialName("ugc_season") val ugcSeason: ArchiveDto? = null,
     val pgc: ArchiveDto? = null,
     val courses: ArchiveDto? = null,
+    /** 图文动态的配图。 */
+    val draw: DrawDto? = null,
+    /**
+     * 专栏。**新接口把专栏、图文长文都归到 `opus` 上**,老的 `article` 只在旧数据里出现,
+     * 两个都收:同一条动态在不同账号/不同时间返回的形状不一定一样。
+     */
+    val opus: OpusDto? = null,
+    val article: ArticleDto? = null,
+    /** 源动态被删时占位,`tips` 是"源动态已被作者删除"这类说明。 */
+    val none: DynamicNoneDto? = null,
 )
+
+@Serializable
+data class DrawDto(val items: List<DrawItemDto> = emptyList())
+
+@Serializable
+data class DrawItemDto(
+    val src: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
+)
+
+/**
+ * 专栏(新)。`summary` 是富文本节点拼出来的纯文本摘要,`pics` 是封面图。
+ * `jump_url` 常常是 `//www.bilibili.com/opus/123` 这种协议相对地址,用之前要补 https。
+ */
+@Serializable
+data class OpusDto(
+    val title: String? = null,
+    val summary: OpusSummaryDto? = null,
+    val pics: List<OpusPicDto> = emptyList(),
+    @SerialName("jump_url") val jumpUrl: String = "",
+)
+
+@Serializable
+data class OpusSummaryDto(val text: String = "")
+
+@Serializable
+data class OpusPicDto(val url: String = "")
+
+/** 专栏(旧)。`covers` 最多三张,`desc` 是摘要。 */
+@Serializable
+data class ArticleDto(
+    val id: Long = 0L,
+    val title: String = "",
+    val desc: String = "",
+    val covers: List<String> = emptyList(),
+    @SerialName("jump_url") val jumpUrl: String = "",
+)
+
+@Serializable
+data class DynamicNoneDto(val tips: String = "")
 
 @Serializable
 data class ArchiveDto(

@@ -347,4 +347,5 @@
     <string name="settings_sponsorblock_enabled_count">已选 %1$d 类,共 %2$d 类</string>
     <string name="settings_sponsorblock_server_subtitle">社区自建服务,官方站点挂了或换域名时可以改这里</string>
     <string name="settings_sponsorblock_section_server">服务器</string>
+    <string name="dynamic_origin_gone">源动态已不可见</string>
 </resources>

@@ -80,6 +80,40 @@ sealed interface SpaceDynamicItem {
         val text: String,
         val publishedAtEpochSeconds: Long,
     ) : SpaceDynamicItem
+
+    /** 图文:一段话加若干张图。图可以点开看大图,所以带的是完整的 URL 列表而不是缩略图。 */
+    data class Draw(
+        override val key: String,
+        val text: String,
+        val images: List<String>,
+        val publishedAtEpochSeconds: Long,
+    ) : SpaceDynamicItem
+
+    /**
+     * 专栏。**只带卡片要显示的东西**:正文不在动态接口里,要另外一次请求
+     * (见 `ui/space/SpaceScreen.kt` 里的说明)。
+     */
+    data class Article(
+        override val key: String,
+        val title: String,
+        val summary: String,
+        val coverUrl: String,
+        val url: String,
+        val publishedAtEpochSeconds: Long,
+    ) : SpaceDynamicItem
+
+    /**
+     * 转发。[origin] 为 null 表示源动态已经被删 —— 这时仍然要把这一条画出来,
+     * 因为转发者自己说的那段话([text])还在。
+     */
+    data class Forward(
+        override val key: String,
+        val text: String,
+        val publishedAtEpochSeconds: Long,
+        val origin: SpaceDynamicItem?,
+        /** 源动态没了时服务端给的说明,如"源动态已被作者删除"。 */
+        val originTips: String,
+    ) : SpaceDynamicItem
 }
 
 data class SpaceDynamicPage(val items: List<SpaceDynamicItem>, val nextOffset: String?, val hasMore: Boolean)
@@ -317,15 +351,23 @@ class SpaceRepository(private val client: BiliClient) {
         )
     }
 
+    /**
+     * 一条动态映射成界面认得的东西。
+     *
+     * **番剧、影视、课堂(PGC / PGC_UNION / COURSES_SEASON)一律丢掉**,这不是"还没做":
+     * 非 UGC 内容是 Non-Goal(版权),画出来只会给一个点了打不开的入口。
+     */
     private fun DynamicItemDto.toDynamicItem(): SpaceDynamicItem? {
+        val author = modules?.moduleAuthor ?: return null
+        val major = modules.moduleDynamic?.major
+        val text = modules.moduleDynamic?.desc?.text.orEmpty().trim()
+        val key = idStr.ifBlank { "$type-${author.mid}-${author.pubTs}" }
+
         val archive = when (type) {
-            "DYNAMIC_TYPE_AV" -> modules?.moduleDynamic?.major?.archive
-            "DYNAMIC_TYPE_UGC_SEASON" -> modules?.moduleDynamic?.major?.ugcSeason
-            "DYNAMIC_TYPE_PGC", "DYNAMIC_TYPE_PGC_UNION" -> modules?.moduleDynamic?.major?.pgc
-            "DYNAMIC_TYPE_COURSES_SEASON" -> modules?.moduleDynamic?.major?.courses
+            "DYNAMIC_TYPE_AV" -> major?.archive
+            "DYNAMIC_TYPE_UGC_SEASON" -> major?.ugcSeason
             else -> null
         }
-        val author = modules?.moduleAuthor ?: return null
         if (archive != null) {
             val bvid = archive.bvid?.takeIf { it.isNotBlank() } ?: return null
             return SpaceDynamicItem.Video(
@@ -340,10 +382,52 @@ class SpaceRepository(private val client: BiliClient) {
                 ),
             )
         }
-        val text = modules.moduleDynamic?.desc?.text.orEmpty().trim()
+
+        // 专栏先认 opus(新接口把长文都归到它上面),没有再退回旧的 article。
+        val opus = major?.opus
+        val article = major?.article
+        if (opus != null || article != null) {
+            val title = opus?.title?.takeIf { it.isNotBlank() } ?: article?.title.orEmpty()
+            val summary = opus?.summary?.text?.takeIf { it.isNotBlank() } ?: article?.desc.orEmpty()
+            if (title.isBlank() && summary.isBlank()) return null
+            return SpaceDynamicItem.Article(
+                key = key,
+                title = title,
+                summary = summary.trim(),
+                coverUrl = (opus?.pics?.firstOrNull()?.url ?: article?.covers?.firstOrNull()).orEmpty().toHttpsUrl(),
+                url = (opus?.jumpUrl ?: article?.jumpUrl).orEmpty().toHttpsUrl(),
+                publishedAtEpochSeconds = author.pubTs,
+            )
+        }
+
+        val images = major?.draw?.items.orEmpty().map { it.src.toHttpsUrl() }.filter { it.isNotEmpty() }
+        if (images.isNotEmpty()) {
+            return SpaceDynamicItem.Draw(
+                key = key,
+                text = text,
+                images = images,
+                publishedAtEpochSeconds = author.pubTs,
+            )
+        }
+
+        if (type == "DYNAMIC_TYPE_FORWARD") {
+            // 源动态自己再走一遍这个映射。它被删时 `orig.type` 是 DYNAMIC_TYPE_NONE,
+            // 映射结果为 null,这一条照样要画 —— 转发者说的话还在。
+            val origin = orig?.toDynamicItem()
+            val tips = orig?.modules?.moduleDynamic?.major?.none?.tips.orEmpty()
+            if (text.isEmpty() && origin == null && tips.isEmpty()) return null
+            return SpaceDynamicItem.Forward(
+                key = key,
+                text = text,
+                publishedAtEpochSeconds = author.pubTs,
+                origin = origin,
+                originTips = tips,
+            )
+        }
+
         if (text.isEmpty()) return null
         return SpaceDynamicItem.Text(
-            key = idStr.ifBlank { "$type-${author.mid}-${author.pubTs}" },
+            key = key,
             type = type,
             text = text,
             publishedAtEpochSeconds = author.pubTs,
