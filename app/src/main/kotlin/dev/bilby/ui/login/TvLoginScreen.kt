@@ -17,18 +17,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.R
 import dev.bilby.api.BiliResult
 import dev.bilby.data.TvLoginRepository
 import dev.bilby.data.TvPollStatus
+import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
@@ -71,14 +74,17 @@ fun TvLoginScreen(
     modifier: Modifier = Modifier,
 ) {
     Scaffold(modifier = modifier) { insets ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(insets)
-                .padding(Spacing.Loose),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Spacing.Loose, Alignment.CenterVertically),
+        AdaptiveContent(
+            modifier = Modifier.fillMaxSize().padding(insets),
+            maxWidth = 520.dp,
         ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(Spacing.Loose),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(Spacing.Loose, Alignment.CenterVertically),
+            ) {
             Text(stringResource(R.string.login_title), style = MaterialTheme.typography.headlineSmall)
 
             Box(contentAlignment = Alignment.Center) {
@@ -107,7 +113,7 @@ fun TvLoginScreen(
                                 stringResource(R.string.login_qr_expired),
                                 style = MaterialTheme.typography.bodyMedium,
                             )
-                            FilledTonalButton(onClick = onRefresh) {
+                            TextButton(onClick = onRefresh) {
                                 Text(stringResource(R.string.action_refresh))
                             }
                         }
@@ -138,7 +144,7 @@ fun TvLoginScreen(
                         color = MaterialTheme.colorScheme.error,
                         textAlign = TextAlign.Center,
                     )
-                    FilledTonalButton(onClick = onRefresh) { Text(stringResource(R.string.action_retry)) }
+                    TextButton(onClick = onRefresh) { Text(stringResource(R.string.action_retry)) }
                 }
 
                 is TvLoginUiState.Success -> Column(
@@ -150,6 +156,7 @@ fun TvLoginScreen(
                 }
 
                 else -> Unit
+            }
             }
         }
     }

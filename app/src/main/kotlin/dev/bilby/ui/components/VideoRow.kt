@@ -14,8 +14,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.bilby.ui.theme.Dimens
@@ -64,6 +66,7 @@ data class VideoRowUi(
 fun VideoRow(
     item: VideoRowUi,
     onClick: () -> Unit,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier,
     /**
      * 长按。**给的是次要操作,不能是这一行唯一能做的事** —— 长按没有任何视觉提示,
@@ -75,10 +78,20 @@ fun VideoRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .combinedClickable(
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+                onLongClick = onLongClick,
+            )
+            // 失效稿件仍保留在收藏夹里,但它必须看起来不可打开。仅禁用语义和点击
+            // 会留下一个“看起来正常、点了没反应”的粗糙行。
+            .alpha(if (enabled) 1f else DisabledContentAlpha)
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
         horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-        verticalAlignment = Alignment.Top,
+        // 字体放大或助理理由变长时,右侧内容可能高过固定比例的封面。
+        // 居中比把封面钉在顶部更稳定,不会在行尾留下明显的“封面下坠”空白。
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         ListCover(
             url = item.coverUrl,
@@ -121,6 +134,8 @@ fun VideoRow(
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -128,6 +143,8 @@ fun VideoRow(
         trailing?.invoke(this)
     }
 }
+
+private const val DisabledContentAlpha = 0.38f
 
 /**
  * "3 小时前  某某 UP 主"。两段之间用两个空格而不是 `·`:UP 名可能很长要截断,

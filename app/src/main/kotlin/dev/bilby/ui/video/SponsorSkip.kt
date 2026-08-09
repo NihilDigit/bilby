@@ -4,7 +4,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -16,10 +15,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import dev.bilby.R
 import androidx.compose.ui.graphics.Color
 import dev.bilby.ui.components.SeekBarSegment
+import dev.bilby.ui.theme.Spacing
 import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.delay
 
@@ -81,13 +80,13 @@ fun SkipToast(category: String?, modifier: Modifier = Modifier) {
 
     AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut(), modifier = modifier) {
         Surface(
-            shape = RoundedCornerShape(8.dp),
+            shape = MaterialTheme.shapes.small,
             color = MaterialTheme.colorScheme.inverseSurface,
         ) {
             Text(
                 text = label,
                 color = MaterialTheme.colorScheme.inverseOnSurface,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
             )
         }
     }

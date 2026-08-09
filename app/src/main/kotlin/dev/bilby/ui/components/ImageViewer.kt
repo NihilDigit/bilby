@@ -1,5 +1,7 @@
 package dev.bilby.ui.components
 
+import android.os.Build
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
@@ -8,8 +10,10 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -20,6 +24,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,10 +38,12 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import dev.bilby.R
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
@@ -78,18 +85,35 @@ fun ImageViewer(
             initialPage = initialIndex.coerceIn(0, urls.lastIndex),
             pageCount = { urls.size },
         )
+        var zoomed by remember { mutableStateOf(false) }
+        LaunchedEffect(pagerState.currentPage) { zoomed = false }
         BackHandler(onBack = onDismiss)
+        // 只有这个窗口铺进刘海所在的短边,不动 Activity 的窗口 —— 全局开 shortEdges 会让
+        // 横屏下每一页的正文都可能压在挖孔底下。关闭按钮那一侧照样躲 displayCutout。
+        val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
+        DisposableEffect(dialogWindow) {
+            if (dialogWindow != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                dialogWindow.attributes = dialogWindow.attributes.apply {
+                    layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+            }
+            onDispose { }
+        }
 
         Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
                 // 放大之后横向拖动是平移图片,不该同时翻页;由每一页自己决定还能不能翻。
-                userScrollEnabled = true,
+                userScrollEnabled = !zoomed,
             ) { page ->
                 ZoomableImage(
                     url = urls[page],
                     onDismiss = onDismiss,
+                    onZoomedChanged = { pageZoomed ->
+                        if (pagerState.currentPage == page) zoomed = pageZoomed
+                    },
                     // 翻走的页把缩放归位,回来时是 1x。
                     active = pagerState.currentPage == page,
                 )
@@ -100,7 +124,7 @@ fun ImageViewer(
                 // 窗口铺到系统栏底下之后,关闭按钮要自己躲开状态栏,否则压在时钟上。
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .windowInsetsPadding(WindowInsets.systemBars)
+                    .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.systemBars))
                     .padding(Spacing.Tight),
             ) {
                 Icon(
@@ -117,7 +141,7 @@ fun ImageViewer(
                     color = FixedColors.OnMedia,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .windowInsetsPadding(WindowInsets.systemBars)
+                        .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.systemBars))
                         .padding(Spacing.Comfortable),
                 )
             }
@@ -126,7 +150,12 @@ fun ImageViewer(
 }
 
 @Composable
-private fun ZoomableImage(url: String, onDismiss: () -> Unit, active: Boolean) {
+private fun ZoomableImage(
+    url: String,
+    onDismiss: () -> Unit,
+    onZoomedChanged: (Boolean) -> Unit,
+    active: Boolean,
+) {
     val scope = rememberCoroutineScope()
     val scale = remember { Animatable(1f) }
     val offsetX = remember { Animatable(0f) }
@@ -138,6 +167,7 @@ private fun ZoomableImage(url: String, onDismiss: () -> Unit, active: Boolean) {
             scale.snapTo(1f)
             offsetX.snapTo(0f)
             offsetY.snapTo(0f)
+            onZoomedChanged(false)
         }
     }
 
@@ -164,6 +194,7 @@ private fun ZoomableImage(url: String, onDismiss: () -> Unit, active: Boolean) {
                                 launch { scale.animateTo(1f) }
                                 launch { offsetX.animateTo(0f) }
                                 launch { offsetY.animateTo(0f) }
+                                onZoomedChanged(false)
                             } else {
                                 // 以双击点为锚放大,而不是以画面中心 —— 否则想看的那个角
                                 // 放大后跑到屏幕外面去了。
@@ -173,6 +204,7 @@ private fun ZoomableImage(url: String, onDismiss: () -> Unit, active: Boolean) {
                                 launch { scale.animateTo(target) }
                                 launch { offsetX.animateTo(clampOffset(dx, boxSize.width, target)) }
                                 launch { offsetY.animateTo(clampOffset(dy, boxSize.height, target)) }
+                                onZoomedChanged(true)
                             }
                         }
                     },
@@ -183,6 +215,7 @@ private fun ZoomableImage(url: String, onDismiss: () -> Unit, active: Boolean) {
                     scope.launch {
                         val next = (scale.value * zoom).coerceIn(1f, MaxScale)
                         scale.snapTo(next)
+                        onZoomedChanged(next > 1f)
                         // 1x 时不接管平移:那时横向拖动应该留给 pager 翻页。
                         if (next > 1f) {
                             offsetX.snapTo(clampOffset(offsetX.value + pan.x, boxSize.width, next))

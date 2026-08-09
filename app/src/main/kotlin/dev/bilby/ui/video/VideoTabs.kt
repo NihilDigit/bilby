@@ -70,6 +70,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.res.stringResource
@@ -80,7 +82,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import dev.bilby.R
 import dev.bilby.formatDurationSeconds
-import dev.bilby.agent.AnswerBlock
+import dev.bilby.agent.AgentTurnState
 import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
@@ -104,14 +106,16 @@ import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.launch
 
-/** 「找相关」的状态。started=false 表示用户还没点过,此时只显示按钮。 */
+/**
+ * 「找相关」的状态。
+ *
+ * [started] 是这一页自己的事(用户点过没有,决定 sheet 的把手在不在),助理那一轮长什么样
+ * 全在 [turn] 里,和搜索页是同一份 [AgentTurnState]。这里原先把 steps/blocks/error 平铺开
+ * 各存一份,那份 steps 还只是 `List<String>` —— 中间结果在播放页就是这样丢掉的。
+ */
 data class RelatedState(
     val started: Boolean = false,
-    val running: Boolean = false,
-    val steps: List<String> = emptyList(),
-    /** 一段夹着视频卡片的正文,和搜索页共用 AnswerBlocks 渲染。 */
-    val blocks: List<AnswerBlock> = emptyList(),
-    val error: String? = null,
+    val turn: AgentTurnState = AgentTurnState(),
 )
 
 /**
@@ -148,6 +152,8 @@ fun VideoTabs(
     related: RelatedState,
     commentState: CommentUiState,
     onFindRelated: () -> Unit,
+    /** 投币那一行的顶边在窗口里的 y(px)。找相关 sheet 的高度锚在它上面,见 VideoScreen。 */
+    onActionsTop: (Int) -> Unit,
     followState: FollowState,
     onToggleFollow: () -> Unit,
     upCard: MemberCard?,
@@ -239,13 +245,16 @@ fun VideoTabs(
                 )
             }
         }
-        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+        // weight 而不是 fillMaxSize:在 Column 里 fillMaxSize 会让 pager 从 tab 栏下面再要
+        // 一整屏的高度,底部那一截被推出可视区。
+        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
             when (page) {
                 0 -> IntroTab(
                     detail = detail,
                     currentCid = currentCid,
                     related = related,
                     onFindRelated = onFindRelated,
+                    onActionsTop = onActionsTop,
                     onUpClick = onUpClick,
                     staffFollowed = staffFollowed,
                     onFollowStaff = onFollowStaff,
@@ -294,6 +303,7 @@ private fun IntroTab(
     currentCid: Long,
     related: RelatedState,
     onFindRelated: () -> Unit,
+    onActionsTop: (Int) -> Unit,
     followState: FollowState,
     onToggleFollow: () -> Unit,
     upCard: MemberCard?,
@@ -344,6 +354,9 @@ private fun IntroTab(
                 )
 
                 ActionButtonsRow(
+                    // 位置**只上报一次**(见 VideoScreen 那侧的取值):这一行跟着简介页滚动,
+                    // 持续上报会让 sheet 的高度随手指变化,而 sheet 本来就不该动。
+                    modifier = Modifier.onGloballyPositioned { onActionsTop(it.positionInWindow().y.toInt()) },
                     stat = detail.stat,
                     relation = relation,
                     favFolders = favFolders,
@@ -840,8 +853,9 @@ private fun FavPickerDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.fav_dialog_title)) },
         text = {
-            Column {
-                favFolders.forEach { folder ->
+            // 收藏夹可以有几十个,对话框里的固定高度列表要能滚,Column 撑高之后按钮会被挤出屏幕。
+            LazyColumn(modifier = Modifier.heightIn(max = FavPickerMaxHeight)) {
+                items(favFolders, key = { it.id }) { folder ->
                     ToggleRow(
                         checked = selected[folder.id] ?: folder.containsThis,
                         onToggle = { checked -> selected[folder.id] = checked },
@@ -1117,3 +1131,6 @@ private val StaffFollowBadgeOffset = 4.dp
 /** 名字栏的宽度区间。下限对齐头像，上限防止一个长名字把整排撑开。 */
 private val StaffLabelMinWidth = 56.dp
 private val StaffLabelMaxWidth = 104.dp
+
+/** 收藏夹对话框里列表的高度上限。再高会把确认/取消按钮顶出屏幕。 */
+private val FavPickerMaxHeight = 360.dp
