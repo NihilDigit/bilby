@@ -38,16 +38,6 @@ data object Settings : NavKey
 data class Space(val mid: Long) : NavKey
 
 /**
- * 助理的两个入口都必须携带完整意图,不能只传一个 id 让下游去补 ——
- * 上下文只含本次意图(DESIGN 3.3 第 4 条),这里就是那条约束的边界。
- */
-@Serializable
-data class AgentSearch(val query: String) : NavKey
-
-@Serializable
-data class AgentRelated(val bvid: String, val title: String, val upName: String) : NavKey
-
-/**
  * 关注列表。入口在动态页顶上那排"最常访问"的右侧 —— 那排只放得下几个人,
  * 而"我到底关注了谁"是个正当问题,不该只能去官方端看。
  */

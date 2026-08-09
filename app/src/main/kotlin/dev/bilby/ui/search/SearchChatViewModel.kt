@@ -4,11 +4,12 @@ import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.R
-import dev.bilby.agent.AgentEvent
 import dev.bilby.agent.AgentIntent
 import dev.bilby.agent.AgentLoop
+import dev.bilby.agent.AgentTurnState
 import dev.bilby.agent.ChatMessage
 import dev.bilby.agent.TraceItem
+import dev.bilby.agent.reduce
 import dev.bilby.api.BiliResult
 import dev.bilby.data.SearchRepository
 import dev.bilby.data.SettingsStore
@@ -129,15 +130,8 @@ class SearchChatViewModel(
             // 只会让人往上翻,而翻上去的东西和这次要找的无关。排序沿用上一次选的那档 ——
             // 新起一份 NormalSearchState() 会把它悄悄弹回综合。
             SearchMode.Normal -> {
-                val order = _state.value.normal.order
                 viewModelScope.launch { settings.addSearchHistory(query) }
-                seenSearchBvids.clear()
-                _state.update {
-                    it.copy(
-                        normal = NormalSearchState(query = query, order = order, videoLoading = true, userLoading = true),
-                    )
-                }
-                runNormal(query, page = 1, order)
+                startNormalSearch(query, _state.value.normal.order)
             }
 
             SearchMode.Agent -> {
@@ -146,7 +140,7 @@ class SearchChatViewModel(
                     state.copy(
                         agent = state.agent.copy(
                             turns = state.agent.turns +
-                                SearchTurn(turnId, query, TurnResult.Agent(emptyList(), running = true)),
+                                SearchTurn(turnId, query, AgentTurnState(running = true)),
                         ),
                     )
                 }
@@ -155,38 +149,66 @@ class SearchChatViewModel(
         }
     }
 
+    /**
+     * 续页只在**首页已经落地**之后才成立。列表在首页返回之前就已经排好版(此刻只有排序行
+     * 和页脚两个 item),UI 那侧的预取条件因此立刻满足;放行的话 [runNormal] 会先取消掉
+     * 正在飞的第一页,再按 [page] 发一个续页 —— 而那个 [page] 还停在上一次搜索翻到的位置,
+     * 于是同一个词每次落到一段任意偏移的结果上。
+     *
+     * 首页出错时同样不续:往一个没建立起来的结果集后面追加没有意义,那一屏给的是重试。
+     */
     fun loadMore() {
         val normal = _state.value.normal
+        if (normal.videoLoading || normal.videoError != null) return
         if (normal.appending || !normal.hasMore || normal.query.isEmpty()) return
         _state.update { it.copy(normal = it.normal.copy(appending = true)) }
         runNormal(normal.query, page = page + 1, normal.order)
     }
 
     /**
-     * 切排序等于换了一份不同的结果集,不是往当前结果里插队 —— 分页状态(`page`、
-     * `seenSearchBvids`、`hasMore`)必须整套清空重来,只换 order 参数继续 append
-     * 会把两种排序的结果拼在一条列表里。
+     * 换关键词、换排序、重试,对结果集都是同一件事:从第一页重来。三个入口原先各自 copy
+     * 一份状态,于是各漏各的 —— 换排序漏了 `appending`(切排序时正在续页的话,被取消的那一代
+     * 不会清它,续页就此卡住),重试漏了 `hasMore`(翻到底之后下拉刷新,页面回到第一页而
+     * `hasMore` 还是 false,再也翻不动)。分页状态只在这一处归位。
+     *
+     * @param keepVisibleResults 下拉刷新用。列表留在屏幕上直到新的第一页落地,否则一下拉就
+     *   整屏空白再重画,而刷新指示器本身(`videoLoading && videos.isNotEmpty()`)也会立刻熄灭。
      */
-    fun onOrderChanged(order: SearchOrder) {
-        val normal = _state.value.normal
-        if (normal.order == order) return
+    private fun startNormalSearch(query: String, order: SearchOrder, keepVisibleResults: Boolean = false) {
         seenSearchBvids.clear()
-        val hasQuery = normal.query.isNotEmpty()
         _state.update {
             it.copy(
-                normal = normal.copy(
+                normal = it.normal.copy(
+                    query = query,
                     order = order,
-                    videos = emptyList(),
-                    users = emptyList(),
+                    videos = if (keepVisibleResults) it.normal.videos else emptyList(),
+                    users = if (keepVisibleResults) it.normal.users else emptyList(),
                     hasMore = true,
-                    videoLoading = hasQuery,
-                    userLoading = hasQuery,
+                    appending = false,
+                    videoLoading = true,
+                    userLoading = true,
                     videoError = null,
                     userError = null,
                 ),
             )
         }
-        if (hasQuery) runNormal(normal.query, page = 1, order)
+        runNormal(query, page = 1, order)
+    }
+
+    /**
+     * 切排序等于换了一份不同的结果集,不是往当前结果里插队:只换 order 参数继续 append
+     * 会把两种排序的结果拼在一条列表里。
+     *
+     * 还没搜过东西时只记下这一档,不发请求 —— 没有关键词可搜。
+     */
+    fun onOrderChanged(order: SearchOrder) {
+        val normal = _state.value.normal
+        if (normal.order == order) return
+        if (normal.query.isEmpty()) {
+            _state.update { it.copy(normal = it.normal.copy(order = order)) }
+            return
+        }
+        startNormalSearch(normal.query, order)
     }
 
     fun retry() {
@@ -194,23 +216,12 @@ class SearchChatViewModel(
             SearchMode.Normal -> {
                 val normal = _state.value.normal
                 val query = normal.query.ifEmpty { return }
-                seenSearchBvids.clear()
-                _state.update {
-                    it.copy(
-                        normal = it.normal.copy(
-                            videoLoading = true,
-                            userLoading = true,
-                            videoError = null,
-                            userError = null,
-                        ),
-                    )
-                }
-                runNormal(query, page = 1, normal.order)
+                startNormalSearch(query, normal.order, keepVisibleResults = true)
             }
 
             SearchMode.Agent -> {
                 val turn = _state.value.agent.turns.lastOrNull() ?: return
-                updateAgent(turn.id) { TurnResult.Agent(emptyList(), running = true) }
+                updateAgent(turn.id) { AgentTurnState(running = true) }
                 runAgent(turn.id, turn.query)
             }
         }
@@ -229,6 +240,10 @@ class SearchChatViewModel(
      */
     private fun runNormal(query: String, page: Int, order: SearchOrder) {
         val gen = ++normalGeneration
+        // 分页游标在**请求发出时**归位,不等响应回来。它是所有入口(回车、换排序、重试)共同的
+        // 收口处,写在这里比让三个调用方各自记得清一遍可靠。留到响应落地才写的那一版,意味着
+        // 首页在途期间 page 还是上一次搜索的值,任何一次续页都会从一个与本次查询无关的偏移开始。
+        if (page == 1) this.page = 1
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
             launch { runVideos(gen, query, page, order) }
@@ -325,26 +340,7 @@ class SearchChatViewModel(
         }
     }
 
-    private fun TurnResult.Agent.reduce(event: AgentEvent): TurnResult.Agent = when (event) {
-        // 模型的自然语言不进 UI:直播要显示"做了什么",不是"想了什么"。
-        is AgentEvent.Thinking -> this
-
-        is AgentEvent.ToolStarted -> copy(steps = steps + AgentStep(event.label, emptyList(), finished = false))
-
-        // 同一次调用的开始与结束是两个事件,按 label 回填最后一个未完成项,否则每步显示两遍。
-        is AgentEvent.ToolFinished -> copy(
-            steps = steps.toMutableList().also { list ->
-                val index = list.indexOfLast { it.label == event.label && !it.finished }
-                if (index >= 0) list[index] = list[index].copy(items = event.items, finished = true)
-                else list += AgentStep(event.label, event.items, finished = true)
-            },
-        )
-
-        is AgentEvent.Answer -> copy(blocks = event.blocks, running = false)
-        is AgentEvent.Failed -> copy(error = event.message, running = false)
-    }
-
-    private inline fun updateAgent(turnId: Long, crossinline block: (TurnResult.Agent) -> TurnResult.Agent) {
+    private inline fun updateAgent(turnId: Long, crossinline block: (AgentTurnState) -> AgentTurnState) {
         _state.update { state ->
             state.copy(
                 agent = state.agent.copy(
@@ -356,7 +352,4 @@ class SearchChatViewModel(
         }
     }
 
-    private companion object {
-        /** 会话标题取第一轮输入的前若干字,给以后的会话列表用。 */
-    }
 }

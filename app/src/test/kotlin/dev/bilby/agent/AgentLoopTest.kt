@@ -83,6 +83,28 @@ class AgentLoopTest {
     }
 
     @Test
+    fun `包着引用的强调记号跟引用一起消失`() = runTest {
+        // 真机上抓到的:模型写 `**[[BV]]**`,而切块在 markdown 解析之前,两个 `**` 被切进
+        // 前后两个不同的文字块,各剩半个配不上对,于是裸星号印在了答案里。
+        val emphasised = FakeStreamer { messages ->
+            if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")
+            else answer("最值得看的是 **[[BV1real0000x]]** 这条")
+        }
+        val events = AgentLoop(emphasised, ToolRegistry(listOf(FakeTool("search_videos", setOf("BV1real0000x")))), json)
+            .run(AgentIntent.Query("随便"))
+            .toList()
+
+        assertEquals(
+            listOf<AnswerBlock>(
+                AnswerBlock.Text("最值得看的是"),
+                AnswerBlock.Video("BV1real0000x", null),
+                AnswerBlock.Text("这条"),
+            ),
+            events.filterIsInstance<AgentEvent.Answer>().single().blocks,
+        )
+    }
+
+    @Test
     fun `同一个视频被反复提到也只出一张卡片`() = runTest {
         val repeats = FakeStreamer { messages ->
             if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")

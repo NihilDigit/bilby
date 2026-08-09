@@ -86,6 +86,11 @@ data class FeedUiState(
      * null 表示从没记过(第一次用)或还没读出来。
      */
     val readMarkerBvid: String? = null,
+    /**
+     * 开屏定位还没做过。做过之后永远为 false —— 它和 [readMarkerBvid] 是两件事:分隔线要一直
+     * 画着(用户翻回去还得认得出哪儿是分界),而"滚到分隔线"只发生一次。
+     */
+    val pendingLocate: Boolean = true,
 )
 
 /**
@@ -128,6 +133,8 @@ fun FeedScreen(
     onOpenFollowings: () -> Unit,
     onExcludeUp: (Long) -> Unit = {},
     onScrollPositionChanged: (String) -> Unit = {},
+    /** 开屏定位已经做过(或确定做不成)。见 [FeedUiState.pendingLocate]。 */
+    onLocated: () -> Unit = {},
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
@@ -136,7 +143,7 @@ fun FeedScreen(
         state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry, modifier)
         else -> FeedList(
             state, onRefresh, onLoadMore, onItemClick, onUpClick, onExcludeUp,
-            onOpenFollowings, onScrollPositionChanged, modifier, contentPadding,
+            onOpenFollowings, onScrollPositionChanged, onLocated, modifier, contentPadding,
         )
     }
 }
@@ -151,6 +158,7 @@ private fun FeedList(
     onExcludeUp: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
     onScrollPositionChanged: (String) -> Unit,
+    onLocated: () -> Unit,
     modifier: Modifier,
     contentPadding: PaddingValues,
 ) {
@@ -170,12 +178,18 @@ private fun FeedList(
             }
     }
 
-    // 进屏只定位这一次:第一次拿到非空列表时尝试把分隔线滚到可见范围,之后不管列表怎么变
-    // (翻页、排除 UP 主)都不再自动跳 —— 用户一旦开始自己滚,视图跳动比找不到分隔线更打扰人。
-    var attemptedLocate by remember { mutableStateOf(false) }
+    // **开屏只定位这一次**,之后不管列表怎么变(翻页、排除 UP 主)都不再自动跳 —— 用户一旦
+    // 开始自己滚,视图跳动比找不到分隔线更打扰人。
+    //
+    // "已经定位过"记在 ViewModel 里,不记在这里的 remember。进 UP 空间、切 tab 都会销毁这段
+    // composition,而滚动位置由 SaveableStateHolder 还原得好好的 —— flag 用 remember 记的话
+    // 它已经忘了,于是在还原好的位置上又跳一次。VM 挂在 Activity 的 store 上(见 FeedPane),
+    // 活的正好是"这一次开屏"。
     LaunchedEffect(state.items) {
-        if (attemptedLocate || state.items.isEmpty()) return@LaunchedEffect
-        attemptedLocate = true
+        if (!state.pendingLocate || state.items.isEmpty()) return@LaunchedEffect
+        // 找不到分隔线也算定位过:那说明记录不在已加载范围内,再等下去只会在某次翻页之后
+        // 突然跳一下。
+        onLocated()
         val target = markerIndex ?: return@LaunchedEffect
         listState.scrollToItem(baseOffset + target)
     }

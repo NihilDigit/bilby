@@ -18,6 +18,8 @@ import dev.bilby.ui.theme.Spacing
  * 只会让它们慢慢长歪。容器各自不同(一个在对话流里,一个在 sheet 里),渲染必须一致。
  *
  * 卡片本身不带说明文字:为什么值得看由它前后的句子承担(见 AgentLoop 的 submit_answer)。
+ *
+ * 正文过 [MarkdownText]:模型本来就会写 `**` 和 `- `,不解析的话那些记号会原样印在答案里。
  */
 @Composable
 fun AnswerBlocks(
@@ -31,10 +33,7 @@ fun AnswerBlocks(
     ) {
         blocks.forEach { block ->
             when (block) {
-                is AnswerBlock.Text -> Text(
-                    text = block.text,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                is AnswerBlock.Text -> MarkdownText(text = block.text)
 
                 // 卡片套一层容器:它嵌在散文里,不套的话和正文一样贴着左边缘,读起来像
                 // 段落中间突然插了一张图,分不清是"被提到的东西"还是"正文的一部分"。

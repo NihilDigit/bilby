@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -19,11 +18,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material3.FilledIconButton
@@ -42,17 +38,22 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import dev.bilby.R
+import dev.bilby.agent.AgentStep
+import dev.bilby.agent.AgentTurnState
 import dev.bilby.agent.AnswerBlock
+import dev.bilby.ui.components.AgentTurnView
 import dev.bilby.ui.components.AnswerBlocks
 import dev.bilby.agent.TraceItem
 import dev.bilby.data.SearchUser
@@ -62,10 +63,11 @@ import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.InlineProgress
-import dev.bilby.ui.components.ListCover
+import dev.bilby.ui.components.KeepScrolledToBottom
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SortRow
+import dev.bilby.ui.components.rememberBottomFollow
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
@@ -83,20 +85,8 @@ private val SearchOrders = SearchOrder.entries.map { it to it.labelRes }
 // label 曾经存在但没有任何界面显示它,随抽取一并去掉。
 enum class SearchMode { Normal, Agent }
 
-sealed interface TurnResult {
-    data class Agent(
-        val steps: List<AgentStep>,
-        /** 一段夹着视频卡片的正文,见 AnswerBlocks。 */
-        val blocks: List<AnswerBlock> = emptyList(),
-        val running: Boolean = false,
-        val error: String? = null,
-    ) : TurnResult
-}
-
-data class AgentStep(val label: String, val items: List<TraceItem>, val finished: Boolean)
-
 /** 助理的一轮对话。普通搜索没有"轮"这个概念,见 [NormalSearchState]。 */
-data class SearchTurn(val id: Long, val query: String, val result: TurnResult.Agent)
+data class SearchTurn(val id: Long, val query: String, val result: AgentTurnState)
 
 /**
  * 普通搜索的状态:**一次查询一份结果**,不留历史。它就是一个搜索页,上一次搜了什么
@@ -248,12 +238,18 @@ private fun NormalPane(
     }
 
     val listState = rememberLazyListState()
+    // LaunchedEffect 的块体捕获的是启动那一刻的 `state` —— 它是个 data class 值,不是 State
+    // 对象,之后再怎么变都不会反映进来。原先直接读 `state.hasMore` 的写法读的是一份永远停在
+    // 查询刚变那一刻的快照,两道守卫都是死的。用 rememberUpdatedState 拿最新的那一份。
+    val current by rememberUpdatedState(state)
     LaunchedEffect(listState, state.query) {
         snapshotFlow { listState.layoutInfo }
             .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
             .distinctUntilChanged()
             .filter { (lastVisible, total) -> lastVisible != null && lastVisible >= total - 1 - PrefetchThreshold }
-            .collect { if (state.hasMore && !state.appending) onLoadMore() }
+            // 列表在首页返回之前就已经排好版,那时只有排序行和页脚,末项自然落在预取窗口里。
+            // 没有 videos.isNotEmpty() 这一条,每次新搜索都会在首页还在飞的时候先要一次续页。
+            .collect { if (current.videos.isNotEmpty() && current.hasMore && !current.appending) onLoadMore() }
     }
 
     LazyColumn(
@@ -377,13 +373,22 @@ private fun AgentPane(
     }
 
     val listState = rememberLazyListState()
-    LaunchedEffect(state.turns.size) {
-        listState.animateScrollToItem(state.turns.lastIndex)
+    val follow = rememberBottomFollow(listState)
+    val running = state.turns.lastOrNull()?.result?.running == true
+
+    // 跑的时候跟着新冒出来的步骤走,直到用户自己往回滑。原先只在**轮数**变化时滚一次,
+    // 于是一整轮检索里画面停在第一步:后面的步骤都长在屏幕外,而它们才是有内容的部分。
+    KeepScrolledToBottom(listState, follow, enabled = running)
+
+    // 答案落地时过程会自动折叠,内容一下子缩短。这时候要回到这一轮的开头 —— 答案是从
+    // 第一句读起的,停在底边等于从结论的最后一行开始读。用户已经自己滑走了就不抢。
+    LaunchedEffect(state.turns.size, running) {
+        if (!running && follow.following) listState.animateScrollToItem(state.turns.lastIndex)
     }
 
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().nestedScroll(follow.connection),
         contentPadding = PaddingValues(vertical = Spacing.Cozy),
         verticalArrangement = Arrangement.spacedBy(Spacing.Loose),
     ) {
@@ -406,7 +411,7 @@ private fun TurnRow(
                 .fillMaxWidth()
                 .padding(horizontal = Spacing.Comfortable),
         )
-        AgentTurnResult(result = turn.result, onVideoClick = onVideoClick, onRetry = onRetry)
+        AgentTurnView(turn = turn.result, onVideoClick = onVideoClick, onRetry = onRetry)
     }
 }
 
@@ -493,136 +498,6 @@ private fun formatDate(epochSeconds: Long): String =
             .format(DateFormatter)
     }
 
-// ---- 助理模式 ----
-
-@Composable
-private fun AgentTurnResult(result: TurnResult.Agent, onVideoClick: (String) -> Unit, onRetry: () -> Unit) {
-    // 答案出来前展开过程,答案一出现就自动折叠——但用户随时能点回来看(DESIGN 3.4)。
-    var processExpanded by remember { mutableStateOf(true) }
-    val hasAnswer = result.blocks.isNotEmpty()
-    LaunchedEffect(hasAnswer) {
-        if (hasAnswer) processExpanded = false
-    }
-
-    Column(modifier = Modifier.fillMaxWidth()) {
-        if (result.steps.isNotEmpty()) {
-            ProcessHeader(
-                expanded = processExpanded,
-                collapsedSummary = result.steps.lastOrNull()?.label.orEmpty(),
-                onToggle = { processExpanded = !processExpanded },
-            )
-            if (processExpanded) {
-                result.steps.forEach { step -> StepRow(step = step, onVideoClick = onVideoClick) }
-            }
-        }
-
-        // 正文与视频卡片是同一段话,不再分成"总结"加"为你找到"两块。
-        AnswerBlocks(
-            blocks = result.blocks,
-            onVideoClick = onVideoClick,
-            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-        )
-
-        when {
-            result.error != null -> FullScreenError(result.error, onRetry, Modifier.fillMaxWidth())
-            result.running -> InlineProgress(
-                text = stringResource(R.string.agent_running),
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-            )
-        }
-    }
-}
-
-@Composable
-private fun ProcessHeader(
-    expanded: Boolean,
-    collapsedSummary: String,
-    onToggle: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = onToggle)
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-    ) {
-        Text(
-            text = if (expanded) {
-                stringResource(R.string.agent_process)
-            } else {
-                stringResource(R.string.agent_process_collapsed, collapsedSummary)
-            },
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Icon(
-            imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-            contentDescription = stringResource(
-                if (expanded) R.string.agent_process_collapse else R.string.agent_process_expand,
-            ),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun StepRow(step: AgentStep, onVideoClick: (String) -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier.fillMaxWidth().padding(vertical = Spacing.Hair),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-    ) {
-        if (step.finished) {
-            Row(
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(Dimens.IconInline),
-                )
-                Text(text = step.label, style = MaterialTheme.typography.bodyMedium)
-            }
-        } else {
-            InlineProgress(step.label, Modifier.padding(horizontal = Spacing.Comfortable))
-        }
-
-        if (step.items.isNotEmpty()) {
-            // 中间结果可点:助理翻到一半用户看中了可以直接点走(DESIGN 3.4)。
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = Spacing.Comfortable),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                items(step.items, key = { it.bvid }) { trace ->
-                    TraceCard(item = trace, onClick = { onVideoClick(trace.bvid) })
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TraceCard(item: TraceItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier.width(Dimens.TraceCardWidth).clickable(onClick = onClick),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-    ) {
-        ListCover(url = item.coverUrl, width = Dimens.TraceCardWidth)
-        Text(
-            text = item.title,
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
 
 // ---- 输入框 ----
 
@@ -752,12 +627,16 @@ private fun SearchChatScreenAgentAnswerPreview() {
                         SearchTurn(
                             id = 1L,
                             query = "适合上班摸鱼看的搞笑动画",
-                            result = TurnResult.Agent(
+                            result = AgentTurnState(
                                 steps = listOf(
-                                    AgentStep("搜索:搞笑动画", listOf(previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")), true),
+                                    AgentStep(
+                                        label = "搜索:搞笑动画",
+                                        items = listOf(previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")),
+                                        finished = true,
+                                    ),
                                 ),
                                 blocks = listOf(
-                                    AnswerBlock.Text("时长短、弹幕密度高,评论区反馈「摸鱼时长刚好一集」:"),
+                                    AnswerBlock.Text("时长短、**弹幕密度高**,评论区反馈「摸鱼时长刚好一集」:"),
                                     AnswerBlock.Video("BV1aa", previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")),
                                     AnswerBlock.Text("再往后是同一个 UP 的旧作,节奏一致。"),
                                 ),

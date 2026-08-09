@@ -107,6 +107,14 @@ class FeedViewModel(
         loadFrequentUps()
     }
 
+    /**
+     * 开屏定位做过了。**这件事必须记在这一层**:动态页的 composition 会在进 UP 空间、切 tab
+     * 时被销毁,而这个 VM 挂在 Activity 的 store 上(见 MainActivity 的 FeedPane),活到这次
+     * 开屏结束。记在 composable 的 `remember` 里的那一版,返回动态页时滚动位置已经由
+     * SaveableStateHolder 还原好了,flag 却忘了,于是又跳一次。
+     */
+    fun onLocated() = _state.update { it.copy(pendingLocate = false) }
+
     /** 由 [FeedScreen] 在滚动时上报当前顶部可见的条目。 */
     fun onVisibleTopChanged(bvid: String) {
         pendingReadBvid = bvid

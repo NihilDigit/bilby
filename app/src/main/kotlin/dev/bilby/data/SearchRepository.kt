@@ -113,12 +113,28 @@ class SearchRepository(private val client: BiliClient) {
     }
 }
 
+private val EmTag = Regex("</?em[^>]*>")
+
+/** `&#39;` 与 `&#x27;` 两种写法。B 站的标题里撇号就是以后者出现的。 */
+private val NumericEntity = Regex("&#([xX][0-9a-fA-F]+|[0-9]+);")
+
 /**
  * 视频标题带 `<em class="keyword">关键词</em>` 高亮标签且做过 HTML 实体转义(notes 2.7)。
  * 用户名笔记里说没有高亮标签,但同样过一遍无害,统一处理更简单。`&amp;` 必须最后解码,
- * 否则 `&amp;lt;` 这种双重转义会被错误地还原成 `<`。
+ * 否则 `&amp;lt;` 这种双重转义会被错误地还原成 `<`;数字字符引用同理排在它前面 ——
+ * 双重转义过的 `&amp;#x27;` 里没有 `&#` 相邻,不会被这一步误伤。
  */
-private fun String.stripKeywordHighlight(): String = replace(Regex("</?em[^>]*>"), "")
+private fun String.stripKeywordHighlight(): String = replace(EmTag, "")
+    .replace(NumericEntity) { match ->
+        val body = match.groupValues[1]
+        val code = if (body[0] == 'x' || body[0] == 'X') {
+            body.drop(1).toIntOrNull(16)
+        } else {
+            body.toIntOrNull()
+        }
+        // 码点非法(超出 Unicode 范围之类)时原样留着,总好过抛异常把整条结果搞没。
+        code?.takeIf { it in 0..0x10FFFF }?.let { String(Character.toChars(it)) } ?: match.value
+    }
     .replace("&lt;", "<")
     .replace("&gt;", ">")
     .replace("&quot;", "\"")
