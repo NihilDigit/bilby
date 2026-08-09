@@ -53,16 +53,26 @@ internal fun RawDanmakuElem.renderId(): String =
         ?: "$progressMillis:$mode:${content.hashCode()}"
 
 /**
+ * B 站的模式号 → 中立三态。**这一步是适配层的活**,库那边只认三种位置。
+ *
+ * 1/2/3 都是滚动;6 是逆向滚动,退化成普通滚动(不实现反向);4 底部、5 顶部。
+ * 7(定位/运动)走 [SpecialDanmakuParser] 那条独立的路,8/9(代码/BAS)不支持,都返回 null。
+ *
+ * 点播与直播共用它:两边拿到的模式号是同一套编码。
+ */
+internal fun danmakuModeOrNull(mode: Int): DanmakuMode? = when (mode) {
+    1, 2, 3, 6 -> DanmakuMode.SCROLL
+    4 -> DanmakuMode.BOTTOM
+    5 -> DanmakuMode.TOP
+    else -> null
+}
+
+/**
  * 单条普通弹幕的映射。`DanmakuMode` 只认三态,不认 B 站的原始编号 —— 库不该知道 B 站长什么样。
  * 认不出来的模式号返回 null。
  */
 internal fun RawDanmakuElem.toDanmakuOrNull(): Danmaku? {
-    val danmakuMode = when (mode) {
-        1, 2, 3, 6 -> DanmakuMode.SCROLL
-        4 -> DanmakuMode.BOTTOM
-        5 -> DanmakuMode.TOP
-        else -> return null
-    }
+    val danmakuMode = danmakuModeOrNull(mode) ?: return null
     return Danmaku(
         id = renderId(),
         playTimeMillis = progressMillis.toLong(),

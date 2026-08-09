@@ -98,6 +98,7 @@ import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
 import dev.bilby.player.cueAt
 import dev.bilby.ui.components.BiliAsyncImage
+import dev.bilby.ui.player.DanmakuFeed
 import dev.bilby.ui.player.DanmakuFontSizeSp
 import dev.bilby.ui.player.DanmakuLayer
 import dev.bilby.ui.components.SeekBar
@@ -234,7 +235,7 @@ fun BilbyPlayer(
                 player = player,
                 surfacePlayer = surfacePlayer,
                 prefs = danmakuPrefs,
-                pool = danmakuPool,
+                feed = DanmakuFeed.Pool(danmakuPool),
                 specialPool = specialDanmakuPool,
                 cid = danmakuCid,
                 fontSizeSp = if (isFullscreen) DanmakuFontSizeSp.Fullscreen else DanmakuFontSizeSp.Embedded,

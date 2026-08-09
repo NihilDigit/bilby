@@ -1,0 +1,109 @@
+package dev.bilby.ui.live
+
+import android.os.Bundle
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import androidx.core.os.bundleOf
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
+import dev.bilby.AppContainer
+import dev.bilby.BiliLog
+import dev.bilby.player.AudioPlaybackService
+
+/**
+ * 直播间的接线:连 session、把选好的流交给服务、把状态和弹幕流交给界面。
+ *
+ * 和播放页一样,**页面不持有播放器**:它连一个 [MediaController],画面接同进程的
+ * `currentPlayer`(MediaController 没有 `COMMAND_SET_VIDEO_SURFACE`),控制一律走 controller。
+ */
+@Composable
+fun LiveRoomRoute(
+    container: AppContainer,
+    roomId: Long,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val credentials by container.settings.credentials.collectAsStateWithLifecycle(initialValue = null)
+    val selfMid = credentials?.dedeUserId?.toLongOrNull() ?: 0L
+
+    val vm: LiveRoomViewModel = viewModel(
+        key = "live-$roomId",
+        factory = viewModelFactory {
+            initializer {
+                LiveRoomViewModel(roomId, container.liveRepository, container.liveDanmakuClient, selfMid)
+            }
+        },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    val danmakuPrefs by container.settings.danmakuPrefs.collectAsStateWithLifecycle(
+        initialValue = dev.bilby.data.DanmakuPrefs(),
+    )
+
+    var controller by remember { mutableStateOf<MediaController?>(null) }
+    DisposableEffect(context) {
+        val future = MediaController.Builder(context, AudioPlaybackService.sessionToken(context))
+            .buildAsync()
+        future.addListener(
+            {
+                controller = runCatching { future.get() }
+                    .onFailure { BiliLog.w("直播间连接播放服务失败", it) }
+                    .getOrNull()
+            },
+            ContextCompat.getMainExecutor(context),
+        )
+        onDispose {
+            // 离开直播间就停:直播没有"后台接着听"的场景 —— 它一直在往前走,回来时听到的
+            // 也不是离开时那一段。**不 release 播放器**,它归服务所有。
+            controller?.pause()
+            MediaController.releaseFuture(future)
+            controller = null
+        }
+    }
+
+    val active = controller
+    val audioState by AudioPlaybackService.state.collectAsStateWithLifecycle()
+    val surfacePlayer = active?.let { AudioPlaybackService.currentPlayer }
+
+    // 流地址到手就交给服务。命令是幂等的(报房间号不报地址),标题晚一步到也只是再发一遍
+    // 更新元数据,不会把已经起好的流掐掉。
+    LaunchedEffect(active, state.streamUrl, state.title) {
+        val url = state.streamUrl ?: return@LaunchedEffect
+        val connected = active ?: return@LaunchedEffect
+        connected.sendCustomCommand(
+            SessionCommand(AudioPlaybackService.ACTION_OPEN_LIVE, Bundle.EMPTY),
+            bundleOf(
+                AudioPlaybackService.EXTRA_ROOM_ID to roomId,
+                AudioPlaybackService.EXTRA_LIVE_URL to url,
+                AudioPlaybackService.EXTRA_TITLE to state.title,
+                AudioPlaybackService.EXTRA_UP_NAME to state.anchorName,
+                AudioPlaybackService.EXTRA_COVER_URL to state.coverUrl,
+            ),
+        )
+    }
+
+    LiveRoomScreen(
+        state = state,
+        danmaku = vm.danmaku,
+        player = active,
+        surfacePlayer = surfacePlayer,
+        // 播放器此刻装的是不是这个房间。和播放页同一个判据,只是标识换成了直播那一套。
+        attached = audioState.loadKey == "${AudioPlaybackService.LOAD_KEY_LIVE_PREFIX}$roomId",
+        danmakuPrefs = danmakuPrefs,
+        onLoadMoreGuards = vm::loadMoreGuards,
+        onBack = onBack,
+        modifier = modifier,
+    )
+}

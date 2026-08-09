@@ -15,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -618,6 +619,7 @@ fun SpaceScreen(
     onCollectionDetailBack: () -> Unit,
     onLoadMoreCollectionDetail: () -> Unit,
     onVideoClick: (SpaceVideoItem) -> Unit,
+    onLiveClick: (Long) -> Unit,
     onToggleFollow: () -> Unit,
     onListenUp: () -> Unit,
     onBack: () -> Unit,
@@ -677,7 +679,12 @@ fun SpaceScreen(
     ) { insets ->
         Column(modifier = Modifier.fillMaxSize().padding(insets)) {
             state.profile?.let {
-                SpaceHeader(it, onToggleFollow = onToggleFollow, onListenUp = onListenUp)
+                SpaceHeader(
+                    it,
+                    onToggleFollow = onToggleFollow,
+                    onListenUp = onListenUp,
+                    onLiveClick = onLiveClick,
+                )
             }
 
             // **tab 栏等合集探测回来才画。** 先画三个再抽掉一个的话,栏目宽度会重新分配、
@@ -755,6 +762,7 @@ private fun SpaceHeader(
     profile: SpaceProfile,
     onToggleFollow: () -> Unit,
     onListenUp: () -> Unit,
+    onLiveClick: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -809,6 +817,40 @@ private fun SpaceHeader(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
+
+        // 正在直播时才出现,而且只出现在这里 —— 直播间的唯一入口是"我点了这个人",
+        // 不是一个可以浏览的列表(DESIGN 1.1)。
+        profile.liveRoom?.let { live ->
+            Surface(
+                onClick = { onLiveClick(live.roomId) },
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(Spacing.Cozy),
+                ) {
+                    Text(
+                        text = stringResource(R.string.space_live_now),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        text = live.title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(horizontal = Spacing.Tight),
+                    )
+                    Text(
+                        text = stringResource(R.string.live_online, live.online),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
     }
 }
 

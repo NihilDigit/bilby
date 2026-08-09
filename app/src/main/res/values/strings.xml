@@ -172,7 +172,6 @@
     <string name="related_title_running">相关 · 还在找</string>
     <string name="related_title_error">相关 · 失败</string>
     <string name="related_title_count">相关 · %1$d 条</string>
-    <string name="related_step">· %1$s</string>
 
     <!-- 播放器控件。听视频页和播放页共用同一组 -->
     <string name="player_play">播放</string>
@@ -310,4 +309,16 @@
     <string name="profile_logout">登出</string>
     <string name="profile_view_all">查看全部</string>
     <string name="profile_favorites_empty">还没有收藏夹</string>
+    <!-- 直播 -->
+    <string name="live_loading">正在连接直播间…</string>
+    <string name="live_offline">主播还没开播</string>
+    <string name="live_online">%1$d 人在看</string>
+    <string name="live_tab_chat">聊天</string>
+    <string name="live_tab_guard">大航海</string>
+    <string name="live_super_chat_price">¥%1$d</string>
+    <string name="live_guard_governor">总督</string>
+    <string name="live_guard_admiral">提督</string>
+    <string name="live_guard_captain">舰长</string>
+    <string name="player_enter_fullscreen">全屏</string>
+    <string name="space_live_now">直播中</string>
 </resources>

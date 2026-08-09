@@ -68,3 +68,13 @@ data class FavFolderContents(val mediaId: Long, val title: String) : NavKey
 /** 历史记录。个人页的三个入口之一,DESIGN 2 节:历史只待在它自己这一页。 */
 @Serializable
 data object History : NavKey
+
+/**
+ * 一个直播间。**入口只有 UP 的空间页** —— 进来是因为用户点了某个他自己选择去看的人,
+ * 不是因为有人替他挑了一个。所以没有直播浏览页,也不会有"推荐直播"。
+ *
+ * 按 DESIGN 1.1 的机制表对过:内容来自用户已有的选择(他访问的这个 UP),是单个有限对象,
+ * 不排序、不推荐,和 [Space]、[FavFolderContents] 落在同一栏。
+ */
+@Serializable
+data class LiveRoom(val roomId: Long) : NavKey

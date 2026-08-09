@@ -32,6 +32,26 @@ import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.nihildigit.danmaku.SpecialDanmakuHost
 import dev.nihildigit.danmaku.SpecialDanmakuHostState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+
+/**
+ * 弹幕从哪来。两种形态的差别只在这里,时钟、测量、排布、渲染都一样。
+ */
+sealed interface DanmakuFeed {
+
+    /** 整池已知(点播)。换一份就交给编排器判断是不是尾部扩展,是就接着排,不是就重建。 */
+    data class Pool(val danmaku: List<Danmaku>) : DanmakuFeed
+
+    /**
+     * 逐条到达(直播)。**[arrivals] 里的 `playTimeMillis` 会被忽略并就地重打** ——
+     * 服务端给的时间戳和播放器的时间轴不是同一根,对时是一整类问题;用播放器此刻的位置打戳,
+     * 两者天然同轴,一步都不用对。
+     *
+     * 时间轴只增不减,所以这一支会定期调用 `trimBefore` 把已经离场的丢掉,否则一场几小时的
+     * 直播会把每一条弹幕连同排布结果一直攒在内存里。
+     */
+    data class Stream(val arrivals: Flow<Danmaku>) : DanmakuFeed
+}
 
 /**
  * 弹幕层。**视频与直播共用这一份** —— 两者的差别只在弹幕从哪来(整池 vs 逐条到达),
@@ -56,7 +76,7 @@ fun DanmakuLayer(
     player: Player,
     surfacePlayer: Player?,
     prefs: DanmakuPrefs,
-    pool: List<Danmaku>,
+    feed: DanmakuFeed,
     specialPool: List<SpecialDanmaku>,
     cid: Long,
     fontSizeSp: Float,
@@ -176,7 +196,7 @@ fun DanmakuLayer(
     // 晚一拍出现,那是用户看得见的,重建不是。
     LaunchedEffect(cid, layout, measure, prefs.density, prefs.frameRateCap) {
         session = buildDanmakuSession(
-            pool = pool,
+            pool = (feed as? DanmakuFeed.Pool)?.danmaku.orEmpty(),
             layout = layout,
             density = prefs.density,
             frameRateCap = prefs.frameRateCap,
@@ -187,12 +207,37 @@ fun DanmakuLayer(
 
     // 池子变了就交给编排器:它自己判断新池子是不是旧池子的时间尾部扩展,是就接着排,不是
     // 就作废重建。
-    LaunchedEffect(session, pool) {
+    LaunchedEffect(session, feed) {
         val current = session ?: return@LaunchedEffect
-        current.compiler.setPool(pool)
-        if (current.compiler.advanceTo(clock.positionMillis)) {
-            logDanmakuReport(current.compiler)
-            current.hostState.notifyChanged()
+        when (feed) {
+            is DanmakuFeed.Pool -> {
+                current.compiler.setPool(feed.danmaku)
+                if (current.compiler.advanceTo(clock.positionMillis)) {
+                    logDanmakuReport(current.compiler)
+                    current.hostState.notifyChanged()
+                }
+            }
+
+            is DanmakuFeed.Stream -> feed.arrivals.collect { danmaku ->
+                // 到达即打戳。往后挪一点点是给排布留出的最小提前量 —— 排在"此刻"的弹幕
+                // 已经错过了当前这一帧,会被 visibleAt 直接跳过。
+                val at = clock.positionMillis + LIVE_EMIT_LEAD_MILLIS
+                if (current.compiler.append(danmaku.copy(playTimeMillis = at))) {
+                    current.compiler.advanceTo(clock.positionMillis)
+                    current.hostState.notifyChanged()
+                }
+            }
+        }
+    }
+
+    // 直播的时间轴只增不减,定期把已经离场的丢掉。点播不做:那边回退 seek 要用到过去那一段。
+    if (feed is DanmakuFeed.Stream) {
+        LaunchedEffect(session) {
+            val current = session ?: return@LaunchedEffect
+            while (true) {
+                delay(LIVE_TRIM_INTERVAL_MILLIS)
+                current.compiler.trimBefore(clock.positionMillis - LIVE_TRIM_KEEP_MILLIS)
+            }
         }
     }
 
@@ -349,3 +394,15 @@ private const val DANMAKU_WINDOW_ADVANCE_INTERVAL_MILLIS = 1_000L
  * 长弹幕因此更快。
  */
 private const val DANMAKU_CROSS_SCREEN_MILLIS = 6_500L
+
+/**
+ * 直播弹幕从到达到进场之间留的提前量。排在"此刻"的那一条已经错过当前帧,`visibleAt` 会直接
+ * 跳过它;给一帧多一点就够,不是为了凑预热窗口。
+ */
+private const val LIVE_EMIT_LEAD_MILLIS = 100L
+
+/** 裁剪间隔。这一步是 O(丢掉的条数),不必频繁。 */
+private const val LIVE_TRIM_INTERVAL_MILLIS = 30_000L
+
+/** 裁剪时在播放位置之前保留多久。留一个穿屏时长的余量,免得把还在屏上的裁掉。 */
+private const val LIVE_TRIM_KEEP_MILLIS = 15_000L

@@ -98,6 +98,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import dev.bilby.player.AudioPlaybackService
 import dev.bilby.ui.listen.ListenScreen
+import dev.bilby.ui.live.LiveRoomRoute
 import dev.bilby.ui.video.VideoScreen
 import dev.bilby.ui.video.VideoViewModel
 
@@ -285,12 +286,20 @@ private fun BilbyApp(container: AppContainer) {
                     onBack = { backStack.removeLastOrNull() },
                 )
             }
+            entry<LiveRoom> { key ->
+                LiveRoomRoute(
+                    container,
+                    key.roomId,
+                    onBack = { backStack.removeLastOrNull() },
+                )
+            }
             entry<Space> { key ->
                 SpaceRoute(
                     container,
                     key.mid,
                     onVideoClick = { backStack.add(Video(it)) },
                     onListenUp = { backStack.add(Video(it, listening = true)) },
+                    onLiveClick = { backStack.add(LiveRoom(it)) },
                     onBack = { backStack.removeLastOrNull() },
                 )
             }
@@ -693,6 +702,7 @@ private fun SpaceRoute(
     mid: Long,
     onVideoClick: (String) -> Unit,
     onListenUp: (String) -> Unit,
+    onLiveClick: (Long) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: SpaceViewModel = viewModel(
@@ -713,6 +723,7 @@ private fun SpaceRoute(
         onCollectionDetailBack = vm::closeCollectionDetail,
         onLoadMoreCollectionDetail = vm::loadMoreCollectionDetail,
         onVideoClick = { onVideoClick(it.bvid) },
+        onLiveClick = onLiveClick,
         onToggleFollow = vm::toggleFollow,
         // 听这位 UP 的投稿:挑第一条进播放页并直接以听的状态打开。**宿主只有播放页一个** ——
         // 空间页不承载听视频界面,否则又会多出一处需要单独维护的生命周期。

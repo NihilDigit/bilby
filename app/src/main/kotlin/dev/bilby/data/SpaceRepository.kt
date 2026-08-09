@@ -41,6 +41,22 @@ data class SpaceProfile(
     val level: Int,
     val follower: Long,
     val followState: FollowState,
+    /** 正在直播的房间。**只有真的在播才非空** —— 见 [SpaceLiveRoom]。 */
+    val liveRoom: SpaceLiveRoom? = null,
+)
+
+/**
+ * 这个 UP 正在直播。
+ *
+ * 空间信息接口本来就带这一段,所以判断"在不在播"不需要额外一次请求。只在
+ * `liveStatus == 1` 时产出:0 是没开播,2 是轮播(在放录像),把轮播当直播会让人点进去
+ * 看到一段循环播放的旧内容。
+ */
+data class SpaceLiveRoom(
+    val roomId: Long,
+    val title: String,
+    val coverUrl: String,
+    val online: Long,
 )
 
 enum class SpaceArchiveOrder(val apiValue: String) {
@@ -106,6 +122,16 @@ class SpaceRepository(private val client: BiliClient) {
                     // 网页端 acc/info **不填** relation,读它只会得到默认的 0(= 未关注),
                     // 一个缺失被读成确定答案。关注态由 SpaceViewModel 用 x/relation 单独查。
                     followState = FollowState.None,
+                    liveRoom = info.value.liveRoom
+                        ?.takeIf { it.liveStatus == LIVE_STATUS_LIVE && it.roomid != 0L }
+                        ?.let {
+                            SpaceLiveRoom(
+                                roomId = it.roomid,
+                                title = it.title,
+                                coverUrl = it.cover.toHttpsUrl(),
+                                online = it.online,
+                            )
+                        },
                 )
             )
             info !is BiliResult.Ok -> info.propagateFailure()
@@ -335,3 +361,6 @@ private fun Long.formatCount(): String = when {
     this >= 10_000 -> "%.1f万".format(this / 10_000.0)
     else -> toString()
 }
+
+/** `live_room.liveStatus`:1 才是正在直播,2 是轮播录像。 */
+private const val LIVE_STATUS_LIVE = 1
