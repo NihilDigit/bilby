@@ -1,4 +1,4 @@
-package dev.bilby.ui.video
+package dev.bilby.ui.player
 
 import android.content.Context
 import android.content.Intent
