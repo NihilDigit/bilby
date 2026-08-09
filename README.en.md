@@ -60,7 +60,8 @@ Planned:
 - [ ] CI regression tests
 - [ ] Interface and motion brought in line with Material Design
 - [ ] Edge-to-edge and status bar handling
-- [ ] Search refinements
+- [ ] Responsive layout
+- [ ] Rebuilt keyword search
 - [ ] Agent harness work
 - [ ] Live streams
 - [ ] Picture-in-picture
