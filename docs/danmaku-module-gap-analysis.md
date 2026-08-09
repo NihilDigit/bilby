@@ -14,7 +14,7 @@ Bilby 已经有一个结构清楚的弹幕渲染原型：数据源映射、时�
 - 轨道内碰撞处理较好，但滚动、顶部、底部三类轨道互不占用，跨类型仍会互相遮挡；当前 `OVERLAP` 也不是真正的无限模式，仍先支付碰撞扫描成本，再用不完整的单尾状态强制叠放。
 - 运行时仍把文字测量和描边/填充命令放在逐帧热路径中。目标架构应严格分离 scheduler、immutable timeline、emitter 和 renderer，并以 prepared layout、`GraphicsLayer` 和可选 sprite atlas 形成分级后端。
 - 没有规范化、过滤与去重管线。范围已收敛：规范化后完全相同的弹幕做“同屏单实例 + 飞行中递增计数”的去重显示，pakku 的相似度匹配、代表弹幕合并与内容密度整形明确不采用（理由见 3.5）。
-- `:danmaku` 目前仍是 Android library，不是可发布的 KMP library；会话管理、重编排和性能诊断也还留在 Bilby 私有接入代码中。
+- 引擎已拆到独立仓库 [tdanmaku](https://github.com/NihilDigit/tdanmaku)，坐标 `dev.nihildigit:tdanmaku`，全部源码在 `commonMain`，target 为 android/jvm/iosArm64/iosSimulatorArm64，Bilby 开发期通过 composite build 消费；但尚未发布到任何仓库，发布流程本身还是空的（见 6.3）。会话管理、重编排和性能诊断仍留在 Bilby 私有接入代码中。
 
 建议先完成“可配置、可测量、可解释”的渲染核心，再做合并与高级弹幕。优先顺序应是：显示区域与密度语义 → scheduler/emitter/renderer 分层 → 固定 duration 与轨道代价匹配 → 帧率正确性和文字后端基准 → 预处理管线 → 高级弹幕 → KMP 发布。KMP 的模块边界需要现在确定，但不必在 API 仍快速变化时急着发布稳定版。
 
@@ -308,11 +308,9 @@ pakku 对 mode 7 的能力主要是从 JSON 中抽取可见文本参与合并，
 
 #### 当前打包缺口
 
-`:danmaku` 目前应用 `com.android.library`，只有 Android source set，没有：
+Kotlin Multiplatform target（android/jvm/iosArm64/iosSimulatorArm64）和坐标 `dev.nihildigit:tdanmaku` 已经就位，全部源码在 `commonMain`。剩下的缺口都在“发布”这一侧：
 
-- Kotlin Multiplatform target 和层级 source set；
-- `groupId / artifactId / version`；
-- `maven-publish`、签名和 Maven Central 发布流程；
+- `maven-publish`、签名和 Maven Central 发布流程（命名空间 `dev.nihildigit` 需要在 `nihildigit.dev` 的 apex 加一条 TXT 记录完成验证）；
 - POM 中的许可证、SCM、开发者信息；
 - sources/documentation artifacts；
 - 稳定 API/ABI 检查、`explicitApi()` 和兼容性策略；

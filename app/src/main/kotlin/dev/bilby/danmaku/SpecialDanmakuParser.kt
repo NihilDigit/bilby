@@ -1,8 +1,8 @@
 package dev.bilby.danmaku
 
 import dev.bilby.BiliLog
-import dev.danmaku.compose.SpecialDanmaku
-import dev.danmaku.compose.SpecialDanmakuEasing
+import dev.nihildigit.danmaku.SpecialDanmaku
+import dev.nihildigit.danmaku.SpecialDanmakuEasing
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive

@@ -117,7 +117,9 @@ android {
 }
 
 dependencies {
-    implementation(project(":danmaku"))
+    // 坐标是外部依赖的写法,但开发期由 settings.gradle.kts 的 includeBuild 替换成隔壁仓库的
+    // 源码构建,这里的版本号在替换生效时不参与解析。见那边的注释。
+    implementation(libs.tdanmaku)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

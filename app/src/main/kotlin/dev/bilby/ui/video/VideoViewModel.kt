@@ -18,8 +18,8 @@ import dev.bilby.data.ToViewRepository
 import dev.bilby.data.SponsorSegment
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
-import dev.danmaku.compose.Danmaku
-import dev.danmaku.compose.SpecialDanmaku
+import dev.nihildigit.danmaku.Danmaku
+import dev.nihildigit.danmaku.SpecialDanmaku
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -279,7 +279,7 @@ class VideoViewModel(
      * mode 7 高级弹幕,与上面那个池分开。
      *
      * **不是"另一种弹幕",是另一套排布规则**:位置由作者写死的绝对坐标决定,不选轨、不判碰撞、
-     * 不受显示区域约束,渲染也走独立的一层([dev.danmaku.compose.SpecialDanmakuHost])。合进
+     * 不受显示区域约束,渲染也走独立的一层([dev.nihildigit.danmaku.SpecialDanmakuHost])。合进
      * 同一个池只会让滚动弹幕那条链路上到处是"这条是不是 7"的分支。
      */
     private val _specialDanmakuPool = MutableStateFlow<List<SpecialDanmaku>>(emptyList())

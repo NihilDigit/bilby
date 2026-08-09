@@ -1,9 +1,9 @@
 package dev.bilby.danmaku
 
 import dev.bilby.BiliLog
-import dev.danmaku.compose.Danmaku
-import dev.danmaku.compose.DanmakuMode
-import dev.danmaku.compose.SpecialDanmaku
+import dev.nihildigit.danmaku.Danmaku
+import dev.nihildigit.danmaku.DanmakuMode
+import dev.nihildigit.danmaku.SpecialDanmaku
 
 /**
  * 一个分段映射完的结果。两类弹幕分开返回,不合成一个列表:它们走两条互不相干的渲染路径

@@ -1,6 +1,6 @@
 package dev.bilby.danmaku
 
-import dev.danmaku.compose.SpecialDanmakuEasing
+import dev.nihildigit.danmaku.SpecialDanmakuEasing
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

@@ -21,7 +21,13 @@ zxing = "3.5.4"
 junit = "4.13.2"
 kotlinxCoroutines = "1.11.0"
 
+# 弹幕引擎,独立仓库。开发期走 composite build(settings.gradle.kts),这个版本号只在
+# 脱离 composite build 从仓库解析时才生效。
+tdanmaku = "0.1.0-SNAPSHOT"
+
 [libraries]
+tdanmaku = { module = "dev.nihildigit:tdanmaku", version.ref = "tdanmaku" }
+
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
 androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }

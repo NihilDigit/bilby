@@ -60,8 +60,8 @@ import dev.bilby.player.AudioPlaybackService
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
 import dev.bilby.data.DanmakuPrefs
-import dev.danmaku.compose.Danmaku
-import dev.danmaku.compose.SpecialDanmaku
+import dev.nihildigit.danmaku.Danmaku
+import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.listen.ListenScreen
 import dev.bilby.ui.theme.Spacing

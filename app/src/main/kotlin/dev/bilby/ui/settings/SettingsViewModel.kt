@@ -11,8 +11,8 @@ import dev.bilby.data.CodecPreference
 import dev.bilby.agent.LlmClient
 import dev.bilby.data.LlmConfig
 import dev.bilby.data.DanmakuPrefs
-import dev.danmaku.compose.DanmakuDensity
-import dev.danmaku.compose.DanmakuFrameRateCap
+import dev.nihildigit.danmaku.DanmakuDensity
+import dev.nihildigit.danmaku.DanmakuFrameRateCap
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockPrefs
 import dev.bilby.player.DeviceCodecs

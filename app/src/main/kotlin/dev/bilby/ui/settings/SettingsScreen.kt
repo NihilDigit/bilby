@@ -45,9 +45,9 @@ import java.io.File
 import dev.bilby.R
 import dev.bilby.data.CodecPreference
 import dev.bilby.data.LlmConfig
-import dev.danmaku.compose.DanmakuDensity
-import dev.danmaku.compose.DanmakuFrameRateCap
-import dev.danmaku.compose.DanmakuViewport
+import dev.nihildigit.danmaku.DanmakuDensity
+import dev.nihildigit.danmaku.DanmakuFrameRateCap
+import dev.nihildigit.danmaku.DanmakuViewport
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockPrefs
 import dev.bilby.ui.components.BilbyTopBar

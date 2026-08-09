@@ -13,8 +13,8 @@ import androidx.datastore.preferences.preferencesDataStore
 import dev.bilby.BuildConfig
 import dev.bilby.player.DEFAULT_PREFERRED_CODECS
 import dev.bilby.player.VideoCodecId
-import dev.danmaku.compose.DanmakuDensity
-import dev.danmaku.compose.DanmakuFrameRateCap
+import dev.nihildigit.danmaku.DanmakuDensity
+import dev.nihildigit.danmaku.DanmakuFrameRateCap
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
