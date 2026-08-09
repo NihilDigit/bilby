@@ -327,8 +327,7 @@ fun ProfileScreen(
  * 不给"这个人很懒"一类的占位文案,那是空间页(`SpaceHeader`)的处理,这里没有那个理由:
  * 签名本来就可能没填,不是"数据还没到"。
  *
- * **宽屏设置紧跟在登出右边**,窄屏则把登出移到下一行,避免两个操作挤占名字和签名的正文宽度。
- * 两者同属"这个账号相关的操作"。它不属于
+ * **设置紧跟在登出右边**,不单独找地方摆:两者同属"这个账号相关的操作"。它不属于
  * `account != null` 那个分支——账号信息拉不到甚至还在读的时候,设置入口也不该跟着消失,
  * 所以三条分支各自只负责把中段(名字/错误文案/空白)撑到 `weight(1f)`,`IconButton`
  * 本身写在 `when` 外面,始终是这一行最后一个元素。
@@ -343,7 +342,6 @@ private fun AccountHeader(
     onSettingsClick: () -> Unit,
     onRetry: () -> Unit,
 ) {
-    val compact = rememberBilbyWindowSize() == BilbyWindowSize.Compact
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -385,11 +383,8 @@ private fun AccountHeader(
                 leadingContent = { Avatar(url = account.faceUrl, size = Dimens.AvatarLarge) },
                 trailingContent = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        // 窄屏把登出移到下一行,给名字/签名留下完整的正文宽度。
-                        if (!compact) {
-                            TextButton(onClick = onLogoutClick) {
-                                Text(stringResource(R.string.profile_logout))
-                            }
+                        TextButton(onClick = onLogoutClick) {
+                            Text(stringResource(R.string.profile_logout))
                         }
                         IconButton(onClick = onSettingsClick) {
                             Icon(
@@ -401,16 +396,6 @@ private fun AccountHeader(
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
-            if (compact) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    TextButton(onClick = onLogoutClick) {
-                        Text(stringResource(R.string.profile_logout))
-                    }
-                }
-            }
         } ?: Row(
             modifier = Modifier.heightIn(min = Dimens.AvatarLarge),
             verticalAlignment = Alignment.CenterVertically,

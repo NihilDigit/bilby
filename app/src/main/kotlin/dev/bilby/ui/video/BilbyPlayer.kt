@@ -13,7 +13,6 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -107,7 +106,6 @@ import dev.bilby.ui.player.PlayerDanmakuLayer
 import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SeekBarSegment
 import dev.bilby.ui.components.SubtitleTrackMenu
-import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.data.DanmakuPrefs
@@ -361,85 +359,52 @@ private fun PlayerControlBar(
         )
 
     // 进度条独占一行:挤在按钮行里只剩几十 dp 可拖,而拖拽是这里最主要的操作。
-    BoxWithConstraints(modifier = container) {
-        // 按**实际可用宽度**判断要不要把次级设置另起一行,不按"是不是全屏"或设备型号:
-        // 平板分屏后同样窄,竖屏视频全屏时也可能只有 270dp。窄的时候倍速/画质/字幕/弹幕
-        // 会和时间读数、全屏按钮挤在一行里互相压扁。
-        val stacked = maxWidth < Breakpoints.StackedControlBar
-        // 带文字标签的那一档只在"全屏且不窄"时给 —— 标签是画质档名,横屏才放得下。
-        val labelled = isFullscreen && !stacked
-
-        Column {
-            SeekBar(
-                position,
-                duration,
-                onSeekStart,
-                onSeekTo,
-                onSeekFinished,
-                Modifier.fillMaxWidth(),
-                segments = segments,
+    // 进度条独占一行:挤在按钮行里只剩几十 dp 可拖,而拖拽是这里最主要的操作。
+    //
+    // 其余控件就一行摆完。**不按宽度分行** —— 手机竖屏(360–410dp)是主力窗口,按宽度分行
+    // 等于在主力形态上永远是两行,而这一行本来就摆得下:图标 22dp、全屏时才给画质档名。
+    Column(modifier = container) {
+        SeekBar(
+            position,
+            duration,
+            onSeekStart,
+            onSeekTo,
+            onSeekFinished,
+            Modifier.fillMaxWidth(),
+            segments = segments,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PlayPauseButton(isPlaying, onPlayPause, if (isFullscreen) 30.dp else 22.dp)
+            Text(
+                "${formatDurationMillis(position)} / ${formatDurationMillis(duration)}",
+                style = if (isFullscreen) MaterialTheme.typography.labelLarge
+                else MaterialTheme.typography.labelSmall,
+                color = FixedColors.OnMedia,
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                PlayPauseButton(isPlaying, onPlayPause, if (isFullscreen) 30.dp else 22.dp)
-                Text(
-                    "${formatDurationMillis(position)} / ${formatDurationMillis(duration)}",
-                    style = if (isFullscreen) MaterialTheme.typography.labelLarge
-                    else MaterialTheme.typography.labelSmall,
-                    color = FixedColors.OnMedia,
-                )
-                Spacer(Modifier.weight(1f))
-                if (!stacked) {
-                    SecondaryControls(
-                        speed = speed,
-                        qualities = qualities,
-                        currentQuality = currentQuality,
-                        subtitleTracks = subtitleTracks,
-                        currentSubtitleLan = currentSubtitleLan,
-                        danmakuEnabled = danmakuEnabled,
-                        labelled = labelled,
-                        isFullscreen = isFullscreen,
-                        onSpeedChange = onSpeedChange,
-                        onQualityChange = onQualityChange,
-                        onSubtitleTrackChange = onSubtitleTrackChange,
-                        onDanmakuEnabledChange = onDanmakuEnabledChange,
-                        onMenuOpenChange = onMenuOpenChange,
-                        onListen = onListen,
-                    )
-                }
-                FullscreenButton(isFullscreen, onFullscreenToggle, if (isFullscreen) 26.dp else 22.dp)
-            }
-
-            if (stacked) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    SecondaryControls(
-                        speed = speed,
-                        qualities = qualities,
-                        currentQuality = currentQuality,
-                        subtitleTracks = subtitleTracks,
-                        currentSubtitleLan = currentSubtitleLan,
-                        danmakuEnabled = danmakuEnabled,
-                        labelled = false,
-                        isFullscreen = isFullscreen,
-                        onSpeedChange = onSpeedChange,
-                        onQualityChange = onQualityChange,
-                        onSubtitleTrackChange = onSubtitleTrackChange,
-                        onDanmakuEnabledChange = onDanmakuEnabledChange,
-                        onMenuOpenChange = onMenuOpenChange,
-                        onListen = onListen,
-                    )
-                }
-            }
+            Spacer(Modifier.weight(1f))
+            SecondaryControls(
+                speed = speed,
+                qualities = qualities,
+                currentQuality = currentQuality,
+                subtitleTracks = subtitleTracks,
+                currentSubtitleLan = currentSubtitleLan,
+                danmakuEnabled = danmakuEnabled,
+                labelled = isFullscreen,
+                isFullscreen = isFullscreen,
+                onSpeedChange = onSpeedChange,
+                onQualityChange = onQualityChange,
+                onSubtitleTrackChange = onSubtitleTrackChange,
+                onDanmakuEnabledChange = onDanmakuEnabledChange,
+                onMenuOpenChange = onMenuOpenChange,
+                onListen = onListen,
+            )
+            FullscreenButton(isFullscreen, onFullscreenToggle, if (isFullscreen) 26.dp else 22.dp)
         }
     }
 }
 
 /**
- * 倍速 / 画质 / 字幕 / 弹幕 / 听视频。宽的时候跟在时间读数右边,窄的时候整组挪到下一行 ——
- * 两处摆的是同一组东西,所以只有一份定义。
+ * 倍速 / 画质 / 字幕 / 弹幕 / 听视频。抽出来只是为了让上面那个 Row 读得完,没有第二个调用方。
  */
 @Composable
 private fun SecondaryControls(

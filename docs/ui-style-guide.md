@@ -681,11 +681,16 @@ intense sliding"。`rememberReducedMotion()` 读 `TRANSITION_ANIMATION_SCALE`,�
 `LocalWindowInfo.containerSize`,不读 `Configuration.screenWidthDp`(后者的语义在 API 35
 全面 edge-to-edge 之后变过)。
 
+**目的是支持平板,不是重排手机。** 这条是踩出来的:上一轮按窗口宽度给了一堆分支,结果
+手机上"登出"被挤到下一行、播放控制条分成两行 —— 而手机布局本来就没有问题。判据因此收紧成
+一句:**compact 档必须和加响应式之前逐像素一致**,任何 `if (compact)` 分支都要先回答
+"手机上这样排哪里不对";答不上来就不该有这个分支。
+
 各档做什么:
 
 | 档 | 起点 | 变化 |
 |---|---|---|
-| compact | — | 底部导航,单列,内容全宽 |
+| compact | — | **一切照旧**,不因响应式改动任何东西 |
 | medium | 600dp | 底栏换 `NavigationRail`,内容开始收窄 |
 | expanded | 840dp | 设置页与个人页拆双栏,播放画面收到 `MediaWidth` |
 

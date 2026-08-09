@@ -44,6 +44,10 @@ import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.FilterChip
@@ -883,6 +887,14 @@ private fun FavPickerDialog(
 /**
  * 分 P。这里是 chip 而不是 segmented button:条数随视频变(1 到几百都有)、要横滚、
  * 是"当前任务的分支路径"—— M3 给 chip 的定义。segmented button 是固定的几个视图切换。
+ *
+ * **条数多时给一个全部分集的入口,开的是 modal bottom sheet,不是对话框。**
+ * dialogs 页写着 "Most dialog content should avoid scrolling",而几百 P 的课程视频必然要滚;
+ * bottom sheets 页则明说内容超过半屏时可以拉到全屏并在内部滚动。就地展开也不行 ——
+ * 那会把简介区撑得很长,和"播放页正好占一屏"直接打架。
+ *
+ * 收起态保持横滚而不是截断:横滚里还能看出当前是第几 P、相邻切换最快,截断则可能把当前
+ * 这一 P 藏在看不见的地方。
  */
 @Composable
 private fun PartRow(
@@ -890,8 +902,16 @@ private fun PartRow(
     isCurrent: (Int) -> Boolean,
     onClick: (Int) -> Unit,
 ) {
+    var sheetOpen by rememberSaveable(labels.size) { mutableStateOf(false) }
+
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-        SectionHeader(stringResource(R.string.video_parts))
+        SectionHeader(stringResource(R.string.video_parts)) {
+            if (labels.size > PartRowExpandThreshold) {
+                TextButton(onClick = { sheetOpen = true }) {
+                    Text(stringResource(R.string.video_parts_expand, labels.size))
+                }
+            }
+        }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
             itemsIndexed(labels) { index, pair ->
                 FilterChip(
@@ -908,7 +928,78 @@ private fun PartRow(
             }
         }
     }
+
+    if (sheetOpen) {
+        PartSheet(
+            labels = labels,
+            isCurrent = isCurrent,
+            onPick = { index ->
+                onClick(index)
+                sheetOpen = false
+            },
+            onDismiss = { sheetOpen = false },
+        )
+    }
 }
+
+/**
+ * 全部分集。**一行一条而不是铺一片 chip**:几百 P 的标题是"第 12 讲 · 线性方程组"这种,
+ * 挤成 chip 只剩截断后的两三个字,而用户要找的正是标题。
+ *
+ * 用 `ModalBottomSheet` 而不是页面自带的那个 `BottomSheetScaffold`(它归「找相关」):
+ * 挑分集时人不在看画面,遮罩压暗反而帮着聚焦;而「找相关」是边看边问,所以那边才刻意
+ * 避开遮罩。两者的取舍不同,不该共用一个 sheet 槽。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PartSheet(
+    labels: List<Pair<Int, String>>,
+    isCurrent: (Int) -> Boolean,
+    onPick: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val listState = rememberLazyListState()
+    // 开的时候把当前这一 P 滚到可见:一百条里默认停在第一条,等于每次都要自己找。
+    LaunchedEffect(Unit) {
+        val current = labels.indices.firstOrNull { isCurrent(it) } ?: return@LaunchedEffect
+        listState.scrollToItem(current)
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        LazyColumn(state = listState) {
+            itemsIndexed(labels) { index, pair ->
+                val selected = isCurrent(index)
+                ListItem(
+                    headlineContent = {
+                        Text(
+                            stringResource(R.string.video_part_label, pair.first, pair.second),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    // 当前这一条只换文字颜色,不加选中背景:sheet 里一整块染色比列表本身还重。
+                    colors = ListItemDefaults.colors(
+                        headlineColor = if (selected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .selectable(
+                            selected = selected,
+                            role = Role.Button,
+                            onClick = { onPick(index) },
+                        ),
+                )
+            }
+        }
+    }
+}
+
+/** 十条以内横滚划得完,再多就该给展开。 */
+private const val PartRowExpandThreshold = 10
 
 /**
  * 播放队列:合集分集 / 该 UP 的其他投稿(DESIGN 2.4b)。官方在简介下方放算法召回的相关

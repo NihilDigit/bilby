@@ -635,7 +635,11 @@ fun VideoScreen(
             if (!fullscreen) state.detail?.let { detail ->
                 // 播放画面保持 720dp 的沉浸宽度，简介/评论允许更宽一点，但仍不把
                 // 长段落铺满展开屏。两者都保持单 pane，避免把视频阅读顺序拆成两条。
-                AdaptiveContent(modifier = Modifier.fillMaxWidth(), maxWidth = Breakpoints.ReadableWidth) {
+                // **weight(1f) 而不是 fillMaxWidth()。** AdaptiveContent 内部会 fillMaxSize,
+                // 不给权重的话它要的是整屏高度,加上上面 16:9 的画面就超出一屏 —— 表现是
+                // 播放页能往下微微滑动一点。给了权重,它拿到的就是"画面之外剩下的高度",
+                // 有没有分 P 都正好占满。
+                AdaptiveContent(modifier = Modifier.weight(1f), maxWidth = Breakpoints.ReadableWidth) {
                     VideoTabs(
                         detail = detail,
                         currentCid = (audioState.queue?.currentCid ?: 0L),

@@ -191,6 +191,13 @@ class AudioPlaybackService : MediaSessionService() {
     private var loadedBvid: String? = null
     private var loadedCid: Long = 0
 
+    /**
+     * 续播时被替换掉的那一 P。页面稍后会用它再发一遍打开命令(它只知道详情里的默认 cid),
+     * 那一趟必须当作"没有换 P 的意思",否则刚接上的进度立刻被推回第一 P。
+     */
+    private var resumedPartBvid: String? = null
+    private var resumedFromCid: Long = 0
+
     private var playInfo: PlayInfo? = null
     private var currentQuality: Int = 0
 
@@ -351,8 +358,18 @@ class AudioPlaybackService : MediaSessionService() {
             // 取到的那个,而此刻 loadedCid 还停在上一条视频上,照着它判就成了"要换 P" ——
             // 结果是把刚发出去的 playurl 取消掉重来一遍,起播反而更慢。真正的换 P 走的是
             // ACTION_PLAY_PART,不经过这里。
+            //
+            // **续播换过 P 之后,这条命令带的 cid 会把它换回去。** 页面手上只有详情里的默认
+            // cid(P1),而服务已经按观看记录切到了第 7 P;照下面这个判断,P1 ≠ loadedCid,
+            // 于是"换 P"回 P1,续播白做了。所以记下续播时被替换掉的那个 cid,来自页面的
+            // 同一个值直接忽略。用户真的手动切 P 走的是 ACTION_PLAY_PART,不经过这里。
             val preparing = prepareJob?.isActive == true
-            if (cid != 0L && cid != loadedCid && !preparing) playPart(cid) else publishState()
+            val isSupersededDefault = bvid == resumedPartBvid && cid == resumedFromCid
+            if (cid != 0L && cid != loadedCid && !preparing && !isSupersededDefault) {
+                playPart(cid)
+            } else {
+                publishState()
+            }
             // 上一次补全失败就停在了单条队列上。这条命令在每次回到播放页时都会再发一遍,
             // 拿它当重试点,不必为此单开一条命令和一个按钮。
             if (queueIncomplete) enrichQueue(bvid)
@@ -522,6 +539,8 @@ class AudioPlaybackService : MediaSessionService() {
                     // 选择。递归下去时 resumePart 已经是 false,换不成第二次。
                     val lastCid = result.value.lastPlayCid
                     if (resumePart && lastCid != 0L && lastCid != cid && hasPart(item.bvid, lastCid)) {
+                        resumedPartBvid = item.bvid
+                        resumedFromCid = cid
                         queue.updateCurrentCid(lastCid)
                         playCurrent(playWhenReady = playWhenReady, force = true)
                         return@launch

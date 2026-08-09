@@ -841,7 +841,6 @@ private fun SpaceHeader(
     onLiveClick: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -878,22 +877,11 @@ private fun SpaceHeader(
                     )
                 }
             }
-            if (wide) {
-                SpaceHeaderActions(
-                    followState = profile.followState,
-                    canListen = canListen,
-                    onToggleFollow = onToggleFollow,
-                    onListenUp = onListenUp,
-                )
-            }
-        }
-        if (!wide) {
             SpaceHeaderActions(
                 followState = profile.followState,
                 canListen = canListen,
                 onToggleFollow = onToggleFollow,
                 onListenUp = onListenUp,
-                modifier = Modifier.fillMaxWidth(),
             )
         }
         // 签名可能很长又基本没信息量,给两行封顶;放在下面一整行是因为它旁边没有头像时
