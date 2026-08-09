@@ -472,6 +472,7 @@ private fun ToViewSection(
         emptyText = stringResource(R.string.toview_empty),
         onViewAll = onViewAll,
         onRetry = onRetry,
+        hideWhenEmpty = true,
     ) { item ->
         VideoRow(item = item.toRowUi(), onClick = { onVideoClick(item.bvid) })
     }
@@ -488,8 +489,18 @@ private fun <T> PreviewSection(
     emptyText: String,
     onViewAll: () -> Unit,
     onRetry: () -> Unit,
+    /**
+     * 空的时候整节不画,而不是画一行"还没有"。给**用不到这个功能的人**用:没往稍后再看
+     * 存过东西的人不需要先认识"稍后再看"这个概念,才能看懂自己页面上多出来的一行字。
+     * 和设置页那条"一个 UP 都没排除过就不显示排除名单"是同一条判据。
+     *
+     * 只对"确实是空的"成立 —— loading 和 error 照常显示,那两种情况下这一节是存在的,
+     * 只是还不知道里面有什么。
+     */
+    hideWhenEmpty: Boolean = false,
     itemRow: @Composable (T) -> Unit,
 ) {
+    if (hideWhenEmpty && !state.loading && state.error == null && state.items.isEmpty()) return
     Column(modifier = Modifier.padding(top = Spacing.Comfortable)) {
         SectionHeader(
             title = title,

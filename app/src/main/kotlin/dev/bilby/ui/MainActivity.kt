@@ -71,6 +71,7 @@ import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.comment.CommentViewModel
 import androidx.compose.material.icons.outlined.DeleteSweep
 import dev.bilby.data.FavFolder
+import dev.bilby.data.PlayerPrefs
 import dev.bilby.ui.fav.FavFolderScreen
 import dev.bilby.ui.fav.FavFolderViewModel
 import dev.bilby.ui.feed.FeedScreen
@@ -634,6 +635,7 @@ private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
         onLlmChange = vm::saveLlm,
         onSmokeTestLlm = vm::smokeTestLlm,
         onCodecChange = vm::setCodec,
+        onFastForwardSpeedChange = vm::setFastForwardSpeed,
         onDanmakuOpacityChange = vm::setDanmakuOpacity,
         onDanmakuScrollShowAreaChange = vm::setDanmakuScrollShowArea,
         onDanmakuDensityChange = vm::setDanmakuDensity,
@@ -955,6 +957,9 @@ private fun VideoPane(
     val danmakuPool by vm.danmakuPool.collectAsStateWithLifecycle()
     val specialDanmakuPool by vm.specialDanmakuPool.collectAsStateWithLifecycle()
     val staffFollowed by vm.staffFollowed.collectAsStateWithLifecycle()
+    val playerPrefs by container.settings.playerPrefs.collectAsStateWithLifecycle(
+        initialValue = PlayerPrefs(),
+    )
 
     // 评论用 aid 作 oid,要等视频详情回来才知道 —— 但**不能拿它卡住整页**。
     //
@@ -1021,6 +1026,7 @@ private fun VideoPane(
         onDanmakuEnabledChange = vm::setDanmakuEnabled,
         danmakuPool = danmakuPool,
         specialDanmakuPool = specialDanmakuPool,
+        fastForwardSpeed = playerPrefs.fastForwardSpeed,
     )
 }
 

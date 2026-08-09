@@ -123,9 +123,6 @@ private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
 /** 控件渐变最下面那一档。比 [FixedColors.PlayerControlScrim] 再深一点,兜住时间文字。 */
 
-/** 长按期间的临时倍速。 */
-private const val FAST_FORWARD_SPEED = 3f
-
 private const val CONTROLS_HIDE_DELAY_MILLIS = 3_000L
 
 /** 双击两侧快进/快退的步长。 */
@@ -178,6 +175,8 @@ fun BilbyPlayer(
      */
     danmakuPrefs: DanmakuPrefs = DanmakuPrefs(),
     onDanmakuEnabledChange: (Boolean) -> Unit = {},
+    /** 长按画面的临时倍速,来自设置页。 */
+    fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
     /**
      * 控件锁。横屏看视频时手容易碰到画面,一碰就暂停或快进;锁上之后除了解锁按钮,所有手势
      * 与控件都不响应。状态提在 VideoScreen,因为返回键要按"先解锁、再退出全屏"的顺序处理它。
@@ -232,6 +231,7 @@ fun BilbyPlayer(
         onLockedChange = onLockedChange,
         title = title,
         modifier = modifier,
+        fastForwardSpeed = fastForwardSpeed,
         onSeeked = { positionMillis, durationMillis -> reportProgress(positionMillis, durationMillis) },
         overlay = {
             // 弹幕层:字号由这里按形态给,层自己不认识"全屏"。

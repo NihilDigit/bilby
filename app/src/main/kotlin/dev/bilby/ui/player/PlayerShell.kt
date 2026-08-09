@@ -66,6 +66,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.ui.compose.PlayerSurface
 import dev.bilby.R
+import dev.bilby.data.SettingsStore
 import dev.bilby.formatDurationMillis
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.theme.FixedColors
@@ -168,6 +169,8 @@ fun PlayerShell(
     title: String,
     modifier: Modifier = Modifier,
     gestures: PlayerGestureOptions = PlayerGestureOptions(),
+    /** 长按画面时的临时倍速,由设置页给(`SettingsStore.FAST_FORWARD_SPEEDS`)。 */
+    fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
     onSeeked: (positionMillis: Long, durationMillis: Long) -> Unit = { _, _ -> },
     overlay: @Composable PlayerShellScope.() -> Unit = {},
     controlBar: @Composable PlayerShellScope.() -> Unit = {},
@@ -416,7 +419,7 @@ fun PlayerShell(
                         onLongPress = {
                             if (!gestures.fastForward) return@detectTapGestures
                             isFastForwarding = true
-                            player.setPlaybackSpeed(FAST_FORWARD_SPEED)
+                            player.setPlaybackSpeed(fastForwardSpeed)
                         },
                         onPress = {
                             tryAwaitRelease()
@@ -553,7 +556,7 @@ fun PlayerShell(
                     Text(
                         "  " + stringResource(
                             R.string.player_fast_forwarding,
-                            formatSpeed(FAST_FORWARD_SPEED),
+                            formatSpeed(fastForwardSpeed),
                         ),
                         style = MaterialTheme.typography.labelMedium,
                         color = FixedColors.OnMedia,
@@ -742,7 +745,6 @@ private fun nudgeSeek(player: Player, deltaMillis: Long) {
 private fun VideoSize.aspectOr(fallback: Float): Float =
     if (width > 0 && height > 0) width.toFloat() / height else fallback
 
-private const val FAST_FORWARD_SPEED = 3f
 private const val CONTROLS_HIDE_DELAY_MILLIS = 3_000L
 private const val DOUBLE_TAP_SEEK_MILLIS = 10_000L
 private const val HINT_VISIBLE_MILLIS = 700L

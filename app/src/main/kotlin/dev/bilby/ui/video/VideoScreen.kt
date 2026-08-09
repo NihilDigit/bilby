@@ -64,6 +64,7 @@ import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
 import dev.bilby.data.MemberCard
+import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.delay
 import dev.bilby.data.VideoRelation
@@ -152,6 +153,8 @@ fun VideoScreen(
     /** 已拉到的弹幕池,时间轴的编译在 BilbyPlayer 里做(需要 Compose 层的测量与画布宽度)。 */
     danmakuPool: List<Danmaku> = emptyList(),
     specialDanmakuPool: List<SpecialDanmaku> = emptyList(),
+    /** 长按画面的临时倍速,来自设置页。 */
+    fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -559,6 +562,7 @@ fun VideoScreen(
                         qualities = audioState.playInfo?.availableQualities.orEmpty(),
                         currentQuality = audioState.currentQuality,
                         onQualityChange = { setQuality(it) },
+                        fastForwardSpeed = fastForwardSpeed,
                         isFullscreen = fullscreen,
                         onFullscreenChange = { fullscreen = it },
                         // 全屏下切听视频要先退出全屏,否则听视频界面会顶着一个已经隐藏的系统栏。

@@ -50,6 +50,7 @@ import dev.bilby.data.LlmConfig
 import dev.nihildigit.danmaku.DanmakuDensity
 import dev.nihildigit.danmaku.DanmakuFrameRateCap
 import dev.bilby.data.SettingsStore
+import dev.bilby.ui.player.formatSpeed
 import dev.bilby.data.SponsorBlockPrefs
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.BilbyWindowSize
@@ -79,6 +80,7 @@ fun SettingsScreen(
     onLlmChange: (LlmConfig) -> Unit,
     onSmokeTestLlm: () -> Unit,
     onCodecChange: (CodecPreference) -> Unit,
+    onFastForwardSpeedChange: (Float) -> Unit,
     onDanmakuOpacityChange: (Float) -> Unit,
     onDanmakuScrollShowAreaChange: (Float) -> Unit,
     onDanmakuDensityChange: (DanmakuDensity) -> Unit,
@@ -124,6 +126,7 @@ fun SettingsScreen(
                             PlayerSettingsSection(
                                 state = state,
                                 onCodecChange = onCodecChange,
+                                onFastForwardSpeedChange = onFastForwardSpeedChange,
                                 onOpacityChange = onDanmakuOpacityChange,
                                 onScrollShowAreaChange = onDanmakuScrollShowAreaChange,
                                 onDensityChange = onDanmakuDensityChange,
@@ -151,6 +154,7 @@ fun SettingsScreen(
                     PlayerSettingsSection(
                         state = state,
                         onCodecChange = onCodecChange,
+                        onFastForwardSpeedChange = onFastForwardSpeedChange,
                         onOpacityChange = onDanmakuOpacityChange,
                         onScrollShowAreaChange = onDanmakuScrollShowAreaChange,
                         onDensityChange = onDanmakuDensityChange,
@@ -250,6 +254,7 @@ private fun AgentSettingsSection(
 private fun PlayerSettingsSection(
     state: SettingsUiState,
     onCodecChange: (CodecPreference) -> Unit,
+    onFastForwardSpeedChange: (Float) -> Unit,
     onOpacityChange: (Float) -> Unit,
     onScrollShowAreaChange: (Float) -> Unit,
     onDensityChange: (DanmakuDensity) -> Unit,
@@ -260,6 +265,16 @@ private fun PlayerSettingsSection(
         selected = state.codec,
         hardwareCodecIds = state.hardwareCodecIds,
         onChange = onCodecChange,
+    )
+    ChoiceSection(
+        title = stringResource(R.string.settings_fast_forward_speed),
+        // 长按加速没有播放页入口 —— 它是"长按的时候有多快"这条规则本身,不是看的时候
+        // 顺手调的东西,所以按 §2.8 的判据("怎么做")放这里。
+        subtitle = stringResource(R.string.settings_fast_forward_speed_subtitle),
+        options = SettingsStore.FAST_FORWARD_SPEEDS,
+        selected = SettingsStore.FAST_FORWARD_SPEEDS.minByOrNull { abs(it - state.fastForwardSpeed) },
+        label = { formatSpeed(it) },
+        onChange = onFastForwardSpeedChange,
     )
     SliderSettingRow(
         title = stringResource(R.string.settings_danmaku_opacity),

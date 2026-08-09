@@ -98,11 +98,16 @@ class SettingsStore(context: Context) {
         PlayerPrefs(
             codec = CodecPreference.fromKey(p[KEY_PREFERRED_CODEC]),
             defaultQuality = p[KEY_DEFAULT_QUALITY] ?: DEFAULT_QUALITY,
+            fastForwardSpeed = p[KEY_FAST_FORWARD_SPEED] ?: DEFAULT_FAST_FORWARD_SPEED,
         )
     }
 
     suspend fun saveCodecPreference(value: CodecPreference) {
         store.edit { p -> p[KEY_PREFERRED_CODEC] = value.key }
+    }
+
+    suspend fun saveFastForwardSpeed(speed: Float) {
+        store.edit { p -> p[KEY_FAST_FORWARD_SPEED] = speed }
     }
 
     suspend fun saveDefaultQuality(quality: Int) {
@@ -279,6 +284,14 @@ class SettingsStore(context: Context) {
         /** 与 `VideoRepository.DEFAULT_QUALITY` 同值(1080P)。 */
         const val DEFAULT_QUALITY = 80
 
+        private val KEY_FAST_FORWARD_SPEED = floatPreferencesKey("player_fast_forward_speed")
+
+        /** 长按加速的倍率。3x 是 B 站客户端的档位,也是这里的默认。 */
+        const val DEFAULT_FAST_FORWARD_SPEED = 3f
+
+        /** 可选档位。再快画面就只剩一串跳帧,再慢和正常倍速区分不出来。 */
+        val FAST_FORWARD_SPEEDS = listOf(2f, 2.5f, 3f)
+
         private val KEY_SB_ENABLED = booleanPreferencesKey("sponsorblock_enabled")
         private val KEY_SB_CATEGORIES = stringSetPreferencesKey("sponsorblock_categories")
         private val KEY_SB_SERVER = stringPreferencesKey("sponsorblock_server")
@@ -358,6 +371,8 @@ enum class CodecPreference(val key: String, val label: String, val codecIds: Lis
 data class PlayerPrefs(
     val codec: CodecPreference = CodecPreference.Auto,
     val defaultQuality: Int = SettingsStore.DEFAULT_QUALITY,
+    /** 长按画面时的临时倍速。松手恢复原速,不写回 `defaultQuality` 那种全局默认。 */
+    val fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
 )
 
 data class SponsorBlockPrefs(

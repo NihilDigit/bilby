@@ -48,6 +48,7 @@ data class SettingsUiState(
     val sponsorBlock: SponsorBlockPrefs = SponsorBlockPrefs(),
     /** 本机真有硬解器的编码,决定编解码那一节列出哪几项。 */
     val hardwareCodecIds: Set<Int> = emptySet(),
+    val fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
     /** 弹幕设置整体存一份,不为每个档位开一个平行字段——理由同 VideoViewModel 的 danmakuPrefs。 */
     val danmaku: DanmakuPrefs = DanmakuPrefs(),
     /** 首页排除了多少个 UP。为 0 时那一行不显示 —— 没排除过的人不需要看见这个概念。 */
@@ -148,6 +149,7 @@ class SettingsViewModel(
                 it.copy(
                     llm = settings.llmConfig.first(),
                     codec = settings.playerPrefs.first().codec,
+                    fastForwardSpeed = settings.playerPrefs.first().fastForwardSpeed,
                     sponsorBlock = settings.sponsorBlockPrefs.first(),
                     hardwareCodecIds = DeviceCodecs.hardwareDecodableCodecIds,
                     danmaku = settings.danmakuPrefs.first(),
@@ -183,6 +185,11 @@ class SettingsViewModel(
     fun setCodec(value: CodecPreference) {
         _state.update { it.copy(codec = value) }
         persist { settings.saveCodecPreference(value) }
+    }
+
+    fun setFastForwardSpeed(value: Float) {
+        _state.update { it.copy(fastForwardSpeed = value) }
+        persist { settings.saveFastForwardSpeed(value) }
     }
 
     fun updateSponsorBlock(value: SponsorBlockPrefs) {

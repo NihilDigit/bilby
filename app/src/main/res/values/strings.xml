@@ -329,4 +329,6 @@
     <string name="live_quality_ultra">超清</string>
     <string name="live_quality_high">高清</string>
     <string name="live_quality_smooth">流畅</string>
+    <string name="settings_fast_forward_speed">长按加速</string>
+    <string name="settings_fast_forward_speed_subtitle">按住画面时的临时倍速,松手恢复</string>
 </resources>
