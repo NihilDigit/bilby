@@ -48,27 +48,61 @@ import kotlinx.coroutines.launch
  *
  * 队列位置是 [positionInQueue] / [queueSize],即 N / M。
  */
-data class AudioPlaybackUiState(
-    /** 队列当前这一条。队列为空(还没打开过任何视频)时为 null。 */
+/**
+ * 通知栏、锁屏与播放页共用的展示信息。**哪种源都有**,所以它挂在状态顶层而不是队列上 ——
+ * 队列曾经兼任元数据来源,那正是直播这类"不是队列"的源塞不进来的原因。
+ */
+data class NowPlaying(
+    val title: String,
+    /** 视频是 UP 名,直播是主播名。 */
+    val subtitle: String,
+    val coverUrl: String,
+)
+
+/**
+ * 源是队列时才有的那部分。**不是队列源时整个为 null**,而不是"一个空队列" —— 两者在界面上
+ * 要表达的东西不同:空队列是"还没打开过东西",null 是"现在放的东西压根没有下一条"。
+ */
+data class QueueState(
+    /** 队列当前这一条。 */
     val current: QueueItem? = null,
     /** 正在播的分 P。队列装的是视频,cid 是"这条视频放到哪一 P"。 */
     val currentCid: Long = 0,
-    /**
-     * **播放器此刻真正装着的那条**,与 [current] 不是一回事:队列在收到打开命令的那一刻就
-     * 指向新视频了,而播放器要等取流回来才切过去,这中间画面上还是上一条的最后一帧。
-     *
-     * 播放页据此决定挂画面还是画占位。用队列那一条来判会把上一条视频的残帧当成本页的画面。
-     */
-    val loadedBvid: String? = null,
-    val isPlaying: Boolean = false,
-    /** 1-based,直接显示。队列空时为 0。 */
-    val positionInQueue: Int = 0,
-    val queueSize: Int = 0,
-    val shuffled: Boolean = false,
     /** 队列内容,自然顺序(随机只改播放顺序,不改列表怎么摆)。 */
     val items: List<QueueItem> = emptyList(),
+    /** 1-based,直接显示。队列空时为 0。 */
+    val positionInQueue: Int = 0,
+    val size: Int = 0,
+    val shuffled: Boolean = false,
     /** 队列的来源,如"合集《x》· 共 7 集"。 */
     val sourceLabel: String = "",
+    /**
+     * 队列还在补全,现在这份队列只有正在播的这一条。**播放不等它**,所以这不是"正在加载"
+     * ([AudioPlaybackUiState.loading] 说的是取流);它给队列面板用,免得那一格看起来像
+     * "这个 UP 只有一条投稿"。
+     */
+    val enriching: Boolean = false,
+    /**
+     * 队列补全失败了,现在这份队列只有正在播的这一条。**播放本身是好的**,失败的只是"这条
+     * 视频属于哪个集合"。摆出来是因为队列里只剩一条这件事本身看不出是"这个 UP 只有一条投稿"
+     * 还是"来源没拉到",而后者重试一下往往就好了。重试点是再发一次 [ACTION_OPEN_VIDEO]。
+     */
+    val incomplete: Boolean = false,
+)
+
+data class AudioPlaybackUiState(
+    /** 正在放什么。没打开过任何东西时为 null。 */
+    val nowPlaying: NowPlaying? = null,
+    /**
+     * **播放器此刻真正装着的东西的标识**,与 [QueueState.current] 不是一回事:队列在收到打开
+     * 命令的那一刻就指向新视频了,而播放器要等取流回来才切过去,这中间画面上还是上一条的
+     * 最后一帧。
+     *
+     * 播放页据此决定挂画面还是画占位。用队列那一条来判会把上一条视频的残帧当成本页的画面。
+     * 视频源填 bvid;别的源填自己的标识,格式由源自己定,调用方只做相等比较。
+     */
+    val loadKey: String? = null,
+    val isPlaying: Boolean = false,
     /** 正在取流或正在重试。这一步要走一次网络,不给反馈的话按下"下一条"后会有一两秒静默。 */
     val loading: Boolean = false,
     /**
@@ -80,17 +114,8 @@ data class AudioPlaybackUiState(
     /** 画质菜单要用的清单,以及正在播的那一份流。取流归服务,页面只读。 */
     val playInfo: PlayInfo? = null,
     val currentQuality: Int = 0,
-    /**
-     * 队列还在补全,现在这份队列只有正在播的这一条。**播放不等它**,所以这不是"正在加载"
-     * ([loading] 说的是取流);它给队列面板用,免得那一格看起来像"这个 UP 只有一条投稿"。
-     */
-    val queueEnriching: Boolean = false,
-    /**
-     * 队列补全失败了,现在这份队列只有正在播的这一条。**播放本身是好的**,失败的只是"这条
-     * 视频属于哪个集合"。摆出来是因为队列里只剩一条这件事本身看不出是"这个 UP 只有一条投稿"
-     * 还是"来源没拉到",而后者重试一下往往就好了。重试点是再发一次 [ACTION_OPEN_VIDEO]。
-     */
-    val queueIncomplete: Boolean = false,
+    /** 源是队列时非空。见 [QueueState]。 */
+    val queue: QueueState? = null,
 )
 
 /**
@@ -563,22 +588,26 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     private fun publishState(loading: Boolean = false) {
+        val current = queue.current()
         _state.value = AudioPlaybackUiState(
-            current = queue.current(),
-            currentCid = loadedCid,
-            loadedBvid = loadedBvid,
+            nowPlaying = nowPlaying(),
+            loadKey = loadedBvid,
             isPlaying = player.isPlaying,
-            items = queue.itemsNatural(),
-            positionInQueue = if (queue.size > 0) queue.currentIndex + 1 else 0,
-            queueSize = queue.size,
-            sourceLabel = sourceLabel,
-            shuffled = queue.shuffled,
             loading = loading,
             error = lastError,
             playInfo = playInfo,
             currentQuality = currentQuality,
-            queueEnriching = queueEnriching,
-            queueIncomplete = queueIncomplete,
+            queue = QueueState(
+                current = current,
+                currentCid = loadedCid,
+                items = queue.itemsNatural(),
+                positionInQueue = if (queue.size > 0) queue.currentIndex + 1 else 0,
+                size = queue.size,
+                shuffled = queue.shuffled,
+                sourceLabel = sourceLabel,
+                enriching = queueEnriching,
+                incomplete = queueIncomplete,
+            ),
         )
     }
 
@@ -597,12 +626,20 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /** 通知栏与锁屏显示的元数据。流本身不带 tag,只能由队列提供。 */
+    /**
+     * 正在放什么。**通知栏和界面读同一份** —— 这两处曾经各自去问队列,于是"元数据从哪来"
+     * 有两个答案,而队列之外的源(直播)一个都答不上。
+     */
+    private fun nowPlaying(): NowPlaying? = queue.current()?.let {
+        NowPlaying(title = it.title, subtitle = it.upName, coverUrl = it.coverUrl)
+    }
+
     private fun currentMetadata(): MediaMetadata {
-        val item = queue.current() ?: return MediaMetadata.EMPTY
+        val now = nowPlaying() ?: return MediaMetadata.EMPTY
         return MediaMetadata.Builder()
-            .setTitle(item.title)
-            .setArtist(item.upName)
-            .setArtworkUri(item.coverUrl.takeIf { it.isNotEmpty() }?.toUri())
+            .setTitle(now.title)
+            .setArtist(now.subtitle)
+            .setArtworkUri(now.coverUrl.takeIf { it.isNotEmpty() }?.toUri())
             .setIsBrowsable(false)
             .setIsPlayable(true)
             .build()

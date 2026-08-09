@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.rememberBottomSheetScaffoldState
@@ -36,7 +37,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -151,7 +155,7 @@ fun VideoScreen(
     // DisposableEffect 捕获的是进入组合那一刻的 state,而 onDispose 要问的是离开那一刻。
     val latestState by rememberUpdatedState(state)
     val playerHoldsThisPage = {
-        AudioPlaybackService.state.value.current?.bvid == latestState.detail?.bvid
+        AudioPlaybackService.state.value.queue?.current?.bvid == latestState.detail?.bvid
     }
 
     DisposableEffect(context) {
@@ -205,19 +209,19 @@ fun VideoScreen(
     // 判据是**播放器装着的那条**,不是队列指着的那条:打开命令一到队列就指向新视频了,
     // 而取流还要几百毫秒。拿队列判的话,这段时间画面会被当成本页的挂上去,用户看到的是
     // 上一条视频冻住的最后一帧。
-    val matchesCurrentPage = audioState.loadedBvid == bvid
+    val matchesCurrentPage = audioState.loadKey == bvid
 
     /** 队列的唯一来源是服务。页面只是把它摆出来,不自己攒一份。 */
     val shownQueue = QueueUiState(
-        items = audioState.items,
-        currentBvid = audioState.current?.bvid,
-        sourceLabel = audioState.sourceLabel,
-        shuffled = audioState.shuffled,
+        items = audioState.queue?.items.orEmpty(),
+        currentBvid = audioState.queue?.current?.bvid,
+        sourceLabel = audioState.queue?.sourceLabel.orEmpty(),
+        shuffled = (audioState.queue?.shuffled == true),
         // 判据从"取流转圈且队列是空的"换成"完整队列建好了没有"。起播现在不等建队列,队列里
         // 那一条是临时占位而不是队列内容(见 AudioPlaybackService.openVideo),按旧判据永远
         // 是"有队列",面板上会摆出一条孤零零的视频。
-        enriching = audioState.queueEnriching,
-        incomplete = audioState.queueIncomplete,
+        enriching = (audioState.queue?.enriching == true),
+        incomplete = (audioState.queue?.incomplete == true),
     )
 
     /** 发一条自定义命令的简写。控制一律走 controller,不碰 currentPlayer。 */
@@ -285,7 +289,7 @@ fun VideoScreen(
     val toggleShuffle: () -> Unit = {
         send(
             AudioPlaybackService.ACTION_SET_SHUFFLE,
-            bundleOf(AudioPlaybackService.EXTRA_SHUFFLED to !audioState.shuffled),
+            bundleOf(AudioPlaybackService.EXTRA_SHUFFLED to !(audioState.queue?.shuffled == true)),
         )
     }
 
@@ -319,7 +323,7 @@ fun VideoScreen(
      * 播放失败的提示。**只在播放器装的确实是本页这一条时显示** —— 播放器全 app 共用一个,
      * 队列走到别的视频上时,那一条的失败不该盖到这一页上。
      */
-    val rawPlaybackError = audioState.error?.takeIf { audioState.current?.bvid == state.detail?.bvid }
+    val rawPlaybackError = audioState.error?.takeIf { audioState.queue?.current?.bvid == state.detail?.bvid }
 
     /**
      * **失败不立刻报。** 服务在取流路上自己会重试(见 AudioPlaybackService 的重试次数与退避),
@@ -399,10 +403,10 @@ fun VideoScreen(
             player = active,
             state = audioState,
             sleepTimer = sleepTimerState,
-            queue = audioState.items,
+            queue = audioState.queue?.items.orEmpty(),
             onPlayQueueItem = onPlayQueueItem,
             parts = state.detail?.pages.orEmpty(),
-            currentCid = audioState.currentCid,
+            currentCid = (audioState.queue?.currentCid ?: 0L),
             onPlayPart = onPlayPart,
             onNext = { send(AudioPlaybackService.ACTION_NEXT, Bundle.EMPTY) },
             onPrevious = { send(AudioPlaybackService.ACTION_PREVIOUS, Bundle.EMPTY) },
@@ -473,7 +477,7 @@ fun VideoScreen(
                 onLockedChange = { locked = it },
                 danmakuPool = danmakuPool,
                 specialDanmakuPool = specialDanmakuPool,
-                danmakuCid = audioState.currentCid,
+                danmakuCid = (audioState.queue?.currentCid ?: 0L),
                 matchesCurrentPage = matchesCurrentPage,
                 placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
                 modifier = Modifier.fillMaxSize(),
@@ -504,6 +508,21 @@ fun VideoScreen(
     // 不是打开播放页就在那儿等着的入口。换个视频就是新的 VideoRoute,自动没有。
     val peek = if (related.started) SheetHandleHeight else 0.dp
 
+    // sheet 展开到**刚好盖住投币那一行**为止:上面的画面、标题、UP 行都还看得见,
+    // 而「找相关」问的正是"这条视频"——把它盖掉就没有参照物了。
+    //
+    // 位置只认第一次量到的那个值。投币行跟着简介页一起滚,持续跟随的话用户滑一下简介、
+    // sheet 就跟着变高变矮;而这条锚线表达的是版面上的一个位置,不是那个按钮此刻在哪。
+    var actionsTop by remember { mutableIntStateOf(0) }
+    // 把手画在 sheet 内容**之上**,是 sheet 总高的一部分。不扣掉的话锚线会整体上移一个把手的
+    // 高度 —— 实测就是这样多盖住了 UP 那一行。它的高度不硬编码:BottomSheetDefaults.DragHandle
+    // 没有公开的尺寸常量,而猜一个数字会在 M3 改版时悄悄错位。
+    var handleHeight by remember { mutableIntStateOf(0) }
+    val windowHeight = LocalWindowInfo.current.containerSize.height
+    val sheetHeight = with(LocalDensity.current) {
+        (windowHeight - actionsTop - handleHeight).coerceAtLeast(0).toDp()
+    }.takeIf { actionsTop > 0 } ?: DefaultSheetHeight
+
     BottomSheetScaffold(
         scaffoldState = sheetState,
         sheetPeekHeight = peek,
@@ -512,9 +531,15 @@ fun VideoScreen(
         // 投影:标准 sheet 没有遮罩,分隔完全靠容器色与阴影承担。
         sheetContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         sheetShadowElevation = 12.dp,
+        sheetDragHandle = {
+            Box(modifier = Modifier.onGloballyPositioned { handleHeight = it.size.height }) {
+                BottomSheetDefaults.DragHandle()
+            }
+        },
         sheetContent = {
             RelatedSheet(
                 related = related,
+                height = sheetHeight,
                 onVideoClick = onRelatedVideoClick,
                 onRetry = onFindRelated,
             )
@@ -554,7 +579,7 @@ fun VideoScreen(
                         onLockedChange = { locked = it },
                         danmakuPool = danmakuPool,
                         specialDanmakuPool = specialDanmakuPool,
-                        danmakuCid = audioState.currentCid,
+                        danmakuCid = (audioState.queue?.currentCid ?: 0L),
                         matchesCurrentPage = matchesCurrentPage,
                         placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
                         modifier = Modifier.fillMaxSize(),
@@ -597,11 +622,12 @@ fun VideoScreen(
             state.detail?.let { detail ->
                 VideoTabs(
                     detail = detail,
-                    currentCid = audioState.currentCid,
+                    currentCid = (audioState.queue?.currentCid ?: 0L),
                     related = related,
                     commentState = commentState,
                     // 点闪光:没问过就发起检索,问过就只是把 sheet 展开 —— 再点一次重跑
                     // 会把已有结果冲掉,而用户此刻多半只是想再看一眼。
+                    onActionsTop = { top -> if (actionsTop == 0 && top > 0) actionsTop = top },
                     onFindRelated = {
                         if (!related.started) onFindRelated()
                         scope.launch { sheetState.bottomSheetState.expand() }

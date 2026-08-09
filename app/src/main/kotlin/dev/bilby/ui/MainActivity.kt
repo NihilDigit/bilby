@@ -64,8 +64,6 @@ import dev.bilby.R
 import dev.bilby.agent.AgentIntent
 import kotlinx.coroutines.launch
 import dev.bilby.ui.components.BilbyTopBar
-import dev.bilby.ui.agent.AgentTraceScreen
-import dev.bilby.ui.agent.AgentViewModel
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.comment.CommentViewModel
 import androidx.compose.material.icons.outlined.DeleteSweep
@@ -255,7 +253,6 @@ private fun BilbyApp(container: AppContainer) {
                     bvid = key.bvid,
                     startListening = key.listening,
                     onUpClick = { backStack.add(Space(it)) },
-                    onFindRelated = { bvid, title, upName -> backStack.add(AgentRelated(bvid, title, upName)) },
                     // 切集是**重组,不是压栈**:换的是这一页在放哪一条,不是又进了一层。
                     // 压栈的话看五集就攒五层,返回要一集一集退回去,而合集本来是一个有限集合、
                     // 用户是在里面平移。替换栈顶之后,从任何一集返回都回到进来时的地方。
@@ -263,22 +260,6 @@ private fun BilbyApp(container: AppContainer) {
                     // 今天那个"点下一集不自动播放"的 bug 也出在这里:压栈时旧页的 onDispose
                     // 在新页起播之后才跑,把刚起播的下一集暂停了。替换栈顶让这个错位不成立。
                     onOpenVideo = { backStack[backStack.lastIndex] = Video(it) },
-                )
-            }
-            entry<AgentSearch> { key ->
-                AgentRoute(
-                    container = container,
-                    intent = AgentIntent.Query(key.query),
-                    onVideoClick = { backStack.add(Video(it)) },
-                    onBack = { backStack.removeLastOrNull() },
-                )
-            }
-            entry<AgentRelated> { key ->
-                AgentRoute(
-                    container = container,
-                    intent = AgentIntent.Related(key.bvid, key.title, key.upName),
-                    onVideoClick = { backStack.add(Video(it)) },
-                    onBack = { backStack.removeLastOrNull() },
                 )
             }
             entry<ToViewList> {
@@ -467,6 +448,7 @@ private fun FeedPane(
         onExcludeUp = vm::excludeUp,
         onOpenFollowings = onOpenFollowings,
         onScrollPositionChanged = vm::onVisibleTopChanged,
+        onLocated = vm::onLocated,
     )
 }
 
@@ -586,21 +568,6 @@ private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
         onInstallUpdate = { UpdateInstaller.install(context, it) },
         onBack = onBack,
     )
-}
-
-@Composable
-private fun AgentRoute(
-    container: AppContainer,
-    intent: AgentIntent,
-    onVideoClick: (String) -> Unit,
-    onBack: () -> Unit,
-) {
-    val vm: AgentViewModel = viewModel(
-        key = "agent-$intent",
-        factory = viewModelFactory { initializer { AgentViewModel(container.agentLoop, intent) } },
-    )
-    val state by vm.state.collectAsStateWithLifecycle()
-    AgentTraceScreen(state = state, onVideoClick = onVideoClick, onRetry = vm::start, onBack = onBack)
 }
 
 /**
@@ -764,7 +731,6 @@ private fun VideoRoute(
     bvid: String,
     startListening: Boolean = false,
     onUpClick: (Long) -> Unit,
-    onFindRelated: (bvid: String, title: String, upName: String) -> Unit,
     onOpenVideo: (String) -> Unit,
 ) {
     // 切集**不进 backstack**。合集里的每一集互为平级,换一集不是进了一层;走 backstack 的话
@@ -812,7 +778,7 @@ private fun VideoRoute(
      * **但要等队列先追上这一条,才开始跟着它走。**
      *
      * 刚点开一条新视频时,服务还在放上一条 —— 队列要重建、取流、prepare,这中间有一段
-     * 几百毫秒到几秒的窗口,`audioState.current` 报的仍是**上一条**。此时若无条件跟随,
+     * 几百毫秒到几秒的窗口,`audioState.queue?.current` 报的仍是**上一条**。此时若无条件跟随,
      * 这一句会立刻把 `episode` 从刚请求的 bvid 拽回旧的那条,于是"打开新播放页却在放老视频";
      * 等新的真正开播,又翻回来 —— 用户看到的是页面自己跳了两次。
      *
@@ -823,8 +789,8 @@ private fun VideoRoute(
      * 用户点开的那一条上显示失败,而不是悄悄变成另一条视频的详情。
      */
     var followingQueue by remember(bvid) { mutableStateOf(false) }
-    LaunchedEffect(audioState.current?.bvid) {
-        val target = audioState.current?.bvid ?: return@LaunchedEffect
+    LaunchedEffect(audioState.queue?.current?.bvid) {
+        val target = audioState.queue?.current?.bvid ?: return@LaunchedEffect
         if (!followingQueue) {
             if (target == bvid) followingQueue = true
             return@LaunchedEffect
@@ -838,7 +804,6 @@ private fun VideoRoute(
         listening = listening,
         onListeningChange = { listening = it },
         onUpClick = onUpClick,
-        onFindRelated = onFindRelated,
         onOpenVideo = onOpenVideo,
     )
 }
@@ -850,7 +815,6 @@ private fun VideoPane(
     listening: Boolean,
     onListeningChange: (Boolean) -> Unit,
     onUpClick: (Long) -> Unit,
-    onFindRelated: (bvid: String, title: String, upName: String) -> Unit,
     onOpenVideo: (String) -> Unit,
 ) {
     // **key 与 bvid 无关,一个播放页只有一个 VideoViewModel。**

@@ -3,7 +3,8 @@ package dev.bilby.ui.video
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
-import dev.bilby.agent.AgentEvent
+import dev.bilby.agent.AgentTurnState
+import dev.bilby.agent.reduce
 import dev.bilby.agent.AgentIntent
 import dev.bilby.agent.AgentLoop
 import dev.bilby.api.BiliResult
@@ -412,7 +413,7 @@ class VideoViewModel(
      */
     private fun observeDanmakuCid(target: String) = videoScope.launch {
         AudioPlaybackService.state
-            .map { if (it.current?.bvid == target) it.currentCid else 0L }
+            .map { if (it.queue?.current?.bvid == target) (it.queue?.currentCid ?: 0L) else 0L }
             .distinctUntilChanged()
             .collect { cid ->
                 danmakuCid = cid
@@ -523,7 +524,7 @@ class VideoViewModel(
         // 等持久化的语言读回来再开始跟 cid 走,理由见 [subtitleLanLoaded]。
         subtitleLanLoaded.await()
         AudioPlaybackService.state
-            .map { if (it.current?.bvid == target) it.currentCid else 0L }
+            .map { if (it.queue?.current?.bvid == target) (it.queue?.currentCid ?: 0L) else 0L }
             .distinctUntilChanged()
             .collect { cid ->
                 // 换 cid 就取消上一条还没跑完的加载——它可能正卡在限流退避的 delay 里。
@@ -571,20 +572,14 @@ class VideoViewModel(
     fun findRelated() {
         val detail = _state.value.detail ?: return
         val target = bvid
-        _related.value = RelatedState(started = true, running = true)
+        _related.value = RelatedState(started = true, turn = AgentTurnState(running = true))
         videoScope.launch {
             agentLoop.run(AgentIntent.Related(target, detail.title, detail.up.name)).collect { event ->
-                _related.update { current ->
-                    when (event) {
-                        is AgentEvent.Thinking -> current
-                        is AgentEvent.ToolStarted -> current.copy(steps = current.steps + event.label)
-                        is AgentEvent.ToolFinished -> current
-                        is AgentEvent.Answer -> current.copy(blocks = event.blocks, running = false)
-                        is AgentEvent.Failed -> current.copy(error = event.message, running = false)
-                    }
-                }
+                // 折叠规则与搜索页是同一份(agent/AgentTurn.kt)。这里曾经另写一份,
+                // 而那份把 ToolFinished 整个吞了 —— 中间结果卡片在播放页从来没出现过。
+                _related.update { it.copy(turn = it.turn.reduce(event)) }
             }
-            _related.update { it.copy(running = false) }
+            _related.update { it.copy(turn = it.turn.copy(running = false)) }
         }
     }
 
@@ -648,7 +643,7 @@ class VideoViewModel(
      */
     private fun observeCurrentPart(target: String) = videoScope.launch {
         AudioPlaybackService.state
-            .map { if (it.current?.bvid == target) it.currentCid else 0L }
+            .map { if (it.queue?.current?.bvid == target) (it.queue?.currentCid ?: 0L) else 0L }
             .distinctUntilChanged()
             .collect { cid -> if (cid != 0L) loadSponsorSegments(target, cid) }
     }
@@ -665,8 +660,8 @@ class VideoViewModel(
         // 播放器装的必须是本页这一条。位置和时长是从播放器读的,而全 app 只有一个播放器
         // (DESIGN 2.4b):队列翻到下一条时本页的轮询可能还没停,不对身份就会把下一条的进度
         // 按本页的 aid 报上去。云端那份是续播的唯一来源,报错一次,下次进来就 seek 到不存在的位置。
-        if (playback.current?.bvid != bvid) return
-        val cid = playback.currentCid.takeIf { it != 0L } ?: return
+        if (playback.queue?.current?.bvid != bvid) return
+        val cid = (playback.queue?.currentCid ?: 0L).takeIf { it != 0L } ?: return
         viewModelScope.launch {
             heartbeatReporter.report(
                 aid = detail.aid,

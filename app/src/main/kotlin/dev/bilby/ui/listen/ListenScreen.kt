@@ -268,7 +268,7 @@ fun ListenScreen(
         //
         // 歌词模式要封面 + 标题:整屏只剩歌词,没有任何地方写着这是哪一条。
         topBar = {
-            val item = state.current
+            val item = state.queue?.current
             if (showLyrics && item != null) {
                 LyricsHeader(item = item, onBack = onBack)
             } else {
@@ -276,7 +276,7 @@ fun ListenScreen(
             }
         },
     ) { insets ->
-        if (player == null || state.current == null) {
+        if (player == null || state.queue?.current == null) {
             Box(
                 modifier = Modifier.fillMaxSize().padding(insets).padding(Spacing.Spacious),
                 contentAlignment = Alignment.Center,
@@ -294,7 +294,7 @@ fun ListenScreen(
         // 队列没建过(queueSize == 0)时收起到 0——一个空把手拉起来什么都没有,是纯噪声。
         // 建过之后把手常显,不需要再点一行入口才能看到它,见 VideoScreen 找相关那个 sheet
         // 的同一个判据。
-        val peek = if (state.queueSize > 0) QueueHandleHeight else 0.dp
+        val peek = if ((state.queue?.size ?: 0) > 0) QueueHandleHeight else 0.dp
 
         BottomSheetScaffold(
             scaffoldState = sheetState,
@@ -303,8 +303,8 @@ fun ListenScreen(
             sheetContent = {
                 QueueSheetContent(
                     queue = queue,
-                    currentBvid = state.current?.bvid,
-                    shuffled = state.shuffled,
+                    currentBvid = state.queue?.current?.bvid,
+                    shuffled = (state.queue?.shuffled == true),
                     onToggleShuffle = onToggleShuffle,
                     onPlayQueueItem = onPlayQueueItem,
                 )
@@ -399,8 +399,8 @@ fun ListenScreen(
                     isPlaying = state.isPlaying,
                     loading = state.loading,
                     speed = speed,
-                    hasPrevious = state.positionInQueue > 1,
-                    hasNext = state.positionInQueue in 1 until state.queueSize,
+                    hasPrevious = (state.queue?.positionInQueue ?: 0) > 1,
+                    hasNext = (state.queue?.positionInQueue ?: 0) in 1 until (state.queue?.size ?: 0),
                     sleepTimer = sleepTimer,
                     onPlayPause = { if (player.isPlaying) player.pause() else player.play() },
                     onPrevious = onPrevious,
@@ -458,7 +458,7 @@ private fun DiscView(
     onSelectSubtitle: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val item = state.current ?: return
+    val item = state.queue?.current ?: return
     // 外面套一层 Box,只为让字幕按钮的参照物是**传进来的整块区域**,和歌词模式一致。
     // 挂在下面那个 Column 上不行:它自带 Loose/Comfortable 的内边距,按钮会被一并推进去,
     // 于是两个模式里同一个按钮仍然落在两个位置 —— 而它是同一个按钮的两个状态,
@@ -563,11 +563,11 @@ private fun DiscView(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (state.queueSize > 0) {
+                if ((state.queue?.size ?: 0) > 0) {
                     // 队列位置和 UP 名同行:它是"这是第几条",属于同一句话的后半截,
                     // 单独占一行会让唱片和进度条之间空出一整行。
                     Text(
-                        "${state.positionInQueue} / ${state.queueSize}",
+                        "${(state.queue?.positionInQueue ?: 0)} / ${(state.queue?.size ?: 0)}",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.outline,
                     )
