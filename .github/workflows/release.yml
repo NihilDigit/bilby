@@ -1,6 +1,11 @@
 # 打 tag 发版。构建只发生在这里 —— 本机不产出、也拿不到发布密钥,
 # 所以「这个 APK 是从这份源码编出来的」这句话有据可查。
 #
+# 两份构建来源证明:job `release` 里的 attest-build-provenance(GitHub 自己核,快),
+# 以及 job `provenance` 走 slsa-github-generator 出的 SLSA Build L3 证明。后者跑在
+# 隔离的可复用 workflow 里,拿不到这个仓库的构建脚本和签名密钥 —— 这正是 L2 与 L3
+# 的区别所在。
+#
 # 触发:推一个 `v` 开头的 tag,例如 `git tag v0.1.0 && git push origin v0.1.0`。
 # 版本号取自 tag(去掉 `v`),传给 Gradle 的 -PbilbyVersion,不写在源码里。
 #
@@ -23,6 +28,10 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      # 交给下面那个隔离的 provenance job。传的是摘要不是文件:generator 不信任、
+      # 也不需要拿到产物本身。
+      hashes: ${{ steps.collect.outputs.hashes }}
 
     steps:
       - uses: actions/checkout@v7
@@ -77,6 +86,10 @@ jobs:
           (cd dist && sha256sum * > SHA256SUMS.txt)
           ls -l dist
 
+          # SLSA generator 要的是 base64 过的 `sha256sum` 输出。只列 APK:
+          # 证明覆盖的是"用户会装进手机的那几个文件"。
+          echo "hashes=$(cd dist && sha256sum *.apk | base64 -w0)" >> "$GITHUB_OUTPUT"
+
       # 证明这些文件确实由这个 workflow、从这个 commit 构建。
       # 校验:gh attestation verify bilby-<版本>-<变体>.apk --repo <owner>/<repo>
       - name: Attest build provenance
@@ -100,5 +113,34 @@ jobs:
 
             - 校验和:`SHA256SUMS.txt`
             - 构建来源:`gh attestation verify <文件> --repo ${{ github.repository }}`
+            - SLSA Build L3 证明:`multiple.intoto.jsonl`,用 [slsa-verifier](https://github.com/slsa-framework/slsa-verifier) 校验
+
+              ```
+              slsa-verifier verify-artifact <文件>                 --provenance-path multiple.intoto.jsonl                 --source-uri github.com/${{ github.repository }}
+              ```
 
             `mapping.txt` 用于还原崩溃堆栈。
+
+  # SLSA Build Level 3。
+  #
+  # 上面那个 `attest-build-provenance` 已经能证明"这些文件由这个 workflow 从这个 commit
+  # 构建",但它和构建跑在同一个 job 里 —— 按 SLSA 的说法,构建过程能影响到生成证明的过程,
+  # 所以只到 L2。这个 job 用 slsa-github-generator 的可复用 workflow:它在自己的
+  # 上下文里跑,拿不到本仓库的构建脚本,也拿不到签名密钥,证明因此不可伪造(L3)。
+  #
+  # 两份证明都留着,它们回答的不是同一个问题,验证方式也不同:
+  #   gh attestation verify <文件> --repo <owner>/<repo>          # 快,GitHub 自己核
+  #   slsa-verifier verify-artifact <文件>   #     --provenance-path multiple.intoto.jsonl   #     --source-uri github.com/<owner>/<repo>                    # 按 SLSA 规范核
+  provenance:
+    needs: [release]
+    permissions:
+      # 证明要签名,签名要 OIDC 身份。
+      id-token: write
+      # 把 .intoto.jsonl 挂到同一个 release 上。
+      contents: write
+      # generator 要读本次 workflow run 的元数据来填 provenance。
+      actions: read
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.release.outputs.hashes }}
+      upload-assets: true
