@@ -138,6 +138,27 @@ class AgentLoopTest {
         assertEquals(emptySet<String>(), pendingCallIds)
     }
 
+    @Test
+    fun `追问那一轮同样带着 system prompt`() = runTest {
+        // 交卷时回传的是本轮新增的消息,system 从来不在里面 —— 于是"只在首轮插一次"的写法
+        // 让第二轮起完全没有 system。少了它模型照样回话,只是不再遵守 [[bvid]] 的引用格式,
+        // 全部答案退化成没有卡片的散文,而这一路不抛任何异常。
+        var seenRoles: List<String> = emptyList()
+        val records = FakeStreamer { messages ->
+            seenRoles = messages.map { it.role }
+            answer("就这个 [[BV1]]")
+        }
+        val loop = AgentLoop(records, ToolRegistry(listOf(FakeTool("search_videos", setOf("BV1")))), json)
+
+        var history: List<ChatMessage> = emptyList()
+        loop.run(AgentIntent.Query("第一问"), onTurnComplete = { messages, _, _ -> history = messages }).toList()
+        loop.run(AgentIntent.Query("追问"), history = history).toList()
+
+        assertEquals(ChatMessage.ROLE_SYSTEM, seenRoles.first())
+        // 而且只有一条:history 里也存一份的话,每轮都会再叠一条上去。
+        assertEquals(1, seenRoles.count { it == ChatMessage.ROLE_SYSTEM })
+    }
+
     /** 模型回话即交卷 —— 没有 submit_answer 那层信封了,答案就是带 [[bvid]] 的散文。 */
     private fun answer(text: String): List<LlmDelta> = listOf(
         LlmDelta.Text(text),

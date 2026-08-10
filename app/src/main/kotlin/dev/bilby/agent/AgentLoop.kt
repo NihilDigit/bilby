@@ -36,6 +36,7 @@ class AgentLoop(
     /**
      * @param history 同一会话之前的对话(DESIGN 3.1 修订:会话内多轮)。**只含本会话的
      *   对话与工具返回,永不含观看历史** —— 那条约束(3.3 第 4 条)不因多轮而放松。
+     *   不含 system 消息,那条每轮在这里现拼。
      * @param seenBvids 本会话此前工具返回过的 bvid。多轮时溯源校验的白名单要跨轮累积,
      *   否则用户追问"刚才第二个怎么样"时,模型重提上一轮的视频会被当成编造的丢掉。
      */
@@ -56,14 +57,13 @@ class AgentLoop(
     ): Flow<AgentEvent> = flow {
         val seenBvids = priorBvids.toMutableSet()
         val traceByBvid = priorTraces.toMutableMap()
-        val turnStart = if (history.isEmpty()) {
-            listOf(ChatMessage(role = ChatMessage.ROLE_SYSTEM, content = SYSTEM_PROMPT))
-        } else {
-            emptyList()
-        }
-        val messages = (turnStart + history).toMutableList().apply {
-            add(ChatMessage(role = ChatMessage.ROLE_USER, content = intent.toPrompt()))
-        }
+        // **每一轮都自己把 system 拼上,不指望 history 里存着一份。** 回传给调用方的是
+        // `drop(newFrom)`,起点在本轮的用户输入上,system 从来就没进过 history —— 只在
+        // 首轮插一次的写法于是让第二轮起完全没有 system 消息,[[bvid]] 的引用格式和溯源
+        // 约束都只写在里面。
+        val messages = mutableListOf(ChatMessage(role = ChatMessage.ROLE_SYSTEM, content = SYSTEM_PROMPT))
+        messages += history
+        messages += ChatMessage(role = ChatMessage.ROLE_USER, content = intent.toPrompt())
         // 新消息从这里开始(本轮的用户输入也算),用于回传给持久化层
         val newFrom = messages.size - 1
 

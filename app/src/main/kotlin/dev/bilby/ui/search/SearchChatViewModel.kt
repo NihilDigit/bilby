@@ -323,20 +323,27 @@ class SearchChatViewModel(
         // 拼出一段谁也没说过的对话。
         agentJob?.cancel()
         agentJob = viewModelScope.launch {
-            agentLoop.run(
-                intent = AgentIntent.Query(query),
-                history = history,
-                priorBvids = seenBvids,
-                priorTraces = traces,
-                onTurnComplete = { newMessages, seen, newTraces ->
-                    history = history + newMessages
-                    seenBvids = seen
-                    traces = newTraces
-                },
-            ).collect { event ->
-                updateAgent(turnId) { it.reduce(event) }
+            try {
+                agentLoop.run(
+                    intent = AgentIntent.Query(query),
+                    history = history,
+                    priorBvids = seenBvids,
+                    priorTraces = traces,
+                    onTurnComplete = { newMessages, seen, newTraces ->
+                        history = history + newMessages
+                        seenBvids = seen
+                        traces = newTraces
+                    },
+                ).collect { event ->
+                    updateAgent(turnId) { it.reduce(event) }
+                }
+            } finally {
+                // **收在 finally 里**:上面那句 cancel 打断的正是这个协程,写在 collect 之后
+                // 的话被取消的那一轮永远停在 running=true,界面上是一个再也停不下来的转圈。
+                // `_state.update` 不挂起,取消中照样执行;轮次已被"新会话"清掉时
+                // [updateAgent] 找不到这个 id,自然什么都不做。
+                updateAgent(turnId) { it.copy(running = false) }
             }
-            updateAgent(turnId) { it.copy(running = false) }
         }
     }
 
