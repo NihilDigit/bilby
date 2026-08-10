@@ -60,6 +60,7 @@ Done:
 
 Planned:
 
+- [ ] Rework the following feed, starting from its data flow
 - [ ] Sending danmaku
 - [ ] Full coverage of moment types
 - [ ] Emote support
