@@ -4,7 +4,11 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -746,28 +750,28 @@ fun SpaceScreen(
             )
         },
     ) { insets ->
-        AdaptiveContent(
-            modifier = Modifier.fillMaxSize().padding(insets),
-            maxWidth = Breakpoints.ReadableWidth,
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                state.profile?.let {
-                    SpaceHeader(
-                        it,
-                        canListen = state.archives.items.isNotEmpty(),
-                        onToggleFollow = onToggleFollow,
-                        onListenUp = onListenUp,
-                        onLiveClick = onLiveClick,
-                    )
-                }
+        // **tab 栏等合集探测回来才画。** 先画三个再抽掉一个的话,栏目宽度会重新分配、
+        // 下面整块内容跟着上跳,而这一切发生在用户已经开始看页面之后。合集探测和投稿
+        // 第一页是并发的,等的是两者里慢的那个,通常不额外多花时间。
+        val collectionsKnown = state.collectionsAvailable != null
+        val tabs = SpaceTab.entries.filter { tab ->
+            tab != SpaceTab.Collections || state.collectionsAvailable == true
+        }
 
-            // **tab 栏等合集探测回来才画。** 先画三个再抽掉一个的话,栏目宽度会重新分配、
-            // 下面整块内容跟着上跳,而这一切发生在用户已经开始看页面之后。合集探测和投稿
-            // 第一页是并发的,等的是两者里慢的那个,通常不额外多花时间。
-            val collectionsKnown = state.collectionsAvailable != null
-            val tabs = SpaceTab.entries.filter { tab ->
-                tab != SpaceTab.Collections || state.collectionsAvailable == true
+        val header: @Composable (Modifier) -> Unit = { paneModifier ->
+            state.profile?.let {
+                SpaceHeader(
+                    it,
+                    canListen = state.archives.items.isNotEmpty(),
+                    onToggleFollow = onToggleFollow,
+                    onListenUp = onListenUp,
+                    onLiveClick = onLiveClick,
+                    modifier = paneModifier,
+                )
             }
+        }
+
+        val tabsAndContent: @Composable ColumnScope.() -> Unit = {
             if (collectionsKnown) {
                 val selectedTabIndex = tabs.indexOf(state.activeTab).coerceAtLeast(0)
                 PrimaryTabRow(selectedTabIndex = selectedTabIndex) {
@@ -780,42 +784,79 @@ fun SpaceScreen(
                     }
                 }
             }
+            PullToRefreshBox(
+                isRefreshing = state.refreshing,
+                onRefresh = onRefresh,
+                modifier = Modifier.weight(1f),
+            ) {
+                when {
+                    state.loading && state.profile == null -> FullScreenLoading()
+                    state.error != null && state.profile == null -> FullScreenError(state.error, onRetry)
+                    // tab 栏还没画出来,内容先不画:否则内容会先顶在页头下面,等 tab 栏出现
+                    // 再被推下去一截。
+                    !collectionsKnown -> FullScreenLoading()
+                    else -> when (state.activeTab) {
+                        SpaceTab.Archives -> ArchivesTab(
+                            state.archives,
+                            searchExpanded = archiveSearchExpanded,
+                            onOrderChanged = onArchiveOrderChanged,
+                            onKeywordChanged = onArchiveKeywordChanged,
+                            onSearch = onArchiveSearch,
+                            onLoadMore = onLoadMoreArchives,
+                            onVideoClick = onVideoClick,
+                        )
 
-                PullToRefreshBox(
-                    isRefreshing = state.refreshing,
-                    onRefresh = onRefresh,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    when {
-                        state.loading && state.profile == null -> FullScreenLoading()
-                        state.error != null && state.profile == null -> FullScreenError(state.error, onRetry)
-                        // tab 栏还没画出来,内容先不画:否则内容会先顶在页头下面,等 tab 栏出现
-                        // 再被推下去一截。
-                        !collectionsKnown -> FullScreenLoading()
-                        else -> when (state.activeTab) {
-                            SpaceTab.Archives -> ArchivesTab(
-                                state.archives,
-                                searchExpanded = archiveSearchExpanded,
-                                onOrderChanged = onArchiveOrderChanged,
-                                onKeywordChanged = onArchiveKeywordChanged,
-                                onSearch = onArchiveSearch,
-                                onLoadMore = onLoadMoreArchives,
-                                onVideoClick = onVideoClick,
-                            )
+                        SpaceTab.Dynamics -> DynamicListTab(
+                            state = state.dynamics,
+                            onLoadMore = onLoadMoreDynamics,
+                            onVideoClick = onVideoClick,
+                        )
 
-                            SpaceTab.Dynamics -> DynamicListTab(
-                                state = state.dynamics,
-                                onLoadMore = onLoadMoreDynamics,
-                                onVideoClick = onVideoClick,
-                            )
-
-                            SpaceTab.Collections -> CollectionsTab(
-                                state.collections,
-                                onLoadMoreCollections,
-                                onCollectionClick,
-                            )
-                        }
+                        SpaceTab.Collections -> CollectionsTab(
+                            state.collections,
+                            onLoadMoreCollections,
+                            onCollectionClick,
+                        )
                     }
+                }
+            }
+        }
+
+        if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
+            /*
+             * **宽屏把头部挪到旁边,而不是钉在上面。**
+             *
+             * 这一页有两种内容:"这个人是谁"和"他发了什么"。canonical-examples 页对
+             * supporting pane 的定义正好是这个分工 —— 主区放主内容并占约三分之二,次区放
+             * 支持性内容。头部横钉在顶上时它两头都不讨好:横向被拉成一条稀疏的长行,
+             * 纵向又从列表里永久扣掉一块高度,而列表才是这一页要看的东西。
+             *
+             * 次区自己能滚:签名可以很长,而它不该把关注按钮顶出屏幕。
+             */
+            Row(
+                modifier = Modifier.fillMaxSize().padding(insets),
+            ) {
+                header(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .verticalScroll(rememberScrollState()),
+                )
+                Column(
+                    modifier = Modifier
+                        .weight(2f)
+                        .fillMaxHeight(),
+                    content = tabsAndContent,
+                )
+            }
+        } else {
+            AdaptiveContent(
+                modifier = Modifier.fillMaxSize().padding(insets),
+                maxWidth = Breakpoints.ReadableWidth,
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    header(Modifier)
+                    tabsAndContent()
                 }
             }
         }
