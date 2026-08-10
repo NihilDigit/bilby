@@ -90,16 +90,22 @@ class VideoActionRepository(private val client: BiliClient) {
             }
         }
 
-    private companion object {
-        /** 视频稿件在收藏体系里的资源类型。 */
-        const val VIDEO_RESOURCE_TYPE = 2
+    companion object {
+        /**
+         * 一条视频**一共**收 2 枚,不是一次 2 枚。已投 1 枚时再投 2 枚服务端必拒,所以
+         * 投币面板的可选枚数要按已投数扣减,而不是固定列出 1 和 2。
+         */
+        const val MAX_COIN_PER_VIDEO = 2
 
-        const val RELATION_URL = "${BiliConstants.WEB_HOST}/x/web-interface/archive/relation"
+        /** 视频稿件在收藏体系里的资源类型。 */
+        private const val VIDEO_RESOURCE_TYPE = 2
+
+        private const val RELATION_URL = "${BiliConstants.WEB_HOST}/x/web-interface/archive/relation"
         // 点赞/投币走 app 端(网页端被风控),收藏留在网页端但用 batch-deal ——
         // 三个选择都照抄 PiliPlus lib/http/api.dart:51/80/110。
-        const val LIKE_URL = "${BiliConstants.APP_HOST}/x/v2/view/like"
-        const val COIN_URL = "${BiliConstants.APP_HOST}/x/v2/view/coin/add"
-        const val FAV_DEAL_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/resource/batch-deal"
-        const val FAV_FOLDER_LIST_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/folder/created/list-all"
+        private const val LIKE_URL = "${BiliConstants.APP_HOST}/x/v2/view/like"
+        private const val COIN_URL = "${BiliConstants.APP_HOST}/x/v2/view/coin/add"
+        private const val FAV_DEAL_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/resource/batch-deal"
+        private const val FAV_FOLDER_LIST_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/folder/created/list-all"
     }
 }

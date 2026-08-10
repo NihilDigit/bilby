@@ -89,6 +89,7 @@ import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
 import dev.bilby.data.MemberCard
+import dev.bilby.data.VideoActionRepository.Companion.MAX_COIN_PER_VIDEO
 import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoStat
@@ -180,6 +181,8 @@ fun VideoTabs(
     /** 切到听视频那一屏。按钮在动作栏里,挨着稍后再看。 */
     onListen: () -> Unit,
     onCoin: (count: Int, alsoLike: Boolean) -> Unit,
+    coinAttempt: CoinAttempt,
+    onCoinDialogClosed: () -> Unit,
     onOpenFavPicker: () -> Unit,
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
     onPlayPart: (cid: Long) -> Unit,
@@ -253,6 +256,8 @@ fun VideoTabs(
                     onAddToView = onAddToView,
                     onListen = onListen,
                     onCoin = onCoin,
+                    coinAttempt = coinAttempt,
+                    onCoinDialogClosed = onCoinDialogClosed,
                     onOpenFavPicker = onOpenFavPicker,
                     onFavConfirm = onFavConfirm,
                     onPlayPart = onPlayPart,
@@ -305,6 +310,8 @@ private fun IntroTab(
     onAddToView: () -> Unit,
     onListen: () -> Unit,
     onCoin: (count: Int, alsoLike: Boolean) -> Unit,
+    coinAttempt: CoinAttempt,
+    onCoinDialogClosed: () -> Unit,
     onOpenFavPicker: () -> Unit,
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
     onPlayPart: (Long) -> Unit,
@@ -357,6 +364,8 @@ private fun IntroTab(
                     onLike = onLike,
                     onAddToView = onAddToView,
                     onCoin = onCoin,
+                    coinAttempt = coinAttempt,
+                    onCoinDialogClosed = onCoinDialogClosed,
                     onOpenFavPicker = onOpenFavPicker,
                     onFavConfirm = onFavConfirm,
                     onListen = onListen,
@@ -611,6 +620,8 @@ private fun ActionButtonsRow(
     addedToView: Boolean,
     onLike: () -> Unit,
     onCoin: (count: Int, alsoLike: Boolean) -> Unit,
+    coinAttempt: CoinAttempt,
+    onCoinDialogClosed: () -> Unit,
     onOpenFavPicker: () -> Unit,
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
     onAddToView: () -> Unit,
@@ -694,12 +705,22 @@ private fun ActionButtonsRow(
     if (showCoinDialog) {
         CoinDialog(
             alreadyCoined = relation?.coined ?: 0,
-            onDismiss = { showCoinDialog = false },
-            onConfirm = { count, alsoLike ->
+            attempt = coinAttempt,
+            onDismiss = {
                 showCoinDialog = false
-                onCoin(count, alsoLike)
+                onCoinDialogClosed()
             },
+            // **确认之后面板不关**,等服务端认了再关(见下面的 LaunchedEffect)。投币不可逆,
+            // 失败的那次必须让人看见,而这个 app 没有全局提示位可以在面板消失之后说话。
+            onConfirm = onCoin,
         )
+    }
+
+    LaunchedEffect(coinAttempt) {
+        if (coinAttempt is CoinAttempt.Succeeded) {
+            showCoinDialog = false
+            onCoinDialogClosed()
+        }
     }
 
     if (awaitingFavFolders && favFolders.isNotEmpty()) {
@@ -769,12 +790,18 @@ private val ActionIconSize = 20.dp
 @Composable
 private fun CoinDialog(
     alreadyCoined: Int,
+    attempt: CoinAttempt,
     onDismiss: () -> Unit,
     onConfirm: (count: Int, alsoLike: Boolean) -> Unit,
 ) {
     var selectedCount by rememberSaveable { mutableIntStateOf(1) }
     var alsoLike by rememberSaveable { mutableStateOf(false) }
-    val maxedOut = alreadyCoined >= 2
+    val maxedOut = alreadyCoined >= MAX_COIN_PER_VIDEO
+    // 上限是"这条视频一共两枚",不是"这一次两枚"。已投 1 枚时还列出 2,选中它必然换来
+    // 一次服务端拒绝,而拒绝在界面上什么都不显示,看起来就是按钮没反应。
+    val selectableCounts = (1..MAX_COIN_PER_VIDEO - alreadyCoined).toList()
+    // rememberSaveable 存的可能是上一条视频选的 2 枚,而这一条已经投过 1 枚了。
+    val effectiveCount = selectedCount.coerceIn(1, (MAX_COIN_PER_VIDEO - alreadyCoined).coerceAtLeast(1))
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -787,9 +814,9 @@ private fun CoinDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    listOf(1, 2).forEach { count ->
+                    selectableCounts.forEach { count ->
                         ChoiceRow(
-                            selected = selectedCount == count,
+                            selected = effectiveCount == count,
                             onSelect = { selectedCount = count },
                             label = stringResource(R.string.coin_count, count),
                         )
@@ -801,8 +828,13 @@ private fun CoinDialog(
                     )
                     // 投币是不可逆的:B 站没有撤销接口,币也不退。误触的代价由用户承担,
                     // 所以这句必须出现在确认之前 —— 这是全应用少数几个用 error 色的地方。
+                    //
+                    // 失败之后这句换成失败原因,不两句并排:两句都是 error 色,读起来分不清
+                    // 哪句在说刚才那一次。警告在重投之前还会再出现一遍(错误清掉之后)。
                     Text(
-                        text = stringResource(R.string.coin_warning),
+                        text = (attempt as? CoinAttempt.Failed)?.message
+                            ?.let { stringResource(R.string.coin_failed, it) }
+                            ?: stringResource(R.string.coin_warning),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(top = Spacing.Tight),
@@ -811,7 +843,11 @@ private fun CoinDialog(
             }
         },
         confirmButton = {
-            TextButton(enabled = !maxedOut, onClick = { onConfirm(selectedCount, alsoLike) }) {
+            // 请求在飞的时候按不动,否则连点两下就是两次投币,而它不可逆。
+            TextButton(
+                enabled = !maxedOut && attempt !is CoinAttempt.Running,
+                onClick = { onConfirm(effectiveCount, alsoLike) },
+            ) {
                 Text(stringResource(R.string.action_confirm))
             }
         },

@@ -65,6 +65,17 @@ data class VideoUiState(
     val error: String? = null,
 )
 
+/**
+ * 一次投币的进展。[Succeeded] 单独建模而不是回到 [Idle]:面板要靠它区分"还没投"和
+ * "投完了可以关了",两者都是"此刻没有请求在飞"。
+ */
+sealed interface CoinAttempt {
+    data object Idle : CoinAttempt
+    data object Running : CoinAttempt
+    data object Succeeded : CoinAttempt
+    data class Failed(val message: String) : CoinAttempt
+}
+
 class VideoViewModel(
     initialBvid: String,
     private val repository: VideoRepository,
@@ -246,6 +257,15 @@ class VideoViewModel(
     private val _favFolders = MutableStateFlow<List<FavFolder>>(emptyList())
     val favFolders: StateFlow<List<FavFolder>> = _favFolders.asStateFlow()
 
+    private val _coinAttempt = MutableStateFlow<CoinAttempt>(CoinAttempt.Idle)
+
+    /**
+     * 投币这一次的进展。**结果要回到发起它的那个面板上**:投币不可逆,失败了用户得知道
+     * 币还在自己手里,而这个 app 没有 snackbar 之类的全局提示位。点赞和收藏靠回滚乐观更新
+     * 说话,投币没有乐观更新可回滚(见 [coin]),失败于是一点痕迹都不留。
+     */
+    val coinAttempt: StateFlow<CoinAttempt> = _coinAttempt.asStateFlow()
+
     /** 本次播放会话的起点,心跳要用同一个值,不能每次上报重新取。换视频时重置,见 [resetForNewVideo]。 */
     private var sessionStartTs = System.currentTimeMillis() / 1000
 
@@ -371,6 +391,7 @@ class VideoViewModel(
         _staffFollowed.value = null
         _upCard.value = null
         _relation.value = null
+        _coinAttempt.value = CoinAttempt.Idle
         _favFolders.value = emptyList()
         _addedToView.value = false
         _sponsorSegments.value = emptyList()
@@ -791,10 +812,15 @@ class VideoViewModel(
         }
     }
 
+    /**
+     * 投币。**没有乐观更新**:币投不出去的情形一点不罕见(未登录、当天硬币不够、已经投满),
+     * 而先加后减的数字比慢半拍的数字更难读。计数等服务端认了再动。
+     */
     fun coin(count: Int, alsoLike: Boolean) {
         val current = _relation.value ?: return
         val aid = _state.value.detail?.aid ?: return
         val startGeneration = generation
+        _coinAttempt.value = CoinAttempt.Running
         viewModelScope.launch {
             when (val result = actionRepository.coin(aid, count, alsoLike)) {
                 is BiliResult.Ok -> ifCurrent(startGeneration) {
@@ -808,12 +834,29 @@ class VideoViewModel(
                             like = if (alsoLike && !current.liked) it.like + 1 else it.like,
                         )
                     }
+                    _coinAttempt.value = CoinAttempt.Succeeded
                 }
 
-                is BiliResult.ApiError -> BiliLog.w("投币失败(${result.code}): ${result.message}")
-                is BiliResult.Failure -> BiliLog.w("投币异常: ${result.cause}")
+                is BiliResult.ApiError -> {
+                    BiliLog.w("投币失败(${result.code}): ${result.message}")
+                    ifCurrent(startGeneration) {
+                        _coinAttempt.value = CoinAttempt.Failed("${result.message}(${result.code})")
+                    }
+                }
+
+                is BiliResult.Failure -> {
+                    BiliLog.w("投币异常: ${result.cause}")
+                    ifCurrent(startGeneration) {
+                        _coinAttempt.value = CoinAttempt.Failed(result.cause.message ?: "网络错误")
+                    }
+                }
             }
         }
+    }
+
+    /** 面板关掉了。下次打开要从干净的状态开始,不能还挂着上一次的报错。 */
+    fun clearCoinAttempt() {
+        _coinAttempt.value = CoinAttempt.Idle
     }
 
     fun openFavPicker() {

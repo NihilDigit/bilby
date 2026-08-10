@@ -1268,6 +1268,7 @@ private fun VideoPane(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val relation by vm.relation.collectAsStateWithLifecycle()
+    val coinAttempt by vm.coinAttempt.collectAsStateWithLifecycle()
     val favFolders by vm.favFolders.collectAsStateWithLifecycle()
     val sponsorSegments by vm.sponsorSegments.collectAsStateWithLifecycle()
     val followState by vm.followState.collectAsStateWithLifecycle()
@@ -1329,6 +1330,8 @@ private fun VideoPane(
         addedToView = addedToView,
         onAddToView = vm::addToView,
         onCoin = vm::coin,
+        coinAttempt = coinAttempt,
+        onCoinDialogClosed = vm::clearCoinAttempt,
         onOpenFavPicker = vm::openFavPicker,
         onFavConfirm = vm::confirmFavorite,
         onPlayEpisode = onOpenVideo,
