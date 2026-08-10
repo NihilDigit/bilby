@@ -76,12 +76,13 @@ Planned:
 - [ ] Emote support
 - [ ] Reading articles in-app
 - [ ] Picture-in-picture
+- [ ] Live room improvements
 - [ ] Filtering low-quality comments
 - [ ] Interface refinement
 - [ ] Performance work
 - [ ] Codebase structure cleanup
 - [ ] Comment pruning
-- [ ] CI regression tests
+- [ ] Instrumented tests on a device in CI
 - [ ] Agent harness work
 
 ## Install
