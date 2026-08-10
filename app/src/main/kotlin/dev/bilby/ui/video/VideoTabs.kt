@@ -58,7 +58,6 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -77,13 +76,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.lerp
 import dev.bilby.R
 import dev.bilby.formatDurationSeconds
 import dev.bilby.agent.AgentTurnState
@@ -199,48 +198,16 @@ fun VideoTabs(
     val scope = rememberCoroutineScope()
 
     Column(modifier = modifier.fillMaxSize()) {
-        SecondaryTabRow(
-            selectedTabIndex = pagerState.currentPage,
-            // 默认指标器只认 selectedTabIndex(整数),手指拖着 HorizontalPager 滑动时它不跟手——
-            // 要等翻页判定过了 50% 才突然跳一下。这里换成读 pagerState 的连续位置
-            // (currentPage + currentPageOffsetFraction,标准的 pager-tab 同步写法),
-            // 在两个 Tab 的位置之间按同一个进度插值,指示器全程贴着手指走。
-            //
-            // 形状/高度原样用 TabRowDefaults.SecondaryIndicator 的默认值,不跟着改——
-            // 高度是 secondary 和 primary 拉开层级的地方(风格指南 §2.2 记着这一条曾经做错过,
-            // 两处指示条粗细一样,层级读不出来);形状仍是直角,圆头是 primary 的标志,
-            // 这里只是让它变窄,不是变成 primary。
-            //
-            // 宽度**占满整格**,这正是 M3 给 secondary 的形状。试过改成贴合文字宽度
-            // (TabPosition.contentWidth,居中摆放),真机上位置偏了,而且窄指示条本来就更像
-            // primary 的做派——两个理由叠起来不值当,退回默认。
-            //
-            // tabIndicatorLayout 是 `Modifier.` 扩展(TabIndicatorScope 内的成员扩展函数,
-            // 接收者是 Modifier),不是"收 Modifier 当第一个参数"的普通函数——第一版写成
-            // tabIndicatorLayout(Modifier) { ... } 编不过,报的正是 receiver 不匹配。用
-            // kotlin-metadata-jvm 读了 TabIndicatorScope.class 的 @Metadata 核实过:
-            // tabIndicatorLayout 的 receiverParameterType 是 Class(name=androidx/compose/ui/Modifier),
-            // 不是凭错误信息反推。
-            indicator = {
-                TabRowDefaults.SecondaryIndicator(
-                    modifier = Modifier.tabIndicatorLayout { measurable, _, positions ->
-                        // 首帧 Tab 还没测量完时 positions 是空的,量出来的宽度撑不住
-                        // coerceIn(0, lastIndex)(lastIndex 是 -1),直接吞掉这一帧不画。
-                        if (positions.isEmpty()) return@tabIndicatorLayout layout(0, 0) {}
-                        val progress = pagerState.currentPage + pagerState.currentPageOffsetFraction
-                        val from = progress.toInt().coerceIn(0, positions.lastIndex)
-                        val to = (from + 1).coerceIn(0, positions.lastIndex)
-                        val fraction = (progress - from).coerceIn(0f, 1f)
-                        val left = lerp(positions[from].left, positions[to].left, fraction)
-                        val width = lerp(positions[from].width, positions[to].width, fraction)
-                        val placeable = measurable.measure(Constraints.fixedWidth(width.roundToPx()))
-                        layout(placeable.width, placeable.height) {
-                            placeable.placeRelative(x = left.roundToPx(), y = 0)
-                        }
-                    },
-                )
-            },
-        ) {
+        // **用组件默认的指示条,不自己画。** 这里曾经读 `currentPage +
+        // currentPageOffsetFraction` 做插值,让指示条全程贴着手指走;规范并不要求那样 ——
+        // tabs 页对指示条只说"apply an underline and color change to the active tab",
+        // 交互一节写的是 "The selected indicator becomes active and **shifts into position
+        // once the touch has been engaged**",也就是选中之后移过去,而不是跟着拖动连续插值。
+        //
+        // 那份自定义代价不小:一个 `tabIndicatorLayout` 的手写测量、首帧 positions 为空的
+        // 特判、以及一段"这个扩展的接收者到底是什么"的考据。删掉之后行为仍然合规,
+        // 而滑动翻页本身照旧(内容区能滑是 tabs 页明写的用法)。
+        SecondaryTabRow(selectedTabIndex = pagerState.currentPage) {
             titles.forEachIndexed { index, title ->
                 Tab(
                     selected = pagerState.currentPage == index,
@@ -1114,9 +1081,17 @@ private fun QueueContent(
 
             // 定高列表:高度有界才能嵌在可滚动的简介页里(高度无界的 LazyColumn 会抛)。
             // 顺带让队列有个固定的占位,不会因为条数不同把下面的内容顶来顶去。
+            //
+            // **高度跟着窗口走,不是写死 320dp。** 横屏和宽屏两栏下,右边这一栏总高常常只有
+            // 七八百 dp,而它上面还有标题、UP 行、动作栏,下面还有「找相关」—— 一个 320dp
+            // 的定高块会把这一栏吃掉将近一半。取窗口高度的三分之一,并夹在一个下限和 320dp
+            // 之间:再矮就看不见两条,再高就回到原来那个问题。
+            val queueHeight = with(LocalDensity.current) {
+                (LocalWindowInfo.current.containerSize.height / 3).toDp()
+            }.coerceIn(Dimens.EmbeddedQueueMinHeight, Dimens.EmbeddedQueueHeight)
             LazyColumn(
                 state = listState,
-                modifier = Modifier.height(Dimens.EmbeddedQueueHeight),
+                modifier = Modifier.height(queueHeight),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 items(queue.items, key = { it.bvid }) { item ->

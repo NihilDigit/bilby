@@ -44,7 +44,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.ui.res.stringResource
+import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.SectionHeader
+import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
 import androidx.compose.ui.tooling.preview.Preview
 import dev.bilby.R
@@ -205,16 +207,20 @@ private fun FeedList(
             .collect { onScrollPositionChanged(it) }
     }
 
-    PullToRefreshBox(
-        isRefreshing = state.refreshing,
-        onRefresh = onRefresh,
-        modifier = modifier.fillMaxSize(),
-    ) {
-        LazyColumn(
-            state = listState,
+    // 宽屏只收窄行长,不拆栏。列表行是"封面 + 三行文字"的定宽版式,铺到 1400dp 之后封面
+    // 还是 128dp,右边多出来的全是空白;而拆成两栏会让"下一条是什么"变成两条线索,
+    // 这一页的读法本来就是一条时间线往下走。
+    AdaptiveContent(modifier = modifier, maxWidth = Breakpoints.ReadableWidth) {
+        PullToRefreshBox(
+            isRefreshing = state.refreshing,
+            onRefresh = onRefresh,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = contentPadding,
         ) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = contentPadding,
+            ) {
         // 跟着列表一起滚,不吸顶:吸顶会让它变成常驻的入口带,而这一页的主体是动态流。
         if (state.frequentUps.isNotEmpty()) {
             item(key = "frequent-ups") {
@@ -239,12 +245,13 @@ private fun FeedList(
         items(fromMarker, key = { it.bvid }) { item ->
             FeedVideoItem(item, onItemClick, onExcludeUp)
         }
-        item(key = "footer") {
-            ListFooter(
-                appending = state.appending,
-                hasMore = state.hasMore,
-                hasItems = state.items.isNotEmpty(),
-            )
+            item(key = "footer") {
+                ListFooter(
+                    appending = state.appending,
+                    hasMore = state.hasMore,
+                    hasItems = state.items.isNotEmpty(),
+                )
+            }
             }
         }
     }
