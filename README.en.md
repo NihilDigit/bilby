@@ -77,6 +77,8 @@ Planned:
 - [ ] Reading articles in-app
 - [ ] Picture-in-picture
 - [ ] Live room improvements
+- [ ] Refine coining, liking and the other site actions
+- [ ] Direct messages
 - [ ] Filtering low-quality comments
 - [ ] Interface refinement
 - [ ] Performance work
