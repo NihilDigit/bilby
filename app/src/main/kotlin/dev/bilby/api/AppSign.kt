@@ -15,10 +15,14 @@ object AppSign {
     private const val APP_SEC = "b5475a8825547a4fc26c7d518eaaa02e"
 
     /** 返回补齐了 appkey/ts/sign 的参数表。 */
-    fun sign(params: Map<String, String>): Map<String, String> {
+    fun sign(params: Map<String, String>): Map<String, String> =
+        signWith(params, ts = System.currentTimeMillis() / 1000)
+
+    /** 纯函数,便于用固定 ts 做回归。理由同 [WbiSigner.signWith]。 */
+    fun signWith(params: Map<String, String>, ts: Long): Map<String, String> {
         val withMeta = params - "sign" + mapOf(
             "appkey" to APP_KEY,
-            "ts" to (System.currentTimeMillis() / 1000).toString(),
+            "ts" to ts.toString(),
         )
         val query = withMeta.keys.sorted().joinToString("&") { key ->
             val value = withMeta.getValue(key)
