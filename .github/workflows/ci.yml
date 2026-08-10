@@ -1,21 +1,21 @@
-# 推到 main 就跑一遍单测和 release 构建。
+# 单测。改动落到 main 或者提出 PR 时各跑一次。
 #
-# 存在的理由是发版链路太靠后:构建只发生在打 tag 的那一刻(见 release.yml),在此之前
-# 没有任何东西验证过这份代码。攒了几十个 commit 才在发版时报错,要在其中挑出是哪一条
-# 引起的,比当场知道贵得多。
+# 存在的理由是发版链路太靠后:此前唯一跑过测试的地方是打 tag 那一刻(见 release.yml),
+# 攒了几十个 commit 才在发版时报错,要从中挑出是哪一条引起的,比当场知道贵得多。
 #
-# **跑 assembleRelease 而不是 assembleDebug**:debug 不过 R8,而 release 独有的失败
-# (keep 规则漏了、资源被 shrink 掉)恰恰只有它能暴露。没有签名密钥时 Gradle 回落到
-# debug key(见 app/build.gradle.kts 的 signingConfigs),所以这个 job 不需要任何 Secret。
-#
-# 版本号不传 -PbilbyVersion,构建报 0.0.0-dev。这里验的是"编不编得过、测不测得过",
-# 产物不发布也不留存。
+# **只跑测试,不出包。** 打包由 release.yml 做,而 tag 通常紧跟着 main 推,两边都编一遍
+# 等于同一份代码在 GitHub 的机器上过两次 R8。编译错误测试任务本来就会先撞上,拿不到的
+# 只有 release 独有的那类失败(keep 规则、资源 shrink),那些留给发版时的构建。
 name: CI
 
 on:
   push:
     branches: [main]
-    # 只改文档不值得跑一次完整构建。
+    # 只改文档不值得跑一次。
+    paths-ignore:
+      - "**.md"
+      - ".github/badges/**"
+  pull_request:
     paths-ignore:
       - "**.md"
       - ".github/badges/**"
@@ -48,9 +48,6 @@ jobs:
       # testReleaseUnitTest 不存在,写上去会报 "Task not found"。
       - name: Test
         run: ./gradlew testDebugUnitTest
-
-      - name: Build
-        run: ./gradlew assembleRelease
 
       # 失败时要能看到是哪个用例、断言差在哪,光看日志行不够。
       - name: Upload test report
