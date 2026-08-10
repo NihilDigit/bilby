@@ -56,7 +56,6 @@ data class SpaceLiveRoom(
     val roomId: Long,
     val title: String,
     val coverUrl: String,
-    val online: Long,
 )
 
 enum class SpaceArchiveOrder(val apiValue: String) {
@@ -163,7 +162,6 @@ class SpaceRepository(private val client: BiliClient) {
                                 roomId = it.roomid,
                                 title = it.title,
                                 coverUrl = it.cover.toHttpsUrl(),
-                                online = it.online,
                             )
                         },
                 )

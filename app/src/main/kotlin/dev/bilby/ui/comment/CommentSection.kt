@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.bilby.R
 import dev.bilby.data.CommentItem
+import dev.bilby.data.CommentMention
 import dev.bilby.data.CommentSort
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
@@ -101,6 +102,8 @@ fun CommentSection(
     onLike: (id: Long) -> Unit,
     onDelete: (id: Long) -> Unit,
     onSeek: (Long) -> Unit = {},
+    /** 点正文里的 @ 去那个人的空间。配不到 mid 的 @ 不是链接,不会走到这里。 */
+    onUserClick: (mid: Long) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var replyTarget by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -141,6 +144,7 @@ fun CommentSection(
                         onDelete = onDelete,
                         onExpandReplies = onExpandReplies,
                         onSeek = onSeek,
+                        onUserClick = onUserClick,
                     )
                 }
             }
@@ -178,6 +182,7 @@ fun CommentSection(
                     onDelete = onDelete,
                     onExpandReplies = onExpandReplies,
                     onSeek = onSeek,
+                    onUserClick = onUserClick,
                 )
             }
 
@@ -250,6 +255,7 @@ private fun CommentRow(
     onDelete: (Long) -> Unit,
     onExpandReplies: (Long) -> Unit,
     onSeek: (Long) -> Unit,
+    onUserClick: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var viewerIndex by remember { mutableStateOf<Int?>(null) }
@@ -301,8 +307,10 @@ private fun CommentRow(
             CommentText(
                 message = comment.message,
                 emotes = comment.emotes,
+                mentions = comment.mentions,
                 style = CommentBodyStyle,
                 onSeek = onSeek,
+                onUserClick = onUserClick,
             )
 
             if (comment.pictureUrls.isNotEmpty()) {
@@ -320,7 +328,7 @@ private fun CommentRow(
                 onDelete = onDelete,
                 onReply = onReply,
             )
-            SubReplies(comment, expanded, onExpandReplies, onSeek)
+            SubReplies(comment, expanded, onExpandReplies, onSeek, onUserClick)
         }
     }
 
@@ -482,6 +490,7 @@ private fun SubReplies(
     expanded: ExpandedReplies?,
     onExpandReplies: (Long) -> Unit,
     onSeek: (Long) -> Unit,
+    onUserClick: (Long) -> Unit,
 ) {
     // 已展开就用展开结果(含翻页累加),否则用主楼自带的预览楼层垫着,避免展开前一片空白。
     //
@@ -501,7 +510,10 @@ private fun SubReplies(
         modifier = Modifier.fillMaxWidth().padding(top = Spacing.Hair),
     ) {
         Column(modifier = Modifier.padding(vertical = Spacing.Hair)) {
-            shown.forEach { sub -> SubReplyRow(sub, onSeek) }
+            shown.forEach { sub -> SubReplyRow(sub, onSeek, onUserClick) }
+            // **每一条出口都要留下痕迹。** 以前失败和"这一页什么都没返回"两种结局都落进
+            // `expanded != null && !hasMore && items 为空`,而这个组合在下面一条分支都不匹配 ——
+            // 按钮消失、回复没有、错误画在整个评论区的页脚上,看起来就是"点了展开什么都没发生"。
             when {
                 expanded == null && remaining > 0 -> SubReplyMoreButton(
                     text = stringResource(R.string.comment_expand_replies, remaining),
@@ -515,9 +527,24 @@ private fun SubReplies(
                     CircularProgressIndicator(modifier = Modifier.size(SmallIconSize), strokeWidth = 2.dp)
                 }
 
+                // 失败就地重试:按钮和它解释的那次点击在同一个容器里。
+                expanded?.error != null -> SubReplyMoreButton(
+                    text = stringResource(R.string.comment_replies_failed) + " · " +
+                        stringResource(R.string.action_retry),
+                    onClick = { onExpandReplies(comment.rpid) },
+                )
+
                 expanded != null && expanded.hasMore -> SubReplyMoreButton(
                     text = stringResource(R.string.comment_load_more),
                     onClick = { onExpandReplies(comment.rpid) },
+                )
+
+                // 服务端说到头了,但一条都没给出来(计数里含已删除或被折叠的回复时会这样)。
+                expanded != null && shown.isEmpty() -> Text(
+                    text = stringResource(R.string.comment_no_more_replies),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
                 )
             }
         }
@@ -544,7 +571,7 @@ private fun SubReplyMoreButton(text: String, onClick: () -> Unit) {
  * 现在主要是给它的 on 色(低强调文字)留位置的,拿它当底在深色主题下会亮出一大截。
  */
 @Composable
-private fun SubReplyRow(comment: CommentItem, onSeek: (Long) -> Unit) {
+private fun SubReplyRow(comment: CommentItem, onSeek: (Long) -> Unit, onUserClick: (Long) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -570,9 +597,11 @@ private fun SubReplyRow(comment: CommentItem, onSeek: (Long) -> Unit) {
     CommentText(
         message = comment.message,
         emotes = comment.emotes,
+        mentions = comment.mentions,
         style = SubReplyBodyStyle,
         maxLines = 5,
         onSeek = onSeek,
+        onUserClick = onUserClick,
         modifier = Modifier.padding(start = Spacing.Tight, end = Spacing.Tight, bottom = Spacing.Tight),
     )
 }
@@ -662,7 +691,49 @@ private fun CommentInputBar(
  * 表情键的长度设了上限:`[` 到 `]` 之间不限长的话,一句"[这里省略一万字]看看"会被整段
  * 当成一个表情键去查表(查不到,原样显示,但白扫一遍)。B 站的表情名都很短。
  */
-private val RichTokenRegex = Regex("""\[[^\[\]]{1,20}]|@[^\s@]+|https?://\S+|(?<!\d)(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?!\d)""")
+internal val RichTokenRegex = Regex("""\[[^\[\]]{1,20}]|@[^\s@]+|https?://\S+|(?<!\d)(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?!\d)""")
+
+/**
+ * 一个 @ 能点开:[mid] 是去处,[length] 是这个 token 里属于名字的那一截。
+ * 后者存在是因为正则按空白切,"@张三,你看" 会整串落进一个 token,而只有 "@张三" 是人。
+ */
+internal data class MentionLink(val mid: Long, val length: Int)
+
+/**
+ * 把正文里的 @ 和接口给的 [CommentMention] 对上,返回「token 起点 -> 去处」。
+ *
+ * **不能只按名字匹配**:members 里的 uname 是此刻的昵称,正文留的是发帖当时的昵称,
+ * 抽样 11 条有 5 条对不上(全是 "回复 @旧名 :" 这种楼中楼)。所以分两轮:
+ *
+ * 一、名字能对上的先认领,长名字优先 —— 否则昵称 "abc" 会抢走 "@abcd" 这个 token。
+ * 二、剩下的人按出现顺序配剩下的 token,**且只在两边数量相等时才配**。数量不等意味着
+ *    正文里有 @ 不属于任何一个人(邮箱、"@一下"),这时按顺序配会把链接接到别人身上,
+ *    而一个指向错误用户的链接比不可点更糟。
+ */
+internal fun resolveMentions(
+    tokens: List<MatchResult>,
+    mentions: List<CommentMention>,
+): Map<Int, MentionLink> {
+    if (mentions.isEmpty()) return emptyMap()
+    val atTokens = tokens.filter { it.value.startsWith('@') }
+    if (atTokens.isEmpty()) return emptyMap()
+
+    val links = mutableMapOf<Int, MentionLink>()
+    val unnamed = mutableListOf<CommentMention>()
+    for (mention in mentions.sortedByDescending { it.uname.length }) {
+        val needle = "@${mention.uname}"
+        val hit = atTokens.firstOrNull { it.range.first !in links && it.value.startsWith(needle) }
+        if (hit != null) links[hit.range.first] = MentionLink(mention.mid, needle.length) else unnamed += mention
+    }
+
+    val free = atTokens.filter { it.range.first !in links }
+    if (unnamed.size == free.size) {
+        free.forEachIndexed { index, token ->
+            links[token.range.first] = MentionLink(unnamed[index].mid, token.value.length)
+        }
+    }
+    return links
+}
 
 /**
  * 评论正文。
@@ -672,16 +743,19 @@ private val RichTokenRegex = Regex("""\[[^\[\]]{1,20}]|@[^\s@]+|https?://\S+|(?<
  * 走 `InlineTextContent`:占位符在 [AnnotatedString] 里留一个带 id 的空位,
  * 渲染时把图片填进去,换行、对齐、选中都跟着文字走。
  *
- * @提及与链接标成 [LocalMentionColor]。仍然不解析 `content.members`/`jump_url`
- * (notes §1.4:两者都是未强类型化字段),靠正则认原文——拿不到结构化数据不等于丢内容。
+ * @提及与链接标成 [LocalMentionColor]。**能配到 mid 的 @ 是链接,配不到的只染色** ——
+ * 见 [resolveMentions],不是所有 @ 都能确定指向谁。`jump_url` 仍然不解析(那是站内搜索
+ * schema,落到本应用只有搜索一个去处)。
  */
 @Composable
 private fun CommentText(
     message: String,
     emotes: Map<String, String>,
+    mentions: List<CommentMention>,
     style: androidx.compose.ui.text.TextStyle,
     maxLines: Int = Int.MAX_VALUE,
     onSeek: (Long) -> Unit = {},
+    onUserClick: (Long) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val mention = LocalMentionColor.current
@@ -694,15 +768,19 @@ private fun CommentText(
     // 回调用 rememberUpdatedState 取最新的一份:注解串是 remember 出来的,直接捕获会把第一次
     // 组合时的 onSeek 焊死在里面,而它捕获着当时的 MediaController。
     val currentOnSeek by rememberUpdatedState(onSeek)
-    val text = remember(message, emotes, mention) {
+    val currentOnUserClick by rememberUpdatedState(onUserClick)
+    val text = remember(message, emotes, mentions, mention) {
         used.clear()
+        val tokens = RichTokenRegex.findAll(message).toList()
+        val mentionLinks = resolveMentions(tokens, mentions)
         buildAnnotatedString {
             var last = 0
-            for (match in RichTokenRegex.findAll(message)) {
+            for (match in tokens) {
                 append(message.substring(last, match.range.first))
                 val token = match.value
                 val emoteUrl = emotes[token]
                 val timestampMillis = if (emoteUrl == null) parseTimestampMillis(token) else null
+                val mentionLink = mentionLinks[match.range.first]
                 when {
                     emoteUrl != null -> {
                         used[token] = emoteUrl
@@ -717,6 +795,17 @@ private fun CommentText(
                             ),
                         ) { currentOnSeek(timestampMillis) },
                     ) { append(token) }
+
+                    mentionLink != null -> {
+                        withLink(
+                            LinkAnnotation.Clickable(
+                                tag = "mention",
+                                styles = TextLinkStyles(style = SpanStyle(color = mention)),
+                            ) { currentOnUserClick(mentionLink.mid) },
+                        ) { append(token.take(mentionLink.length)) }
+                        // 名字后面粘着的标点回归正文色:"@张三,你看" 里只有前半截是人。
+                        append(token.drop(mentionLink.length))
+                    }
 
                     else -> withStyle(SpanStyle(color = mention)) { append(token) }
                 }
@@ -801,6 +890,7 @@ private fun previewComment(
     liked = false,
     message = message,
     emotes = emptyMap(),
+    mentions = emptyList(),
     pictureUrls = emptyList(),
     subReplyCount = 2,
     previewReplies = listOf(

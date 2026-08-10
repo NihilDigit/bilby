@@ -94,6 +94,8 @@
     <string name="comment_delete">Delete comment</string>
     <string name="comment_expand_replies">Show %1$d replies</string>
     <string name="comment_load_more">Load more</string>
+    <string name="comment_replies_failed">Replies failed to load</string>
+    <string name="comment_no_more_replies">No more replies</string>
     <string name="comment_replying_to">Replying to @%1$s</string>
     <string name="comment_input_hint">Say something nice</string>
     <string name="comment_input_hint_reply">Reply to %1$s</string>
@@ -141,7 +143,12 @@
     <string name="offline_cache_action">Download</string>
     <string name="offline_sheet_title">Download for offline</string>
     <string name="offline_sheet_quality">Quality</string>
-    <string name="offline_sheet_danmaku">Include danmaku</string>
+    <string name="offline_sheet_select_all">Select all</string>
+    <string name="offline_selected_count">%1$d selected</string>
+    <string name="offline_delete_batch_title">Delete the selected downloads?</string>
+    <string name="offline_delete_batch_message">%1$d items; the files are removed from this device.</string>
+    <string name="action_delete">Delete</string>
+    <string name="offline_sheet_select_none">Clear all</string>
     <string name="offline_sheet_confirm">Download %1$d</string>
     <string name="offline_sheet_empty_selection">Pick what to download</string>
     <string name="offline_already_cached">Downloaded</string>
@@ -160,6 +167,8 @@
     <string name="offline_notification_queued">%1$d queued</string>
     <string name="size_mb">%1$.1f MB</string>
     <string name="size_gb">%1$.2f GB</string>
+    <string name="speed_kb">%1$d KB/s</string>
+    <string name="speed_mb">%1$.1f MB/s</string>
 
     <string name="action_confirm">Confirm</string>
     <string name="coin_maxed">2 coins given, no more allowed</string>
@@ -196,10 +205,9 @@
     <string name="queue_order_sequential">In order</string>
     <string name="queue_order_shuffle">Shuffle</string>
     <string name="sleep_timer_off">Sleep timer</string>
-    <string name="sleep_timer_minutes">%1$d min</string>
     <string name="sleep_timer_end_of_item">After this one</string>
     <string name="sleep_timer_stop_in">Stop in %1$d min</string>
-    <string name="sleep_timer_finish_switch">Stop after this video finishes</string>
+    <string name="sleep_timer_end_of_item_option">Stop after this video finishes</string>
     <string name="sleep_timer_cancel">Cancel timer</string>
 
     <string name="sponsor_sponsor">Sponsor</string>
@@ -235,6 +243,10 @@
     <string name="settings_configured">Set</string>
     <string name="settings_loading">Loading…</string>
     <string name="settings_section_feed">Home feed</string>
+    <string name="settings_section_offline">Downloads</string>
+    <string name="settings_offline_concurrency">Simultaneous downloads</string>
+    <string name="settings_offline_concurrency_subtitle">A higher number finishes a batch sooner, at the cost of stuttering playback while it runs</string>
+    <string name="settings_offline_concurrency_value">%1$d at a time</string>
     <string name="settings_feed_clear_excluded">Clear hidden creators</string>
     <string name="settings_feed_excluded_count">%1$d hidden right now</string>
     <string name="settings_section_player">Player</string>
@@ -261,6 +273,22 @@
     <string name="settings_version">Version</string>
     <string name="settings_license">License</string>
     <string name="settings_github">Project GitHub</string>
+    <!-- 这一节此前整段漏在这里,英文环境下会退回中文。补齐。 -->
+    <string name="settings_update">Check for updates</string>
+    <string name="settings_update_idle">From GitHub Releases</string>
+    <string name="settings_update_checking">Checking…</string>
+    <string name="settings_update_latest">Up to date</string>
+    <string name="settings_update_available">%1$s available, tap to download</string>
+    <string name="settings_update_downloading">Downloading %1$d%%</string>
+    <string name="settings_update_ready">%1$s downloaded, tap to install</string>
+    <string name="settings_update_failed">Check failed: %1$s</string>
+
+    <string name="update_dialog_title">Version %1$s</string>
+    <string name="update_dialog_no_notes">This release ships without notes.</string>
+    <string name="update_download">Download</string>
+    <string name="update_downloading">Downloading %1$d%%</string>
+    <string name="update_install">Install</string>
+    <string name="update_ignore_version">Skip this version</string>
     <string name="settings_llm_test">Test</string>
     <string name="settings_llm_test_hint">Tap to send one request</string>
     <string name="settings_llm_test_running">Sending…</string>
@@ -301,7 +329,8 @@
     <string name="video_parts_expand">All %1$d parts</string>
     <string name="settings_section_account">Account</string>
     <string name="feed_all_followings">All following</string>
-    <string name="feed_up_live">%1$s is live</string>
+    <string name="feed_live_now">%1$d live</string>
+    <string name="feed_live_now_title">Live now</string>
     <string name="video_action_listen">Listen</string>
     <string name="offline_count">%1$d videos</string>
 </resources>

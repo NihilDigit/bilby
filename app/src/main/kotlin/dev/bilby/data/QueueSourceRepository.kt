@@ -59,7 +59,69 @@ class QueueSourceRepository(
         }
         return fromSeason(bvid, detail)
             ?: fromUpSpace(bvid, detail)
+            ?: fromSeries(bvid, detail)
             ?: fromUpDynamics(bvid, detail)
+    }
+
+    /**
+     * 这位 UP 的**系列**里找。合集(season)那条已经由 [fromSeason] 用详情里的 `ugc_season`
+     * 处理了,系列没有对应的字段 —— 详情根本不告诉你这条视频属于哪个系列。
+     *
+     * **直播回放走的正是这条路。** 那类稿件挂在一个系列下(常见的名字就叫「直播回放」),而且
+     * `arc/search` 不返回它们:表现是从 UP 的合集页点进去能放,却建不出队列,永远只有一条。
+     * 真机上用 BV12iuG6zEt5 复现过,它属于 series_id 5157110。
+     *
+     * 排在 [fromUpSpace] 之后:绝大多数视频在投稿列表里,那条路一次二分就定位到了,而这条
+     * 要按系列逐个翻。排在 [fromUpDynamics] 之前:动态那条一页页往前走且翻不到就放弃,更贵
+     * 也更容易空手而归。
+     *
+     * **有请求预算,翻不完就放弃并记一行。** 一个 UP 可能有几十个系列,每个几百条;为一条
+     * 视频把它们全翻一遍是拿风控换一个"说不定能建出来"。翻不到就老实停在单条队列 ——
+     * 那是"这条视频没有可确定的所属集合"的诚实结果。
+     */
+    private suspend fun fromSeries(bvid: String, detail: VideoDetail): QueueBuildResult? {
+        val mid = detail.up.mid
+        if (mid == 0L) return null
+
+        val collections = when (val result = spaceRepository.loadCollections(mid, 1)) {
+            is BiliResult.Ok -> result.value.items.filterNot { it.isSeason }
+            else -> {
+                BiliLog.w("队列:拉取 UP 合集系列列表失败,mid=$mid")
+                return null
+            }
+        }
+        if (collections.isEmpty()) return null
+
+        var budget = SERIES_REQUEST_BUDGET
+        for (series in collections.take(SERIES_SCAN_LIMIT)) {
+            val videos = mutableListOf<SpaceVideoItem>()
+            var page = 1
+            while (budget > 0) {
+                budget--
+                val loaded = when (val result = spaceRepository.loadCollectionDetail(mid, series, page)) {
+                    is BiliResult.Ok -> result.value
+                    else -> {
+                        BiliLog.w("队列:拉取系列 ${series.id} 第 $page 页失败")
+                        break
+                    }
+                }
+                videos += loaded.items
+                if (videos.any { it.bvid == bvid } || videos.size >= loaded.total || loaded.items.isEmpty()) break
+                page++
+            }
+
+            val position = videos.indexOfFirst { it.bvid == bvid }
+            if (position < 0) continue
+            val from = (position - WINDOW_HALF).coerceAtLeast(0)
+            val to = (position + WINDOW_HALF).coerceAtMost(videos.lastIndex)
+            val windowed = videos.subList(from, to + 1)
+            return QueueBuildResult(
+                items = windowed.map { it.toQueueItem() },
+                sourceLabel = "系列《${series.name}》· 共 ${windowed.size} 条",
+            )
+        }
+        BiliLog.w("队列:UP 的前 $SERIES_SCAN_LIMIT 个系列(预算 $SERIES_REQUEST_BUDGET 次请求)里没有 bvid=$bvid")
+        return null
     }
 
     /**
@@ -257,6 +319,12 @@ class QueueSourceRepository(
 
     private companion object {
         const val WINDOW_HALF = 25
+
+        /** 最多看这位 UP 的前几个系列。列表按更新时间排,在播的那个系列排在前面。 */
+        const val SERIES_SCAN_LIMIT = 4
+
+        /** 扫系列总共最多发几次请求(每次 30 条)。够翻完一个几百条的直播回放系列的前段。 */
+        const val SERIES_REQUEST_BUDGET = 8
         const val PAGE_SIZE = 30 // loadArchives 固定 ps=30(SpaceRepository.kt)
 
         /** 二分的探测上限。2^12 页 = 12 万条投稿,够到不了;它挡的是列表非单调时的死循环。 */

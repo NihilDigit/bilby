@@ -36,6 +36,11 @@ data class ExpandedReplies(
     val items: List<CommentItem>,
     val loadingMore: Boolean = false,
     val hasMore: Boolean = false,
+    /**
+     * 这一楼展开失败的原因。**不写进 [CommentUiState.error]**:那一份画在整个评论区的页脚上,
+     * 而展开按钮可能在十几屏之外,报在那里等于没报 —— 点下去看起来什么都没发生。
+     */
+    val error: String? = null,
 )
 
 class CommentViewModel(
@@ -182,7 +187,8 @@ class CommentViewModel(
         // 把刚刚置上的 loadingMore 又抹掉,于是这一次的转圈不显示,而重复点击的守卫也失效。
         expandJobs[rootId]?.cancel()
         _state.update { current ->
-            val updated = existing?.copy(loadingMore = true) ?: ExpandedReplies(items = emptyList(), loadingMore = true)
+            val updated = existing?.copy(loadingMore = true, error = null)
+                ?: ExpandedReplies(items = emptyList(), loadingMore = true)
             current.copy(expandedReplies = current.expandedReplies + (rootId to updated))
         }
 
@@ -194,9 +200,19 @@ class CommentViewModel(
                         val sub = result.value
                         subReplyNextPage[rootId] = sub.nextPage ?: page
                         _state.update { current ->
-                            val prevItems = current.expandedReplies[rootId]?.items.orEmpty()
+                            // **展开的第一页要以预览楼层打底。** 主楼自带的 previewReplies 是服务端
+                            // 挑的最热几条,而 `x/v2/reply/reply` 只按时间排(sort 参数传 0/1/2/3
+                            // 返回完全相同,服务端忽略它),第 1 页多半不含那几条 —— 直接换掉的话,
+                            // 用户正在读的那条热评在点下"展开"的瞬间消失,或者被拆到别人中间去,
+                            // 表现就是"展开有时候会消失有时候重排"。
+                            //
+                            // appendDistinctBy 同时兜住重复:预览楼层真的落在这一页里时只留一份,
+                            // 服务端不给 nextPage 而同一页被再请求一次时也不会拼出两遍。
+                            val base = current.expandedReplies[rootId]?.items
+                                ?.takeIf { it.isNotEmpty() }
+                                ?: current.rootComment(rootId)?.previewReplies.orEmpty()
                             val merged = ExpandedReplies(
-                                items = prevItems + sub.items,
+                                items = base.appendDistinctBy(sub.items) { it.rpid },
                                 loadingMore = false,
                                 hasMore = sub.hasMore,
                             )
@@ -204,8 +220,11 @@ class CommentViewModel(
                         }
                     }
 
-                    is BiliResult.ApiError -> if (gen == generation) setError("${result.message}(${result.code})")
-                    is BiliResult.Failure -> if (gen == generation) setError(result.cause.message ?: "网络错误")
+                    is BiliResult.ApiError ->
+                        if (gen == generation) setExpandError(rootId, "${result.message}(${result.code})")
+
+                    is BiliResult.Failure ->
+                        if (gen == generation) setExpandError(rootId, result.cause.message ?: "网络错误")
                 }
             } finally {
                 // 失败或取消也要把 loadingMore 收回去,不然这个 root 的展开按钮永远转圈
@@ -282,6 +301,10 @@ class CommentViewModel(
         expandReplies(rootId)
     }
 
+    /** 主楼(含置顶)。只在主楼层找,楼中楼没有自己的 previewReplies。 */
+    private fun CommentUiState.rootComment(rpid: Long): CommentItem? =
+        topComment?.takeIf { it.rpid == rpid } ?: items.find { it.rpid == rpid }
+
     private fun findComment(rpid: Long): CommentItem? {
         val state = _state.value
         state.topComment?.let { if (it.rpid == rpid) return it }
@@ -309,6 +332,14 @@ class CommentViewModel(
                     v.copy(items = v.items.map { if (it.rpid == rpid) transform(it) else it })
                 },
             )
+        }
+    }
+
+    /** 展开失败报在这一楼自己身上,见 [ExpandedReplies.error]。 */
+    private fun setExpandError(rootId: Long, message: String) {
+        _state.update { current ->
+            val entry = current.expandedReplies[rootId] ?: return@update current
+            current.copy(expandedReplies = current.expandedReplies + (rootId to entry.copy(error = message)))
         }
     }
 

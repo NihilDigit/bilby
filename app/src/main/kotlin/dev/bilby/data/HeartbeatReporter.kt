@@ -3,6 +3,8 @@ package dev.bilby.data
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.postAction
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /**
  * 播放进度心跳上报,`POST x/click-interface/web/heartbeat`。
@@ -23,9 +25,30 @@ import dev.bilby.api.postAction
  * 这里只做 UGC(type=3),不支持 PGC/PUGV——和 VideoRepository 现有范围一致,
  * 真要接番剧再加 epid/sid/sub_type 参数。
  */
-class HeartbeatReporter(private val client: BiliClient) {
+class HeartbeatReporter(
+    private val client: BiliClient,
+    /**
+     * **应用级 scope,不是调用方的。**
+     *
+     * 最要紧的那一次心跳发生在离开播放页的瞬间(`VideoScreen` 的 onDispose):它带的是这次
+     * 观看的最终位置,而云端那份是续播的唯一来源。原先它跑在 `viewModelScope` 上 —— 页面
+     * 出栈时 NavEntry 的 ViewModelStore 正在清,scope 当场取消,请求还没发出去就没了,日志
+     * 里只留一行 `JobCancellationException`。真机上抓到过。
+     *
+     * 于是"看完一段就退出"这次观看等于没发生,而周期心跳带着 `isPlaying` 的闸,暂停着看完
+     * 再退出更是一个字都写不进去。多分 P 视频最容易撞上:每一 P 的记录各自独立,漏掉一次
+     * 就停在上一 P 的位置。
+     *
+     * 归到这里而不是让调用方换个 scope:调用方有几个、将来还会有几个,而"这个请求必须活过
+     * 发起它的那个页面"是心跳自己的性质。
+     */
+    private val scope: CoroutineScope,
+) {
 
     /**
+     * 发一次心跳。**不是挂起函数**:调用点通常正在被销毁(见 [scope] 的说明),
+     * 让它去持有一个协程正是那个坑。
+     *
      * [realtimeSeconds]、[startTs]、[videoDurationSeconds] 已不再进请求体,签名暂时保留:
      * 唯一的调用方 `ui/video/VideoViewModel` 属于另一位负责人,本轮不动 ui/。那边清理完
      * 之后,这三个参数连同 [progressSeconds](它与 [playedTimeSeconds] 一直是同一个值)
@@ -34,7 +57,7 @@ class HeartbeatReporter(private val client: BiliClient) {
      * aid 保留不动:PiliPlus 的 UGC 心跳发的是 bvid,但接口本身 aid/bvid 二选一,这一处
      * 不构成行为差异,不值得为它改调用方签名。
      */
-    suspend fun report(
+    fun report(
         aid: Long,
         cid: Long,
         progressSeconds: Long,
@@ -53,7 +76,7 @@ class HeartbeatReporter(private val client: BiliClient) {
         )
         // 失败已由 postAction 记过一行日志(路径 + code + message),这里返回值丢弃即可:
         // 心跳失败绝不能打断播放。
-        client.postAction(HEARTBEAT_URL, form)
+        scope.launch { client.postAction(HEARTBEAT_URL, form) }
     }
 
     private companion object {

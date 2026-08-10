@@ -95,9 +95,27 @@ data class ReplyContentDto(
     val message: String = "",
     val pictures: List<ReplyPictureDto>? = null,
     // key 是消息文本里的表情占位符原文(如 "[doge]"),value 带图片地址,渲染时按 key 在
-    // message 里做替换/标注即可,不需要额外解析 members/jump_url(notes §1.4 两者都是未强
-    // 类型化的 UNSURE 字段,第一版不依赖它们,只靠正则识别 @ 和链接,详见 CommentSection)。
+    // message 里做替换/标注即可。
     val emote: Map<String, ReplyEmoteDto>? = null,
+    /**
+     * 被 @ 到的人。notes §1.4 把它记成未强类型化的 UNSURE 字段,拉真实响应确认了:它是一个
+     * 数组,每项的结构和 [ReplyMemberDto] 同形(mid 同样是字符串)。这里只取 @ 需要的两项。
+     *
+     * jump_url 仍然不解析:那是一个以**匹配文本**为 key 的 map,value 里给的是
+     * `bilibili://search?keyword=...` 这类站内 schema,落到本应用只有搜索一个去处,
+     * 而正文里那几个字本来就能被选中复制去搜。
+     */
+    val members: List<ReplyAtMemberDto> = emptyList(),
+)
+
+/**
+ * @ 到的人。**uname 是此刻的昵称,而正文里留的是发帖当时的昵称**,两者会对不上 ——
+ * 抽样的 11 条里有 5 条改过名。所以匹配不能只靠名字,见 CommentSection 的 resolveMentions。
+ */
+@Serializable
+data class ReplyAtMemberDto(
+    val mid: String = "0",
+    val uname: String = "",
 )
 
 @Serializable

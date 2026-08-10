@@ -99,6 +99,7 @@ import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.AvatarBadge
 import dev.bilby.ui.components.BadgedAvatar
+import dev.bilby.ui.components.ChoiceRow
 import dev.bilby.ui.components.CompactVideoRow
 import dev.bilby.ui.components.FollowButton
 import dev.bilby.ui.components.InlineProgress
@@ -191,6 +192,8 @@ fun VideoTabs(
     onLikeComment: (Long) -> Unit,
     onDeleteComment: (Long) -> Unit,
     onSeekComment: (Long) -> Unit = {},
+    /** 评论正文里的 @ 点开是那个人的空间,和上面 UP 那一行同一个去处。 */
+    onCommentUserClick: (Long) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // 评论数用服务端给的总数,不是已渲染条数 —— 后者会随翻页一路变大,像个假计数器。
@@ -266,6 +269,7 @@ fun VideoTabs(
                     onLike = onLikeComment,
                     onDelete = onDeleteComment,
                     onSeek = onSeekComment,
+                    onUserClick = onCommentUserClick,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -815,25 +819,6 @@ private fun CoinDialog(
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         },
     )
-}
-
-/**
- * 单选行。用 `Modifier.selectable` 而不是给 RadioButton 单独挂 onClick:
- * 前者让整行成为一个可选中的语义节点(读屏念"单选按钮,已选中,2 枚"),
- * 后者会让读屏把控件和文字当成两件无关的东西,而且只有那个小圆点能点。
- */
-@Composable
-private fun ChoiceRow(selected: Boolean, onSelect: () -> Unit, label: String) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = Dimens.MinTouchTarget)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect),
-    ) {
-        RadioButton(selected = selected, onClick = null)
-        Text(label, modifier = Modifier.padding(start = Spacing.Tight))
-    }
 }
 
 /** 同上,复选版。 */

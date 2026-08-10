@@ -115,6 +115,30 @@ class SettingsStore(context: Context) {
     }
 
     /**
+     * 用户按「忽略此版本」压掉的那个版本号。
+     *
+     * **存版本号而不是一个布尔**:存布尔的话,下一个版本发出来时那个"已忽略"还在,而用户
+     * 忽略的是上一个版本,不是"以后都别提"。存号之后,只要发的不是这一版,提示照常出现。
+     */
+    val ignoredUpdateVersion: Flow<String> = store.data.map { p -> p[KEY_IGNORED_UPDATE].orEmpty() }
+
+    suspend fun saveIgnoredUpdateVersion(version: String) {
+        store.edit { p -> p[KEY_IGNORED_UPDATE] = version }
+    }
+
+    /**
+     * 同时下几条缓存。为什么默认 1、上限 3,见 [dev.bilby.offline.OfflineDownloader] 的
+     * "并发度"一节 —— 这里只负责把用户选的那个数存下来。
+     */
+    val offlineConcurrency: Flow<Int> = store.data.map { p ->
+        (p[KEY_OFFLINE_CONCURRENCY] ?: DEFAULT_OFFLINE_CONCURRENCY).coerceIn(1, MAX_OFFLINE_CONCURRENCY)
+    }
+
+    suspend fun saveOfflineConcurrency(value: Int) {
+        store.edit { p -> p[KEY_OFFLINE_CONCURRENCY] = value.coerceIn(1, MAX_OFFLINE_CONCURRENCY) }
+    }
+
+    /**
      * SponsorBlock。服务器地址可配是有原因的:它是社区跑的第三方服务,挂掉或换域名时
      * 我们这边发不出版本,用户得能自己改(PiliPlus 同样把它做成可配项)。
      */
@@ -291,6 +315,22 @@ class SettingsStore(context: Context) {
 
         /** 可选档位。再快画面就只剩一串跳帧,再慢和正常倍速区分不出来。 */
         val FAST_FORWARD_SPEEDS = listOf(2f, 2.5f, 3f)
+
+        private val KEY_IGNORED_UPDATE = stringPreferencesKey("ignored_update_version")
+
+        private val KEY_OFFLINE_CONCURRENCY = intPreferencesKey("offline_concurrency")
+
+        /** 默认仍是一条一条下,和加这个设置之前的行为一样。 */
+        const val DEFAULT_OFFLINE_CONCURRENCY = 1
+
+        /** 上限。理由和档位清单一起写在 [OFFLINE_CONCURRENCY_OPTIONS] 上。 */
+        const val MAX_OFFLINE_CONCURRENCY = 3
+
+        /**
+         * 可选并发度。**上限是 3 不是"随便填"**:再往上,瓶颈从带宽换成风控 —— 每条都要先打
+         * 一次 playurl,同时打十次是那个接口最不该出现的形状。三条已经足够把家用带宽吃满。
+         */
+        val OFFLINE_CONCURRENCY_OPTIONS = listOf(1, 2, 3)
 
         private val KEY_SB_ENABLED = booleanPreferencesKey("sponsorblock_enabled")
         private val KEY_SB_CATEGORIES = stringSetPreferencesKey("sponsorblock_categories")

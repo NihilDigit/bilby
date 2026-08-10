@@ -49,6 +49,16 @@ sealed interface LiveMessage {
      */
     data class Popularity(val value: Long) : LiveMessage
 
+    /**
+     * 看过的人数。**和 [Popularity] 是两个数,不能互相顶替** —— 人气值是服务端按互动算出来的
+     * 一个分数(送礼、弹幕都会推高它),看过人数才是真的有多少人来过。界面上写着"人"的那一处
+     * 用这个。
+     *
+     * [text] 是服务端已经格式化好的整句(如"1.2万人看过")。不解析成数字再自己拼:那个阈值
+     * (万/亿)和小数位是 B 站定的,自己拼一份出来只会和官方端对不上。
+     */
+    data class Watched(val text: String) : LiveMessage
+
     /** 醒目留言。[endTimeSeconds] 到点就该从列表里撤下来,是服务端定的,不是本地计时。 */
     data class SuperChat(
         val id: Long,
@@ -197,6 +207,7 @@ class LiveDanmakuClient(
         val message = when {
             cmd.startsWith("DANMU_MSG") -> root.parseDanmaku(selfMid)
             cmd == "SUPER_CHAT_MESSAGE" -> root.parseSuperChat()
+            cmd == "WATCHED_CHANGE" -> root.parseWatched()
             else -> null
         }
         if (message != null) out.send(message)
@@ -281,6 +292,14 @@ private fun JsonObject.parseDanmaku(selfMid: Long): LiveMessage.Danmaku? {
         isSelf = selfMid != 0L && mid == selfMid,
     )
 }
+
+/** `WATCHED_CHANGE` 的 `data.text_large`,服务端已经格式化好(见 [LiveMessage.Watched])。 */
+private fun JsonObject.parseWatched(): LiveMessage.Watched? =
+    (this["data"] as? JsonObject)
+        ?.get("text_large")
+        ?.jsonPrimitive?.contentOrNull
+        ?.takeIf { it.isNotEmpty() }
+        ?.let { LiveMessage.Watched(it) }
 
 private fun JsonObject.parseSuperChat(): LiveMessage.SuperChat? {
     val data = this["data"] as? JsonObject ?: return null

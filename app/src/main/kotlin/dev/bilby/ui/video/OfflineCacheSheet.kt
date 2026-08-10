@@ -19,6 +19,7 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -32,12 +33,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import dev.bilby.R
 import dev.bilby.data.QualityOption
 import dev.bilby.player.QueueItem
 import dev.bilby.player.videoQualityLabel
-import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 
 /**
@@ -52,6 +53,9 @@ import dev.bilby.ui.theme.Spacing
  *
  * 已经缓存过的条目**显示出来但不可选**:藏起来会让人以为队列少了一条,而"这条已经在本地了"
  * 正是用户此刻想知道的事。
+ *
+ * 弹幕这里没有开关:它一律跟着视频一起缓存。一条视频的全部弹幕只有几十 KB,给它一个勾等于
+ * 让人为一个不存在的取舍做决定,而漏勾的代价是离线打开时才发现一条弹幕都没有。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,7 +68,7 @@ fun OfflineCacheSheet(
     defaultQuality: Int,
     /** 打开时默认勾中的那条(正在播的这条)。 */
     initialSelection: String?,
-    onConfirm: (selected: List<QueueItem>, qualityId: Int, withDanmaku: Boolean) -> Unit,
+    onConfirm: (selected: List<QueueItem>, qualityId: Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val selected = remember(items) {
@@ -73,22 +77,41 @@ fun OfflineCacheSheet(
         }
     }
     var quality by rememberSaveable { mutableStateOf(defaultQuality) }
-    // **默认连弹幕一起缓存。** 离线看没有弹幕的 B 站视频是另一个东西,而弹幕只有几十 KB,
-    // 不值得让用户每次都去勾一下。
-    var withDanmaku by rememberSaveable { mutableStateOf(true) }
 
     val selectable = items.filterNot { it.bvid in cachedBvids }
     val chosen = selectable.filter { selected[it.bvid] == true }
+    val allChosen = selectable.isNotEmpty() && chosen.size == selectable.size
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier.padding(horizontal = Spacing.Comfortable),
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            Text(
-                text = stringResource(R.string.offline_sheet_title),
-                style = MaterialTheme.typography.titleMedium,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = stringResource(R.string.offline_sheet_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                // 全选/全不选是同一个入口:一个只能全选的按钮,按下之后就再没有用处了,而这
+                // 恰好是最想撤销的一刻。已缓存的那些不在 [selectable] 里,全选也不会碰它们。
+                if (selectable.isNotEmpty()) {
+                    TextButton(
+                        onClick = {
+                            selectable.forEach { selected[it.bvid] = !allChosen }
+                        },
+                    ) {
+                        Text(
+                            stringResource(
+                                if (allChosen) R.string.offline_sheet_select_none else R.string.offline_sheet_select_all,
+                            ),
+                        )
+                    }
+                }
+            }
 
             Text(
                 text = stringResource(R.string.offline_sheet_quality),
@@ -109,27 +132,16 @@ fun OfflineCacheSheet(
                     )
                 }
             }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = Dimens.MinTouchTarget)
-                    .toggleable(
-                        value = withDanmaku,
-                        role = Role.Checkbox,
-                        onValueChange = { withDanmaku = it },
-                    ),
-            ) {
-                Checkbox(checked = withDanmaku, onCheckedChange = null)
-                Text(
-                    text = stringResource(R.string.offline_sheet_danmaku),
-                    modifier = Modifier.padding(start = Spacing.Tight),
-                )
-            }
         }
 
-        LazyColumn(modifier = Modifier.weight(1f, fill = false).heightIn(max = SheetListMaxHeight)) {
+        // 列表最多占窗口的这么高。**不能写死 dp** —— 横屏时窗口只有六百多 dp 高,一个按竖屏
+        // 定的 320dp 列表加上标题和档位那两行正好把确认按钮顶出屏幕外,而 sheet 里 `weight`
+        // 分不到东西(内容测的是 wrap content),那个按钮就只能滚出来。按比例算才跟着窗口走。
+        val density = LocalDensity.current
+        val listMaxHeight = with(density) {
+            (LocalWindowInfo.current.containerSize.height * SheetListHeightFraction).toDp()
+        }
+        LazyColumn(modifier = Modifier.weight(1f, fill = false).heightIn(max = listMaxHeight)) {
             items(items, key = { it.bvid }) { item ->
                 val cached = item.bvid in cachedBvids
                 val checked = selected[item.bvid] == true
@@ -159,7 +171,7 @@ fun OfflineCacheSheet(
         }
 
         Button(
-            onClick = { onConfirm(chosen, quality, withDanmaku) },
+            onClick = { onConfirm(chosen, quality) },
             enabled = chosen.isNotEmpty(),
             modifier = Modifier
                 .fillMaxWidth()
@@ -176,5 +188,8 @@ fun OfflineCacheSheet(
     }
 }
 
-/** 列表最多占这么高,再高会把下面的确认按钮顶出 sheet。 */
-private val SheetListMaxHeight = 320.dp
+/**
+ * 列表最多占窗口高度的这一比例。剩下的留给标题、清晰度那一行和底部的确认按钮 —— 竖屏上
+ * 40% 约等于原先那个 320dp,横屏上它会自己收窄,而不是把按钮挤出去。
+ */
+private const val SheetListHeightFraction = 0.4f

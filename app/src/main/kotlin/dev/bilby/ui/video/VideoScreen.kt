@@ -80,6 +80,7 @@ import kotlinx.coroutines.delay
 import dev.bilby.data.VideoRelation
 import dev.bilby.player.AudioPlaybackService
 import dev.bilby.player.QueueItem
+import dev.bilby.player.SleepTimerMode
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
 import dev.bilby.data.DanmakuPrefs
@@ -130,7 +131,7 @@ fun VideoScreen(
     /** 已缓存(或正在缓存)的 bvid。缓存面板拿它把已有的那几条标出来并禁选。 */
     cachedBvids: Set<String> = emptySet(),
     /** 缓存面板按下确认。清晰度与"要不要弹幕"都在面板里选,这里只负责把结果交出去。 */
-    onCacheSelection: (List<QueueItem>, qualityId: Int, withDanmaku: Boolean) -> Unit = { _, _, _ -> },
+    onCacheSelection: (List<QueueItem>, qualityId: Int) -> Unit = { _, _ -> },
     followState: FollowState,
     onToggleFollow: () -> Unit,
     /** UP 主等级,独立请求、独立失败——查不到就是 null,徽章不画(见 VideoViewModel.upCard)。 */
@@ -473,16 +474,16 @@ fun VideoScreen(
             onPrevious = { send(AudioPlaybackService.ACTION_PREVIOUS, Bundle.EMPTY) },
             onToggleShuffle = toggleShuffle,
             onRetry = retryPlayback,
-            onSleepTimer = { minutes, finishCurrentItem ->
-                // 哨兵值(不设时长的缺省)只在 AudioPlaybackService 里定义,这里不重复写字面量——
-                // 不带这个 key 就是"没设",取值那边自己有默认。
-                val args = Bundle().apply {
-                    if (minutes != null) putInt(AudioPlaybackService.EXTRA_SLEEP_MINUTES, minutes)
-                    putBoolean(AudioPlaybackService.EXTRA_SLEEP_FINISH_CURRENT, finishCurrentItem)
+            onSleepTimer = { mode ->
+                // 三种模式压进一个 Int:分钟数,或服务那边定义的两个哨兵。字面量不在这里重复写。
+                val minutes = when (mode) {
+                    SleepTimerMode.Off -> AudioPlaybackService.SLEEP_TIMER_OFF
+                    SleepTimerMode.EndOfItem -> AudioPlaybackService.SLEEP_END_OF_ITEM
+                    is SleepTimerMode.After -> mode.minutes
                 }
                 active.sendCustomCommand(
                     SessionCommand(AudioPlaybackService.ACTION_SLEEP_TIMER, Bundle.EMPTY),
-                    args,
+                    Bundle().apply { putInt(AudioPlaybackService.EXTRA_SLEEP_MINUTES, minutes) },
                 )
             },
             // 退出听视频就是把这个壳关掉,**没有第二件事**。队列不动、播放不停、视频轨由上面
@@ -756,6 +757,7 @@ fun VideoScreen(
                                 controller.seekTo(millis.coerceIn(0L, end))
                             }
                         },
+                        onCommentUserClick = onUpClick,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -856,7 +858,7 @@ fun VideoScreen(
             qualities = audioState.playInfo?.availableQualities.orEmpty(),
             defaultQuality = audioState.currentQuality,
             initialSelection = shownQueue.currentBvid,
-            onConfirm = { selected, quality, withDanmaku ->
+            onConfirm = { selected, quality ->
                 cacheSheetOpen = false
                 // 通知权限在**这里**要,不在开屏要:它唯一的用处是显示下载进度,而人此刻正好
                 // 按下了"开始缓存"——弹窗解释得通。开屏问的话既没有语境,拒绝之后也再没有
@@ -865,7 +867,7 @@ fun VideoScreen(
                 // **不等结果、也不因为被拒就不下载**:通知只是进度条,少了它下载照样跑完,
                 // 缓存列表里也看得到进度。把功能压在一个可以被拒的权限上是本末倒置。
                 requestNotificationPermission()
-                onCacheSelection(selected, quality, withDanmaku)
+                onCacheSelection(selected, quality)
             },
             onDismiss = { cacheSheetOpen = false },
         )

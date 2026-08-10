@@ -6,11 +6,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -82,5 +84,27 @@ fun <T> SortRow(
                 )
             }
         }
+    }
+}
+
+/**
+ * 对话框里的单选行。整行是一个可选中的语义节点(读屏念「单选按钮,已选中,30 分钟后停止」),
+ * 而不是给 `RadioButton` 单挂 onClick —— 后者会让读屏把控件和文字当成两件无关的东西,
+ * 而且只有那个小圆点能点。
+ *
+ * 和 [SortRow] 的分工:那个是列表上方常驻的排序,低强调、可横滚;这个是对话框里要下决心的
+ * 二选一或三选一,每项各占一行、有明确的选中标记。
+ */
+@Composable
+fun ChoiceRow(selected: Boolean, onSelect: () -> Unit, label: String, modifier: Modifier = Modifier) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = Dimens.MinTouchTarget)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect),
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Text(label, modifier = Modifier.padding(start = Spacing.Tight))
     }
 }

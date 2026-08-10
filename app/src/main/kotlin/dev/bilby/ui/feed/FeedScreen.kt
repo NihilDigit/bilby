@@ -6,7 +6,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -31,9 +30,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.bilby.ui.components.AvatarBadge
-import dev.bilby.ui.components.BadgedAvatar
+import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
+import dev.bilby.ui.components.LivePulse
+import dev.bilby.data.LiveUpBrief
 import dev.bilby.data.UpBrief
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -42,6 +42,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
@@ -92,6 +93,13 @@ data class FeedUiState(
      */
     val frequentUps: List<UpBrief> = emptyList(),
     /**
+     * 关注的人里此刻正在直播的那些。和 [frequentUps] 是两份名单,不是同一份的子集 ——
+     * 一个人可以在播而不在"最常访问"里。
+     */
+    val liveUps: List<LiveUpBrief> = emptyList(),
+    /** 一共有几个人在播。可能大于 [liveUps] 的长度,服务端只给这一屏的那几个。 */
+    val liveCount: Int = 0,
+    /**
      * 进这一屏时读到的「上次读到哪儿了」(DESIGN 2.1)。只在进屏那一刻取一次快照,
      * 不随之后的滚动落盘而更新 —— 否则分隔线会追着当前滚动位置跑,变成什么都分不出来。
      * null 表示从没记过(第一次用)或还没读出来。
@@ -141,7 +149,7 @@ fun FeedScreen(
     onRetry: () -> Unit,
     onItemClick: (FeedItem) -> Unit,
     onUpClick: (Long) -> Unit,
-    /** 「最常访问」里正在直播的那个人,点角标进直播间。 */
+    /** 从「正在直播」那张名单里选了一个,进他的直播间。 */
     onLiveClick: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
     onExcludeUp: (Long) -> Unit = {},
@@ -181,7 +189,12 @@ private fun FeedList(
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     // frequentUps 那一格排在动态流前面,分隔线/条目在 LazyColumn 里的绝对下标要把它加回来。
     // **宽屏下它不在这个列表里**(挪到了旁边的次区),这时不能加,否则开屏定位会差一格。
-    val baseOffset = if (!wide && state.frequentUps.isNotEmpty()) 1 else 0
+    // 「最常访问」那一格在没人可显示时整格不画,正在直播的那一格自己也可以撑起它 ——
+    // 判据必须和下面渲染时用的是同一个,差一格就是开屏定位落错一条。
+    val hasUpsRow = state.frequentUps.isNotEmpty() || state.liveUps.isNotEmpty()
+    val baseOffset = if (!wide && hasUpsRow) 1 else 0
+
+    var liveSheetOpen by rememberSaveable { mutableStateOf(false) }
 
     // 触底预取:在 composition 外用 snapshotFlow 观察滚动位置,避免在 composable 里直接调用副作用。
     LaunchedEffect(listState, state.hasMore, state.appending) {
@@ -237,12 +250,14 @@ private fun FeedList(
             ) {
         // 窄屏时「最常访问」仍然跟着列表一起滚,不吸顶:吸顶会让它变成常驻的入口带,
         // 而这一页的主体是动态流。宽屏下它挪到旁边的次区去了,这里就不再出现。
-        if (!wide && state.frequentUps.isNotEmpty()) {
+        if (!wide && hasUpsRow) {
             item(key = "frequent-ups") {
                 FrequentUpsRow(
                     ups = state.frequentUps,
+                    liveUps = state.liveUps,
+                    liveCount = state.liveCount,
                     onUpClick = onUpClick,
-                    onLiveClick = onLiveClick,
+                    onOpenLiveNow = { liveSheetOpen = true },
                     onOpenFollowings = onOpenFollowings,
                 )
             }
@@ -287,8 +302,10 @@ private fun FeedList(
             feedList(Modifier.weight(2f).fillMaxHeight())
             FrequentUpsPane(
                 ups = state.frequentUps,
+                liveUps = state.liveUps,
+                liveCount = state.liveCount,
                 onUpClick = onUpClick,
-                onLiveClick = onLiveClick,
+                onOpenLiveNow = { liveSheetOpen = true },
                 onOpenFollowings = onOpenFollowings,
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             )
@@ -297,6 +314,18 @@ private fun FeedList(
         AdaptiveContent(modifier = modifier, maxWidth = Breakpoints.ReadableWidth) {
             feedList(Modifier.fillMaxSize())
         }
+    }
+
+    // 名单空了就把 sheet 收掉:刷新之后最后一个人下播了,留着的是一张空 sheet。
+    if (liveSheetOpen && state.liveUps.isNotEmpty()) {
+        LiveNowSheet(
+            liveUps = state.liveUps,
+            onLiveClick = { room ->
+                liveSheetOpen = false
+                onLiveClick(room)
+            },
+            onDismiss = { liveSheetOpen = false },
+        )
     }
 }
 
@@ -309,8 +338,10 @@ private fun FeedList(
 @Composable
 private fun FrequentUpsPane(
     ups: List<UpBrief>,
+    liveUps: List<LiveUpBrief>,
+    liveCount: Int,
     onUpClick: (Long) -> Unit,
-    onLiveClick: (Long) -> Unit,
+    onOpenLiveNow: () -> Unit,
     onOpenFollowings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -321,26 +352,19 @@ private fun FrequentUpsPane(
                 modifier = Modifier.padding(horizontal = Spacing.Comfortable),
             )
         }
+        // 竖排里它同样排在最前面,并且和这一栏其余的行同形(ListItem + leading 头像)——
+        // 横排那一格是给方格排布的,原样搬进来会是一块比周围矮一截、字也小一号的补丁。
+        if (liveUps.isNotEmpty()) {
+            item(key = "live-now") {
+                LiveNowListRow(liveUps = liveUps, count = liveCount, onClick = onOpenLiveNow)
+            }
+        }
         items(ups, key = { it.mid }) { up ->
             ListItem(
                 headlineContent = {
                     Text(up.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 },
-                leadingContent = {
-                    BadgedAvatar(
-                        url = up.faceUrl,
-                        size = AvatarSize,
-                        badge = up.liveRoomId?.let { room ->
-                            AvatarBadge(
-                                icon = Icons.Filled.Videocam,
-                                contentDescription = stringResource(R.string.feed_up_live, up.name),
-                                onClick = { onLiveClick(room) },
-                                containerColor = MaterialTheme.colorScheme.error,
-                                contentColor = MaterialTheme.colorScheme.onError,
-                            )
-                        },
-                    )
-                },
+                leadingContent = { Avatar(url = up.faceUrl, size = AvatarSize) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(role = Role.Button) { onUpClick(up.mid) },
@@ -507,8 +531,10 @@ private fun FeedScreenErrorPreview() {
 @Composable
 private fun FrequentUpsRow(
     ups: List<UpBrief>,
+    liveUps: List<LiveUpBrief>,
+    liveCount: Int,
     onUpClick: (Long) -> Unit,
-    onLiveClick: (Long) -> Unit,
+    onOpenLiveNow: () -> Unit,
     onOpenFollowings: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -523,24 +549,16 @@ private fun FrequentUpsRow(
         contentPadding = PaddingValues(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // 正在直播的那一格排在最前面,是这一排的**前置项**而不是成员之一(见 LiveNowSlot)。
+        // 没人在播时它整格不画,这一排就还是原来那排。
+        if (liveUps.isNotEmpty()) {
+            item(key = "live-now") {
+                LiveNowSlot(liveUps = liveUps, count = liveCount, onClick = onOpenLiveNow)
+            }
+        }
         items(ups, key = { it.mid }) { up ->
             UpSlot(label = up.name, onClick = { onUpClick(up.mid) }) {
-                // 正在直播时角上挂一个小圆,点它直接进直播间;点头像仍然是进空间。
-                // 两件事得分得开 —— 直播是此刻正在发生、错过就没有的东西,而空间是那个人
-                // 攒下来的一切,把它们并成一个点击目标就得替用户猜他想去哪。
-                BadgedAvatar(
-                    url = up.faceUrl,
-                    size = AvatarSize,
-                    badge = up.liveRoomId?.let { room ->
-                        AvatarBadge(
-                            icon = Icons.Filled.Videocam,
-                            contentDescription = stringResource(R.string.feed_up_live, up.name),
-                            onClick = { onLiveClick(room) },
-                            containerColor = MaterialTheme.colorScheme.error,
-                            contentColor = MaterialTheme.colorScheme.onError,
-                        )
-                    },
-                )
+                Avatar(url = up.faceUrl, size = AvatarSize)
             }
         }
         // 入口做成横排的最后一项,而不是浮在右边的一个文字按钮。

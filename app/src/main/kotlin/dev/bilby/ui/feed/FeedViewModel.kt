@@ -141,7 +141,13 @@ class FeedViewModel(
      */
     private fun loadFrequentUps() = viewModelScope.launch {
         when (val result = followRepository.frequentUps()) {
-            is BiliResult.Ok -> _state.update { it.copy(frequentUps = result.value) }
+            is BiliResult.Ok -> _state.update {
+                it.copy(
+                    frequentUps = result.value.ups,
+                    liveUps = result.value.liveUsers,
+                    liveCount = result.value.liveCount,
+                )
+            }
             is BiliResult.ApiError -> BiliLog.w("取最常访问失败(${result.code}): ${result.message}")
             is BiliResult.Failure -> BiliLog.w("取最常访问异常", result.cause)
         }

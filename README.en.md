@@ -47,7 +47,7 @@ Done:
 - [x] Playback: fullscreen, quality, speed (WSOLA), double-tap to seek or pause, long-press fast-forward, drag-to-seek, swipe for brightness and volume, lock, multi-part videos that resume on the part you left; progress synced to the cloud
 - [x] Listening: same player as normal playback, screen-off background play, notification, lock screen and headset controls, sleep timer; shuffle queue; the subtitle track doubles as line-by-line lyrics, tap a line to seek
 - [x] Live: watch a room with danmaku, quality, fullscreen, and superchats
-- [x] Offline: pick videos from the playback queue, choose a quality, danmaku kept alongside; cached items live under the profile tab and play without the network
+- [x] Offline: pick videos from the playback queue (select-all available), choose a quality, danmaku kept alongside; how many download at once is configurable and the speed is shown; cached items live under the profile tab, play without the network, and form a queue of the whole library; with no network the video page is built from the cached title, description and counts rather than failing wholesale
 - [x] Danmaku: scrolling, top and bottom, following the playback clock, adjustable opacity
 - [x] Subtitles: multiple tracks, under the picture during normal playback, as a transcript while listening; AI subtitle repair
 - [x] Comments: read, sort, expand reply threads, post and reply, like, delete, tap a timestamp to seek, zoom images and swipe between them
@@ -61,10 +61,15 @@ Done:
 Planned:
 
 - [ ] Sending danmaku
-- [ ] Offline fallback: cache the title and counts so the video page does not fail wholesale without a network
+- [ ] Full coverage of moment types
+- [ ] Emote support
 - [ ] Reading articles in-app
 - [ ] Picture-in-picture
 - [ ] Filtering low-quality comments
+- [ ] Interface refinement
+- [ ] Performance work
+- [ ] Codebase structure cleanup
+- [ ] Comment pruning
 - [ ] CI regression tests
 - [ ] Agent harness work
 

@@ -26,11 +26,13 @@ import dev.bilby.PerfTrace
 import dev.bilby.R
 import dev.bilby.api.BiliResult
 import dev.bilby.data.PlayInfo
+import dev.bilby.data.QueueBuildResult
 import dev.bilby.data.QueueSourceRepository
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SubtitleRepository
 import dev.bilby.data.VideoRepository
 import dev.bilby.data.resumeAtMillisFor
+import dev.bilby.offline.OfflineStatus
 import dev.bilby.offline.OfflineStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -453,7 +455,7 @@ class AudioPlaybackService : MediaSessionService() {
         val generation = ++openGeneration
         val chain = PerfTrace.chain("queueEnrich")
         enrichJob = scope.launch {
-            val built = queueSourceRepository.forVideo(bvid)
+            val built = offlineQueue(bvid) ?: queueSourceRepository.forVideo(bvid)
             chain.mark("built")
             if (generation != openGeneration || queue.current()?.bvid != bvid) {
                 // 不动 queueEnriching:此刻它属于顶掉这次的那一轮补全。
@@ -480,6 +482,37 @@ class AudioPlaybackService : MediaSessionService() {
         }
         // 补全在飞这件事本身要发出去:上面 playCurrent 发的那一份还是"队列只有一条"。
         publishQueueChange()
+    }
+
+    /**
+     * 本地有完整副本时,队列就是**整个缓存库**(owner 定)。
+     *
+     * 判据和 [playCurrent] 挑本地副本用的是同一条:盘上有这条视频的完整副本。两处必须一致 ——
+     * 一旦放的是本地文件而队列却是"这条视频所属的合集",队列里除了这一条以外全要联网,而人
+     * 此刻多半正好没网,下一条就停在取流失败上。
+     *
+     * 顺带解决的是补全在离线时必然失败:[QueueSourceRepository.forVideo] 要拉详情和空间投稿,
+     * 没网就只剩一条的队列 —— 而缓存列表本身是一份用户亲手选定的有限集合,拿它当队列不违反
+     * "队列内容由用户自己选定"(DESIGN 2.4b)。
+     */
+    private suspend fun offlineQueue(bvid: String): QueueBuildResult? {
+        val cached = offlineStore.list()
+            .filter { it.status == OfflineStatus.Completed }
+            .sortedByDescending { it.createdAtMillis }
+        if (cached.none { it.bvid == bvid }) return null
+        return QueueBuildResult(
+            items = cached.map {
+                QueueItem(
+                    bvid = it.bvid,
+                    cid = it.cid,
+                    title = it.title,
+                    upName = it.upName,
+                    coverUrl = it.coverUrl,
+                    durationSeconds = it.durationSeconds,
+                )
+            },
+            sourceLabel = "已缓存 · 共 ${cached.size} 条",
+        )
     }
 
     /**
@@ -969,10 +1002,16 @@ class AudioPlaybackService : MediaSessionService() {
                 ACTION_RETRY -> retryNow()
                 ACTION_NEXT -> if (queue.next() != null) playCurrent()
                 ACTION_PREVIOUS -> if (queue.previous() != null) playCurrent()
-                ACTION_SLEEP_TIMER -> {
-                    val minutes = args.getInt(EXTRA_SLEEP_MINUTES, SLEEP_NO_DURATION).takeIf { it > 0 }
-                    sleepTimer.start(minutes, args.getBoolean(EXTRA_SLEEP_FINISH_CURRENT, false))
-                }
+                // 分钟数是三态里唯一带参数的那个:大于 0 即定时,[SLEEP_END_OF_ITEM] 即播完这条,
+                // 其余(含缺省)即取消。用一个 Int 表达而不是再加一个布尔 extra —— 模式互斥之后
+                // 两个字段能拼出的组合比模式还多,又要在这里判一次哪个说了算。
+                ACTION_SLEEP_TIMER -> sleepTimer.start(
+                    when (val minutes = args.getInt(EXTRA_SLEEP_MINUTES, SLEEP_TIMER_OFF)) {
+                        SLEEP_END_OF_ITEM -> SleepTimerMode.EndOfItem
+                        in 1..Int.MAX_VALUE -> SleepTimerMode.After(minutes)
+                        else -> SleepTimerMode.Off
+                    },
+                )
 
                 else -> return super.onCustomCommand(session, controller, customCommand, args)
             }
@@ -1016,11 +1055,15 @@ class AudioPlaybackService : MediaSessionService() {
         const val ACTION_PREVIOUS = "dev.bilby.PREVIOUS"
 
         const val ACTION_SLEEP_TIMER = "dev.bilby.SLEEP_TIMER"
-        const val EXTRA_SLEEP_MINUTES = "minutes"
-        const val EXTRA_SLEEP_FINISH_CURRENT = "finishCurrentItem"
 
-        /** [EXTRA_SLEEP_MINUTES] 缺省/不设时长时的哨兵值。 */
-        private const val SLEEP_NO_DURATION = -1
+        /** 分钟数,或下面两个哨兵之一。三种定时模式互斥,所以只需要这一个字段。 */
+        const val EXTRA_SLEEP_MINUTES = "minutes"
+
+        /** 播完当前这条就停,不设时长。 */
+        const val SLEEP_END_OF_ITEM = -2
+
+        /** 取消定时,也是 [EXTRA_SLEEP_MINUTES] 缺省时的取值。 */
+        const val SLEEP_TIMER_OFF = -1
 
         const val EXTRA_BVID = "bvid"
         const val EXTRA_CID = "cid"

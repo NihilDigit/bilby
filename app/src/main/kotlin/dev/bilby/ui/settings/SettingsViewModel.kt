@@ -53,6 +53,7 @@ data class SettingsUiState(
     val danmaku: DanmakuPrefs = DanmakuPrefs(),
     /** 首页排除了多少个 UP。为 0 时那一行不显示 —— 没排除过的人不需要看见这个概念。 */
     val excludedFeedCount: Int = 0,
+    val offlineConcurrency: Int = SettingsStore.DEFAULT_OFFLINE_CONCURRENCY,
     val update: UpdateState = UpdateState.Idle,
 )
 
@@ -153,6 +154,7 @@ class SettingsViewModel(
                     sponsorBlock = settings.sponsorBlockPrefs.first(),
                     hardwareCodecIds = DeviceCodecs.hardwareDecodableCodecIds,
                     danmaku = settings.danmakuPrefs.first(),
+                    offlineConcurrency = settings.offlineConcurrency.first(),
                 )
             }
         }
@@ -202,6 +204,11 @@ class SettingsViewModel(
     fun setFastForwardSpeed(value: Float) {
         _state.update { it.copy(fastForwardSpeed = value) }
         persist { settings.saveFastForwardSpeed(value) }
+    }
+
+    fun setOfflineConcurrency(value: Int) {
+        _state.update { it.copy(offlineConcurrency = value) }
+        persist { settings.saveOfflineConcurrency(value) }
     }
 
     fun updateSponsorBlock(value: SponsorBlockPrefs) {

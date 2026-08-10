@@ -173,11 +173,18 @@ class AppContainer(context: Context) {
             client = biliClient,
             videoRepository = videoRepository,
             danmakuRepository = danmakuRepository,
+            concurrency = settings.offlineConcurrency,
             onBusyChanged = { busy -> OfflineDownloadService.setRunning(appContext, busy) },
         )
     }
 
-    val heartbeatReporter: HeartbeatReporter by lazy { HeartbeatReporter(biliClient) }
+    /**
+     * 心跳跑在应用级 scope 上,理由见 [HeartbeatReporter] 的 scope 参数:最要紧的那一次
+     * 恰好发生在播放页销毁的瞬间。
+     */
+    val heartbeatReporter: HeartbeatReporter by lazy {
+        HeartbeatReporter(biliClient, CoroutineScope(SupervisorJob() + Dispatchers.IO))
+    }
 
     /** 第三方服务,不走 BiliClient(它带 B 站的 Cookie 与 Referer,发给别人既无必要也不合适)。 */
     val sponsorBlockRepository: SponsorBlockRepository by lazy { SponsorBlockRepository(httpClient, json) }

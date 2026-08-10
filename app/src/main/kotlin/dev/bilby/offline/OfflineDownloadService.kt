@@ -87,13 +87,19 @@ class OfflineDownloadService : Service() {
         val title: String = "",
         /** 0..100;-1 表示总长未知,画不确定态。 */
         val percent: Int = -1,
-        /** 还排着几条(不含正在下的这条)。多条一起缓存时,只看百分比会以为快好了。 */
+        /**
+         * 还有几条没完(不含通知里画着的这一条)。多条一起缓存时,只看百分比会以为快好了。
+         *
+         * **并行下的那几条也算在里面。** 通知只画得下一条进度,而并发度调到 3 之后,另外两条
+         * 正在下的既不在 Queued 里、也没画出来 —— 不算进来的话,三条一起下会显示成"还有 0 条"。
+         */
         val queued: Int = 0,
     )
 
     private fun List<OfflineItem>.toNotificationProgress(): NotificationProgress {
         val running = firstOrNull { it.status == OfflineStatus.Running }
-        val queued = count { it.status == OfflineStatus.Queued }
+        val queued = count { it.status == OfflineStatus.Queued } +
+            (count { it.status == OfflineStatus.Running } - 1).coerceAtLeast(0)
         if (running == null) return NotificationProgress(queued = queued)
         val fraction = running.progress
             ?: return NotificationProgress(title = running.title, queued = queued)

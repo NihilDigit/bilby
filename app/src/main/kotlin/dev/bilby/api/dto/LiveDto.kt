@@ -85,6 +85,21 @@ data class LiveDanmakuHostDto(
 data class LiveRoomH5InfoDto(
     @SerialName("room_info") val roomInfo: LiveRoomInfoDto? = null,
     @SerialName("anchor_info") val anchorInfo: LiveAnchorInfoDto? = null,
+    /** 看过的人数。和 `room_info.online`(人气值)是两个数,见 [LiveWatchedShowDto]。 */
+    @SerialName("watched_show") val watchedShow: LiveWatchedShowDto? = null,
+)
+
+/**
+ * "N 人看过"。**这才是人数**;`room_info.online` 是人气值,一个按互动算出来的分数,送礼和
+ * 弹幕都会推高它,它和"有多少人来过"没有换算关系。PiliPlus 房间页显示的也是这一项
+ * (`lib/pages/live_room/controller.dart` 的 `watchedShow`)。
+ *
+ * 只取 [textLarge]:它是服务端拼好的整句。同级还有一个 `num`,但万/亿的阈值和小数位是 B 站
+ * 定的,自己按 num 拼一份出来只会和官方端对不上。
+ */
+@Serializable
+data class LiveWatchedShowDto(
+    @SerialName("text_large") val textLarge: String = "",
 )
 
 @Serializable

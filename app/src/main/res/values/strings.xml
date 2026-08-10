@@ -113,6 +113,8 @@
     <string name="comment_delete">删除评论</string>
     <string name="comment_expand_replies">展开 %1$d 条回复</string>
     <string name="comment_load_more">加载更多</string>
+    <string name="comment_replies_failed">回复没加载出来</string>
+    <string name="comment_no_more_replies">没有更多回复</string>
     <string name="comment_replying_to">回复 @%1$s</string>
     <string name="comment_input_hint">发条友善的评论</string>
     <string name="comment_input_hint_reply">回复 %1$s</string>
@@ -164,7 +166,12 @@
     <string name="offline_cache_action">缓存</string>
     <string name="offline_sheet_title">缓存到本地</string>
     <string name="offline_sheet_quality">清晰度</string>
-    <string name="offline_sheet_danmaku">同时缓存弹幕</string>
+    <string name="offline_sheet_select_all">全选</string>
+    <string name="offline_selected_count">已选 %1$d 项</string>
+    <string name="offline_delete_batch_title">删除选中的缓存?</string>
+    <string name="offline_delete_batch_message">共 %1$d 项,文件会从本机移除。</string>
+    <string name="action_delete">删除</string>
+    <string name="offline_sheet_select_none">全不选</string>
     <string name="offline_sheet_confirm">缓存 %1$d 条</string>
     <string name="offline_sheet_empty_selection">选择要缓存的视频</string>
     <string name="offline_already_cached">已缓存</string>
@@ -183,6 +190,8 @@
     <string name="offline_notification_queued">还有 %1$d 条</string>
     <string name="size_mb">%1$.1f MB</string>
     <string name="size_gb">%1$.2f GB</string>
+    <string name="speed_kb">%1$d KB/s</string>
+    <string name="speed_mb">%1$.1f MB/s</string>
 
     <!-- 投币 / 收藏对话框 -->
     <string name="action_confirm">确认</string>
@@ -238,10 +247,9 @@
     <string name="queue_order_sequential">顺序</string>
     <string name="queue_order_shuffle">随机</string>
     <string name="sleep_timer_off">定时关闭</string>
-    <string name="sleep_timer_minutes">%1$d 分钟</string>
     <string name="sleep_timer_end_of_item">播完当前</string>
     <string name="sleep_timer_stop_in">%1$d 分钟后停止</string>
-    <string name="sleep_timer_finish_switch">播完当前视频再停</string>
+    <string name="sleep_timer_end_of_item_option">播完当前视频再停</string>
     <string name="sleep_timer_cancel">取消定时</string>
 
     <!-- SponsorBlock。键名对应接口的 category,顺序即设置页里的显示顺序 -->
@@ -280,6 +288,10 @@
     <string name="settings_configured">已配置</string>
     <string name="settings_loading">读取中…</string>
     <string name="settings_section_feed">动态</string>
+    <string name="settings_section_offline">缓存</string>
+    <string name="settings_offline_concurrency">同时下载</string>
+    <string name="settings_offline_concurrency_subtitle">调大能更快下完一批,代价是缓存期间刷视频会卡</string>
+    <string name="settings_offline_concurrency_value">%1$d 条</string>
     <string name="settings_feed_clear_excluded">清空不再显示的 UP 主</string>
     <string name="settings_feed_excluded_count">当前已隐藏 %1$d 位</string>
     <string name="settings_section_player">播放器</string>
@@ -314,6 +326,14 @@
     <string name="settings_update_ready">%1$s 已下载,点击安装</string>
     <string name="settings_update_failed">检查失败:%1$s</string>
 
+    <!-- 开屏那一次更新提示 -->
+    <string name="update_dialog_title">新版本 %1$s</string>
+    <string name="update_dialog_no_notes">这一版没有附更新说明。</string>
+    <string name="update_download">下载</string>
+    <string name="update_downloading">下载中 %1$d%%</string>
+    <string name="update_install">安装</string>
+    <string name="update_ignore_version">忽略此版本</string>
+
     <string name="settings_license">许可证</string>
     <string name="settings_github">项目 GitHub</string>
     <string name="settings_llm_test">测试</string>
@@ -336,7 +356,6 @@
     <!-- 直播 -->
     <string name="live_loading">正在连接直播间…</string>
     <string name="live_offline">主播还没开播</string>
-    <string name="live_online">%1$d 人在看</string>
     <string name="live_tab_chat">聊天</string>
     <string name="live_tab_guard">大航海</string>
     <string name="live_super_chat_price">¥%1$d</string>
@@ -376,7 +395,8 @@
     <string name="video_parts_expand">全部 %1$d 集</string>
     <string name="settings_section_account">账号</string>
     <string name="feed_all_followings">全部关注</string>
-    <string name="feed_up_live">%1$s 正在直播</string>
+    <string name="feed_live_now">%1$d 正在直播</string>
+    <string name="feed_live_now_title">正在直播</string>
     <string name="video_action_listen">听视频</string>
     <string name="offline_count">%1$d 个视频</string>
 </resources>

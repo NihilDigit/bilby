@@ -38,7 +38,9 @@ import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoRepository
 import dev.bilby.data.VideoStat
+import dev.bilby.data.VideoUp
 import dev.bilby.offline.OfflineDownloader
+import dev.bilby.offline.OfflineStore
 import dev.bilby.offline.toOfflineRequest
 import dev.bilby.player.AudioPlaybackService
 import dev.bilby.player.QueueItem
@@ -76,6 +78,7 @@ class VideoViewModel(
     private val subtitleRepository: SubtitleRepository,
     private val danmakuRepository: DanmakuRepository,
     private val offlineDownloader: OfflineDownloader,
+    private val offlineStore: OfflineStore,
 ) : ViewModel() {
 
     /**
@@ -596,8 +599,8 @@ class VideoViewModel(
      * **这里不落任何状态。** 下载器是应用级的(见 AppContainer),页面退出、切集、连播都不该
      * 影响已经排进去的活儿 —— 那正是"缓存"这个功能的用途。
      */
-    fun cacheSelection(items: List<QueueItem>, qualityId: Int, withDanmaku: Boolean) {
-        offlineDownloader.enqueue(items.map { it.toOfflineRequest(qualityId, withDanmaku) })
+    fun cacheSelection(items: List<QueueItem>, qualityId: Int) {
+        offlineDownloader.enqueue(items.map { it.toOfflineRequest(qualityId) })
     }
 
     /**
@@ -671,6 +674,60 @@ class VideoViewModel(
     }
 
     /**
+     * 详情拉不到时,拿缓存索引里那一份把页面撑起来。
+     *
+     * **这是缓存条目存那一整份元信息的用处**(见 [dev.bilby.offline.OfflineItem]):没有它,
+     * 离线打开一条已缓存的视频是"画面在放,而页面是一片错误提示" —— 播放走的是本地文件,
+     * 根本不需要详情,只有这一页在等网络。
+     *
+     * 补出来的这份**不含 staff、分 P 和合集**:那几样索引里没有,编一个空的出来正好等于
+     * "这条视频不是合集、没有分 P",而那是错的。少一块界面比多一块假的好。
+     *
+     * 评论区不受影响:它拿 [dev.bilby.data.VideoDetail.aid] 打接口,有网就开得出来,没网就
+     * 和别的网络内容一样失败 —— 评论本身不缓存(owner 定,它是随时在变的东西)。
+     */
+    private suspend fun fallBackToCache(target: String): Boolean {
+        val cached = offlineStore.completedFor(target) ?: return false
+        if (cached.aid == 0L) {
+            // 加这套元信息之前存的旧条目。补课在下载器启动时跑(backfillLegacyMetadata),
+            // 但那要有网 —— 拿一份 aid=0 的详情撑页面,评论区会去打 `oid=0`。
+            BiliLog.w("缓存索引没有元信息,不用它撑页面 bvid=$target")
+            return false
+        }
+        _state.update {
+            it.copy(
+                loading = false,
+                error = null,
+                detail = VideoDetail(
+                    bvid = cached.bvid,
+                    aid = cached.aid,
+                    cid = cached.cid,
+                    title = cached.title,
+                    description = cached.description,
+                    coverUrl = cached.coverUrl,
+                    durationSeconds = cached.durationSeconds,
+                    publishedAtEpochSeconds = cached.publishedAtEpochSeconds,
+                    up = VideoUp(cached.upMid, cached.upName, cached.upFaceUrl),
+                    staff = emptyList(),
+                    stat = VideoStat(
+                        view = cached.stat.view,
+                        danmaku = cached.stat.danmaku,
+                        reply = cached.stat.reply,
+                        favorite = cached.stat.favorite,
+                        coin = cached.stat.coin,
+                        share = cached.stat.share,
+                        like = cached.stat.like,
+                    ),
+                    pages = emptyList(),
+                    seasonTitle = "",
+                    seasonEpisodes = emptyList(),
+                ),
+            )
+        }
+        return true
+    }
+
+    /**
      * 片段随 cid 变,所以跟着服务那边正在播的分 P 重拉,而不是页面自己记一份 cid。
      *
      * 只认属于本页这条视频的 cid:播放器是全 app 共用的,队列走到别的视频上时不该把
@@ -697,18 +754,18 @@ class VideoViewModel(
         // 按本页的 aid 报上去。云端那份是续播的唯一来源,报错一次,下次进来就 seek 到不存在的位置。
         if (playback.queue?.current?.bvid != bvid) return
         val cid = (playback.queue?.currentCid ?: 0L).takeIf { it != 0L } ?: return
-        viewModelScope.launch {
-            heartbeatReporter.report(
-                aid = detail.aid,
-                cid = cid,
-                progressSeconds = positionMillis / 1000,
-                playedTimeSeconds = positionMillis / 1000,
-                realtimeSeconds = positionMillis / 1000,
-                startTs = sessionStartTs,
-                videoDurationSeconds = durationMillis / 1000,
-                isFinished = finished,
-            )
-        }
+        // 不套 viewModelScope:这个方法最要紧的一次调用来自播放页的 onDispose,那一刻
+        // 这个 ViewModel 正在被清,scope 当场取消,请求发不出去(见 HeartbeatReporter)。
+        heartbeatReporter.report(
+            aid = detail.aid,
+            cid = cid,
+            progressSeconds = positionMillis / 1000,
+            playedTimeSeconds = positionMillis / 1000,
+            realtimeSeconds = positionMillis / 1000,
+            startTs = sessionStartTs,
+            videoDurationSeconds = durationMillis / 1000,
+            isFinished = finished,
+        )
     }
 
     fun toggleLike() {
@@ -810,8 +867,9 @@ class VideoViewModel(
         }
     }
 
-    private fun fail(target: String, message: String) {
+    private suspend fun fail(target: String, message: String) {
         BiliLog.w("播放页失败($target): $message")
+        if (fallBackToCache(target)) return
         _state.update { it.copy(loading = false, error = message) }
     }
 

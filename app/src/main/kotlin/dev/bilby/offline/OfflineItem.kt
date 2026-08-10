@@ -1,6 +1,7 @@
 package dev.bilby.offline
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * 一条缓存的状态。
@@ -70,6 +71,12 @@ data class OfflineItem(
     /** 音视频两条流合计。总数未知(服务端没给 Content-Length)时为 0。 */
     val downloadedBytes: Long = 0,
     val totalBytes: Long = 0,
+    /**
+     * 当前下载速度。**不落盘** —— 它描述的是这一刻,而 meta.json 是给下次启动读的,存一个
+     * 上次退出瞬间的速度只会让列表在还没开始下的时候就显示 "3.2 MB/s"。
+     */
+    @Transient
+    val speedBytesPerSecond: Long = 0,
     val hasDanmaku: Boolean = false,
     /** 失败原因,给界面看的一句话。成功时为 null。 */
     val error: String? = null,

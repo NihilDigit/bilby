@@ -88,6 +88,7 @@ fun SettingsScreen(
     onDanmakuDensityChange: (DanmakuDensity) -> Unit,
     onDanmakuFrameRateChange: (DanmakuFrameRateCap) -> Unit,
     onSponsorBlockChange: (SponsorBlockPrefs) -> Unit,
+    onOfflineConcurrencyChange: (Int) -> Unit,
     onOpenGithub: () -> Unit,
     onClearExcludedFeed: () -> Unit,
     onCheckUpdate: () -> Unit,
@@ -138,6 +139,7 @@ fun SettingsScreen(
                             )
                         }
                         Column(modifier = Modifier.weight(1f)) {
+                            OfflineSettingsSection(state, onOfflineConcurrencyChange)
                             FeedSettingsSection(state, onClearExcludedFeed)
                             SponsorBlockSettingsSection(
                                 state = state,
@@ -165,6 +167,7 @@ fun SettingsScreen(
                         onDensityChange = onDanmakuDensityChange,
                         onFrameRateChange = onDanmakuFrameRateChange,
                     )
+                    OfflineSettingsSection(state, onOfflineConcurrencyChange)
                     FeedSettingsSection(state, onClearExcludedFeed)
                     SponsorBlockSettingsSection(
                         state = state,
@@ -360,6 +363,26 @@ private fun PlayerSettingsSection(
             )
         },
         onChange = onFrameRateChange,
+    )
+}
+
+/**
+ * 缓存。只有并发度一项 —— 清晰度在缓存面板上选(那是"这一次下什么"),而这里是"怎么下"。
+ */
+@Composable
+private fun OfflineSettingsSection(
+    state: SettingsUiState,
+    onConcurrencyChange: (Int) -> Unit,
+) {
+    SectionTitle(stringResource(R.string.settings_section_offline))
+    ChoiceSection(
+        title = stringResource(R.string.settings_offline_concurrency),
+        // 说清代价:调大不是白拿的,而"下载多了刷不动"是最容易被归到别处的那种症状。
+        subtitle = stringResource(R.string.settings_offline_concurrency_subtitle),
+        options = SettingsStore.OFFLINE_CONCURRENCY_OPTIONS,
+        selected = state.offlineConcurrency,
+        label = { stringResource(R.string.settings_offline_concurrency_value, it) },
+        onChange = onConcurrencyChange,
     )
 }
 

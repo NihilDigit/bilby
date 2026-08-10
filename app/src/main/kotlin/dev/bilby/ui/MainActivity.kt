@@ -25,13 +25,17 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Subscriptions
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Subscriptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -77,6 +81,7 @@ import androidx.compose.material.icons.outlined.DeleteSweep
 import dev.bilby.data.FavFolder
 import dev.bilby.data.PlayerPrefs
 import dev.bilby.offline.OfflineItem
+import dev.bilby.offline.OfflineStatus
 import dev.bilby.ui.fav.FavFolderScreen
 import dev.bilby.ui.fav.FavFolderViewModel
 import dev.bilby.ui.feed.FeedScreen
@@ -102,6 +107,8 @@ import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Motion
 import dev.bilby.ui.theme.rememberReducedMotion
 import dev.bilby.ui.theme.BilbyTheme
+import dev.bilby.ui.update.StartupUpdateDialog
+import dev.bilby.ui.update.StartupUpdateViewModel
 import dev.bilby.ui.toview.ToViewScreen
 import dev.bilby.ui.toview.ToViewViewModel
 import androidx.core.content.ContextCompat
@@ -169,6 +176,30 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+private fun StartupUpdateHost(container: AppContainer) {
+    val context = LocalContext.current
+    val vm: StartupUpdateViewModel = viewModel(
+        factory = viewModelFactory {
+            initializer {
+                StartupUpdateViewModel(
+                    updateRepository = container.updateRepository,
+                    settings = container.settings,
+                    downloadDir = UpdateInstaller.downloadDir(context),
+                )
+            }
+        },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    StartupUpdateDialog(
+        state = state,
+        onDownload = vm::download,
+        onInstall = { apk -> UpdateInstaller.install(context, apk) },
+        onIgnore = vm::ignore,
+        onDismiss = vm::dismiss,
+    )
+}
+
+@Composable
 private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<String?>) {
     // DataStore 第一帧是异步的:null 表示还没读出来,此时什么都不画,
     // 否则已登录用户每次冷启动都会闪一下登录页。
@@ -193,6 +224,11 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
 
     val reducedMotion = rememberReducedMotion()
     val backStack = rememberNavBackStack(Home)
+
+    // 新版本提示。挂在这一层而不是首页里:它和用户此刻在哪一页无关,而首页会随 tab 切换
+    // 离开组合 —— 挂在那儿的话,开屏正好停在别的 tab 上就永远不弹。
+    // **登录之后才挂**:上面那道 return 挡着,登录页不该被一个更新弹窗盖住。
+    StartupUpdateHost(container)
 
     /**
      * 外面递进来的链接。短链要先展开一次才知道指向哪儿,所以这一段可能要走一次网络。
@@ -813,6 +849,7 @@ private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
         onDanmakuDensityChange = vm::setDanmakuDensity,
         onDanmakuFrameRateChange = vm::setDanmakuFrameRate,
         onSponsorBlockChange = vm::updateSponsorBlock,
+        onOfflineConcurrencyChange = vm::setOfflineConcurrency,
         onClearExcludedFeed = vm::clearExcludedFeedMids,
         onOpenGithub = {
             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PROJECT_GITHUB_URL)))
@@ -871,14 +908,86 @@ private fun OfflineRoute(
     )
     val items by vm.items.collectAsStateWithLifecycle()
     val usedBytes by vm.usedBytes.collectAsStateWithLifecycle()
-    Scaffold(topBar = { BilbyTopBar(title = stringResource(R.string.offline_title), onBack = onBack) }) { insets ->
+
+    // 多选态就是"选中集合非空",不另设一个布尔 —— 两者永远同真同假,而分成两个状态之后
+    // "空集合 + 还在多选态"是个画得出来、退不出去的组合。
+    var selectedIds by remember { mutableStateOf(emptySet<String>()) }
+    var confirmingBatchDelete by remember { mutableStateOf(false) }
+    val selected = items.filter { it.id in selectedIds }
+    // 列表里已经没有的 id 要跟着掉:删完之后集合里留着几个死 id,顶栏就一直显示"已选 3 项"。
+    LaunchedEffect(items) { selectedIds = selectedIds intersect items.map { it.id }.toSet() }
+    BackHandler(enabled = selectedIds.isNotEmpty()) { selectedIds = emptySet() }
+
+    Scaffold(
+        topBar = {
+            if (selectedIds.isEmpty()) {
+                BilbyTopBar(title = stringResource(R.string.offline_title), onBack = onBack)
+            } else {
+                // 多选时整条顶栏换掉,返回箭头改成"退出多选"。这是 M3 的 contextual top app bar:
+                // 顶栏是当前上下文里能做什么的唯一说明,多选期间那个上下文变了。
+                BilbyTopBar(
+                    title = stringResource(R.string.offline_selected_count, selectedIds.size),
+                    onBack = { selectedIds = emptySet() },
+                    actions = {
+                        val all = items.map { it.id }.toSet()
+                        IconButton(onClick = { selectedIds = if (selectedIds == all) emptySet() else all }) {
+                            Icon(
+                                Icons.Outlined.SelectAll,
+                                contentDescription = stringResource(R.string.offline_sheet_select_all),
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                // 一个字节都还没下的那些直接删,理由同单条(见 OfflineScreen)。
+                                if (selected.all { it.status == OfflineStatus.Queued }) {
+                                    vm.deleteAll(selected)
+                                    selectedIds = emptySet()
+                                } else {
+                                    confirmingBatchDelete = true
+                                }
+                            },
+                        ) {
+                            Icon(
+                                Icons.Outlined.DeleteOutline,
+                                contentDescription = stringResource(R.string.action_delete),
+                            )
+                        }
+                    },
+                )
+            }
+        },
+    ) { insets ->
         OfflineScreen(
             items = items,
             usedBytes = usedBytes,
             onPlay = onPlay,
             onDelete = vm::delete,
             onRetry = vm::retry,
+            selectedIds = selectedIds,
+            onToggleSelection = { item ->
+                selectedIds = if (item.id in selectedIds) selectedIds - item.id else selectedIds + item.id
+            },
             contentPadding = insets,
+        )
+    }
+
+    if (confirmingBatchDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmingBatchDelete = false },
+            title = { Text(stringResource(R.string.offline_delete_batch_title)) },
+            text = { Text(stringResource(R.string.offline_delete_batch_message, selected.size)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmingBatchDelete = false
+                    vm.deleteAll(selected)
+                    selectedIds = emptySet()
+                }) { Text(stringResource(R.string.action_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingBatchDelete = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
         )
     }
 }
@@ -1146,6 +1255,7 @@ private fun VideoPane(
                     container.subtitleRepository,
                     container.danmakuRepository,
                     container.offlineDownloader,
+                    container.offlineStore,
                 )
             }
         },

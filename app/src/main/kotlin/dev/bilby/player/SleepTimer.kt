@@ -10,23 +10,34 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+/**
+ * 定时怎么停。**三选一,不是两个正交开关。**
+ *
+ * 原先时长和"播完当前"是两个独立的旗子,宣称四种组合。但两个都设的那一格在行为上从来
+ * 不存在:[onItemFinished] 只看旗子、不看定时到没到,所以当前这条先播完就当场停(那 N 分钟
+ * 从未生效),定时先到则清掉时长继续等这条播完 —— 两条路都归到"播完这条就停"。四个状态
+ * 只有三种行为,而多出来的那一格还让倒计时没法诚实显示:它到底是分钟数还是本条剩余,
+ * 取决于哪个先到,而"哪个先到"要到那一刻才知道。
+ *
+ * 三选一之后每个模式各有一个显然的倒计时,文案也不用再拼(见 ListenScreen 的 sleepTimerLabel)。
+ * 代价是"最迟 30 分钟,但别把正在放的切断"这个组合没有了 —— 它是旧注释描述的用法,
+ * 而代码从来没有实现过它。
+ */
 sealed interface SleepTimerMode {
-    /** 没设时长。 */
+    /** 不定时。 */
     data object Off : SleepTimerMode
 
-    /** 固定时长后。 */
+    /** 固定时长后停。 */
     data class After(val minutes: Int) : SleepTimerMode
+
+    /** 当前这条播完就停,不看时长。短视频想"听完这条就睡"走的是这一格。 */
+    data object EndOfItem : SleepTimerMode
 }
 
-/**
- * 时长([mode])和"播完当前视频再停"([finishCurrentItem])是两个正交的开关,不是三选一 ——
- * 只勾开关不设时长就是"播完这条就停",两个都设就是"最迟 N 分钟,但如果那时正好在放就等它放完"。
- */
 data class SleepTimerState(
     val mode: SleepTimerMode = SleepTimerMode.Off,
     /** 只有 [SleepTimerMode.After] 有值,UI 拿它倒计时。 */
     val remainingMillis: Long? = null,
-    val finishCurrentItem: Boolean = false,
 )
 
 /**
@@ -49,28 +60,27 @@ class SleepTimer(
 
     private var countdown: Job? = null
 
-    /**
-     * 设定定时。[minutes] 为 null 表示不设时长;[finishCurrentItem] 独立于时长,四种组合
-     * 都由这一个方法表达,调用方(Slider 与 Switch)各自只管自己那一半,互不覆盖。
-     */
-    fun start(minutes: Int?, finishCurrentItem: Boolean) {
+    /** 设定定时。[SleepTimerMode.Off] 等价于 [cancel]。 */
+    fun start(mode: SleepTimerMode) {
         countdown?.cancel()
         countdown = null
-        if (minutes == null) {
-            _state.value = SleepTimerState(SleepTimerMode.Off, null, finishCurrentItem)
-            return
-        }
-        val deadline = SystemClock.elapsedRealtime() + minutes * 60_000L
-        _state.value = SleepTimerState(SleepTimerMode.After(minutes), minutes * 60_000L, finishCurrentItem)
-        countdown = scope.launch {
-            while (isActive) {
-                val remaining = deadline - SystemClock.elapsedRealtime()
-                if (remaining <= 0) break
-                _state.value = _state.value.copy(remainingMillis = remaining)
-                // 秒级刷新够 UI 用;对不齐整秒无所谓,倒计时不是秒表。
-                delay(1_000)
+        when (mode) {
+            SleepTimerMode.Off -> _state.value = SleepTimerState()
+            SleepTimerMode.EndOfItem -> _state.value = SleepTimerState(SleepTimerMode.EndOfItem)
+            is SleepTimerMode.After -> {
+                val deadline = SystemClock.elapsedRealtime() + mode.minutes * 60_000L
+                _state.value = SleepTimerState(mode, mode.minutes * 60_000L)
+                countdown = scope.launch {
+                    while (isActive) {
+                        val remaining = deadline - SystemClock.elapsedRealtime()
+                        if (remaining <= 0) break
+                        _state.value = _state.value.copy(remainingMillis = remaining)
+                        // 秒级刷新够 UI 用;对不齐整秒无所谓,倒计时不是秒表。
+                        delay(1_000)
+                    }
+                    fire()
+                }
             }
-            onDeadline()
         }
     }
 
@@ -80,24 +90,15 @@ class SleepTimer(
         _state.value = SleepTimerState()
     }
 
-    /** 时长到点。要等这条播完的话不能现在就停——把时长部分清掉,旗子留给 [onItemFinished] 去问。 */
-    private fun onDeadline() {
-        if (_state.value.finishCurrentItem) {
-            _state.value = _state.value.copy(mode = SleepTimerMode.Off, remainingMillis = null)
-        } else {
-            fire()
-        }
-    }
-
     /**
      * 播放器报告当前这条播完了。返回 true 表示"该睡了",调用方**不要**再切下一条。
      * 由服务来问而不是这里监听播放器,是为了让 SleepTimer 不依赖 Player。
      *
-     * 只看 [SleepTimerState.finishCurrentItem] 这一个旗子:不管它是用户直接勾的
-     * (没设时长,等价于旧版 EndOfItem),还是时长到点后转过来的,处理都一样。
+     * 只有 [SleepTimerMode.EndOfItem] 才拦:定时模式到点由 [start] 里那个协程自己停,
+     * 与这条播到哪儿无关。
      */
     fun onItemFinished(): Boolean {
-        if (!_state.value.finishCurrentItem) return false
+        if (_state.value.mode != SleepTimerMode.EndOfItem) return false
         fire()
         return true
     }

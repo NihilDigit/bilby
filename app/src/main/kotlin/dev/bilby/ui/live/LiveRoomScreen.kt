@@ -186,7 +186,7 @@ fun LiveRoomScreen(
                         LiveControlBar(
                             isPlaying = isPlaying,
                             isFullscreen = isFullscreen,
-                            online = state.online,
+                            watched = state.watched,
                             danmakuEnabled = danmakuPrefs.enabled,
                             onDanmakuEnabledChange = {
                                 onDanmakuEnabledChange(it)
@@ -292,7 +292,8 @@ private fun LiveOffline(
 private fun LiveControlBar(
     isPlaying: Boolean,
     isFullscreen: Boolean,
-    online: Long,
+    /** 「N 人看过」整句,服务端拼好的。空串就不画这一格,见 LiveRoomUiState.watched。 */
+    watched: String,
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
     qualities: List<Int>,
@@ -315,8 +316,10 @@ private fun LiveControlBar(
                 tint = FixedColors.OnMedia,
             )
         }
+        // 拿不到就留白,不写"0 人看过" —— 那是个具体而错误的数字。宽度照占,不然弹幕按钮
+        // 会在这一句到货的那一刻横着跳一下。
         Text(
-            text = stringResource(R.string.live_online, online),
+            text = watched,
             style = MaterialTheme.typography.labelMedium,
             color = FixedColors.OnMedia,
             modifier = Modifier.weight(1f).padding(start = Spacing.Hair),

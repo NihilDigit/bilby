@@ -156,13 +156,21 @@ fun SearchChatScreen(
 ) {
     var inputFocused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
+    // **发送要收焦点。** 历史列表盖在结果上的判据之一就是"光标在输入框里"(见 NormalPane),
+    // 而发送不动焦点,于是搜完之后这一屏还停在历史上 —— 而刚搜的那个词正好排在最上面,
+    // 读起来像"搜索只是把词记进了历史,得再点一下才进得去"。点历史那条路早就收了焦点,
+    // 漏的是发送这条。
+    val send: () -> Unit = {
+        focusManager.clearFocus()
+        onSend()
+    }
     val inputBar: @Composable () -> Unit = {
         InputBar(
             input = state.input,
             onInputChange = onInputChange,
             mode = state.mode,
             onModeChange = onModeChange,
-            onSend = onSend,
+            onSend = send,
             // 开新会话是清空助理上下文的唯一入口(DESIGN 3.1:会话必须由用户显式开启)。
             onNewSession = onNewSession,
             onFocusChange = { inputFocused = it },

@@ -105,6 +105,7 @@ import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
 import dev.bilby.player.indexNear
 import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.ChoiceRow
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.CompactVideoRow
 import dev.bilby.ui.components.SeekBar
@@ -121,6 +122,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
+
+/** 倍速折算的除数下限。倍速滑到极小值时不让剩余时长炸成天文数字。 */
+private const val MinSpeedForEstimate = 0.1f
 
 /** 定时 Slider 的范围与步进:10~120 分钟,每格 5 分钟。 */
 private val SLEEP_TIMER_RANGE = 10f..120f
@@ -200,8 +204,8 @@ fun ListenScreen(
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onToggleShuffle: () -> Unit,
-    /** [minutes] 为 null 表示不设时长;两个参数独立,见 [dev.bilby.player.SleepTimer.start]。 */
-    onSleepTimer: (minutes: Int?, finishCurrentItem: Boolean) -> Unit,
+    /** 三选一,见 [dev.bilby.player.SleepTimerMode]。 */
+    onSleepTimer: (SleepTimerMode) -> Unit,
     /** 手动重试当前这条。退避耗尽之后由用户决定是再试还是按下一条跳过。 */
     onRetry: () -> Unit,
     onBack: () -> Unit,
@@ -424,6 +428,10 @@ fun ListenScreen(
                     hasPrevious = (state.queue?.positionInQueue ?: 0) > 1,
                     hasNext = (state.queue?.positionInQueue ?: 0) in 1 until (state.queue?.size ?: 0),
                     sleepTimer = sleepTimer,
+                    // 倍速折进去:2x 下剩的十分钟视频只放五分钟,不折算的话这个数会一直偏大。
+                    itemRemainingMillis = (duration - position)
+                        .takeIf { duration > 0L && it > 0L }
+                        ?.let { (it / speed.coerceAtLeast(MinSpeedForEstimate)).toLong() },
                     onPlayPause = { if (player.isPlaying) player.pause() else player.play() },
                     onPrevious = onPrevious,
                     onNext = onNext,
@@ -620,6 +628,8 @@ private fun PlaybackControls(
     hasPrevious: Boolean,
     hasNext: Boolean,
     sleepTimer: SleepTimerState,
+    /** 当前这条还要放多久,已按倍速折算;拿不到时长时为 null。见 [sleepTimerLabel]。 */
+    itemRemainingMillis: Long?,
     onPlayPause: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -686,7 +696,7 @@ private fun PlaybackControls(
             }
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            val label = sleepTimerLabel(sleepTimer)
+            val label = sleepTimerLabel(sleepTimer, itemRemainingMillis)
             val sleepLabel = stringResource(R.string.sleep_timer_off)
             // **计时中就只剩数字,图标让位,不是在图标下面再挂一行。** 挂一行的写法会让整条
             // 控制行在开始计时的那一刻长高一截,播放键跟着往下跳 —— 一个设定动作不该挪动
@@ -817,7 +827,7 @@ private fun QueueSheetContent(
 @Composable
 private fun SleepTimerDialog(
     sleepTimer: SleepTimerState,
-    onSet: (minutes: Int?, finishCurrentItem: Boolean) -> Unit,
+    onSet: (SleepTimerMode) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var minutes by remember {
@@ -825,41 +835,49 @@ private fun SleepTimerDialog(
             (sleepTimer.mode as? SleepTimerMode.After)?.minutes?.toFloat() ?: SLEEP_TIMER_DEFAULT_MINUTES,
         )
     }
-    var finishCurrentItem by remember { mutableStateOf(sleepTimer.finishCurrentItem) }
-    val active = sleepTimer.mode != SleepTimerMode.Off || sleepTimer.finishCurrentItem
+    var endOfItem by remember { mutableStateOf(sleepTimer.mode == SleepTimerMode.EndOfItem) }
+    val active = sleepTimer.mode != SleepTimerMode.Off
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.sleep_timer_off)) },
         text = {
+            // 两个模式互斥,所以是单选而不是"滑块 + 开关"。开关那版把它们摆成正交的两件事,
+            // 而它们其实是同一个问题的两个答案:什么时候停。
             Column {
-                Text(
-                    stringResource(R.string.sleep_timer_stop_in, minutes.roundToInt()),
-                    style = MaterialTheme.typography.titleMedium,
+                ChoiceRow(
+                    selected = endOfItem,
+                    onSelect = { endOfItem = true },
+                    // 对话框里用完整那句(和「30 分钟后停止」句式对齐);控制行那一格空间只够
+                    // 「播完当前」,用的是另一条 string。
+                    label = stringResource(R.string.sleep_timer_end_of_item_option),
                 )
+                ChoiceRow(
+                    selected = !endOfItem,
+                    onSelect = { endOfItem = false },
+                    label = stringResource(R.string.sleep_timer_stop_in, minutes.roundToInt()),
+                )
+                // 滑块归"定时"那一项,选中才可动 —— 拖它同时也是在选它,免得先点一下再拖两下。
                 Slider(
                     value = minutes,
-                    onValueChange = { minutes = it },
+                    onValueChange = {
+                        minutes = it
+                        endOfItem = false
+                    },
                     valueRange = SLEEP_TIMER_RANGE,
                     steps = SLEEP_TIMER_STEPS,
                     track = { sliderState ->
                         SliderDefaults.Track(sliderState = sliderState, drawTick = { _, _ -> })
                     },
                 )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.Tight),
-                ) {
-                    Text(stringResource(R.string.sleep_timer_finish_switch))
-                    Switch(checked = finishCurrentItem, onCheckedChange = { finishCurrentItem = it })
-                }
             }
         },
         confirmButton = {
             TextButton(
                 onClick = {
-                    onSet(minutes.roundToInt(), finishCurrentItem)
+                    onSet(
+                        if (endOfItem) SleepTimerMode.EndOfItem else SleepTimerMode.After(minutes.roundToInt()),
+                    )
                     onDismiss()
                 },
             ) {
@@ -873,7 +891,7 @@ private fun SleepTimerDialog(
                 if (active) {
                     TextButton(
                         onClick = {
-                            onSet(null, false)
+                            onSet(SleepTimerMode.Off)
                             onDismiss()
                         },
                     ) {
@@ -1191,21 +1209,24 @@ private fun SubtitleTrackCornerButton(
     }
 }
 
-/** 组合出「58:12」「58:12 · 播完这条」「播完这条」三种读法;都不生效时返回 null。 */
+/**
+ * 距离真正停下来还有多久。不定时时返回 null。
+ *
+ * **只给一个数,不拼文案。** 以前是「58:12 · 播完这条」,那两截读起来像两件事,而人想知道的
+ * 只有一件:什么时候会静下来。两种模式各有一个显然的答案 —— 定时是它自己的剩余,播完这条
+ * 是这一条的剩余。模式互斥之后这里不再需要在两者之间取舍(见 [SleepTimerMode])。
+ *
+ * @param itemRemainingMillis 当前这条还要放多久,**已按倍速折算**。拿不到时长时为 null。
+ */
 @Composable
-private fun sleepTimerLabel(state: SleepTimerState): String? {
-    val duration = when (val mode = state.mode) {
-        SleepTimerMode.Off -> null
-        is SleepTimerMode.After -> state.remainingMillis?.let { formatRemaining(it) }
-            ?: stringResource(R.string.sleep_timer_minutes, mode.minutes)
-    }
-    val finish = if (state.finishCurrentItem) stringResource(R.string.sleep_timer_end_of_item) else null
-    return when {
-        duration != null && finish != null -> "$duration · $finish"
-        duration != null -> duration
-        finish != null -> finish
-        else -> null
-    }
+private fun sleepTimerLabel(state: SleepTimerState, itemRemainingMillis: Long?): String? = when (state.mode) {
+    SleepTimerMode.Off -> null
+    is SleepTimerMode.After ->
+        formatRemaining(state.remainingMillis ?: (state.mode.minutes * 60_000L))
+    // 时长还没到手(刚起播、还在取流)时先用文案占位:这一格退回图标的话,就和"没设定时"
+    // 长得一模一样了。拿到时长后自动换成数字。
+    SleepTimerMode.EndOfItem -> itemRemainingMillis?.takeIf { it > 0L }?.let { formatRemaining(it) }
+        ?: stringResource(R.string.sleep_timer_end_of_item)
 }
 
 /**

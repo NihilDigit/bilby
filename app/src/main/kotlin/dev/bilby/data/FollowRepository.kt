@@ -16,8 +16,30 @@ data class UpBrief(
     val name: String,
     val faceUrl: String,
     val sign: String = "",
-    /** 正在直播时的房间号,没在播就是 null。只有"最常访问"那一路填得出来。 */
-    val liveRoomId: Long? = null,
+)
+
+/**
+ * 正在直播的一位关注对象。**和 [UpBrief] 分开**:直播是"此刻正在发生、错过就没有"的东西,
+ * 而 UpBrief 描述的是一个人。合成一个类之后,那个可空的房间号会出现在每一处用到关注对象的
+ * 地方,而其中绝大多数根本填不出它。
+ */
+data class LiveUpBrief(
+    val mid: Long,
+    val name: String,
+    val faceUrl: String,
+    val roomId: Long,
+    /** 直播间标题。列表里靠它才看得出"现在在播什么",而不只是一串人名。 */
+    val roomTitle: String,
+)
+
+/**
+ * portal 那一次请求的全部产出。[liveCount] 可能大于 `liveUsers.size` —— 服务端只给这一屏的
+ * 那几个人,但会如实告诉你一共有几个在播。首页那一格的数字用它。
+ */
+data class PortalSnapshot(
+    val ups: List<UpBrief> = emptyList(),
+    val liveUsers: List<LiveUpBrief> = emptyList(),
+    val liveCount: Int = 0,
 )
 
 /**
@@ -37,19 +59,33 @@ class FollowRepository(
      * 这是导航,不是推荐:里面每一个人都是用户自己关注的,点进去是空间页(DESIGN 1.1 把
      * "进空间"列为带意图的入口)。它不产生任何内容条目,也不参与动态流的排序。
      */
-    suspend fun frequentUps(): BiliResult<List<UpBrief>> =
+    suspend fun frequentUps(): BiliResult<PortalSnapshot> =
         client.getData<PortalDto>(
             PORTAL_URL,
             // up_list_more=1 是必需的:不带它服务端照样返回 code 0,但 up_list 整个缺席,
             // 表现是这一排静默消失而没有任何错误可查。web_location 照 PiliPlus 传。
             mapOf("up_list_more" to "1", "web_location" to "333.1365"),
         ).map { dto ->
-            // 直播态只**标注**在原有那排人身上,不把正在直播的人挪到前面、也不把不在这排里的
-            // 主播加进来:这一排的成员和顺序都是服务端按"最常访问"给的,动它就成了本地排序。
-            val liveRooms = dto.live_users?.items.orEmpty()
-                .filter { it.room_id > 0 }
-                .associate { it.mid to it.room_id }
-            dto.up_list?.items.orEmpty().map { it.toBrief(liveRooms[it.mid]) }
+            // 正在直播的人**单独成一份**,不再往那排人身上贴角标。两者的成员并不重合:
+            // live_users 里的人不一定在"最常访问"那一排,而贴角标的做法只标得出重合的那部分,
+            // 剩下的正在直播的人一个都露不出来。
+            val live = dto.live_users
+            PortalSnapshot(
+                ups = dto.up_list?.items.orEmpty().map { it.toBrief() },
+                liveUsers = live?.items.orEmpty()
+                    .filter { it.room_id > 0 }
+                    .map {
+                        LiveUpBrief(
+                            mid = it.mid,
+                            name = it.uname,
+                            faceUrl = it.face.toHttpsUrl(),
+                            roomId = it.room_id,
+                            roomTitle = it.title,
+                        )
+                    },
+                // count 用服务端那个数,不用 items.size —— items 只是这一屏给的那几个。
+                liveCount = live?.count ?: 0,
+            )
         }
 
     /**
@@ -70,8 +106,8 @@ class FollowRepository(
         ).map { dto -> dto.list.map { UpBrief(it.mid, it.uname, it.face.toHttpsUrl(), it.sign) } }
     }
 
-    private fun dev.bilby.api.dto.PortalUpDto.toBrief(liveRoomId: Long?) =
-        UpBrief(mid = mid, name = uname, faceUrl = face.toHttpsUrl(), liveRoomId = liveRoomId)
+    private fun dev.bilby.api.dto.PortalUpDto.toBrief() =
+        UpBrief(mid = mid, name = uname, faceUrl = face.toHttpsUrl())
 
     private companion object {
         const val PORTAL_URL = "${BiliConstants.WEB_HOST}/x/polymer/web-dynamic/v1/portal"

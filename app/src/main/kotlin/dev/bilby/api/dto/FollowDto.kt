@@ -26,13 +26,24 @@ data class PortalUpDto(
     val face: String = "",
 )
 
+/**
+ * [count] 是服务端给的正在直播人数。**它可能大于 [items] 的长度** —— items 是这一屏要显示的
+ * 那几个,而 count 说的是一共有几个人在播。首页那一格的数字用 count,不用 items.size。
+ */
 @Serializable
-data class PortalLiveUsersDto(val items: List<PortalLiveUserDto> = emptyList())
+data class PortalLiveUsersDto(
+    val count: Int = 0,
+    val items: List<PortalLiveUserDto> = emptyList(),
+)
 
 @Serializable
 data class PortalLiveUserDto(
     val mid: Long = 0L,
+    val uname: String = "",
+    val face: String = "",
     val room_id: Long = 0L,
+    /** 直播间标题。**这是这条目里唯一说"现在在播什么"的字段**,列表靠它才不是一串人名。 */
+    val title: String = "",
 )
 
 /**

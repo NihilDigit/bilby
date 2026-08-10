@@ -47,7 +47,11 @@ data class LiveRoomUiState(
     val anchorFace: String = "",
     val anchorMid: Long = 0L,
     val coverUrl: String = "",
-    val online: Long = 0L,
+    /**
+     * 「N 人看过」,服务端拼好的整句。**不是人气值** —— 那个数(room_info.online)是按互动
+     * 算的分数,送礼和弹幕都会推高它,写成"人"是错的。空串表示还没拿到,那一行就不画。
+     */
+    val watched: String = "",
     /** 未开播时为 false:界面显示封面和一句话,不去连弹幕流。 */
     val isLive: Boolean = false,
     val streamUrl: String? = null,
@@ -105,7 +109,7 @@ class LiveRoomViewModel(
                     it.copy(
                         title = room?.title.orEmpty(),
                         coverUrl = room?.cover.orEmpty(),
-                        online = room?.online ?: 0L,
+                        watched = info.value.watchedShow?.textLarge.orEmpty(),
                         anchorMid = room?.uid ?: 0L,
                         anchorName = anchor?.uname.orEmpty(),
                         anchorFace = anchor?.face.orEmpty(),
@@ -154,8 +158,10 @@ class LiveRoomViewModel(
             danmakuClient.messages(roomId, selfMid).collect { message ->
                 when (message) {
                     is LiveMessage.Danmaku -> onDanmaku(message)
-                    // 人气值只有这一个实时来源,房间详情给的那个只在进房那一刻准。
-                    is LiveMessage.Popularity -> _state.update { it.copy(online = message.value) }
+                    // 进房时那一份只在那一刻准,之后靠这条命令跟。人气值(Popularity)不再显示,
+                    // 但仍然收着 —— 它是心跳回包本身,丢掉会让心跳那条分支无处落地。
+                    is LiveMessage.Watched -> _state.update { it.copy(watched = message.text) }
+                    is LiveMessage.Popularity -> Unit
 
                     is LiveMessage.SuperChat -> _state.update {
                         // 新的在前:醒目留言是一条一条读的,最新那条该在手边。

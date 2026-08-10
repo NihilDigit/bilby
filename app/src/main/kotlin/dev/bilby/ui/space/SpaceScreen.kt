@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.PrimaryTabRow
@@ -28,7 +30,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -770,13 +774,34 @@ fun SpaceScreen(
         }
 
         val tabsAndContent: @Composable ColumnScope.() -> Unit = {
+            // 三个标签用 pager 承载,和播放页的简介/评论一样可以左右划。tabs 页把"内容区能横滑
+            // 翻页"写成 tabs 的常规用法,而这一页原先只有点标签一条路 —— 三栏讲的是同一个人的
+            // 三种内容,横向切换本来就是它们之间最短的距离。
+            //
+            // pageCount 跟着 tabs 走(合集探测不到时只有两栏),所以 pager 的 key 也要带上它:
+            // 栏目数变了还留着旧 pager,currentPage 会指到一个不存在的下标。
+            val pagerState = rememberPagerState(initialPage = tabs.indexOf(state.activeTab).coerceAtLeast(0)) {
+                tabs.size
+            }
+            val scope = rememberCoroutineScope()
+
+            // 两个方向各一条:点标签滚 pager,划 pager 回写 activeTab(后者顺带触发那一栏的
+            // 首次加载,和 onTabSelected 走的是同一个入口)。
+            LaunchedEffect(pagerState, tabs) {
+                snapshotFlow { pagerState.currentPage }
+                    .collect { page -> tabs.getOrNull(page)?.let { if (it != state.activeTab) onTabSelected(it) } }
+            }
+            LaunchedEffect(state.activeTab, tabs) {
+                val target = tabs.indexOf(state.activeTab)
+                if (target >= 0 && target != pagerState.currentPage) pagerState.animateScrollToPage(target)
+            }
+
             if (collectionsKnown) {
-                val selectedTabIndex = tabs.indexOf(state.activeTab).coerceAtLeast(0)
-                PrimaryTabRow(selectedTabIndex = selectedTabIndex) {
-                    tabs.forEach { tab ->
+                PrimaryTabRow(selectedTabIndex = pagerState.currentPage.coerceIn(tabs.indices)) {
+                    tabs.forEachIndexed { index, tab ->
                         Tab(
-                            selected = state.activeTab == tab,
-                            onClick = { onTabSelected(tab) },
+                            selected = pagerState.currentPage == index,
+                            onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
                             text = { Text(stringResource(tab.label)) },
                         )
                     }
@@ -793,28 +818,32 @@ fun SpaceScreen(
                     // tab 栏还没画出来,内容先不画:否则内容会先顶在页头下面,等 tab 栏出现
                     // 再被推下去一截。
                     !collectionsKnown -> FullScreenLoading()
-                    else -> when (state.activeTab) {
-                        SpaceTab.Archives -> ArchivesTab(
-                            state.archives,
-                            searchExpanded = archiveSearchExpanded,
-                            onOrderChanged = onArchiveOrderChanged,
-                            onKeywordChanged = onArchiveKeywordChanged,
-                            onSearch = onArchiveSearch,
-                            onLoadMore = onLoadMoreArchives,
-                            onVideoClick = onVideoClick,
-                        )
+                    else -> HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                        when (tabs.getOrNull(page)) {
+                            SpaceTab.Archives -> ArchivesTab(
+                                state.archives,
+                                searchExpanded = archiveSearchExpanded,
+                                onOrderChanged = onArchiveOrderChanged,
+                                onKeywordChanged = onArchiveKeywordChanged,
+                                onSearch = onArchiveSearch,
+                                onLoadMore = onLoadMoreArchives,
+                                onVideoClick = onVideoClick,
+                            )
 
-                        SpaceTab.Dynamics -> DynamicListTab(
-                            state = state.dynamics,
-                            onLoadMore = onLoadMoreDynamics,
-                            onVideoClick = onVideoClick,
-                        )
+                            SpaceTab.Dynamics -> DynamicListTab(
+                                state = state.dynamics,
+                                onLoadMore = onLoadMoreDynamics,
+                                onVideoClick = onVideoClick,
+                            )
 
-                        SpaceTab.Collections -> CollectionsTab(
-                            state.collections,
-                            onLoadMoreCollections,
-                            onCollectionClick,
-                        )
+                            SpaceTab.Collections -> CollectionsTab(
+                                state.collections,
+                                onLoadMoreCollections,
+                                onCollectionClick,
+                            )
+
+                            null -> Unit
+                        }
                     }
                 }
             }
@@ -974,11 +1003,10 @@ private fun SpaceHeader(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f).padding(horizontal = Spacing.Tight),
                     )
-                    Text(
-                        text = stringResource(R.string.live_online, live.online),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    // 这里曾经画一个"N 人在看"。**空间接口给的那个数是人气值**,一个按互动
+                    // 算出来的分数,和"有多少人在看"没有换算关系;而这条链路上拿不到真的人数
+                    // (watched_show 只在房间详情里)。为一个位置去多打一次房间接口不值,
+                    // 索性不画 —— 少一个数字,好过一个看着像人数的分数。
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                         contentDescription = null,

@@ -44,10 +44,15 @@ data class CommentItem(
     val liked: Boolean,
     val message: String,
     val emotes: Map<String, String>, // 占位符文本(如 "[doge]") -> 图片地址
+    /** 正文里被 @ 到的人,顺序即接口给的顺序。名字与 mid 的对应见 CommentSection.resolveMentions。 */
+    val mentions: List<CommentMention>,
     val pictureUrls: List<String>,
     val subReplyCount: Int,
     val previewReplies: List<CommentItem>, // 展开前先用它垫着,展开后由 loadSubReplies 的结果替换
 )
+
+/** 一个被 @ 到的人。[uname] 是**当前**昵称,不一定等于正文里那串字。 */
+data class CommentMention(val mid: Long, val uname: String)
 
 data class CommentPage(
     val topComment: CommentItem?,
@@ -207,6 +212,9 @@ class CommentRepository(
             liked = action == 1,
             message = content.message,
             emotes = content.emote?.mapValues { it.value.url.toHttpsUrl() }.orEmpty(),
+            mentions = content.members.mapNotNull { member ->
+                member.mid.toLongOrNull()?.takeIf { it != 0L }?.let { CommentMention(it, member.uname) }
+            },
             pictureUrls = content.pictures?.map { it.imgSrc.toHttpsUrl() }.orEmpty(),
             subReplyCount = count,
             previewReplies = replies.orEmpty().map { it.toCommentItem(uploaderMid, rootOverride = root) },
