@@ -37,6 +37,15 @@ and headset controls, and a sleep timer; subtitles follow line by line, tap a li
 </p>
 <p align="center">Searches, reads descriptions and top comments, and returns candidates each with its reason</p>
 
+## Panes by window width
+
+<p align="center">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/tablet-feed.png" width="380" height="238" alt="Feed on a tablet: timeline on the left, most-visited on the right">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/tablet-video.png" width="380" height="238" alt="Playback on a tablet: picture on the left, description and comments on the right">
+</p>
+<p align="center">The feed moves most-visited into a supporting pane; playback puts the picture on the left and
+the description and comments on the right. Phone layouts are unaffected.</p>
+
 ## Features
 
 Done:
@@ -47,7 +56,7 @@ Done:
 - [x] Playback: fullscreen, quality, speed (WSOLA), double-tap to seek or pause, long-press fast-forward, drag-to-seek, swipe for brightness and volume, lock, multi-part videos that resume on the part you left; progress synced to the cloud
 - [x] Listening: same player as normal playback, screen-off background play, notification, lock screen and headset controls, sleep timer; shuffle queue; the subtitle track doubles as line-by-line lyrics, tap a line to seek
 - [x] Live: watch a room with danmaku, quality, fullscreen, and superchats
-- [x] Offline: pick videos from the playback queue (select-all available), choose a quality, danmaku kept alongside; how many download at once is configurable and the speed is shown; cached items live under the profile tab, play without the network, and form a queue of the whole library; with no network the video page is built from the cached title, description and counts rather than failing wholesale
+- [x] Offline: pick videos from the playback queue (select-all available), choose a quality, danmaku kept alongside; concurrency is configurable and the speed is shown; cached items live under the profile tab, support long-press multi-delete, play without the network, and form a queue of the whole library; with no network the video page shows the cached title, description and counts
 - [x] Danmaku: scrolling, top and bottom, following the playback clock, adjustable opacity
 - [x] Subtitles: multiple tracks, under the picture during normal playback, as a transcript while listening; AI subtitle repair
 - [x] Comments: read, sort, expand reply threads, post and reply, like, delete, tap a timestamp to seek, zoom images and swipe between them
@@ -61,6 +70,7 @@ Done:
 Planned:
 
 - [ ] Rework the following feed, starting from its data flow
+- [ ] Better adaptive layout
 - [ ] Sending danmaku
 - [ ] Full coverage of moment types
 - [ ] Emote support
