@@ -45,7 +45,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -146,6 +145,8 @@ fun VideoScreen(
     onLike: () -> Unit,
     onAddToView: () -> Unit,
     onCoin: (count: Int, alsoLike: Boolean) -> Unit,
+    coinAttempt: CoinAttempt,
+    onCoinDialogClosed: () -> Unit,
     onOpenFavPicker: () -> Unit,
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
     onPlayEpisode: (bvid: String) -> Unit,
@@ -195,10 +196,11 @@ fun VideoScreen(
     // 会被静默吞掉,而屏幕上没有任何东西提示它锁着。
     LaunchedEffect(fullscreen) { if (!fullscreen) locked = false }
 
-    // DisposableEffect 捕获的是进入组合那一刻的 state,而 onDispose 要问的是离开那一刻。
-    val latestState by rememberUpdatedState(state)
+    // 判据用路由参数 [bvid],与 `matchesCurrentPage` 同源。用 `state.detail?.bvid` 的那一版
+    // 在详情请求失败时是 null:那时页面早已凭 bvid 发过打开命令、播放器正放着本页这一条,
+    // 而 null 谁也对不上,离开页面音频就继续响。
     val playerHoldsThisPage = {
-        AudioPlaybackService.state.value.queue?.current?.bvid == latestState.detail?.bvid
+        AudioPlaybackService.state.value.queue?.current?.bvid == bvid
     }
 
     DisposableEffect(context) {
@@ -733,6 +735,8 @@ fun VideoScreen(
                         onLike = onLike,
                         onAddToView = onAddToView,
                         onCoin = onCoin,
+                        coinAttempt = coinAttempt,
+                        onCoinDialogClosed = onCoinDialogClosed,
                         onOpenFavPicker = onOpenFavPicker,
                         onFavConfirm = onFavConfirm,
                         onPlayPart = onPlayPart,
