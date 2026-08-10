@@ -4,12 +4,9 @@ import dev.bilby.formatDurationSeconds
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -21,18 +18,12 @@ import dev.bilby.api.BiliResult
 import dev.bilby.data.FavRepository
 import dev.bilby.data.FavVideo
 import dev.bilby.ui.AdaptiveContent
-import dev.bilby.ui.components.EmptyState
-import dev.bilby.ui.components.FullScreenError
-import dev.bilby.ui.components.FullScreenLoading
-import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -153,51 +144,30 @@ fun FavFolderScreen(
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     AdaptiveContent(modifier = modifier) {
-        when {
-            state.loading && state.items.isEmpty() -> FullScreenLoading(Modifier.padding(contentPadding))
-            state.error != null && state.items.isEmpty() ->
-                FullScreenError(state.error, onRetry, Modifier.padding(contentPadding))
-            state.items.isEmpty() ->
-                EmptyState(stringResource(R.string.fav_empty), Modifier.fillMaxSize().padding(contentPadding))
-            else -> {
-                val listState = rememberLazyListState()
-                LaunchedEffect(listState, state.hasMore, state.appending) {
-                    snapshotFlow { listState.layoutInfo }
-                        .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-                        .distinctUntilChanged()
-                        .filter { (last, total) -> last != null && last >= total - 3 }
-                        .collect { if (state.hasMore && !state.appending) onLoadMore() }
-                }
-                PullToRefreshBox(
-                    isRefreshing = state.refreshing,
-                    onRefresh = onRefresh,
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = contentPadding,
-                    ) {
-                        items(state.items, key = { it.aid }) { item ->
-                            VideoRow(
-                                item = item.toRowUi(),
-                                // 失效稿件照常列出但不可点:UP 删稿或转私密之后收藏夹里还留着这一条,
-                                // 悄悄隐藏会让人以为自己记错了收藏过什么。
-                                enabled = !item.invalid,
-                                onClick = { if (!item.invalid) onItemClick(item) },
-                            )
-                        }
-                        item(key = "footer") {
-                            ListFooter(
-                                appending = state.appending,
-                                hasMore = state.hasMore,
-                                hasItems = true,
-                                error = state.error,
-                                onRetry = onRetry,
-                            )
-                        }
-                    }
-                }
+        PullToRefreshBox(
+            isRefreshing = state.refreshing,
+            onRefresh = onRefresh,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            PagedColumn(
+                items = state.items,
+                key = { it.aid },
+                loading = state.loading,
+                appending = state.appending,
+                hasMore = state.hasMore,
+                error = state.error,
+                emptyText = stringResource(R.string.fav_empty),
+                onLoadMore = onLoadMore,
+                onRetry = onRetry,
+                contentPadding = contentPadding,
+            ) { item ->
+                VideoRow(
+                    item = item.toRowUi(),
+                    // 失效稿件照常列出但不可点:UP 删稿或转私密之后收藏夹里还留着这一条,
+                    // 悄悄隐藏会让人以为自己记错了收藏过什么。
+                    enabled = !item.invalid,
+                    onClick = { if (!item.invalid) onItemClick(item) },
+                )
             }
         }
     }

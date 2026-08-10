@@ -6,9 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -31,10 +29,7 @@ import dev.bilby.api.BiliResult
 import dev.bilby.data.FollowRepository
 import dev.bilby.data.UpBrief
 import dev.bilby.ui.components.BiliAsyncImage
-import dev.bilby.ui.components.EmptyState
-import dev.bilby.ui.components.FullScreenError
-import dev.bilby.ui.components.FullScreenLoading
-import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.theme.Dimens
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,10 +37,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.distinctUntilChanged
-import androidx.compose.runtime.snapshotFlow
 
 data class FollowingsUiState(
     val items: List<UpBrief> = emptyList(),
@@ -154,45 +145,24 @@ fun FollowingsScreen(
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     AdaptiveContent(modifier = modifier) {
-        when {
-            state.loading && state.items.isEmpty() -> FullScreenLoading(Modifier.padding(contentPadding))
-            state.error != null && state.items.isEmpty() ->
-                FullScreenError(state.error, onRetry, Modifier.padding(contentPadding))
-            state.items.isEmpty() ->
-                EmptyState(stringResource(R.string.followings_empty), Modifier.fillMaxSize().padding(contentPadding))
-            else -> {
-                val listState = rememberLazyListState()
-                LaunchedEffect(listState, state.hasMore, state.appending) {
-                    snapshotFlow { listState.layoutInfo }
-                        .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-                        .distinctUntilChanged()
-                        .filter { (last, total) -> last != null && last >= total - 3 }
-                        .collect { if (state.hasMore && !state.appending) onLoadMore() }
-                }
-                PullToRefreshBox(
-                    isRefreshing = state.refreshing,
-                    onRefresh = onRefresh,
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = contentPadding,
-                    ) {
-                        items(state.items, key = { it.mid }) { up ->
-                            FollowingRow(up, onClick = { onUpClick(up.mid) })
-                        }
-                        item(key = "footer") {
-                            ListFooter(
-                                appending = state.appending,
-                                hasMore = state.hasMore,
-                                hasItems = true,
-                                error = state.error,
-                                onRetry = onRetry,
-                            )
-                        }
-                    }
-                }
+        PullToRefreshBox(
+            isRefreshing = state.refreshing,
+            onRefresh = onRefresh,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            PagedColumn(
+                items = state.items,
+                key = { it.mid },
+                loading = state.loading,
+                appending = state.appending,
+                hasMore = state.hasMore,
+                error = state.error,
+                emptyText = stringResource(R.string.followings_empty),
+                onLoadMore = onLoadMore,
+                onRetry = onRetry,
+                contentPadding = contentPadding,
+            ) { up ->
+                FollowingRow(up, onClick = { onUpClick(up.mid) })
             }
         }
     }

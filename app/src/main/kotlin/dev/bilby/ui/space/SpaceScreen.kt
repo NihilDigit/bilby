@@ -14,10 +14,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.PrimaryTabRow
@@ -31,11 +29,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.integerResource
@@ -76,16 +74,18 @@ import dev.bilby.data.SpaceDynamicItem
 import dev.bilby.data.SpaceVideoItem
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BilbyTopBar
-import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SortRow
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.ImageViewer
 import dev.bilby.ui.components.SquareCover
+import dev.bilby.ui.components.collapsingHeader
+import dev.bilby.ui.components.rememberCollapsingHeaderState
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.isAtLeast
@@ -99,9 +99,6 @@ import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -854,8 +851,24 @@ fun SpaceScreen(
                 modifier = Modifier.fillMaxSize().padding(insets),
                 maxWidth = Breakpoints.ReadableWidth,
             ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    header(Modifier)
+                /*
+                 * **头部跟着滚动退出屏幕,tab 栏留在原位。**
+                 *
+                 * 依据是 transitions 页 enter/exit 那一节:"Components can enter and exit from
+                 * beyond the screen bounds based on a scroll gesture. This allows for more
+                 * screen space to browse."(它给的例子正是顶栏和导航栏随滚动进出)。
+                 *
+                 * tab 栏不跟着走:tabs 页说 "Tabs control the UI region displayed below them",
+                 * 滚起来之后还要知道自己在哪一栏、还要能换栏,它是这块区域的控制器而不是内容。
+                 *
+                 * 收起靠**缩掉它占的高度**而不是盖住它:后者会让 tab 栏悬在一段空白上,
+                 * 而且列表顶部会被一块看不见的东西挡住。
+                 */
+                val headerScroll = rememberCollapsingHeaderState()
+                Column(
+                    modifier = Modifier.fillMaxSize().nestedScroll(headerScroll.connection),
+                ) {
+                    header(Modifier.collapsingHeader(headerScroll))
                     tabsAndContent()
                 }
             }
@@ -1098,36 +1111,18 @@ private fun CollectionsTab(
     onCollectionClick: (SpaceCollectionItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    when {
-        state.loading && state.items.isEmpty() -> FullScreenLoading(modifier)
-        state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onLoadMore, modifier)
-        else -> {
-            val listState = rememberLazyListState()
-            LaunchedEffect(listState, state.hasMore, state.appending) {
-                snapshotFlow { listState.layoutInfo }
-                    .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-                    .distinctUntilChanged()
-                    .filter { (last, total) -> last != null && last >= total - 1 - PrefetchThreshold }
-                    .collect { if (state.hasMore && !state.appending) onLoadMore() }
-            }
-            LazyColumn(state = listState, modifier = modifier.fillMaxSize()) {
-                if (state.items.isEmpty()) {
-                    item(key = "empty") { EmptyState(stringResource(R.string.space_empty_collections)) }
-                }
-                items(state.items, key = { "${it.isSeason}-${it.id}" }) { item ->
-                    CollectionRow(item, onClick = { onCollectionClick(item) })
-                }
-                item(key = "footer") {
-                    ListFooter(
-                        appending = state.appending,
-                        hasMore = state.hasMore,
-                        hasItems = state.items.isNotEmpty(),
-                        error = state.error,
-                        onRetry = onLoadMore,
-                    )
-                }
-            }
-        }
+    PagedColumn(
+        items = state.items,
+        key = { "${it.isSeason}-${it.id}" },
+        loading = state.loading,
+        appending = state.appending,
+        hasMore = state.hasMore,
+        error = state.error,
+        emptyText = stringResource(R.string.space_empty_collections),
+        onLoadMore = onLoadMore,
+        modifier = modifier,
+    ) { item ->
+        CollectionRow(item, onClick = { onCollectionClick(item) })
     }
 }
 
@@ -1204,7 +1199,6 @@ private fun CollectionDetailScreen(
     }
 }
 
-private const val PrefetchThreshold = 5
 
 @Composable
 private fun DynamicListTab(
@@ -1213,37 +1207,21 @@ private fun DynamicListTab(
     onVideoClick: (SpaceVideoItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    when {
-        state.loading && state.items.isEmpty() -> FullScreenLoading(modifier)
-        state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onLoadMore, modifier)
-        else -> {
-            val listState = rememberLazyListState()
-            LaunchedEffect(listState, state.hasMore, state.appending) {
-                snapshotFlow { listState.layoutInfo }
-                    .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-                    .distinctUntilChanged()
-                    .filter { (last, total) -> last != null && last >= total - 1 - PrefetchThreshold }
-                    .collect { if (state.hasMore && !state.appending) onLoadMore() }
-            }
-            LazyColumn(state = listState, modifier = modifier.fillMaxSize()) {
-                if (state.items.isEmpty()) {
-                    item(key = "empty") { EmptyState(stringResource(R.string.space_empty_dynamics)) }
-                }
-                itemsIndexed(state.items, key = { _, item -> item.key }) { index, dynamic ->
-                    if (index > 0) HorizontalDivider()
-                    DynamicRow(dynamic = dynamic, onVideoClick = onVideoClick)
-                }
-                item(key = "footer") {
-                    ListFooter(
-                        appending = state.appending,
-                        hasMore = state.hasMore,
-                        hasItems = state.items.isNotEmpty(),
-                        error = state.error,
-                        onRetry = onLoadMore,
-                    )
-                }
-            }
-        }
+    PagedColumn(
+        items = state.items,
+        key = { it.key },
+        loading = state.loading,
+        appending = state.appending,
+        hasMore = state.hasMore,
+        error = state.error,
+        emptyText = stringResource(R.string.space_empty_dynamics),
+        onLoadMore = onLoadMore,
+        modifier = modifier,
+    ) { dynamic ->
+        // 分割线画在条目**之间**:动态的形态差别很大(视频行、图文、转发块),
+        // 只靠留白读不出哪里换了一条。第一条上面不画,那儿是列表的开头不是分界。
+        if (dynamic.key != state.items.firstOrNull()?.key) HorizontalDivider()
+        DynamicRow(dynamic = dynamic, onVideoClick = onVideoClick)
     }
 }
 
@@ -1441,47 +1419,29 @@ private fun VideoListTab(
     onVideoClick: (SpaceVideoItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    when {
-        loading && items.isEmpty() -> FullScreenLoading(modifier)
-        error != null && items.isEmpty() -> FullScreenError(error, onLoadMore, modifier)
-        else -> {
-            val listState = rememberLazyListState()
-            LaunchedEffect(listState, hasMore, appending) {
-                snapshotFlow { listState.layoutInfo }
-                    .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-                    .distinctUntilChanged()
-                    .filter { (last, total) -> last != null && last >= total - 1 - PrefetchThreshold }
-                    .collect { if (hasMore && !appending) onLoadMore() }
-            }
-            LazyColumn(state = listState, modifier = modifier.fillMaxSize()) {
-                if (items.isEmpty()) {
-                    item(key = "empty") { EmptyState(emptyText) }
-                }
-                items(items, key = { it.bvid }) { item ->
-                    // 整页都是同一个 UP,不重复印 UP 名(upName 留空)。
-                    VideoRow(
-                        item = VideoRowUi(
-                            title = item.title,
-                            coverUrl = item.coverUrl,
-                            durationText = item.durationText,
-                            dateText = formatDate(item.publishedAtEpochSeconds),
-                            playText = item.playCountText,
-                            danmakuText = item.danmakuCountText,
-                        ),
-                        onClick = { onVideoClick(item) },
-                    )
-                }
-                item(key = "footer") {
-                    ListFooter(
-                        appending = appending,
-                        hasMore = hasMore,
-                        hasItems = items.isNotEmpty(),
-                        error = error,
-                        onRetry = onLoadMore,
-                    )
-                }
-            }
-        }
+    PagedColumn(
+        items = items,
+        key = { it.bvid },
+        loading = loading,
+        appending = appending,
+        hasMore = hasMore,
+        error = error,
+        emptyText = emptyText,
+        onLoadMore = onLoadMore,
+        modifier = modifier,
+    ) { item ->
+        // 整页都是同一个 UP,不重复印 UP 名(upName 留空)。
+        VideoRow(
+            item = VideoRowUi(
+                title = item.title,
+                coverUrl = item.coverUrl,
+                durationText = item.durationText,
+                dateText = formatDate(item.publishedAtEpochSeconds),
+                playText = item.playCountText,
+                danmakuText = item.danmakuCountText,
+            ),
+            onClick = { onVideoClick(item) },
+        )
     }
 }
 

@@ -350,4 +350,5 @@
     <string name="dynamic_origin_gone">源动态已不可见</string>
     <string name="video_parts_expand">全部 %1$d 集</string>
     <string name="settings_section_account">账号</string>
+    <string name="feed_all_followings">全部关注</string>
 </resources>

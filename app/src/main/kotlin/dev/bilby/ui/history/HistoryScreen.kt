@@ -3,12 +3,9 @@ package dev.bilby.ui.history
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -21,10 +18,7 @@ import dev.bilby.ui.AdaptiveContent
 import dev.bilby.api.BiliResult
 import dev.bilby.data.HistoryItem
 import dev.bilby.data.HistoryRepository
-import dev.bilby.ui.components.EmptyState
-import dev.bilby.ui.components.FullScreenError
-import dev.bilby.ui.components.FullScreenLoading
-import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
@@ -34,9 +28,6 @@ import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -143,7 +134,6 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
     }
 }
 
-private const val PrefetchThreshold = 5
 
 @Composable
 fun HistoryScreen(
@@ -156,45 +146,24 @@ fun HistoryScreen(
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     AdaptiveContent(modifier = modifier) {
-        when {
-            state.loading && state.items.isEmpty() -> FullScreenLoading(Modifier.padding(contentPadding))
-            state.error != null && state.items.isEmpty() ->
-                FullScreenError(state.error, onRetry, Modifier.padding(contentPadding))
-            state.items.isEmpty() ->
-                EmptyState(stringResource(R.string.history_empty), Modifier.fillMaxSize().padding(contentPadding))
-            else -> {
-                val listState = rememberLazyListState()
-                LaunchedEffect(listState, state.hasMore, state.appending) {
-                    snapshotFlow { listState.layoutInfo }
-                        .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-                        .distinctUntilChanged()
-                        .filter { (last, total) -> last != null && last >= total - 1 - PrefetchThreshold }
-                        .collect { if (state.hasMore && !state.appending) onLoadMore() }
-                }
-                PullToRefreshBox(
-                    isRefreshing = state.refreshing,
-                    onRefresh = onRefresh,
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = contentPadding,
-                    ) {
-                        items(state.items, key = { it.oid }) { item ->
-                            VideoRow(item = item.toRowUi(), onClick = { onItemClick(item) })
-                        }
-                        item(key = "footer") {
-                            ListFooter(
-                                appending = state.appending,
-                                hasMore = state.hasMore,
-                                hasItems = true,
-                                error = state.error,
-                                onRetry = onRetry,
-                            )
-                        }
-                    }
-                }
+        PullToRefreshBox(
+            isRefreshing = state.refreshing,
+            onRefresh = onRefresh,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            PagedColumn(
+                items = state.items,
+                key = { it.oid },
+                loading = state.loading,
+                appending = state.appending,
+                hasMore = state.hasMore,
+                error = state.error,
+                emptyText = stringResource(R.string.history_empty),
+                onLoadMore = onLoadMore,
+                onRetry = onRetry,
+                contentPadding = contentPadding,
+            ) { item ->
+                VideoRow(item = item.toRowUi(), onClick = { onItemClick(item) })
             }
         }
     }

@@ -44,6 +44,12 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.material3.ListItem
+import androidx.compose.ui.semantics.Role
+import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.SectionHeader
 import dev.bilby.ui.theme.Breakpoints
@@ -166,8 +172,10 @@ private fun FeedList(
 ) {
     val listState = rememberLazyListState()
     val markerIndex = state.items.indexOfReadMarker(state.readMarkerBvid)
+    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     // frequentUps 那一格排在动态流前面,分隔线/条目在 LazyColumn 里的绝对下标要把它加回来。
-    val baseOffset = if (state.frequentUps.isNotEmpty()) 1 else 0
+    // **宽屏下它不在这个列表里**(挪到了旁边的次区),这时不能加,否则开屏定位会差一格。
+    val baseOffset = if (!wide && state.frequentUps.isNotEmpty()) 1 else 0
 
     // 触底预取:在 composition 外用 snapshotFlow 观察滚动位置,避免在 composable 里直接调用副作用。
     LaunchedEffect(listState, state.hasMore, state.appending) {
@@ -210,19 +218,20 @@ private fun FeedList(
     // 宽屏只收窄行长,不拆栏。列表行是"封面 + 三行文字"的定宽版式,铺到 1400dp 之后封面
     // 还是 128dp,右边多出来的全是空白;而拆成两栏会让"下一条是什么"变成两条线索,
     // 这一页的读法本来就是一条时间线往下走。
-    AdaptiveContent(modifier = modifier, maxWidth = Breakpoints.ReadableWidth) {
+    val feedList: @Composable (Modifier) -> Unit = { listModifier ->
         PullToRefreshBox(
             isRefreshing = state.refreshing,
             onRefresh = onRefresh,
-            modifier = Modifier.fillMaxSize(),
+            modifier = listModifier,
         ) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = contentPadding,
             ) {
-        // 跟着列表一起滚,不吸顶:吸顶会让它变成常驻的入口带,而这一页的主体是动态流。
-        if (state.frequentUps.isNotEmpty()) {
+        // 窄屏时「最常访问」仍然跟着列表一起滚,不吸顶:吸顶会让它变成常驻的入口带,
+        // 而这一页的主体是动态流。宽屏下它挪到旁边的次区去了,这里就不再出现。
+        if (!wide && state.frequentUps.isNotEmpty()) {
             item(key = "frequent-ups") {
                 FrequentUpsRow(
                     ups = state.frequentUps,
@@ -253,6 +262,87 @@ private fun FeedList(
                 )
             }
             }
+        }
+    }
+
+    if (wide) {
+        /*
+         * **宽屏把「最常访问」挪到旁边。**
+         *
+         * 它本来就不是这条时间线的一部分 —— 它是"去谁那儿看看"的导航,混在流里当第一条,
+         * 读起来像"今天的第一条动态是一排头像"。canonical-examples 对 supporting pane 的
+         * 说法正好:主区放主内容,次区放支持性内容。
+         *
+         * 顺带解决另一件事:这一页的行是"定宽封面 + 三行文字",宽屏下右边那片空白本来
+         * 什么也没干,现在装的是原本要占掉列表一屏高度的那排头像。
+         */
+        Row(modifier = modifier.fillMaxSize()) {
+            feedList(Modifier.weight(2f).fillMaxHeight())
+            FrequentUpsPane(
+                ups = state.frequentUps,
+                onUpClick = onUpClick,
+                onOpenFollowings = onOpenFollowings,
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+            )
+        }
+    } else {
+        AdaptiveContent(modifier = modifier, maxWidth = Breakpoints.ReadableWidth) {
+            feedList(Modifier.fillMaxSize())
+        }
+    }
+}
+
+/**
+ * 宽屏的次区:竖着排的「最常访问」,末尾是关注列表入口。
+ *
+ * 竖排而不是把那条横滚原样搬过来:次区窄而高,横滚在这个形状里既浪费高度、又要求用户在
+ * 一个不该有滚动的地方滚动。
+ */
+@Composable
+private fun FrequentUpsPane(
+    ups: List<UpBrief>,
+    onUpClick: (Long) -> Unit,
+    onOpenFollowings: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(modifier = modifier) {
+        item(key = "title") {
+            SectionHeader(
+                title = stringResource(R.string.feed_frequent_ups),
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable),
+            )
+        }
+        items(ups, key = { it.mid }) { up ->
+            ListItem(
+                headlineContent = {
+                    Text(up.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                },
+                leadingContent = {
+                    BiliAsyncImage(
+                        url = up.faceUrl,
+                        contentDescription = null,
+                        modifier = Modifier.size(AvatarSize).clip(CircleShape),
+                    )
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(role = Role.Button) { onUpClick(up.mid) },
+            )
+        }
+        item(key = "all-followings") {
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.feed_all_followings)) },
+                leadingContent = {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(role = Role.Button, onClick = onOpenFollowings),
+            )
         }
     }
 }
