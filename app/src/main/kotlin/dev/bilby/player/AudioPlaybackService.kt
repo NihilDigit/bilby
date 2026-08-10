@@ -25,6 +25,7 @@ import dev.bilby.BiliLog
 import dev.bilby.PerfTrace
 import dev.bilby.R
 import dev.bilby.api.BiliResult
+import dev.bilby.data.LiveRepository
 import dev.bilby.data.PlayInfo
 import dev.bilby.data.QueueBuildResult
 import dev.bilby.data.QueueSourceRepository
@@ -89,8 +90,13 @@ data class QueueState(
     val incomplete: Boolean = false,
 )
 
-/** 正在播的直播间。房间号是它的身份,元数据来自房间详情而不是队列。 */
-internal class LiveSource(val roomId: Long, val nowPlaying: NowPlaying)
+/**
+ * 正在播的直播间。房间号是它的身份,元数据来自房间详情而不是队列。
+ *
+ * [qn] 带着是为了重试:断流后要重新取一次流地址,不带的话只能按默认档要,画质会在用户
+ * 没动过的情况下自己跳一档。
+ */
+internal class LiveSource(val roomId: Long, val qn: Int, val nowPlaying: NowPlaying)
 
 data class AudioPlaybackUiState(
     /** 正在放什么。没打开过任何东西时为 null。 */
@@ -152,6 +158,9 @@ class AudioPlaybackService : MediaSessionService() {
 
     /** 只为了问"上次播到哪一 P" —— 那个字段只有 `x/player/wbi/v2` 有,而它归这个仓库。 */
     private lateinit var subtitleRepository: SubtitleRepository
+
+    /** 只为了断流后重新取一次直播地址,见 [retryLive]。 */
+    private lateinit var liveRepository: LiveRepository
     private lateinit var queueSourceRepository: QueueSourceRepository
 
     /** 只为了在取流之前问一句"这一条缓存过没有",见 [playCurrent]。 */
@@ -226,6 +235,7 @@ class AudioPlaybackService : MediaSessionService() {
         val container = (application as BilbyApplication).container
         videoRepository = container.videoRepository
         subtitleRepository = container.subtitleRepository
+        liveRepository = container.liveRepository
         queueSourceRepository = container.queueSourceRepository
         offlineStore = container.offlineStore
         settings = container.settings
@@ -319,6 +329,7 @@ class AudioPlaybackService : MediaSessionService() {
         }
         val next = LiveSource(
             roomId = roomId,
+            qn = args.getInt(EXTRA_LIVE_QN),
             nowPlaying = NowPlaying(
                 title = args.getString(EXTRA_TITLE).orEmpty(),
                 subtitle = args.getString(EXTRA_UP_NAME).orEmpty(),
@@ -776,10 +787,41 @@ class AudioPlaybackService : MediaSessionService() {
         val delayMillis = RETRY_BASE_DELAY_MILLIS shl (failedAttempts - 1)
         BiliLog.w("第 $failedAttempts 次失败,${delayMillis}ms 后重试: $reason")
         publishState(loading = true)
+        val room = live
         retryJob = scope.launch {
             delay(delayMillis)
-            playCurrent(playWhenReady, force = true)
+            // 直播和队列是互斥的两种源(见 [live]),重试也得分开走:直播时队列是空的,
+            // [playCurrent] 第一句 `queue.current() ?: stopPlayback()` 就把直播的重试
+            // 变成了"断一下就彻底停"。
+            if (room != null) retryLive(room) else playCurrent(playWhenReady, force = true)
         }
+    }
+
+    /**
+     * 断流后重开直播。**重新取一次流地址,不重用手上那条** —— 理由和视频那边一样:直链带
+     * 时效,过期是最常见的那种失败,拿同一条地址再 prepare 一次必然还是同样的错。
+     *
+     * 房间已经下播时不再退避重试:那不是"暂时不通",等多久都不会好,如实说一句然后停。
+     */
+    private suspend fun retryLive(room: LiveSource) {
+        // qn=0 是"页面还没拿到档位就发了命令",按默认档要,别把 0 原样传出去。
+        val qn = room.qn.takeIf { it > 0 } ?: LiveRepository.DEFAULT_QN
+        val playback = liveRepository.loadPlayback(room.roomId, qn)
+        if (playback !is BiliResult.Ok) {
+            retryAfterFailure(getString(R.string.playback_error_live_stream), playWhenReady = true)
+            return
+        }
+        val url = playback.value.stream?.url?.takeIf { playback.value.isLive }
+        if (url == null) {
+            BiliLog.w("直播已下播 roomId=${room.roomId},不再重试")
+            lastError = getString(R.string.playback_error_live_ended)
+            stopPlayback()
+            return
+        }
+        player.setMediaSource(PlayerFactory.createLiveMediaSource(url))
+        player.prepare()
+        player.playWhenReady = true
+        publishState(loading = true)
     }
 
     /** 界面上"重试"按下。手动重试是一份新的额度,退避从头算起。 */
@@ -1074,6 +1116,9 @@ class AudioPlaybackService : MediaSessionService() {
         const val EXTRA_COVER_URL = "coverUrl"
         const val EXTRA_LIVE_URL = "liveUrl"
         const val EXTRA_ROOM_ID = "roomId"
+
+        /** 页面这一刻放的档位。断流重取时按它要,见 [LiveSource.qn]。 */
+        const val EXTRA_LIVE_QN = "liveQn"
 
         /** [AudioPlaybackUiState.loadKey] 里直播源的前缀,和 bvid 区分开。 */
         const val LOAD_KEY_LIVE_PREFIX = "live:"

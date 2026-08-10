@@ -88,6 +88,8 @@ fun LiveRoomRoute(
             bundleOf(
                 AudioPlaybackService.EXTRA_ROOM_ID to roomId,
                 AudioPlaybackService.EXTRA_LIVE_URL to url,
+                // 断流后由服务自己重新取地址,那一趟要按这一档要,否则画质会自己跳。
+                AudioPlaybackService.EXTRA_LIVE_QN to state.currentQn,
                 AudioPlaybackService.EXTRA_TITLE to state.title,
                 AudioPlaybackService.EXTRA_UP_NAME to state.anchorName,
                 AudioPlaybackService.EXTRA_COVER_URL to state.coverUrl,
