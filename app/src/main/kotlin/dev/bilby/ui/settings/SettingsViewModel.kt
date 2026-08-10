@@ -187,6 +187,18 @@ class SettingsViewModel(
         persist { settings.saveCodecPreference(value) }
     }
 
+    /**
+     * 登出。清凭据必须扛得住页面随时被销毁,所以走 [persist] 那条 `NonCancellable`;
+     * 停播放服务要 Context,由调用方在 [onDone] 里做 —— 顺序是先清凭据后停服务,
+     * 反过来的话中间那一瞬服务已停而凭据还在,看起来像"没登出但停了"。
+     */
+    fun logout(onDone: () -> Unit) {
+        persist {
+            settings.clearCredentials()
+            onDone()
+        }
+    }
+
     fun setFastForwardSpeed(value: Float) {
         _state.update { it.copy(fastForwardSpeed = value) }
         persist { settings.saveFastForwardSpeed(value) }

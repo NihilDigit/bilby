@@ -93,11 +93,13 @@ fun SettingsScreen(
     onCheckUpdate: () -> Unit,
     onDownloadUpdate: (UpdateInfo) -> Unit,
     onInstallUpdate: (File) -> Unit,
+    onLogout: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var editingLlm by rememberSaveable { mutableStateOf(false) }
     var editingServer by rememberSaveable { mutableStateOf(false) }
+    var confirmingLogout by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -149,6 +151,7 @@ fun SettingsScreen(
                                 onDownloadUpdate = onDownloadUpdate,
                                 onInstallUpdate = onInstallUpdate,
                             )
+                            AccountSettingsSection(onLogout = { confirmingLogout = true })
                         }
                     }
                 } else {
@@ -175,6 +178,7 @@ fun SettingsScreen(
                         onDownloadUpdate = onDownloadUpdate,
                         onInstallUpdate = onInstallUpdate,
                     )
+                    AccountSettingsSection(onLogout = { confirmingLogout = true })
                 }
             }
         }
@@ -208,6 +212,40 @@ fun SettingsScreen(
             },
         )
     }
+
+    if (confirmingLogout) {
+        // 登出不可逆:凭据一清,回来要重新扫码。二次确认不是仪式,是这个动作真的没有撤销。
+        AlertDialog(
+            onDismissRequest = { confirmingLogout = false },
+            title = { Text(stringResource(R.string.settings_logout)) },
+            text = { Text(stringResource(R.string.settings_logout_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmingLogout = false
+                    onLogout()
+                }) {
+                    Text(stringResource(R.string.settings_logout))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingLogout = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
+}
+
+/**
+ * 账号。**只有登出一项**,不重复显示昵称头像 —— 那些在「我的」页头部,而这里是"杂物间"。
+ *
+ * 放在设置页而不是「我的」页头部:登出是一年用不到一次的破坏性动作,摆在每天都要经过的
+ * 概览页顶上,既占着那一行的宽度,又和旁边"看看我攒了什么"完全不是一类事。
+ */
+@Composable
+private fun AccountSettingsSection(onLogout: () -> Unit) {
+    SectionTitle(stringResource(R.string.settings_section_account))
+    SettingRow(title = stringResource(R.string.settings_logout), onClick = onLogout)
 }
 
 @Composable

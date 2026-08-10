@@ -275,4 +275,5 @@
     <string name="settings_sponsorblock_section_server">Server</string>
     <string name="dynamic_origin_gone">The original post is no longer available</string>
     <string name="video_parts_expand">All %1$d parts</string>
+    <string name="settings_section_account">Account</string>
 </resources>

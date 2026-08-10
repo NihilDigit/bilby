@@ -28,6 +28,7 @@ import dev.bilby.api.BiliResult
 import dev.bilby.data.PlayInfo
 import dev.bilby.data.QueueSourceRepository
 import dev.bilby.data.SettingsStore
+import dev.bilby.data.SubtitleRepository
 import dev.bilby.data.VideoRepository
 import dev.bilby.data.resumeAtMillisFor
 import kotlinx.coroutines.CoroutineScope
@@ -145,6 +146,9 @@ class AudioPlaybackService : MediaSessionService() {
 
     private lateinit var player: ExoPlayer
     private lateinit var videoRepository: VideoRepository
+
+    /** 只为了问"上次播到哪一 P" —— 那个字段只有 `x/player/wbi/v2` 有,而它归这个仓库。 */
+    private lateinit var subtitleRepository: SubtitleRepository
     private lateinit var queueSourceRepository: QueueSourceRepository
     private lateinit var settings: SettingsStore
     private lateinit var sleepTimer: SleepTimer
@@ -206,6 +210,7 @@ class AudioPlaybackService : MediaSessionService() {
         runningService = this
         val container = (application as BilbyApplication).container
         videoRepository = container.videoRepository
+        subtitleRepository = container.subtitleRepository
         queueSourceRepository = container.queueSourceRepository
         settings = container.settings
 
@@ -495,7 +500,7 @@ class AudioPlaybackService : MediaSessionService() {
         prepareJob = scope.launch {
             // 空间投稿来源的队列项没有 cid(列表接口不返回),约定由这里补:拿着 0 去取流
             // 会被服务端当成无效 cid,表现是每一条都"取流失败",队列静默空转。
-            val cid = item.cid.takeIf { it != 0L } ?: run {
+            val requestedCid = item.cid.takeIf { it != 0L } ?: run {
                 when (val detail = videoRepository.getVideoDetail(item.bvid)) {
                     is BiliResult.Ok -> {
                         // 顺手把展示信息补上。**必须赶在 load() 之前**:MediaSession 是在
@@ -515,6 +520,19 @@ class AudioPlaybackService : MediaSessionService() {
                     }
                 }
             }
+
+            // 上次看到这条视频的哪一 P。**在取流之前问**:知道了才不用为错的那一 P 白取一次流。
+            // 只有打开视频那一次、且这条视频真的有多 P 时才问(见 [lastPlayedPart])。
+            val lastPlayedCid = if (resumePart) lastPlayedPart(item.bvid, requestedCid) else 0L
+            val cid = if (lastPlayedCid != 0L && lastPlayedCid != requestedCid) {
+                // 页面稍后会拿着详情里的默认 cid 再发一遍打开命令,那一趟必须当作"没有换 P
+                // 的意思",否则刚接上的这一 P 立刻被推回去。
+                resumedPartBvid = item.bvid
+                resumedFromCid = requestedCid
+                lastPlayedCid
+            } else {
+                requestedCid
+            }
             queue.updateCurrentCid(cid)
 
             val prefs = settings.playerPrefs.first()
@@ -530,30 +548,23 @@ class AudioPlaybackService : MediaSessionService() {
             ) {
                 is BiliResult.Ok -> {
                     openChain?.mark("playurlEnd")
-                    // 多 P 视频接着上次那一 P 播。**cid 只能从 playurl 的响应里知道**,而
-                    // playurl 又必须先带一个 cid 去请求,所以这里是"先按 P1 取一次流,发现
-                    // 记录指向别的 P 就换过去重取"——PiliPlus 也是这个次序。
-                    //
-                    // 只在用户打开视频那一次做([resumePart]):自动连播走到下一条时不做,
-                    // 那时用户看的是队列而不是这条视频的历史;手动切 P 更不做,那是明确的
-                    // 选择。递归下去时 resumePart 已经是 false,换不成第二次。
-                    val lastCid = result.value.lastPlayCid
-                    if (resumePart && lastCid != 0L && lastCid != cid && hasPart(item.bvid, lastCid)) {
-                        resumedPartBvid = item.bvid
-                        resumedFromCid = cid
-                        queue.updateCurrentCid(lastCid)
-                        playCurrent(playWhenReady = playWhenReady, force = true)
-                        return@launch
-                    }
                     playInfo = result.value
                     currentQuality = quality
                     val streams = result.value.streams
+                    // **秒数属于 [lastPlayedCid] 那一 P。** playurl 只给秒数不给 P
+                    // (`PlayUrlDto.lastPlayCid` 真实响应不填,见 notes §8.2),所以装的不是
+                    // 那一 P 时必须丢掉它 —— 否则在 P1 上会从 P7 的进度处起播。
+                    val resumeMillis = when {
+                        positionOverrideMillis != null -> positionOverrideMillis
+                        lastPlayedCid != 0L && lastPlayedCid != cid -> 0L
+                        else -> result.value.resumeAtMillisFor(cid)
+                    }
                     load(
                         streams.videoUrl,
                         streams.audioUrl,
                         item.bvid,
                         cid,
-                        positionOverrideMillis ?: result.value.resumeAtMillisFor(cid),
+                        resumeMillis,
                     )
                     player.playWhenReady = playWhenReady
                     publishState()
@@ -591,14 +602,25 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /**
-     * 这条视频有没有这一 P。详情走的是带缓存与并发合并的那条路径,起播时刚请求过,
-     * 这里基本是白拿。
+     * 上次看到这条视频的哪一 P,0 表示不用换。
      *
-     * 单 P 视频直接否掉:`pages` 只有一个元素时,`last_play_cid` 要么就是它、要么是脏数据。
+     * **先看这条视频有没有多 P,再决定要不要发那次请求。** `x/player/wbi/v2` 是一次额外的
+     * 网络往返,而绝大多数视频只有一 P —— 那种情况下问了也只能得到当前这一 P。详情本身走的
+     * 是带缓存与并发合并的那条路径,起播时刚请求过,这一步基本是白拿。
+     *
+     * 拿回来的 cid 还要在 `pages` 里找得到才用:服务端的记录可能指向一条已经被 UP 删掉的
+     * 分 P,照着它取流会得到 -404。
      */
-    private suspend fun hasPart(bvid: String, cid: Long): Boolean {
-        val detail = videoRepository.getVideoDetail(bvid) as? BiliResult.Ok ?: return false
-        return detail.value.pages.size > 1 && detail.value.pages.any { it.cid == cid }
+    private suspend fun lastPlayedPart(bvid: String, currentCid: Long): Long {
+        val detail = videoRepository.getVideoDetail(bvid) as? BiliResult.Ok ?: return 0L
+        if (detail.value.pages.size <= 1) return 0L
+        val lastCid = subtitleRepository.lastPlayedCid(bvid, currentCid)
+        if (lastCid == 0L || lastCid == currentCid) return 0L
+        if (detail.value.pages.none { it.cid == lastCid }) {
+            BiliLog.w("续播记录指向的分 P 已不存在 bvid=$bvid cid=$lastCid")
+            return 0L
+        }
+        return lastCid
     }
 
     /** 跳到队列里的另一条:点队列中的一项、合集里换一集。 */

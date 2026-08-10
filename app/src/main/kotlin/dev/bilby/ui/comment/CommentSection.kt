@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -149,7 +150,7 @@ fun CommentSection(
                 item(key = "empty") { EmptyState(stringResource(R.string.comment_empty)) }
             }
 
-            items(state.items, key = { it.rpid }) { comment ->
+            itemsIndexed(state.items, key = { _, comment -> comment.rpid }) { index, comment ->
                 // **主楼之间画 inset 分割线。** 一条热评加上楼中楼容器可以占到半屏,
                 // 只靠留白的话上一条的楼中楼和下一条的头像挨在一起,读不出哪里换了人。
                 //
@@ -157,10 +158,16 @@ fun CommentSection(
                 // 的相关内容",并要求它对齐头像这类锚定元素的前缘 —— 评论列表正是那一页
                 // 举的"一列邮件"的例子。full-width 是留给不相关的大段内容的,评论条与条之间
                 // 不是那个关系。
-                HorizontalDivider(
-                    modifier = Modifier.padding(start = CommentTextInset, end = Spacing.Comfortable),
-                    color = MaterialTheme.colorScheme.outlineVariant,
-                )
+                //
+                // **只画在两条评论之间。** 无条件画在每条前面的话,列表第一条那根会落在排序栏
+                // 底下,看起来像是给"最热/最新"加了一条下划线 —— 而排序栏和评论列表之间没有
+                // 需要分隔的东西,它们是同一批内容和它的排序方式。
+                if (index > 0 || state.topComment != null) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = CommentTextInset, end = Spacing.Comfortable),
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                    )
+                }
                 CommentRow(
                     comment = comment,
                     pinned = false,
@@ -190,7 +197,8 @@ fun CommentSection(
                 }
             }
         }
-        HorizontalDivider()
+        // 输入栏底色是 surfaceContainer,和上面列表的 surface 已经差着一档 —— 边界靠色阶
+        // 表达就够了(§1.1),再压一条线是同一件事说两遍,而 divider 页要求 sparingly。
         CommentInputBar(
             text = inputText,
             onTextChange = { inputText = it },

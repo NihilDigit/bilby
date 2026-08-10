@@ -708,9 +708,6 @@ private fun ProfilePane(
         onOpenToView = onOpenToView,
         onOpenFavFolder = onOpenFavFolder,
         onSettingsClick = onSettingsClick,
-        // 停播放服务要 Context,顺序先清凭据后停服务(同 SettingsRoute.onLogout 的理由:
-        // 反过来的话中间那一瞬服务已停但凭据还在,看起来像"没登出但停了")。
-        onLogout = { vm.logout { AudioPlaybackService.stop(context) } },
         onRetryAccount = vm::retryAccount,
         onRetryHistory = vm::retryHistory,
         onRetryToView = vm::retryToView,
@@ -751,6 +748,9 @@ private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
         onCheckUpdate = vm::checkUpdate,
         onDownloadUpdate = { vm.downloadUpdate(it, UpdateInstaller.downloadDir(context)) },
         onInstallUpdate = { UpdateInstaller.install(context, it) },
+        // 停播放服务要 Context,所以由这一层做;顺序是先清凭据后停服务 —— 反过来的话
+        // 中间那一瞬服务已停而凭据还在,看起来像"没登出但停了"。
+        onLogout = { vm.logout { AudioPlaybackService.stop(context) } },
         onBack = onBack,
     )
 }

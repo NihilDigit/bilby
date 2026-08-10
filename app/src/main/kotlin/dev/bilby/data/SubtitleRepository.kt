@@ -34,6 +34,26 @@ class SubtitleRepository(private val client: BiliClient) {
         fetchTracksWithRetry(bvid, cid).map { it.toDomain() }.sortedWith(TRACK_ORDER)
 
     /**
+     * 上次播到这条视频的哪一 P。0 表示没有记录,或者这次没问到。
+     *
+     * **这个字段只有 `x/player/wbi/v2` 有**(notes §8.2)。`PlayUrlDto` 里那个同名字段来自
+     * PiliPlus 的模型,真实响应不填,从那儿读永远是 0。
+     *
+     * 单独一次请求,所以调用方要先确认这条视频真的有多 P —— 单 P 视频问了也没有意义,
+     * 而每打开一条视频多一次请求在风控上是有代价的(见 `VideoRepository` 里那段说明)。
+     * 失败按 0 处理:续播接不上只是回到第一 P,不该让起播失败。
+     */
+    suspend fun lastPlayedCid(bvid: String, cid: Long): Long {
+        val result = client.getData<PlayerV2Dto>(
+            PLAYER_V2_URL,
+            params = trackParams(bvid, cid),
+            signed = true,
+            userAgent = BiliConstants.NON_BROWSER_USER_AGENT,
+        )
+        return (result as? BiliResult.Ok)?.value?.lastPlayCid ?: 0L
+    }
+
+    /**
      * 命中限流(-412,`BiliResult.CODE_RATE_LIMITED`)按 DESIGN §5 的风控礼仪退避 60s 再续;
      * 其余失败(接口本身报错、网络异常)直接放弃——那些重试也没用,`getData` 已经打过日志。
      *

@@ -246,7 +246,6 @@ fun ProfileScreen(
     onOpenToView: () -> Unit,
     onOpenFavFolder: (FavFolder) -> Unit,
     onSettingsClick: () -> Unit,
-    onLogout: () -> Unit,
     onRetryAccount: () -> Unit,
     onRetryHistory: () -> Unit,
     onRetryToView: () -> Unit,
@@ -254,10 +253,6 @@ fun ProfileScreen(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
-    // 登出是不可逆的破坏性动作(凭据一清,重新登录要重新扫码),照设置页那份同样的
-    // 二次确认 —— 两处文案共用同一组字符串,不是巧合,是同一个动作的两个入口。
-    var confirmingLogout by rememberSaveable { mutableStateOf(false) }
-
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -266,16 +261,13 @@ fun ProfileScreen(
     ) {
         AccountHeader(
             state = state,
-            onLogoutClick = { confirmingLogout = true },
             onSettingsClick = onSettingsClick,
             onRetry = onRetryAccount,
         )
 
-        // 账号与下面三节之间保留分组边界:上面是"我是谁"(含登出、设置这两个页级动作),
-        // 下面是"我攒了什么"。分割线收进内容边距，避免横贯屏幕把页面切成两块，
-        // 同时比单纯加间距更清楚地表达两个不相属的区域。
-        HorizontalDivider(modifier = Modifier.padding(horizontal = Spacing.Comfortable))
-
+        // 账号与下面三节之间**不画分割线**。divider 页说 full-width 用于分隔"larger sections
+        // of unrelated content",并要求 sparingly;而下面每一节自己都顶着一个 SectionHeader,
+        // 那行标题已经说明"换了一节"了,再加一条线是同一件事说两遍。
         if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
             // Expanded 之后把三个低密度预览区分成两个可扫读的 pane：历史和稍后再看是
             // 同一类视频清单，收藏夹是另一类用户整理内容。Medium 仍保持单列，避免在
@@ -301,33 +293,15 @@ fun ProfileScreen(
 
         Spacer(Modifier.height(Spacing.Comfortable))
     }
-
-    if (confirmingLogout) {
-        AlertDialog(
-            onDismissRequest = { confirmingLogout = false },
-            title = { Text(stringResource(R.string.settings_logout)) },
-            text = { Text(stringResource(R.string.settings_logout_message)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmingLogout = false
-                    onLogout()
-                }) { Text(stringResource(R.string.settings_logout)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmingLogout = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
-    }
 }
 
 /**
- * 头像 → 名字 + 等级徽章 → 登出 → 设置,再加一行个性签名。**签名为空时整行不画**——
+ * 头像 → 名字 + 等级徽章 → 设置,再加一行个性签名。**签名为空时整行不画**——
  * 不给"这个人很懒"一类的占位文案,那是空间页(`SpaceHeader`)的处理,这里没有那个理由:
  * 签名本来就可能没填,不是"数据还没到"。
  *
- * **设置紧跟在登出右边**,不单独找地方摆:两者同属"这个账号相关的操作"。它不属于
+ * **登出不在这里,在设置页。** 它一年用不到一次,而这一页每天都要经过;摆在这一行上既占着
+ * 名字和签名的宽度,又和旁边"看看我攒了什么"完全不是一类事。设置入口留着 —— 它不属于
  * `account != null` 那个分支——账号信息拉不到甚至还在读的时候,设置入口也不该跟着消失,
  * 所以三条分支各自只负责把中段(名字/错误文案/空白)撑到 `weight(1f)`,`IconButton`
  * 本身写在 `when` 外面,始终是这一行最后一个元素。
@@ -338,7 +312,6 @@ fun ProfileScreen(
 @Composable
 private fun AccountHeader(
     state: ProfileUiState,
-    onLogoutClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onRetry: () -> Unit,
 ) {
@@ -382,16 +355,11 @@ private fun AccountHeader(
                 },
                 leadingContent = { Avatar(url = account.faceUrl, size = Dimens.AvatarLarge) },
                 trailingContent = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = onLogoutClick) {
-                            Text(stringResource(R.string.profile_logout))
-                        }
-                        IconButton(onClick = onSettingsClick) {
-                            Icon(
-                                Icons.Outlined.Settings,
-                                contentDescription = stringResource(R.string.settings_title),
-                            )
-                        }
+                    IconButton(onClick = onSettingsClick) {
+                        Icon(
+                            Icons.Outlined.Settings,
+                            contentDescription = stringResource(R.string.settings_title),
+                        )
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
@@ -650,7 +618,6 @@ private fun ProfileScreenPreview() {
             onOpenToView = {},
             onOpenFavFolder = {},
             onSettingsClick = {},
-            onLogout = {},
             onRetryAccount = {},
             onRetryHistory = {},
             onRetryToView = {},
@@ -670,7 +637,6 @@ private fun ProfileScreenErrorPreview() {
             onOpenToView = {},
             onOpenFavFolder = {},
             onSettingsClick = {},
-            onLogout = {},
             onRetryAccount = {},
             onRetryHistory = {},
             onRetryToView = {},

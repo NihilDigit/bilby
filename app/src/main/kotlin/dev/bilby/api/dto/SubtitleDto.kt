@@ -4,13 +4,21 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * `GET /x/player/wbi/v2` 的响应体(data 节点)。notes/playurl.md §8.2 已经记着这个接口带
- * 字幕(不带秒级续播位置,那个从 playurl 自己的 `last_play_time` 拿,见 [PlayUrlDto])。
- * 这里只取字幕需要的这一块,其余字段(`last_play_cid`、看点)这次用不上,不建模。
+ * `GET /x/player/wbi/v2` 的响应体(data 节点)。
+ *
+ * 两个字段分属两件事,notes/playurl.md §8.2 把这条分工写清楚了:
+ * - **秒级续播位置不在这里**,它跟 playurl 一起返回(`PlayUrlDto.lastPlayTime`);
+ * - **"上次播到哪一 P"只在这里**。`PlayUrlDto` 里那个同名字段是照 PiliPlus 的模型建的,
+ *   但真实响应并不填它 —— 从那儿读永远是 0,多 P 续播因此一直没生效过。PiliPlus 自己
+ *   也是从这个接口读的(`pages/video/controller.dart` 里 `playInfo` 的结果)。
+ *
+ * 看点(`view_points`)和互动信息暂时用不上,不建模。
  */
 @Serializable
 data class PlayerV2Dto(
     val subtitle: SubtitleInfoDto? = null,
+    /** 上次播放到哪一 P 的 cid。0 表示没有记录。 */
+    @SerialName("last_play_cid") val lastPlayCid: Long = 0,
 )
 
 @Serializable

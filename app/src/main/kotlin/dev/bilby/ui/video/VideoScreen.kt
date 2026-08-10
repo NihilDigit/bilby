@@ -7,6 +7,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -520,42 +521,38 @@ fun VideoScreen(
             )
         },
     ) { insets ->
-        Column(
-            modifier = modifier
-                .fillMaxSize()
-                // 全屏不留任何 inset:系统栏是 FullscreenEffect 异步藏掉的,这中间有一两帧
-                // statusBars 还报着高度,带着它会让画面先被顶下去再弹回来。
-                .then(
-                    if (fullscreen) {
-                        Modifier
-                    } else {
-                        Modifier
-                            .padding(bottom = insets.calculateBottomPadding())
-                            .windowInsetsPadding(WindowInsets.statusBars)
-                    },
-                ),
-        ) {
-            // 全屏与内嵌是**同一个**播放器调用点,只有容器尺寸和 isFullscreen 不同。分成
-            // 两个分支意味着切全屏时整个播放器卸载重挂:PlayerSurface 销毁重建(画面会闪一下
-            // 被拉大),弹幕整池重编,控件显隐状态清零。
-            Box(
-                modifier = (
-                    if (fullscreen) Modifier.fillMaxSize()
-                    // 播放页是信息密集的沉浸式单 pane,expanded 不拆成低密度双栏,只把画面
-                    // 收到舒适宽度,简介与评论仍是一条阅读顺序。
-                    //
-                    // widthIn 必须在 fillMaxWidth **之前**:反过来的话 fillMaxWidth 已经把
-                    // 宽度定死成父宽,widthIn 再夹也夹不动(见 AdaptiveContent 的说明)。
-                    else Modifier
-                        .align(Alignment.CenterHorizontally)
-                        .then(
-                            if (expandedLayout) Modifier.widthIn(max = Breakpoints.MediaWidth)
-                            else Modifier,
-                        )
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                    ).background(Color.Black),
-            ) {
+        /**
+         * **宽屏是 supporting pane:画面在左,简介与评论在右。**
+         *
+         * 规范给的正是这个例子(breakpoints 页 Expanded 一节配图):"The large, primary pane
+         * has the video, title, and actions. The secondary pane has queued videos.",主区约占
+         * 三分之二。同一页也允许视频类用单栏("a single-pane layout can work when displaying
+         * visually- or information-dense content, such as videos"),这里选双栏 —— 单栏在平板上
+         * 只剩画面加两条黑边,右边那块空间什么也没干。
+         *
+         * **横竖两种排布下,播放器都是同一个调用点。** 分成两个 `BilbyPlayer(...)` 会让切换
+         * 时 PlayerSurface 销毁重建、弹幕整池重编。全屏时也走同一个分支(右栏不组合、左栏
+         * 权重给满),所以最要紧的那次切换 —— 进出全屏 —— 不会重挂。
+         */
+        val rootModifier = modifier
+            .fillMaxSize()
+            // 全屏不留任何 inset:系统栏是 FullscreenEffect 异步藏掉的,这中间有一两帧
+            // statusBars 还报着高度,带着它会让画面先被顶下去再弹回来。
+            .then(
+                if (fullscreen) {
+                    Modifier
+                } else {
+                    Modifier
+                        .padding(bottom = insets.calculateBottomPadding())
+                        .windowInsetsPadding(WindowInsets.statusBars)
+                },
+            )
+
+        // 画面这一块。**整页只有这一处 `BilbyPlayer` 调用**:横排和竖排各写一份的话,转屏
+        // 会让 PlayerSurface 销毁重建、弹幕整池重编。这里用一个接 Modifier 的 lambda,
+        // 两种排布传不同的约束进去。
+        val playerPane: @Composable (Modifier) -> Unit = { paneModifier ->
+            Box(modifier = paneModifier.background(Color.Black)) {
                 when {
                     audioState.playInfo != null && active != null -> BilbyPlayer(
                         player = active,
@@ -630,16 +627,12 @@ fun VideoScreen(
 
                 SkipToast(skippedCategory, Modifier.align(Alignment.TopCenter).padding(Spacing.Tight))
             }
+        }
 
-            // 全屏时播放器独占整屏,下面的简介/评论整块不参与布局。
-            if (!fullscreen) state.detail?.let { detail ->
-                // 播放画面保持 720dp 的沉浸宽度，简介/评论允许更宽一点，但仍不把
-                // 长段落铺满展开屏。两者都保持单 pane，避免把视频阅读顺序拆成两条。
-                // **weight(1f) 而不是 fillMaxWidth()。** AdaptiveContent 内部会 fillMaxSize,
-                // 不给权重的话它要的是整屏高度,加上上面 16:9 的画面就超出一屏 —— 表现是
-                // 播放页能往下微微滑动一点。给了权重,它拿到的就是"画面之外剩下的高度",
-                // 有没有分 P 都正好占满。
-                AdaptiveContent(modifier = Modifier.weight(1f), maxWidth = Breakpoints.ReadableWidth) {
+        // 简介与评论。竖排时在画面下面、拿剩下的高度;横排时是右边那个 secondary pane。
+        val tabsPane: @Composable (Modifier) -> Unit = { paneModifier ->
+            state.detail?.let { detail ->
+                AdaptiveContent(modifier = paneModifier, maxWidth = Breakpoints.ReadableWidth) {
                     VideoTabs(
                         detail = detail,
                         currentCid = (audioState.queue?.currentCid ?: 0L),
@@ -695,6 +688,41 @@ fun VideoScreen(
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
+            }
+        }
+
+        if (expandedLayout) {
+            // 主区约三分之二,和规范给的比例一致。**全屏也走这个分支**,只是右栏不组合、
+            // 左栏权重给满 —— 这样进出全屏时布局树的形状不变,播放器不会重挂。
+            Row(modifier = rootModifier) {
+                Box(
+                    modifier = Modifier.weight(if (fullscreen) 1f else 2f).fillMaxHeight(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    playerPane(
+                        if (fullscreen) {
+                            Modifier.fillMaxSize()
+                        } else {
+                            // 左栏通常比 16:9 高,画面按宽度定比例后在栏内居中,上下留黑。
+                            Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                        },
+                    )
+                }
+                if (!fullscreen) tabsPane(Modifier.weight(1f).fillMaxHeight())
+            }
+        } else {
+            Column(modifier = rootModifier) {
+                playerPane(
+                    if (fullscreen) Modifier.fillMaxSize()
+                    else Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                )
+                // 全屏时画面独占整屏,简介整块不参与布局。
+                //
+                // **weight(1f) 而不是 fillMaxWidth()。** AdaptiveContent 内部会 fillMaxSize,
+                // 不给权重的话它要的是整屏高度,加上上面 16:9 的画面就超出一屏 —— 表现是
+                // 播放页能往下微微滑动一点。给了权重,它拿到的就是"画面之外剩下的高度",
+                // 有没有分 P 都正好占满。
+                if (!fullscreen) tabsPane(Modifier.weight(1f))
             }
         }
     }
