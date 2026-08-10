@@ -49,6 +49,31 @@ val DEFAULT_PREFERRED_CODECS = listOf(VideoCodecId.AVC, VideoCodecId.AV1)
 /** 音质偏好的哨兵值:不指定,按 flac → dolby → 最高普通音轨挑。 */
 const val AUDIO_QUALITY_BEST = Int.MAX_VALUE
 
+/**
+ * 在 [available] 这些档里挑出对应 [preferred] 的那一档。**纯算术,不看流本身**,所以它是
+ * 这条规则唯一值得单测的形态(见 ResolveQualityTest)。
+ *
+ * 画质 id 是严格可比的数字(notes/playurl.md §4.2 那张表),所以规则只有一条,**播放和缓存
+ * 共用同一条**:
+ *
+ * 1. 取**不高于** [preferred] 的最高一档。精确命中自然落在这里,降级也是这一句。
+ * 2. 一档都不满足时**往上取最低可行的那一档**。这只发生在"用户选了 360P,而这条视频最低
+ *    就是 720P"上 —— 此时唯一的选择是升,而升到最低的那一档才是离他要的最近的。
+ *
+ * 这里曾经按调用方分成两种回退(播放取最高、缓存取最低),那是把一个不存在的分歧做成了参数:
+ * 第 2 条里"最低可行档"本来就同时是离 [preferred] 最近的和最省的,两条路径要的是同一个答案。
+ *
+ * **第 2 条与 PiliPlus 不一致,是有意的。** 它那边(notes/playurl.md §4.1 第 2 步)在这种情形下
+ * 直接取最高档。PiliPlus 是接口行为的权威,而这一条不是接口行为,是"用户说了想省流量之后
+ * 该给他什么"——给最高档等于把他的偏好反过来用。能撞上这条分支的只有那种只下发高码率档的
+ * 片源(大多数视频有 360/480/720 打底)。
+ *
+ * [available] 为空时返回 null —— 那说明这条视频压根没下发可用的流,调用方该按"取流失败"
+ * 处理,而不是拿一个编出来的档位继续往下走。
+ */
+fun resolveQuality(available: List<Int>, preferred: Int): Int? =
+    available.filter { it <= preferred }.maxOrNull() ?: available.minOrNull()
+
 fun selectStreams(
     dash: DashDto,
     preferredQuality: Int,
@@ -66,9 +91,13 @@ fun selectStreams(
     // 候选集只取 dash.video 里真的有地址的那些,不用响应里的 accept_quality:后者是
     // "这个账号理论上能选的档",可能包含本次没下发流的档(比如 4K 对非大会员),
     // 照它选会选出一条没有 baseUrl 的流。accept_quality 只适合喂给画质菜单。
+    //
+    // **这一步才是"能不能取到这一档"的真答案。** 请求里带的 qn 只是个愿望:账号权限、
+    // 片源本身都可能让服务端下发另一套档位,所以不按预期档位去构造参数硬试,而是照它
+    // 实际给了什么来挑(需求补充的最后一条)。
     val availableQualities = videos.map { it.id }.distinct()
-    val targetQuality = closestAtMost(availableQualities, preferredQuality)
-        ?: availableQualities.max()
+    // 上面的 videos 非空保证了这里拿得到值;[resolveQuality] 只在候选为空时给 null。
+    val targetQuality = resolveQuality(availableQualities, preferredQuality) ?: return null
 
     val candidates = videos.filter { it.id == targetQuality }
 

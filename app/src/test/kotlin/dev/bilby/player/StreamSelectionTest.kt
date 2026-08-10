@@ -30,12 +30,17 @@ class StreamSelectionTest {
     }
 
     @Test
-    fun `偏好画质低于所有可用档时退到最高档而不是空`() {
-        val dash = dashOf(video(id = 120, codecid = VideoCodecId.AVC, url = "4k"))
+    fun `偏好画质低于所有可用档时升到最低可行的那一档`() {
+        // 用户要 360P,而这条片源最低就是 720P:只能往上,取最低的那一档而不是最高的。
+        // 规则本身在 ResolveQualityTest 里逐条测,这里测的是选流真的照它走。
+        val dash = dashOf(
+            video(id = 120, codecid = VideoCodecId.AVC, url = "4k"),
+            video(id = 64, codecid = VideoCodecId.AVC, url = "720p"),
+        )
 
         val selected = selectStreams(dash, preferredQuality = 16)!!
 
-        assertEquals("4k", selected.videoUrl)
+        assertEquals("720p", selected.videoUrl)
     }
 
     @Test

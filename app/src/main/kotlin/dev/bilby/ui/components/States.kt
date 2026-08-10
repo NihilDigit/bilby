@@ -21,6 +21,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -90,7 +91,12 @@ fun FullScreenError(message: String, onRetry: () -> Unit, modifier: Modifier = M
  * 不是给空屏配的插画。
  */
 @Composable
-fun EmptyState(message: String, modifier: Modifier = Modifier) {
+fun EmptyState(
+    message: String,
+    modifier: Modifier = Modifier,
+    /** 默认那个收件箱是"这里本该有东西但现在没有";空态另有含义时换掉它。 */
+    icon: ImageVector = Icons.Outlined.Inbox,
+) {
     Box(
         modifier = modifier.fillMaxWidth().padding(Spacing.Spacious),
         contentAlignment = Alignment.Center,
@@ -100,7 +106,7 @@ fun EmptyState(message: String, modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
             Icon(
-                imageVector = Icons.Outlined.Inbox,
+                imageVector = icon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(StateIconSize),

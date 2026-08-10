@@ -16,6 +16,8 @@ data class UpBrief(
     val name: String,
     val faceUrl: String,
     val sign: String = "",
+    /** 正在直播时的房间号,没在播就是 null。只有"最常访问"那一路填得出来。 */
+    val liveRoomId: Long? = null,
 )
 
 /**
@@ -41,7 +43,14 @@ class FollowRepository(
             // up_list_more=1 是必需的:不带它服务端照样返回 code 0,但 up_list 整个缺席,
             // 表现是这一排静默消失而没有任何错误可查。web_location 照 PiliPlus 传。
             mapOf("up_list_more" to "1", "web_location" to "333.1365"),
-        ).map { dto -> dto.up_list?.items.orEmpty().map { it.toBrief() } }
+        ).map { dto ->
+            // 直播态只**标注**在原有那排人身上,不把正在直播的人挪到前面、也不把不在这排里的
+            // 主播加进来:这一排的成员和顺序都是服务端按"最常访问"给的,动它就成了本地排序。
+            val liveRooms = dto.live_users?.items.orEmpty()
+                .filter { it.room_id > 0 }
+                .associate { it.mid to it.room_id }
+            dto.up_list?.items.orEmpty().map { it.toBrief(liveRooms[it.mid]) }
+        }
 
     /**
      * 关注列表。`order_type=attention` 与顶部那排同序 —— 从那排点进完整列表时,
@@ -61,8 +70,8 @@ class FollowRepository(
         ).map { dto -> dto.list.map { UpBrief(it.mid, it.uname, it.face.toHttpsUrl(), it.sign) } }
     }
 
-    private fun dev.bilby.api.dto.PortalUpDto.toBrief() =
-        UpBrief(mid = mid, name = uname, faceUrl = face.toHttpsUrl())
+    private fun dev.bilby.api.dto.PortalUpDto.toBrief(liveRoomId: Long?) =
+        UpBrief(mid = mid, name = uname, faceUrl = face.toHttpsUrl(), liveRoomId = liveRoomId)
 
     private companion object {
         const val PORTAL_URL = "${BiliConstants.WEB_HOST}/x/polymer/web-dynamic/v1/portal"

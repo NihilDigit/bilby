@@ -20,7 +20,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -74,6 +76,7 @@ import dev.bilby.ui.comment.CommentViewModel
 import androidx.compose.material.icons.outlined.DeleteSweep
 import dev.bilby.data.FavFolder
 import dev.bilby.data.PlayerPrefs
+import dev.bilby.offline.OfflineItem
 import dev.bilby.ui.fav.FavFolderScreen
 import dev.bilby.ui.fav.FavFolderViewModel
 import dev.bilby.ui.feed.FeedScreen
@@ -84,6 +87,8 @@ import dev.bilby.ui.history.HistoryScreen
 import dev.bilby.ui.history.HistoryViewModel
 import dev.bilby.ui.login.TvLoginScreen
 import dev.bilby.ui.login.TvLoginViewModel
+import dev.bilby.ui.offline.OfflineScreen
+import dev.bilby.ui.offline.OfflineViewModel
 import dev.bilby.ui.profile.ProfileScreen
 import dev.bilby.ui.profile.ProfileViewModel
 import dev.bilby.ui.search.SearchChatScreen
@@ -310,32 +315,41 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
         },
         entryProvider = entryProvider {
             entry<Home> {
-                RootTabs(
-                    container = container,
-                    onVideoClick = { backStack.add(Video(it)) },
-                    onUserClick = { backStack.add(Space(it)) },
-                    onSettingsClick = { backStack.add(Settings) },
-                    onOpenFollowings = { backStack.add(Followings) },
-                    onOpenHistory = { backStack.add(History) },
-                    onOpenToView = { backStack.add(ToViewList) },
-                    onOpenFavFolder = { folder -> backStack.add(FavFolderContents(folder.id, folder.title)) },
-                )
+                CutoutSafe {
+                    RootTabs(
+                        container = container,
+                        onVideoClick = { backStack.add(Video(it)) },
+                        onUserClick = { backStack.add(Space(it)) },
+                        onLiveClick = { backStack.add(LiveRoom(it)) },
+                        onSettingsClick = { backStack.add(Settings) },
+                        onOpenFollowings = { backStack.add(Followings) },
+                        onOpenHistory = { backStack.add(History) },
+                        onOpenToView = { backStack.add(ToViewList) },
+                        onOpenOffline = { backStack.add(Offline) },
+                        onOpenFavFolder = { folder ->
+                            backStack.add(FavFolderContents(folder.id, folder.title))
+                        },
+                    )
+                }
             }
             entry<Settings> {
-                SettingsRoute(container, onBack = { backStack.removeLastOrNull() })
+                CutoutSafe { SettingsRoute(container, onBack = { backStack.removeLastOrNull() }) }
             }
             entry<History> {
-                HistoryRoute(
-                    container = container,
-                    onVideoClick = { backStack.add(Video(it)) },
-                    onBack = { backStack.removeLastOrNull() },
-                )
+                CutoutSafe {
+                    HistoryRoute(
+                        container = container,
+                        onVideoClick = { backStack.add(Video(it)) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
             }
             entry<Video> { key ->
                 VideoRoute(
                     container = container,
                     bvid = key.bvid,
                     startListening = key.listening,
+                    cid = key.cid,
                     onUpClick = { backStack.add(Space(it)) },
                     onBack = { backStack.removeLastOrNull() },
                     // 切集是**重组,不是压栈**:换的是这一页在放哪一条,不是又进了一层。
@@ -347,28 +361,44 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                     onOpenVideo = { backStack[backStack.lastIndex] = Video(it) },
                 )
             }
+            entry<Offline> {
+                CutoutSafe {
+                    OfflineRoute(
+                        container = container,
+                        // 带上 cid:缓存列表里一条就是一个分 P,点哪一条就该播哪一条。
+                        onPlay = { item -> backStack.add(Video(item.bvid, cid = item.cid)) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
+            }
             entry<ToViewList> {
-                ToViewListRoute(
-                    container = container,
-                    onVideoClick = { backStack.add(Video(it)) },
-                    onBack = { backStack.removeLastOrNull() },
-                )
+                CutoutSafe {
+                    ToViewListRoute(
+                        container = container,
+                        onVideoClick = { backStack.add(Video(it)) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
             }
             entry<FavFolderContents> { key ->
-                FavFolderRoute(
-                    container = container,
-                    mediaId = key.mediaId,
-                    title = key.title,
-                    onVideoClick = { backStack.add(Video(it)) },
-                    onBack = { backStack.removeLastOrNull() },
-                )
+                CutoutSafe {
+                    FavFolderRoute(
+                        container = container,
+                        mediaId = key.mediaId,
+                        title = key.title,
+                        onVideoClick = { backStack.add(Video(it)) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
             }
             entry<Followings> {
-                FollowingsRoute(
-                    container = container,
-                    onUpClick = { backStack.add(Space(it)) },
-                    onBack = { backStack.removeLastOrNull() },
-                )
+                CutoutSafe {
+                    FollowingsRoute(
+                        container = container,
+                        onUpClick = { backStack.add(Space(it)) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
             }
             entry<LiveRoom> { key ->
                 LiveRoomRoute(
@@ -378,14 +408,16 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                 )
             }
             entry<Space> { key ->
-                SpaceRoute(
-                    container,
-                    key.mid,
-                    onVideoClick = { backStack.add(Video(it)) },
-                    onListenUp = { backStack.add(Video(it, listening = true)) },
-                    onLiveClick = { backStack.add(LiveRoom(it)) },
-                    onBack = { backStack.removeLastOrNull() },
-                )
+                CutoutSafe {
+                    SpaceRoute(
+                        container,
+                        key.mid,
+                        onVideoClick = { backStack.add(Video(it)) },
+                        onListenUp = { backStack.add(Video(it, listening = true)) },
+                        onLiveClick = { backStack.add(LiveRoom(it)) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
             }
         },
     )
@@ -406,6 +438,23 @@ private enum class RootTab(
 }
 
 /**
+ * 横向挖孔在这一层统一躲开,普通页面自己不用管。
+ *
+ * `Scaffold` 消费的是 `systemBarsForVisualComponents`,里面没有 `displayCutout`;而
+ * targetSdk 35 之后窗口不再被系统让开挖孔那一条,横屏时正文左右会被切掉一块。放在这里而不是
+ * 每个 Route 里,是因为漏写要转屏跑到那一页才看得见 —— 少一个目的地就少一处适配。
+ *
+ * **播放页和直播间不套。** 那两页的画面要铺满挖孔(全屏时尤其),躲开的是浮在画面上的按钮,
+ * 由它们各自用 [dev.bilby.ui.barsAndCutout] 处理。
+ */
+@Composable
+private fun CutoutSafe(content: @Composable () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.horizontalCutout)) {
+        content()
+    }
+}
+
+/**
  * 三个 tab 都是显式入口:刷更新、搜索、看自己存的。没有"随便看看"那一格
  * (DESIGN 1.1 的推送式入口那一栏)。三格正好落在 M3 导航栏 3–5 个目的地的下限上。
  *
@@ -421,10 +470,12 @@ private fun RootTabs(
     container: AppContainer,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
+    onLiveClick: (Long) -> Unit,
     onSettingsClick: () -> Unit,
     onOpenFollowings: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
+    onOpenOffline: () -> Unit,
     onOpenFavFolder: (FavFolder) -> Unit,
 ) {
     var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
@@ -466,10 +517,12 @@ private fun RootTabs(
                 container = container,
                 onVideoClick = onVideoClick,
                 onUserClick = onUserClick,
+                onLiveClick = onLiveClick,
                 onSettingsClick = onSettingsClick,
                 onOpenFollowings = onOpenFollowings,
                 onOpenHistory = onOpenHistory,
                 onOpenToView = onOpenToView,
+                onOpenOffline = onOpenOffline,
                 onOpenFavFolder = onOpenFavFolder,
             )
         }
@@ -494,10 +547,12 @@ private fun RootTabs(
                     container = container,
                     onVideoClick = onVideoClick,
                     onUserClick = onUserClick,
+                    onLiveClick = onLiveClick,
                     onSettingsClick = onSettingsClick,
                     onOpenFollowings = onOpenFollowings,
                     onOpenHistory = onOpenHistory,
                     onOpenToView = onOpenToView,
+                    onOpenOffline = onOpenOffline,
                     onOpenFavFolder = onOpenFavFolder,
                 )
             }
@@ -530,10 +585,12 @@ private fun RootTabsContent(
     container: AppContainer,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
+    onLiveClick: (Long) -> Unit,
     onSettingsClick: () -> Unit,
     onOpenFollowings: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
+    onOpenOffline: () -> Unit,
     onOpenFavFolder: (FavFolder) -> Unit,
 ) {
     // 只 padding 不声明消费的话,子层的 imePadding() 会再多退让一个底栏高度。
@@ -567,15 +624,23 @@ private fun RootTabsContent(
             label = "rootTab",
         ) { tab ->
             when (tab) {
-                RootTab.Feed -> FeedPane(container, onVideoClick, onUserClick, onOpenFollowings)
+                RootTab.Feed -> FeedPane(
+                    container = container,
+                    onVideoClick = onVideoClick,
+                    onUserClick = onUserClick,
+                    onLiveClick = onLiveClick,
+                    onOpenFollowings = onOpenFollowings,
+                )
 
                 RootTab.Search -> SearchPane(container, onVideoClick, onUserClick)
 
                 RootTab.Profile -> ProfilePane(
                     container = container,
                     onVideoClick = onVideoClick,
+                    onUserClick = onUserClick,
                     onOpenHistory = onOpenHistory,
                     onOpenToView = onOpenToView,
+                    onOpenOffline = onOpenOffline,
                     onOpenFavFolder = onOpenFavFolder,
                     onSettingsClick = onSettingsClick,
                 )
@@ -605,6 +670,7 @@ private fun FeedPane(
     container: AppContainer,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
+    onLiveClick: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
 ) {
     val vm: FeedViewModel = viewModel(
@@ -629,6 +695,7 @@ private fun FeedPane(
         onRefresh = vm::refresh,
         onItemClick = { onVideoClick(it.bvid) },
         onUpClick = onUserClick,
+        onLiveClick = onLiveClick,
         onExcludeUp = vm::excludeUp,
         onOpenFollowings = onOpenFollowings,
         onScrollPositionChanged = vm::onVisibleTopChanged,
@@ -672,8 +739,10 @@ private fun SearchPane(
 private fun ProfilePane(
     container: AppContainer,
     onVideoClick: (String) -> Unit,
+    onUserClick: (Long) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
+    onOpenOffline: () -> Unit,
     onOpenFavFolder: (FavFolder) -> Unit,
     onSettingsClick: () -> Unit,
 ) {
@@ -687,6 +756,7 @@ private fun ProfilePane(
                     container.historyRepository,
                     container.toViewRepository,
                     container.favRepository,
+                    container.offlineDownloader,
                 )
             }
         },
@@ -706,8 +776,10 @@ private fun ProfilePane(
         onVideoClick = onVideoClick,
         onOpenHistory = onOpenHistory,
         onOpenToView = onOpenToView,
+        onOpenOffline = onOpenOffline,
         onOpenFavFolder = onOpenFavFolder,
         onSettingsClick = onSettingsClick,
+        onOpenSelf = onUserClick,
         onRetryAccount = vm::retryAccount,
         onRetryHistory = vm::retryHistory,
         onRetryToView = vm::retryToView,
@@ -776,6 +848,36 @@ private fun HistoryRoute(
             onLoadMore = vm::loadMore,
             onRetry = vm::retry,
             onRefresh = vm::refresh,
+            contentPadding = insets,
+        )
+    }
+}
+
+/**
+ * 已缓存的视频。点一条走的是普通的播放页 —— **离线不是另一种播放**,服务在取流之前会先看
+ * 这一条有没有缓存,命中就用本地文件(见 `AudioPlaybackService.playCurrent`)。所以这里不需要
+ * 一个"离线播放器",也不需要给播放页传什么标记。
+ */
+@Composable
+private fun OfflineRoute(
+    container: AppContainer,
+    onPlay: (OfflineItem) -> Unit,
+    onBack: () -> Unit,
+) {
+    val vm: OfflineViewModel = viewModel(
+        factory = viewModelFactory {
+            initializer { OfflineViewModel(container.offlineDownloader, container.offlineStore) }
+        },
+    )
+    val items by vm.items.collectAsStateWithLifecycle()
+    val usedBytes by vm.usedBytes.collectAsStateWithLifecycle()
+    Scaffold(topBar = { BilbyTopBar(title = stringResource(R.string.offline_title), onBack = onBack) }) { insets ->
+        OfflineScreen(
+            items = items,
+            usedBytes = usedBytes,
+            onPlay = onPlay,
+            onDelete = vm::delete,
+            onRetry = vm::retry,
             contentPadding = insets,
         )
     }
@@ -921,6 +1023,8 @@ private fun VideoRoute(
     container: AppContainer,
     bvid: String,
     startListening: Boolean = false,
+    /** 导航指名的那一 P(只有缓存列表会给)。0 = 不指名,由详情/观看记录决定。 */
+    cid: Long = 0,
     onUpClick: (Long) -> Unit,
     onOpenVideo: (String) -> Unit,
     onBack: () -> Unit,
@@ -993,6 +1097,9 @@ private fun VideoRoute(
     VideoPane(
         container = container,
         bvid = episode,
+        // **切集之后就不再是那一 P 了。** episode 会因为切集/自动连播变成别的视频,而 cid 是
+        // 进这一页时那一条的分 P;不夹这一道的话,bvid 与 cid 会分属两条视频。
+        cid = if (episode == bvid) cid else 0L,
         listening = listening,
         onListeningChange = { listening = it },
         onUpClick = onUpClick,
@@ -1005,6 +1112,7 @@ private fun VideoRoute(
 private fun VideoPane(
     container: AppContainer,
     bvid: String,
+    cid: Long = 0,
     listening: Boolean,
     onListeningChange: (Boolean) -> Unit,
     onUpClick: (Long) -> Unit,
@@ -1037,6 +1145,7 @@ private fun VideoPane(
                     container.relationRepository,
                     container.subtitleRepository,
                     container.danmakuRepository,
+                    container.offlineDownloader,
                 )
             }
         },
@@ -1059,6 +1168,7 @@ private fun VideoPane(
     val subtitleCues by vm.subtitleCues.collectAsStateWithLifecycle()
     val danmakuPrefs by vm.danmakuPrefs.collectAsStateWithLifecycle()
     val danmakuPool by vm.danmakuPool.collectAsStateWithLifecycle()
+    val cachedBvids by vm.cachedBvids.collectAsStateWithLifecycle()
     val specialDanmakuPool by vm.specialDanmakuPool.collectAsStateWithLifecycle()
     val staffFollowed by vm.staffFollowed.collectAsStateWithLifecycle()
     val playerPrefs by container.settings.playerPrefs.collectAsStateWithLifecycle(
@@ -1084,6 +1194,7 @@ private fun VideoPane(
 
     VideoScreen(
         bvid = bvid,
+        cid = cid,
         state = state,
         related = related,
         commentState = commentState,
@@ -1096,6 +1207,8 @@ private fun VideoPane(
             vm.onDanmakuPlaybackPosition(position)
         },
         onFindRelated = vm::findRelated,
+        cachedBvids = cachedBvids,
+        onCacheSelection = vm::cacheSelection,
         onUpClick = onUpClick,
         followState = followState,
         onToggleFollow = vm::toggleFollow,

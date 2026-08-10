@@ -67,6 +67,31 @@ class BiliClient(
         }.execute { response -> response.call.request.url.toString() }
 
     /**
+     * CDN 直链取字节。**离线缓存下载视频/音频流走这一条**,不是普通的接口调用:
+     *
+     * - **不带 Cookie、不带账号 header、不签名。** 目标是 `*.bilivideo.com` 这类 CDN,
+     *   不是 api.bilibili.com;把登录凭据发过去既没有必要,也多一处泄漏面。防盗链只认
+     *   Referer 和 UA(见 [dev.bilby.player.PlayerFactory],播放器那侧发的是同一组)。
+     * - **响应体是流,不是 JSON。** 几百 MB 的视频不能整个读进内存,所以用 `prepareGet` +
+     *   `execute`,由调用方在 [block] 里边收边写盘。响应体只在 [block] 里有效,别把
+     *   `HttpResponse` 带出去。
+     * - **[rangeStart] 大于 0 时发 Range,用于断点续传。** 服务端接受时回 206,不接受时
+     *   回 200 并从头给 —— 调用方要按状态码决定是追加还是重写,不能默认它一定支持。
+     *
+     * 放在这里而不是在下载器里直接 `httpClient.get`:CLAUDE.md 的约定是所有出网请求的
+     * 形状都在这个文件里列全,而这一条的凭据、header 与流式响应体都和上面几条不同。
+     */
+    suspend fun <T> streamGet(
+        url: String,
+        rangeStart: Long = 0,
+        block: suspend (HttpResponse) -> T,
+    ): T = http.prepareGet(url) {
+        header(HttpHeaders.UserAgent, BiliConstants.USER_AGENT)
+        header(HttpHeaders.Referrer, BiliConstants.REFERER)
+        if (rangeStart > 0) header(HttpHeaders.Range, "bytes=$rangeStart-")
+    }.execute { block(it) }
+
+    /**
      * app 端路线 + 参数走 query。TV 扫码登录的三个接口用它。
      *
      * 关键是**不能用网页端 header**:参数里带的是 TV/HD 的 appkey,UA 却是桌面 Chrome 的话,

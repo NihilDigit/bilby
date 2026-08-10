@@ -72,6 +72,7 @@ import dev.bilby.data.SpaceProfile
 import dev.bilby.data.SpaceRepository
 import dev.bilby.data.SpaceDynamicItem
 import dev.bilby.data.SpaceVideoItem
+import dev.bilby.ui.components.FollowButton
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.FullScreenError
@@ -1010,7 +1011,8 @@ private fun SpaceHeaderActions(
                 contentDescription = stringResource(R.string.space_listen_up),
             )
         }
-        SpaceFollowButton(state = followState, onClick = onToggleFollow)
+        // 空间页整页都在讲这个人,关注是这一页最主要的动作,用 filled。
+        FollowButton(state = followState, onClick = onToggleFollow)
     }
 }
 
@@ -1450,40 +1452,3 @@ private val DateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 private fun formatDate(epochSeconds: Long): String =
     Instant.ofEpochSecond(epochSeconds).atZone(ZoneId.systemDefault()).format(DateFormatter)
 
-/**
- * 与播放页的关注按钮同一套字面与强调规则,见 VideoTabs 里的那份说明。
- * 取关二次确认同样复用那边的判据和字符串:关注可逆不用确认,取关会丢关系要确认,
- * 确认放在 `onClick`(乐观更新 + 发请求)之前。
- */
-@Composable
-private fun SpaceFollowButton(state: FollowState, onClick: () -> Unit) {
-    var confirmingUnfollow by remember { mutableStateOf(false) }
-    when (state) {
-        FollowState.Self, FollowState.Blocked -> Unit
-        FollowState.None -> Button(onClick = onClick) { Text(stringResource(R.string.follow_none)) }
-        FollowState.Following -> OutlinedButton(onClick = { confirmingUnfollow = true }) {
-            Text(stringResource(R.string.follow_following))
-        }
-        FollowState.Mutual -> OutlinedButton(onClick = { confirmingUnfollow = true }) {
-            Text(stringResource(R.string.follow_mutual))
-        }
-    }
-    if (confirmingUnfollow) {
-        AlertDialog(
-            onDismissRequest = { confirmingUnfollow = false },
-            title = { Text(stringResource(R.string.follow_unfollow_confirm_title)) },
-            text = { Text(stringResource(R.string.follow_unfollow_confirm_message)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmingUnfollow = false
-                    onClick()
-                }) { Text(stringResource(R.string.follow_unfollow_confirm_title)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmingUnfollow = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
-    }
-}

@@ -34,6 +34,12 @@ import dev.bilby.data.db.BilbyDatabase
 import dev.bilby.data.db.FeedCacheRepository
 import dev.bilby.data.db.FeedReadPositionRepository
 import dev.bilby.live.LiveDanmakuClient
+import dev.bilby.offline.OfflineDownloadService
+import dev.bilby.offline.OfflineDownloader
+import dev.bilby.offline.OfflineStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -139,7 +145,37 @@ class AppContainer(context: Context) {
 
     val subtitleRepository: SubtitleRepository by lazy { SubtitleRepository(biliClient) }
 
-    val danmakuRepository: DanmakuRepository by lazy { DanmakuRepository(biliClient) }
+    /**
+     * 缓存文件放外部私有目录:不要权限、随卸载清除、不进媒体库,而空间通常比内部存储宽裕得多
+     * —— 视频是这个应用里唯一的大件。拿不到(没有外置卷)时回落内部存储。
+     */
+    val offlineStore: OfflineStore by lazy {
+        val root = appContext.getExternalFilesDir(null) ?: appContext.filesDir
+        OfflineStore(java.io.File(root, "offline"), json)
+    }
+
+    /**
+     * 弹幕仓库认得离线缓存:缓存过的分段就地解析,不出网。这样 `VideoViewModel` 那侧的分段
+     * 调度一行都不用为离线改 —— 读本地和读网络在它眼里本来就该是同一件事的两种来源。
+     */
+    val danmakuRepository: DanmakuRepository by lazy {
+        DanmakuRepository(biliClient) { cid, segmentIndex -> offlineStore.readDanmaku(cid, segmentIndex) }
+    }
+
+    /**
+     * 离线下载。**跑在应用级 scope 上** —— 下载不该因为用户离开播放页就停,那正是这个功能的
+     * 用途。进程被系统回收是另一回事,由 [OfflineDownloadService] 顶着。
+     */
+    val offlineDownloader: OfflineDownloader by lazy {
+        OfflineDownloader(
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+            store = offlineStore,
+            client = biliClient,
+            videoRepository = videoRepository,
+            danmakuRepository = danmakuRepository,
+            onBusyChanged = { busy -> OfflineDownloadService.setRunning(appContext, busy) },
+        )
+    }
 
     val heartbeatReporter: HeartbeatReporter by lazy { HeartbeatReporter(biliClient) }
 

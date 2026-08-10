@@ -70,8 +70,8 @@
     <string name="search_loading_more">加载更多…</string>
     <string name="search_fans">%1$s粉丝</string>
     <string name="search_new_session">新会话</string>
-    <string name="search_mode_to_agent">交给助理</string>
-    <string name="search_mode_to_normal">改用普通搜索</string>
+    <string name="search_mode_normal">搜索</string>
+    <string name="search_mode_agent">助理</string>
     <string name="search_order_comprehensive">综合</string>
     <string name="search_order_click">最多播放</string>
     <string name="search_order_pubdate">最新发布</string>
@@ -158,6 +158,31 @@
     <string name="video_find_related">找相关</string>
     <string name="video_queue_loading">加载队列…</string>
     <string name="video_queue_incomplete">队列没建全,只有当前这条</string>
+
+    <!-- 离线缓存。入口在播放队列那一节的标题行,列表页在「我的」 -->
+    <string name="offline_title">离线缓存</string>
+    <string name="offline_cache_action">缓存</string>
+    <string name="offline_sheet_title">缓存到本地</string>
+    <string name="offline_sheet_quality">清晰度</string>
+    <string name="offline_sheet_danmaku">同时缓存弹幕</string>
+    <string name="offline_sheet_confirm">缓存 %1$d 条</string>
+    <string name="offline_sheet_empty_selection">选择要缓存的视频</string>
+    <string name="offline_already_cached">已缓存</string>
+    <string name="offline_status_queued">排队中</string>
+    <string name="offline_status_running">下载中 %1$d%%</string>
+    <string name="offline_status_running_unknown">下载中</string>
+    <string name="offline_status_failed">缓存失败</string>
+    <string name="offline_with_danmaku">含弹幕</string>
+    <string name="offline_empty">还没有缓存过视频</string>
+    <string name="offline_used_space">已用 %1$s</string>
+    <string name="offline_delete">删除缓存:%1$s</string>
+    <string name="offline_delete_confirm_title">删除这条缓存?</string>
+    <string name="offline_delete_confirm_message">本地文件会被删掉,重新缓存要再下一次。</string>
+    <string name="offline_notification_channel">离线缓存</string>
+    <string name="offline_notification_title">正在缓存视频</string>
+    <string name="offline_notification_queued">还有 %1$d 条</string>
+    <string name="size_mb">%1$.1f MB</string>
+    <string name="size_gb">%1$.2f GB</string>
 
     <!-- 投币 / 收藏对话框 -->
     <string name="action_confirm">确认</string>
@@ -351,4 +376,7 @@
     <string name="video_parts_expand">全部 %1$d 集</string>
     <string name="settings_section_account">账号</string>
     <string name="feed_all_followings">全部关注</string>
+    <string name="feed_up_live">%1$s 正在直播</string>
+    <string name="video_action_listen">听视频</string>
+    <string name="offline_count">%1$d 个视频</string>
 </resources>

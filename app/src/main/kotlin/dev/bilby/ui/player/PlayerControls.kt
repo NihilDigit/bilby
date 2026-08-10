@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -30,6 +32,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import dev.bilby.R
+import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
@@ -80,9 +83,15 @@ internal fun BoxScope.MediaBackButton(onBack: () -> Unit, onShare: (() -> Unit)?
             .height(MediaScrimHeight)
             .background(Brush.verticalGradient(listOf(FixedColors.ScrimOnMedia, Color.Transparent))),
     )
+    // 画面在横屏两栏下是全出血的,状态栏和刘海就压在这两个按钮上。竖排时页面那一层已经
+    // 躲过并消费掉这份 inset,这里量到 0。
+    val safeInsets = WindowInsets.barsAndCutout
     IconButton(
         onClick = onBack,
-        modifier = Modifier.align(Alignment.TopStart).padding(Spacing.Tight),
+        modifier = Modifier
+            .align(Alignment.TopStart)
+            .windowInsetsPadding(safeInsets)
+            .padding(Spacing.Tight),
     ) {
         Icon(
             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -96,7 +105,10 @@ internal fun BoxScope.MediaBackButton(onBack: () -> Unit, onShare: (() -> Unit)?
     onShare?.let { share ->
         IconButton(
             onClick = share,
-            modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.Tight),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .windowInsetsPadding(safeInsets)
+                .padding(Spacing.Tight),
         ) {
             Icon(
                 imageVector = Icons.Filled.Share,

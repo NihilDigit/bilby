@@ -4,14 +4,17 @@ import kotlinx.serialization.Serializable
 
 /**
  * `GET x/polymer/web-dynamic/v1/portal` 的 data 节点 —— 动态页顶部那排"最常访问"的 UP。
- * 字段依据 PiliPlus 的 `lib/models/dynamics/up.dart`(`FollowUpModel.fromUpList`)。
+ * 字段依据 PiliPlus 的 `lib/models/dynamics/up.dart`(`FollowUpModel`)。
  *
- * 响应里另有 `live_users`(正在直播的 UP)和每个 item 的 `has_update`(更新红点),
- * **两者都不解析**:直播不在产品范围内,而红点是 DESIGN 1.3 点名不实现的东西 ——
+ * `live_users` 解析,用来在头像上标"正在直播"并给出房间号 —— 直播现在是这个 app 的一部分。
+ * 每个 item 上的 `has_update`(更新红点)**不解析**:它是 DESIGN 1.3 点名不实现的东西,
  * 解析出来搁在模型里,下一个人就会顺手把它渲染上去。
  */
 @Serializable
-data class PortalDto(val up_list: PortalUpListDto? = null)
+data class PortalDto(
+    val up_list: PortalUpListDto? = null,
+    val live_users: PortalLiveUsersDto? = null,
+)
 
 @Serializable
 data class PortalUpListDto(val items: List<PortalUpDto> = emptyList())
@@ -21,6 +24,15 @@ data class PortalUpDto(
     val mid: Long = 0L,
     val uname: String = "",
     val face: String = "",
+)
+
+@Serializable
+data class PortalLiveUsersDto(val items: List<PortalLiveUserDto> = emptyList())
+
+@Serializable
+data class PortalLiveUserDto(
+    val mid: Long = 0L,
+    val room_id: Long = 0L,
 )
 
 /**

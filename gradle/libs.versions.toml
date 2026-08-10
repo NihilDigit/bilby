@@ -23,7 +23,7 @@ kotlinxCoroutines = "1.11.0"
 
 # 弹幕引擎,独立仓库。开发期走 composite build(settings.gradle.kts),这个版本号只在
 # 脱离 composite build 从仓库解析时才生效。
-tdanmaku = "0.1.0"
+tdanmaku = "0.1.1"
 
 [libraries]
 tdanmaku = { module = "dev.nihildigit:tdanmaku", version.ref = "tdanmaku" }

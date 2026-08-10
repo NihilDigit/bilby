@@ -18,14 +18,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBars
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,7 +33,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Pause
@@ -89,6 +85,7 @@ import androidx.media3.ui.compose.PlayerSurface
 import dev.bilby.BiliLog
 import dev.bilby.R
 import dev.bilby.formatDurationMillis
+import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.player.ControlButton
 import dev.bilby.ui.player.ControlScrimBottom
 import dev.bilby.ui.player.DanmakuButton
@@ -154,7 +151,6 @@ fun BilbyPlayer(
     onQualityChange: (Int) -> Unit,
     isFullscreen: Boolean,
     onFullscreenChange: (Boolean) -> Unit,
-    onListen: () -> Unit,
     onReportProgress: (positionMillis: Long, durationMillis: Long) -> Unit,
     /** 会被自动跳过的片段。只染在进度条上,不参与交互,见 [SeekBar]。 */
     seekBarSegments: List<SeekBarSegment> = emptyList(),
@@ -202,6 +198,10 @@ fun BilbyPlayer(
     matchesCurrentPage: Boolean = true,
     /** [matchesCurrentPage] 为 false 时画的占位封面,取这一页自己的封面,不是播放器正在放的那条。 */
     placeholderCoverUrl: String = "",
+    /** 透传给 [PlayerShell]:画面压在状态栏底下。 */
+    fullBleed: Boolean = false,
+    /** 透传给 [PlayerShell]:两栏下把状态栏收起来。 */
+    hideStatusBar: Boolean = false,
     modifier: Modifier = Modifier,
     /** 只在全屏时显示。竖屏下标题就在播放器正下方,再印一遍是多余的。 */
     title: String = "",
@@ -228,6 +228,8 @@ fun BilbyPlayer(
         locked = locked,
         onLockedChange = onLockedChange,
         title = title,
+        fullBleed = fullBleed,
+        hideStatusBar = hideStatusBar,
         modifier = modifier,
         fastForwardSpeed = fastForwardSpeed,
         onSeeked = { positionMillis, durationMillis -> reportProgress(positionMillis, durationMillis) },
@@ -300,7 +302,6 @@ fun BilbyPlayer(
                     keepControlsAwake()
                 },
                 onFullscreenToggle = { toggleFullscreen() },
-                onListen = onListen,
                 onMenuOpenChange = { setMenuOpen(it) },
                 danmakuEnabled = danmakuPrefs.enabled,
                 onDanmakuEnabledChange = {
@@ -333,12 +334,11 @@ private fun PlayerControlBar(
     currentSubtitleLan: String,
     onSubtitleTrackChange: (String) -> Unit,
     onFullscreenToggle: () -> Unit,
-    onListen: () -> Unit,
     onMenuOpenChange: (Boolean) -> Unit,
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
 ) {
-    val safeInsets = WindowInsets.displayCutout.union(WindowInsets.systemBars)
+    val safeInsets = WindowInsets.barsAndCutout
     val container = Modifier
         .fillMaxWidth()
         // 渐变而不是一整条半透明黑。控件底下是画面本身,一条硬边的黑带会把画面横着切一刀,
@@ -349,8 +349,10 @@ private fun PlayerControlBar(
                 listOf(Color.Transparent, FixedColors.PlayerControlScrim, ControlScrimBottom),
             ),
         )
-        // 全屏时系统栏被藏了,但挖孔和手势条的位置照旧,控件贴边会被切掉一半。
-        .then(if (isFullscreen) Modifier.windowInsetsPadding(safeInsets) else Modifier)
+        // 挖孔和手势条会切掉贴边的控件。**无条件躲**,不再只在全屏时躲:横屏两栏下画面
+        // 也是全出血的,手势条同样压在控制条上。竖排时页面那一层已经躲过并消费掉了这份
+        // inset,这里量到的是 0,不会重复叠加。
+        .windowInsetsPadding(safeInsets)
         .padding(
             start = if (isFullscreen) 16.dp else 8.dp,
             end = if (isFullscreen) 16.dp else 8.dp,
@@ -396,7 +398,6 @@ private fun PlayerControlBar(
                 onSubtitleTrackChange = onSubtitleTrackChange,
                 onDanmakuEnabledChange = onDanmakuEnabledChange,
                 onMenuOpenChange = onMenuOpenChange,
-                onListen = onListen,
             )
             FullscreenButton(isFullscreen, onFullscreenToggle, if (isFullscreen) 26.dp else 22.dp)
         }
@@ -421,22 +422,14 @@ private fun SecondaryControls(
     onSubtitleTrackChange: (String) -> Unit,
     onDanmakuEnabledChange: (Boolean) -> Unit,
     onMenuOpenChange: (Boolean) -> Unit,
-    onListen: () -> Unit,
 ) {
     SpeedButton(speed, onSpeedChange, onMenuOpenChange, labelled)
     QualityButton(qualities, currentQuality, onQualityChange, onMenuOpenChange, labelled)
     SubtitleButton(subtitleTracks, currentSubtitleLan, onSubtitleTrackChange, onMenuOpenChange, labelled)
     DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, labelled)
-    // 听视频和全屏是同一类东西:都是播放页内的状态,都不换播放器、不交接进度。
-    // 同构的两个动作放在一起,以前它在下面的简介区,和一堆内容动作混着。
-    IconButton(onClick = onListen) {
-        Icon(
-            Icons.Filled.Headphones,
-            contentDescription = stringResource(R.string.player_listen),
-            tint = FixedColors.OnMedia,
-            modifier = Modifier.size(if (isFullscreen) 26.dp else 22.dp),
-        )
-    }
+    // 听视频**不在这条控制条上**,它在简介页的动作栏里、挨着稍后再看(见 VideoTabs)。
+    // 这条控制条上的东西回答的都是"这个播放器现在怎么放"(倍速、清晰度、字幕、弹幕、全屏),
+    // 而听视频换掉的是整页的形态。放在这里时它混在五个播放参数中间,读不出这层区别。
 }
 
 

@@ -6,18 +6,19 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBars
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -64,7 +65,11 @@ import dev.bilby.R
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.live.LiveMessage
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.ShareLink
+import dev.bilby.ui.barsAndCutout
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
@@ -124,14 +129,18 @@ fun LiveRoomScreen(
         if (locked) locked = false else fullscreen = false
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .then(
-                if (fullscreen) Modifier
-                else Modifier.windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.systemBars)),
-            ),
-    ) {
+    // 和播放页同一条规则(见 VideoScreen 里那段"状态栏那一条填黑"):不垫页面底色,改在画面
+    // 上方补一条黑边;宽屏下状态栏整条收起来。下面的 Tab 自己躲左右和底部。
+    val expandedLayout = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    Column(modifier = modifier.fillMaxSize()) {
+        if (!fullscreen && !expandedLayout) {
+            Spacer(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsTopHeight(WindowInsets.barsAndCutout)
+                    .background(Color.Black),
+            )
+        }
         Box(
             modifier = (
                 if (fullscreen) Modifier.fillMaxSize()
@@ -154,6 +163,9 @@ fun LiveRoomScreen(
                     locked = locked,
                     onLockedChange = { locked = it },
                     title = state.title,
+                    fullBleed = true,
+                    // 宽屏下画面只占中间一块,状态栏两端露在页面底色上,图标明暗顾不过来。
+                    hideStatusBar = expandedLayout,
                     // 直播既不能 seek 也不能快进:前者那条时间轴上没有往回拖这回事,后者会把
                     // 倍速设成 3x —— 在一条一直往前走的流上,那只是冲到最前沿然后卡住等数据。
                     // 亮度和音量照旧,它们跟内容是什么无关。
@@ -207,7 +219,16 @@ fun LiveRoomScreen(
         }
 
         if (!fullscreen) {
-            AdaptiveContent(modifier = Modifier.fillMaxSize(), maxWidth = Breakpoints.ReadableWidth) {
+            AdaptiveContent(
+                // 上边没有 inset 要躲,那一侧是画面;左右和底下要躲。
+                modifier = Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(
+                        WindowInsets.barsAndCutout
+                            .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom),
+                    ),
+                maxWidth = Breakpoints.ReadableWidth,
+            ) {
                 LiveRoomTabs(
                     state = state,
                     onLoadMoreGuards = onLoadMoreGuards,

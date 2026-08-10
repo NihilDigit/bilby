@@ -31,6 +31,7 @@ import dev.bilby.data.SettingsStore
 import dev.bilby.data.SubtitleRepository
 import dev.bilby.data.VideoRepository
 import dev.bilby.data.resumeAtMillisFor
+import dev.bilby.offline.OfflineStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -150,6 +151,9 @@ class AudioPlaybackService : MediaSessionService() {
     /** 只为了问"上次播到哪一 P" —— 那个字段只有 `x/player/wbi/v2` 有,而它归这个仓库。 */
     private lateinit var subtitleRepository: SubtitleRepository
     private lateinit var queueSourceRepository: QueueSourceRepository
+
+    /** 只为了在取流之前问一句"这一条缓存过没有",见 [playCurrent]。 */
+    private lateinit var offlineStore: OfflineStore
     private lateinit var settings: SettingsStore
     private lateinit var sleepTimer: SleepTimer
     private var session: MediaSession? = null
@@ -202,6 +206,15 @@ class AudioPlaybackService : MediaSessionService() {
     private var resumedPartBvid: String? = null
     private var resumedFromCid: Long = 0
 
+    /**
+     * 此刻放的是这条视频的**本地副本**。命中缓存时置上,装在线流或切到直播时清掉。
+     *
+     * 它只有一个用处:让页面随后送来的那一趟默认 cid 不要把本地副本顶掉(见 [openVideo])。
+     * 不并进 [resumedFromCid] 那套,是因为那套要求预先知道页面会送来哪个 cid,而离线时
+     * 拿不到详情,也就拿不到那个值。
+     */
+    private var offlineBvid: String? = null
+
     private var playInfo: PlayInfo? = null
     private var currentQuality: Int = 0
 
@@ -212,6 +225,7 @@ class AudioPlaybackService : MediaSessionService() {
         videoRepository = container.videoRepository
         subtitleRepository = container.subtitleRepository
         queueSourceRepository = container.queueSourceRepository
+        offlineStore = container.offlineStore
         settings = container.settings
 
         player = PlayerFactory.createPlayer(this).apply {
@@ -327,6 +341,7 @@ class AudioPlaybackService : MediaSessionService() {
         queueIncomplete = false
         loadedBvid = null
         loadedCid = 0
+        offlineBvid = null
         // 清晰度菜单读的是视频那套 playInfo,直播的档位不同源,留着上一条视频的会给出一个
         // 点了没用的菜单。
         playInfo = null
@@ -369,7 +384,16 @@ class AudioPlaybackService : MediaSessionService() {
             // 于是"换 P"回 P1,续播白做了。所以记下续播时被替换掉的那个 cid,来自页面的
             // 同一个值直接忽略。用户真的手动切 P 走的是 ACTION_PLAY_PART,不经过这里。
             val preparing = prepareJob?.isActive == true
-            val isSupersededDefault = bvid == resumedPartBvid && cid == resumedFromCid
+            // **正在放本地副本时,来自页面的 cid 一律忽略。** 页面手上只有详情里的默认 cid
+            // (通常是 P1),而缓存的可能是别的那一 P;照下面那个判断就成了"要换 P",于是把
+            // 刚起好的本地副本顶掉、改走网络 —— 缓存看起来"播了一下又跳回去"。
+            //
+            // 这一档不能复用 `resumedFromCid`:那套要求预先知道页面会送来哪个 cid,而那个值
+            // 只有联网拿到详情才有,离线时根本拿不到。真正的换 P 走 ACTION_PLAY_PART,
+            // 不经过这里,所以忽略掉是安全的。
+            val playingLocalCopy = bvid == offlineBvid
+            val isSupersededDefault =
+                playingLocalCopy || (bvid == resumedPartBvid && cid == resumedFromCid)
             if (cid != 0L && cid != loadedCid && !preparing && !isSupersededDefault) {
                 playPart(cid)
             } else {
@@ -498,6 +522,46 @@ class AudioPlaybackService : MediaSessionService() {
 
         publishState(loading = true)
         prepareJob = scope.launch {
+            // **已缓存的就地播,而且这一句必须排在所有网络之前。**
+            //
+            // 它原先摆在补 cid 和续播分 P 后面,只越过了 playurl —— 而补 cid 走的
+            // `getVideoDetail` 本身就是一次网络往返。从缓存列表点进来的队列项是现造的、没有
+            // cid,于是第一步就去联网:真离线时那一步直接失败返回,本地那份一步都走不到;
+            // 有网时能补出来,所以表现成"有的能播有的不能"。真机上出过。
+            //
+            // 因此按 **bvid** 查而不是 (bvid, cid):cid 正是那个要联网才拿得到的东西。
+            // 哪一 P 由索引给(见 [OfflineStore.completedFor]),拿到之后当作这次要播的那一 P。
+            offlineStore.completedFor(item.bvid, item.cid)?.let { cached ->
+                queue.updateCurrentCid(cached.cid)
+                // 标题/UP/封面从索引里填。**必须赶在 load() 之前**:MediaSession 是在装载那一刻
+                // 来读 currentMetadata() 的,晚一步通知栏就挂着一条没有标题的媒体,而之后没有
+                // 任何播放器事件会让它再读一次。离线时这也是元数据唯一的来源。
+                queue.fillCurrentMetadata(cached.title, cached.upName, cached.coverUrl)
+                // 画质菜单留空:本地只有下载时选的那一档,摆一个点了没用的菜单不如不摆。
+                playInfo = null
+                currentQuality = cached.qualityId
+                val audio = offlineStore.audioFile(cached.bvid, cached.cid).takeIf { it.isFile }
+                player.setMediaSource(
+                    PlayerFactory.createLocalMediaSource(
+                        offlineStore.videoFile(cached.bvid, cached.cid).path,
+                        audio?.path,
+                    ),
+                )
+                player.prepare()
+                openChain?.mark("prepare")
+                // 续播位置只认服务端的 last_play_time(DESIGN 7),而这里正好没有网络可问。
+                // 本地不另存一份进度:那份是"视频播不动"的根因,见 VideoRepository 的说明。
+                loadedBvid = cached.bvid
+                loadedCid = cached.cid
+                // 页面稍后还会拿着详情里的默认 cid 再发一遍打开命令(见 openVideo 的幂等分支)。
+                // 缓存的可能正是别的那一 P,那一趟会把刚起好的本地副本顶掉、改走网络 —— 记下
+                // "现在放的是这条视频的本地副本",让那一趟被忽略。
+                offlineBvid = cached.bvid
+                player.playWhenReady = playWhenReady
+                publishState()
+                return@launch
+            }
+
             // 空间投稿来源的队列项没有 cid(列表接口不返回),约定由这里补:拿着 0 去取流
             // 会被服务端当成无效 cid,表现是每一条都"取流失败",队列静默空转。
             val requestedCid = item.cid.takeIf { it != 0L } ?: run {
@@ -593,6 +657,8 @@ class AudioPlaybackService : MediaSessionService() {
         cid: Long,
         startPositionMillis: Long,
     ) {
+        // 走到这里就是在线流,本地副本那个标记必须清掉,否则换到别的一 P 会被当成"忽略"。
+        offlineBvid = null
         player.setMediaSource(PlayerFactory.createMediaSource(videoUrl, audioUrl))
         player.prepare()
         openChain?.mark("prepare")

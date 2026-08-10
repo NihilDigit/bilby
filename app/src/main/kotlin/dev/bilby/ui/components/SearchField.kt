@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
@@ -68,6 +69,8 @@ fun SearchField(
     modifier: Modifier = Modifier,
     focusRequester: FocusRequester? = null,
     trailing: @Composable (RowScope.() -> Unit)? = null,
+    /** 输入框拿到/失去焦点。搜索页靠它决定要不要把历史顶上来。 */
+    onFocusChange: (Boolean) -> Unit = {},
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     Row(
@@ -90,7 +93,7 @@ fun SearchField(
             modifier = Modifier.size(Dimens.IconInline),
         )
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-            if (value.isEmpty()) {
+            if (value.isEmpty() && placeholder.isNotEmpty()) {
                 Text(
                     text = placeholder,
                     style = MaterialTheme.typography.bodyLarge,
@@ -116,6 +119,7 @@ fun SearchField(
                     },
                 ),
                 modifier = Modifier.fillMaxWidth()
+                    .onFocusChanged { onFocusChange(it.isFocused) }
                     .let { if (focusRequester != null) it.focusRequester(focusRequester) else it },
             )
         }

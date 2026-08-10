@@ -28,6 +28,10 @@ import dev.bilby.ui.theme.Spacing
  * segmented button 留给切换视图。选中态只换字重(`labelLargeEmphasized`)和颜色
  * (`primary`/`outline`),不放大字号 —— 放大会带着行高一起变,这一排就会跳。
  *
+ * **纵向留白由这一排自己负责,调用方只给左右内边距。** 那 48dp 的触摸盒本身就是这一排的
+ * 高度;外面再垫上下 padding,一行字就撑到 56dp 往上,在评论区那种一屏要放很多条的地方,
+ * 这一条会读成一个独立的板块而不是列表的表头。
+ *
  * @param options 值与其展示文案的 string 资源,按展示顺序传入。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)

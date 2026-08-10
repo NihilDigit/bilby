@@ -18,18 +18,20 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconToggleButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -44,6 +46,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,6 +56,7 @@ import dev.bilby.R
 import dev.bilby.agent.AgentStep
 import dev.bilby.agent.AgentTurnState
 import dev.bilby.agent.AnswerBlock
+import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.AgentTurnView
 import dev.bilby.ui.components.AnswerBlocks
 import dev.bilby.agent.TraceItem
@@ -71,6 +75,7 @@ import dev.bilby.ui.components.rememberBottomFollow
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
+import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -126,9 +131,9 @@ data class SearchChatUiState(
  * 对话式搜索(团队要求的形态):输入在下,一轮轮结果在上,像 Claude App 但内容是视频列表。
  * 结果页只有结果——无历史、无热搜、无"换一批"(DESIGN 2.2/3.4)。
  *
- * "新会话"长在这一页自己的内容里(根 tab 不再有共用顶栏可借):只在助理模式下才有会话
- * 可开,所以只在 `mode == Agent` 时画一个靠右的图标,别的时候不占位置——不是"藏起来",
- * 是普通搜索模式压根没有"会话"这个概念。
+ * "问谁"和"新会话"都长在输入框那一条里(根 tab 不再有共用顶栏可借),但各是各的控件:
+ * 前者在框内尾部,是状态;后者在框左边,是动作。新会话只在助理模式下出现——普通搜索压根
+ * 没有"会话"这个概念,那不是藏起来了。
  */
 @Composable
 fun SearchChatScreen(
@@ -143,12 +148,14 @@ fun SearchChatScreen(
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onRefresh: () -> Unit = {},
-    /** 最近搜过的词,最近的在前。只在普通搜索、且还没搜过东西时露面。 */
+    /** 最近搜过的词,最近的在前。只在普通搜索里露面,时机见 [NormalPane]。 */
     searchHistory: List<String> = emptyList(),
     onHistoryClick: (String) -> Unit = {},
     onHistoryRemove: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    var inputFocused by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
     val inputBar: @Composable () -> Unit = {
         InputBar(
             input = state.input,
@@ -156,57 +163,62 @@ fun SearchChatScreen(
             mode = state.mode,
             onModeChange = onModeChange,
             onSend = onSend,
+            // 开新会话是清空助理上下文的唯一入口(DESIGN 3.1:会话必须由用户显式开启)。
+            onNewSession = onNewSession,
+            onFocusChange = { inputFocused = it },
             modifier = Modifier.fillMaxWidth(),
         )
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
-        // 开新会话是清空助理上下文的唯一入口(DESIGN 3.1:会话必须由用户显式开启),
-        // 属于"改变整页状态"的动作。IconButton 自带 48dp 触摸区,不需要额外撑。
-        if (state.mode == SearchMode.Agent) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                IconButton(onClick = onNewSession) {
-                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.search_new_session))
+    // 宽屏下这一栏不拉满:结果是"封面 + 两行文字"的条目,助理那边整段都是正文,行长一超过
+    // 可读宽度就得靠转头扫。输入框在同一个容器里,跟着一起收 —— 分开算的话底部那条会比它
+    // 上面的结果宽出一大截,看着像两个页面。
+    AdaptiveContent(modifier = modifier.fillMaxSize(), maxWidth = Breakpoints.ReadableWidth) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // **只有普通搜索能下拉刷新。** 助理模式下这个手势会重跑一整轮 LLM ——
+            // 用户下拉时想要的是"再查一次同样的东西",而那边一次下拉是一次真金白银的请求,
+            // 而且答案还会变。要重问就用输入框重新问,或者按输入框左边的新会话。
+            when (state.mode) {
+                SearchMode.Normal -> PullToRefreshBox(
+                    isRefreshing = state.normal.videoLoading && state.normal.videos.isNotEmpty(),
+                    onRefresh = onRefresh,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    NormalPane(
+                        state = state.normal,
+                        onOrderChange = onOrderChange,
+                        onVideoClick = onVideoClick,
+                        onUserClick = onUserClick,
+                        onLoadMore = onLoadMore,
+                        onRetry = onRetry,
+                        history = searchHistory,
+                        // 点了历史就是发起一次搜索,焦点该离开输入框 —— 不收的话结果出来了
+                        // 这一屏还停在历史上,得再点一下别处才看得见。
+                        onHistoryClick = { keyword ->
+                            focusManager.clearFocus()
+                            onHistoryClick(keyword)
+                        },
+                        onHistoryRemove = onHistoryRemove,
+                        inputFocused = inputFocused,
+                    )
+                }
+    
+                SearchMode.Agent -> Box(modifier = Modifier.weight(1f)) {
+                    AgentPane(
+                        state = state.agent,
+                        onVideoClick = onVideoClick,
+                        onRetry = onRetry,
+                    )
                 }
             }
+    
+            // **输入框常驻底部,两种模式都一样。** 位置由模式决定过一版,切模式时框会从底跳到顶,
+            // 闪得扎眼 —— 共用一个框就该只有一个位置。
+            //
+            // 内容仍然从上往下排:上面那个 Box 占满剩余高度,两种 pane 的列表都从它的顶边开始。
+            // 底部这一条不参与内容的排布,它是常驻的输入区。
+            inputBar()
         }
-        // **只有普通搜索能下拉刷新。** 助理模式下这个手势会重跑一整轮 LLM ——
-        // 用户下拉时想要的是"再查一次同样的东西",而那边一次下拉是一次真金白银的请求,
-        // 而且答案还会变。要重问就用输入框重新问,或者用右上角的新会话。
-        when (state.mode) {
-            SearchMode.Normal -> PullToRefreshBox(
-                isRefreshing = state.normal.videoLoading && state.normal.videos.isNotEmpty(),
-                onRefresh = onRefresh,
-                modifier = Modifier.weight(1f),
-            ) {
-                NormalPane(
-                    state = state.normal,
-                    onOrderChange = onOrderChange,
-                    onVideoClick = onVideoClick,
-                    onUserClick = onUserClick,
-                    onLoadMore = onLoadMore,
-                    onRetry = onRetry,
-                    history = searchHistory,
-                    onHistoryClick = onHistoryClick,
-                    onHistoryRemove = onHistoryRemove,
-                )
-            }
-
-            SearchMode.Agent -> Box(modifier = Modifier.weight(1f)) {
-                AgentPane(
-                    state = state.agent,
-                    onVideoClick = onVideoClick,
-                    onRetry = onRetry,
-                )
-            }
-        }
-
-        // **输入框常驻底部,两种模式都一样。** 位置由模式决定过一版,切模式时框会从底跳到顶,
-        // 闪得扎眼 —— 共用一个框就该只有一个位置。
-        //
-        // 内容仍然从上往下排:上面那个 Box 占满剩余高度,两种 pane 的列表都从它的顶边开始。
-        // 底部这一条不参与内容的排布,它是常驻的输入区。
-        inputBar()
     }
 }
 
@@ -222,17 +234,25 @@ private fun NormalPane(
     history: List<String>,
     onHistoryClick: (String) -> Unit,
     onHistoryRemove: (String) -> Unit,
+    /** 输入框此刻有没有焦点。见下面对历史何时露面的说明。 */
+    inputFocused: Boolean,
 ) {
+    // 历史在两种时候露面:**还没搜过**,以及**光标回到输入框**。后者是原先漏掉的那一半 ——
+    // 搜完之后历史就再也拿不到了,可"再搜一次刚才那个"这个念头恰恰常发生在看完一轮结果、
+    // 手已经点回输入框的时候。绑在焦点上而不是一直挂着:结果还在读的时候摆一列旧关键词,
+    // 才是在把人从当前结果引开。
+    if (history.isNotEmpty() && (state.query.isEmpty() || inputFocused)) {
+        SearchHistoryList(history, onHistoryClick, onHistoryRemove)
+        return
+    }
     if (state.query.isEmpty()) {
-        // 还没搜过东西时,这一屏原先只有一句空态。历史摆在这里而不是搜完之后:它的用处是
-        // "再搜一次刚才那个",而那个念头只发生在还没开始搜的时候;结果出来之后再挂一份
-        // 旧关键词,是在把人从当前结果引开。
-        if (history.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                EmptyState(stringResource(R.string.search_empty))
-            }
-        } else {
-            SearchHistoryList(history, onHistoryClick, onHistoryRemove)
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            EmptyState(
+                message = stringResource(R.string.search_empty),
+                // 普通搜索的空态给放大镜,和助理那一屏的图标分开:两种模式的空屏长得一样的话,
+                // 只剩底下那个小小的模式标签能告诉人现在归谁答。
+                icon = Icons.Outlined.Search,
+            )
         }
         return
     }
@@ -264,7 +284,7 @@ private fun NormalPane(
                 options = SearchOrders,
                 selected = state.order,
                 onSelect = onOrderChange,
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable),
             )
         }
         if (state.users.isNotEmpty()) {
@@ -367,7 +387,10 @@ private fun AgentPane(
 ) {
     if (state.turns.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            EmptyState(stringResource(R.string.search_agent_empty))
+            EmptyState(
+                message = stringResource(R.string.search_agent_empty),
+                icon = Icons.Outlined.AutoAwesome,
+            )
         }
         return
     }
@@ -512,46 +535,117 @@ private fun InputBar(
     mode: SearchMode,
     onModeChange: (SearchMode) -> Unit,
     onSend: () -> Unit,
+    onNewSession: () -> Unit,
+    onFocusChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val agent = mode == SearchMode.Agent
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth().padding(Spacing.Tight),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            SearchField(
-                value = input,
-                onValueChange = onInputChange,
-                placeholder = stringResource(
-                    if (agent) R.string.search_agent_empty else R.string.search_empty,
-                ),
-                // 回车即发送。DESIGN 2.2 的快路原话是"输入直接回车 = 原始 B 站搜索",
-                // 换成 SearchField 之前这条根本没实现:OutlinedTextField 的 singleLine
-                // 只是不换行,键盘上那个键什么都不做。
-                onSearch = onSend,
-                modifier = Modifier.weight(1f),
-            )
-            // 闪光亮起 = 这一句交给助理。整个 app 里闪光只表示助理(播放页的「找相关」用的
-            // 是同一个图标),所以它不需要文字解释;放在输入框上是因为要决定的是**这一句话
-            // 由谁回答**,那是输入的属性,不是一个页面级的模式开关。
-            IconToggleButton(checked = agent, onCheckedChange = { onModeChange(if (it) SearchMode.Agent else SearchMode.Normal) }) {
-                Icon(
-                    imageVector = Icons.Filled.AutoAwesome,
-                    contentDescription = stringResource(
-                        if (agent) R.string.search_mode_to_normal else R.string.search_mode_to_agent,
-                    ),
-                    tint = if (agent) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                // 新会话单独一个按钮,不并进模式菜单:它是**动作**(把上下文清掉),而那个菜单
+                // 里两项是**状态**(现在归谁答)。混在一起的话,一个会改选中项、一个不会,
+                // 打开菜单还得先分辨哪行点下去是什么。只在助理模式出现,普通搜索没有会话。
+                if (agent) {
+                    IconButton(onClick = onNewSession) {
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = stringResource(R.string.search_new_session),
+                        )
+                    }
+                }
+                SearchField(
+                    value = input,
+                    onValueChange = onInputChange,
+                    // **不给占位文案。** 它和上面那句空态逐字重复,而两者总是同时出现:
+                    // 输入框空的时候,结果区正好是那一屏空态。同一句话印两遍。
+                    placeholder = "",
+                    // 回车即发送。DESIGN 2.2 的快路原话是"输入直接回车 = 原始 B 站搜索",
+                    // 换成 SearchField 之前这条根本没实现:OutlinedTextField 的 singleLine
+                    // 只是不换行,键盘上那个键什么都不做。
+                    onSearch = onSend,
+                    trailing = { SearchModeMenu(mode, onModeChange) },
+                    onFocusChange = onFocusChange,
+                    modifier = Modifier.weight(1f),
                 )
+                // 发送是这一屏的主行动,用实心图标按钮 —— M3 说要提升某个动作的可见度就换成
+                // filled/tonal,并且一屏只留一个。
+                FilledIconButton(onClick = onSend, enabled = input.isNotBlank()) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send,
+                        contentDescription = stringResource(R.string.action_send),
+                    )
+                }
             }
-            // 发送是这一屏的主行动,用实心图标按钮 —— M3 说要提升某个动作的可见度就换成
-            // filled/tonal,并且一屏只留一个。
-            FilledIconButton(onClick = onSend, enabled = input.isNotBlank()) {
-                Icon(
-                    Icons.AutoMirrored.Filled.Send,
-                    contentDescription = stringResource(R.string.action_send),
+        }
+    }
+}
+
+/**
+ * 「谁来回答」:输入框尾部一个带标签的低强调按钮,点开是两项菜单。
+ *
+ * **它是一个页面级的模式,所以带文字标签**:切过去之后排序、翻页、下拉刷新、整块结果区
+ * 全都换掉,用户看到的是换了一个页面,一个没有标签的图标说不清这件事。
+ *
+ * 但它**不该是一组按钮**。规范里这个位置的原文是 search 页的
+ * "Trailing actions can include: Additional modes of searching like voice search" —— 换搜索
+ * 方式本来就长在输入框尾部。而 connected button group(segmented button 的替代品)在
+ * button groups 页要求 "should span the width of the page or surface it's placed on",
+ * 摊开成一条按钮带,重量压过了它旁边的输入框和发送键。
+ *
+ * 菜单里只有模式,没有「新会话」——那是一个动作,不是一个可选状态,见 [InputBar]。
+ */
+@Composable
+private fun SearchModeMenu(
+    mode: SearchMode,
+    onModeChange: (SearchMode) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        TextButton(
+            onClick = { open = true },
+            contentPadding = PaddingValues(horizontal = Spacing.Tight),
+        ) {
+            Text(
+                stringResource(
+                    if (mode == SearchMode.Agent) R.string.search_mode_agent
+                    else R.string.search_mode_normal,
+                ),
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+            )
+            Icon(
+                Icons.Filled.ArrowDropDown,
+                contentDescription = null,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            SearchMode.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            stringResource(
+                                if (option == SearchMode.Agent) R.string.search_mode_agent
+                                else R.string.search_mode_normal,
+                            ),
+                        )
+                    },
+                    trailingIcon = {
+                        if (option == mode) {
+                            Icon(Icons.Filled.Check, contentDescription = null)
+                        }
+                    },
+                    onClick = {
+                        open = false
+                        onModeChange(option)
+                    },
                 )
             }
         }

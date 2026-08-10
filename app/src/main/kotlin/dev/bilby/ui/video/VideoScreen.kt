@@ -1,6 +1,11 @@
 package dev.bilby.ui.video
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.draw.clip
@@ -8,15 +13,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -70,6 +79,7 @@ import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.delay
 import dev.bilby.data.VideoRelation
 import dev.bilby.player.AudioPlaybackService
+import dev.bilby.player.QueueItem
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
 import dev.bilby.data.DanmakuPrefs
@@ -78,6 +88,8 @@ import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.listen.ListenScreen
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.barsAndCutout
+import dev.bilby.ui.horizontalCutout
 import dev.bilby.ui.ShareLink
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.isAtLeast
@@ -104,12 +116,21 @@ fun VideoScreen(
      * `matchesCurrentPage` 的用法)。这个值由 `VideoPane` 直接传,它手上现成的路由参数就是它。
      */
     bvid: String,
+    /**
+     * 导航指名的那一 P。**0 = 不指名**,由服务按详情/观看记录决定 —— 除缓存列表外的所有入口
+     * 都是 0,行为和以前一个字节都没变。
+     */
+    cid: Long = 0,
     state: VideoUiState,
     related: RelatedState,
     commentState: CommentUiState,
     sponsorSegments: List<SponsorSegment>,
     onReportProgress: (position: Long, duration: Long) -> Unit,
     onFindRelated: () -> Unit,
+    /** 已缓存(或正在缓存)的 bvid。缓存面板拿它把已有的那几条标出来并禁选。 */
+    cachedBvids: Set<String> = emptySet(),
+    /** 缓存面板按下确认。清晰度与"要不要弹幕"都在面板里选,这里只负责把结果交出去。 */
+    onCacheSelection: (List<QueueItem>, qualityId: Int, withDanmaku: Boolean) -> Unit = { _, _, _ -> },
     followState: FollowState,
     onToggleFollow: () -> Unit,
     /** UP 主等级,独立请求、独立失败——查不到就是 null,徽章不画(见 VideoViewModel.upCard)。 */
@@ -232,6 +253,12 @@ fun VideoScreen(
     // 上一条视频冻住的最后一帧。
     val matchesCurrentPage = audioState.loadKey == bvid
 
+    /**
+     * 缓存面板开着没有。**只是这一页的一个浮层**,不是导航目的地也不是播放状态 ——
+     * 选完就关,选的结果交给应用级的下载器,页面不留任何东西。
+     */
+    var cacheSheetOpen by rememberSaveable { mutableStateOf(false) }
+
     /** 队列的唯一来源是服务。页面只是把它摆出来,不自己攒一份。 */
     val shownQueue = QueueUiState(
         items = audioState.queue?.items.orEmpty(),
@@ -262,11 +289,24 @@ fun VideoScreen(
      * 拿到 bvid 就发第一遍,服务据此立刻取流;详情回来再发一遍,补上标题、UP、封面和真正的
      * cid。第二遍落在服务的"同一条视频"分支上,只补元数据、不重新装载。
      */
-    LaunchedEffect(active, bvid) {
+    LaunchedEffect(active, bvid, cid) {
         if (active == null) return@LaunchedEffect
-        // 不带 cid:服务会用视频详情补,而那份详情正是这个页面此刻也在等的同一份请求
+        // 默认不带 cid:服务会用视频详情补,而那份详情正是这个页面此刻也在等的同一份请求
         // (VideoRepository 按 bvid 合并并发详情请求),不会多打一次接口。
-        send(AudioPlaybackService.ACTION_OPEN_VIDEO, bundleOf(AudioPlaybackService.EXTRA_BVID to bvid))
+        //
+        // **导航指名了哪一 P 时带上它**(只有缓存列表会指名):服务据此走缓存查找的精确匹配
+        // 那一支 —— 用户点的是 P7 就得是 P7,拿别的 P 顶上比播不了更糟,画面在动而内容是错的。
+        send(
+            AudioPlaybackService.ACTION_OPEN_VIDEO,
+            if (cid == 0L) {
+                bundleOf(AudioPlaybackService.EXTRA_BVID to bvid)
+            } else {
+                bundleOf(
+                    AudioPlaybackService.EXTRA_BVID to bvid,
+                    AudioPlaybackService.EXTRA_CID to cid,
+                )
+            },
+        )
     }
 
     LaunchedEffect(active, state.detail?.bvid) {
@@ -453,7 +493,9 @@ fun VideoScreen(
             subtitleLan = subtitleLan,
             onSelectSubtitle = onSelectSubtitle,
             subtitleCues = subtitleCues,
-            modifier = Modifier.fillMaxSize(),
+            // 听视频这一屏是普通页面(封面 + 控件),不是全出血的媒体,所以要像导航层那样
+            // 躲开横向挖孔 —— 播放页整个目的地被排除在 `CutoutSafe` 之外,这里没人替它做。
+            modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.horizontalCutout),
         )
         return
     }
@@ -534,17 +576,32 @@ fun VideoScreen(
          * 时 PlayerSurface 销毁重建、弹幕整池重编。全屏时也走同一个分支(右栏不组合、左栏
          * 权重给满),所以最要紧的那次切换 —— 进出全屏 —— 不会重挂。
          */
+        /*
+         * **系统栏:画面全出血,文字躲开。**
+         *
+         * 两栏下画面顶到屏幕上边缘,状态栏被收起来(它会横跨黑画面和浅色的简介栏,而图标明暗
+         * 只能整条设一次)。根容器一垫 inset,露出来的就是页面底色 —— 画面上方一道白带,
+         * 既没有沉浸又损失了高度。
+         *
+         * 单栏(竖屏)只填一条黑边,画面本身不钻到状态栏底下:返回和分享贴在画面上角,状态栏
+         * 会正好压住它们。图标仍然转白(见 `fullBleed`),因为它压着的是那条黑边。
+         *
+         * 文字那一栏自己躲。`windowInsetsPadding` 同时**消费**掉这份 inset,所以嵌在画面里的
+         * 控制条和返回按钮无条件调用同一个躲避也不会重复叠加。
+         */
+        val safeInsets = WindowInsets.barsAndCutout
         val rootModifier = modifier
             .fillMaxSize()
             // 全屏不留任何 inset:系统栏是 FullscreenEffect 异步藏掉的,这中间有一两帧
             // statusBars 还报着高度,带着它会让画面先被顶下去再弹回来。
             .then(
-                if (fullscreen) {
-                    Modifier
-                } else {
-                    Modifier
-                        .padding(bottom = insets.calculateBottomPadding())
-                        .windowInsetsPadding(WindowInsets.statusBars)
+                when {
+                    fullscreen -> Modifier
+                    // 两栏:根一律不躲,交给下面两个 pane 各自处理 —— 连底部也不躲,
+                    // 躲了就在黑画面下面又垫出一条页面底色,和上面那条白带是同一个毛病。
+                    expandedLayout -> Modifier
+                    // 单栏:顶上归画面,底下的手势条要躲(简介和评论滚到底会压在上面)。
+                    else -> Modifier.padding(bottom = insets.calculateBottomPadding())
                 },
             )
 
@@ -553,8 +610,15 @@ fun VideoScreen(
         // 两种排布传不同的约束进去。
         val playerPane: @Composable (Modifier) -> Unit = { paneModifier ->
             Box(modifier = paneModifier.background(Color.Black)) {
+                // **判据是"服务装上东西了没有",不是"有没有 playInfo"。**
+                //
+                // playInfo 是取流的产物,而放本地缓存那条路径压根不取流 —— 服务在命中缓存时
+                // 故意把它置成 null(本地只有下载时选的那一档,画质菜单摆出来点了没用)。
+                // 照 playInfo 判的话,缓存的视频永远落到下面那个转圈分支:播放器其实早就
+                // READY 了(真机上量到 237ms),只是没有人把画面挂上去。
+                val loaded = matchesCurrentPage || audioState.playInfo != null
                 when {
-                    audioState.playInfo != null && active != null -> BilbyPlayer(
+                    loaded && active != null -> BilbyPlayer(
                         player = active,
                         surfacePlayer = surfacePlayer,
                         qualities = audioState.playInfo?.availableQualities.orEmpty(),
@@ -563,8 +627,11 @@ fun VideoScreen(
                         fastForwardSpeed = fastForwardSpeed,
                         isFullscreen = fullscreen,
                         onFullscreenChange = { fullscreen = it },
-                        // 全屏下切听视频要先退出全屏,否则听视频界面会顶着一个已经隐藏的系统栏。
-                        onListen = { fullscreen = false; onListeningChange(true) },
+                        // 非全屏时画面一直顶到屏幕上边缘,状态栏压在它身上。
+                        fullBleed = true,
+                        // 但只有两栏要把状态栏收起来:那时它横跨黑画面和浅色的简介栏,
+                        // 而图标明暗只能整条设一次(见 PlayerShell)。
+                        hideStatusBar = expandedLayout,
                         onReportProgress = onReportProgress,
                         title = state.detail?.title.orEmpty(),
                 seekBarSegments = sponsorSegments.toSeekBarSegments(),
@@ -645,6 +712,10 @@ fun VideoScreen(
                             if (!related.started) onFindRelated()
                             scope.launch { sheetState.bottomSheetState.expand() }
                         },
+                        onListen = { onListeningChange(true) },
+                        onCache = { cacheSheetOpen = true },
+                        // 全屏下这一栏根本不组合,所以不必先退出全屏 —— 能点到这个按钮
+                        // 就说明已经不在全屏了。
                         followState = followState,
                         onToggleFollow = onToggleFollow,
                         upCard = upCard,
@@ -695,26 +766,54 @@ fun VideoScreen(
             // 主区约三分之二,和规范给的比例一致。**全屏也走这个分支**,只是右栏不组合、
             // 左栏权重给满 —— 这样进出全屏时布局树的形状不变,播放器不会重挂。
             Row(modifier = rootModifier) {
-                Box(
-                    modifier = Modifier.weight(if (fullscreen) 1f else 2f).fillMaxHeight(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    playerPane(
-                        if (fullscreen) {
-                            Modifier.fillMaxSize()
-                        } else {
-                            // 左栏通常比 16:9 高,画面按宽度定比例后在栏内居中,上下留黑。
-                            Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-                        },
+                // **左栏整列都是播放器**,画面按比例居中在里面,四周是它自己的黑底。
+                //
+                // 原先这里给的是 `fillMaxWidth().aspectRatio(16:9)`,于是画面只有左栏宽度的
+                // 九分之十六那么高,在更高的列里垂直居中——上下各露出一条页面底色。那条白带
+                // 才是"横屏不沉浸"的真身,和根容器的 inset 无关。
+                playerPane(Modifier.weight(if (fullscreen) 1f else 2f).fillMaxHeight())
+                // 文字这一栏躲开系统栏与刘海,**但不躲 start 那一侧**:它的左边挨着的是播放器,
+                // 不是屏幕边缘,垫了就在画面和简介之间劈出一道缝。
+                if (!fullscreen) {
+                    tabsPane(
+                        Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .windowInsetsPadding(
+                                safeInsets.only(WindowInsetsSides.End + WindowInsetsSides.Vertical),
+                            ),
                     )
                 }
-                if (!fullscreen) tabsPane(Modifier.weight(1f).fillMaxHeight())
             }
         } else {
             Column(modifier = rootModifier) {
+                // 状态栏那一条**填黑,但画面不钻进去**。
+                //
+                // 让画面整块顶到屏幕上边缘试过了:返回和分享按钮贴在画面左右上角,状态栏正好
+                // 压在它们身上,而那两个是这一页仅有的页级动作。现在画面从状态栏下沿开始,
+                // 上面那条黑边和画面的黑底连成一块 —— 拿到的是"没有一条突兀的浅色带",
+                // 而不是"多出一块可用面积";后者本来也没多少,一条状态栏而已。
+                if (!fullscreen) {
+                    Spacer(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .windowInsetsTopHeight(safeInsets)
+                            .background(Color.Black),
+                    )
+                }
                 playerPane(
-                    if (fullscreen) Modifier.fillMaxSize()
-                    else Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                    if (fullscreen) {
+                        Modifier.fillMaxSize()
+                    } else {
+                        // **消费掉系统栏那份 inset。** 上面那条黑边只是"取了 inset 的高度"
+                        // (`windowInsetsTopHeight` 不消费),不声明的话画面里的返回、分享和
+                        // 控制条会以为自己还贴着屏幕边缘,各自再躲一次 —— 表现是箭头往画面
+                        // 里缩了一条状态栏的高度。它上有黑边、下有简介栏,四周都不是屏幕边缘。
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(16f / 9f)
+                            .consumeWindowInsets(safeInsets)
+                    },
                 )
                 // 全屏时画面独占整屏,简介整块不参与布局。
                 //
@@ -722,9 +821,54 @@ fun VideoScreen(
                 // 不给权重的话它要的是整屏高度,加上上面 16:9 的画面就超出一屏 —— 表现是
                 // 播放页能往下微微滑动一点。给了权重,它拿到的就是"画面之外剩下的高度",
                 // 有没有分 P 都正好占满。
-                if (!fullscreen) tabsPane(Modifier.weight(1f))
+                //
+                // 横向挖孔在这里躲:单栏也可能是横屏(600–840dp 的中等宽度),那时挖孔在侧边,
+                // 画面照旧铺过去,但下面的标题和评论不能被切。竖屏时它量到 0。
+                if (!fullscreen) {
+                    tabsPane(Modifier.weight(1f).windowInsetsPadding(WindowInsets.horizontalCutout))
+                }
             }
         }
+    }
+
+    // Android 13 起通知要运行时授权,而 manifest 里那句 uses-permission 只是声明。
+    // 没人要过的话下载通知一条都发不出去 —— 这正是真机上"下载时没有通知"的第一层原因。
+    val notificationPermission = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { /* 给不给都不影响下载,见下面调用处 */ }
+    val requestNotificationPermission = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // 缓存面板。挂在最外层而不是简介页里面:它是覆盖整页的 modal,而简介页是可滚动的内容,
+    // 放进去会跟着滚。全屏时不开 —— 全屏下这个按钮本来就够不着。
+    if (cacheSheetOpen && !fullscreen) {
+        OfflineCacheSheet(
+            items = shownQueue.items,
+            cachedBvids = cachedBvids,
+            // 档位清单来自当前这条视频的 accept_quality。队列里别的视频未必有同样的档,
+            // 取流那边会自动降级(见 selectStreams),所以这里不必逐条去问。
+            qualities = audioState.playInfo?.availableQualities.orEmpty(),
+            defaultQuality = audioState.currentQuality,
+            initialSelection = shownQueue.currentBvid,
+            onConfirm = { selected, quality, withDanmaku ->
+                cacheSheetOpen = false
+                // 通知权限在**这里**要,不在开屏要:它唯一的用处是显示下载进度,而人此刻正好
+                // 按下了"开始缓存"——弹窗解释得通。开屏问的话既没有语境,拒绝之后也再没有
+                // 第二次自然的时机。
+                //
+                // **不等结果、也不因为被拒就不下载**:通知只是进度条,少了它下载照样跑完,
+                // 缓存列表里也看得到进度。把功能压在一个可以被拒的权限上是本末倒置。
+                requestNotificationPermission()
+                onCacheSelection(selected, quality, withDanmaku)
+            },
+            onDismiss = { cacheSheetOpen = false },
+        )
     }
 }
 

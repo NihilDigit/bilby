@@ -1,9 +1,11 @@
 package dev.bilby.player
 
 import android.content.Context
+import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.FileDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.RenderersFactory
@@ -120,10 +122,31 @@ object PlayerFactory {
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
             .setEnableDecoderFallback(true)
 
-    fun createMediaSource(videoUrl: String, audioUrl: String?): MediaSource {
-        val factory = ProgressiveMediaSource.Factory(httpDataSourceFactory())
-        val video = factory.createMediaSource(MediaItem.fromUri(videoUrl))
-        val audio = audioUrl?.let { factory.createMediaSource(MediaItem.fromUri(it)) }
+    fun createMediaSource(videoUrl: String, audioUrl: String?): MediaSource =
+        mergedSource(ProgressiveMediaSource.Factory(httpDataSourceFactory()), videoUrl, audioUrl)
+
+    /**
+     * 离线缓存的本地文件。**结构和网络那条完全一样** —— 同样是两条分离的流靠
+     * [MergingMediaSource] 合成一条时间线,只是数据源换成了 [FileDataSource]。
+     *
+     * 这正是这个功能没有用 Media3 `DownloadManager` + `CacheDataSource` 的收益所在
+     * (理由见 `offline/OfflineDownloader`):落成普通文件之后,离线播放不需要缓存层,
+     * 也不需要一份"这条流的 cache key 是什么"的约定。
+     */
+    fun createLocalMediaSource(videoPath: String, audioPath: String?): MediaSource =
+        mergedSource(
+            ProgressiveMediaSource.Factory(FileDataSource.Factory()),
+            Uri.fromFile(java.io.File(videoPath)).toString(),
+            audioPath?.let { Uri.fromFile(java.io.File(it)).toString() },
+        )
+
+    private fun mergedSource(
+        factory: ProgressiveMediaSource.Factory,
+        videoUri: String,
+        audioUri: String?,
+    ): MediaSource {
+        val video = factory.createMediaSource(MediaItem.fromUri(videoUri))
+        val audio = audioUri?.let { factory.createMediaSource(MediaItem.fromUri(it)) }
         return if (audio == null) video else MergingMediaSource(video, audio)
     }
 

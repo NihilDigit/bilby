@@ -22,13 +22,10 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBars
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -83,6 +80,7 @@ import androidx.media3.ui.compose.PlayerSurface
 import dev.bilby.R
 import dev.bilby.data.SettingsStore
 import dev.bilby.formatDurationMillis
+import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
@@ -182,6 +180,20 @@ fun PlayerShell(
     onLockedChange: (Boolean) -> Unit,
     /** 只在全屏时显示。竖屏下标题就在播放器正下方,再印一遍是多余的。 */
     title: String,
+    /**
+     * 画面虽然没全屏,但已经铺到屏幕边缘、压在状态栏底下了。
+     *
+     * 这时状态栏的图标要转白(它落在画面的黑边或封面上),窗口也要允许铺进刘海那一条。
+     */
+    fullBleed: Boolean = false,
+    /**
+     * 再进一步:把状态栏整条收起来。
+     *
+     * 只有横屏两栏用得上 —— 那时状态栏一半压在黑画面上、一半压在浅色的简介栏上,而图标明暗
+     * 是整条一起设的,必然有一半看不见。竖排不需要,状态栏整条都落在画面上,转白就够了。
+     * 导航栏两种情况都留着。
+     */
+    hideStatusBar: Boolean = false,
     modifier: Modifier = Modifier,
     gestures: PlayerGestureOptions = PlayerGestureOptions(),
     /** 长按画面时的临时倍速,由设置页给(`SettingsStore.FAST_FORWARD_SPEEDS`)。 */
@@ -313,7 +325,12 @@ fun PlayerShell(
 
     // 传布尔而不是比例本身:比例是浮点,解码过程里会有细微抖动,直接当 DisposableEffect
     // 的 key 会让全屏反复重设方向。
-    FullscreenEffect(isFullscreen, isPortraitVideo = videoAspect < 1f)
+    FullscreenEffect(
+        isFullscreen,
+        isPortraitVideo = videoAspect < 1f,
+        fullBleed = fullBleed,
+        hideStatusBar = hideStatusBar,
+    )
 
     val displayPosition = dragPosition ?: position
 
@@ -600,7 +617,7 @@ fun PlayerShell(
                     .background(
                         Brush.verticalGradient(listOf(ControlScrimBottom, Color.Transparent)),
                     )
-                    .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.systemBars))
+                    .windowInsetsPadding(WindowInsets.barsAndCutout)
                     .padding(end = Spacing.Comfortable, bottom = Spacing.Comfortable),
             ) {
                 IconButton(onClick = { onFullscreenChange(false) }) {
@@ -620,15 +637,23 @@ fun PlayerShell(
             }
         }
 
-        // 锁按钮:锁上后它是唯一还能点的东西。只在全屏显示,并放在画面内部左侧,
-        // 对齐 PiliPlus 的全屏播放器手势布局。
-        // 锁按钮浮在画面中间偏左,不贴任何一条边,所以它走的是 enter/exit 里"在主界面语境中
+        // 锁按钮:锁上后它是唯一还能点的东西。只在全屏显示。
+        //
+        // **放在右侧,不是 PiliPlus 那样的左侧。** 全屏时画面铺进短边(SHORT_EDGES),挖孔就在
+        // 横屏的左边缘 —— 左侧那个位置整个压在挖孔底下,而它恰恰是锁上之后唯一还能点的控件。
+        // 挖孔只占一条边,右侧永远是干净的;`barsAndCutout` 那句是为了两种旋转都成立,横屏
+        // 反过来持时挖孔会换到右边。
+        //
+        // 锁按钮浮在画面中间,不贴任何一条边,所以它走的是 enter/exit 里"在主界面语境中
         // 出现的组件"那一支:缩放加淡入,没有方向可言。
         AnimatedVisibility(
             visible = isFullscreen && controlsVisible,
             enter = scaleIn(scaleSpec) + fadeIn(effectsSpec),
             exit = scaleOut(scaleSpec) + fadeOut(effectsSpec),
-            modifier = Modifier.align(Alignment.CenterStart).padding(start = Spacing.Cozy),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .windowInsetsPadding(WindowInsets.barsAndCutout)
+                .padding(end = Spacing.Cozy),
         ) {
             IconButton(onClick = { onLockedChange(!locked) }) {
                 Icon(
@@ -674,7 +699,14 @@ internal fun Overlay(modifier: Modifier = Modifier, content: @Composable () -> U
  * 是为了让人仍能把设备翻过来(倒持、左右手)。
  */
 @Composable
-private fun FullscreenEffect(isFullscreen: Boolean, isPortraitVideo: Boolean) {
+private fun FullscreenEffect(
+    isFullscreen: Boolean,
+    isPortraitVideo: Boolean,
+    /** 见 [PlayerShell] 的同名参数:画面铺到边缘但没全屏。 */
+    fullBleed: Boolean,
+    /** 见 [PlayerShell] 的同名参数:两栏下把状态栏整条收起来。 */
+    hideStatusBar: Boolean,
+) {
     val activity = LocalContext.current.findActivity() ?: return
     val window = activity.window
     val insets = remember(window) { WindowCompat.getInsetsController(window, window.decorView) }
@@ -683,14 +715,15 @@ private fun FullscreenEffect(isFullscreen: Boolean, isPortraitVideo: Boolean) {
     val normalLightStatusBars = remember(window) { insets.isAppearanceLightStatusBars }
     val normalLightNavigationBars = remember(window) { insets.isAppearanceLightNavigationBars }
 
-    DisposableEffect(isFullscreen, isPortraitVideo) {
+    DisposableEffect(isFullscreen, isPortraitVideo, fullBleed, hideStatusBar) {
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        // 只有全屏这一刻才允许画面铺进刘海所在的短边,退出立刻还原。
-        // **不在主题里全局开 shortEdges**:那样横屏下每一页的正文都可能钻到挖孔底下,
-        // 而 `Scaffold` 默认消费的是 systemBars,不含 displayCutout,谁都不会替它躲开。
+        // 画面铺到边缘的那两种情形(全屏、横屏两栏的左栏)才允许它钻进刘海所在的短边,
+        // 别的时候还原。**不在主题里全局开 shortEdges**:那样横屏下每一页的正文都可能压在
+        // 挖孔底下,而 `Scaffold` 默认消费的是 systemBars,不含 displayCutout。
+        val bleeding = isFullscreen || fullBleed
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes = window.attributes.apply {
-                layoutInDisplayCutoutMode = if (isFullscreen) {
+                layoutInDisplayCutoutMode = if (bleeding) {
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
                 } else {
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
@@ -724,6 +757,22 @@ private fun FullscreenEffect(isFullscreen: Boolean, isPortraitVideo: Boolean) {
             insets.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             insets.hide(WindowInsetsCompat.Type.systemBars())
+        } else if (fullBleed) {
+            // 朝向不锁:全屏之外这一页始终跟着设备转,横过来才排得成两栏。
+            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            // **导航栏一直留着**,简介和评论还要滚,手势条也得在。
+            insets.show(WindowInsetsCompat.Type.navigationBars())
+            if (hideStatusBar) {
+                insets.hide(WindowInsetsCompat.Type.statusBars())
+                insets.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            } else {
+                insets.show(WindowInsetsCompat.Type.statusBars())
+                insets.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+            }
+            // 状态栏(收起时是下拉唤出的那一瞬间)压在画面上,要白图标。
+            insets.isAppearanceLightStatusBars = false
+            insets.isAppearanceLightNavigationBars = normalLightNavigationBars
         } else {
             activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             insets.show(WindowInsetsCompat.Type.systemBars())

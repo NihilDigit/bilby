@@ -235,7 +235,7 @@ private fun SortBar(sort: CommentSort, onSort: (CommentSort) -> Unit) {
         options = options,
         selected = sort,
         onSelect = onSort,
-        modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
+        modifier = Modifier.padding(horizontal = Spacing.Comfortable),
     )
 }
 

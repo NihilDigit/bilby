@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.AlertDialog
@@ -35,6 +36,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,6 +56,9 @@ import dev.bilby.data.HistoryRepository
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.ToViewItem
 import dev.bilby.data.ToViewRepository
+import dev.bilby.offline.OfflineDownloader
+import dev.bilby.offline.OfflineItem
+import dev.bilby.ui.offline.toRowUi
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.SectionHeader
@@ -87,6 +92,11 @@ data class ProfileUiState(
     val history: ProfilePreviewState<HistoryItem> = ProfilePreviewState(),
     val toView: ProfilePreviewState<ToViewItem> = ProfilePreviewState(),
     val favFolders: ProfilePreviewState<FavFolder> = ProfilePreviewState(),
+    /**
+     * 已缓存的视频。**没有 loading 也没有 error** —— 它读的是本地目录,由
+     * [dev.bilby.offline.OfflineDownloader] 常驻持有,不存在"正在拉"这个状态。
+     */
+    val offline: List<OfflineItem> = emptyList(),
 )
 
 /**
@@ -103,6 +113,7 @@ class ProfileViewModel(
     private val historyRepository: HistoryRepository,
     private val toViewRepository: ToViewRepository,
     private val favRepository: FavRepository,
+    offlineDownloader: OfflineDownloader,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ProfileUiState())
@@ -112,6 +123,10 @@ class ProfileViewModel(
 
     init {
         refresh()
+        // 缓存列表是本地状态,跟着下载器走就行 —— 它不参与上面那四块的"重进就重拉"。
+        viewModelScope.launch {
+            offlineDownloader.items.collect { items -> _state.update { it.copy(offline = items) } }
+        }
     }
 
     /** 每次重新进入「我的」都重新取四块概览,保证跨页面操作(删稍后再看、看新视频)后能及时反映。 */
@@ -244,8 +259,11 @@ fun ProfileScreen(
     onVideoClick: (String) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
+    onOpenOffline: () -> Unit,
     onOpenFavFolder: (FavFolder) -> Unit,
     onSettingsClick: () -> Unit,
+    /** 点账号那一块进自己的空间。 */
+    onOpenSelf: (Long) -> Unit,
     onRetryAccount: () -> Unit,
     onRetryHistory: () -> Unit,
     onRetryToView: () -> Unit,
@@ -262,6 +280,7 @@ fun ProfileScreen(
         AccountHeader(
             state = state,
             onSettingsClick = onSettingsClick,
+            onOpenSelf = onOpenSelf,
             onRetry = onRetryAccount,
         )
 
@@ -282,13 +301,16 @@ fun ProfileScreen(
                     ToViewSection(state.toView, onVideoClick, onOpenToView, onRetryToView)
                 }
                 Column(modifier = Modifier.weight(1f)) {
+                    // 缓存跟着收藏走:两者都是"我自己存下来的东西",而上面两块是"我看过/打算看的"。
                     FavFoldersSection(state.favFolders, onOpenFavFolder, onRetryFavFolders)
+                    OfflineSection(state.offline, onOpenOffline)
                 }
             }
         } else {
             HistorySection(state.history, onVideoClick, onOpenHistory, onRetryHistory)
             ToViewSection(state.toView, onVideoClick, onOpenToView, onRetryToView)
             FavFoldersSection(state.favFolders, onOpenFavFolder, onRetryFavFolders)
+            OfflineSection(state.offline, onOpenOffline)
         }
 
         Spacer(Modifier.height(Spacing.Comfortable))
@@ -296,7 +318,16 @@ fun ProfileScreen(
 }
 
 /**
- * 头像 → 名字 + 等级徽章 → 设置,再加一行个性签名。**签名为空时整行不画**——
+ * 头像 → 名字 + 等级徽章 → 设置,再加一行个性签名。**整块可点,进自己的空间** ——
+ * 这一页看得到的是"我攒了什么"(历史、稍后再看、收藏夹),而"我发了什么"在空间页,
+ * 原先从这个 app 里根本走不到自己的空间。
+ *
+ * **不用 `ListItem`。** 它的内边距叠在这个 Column 自己的 padding 上,和下面第一节之间
+ * 撑出一段空隙;三行形态还有各自的最小高度,签名那一行也被它的排布挤掉了宽度,于是签名
+ * 和右边的设置图标之间空出一大块。手写成一行 Row 之后,签名拿的是 `weight(1f)`,
+ * 一直铺到设置按钮跟前。
+ *
+ * **签名为空时整行不画**——
  * 不给"这个人很懒"一类的占位文案,那是空间页(`SpaceHeader`)的处理,这里没有那个理由:
  * 签名本来就可能没填,不是"数据还没到"。
  *
@@ -313,17 +344,27 @@ fun ProfileScreen(
 private fun AccountHeader(
     state: ProfileUiState,
     onSettingsClick: () -> Unit,
+    onOpenSelf: (Long) -> Unit,
     onRetry: () -> Unit,
 ) {
+    // **上下留白归里面那一行,不归这个 Column。** 它是可点区域,留白算在里面涟漪才盖得住;
+    // 两边各留一份的话上下就是 12 + 8。这里只负责左右两侧的对齐。
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable),
         verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
         state.account?.let { account ->
-            ListItem(
-                headlineContent = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.large)
+                    .clickable { onOpenSelf(account.mid) }
+                    .padding(vertical = Spacing.Cozy),
+            ) {
+                Avatar(url = account.faceUrl, size = Dimens.AvatarLarge)
+                Column(modifier = Modifier.weight(1f)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
@@ -341,31 +382,29 @@ private fun AccountHeader(
                             height = Dimens.LevelBadgeHeight,
                         )
                     }
-                },
-                supportingContent = account.sign.takeIf { it.isNotBlank() }?.let { sign ->
-                    {
+                    if (account.sign.isNotBlank()) {
                         Text(
-                            text = sign,
+                            text = account.sign,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                },
-                leadingContent = { Avatar(url = account.faceUrl, size = Dimens.AvatarLarge) },
-                trailingContent = {
-                    IconButton(onClick = onSettingsClick) {
-                        Icon(
-                            Icons.Outlined.Settings,
-                            contentDescription = stringResource(R.string.settings_title),
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
+                }
+                IconButton(onClick = onSettingsClick) {
+                    Icon(
+                        Icons.Outlined.Settings,
+                        contentDescription = stringResource(R.string.settings_title),
+                    )
+                }
+            }
         } ?: Row(
-            modifier = Modifier.heightIn(min = Dimens.AvatarLarge),
+            // 失败/加载态没有上面那块可点区域,自己补上同一份上下留白,免得账号一拉到
+            // 整页内容就往下跳一截。
+            modifier = Modifier
+                .heightIn(min = Dimens.AvatarLarge)
+                .padding(vertical = Spacing.Cozy),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
         ) {
@@ -429,6 +468,55 @@ private fun ToViewSection(
     ) { item ->
         VideoRow(item = item.toRowUi(), onClick = { onVideoClick(item.bvid) })
     }
+}
+
+/**
+ * 已缓存的视频预览。**一条都没有时整节不画**,和稍后再看同一条判据:没缓存过东西的人不需要
+ * 先认识"离线缓存"这个概念,才能看懂自己页面上多出来的一行字。
+ */
+@Composable
+private fun OfflineSection(items: List<OfflineItem>, onViewAll: () -> Unit) {
+    if (items.isEmpty()) return
+    // **这里要一条通栏分割线。** 别处不画是因为每一节都顶着自己的 SectionHeader,那行标题
+    // 已经说明"换了一节";而这一行没有标题,紧跟在收藏夹的几行下面就会被读成又一个收藏夹。
+    // divider 页给的正是这条判据:"To separate a different kind of content, use a full-width
+    // divider",以及通栏线用于 "separate larger sections of unrelated content"。
+    HorizontalDivider()
+    // **一行入口,不是预览列表**,和收藏夹同一个形状。缓存是会长的:攒到几十条之后,在这一页
+    // 铺前五条既看不出全貌,又把下面的收藏夹推到屏幕外。这一页是概览,"我缓存了多少"这一个
+    // 数字就够,要挑哪一条是缓存页自己的事。
+    ListItem(
+        headlineContent = {
+            Text(
+                text = stringResource(R.string.offline_title),
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        supportingContent = {
+            Text(
+                text = stringResource(R.string.offline_count, items.size),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        leadingContent = {
+            Icon(
+                Icons.Outlined.DownloadForOffline,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        trailingContent = {
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onViewAll),
+    )
 }
 
 /**
@@ -616,8 +704,10 @@ private fun ProfileScreenPreview() {
             onVideoClick = {},
             onOpenHistory = {},
             onOpenToView = {},
+            onOpenOffline = {},
             onOpenFavFolder = {},
             onSettingsClick = {},
+            onOpenSelf = {},
             onRetryAccount = {},
             onRetryHistory = {},
             onRetryToView = {},
@@ -635,8 +725,10 @@ private fun ProfileScreenErrorPreview() {
             onVideoClick = {},
             onOpenHistory = {},
             onOpenToView = {},
+            onOpenOffline = {},
             onOpenFavFolder = {},
             onSettingsClick = {},
+            onOpenSelf = {},
             onRetryAccount = {},
             onRetryHistory = {},
             onRetryToView = {},

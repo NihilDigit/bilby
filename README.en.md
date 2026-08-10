@@ -2,7 +2,7 @@
 
 # Bilby
 
-[![简体中文](https://img.shields.io/badge/README-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-4A5C92?style=flat-square)](README.md) [![APK](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fraw.githubusercontent.com%2FNihilDigit%2Fbilby%2Fmain%2F.github%2Fbadges%2Fapk-size.json)](https://github.com/NihilDigit/bilby/releases/latest) [![SLSA Build Level 2](https://slsa.dev/images/gh-badge-level2.svg)](https://github.com/NihilDigit/bilby/attestations) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NihilDigit/bilby)
+[![简体中文](https://img.shields.io/badge/README-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-4A5C92?style=flat-square)](README.md) [![APK](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fraw.githubusercontent.com%2FNihilDigit%2Fbilby%2Fmain%2F.github%2Fbadges%2Fapk-size.json)](https://github.com/NihilDigit/bilby/releases/latest) [![SLSA Build Level 3](https://slsa.dev/images/gh-badge-level3.svg)](https://github.com/NihilDigit/bilby/attestations) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NihilDigit/bilby)
 
 Bilby is a native Android client for bilibili, offering a subscription-style design with no
 recommendation feed, an improved listening experience, and agentic search and
@@ -41,35 +41,32 @@ and headset controls, and a sleep timer; subtitles follow line by line, tap a li
 
 Done:
 
-- [x] Feed: following feed (with per-uploader muting), most-visited uploaders, full following list, watch-later, history with cloud progress and resume
+- [x] Feed: following feed (with per-uploader muting), most-visited uploaders (live ones open the room directly), full following list, watch-later, history with cloud progress and resume
+- [x] Moment types: videos, reposts, image posts, text, live, and articles
 - [x] Uploader pages: uploads, moments, and collections/series tabs, with in-space search
-- [x] Playback: fullscreen, quality, speed (WSOLA), double-tap to seek or pause, long-press fast-forward, drag-to-seek, swipe for brightness and volume, lock, multi-part videos; progress synced to the cloud
+- [x] Playback: fullscreen, quality, speed (WSOLA), double-tap to seek or pause, long-press fast-forward, drag-to-seek, swipe for brightness and volume, lock, multi-part videos that resume on the part you left; progress synced to the cloud
 - [x] Listening: same player as normal playback, screen-off background play, notification, lock screen and headset controls, sleep timer; shuffle queue; the subtitle track doubles as line-by-line lyrics, tap a line to seek
+- [x] Live: watch a room with danmaku, quality, fullscreen, and superchats
+- [x] Offline: pick videos from the playback queue, choose a quality, danmaku kept alongside; cached items live under the profile tab and play without the network
 - [x] Danmaku: scrolling, top and bottom, following the playback clock, adjustable opacity
 - [x] Subtitles: multiple tracks, under the picture during normal playback, as a transcript while listening; AI subtitle repair
-- [x] Comments: read, sort, expand reply threads, post and reply, like, delete, tap a timestamp to seek
+- [x] Comments: read, sort, expand reply threads, post and reply, like, delete, tap a timestamp to seek, zoom images and swipe between them
 - [x] Actions: like, coin, favourite, follow; joint submissions credit each uploader separately
-- [x] Agent: conversational site-wide search and "find related" from the video page; reads descriptions and top comments, candidates each with a reason; multi-turn follow-ups, visible execution trace
+- [x] Agent: conversational site-wide search and "find related" from the video page; reads descriptions and top comments, candidates each with a reason; multi-turn follow-ups, visible execution trace, replies rendered as Markdown
+- [x] Links and sharing: opens bilibili links and b23.tv short links, shares videos and live rooms
 - [x] SponsorBlock segments skipped by default, server configurable
+- [x] Interface: Material 3 Expressive, motion rebuilt from the spec; two-pane layout on tablets; edge-to-edge and display cutout handling
 - [x] In-app self-update; Material You dynamic color
 
 Planned:
 
 - [ ] Sending danmaku
-- [ ] Rich text rendering in agent replies
-- [ ] CI regression tests
-- [ ] Interface and motion brought in line with Material Design
-- [ ] Edge-to-edge and status bar handling
-- [ ] Responsive layout
-- [ ] Rebuilt keyword search
-- [ ] Agent harness work
-- [ ] Live streams
+- [ ] Offline fallback: cache the title and counts so the video page does not fail wholesale without a network
+- [ ] Reading articles in-app
 - [ ] Picture-in-picture
-- [ ] Columns (articles)
-- [ ] Opening and sharing bilibili links
-- [ ] Video sharing
-- [ ] Video downloads
 - [ ] Filtering low-quality comments
+- [ ] CI regression tests
+- [ ] Agent harness work
 
 ## Install
 

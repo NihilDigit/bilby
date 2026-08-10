@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -30,6 +31,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.bilby.ui.components.AvatarBadge
+import dev.bilby.ui.components.BadgedAvatar
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.data.UpBrief
 import androidx.compose.foundation.lazy.items
@@ -138,6 +141,8 @@ fun FeedScreen(
     onRetry: () -> Unit,
     onItemClick: (FeedItem) -> Unit,
     onUpClick: (Long) -> Unit,
+    /** 「最常访问」里正在直播的那个人,点角标进直播间。 */
+    onLiveClick: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
     onExcludeUp: (Long) -> Unit = {},
     onScrollPositionChanged: (String) -> Unit = {},
@@ -150,7 +155,7 @@ fun FeedScreen(
         state.loading && state.items.isEmpty() -> FullScreenLoading(modifier)
         state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry, modifier)
         else -> FeedList(
-            state, onRefresh, onLoadMore, onItemClick, onUpClick, onExcludeUp,
+            state, onRefresh, onLoadMore, onItemClick, onUpClick, onLiveClick, onExcludeUp,
             onOpenFollowings, onScrollPositionChanged, onLocated, modifier, contentPadding,
         )
     }
@@ -163,6 +168,7 @@ private fun FeedList(
     onLoadMore: () -> Unit,
     onItemClick: (FeedItem) -> Unit,
     onUpClick: (Long) -> Unit,
+    onLiveClick: (Long) -> Unit,
     onExcludeUp: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
     onScrollPositionChanged: (String) -> Unit,
@@ -236,6 +242,7 @@ private fun FeedList(
                 FrequentUpsRow(
                     ups = state.frequentUps,
                     onUpClick = onUpClick,
+                    onLiveClick = onLiveClick,
                     onOpenFollowings = onOpenFollowings,
                 )
             }
@@ -281,6 +288,7 @@ private fun FeedList(
             FrequentUpsPane(
                 ups = state.frequentUps,
                 onUpClick = onUpClick,
+                onLiveClick = onLiveClick,
                 onOpenFollowings = onOpenFollowings,
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             )
@@ -302,6 +310,7 @@ private fun FeedList(
 private fun FrequentUpsPane(
     ups: List<UpBrief>,
     onUpClick: (Long) -> Unit,
+    onLiveClick: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -318,10 +327,18 @@ private fun FrequentUpsPane(
                     Text(up.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 },
                 leadingContent = {
-                    BiliAsyncImage(
+                    BadgedAvatar(
                         url = up.faceUrl,
-                        contentDescription = null,
-                        modifier = Modifier.size(AvatarSize).clip(CircleShape),
+                        size = AvatarSize,
+                        badge = up.liveRoomId?.let { room ->
+                            AvatarBadge(
+                                icon = Icons.Filled.Videocam,
+                                contentDescription = stringResource(R.string.feed_up_live, up.name),
+                                onClick = { onLiveClick(room) },
+                                containerColor = MaterialTheme.colorScheme.error,
+                                contentColor = MaterialTheme.colorScheme.onError,
+                            )
+                        },
                     )
                 },
                 modifier = Modifier
@@ -450,7 +467,7 @@ private val previewItems = listOf(
 @Composable
 private fun FeedScreenListPreview() {
     BilbyTheme {
-        FeedScreen(FeedUiState(items = previewItems, hasMore = true), {}, {}, {}, {}, {}, {})
+        FeedScreen(FeedUiState(items = previewItems, hasMore = true), {}, {}, {}, {}, {}, {}, {})
     }
 }
 
@@ -458,7 +475,7 @@ private fun FeedScreenListPreview() {
 @Composable
 private fun FeedScreenNoMorePreview() {
     BilbyTheme {
-        FeedScreen(FeedUiState(items = previewItems, hasMore = false), {}, {}, {}, {}, {}, {})
+        FeedScreen(FeedUiState(items = previewItems, hasMore = false), {}, {}, {}, {}, {}, {}, {})
     }
 }
 
@@ -466,7 +483,7 @@ private fun FeedScreenNoMorePreview() {
 @Composable
 private fun FeedScreenEmptyPreview() {
     BilbyTheme {
-        FeedScreen(FeedUiState(items = emptyList(), hasMore = false), {}, {}, {}, {}, {}, {})
+        FeedScreen(FeedUiState(items = emptyList(), hasMore = false), {}, {}, {}, {}, {}, {}, {})
     }
 }
 
@@ -474,7 +491,7 @@ private fun FeedScreenEmptyPreview() {
 @Composable
 private fun FeedScreenErrorPreview() {
     BilbyTheme {
-        FeedScreen(FeedUiState(error = "网络连接失败"), {}, {}, {}, {}, {}, {})
+        FeedScreen(FeedUiState(error = "网络连接失败"), {}, {}, {}, {}, {}, {}, {})
     }
 }
 
@@ -491,6 +508,7 @@ private fun FeedScreenErrorPreview() {
 private fun FrequentUpsRow(
     ups: List<UpBrief>,
     onUpClick: (Long) -> Unit,
+    onLiveClick: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -507,10 +525,21 @@ private fun FrequentUpsRow(
     ) {
         items(ups, key = { it.mid }) { up ->
             UpSlot(label = up.name, onClick = { onUpClick(up.mid) }) {
-                BiliAsyncImage(
+                // 正在直播时角上挂一个小圆,点它直接进直播间;点头像仍然是进空间。
+                // 两件事得分得开 —— 直播是此刻正在发生、错过就没有的东西,而空间是那个人
+                // 攒下来的一切,把它们并成一个点击目标就得替用户猜他想去哪。
+                BadgedAvatar(
                     url = up.faceUrl,
-                    contentDescription = null,
-                    modifier = Modifier.size(AvatarSize).clip(CircleShape),
+                    size = AvatarSize,
+                    badge = up.liveRoomId?.let { room ->
+                        AvatarBadge(
+                            icon = Icons.Filled.Videocam,
+                            contentDescription = stringResource(R.string.feed_up_live, up.name),
+                            onClick = { onLiveClick(room) },
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        )
+                    },
                 )
             }
         }

@@ -13,10 +13,7 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.systemBars
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -48,6 +45,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import dev.bilby.R
+import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.launch
@@ -127,7 +125,7 @@ fun ImageViewer(
                 // 窗口铺到系统栏底下之后,关闭按钮要自己躲开状态栏,否则压在时钟上。
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.systemBars))
+                    .windowInsetsPadding(WindowInsets.barsAndCutout)
                     .padding(Spacing.Tight),
             ) {
                 Icon(
@@ -144,7 +142,7 @@ fun ImageViewer(
                     color = FixedColors.OnMedia,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.systemBars))
+                        .windowInsetsPadding(WindowInsets.barsAndCutout)
                         .padding(Spacing.Comfortable),
                 )
             }

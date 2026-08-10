@@ -2,7 +2,7 @@
 
 # Bilby
 
-[![English](https://img.shields.io/badge/README-English-4A5C92?style=flat-square)](README.en.md) [![APK](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fraw.githubusercontent.com%2FNihilDigit%2Fbilby%2Fmain%2F.github%2Fbadges%2Fapk-size.json)](https://github.com/NihilDigit/bilby/releases/latest) [![SLSA Build Level 2](https://slsa.dev/images/gh-badge-level2.svg)](https://github.com/NihilDigit/bilby/attestations) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NihilDigit/bilby)
+[![English](https://img.shields.io/badge/README-English-4A5C92?style=flat-square)](README.en.md) [![APK](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fraw.githubusercontent.com%2FNihilDigit%2Fbilby%2Fmain%2F.github%2Fbadges%2Fapk-size.json)](https://github.com/NihilDigit/bilby/releases/latest) [![SLSA Build Level 3](https://slsa.dev/images/gh-badge-level3.svg)](https://github.com/NihilDigit/bilby/attestations) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NihilDigit/bilby)
 
 Bilby 是一款安卓原生 bilibili 客户端，提供无推荐流的订阅式设计、优化的听视频功能和 Agentic 搜索推荐能力。
 
@@ -37,35 +37,32 @@ Bilby 是一款安卓原生 bilibili 客户端，提供无推荐流的订阅式�
 
 已完成：
 
-- [x] 信息流：关注动态（可屏蔽 UP 主）、最常访问的 UP 主、完整关注列表、稍后再看、历史记录与断点续播
+- [x] 信息流：关注动态（可屏蔽 UP 主）、最常访问的 UP 主（正在直播的可直接进直播间）、完整关注列表、稍后再看、历史记录与断点续播
+- [x] 动态类型：视频、转发、图文、文字、直播、专栏
 - [x] UP 主空间：投稿、动态、合集/系列，支持空间内搜索
-- [x] 播放：全屏、清晰度、倍速（WSOLA）、双击快进退与暂停、长按快进、拖动进度、滑动调亮度音量、锁定、多 P；播放进度云端同步
+- [x] 播放：全屏、清晰度、倍速（WSOLA）、双击快进退与暂停、长按快进、拖动进度、滑动调亮度音量、锁定、多 P 与分 P 续播；播放进度云端同步
 - [x] 听视频：与播放共用同一播放器，息屏后台，通知栏、锁屏与耳机线控可控，定时关闭；队列可随机播放；字幕轨即逐句歌词，点句跳转
+- [x] 直播：进直播间观看，弹幕、清晰度、全屏与醒目留言
+- [x] 离线缓存：从播放队列勾选、选清晰度、默认连弹幕一起缓存；缓存列表在「我的」，播放不走网络
 - [x] 弹幕：滚动、顶部、底部三类，跟随播放时钟，透明度可调
 - [x] 字幕：多轨可选，普通播放时在画面底部，听视频时作为逐句文稿；支持 AI 字幕修复
-- [x] 评论：浏览、排序、展开楼中楼、发布与回复、点赞、删除，时间戳可点击跳转
+- [x] 评论：浏览、排序、展开楼中楼、发布与回复、点赞、删除，时间戳可点击跳转，配图可放大并左右翻页
 - [x] 互动：点赞、投币、收藏、关注；联合投稿逐个署名并可分别关注
-- [x] Agent：对话式全站搜索与播放页「找相关」，读简介与热评，候选逐条说明理由；支持多轮追问，执行轨迹可见
+- [x] Agent：对话式全站搜索与播放页「找相关」，读简介与热评，候选逐条说明理由；支持多轮追问，执行轨迹可见，回复按 Markdown 渲染
+- [x] 分享与链接：接收站内链接与 b23.tv 短链，视频与直播间可分享
 - [x] SponsorBlock 片段默认跳过，可换服务器
+- [x] 界面：Material 3 Expressive，动效照规范重做；平板双栏布局；全面屏与挖孔适配
 - [x] 应用内自更新；Material You 动态取色
 
 计划中：
 
 - [ ] 弹幕发送
-- [ ] Agent 回复的富文本渲染
-- [ ] CI 回归测试
-- [ ] 界面和动效符合 Material Design 规范
-- [ ] 全面屏适配与状态栏沉浸
-- [ ] 响应式布局
-- [ ] 重做普通搜索
-- [ ] Agent harness 优化
-- [ ] 直播
+- [ ] 离线降级：缓存标题与计数等元信息，断网时播放页不整屏报错
+- [ ] 专栏站内阅读
 - [ ] 小窗播放
-- [ ] 专栏
-- [ ] 解析 bilibili 链接与分享
-- [ ] 视频分享
-- [ ] 视频下载
 - [ ] 过滤低质量评论
+- [ ] CI 回归测试
+- [ ] Agent harness 优化
 
 ## 安装
 

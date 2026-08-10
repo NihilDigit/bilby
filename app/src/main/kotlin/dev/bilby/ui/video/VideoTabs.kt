@@ -2,7 +2,6 @@ package dev.bilby.ui.video
 
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -13,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,6 +36,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.MonetizationOn
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.ThumbUp
@@ -98,7 +97,10 @@ import dev.bilby.player.QueueItem
 import dev.bilby.ui.comment.CommentSection
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.AvatarBadge
+import dev.bilby.ui.components.BadgedAvatar
 import dev.bilby.ui.components.CompactVideoRow
+import dev.bilby.ui.components.FollowButton
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.SectionHeader
@@ -155,6 +157,8 @@ fun VideoTabs(
     related: RelatedState,
     commentState: CommentUiState,
     onFindRelated: () -> Unit,
+    /** 打开缓存选择面板。面板本身长在播放队列那一节上,见 [QueueContent]。 */
+    onCache: () -> Unit,
     /** 投币那一行的顶边在窗口里的 y(px)。找相关 sheet 的高度锚在它上面,见 VideoScreen。 */
     onActionsTop: (Int) -> Unit,
     followState: FollowState,
@@ -172,6 +176,8 @@ fun VideoTabs(
     addedToView: Boolean,
     onLike: () -> Unit,
     onAddToView: () -> Unit,
+    /** 切到听视频那一屏。按钮在动作栏里,挨着稍后再看。 */
+    onListen: () -> Unit,
     onCoin: (count: Int, alsoLike: Boolean) -> Unit,
     onOpenFavPicker: () -> Unit,
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
@@ -225,6 +231,7 @@ fun VideoTabs(
                     currentCid = currentCid,
                     related = related,
                     onFindRelated = onFindRelated,
+                    onCache = onCache,
                     onActionsTop = onActionsTop,
                     onUpClick = onUpClick,
                     staffFollowed = staffFollowed,
@@ -241,6 +248,7 @@ fun VideoTabs(
                     addedToView = addedToView,
                     onLike = onLike,
                     onAddToView = onAddToView,
+                    onListen = onListen,
                     onCoin = onCoin,
                     onOpenFavPicker = onOpenFavPicker,
                     onFavConfirm = onFavConfirm,
@@ -274,6 +282,7 @@ private fun IntroTab(
     currentCid: Long,
     related: RelatedState,
     onFindRelated: () -> Unit,
+    onCache: () -> Unit,
     onActionsTop: (Int) -> Unit,
     followState: FollowState,
     onToggleFollow: () -> Unit,
@@ -290,6 +299,7 @@ private fun IntroTab(
     addedToView: Boolean,
     onLike: () -> Unit,
     onAddToView: () -> Unit,
+    onListen: () -> Unit,
     onCoin: (count: Int, alsoLike: Boolean) -> Unit,
     onOpenFavPicker: () -> Unit,
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
@@ -298,8 +308,16 @@ private fun IntroTab(
     onRelatedVideoClick: (String) -> Unit,
 ) {
     var infoExpanded by rememberSaveable { mutableStateOf(false) }
+    // 这一栏内容区的底边(窗口坐标,px)。队列列表拿它算自己能长多高 —— 见 QueueContent。
+    var contentBottomPx by remember { mutableIntStateOf(0) }
 
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned {
+                contentBottomPx = (it.positionInWindow().y + it.size.height).toInt()
+            },
+    ) {
         item {
             Column(
                 modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
@@ -337,6 +355,7 @@ private fun IntroTab(
                     onCoin = onCoin,
                     onOpenFavPicker = onOpenFavPicker,
                     onFavConfirm = onFavConfirm,
+                    onListen = onListen,
                 )
 
                 if (detail.pages.size > 1) {
@@ -355,9 +374,11 @@ private fun IntroTab(
                 // 它是对当前视频问的一句话,不该把简介页顶下去。
                 QueueSection(
                     queue = queue,
+                    contentBottomPx = contentBottomPx,
                     onPlayQueueItem = onPlayQueueItem,
                     onToggleShuffle = onToggleShuffle,
                     onFindRelated = onFindRelated,
+                    onCache = onCache,
                     onRetryQueue = onRetryQueue,
                     modifier = Modifier.padding(top = Spacing.Hair),
                 )
@@ -407,15 +428,38 @@ private fun UpRow(
                     .heightIn(min = Dimens.MinTouchTarget),
             ) {
                 Avatar(url = faceUrl, size = Dimens.AvatarMedium)
-                Text(
-                    text = name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                upCard?.let {
-                    LevelBadge(level = it.level, senior = it.isSeniorMember, height = Dimens.LevelBadgeHeight)
+                // 名字和粉丝数上下两行。粉丝数是**决定要不要关注时看的那个数**,而关注按钮
+                // 就在这一行的另一端;原先它拉到了(`upCard.follower`)却没画出来,人得点进
+                // 空间页才看得到。等级徽章跟着名字走,它说的是同一个人的另一件事。
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    ) {
+                        Text(
+                            text = name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        upCard?.let {
+                            LevelBadge(
+                                level = it.level,
+                                senior = it.isSeniorMember,
+                                height = Dimens.LevelBadgeHeight,
+                            )
+                        }
+                    }
+                    // 拿不到就整行不画,不占位:这一行是独立请求、独立失败的(见 upCard 的说明)。
+                    upCard?.let {
+                        Text(
+                            text = stringResource(R.string.space_followers, formatCount(it.follower)),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
                 }
             }
         } else {
@@ -434,26 +478,18 @@ private fun UpRow(
                         // UP 主自己也走这一套,不再另开关注按钮:联合投稿这一排里他只是署名
                         // 第一位,单独给他一个按钮会让人以为关注的是"这条视频的作者"整体。
                         val followable = staffFollowed?.contains(participant.mid) == false
-                        Box {
-                            Avatar(url = participant.faceUrl, size = Dimens.AvatarMedium)
-                            if (followable) {
-                                Icon(
-                                    imageVector = Icons.Filled.Add,
-                                    contentDescription = stringResource(R.string.video_follow_staff, participant.name),
-                                    tint = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier
-                                        .align(Alignment.BottomEnd)
-                                        // 往外挪出头像一角:完全压在头像里会盖住脸,而且圆
-                                        // 叠圆的边缘挨得太近,小尺寸下看不出是两个东西。
-                                        .offset(x = StaffFollowBadgeOffset, y = StaffFollowBadgeOffset)
-                                        .size(StaffFollowBadgeSize)
-                                        .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.primary)
-                                        .clickable { onFollowStaff(participant.mid) }
-                                        .padding(1.dp),
-                                )
-                            }
-                        }
+                        BadgedAvatar(
+                            url = participant.faceUrl,
+                            size = Dimens.AvatarMedium,
+                            badge = if (!followable) null else AvatarBadge(
+                                icon = Icons.Filled.Add,
+                                contentDescription = stringResource(
+                                    R.string.video_follow_staff,
+                                    participant.name,
+                                ),
+                                onClick = { onFollowStaff(participant.mid) },
+                            ),
+                        )
                         // widthIn 而不是固定 width:固定 64dp 是照头像宽度定的,可它要装的是
                         // 名字 —— "飓多多StormCrew" 这种在 64dp 里只剩四个字加省略号。给一个
                         // 区间,短名字仍与头像对齐,长名字能多占一截。
@@ -483,7 +519,8 @@ private fun UpRow(
         //
         // 代价是联合投稿下没有取关入口,取关走那个人的空间页。这一排是署名,不是关系管理。
         if (staff.isEmpty()) {
-            FollowButton(state = followState, onClick = onToggleFollow)
+            // 这一页的主角是这条视频,不是这个人 —— 关注用 tonal,别和左边那排动作抢。
+            FollowButton(state = followState, onClick = onToggleFollow, prominent = false)
         }
     }
 }
@@ -573,6 +610,7 @@ private fun ActionButtonsRow(
     onOpenFavPicker: () -> Unit,
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
     onAddToView: () -> Unit,
+    onListen: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showCoinDialog by rememberSaveable { mutableStateOf(false) }
@@ -630,6 +668,21 @@ private fun ActionButtonsRow(
             selectedIcon = Icons.Filled.WatchLater,
             icon = Icons.Outlined.WatchLater,
             onClick = { if (!addedToView) onAddToView() },
+        )
+        // 听视频挨着稍后再看:这两件事是同一类决定——**这条视频我打算怎么消费**(现在只听、
+        // 还是回头再看),而左边三个是对内容表态。它原先在画面底部那条控制条上,那里全是
+        // "播放器现在怎么放"(倍速、清晰度、字幕、弹幕),听视频混在里面读不出它会换掉整页形态。
+        //
+        // 没有选中态:它不是开关,点下去就切到听视频那一屏了。
+        ActionItem(
+            modifier = Modifier.weight(1f),
+            selected = false,
+            enabled = true,
+            label = stringResource(R.string.video_action_listen),
+            contentDescription = stringResource(R.string.video_action_listen),
+            selectedIcon = Icons.Filled.Headphones,
+            icon = Icons.Filled.Headphones,
+            onClick = onListen,
         )
         // 评论数只在 tab 标题上出现一次:同一个数字在同屏显示两遍没有信息量。
     }
@@ -990,9 +1043,12 @@ private const val PartRowExpandThreshold = 10
 @Composable
 private fun QueueSection(
     queue: QueueUiState,
+    /** 简介栏内容底边在窗口坐标里的 y(px)。队列列表靠它算自己该有多高,见 [QueueContent]。 */
+    contentBottomPx: Int,
     onPlayQueueItem: (String) -> Unit,
     onToggleShuffle: () -> Unit,
     onFindRelated: () -> Unit,
+    onCache: () -> Unit,
     onRetryQueue: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1003,16 +1059,26 @@ private fun QueueSection(
         shape = MaterialTheme.shapes.large,
         modifier = modifier.fillMaxWidth(),
     ) {
-        QueueContent(queue, onPlayQueueItem, onToggleShuffle, onFindRelated, onRetryQueue)
+        QueueContent(
+            queue = queue,
+            contentBottomPx = contentBottomPx,
+            onPlayQueueItem = onPlayQueueItem,
+            onToggleShuffle = onToggleShuffle,
+            onFindRelated = onFindRelated,
+            onCache = onCache,
+            onRetryQueue = onRetryQueue,
+        )
     }
 }
 
 @Composable
 private fun QueueContent(
     queue: QueueUiState,
+    contentBottomPx: Int,
     onPlayQueueItem: (String) -> Unit,
     onToggleShuffle: () -> Unit,
     onFindRelated: () -> Unit,
+    onCache: () -> Unit,
     onRetryQueue: () -> Unit,
 ) {
     Column(
@@ -1029,6 +1095,16 @@ private fun QueueContent(
                 Icon(
                     Icons.Filled.AutoAwesome,
                     contentDescription = stringResource(R.string.video_find_related),
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+            }
+            // **缓存的入口长在这里**,因为要选的东西就是这份列表:合集分集 / 这位 UP 的其他
+            // 投稿。摆进上面那排动作栏不行 —— 那四格的宽度是照 360dp 屏量出来的(风格指南
+            // §2.3),加第五格会把每格挤到 72dp,"赞 12.3万"那种标签就放不下了。
+            IconButton(onClick = onCache) {
+                Icon(
+                    Icons.Outlined.DownloadForOffline,
+                    contentDescription = stringResource(R.string.offline_cache_action),
                     modifier = Modifier.size(Dimens.IconInline),
                 )
             }
@@ -1079,19 +1155,31 @@ private fun QueueContent(
         } else {
             val listState = rememberLazyListState()
 
-            // 定高列表:高度有界才能嵌在可滚动的简介页里(高度无界的 LazyColumn 会抛)。
-            // 顺带让队列有个固定的占位,不会因为条数不同把下面的内容顶来顶去。
+            // 高度必须有界(高度无界的 LazyColumn 会抛),但**界取自剩下多少空间,不是窗口的
+            // 三分之一**。按窗口比例算出来的那个数和这一页实际剩多少无关:标题一行还是两行、
+            // 有没有分 P 都会改变上面占掉的高度,于是队列底下常年吊着一截空白 —— 竖屏画面
+            // 铺到状态栏底下之后又多出一条,那截空白正是这么来的。
             //
-            // **高度跟着窗口走,不是写死 320dp。** 横屏和宽屏两栏下,右边这一栏总高常常只有
-            // 七八百 dp,而它上面还有标题、UP 行、动作栏,下面还有「找相关」—— 一个 320dp
-            // 的定高块会把这一栏吃掉将近一半。取窗口高度的三分之一,并夹在一个下限和 320dp
-            // 之间:再矮就看不见两条,再高就回到原来那个问题。
-            val queueHeight = with(LocalDensity.current) {
-                (LocalWindowInfo.current.containerSize.height / 3).toDp()
-            }.coerceIn(Dimens.EmbeddedQueueMinHeight, Dimens.EmbeddedQueueHeight)
+            // 量的是这份列表自己的顶边到窗口内容底边的距离,**只量第一次**:这一块跟着简介页
+            // 滚动,持续跟随的话手指一动列表就跟着长高。够不到下限时(上面内容太长)退回下限,
+            // 由简介页整体滚动兜住。
+            var listTopPx by remember(queue.items.size) { mutableIntStateOf(0) }
+            val density = LocalDensity.current
+            val queueHeight = if (listTopPx > 0 && contentBottomPx > listTopPx) {
+                // 减掉列表**底下还剩的两层内边距**:卡片自己的(Tight)和简介那一列的(Cozy)。
+                // 只减一层的话整页会比一屏高出剩下那一层,表现是默认状态就能上下滑动一点点。
+                (with(density) { (contentBottomPx - listTopPx).toDp() } - BelowQueueInsets)
+                    .coerceAtLeast(Dimens.EmbeddedQueueMinHeight)
+            } else {
+                Dimens.EmbeddedQueueMinHeight
+            }
             LazyColumn(
                 state = listState,
-                modifier = Modifier.height(queueHeight),
+                modifier = Modifier
+                    .height(queueHeight)
+                    .onGloballyPositioned {
+                        if (listTopPx == 0) listTopPx = it.positionInWindow().y.toInt()
+                    },
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 items(queue.items, key = { it.bvid }) { item ->
@@ -1144,55 +1232,10 @@ private fun formatDate(epochSeconds: Long): String =
         .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"))
 
 /**
- * 关注按钮。三种可关注状态各有各的字面:互关不能显示成"已关注",那会把"对方也关注了你"
- * 这条信息抹掉,而这正是 B 站用户会去看的东西。
- *
- * 已关注用 outlined、未关注用 filled:M3 里强调程度对应动作的主次,已经关注之后"取关"
- * 不该继续抢眼。自己的空间和已拉黑都不显示按钮 —— 前者没有这个动作,后者要先解除拉黑。
- *
- * **取关要二次确认,关注不用**:关注是可逆的轻动作,取关会丢掉这条关系(重新关注要
- * 再找到这个人)。确认放在发起请求之前——`onClick` 是乐观更新 + 发请求的入口
- * (`VideoViewModel.toggleFollow`),点"取消关注"先弹确认,按钮状态不能先跳过去再跳回来。
- * 空间页的 `SpaceFollowButton` 是同一套判据,复用同一组字符串。
+ * 队列列表底下压着的内边距之和:队列卡片自己的 [Spacing.Tight] 加简介那一列的
+ * [Spacing.Cozy]。算列表高度时要一并减掉,见 [QueueContent]。
  */
-@Composable
-private fun FollowButton(state: FollowState, onClick: () -> Unit) {
-    var confirmingUnfollow by remember { mutableStateOf(false) }
-    when (state) {
-        FollowState.Self, FollowState.Blocked -> Unit
-        FollowState.None -> Button(onClick = onClick) { Text(stringResource(R.string.follow_none)) }
-        FollowState.Following -> OutlinedButton(onClick = { confirmingUnfollow = true }) {
-            Text(stringResource(R.string.follow_following))
-        }
-        FollowState.Mutual -> OutlinedButton(onClick = { confirmingUnfollow = true }) {
-            Text(stringResource(R.string.follow_mutual))
-        }
-    }
-    if (confirmingUnfollow) {
-        AlertDialog(
-            onDismissRequest = { confirmingUnfollow = false },
-            title = { Text(stringResource(R.string.follow_unfollow_confirm_title)) },
-            text = { Text(stringResource(R.string.follow_unfollow_confirm_message)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmingUnfollow = false
-                    onClick()
-                }) { Text(stringResource(R.string.follow_unfollow_confirm_title)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmingUnfollow = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
-        )
-    }
-}
-
-/** 关注加号的直径。18dp 是能在头像角上认出来、又不盖住脸的下限。 */
-private val StaffFollowBadgeSize = 18.dp
-
-/** 加号往头像外挪出的距离,横竖同值,让它压在右下角那道弧上。 */
-private val StaffFollowBadgeOffset = 4.dp
+private val BelowQueueInsets = Spacing.Tight + Spacing.Cozy
 
 /** 名字栏的宽度区间。下限对齐头像，上限防止一个长名字把整排撑开。 */
 private val StaffLabelMinWidth = 56.dp

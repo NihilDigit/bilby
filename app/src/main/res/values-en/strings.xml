@@ -55,8 +55,8 @@
     <string name="search_loading_more">Loading more…</string>
     <string name="search_fans">%1$s followers</string>
     <string name="search_new_session">New session</string>
-    <string name="search_mode_to_agent">Ask the assistant</string>
-    <string name="search_mode_to_normal">Switch to plain search</string>
+    <string name="search_mode_normal">Search</string>
+    <string name="search_mode_agent">Assistant</string>
     <string name="search_order_comprehensive">Relevance</string>
     <string name="search_order_click">Most played</string>
     <string name="search_order_pubdate">Newest</string>
@@ -136,6 +136,30 @@
     <string name="video_find_related">Find related</string>
     <string name="video_queue_loading">Loading queue…</string>
     <string name="video_queue_incomplete">Queue is incomplete — only this video</string>
+
+    <string name="offline_title">Downloads</string>
+    <string name="offline_cache_action">Download</string>
+    <string name="offline_sheet_title">Download for offline</string>
+    <string name="offline_sheet_quality">Quality</string>
+    <string name="offline_sheet_danmaku">Include danmaku</string>
+    <string name="offline_sheet_confirm">Download %1$d</string>
+    <string name="offline_sheet_empty_selection">Pick what to download</string>
+    <string name="offline_already_cached">Downloaded</string>
+    <string name="offline_status_queued">Queued</string>
+    <string name="offline_status_running">Downloading %1$d%%</string>
+    <string name="offline_status_running_unknown">Downloading</string>
+    <string name="offline_status_failed">Download failed</string>
+    <string name="offline_with_danmaku">With danmaku</string>
+    <string name="offline_empty">Nothing downloaded yet</string>
+    <string name="offline_used_space">%1$s used</string>
+    <string name="offline_delete">Delete download: %1$s</string>
+    <string name="offline_delete_confirm_title">Delete this download?</string>
+    <string name="offline_delete_confirm_message">The local files go away; getting it back means downloading again.</string>
+    <string name="offline_notification_channel">Downloads</string>
+    <string name="offline_notification_title">Downloading videos</string>
+    <string name="offline_notification_queued">%1$d queued</string>
+    <string name="size_mb">%1$.1f MB</string>
+    <string name="size_gb">%1$.2f GB</string>
 
     <string name="action_confirm">Confirm</string>
     <string name="coin_maxed">2 coins given, no more allowed</string>
@@ -277,4 +301,7 @@
     <string name="video_parts_expand">All %1$d parts</string>
     <string name="settings_section_account">Account</string>
     <string name="feed_all_followings">All following</string>
+    <string name="feed_up_live">%1$s is live</string>
+    <string name="video_action_listen">Listen</string>
+    <string name="offline_count">%1$d videos</string>
 </resources>
