@@ -73,8 +73,9 @@ class SettingsViewModel(
 ) : ViewModel() {
 
     /**
-     * 查更新。**只在用户点这一下时才跑**:没有启动时自动检查,也没有后台轮询 ——
-     * 那属于会主动打扰人的东西,和这个 app 不做红点与推送是同一条约束(DESIGN 1.3)。
+     * 查更新。**这一条只由用户点击触发**,它的结果因此要一路显示到底(查到了、已是最新、
+     * 失败了都要说)。开屏那一次是另一条路,失败不打扰(见
+     * [dev.bilby.ui.update.StartupUpdateViewModel])。两条路都没有后台轮询。
      */
     fun checkUpdate() {
         if (_state.value.update is UpdateState.Checking) return

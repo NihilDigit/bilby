@@ -52,8 +52,9 @@ sealed interface UpdateCheck {
 /**
  * 从 GitHub Releases 手动更新。
  *
- * **只在用户点击时才跑**,没有后台轮询、没有启动时自动检查 —— 那属于会主动打扰人的东西,
- * 和这个 app 拒绝红点与推送是同一条约束(DESIGN 1.3)。
+ * 两个调用方:设置页的"检查更新",和开屏那一次(见 [dev.bilby.ui.update.StartupUpdateViewModel],
+ * 一次进程一次)。**没有后台轮询**,查更新只发生在应用正被使用的时候,红点与推送一样不做
+ * (DESIGN 1.3)。
  *
  * 不走 `BiliClient`:那是 B 站接口的唯一出口,而这里访问的是 GitHub。第三方服务另走一条
  * (SponsorBlock 也是这样),两边的鉴权、签名、风控完全不相干,混在一起只会让

@@ -1,37 +1,17 @@
 package dev.bilby.ui.video
 
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
-import android.content.pm.ActivityInfo
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.FastForward
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
@@ -39,7 +19,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
-import androidx.compose.material.icons.automirrored.filled.Comment
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -47,42 +26,25 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
-import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
-import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.compose.PlayerSurface
-import dev.bilby.BiliLog
 import dev.bilby.R
 import dev.bilby.formatDurationMillis
 import dev.bilby.ui.barsAndCutout
@@ -96,7 +58,6 @@ import dev.bilby.data.SettingsStore
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
 import dev.bilby.player.cueAt
-import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.player.DanmakuFeed
 import dev.bilby.ui.player.DanmakuFontSizeSp
 import dev.bilby.ui.player.PlayerDanmakuLayer
@@ -104,27 +65,15 @@ import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SeekBarSegment
 import dev.bilby.ui.components.SubtitleTrackMenu
 import dev.bilby.ui.theme.FixedColors
-import dev.bilby.ui.theme.Spacing
 import dev.bilby.data.DanmakuPrefs
 import dev.nihildigit.danmaku.Danmaku
 import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.nihildigit.danmaku.DanmakuHost
 import dev.nihildigit.danmaku.DanmakuViewport
 import kotlinx.coroutines.delay
-import kotlin.math.abs
-import kotlin.math.roundToInt
 
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
-/** 控件渐变最下面那一档。比 [FixedColors.PlayerControlScrim] 再深一点,兜住时间文字。 */
-
-private const val CONTROLS_HIDE_DELAY_MILLIS = 3_000L
-
-/** 双击两侧快进/快退的步长。 */
-private const val DOUBLE_TAP_SEEK_MILLIS = 10_000L
-
-/** 手势提示浮层停留多久。 */
-private const val HINT_VISIBLE_MILLIS = 700L
 private const val PROGRESS_REPORT_INTERVAL_MILLIS = 5_000L
 
 /**
