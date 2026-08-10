@@ -199,6 +199,7 @@
     <string name="coin_count">%1$d 枚</string>
     <string name="coin_also_like">同时点赞</string>
     <string name="coin_warning">投币不可撤销</string>
+    <string name="coin_failed">投币失败:%1$s</string>
     <string name="fav_dialog_title">收藏到</string>
 
     <!-- 找相关的 sheet。把手上一行既是标题也是状态 -->
@@ -244,6 +245,8 @@
     <string name="playback_error_network">网络错误,取流失败</string>
     <string name="playback_error_detail">读取视频信息失败</string>
     <string name="playback_error_decode">播放失败(%1$d)</string>
+    <string name="playback_error_live_stream">直播流获取失败</string>
+    <string name="playback_error_live_ended">直播已结束</string>
     <string name="queue_order_sequential">顺序</string>
     <string name="queue_order_shuffle">随机</string>
     <string name="sleep_timer_off">定时关闭</string>

@@ -242,13 +242,19 @@ private fun ToViewItem.progressFraction(): Float? {
 private fun formatProgress(seconds: Long): String =
     "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}"
 
-/** "mm:ss" -> 秒数,只用于算进度条比例,拿不到就不画进度条。 */
+/**
+ * "mm:ss" 或 "h:mm:ss" -> 秒数,只用于算进度条比例,拿不到就不画进度条。
+ *
+ * 超过一小时的稿件接口给的是三段,只认两段的那一版对它们返回 null,于是长视频恰好一条
+ * 进度条都没有 —— 而那正是最需要知道自己看到哪儿的一类。
+ */
 private fun String.toSecondsOrNull(): Long? {
     val parts = split(":")
-    if (parts.size != 2) return null
-    val minutes = parts[0].toLongOrNull() ?: return null
-    val seconds = parts[1].toLongOrNull() ?: return null
-    return minutes * 60 + seconds
+    if (parts.size !in 2..3) return null
+    return parts.fold(0L) { acc, part ->
+        val value = part.toLongOrNull() ?: return null
+        acc * 60 + value
+    }
 }
 
 // ---- Preview ----

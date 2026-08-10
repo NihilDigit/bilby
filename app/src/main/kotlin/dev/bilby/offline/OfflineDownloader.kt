@@ -145,6 +145,20 @@ class OfflineDownloader(
         java.util.concurrent.ConcurrentHashMap<String, Boolean>(),
     )
 
+    /**
+     * 已经排进 [pending]、还没走完的那些(排队中和正在下的都算)。**入队去重看它,不看列表
+     * 里的状态。**
+     *
+     * 状态判不住是因为键对不上:请求的 cid 可能是 0,而 [runOne] 会把真 cid 补进列表项,
+     * 于是第二次以 cid=0 排进来的同一条在列表里找不到自己,两个协程同时写同一个文件。
+     *
+     * [delete] **不撤这个标记**。删掉一条排队中的再立刻加回来,通道里那条旧的还在,撤了标记
+     * 就变成两条一起下 —— 而那条旧的会照常把它下完(墓碑已被入队撤掉),结果正是用户要的。
+     */
+    private val inFlight = java.util.Collections.newSetFromMap(
+        java.util.concurrent.ConcurrentHashMap<String, Boolean>(),
+    )
+
     init {
         scope.launch {
             // 先扫无主文件再读列表。**顺序不能反** —— 扫的判据正是"列表里认不认得它",
@@ -189,6 +203,8 @@ class OfflineDownloader(
                             running.remove(key)
                         }
                     } finally {
+                        // 这一条走完(成功、失败、被取消都算)才允许它再次入队。
+                        inFlight.remove(key)
                         permits.send(Unit)
                         if (outstanding.decrementAndGet() == 0) onBusyChanged(false)
                     }
@@ -210,6 +226,8 @@ class OfflineDownloader(
             requests.forEach { request ->
                 val existing = _items.value.firstOrNull { it.bvid == request.bvid && it.cid == request.cid }
                 if (existing?.status == OfflineStatus.Completed) return@forEach
+                // 已经在队列里或正在下的那条不重复排。加不进去就说明有人先到,直接跳过。
+                if (!inFlight.add(offlineId(request.bvid, request.cid))) return@forEach
                 // 上一次被取消的那条又被排进来了(重试,或者用户改了主意),撤掉那道墓碑。
                 cancelled.remove(offlineId(request.bvid, request.cid))
                 upsert(request.toQueuedItem())

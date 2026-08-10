@@ -354,6 +354,9 @@ suspend inline fun <reified T> BiliClient.postForm(
                 BiliResult.Ok(data)
             } else {
                 BiliLog.w("POST ${url.pathOnly()} 失败${envelope.describeFailure()}")
+                // 和 [envelopeResult] 一样复核登录态。少这一句的话,凭据过期后走这条路的写操作
+                // (发评论)只会一条条报错,登录状态却还挂在界面上。
+                if (envelope.code == CODE_NOT_LOGGED_IN) invalidateIfLoggedOut()
                 BiliResult.ApiError(envelope.code, envelope.message)
             }
         },
