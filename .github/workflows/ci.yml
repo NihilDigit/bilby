@@ -55,7 +55,8 @@ jobs:
       # 失败时要能看到是哪个用例、断言差在哪,光看日志行不够。
       - name: Upload test report
         if: failure()
-        uses: actions/upload-artifact@v8
+        # upload 与 download 的大版本号不同步:download 已经到 v8,upload 最新是 v7。
+        uses: actions/upload-artifact@v7
         with:
           name: test-report
           path: app/build/reports/tests/testDebugUnitTest
