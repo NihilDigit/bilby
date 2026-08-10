@@ -1,0 +1,62 @@
+# 推到 main 就跑一遍单测和 release 构建。
+#
+# 存在的理由是发版链路太靠后:构建只发生在打 tag 的那一刻(见 release.yml),在此之前
+# 没有任何东西验证过这份代码。攒了几十个 commit 才在发版时报错,要在其中挑出是哪一条
+# 引起的,比当场知道贵得多。
+#
+# **跑 assembleRelease 而不是 assembleDebug**:debug 不过 R8,而 release 独有的失败
+# (keep 规则漏了、资源被 shrink 掉)恰恰只有它能暴露。没有签名密钥时 Gradle 回落到
+# debug key(见 app/build.gradle.kts 的 signingConfigs),所以这个 job 不需要任何 Secret。
+#
+# 版本号不传 -PbilbyVersion,构建报 0.0.0-dev。这里验的是"编不编得过、测不测得过",
+# 产物不发布也不留存。
+name: CI
+
+on:
+  push:
+    branches: [main]
+    # 只改文档不值得跑一次完整构建。
+    paths-ignore:
+      - "**.md"
+      - ".github/badges/**"
+  workflow_dispatch:
+
+# 连着推几个 commit 时只留最后一次。中间那些的结果没人看,却在排队占位。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          # compileOptions 是 21,这里不能更低。
+          java-version: "21"
+
+      # 停在 v5 的理由见 release.yml。
+      - uses: gradle/actions/setup-gradle@v5
+
+      # 单测只有 debug 变体有:AGP 按 testBuildType(默认 debug)生成任务,
+      # testReleaseUnitTest 不存在,写上去会报 "Task not found"。
+      - name: Test
+        run: ./gradlew testDebugUnitTest
+
+      - name: Build
+        run: ./gradlew assembleRelease
+
+      # 失败时要能看到是哪个用例、断言差在哪,光看日志行不够。
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v8
+        with:
+          name: test-report
+          path: app/build/reports/tests/testDebugUnitTest
+          retention-days: 7
