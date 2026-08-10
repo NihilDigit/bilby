@@ -136,11 +136,53 @@ jobs:
     permissions:
       # 证明要签名,签名要 OIDC 身份。
       id-token: write
-      # 把 .intoto.jsonl 挂到同一个 release 上。
       contents: write
       # generator 要读本次 workflow run 的元数据来填 provenance。
       actions: read
+    # 这个 job 的日志里有一片 "Node.js 20 is deprecated" —— **来自 generator 内部**
+    # (`detect-workflow-js`、`compute-sha256`、它自己 pin 的 checkout),不是本仓库能改的:
+    # v2.1.0 已经是上游最新版。runner 目前会把它们强制跑在 Node 24 上,只是告警。
+    # 本仓库自己引的 action 都已在 Node 24 一代。
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: ${{ needs.release.outputs.hashes }}
-      upload-assets: true
+      # **不让 generator 自己上传。** 它按 tag 查 release,而 GitHub 的按-tag 接口看不到
+      # 草稿;上面那个 job 发的正是草稿,于是它查不到、转而**新建并公开发布**一个同名
+      # release,里面只有一份 .intoto.jsonl,正文空白。v0.7.0 上真的发生过:发布页上
+      # 一个 tag 挂了两个 release,公开的那个还是空的。
+      #
+      # 改成让它把证明留作 workflow 产物,由下面那个 job 按 release id 挂到草稿上。
+      upload-assets: false
+
+  # 把 SLSA 证明挂到上面那个草稿 release 上。
+  #
+  # 按 **release id** 找,不按 tag:`gh release view <tag>` 和 REST 的 releases/tags/<tag>
+  # 都不返回草稿,只有列表接口看得到它。
+  attach-provenance:
+    needs: [release, provenance]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.provenance.outputs.provenance-name }}
+
+      - name: Attach provenance to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ needs.provenance.outputs.provenance-name }}
+        run: |
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id" | head -1)
+          if [ -z "$id" ]; then
+            echo "找不到 $GITHUB_REF_NAME 的 release" >&2
+            exit 1
+          fi
+          # 用 uploads 主机传二进制:gh api 走的是 api.github.com,那台不收附件。
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary "@$NAME" \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$id/assets?name=$NAME" \
+            > /dev/null
