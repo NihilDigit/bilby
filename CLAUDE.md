@@ -178,6 +178,11 @@ release is published; it can also be dispatched against any older tag. It writes
 rejects `github.com` as an endpoint host, so serving the JSON as a release asset returns
 `domain is blocked`.
 
+**That workflow commits to main by itself** (`docs(badge): APK <size> (<tag>)`), so after
+every release `origin/main` is one commit ahead of anything local. Fetch before starting
+work and again before pushing — otherwise the push is rejected as non-fast-forward at the
+worst moment, with a tag already out.
+
 **The device is the owner's, and driving it needs their say-so.** Reach for `adb` — install,
 launch, tap, screenshot — only after they have asked for it in this session. Otherwise hand
 them the steps to run and wait.
