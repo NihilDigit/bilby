@@ -2,7 +2,11 @@
 
 # Bilby
 
-[![English](https://img.shields.io/badge/README-English-4A5C92?style=flat-square)](README.en.md) [![APK](https://img.shields.io/endpoint?style=flat-square&url=https%3A%2F%2Fraw.githubusercontent.com%2FNihilDigit%2Fbilby%2Fmain%2F.github%2Fbadges%2Fapk-size.json)](https://github.com/NihilDigit/bilby/releases/latest) [![SLSA Build Level 3](https://slsa.dev/images/gh-badge-level3.svg)](https://github.com/NihilDigit/bilby/attestations) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NihilDigit/bilby)
+[English](README.en.md)
+
+[![APK](https://raw.githubusercontent.com/NihilDigit/bilby/badges/apk-size.svg)](https://github.com/NihilDigit/bilby/releases/latest) [![Android 10+](https://img.shields.io/badge/Android-10%2B-4A5C92?style=flat-square&logo=android&logoColor=white)](#安装) [![SLSA Build L3](https://raw.githubusercontent.com/NihilDigit/bilby/badges/slsa-l3.svg)](https://github.com/NihilDigit/bilby/attestations) [![GPL-3.0](https://img.shields.io/github/license/NihilDigit/bilby?style=flat-square&color=4A5C92&logo=gnu&logoColor=white)](LICENSE)
+
+![Kotlin](https://img.shields.io/badge/Kotlin-4A5C92?style=flat-square&logo=kotlin&logoColor=white) ![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-4A5C92?style=flat-square&logo=jetpackcompose&logoColor=white) ![Material 3 Expressive](https://img.shields.io/badge/Material%203%20Expressive-4A5C92?style=flat-square&logo=materialdesign&logoColor=white)
 
 Bilby 是一款安卓原生 bilibili 客户端，提供无推荐流的订阅式设计、优化的听视频功能和 Agentic 搜索推荐能力。
 

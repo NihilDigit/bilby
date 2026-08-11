@@ -1,11 +1,17 @@
 # README 顶上那个 APK 体积 badge 的数据源。
 #
-# **文件必须落在仓库里,不能当 release asset。** shields.io 的 endpoint 只认少数几个域名,
-# releases/latest/download/... 会重定向到 objects.githubusercontent.com,它直接回
-# "domain is blocked";raw.githubusercontent.com 则是允许的。这一条试过才知道。
+# **文件必须落在仓库里,不能当 release asset。** raw.githubusercontent.com 对 `.svg`
+# 回的是 `image/svg+xml`,GitHub 直接渲染;而 releases/latest/download/... 会重定向到
+# objects.githubusercontent.com,那个域名连 shields 都拒(回 "domain is blocked")。
 #
 # 写文件走 Contents API 而不是 checkout + git push:不必拉整个仓库,也不会和期间落在
 # 默认分支上的其它提交打架。
+#
+# **落在孤儿分支 `badges` 上,不落在 main。** 这个 job 每次发布都要写一次文件,而 Contents API
+# 的 PUT 内容相同也照样生成提交 —— 落在 main 上就是每个版本一个提交,其中大半是空的
+# (v0.7.1 到 v0.7.4 体积没变过,却留下三个空提交)。更实际的代价是时机:它在发布之后才跑,
+# 于是本地刚推完的 main 立刻落后一个提交,下一次 push 被拒。`badges` 分支没有别的东西,
+# 谁也不会去 pull 它。
 #
 # 单独一个 workflow 而不是并进 release.yml:这样任何一次已经发出去的 release 都能补,
 # 包括加这个 badge 之前发的那些。发版后会自动跑一次,也可以手动指定 tag 重跑。
@@ -33,6 +39,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          BRANCH: badges
           INPUT_TAG: ${{ inputs.tag }}
           EVENT_TAG: ${{ github.event.release.tag_name }}
         run: |
@@ -53,20 +60,38 @@ jobs:
 
           size=$(awk -v b="$bytes" 'BEGIN{printf "%.1f", b/1048576}')
           echo "size: $bytes bytes = $size MB"
-          printf '{"schemaVersion":1,"label":"APK","message":"%s MB","color":"4A5C92"}\n' \
-            "$size" > apk-size.json
-          cat apk-size.json
 
-          path=".github/badges/apk-size.json"
-          content=$(base64 -w0 apk-size.json)
-          # 已存在就要带上它的 sha,否则 API 拒绝覆盖。
-          sha=$(gh api "repos/$REPO/contents/$path" --jq .sha 2>/dev/null || true)
+          # 整张徽章渲染好存成 SVG,不再用 shields 的 endpoint。**为的是那个图标**:
+          # endpoint 的 JSON 只认 namedLogo,`logoSvg` 会被静默忽略(试过,宽度和不带 logo
+          # 的一模一样),而自定义图标只能作为 data URI 走 URL —— 那串 base64 放进 README
+          # 就是首屏中间几百个字符。渲染一次存起来,README 里只剩一条正常长度的链接。
+          #
+          # 图标是应用自己的标记,取自 docs/icon.svg:去掉那块蓝底,只留白色字形,
+          # viewBox 收到字形四周。改图标时两边一起改。
+          cat > mark.svg <<'MARK'
+          <svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="30 20 50 70"><path fill="#FFFFFF" fill-rule="evenodd" d="M39,40 H54.5 A10.5,10.5 0 0 1 54.5,61 H56.5 A11.5,11.5 0 0 1 56.5,84 H39 Z M56,46.1 A2.4,2.9 0 0 1 56,51.9 A2.4,2.9 0 0 1 56,46.1 Z M57.75,47.9 A0.85,0.85 0 0 1 56.05,47.9 A0.85,0.85 0 0 1 57.75,47.9 Z"/><g stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" fill="none"><path d="M45,41 C43,35.5 41.5,32 41,28"/><path d="M56,41 C58.5,35.8 60.8,31.5 62,28"/></g></svg>
+          MARK
+          sed -i 's/^          //' mark.svg
+          logo=$(base64 -w0 mark.svg | sed 's/^/data:image\/svg+xml;base64,/' | jq -sRr @uri)
+          # shields 对没有 UA 的请求回 403。
+          curl -fsSL -A curl \
+            "https://img.shields.io/badge/APK-${size}%20MB-4A5C92?style=flat-square&logo=$logo" \
+            -o apk-size.svg
+          grep -q "<image" apk-size.svg || { echo "::error::图标没有渲染进去"; exit 1; }
+
+          path="apk-size.svg"
+          content=$(base64 -w0 apk-size.svg)
+          # 已存在就要带上它的 sha,否则 API 拒绝覆盖。读也要指名分支:不带 ref 读的是
+          # 默认分支,那里已经没有这个文件了。
+          sha=$(gh api "repos/$REPO/contents/$path?ref=$BRANCH" --jq .sha 2>/dev/null || true)
           if [ -n "$sha" ]; then
             gh api --method PUT "repos/$REPO/contents/$path" \
+              -f branch="$BRANCH" \
               -f message="docs(badge): APK $size MB ($tag)" \
               -f content="$content" -f sha="$sha" --jq .commit.html_url
           else
             gh api --method PUT "repos/$REPO/contents/$path" \
+              -f branch="$BRANCH" \
               -f message="docs(badge): APK $size MB ($tag)" \
               -f content="$content" --jq .commit.html_url
           fi

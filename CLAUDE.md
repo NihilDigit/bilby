@@ -153,6 +153,11 @@ version is passed in as `-PbilbyVersion` and derived from the tag, so a local bu
 back to the debug key so R8 output can still be installed and checked. Unit test tasks exist
 for the debug variant only — `testReleaseUnitTest` does not exist and fails in CI.
 
+**A workflow triggered by a `release` event runs the file as it exists at the tag**, not the
+one on the default branch. Fixing a release-time workflow therefore does nothing for the
+release being cut; it takes effect from the next tag on. Dispatching the same workflow by
+hand does read the default branch, which is the way to apply a fix to a tag already out.
+
 The workflow writes an install-and-verify section into the release body, and publishes as a
 draft. **`gh release edit --notes-file` replaces the whole body, it does not append** — pass
 the changelog plus that section, or read the existing body back and prepend to it. Getting
@@ -174,14 +179,10 @@ problem inside a file that is new in this release was never shipped.
 
 `.github/workflows/apk-size-badge.yml` refreshes the size badge and runs on its own after a
 release is published; it can also be dispatched against any older tag. It writes
-`.github/badges/apk-size.json`, and that file has to live in the repository: shields.io
-rejects `github.com` as an endpoint host, so serving the JSON as a release asset returns
-`domain is blocked`.
-
-**That workflow commits to main by itself** (`docs(badge): APK <size> (<tag>)`), so after
-every release `origin/main` is one commit ahead of anything local. Fetch before starting
-work and again before pushing — otherwise the push is rejected as non-fast-forward at the
-worst moment, with a tag already out.
+`apk-size.json` **on the orphan `badges` branch**, which nothing else touches: the file has
+to live in the repository — shields.io rejects `github.com` as an endpoint host, so serving
+the JSON as a release asset returns `domain is blocked` — but it does not have to live on
+main, and it used to leave a commit there after every release.
 
 **The device is the owner's, and driving it needs their say-so.** Reach for `adb` — install,
 launch, tap, screenshot — only after they have asked for it in this session. Otherwise hand
