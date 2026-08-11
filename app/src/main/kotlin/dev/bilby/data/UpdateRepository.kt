@@ -89,7 +89,7 @@ class UpdateRepository(
         UpdateCheck.Available(
             UpdateInfo(
                 version = latest,
-                notes = release.body.trim(),
+                notes = release.body.changelogOnly(),
                 assetName = asset.name,
                 downloadUrl = asset.downloadUrl,
                 sizeBytes = asset.size,
@@ -134,6 +134,24 @@ class UpdateRepository(
     }.onFailure { BiliLog.w("下载更新包失败", it) }
 
     /**
+     * release 正文里只有更新日志那几节该进应用。
+     *
+     * 后面的「安装」「校验」两节由发布流程写入(见 `.github/workflows/release.yml`),讲的是
+     * 下载页上四个 ABI 包怎么挑、校验和与构建来源怎么核 —— 而应用内更新是它自己按架构挑包、
+     * 下完拉起系统安装器,那两节在这里一个字都用不上,却比日志本身还长。
+     *
+     * 按标题切而不是按行数或分隔符切:标题是这份正文里唯一稳定的结构。切不到就整份留着 ——
+     * 少切一次只是多显示两节,而切错会把真正的更新日志吃掉。
+     */
+    private fun String.changelogOnly(): String {
+        val cut = INSTALL_HEADINGS
+            .mapNotNull { heading -> indexOf(heading).takeIf { it >= 0 } }
+            .minOrNull()
+            ?: return trim()
+        return substring(0, cut).trim()
+    }
+
+    /**
      * 只认 `x.y.z` 形式的数字段,逐段比。
      *
      * 本机构建的版本是 `0.0.0-dev`,debug 还带 `-debug` 后缀 —— 后缀一律截掉再比,
@@ -162,5 +180,8 @@ class UpdateRepository(
         const val LATEST_RELEASE_URL =
             "https://api.github.com/repos/NihilDigit/bilby/releases/latest"
         const val DOWNLOAD_CHUNK = 64L * 1024
+
+        /** 更新日志到这里为止,见 [changelogOnly]。两节都列出来,顺序在正文里不保证。 */
+        val INSTALL_HEADINGS = listOf("## 安装", "## 校验")
     }
 }

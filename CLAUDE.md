@@ -144,6 +144,14 @@ the changelog plus that section, or read the existing body back and prepend to i
 this wrong drops the checksum and `gh attestation verify` instructions from the download
 page, which is where they are of any use. It has happened once.
 
+**Release notes are written for the person downloading the APK.** One line of summary, then
+`## 修复` and `## 变化`, one written sentence per entry, in Chinese and in the same register
+as the rest of the interface. Each line says what the reader will notice — the symptom that
+is gone, the behaviour that is different — not what moved in the code. No file names, no
+type names, no commit subjects, no thanks or filler. Skip anything the reader cannot see;
+a refactor with no visible effect does not belong in the notes at all. Match the previous
+release: read it back with `gh release view <tag> --json body` before writing the next one.
+
 `.github/workflows/apk-size-badge.yml` refreshes the size badge and runs on its own after a
 release is published; it can also be dispatched against any older tag. It writes
 `.github/badges/apk-size.json`, and that file has to live in the repository: shields.io
