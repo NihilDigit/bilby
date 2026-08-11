@@ -199,7 +199,7 @@ class CommentRepository(
             rpid = rpid,
             rootRpid = root.takeIf { it != 0L } ?: rootOverride ?: rpid,
             mid = myMid,
-            uname = member.uname,
+            uname = member.uname.decodeHtmlEntities(),
             avatarUrl = member.avatar.toHttpsUrl(),
             isUploader = uploaderMid != 0L && myMid == uploaderMid,
             // reply_control 和 content 是兄弟字段,层级已用真实响应确认(见 CommentDto.kt);
@@ -210,10 +210,14 @@ class CommentRepository(
             ctimeEpochSeconds = ctime,
             likeCount = like,
             liked = action == 1,
-            message = content.message,
+            // 登录态的 `x/v2/reply` 把正文 HTML 转义了(未登录的 `x/v2/reply/main` 没有),
+            // 见 decodeHtmlEntities。表情占位符和 @ 的匹配都在解码后的文本上做,所以解码要
+            // 发生在这里而不是渲染时。
+            message = content.message.decodeHtmlEntities(),
             emotes = content.emote?.mapValues { it.value.url.toHttpsUrl() }.orEmpty(),
             mentions = content.members.mapNotNull { member ->
-                member.mid.toLongOrNull()?.takeIf { it != 0L }?.let { CommentMention(it, member.uname) }
+                member.mid.toLongOrNull()?.takeIf { it != 0L }
+                    ?.let { CommentMention(it, member.uname.decodeHtmlEntities()) }
             },
             pictureUrls = content.pictures?.map { it.imgSrc.toHttpsUrl() }.orEmpty(),
             subReplyCount = count,
