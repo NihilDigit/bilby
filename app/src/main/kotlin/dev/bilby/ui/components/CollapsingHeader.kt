@@ -1,5 +1,6 @@
 package dev.bilby.ui.components
 
+import androidx.compose.animation.core.animate
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
@@ -65,6 +66,16 @@ class CollapsingHeaderState {
             offsetPx = next
             return Offset(0f, taken)
         }
+    }
+
+    /**
+     * 把页头重新展开。
+     *
+     * 收起是用户滚出来的,展开回去往往是别的事情引起的(播放页里是"视频又开始播了",
+     * 见 VideoScreen),那时候手指不在屏幕上,直接跳回 0 会闪一下,所以走动画。
+     */
+    suspend fun expand() {
+        animate(initialValue = offsetPx, targetValue = 0f) { value, _ -> offsetPx = value }
     }
 
     /** 一个方向的滚动才有意义;横向的留给 pager。 */

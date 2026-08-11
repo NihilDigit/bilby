@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -64,6 +65,7 @@ import android.os.Bundle
 import androidx.core.content.ContextCompat
 import androidx.core.os.bundleOf
 import androidx.media3.common.C
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
@@ -99,6 +101,9 @@ import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import dev.bilby.ui.components.collapsingHeader
+import dev.bilby.ui.components.rememberCollapsingHeaderState
 
 /**
  * 播放页。**没有相关推荐栏、没有自动连播**(DESIGN 2.3/1.3);「找相关」占的是官方相关
@@ -525,6 +530,34 @@ fun VideoScreen(
     val scope = rememberCoroutineScope()
     val expandedLayout = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
 
+    /*
+     * **暂停之后画面不再钉在页顶,跟着简介和评论一起滚走。**
+     *
+     * 播放中它必须钉着:人一边看画面一边翻评论,画面滚没了这一页就没意义了。暂停之后这个
+     * 理由就不成立了 —— 此刻屏幕上三分之一是一张不动的画,而人正在读下面的字。
+     *
+     * 只在竖排(单栏)里做。两栏下画面是左边那一整列,和右栏的滚动没有共同的方向可言。
+     */
+    var playing by remember { mutableStateOf(false) }
+    DisposableEffect(active) {
+        val player = active ?: return@DisposableEffect onDispose { }
+        playing = player.isPlaying
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                playing = isPlaying
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+    val playerScroll = rememberCollapsingHeaderState()
+    val playerPinned = playing || fullscreen || expandedLayout
+    // 又播起来就把画面收回来。**不是 snap 而是动画**:此刻手指多半不在屏幕上(点的是
+    // 通知栏或者画面上的播放键),瞬移读不出"它回来了"这件事。
+    LaunchedEffect(playerPinned) {
+        if (playerPinned) playerScroll.expand()
+    }
+
     // 把手只在问过之后存在,并活到离开播放页为止:它是**你自己那次提问的记忆**,
     // 不是打开播放页就在那儿等着的入口。换个视频就是新的 VideoRoute,自动没有。
     val peek = if (related.started) SheetHandleHeight else 0.dp
@@ -792,7 +825,13 @@ fun VideoScreen(
                 }
             }
         } else {
-            Column(modifier = rootModifier) {
+            Column(
+                modifier = rootModifier.then(
+                    // 钉着的时候连接都不挂:挂着而在 onPreScroll 里判 playerPinned 也行,
+                    // 但那样"能不能收"这件事就散在两个地方了。
+                    if (playerPinned) Modifier else Modifier.nestedScroll(playerScroll.connection),
+                ),
+            ) {
                 // 状态栏那一条**填黑,但画面不钻进去**。
                 //
                 // 让画面整块顶到屏幕上边缘试过了:返回和分享按钮贴在画面左右上角,状态栏正好
@@ -815,7 +854,13 @@ fun VideoScreen(
                         // (`windowInsetsTopHeight` 不消费),不声明的话画面里的返回、分享和
                         // 控制条会以为自己还贴着屏幕边缘,各自再躲一次 —— 表现是箭头往画面
                         // 里缩了一条状态栏的高度。它上有黑边、下有简介栏,四周都不是屏幕边缘。
+                        // **两个修饰符都在 aspectRatio 外面。** aspectRatio 会把自己量出来的
+                        // 16:9 高度直接上报,套在它里面的话收起量根本传不到上一层;
+                        // clipToBounds 再包一层,把挪出可视区的那一截裁掉 —— 不裁的话画面会
+                        // 盖在上面那条状态栏黑边上。
                         Modifier
+                            .clipToBounds()
+                            .collapsingHeader(playerScroll)
                             .fillMaxWidth()
                             .aspectRatio(16f / 9f)
                             .consumeWindowInsets(safeInsets)
