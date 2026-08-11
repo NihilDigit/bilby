@@ -65,6 +65,27 @@ data object ToViewList : NavKey
 @Serializable
 data class FavFolderContents(val mediaId: Long, val title: String) : NavKey
 
+/**
+ * 一个合集/系列的目录。按 1.1 的机制表对过:内容是用户自己点开的那一个合集,有限、不排序、
+ * 不推荐、滚到底就没了,和 [FavFolderContents]、[LiveRoom] 落在同一栏。
+ *
+ * **它曾经是空间页里的一个状态**(`SpaceCollectionsTabState.detail`),不是独立目的地。那样
+ * 有两处走不通:一是播放页的队列来源就是某个合集,而"进入这个合集"没有目的地可去;二是
+ * 空间页在栈里出现第二次时(从播放页点 UP 头像),Nav3 按 NavKey 分组 ViewModel,同一个
+ * `Space(mid)` 拿到的是同一个实例,于是那个还开着的目录被当成新页面画了出来。
+ *
+ * @param name 目录还没拉回来时顶栏就要有标题,和 [FavFolderContents] 带 title 同一个理由。
+ * @param isSeason true=合集(season),false=系列(series)。两者的目录是两个接口
+ *   (notes 1.4.2 节),取哪个由它决定,所以是身份的一部分。
+ */
+@Serializable
+data class CollectionContents(
+    val mid: Long,
+    val id: Long,
+    val isSeason: Boolean,
+    val name: String,
+) : NavKey
+
 /** 历史记录。个人页的三个入口之一,DESIGN 2 节:历史只待在它自己这一页。 */
 @Serializable
 data object History : NavKey

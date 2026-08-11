@@ -9,7 +9,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -65,7 +64,6 @@ import android.os.Bundle
 import androidx.core.content.ContextCompat
 import androidx.core.os.bundleOf
 import androidx.media3.common.C
-import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
@@ -75,6 +73,7 @@ import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
 import dev.bilby.data.MemberCard
+import dev.bilby.data.QueueSource
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.delay
@@ -101,7 +100,10 @@ import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.media3.common.Player
 import dev.bilby.ui.components.collapsingHeader
 import dev.bilby.ui.components.rememberCollapsingHeaderState
 
@@ -141,6 +143,8 @@ fun VideoScreen(
     /** UP 主等级,独立请求、独立失败——查不到就是 null,徽章不画(见 VideoViewModel.upCard)。 */
     upCard: MemberCard?,
     onUpClick: (mid: Long) -> Unit,
+    /** 打开这份队列来自的那个合集/系列的目录。来源没有目录页时那一行点不动,不会走到这里。 */
+    onOpenQueueSource: (QueueSource) -> Unit,
     /** 已关注的联合投稿成员;null = 还没查到。 */
     staffFollowed: Set<Long>?,
     onFollowStaff: (Long) -> Unit,
@@ -272,6 +276,7 @@ fun VideoScreen(
         items = audioState.queue?.items.orEmpty(),
         currentBvid = audioState.queue?.current?.bvid,
         sourceLabel = audioState.queue?.sourceLabel.orEmpty(),
+        source = audioState.queue?.source,
         shuffled = (audioState.queue?.shuffled == true),
         // 判据从"取流转圈且队列是空的"换成"完整队列建好了没有"。起播现在不等建队列,队列里
         // 那一条是临时占位而不是队列内容(见 AudioPlaybackService.openVideo),按旧判据永远
@@ -531,12 +536,16 @@ fun VideoScreen(
     val expandedLayout = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
 
     /*
-     * **暂停之后画面不再钉在页顶,跟着简介和评论一起滚走。**
+     * **暂停之后画面跟着页面滚走,播放中钉在页顶。**
      *
-     * 播放中它必须钉着:人一边看画面一边翻评论,画面滚没了这一页就没意义了。暂停之后这个
-     * 理由就不成立了 —— 此刻屏幕上三分之一是一张不动的画,而人正在读下面的字。
+     * 播放中必须钉着:一边看画面一边翻评论正是这一页的用法。暂停之后这个理由不成立 ——
+     * 此刻屏幕上三分之一是一张不动的画,而人正在读下面的字。
      *
-     * 只在竖排(单栏)里做。两栏下画面是左边那一整列,和右栏的滚动没有共同的方向可言。
+     * **两个 tab 一视同仁。** 曾经只在评论那一边收、简介那边钉死,因为简介里的播放队列按
+     * 窗口坐标算高度,画面一收它就重新量高重组。队列改成由布局撑开之后那条限制没了,而
+     * "同一个手势在两个 tab 上做两件事"本身就是别扭的来源。
+     *
+     * 两栏布局不做:画面是左边那一整列,和右栏的滚动没有共同的方向可言。
      */
     var playing by remember { mutableStateOf(false) }
     DisposableEffect(active) {
@@ -550,10 +559,26 @@ fun VideoScreen(
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
     }
-    val playerScroll = rememberCollapsingHeaderState()
+    val tabPager = rememberPagerState(pageCount = { VideoTabCount })
     val playerPinned = playing || fullscreen || expandedLayout
-    // 又播起来就把画面收回来。**不是 snap 而是动画**:此刻手指多半不在屏幕上(点的是
-    // 通知栏或者画面上的播放键),瞬移读不出"它回来了"这件事。
+    /*
+     * **简介那一边只许把画面拉回来,不许把它收走。**
+     *
+     * 收起是在评论那边做的动作:人在读评论,画面是多余的。简介这一边的下半屏是播放队列,
+     * 它自己就要占满剩下的高度,再把画面收掉换来的空间没有去处 —— 换来的是队列忽然长一截,
+     * 而人并没有要求它长。
+     *
+     * 反过来要留着:从评论页收着画面翻回简介,得有办法把画面拿回来,否则这一页会一直停在
+     * "画面不见了"的状态。展开走 onPostScroll,不受这个开关管(见 CollapsingHeaderState),
+     * 所以这里只写"能不能收"就够,单向限制天然成立。
+     *
+     * 用 settledPage 而不是 currentPage:后者翻过中点就变,允许的方向会在手势中途翻转。
+     */
+    val canCollapsePlayer = !playerPinned && tabPager.settledPage != VideoTabIntro
+    val playerScroll = rememberCollapsingHeaderState { canCollapsePlayer }
+    // 又钉起来就把画面收回来。**不是 snap 而是动画**:此刻手指多半不在屏幕上(点的是通知栏
+    // 或者画面上的播放键),瞬移读不出"它回来了"这件事。翻回简介页是个例外,那时手指在滑,
+    // 但那一下本来就跟着页面走,动画反而顺。
     LaunchedEffect(playerPinned) {
         if (playerPinned) playerScroll.expand()
     }
@@ -737,6 +762,7 @@ fun VideoScreen(
             state.detail?.let { detail ->
                 AdaptiveContent(modifier = paneModifier, maxWidth = Breakpoints.ReadableWidth) {
                     VideoTabs(
+                        pagerState = tabPager,
                         detail = detail,
                         currentCid = (audioState.queue?.currentCid ?: 0L),
                         related = related,
@@ -757,6 +783,7 @@ fun VideoScreen(
                         upCard = upCard,
                         queue = shownQueue,
                         onPlayQueueItem = onPlayQueueItem,
+                        onOpenQueueSource = onOpenQueueSource,
                         onToggleShuffle = toggleShuffle,
                         onRetryQueue = retryQueue,
                         onUpClick = onUpClick,
@@ -825,13 +852,10 @@ fun VideoScreen(
                 }
             }
         } else {
-            Column(
-                modifier = rootModifier.then(
-                    // 钉着的时候连接都不挂:挂着而在 onPreScroll 里判 playerPinned 也行,
-                    // 但那样"能不能收"这件事就散在两个地方了。
-                    if (playerPinned) Modifier else Modifier.nestedScroll(playerScroll.connection),
-                ),
-            ) {
+            // 连接**始终挂着**,钉不钉由 playerScroll 自己判(建它时传进去的那个 lambda)。
+            // 曾经按 playerPinned 增删这个修饰符,而它会在左右翻页翻到一半时翻转 —— 修饰符链
+            // 一变,正在拖的那一下就被取消,表现是滑动卡在两页中间。
+            Column(modifier = rootModifier.nestedScroll(playerScroll.connection)) {
                 // 状态栏那一条**填黑,但画面不钻进去**。
                 //
                 // 让画面整块顶到屏幕上边缘试过了:返回和分享按钮贴在画面左右上角,状态栏正好

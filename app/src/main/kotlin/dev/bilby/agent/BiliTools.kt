@@ -9,7 +9,6 @@ import dev.bilby.data.CommentSort
 import dev.bilby.data.SearchRepository
 import dev.bilby.data.SearchVideo
 import dev.bilby.data.SpaceArchiveOrder
-import dev.bilby.data.SpaceCollectionItem
 import dev.bilby.data.SpaceRepository
 import dev.bilby.data.VideoRepository
 import kotlinx.serialization.json.Json
@@ -280,10 +279,7 @@ private fun getCollectionTool(spaceRepository: SpaceRepository) = object : Tool 
         val sid = arguments.longArg("sid") ?: 0L
         val mid = arguments.longArg("mid") ?: 0L
         val isSeason = arguments.boolArg("is_season") ?: true
-        // loadCollectionDetail 要的是完整 SpaceCollectionItem,这里只有 id/isSeason 是请求真正用到的字段,
-        // 名字/封面/总数等展示字段对这次请求无意义,填占位值。
-        val collection = SpaceCollectionItem(id = sid, isSeason = isSeason, name = "", coverUrl = "", total = 0, ptimeEpochSeconds = 0)
-        when (val result = spaceRepository.loadCollectionDetail(mid, collection, page = 1)) {
+        when (val result = spaceRepository.loadCollectionDetail(mid, sid, isSeason, page = 1)) {
             is BiliResult.Ok -> {
                 val page = result.value
                 if (page.items.isEmpty()) {

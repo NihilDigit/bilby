@@ -247,16 +247,22 @@ class SpaceRepository(private val client: BiliClient) {
         }
     }
 
-    /** 合集/系列详情(目录),两套接口二选一(notes 1.4.2 节),均不需要 WBI。 */
+    /**
+     * 合集/系列详情(目录),两套接口二选一(notes 1.4.2 节),均不需要 WBI。
+     *
+     * 收 id 与 isSeason 而不是整个 [SpaceCollectionItem]:合集目录现在也从播放页进得去
+     * (队列来源就是这个合集),那条路上手里只有 id 和名字,没有列表接口给的封面与条数。
+     */
     suspend fun loadCollectionDetail(
         mid: Long,
-        collection: SpaceCollectionItem,
+        id: Long,
+        isSeason: Boolean,
         page: Int,
     ): BiliResult<SpaceCollectionDetailPage> {
-        val (url, params) = if (collection.isSeason) {
+        val (url, params) = if (isSeason) {
             "${BiliConstants.WEB_HOST}/x/polymer/web-space/seasons_archives_list" to mapOf(
                 "mid" to mid.toString(),
-                "season_id" to collection.id.toString(),
+                "season_id" to id.toString(),
                 "sort_reverse" to "false",
                 "page_size" to "30",
                 "page_num" to page.toString(),
@@ -265,7 +271,7 @@ class SpaceRepository(private val client: BiliClient) {
         } else {
             "${BiliConstants.WEB_HOST}/x/series/archives" to mapOf(
                 "mid" to mid.toString(),
-                "series_id" to collection.id.toString(),
+                "series_id" to id.toString(),
                 "sort" to "desc",
                 "ps" to "30",
                 "pn" to page.toString(),

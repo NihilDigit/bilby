@@ -10,7 +10,35 @@ import dev.bilby.player.QueueItem
  * ([dev.bilby.player.PlaybackQueue.replaceKeeping])。下标在这里算好、到那边再用,中间隔着
  * 一次网络往返,列表随时可能已经整体挪了一位。
  */
-data class QueueBuildResult(val items: List<QueueItem>, val sourceLabel: String)
+data class QueueBuildResult(
+    val items: List<QueueItem>,
+    /**
+     * 队列来源那一行:合集/系列**用它自己的名字**(「直播回放」「AI 早报」),其余两种来源是
+     * 「UP 主投稿」「UP 主动态」。
+     *
+     * **不带条数,也不加"合集"「《》」这类前缀与包装。** 这一行还要并排放下找相关、缓存、
+     * 顺序三个操作,每多一截就挤掉一截名字,而名字才是这行里唯一说明"在放什么"的东西。
+     * 条数还额外不准:投稿、系列、动态取的是当前视频前后各 [QueueSourceRepository.WINDOW_HALF]
+     * 条,写"共 N 条"时那个 N 是窗口大小,一个发过三百条的 UP 会显示"共 51 条"。
+     *
+     * 队列的边界另有出处:听视频那边顶着 `N / M`(ListenScreen),队列列表本身也滚得到底。
+     */
+    val sourceLabel: String,
+    /**
+     * 这份队列取自哪个合集/系列。**为空表示来源没有对应的页面**(UP 投稿、UP 动态),
+     * 播放页那行标题因此点不动 —— 那两种来源是这里为了凑出一份有边界的队列现算的窗口,
+     * 不是用户能在别处打开的一份目录,给它一个入口等于凭空发明一个页面。
+     */
+    val source: QueueSource? = null,
+)
+
+/** 队列来源的身份,够用来打开它的目录页([dev.bilby.ui.CollectionContents])。 */
+data class QueueSource(
+    val mid: Long,
+    val id: Long,
+    val isSeason: Boolean,
+    val name: String,
+)
 
 /**
  * 播放队列的三个来源(DESIGN 2.4b),按顺序退化:当前视频所属合集 → UP 空间投稿 →
@@ -98,7 +126,9 @@ class QueueSourceRepository(
             var page = 1
             while (budget > 0) {
                 budget--
-                val loaded = when (val result = spaceRepository.loadCollectionDetail(mid, series, page)) {
+                val loaded = when (
+                    val result = spaceRepository.loadCollectionDetail(mid, series.id, series.isSeason, page)
+                ) {
                     is BiliResult.Ok -> result.value
                     else -> {
                         BiliLog.w("队列:拉取系列 ${series.id} 第 $page 页失败")
@@ -117,7 +147,10 @@ class QueueSourceRepository(
             val windowed = videos.subList(from, to + 1)
             return QueueBuildResult(
                 items = windowed.map { it.toQueueItem() },
-                sourceLabel = "系列《${series.name}》· 共 ${windowed.size} 条",
+                // 系列的真实条数用接口给的 total,不用 videos.size:后者是翻到当前视频为止
+                // 拉了多少,预算耗尽时还会更少。
+                sourceLabel = series.name,
+                source = QueueSource(mid, series.id, series.isSeason, series.name),
             )
         }
         BiliLog.w("队列:UP 的前 $SERIES_SCAN_LIMIT 个系列(预算 $SERIES_REQUEST_BUDGET 次请求)里没有 bvid=$bvid")
@@ -166,7 +199,7 @@ class QueueSourceRepository(
         val windowed = videos.subList(from, to + 1)
         return QueueBuildResult(
             items = windowed.map { it.toQueueItem() },
-            sourceLabel = "UP 主动态 · 共 ${windowed.size} 条",
+            sourceLabel = "UP 主动态",
         )
     }
 
@@ -190,9 +223,18 @@ class QueueSourceRepository(
                 durationSeconds = ep.durationSeconds,
             )
         }
+        // 合集归属 mid 缺席时退回作者的 mid:目录页要这两样才打得开,取不到就不给入口,
+        // 而不是拿一个说不定是错的 mid 建一个点进去是空目录的链接。
+        val seasonMid = detail.seasonMid.takeIf { it != 0L } ?: detail.up.mid
         return QueueBuildResult(
             items = items,
-            sourceLabel = "合集《${detail.seasonTitle}》· 共 ${items.size} 集",
+            // 合集这条不开窗:详情里的 ugc_season 给的就是全部分集,"共"名副其实。
+            sourceLabel = detail.seasonTitle,
+            source = if (detail.seasonId != 0L && seasonMid != 0L) {
+                QueueSource(seasonMid, detail.seasonId, isSeason = true, name = detail.seasonTitle)
+            } else {
+                null
+            },
         )
     }
 
@@ -230,7 +272,7 @@ class QueueSourceRepository(
         val windowed = span.subList(windowFrom, windowTo + 1)
         return QueueBuildResult(
             items = windowed.map { it.toQueueItem() },
-            sourceLabel = "UP 主投稿 · 共 ${windowed.size} 条",
+            sourceLabel = "UP 主投稿",
         )
     }
 

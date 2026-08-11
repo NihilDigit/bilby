@@ -22,7 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.selectable
@@ -91,6 +91,7 @@ import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
 import dev.bilby.data.MemberCard
+import dev.bilby.data.QueueSource
 import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoStat
@@ -134,6 +135,8 @@ data class QueueUiState(
     val items: List<QueueItem> = emptyList(),
     val currentBvid: String? = null,
     val sourceLabel: String = "",
+    /** 来源的身份。非空时标题行可以点进那个合集的目录;为空的来源没有目录页可去。 */
+    val source: QueueSource? = null,
     val shuffled: Boolean = false,
     /**
      * 完整队列还没建好。**此刻 [items] 里那一条不是队列,是占位** —— 起播时先装的临时队列
@@ -146,6 +149,11 @@ data class QueueUiState(
     val incomplete: Boolean = false,
 )
 
+/** 简介页的下标。它是不是当前页决定画面能不能被收起,见 VideoScreen 的 canCollapsePlayer。 */
+const val VideoTabIntro = 0
+
+const val VideoTabCount = 2
+
 /**
  * 播放页下半部分:简介 / 评论左右滑动切换(DESIGN 2.3)。
  *
@@ -155,6 +163,12 @@ data class QueueUiState(
  */
 @Composable
 fun VideoTabs(
+    /**
+     * 简介/评论分页。**由 VideoScreen 持有**,因为"画面能不能被收起"要看现在停在哪一页
+     * (见它那边的 canCollapsePlayer)。页数与下标因此也一起搬到 [VideoTabCount] /
+     * [VideoTabIntro]:创建 pager 的那一层要先知道有几页。
+     */
+    pagerState: PagerState,
     detail: VideoDetail,
     currentCid: Long,
     related: RelatedState,
@@ -169,6 +183,7 @@ fun VideoTabs(
     upCard: MemberCard?,
     queue: QueueUiState,
     onPlayQueueItem: (bvid: String) -> Unit,
+    onOpenQueueSource: (QueueSource) -> Unit,
     onToggleShuffle: () -> Unit,
     onRetryQueue: () -> Unit,
     onUpClick: (Long) -> Unit,
@@ -207,7 +222,6 @@ fun VideoTabs(
         stringResource(R.string.video_tab_comment)
     }
     val titles = listOf(stringResource(R.string.video_tab_intro), commentLabel)
-    val pagerState = rememberPagerState(pageCount = { titles.size })
     val scope = rememberCoroutineScope()
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -233,7 +247,7 @@ fun VideoTabs(
         // 一整屏的高度,底部那一截被推出可视区。
         HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
             when (page) {
-                0 -> IntroTab(
+                VideoTabIntro -> IntroTab(
                     detail = detail,
                     currentCid = currentCid,
                     related = related,
@@ -248,6 +262,7 @@ fun VideoTabs(
                     upCard = upCard,
                     queue = queue,
                     onPlayQueueItem = onPlayQueueItem,
+                    onOpenQueueSource = onOpenQueueSource,
                     onToggleShuffle = onToggleShuffle,
                     onRetryQueue = onRetryQueue,
                     relation = relation,
@@ -299,6 +314,7 @@ private fun IntroTab(
     upCard: MemberCard?,
     queue: QueueUiState,
     onPlayQueueItem: (bvid: String) -> Unit,
+    onOpenQueueSource: (QueueSource) -> Unit,
     onToggleShuffle: () -> Unit,
     onRetryQueue: () -> Unit,
     onUpClick: (Long) -> Unit,
@@ -320,24 +336,22 @@ private fun IntroTab(
     onRelatedVideoClick: (String) -> Unit,
 ) {
     var infoExpanded by rememberSaveable { mutableStateOf(false) }
-    // 这一栏内容区的底边(窗口坐标,px)。队列列表拿它算自己能长多高 —— 见 QueueContent。
-    var contentBottomPx by remember { mutableIntStateOf(0) }
 
     /*
-     * **可滚动的 Column,不是 LazyColumn。** 这一页只有一个 item,懒加载没有任何收益,
-     * 而队列那一块要知道自己被滚走了多少才算得出高度([QueueContent]),
-     * `ScrollState.value` 给得出这个数,LazyColumn 的 `firstVisibleItemScrollOffset` 要靠
-     * "只有一个 item"这个前提才等价。
+     * **这一栏整体不滚动。** 上面那几块各占自己那点高度,剩下多少全归播放队列(weight),
+     * 队列在自己那块里滚。
+     *
+     * 原先是一个 `verticalScroll` 的 Column,队列则按"这份列表的顶边到窗口内容底边还剩多少"
+     * 反算自己该多高 —— 那串窗口坐标是这一页最难缠的一段:简介一展开、播放器一收起、
+     * 页面一滚动,顶边就变,队列跟着重新量高重组。现在高度由布局给,那段算法整个不存在了,
+     * 播放器的收起也不再牵动这一栏。
+     *
+     * 可用高度变了(播放器收起、简介展开)就重排一次,队列跟着变高变矮。**这一栏不吃用户的
+     * 滑动去收缩自己** —— 收播放器是队列那个列表的滚动带起来的,而不是这一栏在整体挪。
      */
-    val scrollState = rememberScrollState()
-
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .onGloballyPositioned {
-                contentBottomPx = (it.positionInWindow().y + it.size.height).toInt()
-            }
-            .verticalScroll(scrollState)
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
         verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
@@ -395,14 +409,13 @@ private fun IntroTab(
         // 它是对当前视频问的一句话,不该把简介页顶下去。
         QueueSection(
             queue = queue,
-            contentBottomPx = contentBottomPx,
-            scrolledPx = scrollState.value,
             onPlayQueueItem = onPlayQueueItem,
+            onOpenQueueSource = onOpenQueueSource,
             onToggleShuffle = onToggleShuffle,
             onFindRelated = onFindRelated,
             onCache = onCache,
             onRetryQueue = onRetryQueue,
-            modifier = Modifier.padding(top = Spacing.Hair),
+            modifier = Modifier.padding(top = Spacing.Hair).weight(1f),
         )
     }
 }
@@ -1080,11 +1093,8 @@ private const val PartRowExpandThreshold = 10
 @Composable
 private fun QueueSection(
     queue: QueueUiState,
-    /** 简介栏内容底边在窗口坐标里的 y(px)。队列列表靠它算自己该有多高,见 [QueueContent]。 */
-    contentBottomPx: Int,
-    /** 简介栏已经滚走多少(px)。同上,见 [QueueContent]。 */
-    scrolledPx: Int,
     onPlayQueueItem: (String) -> Unit,
+    onOpenQueueSource: (QueueSource) -> Unit,
     onToggleShuffle: () -> Unit,
     onFindRelated: () -> Unit,
     onCache: () -> Unit,
@@ -1100,9 +1110,8 @@ private fun QueueSection(
     ) {
         QueueContent(
             queue = queue,
-            contentBottomPx = contentBottomPx,
-            scrolledPx = scrolledPx,
             onPlayQueueItem = onPlayQueueItem,
+            onOpenQueueSource = onOpenQueueSource,
             onToggleShuffle = onToggleShuffle,
             onFindRelated = onFindRelated,
             onCache = onCache,
@@ -1114,9 +1123,8 @@ private fun QueueSection(
 @Composable
 private fun QueueContent(
     queue: QueueUiState,
-    contentBottomPx: Int,
-    scrolledPx: Int,
     onPlayQueueItem: (String) -> Unit,
+    onOpenQueueSource: (QueueSource) -> Unit,
     onToggleShuffle: () -> Unit,
     onFindRelated: () -> Unit,
     onCache: () -> Unit,
@@ -1126,7 +1134,15 @@ private fun QueueContent(
         modifier = Modifier.padding(Spacing.Tight),
         verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
-        SectionHeader(title = queue.sourceLabel) {
+        // 标题就是这份队列的来源。是合集/系列时它点得进目录 —— 队列只有当前视频前后一小段,
+        // "这个合集里还有什么"要去目录看。UP 投稿和 UP 动态那两种来源没有目录页,不给入口。
+        SectionHeader(
+            title = queue.sourceLabel,
+            // 标题左边和下面第一张封面对齐。队列行(CompactVideoRow)自己还有一层 Tight 内边距,
+            // 而标题直接贴着这一列的内边距,不补这一层的话标题会比整列封面靠左 8dp。
+            modifier = Modifier.padding(start = Spacing.Tight),
+            onTitleClick = queue.source?.let { source -> { onOpenQueueSource(source) } },
+        ) {
             // 「找相关」长在这份列表上:这个位置在别的客户端是相关推荐,在这里是合集/UP 投稿,
             // 把"要不要另找几个"做成这份列表的一个小动作,力度正好 —— 可用,但不劝你用。
             //
@@ -1196,34 +1212,17 @@ private fun QueueContent(
         } else {
             val listState = rememberLazyListState()
 
-            // 高度必须有界(高度无界的 LazyColumn 会抛),但**界取自剩下多少空间,不是窗口的
-            // 三分之一**。按窗口比例算出来的那个数和这一页实际剩多少无关:标题一行还是两行、
-            // 有没有分 P 都会改变上面占掉的高度,于是队列底下常年吊着一截空白 —— 竖屏画面
-            // 铺到状态栏底下之后又多出一条,那截空白正是这么来的。
+            // **高度由上一层给,这里只管填满。** 简介那一栏把剩下的空间整块交给这一节
+            // (weight),所以这个 LazyColumn 拿到的约束本来就是有界的。
             //
-            // 量的是这份列表自己的顶边到窗口内容底边的距离。位置**加回已经滚走的那一段**,
-            // 得到的是"页面没滚动时这份列表的顶边在哪儿",这个数与手指无关 —— 直接用窗口
-            // 坐标的话手指一动列表就跟着长高。够不到下限时(上面内容太长)退回下限,
-            // 由简介页整体滚动兜住。
-            //
-            // 原先这个位置**只量第一次**,那是为了躲开跟随手指的问题,代价是简介展开之后
-            // 高度再也不重算:展开时列表被挤短,收起来也回不去。
-            var listTopPx by remember { mutableIntStateOf(0) }
-            val restingTopPx = listTopPx + scrolledPx
-            val density = LocalDensity.current
-            val queueHeight = if (listTopPx > 0 && contentBottomPx > restingTopPx) {
-                // 减掉列表**底下还剩的两层内边距**:卡片自己的(Tight)和简介那一列的(Cozy)。
-                // 只减一层的话整页会比一屏高出剩下那一层,表现是默认状态就能上下滑动一点点。
-                (with(density) { (contentBottomPx - restingTopPx).toDp() } - BelowQueueInsets)
-                    .coerceAtLeast(Dimens.EmbeddedQueueMinHeight)
-            } else {
-                Dimens.EmbeddedQueueMinHeight
-            }
+            // 这里曾经有一段自己算高度的代码:量列表顶边到窗口内容底边的距离,再加回已经滚走
+            // 的那一段。它是为了让一个 LazyColumn 活在可滚动的 Column 里 —— 那种嵌套没有
+            // 有界高度可言,只能自己算一个。代价是这一页的高度成了窗口坐标的函数:简介一展开、
+            // 播放器一收起、页面一滚动,顶边就变,列表跟着重新量高重组。简介栏不再整体滚动
+            // 之后,这些全部消失。
             LazyColumn(
                 state = listState,
-                modifier = Modifier
-                    .height(queueHeight)
-                    .onGloballyPositioned { listTopPx = it.positionInWindow().y.toInt() },
+                modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 items(queue.items, key = { it.bvid }) { item ->
@@ -1274,12 +1273,6 @@ private fun formatDate(epochSeconds: Long): String =
     java.time.Instant.ofEpochSecond(epochSeconds)
         .atZone(java.time.ZoneId.systemDefault())
         .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"))
-
-/**
- * 队列列表底下压着的内边距之和:队列卡片自己的 [Spacing.Tight] 加简介那一列的
- * [Spacing.Cozy]。算列表高度时要一并减掉,见 [QueueContent]。
- */
-private val BelowQueueInsets = Spacing.Tight + Spacing.Cozy
 
 /** 名字栏的宽度区间。下限对齐头像，上限防止一个长名字把整排撑开。 */
 private val StaffLabelMinWidth = 56.dp

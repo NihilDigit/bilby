@@ -164,25 +164,6 @@ data class SpaceCollectionsTabState(
     val appending: Boolean = false,
     val hasMore: Boolean = true,
     val error: String? = null,
-    /** 非空即表示正在看某个合集/系列的目录,当作页内抽屉而不是独立导航目的地。 */
-    val detail: SpaceCollectionDetailState? = null,
-)
-
-data class SpaceCollectionDetailState(
-    val collection: SpaceCollectionItem,
-    val items: List<SpaceVideoItem> = emptyList(),
-    val page: Int = 1,
-    val total: Int = 0,
-    /**
-     * **只表示"有请求在飞",不表示"该画转圈了"。** 这两件事合用一个字段时,默认值必须是
-     * false:[loadMoreCollectionDetail] 拿它当重入闸,而 [openCollection] 是先建状态再拉
-     * 第一页 —— 默认 true 会让第一页被自己的闸挡掉,一个请求都不发,合集详情永远停在初始
-     * 状态。表现是"点进合集打不开",且因为根本没发请求,日志里一个字都没有。
-     */
-    val loading: Boolean = false,
-    val appending: Boolean = false,
-    val hasMore: Boolean = true,
-    val error: String? = null,
 )
 
 /**
@@ -240,7 +221,6 @@ class SpaceViewModel(
     private var archivesGeneration = 0L
     private var dynamicsGeneration = 0L
     private var collectionsGeneration = 0L
-    private var collectionDetailGeneration = 0L
 
     init {
         loadProfile()
@@ -262,20 +242,6 @@ class SpaceViewModel(
         loadProfile()
         val current = _state.value
         when {
-            current.collections.detail != null -> {
-                collectionDetailGeneration++
-                _state.update {
-                    it.copy(
-                        collections = it.collections.copy(
-                            detail = it.collections.detail?.copy(
-                                page = 1,
-                                loading = false, appending = false, hasMore = true, error = null,
-                            ),
-                        ),
-                    )
-                }
-                loadMoreCollectionDetail(replace = true)
-            }
             current.activeTab == SpaceTab.Archives -> {
                 archivesGeneration++
                 _state.update {
@@ -538,85 +504,6 @@ class SpaceViewModel(
         }
     }
 
-    fun openCollection(item: SpaceCollectionItem) {
-        collectionDetailGeneration++
-        _state.update { it.copy(collections = it.collections.copy(detail = SpaceCollectionDetailState(item))) }
-        loadMoreCollectionDetail()
-    }
-
-    fun closeCollectionDetail() {
-        collectionDetailGeneration++
-        _state.update { it.copy(collections = it.collections.copy(detail = null)) }
-    }
-
-    /**
-     * 合集目录分页。除了那两条纪律,这里的身份校验还多挡一件事:**目录已经被关掉时,迟到的
-     * 响应不能把它重新支起来。** 原先响应无条件写 `detail = detail.copy(...)`,用户点返回退出
-     * 目录后那一页回来,抽屉会自己弹回来。
-     */
-    fun loadMoreCollectionDetail(replace: Boolean = false) {
-        val detail = _state.value.collections.detail ?: return
-        if (detail.loading || detail.appending || !detail.hasMore) return
-        val firstPage = replace || detail.items.isEmpty()
-        val requestedCollection = detail.collection
-        val requestedPage = if (replace) 1 else detail.page
-        val requestedGeneration = collectionDetailGeneration
-        _state.update {
-            it.copy(
-                collections = it.collections.copy(
-                    detail = detail.copy(loading = firstPage, appending = !firstPage, error = null),
-                ),
-            )
-        }
-        viewModelScope.launch {
-            val result = repository.loadCollectionDetail(mid, requestedCollection, requestedPage)
-            _state.update { state ->
-                val current = state.collections.detail ?: return@update state
-                if (
-                    requestedGeneration != collectionDetailGeneration ||
-                    current.collection != requestedCollection ||
-                    current.page != requestedPage
-                ) {
-                    return@update state
-                }
-                when (result) {
-                    is BiliResult.Ok -> {
-                        val pageItems = result.value.items
-                        val merged = if (replace) {
-                            pageItems.distinctBy { it.bvid }
-                        } else {
-                            current.items.appendDistinctBy(pageItems) { v -> v.bvid }
-                        }
-                        state.copy(
-                            refreshing = false,
-                            collections = state.collections.copy(
-                                detail = current.copy(
-                                    items = merged,
-                                    page = if (pageItems.isEmpty()) current.page else requestedPage + 1,
-                                    total = result.value.total,
-                                    loading = false,
-                                    appending = false,
-                                    hasMore = pageItems.isNotEmpty() && merged.size < result.value.total,
-                                ),
-                            ),
-                        )
-                    }
-
-                    else -> state.copy(
-                        refreshing = false,
-                        collections = state.collections.copy(
-                            detail = current.copy(
-                                loading = false,
-                                appending = false,
-                                error = result.errorText(),
-                            ),
-                        ),
-                    )
-                }
-            }
-        }
-    }
-
     private fun loadProfile() {
         _state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
@@ -680,8 +567,6 @@ fun SpaceScreen(
     onLoadMoreDynamics: () -> Unit,
     onLoadMoreCollections: () -> Unit,
     onCollectionClick: (SpaceCollectionItem) -> Unit,
-    onCollectionDetailBack: () -> Unit,
-    onLoadMoreCollectionDetail: () -> Unit,
     onVideoClick: (SpaceVideoItem) -> Unit,
     onLiveClick: (Long) -> Unit,
     onToggleFollow: () -> Unit,
@@ -694,14 +579,6 @@ fun SpaceScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val detail = state.collections.detail
-    if (detail != null) {
-        CollectionDetailScreen(
-            detail, onCollectionDetailBack, onLoadMoreCollectionDetail, onVideoClick,
-            onRefresh, state.refreshing, modifier,
-        )
-        return
-    }
 
     // 空间内搜索是页内的次要动作,不是空间内容本身,所以展开态只是本页的 UI 状态,
     // 不进 ViewModel —— 离开页面就该忘掉,不需要记住"上次展开过"。
@@ -1191,46 +1068,6 @@ private fun CollectionRow(item: SpaceCollectionItem, onClick: () -> Unit, modifi
 private val CollectionCoverSize = 72.dp
 
 @Composable
-private fun CollectionDetailScreen(
-    detail: SpaceCollectionDetailState,
-    onBack: () -> Unit,
-    onLoadMore: () -> Unit,
-    onVideoClick: (SpaceVideoItem) -> Unit,
-    onRefresh: () -> Unit,
-    refreshing: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    Scaffold(
-        modifier = modifier,
-        topBar = { BilbyTopBar(title = detail.collection.name, onBack = onBack) },
-    ) { padding ->
-        AdaptiveContent(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            maxWidth = Breakpoints.ReadableWidth,
-        ) {
-            PullToRefreshBox(
-                isRefreshing = refreshing,
-                onRefresh = onRefresh,
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                VideoListTab(
-                    items = detail.items,
-                    appending = detail.appending,
-                    hasMore = detail.hasMore,
-                    loading = detail.loading,
-                    error = detail.error,
-                    emptyText = stringResource(R.string.space_empty_collection_detail),
-                    onLoadMore = onLoadMore,
-                    onVideoClick = onVideoClick,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-        }
-    }
-}
-
-
-@Composable
 private fun DynamicListTab(
     state: SpaceListTabState,
     onLoadMore: () -> Unit,
@@ -1437,8 +1274,9 @@ private fun DynamicImageGrid(images: List<String>) {
     }
 }
 
+/** 投稿 tab 与合集目录([CollectionScreen])共用的视频列表。 */
 @Composable
-private fun VideoListTab(
+internal fun VideoListTab(
     items: List<SpaceVideoItem>,
     appending: Boolean,
     hasMore: Boolean,

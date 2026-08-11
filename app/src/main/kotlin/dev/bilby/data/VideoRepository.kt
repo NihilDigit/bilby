@@ -45,6 +45,13 @@ data class VideoDetail(
     /** 单 P 视频这里也有一个元素;UI 判断要不要显示分 P 列表看 size > 1。 */
     val pages: List<VideoPart>,
     val seasonTitle: String,
+    /** 合集 id。用来打开这个合集的目录页,不属于合集时为 0。 */
+    val seasonId: Long,
+    /**
+     * 合集的归属 mid。**不等同于 [up] 的 mid** —— 联合投稿的合集挂在发起者名下,而这条视频的
+     * up 字段给的是本条的作者。目录接口按 mid + season_id 取,拿错了会取到空目录。
+     */
+    val seasonMid: Long,
     /** 合集分集,已跨 section 摊平。不属于合集时为空。 */
     val seasonEpisodes: List<SeasonEpisode>,
 )
@@ -306,6 +313,8 @@ class VideoRepository(private val client: BiliClient) {
             )
         },
         seasonTitle = ugcSeason?.title.orEmpty(),
+        seasonId = ugcSeason?.id ?: 0L,
+        seasonMid = ugcSeason?.mid ?: 0L,
         seasonEpisodes = ugcSeason?.flattenEpisodes().orEmpty(),
     )
 

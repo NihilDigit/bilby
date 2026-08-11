@@ -28,6 +28,7 @@ import dev.bilby.api.BiliResult
 import dev.bilby.data.LiveRepository
 import dev.bilby.data.PlayInfo
 import dev.bilby.data.QueueBuildResult
+import dev.bilby.data.QueueSource
 import dev.bilby.data.QueueSourceRepository
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SubtitleRepository
@@ -74,8 +75,10 @@ data class QueueState(
     val positionInQueue: Int = 0,
     val size: Int = 0,
     val shuffled: Boolean = false,
-    /** 队列的来源,如"合集《x》· 共 7 集"。 */
+    /** 队列的来源,如"直播回放""UP 主投稿"。见 [QueueBuildResult.sourceLabel]。 */
     val sourceLabel: String = "",
+    /** 来源的身份,非空时 [sourceLabel] 那一行可以点进目录。见 [QueueBuildResult.source]。 */
+    val source: QueueSource? = null,
     /**
      * 队列还在补全,现在这份队列只有正在播的这一条。**播放不等它**,所以这不是"正在加载"
      * ([AudioPlaybackUiState.loading] 说的是取流);它给队列面板用,免得那一格看起来像
@@ -171,6 +174,7 @@ class AudioPlaybackService : MediaSessionService() {
 
     private var queue = PlaybackQueue(emptyList())
     private var sourceLabel = ""
+    private var queueSource: QueueSource? = null
 
     /**
      * 正在播的直播间。**非空时播放器装的是直播流,与 [queue] 互斥** —— 直播是单条无限流,
@@ -350,6 +354,7 @@ class AudioPlaybackService : MediaSessionService() {
         live = next
         queue = PlaybackQueue(emptyList())
         sourceLabel = ""
+        queueSource = null
         queueEnriching = false
         queueIncomplete = false
         loadedBvid = null
@@ -441,6 +446,7 @@ class AudioPlaybackService : MediaSessionService() {
             )
         )
         sourceLabel = ""
+        queueSource = null
         openChain?.mark("tempQueue")
 
         playCurrent(resumePart = true)
@@ -486,6 +492,7 @@ class AudioPlaybackService : MediaSessionService() {
                 return@launch
             }
             sourceLabel = built.sourceLabel
+            queueSource = built.source
             queue.setShuffled(settings.playbackPrefs.first().shuffled)
             chain.count("items", queue.size.toLong())
             chain.end()
@@ -522,7 +529,7 @@ class AudioPlaybackService : MediaSessionService() {
                     durationSeconds = it.durationSeconds,
                 )
             },
-            sourceLabel = "已缓存 · 共 ${cached.size} 条",
+            sourceLabel = "已缓存",
         )
     }
 
@@ -874,6 +881,7 @@ class AudioPlaybackService : MediaSessionService() {
                 size = queue.size,
                 shuffled = queue.shuffled,
                 sourceLabel = sourceLabel,
+                source = queueSource,
                 enriching = queueEnriching,
                 incomplete = queueIncomplete,
             ),

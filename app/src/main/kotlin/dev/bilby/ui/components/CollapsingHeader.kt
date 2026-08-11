@@ -7,6 +7,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -25,8 +26,17 @@ import kotlin.math.roundToInt
  * **收起靠缩掉它占的高度,不是拿别的东西盖住它。** 盖住的话下面的 tab 栏会悬在一段空白上,
  * 列表顶部也会被一块看不见的东西挡着。
  */
+/**
+ * @param canCollapse 这一刻允许不允许**收起**。展开不受它管:两个方向本来就分在
+ *   [NestedScrollConnection] 的两个回调里(收起在 `onPreScroll`、展开在 `onPostScroll`),
+ *   所以"只许展开、不许收起"这种单向限制天然落在这一个开关上,不必再加一个。
+ *
+ *   **收不收由它决定,而不是由调用方挂不挂 [connection] 决定。** 播放页里这个判断会随
+ *   左右翻页变(见 VideoScreen 的 canCollapsePlayer),而按它增删 `Modifier.nestedScroll`
+ *   等于在手势进行中改修饰符链,正在拖的那一下会被取消,表现是左右滑动卡在两页中间。
+ */
 @Stable
-class CollapsingHeaderState {
+class CollapsingHeaderState(private val canCollapse: () -> Boolean = { true }) {
 
     /** 页头量出来的完整高度(px)。测量时回填。 */
     var heightPx by mutableFloatStateOf(0f)
@@ -47,7 +57,7 @@ class CollapsingHeaderState {
     val connection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
             val delta = available.y
-            if (delta >= 0f) return Offset.Zero
+            if (!canCollapse() || delta >= 0f) return Offset.Zero
             val next = (offsetPx + delta).coerceIn(-heightPx, 0f)
             val consumed = next - offsetPx
             offsetPx = next
@@ -82,8 +92,15 @@ class CollapsingHeaderState {
     internal val orientation = Orientation.Vertical
 }
 
+/**
+ * @param canCollapse 见 [CollapsingHeaderState]。**读的是最新一次组合传进来的那个 lambda**,
+ *   所以状态本身不必跟着重建 —— 重建会把已经收起的量清成 0。
+ */
 @Composable
-fun rememberCollapsingHeaderState(): CollapsingHeaderState = remember { CollapsingHeaderState() }
+fun rememberCollapsingHeaderState(canCollapse: () -> Boolean = { true }): CollapsingHeaderState {
+    val latest by rememberUpdatedState(canCollapse)
+    return remember { CollapsingHeaderState { latest() } }
+}
 
 /**
  * 把这个可组合项变成会随滚动收起的页头。

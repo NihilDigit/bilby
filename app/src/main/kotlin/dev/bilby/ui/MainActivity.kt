@@ -80,6 +80,7 @@ import dev.bilby.ui.comment.CommentViewModel
 import androidx.compose.material.icons.outlined.DeleteSweep
 import dev.bilby.data.FavFolder
 import dev.bilby.data.PlayerPrefs
+import dev.bilby.data.QueueSource
 import dev.bilby.offline.OfflineItem
 import dev.bilby.offline.OfflineStatus
 import dev.bilby.ui.fav.FavFolderScreen
@@ -101,6 +102,9 @@ import dev.bilby.ui.search.SearchChatViewModel
 import dev.bilby.ui.settings.SettingsScreen
 import dev.bilby.ui.settings.UpdateInstaller
 import dev.bilby.ui.settings.SettingsViewModel
+import dev.bilby.data.SpaceCollectionItem
+import dev.bilby.ui.space.CollectionScreen
+import dev.bilby.ui.space.CollectionViewModel
 import dev.bilby.ui.space.SpaceScreen
 import dev.bilby.ui.space.SpaceViewModel
 import dev.bilby.ui.theme.Breakpoints
@@ -387,6 +391,9 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                     startListening = key.listening,
                     cid = key.cid,
                     onUpClick = { backStack.add(Space(it)) },
+                    onOpenQueueSource = {
+                        backStack.add(CollectionContents(it.mid, it.id, it.isSeason, it.name))
+                    },
                     onBack = { backStack.removeLastOrNull() },
                     // 切集是**重组,不是压栈**:换的是这一页在放哪一条,不是又进了一层。
                     // 压栈的话看五集就攒五层,返回要一集一集退回去,而合集本来是一个有限集合、
@@ -451,6 +458,19 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                         onVideoClick = { backStack.add(Video(it)) },
                         onListenUp = { backStack.add(Video(it, listening = true)) },
                         onLiveClick = { backStack.add(LiveRoom(it)) },
+                        onCollectionClick = {
+                            backStack.add(CollectionContents(key.mid, it.id, it.isSeason, it.name))
+                        },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
+            }
+            entry<CollectionContents> { key ->
+                CutoutSafe {
+                    CollectionRoute(
+                        container = container,
+                        key = key,
+                        onVideoClick = { backStack.add(Video(it)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -1093,6 +1113,7 @@ private fun SpaceRoute(
     onVideoClick: (String) -> Unit,
     onListenUp: (String) -> Unit,
     onLiveClick: (Long) -> Unit,
+    onCollectionClick: (SpaceCollectionItem) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: SpaceViewModel = viewModel(
@@ -1109,9 +1130,7 @@ private fun SpaceRoute(
         onLoadMoreArchives = vm::loadMoreArchives,
         onLoadMoreDynamics = vm::loadMoreDynamics,
         onLoadMoreCollections = vm::loadMoreCollections,
-        onCollectionClick = vm::openCollection,
-        onCollectionDetailBack = vm::closeCollectionDetail,
-        onLoadMoreCollectionDetail = vm::loadMoreCollectionDetail,
+        onCollectionClick = onCollectionClick,
         onVideoClick = { onVideoClick(it.bvid) },
         onLiveClick = onLiveClick,
         onToggleFollow = vm::toggleFollow,
@@ -1127,6 +1146,36 @@ private fun SpaceRoute(
     )
 }
 
+/**
+ * 合集/系列目录。VM 的 key 带上合集身份而不是只带 mid:同一个 UP 的两个合集是两份目录,
+ * 共用一个 VM 的话第二个会读到第一个的列表。
+ */
+@Composable
+private fun CollectionRoute(
+    container: AppContainer,
+    key: CollectionContents,
+    onVideoClick: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val vm: CollectionViewModel = viewModel(
+        key = "collection-${key.mid}-${key.isSeason}-${key.id}",
+        factory = viewModelFactory {
+            initializer {
+                CollectionViewModel(key.mid, key.id, key.isSeason, container.spaceRepository)
+            }
+        },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    CollectionScreen(
+        title = key.name,
+        state = state,
+        onBack = onBack,
+        onLoadMore = { vm.loadMore() },
+        onRefresh = vm::refresh,
+        onVideoClick = { onVideoClick(it.bvid) },
+    )
+}
+
 @Composable
 private fun VideoRoute(
     container: AppContainer,
@@ -1135,6 +1184,7 @@ private fun VideoRoute(
     /** 导航指名的那一 P(只有缓存列表会给)。0 = 不指名,由详情/观看记录决定。 */
     cid: Long = 0,
     onUpClick: (Long) -> Unit,
+    onOpenQueueSource: (QueueSource) -> Unit,
     onOpenVideo: (String) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -1212,6 +1262,7 @@ private fun VideoRoute(
         listening = listening,
         onListeningChange = { listening = it },
         onUpClick = onUpClick,
+        onOpenQueueSource = onOpenQueueSource,
         onOpenVideo = onOpenVideo,
         onBack = onBack,
     )
@@ -1225,6 +1276,7 @@ private fun VideoPane(
     listening: Boolean,
     onListeningChange: (Boolean) -> Unit,
     onUpClick: (Long) -> Unit,
+    onOpenQueueSource: (QueueSource) -> Unit,
     onOpenVideo: (String) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -1321,6 +1373,7 @@ private fun VideoPane(
         cachedBvids = cachedBvids,
         onCacheSelection = vm::cacheSelection,
         onUpClick = onUpClick,
+        onOpenQueueSource = onOpenQueueSource,
         followState = followState,
         onToggleFollow = vm::toggleFollow,
         upCard = upCard,

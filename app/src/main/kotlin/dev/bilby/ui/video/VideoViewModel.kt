@@ -746,6 +746,8 @@ class VideoViewModel(
                     // 详情一到就会被真实值换掉。
                     maxCoins = VideoActionRepository.MAX_COIN_PER_VIDEO,
                     seasonTitle = "",
+                    seasonId = 0L,
+                    seasonMid = 0L,
                     seasonEpisodes = emptyList(),
                 ),
             )
