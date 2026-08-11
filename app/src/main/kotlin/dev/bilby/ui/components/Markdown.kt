@@ -40,8 +40,17 @@ fun MarkdownText(
     text: String,
     modifier: Modifier = Modifier,
     style: TextStyle = MaterialTheme.typography.bodyMedium,
+    /**
+     * 遇到标题内容属于这一组的,这一节连同它后面的全部不画。
+     *
+     * 给更新日志用:release 正文是手写的日志加上发布流程拼在后面的固定几节(见
+     * `.github/workflows/release.yml`),而那几节讲的是下载页上怎么挑 ABI 包、怎么核校验和,
+     * 应用内更新一个字都用不上。**判断放在这里而不是取回来时裁字符串**:日志本身没有问题,
+     * 是这块界面只该画它的一部分,而"哪一部分"按解析出来的标题分节,不按字符位置。
+     */
+    stopAtHeadings: Set<String> = emptySet(),
 ) {
-    val blocks = remember(text) { parseMarkdown(text) }
+    val blocks = remember(text, stopAtHeadings) { parseMarkdown(text).upTo(stopAtHeadings) }
     val codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest
     Column(
         modifier = modifier,
@@ -119,6 +128,17 @@ internal sealed interface MdBlock {
 private val HeadingLine = Regex("""^(#{1,3})\s+(.*)$""")
 private val BulletLine = Regex("""^\s*[-*+]\s+(.*)$""")
 private val OrderedLine = Regex("""^\s*(\d{1,3})[.)]\s+(.*)$""")
+
+/**
+ * 截到第一个标题内容落在 [stopAtHeadings] 里的地方,那一节连同后面的全部丢掉。
+ * 空集合表示不截。见 [MarkdownText] 的同名参数。
+ */
+internal fun List<MdBlock>.upTo(stopAtHeadings: Set<String>): List<MdBlock> {
+    if (stopAtHeadings.isEmpty()) return this
+    return takeWhile { block ->
+        block !is MdBlock.Heading || block.spans.joinToString("") { it.text } !in stopAtHeadings
+    }
+}
 
 /**
  * **一行一块,不合并相邻行。** 标准 markdown 会把连续的非空行接成一段,这里不:模型换行

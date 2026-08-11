@@ -174,7 +174,10 @@ fun StartupUpdateDialog(
                         .heightIn(max = NotesMaxHeight)
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    MarkdownText(text = info.notes.ifBlank { stringResource(R.string.update_dialog_no_notes) })
+                    MarkdownText(
+                        text = info.notes.ifBlank { stringResource(R.string.update_dialog_no_notes) },
+                        stopAtHeadings = DownloadPageSections,
+                    )
                 }
                 when (state) {
                     is StartupUpdateState.Downloading -> LinearProgressIndicator(
@@ -222,6 +225,14 @@ fun StartupUpdateDialog(
 
 /** 更新说明最多占这么高,再长就在里面滚。再高按钮会被顶出屏幕。 */
 private val NotesMaxHeight = 380.dp
+
+/**
+ * release 正文里属于下载页的几节,应用内不画(见 [MarkdownText] 的 stopAtHeadings)。
+ *
+ * 与 `.github/workflows/release.yml` 里模板拼上去的标题逐字对应。**改那边要改这里** ——
+ * 对不上的后果是这两节又出现在更新对话框里,不会有任何报错。
+ */
+private val DownloadPageSections = setOf("安装", "校验")
 
 /** 弹窗占屏宽的比例。两侧各留一点,让人看得出底下还有东西。 */
 private const val DialogWidthFraction = 0.92f
