@@ -121,6 +121,9 @@ class ProfileViewModel(
 
     private var lastRefreshedAtMillis = 0L
 
+    /** 手里这份稍后再看预览取自哪一版,见 [ToViewRepository.revision] 与 [refreshIfStale]。 */
+    private var loadedToViewRevision = -1
+
     init {
         refresh()
         // 缓存列表是本地状态,跟着下载器走就行 —— 它不参与上面那四块的"重进就重拉"。
@@ -143,10 +146,17 @@ class ProfileViewModel(
      * 每次都打四个请求既没有新内容可显示,又让那四块各闪一次骨架。
      *
      * 用 elapsedRealtime 而不是墙钟:后者会被对时和时区调整拨动,拨回去就再也刷不了。
+     *
+     * 去抖窗口内仍要单独看稍后再看:它是唯一一块用户能在子页面里直接改的内容,删空了退回来
+     * 一般只花几秒,正好落在窗口里,靠时间猜就会继续显示已经删掉的条目。这里比的是仓库记的
+     * 版本号,是"确实被改过"而不是"可能过期了"。
      */
     fun refreshIfStale() {
-        if (SystemClock.elapsedRealtime() - lastRefreshedAtMillis < RefreshDebounceMillis) return
-        refresh()
+        if (SystemClock.elapsedRealtime() - lastRefreshedAtMillis >= RefreshDebounceMillis) {
+            refresh()
+            return
+        }
+        if (toViewRepository.revision.value != loadedToViewRevision) retryToView()
     }
 
     fun retryAccount() {
@@ -183,11 +193,16 @@ class ProfileViewModel(
     }
 
     fun retryToView() {
+        // 在发请求之前取版本号:请求飞行途中又发生的写入不该被算进这次结果里,记晚了会漏刷。
+        val requestedRevision = toViewRepository.revision.value
         _state.update { it.copy(toView = it.toView.copy(loading = true, error = null)) }
         viewModelScope.launch {
             when (val result = toViewRepository.loadList()) {
-                is BiliResult.Ok -> _state.update {
-                    it.copy(toView = it.toView.copy(loading = false, items = result.value.items.take(PreviewCount)))
+                is BiliResult.Ok -> {
+                    loadedToViewRevision = requestedRevision
+                    _state.update {
+                        it.copy(toView = it.toView.copy(loading = false, items = result.value.items.take(PreviewCount)))
+                    }
                 }
 
                 else -> _state.update {
@@ -552,7 +567,10 @@ private fun <T> PreviewSection(
             }
         }
         when {
-            state.loading -> InlineSectionProgress()
+            // 手里已经有内容时,重取期间原样留着,不退回转圈:重进这一页就是最常见的重取时机,
+            // 换成转圈的话每次进来都要先看着三节各空一下。等新的一份回来直接换掉即可,
+            // 概览只有三条,替换是一次性的,不存在"换到一半"的中间态。
+            state.loading && state.items.isEmpty() -> InlineSectionProgress()
             state.error != null -> InlineSectionError(state.error, onRetry)
             state.items.isEmpty() -> InlineSectionMessage(emptyText)
             else -> Column { state.items.forEach { itemRow(it) } }
@@ -573,7 +591,8 @@ private fun FavFoldersSection(
             modifier = Modifier.padding(horizontal = Spacing.Comfortable),
         )
         when {
-            state.loading -> InlineSectionProgress()
+            // 同 PreviewSection:重取期间留着旧的那几行。
+            state.loading && state.items.isEmpty() -> InlineSectionProgress()
             state.error != null -> InlineSectionError(state.error, onRetry)
             state.items.isEmpty() -> InlineSectionMessage(stringResource(R.string.profile_favorites_empty))
             else -> Column {
