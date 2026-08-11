@@ -740,6 +740,11 @@ class VideoViewModel(
                         like = cached.stat.like,
                     ),
                     pages = emptyList(),
+                    // 缓存索引里没有 copyright,这里只能退回自制稿的 2 枚。给多了的代价是
+                    // 转载稿上多列一个选项、投出去被服务端拒(面板里会说明);给少了的代价是
+                    // 自制稿的第二枚永远投不出去。何况这条路径是"详情拉不到"的兜底,
+                    // 详情一到就会被真实值换掉。
+                    maxCoins = VideoActionRepository.MAX_COIN_PER_VIDEO,
                     seasonTitle = "",
                     seasonEpisodes = emptyList(),
                 ),

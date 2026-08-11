@@ -33,6 +33,15 @@ data class VideoDetail(
     val up: VideoUp,
     val staff: List<VideoStaff>,
     val stat: VideoStat,
+    /**
+     * 这条视频最多收几枚币。
+     *
+     * **转载稿只收 1 枚**,自制稿收 2 枚。判据照 PiliPlus 的
+     * `introduction/ugc/widgets/triple_mixin.dart`:`copyright != 2` 为自制,
+     * `reachCoinLimit` 对转载稿的上限就是 1。投满之后再投服务端只会拒绝,而拒绝在界面上
+     * 只表现为按钮没反应。
+     */
+    val maxCoins: Int,
     /** 单 P 视频这里也有一个元素;UI 判断要不要显示分 P 列表看 size > 1。 */
     val pages: List<VideoPart>,
     val seasonTitle: String,
@@ -286,6 +295,7 @@ class VideoRepository(private val client: BiliClient) {
             share = stat?.share ?: 0,
             like = stat?.like ?: 0,
         ),
+        maxCoins = if (copyright == COPYRIGHT_REPRINT) 1 else VideoActionRepository.MAX_COIN_PER_VIDEO,
         pages = pages.mapIndexed { i, p ->
             VideoPart(
                 cid = p.cid,
@@ -349,6 +359,9 @@ class VideoRepository(private val client: BiliClient) {
     }
 
     private companion object {
+        /** `copyright` 的转载取值。1 是自制,接口不给时按自制处理(多收的那一枚由服务端拒)。 */
+        const val COPYRIGHT_REPRINT = 2
+
         const val VIEW_URL = "${BiliConstants.WEB_HOST}/x/web-interface/view"
         const val CARD_URL = "${BiliConstants.WEB_HOST}/x/web-interface/card"
         const val PLAY_URL = "${BiliConstants.WEB_HOST}/x/player/wbi/playurl"

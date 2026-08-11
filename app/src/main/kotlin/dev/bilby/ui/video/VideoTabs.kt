@@ -89,7 +89,6 @@ import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
 import dev.bilby.data.MemberCard
-import dev.bilby.data.VideoActionRepository.Companion.MAX_COIN_PER_VIDEO
 import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoStat
@@ -358,6 +357,7 @@ private fun IntroTab(
                     // 持续上报会让 sheet 的高度随手指变化,而 sheet 本来就不该动。
                     modifier = Modifier.onGloballyPositioned { onActionsTop(it.positionInWindow().y.toInt()) },
                     stat = detail.stat,
+                    maxCoins = detail.maxCoins,
                     relation = relation,
                     favFolders = favFolders,
                     addedToView = addedToView,
@@ -615,6 +615,8 @@ private fun TitleBlock(detail: VideoDetail, expanded: Boolean, onToggle: () -> U
 @Composable
 private fun ActionButtonsRow(
     stat: VideoStat,
+    /** 这条视频一共收几枚币,见 [dev.bilby.data.VideoDetail.maxCoins]。 */
+    maxCoins: Int,
     relation: VideoRelation?,
     favFolders: List<FavFolder>,
     addedToView: Boolean,
@@ -704,6 +706,7 @@ private fun ActionButtonsRow(
 
     if (showCoinDialog) {
         CoinDialog(
+            maxCoins = maxCoins,
             alreadyCoined = relation?.coined ?: 0,
             attempt = coinAttempt,
             onDismiss = {
@@ -786,9 +789,14 @@ private fun ActionItem(
 
 private val ActionIconSize = 20.dp
 
-/** 一次最多投 2 枚(VideoActionRepository.coin),已投满时按钮禁用并报告已投数量。 */
+/**
+ * 投币面板。上限是**这条视频一共几枚**而不是"这一次几枚":自制稿两枚,转载稿一枚
+ * (见 [dev.bilby.data.VideoDetail.maxCoins]),已投的数量还要从里面扣掉。投满时按钮禁用并
+ * 报告已投数量。
+ */
 @Composable
 private fun CoinDialog(
+    maxCoins: Int,
     alreadyCoined: Int,
     attempt: CoinAttempt,
     onDismiss: () -> Unit,
@@ -796,12 +804,13 @@ private fun CoinDialog(
 ) {
     var selectedCount by rememberSaveable { mutableIntStateOf(1) }
     var alsoLike by rememberSaveable { mutableStateOf(false) }
-    val maxedOut = alreadyCoined >= MAX_COIN_PER_VIDEO
-    // 上限是"这条视频一共两枚",不是"这一次两枚"。已投 1 枚时还列出 2,选中它必然换来
-    // 一次服务端拒绝,而拒绝在界面上什么都不显示,看起来就是按钮没反应。
-    val selectableCounts = (1..MAX_COIN_PER_VIDEO - alreadyCoined).toList()
-    // rememberSaveable 存的可能是上一条视频选的 2 枚,而这一条已经投过 1 枚了。
-    val effectiveCount = selectedCount.coerceIn(1, (MAX_COIN_PER_VIDEO - alreadyCoined).coerceAtLeast(1))
+    val remaining = maxCoins - alreadyCoined
+    val maxedOut = remaining <= 0
+    // 已投 1 枚时还列出 2,选中它必然换来一次服务端拒绝,而拒绝在界面上什么都不显示,
+    // 看起来就是按钮没反应。转载稿同理:那里从一开始就只有 1 这一个选项。
+    val selectableCounts = (1..remaining).toList()
+    // rememberSaveable 存的可能是上一条视频选的 2 枚,而这一条是转载稿或者已经投过 1 枚了。
+    val effectiveCount = selectedCount.coerceIn(1, remaining.coerceAtLeast(1))
 
     AlertDialog(
         onDismissRequest = onDismiss,

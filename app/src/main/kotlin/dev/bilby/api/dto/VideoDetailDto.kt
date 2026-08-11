@@ -20,6 +20,8 @@ data class VideoDetailDto(
     val cid: Long = 0,
     /** 分 P 数量。 */
     val videos: Int = 1,
+    /** 1 = 自制,2 = 转载。转载稿一共只收 1 枚币,见 VideoDetail.maxCoins。 */
+    val copyright: Int = 0,
     val tid: Int = 0,
     val tname: String = "",
     val title: String = "",
