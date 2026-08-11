@@ -23,6 +23,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
@@ -321,82 +323,87 @@ private fun IntroTab(
     // 这一栏内容区的底边(窗口坐标,px)。队列列表拿它算自己能长多高 —— 见 QueueContent。
     var contentBottomPx by remember { mutableIntStateOf(0) }
 
-    LazyColumn(
+    /*
+     * **可滚动的 Column,不是 LazyColumn。** 这一页只有一个 item,懒加载没有任何收益,
+     * 而队列那一块要知道自己被滚走了多少才算得出高度([QueueContent]),
+     * `ScrollState.value` 给得出这个数,LazyColumn 的 `firstVisibleItemScrollOffset` 要靠
+     * "只有一个 item"这个前提才等价。
+     */
+    val scrollState = rememberScrollState()
+
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .onGloballyPositioned {
                 contentBottomPx = (it.positionInWindow().y + it.size.height).toInt()
-            },
-    ) {
-        item {
-            Column(
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                TitleBlock(
-                    detail = detail,
-                    expanded = infoExpanded,
-                    onToggle = { infoExpanded = !infoExpanded },
-                )
-
-                UpRow(
-                    mid = detail.up.mid,
-                    faceUrl = detail.up.faceUrl,
-                    name = detail.up.name,
-                    upCard = upCard,
-                    onUpClick = onUpClick,
-                    staff = detail.staff,
-                    staffFollowed = staffFollowed,
-                    onFollowStaff = onFollowStaff,
-                    followState = followState,
-                    onToggleFollow = onToggleFollow,
-                )
-
-                ActionButtonsRow(
-                    // 位置**只上报一次**(见 VideoScreen 那侧的取值):这一行跟着简介页滚动,
-                    // 持续上报会让 sheet 的高度随手指变化,而 sheet 本来就不该动。
-                    modifier = Modifier.onGloballyPositioned { onActionsTop(it.positionInWindow().y.toInt()) },
-                    stat = detail.stat,
-                    maxCoins = detail.maxCoins,
-                    relation = relation,
-                    favFolders = favFolders,
-                    addedToView = addedToView,
-                    onLike = onLike,
-                    onAddToView = onAddToView,
-                    onCoin = onCoin,
-                    coinAttempt = coinAttempt,
-                    onCoinDialogClosed = onCoinDialogClosed,
-                    onOpenFavPicker = onOpenFavPicker,
-                    onFavConfirm = onFavConfirm,
-                    onListen = onListen,
-                )
-
-                if (detail.pages.size > 1) {
-                    PartRow(
-                        labels = detail.pages.map { it.index to it.title },
-                        isCurrent = { index -> detail.pages.getOrNull(index)?.cid == currentCid },
-                        onClick = { index -> detail.pages[index].cid.let(onPlayPart) },
-                    )
-                }
-
-                // 合集的分集 chip 行不再单独显示:内容已经在下面的播放队列列表里,
-                // 重复一遍没有信息量(合集场景下队列来源就是这个合集,
-                // 见 QueueSourceRepository.fromSeason)。
-
-                // 找相关的结果不在这里,在页面底部的 sheet 里(见 VideoScreen):
-                // 它是对当前视频问的一句话,不该把简介页顶下去。
-                QueueSection(
-                    queue = queue,
-                    contentBottomPx = contentBottomPx,
-                    onPlayQueueItem = onPlayQueueItem,
-                    onToggleShuffle = onToggleShuffle,
-                    onFindRelated = onFindRelated,
-                    onCache = onCache,
-                    onRetryQueue = onRetryQueue,
-                    modifier = Modifier.padding(top = Spacing.Hair),
-                )
             }
+            .verticalScroll(scrollState)
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    ) {
+        TitleBlock(
+            detail = detail,
+            expanded = infoExpanded,
+            onToggle = { infoExpanded = !infoExpanded },
+        )
+
+        UpRow(
+            mid = detail.up.mid,
+            faceUrl = detail.up.faceUrl,
+            name = detail.up.name,
+            upCard = upCard,
+            onUpClick = onUpClick,
+            staff = detail.staff,
+            staffFollowed = staffFollowed,
+            onFollowStaff = onFollowStaff,
+            followState = followState,
+            onToggleFollow = onToggleFollow,
+        )
+
+        ActionButtonsRow(
+            // 位置**只上报一次**(见 VideoScreen 那侧的取值):这一行跟着简介页滚动,
+            // 持续上报会让 sheet 的高度随手指变化,而 sheet 本来就不该动。
+            modifier = Modifier.onGloballyPositioned { onActionsTop(it.positionInWindow().y.toInt()) },
+            stat = detail.stat,
+            maxCoins = detail.maxCoins,
+            relation = relation,
+            favFolders = favFolders,
+            addedToView = addedToView,
+            onLike = onLike,
+            onAddToView = onAddToView,
+            onCoin = onCoin,
+            coinAttempt = coinAttempt,
+            onCoinDialogClosed = onCoinDialogClosed,
+            onOpenFavPicker = onOpenFavPicker,
+            onFavConfirm = onFavConfirm,
+            onListen = onListen,
+        )
+
+        if (detail.pages.size > 1) {
+            PartRow(
+                labels = detail.pages.map { it.index to it.title },
+                isCurrent = { index -> detail.pages.getOrNull(index)?.cid == currentCid },
+                onClick = { index -> detail.pages[index].cid.let(onPlayPart) },
+            )
         }
+
+        // 合集的分集 chip 行不再单独显示:内容已经在下面的播放队列列表里,
+        // 重复一遍没有信息量(合集场景下队列来源就是这个合集,
+        // 见 QueueSourceRepository.fromSeason)。
+
+        // 找相关的结果不在这里,在页面底部的 sheet 里(见 VideoScreen):
+        // 它是对当前视频问的一句话,不该把简介页顶下去。
+        QueueSection(
+            queue = queue,
+            contentBottomPx = contentBottomPx,
+            scrolledPx = scrollState.value,
+            onPlayQueueItem = onPlayQueueItem,
+            onToggleShuffle = onToggleShuffle,
+            onFindRelated = onFindRelated,
+            onCache = onCache,
+            onRetryQueue = onRetryQueue,
+            modifier = Modifier.padding(top = Spacing.Hair),
+        )
     }
 }
 
@@ -1075,6 +1082,8 @@ private fun QueueSection(
     queue: QueueUiState,
     /** 简介栏内容底边在窗口坐标里的 y(px)。队列列表靠它算自己该有多高,见 [QueueContent]。 */
     contentBottomPx: Int,
+    /** 简介栏已经滚走多少(px)。同上,见 [QueueContent]。 */
+    scrolledPx: Int,
     onPlayQueueItem: (String) -> Unit,
     onToggleShuffle: () -> Unit,
     onFindRelated: () -> Unit,
@@ -1092,6 +1101,7 @@ private fun QueueSection(
         QueueContent(
             queue = queue,
             contentBottomPx = contentBottomPx,
+            scrolledPx = scrolledPx,
             onPlayQueueItem = onPlayQueueItem,
             onToggleShuffle = onToggleShuffle,
             onFindRelated = onFindRelated,
@@ -1105,6 +1115,7 @@ private fun QueueSection(
 private fun QueueContent(
     queue: QueueUiState,
     contentBottomPx: Int,
+    scrolledPx: Int,
     onPlayQueueItem: (String) -> Unit,
     onToggleShuffle: () -> Unit,
     onFindRelated: () -> Unit,
@@ -1190,15 +1201,20 @@ private fun QueueContent(
             // 有没有分 P 都会改变上面占掉的高度,于是队列底下常年吊着一截空白 —— 竖屏画面
             // 铺到状态栏底下之后又多出一条,那截空白正是这么来的。
             //
-            // 量的是这份列表自己的顶边到窗口内容底边的距离,**只量第一次**:这一块跟着简介页
-            // 滚动,持续跟随的话手指一动列表就跟着长高。够不到下限时(上面内容太长)退回下限,
+            // 量的是这份列表自己的顶边到窗口内容底边的距离。位置**加回已经滚走的那一段**,
+            // 得到的是"页面没滚动时这份列表的顶边在哪儿",这个数与手指无关 —— 直接用窗口
+            // 坐标的话手指一动列表就跟着长高。够不到下限时(上面内容太长)退回下限,
             // 由简介页整体滚动兜住。
-            var listTopPx by remember(queue.items.size) { mutableIntStateOf(0) }
+            //
+            // 原先这个位置**只量第一次**,那是为了躲开跟随手指的问题,代价是简介展开之后
+            // 高度再也不重算:展开时列表被挤短,收起来也回不去。
+            var listTopPx by remember { mutableIntStateOf(0) }
+            val restingTopPx = listTopPx + scrolledPx
             val density = LocalDensity.current
-            val queueHeight = if (listTopPx > 0 && contentBottomPx > listTopPx) {
+            val queueHeight = if (listTopPx > 0 && contentBottomPx > restingTopPx) {
                 // 减掉列表**底下还剩的两层内边距**:卡片自己的(Tight)和简介那一列的(Cozy)。
                 // 只减一层的话整页会比一屏高出剩下那一层,表现是默认状态就能上下滑动一点点。
-                (with(density) { (contentBottomPx - listTopPx).toDp() } - BelowQueueInsets)
+                (with(density) { (contentBottomPx - restingTopPx).toDp() } - BelowQueueInsets)
                     .coerceAtLeast(Dimens.EmbeddedQueueMinHeight)
             } else {
                 Dimens.EmbeddedQueueMinHeight
@@ -1207,9 +1223,7 @@ private fun QueueContent(
                 state = listState,
                 modifier = Modifier
                     .height(queueHeight)
-                    .onGloballyPositioned {
-                        if (listTopPx == 0) listTopPx = it.positionInWindow().y.toInt()
-                    },
+                    .onGloballyPositioned { listTopPx = it.positionInWindow().y.toInt() },
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 items(queue.items, key = { it.bvid }) { item ->
