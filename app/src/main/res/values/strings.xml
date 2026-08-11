@@ -2,6 +2,9 @@
     <!-- 产品名,任何语言下都一样,不进 values-en。 -->
     <string name="app_name" translatable="false">Bilby</string>
 
+    <!-- 导航。 -->
+    <string name="nav_already_here">已在当前页面</string>
+
     <!-- 通用动作。同一个动词全 app 一份,别在各页面各写各的。 -->
     <string name="action_back">返回</string>
     <string name="action_cancel">取消</string>
@@ -49,14 +52,10 @@
 
     <!-- 动态 -->
     <string name="feed_empty">关注的 UP 主还没有新投稿</string>
+    <string name="feed_special_ups">特别关注</string>
+    <!-- 没划过特别关注时那一排退回 B 站的「最常访问」,标题跟着换 -->
     <string name="feed_frequent_ups">最常访问</string>
     <string name="feed_item_actions">动态操作</string>
-    <string name="dynamic_type_draw">图文动态</string>
-    <string name="dynamic_type_article">专栏动态</string>
-    <string name="dynamic_type_word">文字动态</string>
-    <string name="dynamic_type_forward">转发动态</string>
-    <string name="dynamic_type_live">直播动态</string>
-    <string name="dynamic_type_other">动态</string>
     <string name="feed_exclude_up">不再显示 %1$s</string>
     <string name="feed_read_marker">以上是新内容</string>
 
@@ -108,6 +107,7 @@
     <string name="comment_sort_hot">最热</string>
     <string name="comment_sort_time">最新</string>
     <string name="comment_tag_up">UP 主</string>
+    <string name="comment_open_space">%1$s 的个人空间</string>
     <string name="comment_tag_pinned">置顶</string>
     <string name="comment_picture">评论配图</string>
     <string name="comment_like">点赞</string>
@@ -137,7 +137,7 @@
     <string name="space_search_hint">在这个空间内搜索</string>
     <string name="space_empty_archives">这位 UP 主还没有投稿</string>
     <string name="space_empty_archives_search">没有匹配的投稿</string>
-    <string name="space_empty_dynamics">这位 UP 主还没有视频动态</string>
+    <string name="space_empty_dynamics">这位 UP 主还没有动态</string>
     <string name="space_empty_collections">这位 UP 主没有合集</string>
     <string name="space_empty_collection_detail">这个合集是空的</string>
     <string name="space_collection_season">合集</string>
@@ -151,6 +151,8 @@
     <string name="video_tab_comment_count">评论 %1$s</string>
     <string name="video_intro_expand">展开简介</string>
     <string name="video_intro_collapse">收起简介</string>
+    <string name="video_cloud_resume">别处已看到 %1$s</string>
+    <string name="video_cloud_resume_jump">跳转</string>
     <string name="video_action_like">点赞</string>
     <string name="video_action_unlike">取消点赞</string>
     <string name="video_action_coin">投币</string>
@@ -349,6 +351,11 @@
     <string name="feed_open_followings">关注列表</string>
     <string name="followings_title">关注列表</string>
     <string name="followings_empty">还没有关注任何人</string>
+    <string name="followings_search_hint">在关注里搜索</string>
+    <string name="followings_search_empty">没有匹配的关注</string>
+    <string name="followings_all">全部关注</string>
+    <string name="followings_order_frequent">最常访问</string>
+    <string name="followings_order_recent">最近关注</string>
     <string name="fav_folder_count">%1$d 个视频</string>
     <string name="fav_empty">这个收藏夹是空的</string>
     <string name="fav_invalid_video">稿件已失效</string>
@@ -380,6 +387,8 @@
     <string name="live_quality_smooth">流畅</string>
     <string name="settings_fast_forward_speed">长按加速</string>
     <string name="settings_fast_forward_speed_subtitle">长按画面期间的临时倍速,松手后恢复</string>
+    <string name="settings_auto_next">自动播放下一条</string>
+    <string name="settings_auto_next_subtitle">一条播完后接着放队列里的下一条。关闭后播完即停,手动切换不受影响</string>
     <string name="player_seek_release_to_cancel">松手取消进退</string>
     <string name="action_share">分享</string>
     <string name="sponsor_sponsor_desc">品牌方投放的口播或贴片</string>
@@ -405,4 +414,27 @@
     <string name="feed_live_now_title">正在直播</string>
     <string name="video_action_listen">听视频</string>
     <string name="offline_count">%1$d 个视频</string>
+    <string name="article_title">专栏</string>
+    <string name="article_open_in_browser">用浏览器打开</string>
+    <string name="article_card_video">视频</string>
+    <string name="article_card_live">直播</string>
+    <string name="article_card_article">专栏</string>
+    <string name="article_card_music">音频</string>
+    <string name="article_card_common">内容</string>
+    <string name="article_card_gone">内容已失效</string>
+    <string name="article_end">全文完</string>
+    <string name="dynamic_type_video">投稿视频</string>
+    <string name="dynamic_type_common">活动</string>
+    <string name="dynamic_live_on">直播中</string>
+    <string name="dynamic_live_off">直播已结束</string>
+    <string name="dynamic_vote">投票</string>
+    <string name="dynamic_vote_joined">%1$s 人参与</string>
+    <string name="dynamic_reserve">预约</string>
+    <string name="dynamic_article_open">阅读全文</string>
+    <string name="dynamic_text_expand">展开</string>
+    <string name="dynamic_reserve_calendar">加入日历</string>
+    <string name="dynamic_reserve_calendar_note">%1$s\n%2$s</string>
+    <string name="dynamic_other_title">关注动态</string>
+    <string name="dynamic_other_entry">关注动态</string>
+    <string name="dynamic_other_empty">关注的人最近没有发过视频以外的动态</string>
 </resources>

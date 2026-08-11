@@ -10,10 +10,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
@@ -31,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -54,7 +54,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
@@ -62,7 +61,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import dev.bilby.BiliLog
 import dev.bilby.R
-import dev.bilby.ui.dynamicTypeLabel
+import dev.bilby.ui.dynamic.DynamicAction
+import dev.bilby.ui.dynamic.DynamicCardView
 import dev.bilby.ui.appendDistinctBy
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.ShareLink
@@ -76,18 +76,19 @@ import dev.bilby.data.SpaceProfile
 import dev.bilby.data.SpaceRepository
 import dev.bilby.data.SpaceDynamicItem
 import dev.bilby.data.SpaceVideoItem
+import dev.bilby.data.model.DynamicAdditional
+import dev.bilby.data.model.DynamicCard
 import dev.bilby.ui.components.FollowButton
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.LivePulse
 import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SortRow
-import dev.bilby.ui.components.BiliAsyncImage
-import dev.bilby.ui.components.ImageViewer
 import dev.bilby.ui.components.SquareCover
 import dev.bilby.ui.components.collapsingHeader
 import dev.bilby.ui.components.rememberCollapsingHeaderState
@@ -101,6 +102,7 @@ import dev.bilby.ui.theme.Spacing
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -193,7 +195,7 @@ class SpaceViewModel(
     /**
      * 关注/取关。乐观更新、不重拉,与播放页同一套规矩。
      *
-     * 关注态存在 profile 里(由 [loadFollowState] 填),这里改的也是那一份,
+     * 关注态存在 profile 里(由 [loadProfile] 填),这里改的也是那一份,
      * 不额外维护第二处状态 —— 两份状态迟早对不上。
      */
     fun toggleFollow() {
@@ -415,20 +417,30 @@ class SpaceViewModel(
                 val dynamics = state.dynamics
                 if (requestedGeneration != dynamicsGeneration || dynamics.nextOffset != requestedOffset) return@update state
                 when (result) {
-                    is BiliResult.Ok -> state.copy(
-                        refreshing = false,
-                        dynamics = dynamics.copy(
-                            items = if (replace) {
-                                result.value.items.distinctBy { it.key }
-                            } else {
-                                dynamics.items.appendDistinctBy(result.value.items) { d -> d.key }
-                            },
-                            nextOffset = result.value.nextOffset,
-                            loading = false,
-                            appending = false,
-                            hasMore = result.value.hasMore && result.value.nextOffset != null,
-                        ),
-                    )
+                    is BiliResult.Ok -> {
+                        // **投稿视频不进这一栏。** 隔壁「投稿」栏装的就是它们,而且那边按发布时间
+                        // 排得整整齐齐、还能搜。同一条稿件在两栏里各出现一次,翻动态时读到的
+                        // 一半内容是刚在上一栏看过的。
+                        //
+                        // 只在这里滤,不在 repository 里滤:建播放队列那条路
+                        // (QueueSourceRepository.fromUpDynamics)要的正是这些 Video ——
+                        // 以动态形式发的视频不进 arc/search,只有这条路找得到它们。
+                        val fresh = result.value.items.filterNot { it is SpaceDynamicItem.Video }
+                        state.copy(
+                            refreshing = false,
+                            dynamics = dynamics.copy(
+                                items = if (replace) {
+                                    fresh.distinctBy { it.key }
+                                } else {
+                                    dynamics.items.appendDistinctBy(fresh) { d -> d.key }
+                                },
+                                nextOffset = result.value.nextOffset,
+                                loading = false,
+                                appending = false,
+                                hasMore = result.value.hasMore && result.value.nextOffset != null,
+                            ),
+                        )
+                    }
 
                     else -> state.copy(
                         refreshing = false,
@@ -504,39 +516,49 @@ class SpaceViewModel(
         }
     }
 
+    /**
+     * **两条请求并发发,等齐了再一起写进 state。**
+     *
+     * **关注态要单独查**,不能读 `acc/info` 的 relation:网页端那条接口不填这个字段,DTO 拿不到
+     * 就默认 0,而 0 正好是 `FollowState.None` —— 一个缺失被静默读成确定答案,表现是关注按钮
+     * 永远显示"关注"。PiliPlus 的空间页看着也读 relation,但它读的是 **app 端**的空间接口
+     * (带 app UA 和 app 参数),和这条不是一回事。这里用 `x/relation?fid=`,播放页一直用它。
+     *
+     * 关注态既然不在 profile 那条接口里,而按钮的默认值 `None` 就是
+     * 「未关注」—— 先写 profile 再补关注态的话,已关注的人身上会先闪一下"关注"再跳成
+     * "已关注"。那一下不是加载中,是一个错误答案被显示了一瞬。
+     *
+     * 并发之前这里是串行的(profile 回来才查关注态),理由写着"并发时 profile 后到会把查到的
+     * 关注态盖回默认值" —— 那说的是两条各自写 state 的写法。等齐了一起写,这个问题不存在,
+     * 而且总耗时从两条之和变成两条里慢的那条。
+     */
     private fun loadProfile() {
         _state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
-            when (val result = repository.loadProfile(mid)) {
-                // 这里不碰 refreshing:下拉刷新会同时发 profile 和当前 tab 两个请求,谁都清一次
-                // 的话先回来的那个就把指示器关掉了,而列表还在转。指示器跟着列表走。
+            val profileResult = async { repository.loadProfile(mid) }
+            val relationResult = async { relationRepository.stateOf(mid) }
+            val profile = profileResult.await()
+            val relation = relationResult.await()
+            // 这里不碰 refreshing:下拉刷新会同时发 profile 和当前 tab 两个请求,谁都清一次
+            // 的话先回来的那个就把指示器关掉了,而列表还在转。指示器跟着列表走。
+            when (profile) {
                 is BiliResult.Ok -> {
-                    _state.update { it.copy(loading = false, profile = result.value) }
-                    // 串在 profile 之后,不并发:并发时 profile 后到就会把查到的关注态盖回默认值。
-                    loadFollowState()
+                    val followState = when (relation) {
+                        is BiliResult.Ok -> relation.value
+                        // 查不到就退回 profile 自带的那个默认值。**这仍然是"未关注"**,
+                        // 和查到的"未关注"分不开 —— 但这一步已经不会再闪,而给按钮加一个
+                        // "不知道"的第三态是另一件事(它会牵动播放页共用的 FollowButton)。
+                        else -> {
+                            BiliLog.w("空间页查关注态失败: $relation")
+                            profile.value.followState
+                        }
+                    }
+                    _state.update {
+                        it.copy(loading = false, profile = profile.value.copy(followState = followState))
+                    }
                 }
-                else -> _state.update { it.copy(loading = false, error = result.errorText()) }
+                else -> _state.update { it.copy(loading = false, error = profile.errorText()) }
             }
-        }
-    }
-
-    /**
-     * 关注态**单独查**,不用 profile 里那份。
-     *
-     * 这里曾经直接读 `acc/info` 的 relation 字段,结果是关注按钮永远显示"关注" —— 网页端的
-     * acc/info 不填这个字段,DTO 拿不到就默认 0,而 0 正好是 FollowState.None,一个缺失被
-     * 静默读成了一个确定的答案。PiliPlus 的空间页看着也是读 relation,但它读的是**app 端**
-     * 的空间接口(带 app UA 和 app 参数),和这条不是一回事。
-     *
-     * 用 `x/relation?fid=` —— 播放页一直用的就是它,已经验证过。多一次请求,换一个真值。
-     */
-    private suspend fun loadFollowState() {
-        when (val result = relationRepository.stateOf(mid)) {
-            is BiliResult.Ok -> _state.update { state ->
-                state.copy(profile = state.profile?.copy(followState = result.value))
-            }
-            is BiliResult.ApiError -> BiliLog.w("空间页查关注态失败(${result.code}): ${result.message}")
-            is BiliResult.Failure -> BiliLog.w("空间页查关注态异常", result.cause)
         }
     }
 
@@ -568,6 +590,8 @@ fun SpaceScreen(
     onLoadMoreCollections: () -> Unit,
     onCollectionClick: (SpaceCollectionItem) -> Unit,
     onVideoClick: (SpaceVideoItem) -> Unit,
+    /** 动态卡片被点开时去哪儿。由 MainActivity 接到 backstack 上,这一页不认识导航。 */
+    onDynamicAction: (DynamicAction) -> Unit,
     onLiveClick: (Long) -> Unit,
     onToggleFollow: () -> Unit,
     onListenUp: () -> Unit,
@@ -637,6 +661,11 @@ fun SpaceScreen(
             tab != SpaceTab.Collections || state.collectionsAvailable == true
         }
 
+        // 页头的收起量。**在这里声明而不是在窄屏那个分支里**:窄屏下它同时被两处用到 ——
+        // 页头自己(缩掉高度)和列表那一侧(把滚动喂给它),而后者在 tabsAndContent 里面。
+        // 宽屏下页头不收起,那时它的 heightPx 恒为 0,连接因此什么都不消费。
+        val headerScroll = rememberCollapsingHeaderState()
+
         val header: @Composable (Modifier) -> Unit = { paneModifier ->
             state.profile?.let {
                 SpaceHeader(
@@ -664,9 +693,16 @@ fun SpaceScreen(
 
             // 两个方向各一条:点标签滚 pager,划 pager 回写 activeTab(后者顺带触发那一栏的
             // 首次加载,和 onTabSelected 走的是同一个入口)。
+            //
+            // **比较用 [rememberUpdatedState] 读当前值,不能直接读 `state.activeTab`。**
+            // 这个效应只在 (pagerState, tabs) 变化时重启,而 `state` 是启动那一刻捕获的那一份 ——
+            // 之后它永远是"进这一页时的那个 tab"。真机上的表现:从投稿划到动态(旧值是投稿,
+            // 不相等,写回去了),再划回投稿时旧值仍然是投稿,判成"没变"于是不写回,
+            // ViewModel 里的 activeTab 就卡在动态上,顶栏那个只在投稿页出现的搜索图标再也回不来。
+            val currentTab by rememberUpdatedState(state.activeTab)
             LaunchedEffect(pagerState, tabs) {
                 snapshotFlow { pagerState.currentPage }
-                    .collect { page -> tabs.getOrNull(page)?.let { if (it != state.activeTab) onTabSelected(it) } }
+                    .collect { page -> tabs.getOrNull(page)?.let { if (it != currentTab) onTabSelected(it) } }
             }
             LaunchedEffect(state.activeTab, tabs) {
                 val target = tabs.indexOf(state.activeTab)
@@ -695,7 +731,16 @@ fun SpaceScreen(
                     // tab 栏还没画出来,内容先不画:否则内容会先顶在页头下面,等 tab 栏出现
                     // 再被推下去一截。
                     !collectionsKnown -> FullScreenLoading()
-                    else -> HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                    // **页头的连接挂在这里,不是挂在外层那个 Column 上。**
+                    //
+                    // 嵌套滚动从内往外传:列表 → 这里 → PullToRefreshBox → 外层。挂在外层时
+                    // 页头排在下拉刷新之后,列表到顶后剩下的下滑量先被刷新吃掉,页头再也拿不到
+                    // —— 表现是收起之后展不开,而且"想把页头拉回来"这个动作变成了刷新。
+                    // 挂在刷新框里面之后顺序对了:先把页头顶回来,它满了才轮到刷新。
+                    else -> HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxSize().nestedScroll(headerScroll.connection),
+                    ) { page ->
                         when (tabs.getOrNull(page)) {
                             SpaceTab.Archives -> ArchivesTab(
                                 state.archives,
@@ -710,7 +755,7 @@ fun SpaceScreen(
                             SpaceTab.Dynamics -> DynamicListTab(
                                 state = state.dynamics,
                                 onLoadMore = onLoadMoreDynamics,
-                                onVideoClick = onVideoClick,
+                                onAction = onDynamicAction,
                             )
 
                             SpaceTab.Collections -> CollectionsTab(
@@ -771,10 +816,7 @@ fun SpaceScreen(
                  * 收起靠**缩掉它占的高度**而不是盖住它:后者会让 tab 栏悬在一段空白上,
                  * 而且列表顶部会被一块看不见的东西挡住。
                  */
-                val headerScroll = rememberCollapsingHeaderState()
-                Column(
-                    modifier = Modifier.fillMaxSize().nestedScroll(headerScroll.connection),
-                ) {
+                Column(modifier = Modifier.fillMaxSize()) {
                     header(Modifier.collapsingHeader(headerScroll))
                     tabsAndContent()
                 }
@@ -813,7 +855,7 @@ private fun SpaceHeader(
             horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Avatar(url = profile.faceUrl, size = Dimens.AvatarLarge)
+            Avatar(url = profile.faceUrl, size = Dimens.AvatarHeader)
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
@@ -866,8 +908,15 @@ private fun SpaceHeader(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
                     modifier = Modifier.padding(Spacing.Cozy),
                 ) {
+                    // 与首页那一排、动态里的直播格同一个符号:「正在直播」在全应用只有这一种
+                    // 长相,换个位置就换个说法的话,这四个字得重新认一遍。
+                    LivePulse(
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(Dimens.LivePulseInline),
+                    )
                     Text(
                         text = stringResource(R.string.space_live_now),
                         style = MaterialTheme.typography.labelMedium,
@@ -1071,7 +1120,7 @@ private val CollectionCoverSize = 72.dp
 private fun DynamicListTab(
     state: SpaceListTabState,
     onLoadMore: () -> Unit,
-    onVideoClick: (SpaceVideoItem) -> Unit,
+    onAction: (DynamicAction) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     PagedColumn(
@@ -1085,192 +1134,40 @@ private fun DynamicListTab(
         onLoadMore = onLoadMore,
         modifier = modifier,
     ) { dynamic ->
-        // 分割线画在条目**之间**:动态的形态差别很大(视频行、图文、转发块),
-        // 只靠留白读不出哪里换了一条。第一条上面不画,那儿是列表的开头不是分界。
-        if (dynamic.key != state.items.firstOrNull()?.key) HorizontalDivider()
-        DynamicRow(dynamic = dynamic, onVideoClick = onVideoClick)
+        DynamicRow(dynamic = dynamic, onAction = onAction)
     }
 }
 
 /**
- * 一条动态。**五种形态走同一个入口**,因为转发要把被转发的那条原样嵌进来 —— 分散成五个
- * 调用点的话,嵌套那一层就得再挑一遍类型,于是同一套判断会有两份。
- *
- * [nested] 为真时是"被转发的那一条":收窄一档、不再画自己的日期(外层已经有了),
- * 也不再允许继续嵌套 —— B 站的转发链最长就是两层,原动态本身若是转发,展示的也是它的正文。
+ * 一条动态。**投稿视频之外的全部类型走 [DynamicCardView]** —— 那一份是动态渲染的唯一实现,
+ * 这一页与「其他动态」页共用。以前这里另写了一套只认五种形态的分支,于是同一位 UP 发的直播、
+ * 音频、番剧更新在空间页悄悄消失,而在别处是有的。
  */
 @Composable
 private fun DynamicRow(
     dynamic: SpaceDynamicItem,
-    onVideoClick: (SpaceVideoItem) -> Unit,
-    nested: Boolean = false,
+    onAction: (DynamicAction) -> Unit,
 ) {
-    val context = LocalContext.current
     when (dynamic) {
-        is SpaceDynamicItem.Video -> {
-            val item = dynamic.item
-            VideoRow(
-                item = VideoRowUi(
-                    title = item.title,
-                    coverUrl = item.coverUrl,
-                    durationText = item.durationText,
-                    dateText = formatDate(item.publishedAtEpochSeconds),
-                    playText = item.playCountText,
-                    danmakuText = item.danmakuCountText,
-                ),
-                onClick = { onVideoClick(item) },
-            )
-        }
+        // 投稿视频在进 state 之前就被滤掉了(见 loadMoreDynamics),这一栏里不会有 ——
+        // 它们是隔壁「投稿」栏的内容。这个分支留着只因为 [SpaceDynamicItem] 还有这一支:
+        // 建播放队列那条路要认它。
+        is SpaceDynamicItem.Video -> Unit
 
-        is SpaceDynamicItem.Text -> DynamicTextBlock(
-            label = stringResource(dynamicTypeLabel(dynamic.type)),
-            text = dynamic.text,
-            dateText = formatDate(dynamic.publishedAtEpochSeconds).takeIf { !nested },
+        // 一条动态一张卡片,与「其他动态」页同一份处理:条目之间不画分割线,边界由底色和圆角
+        // 画在卡片自己身上。动态内部本来就有带底色的块(转发、直播、预约),再叠一层横线之后
+        // 整页全是线,分不清哪条是条目边界。
+        //
+        // 整页都是同一个人,所以不重复印他的头像和名字 —— 与上面视频行留空 upName 同一个理由。
+        is SpaceDynamicItem.Card -> DynamicCardView(
+            card = dynamic.card,
+            onAction = onAction,
+            showAuthor = false,
+            // 底色、圆角、内边距归卡片自己;这里只给边距和条目间的 gap,与「关注动态」页
+            // 取同一组数,同一条动态在两页里才是同一个样子。
+            // 上下各 4 合成 8 的 gap,与「关注动态」页的 spacedBy(Tight) 相同。
+            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
         )
-
-        is SpaceDynamicItem.Draw -> Column(
-            modifier = Modifier.fillMaxWidth().padding(
-                horizontal = Spacing.Comfortable,
-                vertical = Spacing.Cozy,
-            ),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        ) {
-            if (dynamic.text.isNotEmpty()) {
-                Text(dynamic.text, style = MaterialTheme.typography.bodyLarge)
-            }
-            DynamicImageGrid(dynamic.images)
-            if (!nested) {
-                Text(
-                    formatDate(dynamic.publishedAtEpochSeconds),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        is SpaceDynamicItem.Article -> ListItem(
-            overlineContent = { Text(stringResource(R.string.dynamic_type_article)) },
-            headlineContent = {
-                Text(dynamic.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            },
-            supportingContent = if (dynamic.summary.isNotEmpty()) {
-                {
-                    Text(
-                        text = dynamic.summary,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            } else {
-                null
-            },
-            leadingContent = if (dynamic.coverUrl.isNotEmpty()) {
-                { SquareCover(url = dynamic.coverUrl, size = CollectionCoverSize) }
-            } else {
-                null
-            },
-            // **正文还没有站内阅读器**,所以先交给浏览器。专栏正文不在动态接口里,要另外一次
-            // 请求并渲染一整套富文本节点;在那之前跳出去至少是能读到的,而画一个点不开的卡片
-            // 不是。
-            modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) {
-                if (dynamic.url.isNotEmpty()) ShareLink.openInBrowser(context, dynamic.url)
-            },
-        )
-
-        is SpaceDynamicItem.Forward -> Column(
-            modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.Tight),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        ) {
-            DynamicTextBlock(
-                label = stringResource(R.string.dynamic_type_forward),
-                text = dynamic.text,
-                dateText = formatDate(dynamic.publishedAtEpochSeconds),
-            )
-            // 被转发的那条装进一个容器里,和转发者说的话分开。**源没了也要画**,
-            // 否则这条动态看起来像转发者对着空气说话。
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                shape = MaterialTheme.shapes.small,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.Comfortable),
-            ) {
-                val origin = dynamic.origin
-                if (origin == null) {
-                    Text(
-                        text = dynamic.originTips.ifEmpty { stringResource(R.string.dynamic_origin_gone) },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(Spacing.Cozy),
-                    )
-                } else {
-                    DynamicRow(dynamic = origin, onVideoClick = onVideoClick, nested = true)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DynamicTextBlock(label: String, text: String, dateText: String?) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(
-            horizontal = Spacing.Comfortable,
-            vertical = Spacing.Cozy,
-        ),
-    ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-        if (text.isNotEmpty()) {
-            Text(text, style = MaterialTheme.typography.bodyLarge)
-        }
-        dateText?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = Spacing.Tight),
-            )
-        }
-    }
-}
-
-/**
- * 图文动态的配图。**和评论区那个网格是同一套规矩**(单张给宽一点、多张等分方格、点开进
- * [ImageViewer] 并能左右翻),但没有抽成共用组件:评论那份的列宽判断绑着评论行的缩进,
- * 抽出来要先把两处的边距参数化,收益不抵读起来多绕的那一层。真要合并,先合边距。
- */
-@Composable
-private fun DynamicImageGrid(images: List<String>) {
-    var viewerIndex by remember(images) { mutableStateOf<Int?>(null) }
-    val columns = if (images.size == 2 || images.size == 4) 2 else 3
-
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-        images.withIndex().chunked(columns).forEach { row ->
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                row.forEach { (index, url) ->
-                    BiliAsyncImage(
-                        url = url,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .weight(1f)
-                            .aspectRatio(1f)
-                            .clip(MaterialTheme.shapes.small)
-                            .clickable(role = Role.Button) { viewerIndex = index },
-                    )
-                }
-                // 最后一行不满时补空位,否则两张图会被拉宽到占满整行。
-                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
-            }
-        }
-    }
-
-    viewerIndex?.let { index ->
-        ImageViewer(urls = images, initialIndex = index, onDismiss = { viewerIndex = null })
     }
 }
 

@@ -16,6 +16,19 @@ import io.ktor.client.call.body
 import kotlinx.coroutines.delay
 
 /**
+ * 服务端记着的那一对续播位置:哪一 P、第几毫秒。[cid] 为 0 表示这条视频没有记录。
+ *
+ * **全站每条视频只有这一对。** 实测确认过(见 [dev.bilby.api.dto.PlayerV2Dto]):给 P1 报过
+ * 进度之后再给 P2 报,P1 那份当场消失。所以"续播到第 7 P 的第 3 分钟"是可以表达的,
+ * "P1 到第 3 分钟、同时 P7 到第 8 分钟"不行。
+ */
+data class LastPlayed(val cid: Long, val positionMillis: Long) {
+    companion object {
+        val NONE = LastPlayed(0, 0)
+    }
+}
+
+/**
  * AI 字幕。轨道清单和正文是两个不同形状的接口(见两处方法上的注释),这里各自处理,
  * 不假装它们同一套信封。
  *
@@ -34,24 +47,35 @@ class SubtitleRepository(private val client: BiliClient) {
         fetchTracksWithRetry(bvid, cid).map { it.toDomain() }.sortedWith(TRACK_ORDER)
 
     /**
-     * 上次播到这条视频的哪一 P。0 表示没有记录,或者这次没问到。
+     * 这条视频当前记在哪一 P 的第几毫秒。**是整条视频的那一对,与传进去的 [cid] 无关** ——
+     * 问 P1 也会回 P7 的记录(实测,见 [PlayerV2Dto])。cid 为 0 表示没有记录,或者这次没问到。
      *
-     * **这个字段只有 `x/player/wbi/v2` 有**(notes §8.2)。`PlayUrlDto` 里那个同名字段来自
-     * PiliPlus 的模型,真实响应不填,从那儿读永远是 0。
+     * 单独一次请求,所以调用方要先确认值得问 —— 每打开一条视频多一次请求在风控上是有代价的
+     * (见 `VideoRepository` 里那段说明)。
      *
-     * 单独一次请求,所以调用方要先确认这条视频真的有多 P —— 单 P 视频问了也没有意义,
-     * 而每打开一条视频多一次请求在风控上是有代价的(见 `VideoRepository` 里那段说明)。
-     * 失败按 0 处理:续播接不上只是回到第一 P,不该让起播失败。
+     * **问不到返回 null,而不是 [LastPlayed.NONE]。** 这两件事必须分开:前者是"这次没问到"
+     * (离线、限流、接口出错),后者是"服务端确认没有记录"。它们曾经都返回 NONE,于是离线播
+     * 缓存时,核对进度那一步把「服务端进度基线」写成了 0 —— 而离线正是那个功能存在的场景。
+     * 后果有两层:基线被抹掉之后,"云端没动过、本地说了算"这一支再也成立不了,本地看的进度
+     * 下次会被更旧的云端值顶掉;而下一次联网时 0 又必然不等于云端的真值,于是弹出一条"别处
+     * 已看到"——用户根本没在别处看。
      */
-    suspend fun lastPlayedCid(bvid: String, cid: Long): Long {
+    suspend fun lastPlayed(bvid: String, cid: Long): LastPlayed? {
         val result = client.getData<PlayerV2Dto>(
             PLAYER_V2_URL,
             params = trackParams(bvid, cid),
             signed = true,
             userAgent = BiliConstants.NON_BROWSER_USER_AGENT,
         )
-        return (result as? BiliResult.Ok)?.value?.lastPlayCid ?: 0L
+        val value = (result as? BiliResult.Ok)?.value ?: return null
+        return LastPlayed(value.lastPlayCid, value.lastPlayTimeMillis.coerceAtLeast(0))
     }
+
+    /**
+     * 上次播到这条视频的哪一 P。0 表示没有记录**或这次没问到** —— 这条路上两者等价:
+     * 问不到就照页面给的那一 P 播,续播接不上只是回到第一 P,不该让起播失败。
+     */
+    suspend fun lastPlayedCid(bvid: String, cid: Long): Long = lastPlayed(bvid, cid)?.cid ?: 0L
 
     /**
      * 命中限流(-412,`BiliResult.CODE_RATE_LIMITED`)按 DESIGN §5 的风控礼仪退避 60s 再续;

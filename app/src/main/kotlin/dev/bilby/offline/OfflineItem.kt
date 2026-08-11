@@ -81,6 +81,25 @@ data class OfflineItem(
     /** 失败原因,给界面看的一句话。成功时为 null。 */
     val error: String? = null,
     val createdAtMillis: Long = 0,
+    /**
+     * 上次在本机播到哪儿(毫秒)。**只在放本地副本时读写**,放网络流时服务端的 last_play_time
+     * 是唯一来源(见 [dev.bilby.data.resumeAtMillisFor])。
+     *
+     * 存在这里而不是另开一张 Room 表,理由和索引本身不进库是同一条(见 [OfflineStore] 的说明):
+     * 那个库走 `fallbackToDestructiveMigration`,而这份进度恰恰是不可再生的那部分 —— 断网看过
+     * 一段、还没来得及上报,库一丢它就没了。放在 meta.json 里则进度与文件同生共死,删缓存时不需要
+     * 另有一处记得把它一起删掉。
+     */
+    val watchedPositionMillis: Long = 0,
+    /**
+     * 写下 [watchedPositionMillis] 那一刻,服务端的 last_play_time 是多少(毫秒)。
+     *
+     * 用来回答"这期间这条视频在别处被看过没有":下次打开时服务端的值若不等于它,说明网页或
+     * 官方 app 动过,那边比本机新。判据与理由见 [dev.bilby.player.mergeCachedProgress]。
+     *
+     * 心跳上报成功之后它跟着推进到刚报上去的值 —— 那一刻服务端存的就是我们报的数。
+     */
+    val serverProgressBaseMillis: Long = 0,
 ) {
     val id: String get() = offlineId(bvid, cid)
 
@@ -94,6 +113,32 @@ data class OfflineItem(
  * 标题里有 `/`、emoji,还会被 UP 改,改一次就再也对不上原来那个目录。
  */
 fun offlineId(bvid: String, cid: Long): String = "${bvid}_$cid"
+
+/**
+ * 盘上已有(或正在下)的东西,供缓存面板把已缓存的条目标出来。
+ *
+ * **两种问法都要答得上,因为面板上两种行并存:**
+ * - 当前这条视频的分 P,cid 是已知的,按 (bvid, cid) 精确判 —— 缓存了 P1 不该让 P2 也显示成
+ *   已缓存,那正是"选不了具体哪一 P"这个毛病的另一半。
+ * - 队列里别的视频,cid 要联网拿详情才知道(队列项的 cid 可能是 0)。那时只能按 bvid 判:
+ *   宁可把"缓存过这条视频的某一 P"说成已缓存,也好过因为 cid 对不上而显示成没缓存,让人再下一遍。
+ */
+data class CachedIndex(
+    private val ids: Set<String> = emptySet(),
+    private val bvids: Set<String> = emptySet(),
+) {
+    operator fun contains(target: Pair<String, Long>): Boolean {
+        val (bvid, cid) = target
+        return if (cid == 0L) bvid in bvids else offlineId(bvid, cid) in ids
+    }
+
+    companion object {
+        fun of(items: List<OfflineItem>): CachedIndex = CachedIndex(
+            ids = items.map { offlineId(it.bvid, it.cid) }.toSet(),
+            bvids = items.map { it.bvid }.toSet(),
+        )
+    }
+}
 
 /**
  * 这一条有没有身份。**cid 为 0 表示还不知道要缓存哪一 P**(空间投稿来源的队列项不带 cid,

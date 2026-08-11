@@ -7,9 +7,13 @@ import dev.bilby.api.dto.DynamicFeedResponseDto
 import dev.bilby.api.dto.DynamicItemDto
 import dev.bilby.api.getData
 import dev.bilby.api.toHttpsUrl
+import dev.bilby.data.model.DynamicAdditional
+import dev.bilby.data.model.DynamicCard
 import dev.bilby.data.model.FeedItem
 
 data class FeedPage(val items: List<FeedItem>, val nextOffset: String?, val hasMore: Boolean)
+
+data class DynamicCardPage(val items: List<DynamicCard>, val nextOffset: String?, val hasMore: Boolean)
 
 /**
  * 首页动态流(DESIGN 2.1:关注 UP 投稿,时间序,只显示视频类动态)。
@@ -26,13 +30,22 @@ class DynamicRepository(private val client: BiliClient) {
     suspend fun loadVideoFeed(offset: String? = null): BiliResult<FeedPage> =
         loadPage(offset, pagesLeft = maxAutoPages)
 
+    /**
+     * 首页折起来的那一半:图文、转发、直播、专栏、番剧更新……(DESIGN 2.1 的"图文/转发折叠为
+     * 一个不显眼的入口")。
+     *
+     * **走 `type=all` 再在本地筛掉投稿视频**,不是另找一条接口:服务端只有 `video`/`article`/
+     * `pgc` 这几档,拼不出"除了投稿之外的全部",而漏掉的那些类型正是这一页存在的理由。
+     * 筛的判据是"它已经在首页出现过了",所以只排除 AV 与合集更新两种(notes/dynamic-cards.md)。
+     *
+     * 这一页仍然是时间序、仍然只含关注的人发的东西,与 DESIGN 1.1 的机制表逐条对过:没有排序、
+     * 没有推荐池、翻到底就没了。它和首页的区别只有内容形态,不是另一条推送管道。
+     */
+    suspend fun loadOtherFeed(offset: String? = null): BiliResult<DynamicCardPage> =
+        loadCardPage(offset, pagesLeft = maxAutoPages)
+
     private suspend fun loadPage(offset: String?, pagesLeft: Int): BiliResult<FeedPage> {
-        val params = buildMap {
-            put("type", "video")
-            offset?.let { put("offset", it) }
-            put("features", BiliConstants.DYN_FEATURES)
-        }
-        val result = client.getData<DynamicFeedResponseDto>(FEED_URL, params)
+        val result = client.getData<DynamicFeedResponseDto>(FEED_URL, feedParams("video", offset))
         return when (result) {
             is BiliResult.Ok -> {
                 val page = result.value
@@ -47,6 +60,35 @@ class DynamicRepository(private val client: BiliClient) {
             is BiliResult.ApiError -> result
             is BiliResult.Failure -> result
         }
+    }
+
+    private suspend fun loadCardPage(offset: String?, pagesLeft: Int): BiliResult<DynamicCardPage> {
+        val result = client.getData<DynamicFeedResponseDto>(FEED_URL, feedParams("all", offset))
+        return when (result) {
+            is BiliResult.Ok -> {
+                val page = result.value
+                val items = page.items
+                    .filterNot { it.type in VIDEO_TYPES }
+                    .mapNotNull { it.toDynamicCard() }
+                val nextOffset = page.offset.ifEmpty { null }
+                // 这一页的筛选比首页狠得多(整页都是投稿视频是常态),所以自动翻页在这里更常
+                // 触发,上限仍然是同一个:坏数据上不能无限递归。
+                if (items.isEmpty() && page.hasMore && pagesLeft > 1) {
+                    loadCardPage(nextOffset, pagesLeft - 1)
+                } else {
+                    BiliResult.Ok(DynamicCardPage(items, nextOffset, page.hasMore))
+                }
+            }
+
+            is BiliResult.ApiError -> result
+            is BiliResult.Failure -> result
+        }
+    }
+
+    private fun feedParams(type: String, offset: String?): Map<String, String> = buildMap {
+        put("type", type)
+        offset?.let { put("offset", it) }
+        put("features", BiliConstants.DYN_FEATURES)
     }
 
     /**
@@ -85,5 +127,11 @@ class DynamicRepository(private val client: BiliClient) {
 
     private companion object {
         const val FEED_URL = "${BiliConstants.WEB_HOST}/x/polymer/web-dynamic/v1/feed/all"
+
+        /**
+         * 已经在首页出现过的两种。**番剧、课堂不在里面**:它们虽然也是"视频类",但首页那条
+         * 路要求有 bvid,番剧只有 epid,于是一条都进不去 —— 不放到这一页来就等于整个看不见。
+         */
+        val VIDEO_TYPES = setOf("DYNAMIC_TYPE_AV", "DYNAMIC_TYPE_UGC_SEASON")
     }
 }

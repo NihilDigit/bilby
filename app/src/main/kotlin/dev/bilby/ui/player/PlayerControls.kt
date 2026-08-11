@@ -73,16 +73,19 @@ internal fun DanmakuButton(
  *
  * 它**不跟控件一起自动隐藏**:自动隐藏的是"播放器现在在做什么"那一类控件,而离开这一页是
  * 页面级动作,藏起来就等于没有。
+ *
+ * @param scrim 自己画那条渐变。**画面里有弹幕时要传 false**,改由 [PlayerShell] 在弹幕
+ *   下面画([MediaTopScrim])—— 这两个按钮是画在壳外面的,渐变跟着它们就压在弹幕之上,
+ *   顶上那一两条弹幕会被这层黑纱洗掉一档对比度。没有壳的场合(直播下播后的封面页)
+ *   保持 true,那时渐变只能自己带。
  */
 @Composable
-internal fun BoxScope.MediaBackButton(onBack: () -> Unit, onShare: (() -> Unit)? = null) {
-    Box(
-        modifier = Modifier
-            .align(Alignment.TopCenter)
-            .fillMaxWidth()
-            .height(MediaScrimHeight)
-            .background(Brush.verticalGradient(listOf(FixedColors.ScrimOnMedia, Color.Transparent))),
-    )
+internal fun BoxScope.MediaBackButton(
+    onBack: () -> Unit,
+    onShare: (() -> Unit)? = null,
+    scrim: Boolean = true,
+) {
+    if (scrim) MediaTopScrim()
     // 画面在横屏两栏下是全出血的,状态栏和刘海就压在这两个按钮上。竖排时页面那一层已经
     // 躲过并消费掉这份 inset,这里量到 0。
     val safeInsets = WindowInsets.barsAndCutout
@@ -117,6 +120,25 @@ internal fun BoxScope.MediaBackButton(onBack: () -> Unit, onShare: (() -> Unit)?
             )
         }
     }
+}
+
+/**
+ * 画面顶部那条渐变,托着左上角的返回和右上角的分享。
+ *
+ * **单独拿出来是为了让它落在弹幕下面。** 按钮本身画在壳外面(页面那一层),渐变跟着它们的话
+ * 整条黑纱就压在弹幕之上,顶上那一两条弹幕被洗淡一档;而这条渐变要垫的只是那两个图标。
+ * 现在它由 [PlayerShell] 在 overlay 之前画,z 序成了 画面 → 渐变 → 弹幕 → 按钮:
+ * 按钮照旧有底,弹幕落在渐变上反而比落在原画面上更清楚。
+ */
+@Composable
+internal fun BoxScope.MediaTopScrim() {
+    Box(
+        modifier = Modifier
+            .align(Alignment.TopCenter)
+            .fillMaxWidth()
+            .height(MediaScrimHeight)
+            .background(Brush.verticalGradient(listOf(FixedColors.ScrimOnMedia, Color.Transparent))),
+    )
 }
 
 /** 够盖住一个 48dp 触摸目标再加一段渐隐,不到画面高度的四分之一。 */

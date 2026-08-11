@@ -132,6 +132,10 @@ class BiliClient(
      *   `x/relation/modify` 就是这样(statistics 与 x-bili-device-req-json 在 query,
      *   业务字段在 body),照 PiliPlus 的实际做法,放错位置会被拒。
      * @param referer 覆盖站内 Referer/Origin,同 [rawGet]。关注要指到 `space.bilibili.com/<mid>`。
+     * @param csrfInQuery csrf 改放 query。**动态预约 `x/dynamic/feed/reserve/click` 要这样**
+     *   (PiliPlus `http/dynamics.dart:531-535` 把 csrf 放 queryParameters、业务字段放 body)。
+     *   风控是按动作算的,别的写接口把 csrf 放 body 能过,不代表这个也能 —— 同一类踩过一次的
+     *   还有 `bili_ticket` 的参数必须放 query。
      */
     suspend fun rawPostForm(
         url: String,
@@ -140,15 +144,18 @@ class BiliClient(
         params: Map<String, String> = emptyMap(),
         referer: String? = null,
         userAgent: String? = null,
+        csrfInQuery: Boolean = false,
     ): HttpResponse {
         val credentials = settings.credentials.first()
-        val fields = if (withCsrf) form + ("csrf" to credentials.biliJct) else form
+        val csrf = if (withCsrf) mapOf("csrf" to credentials.biliJct) else emptyMap()
+        val fields = if (csrfInQuery) form else form + csrf
+        val query = if (csrfInQuery) params + csrf else params
         val cookie = cookieHeader(credentials)
         return http.submitForm(
             url = url,
             formParameters = Parameters.build { fields.forEach { (k, v) -> append(k, v) } },
         ) {
-            params.forEach { (k, v) -> parameter(k, v) }
+            query.forEach { (k, v) -> parameter(k, v) }
             applyCommonHeaders(credentials, cookie, referer, userAgent)
         }.also { fingerprint.rememberCookies(it.setCookie()) }
     }
@@ -313,8 +320,9 @@ suspend fun BiliClient.postAction(
     params: Map<String, String> = emptyMap(),
     referer: String? = null,
     userAgent: String? = null,
+    csrfInQuery: Boolean = false,
 ): BiliResult<Unit> = envelopeResult(url) {
-    rawPostForm(url, form, withCsrf, params, referer, userAgent).body<BiliEnvelope>()
+    rawPostForm(url, form, withCsrf, params, referer, userAgent, csrfInQuery).body<BiliEnvelope>()
 }
 
 /** app 路线的写接口(点赞/投币):access_key + appkey 签名,不带 Cookie。 */

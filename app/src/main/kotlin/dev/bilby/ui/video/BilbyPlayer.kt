@@ -151,6 +151,8 @@ fun BilbyPlayer(
     fullBleed: Boolean = false,
     /** 透传给 [PlayerShell]:两栏下把状态栏收起来。 */
     hideStatusBar: Boolean = false,
+    /** 见 [PlayerShell] 的同名参数:页面在画面上挂了返回/分享,渐变交给壳画。 */
+    topScrim: Boolean = false,
     modifier: Modifier = Modifier,
     /** 只在全屏时显示。竖屏下标题就在播放器正下方,再印一遍是多余的。 */
     title: String = "",
@@ -179,6 +181,7 @@ fun BilbyPlayer(
         title = title,
         fullBleed = fullBleed,
         hideStatusBar = hideStatusBar,
+        topScrim = topScrim,
         modifier = modifier,
         fastForwardSpeed = fastForwardSpeed,
         onSeeked = { positionMillis, durationMillis -> reportProgress(positionMillis, durationMillis) },

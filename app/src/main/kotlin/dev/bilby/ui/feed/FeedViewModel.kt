@@ -104,7 +104,7 @@ class FeedViewModel(
                 loadFirstPage()
             }
         }
-        loadFrequentUps()
+        loadTopUps()
     }
 
     /**
@@ -139,17 +139,32 @@ class FeedViewModel(
      *
      * 但不显示不等于不留痕:界面上什么都不会有,不打这行日志就再也查不出它为什么没出来。
      */
-    private fun loadFrequentUps() = viewModelScope.launch {
-        when (val result = followRepository.frequentUps()) {
+    private fun loadTopUps() = viewModelScope.launch {
+        // portal 这条照发:它同时带着"谁在播",而那份数据没有别的来源。
+        val portal = followRepository.frequentUps()
+        when (portal) {
             is BiliResult.Ok -> _state.update {
-                it.copy(
-                    frequentUps = result.value.ups,
-                    liveUps = result.value.liveUsers,
-                    liveCount = result.value.liveCount,
-                )
+                it.copy(liveUps = portal.value.liveUsers, liveCount = portal.value.liveCount)
             }
-            is BiliResult.ApiError -> BiliLog.w("取最常访问失败(${result.code}): ${result.message}")
-            is BiliResult.Failure -> BiliLog.w("取最常访问异常", result.cause)
+            is BiliResult.ApiError -> BiliLog.w("取正在直播失败(${portal.code}): ${portal.message}")
+            is BiliResult.Failure -> BiliLog.w("取正在直播异常", portal.cause)
+        }
+
+        // 那一排人优先用「特别关注」——那是用户自己划的一组人。**没划过就退回最常访问**:
+        // 一排空位比一份不是自己排的名单更没用,而"没有特别关注"是个很常见的状态。
+        val special = when (val result = followRepository.groupMembers(SPECIAL_GROUP_ID, page = 1)) {
+            is BiliResult.Ok -> result.value
+            is BiliResult.ApiError -> emptyList<dev.bilby.data.UpBrief>()
+                .also { BiliLog.w("取特别关注失败(${result.code}): ${result.message}") }
+            is BiliResult.Failure -> emptyList<dev.bilby.data.UpBrief>()
+                .also { BiliLog.w("取特别关注异常", result.cause) }
+        }
+        _state.update {
+            if (special.isNotEmpty()) {
+                it.copy(topUps = special, topUpsAreSpecial = true)
+            } else {
+                it.copy(topUps = (portal as? BiliResult.Ok)?.value?.ups.orEmpty(), topUpsAreSpecial = false)
+            }
         }
     }
 
@@ -162,7 +177,7 @@ class FeedViewModel(
         if (_state.value.refreshing) return
         _state.update { it.copy(refreshing = true) }
         fetch(append = false)
-        loadFrequentUps()
+        loadTopUps()
     }
 
     /**
@@ -254,6 +269,9 @@ class FeedViewModel(
 
     private companion object {
         const val READ_POSITION_DEBOUNCE_MS = 1_200L
+
+        /** 「特别关注」在关注分组里的固定 tagid,见 FollowRepository.groups。 */
+        const val SPECIAL_GROUP_ID = -10L
     }
 }
 

@@ -14,6 +14,7 @@ import dev.bilby.api.toHttpsUrl
 import dev.bilby.player.AUDIO_QUALITY_BEST
 import dev.bilby.player.DEFAULT_PREFERRED_CODECS
 import dev.bilby.player.SelectedStreams
+import dev.bilby.player.resumePositionMillis
 import dev.bilby.player.selectStreams
 import dev.bilby.player.videoQualityLabel
 import java.util.concurrent.ConcurrentHashMap
@@ -107,33 +108,27 @@ data class PlayInfo(
 data class QualityOption(val quality: Int, val label: String)
 
 /**
- * 进度条判定为"满"的容差。服务端的 last_play_time 是整秒,时长又有 dash.duration 与
- * timeLength 两个来源、彼此能差一秒,卡太紧会让真正看完的视频从倒数第二秒接着播。
- */
-private const val FINISHED_TOLERANCE_MILLIS = 2_000L
-
-/**
- * 这次从哪儿接着播。**云端那份是唯一来源。**
+ * 这次从哪儿接着播。**放网络流时云端那份是唯一来源。**
  *
  * 本地曾经另存一份 Room 进度并与云端取较大者,那份是"视频播不动"的根因:全 app 只有一个
  * 播放器,翻到新视频时它还装着上一条,新页一 compose 就按自己的 bvid 把上一条的位置写了
  * 下去。一个 780 秒的视频因此拿到 1587 秒的续播点,seek 落到文件末尾之外,CDN 收下连接却
  * 不给响应头,最后以 SocketTimeout 收场。删掉本地那份之后这类串味无处产生。
  *
- * PiliPlus 也是这个分工:网络播放只认 last_play_time,本地缓存只服务离线下载的文件。对我们
- * 更直接的理由是 last_play_time 和流地址来自同一个 playurl 响应——有流必有进度,本地留一份
- * 换不到任何东西。
+ * PiliPlus 也是这个分工:网络播放只认 last_play_time,本地那份只服务下载好的文件
+ * (`pages/video/controller.dart` 里读写它的两处都包在 `isFileSource` 里)。缓存内容的
+ * 本地进度现在存在 `meta.json` 里,见 [dev.bilby.offline.OfflineItem],与这条路径不相交。
  *
- * 两个约束:
- * - `last_play_time` 属于 `last_play_cid` 那一 P。cid 对不上就不能用,否则多 P 视频互相串。
- * - 看完的视频要从头播。服务端在看完时给 -1(映射处已归零),但"停在最后两秒"它照样如实
- *   返回,那种位置续播等于一进来就在片尾。
+ * `last_play_time` 属于 `last_play_cid` 那一 P。cid 对不上就不能用,否则多 P 视频互相串。
+ * 分 P 各自的进度服务端根本不存(全站每条视频只有一对 cid + 秒数,网页端同样如此),所以
+ * 对不上时只能归零,不存在"去另一处取"这个选项。
+ *
+ * 看完之后从头播这条判据不在这里,在 [resumePositionMillis] —— 它对本地副本和网络流是同一
+ * 条规则,而这个函数只负责把服务端那份取出来。
  */
 fun PlayInfo.resumeAtMillisFor(cid: Long): Long {
     if (lastPlayCid != 0L && lastPlayCid != cid) return 0
-    if (lastPlayTimeMillis <= 0) return 0
-    if (durationMillis > 0 && lastPlayTimeMillis >= durationMillis - FINISHED_TOLERANCE_MILLIS) return 0
-    return lastPlayTimeMillis
+    return resumePositionMillis(lastPlayTimeMillis, durationMillis)
 }
 
 class VideoRepository(private val client: BiliClient) {

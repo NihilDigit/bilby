@@ -51,7 +51,8 @@ the description and comments on the right. Phone layouts are unaffected.</p>
 Done:
 
 - [x] Feed: following feed (with per-uploader muting), most-visited uploaders (live ones open the room directly), full following list, watch-later, history with cloud progress and resume
-- [x] Moment types: videos, reposts, image posts, text, live, and articles
+- [x] Moments: videos, reposts, image posts, text, live, articles and reservations; bodies and images shown as posted, emotes inline, reservations added to the calendar
+- [x] Articles read in-app: text, images, link cards, code blocks and formulas
 - [x] Uploader pages: uploads, moments, and collections/series tabs, with in-space search
 - [x] Playback: fullscreen, quality, speed (WSOLA), double-tap to seek or pause, long-press fast-forward, drag-to-seek, swipe for brightness and volume, lock, multi-part videos that resume on the part you left; progress synced to the cloud
 - [x] Listening: same player as normal playback, screen-off background play, notification, lock screen and headset controls, sleep timer; shuffle queue; the subtitle track doubles as line-by-line lyrics, tap a line to seek
@@ -72,9 +73,6 @@ Planned:
 - [ ] Rework the following feed, starting from its data flow
 - [ ] Better adaptive layout
 - [ ] Sending danmaku
-- [ ] Full coverage of moment types
-- [ ] Emote support
-- [ ] Reading articles in-app
 - [ ] Picture-in-picture
 - [ ] Live room improvements
 - [ ] Refine coining, liking and the other site actions
@@ -105,10 +103,18 @@ can go straight to an issue or a pull request.
 
 For features and breaking changes, please open an RFC issue first, describing what you want,
 what the app does about it today, and what the design would look like. It exists so you do
-not write code in a direction the project cannot take. Introducing no recommendation
-algorithms or other attention-grabbing features is a settled constraint of the project;
-a pull request that moves it is unlikely to land; filing the issue first avoids the time
-and effort both sides would lose to a mismatch in goals.
+not write code in a direction the project cannot take.
+
+These are out of scope, and a pull request that adds them is unlikely to land:
+
+- **Circumvention of any kind.** No defeating membership gates or paywalled quality tiers,
+  and nothing that touches billing or entitlement; viewing and interaction data are
+  reported back as usual.
+- **Anime, film, courses and anything else that is not UGC.** The app plays user
+  submissions only, and those links are not resolved.
+- **Anything that interrupts the user or competes for their attention.** Recommendation
+  feeds, a persistent related-videos rail and "for you" of any kind all fall here; the app
+  implements neutral behaviour only, and what a list contains follows from what the user did.
 
 When using LLM-assisted coding, make sure you understand the business logic of the code
 you add and verify it on a real device.

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -29,6 +30,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
@@ -56,6 +58,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -70,6 +74,7 @@ import dev.bilby.ui.ShareLink
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
@@ -117,6 +122,8 @@ fun LiveRoomScreen(
     /** 分享要给出 `live.bilibili.com/<roomId>`,而房间号不在 [state] 里。 */
     roomId: Long,
     onBack: () -> Unit,
+    /** 进主播的个人空间。mid 由 [state] 带,这一页不认识导航。 */
+    onUserClick: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var fullscreen by remember { mutableStateOf(false) }
@@ -150,6 +157,14 @@ fun LiveRoomScreen(
                     .widthIn(max = Breakpoints.MediaWidth)
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f)
+                    // **上面那条黑边只是取了 inset 的高度,没有消费它**
+                    // (`windowInsetsTopHeight` 不消费)。不声明的话画面里的返回和分享会以为
+                    // 自己还贴着屏幕上沿,各自再躲一次系统栏 —— 表现就是这两个按钮往画面里
+                    // 掉了一条状态栏的高度。播放页在同一处写着同一行,这边漏了。
+                    //
+                    // **只在画了那条黑边时消费。** 宽屏下画面是全出血的(没有黑边),状态栏
+                    // 真的压在按钮上,那时得让它们照旧躲。
+                    .then(if (expandedLayout) Modifier else Modifier.consumeWindowInsets(WindowInsets.barsAndCutout))
                 ).background(Color.Black),
         ) {
             if (player != null && state.isLive && state.streamUrl != null) {
@@ -166,6 +181,8 @@ fun LiveRoomScreen(
                     fullBleed = true,
                     // 宽屏下画面只占中间一块,状态栏两端露在页面底色上,图标明暗顾不过来。
                     hideStatusBar = expandedLayout,
+                    // 同播放页:渐变归壳画,弹幕才落在它上面。
+                    topScrim = !fullscreen,
                     // 直播既不能 seek 也不能快进:前者那条时间轴上没有往回拖这回事,后者会把
                     // 倍速设成 3x —— 在一条一直往前走的流上,那只是冲到最前沿然后卡住等数据。
                     // 亮度和音量照旧,它们跟内容是什么无关。
@@ -214,6 +231,7 @@ fun LiveRoomScreen(
                 MediaBackButton(
                     onBack = onBack,
                     onShare = { ShareLink.liveRoom(context, roomId, state.title) },
+                    scrim = false,
                 )
             }
         }
@@ -229,11 +247,14 @@ fun LiveRoomScreen(
                     ),
                 maxWidth = Breakpoints.ReadableWidth,
             ) {
-                LiveRoomTabs(
-                    state = state,
-                    onLoadMoreGuards = onLoadMoreGuards,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                Column(modifier = Modifier.fillMaxSize()) {
+                    LiveAnchorRow(state = state, onUserClick = onUserClick)
+                    LiveRoomTabs(
+                        state = state,
+                        onLoadMoreGuards = onLoadMoreGuards,
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                    )
+                }
             }
         }
     }
@@ -346,6 +367,59 @@ private fun LiveControlBar(
     }
 }
 
+/**
+ * 主播那一行:头像、名字、这场的标题,整行进他的个人空间。
+ *
+ * **这一页此前没有任何地方能到主播的空间**,而"这个人还发过什么"正是看直播时最容易起的
+ * 念头 —— 之前只能退回上一页再从别处找他。头像和名字本来也只存在于通知栏里,页面上一个
+ * 字都没有。
+ *
+ * 房间标题放在这里而不是画面上:全屏那条顶栏只在全屏时出现(见 §4.1b),竖屏时标题此前
+ * 无处可读。
+ *
+ * 整行是一个语义节点(`clickable` + `role`),不是给头像单独挂点击 —— 那样读屏会把头像和
+ * 名字念成两件无关的东西,而且只有那个小圆点能点(风格指南 §3)。
+ */
+@Composable
+private fun LiveAnchorRow(state: LiveRoomUiState, onUserClick: (Long) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        modifier = Modifier
+            .fillMaxWidth()
+            // mid 要到房间信息回来才有,那之前整行不可点(点了也不知道去谁那儿)。
+            .clickable(role = Role.Button, enabled = state.anchorMid != 0L) {
+                onUserClick(state.anchorMid)
+            }
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+    ) {
+        Avatar(url = state.anchorFace, size = Dimens.AvatarRow)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = state.anchorName,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (state.title.isNotBlank()) {
+                Text(
+                    text = state.title,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(Dimens.IconInline),
+        )
+    }
+}
+
 @Composable
 private fun LiveRoomTabs(
     state: LiveRoomUiState,
@@ -439,32 +513,64 @@ private fun ChatPane(state: LiveRoomUiState) {
     }
 }
 
+/**
+ * 一条醒目留言。**头像 + 名字 + 金额一行,留言一段**,读的顺序就是"谁、多少钱、说了什么"。
+ *
+ * 三处照风格指南改过:
+ *
+ * - 圆角走 `shapes.medium`,不再拿间距刻度当半径(`RoundedCornerShape(Spacing.Tight)`)——
+ *   §1.4 的形状档由信息密度定,和间距是两套刻度,混用等于把两个决定绑在一起。
+ * - 名字取 `outline`、留言满对比度,与评论区同一条(§2.7b):一排卡片扫过去,先看见的该是
+ *   留言而不是每张卡开头的人名。
+ * - 金额单独装进一个 `tertiaryContainer` 的小块。它是这条留言之所以在这儿的原因,得读得出来;
+ *   而容器色和文字色成对取自同一组 role,不用 alpha 兑(§3 最后一条)。**没有用 B 站自己那对
+ *   `background_color`**:那两个色是照白底设计的,深色主题下直接糊,而且它编码的是价位档,
+ *   金额本身已经写在那儿了。
+ *
+ * 圆角按 optical roundness:外 12 − 内边距 12 = 0,取刻度末档 `extraSmall` 4(同 §2.7c)。
+ */
 @Composable
 private fun SuperChatCard(sc: LiveMessage.SuperChat) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(Spacing.Tight),
-        modifier = Modifier.width(Dimens.TraceCardWidth * 2),
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.width(Dimens.SuperChatWidth),
     ) {
-        Column(modifier = Modifier.padding(Spacing.Cozy)) {
-            Text(
-                text = sc.senderName,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.outline,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        Column(
+            modifier = Modifier.padding(Spacing.Cozy),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                Avatar(url = sc.senderFace, size = Dimens.AvatarRow)
+                Text(
+                    text = sc.senderName,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Surface(
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                    shape = MaterialTheme.shapes.extraSmall,
+                ) {
+                    Text(
+                        text = stringResource(R.string.live_super_chat_price, sc.priceYuan),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = Spacing.Hair),
+                    )
+                }
+            }
             Text(
                 text = sc.message,
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = stringResource(R.string.live_super_chat_price, sc.priceYuan),
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.primary,
             )
         }
     }
@@ -502,11 +608,7 @@ private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit) {
     ) {
         items(state.guards.items, key = { it.uid }) { guard ->
             Row(verticalAlignment = Alignment.CenterVertically) {
-                BiliAsyncImage(
-                    url = guard.face,
-                    contentDescription = null,
-                    modifier = Modifier.size(Dimens.AvatarSmall).clip(CircleShape),
-                )
+                Avatar(url = guard.face, size = Dimens.AvatarRow)
                 Text(
                     text = guard.username,
                     style = MaterialTheme.typography.bodyMedium,

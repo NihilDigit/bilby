@@ -378,7 +378,7 @@ private fun AccountHeader(
                     .clickable { onOpenSelf(account.mid) }
                     .padding(vertical = Spacing.Cozy),
             ) {
-                Avatar(url = account.faceUrl, size = Dimens.AvatarLarge)
+                Avatar(url = account.faceUrl, size = Dimens.AvatarHeader)
                 Column(modifier = Modifier.weight(1f)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -418,7 +418,7 @@ private fun AccountHeader(
             // 失败/加载态没有上面那块可点区域,自己补上同一份上下留白,免得账号一拉到
             // 整页内容就往下跳一截。
             modifier = Modifier
-                .heightIn(min = Dimens.AvatarLarge)
+                .heightIn(min = Dimens.AvatarHeader)
                 .padding(vertical = Spacing.Cozy),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),

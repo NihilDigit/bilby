@@ -22,6 +22,11 @@ data class CommentUiState(
     val sort: CommentSort = CommentSort.HOT, // 服务端默认也是热度(notes §1.5)
     val loading: Boolean = false, // 首屏加载
     val appending: Boolean = false, // 追加下一页
+    /**
+     * 下拉刷新中。**与 [loading] 分开**:首屏是一片空白加一个转圈,刷新是"列表还在、顶上转圈"。
+     * 用 loading 顶替的话,每次下拉都会把已经读到的评论整片清掉再重画。
+     */
+    val refreshing: Boolean = false,
     val hasMore: Boolean = true,
     val error: String? = null,
     val sending: Boolean = false,
@@ -111,6 +116,24 @@ class CommentViewModel(
         fetch(append = false)
     }
 
+    /**
+     * 下拉刷新。和 [loadFirstPage] 的区别只在**屏上留不留旧列表**:那条是"这一页从头来过"
+     * (换排序、换视频),会连着置 loading 清空;这条保留已经读到的评论,只在顶上转圈,
+     * 第一页回来了再整片换掉。
+     *
+     * 楼中楼的展开状态跟着清:它们挂在具体的 rpid 上,而刷新之后那些楼层可能已经不在第一页了。
+     */
+    fun refresh() {
+        generation++
+        fetchJob?.cancel()
+        expandJobs.values.forEach { it.cancel() }
+        expandJobs.clear()
+        cursor = null
+        subReplyNextPage.clear()
+        _state.update { it.copy(refreshing = true, error = null, expandedReplies = emptyMap()) }
+        fetch(append = false)
+    }
+
     fun setSort(sort: CommentSort) {
         if (sort == _state.value.sort) return
         _state.update { it.copy(sort = sort) }
@@ -165,7 +188,7 @@ class CommentViewModel(
                 // 不能把这个刚置位的 true 又清掉。
                 if (gen == generation) {
                     loadingPage = false
-                    _state.update { it.copy(loading = false, appending = false) }
+                    _state.update { it.copy(loading = false, appending = false, refreshing = false) }
                 }
             }
         }

@@ -46,6 +46,29 @@ class BilbyLinkTest {
         )
     }
 
+    /**
+     * 专栏的两套编号必须分开。认错一套的表现不是打不开,而是**打开另一篇文章** ——
+     * cv123 和 opus/123 都存在,内容毫无关系。
+     */
+    @Test
+    fun `专栏分得清 opus 与 cv 两套编号`() {
+        assertEquals(
+            ArticlePage("998", isRead = false),
+            BilbyLink.destinationOf("https://www.bilibili.com/opus/998"),
+        )
+        assertEquals(
+            ArticlePage("123", isRead = true),
+            BilbyLink.destinationOf("https://www.bilibili.com/read/cv123"),
+        )
+        // 手机端给的是不带 cv 前缀的那种。
+        assertEquals(
+            ArticlePage("123", isRead = true),
+            BilbyLink.destinationOf("https://m.bilibili.com/read/123/?from=share"),
+        )
+        // 编号位不是数字就不认,不要构造一个取不到内容的目的地。
+        assertNull(BilbyLink.destinationOf("https://www.bilibili.com/read/mobile"))
+    }
+
     @Test
     fun `非 UGC 与站外链接一律不认`() {
         // 番剧、影视、课堂是 Non-Goal(版权),不是"还没做"。

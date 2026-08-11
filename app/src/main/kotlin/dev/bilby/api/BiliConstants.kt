@@ -14,6 +14,9 @@ object BiliConstants {
     const val PASSPORT_HOST = "https://passport.bilibili.com"
     const val MAIN_HOST = "https://www.bilibili.com"
     const val SPACE_HOST = "https://space.bilibili.com"
+
+    /** 一条动态的网页地址是 `t.bilibili.com/<id_str>`,不在 `www` 下面。 */
+    const val DYNAMIC_HOST = "https://t.bilibili.com"
     const val APP_HOST = "https://app.bilibili.com"
 
     /** 直播接口自成一个域,和 `api.bilibili.com` 不通用。 */

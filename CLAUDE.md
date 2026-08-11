@@ -1,37 +1,51 @@
 # Bilby
 
-Android client for bilibili, single account, open source. The implementation basis is
-`DESIGN.md` in the repository root, which is a local file and not tracked. Read it before
-changing structure.
+Android client for bilibili, single account, open source.
+
+**Three boundaries, stated in `README.md`'s contributing section, which is authoritative on
+them.** Restated here so they can be applied without a second file open:
+
+- **Circumvention and entitlement.** No defeating membership gates or paywalled quality
+  tiers, nothing touching billing or entitlement; viewing and interaction data are reported
+  back as they would be from the official app.
+- **UGC only.** The app plays user submissions; anime, film and course links are not
+  resolved.
+- **Interruption and attention.** Nothing designed to interrupt the user or compete for
+  their attention. The app implements neutral behaviour only, and what a list contains
+  follows from what the user did.
+
+When a request seems to cross one of them, that file settles it.
 
 **This is the owner's own repository**, so features and behaviour changes are agreed in
 conversation before code, not filed as issues. If a request arrives as "add X" with no agreed
 shape, say so and work the design out first. Skipping issues is a consequence of the owner
 being in the room — it is not advice for contributors, who should still open one.
 
-## Product constraints
+**Product copy, reworked business logic and architecture changes get a proposal first.**
+Show the shape and wait for a yes. These are the things the owner reads word by word or has
+to live with afterwards, and a diff is the wrong place to meet them for the first time. Bug
+fixes and mechanical work go straight in.
 
-Bilby takes an anti-algorithmic stance: what the user sees comes from their own
-subscriptions and from searches they start, never from a ranker deciding on their behalf.
-The point is that the content is worth their attention, not that they spend less time in
-the app — this is not a screen-time tool, and arguments of the form "that would make the
-app too engaging" do not belong here. Every rule below is load-bearing; treat them as
-fixed:
+## Product shape
 
-- No recommendation feed, no related-videos rail, no autoplay. A list's contents follow from
-  what the user already chose (who they follow, which video they opened). Never insert
-  anything into a list as the user scrolls.
-- The slot where the official app puts related recommendations holds the video's collection
-  and the uploader's other work: a finite set the user selected by opening this video. The
-  playback queue is built from that set, which makes it a general queue and keeps it free of
-  listening-mode special cases.
-- A queue plays to the end and stops. No wrapping, no looping, no refilling from a
-  recommendation pool. Bounded selection is the whole reason autoplay is permitted here at
-  all; refilling deletes the decision point.
+A position, and it can change in conversation. The test is whether the app interrupts the
+user or competes for their attention: what a list contains follows from what the user did,
+and the app implements neutral behaviour only. It is not a screen-time tool — using the app
+less is not the goal, and "that would make the app too engaging" is not an argument here.
+
+**Finiteness is a result, not a rule.** A subscription feed runs out and a collection ends
+because the content follows the user's own choices. Do not reason backwards from it: capping
+a list, refusing a second page, or calling an upstream limit a feature are all inventions.
+
+The concrete rules:
+
+- No recommendation feed and no related-videos rail. 找相关 is one explicit tap that returns
+  a handful of candidates with reasons, and does not persist on the page.
 - The search assistant's context contains only the user's current request. Never inject
-  watch history.
-- Report to bilibili honestly (history, heartbeats, coins, favourites, likes). Do no
-  personalization locally.
+  watch history. The step ceiling, the provenance check, and the result count live in code,
+  not in the prompt (see `agent/AgentLoop.kt`).
+- Do no personalization locally. Reporting to bilibili is one thing; deciding anything on
+  the basis of what came back is not allowed.
 
 ## Fixed conventions
 
@@ -43,13 +57,10 @@ beside it. Never generalise from one action to the next — check what PiliPlus 
 for that specific call. The parameter, header and signing facts already paid for live in
 `notes/` and at their call sites.
 
-Two paths were built, tested against the live API, and removed. Do not reimplement either:
-the cookie-to-`access_key` exchange, which returns `-101`; and web login with cookie
-refresh, because the refresh token this app holds comes from TV login and refreshes an
-app-side token, which is a different thing from what the web `cookie/refresh` endpoint
-wants. PiliPlus implements no cookie refresh either — when credentials expire it asks for
-another qrcode scan, and so do we. A refresh path that looks like it works is worse than
-none, because it stops anyone from handling expiry.
+**A newly established API fact goes into the matching file under `notes/`**, with the call
+site left holding one line that points there. KDoc explains why this call is written the way
+it is; `notes/` records what the endpoint actually does, which is what the next feature will
+need. Facts that only ever reached a KDoc get established twice.
 
 **Logging.** Every failure swallowed by `runCatching` logs path, code, and message through
 `BiliLog`. Credentials never appear in logs: not SESSDATA, `bili_jct`, `access_key`, or the
@@ -72,10 +83,10 @@ mark* in a dropdown is a different thing and stays.
 **Interface copy is written, never spoken.** No `刷视频`, no `删掉`, no `再下一次`. The
 register that makes an irreversible action sound casual is the register that gets it
 misread. Two carve-outs: the assistant's process rows, where `瞟了一眼` is exactly right
-because those lines are the assistant reporting on itself (see `Tool.label`); and copy the
-user is owed nothing extra — confirmations state the action and stop. `取消关注` is the
-whole dialog. Explaining that unfollowing means finding the person again is user education
-this app does not do, and PiliPlus does not either.
+because those lines are the assistant reporting on itself (see `Tool.label`); and
+confirmations, which state the action and stop. `取消关注` is the whole dialog — spelling
+out that unfollowing means finding the person again tells the reader something they already
+know, and a dialog that explains itself gets dismissed without being read.
 
 ## Architecture traps
 
@@ -94,7 +105,11 @@ navigation destination, adding a `listening` flag on the service, and adding a
 Multi-part videos and collections are different things. Shuffle changes play order only; the
 displayed list keeps its order and the highlight scrolls.
 
-Navigation 3 has no separate graph: the backstack is a `SnapshotStateList<NavKey>`.
+Navigation 3 has no separate graph: the backstack is a `SnapshotStateList<NavKey>`, and it
+does not deduplicate. Both entry decorators index by the key, so one key appearing twice
+means a shared ViewModel and a shared saveable slot, popping either clears the other's
+store, and composing both at once trips `SaveableStateHolder`'s `require`. Push through
+`pushUnique` in `ui/NavBackStackPolicy.kt` — never `backStack.add` directly.
 
 ## Toolchain
 
@@ -152,16 +167,29 @@ type names, no commit subjects, no thanks or filler. Skip anything the reader ca
 a refactor with no visible effect does not belong in the notes at all. Match the previous
 release: read it back with `gh release view <tag> --json body` before writing the next one.
 
+**修复 lists what was broken in the released version, not what broke on the way here.** Half
+of a batch is usually self-inflicted and self-repaired before anyone saw it; reporting that
+asks the reader to verify something they never had. The diff since the tag answers it — a
+problem inside a file that is new in this release was never shipped.
+
 `.github/workflows/apk-size-badge.yml` refreshes the size badge and runs on its own after a
 release is published; it can also be dispatched against any older tag. It writes
 `.github/badges/apk-size.json`, and that file has to live in the repository: shields.io
 rejects `github.com` as an endpoint host, so serving the JSON as a release asset returns
 `domain is blocked`.
 
-Smoke test changes on a real device and watch end-to-end behaviour. `adb shell input tap` is
-a no-op while the screen is off and reads as an unresponsive button, so send
-`input keyevent KEYCODE_WAKEUP` first. `adb shell input text` is swallowed by the pinyin
-IME.
+**The device is the owner's, and driving it needs their say-so.** Reach for `adb` — install,
+launch, tap, screenshot — only after they have asked for it in this session. Otherwise hand
+them the steps to run and wait.
+
+**When they ask for a screenshot, take the screenshot and nothing else.** No relaunch, no
+`installDebug`, no `am start`, nothing that tears down the activity they are looking at:
+they are pointing at what is on screen right now, and rebuilding it answers a different
+question. Install the new build when they ask for the new build.
+
+While driving is authorised: `adb shell input tap` is a no-op with the screen off and reads
+as an unresponsive button, so send `input keyevent KEYCODE_WAKEUP` first, and
+`adb shell input text` is swallowed by the pinyin IME.
 
 Gradle compilation is an exclusive resource. Parallel subagents compiling at the same time
 crash the Kotlin daemon.

@@ -34,6 +34,7 @@ import dev.bilby.data.SettingsStore
 import dev.bilby.data.SubtitleRepository
 import dev.bilby.data.VideoRepository
 import dev.bilby.data.resumeAtMillisFor
+import dev.bilby.offline.OfflineItem
 import dev.bilby.offline.OfflineStatus
 import dev.bilby.offline.OfflineStore
 import kotlinx.coroutines.CoroutineScope
@@ -127,6 +128,14 @@ data class AudioPlaybackUiState(
     val currentQuality: Int = 0,
     /** 源是队列时非空。见 [QueueState]。 */
     val queue: QueueState? = null,
+    /**
+     * 别处看到的位置(毫秒),只在放本地副本、且服务端那份确实比本机新时非空。
+     *
+     * **是一条建议,不是一次跳转。** 播放已经从本地进度起播了,这个值只让界面摆一条可点的提示,
+     * 用户点了才 seek。自动跳过去会让播放头在没有任何操作的情况下自己动 —— 那比停在一个稍旧的
+     * 位置更难理解,而"稍旧"本身是有下限的:它就是本机上次看到的地方。
+     */
+    val cloudResumeMillis: Long? = null,
 )
 
 /**
@@ -233,6 +242,30 @@ class AudioPlaybackService : MediaSessionService() {
     private var playInfo: PlayInfo? = null
     private var currentQuality: Int = 0
 
+    /** 见 [AudioPlaybackUiState.cloudResumeMillis]。装载任何新东西时清掉。 */
+    private var cloudResumeMillis: Long? = null
+
+    /**
+     * 一条播完了要不要接着放下一条。见 [dev.bilby.data.PlaybackPrefs.autoNext]。
+     *
+     * 在这里存一份镜像而不是每次现读:判断点在 `onPlaybackStateChanged` 里,那是个同步回调,
+     * 而读设置是挂起的。启动一个协程去读、读完再决定,中间那一小段里播放器已经停在片尾了。
+     */
+    private var autoNextEnabled = true
+
+    /**
+     * 用户还想让它响着。**这个 bit 归服务所有,页面不碰。**
+     *
+     * 播放器暂停的原因不止一种,而只有一种是"我不想听了":暂停按钮(界面、通知栏、耳机线控)、
+     * 睡眠定时器到点、队列走完。离开播放页去 UP 空间、切后台、来电避让都会让播放器停下来,但
+     * 它们表达的不是这个意思,回来时该接着播。
+     *
+     * 判据放在这里而不是导航层,是因为导航层回答不了。它只知道页面被压住还是被弹掉,而这两者
+     * 与用户想不想听没有对应关系 —— 之前三次尝试都栽在这个判断上(CLAUDE.md)。页面重新组合时
+     * 只问一句"播放器装的还是这一条吗、这个 bit 还立着吗",两个问题都不需要知道自己是怎么来的。
+     */
+    private var playIntent = false
+
     override fun onCreate() {
         super.onCreate()
         runningService = this
@@ -261,8 +294,14 @@ class AudioPlaybackService : MediaSessionService() {
         }
         currentPlayer = player
 
-        sleepTimer = SleepTimer(scope) { player.pause() }
+        // 定时到点是"这次听完了",和按下暂停同一类,所以连 playIntent 一起清 —— 不清的话
+        // 回到播放页它会自己响起来,而用户设定时器正是为了让它别再响。
+        sleepTimer = SleepTimer(scope) {
+            playIntent = false
+            player.pause()
+        }
         scope.launch { sleepTimer.state.collect { _sleepTimerState.value = it } }
+        scope.launch { settings.playbackPrefs.collect { autoNextEnabled = it.autoNext } }
 
         session = MediaSession.Builder(this, QueuePlayer(player))
             .setCallback(SessionCallback())
@@ -415,11 +454,19 @@ class AudioPlaybackService : MediaSessionService() {
             if (cid != 0L && cid != loadedCid && !preparing && !isSupersededDefault) {
                 playPart(cid)
             } else {
+                // 回到这一页了。播放器停着而 [playIntent] 还立着,说明上次停下不是用户的意思
+                // (多半是离开页面去看别的),接着播。**这一句就是"非本意的停止,回来续播"的
+                // 全部实现** —— 它不需要知道自己是被弹回来的还是被重新露出来的,那两个问题
+                // 正是之前三次尝试栽进去的地方。
+                if (playIntent && !player.playWhenReady) player.playWhenReady = true
                 publishState()
             }
             // 上一次补全失败就停在了单条队列上。这条命令在每次回到播放页时都会再发一遍,
             // 拿它当重试点,不必为此单开一条命令和一个按钮。
             if (queueIncomplete) enrichQueue(bvid)
+            // 回到这一页也要重新核对一次云端进度,理由见 [reconcileIfLocalCopy]。
+            // **这一趟是唯一的机会**:播放器还装着这一条,下面那些装载路径一条都走不到。
+            reconcileIfLocalCopy(bvid)
             return
         }
         if (queue.seekToBvid(bvid) != null) {
@@ -556,6 +603,9 @@ class AudioPlaybackService : MediaSessionService() {
         positionOverrideMillis: Long? = null,
         resumePart: Boolean = false,
     ) {
+        // 换东西之前先把上一条的进度写下去。此刻 [offlineBvid] 和 [loadedCid] 还指着上一条,
+        // 再往下一行就被顶掉了。
+        persistCachedProgress()
         prepareJob?.cancel()
         retryJob?.cancel()
         // 换到新的一条就是一份新的额度;重试则要把已经失败的次数带着,否则退避永远停在第一档。
@@ -565,9 +615,14 @@ class AudioPlaybackService : MediaSessionService() {
         }
         val item = queue.current() ?: run { stopPlayback(); return }
 
+        // 打开一条要放的东西本身就是"我想听"。放在早退分支之前:转屏、退出全屏走的是那条,
+        // 而那些同样不该把 bit 弄丢。
+        playIntent = playWhenReady
+
         if (!force && loadedBvid == item.bvid && (item.cid == 0L || loadedCid == item.cid)) {
             player.playWhenReady = playWhenReady
             publishState()
+            reconcileIfLocalCopy(item.bvid)
             return
         }
 
@@ -600,10 +655,19 @@ class AudioPlaybackService : MediaSessionService() {
                 )
                 player.prepare()
                 openChain?.mark("prepare")
-                // 续播位置只认服务端的 last_play_time(DESIGN 7),而这里正好没有网络可问。
-                // 本地不另存一份进度:那份是"视频播不动"的根因,见 VideoRepository 的说明。
+                // 续播位置取索引里那份本地进度(见 [OfflineItem.watchedPositionMillis])。
+                // **这里不问服务端**:问它要一次网络往返,而这条路径的全部意义就是没有网络时也能
+                // 起播。放本地副本就用本地那份进度,和 PiliPlus 的分工一致。
+                val startMillis = positionOverrideMillis
+                    ?: resumePositionMillis(cached.watchedPositionMillis, cached.durationSeconds * 1000)
+                if (startMillis > 0) player.seekTo(startMillis)
                 loadedBvid = cached.bvid
                 loadedCid = cached.cid
+                cloudResumeMillis = null
+                // 起播之后才去核对云端进度,而且是这次 prepare 的子协程:下一次 playCurrent 会
+                // `prepareJob?.cancel()`,这份核对跟着一起走 —— 上一条的核对结果落到新的一条上
+                // 就是串味。
+                launch { reconcileCachedProgress(cached) }
                 // 页面稍后还会拿着详情里的默认 cid 再发一遍打开命令(见 openVideo 的幂等分支)。
                 // 缓存的可能正是别的那一 P,那一趟会把刚起好的本地副本顶掉、改走网络 —— 记下
                 // "现在放的是这条视频的本地副本",让那一趟被忽略。
@@ -740,6 +804,97 @@ class AudioPlaybackService : MediaSessionService() {
         return lastCid
     }
 
+    /**
+     * 本地副本起播之后,到云端核对一次进度。
+     *
+     * **不挡起播,失败什么也不中止。** "缓存了却播不动"那个 bug 的根因是补 cid 那次网络调用排在
+     * 本地检查前面、失败即 return,判据是"阻塞且失败会中止",不是"有网络调用" —— 所以这一句放在
+     * 起播之后是安全的,把它挪到前面就不是了。
+     *
+     * **云端赢了也不 seek**,只把位置摆上界面等用户点(见 [AudioPlaybackUiState.cloudResumeMillis])。
+     *
+     * 走 `x/player/wbi/v2` 而不是 playurl:两者都带这一对续播位置,但前者不返回流地址。为了读一个
+     * 数字去取一整份带时效的 CDN 地址再丢掉,是在风控额度上白花钱。
+     *
+     * **服务端记的那一对属于哪一 P 必须核** —— v2 回的是整条视频当前那一对,问 P1 也会回 P7 的值
+     * (实测,见 [dev.bilby.api.dto.PlayerV2Dto])。对不上就当"这一 P 服务端没有记录",本地那份直接
+     * 说了算:全站每条视频只存一对,分 P 各自的进度它不存,所以这不是"去别处取"的问题,那份根本
+     * 不存在。
+     *
+     * 顺带把 base 校准到云端此刻的值:这一次我们确实问到了它。用户不点、继续在本地看下去时,停止
+     * 时写下的本地位置配上这个 base,下次打开就是"云端没再动过,本地说了算" —— 他刚做的那个选择
+     * 被记住了。
+     */
+    /**
+     * 播放器已经装着这一条时,重新去云端核对一次进度。
+     *
+     * **不是装载路径的一部分,而是"又进了一次这条视频"。** 核对本来只发生在装载那一刻,
+     * 而播放器是单例、离开播放页也不卸载 —— 从缓存目录点进来看一会儿、退出去、再点回来,
+     * 走的是 [openVideo] 里那条"已经是它了"的捷径,装载路径一步都不走,于是这中间别处产生的
+     * 新进度一次也问不到。表现是只有重启 app 那条提示才弹得出来。
+     *
+     * 时间上赶得及:周期心跳每 5 秒才把本地位置报上去一次(BilbyPlayer 的
+     * `PROGRESS_REPORT_INTERVAL_MILLIS`),而这一趟只是一次请求。不赶在它前面的话,云端那份
+     * 记录会先被本地进度盖掉,提示就再也没有可比的对象了。
+     *
+     * 只对本地副本做:在线播放的进度本来就以服务端那份为准,没有第二份可比。
+     */
+    private fun reconcileIfLocalCopy(bvid: String) {
+        if (bvid != offlineBvid) return
+        val cid = loadedCid
+        scope.launch {
+            offlineStore.completedFor(bvid, cid)?.let { reconcileCachedProgress(it) }
+        }
+    }
+
+    private suspend fun reconcileCachedProgress(cached: OfflineItem) {
+        // **问不到就什么都不做。** 离线时这一句必然失败,而那正是这个功能存在的场景 ——
+        // 把失败当成"服务端说 0"会把基线抹成 0,于是"云端没动过、本地说了算"这一支再也成立
+        // 不了,而下次联网时 0 又必然不等于云端真值,弹一条用户根本没做过的"别处已看到"。
+        val lastPlayed = subtitleRepository.lastPlayed(cached.bvid, cached.cid) ?: return
+        // 回来时播放器可能已经换到别的东西上了(手快点了下一条)。
+        if (loadedBvid != cached.bvid || loadedCid != cached.cid) return
+
+        val serverMillis = if (lastPlayed.cid == cached.cid) lastPlayed.positionMillis else 0L
+        offlineStore.recordServerBase(cached.bvid, cached.cid, serverMillis)
+
+        val merged = mergeCachedProgress(
+            localMillis = cached.watchedPositionMillis,
+            base = cached.serverProgressBaseMillis,
+            serverMillis = serverMillis,
+        )
+        // 没冲突就把上一次的结果清掉,不是直接 return。**回到这一页会重新组合一次**,
+        // 那时 [CloudResumeHint] 的 visible 从 false 起步,状态里留着的旧值会让它再弹一遍 ——
+        // 而这一次核对刚刚说了"云端没有更新的位置"。
+        if (merged == cached.watchedPositionMillis) {
+            if (cloudResumeMillis != null) {
+                cloudResumeMillis = null
+                publishState()
+            }
+            return
+        }
+        cloudResumeMillis = resumePositionMillis(merged, cached.durationSeconds * 1000)
+            .takeIf { it > 0 }
+        publishState()
+    }
+
+    /**
+     * 把本地副本播到哪儿了写进它的 meta.json。
+     *
+     * 只在放本地副本时有意义:装在线流时服务端那份才是真相,本地不掺和(见
+     * [dev.bilby.data.resumeAtMillisFor])。[offlineBvid] 非空正是"此刻放的是本地副本"。
+     *
+     * `NonCancellable`:调用点都在"正要停下来"的时刻(暂停、播完、换一条),而那些时刻紧挨着
+     * scope 被取消 —— 写盘是这次观看留下的唯一痕迹,不能跟着一起没。
+     */
+    private fun persistCachedProgress() {
+        val bvid = offlineBvid ?: return
+        val cid = loadedCid
+        val position = player.currentPosition.coerceAtLeast(0)
+        if (position <= 0) return
+        scope.launch(NonCancellable) { offlineStore.recordProgress(bvid, cid, position) }
+    }
+
     /** 跳到队列里的另一条:点队列中的一项、合集里换一集。 */
     private fun seekToBvid(bvid: String) {
         if (queue.current()?.bvid == bvid) return
@@ -855,8 +1010,14 @@ class AudioPlaybackService : MediaSessionService() {
         publishState()
     }
 
-    /** 队列走完。只暂停不停服务:用户可能想按上一条回去重听。 */
+    /**
+     * 停下来,而且是**结束意义上的停**:队列走完、睡眠定时器到点、队列空了。只暂停不停服务,
+     * 用户可能想按上一条回去重听。
+     *
+     * 清掉 [playIntent] —— 这几种都是"这次听完了",回到播放页不该自己再响起来。
+     */
     private fun stopPlayback() {
+        playIntent = false
         player.playWhenReady = false
         publishState()
     }
@@ -873,6 +1034,7 @@ class AudioPlaybackService : MediaSessionService() {
             currentQuality = currentQuality,
             // 直播源没有队列。给一个空队列而不是 null 的话,界面分不出"没有下一条"和
             // "还没打开过东西"。
+            cloudResumeMillis = cloudResumeMillis,
             queue = if (live != null) null else QueueState(
                 current = current,
                 currentCid = loadedCid,
@@ -936,15 +1098,29 @@ class AudioPlaybackService : MediaSessionService() {
                 publishState()
                 return
             }
+            // 播到底了。位置此刻就是时长,写下去之后 [isWatchedToEnd] 认得出它 —— 不需要为
+            // "看完"单独存一个标记,也就不会出现标记和位置各说各话。
+            persistCachedProgress()
             // "播完当前这条后"睡:此时不能再切下一条,否则定时关闭形同虚设。
             if (sleepTimer.onItemFinished()) {
+                stopPlayback()
+                return
+            }
+            // 关掉自动前进就在这里停住。**只挡这一条路** —— 手动的下一条走 [ACTION_NEXT] 和
+            // [QueuePlayer.seekToNextMediaItem],那是用户当场表达的意思,不该被设置挡住。
+            if (!autoNextEnabled) {
                 stopPlayback()
                 return
             }
             if (queue.next() != null) playCurrent() else stopPlayback()
         }
 
-        override fun onIsPlayingChanged(isPlaying: Boolean) = publishState()
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            // 真停下来了就把本地副本的进度写下去。**缓冲造成的 isPlaying=false 不写** ——
+            // 那时 playWhenReady 还立着,而缓冲一分钟能有好几次,每次写下的位置和上一次没区别。
+            if (!isPlaying && !player.playWhenReady) persistCachedProgress()
+            publishState()
+        }
 
         /** 画面出来了才算这次打开走完。音频先出声,但用户等的是这一帧。 */
         override fun onRenderedFirstFrame() = finishOpenChain("firstFrame")
@@ -970,6 +1146,30 @@ class AudioPlaybackService : MediaSessionService() {
     private inner class QueuePlayer(player: Player) : ForwardingPlayer(player) {
 
         override fun getMediaMetadata(): MediaMetadata = currentMetadata()
+
+        /**
+         * 外部控制器按下的播放/暂停。**这两个覆写是 [playIntent] 唯一的正门。**
+         *
+         * 通知栏、锁屏、耳机线控、车机都经过 MediaSession 落到这里,界面里的播放/暂停按钮走
+         * MediaController 也落到这里 —— 也就是说凡是用户亲手表达"放"或"停"的地方,全都在这条
+         * 路上。反过来,切后台([pauseForAppBackground])、来电避让(播放器内部处理音频焦点)、
+         * 页面离开([ACTION_PAGE_LEFT])都直接动 `player`,不经过这里,于是那个 bit 不受影响。
+         */
+        override fun play() {
+            playIntent = true
+            super.play()
+        }
+
+        override fun pause() {
+            playIntent = false
+            super.pause()
+        }
+
+        /** 有些控制器不发 play/pause 而是直接设这个标志,两条路要给出同一个结果。 */
+        override fun setPlayWhenReady(playWhenReady: Boolean) {
+            playIntent = playWhenReady
+            super.setPlayWhenReady(playWhenReady)
+        }
 
         override fun hasNextMediaItem(): Boolean = queue.currentIndex + 1 < queue.size
 
@@ -1029,6 +1229,7 @@ class AudioPlaybackService : MediaSessionService() {
                         .add(SessionCommand(ACTION_SET_QUALITY, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SET_SHUFFLE, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_RETRY, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_PAGE_LEFT, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_NEXT, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_PREVIOUS, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SLEEP_TIMER, Bundle.EMPTY))
@@ -1050,6 +1251,12 @@ class AudioPlaybackService : MediaSessionService() {
                 ACTION_SET_QUALITY -> setQuality(args.getInt(EXTRA_QUALITY))
                 ACTION_SET_SHUFFLE -> setShuffled(args.getBoolean(EXTRA_SHUFFLED))
                 ACTION_RETRY -> retryNow()
+                // 暂停,但**不动 playIntent**(见 [ACTION_PAGE_LEFT])。顺手写一次本地进度:
+                // 离开页面是这次观看最可能的终点。
+                ACTION_PAGE_LEFT -> {
+                    persistCachedProgress()
+                    player.pause()
+                }
                 ACTION_NEXT -> if (queue.next() != null) playCurrent()
                 ACTION_PREVIOUS -> if (queue.previous() != null) playCurrent()
                 // 分钟数是三态里唯一带参数的那个:大于 0 即定时,[SLEEP_END_OF_ITEM] 即播完这条,
@@ -1103,6 +1310,18 @@ class AudioPlaybackService : MediaSessionService() {
          */
         const val ACTION_NEXT = "dev.bilby.NEXT"
         const val ACTION_PREVIOUS = "dev.bilby.PREVIOUS"
+
+        /**
+         * 播放页离开了组合。**暂停,但不动 [playIntent]。**
+         *
+         * 页面原先在 onDispose 里直接 `controller.pause()`,而那条路和用户按下暂停键是同一条
+         * (都落到 [QueuePlayer.pause]),于是服务分不出"他不想听了"和"他去看别的了"——回到
+         * 页面时只能一律停着。
+         *
+         * 分成两条命令而不是让服务去猜,是因为服务确实猜不出来:它看到的只是一次 pause。谁按的
+         * 这个信息只有发命令的那一方有。
+         */
+        const val ACTION_PAGE_LEFT = "dev.bilby.PAGE_LEFT"
 
         const val ACTION_SLEEP_TIMER = "dev.bilby.SLEEP_TIMER"
 

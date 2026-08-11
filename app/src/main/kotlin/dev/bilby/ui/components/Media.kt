@@ -180,7 +180,7 @@ fun SquareCover(url: String, size: Dp, modifier: Modifier = Modifier) {
 
 /** 圆形头像。同样走 [biliImageRequest],同样是装饰(旁边一定跟着用户名)。 */
 @Composable
-fun Avatar(url: String, modifier: Modifier = Modifier, size: Dp = Dimens.AvatarSmall) {
+fun Avatar(url: String, modifier: Modifier = Modifier, size: Dp = Dimens.AvatarRow) {
     AsyncImage(
         model = biliImageRequest(url),
         contentDescription = null,

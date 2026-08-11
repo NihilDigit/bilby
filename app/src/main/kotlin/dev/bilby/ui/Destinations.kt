@@ -86,6 +86,27 @@ data class CollectionContents(
     val name: String,
 ) : NavKey
 
+/**
+ * 首页折起来的那一半:图文、转发、直播、专栏、剧集更新(DESIGN 2.1 的"图文/转发折叠为一个
+ * 不显眼的入口")。
+ *
+ * 它和首页是同一条时间序流的两半,数据源、分页方式、有限性都相同,不是新增一个信息流 ——
+ * 按 1.1 的机制表逐条对过:不排序、不推荐、翻到底就没了。
+ */
+@Serializable
+data object OtherDynamics : NavKey
+
+/**
+ * 一篇专栏。按 1.1 的机制表对过:进来的唯一方式是用户点了某条动态里的那一篇,是单个有限
+ * 对象,读完就到底,页内不推荐别的文章 —— 和 [Video]、[LiveRoom] 落在同一栏。
+ *
+ * @param isRead true 时 [id] 是 cv 号(旧版专栏),false 时是 opus id。两种编号都是一串
+ *   数字,分不出来,所以由链接/卡片那一侧带过来;取哪条接口由它决定,是身份的一部分
+ *   (见 `data/ArticleRepository.kt`)。
+ */
+@Serializable
+data class ArticlePage(val id: String, val isRead: Boolean) : NavKey
+
 /** 历史记录。个人页的三个入口之一,DESIGN 2 节:历史只待在它自己这一页。 */
 @Serializable
 data object History : NavKey

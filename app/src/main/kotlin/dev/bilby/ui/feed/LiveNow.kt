@@ -31,6 +31,7 @@ import dev.bilby.R
 import dev.bilby.data.LiveUpBrief
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.LivePulse
+import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 
 /**
@@ -172,7 +173,7 @@ fun LiveNowSheet(
                     supportingContent = up.roomTitle.takeIf { it.isNotEmpty() }?.let { title ->
                         { Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis) }
                     },
-                    leadingContent = { Avatar(url = up.faceUrl, size = FaceSize) },
+                    leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarRow) },
                     trailingContent = {
                         LivePulse(
                             color = MaterialTheme.colorScheme.primary,
@@ -189,10 +190,11 @@ fun LiveNowSheet(
 }
 
 /**
- * 左边那张,压在上面。**和 `FeedScreen` 的 `AvatarSize` 同值** —— 这一格排在那一排最前面,
- * 头像不一样大的话整行的上沿就参差了。改那边记得改这里。
+ * 左边那张,压在上面。**取的就是那一排的尺寸** —— 这一格排在首页那排关注的最前面,
+ * 头像不一样大的话整行的上沿就参差了。以前这里是一个同值的本地常量,配一句"改那边记得
+ * 改这里"。
  */
-private val FrontFaceSize = 48.dp
+private val FrontFaceSize = Dimens.AvatarStack
 
 /**
  * 右边那张,压在下面。**按前一张的比例定,不写死 dp** —— 这两个数之间的差是有意义的
@@ -211,9 +213,8 @@ private val FaceRing = 1.5.dp
 
 private val PulseSize = 16.dp
 
-/** sheet 里每行的头像,和 ListItem 的 leading 尺寸一致。 */
-private val FaceSize = 36.dp
 private val LivePulseSizeInList = 14.dp
 
 /** 比两张头像叠起来再宽一点,让"N 正在直播"那行字有地方站。 */
+/** 这一格**比头像格宽**:它装的是两张叠着的脸,不是一张。 */
 private val LiveSlotWidth = 72.dp

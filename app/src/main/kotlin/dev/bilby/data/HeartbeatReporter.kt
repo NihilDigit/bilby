@@ -2,6 +2,7 @@ package dev.bilby.data
 
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
+import dev.bilby.api.BiliResult
 import dev.bilby.api.postAction
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -66,6 +67,7 @@ class HeartbeatReporter(
         startTs: Long,
         videoDurationSeconds: Long,
         isFinished: Boolean,
+        onReported: suspend (reportedMillis: Long) -> Unit = {},
     ) {
         if (progressSeconds == 0L) return
         val form = mapOf(
@@ -76,7 +78,16 @@ class HeartbeatReporter(
         )
         // 失败已由 postAction 记过一行日志(路径 + code + message),这里返回值丢弃即可:
         // 心跳失败绝不能打断播放。
-        scope.launch { client.postAction(HEARTBEAT_URL, form) }
+        scope.launch {
+            if (client.postAction(HEARTBEAT_URL, form) is BiliResult.Ok) {
+                // 报成功了,服务端存的就是这个数。缓存内容据此推进 base ——
+                // 不推的话下次打开会把我们自己刚报上去的进度当成"别处看过的",
+                // 每次都弹一条其实来自本机的提示(见 dev.bilby.player.mergeCachedProgress)。
+                //
+                // 完播报的是 -1,服务端那边归零,所以这里也报 0。
+                onReported(if (isFinished) 0L else playedTimeSeconds * 1000)
+            }
+        }
     }
 
     private companion object {

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -48,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -104,6 +106,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.media3.common.Player
+import dev.bilby.offline.CachedIndex
+import dev.bilby.offline.offlineId
 import dev.bilby.ui.components.collapsingHeader
 import dev.bilby.ui.components.rememberCollapsingHeaderState
 
@@ -134,8 +138,8 @@ fun VideoScreen(
     sponsorSegments: List<SponsorSegment>,
     onReportProgress: (position: Long, duration: Long) -> Unit,
     onFindRelated: () -> Unit,
-    /** 已缓存(或正在缓存)的 bvid。缓存面板拿它把已有的那几条标出来并禁选。 */
-    cachedBvids: Set<String> = emptySet(),
+    /** 盘上已有的东西。缓存面板拿它把已有的那几条标出来并禁选。 */
+    cached: CachedIndex = CachedIndex(),
     /** 缓存面板按下确认。清晰度与"要不要弹幕"都在面板里选,这里只负责把结果交出去。 */
     onCacheSelection: (List<QueueItem>, qualityId: Int) -> Unit = { _, _ -> },
     followState: FollowState,
@@ -161,6 +165,7 @@ fun VideoScreen(
     onPlayEpisode: (bvid: String) -> Unit,
     onRelatedVideoClick: (bvid: String) -> Unit,
     onCommentSort: (CommentSort) -> Unit,
+    onCommentRefresh: () -> Unit,
     onCommentLoadMore: () -> Unit,
     onExpandReplies: (Long) -> Unit,
     onSendComment: (String, Long?) -> Unit,
@@ -234,7 +239,16 @@ fun VideoScreen(
                 // 播放器并起播,旧页的 onDispose 之后才跑。不认身份就会把刚起播的下一集摁停,
                 // 表现为"进播放页不自动播放"。这与进度串味是同一个毛病——页面对着共享播放器
                 // 发命令,却没问播放器还是不是自己的。
-                if (playerHoldsThisPage()) connected.pause()
+                //
+                // **发 [ACTION_PAGE_LEFT] 而不是 pause()。** 后者和用户按下暂停键是同一条路,
+                // 服务分不出"他不想听了"和"他去看 UP 主页了" —— 于是回到这一页只能一律停着。
+                // 谁按的这个信息只有发命令的这一方有,所以由这一方说清楚。
+                if (playerHoldsThisPage()) {
+                    connected.sendCustomCommand(
+                        SessionCommand(AudioPlaybackService.ACTION_PAGE_LEFT, Bundle.EMPTY),
+                        Bundle.EMPTY,
+                    )
+                }
             }
             // **不 release 播放器**:它归服务所有,不归这个页面。页面离开只断开连接——
             // 在这里 release 就等于把后台正在听的那条一起掐了,而"页面走了"和"播放结束"
@@ -693,6 +707,8 @@ fun VideoScreen(
                         // 但只有两栏要把状态栏收起来:那时它横跨黑画面和浅色的简介栏,
                         // 而图标明暗只能整条设一次(见 PlayerShell)。
                         hideStatusBar = expandedLayout,
+                        // 返回/分享画在壳外面(下面那个 if),渐变归壳画,才落得到弹幕下面。
+                        topScrim = !fullscreen,
                         onReportProgress = onReportProgress,
                         title = state.detail?.title.orEmpty(),
                 seekBarSegments = sponsorSegments.toSeekBarSegments(),
@@ -728,6 +744,7 @@ fun VideoScreen(
                         onShare = {
                             ShareLink.video(context, bvid, state.detail?.title.orEmpty())
                         },
+                        scrim = false,
                     )
                 }
 
@@ -753,7 +770,29 @@ fun VideoScreen(
                         PlaybackLoading(Modifier.align(Alignment.Center))
                 }
 
-                SkipToast(skippedCategory, Modifier.align(Alignment.TopCenter).padding(Spacing.Tight))
+                // 两条提示摞成一列而不是各自对齐:同时出现的机会很小(一条在起播那一刻,一条在
+                // 跳过赞助段的时候),但真撞上时叠在一起谁都读不出来。
+                //
+                // 跳过提示贴画面顶部:它说的是"刚跳过了一段",归画面。
+                //
+                // **「别处已看到」只有全屏时才在这一层。** 它是要按的,而这个 Box 只有画面那么
+                // 大 —— 竖排时它的"底部"就是进度条那一带,提示会浮在进度条上,两个可按的东西
+                // 叠在一起。竖排那一份挂在整页那一层(见下面 rootBox 里那处),锚在屏幕的下
+                // 四分之一,落在简介/评论上方,拇指够得着又不压任何控件。
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    modifier = Modifier.align(Alignment.TopCenter).padding(Spacing.Comfortable),
+                ) {
+                    if (fullscreen) {
+                        CloudResumeHint(
+                            positionMillis = audioState.cloudResumeMillis,
+                            // 直接 seek:这一下是用户点出来的,不是播放头自己动。
+                            onJump = { active?.seekTo(it) },
+                        )
+                    }
+                    SkipToast(skippedCategory)
+                }
             }
         }
 
@@ -803,6 +842,9 @@ fun VideoScreen(
                         onPlayEpisode = onPlayEpisode,
                         onRelatedVideoClick = onRelatedVideoClick,
                         onCommentSort = onCommentSort,
+                        onCommentRefresh = onCommentRefresh,
+                        // 画面收起着的时候下滑先把它拉回来,那一下不该被读成刷新。
+                        playerExpanded = playerScroll.offsetPx == 0f,
                         onCommentLoadMore = onCommentLoadMore,
                         onExpandReplies = onExpandReplies,
                         onSendComment = onSendComment,
@@ -828,10 +870,15 @@ fun VideoScreen(
             }
         }
 
+        // 整页一层。**竖排时那条「别处已看到」挂在这里**,而不是挂在画面那个 Box 上:
+        // 它要按,而画面那个 Box 的下四分之一正是进度条。挂在整页这一层,它落在简介/评论
+        // 上方,离手近又不压任何控件;而且它是这一层的**兄弟节点而不是列表的孩子**,进出
+        // 不会让下面那一整栏重新布局。
+        Box(modifier = rootModifier) {
         if (expandedLayout) {
             // 主区约三分之二,和规范给的比例一致。**全屏也走这个分支**,只是右栏不组合、
             // 左栏权重给满 —— 这样进出全屏时布局树的形状不变,播放器不会重挂。
-            Row(modifier = rootModifier) {
+            Row(modifier = Modifier.fillMaxSize()) {
                 // **左栏整列都是播放器**,画面按比例居中在里面,四周是它自己的黑底。
                 //
                 // 原先这里给的是 `fillMaxWidth().aspectRatio(16:9)`,于是画面只有左栏宽度的
@@ -855,7 +902,7 @@ fun VideoScreen(
             // 连接**始终挂着**,钉不钉由 playerScroll 自己判(建它时传进去的那个 lambda)。
             // 曾经按 playerPinned 增删这个修饰符,而它会在左右翻页翻到一半时翻转 —— 修饰符链
             // 一变,正在拖的那一下就被取消,表现是滑动卡在两页中间。
-            Column(modifier = rootModifier.nestedScroll(playerScroll.connection)) {
+            Column(modifier = Modifier.fillMaxSize().nestedScroll(playerScroll.connection)) {
                 // 状态栏那一条**填黑,但画面不钻进去**。
                 //
                 // 让画面整块顶到屏幕上边缘试过了:返回和分享按钮贴在画面左右上角,状态栏正好
@@ -904,6 +951,15 @@ fun VideoScreen(
                 }
             }
         }
+
+        if (!fullscreen) {
+            CloudResumeHint(
+                positionMillis = audioState.cloudResumeMillis,
+                onJump = { active?.seekTo(it) },
+                modifier = Modifier.align(ToastAnchorInDetail).padding(Spacing.Comfortable),
+            )
+        }
+        }
     }
 
     // Android 13 起通知要运行时授权,而 manifest 里那句 uses-permission 只是声明。
@@ -923,14 +979,34 @@ fun VideoScreen(
     // 缓存面板。挂在最外层而不是简介页里面:它是覆盖整页的 modal,而简介页是可滚动的内容,
     // 放进去会跟着滚。全屏时不开 —— 全屏下这个按钮本来就够不着。
     if (cacheSheetOpen && !fullscreen) {
+        // 当前这条视频摊成分 P,别的队列项各占一行。**分 P 清单只有当前这条有** —— 它来自
+        // 已经在手上的这份详情,而队列里其他视频要各打一次详情请求才知道有几 P,不值得在
+        // 打开面板时先发十几个请求去换一个多数视频用不上的选项。
+        val currentParts = state.detail?.takeIf { it.bvid == shownQueue.currentBvid }?.pages.orEmpty()
+        val targets = shownQueue.items.flatMap { item ->
+            if (item.bvid != shownQueue.currentBvid || currentParts.size <= 1) {
+                listOf(OfflineTarget(item))
+            } else {
+                currentParts.map { part ->
+                    OfflineTarget(
+                        item = item.copy(cid = part.cid),
+                        partTitle = stringResource(R.string.video_part_label, part.index, part.title),
+                    )
+                }
+            }
+        }
         OfflineCacheSheet(
-            items = shownQueue.items,
-            cachedBvids = cachedBvids,
+            targets = targets,
+            cached = cached,
             // 档位清单来自当前这条视频的 accept_quality。队列里别的视频未必有同样的档,
             // 取流那边会自动降级(见 selectStreams),所以这里不必逐条去问。
             qualities = audioState.playInfo?.availableQualities.orEmpty(),
             defaultQuality = audioState.currentQuality,
-            initialSelection = shownQueue.currentBvid,
+            // 默认勾中正在播的**这一 P**,不是这条视频的第一 P:多 P 视频里用户看到第 7 P 才
+            // 想起来缓存,想要的显然是第 7 P。
+            initialSelection = shownQueue.currentBvid?.let {
+                offlineId(it, audioState.queue?.currentCid ?: 0L)
+            },
             onConfirm = { selected, quality ->
                 cacheSheetOpen = false
                 // 通知权限在**这里**要,不在开屏要:它唯一的用处是显示下载进度,而人此刻正好
@@ -1011,3 +1087,12 @@ private fun PlaybackFailure(
 
 /** 取流失败的宽限期。服务自己的重试最坏花 3 秒，留一点余地。 */
 private const val PlaybackErrorGraceMillis = 5_000L
+
+/**
+ * 竖排时「别处已看到」落在**整页**的下四分之一处 —— 简介/评论那一片,不是画面里。
+ *
+ * `BiasAlignment` 的纵向取值 −1 是顶、0 是中、1 是底,所以 0.5 落在中点与底边的正中间,
+ * 也就是从下边缘往上约四分之一。**用比例而不是从底边往上垫固定 dp**:屏幕高度差得远,
+ * 固定 dp 在小屏上会压到底部手势条。
+ */
+private val ToastAnchorInDetail = BiasAlignment(horizontalBias = 0f, verticalBias = 0.5f)

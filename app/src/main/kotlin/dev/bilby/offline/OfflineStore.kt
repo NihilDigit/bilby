@@ -108,6 +108,45 @@ class OfflineStore(private val root: File, private val json: Json) {
         }.onFailure { BiliLog.w("写缓存索引失败 id=${item.id}", it) }
     }
 
+    /**
+     * 记下本地副本播到哪儿了。
+     *
+     * **不动 `serverProgressBaseMillis`** —— 那个字段回答的是"服务端那边现在是多少",而这一句
+     * 发生时手上没有服务端的值(放本地副本本来就不问网络)。推进它的是心跳上报成功那一刻,见
+     * [recordServerBase]。两件事分开写,是因为把它们并成一个函数就得为"这次没有服务端值"传一个
+     * 哨兵进去,而那个哨兵和"服务端真的是 0"长得一样。
+     */
+    suspend fun recordProgress(bvid: String, cid: Long, positionMillis: Long): Unit =
+        updateEntry(bvid, cid) { it.copy(watchedPositionMillis = positionMillis) }
+
+    /**
+     * 心跳报上去之后,服务端存的就是我们报的这个数。
+     *
+     * 推进 base 等于宣告"到此为止两边是一致的",于是本地那份不再有话语权,直到下一次断网观看
+     * 把它们重新拉开。判据见 [dev.bilby.player.mergeCachedProgress]。
+     */
+    suspend fun recordServerBase(bvid: String, cid: Long, baseMillis: Long): Unit =
+        updateEntry(bvid, cid) { it.copy(serverProgressBaseMillis = baseMillis) }
+
+    /**
+     * 读一条、改一条、写回去。
+     *
+     * **条目不在盘上就什么都不做。** [write] 会 `mkdirs`,照它写下去等于在用户刚删掉的位置重建
+     * 一个只有 meta.json、没有任何流的目录 —— 缓存列表里会多出一条播不动的视频,而删除操作看起来
+     * 失败了。播放停在删除之后是正常时序(队列里那一条还在放),所以这不是异常路径。
+     *
+     * 从盘上重读而不是拿调用方手里那份改:这个文件下载器也在写,拿内存里的旧副本整体覆盖回去
+     * 会把下载状态、已下字节、失败原因一起退回到读盘那一刻。
+     */
+    private suspend fun updateEntry(
+        bvid: String,
+        cid: Long,
+        transform: (OfflineItem) -> OfflineItem,
+    ): Unit = withContext(Dispatchers.IO) {
+        val existing = readManifest(File(dirFor(bvid, cid), META_NAME)) ?: return@withContext
+        write(transform(existing))
+    }
+
     suspend fun writeDanmaku(cid: Long, segmentIndex: Int, bytes: ByteArray): Unit =
         withContext(Dispatchers.IO) {
             val file = danmakuFile(cid, segmentIndex)

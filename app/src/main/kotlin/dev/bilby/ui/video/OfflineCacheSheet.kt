@@ -37,9 +37,30 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import dev.bilby.R
 import dev.bilby.data.QualityOption
+import dev.bilby.offline.CachedIndex
+import dev.bilby.offline.offlineId
 import dev.bilby.player.QueueItem
 import dev.bilby.player.videoQualityLabel
 import dev.bilby.ui.theme.Spacing
+
+/**
+ * 缓存面板里的一行:**一个能单独缓存的单元**,不是队列里的一条视频。
+ *
+ * 这两者过去是同一个东西,而那正是"缓存只能缓存整条视频、选不了具体哪一 P"的来源:缓存的身份
+ * 一直是 (bvid, cid)([dev.bilby.offline.OfflineItem]),下载器也一直按 cid 下,只有选择界面
+ * 表达不出"哪一 P",于是多 P 视频永远缓存队列项手上那个 cid ——正在播的那条是当前 P,其余的
+ * 是 P1。
+ *
+ * 多 P 视频的每一 P 各占一行,[partTitle] 非空;单 P 视频和队列里的其他视频仍是一行,
+ * [partTitle] 为空。**只有当前这条视频摊得开** —— 分 P 清单来自视频详情,队列里别的视频要各
+ * 打一次详情请求才知道,而缓存面板不值得为此在打开时先发十几个请求。
+ */
+data class OfflineTarget(val item: QueueItem, val partTitle: String = "") {
+    /** 列表 key 与勾选状态的键。用 (bvid, cid) 而不是 bvid:同一条视频的两个分 P 是两行。 */
+    val key: String get() = offlineId(item.bvid, item.cid)
+
+    fun isCached(cached: CachedIndex): Boolean = (item.bvid to item.cid) in cached
+}
 
 /**
  * 选择要缓存哪几条、用哪一档清晰度。
@@ -60,26 +81,27 @@ import dev.bilby.ui.theme.Spacing
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OfflineCacheSheet(
-    items: List<QueueItem>,
-    /** 已缓存(或正在缓存)的 bvid。这些条目在列表里显示为已缓存且不可勾。 */
-    cachedBvids: Set<String>,
+    targets: List<OfflineTarget>,
+    /** 盘上已有的东西。命中的条目显示为已缓存且不可勾。 */
+    cached: CachedIndex,
     /** 可选清晰度,来自当前这条视频的 accept_quality。为空时只显示默认档。 */
     qualities: List<QualityOption>,
     defaultQuality: Int,
-    /** 打开时默认勾中的那条(正在播的这条)。 */
+    /** 打开时默认勾中的那个单元(正在播的这一 P)。 */
     initialSelection: String?,
     onConfirm: (selected: List<QueueItem>, qualityId: Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val selected = remember(items) {
+    val selected = remember(targets) {
         mutableStateMapOf<String, Boolean>().apply {
-            initialSelection?.takeIf { it !in cachedBvids }?.let { put(it, true) }
+            val initial = targets.firstOrNull { it.key == initialSelection && !it.isCached(cached) }
+            initial?.let { put(it.key, true) }
         }
     }
     var quality by rememberSaveable { mutableStateOf(defaultQuality) }
 
-    val selectable = items.filterNot { it.bvid in cachedBvids }
-    val chosen = selectable.filter { selected[it.bvid] == true }
+    val selectable = targets.filterNot { it.isCached(cached) }
+    val chosen = selectable.filter { selected[it.key] == true }
     val allChosen = selectable.isNotEmpty() && chosen.size == selectable.size
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -101,7 +123,7 @@ fun OfflineCacheSheet(
                 if (selectable.isNotEmpty()) {
                     TextButton(
                         onClick = {
-                            selectable.forEach { selected[it.bvid] = !allChosen }
+                            selectable.forEach { selected[it.key] = !allChosen }
                         },
                     ) {
                         Text(
@@ -142,36 +164,42 @@ fun OfflineCacheSheet(
             (LocalWindowInfo.current.containerSize.height * SheetListHeightFraction).toDp()
         }
         LazyColumn(modifier = Modifier.weight(1f, fill = false).heightIn(max = listMaxHeight)) {
-            items(items, key = { it.bvid }) { item ->
-                val cached = item.bvid in cachedBvids
-                val checked = selected[item.bvid] == true
+            items(targets, key = { it.key }) { target ->
+                val isCached = target.isCached(cached)
+                val checked = selected[target.key] == true
                 ListItem(
                     headlineContent = {
-                        Text(item.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        // 分 P 行显示的是这一 P 的名字。整条视频的标题不再重复印在每一行上 ——
+                        // 它们紧挨着,而用户正是从这条视频点进来的。
+                        Text(
+                            text = target.partTitle.ifEmpty { target.item.title },
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     },
-                    supportingContent = if (cached) {
+                    supportingContent = if (isCached) {
                         { Text(stringResource(R.string.offline_already_cached)) }
                     } else {
                         null
                     },
                     leadingContent = {
-                        Checkbox(checked = checked || cached, enabled = !cached, onCheckedChange = null)
+                        Checkbox(checked = checked || isCached, enabled = !isCached, onCheckedChange = null)
                     },
                     // sheet 自己就是容器,行底色跟着它走 —— 画死 surface 会在容器里留下一条条
                     // 比容器亮的补丁(风格指南 §2.3c 的第二个坑)。
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     modifier = Modifier.fillMaxWidth().toggleable(
                         value = checked,
-                        enabled = !cached,
+                        enabled = !isCached,
                         role = Role.Checkbox,
-                        onValueChange = { selected[item.bvid] = it },
+                        onValueChange = { selected[target.key] = it },
                     ),
                 )
             }
         }
 
         Button(
-            onClick = { onConfirm(chosen, quality) },
+            onClick = { onConfirm(chosen.map { it.item }, quality) },
             enabled = chosen.isNotEmpty(),
             modifier = Modifier
                 .fillMaxWidth()

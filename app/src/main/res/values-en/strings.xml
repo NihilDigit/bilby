@@ -1,6 +1,7 @@
 <resources>
     <string name="action_back">Back</string>
     <string name="action_cancel">Cancel</string>
+    <string name="nav_already_here">Already on this page</string>
     <string name="action_clear">Clear</string>
     <string name="action_close">Close</string>
     <string name="action_done">Done</string>
@@ -34,14 +35,9 @@
     <string name="follow_unfollow_confirm_title">Unfollow</string>
 
     <string name="feed_empty">No new videos from the creators you follow</string>
+    <string name="feed_special_ups">Special follows</string>
     <string name="feed_frequent_ups">Most visited</string>
     <string name="feed_item_actions">Post actions</string>
-    <string name="dynamic_type_draw">Photo post</string>
-    <string name="dynamic_type_article">Article</string>
-    <string name="dynamic_type_word">Text post</string>
-    <string name="dynamic_type_forward">Repost</string>
-    <string name="dynamic_type_live">Live</string>
-    <string name="dynamic_type_other">Post</string>
     <string name="feed_exclude_up">Hide %1$s from home</string>
     <string name="feed_read_marker">New since your last visit</string>
 
@@ -85,6 +81,7 @@
     <string name="comment_sort_hot">Top</string>
     <string name="comment_sort_time">Newest</string>
     <string name="comment_tag_up">Creator</string>
+    <string name="comment_open_space">Space of %1$s</string>
     <string name="comment_tag_pinned">Pinned</string>
     <string name="comment_picture">Comment image</string>
     <string name="comment_like">Like</string>
@@ -112,7 +109,7 @@
     <string name="space_search_hint">Search this profile</string>
     <string name="space_empty_archives">This creator hasn\'t posted any videos</string>
     <string name="space_empty_archives_search">No matching videos</string>
-    <string name="space_empty_dynamics">This creator has no video posts</string>
+    <string name="space_empty_dynamics">This creator has no posts</string>
     <string name="space_empty_collections">This creator has no collections</string>
     <string name="space_empty_collection_detail">This collection is empty</string>
     <string name="space_collection_season">Collection</string>
@@ -295,6 +292,11 @@
     <string name="feed_open_followings">Following</string>
     <string name="followings_title">Following</string>
     <string name="followings_empty">Not following anyone yet</string>
+    <string name="followings_search_hint">Search your following list</string>
+    <string name="followings_search_empty">No matching creators</string>
+    <string name="followings_all">All</string>
+    <string name="followings_order_frequent">Most visited</string>
+    <string name="followings_order_recent">Recently followed</string>
     <string name="fav_folder_count">%1$d videos</string>
     <string name="fav_empty">This folder is empty</string>
     <string name="fav_invalid_video">Video unavailable</string>
@@ -332,4 +334,27 @@
     <string name="feed_live_now_title">Live now</string>
     <string name="video_action_listen">Listen</string>
     <string name="offline_count">%1$d videos</string>
+    <string name="article_title">Article</string>
+    <string name="article_open_in_browser">Open in browser</string>
+    <string name="article_card_video">Video</string>
+    <string name="article_card_live">Live</string>
+    <string name="article_card_article">Article</string>
+    <string name="article_card_music">Audio</string>
+    <string name="article_card_common">Content</string>
+    <string name="article_card_gone">No longer available</string>
+    <string name="article_end">End of article</string>
+    <string name="dynamic_type_video">Video</string>
+    <string name="dynamic_type_common">Event</string>
+    <string name="dynamic_live_on">Live</string>
+    <string name="dynamic_live_off">Stream ended</string>
+    <string name="dynamic_vote">Poll</string>
+    <string name="dynamic_vote_joined">%1$s participants</string>
+    <string name="dynamic_reserve">Reservation</string>
+    <string name="dynamic_article_open">Read the full article</string>
+    <string name="dynamic_text_expand">Show more</string>
+    <string name="dynamic_reserve_calendar">Add to calendar</string>
+    <string name="dynamic_reserve_calendar_note">%1$s\n%2$s</string>
+    <string name="dynamic_other_title">Following posts</string>
+    <string name="dynamic_other_entry">Following posts</string>
+    <string name="dynamic_other_empty">The people you follow have posted nothing but videos lately</string>
 </resources>

@@ -18,8 +18,8 @@ data class QueueBuildResult(
      *
      * **不带条数,也不加"合集"「《》」这类前缀与包装。** 这一行还要并排放下找相关、缓存、
      * 顺序三个操作,每多一截就挤掉一截名字,而名字才是这行里唯一说明"在放什么"的东西。
-     * 条数还额外不准:投稿、系列、动态取的是当前视频前后各 [QueueSourceRepository.WINDOW_HALF]
-     * 条,写"共 N 条"时那个 N 是窗口大小,一个发过三百条的 UP 会显示"共 51 条"。
+     * 条数还额外不准:投稿取最新 25 条,系列和动态取当前视频前后各 12 条,写"共 N 条"时那个 N
+     * 是窗口大小,一个发过三百条的 UP 会显示"共 25 条"。
      *
      * 队列的边界另有出处:听视频那边顶着 `N / M`(ListenScreen),队列列表本身也滚得到底。
      */
@@ -32,6 +32,21 @@ data class QueueBuildResult(
     val source: QueueSource? = null,
 )
 
+/**
+ * 以 [position] 为中心、前后各取 [half] 条的窗口。系列与动态两条来源共用它。
+ *
+ * **两端不补齐。** 当前视频排在第 2 条时窗口就是 15 条,不会为了凑够 25 而往后多要 10 条——
+ * 那 10 条并不比别的更该在队列里,而"当前这条在队列中间"本来就只是常态,不是要求。
+ *
+ * 边界值是这里唯一容易写错的东西:[position] 落在两端时 `subList` 的上下界都得夹住,
+ * 差一位就是 `IndexOutOfBounds`,而它只在"这条视频恰好是最新或最旧的一条"时才发作。
+ */
+internal fun <T> List<T>.windowAround(position: Int, half: Int): List<T> {
+    val from = (position - half).coerceAtLeast(0)
+    val to = (position + half).coerceAtMost(lastIndex)
+    return subList(from, to + 1)
+}
+
 /** 队列来源的身份,够用来打开它的目录页([dev.bilby.ui.CollectionContents])。 */
 data class QueueSource(
     val mid: Long,
@@ -41,11 +56,11 @@ data class QueueSource(
 )
 
 /**
- * 播放队列的三个来源(DESIGN 2.4b),按顺序退化:当前视频所属合集 → UP 空间投稿 →
- * UP 动态。判据是"有限且用户显式选定的集合"——合集本身有限;投稿和动态都是无底洞,
- * 所以只取当前视频前后各 25 条,不取全部。
+ * 播放队列的来源,按顺序退化:当前视频所属合集 → 所属系列 → UP 最新投稿 → UP 动态 →
+ * 最新投稿加这一条。判据是"有限且用户显式选定的集合"——合集与系列本身有限;投稿和动态
+ * 都是无底洞,所以只取一个 25 条的窗口,不取全部。
  *
- * 第三条是为**以动态形式发布的视频**加的:它们不在投稿列表里,只走前两条的话,从动态流
+ * 动态那条是为**以动态形式发布的视频**加的:它们不在投稿列表里,没有它的话,从动态流
  * 点进去的视频永远只有孤零零一条。
  *
  * **建出来的队列一定含有当前这条视频,否则返回 null。** 调用方拿到队列后会把页面带来的 cid
@@ -59,23 +74,16 @@ class QueueSourceRepository(
 ) {
 
     /**
-     * `mid:bvid → 页号`,给空间投稿的定位当起点。
+     * 打开一条视频时的队列来源,按"这份集合有多像用户自己选的"排:所属合集 → 所属系列 →
+     * UP 最新投稿 → UP 动态 → 最新投稿加这一条。
      *
-     * 二分定位一条老投稿要 log2(页数) 次请求(三千条投稿约 7 次),而同一条视频被反复打开是
-     * 常态:退出再进、切集回来、通知栏切回来。
+     * **系列排在最新投稿之前。** 系列是 UP 归拢出来的一份目录,最新投稿只是按发布时间现编的
+     * 邻居,两者都含有这条视频时该赢的是前者。代价是每条不属于合集的视频都要先问一次系列
+     * 列表——但那一次就足以判空,没有系列的 UP 只多花一次请求,真正贵的翻页只发生在有系列的
+     * UP 身上。
      *
-     * **存页号而不是绝对下标**,因为页号能当场验证:把那一页拉回来看里面有没有它,没有就照常
-     * 二分。下标没有这种自证方式,UP 发一条新稿它就整体错位,而错位的下标会安静地建出一份
-     * 当前格是邻居的队列。
-     */
-    private val pageHints = ExpiringLruCache<String, Int>(PAGE_HINT_CACHE_SIZE, PAGE_HINT_TTL_NANOS)
-
-    /**
-     * 打开一条视频时的队列来源:先按合集,不属于合集退到 UP 空间投稿,投稿列表里也没有
-     * (动态视频)再退到 UP 动态。
-     *
-     * 详情只取一次。合集要 `ugc_season`、空间定位要 `pubdate` 和 UP 的 mid,三样都在这一份
-     * 详情里,分头去取等于为同一条视频问两遍。
+     * 详情只取一次。合集要 `ugc_season`、其余几条要 UP 的 mid,都在这一份详情里,分头去取
+     * 等于为同一条视频问两遍。最新投稿那一页同理只拉一次:它既是一条来源,也是最后的兜底。
      */
     suspend fun forVideo(bvid: String): QueueBuildResult? {
         val detail = when (val result = videoRepository.getVideoDetail(bvid)) {
@@ -85,10 +93,52 @@ class QueueSourceRepository(
                 return null
             }
         }
-        return fromSeason(bvid, detail)
-            ?: fromUpSpace(bvid, detail)
-            ?: fromSeries(bvid, detail)
-            ?: fromUpDynamics(bvid, detail)
+        fromSeason(bvid, detail)?.let { return it }
+        fromSeries(bvid, detail)?.let { return it }
+
+        val recent = recentArchives(detail.up.mid)
+        if (recent != null && recent.take(RECENT_COUNT).any { it.bvid == bvid }) {
+            return QueueBuildResult(
+                items = recent.take(RECENT_COUNT).map { it.toQueueItem() },
+                sourceLabel = "UP 主投稿",
+            )
+        }
+
+        // 动态排在兜底之前:以动态形式发的视频不进 `arc/search`,而兜底会无条件成立,
+        // 放它前面就把这条路吃掉了。
+        fromUpDynamics(bvid, detail)?.let { return it }
+
+        if (recent == null) return null
+        // 这条视频够老,不在最新 [RECENT_COUNT] 条里,也不属于任何系列或最近的动态。补最新的
+        // 24 条再把它接在队尾,凑够 [RECENT_COUNT] —— 每种来源都是同一个量级,「N / M」里的 M
+        // 才不会随来源跳变。接在队尾是因为队列的当前格必须就是它(见类注释),而按发布时间
+        // 它本就排在这批的后面。
+        return QueueBuildResult(
+            items = recent.take(RECENT_COUNT - 1).map { it.toQueueItem() } + detail.toQueueItem(),
+            sourceLabel = "UP 主投稿",
+        )
+    }
+
+    /**
+     * 这位 UP 最新的一页投稿(30 条),取不到(含 mid 缺席)返回 null。调用方按需截取:
+     * 当前视频在其中时取 [RECENT_COUNT] 条,不在时取 [RECENT_COUNT] - 1 条再补上它自己。
+     *
+     * **只拉第一页。** 这里原先是按 pubdate 二分定位当前视频、再取前后各 25 条的窗口,前提是
+     * "页号 → 内容"单调;而服务端会把过深的 `pn` 夹到一个可达上限,再往后翻永远返回同一页,
+     * 前提就没了。索尼音乐中国(mid 486906719)身上实测:total 报 257561(8586 页),
+     * pn=4294 与 pn=6440 返回一模一样的一页,2020 年那条投稿七次探测全部白发,最后仍是单条
+     * 队列。二分的收益本来就只在"一条老投稿的邻居是谁"这件事上,而那个邻居关系是按发布时间
+     * 现编的,不是用户选定的集合——真正成套的内容在合集和系列里,那两条路不受影响。
+     */
+    private suspend fun recentArchives(mid: Long): List<SpaceVideoItem>? {
+        if (mid == 0L) return null
+        return when (val result = spaceRepository.loadArchives(mid, 1, SpaceArchiveOrder.Pubdate)) {
+            is BiliResult.Ok -> result.value.items.takeIf { it.isNotEmpty() }
+            else -> {
+                BiliLog.w("队列:拉取空间投稿失败,mid=$mid")
+                null
+            }
+        }
     }
 
     /**
@@ -99,9 +149,7 @@ class QueueSourceRepository(
      * `arc/search` 不返回它们:表现是从 UP 的合集页点进去能放,却建不出队列,永远只有一条。
      * 真机上用 BV12iuG6zEt5 复现过,它属于 series_id 5157110。
      *
-     * 排在 [fromUpSpace] 之后:绝大多数视频在投稿列表里,那条路一次二分就定位到了,而这条
-     * 要按系列逐个翻。排在 [fromUpDynamics] 之前:动态那条一页页往前走且翻不到就放弃,更贵
-     * 也更容易空手而归。
+     * 排在最新投稿之前的理由见 [forVideo]:系列是一份目录,最新投稿只是时间上的邻居。
      *
      * **有请求预算,翻不完就放弃并记一行。** 一个 UP 可能有几十个系列,每个几百条;为一条
      * 视频把它们全翻一遍是拿风控换一个"说不定能建出来"。翻不到就老实停在单条队列 ——
@@ -142,9 +190,7 @@ class QueueSourceRepository(
 
             val position = videos.indexOfFirst { it.bvid == bvid }
             if (position < 0) continue
-            val from = (position - WINDOW_HALF).coerceAtLeast(0)
-            val to = (position + WINDOW_HALF).coerceAtMost(videos.lastIndex)
-            val windowed = videos.subList(from, to + 1)
+            val windowed = videos.windowAround(position, WINDOW_HALF)
             return QueueBuildResult(
                 items = windowed.map { it.toQueueItem() },
                 // 系列的真实条数用接口给的 total,不用 videos.size:后者是翻到当前视频为止
@@ -194,9 +240,7 @@ class QueueSourceRepository(
             BiliLog.w("队列:UP 动态前 $DYNAMIC_SCAN_PAGES 页里没有 bvid=$bvid,保持单条队列")
             return null
         }
-        val from = (position - WINDOW_HALF).coerceAtLeast(0)
-        val to = (position + WINDOW_HALF).coerceAtMost(videos.lastIndex)
-        val windowed = videos.subList(from, to + 1)
+        val windowed = videos.windowAround(position, WINDOW_HALF)
         return QueueBuildResult(
             items = windowed.map { it.toQueueItem() },
             sourceLabel = "UP 主动态",
@@ -238,117 +282,14 @@ class QueueSourceRepository(
         )
     }
 
-    /**
-     * 该 UP 的空间投稿,取当前视频前后各 25 条。
-     *
-     * 为什么是前后各 25:投稿动辄成百上千条,全量当队列等于没有边界,"还剩多少"这件事
-     * 会重新变得无意义(DESIGN 2.4b 明确要能看见边界)。25 条是一个数得过来、UI 上
-     * "N / M" 仍然有意义的量。
-     */
-    private suspend fun fromUpSpace(bvid: String, detail: VideoDetail): QueueBuildResult? {
-        val mid = detail.up.mid
-        if (mid == 0L) return null
-
-        val pages = ArchivePageCache(mid)
-        val index = pages.locate(bvid, detail.publishedAtEpochSeconds) ?: return null
-        val total = pages.total
-
-        // 目标下标两侧各 25 条,换算成页号;51 条最多横跨 3 页,其中一页定位时已经取过。
-        val from = (index - WINDOW_HALF).coerceAtLeast(0)
-        val to = (index + WINDOW_HALF).coerceAtMost(total - 1)
-        val firstPage = from / PAGE_SIZE + 1
-        val lastPage = to / PAGE_SIZE + 1
-        val span = (firstPage..lastPage).map { pages.load(it) ?: return null }.flatten()
-
-        // 位置在拼好的这几页里重新找一遍,不照下标算。定位与取窗口之间 UP 发了新稿的话整个
-        // 列表会往后挪一位,按下标切会切出一条邻居 —— 而这份队列的当前格必须就是这条视频。
-        val position = span.indexOfFirst { it.bvid == bvid }
-        if (position < 0) {
-            BiliLog.w("听视频:取窗口时投稿列表已变动,找不到 bvid=$bvid")
-            return null
-        }
-        val windowFrom = (position - WINDOW_HALF).coerceAtLeast(0)
-        val windowTo = (position + WINDOW_HALF).coerceAtMost(span.size - 1)
-        val windowed = span.subList(windowFrom, windowTo + 1)
-        return QueueBuildResult(
-            items = windowed.map { it.toQueueItem() },
-            sourceLabel = "UP 主投稿",
-        )
-    }
-
-    /**
-     * 空间投稿的分页取用,带一份本次调用内的页缓存 —— 定位命中的那一页多半也在窗口里,
-     * 缓存省掉的就是这次重复请求。
-     */
-    private inner class ArchivePageCache(private val mid: Long) {
-        private val pages = mutableMapOf<Int, List<SpaceVideoItem>>()
-
-        /** 投稿总数,[load] 成功过之后才有意义。 */
-        var total: Int = 0
-            private set
-
-        suspend fun load(page: Int): List<SpaceVideoItem>? {
-            pages[page]?.let { return it }
-            return when (val result = spaceRepository.loadArchives(mid, page, SpaceArchiveOrder.Pubdate)) {
-                is BiliResult.Ok -> {
-                    total = result.value.total
-                    result.value.items.also { pages[page] = it }
-                }
-                else -> {
-                    BiliLog.w("听视频:拉取空间投稿失败,mid=$mid,page=$page")
-                    null
-                }
-            }
-        }
-
-        /**
-         * 目标视频在全部投稿里的绝对下标。
-         *
-         * 列表按 pubdate 降序,所以页号可以直接二分:拿目标的 pubdate 跟某页首尾两条比一下,
-         * 就知道该往新的一侧还是旧的一侧走。这里原先是从第 1 页顺序翻、最多翻 5 页(150 条),
-         * 翻不到就降级成"从最新 50 条开始" —— 对机核这种日更 UP,一条 2021 年的投稿必定翻不到,
-         * 于是每次都白发 5 次请求再拿到一份不含目标视频的队列。二分之后请求数是 log2(页数),
-         * 三千条投稿约 7 次,且与视频有多老无关。
-         */
-        suspend fun locate(bvid: String, pubdate: Long): Int? {
-            val hintKey = "$mid:$bvid"
-            pageHints.get(hintKey)?.let { hinted ->
-                val position = load(hinted)?.indexOfFirst { it.bvid == bvid } ?: -1
-                if (position >= 0) return (hinted - 1) * PAGE_SIZE + position
-                // 页号还在,但那一页已经没有它了(UP 又发了几条,把它挤到下一页)。当没命中处理,
-                // 下面照常二分并把新页号写回去。load 的页缓存让这一页不会被再拉一次。
-            }
-
-            var low = 1
-            var high = 1 // 先取第一页,才知道总共有多少页
-            var probes = 0
-            while (low <= high && probes < MAX_PROBES) {
-                val page = (low + high) / 2
-                val items = load(page) ?: return null
-                probes++
-                if (probes == 1) high = ((total + PAGE_SIZE - 1) / PAGE_SIZE).coerceAtLeast(1)
-                if (items.isEmpty()) return null
-
-                val position = items.indexOfFirst { it.bvid == bvid }
-                if (position >= 0) {
-                    pageHints.put(hintKey, page)
-                    return (page - 1) * PAGE_SIZE + position
-                }
-
-                val newest = items.first().publishedAtEpochSeconds
-                val oldest = items.last().publishedAtEpochSeconds
-                when {
-                    pubdate > newest -> high = page - 1
-                    pubdate < oldest -> low = page + 1
-                    // pubdate 落在本页区间内却不在本页:稿件已不在空间列表里(删除、仅自己可见、
-                    // 或联合投稿只挂在另一个 UP 名下)。继续二分不会有结果。
-                    else -> return null
-                }
-            }
-            BiliLog.w("听视频:空间投稿里定位不到 bvid=$bvid(探测 $probes 次)")
-            return null
-        }
-    }
+    private fun VideoDetail.toQueueItem() = QueueItem(
+        bvid = bvid,
+        cid = cid,
+        title = title,
+        upName = up.name,
+        coverUrl = coverUrl,
+        durationSeconds = durationSeconds,
+    )
 
     private fun SpaceVideoItem.toQueueItem() = QueueItem(
         bvid = bvid,
@@ -360,31 +301,22 @@ class QueueSourceRepository(
     )
 
     private companion object {
-        const val WINDOW_HALF = 25
+        /** 系列与动态开窗时,当前视频前后各取几条。连同自己一共 25 条,与 [RECENT_COUNT] 齐平。 */
+        const val WINDOW_HALF = 12
+
+        /** 最新投稿取几条。一个数得过来、UI 上「N / M」仍然有意义的量。 */
+        const val RECENT_COUNT = 25
 
         /** 最多看这位 UP 的前几个系列。列表按更新时间排,在播的那个系列排在前面。 */
         const val SERIES_SCAN_LIMIT = 4
 
         /** 扫系列总共最多发几次请求(每次 30 条)。够翻完一个几百条的直播回放系列的前段。 */
         const val SERIES_REQUEST_BUDGET = 8
-        const val PAGE_SIZE = 30 // loadArchives 固定 ps=30(SpaceRepository.kt)
-
-        /** 二分的探测上限。2^12 页 = 12 万条投稿,够到不了;它挡的是列表非单调时的死循环。 */
-        const val MAX_PROBES = 12
 
         /**
          * 动态最多往前翻几页(一页约 12 条)。动态接口只有 offset 游标,没有页号也就没法二分,
          * 只能顺着往前走 —— 上限在这里,不是让它一路翻到 UP 注册那天。
          */
         const val DYNAMIC_SCAN_PAGES = 4
-
-        /** 页号提示的容量。一次会话里来回打开的视频数量级就在这附近。 */
-        const val PAGE_HINT_CACHE_SIZE = 128
-
-        /**
-         * 30 分钟。命中之后还要拉那一页验证一次,所以过期时间不必短;它挡的是"这个 UP 这半天
-         * 发了太多稿,提示页号已经差出好几页"这种整体漂移。
-         */
-        val PAGE_HINT_TTL_NANOS = 30L * 60 * 1_000_000_000L
     }
 }

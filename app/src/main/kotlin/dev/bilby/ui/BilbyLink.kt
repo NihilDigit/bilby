@@ -5,8 +5,9 @@ import androidx.navigation3.runtime.NavKey
 /**
  * 一条 bilibili 链接指向应用里的哪一页。
  *
- * **只认 UGC**:视频、直播间、UP 主空间。番剧、影视、课堂这些**不是"还没做",是 Non-Goal**
- * —— 它们是有版权方的商业内容,这个应用不碰。解析直接失败,不给一个跳过去发现是空壳的入口。
+ * **只认 UGC**:视频、直播间、UP 主空间、专栏。番剧、影视、课堂这些**不是"还没做",是
+ * Non-Goal** —— 它们是有版权方的商业内容,这个应用不碰。解析直接失败,不给一个跳过去发现
+ * 是空壳的入口。
  *
  * 解析是纯函数,不碰网络。短链(b23.tv)例外:它必须先展开一次才知道指向哪儿,
  * 那一步由 `BiliClient.resolveRedirect` 做(不带 Cookie),展开之后再送回这里。
@@ -50,6 +51,20 @@ object BilbyLink {
         }
         // `endsWith("bilibili.com")` 会放行 `evilbilibili.com` —— 少一个点就是另一个域名。
         if (host != "bilibili.com" && !host.endsWith(".bilibili.com")) return null
+
+        // 专栏。**两套编号,不是同一个东西的两种写法**:`/opus/<id>` 是新版,`/read/cv<id>`
+        // 是旧版,取的接口不同(notes/article.md 第 0 节),所以要连"是哪一套"一起带走。
+        segments.indexOf("opus").takeIf { it >= 0 }?.let { index ->
+            return segments.getOrNull(index + 1)
+                ?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
+                ?.let { ArticlePage(id = it, isRead = false) }
+        }
+        segments.indexOf("read").takeIf { it >= 0 }?.let { index ->
+            return segments.getOrNull(index + 1)
+                ?.removePrefix("cv")
+                ?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
+                ?.let { ArticlePage(id = it, isRead = true) }
+        }
 
         val videoIndex = segments.indexOf("video")
         if (videoIndex >= 0) {

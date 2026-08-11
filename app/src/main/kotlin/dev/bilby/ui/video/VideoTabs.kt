@@ -205,6 +205,9 @@ fun VideoTabs(
     onPlayEpisode: (bvid: String) -> Unit,
     onRelatedVideoClick: (bvid: String) -> Unit,
     onCommentSort: (CommentSort) -> Unit,
+    onCommentRefresh: () -> Unit,
+    /** 播放器是不是完全展开着。评论区的下拉刷新只在这时接管手势。 */
+    playerExpanded: Boolean,
     onCommentLoadMore: () -> Unit,
     onExpandReplies: (Long) -> Unit,
     onSendComment: (String, Long?) -> Unit,
@@ -284,6 +287,9 @@ fun VideoTabs(
                 else -> CommentSection(
                     state = commentState,
                     onSort = onCommentSort,
+                    onRefresh = onCommentRefresh,
+                    // 播放器收起着的时候下滑的意思是"把它拉回来",不是刷新(见 CommentSection)。
+                    refreshEnabled = playerExpanded,
                     onLoadMore = onCommentLoadMore,
                     onExpandReplies = onExpandReplies,
                     onSend = onSendComment,
@@ -460,7 +466,7 @@ private fun UpRow(
                     .clickable { onUpClick(mid) }
                     .heightIn(min = Dimens.MinTouchTarget),
             ) {
-                Avatar(url = faceUrl, size = Dimens.AvatarMedium)
+                Avatar(url = faceUrl, size = Dimens.AvatarRow)
                 // 名字和粉丝数上下两行。粉丝数是**决定要不要关注时看的那个数**,而关注按钮
                 // 就在这一行的另一端;原先它拉到了(`upCard.follower`)却没画出来,人得点进
                 // 空间页才看得到。等级徽章跟着名字走,它说的是同一个人的另一件事。
@@ -513,7 +519,7 @@ private fun UpRow(
                         val followable = staffFollowed?.contains(participant.mid) == false
                         BadgedAvatar(
                             url = participant.faceUrl,
-                            size = Dimens.AvatarMedium,
+                            size = Dimens.AvatarRow,
                             badge = if (!followable) null else AvatarBadge(
                                 icon = Icons.Filled.Add,
                                 contentDescription = stringResource(
@@ -566,10 +572,26 @@ private fun UpRow(
  * 以前标题不限行数、简介另有一个展开开关,长标题会把 UP 主那一行和动作栏一起顶下去,
  * 而简介的展开箭头又落在半屏之外 —— 两个开关管的其实是同一件事:这条视频要看多细。
  *
- * 展开指示放在计数行右端,不放标题末尾:标题会截断,截断处的箭头看起来像正文的一部分。
+ * 展开指示不放标题末尾:标题会截断,截断处的箭头看起来像正文的一部分。
+ *
+ * **它跟着内容的末端走,不固定在计数行。** 收起时内容到计数行为止,箭头在那一行右端;展开之后
+ * 内容一直延伸到简介末尾,箭头留在原地就意味着"收起"这个动作离它作用的那段文字隔着大半屏,
+ * 而它指向的是上方——看起来像在说"上面还有东西"。横向位置两态一致(都靠右),于是这一下移动
+ * 读得出来是同一个东西换了位置,不是又多出一个控件。
  */
 @Composable
 private fun TitleBlock(detail: VideoDetail, expanded: Boolean, onToggle: () -> Unit) {
+    val indicator = @Composable {
+        Icon(
+            imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+            contentDescription = stringResource(
+                if (expanded) R.string.video_intro_collapse else R.string.video_intro_expand,
+            ),
+            tint = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.size(Dimens.IconInline),
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -589,14 +611,7 @@ private fun TitleBlock(detail: VideoDetail, expanded: Boolean, onToggle: () -> U
                 danmakuText = formatCount(detail.stat.danmaku),
                 dateText = formatDate(detail.publishedAtEpochSeconds),
             )
-            Icon(
-                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                contentDescription = stringResource(
-                    if (expanded) R.string.video_intro_collapse else R.string.video_intro_expand,
-                ),
-                tint = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.size(Dimens.IconInline),
-            )
+            if (!expanded) indicator()
         }
         if (expanded) {
             Text(
@@ -610,6 +625,12 @@ private fun TitleBlock(detail: VideoDetail, expanded: Boolean, onToggle: () -> U
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                indicator()
             }
         }
     }
@@ -992,6 +1013,15 @@ private fun PartRow(
                             stringResource(R.string.video_part_label, pair.first, pair.second),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            // 分 P 名常常把视频标题又抄一遍("1-四时小路只是在聊天+"),不封顶
+                            // 的话一个 chip 就吃掉大半屏:这条带子既看不出能横滚,又在简介页
+                            // 上半部分占走一大块可滑区域,而**能滚的横向条会完整吃掉左右拖动**
+                            // (实测:在它上面左右滑只滚 chip,不翻页)。封顶之后一屏能露出两个
+                            // 半,它读起来才是一条带子,也把抢走手势的面积压下来。
+                            //
+                            // 封顶不是截断成"P1 P2 P3":分 P 名在课程、纪录片这类视频里是真信息,
+                            // 而当前这一 P 有选中态,认得出自己在哪。
+                            modifier = Modifier.widthIn(max = PartChipMaxWidth),
                         )
                     },
                 )
@@ -1070,6 +1100,9 @@ private fun PartSheet(
 
 /** 十条以内横滚划得完,再多就该给展开。 */
 private const val PartRowExpandThreshold = 10
+
+/** 分 P chip 的宽度上限。见 [PartRow] 里那段说明:够窄到一屏能露出两个半,读起来才是一条带子。 */
+private val PartChipMaxWidth = 160.dp
 
 /**
  * 播放队列:合集分集 / 该 UP 的其他投稿(DESIGN 2.4b)。官方在简介下方放算法召回的相关

@@ -194,6 +194,12 @@ fun PlayerShell(
      * 导航栏两种情况都留着。
      */
     hideStatusBar: Boolean = false,
+    /**
+     * 画面顶部画一条渐变。**页面在画面左上角挂了返回/分享时传 true** —— 那两个按钮画在壳
+     * 外面,渐变若跟着它们走就会压在弹幕上，把顶上一两条洗淡;交给壳画,它就落在弹幕下面
+     * (见 [MediaTopScrim])。
+     */
+    topScrim: Boolean = false,
     modifier: Modifier = Modifier,
     gestures: PlayerGestureOptions = PlayerGestureOptions(),
     /** 长按画面时的临时倍速,由设置页给(`SettingsStore.FAST_FORWARD_SPEEDS`)。 */
@@ -537,6 +543,10 @@ fun PlayerShell(
                     }
                 },
         )
+
+        // 顶部渐变在 overlay **之前**,于是弹幕落在它上面而不是底下。托的是页面画在壳外面的
+        // 那两个按钮(返回、分享),见 [MediaTopScrim]。
+        if (topScrim) MediaTopScrim()
 
         // 内容层:压在画面与手势层之上、控制条之下——声明顺序即 z 序。没有 pointerInput,
         // 不拦截手势,底下的双击/拖拽照常命中。

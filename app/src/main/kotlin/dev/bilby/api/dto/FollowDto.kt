@@ -59,4 +59,19 @@ data class FollowingDto(
     val uname: String = "",
     val face: String = "",
     val sign: String = "",
+    /** 1 = 在特别关注分组里。三条列表接口都带这个字段,分组接口也一样。 */
+    val special: Int = 0,
+)
+
+/**
+ * `GET x/relation/tags` 的一项:用户自己建的关注分组。
+ *
+ * **`tagid` 有两个固定值**:-10 是「特别关注」,0 是「默认分组」(没被分进任何分组的人)。
+ * 2026-08-11 实测这两条恒定存在,自建分组排在它们后面。[count] 是这个分组里有几个人。
+ */
+@Serializable
+data class FollowTagDto(
+    val tagid: Long = 0L,
+    val name: String = "",
+    val count: Int = 0,
 )

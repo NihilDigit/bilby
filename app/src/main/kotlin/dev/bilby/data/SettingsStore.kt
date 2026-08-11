@@ -57,7 +57,7 @@ class SettingsStore(context: Context) {
     /** 播放偏好:连播与随机。是用户偏好,不按队列类型猜(DESIGN 2.4b)。 */
     val playbackPrefs: Flow<PlaybackPrefs> = store.data.map { p ->
         PlaybackPrefs(
-            autoNext = p[KEY_AUTO_NEXT] ?: false,
+            autoNext = p[KEY_AUTO_NEXT] ?: true,
             shuffled = p[KEY_SHUFFLED] ?: false,
         )
     }
@@ -387,7 +387,16 @@ data class Credentials(
     val isLoggedIn: Boolean get() = sessdata.isNotEmpty() && dedeUserId.isNotEmpty()
 }
 
-data class PlaybackPrefs(val autoNext: Boolean = false, val shuffled: Boolean = false)
+/**
+ * [autoNext] 只管**自动**前进:一条播完了要不要接着放队列里的下一条。手动的下一条(界面按钮、
+ * 通知栏、耳机线控双击)不受它影响 —— 那些是用户当场表达的意思,没有理由被一个设置挡住。
+ *
+ * 默认开。DESIGN 1.3 原先把"自动连播"整条列进永不实现清单,那一条已经作废(见该处),现在的
+ * 边界只剩 2.4b 那句:**禁止从推荐池续接队列**。队列的内容来自合集、UP 投稿或稍后再看,都是
+ * 有限且能穷尽的集合,播完即停 —— 这与"放完一条自动放下一条"是两件事,前者是产品约束,后者
+ * 是听感偏好。
+ */
+data class PlaybackPrefs(val autoNext: Boolean = true, val shuffled: Boolean = false)
 
 /**
  * 编解码偏好。选的是"取流时优先要哪一条",不是"用什么解码器" ——

@@ -14,7 +14,9 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -28,7 +30,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
@@ -50,13 +59,16 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.ui.semantics.Role
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.components.SectionHeader
 import dev.bilby.ui.theme.Breakpoints
+import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import androidx.compose.ui.tooling.preview.Preview
 import dev.bilby.R
@@ -69,8 +81,6 @@ import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
 import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
@@ -85,16 +95,22 @@ data class FeedUiState(
     /** 下拉刷新中。与 loading 分开:首屏空白加载和「列表还在、顶上转圈」是两种反馈。 */
     val refreshing: Boolean = false,
     /**
-     * 顶上那排"最常访问"的 UP。顺序是服务端给的,本地不排序也不缓存 ——
-     * 它是导航(点进空间),不参与也不影响下面这条时间序动态流。
+     * 顶上那排人。**优先是「特别关注」分组**(`tagid = -10`),没划过特别关注时退回 portal 的
+     * `up_list`(最常访问),由 [topUpsAreSpecial] 说明当前是哪一份。
+     *
+     * 这里原本只有最常访问 —— 一份 B 站按访问频次算好的排序,依据不透明也调不了,而这一排是
+     * 这一页最显眼的导航。特别关注是用户自己划出来的一组人,谁在这里由他自己决定。两者的顺序
+     * 都用服务端给的,本地不排也不缓存。
      *
      * 取不到就是空列表,整排消失,不占位、不显示错误:这一排是快捷方式,
      * 拿不到它不妨碍这一页做正事。
      */
-    val frequentUps: List<UpBrief> = emptyList(),
+    val topUps: List<UpBrief> = emptyList(),
+    /** [topUps] 是特别关注(true)还是退回来的最常访问(false)。小标题按它取词。 */
+    val topUpsAreSpecial: Boolean = false,
     /**
-     * 关注的人里此刻正在直播的那些。和 [frequentUps] 是两份名单,不是同一份的子集 ——
-     * 一个人可以在播而不在"最常访问"里。
+     * 关注的人里此刻正在直播的那些。和 [topUps] 是两份名单,不是同一份的子集 ——
+     * 一个人可以在播而不在特别关注里。
      */
     val liveUps: List<LiveUpBrief> = emptyList(),
     /** 一共有几个人在播。可能大于 [liveUps] 的长度,服务端只给这一屏的那几个。 */
@@ -152,6 +168,8 @@ fun FeedScreen(
     /** 从「正在直播」那张名单里选了一个,进他的直播间。 */
     onLiveClick: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
+    /** 折起来的那一半:图文、转发、直播……(DESIGN 2.1)。 */
+    onOpenOtherDynamics: () -> Unit = {},
     onExcludeUp: (Long) -> Unit = {},
     onScrollPositionChanged: (String) -> Unit = {},
     /** 开屏定位已经做过(或确定做不成)。见 [FeedUiState.pendingLocate]。 */
@@ -164,7 +182,7 @@ fun FeedScreen(
         state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry, modifier)
         else -> FeedList(
             state, onRefresh, onLoadMore, onItemClick, onUpClick, onLiveClick, onExcludeUp,
-            onOpenFollowings, onScrollPositionChanged, onLocated, modifier, contentPadding,
+            onOpenFollowings, onOpenOtherDynamics, onScrollPositionChanged, onLocated, modifier, contentPadding,
         )
     }
 }
@@ -179,6 +197,7 @@ private fun FeedList(
     onLiveClick: (Long) -> Unit,
     onExcludeUp: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
+    onOpenOtherDynamics: () -> Unit,
     onScrollPositionChanged: (String) -> Unit,
     onLocated: () -> Unit,
     modifier: Modifier,
@@ -187,12 +206,14 @@ private fun FeedList(
     val listState = rememberLazyListState()
     val markerIndex = state.items.indexOfReadMarker(state.readMarkerBvid)
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
-    // frequentUps 那一格排在动态流前面,分隔线/条目在 LazyColumn 里的绝对下标要把它加回来。
+    // 那一排头像排在动态流前面,分隔线/条目在 LazyColumn 里的绝对下标要把它加回来。
     // **宽屏下它不在这个列表里**(挪到了旁边的次区),这时不能加,否则开屏定位会差一格。
     // 「最常访问」那一格在没人可显示时整格不画,正在直播的那一格自己也可以撑起它 ——
     // 判据必须和下面渲染时用的是同一个,差一格就是开屏定位落错一条。
-    val hasUpsRow = state.frequentUps.isNotEmpty() || state.liveUps.isNotEmpty()
-    val baseOffset = if (!wide && hasUpsRow) 1 else 0
+    val hasUpsRow = state.topUps.isNotEmpty() || state.liveUps.isNotEmpty()
+    // 「其他动态」那一行**两种宽度下都在列表里**,所以恒占一格。它不像「最常访问」那样会被
+    // 挪到旁边:那一排是一组人,占得住次区一整栏;这一行只有一句话。
+    val baseOffset = (if (!wide && hasUpsRow) 1 else 0) + 1
 
     var liveSheetOpen by rememberSaveable { mutableStateOf(false) }
 
@@ -253,14 +274,48 @@ private fun FeedList(
         if (!wide && hasUpsRow) {
             item(key = "frequent-ups") {
                 FrequentUpsRow(
-                    ups = state.frequentUps,
+                    ups = state.topUps,
                     liveUps = state.liveUps,
                     liveCount = state.liveCount,
+                    special = state.topUpsAreSpecial,
                     onUpClick = onUpClick,
                     onOpenLiveNow = { liveSheetOpen = true },
                     onOpenFollowings = onOpenFollowings,
                 )
             }
+        }
+        // 首页装不下的另一半(图文、转发、直播、专栏)的入口。
+        //
+        // **一行字,不是一格卡片,也不占顶栏。** 首页的主体是投稿时间序,这条入口通往的是
+        // 另一种东西,不是它的续篇。放在这里而不是列表末尾,是因为这条时间序流实际上翻不到底
+        // (见函数头注释),末尾没人到得了。
+        //
+        // **但不降调。** 这一行的字曾经是 onSurfaceVariant,理由抄的是 DESIGN 2.1 那句
+        // 「折叠为一个不显眼的入口」—— 而那正是 CLAUDE.md 点名删掉的那类发明:把入口做得
+        // 更难找不是克制,是替用户决定他不该去那儿。它是一条普通入口,就按普通入口画。
+        //
+        // **永远不给它红点、未读计数或带数量的角标。** 那些是 DESIGN 1.3 永不实现清单上的
+        // 第一条,而这一行正是它们最容易被加回来的位置 —— 「顺手显示有几条新的」听起来是
+        // 信息,实际是把一条静态入口变成催人回来的提醒。
+        //
+        // 文案不写「刷」这类口语,也不用中点分隔(见 MetaSeparator)。
+        item(key = "other-dynamics") {
+            ListItem(
+                headlineContent = {
+                    Text(
+                        text = stringResource(R.string.dynamic_other_entry),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                },
+                trailingContent = {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onOpenOtherDynamics),
+            )
         }
         if (state.items.isEmpty()) {
             item(key = "empty") { EmptyState(stringResource(R.string.feed_empty)) }
@@ -301,9 +356,10 @@ private fun FeedList(
         Row(modifier = modifier.fillMaxSize()) {
             feedList(Modifier.weight(2f).fillMaxHeight())
             FrequentUpsPane(
-                ups = state.frequentUps,
+                ups = state.topUps,
                 liveUps = state.liveUps,
                 liveCount = state.liveCount,
+                special = state.topUpsAreSpecial,
                 onUpClick = onUpClick,
                 onOpenLiveNow = { liveSheetOpen = true },
                 onOpenFollowings = onOpenFollowings,
@@ -340,6 +396,7 @@ private fun FrequentUpsPane(
     ups: List<UpBrief>,
     liveUps: List<LiveUpBrief>,
     liveCount: Int,
+    special: Boolean,
     onUpClick: (Long) -> Unit,
     onOpenLiveNow: () -> Unit,
     onOpenFollowings: () -> Unit,
@@ -348,7 +405,7 @@ private fun FrequentUpsPane(
     LazyColumn(modifier = modifier) {
         item(key = "title") {
             SectionHeader(
-                title = stringResource(R.string.feed_frequent_ups),
+                title = stringResource(if (special) R.string.feed_special_ups else R.string.feed_frequent_ups),
                 modifier = Modifier.padding(horizontal = Spacing.Comfortable),
             )
         }
@@ -364,7 +421,7 @@ private fun FrequentUpsPane(
                 headlineContent = {
                     Text(up.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 },
-                leadingContent = { Avatar(url = up.faceUrl, size = AvatarSize) },
+                leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarStack) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(role = Role.Button) { onUpClick(up.mid) },
@@ -437,8 +494,6 @@ private fun ReadMarkerDivider(modifier: Modifier = Modifier) {
 }
 
 
-// @Composable 只为了取字符串资源:相对时间的字面("刚刚""3分钟前")是本地化内容,
-// 不能写死在这里。调用点本来就在 composable 作用域内。
 @Composable
 private fun FeedItem.toRowUi() = VideoRowUi(
     title = title,
@@ -449,21 +504,6 @@ private fun FeedItem.toRowUi() = VideoRowUi(
     playText = playCount,
     danmakuText = danmakuCount,
 )
-
-private val AbsoluteDateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-
-@Composable
-private fun formatRelativeTime(epochSeconds: Long, nowEpochSeconds: Long = Instant.now().epochSecond): String {
-    val diff = nowEpochSeconds - epochSeconds
-    return when {
-        diff < 60 -> stringResource(R.string.time_just_now)
-        diff < 3600 -> stringResource(R.string.time_minutes_ago, diff / 60)
-        diff < 24 * 3600 -> stringResource(R.string.time_hours_ago, diff / 3600)
-        diff < 2 * 24 * 3600 -> stringResource(R.string.time_yesterday)
-        diff < 7 * 24 * 3600 -> stringResource(R.string.time_days_ago, diff / (24 * 3600))
-        else -> Instant.ofEpochSecond(epochSeconds).atZone(ZoneId.systemDefault()).format(AbsoluteDateFormatter)
-    }
-}
 
 // ---- Preview ----
 
@@ -533,6 +573,7 @@ private fun FrequentUpsRow(
     ups: List<UpBrief>,
     liveUps: List<LiveUpBrief>,
     liveCount: Int,
+    special: Boolean,
     onUpClick: (Long) -> Unit,
     onOpenLiveNow: () -> Unit,
     onOpenFollowings: () -> Unit,
@@ -540,51 +581,71 @@ private fun FrequentUpsRow(
     Column(modifier = Modifier.fillMaxWidth()) {
     // 小标题:没有它,这一排头像和下面的动态之间只有间距,读起来像同一块内容的一部分。
     // 加了标题就说清了"这是谁",也顺带把它和时间序流的边界画出来。
+    //
+    // **标题跟着名单的来源走。** 这一排可能是「特别关注」(用户自己划的),也可能是退回来的
+    // 「最常访问」(B 站算的排序),两者是不同的东西 —— 一个固定的标题会把其中一种说成另一种。
     SectionHeader(
-        title = stringResource(R.string.feed_frequent_ups),
+        title = stringResource(if (special) R.string.feed_special_ups else R.string.feed_frequent_ups),
         modifier = Modifier.padding(horizontal = Spacing.Comfortable),
     )
-    LazyRow(
+    // **头像横滚,「全部关注」钉在右边不参与滚动。**
+    //
+    // 原来那版把整排(含入口)塞进一个 LazyRow,入口于是躲在滚动尽头,想进完整名单得先横拖到头。
+    // 后来改成"按宽度算出能站几个、不滚",入口是露出来了,代价是每种屏宽都剩一段放不下一格的
+    // 余量,而且看得见的人变少了 —— 那段余量不是省下来的空间,是浪费掉的。
+    //
+    // 钉住入口之后两头都成立:名单要多长有多长,入口的位置不随屏宽和关注人数变。
+    Row(
         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-        contentPadding = PaddingValues(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top,
     ) {
-        // 正在直播的那一格排在最前面,是这一排的**前置项**而不是成员之一(见 LiveNowSlot)。
-        // 没人在播时它整格不画,这一排就还是原来那排。
-        if (liveUps.isNotEmpty()) {
-            item(key = "live-now") {
-                LiveNowSlot(liveUps = liveUps, count = liveCount, onClick = onOpenLiveNow)
-            }
-        }
-        items(ups, key = { it.mid }) { up ->
-            UpSlot(label = up.name, onClick = { onUpClick(up.mid) }) {
-                Avatar(url = up.faceUrl, size = AvatarSize)
-            }
-        }
-        // 入口做成横排的最后一项,而不是浮在右边的一个文字按钮。
-        //
-        // 放在右侧时它和头像不是同一种东西却并排站着:头像是有名字的方格,它是一块悬空的文字,
-        // 还会把最后一个头像压在底下,滚到头也露不全。做成同样的圆形槽位之后,它成了这一排的
-        // 一员 —— 读法是"...还有全部",而不是"这排东西,以及右边那个按钮"。
-        item(key = "open-followings") {
-            UpSlot(
-                label = stringResource(R.string.feed_open_followings),
-                onClick = onOpenFollowings,
-            ) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .size(AvatarSize)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+        LazyRow(
+            // 右边沿淡出。滚动到边界的那个头像会被切一半 —— 切口本身是"还有更多"的信号,
+            // 但硬切在一个圆形上读起来像被右边那个入口盖住了。渐隐把切口变成"没画完",
+            // 那正是它的意思。左边不淡:那儿是这一排的开头,不是被截断的地方。
+            modifier = Modifier.weight(1f).fadingRightEdge(),
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(SlotGap),
+        ) {
+            // 正在直播的那一格排在最前面,是这一排的**前置项**而不是成员之一(见 LiveNowSlot)。
+            // 没人在播时它整格不画,这一排就还是原来那排。
+            if (liveUps.isNotEmpty()) {
+                item(key = "live-now") {
+                    LiveNowSlot(liveUps = liveUps, count = liveCount, onClick = onOpenLiveNow)
                 }
             }
+            items(ups.take(FrequentUpLimit), key = { it.mid }) { up ->
+                UpSlot(label = up.name, onClick = { onUpClick(up.mid) }) {
+                    Avatar(url = up.faceUrl, size = Dimens.AvatarStack)
+                }
+            }
+        }
+        // **箭头不衬圆底。** 那个圆底原来是为了让入口读起来是这一排的一员 —— 当时它确实是,
+        // 排在 LazyRow 的最后一项。现在它钉在滚动区外面,是这一排旁边的一个控件,再顶着一张
+        // 和头像同形同大的圆,反倒像队尾站了个没有脸的人。
+        // **只有一个箭头,不写字。** 「关注列表」四个字说的是箭头本来就在说的事,而它顶在
+        // 一排人名中间,读起来像队尾还站着一个叫这个名字的人。名字留给读屏(contentDescription)。
+        //
+        // 箭头和下面那行「关注动态」的箭头竖着对齐:那一行是 ListItem,尾部图标按 M3 的 16dp
+        // 内边距摆,24dp 图标的中心落在右边缘往里 28dp;这里 48dp 的方框里图标居中,末尾留
+        // [SlotInset] × 2,中心同样是 4 + 24 = 28。
+        //
+        // 高度和头像那一格的头像对齐(都是 48dp、都从行顶往下 4dp),所以下面少一行字也不会
+        // 让它浮在半空。
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .padding(vertical = 4.dp)
+                .padding(end = SlotInset * 2)
+                .clip(CircleShape)
+                .clickable(role = Role.Button, onClick = onOpenFollowings)
+                .size(Dimens.AvatarStack),
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = stringResource(R.string.feed_open_followings),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
     // 分割线把这一排和下面的时间序流断开。它不只是装饰:这一排是**导航**(点进空间),
@@ -593,19 +654,23 @@ private fun FrequentUpsRow(
     }
 }
 
-/** 这一排里的一格:上面是 48dp 的圆,下面一行字,宽度固定,格与格之间才对得齐。 */
+/**
+ * 这一排里的一格:上面是 48dp 的圆,下面一行字,宽度固定,格与格之间才对得齐。
+ *
+ */
 @Composable
 private fun UpSlot(
     label: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(vertical = 4.dp, horizontal = 2.dp)
+            .padding(vertical = 4.dp, horizontal = SlotInset)
             .width(AvatarSlotWidth),
     ) {
         content()
@@ -619,7 +684,48 @@ private fun UpSlot(
     }
 }
 
-private val AvatarSize = 48.dp
-
 /** 比头像宽一点,让两行字的名字也能各自居中而不互相挤。 */
 private val AvatarSlotWidth = 60.dp
+
+/** 每格自己的左右内边距。算箭头对齐时要用到,见「关注列表」那一格的注释。 */
+private val SlotInset = 2.dp
+
+
+/**
+ * 这一排格与格之间的间距。算能站下几格时要用到,所以是个具名值而不是写在两处的字面量。
+ *
+ * **8dp 而不是 12dp**:360dp 的屏减去左右内边距是 336dp,按 12dp 排第五格要 348dp,差的
+ * 正好是一道间距,于是那 60dp 空着谁也进不来。收到 8dp 之后 `5×60 + 4×8 = 332` 站得下。
+ * 格与格之间实际看到的空隙比这个数大 —— [UpSlot] 自己还有 2dp 的左右内边距,而头像只有
+ * 48dp,在 60dp 的格子里两边各留 6dp。
+ */
+private val SlotGap = Spacing.Tight
+
+/**
+ * 右边沿渐隐:内容画完之后,用一道从不透明到透明的渐变按 `DstIn` 混合把最右边那几 dp 擦掉。
+ *
+ * **必须 `CompositingStrategy.Offscreen`**:混合模式作用在"已经画好的一层"上,不离屏合成的话
+ * `DstIn` 会跟这一层底下的东西作用,把背景一起擦出一个透明洞。
+ */
+private fun Modifier.fadingRightEdge(width: Dp = 24.dp): Modifier = this
+    .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+    .drawWithContent {
+        drawContent()
+        drawRect(
+            brush = Brush.horizontalGradient(
+                colors = listOf(Color.Black, Color.Transparent),
+                startX = size.width - width.toPx(),
+                endX = size.width,
+            ),
+            blendMode = BlendMode.DstIn,
+        )
+    }
+
+/**
+ * 这一排最多摆几个人。
+ *
+ * **这是个上限,不是版式**:摆几个由屏宽和滚动决定,这个数只挡住"portal 哪天返回上百个"
+ * 那种情况 —— 那时 LazyRow 仍然只组合可见的几格,但 20 个已经远超"横着拖两下"的耐心,
+ * 再多的人本来就该从右边那个入口进完整名单。
+ */
+private const val FrequentUpLimit = 20

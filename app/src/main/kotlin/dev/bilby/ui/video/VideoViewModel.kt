@@ -39,6 +39,7 @@ import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoRepository
 import dev.bilby.data.VideoStat
 import dev.bilby.data.VideoUp
+import dev.bilby.offline.CachedIndex
 import dev.bilby.offline.OfflineDownloader
 import dev.bilby.offline.OfflineStore
 import dev.bilby.offline.toOfflineRequest
@@ -604,15 +605,15 @@ class VideoViewModel(
     }
 
     /**
-     * 已缓存(或正在缓存)的 bvid。缓存面板拿它把已有的那几条标出来。
+     * 已缓存(或正在缓存)的东西,缓存面板拿它把已有的那几条标出来。
      *
-     * **在这里做成 bvid 的集合,而不是 (bvid, cid) 的集合**:面板选的是队列里的一条视频,
-     * 而队列装的就是视频;真正按 (bvid, cid) 去重是下载器的事(见 OfflineDownloader.enqueue),
-     * 它拿得到补全后的 cid,面板拿不到。
+     * 两种粒度都要能答,理由见 [CachedIndex]:当前这条视频的分 P 有确切的 cid,按 (bvid, cid)
+     * 判;队列里别的视频的 cid 要联网才知道,只能按 bvid 判。真正的去重仍然是下载器的事
+     * (见 OfflineDownloader.enqueue),它拿得到补全后的 cid。
      */
-    val cachedBvids: StateFlow<Set<String>> = offlineDownloader.items
-        .map { items -> items.map { it.bvid }.toSet() }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+    val cached: StateFlow<CachedIndex> = offlineDownloader.items
+        .map { CachedIndex.of(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CachedIndex())
 
     /**
      * 把选中的队列项排进缓存队列。
@@ -771,8 +772,12 @@ class VideoViewModel(
     /**
      * 心跳上报。DESIGN 7 节已定案回传:它是跨端续播的必要条件,不是观看画像。
      *
-     * 本地不再另存一份进度,续播只认服务端这一份(服务那边按 playurl 带回的位置续播),所以这里既是
-     * 回传也是我们自己下次进来的依据。
+     * 在线播放的续播只认服务端这一份(服务那边按 playurl 带回的位置续播),所以这里既是回传也是
+     * 我们自己下次进来的依据。
+     *
+     * **缓存内容还要用它推进 base。** 报成功之后服务端存的就是我们报的这个数,把它记进
+     * meta.json,下次打开才分得清"服务端动了"和"这是我们自己刚报上去的"——不记的话每次重开
+     * 缓存视频都会弹一条其实来自本机的"别处已看到"。
      */
     fun reportHeartbeat(positionMillis: Long, durationMillis: Long, finished: Boolean) {
         val detail = _state.value.detail ?: return
@@ -793,6 +798,8 @@ class VideoViewModel(
             startTs = sessionStartTs,
             videoDurationSeconds = durationMillis / 1000,
             isFinished = finished,
+            // 条目不在盘上时 recordServerBase 自己就什么都不做,这里不必先查一遍。
+            onReported = { reportedMillis -> offlineStore.recordServerBase(bvid, cid, reportedMillis) },
         )
     }
 

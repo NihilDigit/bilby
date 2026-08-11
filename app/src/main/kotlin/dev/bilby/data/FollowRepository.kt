@@ -3,6 +3,8 @@ package dev.bilby.data
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
+import dev.bilby.api.dto.FollowTagDto
+import dev.bilby.api.dto.FollowingDto
 import dev.bilby.api.dto.FollowingsDto
 import dev.bilby.api.dto.PortalDto
 import dev.bilby.api.getData
@@ -16,7 +18,26 @@ data class UpBrief(
     val name: String,
     val faceUrl: String,
     val sign: String = "",
+    /** 在「特别关注」分组里。三条关注列表接口都带这个字段。 */
+    val special: Boolean = false,
 )
+
+/** 关注列表的两种排法,都由服务端算,本地不重排。 */
+enum class FollowOrder(val param: String) {
+    /** 按关注时间倒序。 */
+    Recent(""),
+
+    /** B 站按访问频次算好的顺序。 */
+    Frequent("attention"),
+}
+
+/**
+ * 一个关注分组。**这是用户自己划的**,不是谁算出来的排序,所以它比「最常访问」更适合当
+ * 这一页的主要入口。
+ *
+ * @param id `tagid`。-10 是「特别关注」,0 是「默认分组」(没被分进任何自建分组的人)。
+ */
+data class FollowGroup(val id: Long, val name: String, val count: Int)
 
 /**
  * 正在直播的一位关注对象。**和 [UpBrief] 分开**:直播是"此刻正在发生、错过就没有"的东西,
@@ -89,10 +110,12 @@ class FollowRepository(
         }
 
     /**
-     * 关注列表。`order_type=attention` 与顶部那排同序 —— 从那排点进完整列表时,
-     * 换一种排法会让人以为进错了地方。
+     * 关注列表,按 [order] 排。
+     *
+     * 两种排法都是服务端给的:`attention` 是 B 站按访问频次算好的"最常访问",空串是按关注
+     * 时间倒序的"最近关注"。本地不重排也不加权(见类注释)。
      */
-    suspend fun followings(page: Int): BiliResult<List<UpBrief>> {
+    suspend fun followings(page: Int, order: FollowOrder): BiliResult<List<UpBrief>> {
         val mid = settings.credentials.first().dedeUserId
         return client.getData<FollowingsDto>(
             FOLLOWINGS_URL,
@@ -101,10 +124,64 @@ class FollowRepository(
                 "pn" to page.toString(),
                 "ps" to PAGE_SIZE.toString(),
                 "order" to "desc",
-                "order_type" to "attention",
+                "order_type" to order.param,
             ),
-        ).map { dto -> dto.list.map { UpBrief(it.mid, it.uname, it.face.toHttpsUrl(), it.sign) } }
+        ).map { dto -> dto.list.map { it.toBrief() } }
     }
+
+    /**
+     * 用户自己建的关注分组。「特别关注」也在这份名单里(tagid = -10),不单独一条路 ——
+     * 它在接口眼里就是一个分组,分出来只会让取成员时多一份分支。
+     */
+    suspend fun groups(): BiliResult<List<FollowGroup>> =
+        client.getData<List<FollowTagDto>>(TAGS_URL).map { tags ->
+            tags.map { FollowGroup(id = it.tagid, name = it.name, count = it.count) }
+        }
+
+    /**
+     * 某个分组里的人。**这条接口的 data 是一个裸数组**,没有 total,所以翻页只能按
+     * "这一页没满就是最后一页"判。
+     */
+    suspend fun groupMembers(groupId: Long, page: Int): BiliResult<List<UpBrief>> {
+        val mid = settings.credentials.first().dedeUserId
+        return client.getData<List<FollowingDto>>(
+            GROUP_URL,
+            mapOf(
+                "mid" to mid,
+                "tagid" to groupId.toString(),
+                "pn" to page.toString(),
+                "ps" to PAGE_SIZE.toString(),
+            ),
+        ).map { list -> list.map { it.toBrief() } }
+    }
+
+    /**
+     * 在自己的关注里按名字搜。**要 WBI 签名**,照 PiliPlus `member.dart:688-717` —— 浏览器
+     * 里裸调也回 code 0,但风控是逐接口的(CLAUDE.md),按它实际发的来。
+     *
+     * `order_type` 固定 `attention`,同样照 PiliPlus:搜索结果的排序不跟着列表当前那个模式走,
+     * 那样同一个词在两个模式下会给出两种顺序,而用户搜的是"这个人在哪",不是一份排序。
+     */
+    suspend fun searchFollowings(name: String, page: Int): BiliResult<List<UpBrief>> {
+        val mid = settings.credentials.first().dedeUserId
+        return client.getData<FollowingsDto>(
+            SEARCH_URL,
+            mapOf(
+                "vmid" to mid,
+                "pn" to page.toString(),
+                "ps" to PAGE_SIZE.toString(),
+                "order" to "desc",
+                "order_type" to "attention",
+                "name" to name,
+                "gaia_source" to "main_web",
+                "web_location" to "333.999",
+            ),
+            signed = true,
+        ).map { dto -> dto.list.map { it.toBrief() } }
+    }
+
+    private fun FollowingDto.toBrief() =
+        UpBrief(mid = mid, name = uname, faceUrl = face.toHttpsUrl(), sign = sign, special = special == 1)
 
     private fun dev.bilby.api.dto.PortalUpDto.toBrief() =
         UpBrief(mid = mid, name = uname, faceUrl = face.toHttpsUrl())
@@ -112,6 +189,9 @@ class FollowRepository(
     private companion object {
         const val PORTAL_URL = "${BiliConstants.WEB_HOST}/x/polymer/web-dynamic/v1/portal"
         const val FOLLOWINGS_URL = "${BiliConstants.WEB_HOST}/x/relation/followings"
+        const val TAGS_URL = "${BiliConstants.WEB_HOST}/x/relation/tags"
+        const val GROUP_URL = "${BiliConstants.WEB_HOST}/x/relation/tag"
+        const val SEARCH_URL = "${BiliConstants.WEB_HOST}/x/relation/followings/search"
         const val PAGE_SIZE = 50
     }
 }

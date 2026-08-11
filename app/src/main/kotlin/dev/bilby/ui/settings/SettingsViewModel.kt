@@ -49,6 +49,8 @@ data class SettingsUiState(
     /** 本机真有硬解器的编码,决定编解码那一节列出哪几项。 */
     val hardwareCodecIds: Set<Int> = emptySet(),
     val fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
+    /** 播完一条要不要接着放队列里的下一条。见 [dev.bilby.data.PlaybackPrefs.autoNext]。 */
+    val autoNext: Boolean = true,
     /** 弹幕设置整体存一份,不为每个档位开一个平行字段——理由同 VideoViewModel 的 danmakuPrefs。 */
     val danmaku: DanmakuPrefs = DanmakuPrefs(),
     /** 首页排除了多少个 UP。为 0 时那一行不显示 —— 没排除过的人不需要看见这个概念。 */
@@ -155,6 +157,7 @@ class SettingsViewModel(
                     sponsorBlock = settings.sponsorBlockPrefs.first(),
                     hardwareCodecIds = DeviceCodecs.hardwareDecodableCodecIds,
                     danmaku = settings.danmakuPrefs.first(),
+                    autoNext = settings.playbackPrefs.first().autoNext,
                     offlineConcurrency = settings.offlineConcurrency.first(),
                 )
             }
@@ -188,6 +191,18 @@ class SettingsViewModel(
     fun setCodec(value: CodecPreference) {
         _state.update { it.copy(codec = value) }
         persist { settings.saveCodecPreference(value) }
+    }
+
+    /**
+     * 读一次再写回去,不拿界面上那份拼一个新的:[dev.bilby.data.PlaybackPrefs] 里还有随机播放,
+     * 而它归播放页管、随时会变。整份覆盖会把用户刚在播放页开的随机播放悄悄关掉。
+     */
+    fun setAutoNext(value: Boolean) {
+        _state.update { it.copy(autoNext = value) }
+        persist {
+            val prefs = settings.playbackPrefs.first()
+            settings.savePlaybackPrefs(prefs.copy(autoNext = value))
+        }
     }
 
     /**

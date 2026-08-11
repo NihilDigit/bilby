@@ -3,11 +3,15 @@ package dev.bilby.ui.comment
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.pullToRefresh
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -75,13 +79,13 @@ import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SortRow
+import dev.bilby.ui.components.inlineEmoteSize
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.LocalMentionColor
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.formatRelativeTime
 import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
@@ -97,6 +101,7 @@ private const val PrefetchThreshold = 5
 fun CommentSection(
     state: CommentUiState,
     onSort: (CommentSort) -> Unit,
+    onRefresh: () -> Unit,
     onLoadMore: () -> Unit,
     onExpandReplies: (rootId: Long) -> Unit,
     onSend: (text: String, replyTo: Long?) -> Unit,
@@ -105,6 +110,11 @@ fun CommentSection(
     onSeek: (Long) -> Unit = {},
     /** 点正文里的 @ 去那个人的空间。配不到 mid 的 @ 不是链接,不会走到这里。 */
     onUserClick: (mid: Long) -> Unit = {},
+    /**
+     * 这一刻允不允许下拉刷新。**播放器收起着的时候要传 false**:那时下滑的意思是"把播放器
+     * 拉回来",详见下面那处注释。
+     */
+    refreshEnabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     var replyTarget by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -126,9 +136,26 @@ fun CommentSection(
     // 输入栏跟着键盘走。放在这一层而不是输入框上:内层退让的话,输入栏上面那段列表
     // 不会跟着上移,打字时看不到自己在回复哪一条。
     Column(modifier = modifier.imePadding()) {
+        // 下拉刷新只套列表,不套输入栏:输入栏是常驻控件,被下拉手势带着往下走没有道理。
+        //
+        // **[refreshEnabled] 为假时整个手势不接管。** 嵌套滚动从内往外传,而播放器那个收起
+        // 页头的连接挂在这一整块的祖先上(见 VideoScreen),这里的刷新框离列表更近:不设这道
+        // 闸的话,列表到顶后剩下的下滑量会先被刷新吃掉,播放器再也展不开 —— 空间页正是这么
+        // 坏掉的。用手写的 `pullToRefresh` 而不是 `PullToRefreshBox`,只因为后者不给这个开关。
+        val pullState = rememberPullToRefreshState()
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .pullToRefresh(
+                    isRefreshing = state.refreshing,
+                    state = pullState,
+                    enabled = refreshEnabled,
+                    onRefresh = onRefresh,
+                ),
+        ) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = Spacing.Tight),
         ) {
             item(key = "sort-bar") { SortBar(state.sort, onSort) }
@@ -203,6 +230,12 @@ fun CommentSection(
                 }
             }
         }
+            PullToRefreshDefaults.Indicator(
+                state = pullState,
+                isRefreshing = state.refreshing,
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
+        }
         // 输入栏底色是 surfaceContainer,和上面列表的 surface 已经差着一档 —— 边界靠色阶
         // 表达就够了(§1.1),再压一条线是同一件事说两遍,而 divider 页要求 sparingly。
         CommentInputBar(
@@ -267,13 +300,21 @@ private fun CommentRow(
             .padding(start = Spacing.Comfortable, end = Spacing.Cozy, top = Spacing.Cozy, bottom = Spacing.Hair),
         horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
     ) {
-        Avatar(url = comment.avatarUrl, size = Dimens.AvatarSmall)
+        Avatar(
+            url = comment.avatarUrl,
+            size = Dimens.AvatarRow,
+            modifier = Modifier.openSpace(comment, onUserClick),
+        )
         Column(modifier = Modifier.weight(1f)) {
             // 头部两行(名字 / 时间·属地)是一块整的元信息,照 PiliPlus 的
             // `reply_item_grpc.dart` 的 _buildHeader。
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                // 整行可点而不是只点名字那几个字:三个字的昵称在手机上不到 30dp 宽,
+                // 按不中的按钮和没有按钮是一回事。等级徽章、UP 主标记跟着一起进热区,
+                // 它们说的也是同一个人。
+                modifier = Modifier.fillMaxWidth().openSpace(comment, onUserClick),
             ) {
                 // **用户名用 outline,不用满对比度。** 一屏几十条评论,真正要读的是正文;
                 // 名字和正文一样重的话,视线会被每条开头的名字拽住,整片看起来就是一团。
@@ -342,6 +383,25 @@ private fun CommentRow(
     }
 }
 
+/**
+ * 头像与名字点开这个人的空间。**复用 [CommentText] 那条 `onUserClick`**,不另开一条平行的
+ * 回调:正文里的 @提及 和头部的名字指的是同一件事(去这个人的空间),两条路会各自漂移。
+ *
+ * `mid` 为 0 时不可点 —— 那是接口没给出人(注销的账号),点进去只会是一个空空间。
+ *
+ * 读屏靠 `onClickLabel` 念出去处:头像的 `contentDescription` 按风格指南 §3 是 null
+ * (旁边就是同一个人的名字),没有它读屏只会念一句"按钮"。
+ */
+@Composable
+private fun Modifier.openSpace(comment: CommentItem, onUserClick: (Long) -> Unit): Modifier {
+    val label = stringResource(R.string.comment_open_space, comment.uname)
+    return clickable(
+        enabled = comment.mid != 0L,
+        onClickLabel = label,
+        role = Role.Button,
+    ) { onUserClick(comment.mid) }
+}
+
 /** "3 小时前  IP属地:广东"。11sp,和名字同属元信息那一块。 */
 @Composable
 private fun SubLine(comment: CommentItem) {
@@ -373,10 +433,6 @@ private val CommentBodyStyle
 private val SubReplyBodyStyle
     @Composable get() = MaterialTheme.typography.bodySmall.copy(lineHeight = 20.sp)
 
-private val EmoteSize = 20.sp
-
-/** 内联表情的绘制尺寸。占位是按 sp 给的(跟着字号缩放),画的时候要一个 dp。 */
-private val EmoteBoxSize = 20.dp
 private val GridSpacing = 4.dp
 
 /**
@@ -434,7 +490,7 @@ private const val SinglePictureWidthFraction = 0.7f
  * inset 分割线对齐到这里,也就是对齐头像的**后**缘、正文的前缘(M3 divider 页对
  * inset divider 的要求:与锚定元素对齐)。
  */
-private val CommentTextInset = Spacing.Comfortable + Dimens.AvatarSmall + Spacing.Cozy
+private val CommentTextInset = Spacing.Comfortable + Dimens.AvatarRow + Spacing.Cozy
 
 /**
  * 点赞 / 回复 / 删除。三个按钮以前都是 32dp 见方,低于 48dp 的最小触摸目标 ——
@@ -576,6 +632,7 @@ private fun SubReplyRow(comment: CommentItem, onSeek: (Long) -> Unit, onUserClic
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .openSpace(comment, onUserClick)
             .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
         horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
@@ -816,11 +873,14 @@ private fun CommentText(
         }
     }
 
+    // 尺寸与动态、专栏共用一处判断:同一个表情在三页里该是同一个大小,而三处正文字号不同。
+    // 楼中楼的行高比主楼矮一档,那一档里表情跟着收 —— 收的判断也在 inlineEmoteSize 里。
+    val emoteSize = inlineEmoteSize(style)
     val inline = used.mapValues { (_, url) ->
         InlineTextContent(
-            Placeholder(EmoteSize, EmoteSize, PlaceholderVerticalAlign.TextCenter),
+            Placeholder(emoteSize, emoteSize, PlaceholderVerticalAlign.TextCenter),
         ) {
-            BiliAsyncImage(url = url, contentDescription = null, modifier = Modifier.size(EmoteBoxSize))
+            BiliAsyncImage(url = url, contentDescription = null, modifier = Modifier.fillMaxSize())
         }
     }
 
@@ -851,21 +911,6 @@ private fun parseTimestampMillis(token: String): Long? {
     return seconds * 1000L
 }
 
-private val AbsoluteDateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-
-@Composable
-private fun formatRelativeTime(epochSeconds: Long, nowEpochSeconds: Long = Instant.now().epochSecond): String {
-    if (epochSeconds <= 0L) return ""
-    val diff = nowEpochSeconds - epochSeconds
-    return when {
-        diff < 60 -> stringResource(R.string.time_just_now)
-        diff < 3600 -> stringResource(R.string.time_minutes_ago, diff / 60)
-        diff < 24 * 3600 -> stringResource(R.string.time_hours_ago, diff / 3600)
-        diff < 7 * 24 * 3600 -> stringResource(R.string.time_days_ago, diff / (24 * 3600))
-        else -> Instant.ofEpochSecond(epochSeconds).atZone(ZoneId.systemDefault()).format(AbsoluteDateFormatter)
-    }
-}
-
 // ---- Preview ----
 
 // 显式写返回类型:它在 previewReplies 里递归调用自己,不写会让类型推断绕不出来。
@@ -879,7 +924,9 @@ private fun previewComment(
 ): CommentItem = CommentItem(
     rpid = rpid,
     rootRpid = rpid,
-    mid = rpid,
+    // mid 与 rpid 是两回事(一个是人,一个是这条评论),预览里给个不撞号的假值,
+    // 免得下一个人照着这里以为它们可以混用 —— 真实映射在 CommentRepository 里取 member.mid。
+    mid = 900_000L + rpid,
     uname = uname,
     avatarUrl = "",
     isUploader = isUp,
@@ -914,6 +961,7 @@ private fun CommentSectionPreview() {
                 hasMore = false,
             ),
             onSort = {},
+            onRefresh = {},
             onLoadMore = {},
             onExpandReplies = {},
             onSend = { _, _ -> },

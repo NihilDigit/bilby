@@ -88,14 +88,23 @@ object Dimens {
     /** 助理检索过程那一排横向缩略图。 */
     val TraceCardWidth = 120.dp
 
-    /** 列表行里的头像(评论区)。 */
-    val AvatarSmall = 36.dp
+    /**
+     * 头像三档,**按用途分,不按大小分**:同一个用途在全 app 只有一个尺寸,而"中"和"小"
+     * 这种名字挡不住第四档被加进来。所有头像都走 [dev.bilby.ui.components.Avatar],
+     * 别在别处手搓 `clip(CircleShape)` —— 那样漏掉的是 `ContentScale.Crop`,
+     * 表现是非正方形的头像被拉长,而且只在漏掉的那几处拉长。
+     *
+     * 列表行里的一个人:评论、动态、专栏、关注列表、播放页的 UP、直播的舰长。
+     * 这一档以前是 36 和 40 两个数,分别叫 Small 和 Medium —— 差 4dp,谁也看不出来,
+     * 而两个名字让人以为该有区别。
+     */
+    val AvatarRow = 36.dp
 
-    /** 播放页 UP 主头像。 */
-    val AvatarMedium = 40.dp
+    /** 成排站着的头像:首页那一排关注、正在直播那一叠的前脸。 */
+    val AvatarStack = 48.dp
 
-    /** 空间页顶部的大头像。 */
-    val AvatarLarge = 56.dp
+    /** 页头的大头像:空间页、我的。 */
+    val AvatarHeader = 56.dp
 
     /**
      * 可点区域的最小边长。M3 与 Android 无障碍规范都取 48dp;
@@ -106,11 +115,29 @@ object Dimens {
     /** 行内小图标(跟在文字旁边的)。M3 规定按钮的前后置图标统一 20dp,这里沿用。 */
     val IconInline = 20.dp
 
+    /**
+     * 「正在直播」那三根跳条([dev.bilby.ui.components.LivePulse])跟在文字旁边时的尺寸。
+     *
+     * **它必须由调用方给,`Canvas` 没有固有尺寸** —— 不给就是 0×0,编译和预览都不报错,
+     * 真机上那个符号直接不存在。动态卡片的直播格踩过:代码里写着 `LivePulse(...)`,
+     * 而那一格从来没画出来过。
+     */
+    val LivePulseInline = 14.dp
+
     /** 独立图标按钮里的图标。 */
     val IconAction = 24.dp
 
     /** 登录二维码的边长。 */
     val QrCode = 220.dp
+
+    /**
+     * 醒目留言那张卡片的宽度。它排在一条横滚的 `LazyRow` 里,**宽度得自己定死** ——
+     * 跟着内容走的话每条 SC 一个宽度,横向扫过去边界忽宽忽窄。
+     *
+     * 260 是按内容算的:减去左右各 12 的内边距还剩 236dp,`bodyMedium` 14sp 下一行约 16 个
+     * 汉字,两行盛得下绝大多数留言;再窄一档,名字那一行会先于正文被挤掉。
+     */
+    val SuperChatWidth = 260.dp
 
     /**
      * LV 徽章的渲染高度,评论区和空间页头部共用同一档。

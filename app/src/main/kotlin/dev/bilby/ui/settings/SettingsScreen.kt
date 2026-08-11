@@ -83,6 +83,7 @@ fun SettingsScreen(
     onSmokeTestLlm: () -> Unit,
     onCodecChange: (CodecPreference) -> Unit,
     onFastForwardSpeedChange: (Float) -> Unit,
+    onAutoNextChange: (Boolean) -> Unit,
     onDanmakuOpacityChange: (Float) -> Unit,
     onDanmakuScrollShowAreaChange: (Float) -> Unit,
     onDanmakuDensityChange: (DanmakuDensity) -> Unit,
@@ -132,6 +133,7 @@ fun SettingsScreen(
                                 state = state,
                                 onCodecChange = onCodecChange,
                                 onFastForwardSpeedChange = onFastForwardSpeedChange,
+                                onAutoNextChange = onAutoNextChange,
                                 onOpacityChange = onDanmakuOpacityChange,
                                 onScrollShowAreaChange = onDanmakuScrollShowAreaChange,
                                 onDensityChange = onDanmakuDensityChange,
@@ -162,6 +164,7 @@ fun SettingsScreen(
                         state = state,
                         onCodecChange = onCodecChange,
                         onFastForwardSpeedChange = onFastForwardSpeedChange,
+                        onAutoNextChange = onAutoNextChange,
                         onOpacityChange = onDanmakuOpacityChange,
                         onScrollShowAreaChange = onDanmakuScrollShowAreaChange,
                         onDensityChange = onDanmakuDensityChange,
@@ -298,12 +301,20 @@ private fun PlayerSettingsSection(
     state: SettingsUiState,
     onCodecChange: (CodecPreference) -> Unit,
     onFastForwardSpeedChange: (Float) -> Unit,
+    onAutoNextChange: (Boolean) -> Unit,
     onOpacityChange: (Float) -> Unit,
     onScrollShowAreaChange: (Float) -> Unit,
     onDensityChange: (DanmakuDensity) -> Unit,
     onFrameRateChange: (DanmakuFrameRateCap) -> Unit,
 ) {
     SectionTitle(stringResource(R.string.settings_section_player))
+    ToggleSettingRow(
+        title = stringResource(R.string.settings_auto_next),
+        // 说明这一行为什么存在:队列不是用户建的,自动前进因此是一个没人点过头的默认。
+        subtitle = stringResource(R.string.settings_auto_next_subtitle),
+        checked = state.autoNext,
+        onCheckedChange = onAutoNextChange,
+    )
     CodecSection(
         selected = state.codec,
         hardwareCodecIds = state.hardwareCodecIds,

@@ -3,6 +3,7 @@ package dev.bilby.ui
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
@@ -62,6 +63,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
@@ -72,8 +74,14 @@ import dev.bilby.BilbyApplication
 import dev.bilby.BiliLog
 import dev.bilby.R
 import dev.bilby.agent.AgentIntent
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import dev.bilby.ui.article.ArticleScreen
+import dev.bilby.ui.article.ArticleViewModel
+import dev.bilby.ui.dynamic.DynamicAction
+import dev.bilby.ui.dynamic.OtherDynamicsScreen
+import dev.bilby.ui.dynamic.OtherDynamicsViewModel
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.comment.CommentViewModel
@@ -229,6 +237,25 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
     val reducedMotion = rememberReducedMotion()
     val backStack = rememberNavBackStack(Home)
 
+    /**
+     * 压栈的唯一入口。同一个 key 在栈里只留一份,规则与理由见 [pushUnique]。
+     *
+     * **目标就是当前这一页时说一句。** 那一下真的什么都不该发生(空间页里点他自己的 @ 就是
+     * 这种),但一个按下去有涟漪、然后毫无动静的链接读起来和坏掉没有区别 —— 这条 toast 是
+     * 在回答"我点到了吗"。
+     *
+     * 用 `Toast` 而不是 snackbar:这句话没有可执行的动作,而 snackbar 要一个 `SnackbarHost`,
+     * 各页面各有自己的 Scaffold,为一句话把它穿到导航这一层不值。
+     */
+    val pushContext = LocalContext.current
+    val push: (NavKey) -> Unit = remember(backStack, pushContext) {
+        { key ->
+            if (!backStack.pushUnique(key)) {
+                Toast.makeText(pushContext, R.string.nav_already_here, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     // 新版本提示。挂在这一层而不是首页里:它和用户此刻在哪一页无关,而首页会随 tab 切换
     // 离开组合 —— 挂在那儿的话,开屏正好停在别的 tab 上就永远不弹。
     // **登录之后才挂**:上面那道 return 挡着,登录页不该被一个更新弹窗盖住。
@@ -258,7 +285,7 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                 return@collect
             }
             // 压栈而不是替换:从别的应用进来时栈里只有 Home,返回该回到首页而不是退出应用。
-            if (backStack.lastOrNull() != destination) backStack.add(destination)
+            push(destination)
         }
     }
 
@@ -358,16 +385,17 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                 CutoutSafe {
                     RootTabs(
                         container = container,
-                        onVideoClick = { backStack.add(Video(it)) },
-                        onUserClick = { backStack.add(Space(it)) },
-                        onLiveClick = { backStack.add(LiveRoom(it)) },
-                        onSettingsClick = { backStack.add(Settings) },
-                        onOpenFollowings = { backStack.add(Followings) },
-                        onOpenHistory = { backStack.add(History) },
-                        onOpenToView = { backStack.add(ToViewList) },
-                        onOpenOffline = { backStack.add(Offline) },
+                        onVideoClick = { push(Video(it)) },
+                        onUserClick = { push(Space(it)) },
+                        onLiveClick = { push(LiveRoom(it)) },
+                        onSettingsClick = { push(Settings) },
+                        onOpenFollowings = { push(Followings) },
+                        onOpenOtherDynamics = { push(OtherDynamics) },
+                        onOpenHistory = { push(History) },
+                        onOpenToView = { push(ToViewList) },
+                        onOpenOffline = { push(Offline) },
                         onOpenFavFolder = { folder ->
-                            backStack.add(FavFolderContents(folder.id, folder.title))
+                            push(FavFolderContents(folder.id, folder.title))
                         },
                     )
                 }
@@ -379,7 +407,7 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                 CutoutSafe {
                     HistoryRoute(
                         container = container,
-                        onVideoClick = { backStack.add(Video(it)) },
+                        onVideoClick = { push(Video(it)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -390,9 +418,9 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                     bvid = key.bvid,
                     startListening = key.listening,
                     cid = key.cid,
-                    onUpClick = { backStack.add(Space(it)) },
+                    onUpClick = { push(Space(it)) },
                     onOpenQueueSource = {
-                        backStack.add(CollectionContents(it.mid, it.id, it.isSeason, it.name))
+                        push(CollectionContents(it.mid, it.id, it.isSeason, it.name))
                     },
                     onBack = { backStack.removeLastOrNull() },
                     // 切集是**重组,不是压栈**:换的是这一页在放哪一条,不是又进了一层。
@@ -409,7 +437,7 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                     OfflineRoute(
                         container = container,
                         // 带上 cid:缓存列表里一条就是一个分 P,点哪一条就该播哪一条。
-                        onPlay = { item -> backStack.add(Video(item.bvid, cid = item.cid)) },
+                        onPlay = { item -> push(Video(item.bvid, cid = item.cid)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -418,7 +446,7 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                 CutoutSafe {
                     ToViewListRoute(
                         container = container,
-                        onVideoClick = { backStack.add(Video(it)) },
+                        onVideoClick = { push(Video(it)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -429,7 +457,7 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                         container = container,
                         mediaId = key.mediaId,
                         title = key.title,
-                        onVideoClick = { backStack.add(Video(it)) },
+                        onVideoClick = { push(Video(it)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -438,7 +466,7 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                 CutoutSafe {
                     FollowingsRoute(
                         container = container,
-                        onUpClick = { backStack.add(Space(it)) },
+                        onUpClick = { push(Space(it)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -448,18 +476,24 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                     container,
                     key.roomId,
                     onBack = { backStack.removeLastOrNull() },
+                    onUserClick = { push(Space(it)) },
                 )
             }
             entry<Space> { key ->
+                val context = LocalContext.current
+                val scope = rememberCoroutineScope()
                 CutoutSafe {
                     SpaceRoute(
                         container,
                         key.mid,
-                        onVideoClick = { backStack.add(Video(it)) },
-                        onListenUp = { backStack.add(Video(it, listening = true)) },
-                        onLiveClick = { backStack.add(LiveRoom(it)) },
+                        onVideoClick = { push(Video(it)) },
+                        onListenUp = { push(Video(it, listening = true)) },
+                        onLiveClick = { push(LiveRoom(it)) },
                         onCollectionClick = {
-                            backStack.add(CollectionContents(key.mid, it.id, it.isSeason, it.name))
+                            push(CollectionContents(key.mid, it.id, it.isSeason, it.name))
+                        },
+                        onDynamicAction = { action ->
+                            handleDynamicAction(action, context, container, scope, push)
                         },
                         onBack = { backStack.removeLastOrNull() },
                     )
@@ -470,7 +504,42 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                     CollectionRoute(
                         container = container,
                         key = key,
-                        onVideoClick = { backStack.add(Video(it)) },
+                        onVideoClick = { push(Video(it)) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
+            }
+            entry<OtherDynamics> {
+                val context = LocalContext.current
+                val scope = rememberCoroutineScope()
+                CutoutSafe {
+                    OtherDynamicsRoute(
+                        container = container,
+                        onAction = { action ->
+                            handleDynamicAction(action, context, container, scope, push)
+                        },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
+            }
+            entry<ArticlePage> { key ->
+                val context = LocalContext.current
+                CutoutSafe {
+                    ArticleRoute(
+                        container = container,
+                        key = key,
+                        onOpenLink = { url ->
+                            // 专栏正文里的链接先按站内解析。**认不出来才交给浏览器** ——
+                            // 文中引用的多是 BV 号和别人的空间,那些在这个应用里有落点,
+                            // 一律外跳等于把读者赶出去再走回来。
+                            val destination = BilbyLink.destinationOf(url)
+                            if (destination != null) {
+                                push(destination)
+                            } else {
+                                ShareLink.openInBrowser(context, url)
+                            }
+                        },
+                        onUpClick = { push(Space(it)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -529,6 +598,7 @@ private fun RootTabs(
     onLiveClick: (Long) -> Unit,
     onSettingsClick: () -> Unit,
     onOpenFollowings: () -> Unit,
+    onOpenOtherDynamics: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
@@ -576,6 +646,7 @@ private fun RootTabs(
                 onLiveClick = onLiveClick,
                 onSettingsClick = onSettingsClick,
                 onOpenFollowings = onOpenFollowings,
+                onOpenOtherDynamics = onOpenOtherDynamics,
                 onOpenHistory = onOpenHistory,
                 onOpenToView = onOpenToView,
                 onOpenOffline = onOpenOffline,
@@ -606,6 +677,7 @@ private fun RootTabs(
                     onLiveClick = onLiveClick,
                     onSettingsClick = onSettingsClick,
                     onOpenFollowings = onOpenFollowings,
+                    onOpenOtherDynamics = onOpenOtherDynamics,
                     onOpenHistory = onOpenHistory,
                     onOpenToView = onOpenToView,
                     onOpenOffline = onOpenOffline,
@@ -644,6 +716,7 @@ private fun RootTabsContent(
     onLiveClick: (Long) -> Unit,
     onSettingsClick: () -> Unit,
     onOpenFollowings: () -> Unit,
+    onOpenOtherDynamics: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
@@ -686,6 +759,7 @@ private fun RootTabsContent(
                     onUserClick = onUserClick,
                     onLiveClick = onLiveClick,
                     onOpenFollowings = onOpenFollowings,
+                    onOpenOtherDynamics = onOpenOtherDynamics,
                 )
 
                 RootTab.Search -> SearchPane(container, onVideoClick, onUserClick)
@@ -728,6 +802,7 @@ private fun FeedPane(
     onUserClick: (Long) -> Unit,
     onLiveClick: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
+    onOpenOtherDynamics: () -> Unit,
 ) {
     val vm: FeedViewModel = viewModel(
         key = "root-feed",
@@ -754,6 +829,7 @@ private fun FeedPane(
         onLiveClick = onLiveClick,
         onExcludeUp = vm::excludeUp,
         onOpenFollowings = onOpenFollowings,
+        onOpenOtherDynamics = onOpenOtherDynamics,
         onScrollPositionChanged = vm::onVisibleTopChanged,
         onLocated = vm::onLocated,
     )
@@ -870,6 +946,7 @@ private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
         onDanmakuFrameRateChange = vm::setDanmakuFrameRate,
         onSponsorBlockChange = vm::updateSponsorBlock,
         onOfflineConcurrencyChange = vm::setOfflineConcurrency,
+        onAutoNextChange = vm::setAutoNext,
         onClearExcludedFeed = vm::clearExcludedFeedMids,
         onOpenGithub = {
             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PROJECT_GITHUB_URL)))
@@ -1100,6 +1177,9 @@ private fun FollowingsRoute(
             onUpClick = onUpClick,
             onLoadMore = vm::loadMore,
             onRetry = vm::retry,
+            onSelectSource = vm::selectSource,
+            onSelectOrder = vm::selectOrder,
+            onSearch = vm::search,
             onRefresh = vm::refresh,
             contentPadding = insets,
         )
@@ -1114,6 +1194,7 @@ private fun SpaceRoute(
     onListenUp: (String) -> Unit,
     onLiveClick: (Long) -> Unit,
     onCollectionClick: (SpaceCollectionItem) -> Unit,
+    onDynamicAction: (DynamicAction) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: SpaceViewModel = viewModel(
@@ -1132,6 +1213,7 @@ private fun SpaceRoute(
         onLoadMoreCollections = vm::loadMoreCollections,
         onCollectionClick = onCollectionClick,
         onVideoClick = { onVideoClick(it.bvid) },
+        onDynamicAction = onDynamicAction,
         onLiveClick = onLiveClick,
         onToggleFollow = vm::toggleFollow,
         // 听这位 UP 的投稿:挑第一条进播放页并直接以听的状态打开。**宿主只有播放页一个** ——
@@ -1173,6 +1255,86 @@ private fun CollectionRoute(
         onLoadMore = { vm.loadMore() },
         onRefresh = vm::refresh,
         onVideoClick = { onVideoClick(it.bvid) },
+    )
+}
+
+@Composable
+private fun OtherDynamicsRoute(
+    container: AppContainer,
+    onAction: (DynamicAction) -> Unit,
+    onBack: () -> Unit,
+) {
+    val vm: OtherDynamicsViewModel = viewModel(
+        factory = viewModelFactory { initializer { OtherDynamicsViewModel(container.dynamicRepository) } },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    OtherDynamicsScreen(
+        state = state,
+        onBack = onBack,
+        onRefresh = vm::refresh,
+        onLoadMore = vm::loadMore,
+        onRetry = vm::retry,
+        onAction = onAction,
+    )
+}
+
+/**
+ * 一张动态卡片被点开时去哪儿。**这一段在 backstack 这一层,不在卡片里**:卡片只说"要去
+ * 哪种东西",怎么去是导航的事。
+ *
+ * [DynamicAction.OpenUrl] 先按站内解析,认不出来才交给浏览器 —— 动态里贴的多是 BV 号和
+ * 别人的空间,那些在这个应用里有落点;番剧、活动页没有,那才是浏览器该接手的。
+ */
+private fun handleDynamicAction(
+    action: DynamicAction,
+    context: android.content.Context,
+    container: AppContainer,
+    scope: CoroutineScope,
+    push: (NavKey) -> Unit,
+) {
+    when (action) {
+        is DynamicAction.OpenVideo -> push(Video(action.bvid))
+        is DynamicAction.OpenLive -> push(LiveRoom(action.roomId))
+        // 房间号要现查(预约卡片只给 mid)。查不到就退到这个人的空间页 —— 那是"这个人在哪"
+        // 的答案,而一个查不出房间的 mid 多半是没开通过直播间。
+        is DynamicAction.OpenLiveOfUser -> scope.launch {
+            val roomId = container.spaceRepository.liveRoomId(action.mid)
+            push(if (roomId != null) LiveRoom(roomId) else Space(action.mid))
+        }
+        is DynamicAction.OpenArticle -> push(ArticlePage(action.id, action.isRead))
+        is DynamicAction.OpenUser -> push(Space(action.mid))
+        is DynamicAction.OpenUrl -> {
+            val destination = BilbyLink.destinationOf(action.url)
+            if (destination != null) push(destination) else ShareLink.openInBrowser(context, action.url)
+        }
+    }
+}
+
+/**
+ * 专栏阅读页。VM 的 key 带上 `isRead`:同一串数字在两套编号里是两篇不同的文章,只用 id
+ * 做 key 会让先打开的那篇被后打开的那篇读到。
+ */
+@Composable
+private fun ArticleRoute(
+    container: AppContainer,
+    key: ArticlePage,
+    onOpenLink: (String) -> Unit,
+    onUpClick: (Long) -> Unit,
+    onBack: () -> Unit,
+) {
+    val vm: ArticleViewModel = viewModel(
+        key = "article-${key.isRead}-${key.id}",
+        factory = viewModelFactory {
+            initializer { ArticleViewModel(key.id, key.isRead, container.articleRepository) }
+        },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    ArticleScreen(
+        state = state,
+        onBack = onBack,
+        onRetry = vm::retry,
+        onLinkClick = onOpenLink,
+        onMentionClick = onUpClick,
     )
 }
 
@@ -1331,7 +1493,7 @@ private fun VideoPane(
     val subtitleCues by vm.subtitleCues.collectAsStateWithLifecycle()
     val danmakuPrefs by vm.danmakuPrefs.collectAsStateWithLifecycle()
     val danmakuPool by vm.danmakuPool.collectAsStateWithLifecycle()
-    val cachedBvids by vm.cachedBvids.collectAsStateWithLifecycle()
+    val cached by vm.cached.collectAsStateWithLifecycle()
     val specialDanmakuPool by vm.specialDanmakuPool.collectAsStateWithLifecycle()
     val staffFollowed by vm.staffFollowed.collectAsStateWithLifecycle()
     val playerPrefs by container.settings.playerPrefs.collectAsStateWithLifecycle(
@@ -1370,7 +1532,7 @@ private fun VideoPane(
             vm.onDanmakuPlaybackPosition(position)
         },
         onFindRelated = vm::findRelated,
-        cachedBvids = cachedBvids,
+        cached = cached,
         onCacheSelection = vm::cacheSelection,
         onUpClick = onUpClick,
         onOpenQueueSource = onOpenQueueSource,
@@ -1390,6 +1552,7 @@ private fun VideoPane(
         onPlayEpisode = onOpenVideo,
         onRelatedVideoClick = onOpenVideo,
         onCommentSort = { commentVm?.setSort(it) },
+        onCommentRefresh = { commentVm?.refresh() },
         onCommentLoadMore = { commentVm?.loadMore() },
         onExpandReplies = { commentVm?.expandReplies(it) },
         onSendComment = { text, parent -> commentVm?.send(text, parent) },

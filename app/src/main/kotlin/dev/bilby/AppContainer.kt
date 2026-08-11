@@ -9,6 +9,7 @@ import dev.bilby.api.BiliClient
 import dev.bilby.api.DeviceFingerprint
 import dev.bilby.api.WbiSigner
 import dev.bilby.data.AccountRepository
+import dev.bilby.data.ArticleRepository
 import dev.bilby.data.DynamicRepository
 import dev.bilby.data.FingerprintStore
 import dev.bilby.danmaku.DanmakuRepository
@@ -127,6 +128,8 @@ class AppContainer(context: Context) {
     val commentRepository: CommentRepository by lazy { CommentRepository(biliClient, settings) }
 
     val spaceRepository: SpaceRepository by lazy { SpaceRepository(biliClient) }
+
+    val articleRepository: ArticleRepository by lazy { ArticleRepository(biliClient) }
 
     val relationRepository: RelationRepository by lazy { RelationRepository(biliClient) }
 

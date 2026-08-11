@@ -36,6 +36,7 @@ fun LiveRoomRoute(
     container: AppContainer,
     roomId: Long,
     onBack: () -> Unit,
+    onUserClick: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -115,6 +116,7 @@ fun LiveRoomRoute(
         onRetry = vm::load,
         roomId = roomId,
         onBack = onBack,
+        onUserClick = onUserClick,
         modifier = modifier,
     )
 }

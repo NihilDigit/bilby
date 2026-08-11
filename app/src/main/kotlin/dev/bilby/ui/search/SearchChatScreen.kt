@@ -488,7 +488,7 @@ private fun UserChip(user: SearchUser, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
-        Avatar(url = user.avatarUrl, size = Dimens.AvatarMedium)
+        Avatar(url = user.avatarUrl, size = Dimens.AvatarRow)
         Column {
             Text(
                 text = user.name,

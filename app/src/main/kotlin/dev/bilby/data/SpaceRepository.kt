@@ -1,5 +1,6 @@
 package dev.bilby.data
 
+import dev.bilby.BiliLog
 import dev.bilby.formatDurationSeconds
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
@@ -19,6 +20,9 @@ import dev.bilby.api.getData
 import dev.bilby.api.map
 import dev.bilby.api.propagateFailure
 import dev.bilby.api.toHttpsUrl
+import dev.bilby.data.model.DynamicAdditional
+import dev.bilby.data.model.DynamicCard
+import dev.bilby.data.model.DynamicContent
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.async
 
@@ -65,6 +69,17 @@ enum class SpaceArchiveOrder(val apiValue: String) {
 
 data class SpaceArchivePage(val total: Int, val items: List<SpaceVideoItem>)
 
+/**
+ * 空间动态 tab 的一条。
+ *
+ * **只有两个分支,不是每种动态一个。** 类型分发本身在 `DynamicCardMapper` 里,产出的
+ * [dev.bilby.data.model.DynamicCard] 已经把十几种形态收敛好了;这里再按形态分一遍,等于把
+ * 同一套判断写两份 —— 以前正是这样,于是空间页认得的类型比 PiliPlus 少一大半,而且直播、
+ * 音频、番剧更新在这一页悄悄消失。
+ *
+ * [Video] 仍然单独留着,因为它要喂给播放队列(`QueueSourceRepository`),而队列装的是
+ * [SpaceVideoItem] —— 三个 tab 共用的那个视频行形状。
+ */
 sealed interface SpaceDynamicItem {
     val key: String
 
@@ -72,47 +87,10 @@ sealed interface SpaceDynamicItem {
         override val key: String get() = item.bvid
     }
 
-    /** 类型名是界面文字,按 [type] 在 UI 层取本地化文案,不在数据层写死。 */
-    data class Text(
-        override val key: String,
-        val type: String,
-        val text: String,
-        val publishedAtEpochSeconds: Long,
-    ) : SpaceDynamicItem
-
-    /** 图文:一段话加若干张图。图可以点开看大图,所以带的是完整的 URL 列表而不是缩略图。 */
-    data class Draw(
-        override val key: String,
-        val text: String,
-        val images: List<String>,
-        val publishedAtEpochSeconds: Long,
-    ) : SpaceDynamicItem
-
-    /**
-     * 专栏。**只带卡片要显示的东西**:正文不在动态接口里,要另外一次请求
-     * (见 `ui/space/SpaceScreen.kt` 里的说明)。
-     */
-    data class Article(
-        override val key: String,
-        val title: String,
-        val summary: String,
-        val coverUrl: String,
-        val url: String,
-        val publishedAtEpochSeconds: Long,
-    ) : SpaceDynamicItem
-
-    /**
-     * 转发。[origin] 为 null 表示源动态已经被删 —— 这时仍然要把这一条画出来,
-     * 因为转发者自己说的那段话([text])还在。
-     */
-    data class Forward(
-        override val key: String,
-        val text: String,
-        val publishedAtEpochSeconds: Long,
-        val origin: SpaceDynamicItem?,
-        /** 源动态没了时服务端给的说明,如"源动态已被作者删除"。 */
-        val originTips: String,
-    ) : SpaceDynamicItem
+    /** 投稿视频之外的全部类型:图文、文字、转发、直播、专栏、番剧更新、音频、收藏夹、活动。 */
+    data class Card(val card: DynamicCard) : SpaceDynamicItem {
+        override val key: String get() = card.id
+    }
 }
 
 data class SpaceDynamicPage(val items: List<SpaceDynamicItem>, val nextOffset: String?, val hasMore: Boolean)
@@ -136,6 +114,21 @@ data class SpaceCollectionDetailPage(val total: Int, val items: List<SpaceVideoI
  * 裸调返回 -400/-403(notes 1.1、1.3、1.5 节)。
  */
 class SpaceRepository(private val client: BiliClient) {
+
+    /**
+     * 这个人的直播间号,没开通过直播间返回 null。
+     *
+     * **不看在不在播**,与 [loadProfile] 里那个 `liveRoom` 正相反:那边是"现在能不能进去看",
+     * 这边回答的是"这场预约的直播在哪个房间",而房间号在开播前后是同一个。预约卡片只给
+     * up_mid,房间号得这么现查(见 DynamicAdditional.Reserve)。
+     */
+    suspend fun liveRoomId(mid: Long): Long? = when (val info = loadUserInfo(mid)) {
+        is BiliResult.Ok -> info.value.liveRoom?.roomid?.takeIf { it != 0L }
+        else -> {
+            BiliLog.w("预约:查直播间号失败,mid=$mid")
+            null
+        }
+    }
 
     /** 用户信息(acc/info)与关系统计(relation/stat)是两个接口,合并成一个界面用的 profile。 */
     suspend fun loadProfile(mid: Long): BiliResult<SpaceProfile> = coroutineScope {
@@ -285,7 +278,8 @@ class SpaceRepository(private val client: BiliClient) {
     /**
      * 空间动态(notes 1.5 节),需要 WBI。分页游标由服务端驱动:`loadNext == true` 时
      * 用返回的新 offset 再拉一页并拼接(notes 1.5 节,与 DynamicRepository 的 feed/all 不同)。
-     * 视频和非视频动态都保留；非视频动态使用轻量文字行，不进入播放队列。
+     * **所有类型都保留**,分发照 PiliPlus(见 notes/dynamic-cards.md);只有投稿视频进播放
+     * 队列,其余以卡片形式显示。
      */
     suspend fun loadDynamics(mid: Long, offset: String?): BiliResult<SpaceDynamicPage> {
         val params = buildMap {
@@ -306,7 +300,7 @@ class SpaceRepository(private val client: BiliClient) {
             referer = spaceReferer(mid, dynamic = true),
         )
         return result.map { dto ->
-            val items = dto.items.mapNotNull { it.toDynamicItem() }
+            val items = dto.items.mapNotNull { it.toSpaceDynamicItem() }
             SpaceDynamicPage(items, dto.offset.ifEmpty { null }, dto.hasMore)
         }
     }
@@ -355,88 +349,34 @@ class SpaceRepository(private val client: BiliClient) {
         )
     }
 
-    /**
-     * 一条动态映射成界面认得的东西。
-     *
-     * **番剧、影视、课堂(PGC / PGC_UNION / COURSES_SEASON)一律丢掉**,这不是"还没做":
-     * 非 UGC 内容是 Non-Goal(版权),画出来只会给一个点了打不开的入口。
-     */
-    private fun DynamicItemDto.toDynamicItem(): SpaceDynamicItem? {
-        val author = modules?.moduleAuthor ?: return null
-        val major = modules.moduleDynamic?.major
-        val text = modules.moduleDynamic?.desc?.text.orEmpty().trim()
-        val key = idStr.ifBlank { "$type-${author.mid}-${author.pubTs}" }
+}
 
-        val archive = when (type) {
-            "DYNAMIC_TYPE_AV" -> major?.archive
-            "DYNAMIC_TYPE_UGC_SEASON" -> major?.ugcSeason
-            else -> null
-        }
-        if (archive != null) {
-            val bvid = archive.bvid?.takeIf { it.isNotBlank() } ?: return null
-            return SpaceDynamicItem.Video(
-                SpaceVideoItem(
-                    bvid = bvid,
-                    title = archive.title,
-                    coverUrl = archive.cover.toHttpsUrl(),
-                    durationText = archive.durationText,
-                    publishedAtEpochSeconds = author.pubTs,
-                    playCountText = archive.stat?.play ?: "",
-                    danmakuCountText = archive.stat?.danmaku ?: "",
-                ),
-            )
-        }
-
-        // 专栏先认 opus(新接口把长文都归到它上面),没有再退回旧的 article。
-        val opus = major?.opus
-        val article = major?.article
-        if (opus != null || article != null) {
-            val title = opus?.title?.takeIf { it.isNotBlank() } ?: article?.title.orEmpty()
-            val summary = opus?.summary?.text?.takeIf { it.isNotBlank() } ?: article?.desc.orEmpty()
-            if (title.isBlank() && summary.isBlank()) return null
-            return SpaceDynamicItem.Article(
-                key = key,
-                title = title,
-                summary = summary.trim(),
-                coverUrl = (opus?.pics?.firstOrNull()?.url ?: article?.covers?.firstOrNull()).orEmpty().toHttpsUrl(),
-                url = (opus?.jumpUrl ?: article?.jumpUrl).orEmpty().toHttpsUrl(),
-                publishedAtEpochSeconds = author.pubTs,
-            )
-        }
-
-        val images = major?.draw?.items.orEmpty().map { it.src.toHttpsUrl() }.filter { it.isNotEmpty() }
-        if (images.isNotEmpty()) {
-            return SpaceDynamicItem.Draw(
-                key = key,
-                text = text,
-                images = images,
-                publishedAtEpochSeconds = author.pubTs,
-            )
-        }
-
-        if (type == "DYNAMIC_TYPE_FORWARD") {
-            // 源动态自己再走一遍这个映射。它被删时 `orig.type` 是 DYNAMIC_TYPE_NONE,
-            // 映射结果为 null,这一条照样要画 —— 转发者说的话还在。
-            val origin = orig?.toDynamicItem()
-            val tips = orig?.modules?.moduleDynamic?.major?.none?.tips.orEmpty()
-            if (text.isEmpty() && origin == null && tips.isEmpty()) return null
-            return SpaceDynamicItem.Forward(
-                key = key,
-                text = text,
-                publishedAtEpochSeconds = author.pubTs,
-                origin = origin,
-                originTips = tips,
-            )
-        }
-
-        if (text.isEmpty()) return null
-        return SpaceDynamicItem.Text(
-            key = key,
-            type = type,
-            text = text,
-            publishedAtEpochSeconds = author.pubTs,
-        )
-    }
+/**
+ * 一条动态映射成空间页认得的东西。**类型分发不在这里**,在 `DynamicCardMapper`
+ * (对照表见 notes/dynamic-cards.md);这里只做一件事:把投稿视频挑出来换成
+ * [SpaceVideoItem],好让它能进播放队列。
+ *
+ * 分成两步而不是让 mapper 直接产出 [SpaceVideoItem]:队列要的那个形状带发布时间,而发布时间
+ * 在动态的作者模块上、不在 `major.archive` 里 —— 那是"这条动态"的属性,不是"这个稿件"的,
+ * 让 mapper 认识空间页的模型只会把两边焊死。
+ */
+internal fun DynamicItemDto.toSpaceDynamicItem(): SpaceDynamicItem? {
+    val card = toDynamicCard() ?: return null
+    val video = card.content as? DynamicContent.Video ?: return SpaceDynamicItem.Card(card)
+    // 转发来的视频不算这位 UP 的投稿。队列装的是他自己发的东西,混进转发的之后
+    // 「听这位 UP 的投稿」会放出别人的稿件。这一条照样显示,只是以卡片形式。
+    if (card.forwarded != null) return SpaceDynamicItem.Card(card)
+    return SpaceDynamicItem.Video(
+        SpaceVideoItem(
+            bvid = video.bvid,
+            title = video.title,
+            coverUrl = video.coverUrl,
+            durationText = video.durationText,
+            publishedAtEpochSeconds = card.publishedAtEpochSeconds,
+            playCountText = video.playCountText,
+            danmakuCountText = video.danmakuCountText,
+        ),
+    )
 }
 
 
