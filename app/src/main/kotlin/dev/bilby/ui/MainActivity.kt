@@ -756,7 +756,7 @@ private fun SearchPane(
     SearchChatScreen(
         state = state,
         searchHistory = history,
-        onHistoryClick = vm::searchFromHistory,
+        onHistoryClick = vm::fillFromHistory,
         onHistoryRemove = vm::removeSearchHistory,
         onInputChange = vm::onInputChange,
         onModeChange = vm::onModeChange,

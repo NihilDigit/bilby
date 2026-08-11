@@ -56,9 +56,12 @@ class SearchChatViewModel(
     fun removeSearchHistory(query: String) = viewModelScope.launch { settings.removeSearchHistory(query) }
 
     /** 点历史里的一条 = 把它填回输入框并直接搜。 */
-    fun searchFromHistory(query: String) {
+    /**
+     * 点历史词条**只把它填回输入框,不直接搜**。历史里的词多半是"上次搜的那个,再改一点",
+     * 直接发出去的话想改就只能重打一遍。要搜就按发送,和手打没有区别。
+     */
+    fun fillFromHistory(query: String) {
         _state.update { it.copy(input = query, mode = SearchMode.Normal) }
-        send()
     }
 
     /**

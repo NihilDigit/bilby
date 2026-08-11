@@ -158,8 +158,9 @@ fun SearchChatScreen(
     val focusManager = LocalFocusManager.current
     // **发送要收焦点。** 历史列表盖在结果上的判据之一就是"光标在输入框里"(见 NormalPane),
     // 而发送不动焦点,于是搜完之后这一屏还停在历史上 —— 而刚搜的那个词正好排在最上面,
-    // 读起来像"搜索只是把词记进了历史,得再点一下才进得去"。点历史那条路早就收了焦点,
-    // 漏的是发送这条。
+    // 读起来像"搜索只是把词记进了历史,得再点一下才进得去"。
+    //
+    // 现在发送是**唯一**收焦点的路径:点历史只填词不发送,那时候焦点必须留着。
     val send: () -> Unit = {
         focusManager.clearFocus()
         onSend()
@@ -200,12 +201,10 @@ fun SearchChatScreen(
                         onLoadMore = onLoadMore,
                         onRetry = onRetry,
                         history = searchHistory,
-                        // 点了历史就是发起一次搜索,焦点该离开输入框 —— 不收的话结果出来了
-                        // 这一屏还停在历史上,得再点一下别处才看得见。
-                        onHistoryClick = { keyword ->
-                            focusManager.clearFocus()
-                            onHistoryClick(keyword)
-                        },
+                        // **点历史不收焦点**:它现在只是把词填回输入框(见
+                        // SearchChatViewModel.fillFromHistory),人接着还要改那几个字。
+                        // 收掉焦点等于把键盘和历史一起撤走,而搜索还没发生。
+                        onHistoryClick = onHistoryClick,
                         onHistoryRemove = onHistoryRemove,
                         inputFocused = inputFocused,
                     )
