@@ -62,6 +62,21 @@ none of them has gets a new route there — never a request issued around it.
 **Optimistic updates exclude refetching.** Likes, coins, and favourites adjust the count
 locally and do not refetch; refetching makes the number flicker twice on popular videos.
 
+**Never separate metadata with a middle dot.** Not `·`, not `•`, not any of their
+lookalikes. Use `MetaSeparator` (two spaces, in `ui/components/VideoRow.kt`). The last
+segment of these lines is usually the one that gets truncated — an uploader name, an IP
+region — and the dot truncates with it, leaving a dot hanging at the end of the line; on a
+narrow screen the dots also wrap before the content does. A literal dot as a *selection
+mark* in a dropdown is a different thing and stays.
+
+**Interface copy is written, never spoken.** No `刷视频`, no `删掉`, no `再下一次`. The
+register that makes an irreversible action sound casual is the register that gets it
+misread. Two carve-outs: the assistant's process rows, where `瞟了一眼` is exactly right
+because those lines are the assistant reporting on itself (see `Tool.label`); and copy the
+user is owed nothing extra — confirmations state the action and stop. `取消关注` is the
+whole dialog. Explaining that unfollowing means finding the person again is user education
+this app does not do, and PiliPlus does not either.
+
 ## Architecture traps
 
 There is exactly one player. It belongs to `player/AudioPlaybackService`, a

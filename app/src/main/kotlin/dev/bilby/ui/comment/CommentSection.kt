@@ -73,6 +73,7 @@ import dev.bilby.ui.components.ImageViewer
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SortRow
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
@@ -341,12 +342,12 @@ private fun CommentRow(
     }
 }
 
-/** "3 小时前 • IP属地:广东"。11sp,和名字同属元信息那一块。 */
+/** "3 小时前  IP属地:广东"。11sp,和名字同属元信息那一块。 */
 @Composable
 private fun SubLine(comment: CommentItem) {
     val text = listOf(formatRelativeTime(comment.ctimeEpochSeconds), comment.ipLocation)
         .filter { it.isNotBlank() }
-        .joinToString("  •  ")
+        .joinToString(MetaSeparator)
     if (text.isEmpty()) return
     Text(
         text = text,
@@ -529,7 +530,7 @@ private fun SubReplies(
 
                 // 失败就地重试:按钮和它解释的那次点击在同一个容器里。
                 expanded?.error != null -> SubReplyMoreButton(
-                    text = stringResource(R.string.comment_replies_failed) + " · " +
+                    text = stringResource(R.string.comment_replies_failed) + "  " +
                         stringResource(R.string.action_retry),
                     onClick = { onExpandReplies(comment.rpid) },
                 )

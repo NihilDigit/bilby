@@ -147,12 +147,17 @@ fun VideoRow(
 private const val DisabledContentAlpha = 0.38f
 
 /**
- * "3 小时前  某某 UP 主"。两段之间用两个空格而不是 `·`:UP 名可能很长要截断,
- * 分隔点跟着被截掉会留下一个孤零零的点。
+ * 一行元信息里各段之间的间隔:**两个空格,不是 `·` 或 `•`**。
+ *
+ * 这一行的末段常常是要截断的(UP 名、IP 属地),分隔点跟着被截掉会留下一个孤零零的点;
+ * 窄屏上那一串点还会先于内容换行。两个空格没有这两个问题,也不必再挑用哪个点。
  */
+const val MetaSeparator = "  "
+
+/** "3 小时前  某某 UP 主"。 */
 @Composable
 private fun SecondaryLine(dateText: String?, upName: String?) {
-    val text = listOfNotNull(dateText, upName).filter { it.isNotBlank() }.joinToString("  ")
+    val text = listOfNotNull(dateText, upName).filter { it.isNotBlank() }.joinToString(MetaSeparator)
     if (text.isEmpty()) return
     Text(
         text = text,

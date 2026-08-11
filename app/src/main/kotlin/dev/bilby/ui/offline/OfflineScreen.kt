@@ -32,6 +32,7 @@ import dev.bilby.offline.OfflineItem
 import dev.bilby.offline.OfflineStatus
 import dev.bilby.offline.OfflineStore
 import dev.bilby.ui.components.EmptyState
+import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.Spacing
@@ -201,7 +202,7 @@ fun OfflineItem.toRowUi(): VideoRowUi = VideoRowUi(
             qualityLabel.takeIf { it.isNotEmpty() },
             stringResource(R.string.offline_with_danmaku).takeIf { hasDanmaku },
             formatBytes(downloadedBytes),
-        ).joinToString(" · ")
+        ).joinToString(MetaSeparator)
         OfflineStatus.Queued -> stringResource(R.string.offline_status_queued)
         // 速度和百分比一起给:并发之后同时有几条在动,只有百分比的话看不出带宽分给了谁,
         // 也看不出某一条是不是已经停住了。速度为 0 的那一瞬(刚起步)不显示,别闪一下 0。
@@ -210,7 +211,7 @@ fun OfflineItem.toRowUi(): VideoRowUi = VideoRowUi(
                 ?.let { stringResource(R.string.offline_status_running, (it * 100).toInt()) }
                 ?: stringResource(R.string.offline_status_running_unknown),
             speedBytesPerSecond.takeIf { it > 0 }?.let { formatSpeed(it) },
-        ).joinToString(" · ")
+        ).joinToString(MetaSeparator)
         OfflineStatus.Failed -> error ?: stringResource(R.string.offline_status_failed)
     },
     progressFraction = progress.takeIf { status == OfflineStatus.Running },

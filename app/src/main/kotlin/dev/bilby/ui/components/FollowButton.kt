@@ -61,8 +61,10 @@ fun FollowButton(
     if (confirmingUnfollow) {
         AlertDialog(
             onDismissRequest = { confirmingUnfollow = false },
+            // 不写说明。**"取消关注"这四个字已经说完了这件事**,再补一句"取消后要重新找到
+            // 这个人"是在教用户关注是怎么回事。PiliPlus 的取关面板同样只有选项没有说明
+            // (request_utils.dart 的 relationMod 那一段)。
             title = { Text(stringResource(R.string.follow_unfollow_confirm_title)) },
-            text = { Text(stringResource(R.string.follow_unfollow_confirm_message)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmingUnfollow = false

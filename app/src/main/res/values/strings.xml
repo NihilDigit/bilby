@@ -43,9 +43,9 @@
     <string name="follow_none">关注</string>
     <string name="follow_following">已关注</string>
     <string name="follow_mutual">互相关注</string>
-    <!-- 取关二次确认。关注是可逆的轻动作不用确认,取关会丢掉关系所以要——空间页和播放页共用同一组文案 -->
+    <!-- 取关二次确认。关注是可逆的轻动作不用确认,取关会丢掉关系所以要——空间页和播放页共用。
+         只有标题没有说明,理由见 FollowButton -->
     <string name="follow_unfollow_confirm_title">取消关注</string>
-    <string name="follow_unfollow_confirm_message">取消后需要重新找到这个人才能再次关注</string>
 
     <!-- 动态 -->
     <string name="feed_empty">关注的 UP 主还没有新投稿</string>
@@ -79,10 +79,13 @@
     <!-- 助理:搜索页、播放页找相关、独立结果页共用 -->
     <string name="agent_title">助理</string>
     <string name="agent_process">过程</string>
-    <string name="agent_process_collapsed">过程 · %1$s</string>
+    <!-- 元信息各段之间用两个空格,不是 ·(见 VideoRow)。XML 会把连续空白压成一个,
+         所以整串加引号保住那两个空格。 -->
+    <string name="agent_process_collapsed">"过程  %1$s"</string>
     <string name="agent_process_expand">展开过程</string>
     <string name="agent_process_collapse">收起过程</string>
-    <string name="agent_running">还在找…</string>
+    <!-- 助理讲自己,可以有人称口吻(见 Tool.label)。这三条都是它在说话,不是在指示用户。 -->
+    <string name="agent_running">还在翻…</string>
     <string name="agent_no_result">没找到合适的</string>
 
     <!-- 稍后再看 -->
@@ -139,7 +142,7 @@
     <string name="space_empty_collection_detail">这个合集是空的</string>
     <string name="space_collection_season">合集</string>
     <string name="space_collection_series">系列</string>
-    <string name="space_collection_meta">%1$s · 共 %2$d 个视频</string>
+    <string name="space_collection_meta">"%1$s  共 %2$d 个视频"</string>
 
     <!-- 播放页 -->
     <string name="video_tab_intro">简介</string>
@@ -169,7 +172,7 @@
     <string name="offline_sheet_select_all">全选</string>
     <string name="offline_selected_count">已选 %1$d 项</string>
     <string name="offline_delete_batch_title">删除选中的缓存?</string>
-    <string name="offline_delete_batch_message">共 %1$d 项,文件会从本机移除。</string>
+    <string name="offline_delete_batch_message">共 %1$d 项,文件将从本机移除,重新缓存需再次下载。</string>
     <string name="action_delete">删除</string>
     <string name="offline_sheet_select_none">全不选</string>
     <string name="offline_sheet_confirm">缓存 %1$d 条</string>
@@ -184,7 +187,7 @@
     <string name="offline_used_space">已用 %1$s</string>
     <string name="offline_delete">删除缓存:%1$s</string>
     <string name="offline_delete_confirm_title">删除这条缓存?</string>
-    <string name="offline_delete_confirm_message">本地文件会被删掉,重新缓存要再下一次。</string>
+    <string name="offline_delete_confirm_message">文件将从本机移除,重新缓存需再次下载。</string>
     <string name="offline_notification_channel">离线缓存</string>
     <string name="offline_notification_title">正在缓存视频</string>
     <string name="offline_notification_queued">还有 %1$d 条</string>
@@ -204,9 +207,9 @@
 
     <!-- 找相关的 sheet。把手上一行既是标题也是状态 -->
     <string name="related_title">相关</string>
-    <string name="related_title_running">相关 · 还在找</string>
-    <string name="related_title_error">相关 · 失败</string>
-    <string name="related_title_count">相关 · %1$d 条</string>
+    <string name="related_title_running">"相关  还在翻"</string>
+    <string name="related_title_error">"相关  失败"</string>
+    <string name="related_title_count">"相关  %1$d 条"</string>
 
     <!-- 播放器控件。听视频页和播放页共用同一组 -->
     <string name="player_play">播放</string>
@@ -293,7 +296,7 @@
     <string name="settings_section_feed">动态</string>
     <string name="settings_section_offline">缓存</string>
     <string name="settings_offline_concurrency">同时下载</string>
-    <string name="settings_offline_concurrency_subtitle">调大能更快下完一批,代价是缓存期间刷视频会卡</string>
+    <string name="settings_offline_concurrency_subtitle">调大可加快批量缓存,代价是并发请求增多,更易触发风控</string>
     <string name="settings_offline_concurrency_value">%1$d 条</string>
     <string name="settings_feed_clear_excluded">清空不再显示的 UP 主</string>
     <string name="settings_feed_excluded_count">当前已隐藏 %1$d 位</string>
@@ -342,7 +345,7 @@
     <string name="settings_llm_test">测试</string>
     <string name="settings_llm_test_hint">点击发送一次请求</string>
     <string name="settings_llm_test_running">请求中…</string>
-    <string name="settings_llm_test_ok">正常 · %1$d ms</string>
+    <string name="settings_llm_test_ok">"正常  %1$d ms"</string>
     <string name="feed_open_followings">关注列表</string>
     <string name="followings_title">关注列表</string>
     <string name="followings_empty">还没有关注任何人</string>

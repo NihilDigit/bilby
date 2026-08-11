@@ -73,7 +73,9 @@ private fun searchVideosTool(searchRepository: SearchRepository) = object : Tool
         """,
     )
 
-    override fun label(arguments: JsonObject) = "搜索:${arguments.stringArg("kw").orEmpty()}"
+    // 过程里的每一行都是助理在讲自己刚做了什么,所以一律"动词了什么",不是"名词:参数"。
+    // 这一栏是这个应用里唯一允许带点人称口吻的地方(见 label 在 BiliTool 上的说明)。
+    override fun label(arguments: JsonObject) = "搜了「${arguments.stringArg("kw").orEmpty()}」"
 
     override suspend fun execute(arguments: JsonObject): ToolResult = runCatching {
         val kw = arguments.stringArg("kw").orEmpty()
@@ -113,7 +115,7 @@ private fun searchUsersTool(searchRepository: SearchRepository) = object : Tool 
         """{"type": "object", "properties": {"kw": {"type": "string", "description": "搜索关键词(用户昵称)"}}, "required": ["kw"]}""",
     )
 
-    override fun label(arguments: JsonObject) = "搜人:${arguments.stringArg("kw").orEmpty()}"
+    override fun label(arguments: JsonObject) = "找了叫「${arguments.stringArg("kw").orEmpty()}」的 UP 主"
 
     override suspend fun execute(arguments: JsonObject): ToolResult = runCatching {
         val kw = arguments.stringArg("kw").orEmpty()

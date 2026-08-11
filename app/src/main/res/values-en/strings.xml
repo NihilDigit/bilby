@@ -32,7 +32,6 @@
     <string name="follow_following">Following</string>
     <string name="follow_mutual">Mutual</string>
     <string name="follow_unfollow_confirm_title">Unfollow</string>
-    <string name="follow_unfollow_confirm_message">You\'ll need to find this person again to follow them once more</string>
 
     <string name="feed_empty">No new videos from the creators you follow</string>
     <string name="feed_frequent_ups">Most visited</string>
@@ -63,10 +62,10 @@
 
     <string name="agent_title">Assistant</string>
     <string name="agent_process">Steps</string>
-    <string name="agent_process_collapsed">Steps · %1$s</string>
+    <string name="agent_process_collapsed">"Steps  %1$s"</string>
     <string name="agent_process_expand">Show steps</string>
     <string name="agent_process_collapse">Hide steps</string>
-    <string name="agent_running">Still looking…</string>
+    <string name="agent_running">Still digging…</string>
     <string name="agent_no_result">Nothing that fits</string>
 
     <string name="toview_empty">Watch later is empty</string>
@@ -118,7 +117,7 @@
     <string name="space_empty_collection_detail">This collection is empty</string>
     <string name="space_collection_season">Collection</string>
     <string name="space_collection_series">Series</string>
-    <string name="space_collection_meta">%1$s · %2$d videos</string>
+    <string name="space_collection_meta">"%1$s  %2$d videos"</string>
 
     <string name="video_tab_intro">About</string>
     <string name="video_follow_staff">Follow %1$s</string>
@@ -146,7 +145,7 @@
     <string name="offline_sheet_select_all">Select all</string>
     <string name="offline_selected_count">%1$d selected</string>
     <string name="offline_delete_batch_title">Delete the selected downloads?</string>
-    <string name="offline_delete_batch_message">%1$d items; the files are removed from this device.</string>
+    <string name="offline_delete_batch_message">%1$d items. The files are removed from this device and caching again means downloading again.</string>
     <string name="action_delete">Delete</string>
     <string name="offline_sheet_select_none">Clear all</string>
     <string name="offline_sheet_confirm">Download %1$d</string>
@@ -161,7 +160,7 @@
     <string name="offline_used_space">%1$s used</string>
     <string name="offline_delete">Delete download: %1$s</string>
     <string name="offline_delete_confirm_title">Delete this download?</string>
-    <string name="offline_delete_confirm_message">The local files go away; getting it back means downloading again.</string>
+    <string name="offline_delete_confirm_message">The file is removed from this device and caching again means downloading again.</string>
     <string name="offline_notification_channel">Downloads</string>
     <string name="offline_notification_title">Downloading videos</string>
     <string name="offline_notification_queued">%1$d queued</string>
@@ -178,9 +177,9 @@
     <string name="fav_dialog_title">Add to</string>
 
     <string name="related_title">Related</string>
-    <string name="related_title_running">Related · still looking</string>
-    <string name="related_title_error">Related · failed</string>
-    <string name="related_title_count">Related · %1$d</string>
+    <string name="related_title_running">"Related  still digging"</string>
+    <string name="related_title_error">"Related  failed"</string>
+    <string name="related_title_count">"Related  %1$d"</string>
 
     <string name="player_play">Play</string>
     <string name="player_pause">Pause</string>
@@ -245,7 +244,7 @@
     <string name="settings_section_feed">Home feed</string>
     <string name="settings_section_offline">Downloads</string>
     <string name="settings_offline_concurrency">Simultaneous downloads</string>
-    <string name="settings_offline_concurrency_subtitle">A higher number finishes a batch sooner, at the cost of stuttering playback while it runs</string>
+    <string name="settings_offline_concurrency_subtitle">A higher number caches a batch sooner, at the cost of more requests in flight and a greater chance of tripping risk control</string>
     <string name="settings_offline_concurrency_value">%1$d at a time</string>
     <string name="settings_feed_clear_excluded">Clear hidden creators</string>
     <string name="settings_feed_excluded_count">%1$d hidden right now</string>
@@ -292,7 +291,7 @@
     <string name="settings_llm_test">Test</string>
     <string name="settings_llm_test_hint">Tap to send one request</string>
     <string name="settings_llm_test_running">Sending…</string>
-    <string name="settings_llm_test_ok">OK · %1$d ms</string>
+    <string name="settings_llm_test_ok">"OK  %1$d ms"</string>
     <string name="feed_open_followings">Following</string>
     <string name="followings_title">Following</string>
     <string name="followings_empty">Not following anyone yet</string>
