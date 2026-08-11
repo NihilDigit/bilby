@@ -65,7 +65,15 @@ data class ReplyItemDto(
     val parent: Long = 0L,
     val ctime: Long = 0L,
     val like: Int = 0,
-    val count: Int = 0, // 楼中楼总数
+    val count: Int = 0, // 二级评论条数,含已删除/不可见的那些
+    /**
+     * 实际取得到的楼中楼条数。**展开按钮上的数字要用它,不是 [count]。**
+     *
+     * 两个字段经常不等:av80433022 的 rpid 5634736614 是 `count=3, rcount=0`,
+     * 而 `x/v2/reply/reply` 对它返回 `page.count=0`、replies 空数组 —— 计数里那 3 条
+     * 已经拿不到了。抽查过的其余楼层里 `page.count` 一律等于 rcount,不等于 count。
+     */
+    val rcount: Int = 0,
     val action: Int = 0, // 0未操作 1已赞 2已踩(notes §1.4)
     val member: ReplyMemberDto = ReplyMemberDto(),
     val content: ReplyContentDto = ReplyContentDto(),

@@ -220,7 +220,9 @@ class CommentRepository(
                     ?.let { CommentMention(it, member.uname.decodeHtmlEntities()) }
             },
             pictureUrls = content.pictures?.map { it.imgSrc.toHttpsUrl() }.orEmpty(),
-            subReplyCount = count,
+            // rcount 而不是 count:后者含已删除/不可见的回复,按它算出来的"还有 N 条"点开是
+            // 空的(见 ReplyItemDto.rcount)。
+            subReplyCount = rcount,
             previewReplies = replies.orEmpty().map { it.toCommentItem(uploaderMid, rootOverride = root) },
         )
     }
