@@ -1,9 +1,15 @@
 package dev.bilby.ui.history
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -12,6 +18,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.bilby.BiliLog
 import dev.bilby.R
 import dev.bilby.ui.appendDistinctBy
 import dev.bilby.ui.AdaptiveContent
@@ -41,11 +48,17 @@ data class HistoryUiState(
     val refreshing: Boolean = false,
     val hasMore: Boolean = true,
     val error: String? = null,
+    /** 删除或清空正在飞。顶栏的那几个入口据此禁用,避免同一批记录被删两次。 */
+    val mutating: Boolean = false,
+    /**
+     * 删除失败的原因。**不并进 [error]**:那一个归翻页用,写进去会让整页退成"重试"
+     * 状态,而重试按钮做的是再拉一页,跟刚才失败的删除没有关系。
+     */
+    val mutationError: String? = null,
 )
 
 /**
- * 历史记录(DESIGN 2 节)。只做展示,不做删除/清空 —— 这一轮的边界是"看得到自己看过什么",
- * 增删属于另一次要不要做的判断,不在这次范围内。
+ * 历史记录(DESIGN 2 节)。
  *
  * 分页照 [HistoryRepository] 的游标语义:每页把服务端给的 `max`/`view_at` 原样带下去。
  */
@@ -127,6 +140,70 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
         }
     }
 
+    /**
+     * 删除选中的这些。**删成功才从列表里摘掉**:乐观更新的前提是失败能回滚,而这是一个
+     * 游标列表,把行插回原来的位置没有可靠的做法。删除本身也不可撤销 —— 服务端没有恢复
+     * 接口,所以入口那侧用确认对话框,不用可撤销的 Snackbar。
+     */
+    fun delete(items: List<HistoryItem>) {
+        if (_state.value.mutating) return
+        // kid 缺了就拼成 archive_0,那指向的是一条谁也不知道的记录。宁可少删一条。
+        val deletable = items.filter { it.kid != 0L }
+        if (deletable.size != items.size) {
+            BiliLog.w("历史记录删除跳过 ${items.size - deletable.size} 条没有 kid 的条目")
+        }
+        if (deletable.isEmpty()) return
+        val removedOids = deletable.map { it.oid }.toSet()
+        cancelInFlightLoad()
+        _state.update { it.copy(mutating = true, mutationError = null) }
+        viewModelScope.launch {
+            when (val result = repository.delete(deletable.map { it.kid })) {
+                is BiliResult.Ok -> _state.update {
+                    it.copy(mutating = false, items = it.items.filterNot { item -> item.oid in removedOids })
+                }
+
+                else -> _state.update { it.copy(mutating = false, mutationError = result.errorText()) }
+            }
+        }
+    }
+
+    /** 清空全部。服务端一条接口做完,不必逐条删(notes §3.7)。 */
+    fun clearAll() {
+        if (_state.value.mutating) return
+        cancelInFlightLoad()
+        _state.update { it.copy(mutating = true, mutationError = null) }
+        viewModelScope.launch {
+            when (val result = repository.clear()) {
+                // 清完之后没有下一页:游标归零、hasMore 关掉,否则触底预取立刻再拉一次。
+                // 下拉刷新会把 hasMore 重新打开,所以这不是把这一页锁死。
+                is BiliResult.Ok -> _state.update {
+                    it.copy(
+                        mutating = false,
+                        items = emptyList(),
+                        cursorMax = 0L,
+                        cursorViewAt = 0L,
+                        hasMore = false,
+                    )
+                }
+
+                else -> _state.update { it.copy(mutating = false, mutationError = result.errorText()) }
+            }
+        }
+    }
+
+    fun dismissMutationError() = _state.update { it.copy(mutationError = null) }
+
+    /**
+     * 掐掉在飞的那一页。删之前发出去的请求落地时会把刚删掉的条目原样拼回列表。
+     * generation 一动,那个协程的 finally 就不再回写标志位,所以 loading/appending
+     * 要在这里自己清干净;清不干净的话 appending 会一直挂着,之后再也翻不了页。
+     */
+    private fun cancelInFlightLoad() {
+        generation++
+        loadJob?.cancel()
+        _state.update { it.copy(loading = false, appending = false, refreshing = false) }
+    }
+
     private fun BiliResult<*>.errorText(): String = when (this) {
         is BiliResult.ApiError -> "$message($code)"
         is BiliResult.Failure -> cause.message ?: "网络错误"
@@ -135,6 +212,17 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
 }
 
 
+/**
+ * @param selectedIds 已选中条目的 oid,`null` 表示不在多选态。
+ *
+ *   多选态和选中集合仍然是**一个**状态,不是一个布尔加一个集合 —— 后者能凑出互相矛盾的
+ *   组合。但这里的空集合不能当作"不在多选态":顶栏的「选择」要在一条都还没选的时候就进入
+ *   多选,那一刻集合本来就是空的。这是与 `OfflineScreen` 的偏离,那边长按是唯一入口,
+ *   进入多选必然带着一条,所以"非空即多选"在那边成立。退出多选由 contextual 顶栏的返回
+ *   箭头承担,空集合不是一个退不出去的状态。
+ *
+ *   用 oid 而不是 kid:列表本来就按 oid 去重、按 oid 作 key,选中集合跟着同一个键走。
+ */
 @Composable
 fun HistoryScreen(
     state: HistoryUiState,
@@ -142,9 +230,27 @@ fun HistoryScreen(
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onRefresh: () -> Unit = {},
+    selectedIds: Set<Long>? = null,
+    onToggleSelection: (HistoryItem) -> Unit = {},
+    onDismissMutationError: () -> Unit = {},
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
+    val selecting = selectedIds != null
+
+    // 删除失败要说出来。这条路径没有乐观更新,失败之后屏上什么都没变 —— 不给一句话的话,
+    // 用户看到的是"点了删除,记录还在"。
+    state.mutationError?.let { message ->
+        AlertDialog(
+            onDismissRequest = onDismissMutationError,
+            title = { Text(stringResource(R.string.history_delete_failed)) },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = onDismissMutationError) { Text(stringResource(R.string.action_confirm)) }
+            },
+        )
+    }
+
     AdaptiveContent(modifier = modifier) {
         PullToRefreshBox(
             isRefreshing = state.refreshing,
@@ -163,7 +269,25 @@ fun HistoryScreen(
                 onRetry = onRetry,
                 contentPadding = contentPadding,
             ) { item ->
-                VideoRow(item = item.toRowUi(), onClick = { onItemClick(item) })
+                val selected = selectedIds != null && item.oid in selectedIds
+                VideoRow(
+                    item = item.toRowUi(),
+                    // 多选态下点一行是勾选,不是打开:进了多选还去播放,等于长按一下就再也
+                    // 删不成批。
+                    onClick = { if (selecting) onToggleSelection(item) else onItemClick(item) },
+                    // 长按只是快捷方式,不是唯一入口 —— 顶栏另有一个「选择」。长按没有任何
+                    // 视觉提示,只发现得了点击的人也必须能进多选。
+                    onLongClick = { onToggleSelection(item) },
+                    // 整行染色而不是只画一个勾:勾在行尾,而人是从左往右扫的。
+                    modifier = if (selected) {
+                        Modifier.background(MaterialTheme.colorScheme.secondaryContainer)
+                    } else {
+                        Modifier
+                    },
+                    // onCheckedChange = null:整行已经是一个可点节点,勾选框自己再接一次
+                    // 点击会让读屏把它和这一行当成两件事。
+                    trailing = { if (selecting) Checkbox(checked = selected, onCheckedChange = null) },
+                )
             }
         }
     }
@@ -216,6 +340,7 @@ private fun formatRelativeTime(epochSeconds: Long, nowEpochSeconds: Long = Insta
 
 private fun previewItem(oid: Long, title: String, progress: Long) = HistoryItem(
     oid = oid,
+    kid = oid,
     bvid = "BV1aa",
     title = title,
     coverUrl = "https://i0.hdslb.com/bfs/archive/preview.jpg",
@@ -240,6 +365,25 @@ private fun HistoryScreenPreview() {
             onItemClick = {},
             onLoadMore = {},
             onRetry = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "多选")
+@Composable
+private fun HistoryScreenSelectingPreview() {
+    BilbyTheme {
+        HistoryScreen(
+            state = HistoryUiState(
+                items = listOf(
+                    previewItem(1, "看到一半的视频", 300),
+                    previewItem(2, "已经看完的视频", -1),
+                ),
+            ),
+            onItemClick = {},
+            onLoadMore = {},
+            onRetry = {},
+            selectedIds = setOf(1L),
         )
     }
 }

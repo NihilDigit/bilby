@@ -65,36 +65,55 @@ data class CommentPage(
 
 data class SubReplyPage(val items: List<CommentItem>, val nextPage: Int?, val hasMore: Boolean)
 
+/** 视频稿件评论区(notes §1.1)。是各方法 `type` 的默认值,不再是唯一值。 */
+const val VIDEO_COMMENT_TYPE = 1
+
 /**
- * 视频评论区完整读写(DESIGN 2.3)。范围只覆盖视频稿件评论(`type=1`,notes §1.1),不是通用
- * 评论组件——动态/专栏评论不在 M3 范围内,所以 `type` 直接写死不对外暴露。
+ * 评论区完整读写(DESIGN 2.3)。
  *
- * 无状态:不持有 oid,每次调用显式传入,方便 ViewModel 按视频实例化/复用同一个 Repository。
+ * **无状态**:不持有 oid,也不持有 `type`,两者每次调用显式传入。这个仓库在 `AppContainer`
+ * 里是单例,同时给视频页、动态详情页和 `agent/BiliTools.kt` 用,把类型绑在实例上就等于每种
+ * 内容各要一份。`type` 的取值也不由客户端推导 —— 动态那侧是服务端在 `basic.comment_type`
+ * 里直接给的,见 notes/dynamic-cards.md。
  */
 class CommentRepository(
     private val client: BiliClient,
     private val settings: SettingsStore,
 ) {
 
+    /**
+     * @param type 评论区所属的内容类型。**由调用方传,不是构造参数**:这个仓库在
+     *   `AppContainer` 里是单例,同时给视频页、动态页和 `agent/BiliTools.kt` 用,
+     *   绑在实例上就等于每种类型各要一份。
+     *
+     *   取值不由客户端推导 —— 动态那侧是服务端在 `basic.comment_type` 里直接给的,
+     *   见 notes/dynamic-cards.md。
+     */
     suspend fun loadMainPage(
         oid: Long,
         sort: CommentSort,
         cursor: CommentCursor? = null,
+        type: Int = VIDEO_COMMENT_TYPE,
     ): BiliResult<CommentPage> {
         val loggedIn = settings.credentials.first().isLoggedIn
         // cursor 类型与当前登录态不匹配时(比如翻页途中登录态发生变化)直接当作首页处理,
         // 不做游标类型转换——两种分页方式本就不可换算。
         return if (loggedIn) {
-            loadLoggedInPage(oid, sort, (cursor as? CommentCursor.Page)?.pn ?: 1)
+            loadLoggedInPage(oid, sort, (cursor as? CommentCursor.Page)?.pn ?: 1, type)
         } else {
-            loadAnonymousPage(oid, sort, (cursor as? CommentCursor.Offset)?.nextOffset ?: "")
+            loadAnonymousPage(oid, sort, (cursor as? CommentCursor.Offset)?.nextOffset ?: "", type)
         }
     }
 
-    private suspend fun loadAnonymousPage(oid: Long, sort: CommentSort, offset: String): BiliResult<CommentPage> {
+    private suspend fun loadAnonymousPage(
+        oid: Long,
+        sort: CommentSort,
+        offset: String,
+        type: Int,
+    ): BiliResult<CommentPage> {
         val params = mapOf(
             "oid" to oid.toString(),
-            "type" to VIDEO_TYPE.toString(),
+            "type" to type.toString(),
             "mode" to (sort.ordinal0 + 2).toString(), // 2=时间 3=热度(notes §1.1/§1.5)
             "pagination_str" to """{"offset":"${offset.escapeForJsonString()}"}""",
         )
@@ -113,10 +132,15 @@ class CommentRepository(
         }
     }
 
-    private suspend fun loadLoggedInPage(oid: Long, sort: CommentSort, pn: Int): BiliResult<CommentPage> {
+    private suspend fun loadLoggedInPage(
+        oid: Long,
+        sort: CommentSort,
+        pn: Int,
+        type: Int,
+    ): BiliResult<CommentPage> {
         val params = mapOf(
             "oid" to oid.toString(),
-            "type" to VIDEO_TYPE.toString(),
+            "type" to type.toString(),
             "sort" to sort.ordinal0.toString(), // 直传,不加偏移(notes §1.5)
             "pn" to pn.toString(),
             "ps" to "20",
@@ -136,11 +160,16 @@ class CommentRepository(
     }
 
     /** 楼中楼,登录/未登录通用,纯页码分页(notes §1.3)。`sort` 服务端写死为 1,不受用户排序设置影响。 */
-    suspend fun loadSubReplies(oid: Long, rootRpid: Long, page: Int = 1): BiliResult<SubReplyPage> {
+    suspend fun loadSubReplies(
+        oid: Long,
+        rootRpid: Long,
+        page: Int = 1,
+        type: Int = VIDEO_COMMENT_TYPE,
+    ): BiliResult<SubReplyPage> {
         val credentials = settings.credentials.first()
         val params = buildMap {
             put("oid", oid.toString())
-            put("type", VIDEO_TYPE.toString())
+            put("type", type.toString())
             put("root", rootRpid.toString())
             put("pn", page.toString())
             put("sort", "1")
@@ -159,9 +188,14 @@ class CommentRepository(
     }
 
     /** 发评论,`replyTo` 为空即发主楼一级评论,非空即回复该楼(notes §1.7)。 */
-    suspend fun postComment(oid: Long, message: String, replyTo: CommentItem? = null): BiliResult<Unit> {
+    suspend fun postComment(
+        oid: Long,
+        message: String,
+        replyTo: CommentItem? = null,
+        type: Int = VIDEO_COMMENT_TYPE,
+    ): BiliResult<Unit> {
         val form = buildMap {
-            put("type", VIDEO_TYPE.toString())
+            put("type", type.toString())
             put("oid", oid.toString())
             replyTo?.let {
                 put("root", it.rootRpid.toString())
@@ -173,14 +207,14 @@ class CommentRepository(
     }
 
     /** 只允许删自己的评论,UI 层已经按 mid 过滤入口,这里不重复校验——服务端本身也会拒绝越权删除。 */
-    suspend fun deleteComment(oid: Long, rpid: Long): BiliResult<Unit> {
-        val form = mapOf("type" to VIDEO_TYPE.toString(), "oid" to oid.toString(), "rpid" to rpid.toString())
+    suspend fun deleteComment(oid: Long, rpid: Long, type: Int = VIDEO_COMMENT_TYPE): BiliResult<Unit> {
+        val form = mapOf("type" to type.toString(), "oid" to oid.toString(), "rpid" to rpid.toString())
         return client.postAction(DEL_URL, form)
     }
 
-    suspend fun likeComment(oid: Long, rpid: Long, like: Boolean): BiliResult<Unit> {
+    suspend fun likeComment(oid: Long, rpid: Long, like: Boolean, type: Int = VIDEO_COMMENT_TYPE): BiliResult<Unit> {
         val form = mapOf(
-            "type" to VIDEO_TYPE.toString(),
+            "type" to type.toString(),
             "oid" to oid.toString(),
             "rpid" to rpid.toString(),
             "action" to if (like) "1" else "0",
@@ -230,7 +264,6 @@ class CommentRepository(
     private fun String.escapeForJsonString(): String = replace("\\", "\\\\").replace("\"", "\\\"")
 
     private companion object {
-        const val VIDEO_TYPE = 1 // 视频稿件评论区(notes §1.1),M3 范围只做这一种
         const val MAIN_URL_ANON = "${BiliConstants.WEB_HOST}/x/v2/reply/main"
         const val MAIN_URL_LOGGED = "${BiliConstants.WEB_HOST}/x/v2/reply"
         const val SUBREPLY_URL = "${BiliConstants.WEB_HOST}/x/v2/reply/reply"

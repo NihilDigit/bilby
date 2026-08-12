@@ -38,7 +38,7 @@
     <string name="stat_danmaku">弹幕</string>
 
     <!-- 底部导航 -->
-    <string name="tab_feed">动态</string>
+    <string name="tab_feed">订阅</string>
     <string name="tab_search">搜索</string>
     <string name="tab_toview">稍后再看</string>
 
@@ -99,6 +99,23 @@
     <!-- 历史记录 -->
     <string name="history_title">历史记录</string>
     <string name="history_empty">还没有历史记录</string>
+    <string name="history_select">选择</string>
+    <string name="history_select_all">全选</string>
+    <string name="history_selected_count">已选 %1$d 项</string>
+    <string name="history_more">更多</string>
+    <string name="history_clear_finished">清空已看完</string>
+    <string name="history_clear_all">清空全部</string>
+    <string name="history_delete_confirm">删除选中的 %1$d 条记录?</string>
+    <string name="history_clear_finished_confirm">删除已看完的 %1$d 条记录?</string>
+    <string name="history_clear_all_confirm">清空全部历史记录?</string>
+    <string name="history_delete_failed">删除失败</string>
+    <string name="settings_default_quality_wifi">WiFi 默认画质</string>
+    <string name="settings_default_quality_metered">计费网络默认画质</string>
+    <string name="settings_default_quality_metered_subtitle">按系统的流量计费标记判断,手机热点和按量计费的 WiFi 也算</string>
+    <string name="settings_pause_history">暂停记录观看历史</string>
+    <string name="settings_pause_history_subtitle">暂停后不再记录新的观看历史,已有记录和播放进度不受影响</string>
+    <string name="settings_pause_history_loading">正在读取</string>
+    <string name="settings_pause_history_failed">读取失败,点击重试</string>
     <string name="history_finished">已看完</string>
     <string name="history_progress">看到 %1$s</string>
 
@@ -153,6 +170,11 @@
     <string name="video_intro_collapse">收起简介</string>
     <string name="video_cloud_resume">别处已看到 %1$s</string>
     <string name="video_cloud_resume_jump">跳转</string>
+    <string name="video_cloud_resume_dismiss">忽略</string>
+    <string name="dynamic_action_like">点赞</string>
+    <string name="dynamic_action_unlike">取消点赞</string>
+    <string name="dynamic_action_comment">评论</string>
+    <string name="dynamic_detail_title">动态</string>
     <string name="video_action_like">点赞</string>
     <string name="video_action_unlike">取消点赞</string>
     <string name="video_action_coin">投币</string>
@@ -328,6 +350,13 @@
     <string name="settings_sponsorblock_server">服务器地址</string>
     <string name="settings_sponsorblock_server_dialog">SponsorBlock 服务器</string>
     <string name="settings_section_about">关于</string>
+    <string name="settings_section_danmaku">弹幕</string>
+    <string name="settings_section_privacy">隐私与屏蔽</string>
+    <string name="settings_section_sponsorblock">SponsorBlock</string>
+    <string name="settings_sponsorblock_categories">跳过哪些段落</string>
+    <string name="settings_agent_config">服务端配置</string>
+    <string name="settings_on">已开启</string>
+    <string name="settings_off">已关闭</string>
     <string name="settings_version">版本</string>
     <!-- 手动更新。副标题即状态,见 SettingsScreen 的 UpdateRow。 -->
     <string name="settings_update">检查更新</string>
@@ -363,6 +392,43 @@
     <string name="followings_order_recent">最近关注</string>
     <string name="fav_folder_count">%1$d 个视频</string>
     <string name="fav_empty">这个收藏夹是空的</string>
+    <string name="follow_groups_manage">管理分组</string>
+    <string name="follow_groups_title">关注分组</string>
+    <string name="follow_group_create">新建分组</string>
+    <string name="follow_group_rename">重命名分组</string>
+    <string name="follow_group_name_hint">分组名</string>
+    <string name="follow_group_delete_confirm_title">删除分组「%1$s」</string>
+    <string name="follow_group_picker_title">设置「%1$s」的分组</string>
+    <string name="follow_group_loading">正在读取当前分组</string>
+    <string name="follow_set_groups">设置分组</string>
+    <string name="follow_row_actions">%1$s 的更多操作</string>
+    <string name="follow_group_rename_action">重命名 %1$s</string>
+    <string name="follow_group_delete_action">删除 %1$s</string>
+    <string name="blacklist_title">黑名单</string>
+    <string name="blacklist_empty">黑名单里没有人</string>
+    <string name="blacklist_unblock">取消拉黑</string>
+    <string name="blacklist_blocked_at">拉黑于 %1$s</string>
+    <string name="blacklist_block">拉黑</string>
+    <string name="blacklist_block_confirm_title">拉黑「%1$s」</string>
+    <string name="blacklist_block_confirm_message">将解除关注和合集订阅,对方无法与你互动或查看你的空间。</string>
+    <string name="fav_folders_title">收藏夹</string>
+    <string name="fav_folders_empty">还没有收藏夹</string>
+    <string name="fav_folder_create">新建收藏夹</string>
+    <string name="fav_folder_edit">编辑收藏夹</string>
+    <string name="fav_folder_actions">管理「%1$s」</string>
+    <string name="fav_folder_title_label">名称</string>
+    <string name="fav_folder_intro_label">简介</string>
+    <string name="fav_folder_privacy_label">谁能看到</string>
+    <string name="fav_folder_public">公开</string>
+    <string name="fav_folder_private">私密</string>
+    <string name="fav_folder_delete_title">删除收藏夹</string>
+    <string name="fav_folder_delete_message">「%1$s」和它收着的 %2$d 个视频会一起移出。</string>
+    <string name="fav_folder_delete_confirm">删除收藏夹</string>
+    <string name="fav_remove">取消收藏:%1$s</string>
+    <string name="fav_removed">已取消收藏</string>
+    <string name="fav_undo">撤销</string>
+    <string name="fav_remove_failed">没能取消收藏:%1$s</string>
+    <string name="fav_undo_failed">没能撤销:%1$s</string>
     <string name="fav_invalid_video">稿件已失效</string>
     <string name="tab_saved">收藏</string>
 

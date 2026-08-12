@@ -7,6 +7,7 @@ import dev.bilby.ui.appendDistinctBy
 import dev.bilby.data.CommentCursor
 import dev.bilby.data.CommentItem
 import dev.bilby.data.CommentRepository
+import dev.bilby.data.VIDEO_COMMENT_TYPE
 import dev.bilby.data.CommentSort
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,6 +52,14 @@ data class ExpandedReplies(
 class CommentViewModel(
     private val repository: CommentRepository,
     initialOid: Long,
+    /**
+     * 评论区所属的内容类型,默认视频稿件。动态那侧由服务端在 `basic.comment_type` 里给,
+     * 客户端不推导(notes/dynamic-cards.md)。
+     *
+     * 与 [oid] 不同,它**跟着这一个 ViewModel 不变**:换视频走 [switchTo],而那始终是同一
+     * 种类型;动态详情页是另一个页面、另一个实例。
+     */
+    private val type: Int = VIDEO_COMMENT_TYPE,
 ) : ViewModel() {
 
     /**
@@ -154,7 +163,7 @@ class CommentViewModel(
         val target = oid
         fetchJob = viewModelScope.launch {
             try {
-                when (val result = repository.loadMainPage(target, _state.value.sort, cursor)) {
+                when (val result = repository.loadMainPage(target, _state.value.sort, cursor, type)) {
                     is BiliResult.Ok -> {
                         // 迟到的响应不能碰 cursor:排序切换/重载已经把它清成 null,
                         // 这里再写回去,下一次 loadMore 就会拿旧排序的游标去翻页。
@@ -217,7 +226,7 @@ class CommentViewModel(
 
         expandJobs[rootId] = viewModelScope.launch {
             try {
-                when (val result = repository.loadSubReplies(oid, rootId, page)) {
+                when (val result = repository.loadSubReplies(oid, rootId, page, type)) {
                     is BiliResult.Ok -> {
                         if (gen != generation) return@launch
                         val sub = result.value
@@ -268,7 +277,7 @@ class CommentViewModel(
         val target = replyTo?.let { rpid -> findComment(rpid) }
         _state.update { it.copy(sending = true) }
         viewModelScope.launch {
-            when (val result = repository.postComment(oid, text, target)) {
+            when (val result = repository.postComment(oid, text, target, type)) {
                 is BiliResult.Ok -> {
                     _state.update { it.copy(sending = false) }
                     // notes §1.7:发送成功后拿不到可靠的新评论结构,不做本地拼接,直接重拉受影响的列表。
@@ -291,7 +300,7 @@ class CommentViewModel(
         val nextLiked = !comment.liked
         applyToComment(rpid) { it.copy(liked = nextLiked, likeCount = it.likeCount + if (nextLiked) 1 else -1) }
         viewModelScope.launch {
-            val result = repository.likeComment(oid, rpid, nextLiked)
+            val result = repository.likeComment(oid, rpid, nextLiked, type)
             if (result is BiliResult.ApiError || result is BiliResult.Failure) {
                 // 乐观更新失败要退回去,不然点赞状态和服务端永久不一致。
                 applyToComment(rpid) { it.copy(liked = !nextLiked, likeCount = it.likeCount + if (nextLiked) -1 else 1) }
@@ -311,7 +320,7 @@ class CommentViewModel(
             )
         }
         viewModelScope.launch {
-            val result = repository.deleteComment(oid, rpid)
+            val result = repository.deleteComment(oid, rpid, type)
             if (result is BiliResult.ApiError) setError("${result.message}(${result.code})")
             if (result is BiliResult.Failure) setError(result.cause.message ?: "网络错误")
             if (comment.rootRpid == rpid) subReplyNextPage.remove(rpid)

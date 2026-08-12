@@ -127,20 +127,27 @@ class SearchChatViewModel(
     fun send() {
         val query = _state.value.input.trim()
         if (query.isEmpty()) return
-        _state.update { it.copy(input = "") }
         when (_state.value.mode) {
             // 普通搜索是一次查询一份结果,不累积轮次:它就是一个搜索页。留着上一次的结果
             // 只会让人往上翻,而翻上去的东西和这次要找的无关。排序沿用上一次选的那档 ——
             // 新起一份 NormalSearchState() 会把它悄悄弹回综合。
+            // **查询词留在输入框里**,只把两端空白去掉。普通搜索的结果页没有别处显示当前查到的
+            // 是什么,清空之后这一屏就没有任何东西说明这些结果从何而来,改一个字也得重打。
+            // 留下之后 [SearchField] 尾部那个清除按钮才会出现 —— 它一直都在,只是从来没有过
+            // 非空的输入可显示。
             SearchMode.Normal -> {
+                _state.update { it.copy(input = query) }
                 viewModelScope.launch { settings.addSearchHistory(query) }
                 startNormalSearch(query, _state.value.normal.order)
             }
 
+            // 助理这边**照旧清空**:它是一段对话,发出去的话已经作为一轮留在上面了,输入框里
+            // 再留一份就是同一句话印两遍,而下一句要问什么和上一句无关。
             SearchMode.Agent -> {
                 val turnId = nextTurnId++
                 _state.update { state ->
                     state.copy(
+                        input = "",
                         agent = state.agent.copy(
                             turns = state.agent.turns +
                                 SearchTurn(turnId, query, AgentTurnState(running = true)),

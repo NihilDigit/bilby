@@ -11,6 +11,7 @@ import dev.bilby.api.dto.CommonCardDto
 import dev.bilby.api.dto.DrawDto
 import dev.bilby.api.dto.DrawItemDto
 import dev.bilby.api.dto.DynamicAdditionalDto
+import dev.bilby.api.dto.DynamicBasicDto
 import dev.bilby.api.dto.DynamicDescDto
 import dev.bilby.api.dto.DynamicEmojiDto
 import dev.bilby.api.dto.DynamicItemDto
@@ -22,7 +23,9 @@ import dev.bilby.api.dto.LiveRcmdDto
 import dev.bilby.api.dto.MajorDto
 import dev.bilby.api.dto.MedialistDto
 import dev.bilby.api.dto.ModuleAuthorDto
+import dev.bilby.api.dto.DynamicStatDto
 import dev.bilby.api.dto.ModuleDynamicDto
+import dev.bilby.api.dto.ModuleStatDto
 import dev.bilby.api.dto.DynamicMusicDto
 import dev.bilby.api.dto.OpusDto
 import dev.bilby.api.dto.OpusSummaryDto
@@ -485,5 +488,39 @@ class DynamicCardMapperTest {
     @Test
     fun `认不出的新类型丢掉,不画占位卡片`() {
         assertNull(item("DYNAMIC_TYPE_SOMETHING_NEW", MajorDto()).toDynamicCard())
+    }
+
+    /**
+     * 评论区身份原样取自 `basic`。**这条测的是"没有按类型推导"**:纯文字动态的 `comment_type`
+     * 在真实数据里是 17,而这里喂的是 1(视频稿件那一档),映射照样把 1 带出来。要是哪天有人
+     * 补一张 `DYNAMIC_TYPE_*` -> `comment_type` 的对照表,这条会红 —— 那张表在 PiliPlus 里
+     * 不存在,写出来就是发明,而错了的表现是评论区里全是别人的评论。
+     */
+    @Test
+    fun `评论区的 oid 与 type 照抄 basic,不按动态类型推导`() {
+        val word = item("DYNAMIC_TYPE_WORD", desc = "正文")
+        val card = word.copy(
+            basic = DynamicBasicDto(commentIdStr = "998", commentType = 1),
+            modules = word.modules?.copy(
+                moduleStat = ModuleStatDto(
+                    like = DynamicStatDto(count = 12, status = true),
+                    comment = DynamicStatDto(count = 3),
+                ),
+            ),
+        ).toDynamicCard()
+
+        val interaction = card?.interaction
+        assertEquals("998", interaction?.commentId)
+        assertEquals(1, interaction?.commentType)
+        assertEquals(12L, interaction?.likeCount)
+        assertTrue(interaction?.liked == true)
+        assertEquals(3L, interaction?.commentCount)
+    }
+
+    @Test
+    fun `拿不到 id_str 的动态不给互动栏`() {
+        // id 那时是本地拼出来的占位串,拿它去点赞只会被服务端拒,而按钮看起来是好的。
+        val card = item("DYNAMIC_TYPE_WORD", desc = "正文").copy(idStr = "").toDynamicCard()
+        assertNull(card?.interaction)
     }
 }

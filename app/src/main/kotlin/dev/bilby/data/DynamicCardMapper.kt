@@ -16,6 +16,7 @@ import dev.bilby.data.model.DynamicAdditional
 import dev.bilby.data.model.DynamicAuthor
 import dev.bilby.data.model.DynamicCard
 import dev.bilby.data.model.DynamicContent
+import dev.bilby.data.model.DynamicInteraction
 import kotlinx.serialization.json.Json
 
 /**
@@ -63,6 +64,28 @@ internal fun DynamicItemDto.toDynamicCard(depth: Int = 0): DynamicCard? {
         forwarded = forwarded,
         forwardTips = forwardTips,
         tag = modules.moduleTag?.text?.takeIf { it.isNotBlank() },
+        interaction = toInteraction(),
+    )
+}
+
+/**
+ * 点赞数、评论数与评论区身份。
+ *
+ * **`idStr` 为空时整块不给**:点赞接口按 `dyn_id_str` 认动态,而那种情况下 [DynamicCard.id]
+ * 是本地拼出来的占位串,发过去只会被服务端拒掉,而按钮看起来是好的。
+ *
+ * 评论区的 oid 与 type 直接抄 `basic`,**不按 `item.type` 映射** —— 见 [DynamicInteraction]。
+ * `basic` 缺失时留空,界面按 [DynamicInteraction.hasComments] 决定要不要先补一次详情。
+ */
+private fun DynamicItemDto.toInteraction(): DynamicInteraction? {
+    if (idStr.isBlank()) return null
+    val stat = modules?.moduleStat
+    return DynamicInteraction(
+        likeCount = stat?.like?.count ?: 0L,
+        liked = stat?.like?.status ?: false,
+        commentCount = stat?.comment?.count ?: 0L,
+        commentId = basic?.commentIdStr.orEmpty(),
+        commentType = basic?.commentType ?: 0,
     )
 }
 

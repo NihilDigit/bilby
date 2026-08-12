@@ -9,6 +9,7 @@ import dev.bilby.api.dto.FollowingsDto
 import dev.bilby.api.dto.PortalDto
 import dev.bilby.api.getData
 import dev.bilby.api.map
+import dev.bilby.api.postAction
 import dev.bilby.api.toHttpsUrl
 import kotlinx.coroutines.flow.first
 
@@ -37,7 +38,20 @@ enum class FollowOrder(val param: String) {
  *
  * @param id `tagid`。-10 是「特别关注」,0 是「默认分组」(没被分进任何自建分组的人)。
  */
-data class FollowGroup(val id: Long, val name: String, val count: Int)
+data class FollowGroup(val id: Long, val name: String, val count: Int) {
+    /** 这两个分组是接口固定给的,改不了名也删不掉。 */
+    val isBuiltIn: Boolean get() = id == SPECIAL_GROUP_ID || id == DEFAULT_GROUP_ID
+}
+
+/**
+ * 「特别关注」。它另有 `tag/special/add`、`/del` 两条独立写接口,但**本项目一条都不走**:
+ * 它同时也是一个普通 tagid,跟着 [FollowRepository.replaceGroupsOf] 的覆盖提交一起进出即可。
+ * 两条都走会让第二次写撞上 `22004 已经设置该属性了`,见 notes/relation-groups.md 1.7。
+ */
+const val SPECIAL_GROUP_ID = -10L
+
+/** 「默认分组」:没被分进任何自建分组的人。清空某人的分组要往接口传的正是这个 id。 */
+const val DEFAULT_GROUP_ID = 0L
 
 /**
  * 正在直播的一位关注对象。**和 [UpBrief] 分开**:直播是"此刻正在发生、错过就没有"的东西,
@@ -64,7 +78,11 @@ data class PortalSnapshot(
 )
 
 /**
- * 关注关系的读取侧(改关注在 [RelationRepository])。
+ * 关注列表的读取,以及 `x/relation/tag*` 那一族分组接口的读写。
+ *
+ * **和 [RelationRepository] 的分工按接口族划,不按读写划**:那边是 `x/relation/modify`
+ * (关注、取关、拉黑)与 `x/relation`(单个人的关系),这边是分组。分组的读和写共用同一组
+ * 参数约定和同一份 tagid 语义,拆到两个类里只会让下一个人两边都要看。
  *
  * **顺序一律用服务端给的,本地不排、不加权、不记次数。** "最常访问"是 B 站按账号维度算好
  * 的结果,我们只是把它显示出来;在本地再算一遍就成了 DESIGN 1.3 禁止的那种个性化。
@@ -156,6 +174,52 @@ class FollowRepository(
     }
 
     /**
+     * 新建一个分组。**不读返回里的 tagid**,建完由调用方重拉 [groups] ——
+     * 理由见 notes/relation-groups.md 1.2。
+     */
+    suspend fun createGroup(name: String): BiliResult<Unit> =
+        client.postAction(TAG_CREATE_URL, form = mapOf("tag" to name), params = TAG_PARAMS)
+
+    /** 改名。字段叫 `name`,建的时候那个叫 `tag`,接口本身不对称。 */
+    suspend fun renameGroup(id: Long, name: String): BiliResult<Unit> = client.postAction(
+        TAG_UPDATE_URL,
+        form = mapOf("tagid" to id.toString(), "name" to name),
+        params = TAG_PARAMS,
+    )
+
+    /** 删分组。组里的人退回默认分组,关注关系不受影响。 */
+    suspend fun deleteGroup(id: Long): BiliResult<Unit> =
+        client.postAction(TAG_DEL_URL, form = mapOf("tagid" to id.toString()), params = TAG_PARAMS)
+
+    /**
+     * 把一个人的分组**整个换成** [groupIds]。
+     *
+     * 接口叫 `tags/addUsers`,但它不是追加:传进去的就是这个人此后所属的全部分组,不在里面的
+     * 一律被摘掉(notes/relation-groups.md 1.5)。所以调用方必须先用
+     * [RelationRepository.groupsOf] 读齐当前的一份再写回,漏掉的那些会被静默清掉。
+     *
+     * 空集合要传 `"0"`(默认分组)而不是空串 —— 空串这条接口不认。
+     */
+    suspend fun replaceGroupsOf(mid: Long, groupIds: Set<Long>): BiliResult<Unit> = client.postAction(
+        TAGS_ADD_USERS_URL,
+        form = mapOf(
+            "fids" to mid.toString(),
+            // 括号不能省:`to` 是中缀函数,绑定比 `?:` 紧,没有括号时整个 Pair 会成为
+            // `?:` 的左操作数,类型退化成 Serializable。
+            "tagids" to (
+                groupIds.takeIf { it.isNotEmpty() }?.joinToString(",")
+                    ?: DEFAULT_GROUP_ID.toString()
+                ),
+        ),
+        params = TAG_PARAMS,
+    )
+
+    // 特别关注**没有单独的方法**:它就是 tagid 为 -10 的那个分组,跟着 [replaceGroupsOf]
+    // 一起覆盖提交。`tag/special/add` 与 `/del` 那两条接口确实存在(形状也和上面四条不同,
+    // body 只有 fid 和 csrf),但在这条路上是多余的 —— 覆盖提交里带了 -10 之后再调它,
+    // 服务端回 `22004 已经设置该属性了`。接口事实留在 notes/relation-groups.md 1.7。
+
+    /**
      * 在自己的关注里按名字搜。**要 WBI 签名**,照 PiliPlus `member.dart:688-717` —— 浏览器
      * 里裸调也回 code 0,但风控是逐接口的(CLAUDE.md),按它实际发的来。
      *
@@ -192,6 +256,18 @@ class FollowRepository(
         const val TAGS_URL = "${BiliConstants.WEB_HOST}/x/relation/tags"
         const val GROUP_URL = "${BiliConstants.WEB_HOST}/x/relation/tag"
         const val SEARCH_URL = "${BiliConstants.WEB_HOST}/x/relation/followings/search"
+        const val TAG_CREATE_URL = "${BiliConstants.WEB_HOST}/x/relation/tag/create"
+        const val TAG_UPDATE_URL = "${BiliConstants.WEB_HOST}/x/relation/tag/update"
+        const val TAG_DEL_URL = "${BiliConstants.WEB_HOST}/x/relation/tag/del"
+        const val TAGS_ADD_USERS_URL = "${BiliConstants.WEB_HOST}/x/relation/tags/addUsers"
         const val PAGE_SIZE = 50
+
+        /**
+         * 四条分组写接口共同的 query。**只有这一个参数**:关注/取关那条还带 `statistics`
+         * 并覆盖 Referer,这几条都不带(notes/relation-groups.md 1.0)。
+         */
+        val TAG_PARAMS = mapOf("x-bili-device-req-json" to DEVICE_REQ_JSON)
+
+        const val DEVICE_REQ_JSON = """{"platform":"web","device":"pc","spmid":"333.1387"}"""
     }
 }

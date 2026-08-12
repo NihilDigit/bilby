@@ -1,6 +1,7 @@
 package dev.bilby.ui
 
 import androidx.navigation3.runtime.NavKey
+import dev.bilby.ui.settings.SettingsSection
 import kotlinx.serialization.Serializable
 
 /**
@@ -44,6 +45,16 @@ data class Video(
 @Serializable
 data object Settings : NavKey
 
+/**
+ * 设置的一个二级页面。**八页共用这一个 key**,差别只有 [section] —— 它们没有各自的参数,
+ * 拆成八个 NavKey 只会让 `MainActivity` 多七条长得一样的 entry。
+ *
+ * Nav3 按 key 分组 ViewModel 和 saveable 槽,而这里 `section` 参与 equals,所以两页各存各的
+ * 滚动位置,同一页压两次仍然由 `pushUnique` 挡住。
+ */
+@Serializable
+data class SettingsPage(val section: SettingsSection) : NavKey
+
 @Serializable
 data class Space(val mid: Long) : NavKey
 
@@ -64,6 +75,13 @@ data object ToViewList : NavKey
 
 @Serializable
 data class FavFolderContents(val mediaId: Long, val title: String) : NavKey
+
+/**
+ * 收藏夹列表。按 1.1 的机制表对过:内容全是用户自己建的夹子,有限、不排序、不推荐,
+ * 与 [ToViewList] 同一栏。它同时是新建、改名、删除收藏夹的落点。
+ */
+@Serializable
+data object FavFolders : NavKey
 
 /**
  * 一个合集/系列的目录。按 1.1 的机制表对过:内容是用户自己点开的那一个合集,有限、不排序、
@@ -107,9 +125,28 @@ data object OtherDynamics : NavKey
 @Serializable
 data class ArticlePage(val id: String, val isRead: Boolean) : NavKey
 
+/**
+ * 一条动态本身,带它的评论区。按 1.1 的机制表对过:进来的唯一方式是用户点了某条动态的评论,
+ * 是单个有限对象,页内不推荐别的动态 —— 和 [ArticlePage]、[Video] 落在同一栏。
+ *
+ * @param id 动态的 `id_str`。评论区的 oid 与 type 不在这里 —— 那两个由服务端在
+ *   `basic.comment_id_str`/`basic.comment_type` 里给,这一页自己拉一次详情取回来
+ *   (见 notes/dynamic-cards.md),不从列表页带过来:带过来的话,列表项缺 `basic` 时的
+ *   那条回落几乎不会被走到,坏了也没人知道。
+ */
+@Serializable
+data class DynamicDetail(val id: String) : NavKey
+
 /** 历史记录。个人页的三个入口之一,DESIGN 2 节:历史只待在它自己这一页。 */
 @Serializable
 data object History : NavKey
+
+/**
+ * 黑名单。内容全部来自用户自己按下的「拉黑」,是有限集合,不排序不推荐 —— 按 1.1 的机制表
+ * 对过,和 [ToViewList]、[Followings] 落在同一栏。
+ */
+@Serializable
+data object Blacklist : NavKey
 
 /**
  * 已缓存到本地的视频。按 1.1 的机制表对过:内容全部来自用户自己按下的"缓存",是有限集合,

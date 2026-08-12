@@ -1,6 +1,5 @@
 package dev.bilby.ui.profile
 
-import android.os.SystemClock
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -16,7 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Mail
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.Settings
@@ -63,6 +62,7 @@ import dev.bilby.ui.offline.toRowUi
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.SectionHeader
+import dev.bilby.ui.components.TrailingEntry
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.rememberBilbyWindowSize
@@ -120,11 +120,6 @@ class ProfileViewModel(
     private val _state = MutableStateFlow(ProfileUiState())
     val state: StateFlow<ProfileUiState> = _state.asStateFlow()
 
-    private var lastRefreshedAtMillis = 0L
-
-    /** 手里这份稍后再看预览取自哪一版,见 [ToViewRepository.revision] 与 [refreshIfStale]。 */
-    private var loadedToViewRevision = -1
-
     init {
         refresh()
         // 缓存列表是本地状态,跟着下载器走就行 —— 它不参与上面那四块的"重进就重拉"。
@@ -133,31 +128,22 @@ class ProfileViewModel(
         }
     }
 
-    /** 每次重新进入「我的」都重新取四块概览,保证跨页面操作(删稍后再看、看新视频)后能及时反映。 */
+    /**
+     * 每次重新进入「我的」都把四块概览整个重取。
+     *
+     * **不做去抖,也不比版本号。** 两者都试过:去抖窗口内的改动看不见,于是按仓库记的版本号
+     * 补判;但版本号只认得**经这几个仓库发生的写**,而这一页显示的东西在别处也会变 —— 官方
+     * 客户端、网页端,以及播放页那个收藏面板(它走 `VideoActionRepository`,压根不碰
+     * `FavRepository`)。补不完,而每补一处就多一处"忘了同步"的可能。
+     *
+     * 代价比想的小:下面每一块在重取期间都原样留着旧内容,不退回骨架屏(见 [retryHistory]
+     * 那几处的写法),所以多打这几个请求不会让页面闪。
+     */
     fun refresh() {
-        lastRefreshedAtMillis = SystemClock.elapsedRealtime()
         retryAccount()
         retryHistory()
         retryToView()
         retryFavFolders()
-    }
-
-    /**
-     * 重新进入这一页时补一次,**刚拉过就跳过**。底栏来回点、或者进子页面看一眼就退回来,
-     * 每次都打四个请求既没有新内容可显示,又让那四块各闪一次骨架。
-     *
-     * 用 elapsedRealtime 而不是墙钟:后者会被对时和时区调整拨动,拨回去就再也刷不了。
-     *
-     * 去抖窗口内仍要单独看稍后再看:它是唯一一块用户能在子页面里直接改的内容,删空了退回来
-     * 一般只花几秒,正好落在窗口里,靠时间猜就会继续显示已经删掉的条目。这里比的是仓库记的
-     * 版本号,是"确实被改过"而不是"可能过期了"。
-     */
-    fun refreshIfStale() {
-        if (SystemClock.elapsedRealtime() - lastRefreshedAtMillis >= RefreshDebounceMillis) {
-            refresh()
-            return
-        }
-        if (toViewRepository.revision.value != loadedToViewRevision) retryToView()
     }
 
     fun retryAccount() {
@@ -183,7 +169,12 @@ class ProfileViewModel(
         viewModelScope.launch {
             when (val result = historyRepository.loadPage(0L, 0L)) {
                 is BiliResult.Ok -> _state.update {
-                    it.copy(history = it.history.copy(loading = false, items = result.value.items.take(PreviewCount)))
+                    it.copy(
+                        history = it.history.copy(
+                            loading = false,
+                            items = result.value.items.take(PreviewCount),
+                        ),
+                    )
                 }
 
                 else -> _state.update {
@@ -194,16 +185,11 @@ class ProfileViewModel(
     }
 
     fun retryToView() {
-        // 在发请求之前取版本号:请求飞行途中又发生的写入不该被算进这次结果里,记晚了会漏刷。
-        val requestedRevision = toViewRepository.revision.value
         _state.update { it.copy(toView = it.toView.copy(loading = true, error = null)) }
         viewModelScope.launch {
             when (val result = toViewRepository.loadList()) {
-                is BiliResult.Ok -> {
-                    loadedToViewRevision = requestedRevision
-                    _state.update {
-                        it.copy(toView = it.toView.copy(loading = false, items = result.value.items.take(PreviewCount)))
-                    }
+                is BiliResult.Ok -> _state.update {
+                    it.copy(toView = it.toView.copy(loading = false, items = result.value.items.take(PreviewCount)))
                 }
 
                 else -> _state.update {
@@ -254,9 +240,6 @@ class ProfileViewModel(
          * 底下两节要滚很久才见得到,那就不再是概览了。
          */
         const val PreviewCount = 3
-
-        /** 概览的重进刷新间隔,见 [refreshIfStale]。 */
-        private const val RefreshDebounceMillis = 30_000L
     }
 }
 
@@ -279,6 +262,8 @@ fun ProfileScreen(
     /** 进消息页。见 MessagesEntry 那一行的说明:入口不带任何计数。 */
     onOpenMessages: () -> Unit,
     onOpenFavFolder: (FavFolder) -> Unit,
+    /** 进收藏夹列表页。新建、改名、删除收藏夹都在那里。 */
+    onOpenFavFolders: () -> Unit,
     onSettingsClick: () -> Unit,
     /** 点账号那一块进自己的空间。 */
     onOpenSelf: (Long) -> Unit,
@@ -302,15 +287,26 @@ fun ProfileScreen(
             onRetry = onRetryAccount,
         )
 
-        // 账号与下面三节之间**不画分割线**。divider 页说 full-width 用于分隔"larger sections
-        // of unrelated content",并要求 sparingly;而下面每一节自己都顶着一个 SectionHeader,
-        // 那行标题已经说明"换了一节"了,再加一条线是同一件事说两遍。
+        // **分割线画在这里,分节之间不画。**
+        //
+        // divider.md:121「Use full-width dividers to separate larger sections of unrelated
+        // content」、:161「To separate a different kind of content, use a full-width divider」——
+        // 线以上是这个账号本身,线以下都是"去看点什么"的去处(私信、历史、稍后再看、收藏夹、
+        // 缓存),是两类内容。
+        //
+        // 分节之间不画则是同一页 137 行那句「use sparingly. Too many divider lines will make an
+        // interface look cluttered」:那几节彼此相关,而且各自顶着一个 SectionHeader,标题已经
+        // 说明"换了一节",再加线是同一件事说两遍。
+        HorizontalDivider()
+
         // **消息这一行画在历史记录上面,不是塞进头像那一行。** 那一行是头像 + 名字 + 个性签名
         // + 设置齿轮,再挤一个图标只能从签名身上抠宽度。
         //
-        // 样式照首页的「关注动态」入口(FeedScreen 里那个 ListItem):一行字加一个箭头。
-        // **不带未读计数,也不带红点** —— DESIGN 1.3 两处写着不做,而那一行的说明写得更死:
-        // 这类入口正是它们最容易被加回来的位置。
+        // 它落在分割线**以下**,和首页那个同款入口与分割线的关系一致(头像排 → 线 → 其他动态
+        // 入口 → 时间序流)。同一个控件在两页里跟线的上下关系反过来,是最容易被当成随手摆的。
+        //
+        // **不带未读计数,也不带红点** —— DESIGN 1.3 两处写着不做,而 [TrailingEntry] 的说明
+        // 写得更死:这类入口正是它们最容易被加回来的位置。
         MessagesEntry(onOpenMessages)
 
         if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
@@ -328,14 +324,14 @@ fun ProfileScreen(
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     // 缓存跟着收藏走:两者都是"我自己存下来的东西",而上面两块是"我看过/打算看的"。
-                    FavFoldersSection(state.favFolders, onOpenFavFolder, onRetryFavFolders)
+                    FavFoldersSection(state.favFolders, onOpenFavFolder, onOpenFavFolders, onRetryFavFolders)
                     OfflineSection(state.offline, onOpenOffline)
                 }
             }
         } else {
             HistorySection(state.history, onVideoClick, onOpenHistory, onRetryHistory)
             ToViewSection(state.toView, onVideoClick, onOpenToView, onRetryToView)
-            FavFoldersSection(state.favFolders, onOpenFavFolder, onRetryFavFolders)
+            FavFoldersSection(state.favFolders, onOpenFavFolder, onOpenFavFolders, onRetryFavFolders)
             OfflineSection(state.offline, onOpenOffline)
         }
 
@@ -343,24 +339,18 @@ fun ProfileScreen(
     }
 }
 
-/** 见调用处的说明:一行入口,没有计数。 */
+/**
+ * 消息入口。见调用处的说明:**没有计数**。
+ *
+ * 缩到行尾的一个 [TrailingEntry],不再是铺满整行的列表项 —— 它标的是"去哪儿",而这一页
+ * 其余的行都是"我攒了什么"。原先同形同宽地摆在最上面,读起来就像那些预览区的一员。
+ */
 @Composable
 private fun MessagesEntry(onClick: () -> Unit) {
-    ListItem(
-        headlineContent = {
-            Text(
-                text = stringResource(R.string.message_title),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        },
-        trailingContent = {
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        },
-        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
+    TrailingEntry(
+        text = stringResource(R.string.message_title),
+        icon = Icons.Filled.Mail,
+        onClick = onClick,
     )
 }
 
@@ -589,7 +579,10 @@ private fun <T> PreviewSection(
     itemRow: @Composable (T) -> Unit,
 ) {
     if (hideWhenEmpty && !state.loading && state.error == null && state.items.isEmpty()) return
-    Column(modifier = Modifier.padding(top = Spacing.Comfortable)) {
+    // **间距记在这一节的下面,不是上面。** 记在上面的话,排在最前的那一节会在它和上面那个
+    // 入口之间多出一段谁也没要的留白;而节与节之间的距离两种写法是一样的。末尾多出的一段
+    // 落在页面底部,那里本来就有收尾的 Spacer。
+    Column(modifier = Modifier.padding(bottom = Spacing.Comfortable)) {
         SectionHeader(
             title = title,
             modifier = Modifier.padding(horizontal = Spacing.Comfortable),
@@ -615,13 +608,21 @@ private fun <T> PreviewSection(
 private fun FavFoldersSection(
     state: ProfilePreviewState<FavFolder>,
     onOpenFolder: (FavFolder) -> Unit,
+    onViewAll: () -> Unit,
     onRetry: () -> Unit,
 ) {
-    Column(modifier = Modifier.padding(top = Spacing.Comfortable)) {
+    // **间距记在这一节的下面,不是上面。** 记在上面的话,排在最前的那一节会在它和上面那个
+    // 入口之间多出一段谁也没要的留白;而节与节之间的距离两种写法是一样的。末尾多出的一段
+    // 落在页面底部,那里本来就有收尾的 Spacer。
+    Column(modifier = Modifier.padding(bottom = Spacing.Comfortable)) {
         SectionHeader(
             title = stringResource(R.string.tab_saved),
             modifier = Modifier.padding(horizontal = Spacing.Comfortable),
-        )
+        ) {
+            // **一条都没有时也要给**,与上面几节按 items 非空判不同:那一页除了列表还挂着
+            // 「新建收藏夹」,而一个还没建过收藏夹的人,恰好最需要走进去。
+            TextButton(onClick = onViewAll) { Text(stringResource(R.string.profile_view_all)) }
+        }
         when {
             // 同 PreviewSection:重取期间留着旧的那几行。
             state.loading && state.items.isEmpty() -> InlineSectionProgress()
@@ -717,6 +718,9 @@ private fun InlineSectionMessage(text: String) {
 
 private fun previewHistoryItem(oid: Long, title: String) = HistoryItem(
     oid = oid,
+    // 故意取一个和 oid 不同的值:两者是否相等没有证据,预览里写成 oid 会把「它们一样」
+    // 这个未经证实的判断留在代码里当样板抄。
+    kid = oid + 1,
     bvid = "BV1aa$oid",
     title = title,
     coverUrl = "https://i0.hdslb.com/bfs/archive/preview.jpg",
@@ -758,6 +762,7 @@ private fun ProfileScreenPreview() {
             onOpenOffline = {},
             onOpenMessages = {},
             onOpenFavFolder = {},
+            onOpenFavFolders = {},
             onSettingsClick = {},
             onOpenSelf = {},
             onRetryAccount = {},
@@ -780,6 +785,7 @@ private fun ProfileScreenErrorPreview() {
             onOpenOffline = {},
             onOpenMessages = {},
             onOpenFavFolder = {},
+            onOpenFavFolders = {},
             onSettingsClick = {},
             onOpenSelf = {},
             onRetryAccount = {},

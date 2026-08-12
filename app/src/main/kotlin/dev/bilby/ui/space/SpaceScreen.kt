@@ -51,7 +51,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -67,16 +70,24 @@ import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.ShareLink
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.api.BiliResult
+import dev.bilby.data.FollowGroup
+import dev.bilby.data.FollowRepository
 import dev.bilby.data.FollowState
+import dev.bilby.data.UpBrief
 import dev.bilby.data.RelationRepository
 import dev.bilby.data.SpaceArchiveOrder
 import dev.bilby.data.SpaceCollectionItem
 import dev.bilby.data.SpaceProfile
+import dev.bilby.data.DynamicRepository
 import dev.bilby.data.SpaceRepository
 import dev.bilby.data.SpaceDynamicItem
 import dev.bilby.data.SpaceVideoItem
 import dev.bilby.data.model.DynamicAdditional
 import dev.bilby.data.model.DynamicCard
+import dev.bilby.ui.follow.BlockConfirmDialog
+import dev.bilby.ui.follow.GroupPickerController
+import dev.bilby.ui.follow.GroupPickerSheet
+import dev.bilby.ui.follow.GroupPickerState
 import dev.bilby.ui.components.FollowButton
 import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.components.Avatar
@@ -128,6 +139,10 @@ data class SpaceUiState(
     val archives: SpaceArchiveTabState = SpaceArchiveTabState(),
     val dynamics: SpaceListTabState = SpaceListTabState(),
     val collections: SpaceCollectionsTabState = SpaceCollectionsTabState(),
+    /** 可选的关注分组。空着直到用户第一次打开分组面板。 */
+    val groups: List<FollowGroup> = emptyList(),
+    /** 非空时正在给这个人设置分组。 */
+    val picker: GroupPickerState? = null,
 )
 
 data class SpaceArchiveTabState(
@@ -190,7 +205,28 @@ class SpaceViewModel(
     private val mid: Long,
     private val repository: SpaceRepository,
     private val relationRepository: RelationRepository,
+    private val dynamicRepository: DynamicRepository,
+    followRepository: FollowRepository,
 ) : ViewModel() {
+
+    /** 分组面板与关注列表页共用同一份实现,覆盖式写回的那些坑都在里面。 */
+    private val groupPicker =
+        GroupPickerController(followRepository, relationRepository, viewModelScope)
+
+    /**
+     * 打开分组面板。**分组名单在这里才拉**,不在页面初始化时:空间页绝大多数时候只是看内容,
+     * 为一个藏在溢出菜单里的动作先打一个请求不划算。
+     */
+    fun openGroupPicker() {
+        val profile = _state.value.profile ?: return
+        groupPicker.open(UpBrief(mid = mid, name = profile.name, faceUrl = profile.faceUrl))
+    }
+
+    fun closeGroupPicker() = groupPicker.close()
+
+    fun toggleGroup(groupId: Long) = groupPicker.toggle(groupId)
+
+    fun saveGroups() = groupPicker.save()
 
     /**
      * 关注/取关。乐观更新、不重拉,与播放页同一套规矩。
@@ -216,6 +252,66 @@ class SpaceViewModel(
         }
     }
 
+    /**
+     * 拉黑/取消拉黑。形状与 [toggleFollow] 相同:乐观更新、失败回滚、不重拉。
+     *
+     * 拉黑会连带解除关注,所以成功之后关注态就是 [FollowState.Blocked] 这一个值,不需要
+     * 再问一次服务端。取消拉黑回到 [FollowState.None] —— 解除拉黑不会把关注还回来。
+     */
+    fun setBlocked(blocked: Boolean) {
+        val profile = _state.value.profile ?: return
+        if (profile.followState == FollowState.Self) return
+        val next = if (blocked) FollowState.Blocked else FollowState.None
+        _state.update { it.copy(profile = profile.copy(followState = next)) }
+        viewModelScope.launch {
+            val result =
+                if (blocked) relationRepository.block(mid) else relationRepository.unblock(mid)
+            if (result !is BiliResult.Ok) {
+                BiliLog.w("${if (blocked) "拉黑" else "取消拉黑"}失败: $result")
+                _state.update { it.copy(profile = profile) }
+            }
+        }
+    }
+
+    /**
+     * 空间页的动态点赞。与 [dev.bilby.ui.dynamic.OtherDynamicsViewModel.like] 同形 ——
+     * 同一条动态在两页里必须是同一个行为,乐观更新、失败回滚、不重拉。
+     */
+    fun likeDynamic(id: String, like: Boolean) {
+        applyDynamicLike(id, like)
+        viewModelScope.launch {
+            val result = dynamicRepository.likeDynamic(id, like)
+            if (result is BiliResult.ApiError || result is BiliResult.Failure) {
+                BiliLog.w("动态 $id 点赞失败,已回滚")
+                applyDynamicLike(id, !like)
+            }
+        }
+    }
+
+    private fun applyDynamicLike(id: String, like: Boolean) = _state.update { current ->
+        current.copy(
+            dynamics = current.dynamics.copy(
+                items = current.dynamics.items.map { item ->
+                    val card = (item as? SpaceDynamicItem.Card)?.card
+                    val interaction = card?.interaction
+                    if (card == null || interaction == null || card.id != id || interaction.liked == like) {
+                        item
+                    } else {
+                        item.copy(
+                            card = card.copy(
+                                interaction = interaction.copy(
+                                    liked = like,
+                                    likeCount = (interaction.likeCount + if (like) 1 else -1)
+                                        .coerceAtLeast(0),
+                                ),
+                            ),
+                        )
+                    }
+                },
+            ),
+        )
+    }
+
     private val _state = MutableStateFlow(SpaceUiState())
     val state: StateFlow<SpaceUiState> = _state.asStateFlow()
 
@@ -228,6 +324,13 @@ class SpaceViewModel(
         loadProfile()
         loadMoreArchives()
         loadMoreCollections()
+        // 分组名单和面板归 controller,这一页的 UI 状态只是把它们抄进来。
+        viewModelScope.launch {
+            groupPicker.groups.collect { groups -> _state.update { it.copy(groups = groups) } }
+        }
+        viewModelScope.launch {
+            groupPicker.picker.collect { picker -> _state.update { it.copy(picker = picker) } }
+        }
     }
 
     fun retry() {
@@ -592,8 +695,14 @@ fun SpaceScreen(
     onVideoClick: (SpaceVideoItem) -> Unit,
     /** 动态卡片被点开时去哪儿。由 MainActivity 接到 backstack 上,这一页不认识导航。 */
     onDynamicAction: (DynamicAction) -> Unit,
+    onLikeDynamic: (String, Boolean) -> Unit,
     onLiveClick: (Long) -> Unit,
     onToggleFollow: () -> Unit,
+    onSetBlocked: (Boolean) -> Unit,
+    onOpenGroupPicker: () -> Unit,
+    onCloseGroupPicker: () -> Unit,
+    onToggleGroup: (Long) -> Unit,
+    onSaveGroups: () -> Unit,
     onListenUp: () -> Unit,
     onBack: () -> Unit,
     onRetry: () -> Unit,
@@ -672,6 +781,8 @@ fun SpaceScreen(
                     it,
                     canListen = state.archives.items.isNotEmpty(),
                     onToggleFollow = onToggleFollow,
+                    onSetBlocked = onSetBlocked,
+                    onOpenGroupPicker = onOpenGroupPicker,
                     onListenUp = onListenUp,
                     onLiveClick = onLiveClick,
                     modifier = paneModifier,
@@ -756,6 +867,7 @@ fun SpaceScreen(
                                 state = state.dynamics,
                                 onLoadMore = onLoadMoreDynamics,
                                 onAction = onDynamicAction,
+                                onLikeDynamic = onLikeDynamic,
                             )
 
                             SpaceTab.Collections -> CollectionsTab(
@@ -823,6 +935,18 @@ fun SpaceScreen(
             }
         }
     }
+
+    // 分组面板与关注列表页共用同一个组件,那一页的入口在行尾溢出菜单里,这一页在头部的
+    // 溢出菜单里,面板本身一模一样。
+    state.picker?.let { picker ->
+        GroupPickerSheet(
+            state = picker,
+            groups = state.groups,
+            onToggle = onToggleGroup,
+            onSave = onSaveGroups,
+            onDismiss = onCloseGroupPicker,
+        )
+    }
 }
 
 /**
@@ -840,6 +964,8 @@ private fun SpaceHeader(
     profile: SpaceProfile,
     canListen: Boolean,
     onToggleFollow: () -> Unit,
+    onSetBlocked: (Boolean) -> Unit,
+    onOpenGroupPicker: () -> Unit,
     onListenUp: () -> Unit,
     onLiveClick: (Long) -> Unit,
     modifier: Modifier = Modifier,
@@ -883,7 +1009,10 @@ private fun SpaceHeader(
             SpaceHeaderActions(
                 followState = profile.followState,
                 canListen = canListen,
+                name = profile.name,
                 onToggleFollow = onToggleFollow,
+                onSetBlocked = onSetBlocked,
+                onOpenGroupPicker = onOpenGroupPicker,
                 onListenUp = onListenUp,
             )
         }
@@ -948,10 +1077,16 @@ private fun SpaceHeader(
 private fun SpaceHeaderActions(
     followState: FollowState,
     canListen: Boolean,
+    name: String,
     onToggleFollow: () -> Unit,
+    onSetBlocked: (Boolean) -> Unit,
+    onOpenGroupPicker: () -> Unit,
     onListenUp: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
+    var confirmingBlock by remember { mutableStateOf(false) }
+
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.End,
@@ -965,8 +1100,54 @@ private fun SpaceHeaderActions(
                 contentDescription = stringResource(R.string.space_listen_up),
             )
         }
-        // 空间页整页都在讲这个人,关注是这一页最主要的动作,用 filled。
-        FollowButton(state = followState, onClick = onToggleFollow)
+        if (followState == FollowState.Blocked) {
+            // [FollowButton] 在这一档什么都不画,不补一个出口的话这一页就没有回头路 ——
+            // 拉黑之后唯一能解除的地方会变成设置里的黑名单列表。
+            TextButton(onClick = { onSetBlocked(false) }) {
+                Text(stringResource(R.string.blacklist_unblock))
+            }
+        } else {
+            if (followState != FollowState.Self) {
+                // 拉黑收进溢出菜单,不在头部多摆一个按钮:一屏只留一个强调按钮
+                // (风格指南 §2.4),那个名额是关注的。
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(
+                        Icons.Outlined.MoreVert,
+                        contentDescription = stringResource(R.string.follow_row_actions, name),
+                    )
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    // 只有关注了的人才谈得上分组:没关注的人不在任何一份关注名单里,写回去
+                    // 服务端也不认。
+                    if (followState.isFollowing) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.follow_set_groups)) },
+                            onClick = {
+                                menuOpen = false
+                                onOpenGroupPicker()
+                            },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.blacklist_block)) },
+                        onClick = {
+                            menuOpen = false
+                            confirmingBlock = true
+                        },
+                    )
+                }
+            }
+            // 空间页整页都在讲这个人,关注是这一页最主要的动作,用 filled。
+            FollowButton(state = followState, onClick = onToggleFollow)
+        }
+    }
+
+    if (confirmingBlock) {
+        BlockConfirmDialog(
+            name = name,
+            onConfirm = { onSetBlocked(true) },
+            onDismiss = { confirmingBlock = false },
+        )
     }
 }
 
@@ -1111,6 +1292,7 @@ private fun DynamicListTab(
     state: SpaceListTabState,
     onLoadMore: () -> Unit,
     onAction: (DynamicAction) -> Unit,
+    onLikeDynamic: (String, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     PagedColumn(
@@ -1124,7 +1306,7 @@ private fun DynamicListTab(
         onLoadMore = onLoadMore,
         modifier = modifier,
     ) { dynamic ->
-        DynamicRow(dynamic = dynamic, onAction = onAction)
+        DynamicRow(dynamic = dynamic, onAction = onAction, onLikeDynamic = onLikeDynamic)
     }
 }
 
@@ -1137,6 +1319,7 @@ private fun DynamicListTab(
 private fun DynamicRow(
     dynamic: SpaceDynamicItem,
     onAction: (DynamicAction) -> Unit,
+    onLikeDynamic: (String, Boolean) -> Unit,
 ) {
     when (dynamic) {
         // 投稿视频在进 state 之前就被滤掉了(见 loadMoreDynamics),这一栏里不会有 ——
@@ -1152,6 +1335,7 @@ private fun DynamicRow(
         is SpaceDynamicItem.Card -> DynamicCardView(
             card = dynamic.card,
             onAction = onAction,
+            onLike = { like -> onLikeDynamic(dynamic.card.id, like) },
             showAuthor = false,
             // 底色、圆角、内边距归卡片自己;这里只给边距和条目间的 gap,与「关注动态」页
             // 取同一组数,同一条动态在两页里才是同一个样子。

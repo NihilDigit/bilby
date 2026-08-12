@@ -200,7 +200,7 @@ class VideoRepository(private val client: BiliClient) {
     suspend fun getPlayUrl(
         bvid: String,
         cid: Long,
-        preferredQuality: Int = DEFAULT_QUALITY,
+        preferredQuality: Int,
         preferredCodecs: List<Int> = DEFAULT_PREFERRED_CODECS,
         preferredAudioQuality: Int = AUDIO_QUALITY_BEST,
     ): BiliResult<PlayInfo> {
@@ -370,8 +370,9 @@ class VideoRepository(private val client: BiliClient) {
         const val CARD_URL = "${BiliConstants.WEB_HOST}/x/web-interface/card"
         const val PLAY_URL = "${BiliConstants.WEB_HOST}/x/player/wbi/playurl"
 
-        /** PiliPlus 的默认 qn(notes §1.1),1080P 高清。 */
-        const val DEFAULT_QUALITY = 80
+        // 这里**不放默认画质**。默认只有一处:`SettingsStore.DEFAULT_QUALITY`(WiFi)与
+        // `DEFAULT_QUALITY_METERED`(计费网络)。[getPlayUrl] 的 preferredQuality 因此没有
+        // 形参默认值 —— 有的话就是第二个真相,而它和真正生效的那个会各改各的。
 
         /** 详情缓存:够装下一个合集里连着看的十几条,再多就是在留没人会回头的东西。 */
         const val DETAIL_CACHE_SIZE = 16

@@ -10,10 +10,14 @@ import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.prepareGet
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
+import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
+import io.ktor.http.contentType
 import io.ktor.http.setCookie
+import kotlinx.serialization.json.JsonObject
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -36,6 +40,9 @@ class BiliClient(
      * @param referer 覆盖站内 Referer/Origin。空间那几个接口要指到 `space.bilibili.com/<mid>`
      *   而不是站点首页(PiliPlus member.dart:305-310/380-385 逐个接口都手写了这一组),
      *   真实浏览器发这些请求时人就在空间页上,Referer 对不上是最好认的破绽之一。
+     * @param withCsrf 往 query 里加 csrf(bili_jct)。**黑名单列表 `x/relation/blacks` 要这样**
+     *   (PiliPlus `http/black.dart:12-21` 把 csrf 和 pn/ps 一起放 queryParameters)。读接口
+     *   带 csrf 是个例外 —— 关系类的其余读接口都不带,别顺手给它们打开。
      */
     suspend fun rawGet(
         url: String,
@@ -43,9 +50,12 @@ class BiliClient(
         signed: Boolean = false,
         referer: String? = null,
         userAgent: String? = null,
+        withCsrf: Boolean = false,
     ): HttpResponse {
-        val finalParams = if (signed) wbiSigner.sign(params) else params
         val credentials = settings.credentials.first()
+        // 与 [rawPostForm] 同序:csrf 先并进来再签,签的是实际发出去的那一组 query。
+        val rawQuery = if (withCsrf) params + ("csrf" to credentials.biliJct) else params
+        val finalParams = if (signed) wbiSigner.sign(rawQuery) else rawQuery
         val cookie = cookieHeader(credentials)
         return http.get(url) {
             applyCommonHeaders(credentials, cookie, referer, userAgent)
@@ -169,6 +179,36 @@ class BiliClient(
         ) {
             query.forEach { (k, v) -> parameter(k, v) }
             applyCommonHeaders(credentials, cookie, referer, userAgent)
+        }.also { fingerprint.rememberCookies(it.setCookie()) }
+    }
+
+    /**
+     * **body 是 JSON 的写接口。** 动态点赞 `x/dynamic/feed/dyn/thumb` 要这样。
+     *
+     * 单开一条而不是给 [rawPostForm] 加开关:两者从请求体到参数类型都不一样。form 那边
+     * 每个值都是字符串,而这里 `up` 必须是 JSON 数字 —— 发成 `"1"` 服务端回
+     * `4100001 参数错误`,这条路就是这么找出来的。
+     *
+     * csrf 一律进 query:body 已经是一个业务对象,把凭据混进去是另一种形状,而 PiliPlus
+     * 在这条接口上正是放 query(`http/dynamics.dart:155-158`)。
+     *
+     * 判断依据是 PiliPlus 在这里**没有**指定 contentType,dio 默认发 JSON;它在
+     * `reply/add` 那边是显式设了 form 的(`http/video.dart:566`)。同一个 app 里两种编码
+     * 并存,不能从一条推另一条。
+     */
+    suspend fun rawPostJson(
+        url: String,
+        body: JsonObject,
+        params: Map<String, String> = emptyMap(),
+        referer: String? = null,
+    ): HttpResponse {
+        val credentials = settings.credentials.first()
+        val cookie = cookieHeader(credentials)
+        return http.post(url) {
+            (params + ("csrf" to credentials.biliJct)).forEach { (k, v) -> parameter(k, v) }
+            applyCommonHeaders(credentials, cookie, referer, null)
+            contentType(ContentType.Application.Json)
+            setBody(body)
         }.also { fingerprint.rememberCookies(it.setCookie()) }
     }
 
@@ -300,7 +340,8 @@ suspend inline fun <reified T> BiliClient.getData(
     signed: Boolean = false,
     referer: String? = null,
     userAgent: String? = null,
-): BiliResult<T> = runCatching { rawGet(url, params, signed, referer, userAgent).body<BiliResponse<T>>() }
+    withCsrf: Boolean = false,
+): BiliResult<T> = runCatching { rawGet(url, params, signed, referer, userAgent, withCsrf).body<BiliResponse<T>>() }
     .fold(
         onSuccess = { envelope ->
             val data = envelope.data
@@ -338,6 +379,16 @@ suspend fun BiliClient.postAction(
 ): BiliResult<Unit> = envelopeResult(url) {
     rawPostForm(url, form, withCsrf, params, referer, userAgent, csrfInQuery, signedParams, csrfTokenAlias)
         .body<BiliEnvelope>()
+}
+
+/** JSON body 的写接口,信封解析同 [postAction]。见 [BiliClient.rawPostJson]。 */
+suspend fun BiliClient.postJsonAction(
+    url: String,
+    body: JsonObject,
+    params: Map<String, String> = emptyMap(),
+    referer: String? = null,
+): BiliResult<Unit> = envelopeResult(url) {
+    rawPostJson(url, body, params, referer).body<BiliEnvelope>()
 }
 
 /** app 路线的写接口(点赞/投币):access_key + appkey 签名,不带 Cookie。 */

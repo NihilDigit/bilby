@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenu
@@ -66,7 +67,7 @@ import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.formatRelativeTime
-import dev.bilby.ui.components.SectionHeader
+import dev.bilby.ui.components.TrailingEntry
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -300,21 +301,10 @@ private fun FeedList(
         //
         // 文案不写「刷」这类口语,也不用中点分隔(见 MetaSeparator)。
         item(key = "other-dynamics") {
-            ListItem(
-                headlineContent = {
-                    Text(
-                        text = stringResource(R.string.dynamic_other_entry),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                },
-                trailingContent = {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                },
-                modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onOpenOtherDynamics),
+            TrailingEntry(
+                text = stringResource(R.string.dynamic_other_entry),
+                icon = Icons.AutoMirrored.Filled.Article,
+                onClick = onOpenOtherDynamics,
             )
         }
         if (state.items.isEmpty()) {
@@ -403,12 +393,6 @@ private fun FrequentUpsPane(
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(modifier = modifier) {
-        item(key = "title") {
-            SectionHeader(
-                title = stringResource(if (special) R.string.feed_special_ups else R.string.feed_frequent_ups),
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable),
-            )
-        }
         // 竖排里它同样排在最前面,并且和这一栏其余的行同形(ListItem + leading 头像)——
         // 横排那一格是给方格排布的,原样搬进来会是一块比周围矮一截、字也小一号的补丁。
         if (liveUps.isNotEmpty()) {
@@ -579,15 +563,20 @@ private fun FrequentUpsRow(
     onOpenFollowings: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-    // 小标题:没有它,这一排头像和下面的动态之间只有间距,读起来像同一块内容的一部分。
-    // 加了标题就说清了"这是谁",也顺带把它和时间序流的边界画出来。
+    // **不给这一排小标题,但保留下面那条分割线。**
     //
-    // **标题跟着名单的来源走。** 这一排可能是「特别关注」(用户自己划的),也可能是退回来的
-    // 「最常访问」(B 站算的排序),两者是不同的东西 —— 一个固定的标题会把其中一种说成另一种。
-    SectionHeader(
-        title = stringResource(if (special) R.string.feed_special_ups else R.string.feed_frequent_ups),
-        modifier = Modifier.padding(horizontal = Spacing.Comfortable),
-    )
+    // 依据是 divider.md 的两条:"Only use dividers if items can't be grouped with open space"
+    // 和 "Use dividers to group things, not separate individual items"。这一排是**导航**
+    // (点进空间),下面是**内容**(时间序动态),分的是两个区域而不是两个条目 —— 正是它该用
+    // 的地方;而留白在这里不够用,底下紧跟着就是列表项,一段空白只会被读成内边距。
+    //
+    // 标题去掉是因为它和分割线在说同一件事(cards.md:219 把 spacing / headlines / dividers
+    // 并列为三选一),而它还要跟着名单来源在「特别关注」和「最常访问」之间切换 —— 一行会变的
+    // 字,读者每次都得先认一遍;一排头像本来就说得清自己是谁。
+    //
+    // **不给它 surfaceContainer 底色。** 试过,不好看,而且是误用:roles.md:172 把 surface
+    // 分给 background area、surface container 分给 **navigation area**(底栏、rail、抽屉
+    // 那种),拿它刷正文里的一块是把导航的颜色用进了 body。
     // **头像横滚,「全部关注」钉在右边不参与滚动。**
     //
     // 原来那版把整排(含入口)塞进一个 LazyRow,入口于是躲在滚动尽头,想进完整名单得先横拖到头。
@@ -648,8 +637,7 @@ private fun FrequentUpsRow(
             )
         }
     }
-    // 分割线把这一排和下面的时间序流断开。它不只是装饰:这一排是**导航**(点进空间),
-    // 下面是**内容**(时间序动态),两者读法不同,中间没有边界的话整块会被读成一个列表的开头。
+    // 见这个函数开头:这条线分的是导航区和内容区两块,不是两个条目。
     HorizontalDivider()
     }
 }

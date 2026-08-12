@@ -5,14 +5,27 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import dev.bilby.data.DEFAULT_GROUP_ID
 import dev.bilby.data.FollowGroup
 import dev.bilby.data.FollowOrder
+import dev.bilby.data.RelationRepository
+import dev.bilby.data.SPECIAL_GROUP_ID
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SortRow
@@ -74,6 +87,12 @@ data class FollowingsUiState(
     val order: FollowOrder = FollowOrder.Frequent,
     /** 搜索词。非空时列表来自搜索接口,分组和排序都不参与。 */
     val query: String = "",
+    /** 分组管理面板开着没有。 */
+    val managingGroups: Boolean = false,
+    /** 上一次分组读写的失败原因,显示在对应的面板里。 */
+    val groupError: String? = null,
+    /** 非空时正在给某个人设置分组。 */
+    val picker: GroupPickerState? = null,
     // false 而不是 true:loadMore 的并发守卫现在直接读这个字段(见 FollowingsViewModel),
     // 默认 true 会让 init{} 里的第一次调用把自己挡在门外。首屏 loading 由 loadMore 显式置位。
     val loading: Boolean = false,
@@ -89,10 +108,17 @@ data class FollowingsUiState(
  * 默认排序是「最常访问」,与动态页顶上那排一致 —— 从那排点进来却换一种排法,会让人以为
  * 进错了地方。切到别的排法、切分组、搜索都会把列表整个换掉并从第一页重来。
  */
-class FollowingsViewModel(private val repository: FollowRepository) : ViewModel() {
+class FollowingsViewModel(
+    private val repository: FollowRepository,
+    private val relationRepository: RelationRepository,
+) : ViewModel() {
 
     private val _state = MutableStateFlow(FollowingsUiState())
     val state: StateFlow<FollowingsUiState> = _state.asStateFlow()
+
+    /** 分组面板与分组名单都归它,空间页用的是同一份实现,见 [GroupPickerController]。 */
+    private val groupPicker =
+        GroupPickerController(repository, relationRepository, viewModelScope)
 
     private var page = 0
 
@@ -106,25 +132,76 @@ class FollowingsViewModel(private val repository: FollowRepository) : ViewModel(
 
     init {
         loadMore()
-        loadGroups()
+        groupPicker.loadGroups()
+        // 分组名单和面板都由 controller 持有,这一页的 UI 状态只是把它们抄进来,免得屏幕
+        // 那侧要同时收三个 flow。
+        viewModelScope.launch {
+            groupPicker.groups.collect { groups -> _state.update { it.copy(groups = groups) } }
+        }
+        viewModelScope.launch {
+            groupPicker.picker.collect { picker -> _state.update { it.copy(picker = picker) } }
+        }
     }
 
+    fun openGroupManager() = _state.update { it.copy(managingGroups = true, groupError = null) }
+
+    fun closeGroupManager() = _state.update { it.copy(managingGroups = false, groupError = null) }
+
+    fun createGroup(name: String) = groupAction { repository.createGroup(name) }
+
+    fun renameGroup(id: Long, name: String) = groupAction { repository.renameGroup(id, name) }
+
+    fun deleteGroup(id: Long) = groupAction { repository.deleteGroup(id) }
+
     /**
-     * 分组名单只取一次,不跟着列表刷新重取:分组是用户在 B 站那边建的,一次会话里不会变,
-     * 而这一排筛选跟着下拉刷新闪一下比它过时更打扰人。
+     * 分组的三个写动作长得一样:成功就重拉一次分组名单,失败把原因留在面板上。
      *
-     * **「默认分组」不进这一排。** 它装的是没被分进任何分组的人,和「全部关注」并排站着时
-     * 是同一件事的两个说法(实测 288 = 默认分组 273 + 特别关注 15),而两个几乎一样的档
-     * 只会让人先比较再选。
+     * **重拉而不是本地增删一条。** chip 上除了名字还有人数,而人数只有列表接口给得出;
+     * 新建那条接口虽然回了 tagid,拿它自己拼一条记录等于把人数猜一遍(notes 1.2)。
+     *
+     * 这里重拉是对的,和 [GroupPickerController.save] 那边不重拉不矛盾:那边动的是**成员**,
+     * 写完立刻读会拿到旧人数;这里动的是**分组本身**,新建或删掉一个分组之后,名单里多没多
+     * 那一行是立刻就能读到的。
      */
-    private fun loadGroups() {
+    private fun groupAction(action: suspend () -> BiliResult<Unit>) {
         viewModelScope.launch {
-            when (val result = repository.groups()) {
-                is BiliResult.Ok -> _state.update {
-                    it.copy(groups = result.value.filterNot { group -> group.id == DEFAULT_GROUP_ID })
-                }
-                // 取不到就只剩「全部关注」那一档,列表本身照常能用,所以不当成整页的错误。
-                else -> BiliLog.w("取关注分组失败: $result")
+            _state.update { it.copy(groupError = null) }
+            when (val result = action()) {
+                is BiliResult.Ok -> groupPicker.loadGroups()
+                is BiliResult.ApiError -> groupFail("${result.message}(${result.code})")
+                is BiliResult.Failure -> groupFail(result.cause.message ?: "网络错误")
+            }
+        }
+    }
+
+    private fun groupFail(message: String) {
+        BiliLog.w("分组操作失败: $message")
+        _state.update { it.copy(groupError = message) }
+    }
+
+    fun openGroupPicker(up: UpBrief) = groupPicker.open(up)
+
+    fun closeGroupPicker() = groupPicker.close()
+
+    fun toggleGroup(groupId: Long) = groupPicker.toggle(groupId)
+
+    fun saveGroups() = groupPicker.save()
+
+    /**
+     * 拉黑。**乐观更新、失败回滚、不重拉**,与关注/取关同一套规矩。
+     *
+     * 拉黑会连带解除关注,所以这一行从这份名单里消失是对的 —— 界面直接把它拿掉,
+     * 不等一个来回,也不重拉整份名单。
+     */
+    fun block(mid: Long) {
+        val before = _state.value.items
+        if (before.none { it.mid == mid }) return
+        _state.update { it.copy(items = it.items.filterNot { up -> up.mid == mid }) }
+        viewModelScope.launch {
+            val result = relationRepository.block(mid)
+            if (result !is BiliResult.Ok) {
+                BiliLog.w("拉黑失败: $result")
+                _state.update { it.copy(items = before) }
             }
         }
     }
@@ -234,11 +311,6 @@ class FollowingsViewModel(private val repository: FollowRepository) : ViewModel(
         BiliLog.w("取关注列表失败: $message")
         _state.update { it.copy(loading = false, appending = false, refreshing = false, error = message) }
     }
-
-    private companion object {
-        /** `tagid = 0` 是「默认分组」,见 [loadGroups]。 */
-        const val DEFAULT_GROUP_ID = 0L
-    }
 }
 
 @Composable
@@ -250,6 +322,16 @@ fun FollowingsScreen(
     onSelectSource: (FollowSource) -> Unit,
     onSelectOrder: (FollowOrder) -> Unit,
     onSearch: (String) -> Unit,
+    onOpenGroupManager: () -> Unit,
+    onCloseGroupManager: () -> Unit,
+    onCreateGroup: (String) -> Unit,
+    onRenameGroup: (Long, String) -> Unit,
+    onDeleteGroup: (Long) -> Unit,
+    onOpenGroupPicker: (UpBrief) -> Unit,
+    onCloseGroupPicker: () -> Unit,
+    onToggleGroup: (Long) -> Unit,
+    onSaveGroups: () -> Unit,
+    onBlock: (Long) -> Unit,
     onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
@@ -275,13 +357,44 @@ fun FollowingsScreen(
                 contentPadding = contentPadding,
                 header = {
                     item(key = "controls") {
-                        FollowingsControls(state, onSelectSource, onSelectOrder, onSearch)
+                        FollowingsControls(
+                            state,
+                            onSelectSource,
+                            onSelectOrder,
+                            onSearch,
+                            onOpenGroupManager,
+                        )
                     }
                 },
             ) { up ->
-                FollowingRow(up, onClick = { onUpClick(up.mid) })
+                FollowingRow(
+                    up,
+                    onClick = { onUpClick(up.mid) },
+                    onSetGroups = { onOpenGroupPicker(up) },
+                    onBlock = { onBlock(up.mid) },
+                )
             }
         }
+    }
+
+    if (state.managingGroups) {
+        GroupManagerSheet(
+            groups = state.groups,
+            error = state.groupError,
+            onCreate = onCreateGroup,
+            onRename = onRenameGroup,
+            onDelete = onDeleteGroup,
+            onDismiss = onCloseGroupManager,
+        )
+    }
+    state.picker?.let { picker ->
+        GroupPickerSheet(
+            state = picker,
+            groups = state.groups,
+            onToggle = onToggleGroup,
+            onSave = onSaveGroups,
+            onDismiss = onCloseGroupPicker,
+        )
     }
 }
 
@@ -302,6 +415,7 @@ private fun FollowingsControls(
     onSelectSource: (FollowSource) -> Unit,
     onSelectOrder: (FollowOrder) -> Unit,
     onSearch: (String) -> Unit,
+    onOpenGroupManager: () -> Unit,
 ) {
     var input by rememberSaveable(state.query) { mutableStateOf(state.query) }
     Column(modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Tight)) {
@@ -321,24 +435,39 @@ private fun FollowingsControls(
 
         // 分组可以有任意多个(用户自己在 B 站建),所以这一排横滚 —— 与首页那排头像不同,
         // 那一排后面藏着入口,这一排藏的是并列的筛选项,滚到哪里都不影响别的东西。
+        //
+        // **管理分组的按钮钉在右端,不跟着横滚。** 它不是一个筛选项,混进那一排之后既会被滚出
+        // 视野,也会被读成"还有一个叫管理分组的分组"。
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = Spacing.Comfortable),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier.fillMaxWidth().padding(end = Spacing.Tight),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            FilterChip(
-                selected = state.source is FollowSource.All && state.query.isBlank(),
-                onClick = { onSelectSource(FollowSource.All) },
-                label = { Text(stringResource(R.string.followings_all)) },
-            )
-            state.groups.forEach { group ->
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = Spacing.Comfortable),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
                 FilterChip(
-                    selected = (state.source as? FollowSource.Group)?.group?.id == group.id && state.query.isBlank(),
-                    onClick = { onSelectSource(FollowSource.Group(group)) },
-                    // 分组名是用户自己起的,原样显示;人数跟在后面,不用中点分隔(见 MetaSeparator)。
-                    label = { Text("${group.name}$MetaSeparator${group.count}") },
+                    selected = state.source is FollowSource.All && state.query.isBlank(),
+                    onClick = { onSelectSource(FollowSource.All) },
+                    label = { Text(stringResource(R.string.followings_all)) },
+                )
+                state.groups.forEach { group ->
+                    FilterChip(
+                        selected = (state.source as? FollowSource.Group)?.group?.id == group.id &&
+                            state.query.isBlank(),
+                        onClick = { onSelectSource(FollowSource.Group(group)) },
+                        // 分组名是用户自己起的,原样显示;人数跟在后面,不用中点分隔(见 MetaSeparator)。
+                        label = { Text("${group.name}$MetaSeparator${group.count}") },
+                    )
+                }
+            }
+            IconButton(onClick = onOpenGroupManager) {
+                Icon(
+                    Icons.Outlined.Tune,
+                    contentDescription = stringResource(R.string.follow_groups_manage),
                 )
             }
         }
@@ -357,8 +486,19 @@ private fun FollowingsControls(
     }
 }
 
+/**
+ * 一行一个人。**分组和拉黑收在行尾的菜单里**,不各占一个按钮:这一页的主要动作是点进空间,
+ * 而一行摆三个可点的东西之后,最常做的那件事反而最难认出来。
+ */
 @Composable
-private fun FollowingRow(up: UpBrief, onClick: () -> Unit) {
+private fun FollowingRow(
+    up: UpBrief,
+    onClick: () -> Unit,
+    onSetGroups: () -> Unit,
+    onBlock: () -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    var confirmingBlock by remember { mutableStateOf(false) }
     ListItem(
         headlineContent = {
             Text(up.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -375,6 +515,39 @@ private fun FollowingRow(up: UpBrief, onClick: () -> Unit) {
             }
         },
         leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarRow) },
+        trailingContent = {
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(
+                        Icons.Outlined.MoreVert,
+                        contentDescription = stringResource(R.string.follow_row_actions, up.name),
+                    )
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.follow_set_groups)) },
+                        onClick = {
+                            menuOpen = false
+                            onSetGroups()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.blacklist_block)) },
+                        onClick = {
+                            menuOpen = false
+                            confirmingBlock = true
+                        },
+                    )
+                }
+            }
+        },
         modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
     )
+    if (confirmingBlock) {
+        BlockConfirmDialog(
+            name = up.name,
+            onConfirm = onBlock,
+            onDismiss = { confirmingBlock = false },
+        )
+    }
 }

@@ -29,6 +29,11 @@ data class HistoryItemDto(
     /** 观看进度,秒;-1 表示已看完,与稍后再看同规则(notes §3.4)。 */
     val progress: Long = -1L,
     val duration: Long = 0L,
+    /**
+     * 删除这条记录的主键(notes §3.5)。**是条目顶层的 `kid`,不是 `history.oid`** ——
+     * 两者是否总相等没有证据,不能互相顶替。
+     */
+    val kid: Long = 0L,
 )
 
 /**

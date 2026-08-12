@@ -115,6 +115,13 @@ fun CommentSection(
      * 拉回来",详见下面那处注释。
      */
     refreshEnabled: Boolean = true,
+    /**
+     * 排在排序栏之前、跟着一起滚的一块内容。**动态详情页把那条动态本身放在这里。**
+     *
+     * 钉在顶上不行:一条九宫格图文能占掉大半屏,把评论区压成一条缝,而那一页存在的理由
+     * 就是评论。默认 null,播放页不受影响 —— 它的正文在另一个 tab 里,不进这个列表。
+     */
+    header: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var replyTarget by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -158,6 +165,7 @@ fun CommentSection(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = Spacing.Tight),
         ) {
+            header?.let { item(key = "header") { it() } }
             item(key = "sort-bar") { SortBar(state.sort, onSort) }
 
             state.topComment?.let { top ->

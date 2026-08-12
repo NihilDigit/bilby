@@ -49,6 +49,7 @@ fun OtherDynamicsScreen(
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onAction: (DynamicAction) -> Unit,
+    onLike: (id: String, like: Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -61,7 +62,7 @@ fun OtherDynamicsScreen(
                 FullScreenError(state.error, onRetry, Modifier.padding(padding))
 
             else -> AdaptiveContent(modifier = Modifier.padding(padding)) {
-                OtherDynamicsList(state, onRefresh, onLoadMore, onAction)
+                OtherDynamicsList(state, onRefresh, onLoadMore, onAction, onLike)
             }
         }
     }
@@ -73,6 +74,7 @@ private fun OtherDynamicsList(
     onRefresh: () -> Unit,
     onLoadMore: () -> Unit,
     onAction: (DynamicAction) -> Unit,
+    onLike: (id: String, like: Boolean) -> Unit,
 ) {
     val listState = rememberLazyListState()
 
@@ -102,7 +104,11 @@ private fun OtherDynamicsList(
             // 卡片的底色、圆角、内边距都归 DynamicCardView 自己(见那边的 BlockStyle),
             // 这一页只决定条目之间留多少 gap。
             items(state.items, key = { it.id }) { card ->
-                DynamicCardView(card = card, onAction = onAction)
+                DynamicCardView(
+                    card = card,
+                    onAction = onAction,
+                    onLike = { like -> onLike(card.id, like) },
+                )
             }
             item(key = "footer") {
                 ListFooter(

@@ -3,13 +3,17 @@ package dev.bilby.data
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
+import dev.bilby.api.dto.DynamicDetailResponseDto
 import dev.bilby.api.dto.DynamicFeedResponseDto
 import dev.bilby.api.dto.DynamicItemDto
 import dev.bilby.api.getData
+import dev.bilby.api.postJsonAction
 import dev.bilby.api.toHttpsUrl
 import dev.bilby.data.model.DynamicAdditional
 import dev.bilby.data.model.DynamicCard
 import dev.bilby.data.model.FeedItem
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 data class FeedPage(val items: List<FeedItem>, val nextOffset: String?, val hasMore: Boolean)
 
@@ -43,6 +47,54 @@ class DynamicRepository(private val client: BiliClient) {
      */
     suspend fun loadOtherFeed(offset: String? = null): BiliResult<DynamicCardPage> =
         loadCardPage(offset, pagesLeft = maxAutoPages)
+
+    /**
+     * 一条动态的全部内容。动态详情页进来就走这条,**不接受列表页传过来的那份卡片**:评论区的
+     * oid 与 type 只在 `basic` 里,而列表项的 `basic` 有时是缺的,推不出来只能回头再问一次
+     * (notes/dynamic-cards.md 第 8 节)。分成"齐了直接用、缺了补一次"两条路的话,其中一条
+     * 几乎不会被走到,它坏了也没人知道。
+     *
+     * 解析后为 null 表示这条动态没有可显示的内容(见 DynamicCardMapper),按业务失败报出去,
+     * 不返回一张空卡片。
+     */
+    suspend fun loadDetail(id: String): BiliResult<DynamicCard> {
+        val params = mapOf(
+            "id" to id,
+            "timezone_offset" to TIMEZONE_OFFSET,
+            "features" to BiliConstants.DYN_FEATURES,
+            "gaia_source" to "Athena",
+            "web_location" to "333.1330",
+        )
+        return when (val result = client.getData<DynamicDetailResponseDto>(DETAIL_URL, params)) {
+            is BiliResult.Ok -> result.value.item?.toDynamicCard()
+                ?.let { BiliResult.Ok(it) }
+                ?: BiliResult.ApiError(0, "这条动态没有可显示的内容")
+
+            is BiliResult.ApiError -> result
+            is BiliResult.Failure -> result
+        }
+    }
+
+    /**
+     * 动态点赞。**与视频点赞不是同一条接口**,也不是同一条路线:视频那条走 app 端 access_key,
+     * 这条是网页 Cookie + csrf。风控按动作算,别处能过不代表这里能过(notes 第 7 节)。
+     *
+     * `up` 是 1/2 而不是 0/1 —— 2 才是取消,这一条反直觉,写错的表现是"取消点赞"变成再点一次赞。
+     */
+    /**
+     * 动态点赞。**body 是 JSON,不是 form**,而且 `up` 要发成 JSON 数字 —— 发成字符串
+     * 服务端回 `4100001 参数错误`(notes/dynamic-cards.md 第 7 节)。csrf 在 query,
+     * Referer 指到动态站而不是站点首页。
+     */
+    suspend fun likeDynamic(id: String, like: Boolean): BiliResult<Unit> = client.postJsonAction(
+        url = THUMB_URL,
+        body = buildJsonObject {
+            put("dyn_id_str", id)
+            put("up", if (like) THUMB_UP else THUMB_CANCEL)
+            put("spmid", "333.1365.0.0")
+        },
+        referer = BiliConstants.DYNAMIC_HOST,
+    )
 
     private suspend fun loadPage(offset: String?, pagesLeft: Int): BiliResult<FeedPage> {
         val result = client.getData<DynamicFeedResponseDto>(FEED_URL, feedParams("video", offset))
@@ -127,6 +179,15 @@ class DynamicRepository(private val client: BiliClient) {
 
     private companion object {
         const val FEED_URL = "${BiliConstants.WEB_HOST}/x/polymer/web-dynamic/v1/feed/all"
+        const val DETAIL_URL = "${BiliConstants.WEB_HOST}/x/polymer/web-dynamic/v1/detail"
+        const val THUMB_URL = "${BiliConstants.WEB_HOST}/x/dynamic/feed/dyn/thumb"
+
+        /** 东八区,分钟数取负。服务端按它算"几天前"这类展示串。 */
+        const val TIMEZONE_OFFSET = "-480"
+
+        /** `up`:1 点赞,2 取消。**不是 0/1**,而且要发成 JSON 数字,发字符串回 4100001。 */
+        const val THUMB_UP = 1
+        const val THUMB_CANCEL = 2
 
         /**
          * 已经在首页出现过的两种。**番剧、课堂不在里面**:它们虽然也是"视频类",但首页那条

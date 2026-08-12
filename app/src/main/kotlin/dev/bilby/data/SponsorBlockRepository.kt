@@ -57,46 +57,59 @@ class SponsorBlockRepository(
         }
         if (!response.status.isSuccess()) return@runCatching emptyList()
 
-        val dtos = json.decodeFromString<List<SponsorBlockSegmentDto>>(response.bodyAsText())
-        val segments = dtos
-            // poi_highlight(空降点)、exclusive_access(整段视频打标)不是"跳过一段时间"
-            // 的语义,只有 actionType 缺省或显式为 skip 的条目才当成可跳过区间处理。
-            .filter { (it.actionType ?: "skip") == "skip" }
-            .mapNotNull { it.toSegmentOrNull() }
-        mergeOverlaps(segments)
+        computeSponsorSegments(json.decodeFromString(response.bodyAsText()))
     }.getOrElse {
         // 网络失败或 JSON 解析失败才会走到这里(404 已经在上面提前 return 掉,不算异常)。
         BiliLog.w("SponsorBlock 片段查询异常", it)
         emptyList()
     }
 
-    private fun SponsorBlockSegmentDto.toSegmentOrNull(): SponsorSegment? {
-        if (segment.size != 2) return null
-        val startMillis = (segment[0] * 1000).toLong()
-        val endMillis = (segment[1] * 1000).toLong()
-        if (endMillis <= startMillis) return null
-        return SponsorSegment(startMillis, endMillis, category, uuid)
-    }
-
-    /**
-     * 按起点排序后合并重叠或首尾相接的片段,类别/uuid 取排在前面的那个——
-     * 重叠片段本就是罕见的边界情况,合并后提示文案偶尔对不上具体类别,
-     * 但不影响跳过这个核心功能。
-     */
-    private fun mergeOverlaps(segments: List<SponsorSegment>): List<SponsorSegment> {
-        val merged = mutableListOf<SponsorSegment>()
-        for (segment in segments.sortedBy { it.startMillis }) {
-            val last = merged.lastOrNull()
-            if (last != null && segment.startMillis <= last.endMillis) {
-                merged[merged.lastIndex] = last.copy(endMillis = maxOf(last.endMillis, segment.endMillis))
-            } else {
-                merged.add(segment)
-            }
-        }
-        return merged
-    }
-
     private companion object {
         const val SKIP_SEGMENTS_PATH = "/api/skipSegments"
     }
+}
+
+/**
+ * 把服务端那一串原始片段折成可以直接喂给 [dev.bilby.ui.video.nextSkipTarget] 的形态:
+ * **按起点升序、互不重叠**。
+ *
+ * 拆成文件级纯函数是为了能单独测(同 `computeHistoryPage`)。它建立的正是 `nextSkipTarget`
+ * 明写着要求的那个前提 —— 而前提破了不会报错:那个函数遇到乱序会提前返回 null,表现是
+ * "片段就是不跳",没有任何地方能看出是这里出的问题。
+ */
+internal fun computeSponsorSegments(dtos: List<SponsorBlockSegmentDto>): List<SponsorSegment> {
+    val segments = dtos
+        // poi_highlight(空降点)、exclusive_access(整段视频打标)不是"跳过一段时间"
+        // 的语义,只有 actionType 缺省或显式为 skip 的条目才当成可跳过区间处理。
+        .filter { (it.actionType ?: "skip") == "skip" }
+        .mapNotNull { it.toSegmentOrNull() }
+    return mergeOverlaps(segments)
+}
+
+private fun SponsorBlockSegmentDto.toSegmentOrNull(): SponsorSegment? {
+    if (segment.size != 2) return null
+    val startMillis = (segment[0] * 1000).toLong()
+    val endMillis = (segment[1] * 1000).toLong()
+    // **零长与倒置一律丢掉。** 留着的话 nextSkipTarget 会返回一个等于当前位置的目标,
+    // 播放器 seek 到原地、位置监听再次命中同一段,就是一个跳不出去的循环。
+    if (endMillis <= startMillis) return null
+    return SponsorSegment(startMillis, endMillis, category, uuid)
+}
+
+/**
+ * 按起点排序后合并重叠或首尾相接的片段,类别/uuid 取排在前面的那个——
+ * 重叠片段本就是罕见的边界情况,合并后提示文案偶尔对不上具体类别,
+ * 但不影响跳过这个核心功能。
+ */
+private fun mergeOverlaps(segments: List<SponsorSegment>): List<SponsorSegment> {
+    val merged = mutableListOf<SponsorSegment>()
+    for (segment in segments.sortedBy { it.startMillis }) {
+        val last = merged.lastOrNull()
+        if (last != null && segment.startMillis <= last.endMillis) {
+            merged[merged.lastIndex] = last.copy(endMillis = maxOf(last.endMillis, segment.endMillis))
+        } else {
+            merged.add(segment)
+        }
+    }
+    return merged
 }

@@ -31,12 +31,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Subscriptions
+import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Subscriptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -80,6 +84,8 @@ import kotlinx.coroutines.launch
 import dev.bilby.ui.article.ArticleScreen
 import dev.bilby.ui.article.ArticleViewModel
 import dev.bilby.ui.dynamic.DynamicAction
+import dev.bilby.ui.dynamic.DynamicDetailScreen
+import dev.bilby.ui.dynamic.DynamicDetailViewModel
 import dev.bilby.ui.dynamic.OtherDynamicsScreen
 import dev.bilby.ui.dynamic.OtherDynamicsViewModel
 import dev.bilby.ui.components.BilbyTopBar
@@ -87,14 +93,21 @@ import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.comment.CommentViewModel
 import androidx.compose.material.icons.outlined.DeleteSweep
 import dev.bilby.data.FavFolder
+import dev.bilby.data.FavFolderDetail
 import dev.bilby.data.PlayerPrefs
 import dev.bilby.data.QueueSource
 import dev.bilby.offline.OfflineItem
 import dev.bilby.offline.OfflineStatus
+import dev.bilby.ui.fav.FavFolderDeletionActions
+import dev.bilby.ui.fav.FavFolderEditorActions
 import dev.bilby.ui.fav.FavFolderScreen
 import dev.bilby.ui.fav.FavFolderViewModel
+import dev.bilby.ui.fav.FavFoldersScreen
+import dev.bilby.ui.fav.FavFoldersViewModel
 import dev.bilby.ui.feed.FeedScreen
 import dev.bilby.ui.feed.FeedViewModel
+import dev.bilby.ui.follow.BlacklistScreen
+import dev.bilby.ui.follow.BlacklistViewModel
 import dev.bilby.ui.follow.FollowingsScreen
 import dev.bilby.ui.follow.FollowingsViewModel
 import dev.bilby.ui.history.HistoryScreen
@@ -111,7 +124,16 @@ import dev.bilby.ui.message.WhisperViewModel
 import dev.bilby.ui.profile.ProfileViewModel
 import dev.bilby.ui.search.SearchChatScreen
 import dev.bilby.ui.search.SearchChatViewModel
+import dev.bilby.ui.settings.AboutSettingsPage
+import dev.bilby.ui.settings.AgentSettingsPage
+import dev.bilby.ui.settings.DanmakuSettingsPage
+import dev.bilby.ui.settings.OfflineSettingsPage
+import dev.bilby.ui.settings.PlaybackSettingsPage
+import dev.bilby.ui.settings.PrivacySettingsPage
 import dev.bilby.ui.settings.SettingsScreen
+import dev.bilby.ui.settings.SettingsSection
+import dev.bilby.ui.settings.SponsorBlockSettingsPage
+import dev.bilby.ui.settings.SponsorCategoriesPage
 import dev.bilby.ui.settings.UpdateInstaller
 import dev.bilby.ui.settings.SettingsViewModel
 import dev.bilby.data.SpaceCollectionItem
@@ -401,12 +423,30 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                         onOpenFavFolder = { folder ->
                             push(FavFolderContents(folder.id, folder.title))
                         },
+                        onOpenFavFolders = { push(FavFolders) },
                         onOpenMessages = { push(Messages) },
                     )
                 }
             }
             entry<Settings> {
-                CutoutSafe { SettingsRoute(container, onBack = { backStack.removeLastOrNull() }) }
+                CutoutSafe {
+                    SettingsRoute(
+                        container = container,
+                        onOpenSection = { push(SettingsPage(it)) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
+            }
+            entry<SettingsPage> { key ->
+                CutoutSafe {
+                    SettingsPageRoute(
+                        container = container,
+                        section = key.section,
+                        onOpenSection = { push(SettingsPage(it)) },
+                        onOpenBlacklist = { push(Blacklist) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
             }
             entry<History> {
                 CutoutSafe {
@@ -490,6 +530,32 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                         mediaId = key.mediaId,
                         title = key.title,
                         onVideoClick = { push(Video(it)) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
+            }
+            entry<FavFolders> {
+                CutoutSafe {
+                    FavFoldersRoute(
+                        container = container,
+                        onOpenFolder = { push(FavFolderContents(it.id, it.title)) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
+            }
+            entry<Blacklist> {
+                CutoutSafe {
+                    BlacklistRoute(container = container, onBack = { backStack.removeLastOrNull() })
+                }
+            }
+            entry<DynamicDetail> { key ->
+                CutoutSafe {
+                    DynamicDetailRoute(
+                        container = container,
+                        id = key.id,
+                        onVideoClick = { push(Video(it)) },
+                        onUpClick = { push(Space(it)) },
+                        onArticleClick = { id, isRead -> push(ArticlePage(id, isRead)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -635,6 +701,7 @@ private fun RootTabs(
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
     onOpenFavFolder: (FavFolder) -> Unit,
+    onOpenFavFolders: () -> Unit,
     onOpenMessages: () -> Unit,
 ) {
     var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
@@ -684,6 +751,7 @@ private fun RootTabs(
                 onOpenToView = onOpenToView,
                 onOpenOffline = onOpenOffline,
                 onOpenFavFolder = onOpenFavFolder,
+                onOpenFavFolders = onOpenFavFolders,
                 onOpenMessages = onOpenMessages,
             )
         }
@@ -716,6 +784,7 @@ private fun RootTabs(
                     onOpenToView = onOpenToView,
                     onOpenOffline = onOpenOffline,
                     onOpenFavFolder = onOpenFavFolder,
+                    onOpenFavFolders = onOpenFavFolders,
                     onOpenMessages = onOpenMessages,
                 )
             }
@@ -756,6 +825,7 @@ private fun RootTabsContent(
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
     onOpenFavFolder: (FavFolder) -> Unit,
+    onOpenFavFolders: () -> Unit,
     onOpenMessages: () -> Unit,
 ) {
     // 只 padding 不声明消费的话,子层的 imePadding() 会再多退让一个底栏高度。
@@ -808,6 +878,7 @@ private fun RootTabsContent(
                     onOpenToView = onOpenToView,
                     onOpenOffline = onOpenOffline,
                     onOpenFavFolder = onOpenFavFolder,
+                    onOpenFavFolders = onOpenFavFolders,
                     onOpenMessages = onOpenMessages,
                     onSettingsClick = onSettingsClick,
                 )
@@ -913,6 +984,7 @@ private fun ProfilePane(
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
     onOpenFavFolder: (FavFolder) -> Unit,
+    onOpenFavFolders: () -> Unit,
     onOpenMessages: () -> Unit,
     onSettingsClick: () -> Unit,
 ) {
@@ -934,12 +1006,13 @@ private fun ProfilePane(
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    // 重新进入这一页时补一次概览。挂在"进组合"上而不是底栏那次点击上:从历史记录、
-    // 稍后再看这些子页面返回时 Home 整个重新进组合,而那正是概览最可能已经过期的时候
-    // (用户刚在那边删了东西),底栏的 onClick 覆盖不到这条路。
+    // 重新进入这一页时整个重取。挂在"进组合"上而不是底栏那次点击上:从历史记录、稍后再看
+    // 这些子页面返回时 Home 整个重新进组合,而那正是概览最可能已经过期的时候(用户刚在那边
+    // 删了东西),底栏的 onClick 覆盖不到这条路。
     //
-    // 首次进入由 ViewModel 的 init 负责,refreshIfStale 会因为刚拉过而跳过。
-    LaunchedEffect(Unit) { vm.refreshIfStale() }
+    // 首次进入时 ViewModel 的 init 已经拉过一次,这里会再来一次 —— 认了。少这一次的写法
+    // (去抖 + 版本号)试过,漏的比省的多,见 [ProfileViewModel.refresh]。
+    LaunchedEffect(Unit) { vm.refresh() }
 
     ProfileScreen(
         state = state,
@@ -948,6 +1021,7 @@ private fun ProfilePane(
         onOpenToView = onOpenToView,
         onOpenOffline = onOpenOffline,
         onOpenFavFolder = onOpenFavFolder,
+        onOpenFavFolders = onOpenFavFolders,
         onOpenMessages = onOpenMessages,
         onSettingsClick = onSettingsClick,
         onOpenSelf = onUserClick,
@@ -958,41 +1032,23 @@ private fun ProfilePane(
     )
 }
 
+/**
+ * 设置。**首页只有入口,内容在 [SettingsPageRoute]**;两层各是一个 NavEntry,因此各有一个
+ * `SettingsViewModel` 实例 —— 它们靠持续收 DataStore 的流保持一致,不靠互相通知
+ * (见 `SettingsViewModel` 的 init)。
+ */
 @Composable
-private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
-    val vm: SettingsViewModel = viewModel(
-        factory = viewModelFactory {
-            initializer {
-                SettingsViewModel(
-                    container.settings,
-                    container.llmClient,
-                    container.updateRepository,
-                )
-            }
-        },
-    )
+private fun SettingsRoute(
+    container: AppContainer,
+    onOpenSection: (SettingsSection) -> Unit,
+    onBack: () -> Unit,
+) {
+    val vm = rememberSettingsViewModel(container)
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     SettingsScreen(
         state = state,
-        onLlmChange = vm::saveLlm,
-        onSmokeTestLlm = vm::smokeTestLlm,
-        onCodecChange = vm::setCodec,
-        onFastForwardSpeedChange = vm::setFastForwardSpeed,
-        onDanmakuOpacityChange = vm::setDanmakuOpacity,
-        onDanmakuScrollShowAreaChange = vm::setDanmakuScrollShowArea,
-        onDanmakuDensityChange = vm::setDanmakuDensity,
-        onDanmakuFrameRateChange = vm::setDanmakuFrameRate,
-        onSponsorBlockChange = vm::updateSponsorBlock,
-        onOfflineConcurrencyChange = vm::setOfflineConcurrency,
-        onAutoNextChange = vm::setAutoNext,
-        onClearExcludedFeed = vm::clearExcludedFeedMids,
-        onOpenGithub = {
-            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PROJECT_GITHUB_URL)))
-        },
-        onCheckUpdate = vm::checkUpdate,
-        onDownloadUpdate = { vm.downloadUpdate(it, UpdateInstaller.downloadDir(context)) },
-        onInstallUpdate = { UpdateInstaller.install(context, it) },
+        onOpenSection = onOpenSection,
         // 停播放服务要 Context,所以由这一层做;顺序是先清凭据后停服务 —— 反过来的话
         // 中间那一瞬服务已停而凭据还在,看起来像"没登出但停了"。
         onLogout = { vm.logout { AudioPlaybackService.stop(context) } },
@@ -1000,9 +1056,111 @@ private fun SettingsRoute(container: AppContainer, onBack: () -> Unit) {
     )
 }
 
+/** 设置的二级页面。八页共用一条路由,分支在这里,理由见 `SettingsPage` 的说明。 */
+@Composable
+private fun SettingsPageRoute(
+    container: AppContainer,
+    section: SettingsSection,
+    onOpenSection: (SettingsSection) -> Unit,
+    onOpenBlacklist: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val vm = rememberSettingsViewModel(container)
+    val state by vm.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    when (section) {
+        SettingsSection.Playback -> PlaybackSettingsPage(
+            state = state,
+            onWifiQualityChange = { vm.setDefaultQuality(it, metered = false) },
+            onMeteredQualityChange = { vm.setDefaultQuality(it, metered = true) },
+            onCodecChange = vm::setCodec,
+            onFastForwardSpeedChange = vm::setFastForwardSpeed,
+            onAutoNextChange = vm::setAutoNext,
+            onBack = onBack,
+        )
+
+        SettingsSection.Danmaku -> DanmakuSettingsPage(
+            state = state,
+            onOpacityChange = vm::setDanmakuOpacity,
+            onScrollShowAreaChange = vm::setDanmakuScrollShowArea,
+            onDensityChange = vm::setDanmakuDensity,
+            onFrameRateChange = vm::setDanmakuFrameRate,
+            onBack = onBack,
+        )
+
+        SettingsSection.SponsorBlock -> SponsorBlockSettingsPage(
+            state = state,
+            onChange = vm::updateSponsorBlock,
+            onOpenCategories = { onOpenSection(SettingsSection.SponsorCategories) },
+            onBack = onBack,
+        )
+
+        SettingsSection.SponsorCategories -> SponsorCategoriesPage(
+            state = state,
+            onChange = vm::updateSponsorBlock,
+            onBack = onBack,
+        )
+
+        SettingsSection.Offline -> OfflineSettingsPage(
+            state = state,
+            onConcurrencyChange = vm::setOfflineConcurrency,
+            onBack = onBack,
+        )
+
+        SettingsSection.Agent -> AgentSettingsPage(
+            state = state,
+            onLlmChange = vm::saveLlm,
+            onSmokeTest = vm::smokeTestLlm,
+            onBack = onBack,
+        )
+
+        SettingsSection.Privacy -> {
+            // 「暂停记录」是服务端状态,进这一页才知道 —— 别的开关都从 SettingsStore 读得出来。
+            LaunchedEffect(Unit) { vm.loadHistoryPause() }
+            PrivacySettingsPage(
+                state = state,
+                onHistoryPausedChange = vm::setHistoryPaused,
+                onRetryHistoryPause = vm::loadHistoryPause,
+                onOpenBlacklist = onOpenBlacklist,
+                onClearExcludedFeed = vm::clearExcludedFeedMids,
+                onBack = onBack,
+            )
+        }
+
+        SettingsSection.About -> AboutSettingsPage(
+            state = state,
+            onOpenGithub = {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PROJECT_GITHUB_URL)))
+            },
+            onCheckUpdate = vm::checkUpdate,
+            onDownloadUpdate = { vm.downloadUpdate(it, UpdateInstaller.downloadDir(context)) },
+            onInstallUpdate = { UpdateInstaller.install(context, it) },
+            onBack = onBack,
+        )
+    }
+}
+
+@Composable
+private fun rememberSettingsViewModel(container: AppContainer): SettingsViewModel = viewModel(
+    factory = viewModelFactory {
+        initializer {
+            SettingsViewModel(
+                container.settings,
+                container.llmClient,
+                container.updateRepository,
+                container.historyRepository,
+            )
+        }
+    },
+)
+
 /**
  * 历史记录。「我的」页的三个入口之一,独立成页且只待在这一页(DESIGN 2 节)——
  * 不喂给别的界面,没有"继续观看"式的跳转。
+ *
+ * 多选的外壳照 [OfflineRoute]:选中集合放在这里而不是 ViewModel,它是这一页的界面状态,
+ * 离开这一页就该没有。两处偏离见 [HistoryScreen] 的说明:进入多选不只有长按一条路;
+ * 删除不可撤销(服务端没有恢复接口),所以用确认对话框,不用可撤销的 Snackbar。
  */
 @Composable
 private fun HistoryRoute(
@@ -1014,16 +1172,165 @@ private fun HistoryRoute(
         factory = viewModelFactory { initializer { HistoryViewModel(container.historyRepository) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
-    Scaffold(topBar = { BilbyTopBar(title = stringResource(R.string.history_title), onBack = onBack) }) { insets ->
+
+    // null 表示不在多选态。空集合是多选态里的合法状态 —— 顶栏的「选择」要在一条都没选的
+    // 时候就进得去。
+    var selectedIds by remember { mutableStateOf<Set<Long>?>(null) }
+    var menuExpanded by remember { mutableStateOf(false) }
+    var confirmingDeleteSelected by remember { mutableStateOf(false) }
+    var confirmingClearFinished by remember { mutableStateOf(false) }
+    var confirmingClearAll by remember { mutableStateOf(false) }
+
+    val selected = state.items.filter { selectedIds?.contains(it.oid) == true }
+    // 「清空已看完」没有服务端接口,是本地筛出 progress == -1 再走同一条批量删除
+    // (notes/comment-toview-history.md §3.7),范围因此只到已经加载的这些。
+    val finished = state.items.filter { it.isFinished }
+
+    // 历史是游标翻页、列表会往下追加,每次列表变了都要把选中集合与它求交:删掉的 id 留在
+    // 集合里,顶栏就一直显示"已选 3 项",而那几条早就不在屏上了。
+    LaunchedEffect(state.items) {
+        selectedIds = selectedIds?.intersect(state.items.map { it.oid }.toSet())
+    }
+    BackHandler(enabled = selectedIds != null) { selectedIds = null }
+
+    Scaffold(
+        topBar = {
+            val ids = selectedIds
+            if (ids == null) {
+                BilbyTopBar(
+                    title = stringResource(R.string.history_title),
+                    onBack = onBack,
+                    actions = {
+                        IconButton(
+                            onClick = { selectedIds = emptySet() },
+                            enabled = state.items.isNotEmpty() && !state.mutating,
+                        ) {
+                            Icon(
+                                Icons.Outlined.Checklist,
+                                contentDescription = stringResource(R.string.history_select),
+                            )
+                        }
+                        // 两个清空收进溢出菜单:M3 的 top app bar anatomy 里 headline 之后最多
+                        // 两个 icon button,而这一页的常态还要留一个给「选择」。
+                        IconButton(onClick = { menuExpanded = true }, enabled = !state.mutating) {
+                            Icon(
+                                Icons.Outlined.MoreVert,
+                                contentDescription = stringResource(R.string.history_more),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.history_clear_finished)) },
+                                enabled = finished.isNotEmpty(),
+                                onClick = {
+                                    menuExpanded = false
+                                    confirmingClearFinished = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.history_clear_all)) },
+                                enabled = state.items.isNotEmpty(),
+                                onClick = {
+                                    menuExpanded = false
+                                    confirmingClearAll = true
+                                },
+                            )
+                        }
+                    },
+                )
+            } else {
+                // 多选时整条顶栏换掉,返回箭头改成"退出多选"(M3 的 contextual top app bar)。
+                BilbyTopBar(
+                    title = stringResource(R.string.history_selected_count, ids.size),
+                    onBack = { selectedIds = null },
+                    actions = {
+                        val all = state.items.map { it.oid }.toSet()
+                        IconButton(onClick = { selectedIds = if (ids == all) emptySet() else all }) {
+                            Icon(
+                                Icons.Outlined.SelectAll,
+                                contentDescription = stringResource(R.string.history_select_all),
+                            )
+                        }
+                        IconButton(
+                            onClick = { confirmingDeleteSelected = true },
+                            enabled = ids.isNotEmpty() && !state.mutating,
+                        ) {
+                            Icon(
+                                Icons.Outlined.DeleteOutline,
+                                contentDescription = stringResource(R.string.action_delete),
+                            )
+                        }
+                    },
+                )
+            }
+        },
+    ) { insets ->
         HistoryScreen(
             state = state,
             onItemClick = { onVideoClick(it.bvid) },
             onLoadMore = vm::loadMore,
             onRetry = vm::retry,
             onRefresh = vm::refresh,
+            selectedIds = selectedIds,
+            onToggleSelection = { item ->
+                val current = selectedIds ?: emptySet()
+                selectedIds = if (item.oid in current) current - item.oid else current + item.oid
+            },
+            onDismissMutationError = vm::dismissMutationError,
             contentPadding = insets,
         )
     }
+
+    // 三个确认框各说各的范围。删除不可撤销,而这三件事影响的条数各不相同 —— 合并成一句
+    // "确定删除吗"就把范围这个唯一值得确认的东西省掉了。
+    if (confirmingDeleteSelected) {
+        HistoryConfirmDialog(
+            message = stringResource(R.string.history_delete_confirm, selected.size),
+            onConfirm = {
+                vm.delete(selected)
+                selectedIds = null
+            },
+            onDismiss = { confirmingDeleteSelected = false },
+        )
+    }
+    if (confirmingClearFinished) {
+        HistoryConfirmDialog(
+            message = stringResource(R.string.history_clear_finished_confirm, finished.size),
+            onConfirm = { vm.delete(finished) },
+            onDismiss = { confirmingClearFinished = false },
+        )
+    }
+    if (confirmingClearAll) {
+        HistoryConfirmDialog(
+            message = stringResource(R.string.history_clear_all_confirm),
+            onConfirm = {
+                vm.clearAll()
+                selectedIds = null
+            },
+            onDismiss = { confirmingClearAll = false },
+        )
+    }
+}
+
+/** 只有标题的确认框:陈述动作即止,不解释删除意味着什么。 */
+@Composable
+private fun HistoryConfirmDialog(message: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(message) },
+        confirmButton = {
+            TextButton(onClick = {
+                onDismiss()
+                onConfirm()
+            }) { Text(stringResource(R.string.action_confirm)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
 }
 
 /**
@@ -1255,6 +1562,10 @@ private fun FavFolderRoute(
             onLoadMore = vm::loadMore,
             onRetry = vm::retry,
             onRefresh = vm::refresh,
+            onRemove = vm::remove,
+            onUndoRemove = vm::undoRemove,
+            onUndoExpired = vm::dismissUndo,
+            onNoticeShown = vm::dismissNotice,
             contentPadding = insets,
         )
     }
@@ -1267,7 +1578,9 @@ private fun FollowingsRoute(
     onBack: () -> Unit,
 ) {
     val vm: FollowingsViewModel = viewModel(
-        factory = viewModelFactory { initializer { FollowingsViewModel(container.followRepository) } },
+        factory = viewModelFactory {
+            initializer { FollowingsViewModel(container.followRepository, container.relationRepository) }
+        },
     )
     val state by vm.state.collectAsStateWithLifecycle()
     Scaffold(
@@ -1282,6 +1595,16 @@ private fun FollowingsRoute(
             onSelectOrder = vm::selectOrder,
             onSearch = vm::search,
             onRefresh = vm::refresh,
+            onOpenGroupManager = vm::openGroupManager,
+            onCloseGroupManager = vm::closeGroupManager,
+            onCreateGroup = vm::createGroup,
+            onRenameGroup = vm::renameGroup,
+            onDeleteGroup = vm::deleteGroup,
+            onOpenGroupPicker = vm::openGroupPicker,
+            onCloseGroupPicker = vm::closeGroupPicker,
+            onToggleGroup = vm::toggleGroup,
+            onSaveGroups = vm::saveGroups,
+            onBlock = vm::block,
             contentPadding = insets,
         )
     }
@@ -1300,7 +1623,17 @@ private fun SpaceRoute(
 ) {
     val vm: SpaceViewModel = viewModel(
         key = "space-$mid",
-        factory = viewModelFactory { initializer { SpaceViewModel(mid, container.spaceRepository, container.relationRepository) } },
+        factory = viewModelFactory {
+            initializer {
+                SpaceViewModel(
+                    mid,
+                    container.spaceRepository,
+                    container.relationRepository,
+                    container.dynamicRepository,
+                    container.followRepository,
+                )
+            }
+        },
     )
     val state by vm.state.collectAsStateWithLifecycle()
     SpaceScreen(
@@ -1315,8 +1648,14 @@ private fun SpaceRoute(
         onCollectionClick = onCollectionClick,
         onVideoClick = { onVideoClick(it.bvid) },
         onDynamicAction = onDynamicAction,
+        onLikeDynamic = vm::likeDynamic,
         onLiveClick = onLiveClick,
         onToggleFollow = vm::toggleFollow,
+        onSetBlocked = vm::setBlocked,
+        onOpenGroupPicker = vm::openGroupPicker,
+        onCloseGroupPicker = vm::closeGroupPicker,
+        onToggleGroup = vm::toggleGroup,
+        onSaveGroups = vm::saveGroups,
         // 听这位 UP 的投稿:挑第一条进播放页并直接以听的状态打开。**宿主只有播放页一个** ——
         // 空间页不承载听视频界面,否则又会多出一处需要单独维护的生命周期。
         onListenUp = {
@@ -1376,7 +1715,137 @@ private fun OtherDynamicsRoute(
         onLoadMore = vm::loadMore,
         onRetry = vm::retry,
         onAction = onAction,
+        onLike = vm::like,
     )
+}
+
+/**
+ * 一条动态本身,带评论区。
+ *
+ * **进来先拉一次详情,不接列表页递过来的卡片。** 评论区的 oid 与 type 只在服务端下发的
+ * `basic` 里(notes/dynamic-cards.md),而列表项的 `basic` 可能缺;让正常路径和那条回落
+ * 走同一次请求,回落才会真的被走到 —— 只在缺失时才用的分支,坏了没人会发现。这一页本来
+ * 也需要这次请求:列表里的正文可能只是摘要。
+ */
+@Composable
+private fun DynamicDetailRoute(
+    container: AppContainer,
+    id: String,
+    onVideoClick: (String) -> Unit,
+    onUpClick: (Long) -> Unit,
+    onArticleClick: (String, Boolean) -> Unit,
+    onBack: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val vm: DynamicDetailViewModel = viewModel(
+        factory = viewModelFactory {
+            initializer { DynamicDetailViewModel(container.dynamicRepository, id) }
+        },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+
+    // 评论区要等 oid 落地才建得起来,和播放页同一个形状。拿不到就是这条动态没有评论区
+    // (comment_type 为 0,或者 comment_id_str 不是一串数字)。
+    val reference = state.card?.interaction?.takeIf { it.hasComments }
+    val oid = reference?.commentId?.toLongOrNull()
+    val commentVm: CommentViewModel? = if (oid != null) {
+        viewModel(
+            key = "dyn-comment",
+            factory = viewModelFactory {
+                initializer { CommentViewModel(container.commentRepository, oid, reference.commentType) }
+            },
+        )
+    } else {
+        null
+    }
+    val commentState by (commentVm?.state ?: MutableStateFlow(CommentUiState()))
+        .collectAsStateWithLifecycle()
+
+    DynamicDetailScreen(
+        state = state,
+        commentState = commentState,
+        onBack = onBack,
+        onRetry = vm::retry,
+        onAction = { action ->
+            when (action) {
+                is DynamicAction.OpenVideo -> onVideoClick(action.bvid)
+                is DynamicAction.OpenUser -> onUpClick(action.mid)
+                is DynamicAction.OpenArticle -> onArticleClick(action.id, action.isRead)
+                // 已经在一条动态里了,再点进"这条动态"没有去处。其余的交给公共那段。
+                is DynamicAction.OpenDynamic -> Unit
+                else -> handleDynamicAction(action, context, container, scope) { }
+            }
+        },
+        onLike = vm::like,
+        onCommentSort = { commentVm?.setSort(it) },
+        onCommentRefresh = { commentVm?.refresh() },
+        onCommentLoadMore = { commentVm?.loadMore() },
+        onExpandReplies = { commentVm?.expandReplies(it) },
+        onSendComment = { text, replyTo -> commentVm?.send(text, replyTo) },
+        onLikeComment = { commentVm?.like(it) },
+        onDeleteComment = { commentVm?.delete(it) },
+    )
+}
+
+/**
+ * 收藏夹列表。新建、改名、删除都落在这里 —— 收藏夹是用户自己建的有限存货,和稍后再看同一栏。
+ */
+@Composable
+private fun FavFoldersRoute(
+    container: AppContainer,
+    onOpenFolder: (FavFolderDetail) -> Unit,
+    onBack: () -> Unit,
+) {
+    val vm: FavFoldersViewModel = viewModel(
+        factory = viewModelFactory { initializer { FavFoldersViewModel(container.favRepository) } },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    Scaffold(
+        topBar = { BilbyTopBar(title = stringResource(R.string.fav_folders_title), onBack = onBack) },
+    ) { insets ->
+        FavFoldersScreen(
+            state = state,
+            onOpenFolder = onOpenFolder,
+            onCreate = vm::startCreate,
+            onEdit = vm::startEdit,
+            onDelete = vm::startDelete,
+            onRetry = vm::retry,
+            onRefresh = vm::refresh,
+            editorActions = FavFolderEditorActions(
+                onTitleChange = vm::changeTitle,
+                onIntroChange = vm::changeIntro,
+                onPrivacyChange = vm::changePrivacy,
+                onSave = vm::save,
+                onDismiss = vm::dismissEditor,
+            ),
+            deletionActions = FavFolderDeletionActions(
+                onConfirm = vm::confirmDelete,
+                onDismiss = vm::dismissDelete,
+            ),
+            contentPadding = insets,
+        )
+    }
+}
+
+/** 黑名单。名字和头像都不可点:拉黑之后对方的空间本来就进不去。 */
+@Composable
+private fun BlacklistRoute(container: AppContainer, onBack: () -> Unit) {
+    val vm: BlacklistViewModel = viewModel(
+        factory = viewModelFactory { initializer { BlacklistViewModel(container.relationRepository) } },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    Scaffold(
+        topBar = { BilbyTopBar(title = stringResource(R.string.blacklist_title), onBack = onBack) },
+    ) { insets ->
+        BlacklistScreen(
+            state = state,
+            onUnblock = vm::unblock,
+            onLoadMore = vm::loadMore,
+            onRetry = vm::retry,
+            contentPadding = insets,
+        )
+    }
 }
 
 /**
@@ -1404,6 +1873,7 @@ private fun handleDynamicAction(
         }
         is DynamicAction.OpenArticle -> push(ArticlePage(action.id, action.isRead))
         is DynamicAction.OpenUser -> push(Space(action.mid))
+        is DynamicAction.OpenDynamic -> push(DynamicDetail(action.id))
         is DynamicAction.OpenUrl -> {
             val destination = BilbyLink.destinationOf(action.url)
             if (destination != null) push(destination) else ShareLink.openInBrowser(context, action.url)

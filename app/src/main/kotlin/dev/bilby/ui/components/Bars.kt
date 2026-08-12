@@ -1,6 +1,7 @@
 package dev.bilby.ui.components
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,12 +15,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
@@ -119,5 +122,55 @@ fun SectionHeader(
             }
         }
         trailing()
+    }
+}
+
+/**
+ * 靠右的一个去处:图标 + 文字 + 箭头,整体贴在行尾。
+ *
+ * **它标的是"去哪儿",不是一条内容。** 这两处原先都是铺满整行的 `ListItem`,于是长得和它们
+ * 上下的内容行一模一样 —— 「我的」页的消息入口挤在一堆预览区之间,首页的「其他动态」排在时间序
+ * 流里,两个都读起来像列表的一员。缩到行尾之后,它和 [SectionHeader] 右边的「全部」是同一类
+ * 东西,一眼分得出这是个出口。
+ *
+ * **只在这两处用**(`ProfileScreen` 的消息、`FeedScreen` 的其他动态)。别处的入口该不该也换成
+ * 这个形态,是逐个判断的事:铺满整行的入口在只有它一个的地方是对的,这里的毛病来自"和邻居撞脸"。
+ *
+ * **永远不给它红点、未读计数或角标。** 那是 DESIGN 1.3 永不实现清单上的第一条,而这两处正是
+ * 它们最容易被加回来的位置 —— 「顺手显示有几条新的」听起来是信息,实际是把一条静态入口变成
+ * 催人回来的提醒。
+ */
+@Composable
+fun TrailingEntry(
+    text: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth().padding(horizontal = Spacing.Tight),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // TextButton 而不是自己拼一个 clickable Row:它自带 48dp 的触控下限和涟漪,
+        // 而这个控件本身只有一行字那么高。内容色用它默认的 primary —— 这一行本来就要在一片
+        // 内容里被认出来是个出口,压成 onSurfaceVariant 之后它和周围的正文分不开。
+        TextButton(onClick = onClick) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(Dimens.IconInline))
+            Text(
+                text = text,
+                // 比 TextButton 默认的 labelLarge 大一档,与列表行的标题同字号:它和那些行
+                // 并排,小一号会让它读起来像那些行的附注。
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = Spacing.Tight, end = Spacing.Hair),
+            )
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+        }
     }
 }

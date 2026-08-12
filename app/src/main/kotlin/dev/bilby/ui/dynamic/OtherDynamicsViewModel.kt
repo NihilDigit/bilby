@@ -60,6 +60,40 @@ class OtherDynamicsViewModel(private val repository: DynamicRepository) : ViewMo
         fetch(append = true)
     }
 
+    /**
+     * 点赞。**乐观更新,失败回滚,不重新拉取** —— 重拉会让同一个数字先跳到新值、再被响应改回去,
+     * 在点赞多的动态上看起来就是闪两下(CLAUDE.md 的硬约定,与视频点赞同一条)。
+     */
+    fun like(id: String, like: Boolean) {
+        applyLike(id, like)
+        viewModelScope.launch {
+            val result = repository.likeDynamic(id, like)
+            if (result is BiliResult.ApiError || result is BiliResult.Failure) {
+                // 回滚。日志由 BiliClient 那层打过一行带 code 的了,这里只补上是哪条动态。
+                BiliLog.w("动态 $id 点赞失败,已回滚")
+                applyLike(id, !like)
+            }
+        }
+    }
+
+    private fun applyLike(id: String, like: Boolean) = _state.update { current ->
+        current.copy(
+            items = current.items.map { card ->
+                val interaction = card.interaction
+                if (card.id != id || interaction == null || interaction.liked == like) {
+                    card
+                } else {
+                    card.copy(
+                        interaction = interaction.copy(
+                            liked = like,
+                            likeCount = (interaction.likeCount + if (like) 1 else -1).coerceAtLeast(0),
+                        ),
+                    )
+                }
+            },
+        )
+    }
+
     private fun fetch(append: Boolean) {
         loadingPage = true
         viewModelScope.launch {

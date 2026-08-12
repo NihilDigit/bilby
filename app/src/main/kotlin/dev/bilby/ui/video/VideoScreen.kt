@@ -220,6 +220,15 @@ fun VideoScreen(
     // 会被静默吞掉,而屏幕上没有任何东西提示它锁着。
     LaunchedEffect(fullscreen) { if (!fullscreen) locked = false }
 
+    /**
+     * 已经忽略过的云端位置。和 [locked] 同样的理由提到这一层:[CloudResumeHint] 也有全屏和
+     * 非全屏两个调用点,状态留在组件内部的话,转一次屏就换成另一个实例,忽略过的提示会重新弹。
+     *
+     * 存的是位置本身而不是一个布尔,因为要挡的是"同一个云端时间不再弹"。换一集之后云端位置是
+     * 另一个值,那一条该弹还是要弹。
+     */
+    var dismissedResumeMillis by rememberSaveable { mutableStateOf<Long?>(null) }
+
     // 判据用路由参数 [bvid],与 `matchesCurrentPage` 同源。用 `state.detail?.bvid` 的那一版
     // 在详情请求失败时是 null:那时页面早已凭 bvid 发过打开命令、播放器正放着本页这一条,
     // 而 null 谁也对不上,离开页面音频就继续响。
@@ -273,6 +282,10 @@ fun VideoScreen(
 
     val audioState by AudioPlaybackService.state.collectAsStateWithLifecycle()
     val sleepTimerState by AudioPlaybackService.sleepTimerState.collectAsStateWithLifecycle()
+
+    // 忽略过的那个位置直接不往下传,两个调用点各自的 visible 就不会再被点亮。判据见上面
+    // [dismissedResumeMillis] 的注释。
+    val cloudResumeMillis = audioState.cloudResumeMillis?.takeIf { it != dismissedResumeMillis }
 
     // 画面必须接在真的 ExoPlayer 上:MediaController 没有 COMMAND_SET_VIDEO_SURFACE
     // (Surface 是本地对象,递不到 session 那侧),这是 Media3 的已知限制。服务与 UI 同进程,
@@ -858,9 +871,10 @@ fun VideoScreen(
                 ) {
                     if (fullscreen) {
                         CloudResumeHint(
-                            positionMillis = audioState.cloudResumeMillis,
+                            positionMillis = cloudResumeMillis,
                             // 直接 seek:这一下是用户点出来的,不是播放头自己动。
                             onJump = { active?.seekTo(it) },
+                            onDismiss = { dismissedResumeMillis = it },
                         )
                     }
                     SkipToast(skippedCategory)
@@ -1033,8 +1047,9 @@ fun VideoScreen(
 
         if (!fullscreen) {
             CloudResumeHint(
-                positionMillis = audioState.cloudResumeMillis,
+                positionMillis = cloudResumeMillis,
                 onJump = { active?.seekTo(it) },
+                onDismiss = { dismissedResumeMillis = it },
                 modifier = Modifier.align(ToastAnchorInDetail).padding(Spacing.Comfortable),
             )
         }

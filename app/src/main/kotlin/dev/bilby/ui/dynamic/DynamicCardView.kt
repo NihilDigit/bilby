@@ -11,8 +11,11 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
+import androidx.compose.material.icons.automirrored.outlined.Comment
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -28,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -38,6 +42,7 @@ import dev.bilby.data.model.ArticleImage
 import dev.bilby.data.model.DynamicAdditional
 import dev.bilby.data.model.DynamicCard
 import dev.bilby.data.model.DynamicContent
+import dev.bilby.data.model.DynamicInteraction
 import dev.bilby.ui.CalendarEvent
 import dev.bilby.ui.article.ArticleParagraph
 import dev.bilby.ui.components.Avatar
@@ -71,6 +76,13 @@ sealed interface DynamicAction {
     data class OpenLiveOfUser(val mid: Long) : DynamicAction
     data class OpenArticle(val id: String, val isRead: Boolean) : DynamicAction
     data class OpenUser(val mid: Long) : DynamicAction
+
+    /**
+     * 这条动态自己的一页(正文 + 评论区)。**只带 id**:评论区的 oid 与 type 由那一页现拉的
+     * 详情给出,不从列表项里带过去 —— 列表项的 `basic` 有时候是缺的,而那一页无论如何都要
+     * 一次详情请求才能拿到完整正文。
+     */
+    data class OpenDynamic(val id: String) : DynamicAction
     /** 站内没有落点的东西(番剧、音频、活动、收藏夹分享)。由调用方决定是站内解析还是外跳。 */
     data class OpenUrl(val url: String) : DynamicAction
 }
@@ -84,6 +96,8 @@ sealed interface DynamicAction {
  * @param nested 为真时是"被转发的那一条":不画自己的日期(外层已经有了),也不再往下嵌套。
  * @param showAuthor 画不画头像与名字。**空间页整页都是同一个人,要传 false** —— 每条重复
  *   印一遍他自己的头像,读起来像一页别人转他的动态。时间那一行照旧留着。
+ * @param onLike 为 null 时不画互动栏。**它不是"点了没反应"的兜底**:点赞要乐观更新加失败回滚,
+ *   而那份状态在持有这一列动态的 ViewModel 里,拿不到它的调用方画出来的按钮按下去只能骗人。
  */
 @Composable
 fun DynamicCardView(
@@ -92,6 +106,7 @@ fun DynamicCardView(
     modifier: Modifier = Modifier,
     nested: Boolean = false,
     showAuthor: Boolean = true,
+    onLike: ((like: Boolean) -> Unit)? = null,
 ) {
     val block = blockStyle(nested)
     Surface(
@@ -164,9 +179,108 @@ fun DynamicCardView(
                     )
                 }
             }
+
+            // 被转发的那条不画互动栏:赞和评论都落在转发它的这一条上,里外各一份会让人不知道
+            // 自己点的是哪一条。
+            val interaction = card.interaction
+            if (!nested && interaction != null && onLike != null) {
+                DynamicActionBar(interaction, onLike, onAction, card.id)
+            }
         }
     }
 }
+
+/**
+ * 卡片底部的互动栏:点赞、评论。
+ *
+ * **图标和计数横排,不是播放页那种图标在上、计数在下的两行**(风格指南 §2.3)。那一排是整页
+ * 的主要动作,占满一行的宽度;这里只有两项,而它们下面还接着下一条动态 —— 竖排会让每张卡片
+ * 都多出一截高度,一屏少放小半条内容。
+ *
+ * 未选中取 `outline`:这一行是卡片里优先级最低的东西,和上面的正文再拉开一档(同 §2.3b 的
+ * 计数行)。选中的赞取 `primary` 并换成实心图标 —— **形态跟着状态变,不只是变色**(§2.6),
+ * 只靠颜色的话色觉障碍用户读不出自己点没点。
+ *
+ * 触摸区靠 `heightIn(min = 48dp)` 加 `weight(1f)` 撑起来,和播放页动作栏是同一条(§3)。
+ *
+ * **转发不做。** 它要一个写正文的输入面板,而这一次只谈赞和评论。
+ */
+@Composable
+private fun DynamicActionBar(
+    interaction: DynamicInteraction,
+    onLike: (like: Boolean) -> Unit,
+    onAction: (DynamicAction) -> Unit,
+    dynamicId: String,
+) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        ActionCell(
+            modifier = Modifier.weight(1f),
+            selected = interaction.liked,
+            icon = if (interaction.liked) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp,
+            contentDescription = stringResource(
+                if (interaction.liked) R.string.dynamic_action_unlike else R.string.dynamic_action_like,
+            ),
+            label = interaction.likeCount.takeIf { it > 0 }?.let { formatCount(it) }
+                ?: stringResource(R.string.dynamic_action_like),
+            onClick = { onLike(!interaction.liked) },
+        )
+        ActionCell(
+            modifier = Modifier.weight(1f),
+            selected = false,
+            icon = Icons.AutoMirrored.Outlined.Comment,
+            contentDescription = stringResource(R.string.dynamic_action_comment),
+            label = interaction.commentCount.takeIf { it > 0 }?.let { formatCount(it) }
+                ?: stringResource(R.string.dynamic_action_comment),
+            // 专栏动态的评论区就是那篇文章的评论区(`comment_type == 12` 时 oid 是 cv 号),
+            // 所以直接进文章页 —— 那里有正文,而动态这一页只有一段摘要。PiliPlus 同样不给这一种
+            // 动态详情页(page_utils.dart:126、232)。
+            onClick = {
+                if (interaction.commentType == ARTICLE_COMMENT_TYPE && interaction.commentId.isNotBlank()) {
+                    onAction(DynamicAction.OpenArticle(interaction.commentId, isRead = true))
+                } else {
+                    onAction(DynamicAction.OpenDynamic(dynamicId))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun ActionCell(
+    selected: Boolean,
+    icon: ImageVector,
+    contentDescription: String,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    Row(
+        modifier = modifier
+            .clip(MaterialTheme.shapes.small)
+            .clickable(role = Role.Button, onClick = onClick)
+            .heightIn(min = Dimens.MinTouchTarget),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = tint,
+            modifier = Modifier.size(Dimens.IconInline),
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = tint,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** `comment_type == 12` 是专栏,那时评论区的 oid 是 cv 号(notes/dynamic-cards.md 第 8 节)。 */
+private const val ARTICLE_COMMENT_TYPE = 12
 
 /**
  * 卡片里那些带底色的块(视频、直播、预约、投票、被转发的那条)统一的一档。

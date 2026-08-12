@@ -715,7 +715,10 @@ class AudioPlaybackService : MediaSessionService() {
             queue.updateCurrentCid(cid)
 
             val prefs = settings.playerPrefs.first()
-            val quality = currentQuality.takeIf { it != 0 } ?: prefs.defaultQuality
+            // 当次播放里手动切过就用那一个;否则按此刻计不计费取对应的那一档。判据每次取流
+            // 现算,所以出门断了 WiFi 之后**下一条**自然就降下来了,当前这条不动。
+            val quality = currentQuality.takeIf { it != 0 }
+                ?: prefs.defaultQualityOn(isOnMeteredNetwork())
             openChain?.mark("playurlStart")
             when (
                 val result = videoRepository.getPlayUrl(
@@ -912,14 +915,17 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /**
-     * 切清晰度。在播放页改画质就是改全局默认(DESIGN 2 节):设置页不重复放一个画质选项,
-     * 也就没有"两处能改同一件事"的问题。
+     * 切清晰度。在播放页改画质就是改默认画质,**改的是当前网络那一档**。
+     *
+     * 设置页那两行和这里不是"两处能改同一件事":它们是同一个值按计不计费分成的两格,播放页
+     * 这一下写进当下所在的那一格。在 WiFi 上调高不会连带把出门时用的那一档也调高。
      *
      * NonCancellable 落盘:切完清晰度就退出页面是常见操作,而 DataStore 的 edit 是挂起函数。
      */
     private fun setQuality(quality: Int) {
         currentQuality = quality
-        scope.launch(NonCancellable) { settings.saveDefaultQuality(quality) }
+        val metered = isOnMeteredNetwork()
+        scope.launch(NonCancellable) { settings.saveDefaultQuality(quality, metered) }
         playCurrent(force = true, positionOverrideMillis = player.currentPosition.coerceAtLeast(0))
     }
 

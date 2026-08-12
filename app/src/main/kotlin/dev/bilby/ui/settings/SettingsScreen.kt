@@ -9,9 +9,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.DownloadForOffline
+import androidx.compose.material.icons.outlined.FastForward
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.PlayCircleOutline
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -20,6 +28,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -36,6 +45,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -46,62 +57,39 @@ import dev.bilby.data.UpdateInfo
 import java.io.File
 import dev.bilby.R
 import dev.bilby.data.CodecPreference
+import dev.bilby.ui.components.BilbyIcons
 import dev.bilby.data.LlmConfig
-import dev.nihildigit.danmaku.DanmakuDensity
-import dev.nihildigit.danmaku.DanmakuFrameRateCap
 import dev.bilby.data.SettingsStore
-import dev.bilby.ui.player.formatSpeed
-import dev.bilby.data.SponsorBlockPrefs
+import dev.bilby.player.videoQualityLabel
 import dev.bilby.ui.AdaptiveContent
-import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.components.BilbyTopBar
-import dev.bilby.ui.isAtLeast
-import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
-import dev.bilby.ui.video.CATEGORY_DESCRIPTIONS
-import dev.bilby.ui.video.CATEGORY_GROUPS
-import dev.bilby.ui.video.CATEGORY_LABELS
-import kotlin.math.abs
-import kotlin.math.roundToInt
 
 /**
- * 设置页。
+ * 设置首页。**只放入口,没有一项设置直接躺在这里**(登出除外,见下)。
  *
- * **范围是定死的**(DESIGN 2 节):设置只调整**怎么做**,不调整**做不做**。
- * 推荐流、相关推荐、自动续接一个开关都不给 —— 它们能被开关掉的那一刻,
- * DESIGN 1.3 的结构约束就退化成了自制力工具。看视频时要调的(画质、倍速、连播、
- * 顺序/随机)留在播放页,在那里改即是改全局默认。
+ * 重做之前这一页是一整条铺开的清单:七节、六十多行,其中三分之二是「几档选一」常驻画出来的
+ * 单选行。要改一项弹幕密度得滚过二十几行自己早就选定的画质和编解码。
  *
- * 入口是「我的」页顶栏的图标,不进底部导航:底部三格是"我要去哪",设置不是目的地。
- * 账号信息与登出不在这里 —— 它们归「我的」页头部(`ui/profile/ProfileScreen`)。
+ * **每一行右侧给当前值。** 一层菜单换来的如果是每次都要点进去才知道现在设成了什么,那这层
+ * 菜单是净亏 —— 摘要是它成立的前提,不是装饰。
+ *
+ * **不再分宽屏双栏。** 那是为六十多行准备的;八行入口拆两栏只会让右边一栏空着。
+ *
+ * 范围仍然是定死的(DESIGN 2 节):设置只调整**怎么做**,不调整**做不做**。推荐流、相关
+ * 推荐一个开关都不给 —— 它们能被开关掉的那一刻,DESIGN 1.3 的结构约束就退化成了自制力工具。
  */
 @Composable
 fun SettingsScreen(
     state: SettingsUiState,
-    onLlmChange: (LlmConfig) -> Unit,
-    onSmokeTestLlm: () -> Unit,
-    onCodecChange: (CodecPreference) -> Unit,
-    onFastForwardSpeedChange: (Float) -> Unit,
-    onAutoNextChange: (Boolean) -> Unit,
-    onDanmakuOpacityChange: (Float) -> Unit,
-    onDanmakuScrollShowAreaChange: (Float) -> Unit,
-    onDanmakuDensityChange: (DanmakuDensity) -> Unit,
-    onDanmakuFrameRateChange: (DanmakuFrameRateCap) -> Unit,
-    onSponsorBlockChange: (SponsorBlockPrefs) -> Unit,
-    onOfflineConcurrencyChange: (Int) -> Unit,
-    onOpenGithub: () -> Unit,
-    onClearExcludedFeed: () -> Unit,
-    onCheckUpdate: () -> Unit,
-    onDownloadUpdate: (UpdateInfo) -> Unit,
-    onInstallUpdate: (File) -> Unit,
+    onOpenSection: (SettingsSection) -> Unit,
     onLogout: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var editingLlm by rememberSaveable { mutableStateOf(false) }
-    var editingServer by rememberSaveable { mutableStateOf(false) }
     var confirmingLogout by rememberSaveable { mutableStateOf(false) }
+    val notConfigured = stringResource(R.string.settings_not_configured)
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -111,116 +99,74 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxSize().padding(insets),
             maxWidth = Breakpoints.ReadableWidth,
         ) {
-            val expanded = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
                     .padding(bottom = Spacing.Spacious),
             ) {
-                if (expanded) {
-                    // 设置是少数真正适合宽屏双栏的页面：每个选项都属于一个明确分组，
-                    // 不需要像视频/评论那样保持一条阅读顺序。Expanded 才拆栏，Medium
-                    // 仍保留单列，给平板竖屏和折叠屏留出连续的焦点移动顺序。
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.Loose),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            AgentSettingsSection(state, onEdit = { editingLlm = true }, onSmokeTest = onSmokeTestLlm)
-                            PlayerSettingsSection(
-                                state = state,
-                                onCodecChange = onCodecChange,
-                                onFastForwardSpeedChange = onFastForwardSpeedChange,
-                                onAutoNextChange = onAutoNextChange,
-                                onOpacityChange = onDanmakuOpacityChange,
-                                onScrollShowAreaChange = onDanmakuScrollShowAreaChange,
-                                onDensityChange = onDanmakuDensityChange,
-                                onFrameRateChange = onDanmakuFrameRateChange,
-                            )
+                SettingRow(
+                    title = stringResource(R.string.settings_section_player),
+                    icon = Icons.Outlined.PlayCircleOutline,
+                    // 摘要给 WiFi 那一档:它是绝大多数时候真正生效的那个值。
+                    value = state.loaded.then { videoQualityLabel(state.defaultQualityWifi) },
+                    onClick = { onOpenSection(SettingsSection.Playback) },
+                )
+                SettingRow(
+                    title = stringResource(R.string.settings_section_danmaku),
+                    icon = BilbyIcons.Danmaku,
+                    onClick = { onOpenSection(SettingsSection.Danmaku) },
+                )
+                SettingRow(
+                    title = stringResource(R.string.settings_section_sponsorblock),
+                    icon = Icons.Outlined.FastForward,
+                    value = state.loaded.then { onOffLabel(state.sponsorBlock.enabled) },
+                    onClick = { onOpenSection(SettingsSection.SponsorBlock) },
+                )
+                SettingRow(
+                    title = stringResource(R.string.settings_section_offline),
+                    icon = Icons.Outlined.DownloadForOffline,
+                    value = state.loaded.then {
+                        stringResource(R.string.settings_offline_concurrency_value, state.offlineConcurrency)
+                    },
+                    onClick = { onOpenSection(SettingsSection.Offline) },
+                )
+                SettingRow(
+                    title = stringResource(R.string.settings_section_agent),
+                    icon = Icons.Outlined.AutoAwesome,
+                    value = state.llm?.let { llm ->
+                        if (llm.isConfigured) {
+                            stringResource(R.string.settings_configured)
+                        } else {
+                            notConfigured
                         }
-                        Column(modifier = Modifier.weight(1f)) {
-                            OfflineSettingsSection(state, onOfflineConcurrencyChange)
-                            FeedSettingsSection(state, onClearExcludedFeed)
-                            SponsorBlockSettingsSection(
-                                state = state,
-                                onChange = onSponsorBlockChange,
-                                onEditServer = { editingServer = true },
-                            )
-                            AboutSettingsSection(
-                                state = state,
-                                onOpenGithub = onOpenGithub,
-                                onCheckUpdate = onCheckUpdate,
-                                onDownloadUpdate = onDownloadUpdate,
-                                onInstallUpdate = onInstallUpdate,
-                            )
-                            AccountSettingsSection(onLogout = { confirmingLogout = true })
-                        }
-                    }
-                } else {
-                    AgentSettingsSection(state, onEdit = { editingLlm = true }, onSmokeTest = onSmokeTestLlm)
-                    PlayerSettingsSection(
-                        state = state,
-                        onCodecChange = onCodecChange,
-                        onFastForwardSpeedChange = onFastForwardSpeedChange,
-                        onAutoNextChange = onAutoNextChange,
-                        onOpacityChange = onDanmakuOpacityChange,
-                        onScrollShowAreaChange = onDanmakuScrollShowAreaChange,
-                        onDensityChange = onDanmakuDensityChange,
-                        onFrameRateChange = onDanmakuFrameRateChange,
-                    )
-                    OfflineSettingsSection(state, onOfflineConcurrencyChange)
-                    FeedSettingsSection(state, onClearExcludedFeed)
-                    SponsorBlockSettingsSection(
-                        state = state,
-                        onChange = onSponsorBlockChange,
-                        onEditServer = { editingServer = true },
-                    )
-                    AboutSettingsSection(
-                        state = state,
-                        onOpenGithub = onOpenGithub,
-                        onCheckUpdate = onCheckUpdate,
-                        onDownloadUpdate = onDownloadUpdate,
-                        onInstallUpdate = onInstallUpdate,
-                    )
-                    AccountSettingsSection(onLogout = { confirmingLogout = true })
-                }
+                    },
+                    onClick = { onOpenSection(SettingsSection.Agent) },
+                )
+                SettingRow(
+                    title = stringResource(R.string.settings_section_privacy),
+                    icon = Icons.Outlined.Shield,
+                    onClick = { onOpenSection(SettingsSection.Privacy) },
+                )
+                SettingRow(
+                    title = stringResource(R.string.settings_section_about),
+                    icon = Icons.Outlined.Info,
+                    value = BuildConfig.VERSION_NAME,
+                    onClick = { onOpenSection(SettingsSection.About) },
+                )
+                // **登出留在首页,不进任何子页。** 它是这一页唯一的破坏性动作,埋进二级菜单
+                // 反而更危险:找不到的时候人会挨个点进去翻。
+                SectionTitle(stringResource(R.string.settings_section_account))
+                SettingRow(
+                    title = stringResource(R.string.settings_logout),
+                    icon = Icons.AutoMirrored.Outlined.Logout,
+                    onClick = { confirmingLogout = true },
+                )
             }
         }
     }
 
-    if (editingLlm && state.llm != null) {
-        LlmDialog(
-            initial = state.llm,
-            onDismiss = { editingLlm = false },
-            onConfirm = {
-                editingLlm = false
-                onLlmChange(it)
-            },
-        )
-    }
-
-    if (editingServer) {
-        TextFieldDialog(
-            title = stringResource(R.string.settings_sponsorblock_server_dialog),
-            initial = state.sponsorBlock.serverUrl,
-            // 留空即恢复默认:这是个第三方服务地址,改错了要有一条不用记原值的退路。
-            placeholder = SettingsStore.DEFAULT_SB_SERVER,
-            onDismiss = { editingServer = false },
-            onConfirm = { value ->
-                editingServer = false
-                onSponsorBlockChange(
-                    state.sponsorBlock.copy(
-                        serverUrl = value.trim().ifBlank { SettingsStore.DEFAULT_SB_SERVER },
-                    ),
-                )
-            },
-        )
-    }
-
     if (confirmingLogout) {
-        // 登出不可逆:凭据一清,回来要重新扫码。二次确认不是仪式,是这个动作真的没有撤销。
         AlertDialog(
             onDismissRequest = { confirmingLogout = false },
             title = { Text(stringResource(R.string.settings_logout)) },
@@ -229,9 +175,7 @@ fun SettingsScreen(
                 TextButton(onClick = {
                     confirmingLogout = false
                     onLogout()
-                }) {
-                    Text(stringResource(R.string.settings_logout))
-                }
+                }) { Text(stringResource(R.string.settings_logout)) }
             },
             dismissButton = {
                 TextButton(onClick = { confirmingLogout = false }) {
@@ -243,234 +187,10 @@ fun SettingsScreen(
 }
 
 /**
- * 账号。**只有登出一项**,不重复显示昵称头像 —— 那些在「我的」页头部,而这里是"杂物间"。
- *
- * 放在设置页而不是「我的」页头部:登出是一年用不到一次的破坏性动作,摆在每天都要经过的
- * 概览页顶上,既占着那一行的宽度,又和旁边"看看我攒了什么"完全不是一类事。
- */
-@Composable
-private fun AccountSettingsSection(onLogout: () -> Unit) {
-    SectionTitle(stringResource(R.string.settings_section_account))
-    SettingRow(title = stringResource(R.string.settings_logout), onClick = onLogout)
-}
-
-@Composable
-private fun AgentSettingsSection(
-    state: SettingsUiState,
-    onEdit: () -> Unit,
-    onSmokeTest: () -> Unit,
-) {
-    SectionTitle(stringResource(R.string.settings_section_agent))
-    val llm = state.llm
-    val notConfigured = stringResource(R.string.settings_not_configured)
-    SettingRow(
-        title = stringResource(R.string.settings_llm_base_url),
-        subtitle = llm?.baseUrl?.ifBlank { notConfigured }
-            ?: stringResource(R.string.settings_loading),
-        onClick = onEdit,
-    )
-    SettingRow(
-        title = stringResource(R.string.settings_api_key),
-        // 永远只显示是否配置,不显示遮蔽后的原文:遮蔽只挡眼睛,截图和录屏挡不住。
-        subtitle = if (llm?.apiKey.isNullOrEmpty()) {
-            notConfigured
-        } else {
-            stringResource(R.string.settings_configured)
-        },
-        onClick = onEdit,
-    )
-    SettingRow(
-        title = stringResource(R.string.settings_model),
-        subtitle = llm?.model.orEmpty().ifBlank { SettingsStore.DEFAULT_LLM_MODEL },
-        onClick = onEdit,
-    )
-    SettingRow(
-        title = stringResource(R.string.settings_llm_test),
-        subtitle = when (val test = state.llmTest) {
-            LlmTest.Idle -> stringResource(R.string.settings_llm_test_hint)
-            LlmTest.Running -> stringResource(R.string.settings_llm_test_running)
-            is LlmTest.Ok -> stringResource(R.string.settings_llm_test_ok, test.millis)
-            is LlmTest.Failed -> test.message
-        },
-        onClick = onSmokeTest,
-    )
-}
-
-@Composable
-private fun PlayerSettingsSection(
-    state: SettingsUiState,
-    onCodecChange: (CodecPreference) -> Unit,
-    onFastForwardSpeedChange: (Float) -> Unit,
-    onAutoNextChange: (Boolean) -> Unit,
-    onOpacityChange: (Float) -> Unit,
-    onScrollShowAreaChange: (Float) -> Unit,
-    onDensityChange: (DanmakuDensity) -> Unit,
-    onFrameRateChange: (DanmakuFrameRateCap) -> Unit,
-) {
-    SectionTitle(stringResource(R.string.settings_section_player))
-    ToggleSettingRow(
-        title = stringResource(R.string.settings_auto_next),
-        // 说明这一行为什么存在:队列不是用户建的,自动前进因此是一个没人点过头的默认。
-        subtitle = stringResource(R.string.settings_auto_next_subtitle),
-        checked = state.autoNext,
-        onCheckedChange = onAutoNextChange,
-    )
-    CodecSection(
-        selected = state.codec,
-        hardwareCodecIds = state.hardwareCodecIds,
-        onChange = onCodecChange,
-    )
-    ChoiceSection(
-        title = stringResource(R.string.settings_fast_forward_speed),
-        // 长按加速没有播放页入口 —— 它是"长按的时候有多快"这条规则本身,不是看的时候
-        // 顺手调的东西,所以按 §2.8 的判据("怎么做")放这里。
-        subtitle = stringResource(R.string.settings_fast_forward_speed_subtitle),
-        options = SettingsStore.FAST_FORWARD_SPEEDS,
-        selected = SettingsStore.FAST_FORWARD_SPEEDS.minByOrNull { abs(it - state.fastForwardSpeed) },
-        label = { formatSpeed(it) },
-        onChange = onFastForwardSpeedChange,
-    )
-    SliderSettingRow(
-        title = stringResource(R.string.settings_danmaku_opacity),
-        value = state.danmaku.opacity,
-        valueLabel = { stringResource(R.string.settings_danmaku_opacity_value, (it * 100).roundToInt()) },
-        onChange = onOpacityChange,
-    )
-    ChoiceSection(
-        title = stringResource(R.string.settings_danmaku_show_area),
-        // 说清它不管底部弹幕:调到 25% 之后底部那几条纹丝不动,不写清楚会被当成没生效。
-        subtitle = stringResource(R.string.settings_danmaku_show_area_subtitle),
-        options = SCROLL_SHOW_AREA_STEPS,
-        selected = SCROLL_SHOW_AREA_STEPS.minByOrNull { abs(it - state.danmaku.scrollShowArea) },
-        label = { stringResource(R.string.settings_danmaku_show_area_value, (it * 100).roundToInt()) },
-        onChange = onScrollShowAreaChange,
-    )
-    ChoiceSection(
-        title = stringResource(R.string.settings_danmaku_density),
-        options = DanmakuDensity.entries,
-        selected = state.danmaku.density,
-        label = {
-            stringResource(
-                when (it) {
-                    DanmakuDensity.STANDARD -> R.string.settings_danmaku_density_standard
-                    DanmakuDensity.UNLIMITED -> R.string.settings_danmaku_density_unlimited
-                },
-            )
-        },
-        onChange = onDensityChange,
-    )
-    ChoiceSection(
-        title = stringResource(R.string.settings_danmaku_frame_rate),
-        subtitle = stringResource(R.string.settings_danmaku_frame_rate_subtitle),
-        options = DanmakuFrameRateCap.entries,
-        selected = state.danmaku.frameRateCap,
-        label = {
-            stringResource(
-                when (it) {
-                    DanmakuFrameRateCap.FPS_30 -> R.string.settings_danmaku_frame_rate_30
-                    DanmakuFrameRateCap.FPS_60 -> R.string.settings_danmaku_frame_rate_60
-                    DanmakuFrameRateCap.DISPLAY -> R.string.settings_danmaku_frame_rate_display
-                },
-            )
-        },
-        onChange = onFrameRateChange,
-    )
-}
-
-/**
- * 缓存。只有并发度一项 —— 清晰度在缓存面板上选(那是"这一次下什么"),而这里是"怎么下"。
- */
-@Composable
-private fun OfflineSettingsSection(
-    state: SettingsUiState,
-    onConcurrencyChange: (Int) -> Unit,
-) {
-    SectionTitle(stringResource(R.string.settings_section_offline))
-    ChoiceSection(
-        title = stringResource(R.string.settings_offline_concurrency),
-        // 说清代价:调大不是白拿的,而"下载多了刷不动"是最容易被归到别处的那种症状。
-        subtitle = stringResource(R.string.settings_offline_concurrency_subtitle),
-        options = SettingsStore.OFFLINE_CONCURRENCY_OPTIONS,
-        selected = state.offlineConcurrency,
-        label = { stringResource(R.string.settings_offline_concurrency_value, it) },
-        onChange = onConcurrencyChange,
-    )
-}
-
-@Composable
-private fun FeedSettingsSection(
-    state: SettingsUiState,
-    onClearExcludedFeed: () -> Unit,
-) {
-    if (state.excludedFeedCount <= 0) return
-    SectionTitle(stringResource(R.string.settings_section_feed))
-    SettingRow(
-        title = stringResource(R.string.settings_feed_clear_excluded),
-        subtitle = stringResource(R.string.settings_feed_excluded_count, state.excludedFeedCount),
-        onClick = onClearExcludedFeed,
-    )
-}
-
-@Composable
-private fun SponsorBlockSettingsSection(
-    state: SettingsUiState,
-    onChange: (SponsorBlockPrefs) -> Unit,
-    onEditServer: () -> Unit,
-) {
-    SectionTitle("SponsorBlock")
-    val prefs = state.sponsorBlock
-    // 总开关的副标题说清"现在有几类在生效"。九个 checkbox 收起来之后,不给这个数就没有任何
-    // 地方能看出自己上次选了什么 —— 而这一页最常见的动作正是"回来确认一下"。
-    ToggleSettingRow(
-        title = stringResource(R.string.settings_sponsorblock_toggle),
-        subtitle = if (prefs.enabled) {
-            stringResource(
-                R.string.settings_sponsorblock_enabled_count,
-                prefs.categories.count { it in CATEGORY_LABELS },
-                CATEGORY_LABELS.size,
-            )
-        } else {
-            stringResource(R.string.settings_sponsorblock_toggle_subtitle)
-        },
-        checked = prefs.enabled,
-        onCheckedChange = { onChange(prefs.copy(enabled = it)) },
-    )
-    if (!prefs.enabled) return
-
-    CATEGORY_GROUPS.forEach { (groupTitle, categories) ->
-        GroupLabel(stringResource(groupTitle))
-        categories.forEach { category ->
-            val label = CATEGORY_LABELS[category] ?: return@forEach
-            ToggleSettingRow(
-                title = stringResource(label),
-                // 类别名解释不了自己,判断"要不要跳过它"靠的是这一行。
-                subtitle = CATEGORY_DESCRIPTIONS[category]?.let { stringResource(it) },
-                checked = category in prefs.categories,
-                onCheckedChange = { checked ->
-                    val next = if (checked) prefs.categories + category else prefs.categories - category
-                    onChange(prefs.copy(categories = next))
-                },
-                indent = true,
-                useCheckbox = true,
-            )
-        }
-    }
-
-    // 服务器地址和上面九个不是一类东西:那九个是"跳什么",这个是"问谁"。混在同一串行里
-    // 会让人以为它也是一个内容选项。
-    GroupLabel(stringResource(R.string.settings_sponsorblock_section_server))
-    SettingRow(
-        title = stringResource(R.string.settings_sponsorblock_server),
-        subtitle = "${prefs.serverUrl}\n${stringResource(R.string.settings_sponsorblock_server_subtitle)}",
-        onClick = onEditServer,
-    )
-}
-
-/**
  * 组标签。比 [SectionTitle] 轻一档:它分的是同一节内部的几组,不是另起一节。
  */
 @Composable
-private fun GroupLabel(text: String) {
+internal fun GroupLabel(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.labelLarge,
@@ -484,35 +204,6 @@ private fun GroupLabel(text: String) {
     )
 }
 
-@Composable
-private fun AboutSettingsSection(
-    state: SettingsUiState,
-    onOpenGithub: () -> Unit,
-    onCheckUpdate: () -> Unit,
-    onDownloadUpdate: (UpdateInfo) -> Unit,
-    onInstallUpdate: (File) -> Unit,
-) {
-    SectionTitle(stringResource(R.string.settings_section_about))
-    SettingRow(
-        title = stringResource(R.string.settings_version),
-        subtitle = "${BuildConfig.VERSION_NAME}(${BuildConfig.APPLICATION_ID})",
-    )
-    SettingRow(
-        title = stringResource(R.string.settings_license),
-        subtitle = "GPL-3.0-or-later",
-    )
-    SettingRow(
-        title = stringResource(R.string.settings_github),
-        onClick = onOpenGithub,
-    )
-    UpdateRow(
-        state = state.update,
-        onCheck = onCheckUpdate,
-        onDownload = onDownloadUpdate,
-        onInstall = onInstallUpdate,
-    )
-}
-
 /**
  * 拖动中只改本地状态,**松手才回调 [onChange]**。
  *
@@ -520,7 +211,7 @@ private fun AboutSettingsSection(
  * 而 `danmakuPrefs` 每写一次,所有还活着的播放页 ViewModel 都会被唤醒收一遍。
  */
 @Composable
-private fun SliderSettingRow(
+internal fun SliderSettingRow(
     title: String,
     value: Float,
     valueLabel: @Composable (Float) -> String,
@@ -555,47 +246,42 @@ private fun SliderSettingRow(
 /**
  * 编解码偏好。**只列本机真有硬解器的编码** —— 列一个选了也只能软解的选项,
  * 等于让用户自己给自己挑一条掉帧的路。查询走 `player/DeviceCodecs`。
+ *
+ * 过滤完之后就是一个普通的「几档选一」,所以套 [ChoiceRow]。它当初单写一份是因为选项要过滤、
+ * 标签来自枚举自己,而这两件事在调用点做掉即可,不必让通用组件多两个参数。
  */
 @Composable
-private fun CodecSection(
+internal fun CodecSection(
     selected: CodecPreference,
     hardwareCodecIds: Set<Int>,
     onChange: (CodecPreference) -> Unit,
 ) {
-    val options = CodecPreference.entries.filter { option ->
-        option.requiredCodecId()?.let { it in hardwareCodecIds } ?: true
-    }
-    SettingRow(
+    ChoiceRow(
         title = stringResource(R.string.settings_codec),
         // 说清生效时机:改完不重开当前视频,不为一个设置项打断正在看的东西。
         subtitle = stringResource(R.string.settings_codec_subtitle),
+        options = CodecPreference.entries.filter { option ->
+            option.requiredCodecId()?.let { it in hardwareCodecIds } ?: true
+        },
+        selected = selected,
+        label = { it.label },
+        onChange = onChange,
     )
-    options.forEach { option ->
-        ListItem(
-            headlineContent = { Text(option.label) },
-            leadingContent = {
-                RadioButton(selected = option == selected, onClick = null)
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .selectable(
-                    selected = option == selected,
-                    role = Role.RadioButton,
-                    onClick = { onChange(option) },
-                )
-                // 单选行是上面那条标题的子项,缩进一档;ListItem 已经给了 16dp 基础边距。
-                .padding(start = Spacing.Tight),
-        )
-    }
 }
 
 /**
- * 「几档选一」的通用形态:一行标题(可带副标题)加若干单选行。[CodecSection] 是同一个形态,
- * 但它要按本机硬解能力过滤选项、标签也来自枚举自己,不套进来——为一处特例给通用组件加参数,
- * 换来的是两边都变难读。
+ * 「几档选一」:**一行显示当前值,点开才是那几档**。
+ *
+ * 原先每一档都常驻画一行单选。七处这样的设置加起来占了整页三分之二的高度,而其中六处是
+ * 设一次就再不动的东西 —— 用户为了翻到下一节,每次都要滚过二十几行自己早就选定的选项。
+ * 一屏铺开唯一的好处是"能同时看见所有档",而设置页要回答的问题是"现在是哪一档",
+ * 那个答案现在写在行尾。
+ *
+ * 对话框而不是下拉菜单:档位最多的那两项(默认画质)有七档,下拉菜单在小屏上会顶到边缘,
+ * 而对话框自带滚动和标题。
  */
 @Composable
-private fun <T> ChoiceSection(
+internal fun <T> ChoiceRow(
     title: String,
     options: List<T>,
     selected: T?,
@@ -603,31 +289,51 @@ private fun <T> ChoiceSection(
     onChange: (T) -> Unit,
     subtitle: String? = null,
 ) {
-    SettingRow(title = title, subtitle = subtitle)
-    options.forEach { option ->
-        ListItem(
-            headlineContent = { Text(label(option)) },
-            leadingContent = {
-                RadioButton(selected = option == selected, onClick = null)
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .selectable(
-                    selected = option == selected,
-                    role = Role.RadioButton,
-                    onClick = { onChange(option) },
-                )
-                // 单选行是上面那条标题的子项,缩进一档;ListItem 已经给了 16dp 基础边距。
-                .padding(start = Spacing.Tight),
-        )
-    }
+    var open by remember { mutableStateOf(false) }
+    SettingRow(
+        title = title,
+        subtitle = subtitle,
+        value = selected?.let { label(it) },
+        onClick = { open = true },
+    )
+    if (!open) return
+    AlertDialog(
+        onDismissRequest = { open = false },
+        title = { Text(title) },
+        text = {
+            // selectableGroup:读屏把这几行念成一组单选,而不是几个互不相干的按钮。
+            Column(modifier = Modifier.selectableGroup()) {
+                options.forEach { option ->
+                    ListItem(
+                        headlineContent = { Text(label(option)) },
+                        leadingContent = { RadioButton(selected = option == selected, onClick = null) },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(
+                                selected = option == selected,
+                                role = Role.RadioButton,
+                                onClick = {
+                                    open = false
+                                    onChange(option)
+                                },
+                            ),
+                    )
+                }
+            }
+        },
+        // 选中即生效即关闭,所以只留取消。多一个「确定」等于让人按两次才改得掉一项。
+        confirmButton = {
+            TextButton(onClick = { open = false }) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
 }
 
 /**
  * 滚动弹幕显示区域的四档。存的是连续的 Float(公共 API 不写死成枚举,见 [DanmakuViewport]),
  * 界面上只给这四档,选中判定按最近档取——将来加档或换成连续滑杆都不必改存储格式。
  */
-private val SCROLL_SHOW_AREA_STEPS = listOf(0.25f, 0.5f, 0.75f, 1f)
+internal val SCROLL_SHOW_AREA_STEPS = listOf(0.25f, 0.5f, 0.75f, 1f)
 
 /**
  * 分组标题。**分组之间不画分割线**,靠这行带 primary 色的标题加上它上方的留白分隔。
@@ -644,7 +350,7 @@ private val SCROLL_SHOW_AREA_STEPS = listOf(0.25f, 0.5f, 0.75f, 1f)
  * 下好了是"安装",下载中不响应。
  */
 @Composable
-private fun UpdateRow(
+internal fun UpdateRow(
     state: UpdateState,
     onCheck: () -> Unit,
     onDownload: (UpdateInfo) -> Unit,
@@ -676,7 +382,7 @@ private fun UpdateRow(
 }
 
 @Composable
-private fun SectionTitle(text: String) {
+internal fun SectionTitle(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.titleSmall,
@@ -691,14 +397,33 @@ private fun SectionTitle(text: String) {
     )
 }
 
+/**
+ * @param value 这一项**当前是什么**,显示在行尾箭头之前。设置首页那七个入口靠它做到"不点进去
+ *   也知道现在设成了什么" —— 一层菜单换来的如果是每次都得点进去看一眼,那这层菜单是净亏。
+ */
 @Composable
-private fun SettingRow(
+internal fun SettingRow(
     title: String,
     subtitle: String? = null,
+    value: String? = null,
+    /**
+     * 行首图标。**只有设置首页那一层给**:那七行是七个去处,图标让它们在滚动中彼此可分。
+     * 子页里的每一行是一项设置而不是一个去处,逐行配图标只会让人以为它们还能再点进去。
+     */
+    icon: ImageVector? = null,
     onClick: (() -> Unit)? = null,
 ) {
     ListItem(
         headlineContent = { Text(title, style = MaterialTheme.typography.bodyLarge) },
+        leadingContent = icon?.let {
+            {
+                Icon(
+                    imageVector = it,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
         supportingContent = subtitle?.let {
             {
                 Text(
@@ -708,13 +433,24 @@ private fun SettingRow(
                 )
             }
         },
-        trailingContent = if (onClick != null) {
+        trailingContent = if (onClick != null || value != null) {
             {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (value != null) {
+                        Text(
+                            text = value,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (onClick != null) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         } else {
             null
@@ -736,7 +472,7 @@ private fun SettingRow(
  * 前者让整行成为一个语义节点(读屏念"开关,已开启,自动跳过"),后者只有那个小控件能点。
  */
 @Composable
-private fun ToggleSettingRow(
+internal fun ToggleSettingRow(
     title: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
@@ -783,7 +519,7 @@ private fun ToggleSettingRow(
  * 单改一项存下去,中间那个状态是"配了地址没配 key",助理照样跑不起来。
  */
 @Composable
-private fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (LlmConfig) -> Unit) {
+internal fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (LlmConfig) -> Unit) {
     var baseUrl by rememberSaveable { mutableStateOf(initial.baseUrl) }
     var apiKey by rememberSaveable { mutableStateOf(initial.apiKey) }
     var model by rememberSaveable { mutableStateOf(initial.model) }
@@ -853,7 +589,7 @@ private fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Llm
 }
 
 @Composable
-private fun TextFieldDialog(
+internal fun TextFieldDialog(
     title: String,
     initial: String,
     placeholder: String,
@@ -880,3 +616,10 @@ private fun TextFieldDialog(
         },
     )
 }
+
+/**
+ * 值没到齐时不给摘要。**留空,不是给一个默认值** —— 首页每行右侧那串字是"现在是什么"的
+ * 回答,先答错再改口比不答更糟。见 [SettingsUiState.loaded]。
+ */
+@Composable
+private inline fun Boolean.then(text: @Composable () -> String): String? = if (this) text() else null

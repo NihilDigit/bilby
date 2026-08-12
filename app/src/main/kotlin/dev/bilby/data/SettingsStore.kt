@@ -97,7 +97,10 @@ class SettingsStore(context: Context) {
     val playerPrefs: Flow<PlayerPrefs> = store.data.map { p ->
         PlayerPrefs(
             codec = CodecPreference.fromKey(p[KEY_PREFERRED_CODEC]),
-            defaultQuality = p[KEY_DEFAULT_QUALITY] ?: DEFAULT_QUALITY,
+            // 老键继续当 WiFi 那一档读:它存的就是用户此前设的那个值,而绝大多数人是在
+            // WiFi 上调的画质。换个新键会让所有人的偏好在升级那一刻悄悄回到 1080P。
+            defaultQualityWifi = p[KEY_DEFAULT_QUALITY] ?: DEFAULT_QUALITY,
+            defaultQualityMetered = p[KEY_DEFAULT_QUALITY_METERED] ?: DEFAULT_QUALITY_METERED,
             fastForwardSpeed = p[KEY_FAST_FORWARD_SPEED] ?: DEFAULT_FAST_FORWARD_SPEED,
         )
     }
@@ -110,8 +113,14 @@ class SettingsStore(context: Context) {
         store.edit { p -> p[KEY_FAST_FORWARD_SPEED] = speed }
     }
 
-    suspend fun saveDefaultQuality(quality: Int) {
-        store.edit { p -> p[KEY_DEFAULT_QUALITY] = quality }
+    /**
+     * 存默认画质。**按当前网络计不计费分成两档** —— 在播放页切画质写的是当下这一档,
+     * 出门断了 WiFi 之后不该继续用刚才在家里挑的那一档(见 `AudioPlaybackService.setQuality`)。
+     */
+    suspend fun saveDefaultQuality(quality: Int, metered: Boolean) {
+        store.edit { p ->
+            if (metered) p[KEY_DEFAULT_QUALITY_METERED] = quality else p[KEY_DEFAULT_QUALITY] = quality
+        }
     }
 
     /**
@@ -304,9 +313,29 @@ class SettingsStore(context: Context) {
 
         private val KEY_PREFERRED_CODEC = stringPreferencesKey("player_preferred_codec")
         private val KEY_DEFAULT_QUALITY = intPreferencesKey("player_default_quality")
+        private val KEY_DEFAULT_QUALITY_METERED = intPreferencesKey("player_default_quality_metered")
 
-        /** 与 `VideoRepository.DEFAULT_QUALITY` 同值(1080P)。 */
-        const val DEFAULT_QUALITY = 80
+        /**
+         * WiFi 的出厂值:1080P60。**全 app 只有这一处定义默认画质**(计费网络那一档见
+         * [DEFAULT_QUALITY_METERED]),`VideoRepository` 那边不再另有一个。
+         *
+         * 片源没有这一档时 [dev.bilby.player.resolveQuality] 会退到不高于它的最高一档,
+         * 所以设了也不会取流失败。
+         */
+        const val DEFAULT_QUALITY = 116
+
+        /** 计费网络的出厂值:720P。比 WiFi 低一截,但仍然是能好好看的画质。 */
+        const val DEFAULT_QUALITY_METERED = 64
+
+        /**
+         * 设置页能选的档。**是一张固定表,不是某条视频的 accept_quality** —— 这里设的是
+         * "默认想要哪一档",而每条视频真有哪几档要取流才知道;片源没有时
+         * [dev.bilby.player.resolveQuality] 会就近退档。
+         *
+         * 不列 8K、HDR、杜比:那几档只在极少数片源上存在,摆在默认值里等于让人设一个几乎
+         * 永远退档的值。
+         */
+        val QUALITY_OPTIONS = listOf(120, 116, 112, 80, 64, 32, 16)
 
         private val KEY_FAST_FORWARD_SPEED = floatPreferencesKey("player_fast_forward_speed")
 
@@ -419,10 +448,21 @@ enum class CodecPreference(val key: String, val label: String, val codecIds: Lis
 
 data class PlayerPrefs(
     val codec: CodecPreference = CodecPreference.Auto,
-    val defaultQuality: Int = SettingsStore.DEFAULT_QUALITY,
-    /** 长按画面时的临时倍速。松手恢复原速,不写回 `defaultQuality` 那种全局默认。 */
+    /** 不计费网络(通常就是 WiFi)下的默认画质。 */
+    val defaultQualityWifi: Int = SettingsStore.DEFAULT_QUALITY,
+    /** 计费网络下的默认画质。默认比 WiFi 低一截 —— 这一档存在的理由就是省流量。 */
+    val defaultQualityMetered: Int = SettingsStore.DEFAULT_QUALITY_METERED,
+    /** 长按画面时的临时倍速。松手恢复原速,不写回默认画质那种全局偏好。 */
     val fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
-)
+) {
+    /**
+     * 这一次该用哪一档。**判据是计不计费而不是"是不是 WiFi"** —— 要省的是流量:手机热点和
+     * 按量计费的 WiFi 都该走省的那一档,而它们在 `TRANSPORT_WIFI` 眼里都是 WiFi。
+     * 界面上仍叫「WiFi」和「计费网络」,那是这两种情况的常见名字。
+     */
+    fun defaultQualityOn(metered: Boolean): Int =
+        if (metered) defaultQualityMetered else defaultQualityWifi
+}
 
 data class SponsorBlockPrefs(
     val enabled: Boolean = true,

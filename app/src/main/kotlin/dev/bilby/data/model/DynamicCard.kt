@@ -38,9 +38,36 @@ data class DynamicCard(
     val forwardTips: String? = null,
     /** 服务端给的"置顶"之类的标记文案。 */
     val tag: String? = null,
+    /**
+     * 点赞数、评论数与评论区身份。**[id] 为空时是 null** —— 那种动态点不了赞:
+     * 点赞接口按 `dyn_id_str` 认动态,而 [id] 那时是本地拼出来的占位串。
+     */
+    val interaction: DynamicInteraction? = null,
 )
 
 data class DynamicAuthor(val mid: Long, val name: String, val faceUrl: String)
+
+/**
+ * 一条动态的互动状态。
+ *
+ * **[commentId] 与 [commentType] 原样取自服务端下发的 `basic`,不本地推导。** 一条动态的评论区
+ * 挂在哪儿由动态类型决定(视频动态挂稿件、专栏动态挂 cv、纯文字动态挂动态自己),而那张
+ * 对照表 PiliPlus 里根本没有 —— 它读的就是这两个字段(`models/dynamics/result.dart:398-408`)。
+ * 自己写一张映射表等于发明一份规则,而规则错了的表现是评论区里全是别人的评论。
+ *
+ * @param commentType 已知取值见 notes/dynamic-cards.md 第 8 节。**不要据此写分支**,
+ *   除了专栏(12)那一条:它的 [commentId] 是 cv 号,PiliPlus 对它直接跳文章页。
+ */
+data class DynamicInteraction(
+    val likeCount: Long,
+    val liked: Boolean,
+    val commentCount: Long,
+    val commentId: String,
+    val commentType: Int,
+) {
+    /** 评论区身份齐了才点得开;缺 `basic` 的列表项要先补一次详情(见 DynamicRepository.loadDetail)。 */
+    val hasComments: Boolean get() = commentId.isNotBlank() && commentType != 0
+}
 
 /**
  * 进专栏正文页的入口。**它不替代正文** —— 摘要已经在 [DynamicCard.text] 里就地铺开了,

@@ -75,3 +75,21 @@ data class FollowTagDto(
     val name: String = "",
     val count: Int = 0,
 )
+
+/**
+ * `GET x/relation/blacks` 的 data 节点。
+ *
+ * **[total] 是翻页终止的依据**(notes/relation-groups.md 2.2):这条接口按"已取条数 ≥ total"
+ * 判到底,不按"这一页是空的"判 —— 与挨着它的分组成员接口正好相反。
+ */
+@Serializable
+data class BlackListDto(val total: Int = 0, val list: List<BlackUserDto> = emptyList())
+
+@Serializable
+data class BlackUserDto(
+    val mid: Long = 0L,
+    val uname: String = "",
+    val face: String = "",
+    /** 拉黑时间,秒。列表里靠它才排得出"什么时候拉黑的"。 */
+    val mtime: Long = 0L,
+)

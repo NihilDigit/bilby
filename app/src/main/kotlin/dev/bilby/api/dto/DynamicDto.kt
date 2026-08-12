@@ -20,6 +20,15 @@ data class DynamicFeedResponseDto(
     val items: List<DynamicItemDto> = emptyList(),
 )
 
+/**
+ * `GET /x/polymer/web-dynamic/v1/detail` 的响应体:一条动态,结构与列表里的一项完全一样。
+ *
+ * 只在**列表项没有 `basic`** 时用得上 —— 那两个字段是评论区的身份,推不出来,只能回头再问一次
+ * (notes/dynamic-cards.md 第 8 节)。
+ */
+@Serializable
+data class DynamicDetailResponseDto(val item: DynamicItemDto? = null)
+
 @Serializable
 data class DynamicItemDto(
     @SerialName("id_str") val idStr: String = "",
