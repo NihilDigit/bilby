@@ -88,6 +88,37 @@ confirmations, which state the action and stop. `取消关注` is the whole dial
 out that unfollowing means finding the person again tells the reader something they already
 know, and a dialog that explains itself gets dismissed without being read.
 
+## Documentation mirrors
+
+**Three local mirrors carry the upstream documentation this codebase leans on. Read the
+relevant one before designing anything architectural, and before any change that turns on
+what a framework actually does.**
+
+- `m3-material-mirror/` — m3.material.io: tokens, component anatomy, motion.
+- `android-docs-mirror/` — developer.android.com: Media3 guides and reference, Compose,
+  Navigation 3, foreground services and background work.
+- `kotlin-docs-mirror/` — kotlinlang.org: language reference, the coroutines guide, stdlib.
+
+All three have the same shape. `pages/` holds the cleaned Markdown, `pages/INDEX.md` maps
+topics to files, and every page carries its source URL in the header. Generated content stays
+out of Git through `.git/info/exclude`; `README.md` and `refresh.py` are committed, so a
+fresh clone re-fetches with `python <dir>/refresh.py --workers 10`. Read the index, grep
+`pages/`, then follow the header URL back to the source when the answer carries weight.
+
+**Precedence: the resolved artifact beats the mirror, the mirror beats memory.** Whether a
+symbol exists in the pinned version, and what its signature is, is answered by the aar or jar
+in the Gradle cache — unzip its `classes.jar` and run `javap`. The mirror answers what an API
+is for and how it is meant to be assembled. Documentation lags the library the same way the
+public bilibili documentation lags PiliPlus.
+
+**This rule exists because of a claim nobody checked.** `player/AudioPlaybackService` states
+that `MediaController` has no `COMMAND_SET_VIDEO_SURFACE` and that a Surface cannot reach the
+session; the shipped `media3-session` carries all four `setVideoSurface*` methods and passes
+the Surface over the session binder. That sentence became the justification for a static
+player reference, and from there for treating same-process as an architectural premise. A
+comment asserting that an API does not exist is a claim about the library, and claims about
+the library are checkable.
+
 ## Architecture traps
 
 There is exactly one player. It belongs to `player/AudioPlaybackService`, a
