@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
@@ -31,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
@@ -38,10 +40,12 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
@@ -53,6 +57,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -60,10 +65,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.ImeAction
 import androidx.media3.common.Player
 import dev.bilby.R
 import dev.bilby.data.DanmakuPrefs
@@ -118,6 +126,8 @@ fun LiveRoomScreen(
     onDanmakuEnabledChange: (Boolean) -> Unit,
     onQualityChange: (Int) -> Unit,
     onLoadMoreGuards: () -> Unit,
+    /** 发一条弹幕。直播不需要暂停,也不做本地回显(见 LiveRoomViewModel.sendDanmaku)。 */
+    onSendDanmaku: (String) -> Unit,
     onRetry: () -> Unit,
     /** 分享要给出 `live.bilibili.com/<roomId>`,而房间号不在 [state] 里。 */
     roomId: Long,
@@ -252,6 +262,7 @@ fun LiveRoomScreen(
                     LiveRoomTabs(
                         state = state,
                         onLoadMoreGuards = onLoadMoreGuards,
+                        onSendDanmaku = onSendDanmaku,
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                     )
                 }
@@ -424,6 +435,7 @@ private fun LiveAnchorRow(state: LiveRoomUiState, onUserClick: (Long) -> Unit) {
 private fun LiveRoomTabs(
     state: LiveRoomUiState,
     onLoadMoreGuards: () -> Unit,
+    onSendDanmaku: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val pager = rememberPagerState(pageCount = { 2 })
@@ -447,7 +459,7 @@ private fun LiveRoomTabs(
         // 再要一整屏,底部被推出可视区。
         HorizontalPager(state = pager, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
             when (page) {
-                0 -> ChatPane(state)
+                0 -> ChatPane(state, onSendDanmaku)
                 else -> GuardPane(state, onLoadMoreGuards)
             }
         }
@@ -456,7 +468,7 @@ private fun LiveRoomTabs(
 
 /** 醒目留言横条 + 滚动聊天。SC 在上面是因为它是"付过钱、要被看见"的一类,不该混在流里冲走。 */
 @Composable
-private fun ChatPane(state: LiveRoomUiState) {
+private fun ChatPane(state: LiveRoomUiState, onSendDanmaku: (String) -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         if (state.superChats.isNotEmpty()) {
             LazyRow(
@@ -510,8 +522,91 @@ private fun ChatPane(state: LiveRoomUiState) {
                 }
             }
         }
+
+        // **常驻输入栏,不是弹出面板。** 播放页那边的弹幕输入要盖一层、还要暂停视频,是因为
+        // 那一行按钮下面就是简介和评论,没有它的位置;直播间本来就有一条聊天栏,输入栏接在
+        // 它下面读起来就是"在这儿说话",和评论区是同一个形状。直播也没什么好暂停的。
+        LiveDanmakuInput(
+            sending = state.sendingDanmaku,
+            error = state.sendError,
+            // 未开播时不给输入:此刻画面是一张封面,服务端也会拒。
+            enabled = state.isLive,
+            onSend = onSendDanmaku,
+        )
     }
 }
+
+/**
+ * 直播间的发言栏。形状照评论区的 `CommentInputBar`(风格指南 §2.7:同一件事只有一份样子),
+ * 差别只有两处:这里没有"回复某人"那一行,以及多一条失败提示。
+ *
+ * 草稿在发送时就清空,和评论区一样。失败时那句话没了 —— 这是评论区当初的取舍,两处保持一致
+ * 比这里单独更聪明重要。
+ */
+@Composable
+private fun LiveDanmakuInput(
+    sending: Boolean,
+    error: String?,
+    enabled: Boolean,
+    onSend: (String) -> Unit,
+) {
+    var text by rememberSaveable { mutableStateOf("") }
+    val send = {
+        onSend(text)
+        text = ""
+    }
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.imePadding()) {
+        Column {
+            // 失败原因贴在输入框上面。直播间没有别的地方说这句话,而"等级不够""房间禁言"
+            // 这几种失败,人得读一眼才知道下一步该干什么。
+            error?.let {
+                Text(
+                    text = stringResource(R.string.danmaku_send_failed, it),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(
+                        start = Spacing.Comfortable,
+                        end = Spacing.Comfortable,
+                        top = Spacing.Tight,
+                    ),
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(Spacing.Tight),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { if (it.length <= LiveDanmakuMaxLength) text = it },
+                    modifier = Modifier.weight(1f),
+                    enabled = enabled,
+                    placeholder = { Text(stringResource(R.string.danmaku_input_hint)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { if (text.isNotBlank()) send() }),
+                    shape = MaterialTheme.shapes.large,
+                )
+                FilledIconButton(onClick = send, enabled = enabled && !sending && text.isNotBlank()) {
+                    if (sending) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(Dimens.IconInline),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = stringResource(R.string.action_send),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 直播弹幕的长度上限比点播短(B 站自己的输入框就是 20)。 */
+private const val LiveDanmakuMaxLength = 20
 
 /**
  * 一条醒目留言。**头像 + 名字 + 金额一行,留言一段**,读的顺序就是"谁、多少钱、说了什么"。

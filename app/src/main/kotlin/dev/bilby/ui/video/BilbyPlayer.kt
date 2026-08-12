@@ -71,6 +71,8 @@ import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.nihildigit.danmaku.DanmakuHost
 import dev.nihildigit.danmaku.DanmakuViewport
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
@@ -133,6 +135,8 @@ fun BilbyPlayer(
      * 渲染走独立的一层——合进同一个池只会让排布那条链路上到处是"这条是不是 7"的分支。
      */
     specialDanmakuPool: List<SpecialDanmaku> = emptyList(),
+    /** 自己刚发出去的那条,立刻上屏。**不并进 [danmakuPool]**,见 VideoViewModel.selfDanmaku。 */
+    selfDanmaku: Flow<Danmaku> = emptyFlow(),
     /** 弹幕池所属的 cid,换一条(切分 P、队列走到下一条)要整池重编,不是接着追加。 */
     danmakuCid: Long = 0L,
     /**
@@ -193,6 +197,7 @@ fun BilbyPlayer(
                 prefs = danmakuPrefs,
                 feed = DanmakuFeed.Pool(danmakuPool),
                 specialPool = specialDanmakuPool,
+                selfDanmaku = selfDanmaku,
                 cid = danmakuCid,
                 fontSizeSp = if (isFullscreen) DanmakuFontSizeSp.Fullscreen else DanmakuFontSizeSp.Embedded,
             )
@@ -378,7 +383,12 @@ private fun SecondaryControls(
     SpeedButton(speed, onSpeedChange, onMenuOpenChange, labelled)
     QualityButton(qualities, currentQuality, onQualityChange, onMenuOpenChange, labelled)
     SubtitleButton(subtitleTracks, currentSubtitleLan, onSubtitleTrackChange, onMenuOpenChange, labelled)
-    DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, labelled)
+    // **弹幕开关只在全屏留在这条控制条上。** 内嵌时它在标签行右端、挨着"发弹幕"(见 VideoTabs),
+    // 那里两个控件说的是同一件事:这条视频的弹幕看不看、发不发。全屏没有标签行,只能回到这里,
+    // 发弹幕则不给 —— 横屏起键盘会铺掉大半个画面,而弹幕是发给眼前这一帧的。
+    //
+    // 直播间不受影响:它没有标签行,开关一直在控制条上(见 LiveRoomScreen)。
+    if (isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, labelled)
     // 听视频**不在这条控制条上**,它在简介页的动作栏里、挨着稍后再看(见 VideoTabs)。
     // 这条控制条上的东西回答的都是"这个播放器现在怎么放"(倍速、清晰度、字幕、弹幕、全屏),
     // 而听视频换掉的是整页的形态。放在这里时它混在五个播放参数中间,读不出这层区别。

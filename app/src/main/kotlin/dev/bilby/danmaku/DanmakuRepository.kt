@@ -4,12 +4,16 @@ import dev.bilby.BiliLog
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
+import dev.bilby.api.map
 import dev.bilby.api.pathOnly
+import dev.bilby.api.postForm
 import io.ktor.client.call.body
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 
 /**
  * 本地已缓存的弹幕分段。离线缓存把服务端下发的原始 protobuf 原样存了盘,这里把它读回来。
@@ -124,6 +128,43 @@ class DanmakuRepository(
         return BiliResult.Ok(response.body<ByteArray>())
     }
 
+    /**
+     * 发一条弹幕(notes/danmaku.md §4,2026-08-12 实测)。凭据是 web cookie 的 csrf,
+     * **不是**点赞投币那条 TV `access_key` 路线 —— 风控按动作算,这一条实测过。
+     *
+     * 只发滚动白字:`mode`/`color`/`fontsize` 三个参数照 B 站的默认档写死。样式选择器不做,
+     * 顶端与底端弹幕是"占住画面固定位置"的东西,给了入口就得连着给"发在哪不打扰别人"的判断,
+     * 而这个应用没有理由帮用户争这块地方。
+     *
+     * **`rnd` 不是可省参数。** 它是"这次发送的随机标识",缺了它服务端把冷却按 90 秒算,
+     * 带上按 5 秒算(PiliPlus `danmaku.dart:22` 的注释,实测响应一致)。取微秒时间戳。
+     *
+     * 返回服务端给的弹幕 id,用作回显那一条的渲染 key。**读 `dmid_str` 不读 `dmid`**:
+     * 同一个 int64 给了两份,正因为它超出 double 精度——实测 `dmid` 回来是 `…324300`,
+     * `dmid_str` 是 `…324288`。这里虽然按 Long 解析不会丢精度,但既然服务端已经给了权威的
+     * 字符串形式,没有理由再转一道。
+     */
+    suspend fun post(
+        cid: Long,
+        bvid: String,
+        text: String,
+        progressMillis: Long,
+    ): BiliResult<String> = client.postForm<DanmakuPostDto>(
+        POST_URL,
+        mapOf(
+            "type" to "1",
+            "oid" to cid.toString(),
+            "bvid" to bvid,
+            "msg" to text,
+            "mode" to SCROLL_MODE.toString(),
+            "progress" to progressMillis.coerceAtLeast(0).toString(),
+            "color" to WHITE_COLOR.toString(),
+            "fontsize" to DEFAULT_FONT_SIZE.toString(),
+            "pool" to "0",
+            "rnd" to (System.currentTimeMillis() * 1000).toString(),
+        ),
+    ).map { it.dmidStr }
+
     private fun logRejected(cid: Long, segmentIndex: Int, result: BiliResult.ApiError) {
         BiliLog.w(
             "拉弹幕分段被拒 url=${SEG_URL.pathOnly()} cid=$cid segment=$segmentIndex " +
@@ -144,6 +185,22 @@ class DanmakuRepository(
 
     private companion object {
         const val SEG_URL = "${BiliConstants.WEB_HOST}/x/v2/dm/web/seg.so"
+        const val POST_URL = "${BiliConstants.WEB_HOST}/x/v2/dm/post"
         const val SEGMENT_LENGTH_MILLIS = 60L * 6 * 1000
+
+        /** notes/danmaku.md §1.4 的模式号,发送侧只用滚动这一档。 */
+        const val SCROLL_MODE = 1
+        const val WHITE_COLOR = 0xFFFFFF
+        /** B 站的"标准"档。它是网页播放器的字号档位,不是 sp,见 [toDanmakuOrNull] 里的说明。 */
+        const val DEFAULT_FONT_SIZE = 25
     }
 }
+
+/**
+ * 发送成功后的响应体。字段远不止这一个(`action`/`animation`/`visible` 等),
+ * 只声明用得上的:[dev.bilby.api.BiliClient] 那侧的 Json 配置忽略未知字段。
+ */
+@Serializable
+private data class DanmakuPostDto(
+    @SerialName("dmid_str") val dmidStr: String = "",
+)

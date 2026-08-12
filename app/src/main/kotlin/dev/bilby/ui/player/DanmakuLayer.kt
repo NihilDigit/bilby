@@ -18,6 +18,7 @@ import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.nihildigit.danmaku.rememberDanmakuController
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlin.time.TimeSource
 
 /** 弹幕从哪来。两种形态的差别只在这里,排布与渲染都一样。 */
@@ -49,6 +50,11 @@ fun PlayerDanmakuLayer(
     specialPool: List<SpecialDanmaku>,
     cid: Long,
     fontSizeSp: Float,
+    /**
+     * 自己刚发出去的弹幕。**与 [feed] 的形态无关**,两种都可能有 —— 所以它不是
+     * [DanmakuFeed.Stream] 的一个变体,而是单独一条。
+     */
+    selfDanmaku: Flow<Danmaku> = emptyFlow(),
     modifier: Modifier = Modifier,
 ) {
     val isLive = feed is DanmakuFeed.Stream
@@ -108,6 +114,13 @@ fun PlayerDanmakuLayer(
                 }
             }
         }
+    }
+
+    // 自己发的那条走 `appendNow`,和直播的到达流同一个入口:它要的是"此刻上屏",而不是
+    // "在时间轴的某一点上"。进池子的话下一次分段追加会把它一起重编,于是它会在当前位置
+    // 再飘一遍。
+    LaunchedEffect(controller, selfDanmaku) {
+        selfDanmaku.collect { controller.appendNow(it) }
     }
 
     // **关掉时整个不进组合**,不是画了个空 —— 帧循环由组合驱动,不进组合就没有那条协程。

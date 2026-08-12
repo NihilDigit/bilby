@@ -104,6 +104,10 @@ import dev.bilby.ui.login.TvLoginViewModel
 import dev.bilby.ui.offline.OfflineScreen
 import dev.bilby.ui.offline.OfflineViewModel
 import dev.bilby.ui.profile.ProfileScreen
+import dev.bilby.ui.message.MessageScreen
+import dev.bilby.ui.message.MessageViewModel
+import dev.bilby.ui.message.WhisperScreen
+import dev.bilby.ui.message.WhisperViewModel
 import dev.bilby.ui.profile.ProfileViewModel
 import dev.bilby.ui.search.SearchChatScreen
 import dev.bilby.ui.search.SearchChatViewModel
@@ -397,6 +401,7 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                         onOpenFavFolder = { folder ->
                             push(FavFolderContents(folder.id, folder.title))
                         },
+                        onOpenMessages = { push(Messages) },
                     )
                 }
             }
@@ -431,6 +436,33 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                     // 在新页起播之后才跑,把刚起播的下一集暂停了。替换栈顶让这个错位不成立。
                     onOpenVideo = { backStack[backStack.lastIndex] = Video(it) },
                 )
+            }
+            entry<Messages> {
+                CutoutSafe {
+                    MessagesRoute(
+                        container = container,
+                        onOpenWhisper = { push(Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem)) },
+                        // 通知里的 uri 是站内链接,认得出来就在应用内落地,认不出来
+                        // (活动页、会员购这类)交给浏览器 —— 同专栏正文里的链接一条路。
+                        onOpenUri = { uri ->
+                            val destination = BilbyLink.destinationOf(uri)
+                            if (destination != null) push(destination) else ShareLink.openInBrowser(context, uri)
+                        },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
+            }
+            entry<Whisper> { key ->
+                CutoutSafe {
+                    WhisperRoute(
+                        container = container,
+                        key = key,
+                        onOpenSpace = { push(Space(key.talkerId)) },
+                        onOpenVideo = { push(Video(it)) },
+                        onOpenArticle = { push(ArticlePage(it, isRead = false)) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
             }
             entry<Offline> {
                 CutoutSafe {
@@ -603,6 +635,7 @@ private fun RootTabs(
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
     onOpenFavFolder: (FavFolder) -> Unit,
+    onOpenMessages: () -> Unit,
 ) {
     var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
     val windowSize = rememberBilbyWindowSize()
@@ -651,6 +684,7 @@ private fun RootTabs(
                 onOpenToView = onOpenToView,
                 onOpenOffline = onOpenOffline,
                 onOpenFavFolder = onOpenFavFolder,
+                onOpenMessages = onOpenMessages,
             )
         }
     } else {
@@ -682,6 +716,7 @@ private fun RootTabs(
                     onOpenToView = onOpenToView,
                     onOpenOffline = onOpenOffline,
                     onOpenFavFolder = onOpenFavFolder,
+                    onOpenMessages = onOpenMessages,
                 )
             }
         }
@@ -721,6 +756,7 @@ private fun RootTabsContent(
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
     onOpenFavFolder: (FavFolder) -> Unit,
+    onOpenMessages: () -> Unit,
 ) {
     // 只 padding 不声明消费的话,子层的 imePadding() 会再多退让一个底栏高度。
     val bottom = PaddingValues(bottom = insets.calculateBottomPadding())
@@ -772,6 +808,7 @@ private fun RootTabsContent(
                     onOpenToView = onOpenToView,
                     onOpenOffline = onOpenOffline,
                     onOpenFavFolder = onOpenFavFolder,
+                    onOpenMessages = onOpenMessages,
                     onSettingsClick = onSettingsClick,
                 )
             }
@@ -876,6 +913,7 @@ private fun ProfilePane(
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
     onOpenFavFolder: (FavFolder) -> Unit,
+    onOpenMessages: () -> Unit,
     onSettingsClick: () -> Unit,
 ) {
     val vm: ProfileViewModel = viewModel(
@@ -910,6 +948,7 @@ private fun ProfilePane(
         onOpenToView = onOpenToView,
         onOpenOffline = onOpenOffline,
         onOpenFavFolder = onOpenFavFolder,
+        onOpenMessages = onOpenMessages,
         onSettingsClick = onSettingsClick,
         onOpenSelf = onUserClick,
         onRetryAccount = vm::retryAccount,
@@ -985,6 +1024,68 @@ private fun HistoryRoute(
             contentPadding = insets,
         )
     }
+}
+
+/**
+ * 消息中心与私信会话列表。**五格里只有第一格进页面就拉**,其余各自第一次被选中时才拉
+ * (见 [MessageViewModel])。
+ */
+@Composable
+private fun MessagesRoute(
+    container: AppContainer,
+    onOpenWhisper: (dev.bilby.data.WhisperSession) -> Unit,
+    onOpenUri: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val vm: MessageViewModel = viewModel(
+        factory = viewModelFactory { initializer { MessageViewModel(container.messageRepository) } },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    MessageScreen(
+        state = state,
+        onSelectTab = vm::selectTab,
+        onLoadMore = vm::loadMore,
+        onRefresh = vm::refresh,
+        onOpenWhisper = onOpenWhisper,
+        onOpenUri = onOpenUri,
+        onBack = onBack,
+    )
+}
+
+/** 一个私信会话。名字由路由带,顶栏第一帧就有标题。 */
+@Composable
+private fun WhisperRoute(
+    container: AppContainer,
+    key: Whisper,
+    onOpenSpace: () -> Unit,
+    onOpenVideo: (String) -> Unit,
+    onOpenArticle: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val vm: WhisperViewModel = viewModel(
+        factory = viewModelFactory {
+            initializer {
+                WhisperViewModel(
+                    key.talkerId,
+                    key.talkerName,
+                    key.talkerFaceUrl,
+                    key.isSystem,
+                    container.messageRepository,
+                    container.settings,
+                )
+            }
+        },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    WhisperScreen(
+        state = state,
+        onSend = vm::send,
+        onRetry = vm::load,
+        onOpenSpace = onOpenSpace,
+        onOpenVideo = onOpenVideo,
+        onOpenArticle = onOpenArticle,
+        onBack = onBack,
+    )
 }
 
 /**
@@ -1495,6 +1596,7 @@ private fun VideoPane(
     val danmakuPool by vm.danmakuPool.collectAsStateWithLifecycle()
     val cached by vm.cached.collectAsStateWithLifecycle()
     val specialDanmakuPool by vm.specialDanmakuPool.collectAsStateWithLifecycle()
+    val danmakuSend by vm.danmakuSend.collectAsStateWithLifecycle()
     val staffFollowed by vm.staffFollowed.collectAsStateWithLifecycle()
     val playerPrefs by container.settings.playerPrefs.collectAsStateWithLifecycle(
         initialValue = PlayerPrefs(),
@@ -1572,6 +1674,10 @@ private fun VideoPane(
         onDanmakuEnabledChange = vm::setDanmakuEnabled,
         danmakuPool = danmakuPool,
         specialDanmakuPool = specialDanmakuPool,
+        selfDanmaku = vm.selfDanmaku,
+        danmakuSend = danmakuSend,
+        onSendDanmaku = vm::sendDanmaku,
+        onDanmakuSendConsumed = vm::clearDanmakuSend,
         fastForwardSpeed = playerPrefs.fastForwardSpeed,
     )
 }

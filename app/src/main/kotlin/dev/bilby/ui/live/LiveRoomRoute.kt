@@ -113,6 +113,7 @@ fun LiveRoomRoute(
         },
         onQualityChange = vm::setQuality,
         onLoadMoreGuards = vm::loadMoreGuards,
+        onSendDanmaku = vm::sendDanmaku,
         onRetry = vm::load,
         roomId = roomId,
         onBack = onBack,

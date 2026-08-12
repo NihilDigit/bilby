@@ -62,11 +62,12 @@ Done:
 - [x] Listening: same player as normal playback, screen-off background play, notification, lock screen and headset controls, sleep timer; shuffle queue; the subtitle track doubles as line-by-line lyrics, tap a line to seek
 - [x] Live: watch a room with danmaku, quality, fullscreen, and superchats
 - [x] Offline: pick videos from the playback queue (select-all available), choose a quality, danmaku kept alongside; concurrency is configurable and the speed is shown; cached items live under the profile tab, support long-press multi-delete, play without the network, and form a queue of the whole library; with no network the video page shows the cached title, description and counts
-- [x] Danmaku: scrolling, top and bottom, following the playback clock, adjustable opacity
+- [x] Danmaku: scrolling, top and bottom, following the playback clock, adjustable opacity; post from the video page (yours appears at once) or from the bar under the live chat
 - [x] Subtitles: multiple tracks, under the picture during normal playback, as a transcript while listening; AI subtitle repair
 - [x] Comments: read, sort, expand reply threads, post and reply, like, delete, tap a timestamp to seek, zoom images and swipe between them
 - [x] Actions: like, coin, favourite, follow; joint submissions credit each uploader separately
 - [x] Agent: conversational site-wide search and "find related" from the video page; reads descriptions and top comments, candidates each with a reason; multi-turn follow-ups, visible execution trace, replies rendered as Markdown
+- [x] Messages: chats, replies, mentions, likes and system notices; text chats send and receive, video and article messages open in the app
 - [x] Links and sharing: opens bilibili links and b23.tv short links, shares videos and live rooms
 - [x] SponsorBlock segments skipped by default, server configurable
 - [x] Interface: Material 3 Expressive, motion rebuilt from the spec; two-pane layout on tablets; edge-to-edge and display cutout handling
@@ -74,17 +75,20 @@ Done:
 
 Planned:
 
+- [ ] Interface: refine the experience and follow the Material 3 Expressive spec throughout
 - [ ] Rework the following feed, starting from its data flow
 - [ ] Better adaptive layout
-- [ ] Sending danmaku
 - [ ] Picture-in-picture
+- [ ] Player behaviour refinement
 - [ ] Live room improvements
 - [ ] Refine coining, liking and the other site actions
-- [ ] Direct messages
+- [ ] Deleting and clearing history
+- [ ] Favourites management: create, rename and delete folders, unfavourite from the list
+- [ ] Follow groups and the blocklist
+- [ ] Liking and commenting on moments
 - [ ] Filtering low-quality comments
-- [ ] Interface refinement
 - [ ] Performance work
-- [ ] Codebase structure cleanup
+- [ ] Clean up abstractions and data flow
 - [ ] Comment pruning
 - [ ] Instrumented tests on a device in CI
 - [ ] Agent harness work

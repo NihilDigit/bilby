@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Comment
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,6 +31,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import dev.bilby.R
+import dev.bilby.ui.components.BilbyIcons
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
@@ -42,7 +42,12 @@ import dev.bilby.ui.theme.Spacing
  * 各写一份的话两条控制条会慢慢长得不一样,而用户看到的是同一个播放器。
  */
 
-/** 弹幕开关。开着时图标染主色,这是"当前状态"而不是"点了会怎样"。 */
+/**
+ * 弹幕开关。开着时图标染主色,这是"当前状态"而不是"点了会怎样"。
+ *
+ * 字形与标签行那个开关共用([BilbyIcons.Danmaku]):同一个开关在两处出现,长得不一样就成了
+ * 两个东西。不借用气泡或字幕框的理由见 [BilbyIcons]。
+ */
 @Composable
 internal fun DanmakuButton(
     enabled: Boolean,
@@ -55,8 +60,8 @@ internal fun DanmakuButton(
         label = null,
         icon = { tint ->
             Icon(
-                Icons.AutoMirrored.Filled.Comment,
-                stringResource(R.string.player_danmaku),
+                if (enabled) BilbyIcons.Danmaku else BilbyIcons.DanmakuOff,
+                stringResource(if (enabled) R.string.danmaku_hide else R.string.danmaku_show),
                 tint = tint,
                 modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp),
             )

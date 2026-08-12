@@ -29,7 +29,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
@@ -42,6 +41,7 @@ import dev.bilby.data.model.DynamicContent
 import dev.bilby.ui.CalendarEvent
 import dev.bilby.ui.article.ArticleParagraph
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.CoverCornerRadius
 import dev.bilby.ui.components.ImageViewer
@@ -757,13 +757,3 @@ private const val DynamicTextMaxLines = 12
  * 计数折算。分档除数也是本地化资源:中文按万/亿分档,英文按 K/M,只翻译单位后缀会让英文
  * 差一个量级(同一份写法见 SpaceScreen、VideoTabs)。
  */
-@Composable
-private fun formatCount(value: Long): String {
-    val large = integerResource(R.integer.count_divisor_large)
-    val small = integerResource(R.integer.count_divisor_small)
-    return when {
-        value >= large -> stringResource(R.string.count_large, value.toDouble() / large)
-        value >= small -> stringResource(R.string.count_small, value.toDouble() / small)
-        else -> value.toString()
-    }
-}

@@ -52,6 +52,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -79,7 +80,6 @@ import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
-import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
@@ -101,6 +101,8 @@ import dev.bilby.ui.comment.CommentSection
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.AvatarBadge
+import dev.bilby.ui.components.BilbyIcons
+import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.components.BadgedAvatar
 import dev.bilby.ui.components.ChoiceRow
 import dev.bilby.ui.components.CompactVideoRow
@@ -174,6 +176,11 @@ fun VideoTabs(
     related: RelatedState,
     commentState: CommentUiState,
     onFindRelated: () -> Unit,
+    /** 打开发弹幕的输入层。面板本身挂在页面那一层(见 VideoScreen),这里只是入口。 */
+    onSendDanmaku: () -> Unit,
+    /** 弹幕显示开关。全屏时这一行不组合,那时的开关在播放控制条上。 */
+    danmakuEnabled: Boolean,
+    onDanmakuEnabledChange: (Boolean) -> Unit,
     /** 打开缓存选择面板。面板本身长在播放队列那一节上,见 [QueueContent]。 */
     onCache: () -> Unit,
     /** 投币那一行的顶边在窗口里的 y(px)。找相关 sheet 的高度锚在它上面,见 VideoScreen。 */
@@ -228,24 +235,75 @@ fun VideoTabs(
     val scope = rememberCoroutineScope()
 
     Column(modifier = modifier.fillMaxSize()) {
-        // **用组件默认的指示条,不自己画。** 这里曾经读 `currentPage +
-        // currentPageOffsetFraction` 做插值,让指示条全程贴着手指走;规范并不要求那样 ——
-        // tabs 页对指示条只说"apply an underline and color change to the active tab",
-        // 交互一节写的是 "The selected indicator becomes active and **shifts into position
-        // once the touch has been engaged**",也就是选中之后移过去,而不是跟着拖动连续插值。
-        //
-        // 那份自定义代价不小:一个 `tabIndicatorLayout` 的手写测量、首帧 positions 为空的
-        // 特判、以及一段"这个扩展的接收者到底是什么"的考据。删掉之后行为仍然合规,
-        // 而滑动翻页本身照旧(内容区能滑是 tabs 页明写的用法)。
-        SecondaryTabRow(selectedTabIndex = pagerState.currentPage) {
-            titles.forEachIndexed { index, title ->
-                Tab(
-                    selected = pagerState.currentPage == index,
-                    onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
-                    text = { Text(title) },
+        /*
+         * **标签吃掉右边两个控件之外的全部宽度。**
+         *
+         * 这里曾经照 PiliPlus 把标签限死在每个 96dp(`pages/video/view.dart:1376-1406`),
+         * 结果是两头不讨好:"评论 1234" 在 96dp 里放不下,标签换到第二行、整条行跟着变高;
+         * 而右边又空出一大块——限宽块靠左、按钮靠右,中间那段谁都不占。PiliPlus 自己不换行
+         * (它给 Tab 传的是 `softWrap: false`,宁可溢出),但那是拿截断换的,同一个问题没有解掉。
+         *
+         * 给标签 `weight(1f)` 之后两件事一起没了:宽度按屏幕分,4 位数装得下;中间也不再有
+         * 无主的空白。标签本身仍然单行不换行 —— 计数再长(“评论 1.2万”)也只该截断,不该把
+         * 这一行撑成两倍高。
+         *
+         * **弹幕的显示开关也在这里,挨着"发弹幕"**,照 PiliPlus 的同一行。两个控件说的是同一
+         * 件事——这条视频的弹幕看不看、发不发,摆在一起才读得出它们是一对;开关原先在播放控制条
+         * 上,和倍速、清晰度、字幕并排,那条条控制的是"播放器怎么放",弹幕混在里面像是第五个
+         * 播放参数。
+         *
+         * 全屏没有这一行,开关回到控制条上(见 BilbyPlayer.SecondaryControls),那里是它唯一
+         * 够得着的位置;发弹幕全屏不给。
+         */
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(modifier = Modifier.weight(1f)) {
+                // **用组件默认的指示条,不自己画。** 这里曾经读 `currentPage +
+                // currentPageOffsetFraction` 做插值,让指示条全程贴着手指走;规范并不要求那样
+                // —— tabs 页对指示条只说"apply an underline and color change to the active
+                // tab",交互一节写的是 "The selected indicator becomes active and **shifts into
+                // position once the touch has been engaged**",也就是选中之后移过去,而不是
+                // 跟着拖动连续插值。
+                //
+                // 那份自定义代价不小:一个 `tabIndicatorLayout` 的手写测量、首帧 positions 为空
+                // 的特判、以及一段"这个扩展的接收者到底是什么"的考据。删掉之后行为仍然合规,
+                // 而滑动翻页本身照旧(内容区能滑是 tabs 页明写的用法)。
+                //
+                // 自带的分割线要关掉:它只画到自己那点宽度为止,右半行会缺一截。通栏那条画在
+                // 整行下面。
+                SecondaryTabRow(selectedTabIndex = pagerState.currentPage, divider = {}) {
+                    titles.forEachIndexed { index, title ->
+                        Tab(
+                            selected = pagerState.currentPage == index,
+                            onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
+                            text = {
+                                Text(
+                                    text = title,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+            // 发弹幕用文字、显示开关用图标:两者一个是动作、一个是状态,形状不同才不会被
+            // 读成两个并列的按钮。文字在前,和 PiliPlus 的顺序一致。
+            TextButton(
+                onClick = onSendDanmaku,
+                contentPadding = PaddingValues(horizontal = Spacing.Cozy),
+            ) {
+                Text(
+                    text = stringResource(R.string.danmaku_send),
+                    style = MaterialTheme.typography.labelLarge,
                 )
             }
+            DanmakuVisibilityButton(
+                enabled = danmakuEnabled,
+                onEnabledChange = onDanmakuEnabledChange,
+            )
         }
+        HorizontalDivider()
         // weight 而不是 fillMaxSize:在 Column 里 fillMaxSize 会让 pager 从 tab 栏下面再要
         // 一整屏的高度,底部那一截被推出可视区。
         HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
@@ -301,6 +359,34 @@ fun VideoTabs(
                 )
             }
         }
+    }
+}
+
+/**
+ * 弹幕显示开关(标签行版)。
+ *
+ * **不复用 [dev.bilby.ui.player.DanmakuButton]**:那一个的未选中色是 `FixedColors.OnMedia`
+ * (压在画面上的白),摆到这条浅色的标签行上就是白底白字。图标([BilbyIcons.Danmaku])两处
+ * 共用,于是全屏与内嵌看起来仍是同一个开关。
+ *
+ * 内容描述说的是**按下去会怎样**,不是当前状态:状态由字形和颜色一起表达,而读屏用户需要的
+ * 是这一下的后果。
+ */
+@Composable
+private fun DanmakuVisibilityButton(enabled: Boolean, onEnabledChange: (Boolean) -> Unit) {
+    IconButton(onClick = { onEnabledChange(!enabled) }) {
+        Icon(
+            imageVector = if (enabled) BilbyIcons.Danmaku else BilbyIcons.DanmakuOff,
+            contentDescription = stringResource(
+                if (enabled) R.string.danmaku_hide else R.string.danmaku_show,
+            ),
+            tint = if (enabled) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.outline
+            },
+            modifier = Modifier.size(Dimens.IconInline),
+        )
     }
 }
 
@@ -1101,6 +1187,7 @@ private fun PartSheet(
 /** 十条以内横滚划得完,再多就该给展开。 */
 private const val PartRowExpandThreshold = 10
 
+
 /** 分 P chip 的宽度上限。见 [PartRow] 里那段说明:够窄到一屏能露出两个半,读起来才是一条带子。 */
 private val PartChipMaxWidth = 160.dp
 
@@ -1286,20 +1373,6 @@ private fun QueueContent(
     }
 }
 
-/**
- * 计数折算。分档除数取自资源:中文按万/亿分档,英文按 K/M,
- * 只翻译单位后缀会让英文差一个量级。
- */
-@Composable
-private fun formatCount(value: Long): String {
-    val large = integerResource(R.integer.count_divisor_large)
-    val small = integerResource(R.integer.count_divisor_small)
-    return when {
-        value >= large -> stringResource(R.string.count_large, value.toDouble() / large)
-        value >= small -> stringResource(R.string.count_small, value.toDouble() / small)
-        else -> value.toString()
-    }
-}
 
 
 private fun formatDate(epochSeconds: Long): String =

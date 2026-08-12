@@ -136,6 +136,10 @@ class BiliClient(
      *   (PiliPlus `http/dynamics.dart:531-535` 把 csrf 放 queryParameters、业务字段放 body)。
      *   风控是按动作算的,别的写接口把 csrf 放 body 能过,不代表这个也能 —— 同一类踩过一次的
      *   还有 `bili_ticket` 的参数必须放 query。
+     * @param signedParams 给 query 做 WBI 签名。**直播发弹幕 `/msg/send` 要这样**:业务字段
+     *   全在 body,query 里只有一个 `web_location` 且要签(PiliPlus `http/live.dart:47-50`)。
+     *   这是唯一一条"签名和表单同时出现"的写接口,所以是一个开关而不是另一条路线 ——
+     *   签的只有 query,body 不参与,与 [rawGet] 的签名是同一个函数。
      */
     suspend fun rawPostForm(
         url: String,
@@ -145,11 +149,19 @@ class BiliClient(
         referer: String? = null,
         userAgent: String? = null,
         csrfInQuery: Boolean = false,
+        signedParams: Boolean = false,
+        csrfTokenAlias: Boolean = false,
     ): HttpResponse {
         val credentials = settings.credentials.first()
         val csrf = if (withCsrf) mapOf("csrf" to credentials.biliJct) else emptyMap()
-        val fields = if (csrfInQuery) form else form + csrf
-        val query = if (csrfInQuery) params + csrf else params
+        // 同一个值的第二个名字。直播发弹幕和私信那几条要求两个都在,少一个报 -400;
+        // 而多数接口只认 `csrf`,所以不能无条件都发。
+        val csrfAlias = if (withCsrf && csrfTokenAlias) mapOf("csrf_token" to credentials.biliJct) else emptyMap()
+        val fields = (if (csrfInQuery) form else form + csrf) + csrfAlias
+        val rawQuery = if (csrfInQuery) params + csrf else params
+        // 签名要在 csrf 并进来之后做:签的是实际发出去的那一组 query,漏掉任何一个参数
+        // 都会让 w_rid 对不上。
+        val query = if (signedParams) wbiSigner.sign(rawQuery) else rawQuery
         val cookie = cookieHeader(credentials)
         return http.submitForm(
             url = url,
@@ -321,8 +333,11 @@ suspend fun BiliClient.postAction(
     referer: String? = null,
     userAgent: String? = null,
     csrfInQuery: Boolean = false,
+    signedParams: Boolean = false,
+    csrfTokenAlias: Boolean = false,
 ): BiliResult<Unit> = envelopeResult(url) {
-    rawPostForm(url, form, withCsrf, params, referer, userAgent, csrfInQuery).body<BiliEnvelope>()
+    rawPostForm(url, form, withCsrf, params, referer, userAgent, csrfInQuery, signedParams, csrfTokenAlias)
+        .body<BiliEnvelope>()
 }
 
 /** app 路线的写接口(点赞/投币):access_key + appkey 签名,不带 Cookie。 */

@@ -18,6 +18,7 @@ import dev.bilby.data.FavRepository
 import dev.bilby.data.FollowRepository
 import dev.bilby.data.HeartbeatReporter
 import dev.bilby.data.HistoryRepository
+import dev.bilby.data.MessageRepository
 import dev.bilby.data.LiveRepository
 import dev.bilby.data.QueueSourceRepository
 import dev.bilby.data.UpdateRepository
@@ -136,6 +137,9 @@ class AppContainer(context: Context) {
     val toViewRepository: ToViewRepository by lazy { ToViewRepository(biliClient) }
 
     val historyRepository: HistoryRepository by lazy { HistoryRepository(biliClient) }
+
+    /** 消息中心(回复/@/赞/通知)与私信。两组接口分属两个主机,见它自己的说明。 */
+    val messageRepository: MessageRepository by lazy { MessageRepository(biliClient) }
 
     /** 个人页头部的账号身份(头像/名字/等级/签名),来自 `x/web-interface/nav` + `SpaceRepository`。 */
     val accountRepository: AccountRepository by lazy { AccountRepository(biliClient, spaceRepository) }

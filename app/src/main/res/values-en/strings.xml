@@ -187,6 +187,11 @@
     <string name="player_subtitle">Subtitles</string>
     <string name="player_subtitle_off">Subtitles off</string>
     <string name="player_danmaku">Danmaku</string>
+    <string name="danmaku_send">Send danmaku</string>
+    <string name="danmaku_show">Show danmaku</string>
+    <string name="danmaku_hide">Hide danmaku</string>
+    <string name="danmaku_input_hint">Send a danmaku</string>
+    <string name="danmaku_send_failed">Failed to send: %1$s</string>
     <string name="player_listen">Listen</string>
     <string name="player_lock">Lock</string>
     <string name="player_unlock">Unlock</string>
@@ -357,4 +362,21 @@
     <string name="dynamic_other_title">Following posts</string>
     <string name="dynamic_other_entry">Following posts</string>
     <string name="dynamic_other_empty">The people you follow have posted nothing but videos lately</string>
+    <string name="message_title">Messages</string>
+    <string name="message_tab_whisper">Chats</string>
+    <string name="message_tab_reply">Replies</string>
+    <string name="message_tab_at">Mentions</string>
+    <string name="message_tab_like">Likes</string>
+    <string name="message_tab_notice">Notices</string>
+    <string name="message_empty_whisper">No chats yet</string>
+    <string name="message_empty_reply">No replies yet</string>
+    <string name="message_empty_at">No mentions yet</string>
+    <string name="message_empty_like">No likes yet</string>
+    <string name="message_empty_notice">No notices</string>
+    <string name="message_actors">%1$s and %2$d others</string>
+    <string name="whisper_empty">No messages yet</string>
+    <string name="whisper_input_hint">Write a message</string>
+    <string name="whisper_send_failed">Failed to send: %1$s</string>
+    <string name="whisper_unsupported">Unsupported message (type %1$d)</string>
+    <string name="whisper_system_account">System</string>
 </resources>

@@ -18,20 +18,38 @@ import kotlinx.serialization.json.JsonElement
  * **互关是一个独立状态,不要合并进"已关注"** —— B 站用户在意这个区别,把它显示成"已关注"
  * 等于丢掉信息。
  */
-enum class FollowState(val attribute: Int) {
-    None(0),
-    Following(2),
-    Mutual(4),
-    Blocked(128),
+enum class FollowState {
+    None,
+    Following,
+    Mutual,
+    Blocked,
     /** 这是自己的空间,没有关注这个动作。 */
-    Self(-1),
+    Self,
     ;
 
     val isFollowing: Boolean get() = this == Following || this == Mutual
 
     companion object {
-        fun of(attribute: Int): FollowState =
-            entries.firstOrNull { it.attribute == attribute } ?: None
+        /**
+         * `attribute` → 状态。取值照 PiliPlus 的 `member/widget/user_info_card.dart:498-505`,
+         * 那是这份表唯一的权威来源。
+         *
+         * **互关有 4 和 6 两个值,实测下发的是 6**(`x/relation?fid=364259623` 回
+         * `attribute: 6`,2026-08-12)。这里原先是一张 `attribute == it.attribute` 的精确匹配表、
+         * 且只登记了 4,于是 6 落进兜底的 [None] —— 表现是互关的人在播放页和空间页一律显示成
+         * 未关注,点关注还会成功(服务端幂等)。**兜底到"未关注"是这个 bug 能一直不被发现的原因**:
+         * 一个没登记的值和"确实没关注"在界面上完全同形。
+         *
+         * 1 是悄悄关注,这个应用不区分,并进 [Following] —— 从"我关没关他"这个问题上看它就是
+         * 关注了。
+         */
+        fun of(attribute: Int): FollowState = when (attribute) {
+            1, 2 -> Following
+            4, 6 -> Mutual
+            128 -> Blocked
+            -1 -> Self
+            else -> None
+        }
     }
 }
 

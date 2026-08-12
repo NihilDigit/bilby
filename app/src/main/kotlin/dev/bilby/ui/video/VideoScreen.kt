@@ -44,6 +44,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -79,6 +80,8 @@ import dev.bilby.data.QueueSource
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import dev.bilby.data.VideoRelation
 import dev.bilby.player.AudioPlaybackService
 import dev.bilby.player.QueueItem
@@ -192,6 +195,13 @@ fun VideoScreen(
     /** 已拉到的弹幕池,时间轴的编译在 BilbyPlayer 里做(需要 Compose 层的测量与画布宽度)。 */
     danmakuPool: List<Danmaku> = emptyList(),
     specialDanmakuPool: List<SpecialDanmaku> = emptyList(),
+    /** 自己刚发出去的那条,立刻上屏。**不进弹幕池**,理由见 VideoViewModel.selfDanmaku。 */
+    selfDanmaku: Flow<Danmaku> = emptyFlow(),
+    /** 发弹幕这一次的进展。面板靠它显示转圈与失败原因,[DanmakuSend.Sent] 即关面板。 */
+    danmakuSend: DanmakuSend = DanmakuSend.Idle,
+    /** cid 与进度由这一层给:播放器装着哪一 P、放到了哪儿,权威在服务那侧。 */
+    onSendDanmaku: (text: String, cid: Long, progressMillis: Long) -> Unit = { _, _, _ -> },
+    onDanmakuSendConsumed: () -> Unit = {},
     /** 长按画面的临时倍速,来自设置页。 */
     fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
     modifier: Modifier = Modifier,
@@ -285,6 +295,21 @@ fun VideoScreen(
      */
     var cacheSheetOpen by rememberSaveable { mutableStateOf(false) }
 
+    /** 发弹幕的输入层开着没有。和缓存面板一样,只是这一页的一个浮层。 */
+    var danmakuInputOpen by rememberSaveable { mutableStateOf(false) }
+
+    /**
+     * 输入层里的草稿。**按 bvid 存**:连播走到下一条时这一页并不重建(见 VideoViewModel 的
+     * switchTo),不带 key 的话上一条没发出去的半句话会跟到下一条视频上。
+     */
+    var danmakuDraft by rememberSaveable(bvid) { mutableStateOf("") }
+
+    /**
+     * 这条弹幕属于哪一刻。**在打开输入层那一刻取值,之后不再动** —— 弹幕是发给人按下"发弹幕"
+     * 时看到的那一帧的。取完就暂停,所以进度也不会再走。
+     */
+    var danmakuProgress by remember { mutableLongStateOf(0L) }
+
     /** 队列的唯一来源是服务。页面只是把它摆出来,不自己攒一份。 */
     val shownQueue = QueueUiState(
         items = audioState.queue?.items.orEmpty(),
@@ -372,6 +397,52 @@ fun VideoScreen(
                 AudioPlaybackService.EXTRA_COVER_URL to detail?.coverUrl.orEmpty(),
             ),
         )
+    }
+
+    /**
+     * 打开/关闭发弹幕的输入层。**暂停与恢复复用服务已有的那一对命令,不新造一套。**
+     *
+     * 打开发 [AudioPlaybackService.ACTION_PAGE_LEFT]:它的语义正是"暂停,但不动 playIntent"
+     * ——也就是"这次停下不是用户的意思"。关闭再发一遍 [AudioPlaybackService.ACTION_OPEN_VIDEO],
+     * 落在服务的幂等分支上,那里那句 `if (playIntent && !playWhenReady)` 就是恢复。
+     *
+     * 于是**打开面板期间用户从通知栏按了暂停**这种情况自动是对的:那一下走 `QueuePlayer.pause()`
+     * 把 playIntent 清了,关面板时不会自作主张再放起来。页面自己记一个"打开前在不在播"的
+     * 快照做不到这一点,它只知道打开那一刻的事。
+     *
+     * 两边都先问[playerHoldsThisPage]:队列自动连播走到下一条时,这一页可能还没被换掉,
+     * 而那时发 OPEN_VIDEO 等于把播放器拽回这条视频——用户并没有要求。
+     *
+     * **不带 cid。** 带的话服务会拿它和正在播的那一 P 比,而这里给得出的只有默认 P1,
+     * 多 P 视频在第 3 P 上发条弹幕就会被送回第 1 P(同 retryQueue 那条)。
+     */
+    val openDanmakuInput: () -> Unit = {
+        danmakuProgress = active?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        if (playerHoldsThisPage()) send(AudioPlaybackService.ACTION_PAGE_LEFT, Bundle.EMPTY)
+        danmakuInputOpen = true
+    }
+
+    /**
+     * 输入层的唯一出口。四条路径(发送成功、点空白、系统返回、按了发送键)都走这里,
+     * 分开写必然漏掉一条 —— 漏掉的那条表现为"退出输入之后视频不再自己接着放"。
+     */
+    val closeDanmakuInput: () -> Unit = {
+        danmakuInputOpen = false
+        onDanmakuSendConsumed()
+        if (playerHoldsThisPage()) {
+            send(
+                AudioPlaybackService.ACTION_OPEN_VIDEO,
+                bundleOf(AudioPlaybackService.EXTRA_BVID to bvid),
+            )
+        }
+    }
+
+    // 发出去了就关面板并清草稿。**清草稿只在这里**:失败时留着,人改一个字就能再发一次。
+    LaunchedEffect(danmakuSend) {
+        if (danmakuSend is DanmakuSend.Sent) {
+            danmakuDraft = ""
+            closeDanmakuInput()
+        }
     }
 
     val toggleShuffle: () -> Unit = {
@@ -722,6 +793,7 @@ fun VideoScreen(
                         onLockedChange = { locked = it },
                         danmakuPool = danmakuPool,
                         specialDanmakuPool = specialDanmakuPool,
+                        selfDanmaku = selfDanmaku,
                         danmakuCid = (audioState.queue?.currentCid ?: 0L),
                         matchesCurrentPage = matchesCurrentPage,
                         placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
@@ -814,6 +886,9 @@ fun VideoScreen(
                             scope.launch { sheetState.bottomSheetState.expand() }
                         },
                         onListen = { onListeningChange(true) },
+                        onSendDanmaku = openDanmakuInput,
+                        danmakuEnabled = danmakuPrefs.enabled,
+                        onDanmakuEnabledChange = onDanmakuEnabledChange,
                         onCache = { cacheSheetOpen = true },
                         // 全屏下这一栏根本不组合,所以不必先退出全屏 —— 能点到这个按钮
                         // 就说明已经不在全屏了。
@@ -874,6 +949,10 @@ fun VideoScreen(
         // 它要按,而画面那个 Box 的下四分之一正是进度条。挂在整页这一层,它落在简介/评论
         // 上方,离手近又不压任何控件;而且它是这一层的**兄弟节点而不是列表的孩子**,进出
         // 不会让下面那一整栏重新布局。
+        // **发弹幕的输入层是整页的兄弟节点,不在 rootModifier 那个 Box 里面。** 那个 Box 单栏时
+        // 自己垫了一条手势条的高度(而且是普通 padding,不是消费掉的 inset),输入层套在里面的话
+        // 键盘弹起来时会在两者之间空出正好那么一条。
+        Box(modifier = Modifier.fillMaxSize()) {
         Box(modifier = rootModifier) {
         if (expandedLayout) {
             // 主区约三分之二,和规范给的比例一致。**全屏也走这个分支**,只是右栏不组合、
@@ -957,6 +1036,25 @@ fun VideoScreen(
                 positionMillis = audioState.cloudResumeMillis,
                 onJump = { active?.seekTo(it) },
                 modifier = Modifier.align(ToastAnchorInDetail).padding(Spacing.Comfortable),
+            )
+        }
+        }
+
+        // 全屏下不给:那时这一行按钮根本不组合,而横屏起键盘会铺掉大半个画面——发弹幕要看着
+        // 画面发,盖掉画面就没有可发的对象了。想发先退出全屏。
+        if (danmakuInputOpen && !fullscreen) {
+            DanmakuInputLayer(
+                text = danmakuDraft,
+                onTextChange = { danmakuDraft = it },
+                state = danmakuSend,
+                onSend = {
+                    onSendDanmaku(
+                        danmakuDraft,
+                        audioState.queue?.currentCid ?: 0L,
+                        danmakuProgress,
+                    )
+                },
+                onDismiss = closeDanmakuInput,
             )
         }
         }

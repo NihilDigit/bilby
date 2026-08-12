@@ -16,7 +16,7 @@ data class SpaceUserInfoDto(
     val face: String = "",
     val sign: String = "",
     val level: Int = 0,
-    /** 关注关系属性值:0 未关注、2 已关注、4 互关、128 已拉黑、-1 是自己。见 FollowState。 */
+    /** 关注关系属性值:0 未关注、1 悄悄关注、2 已关注、4/6 互关、128 已拉黑、-1 是自己。见 FollowState。 */
     val relation: Int = 0,
     /** 直播间。这个接口本来就带,所以空间页判断"在不在播"不需要额外一次请求。 */
     @SerialName("live_room") val liveRoom: SpaceLiveRoomDto? = null,

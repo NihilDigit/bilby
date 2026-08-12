@@ -20,6 +20,7 @@ import dev.bilby.data.SponsorSegment
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
 import dev.nihildigit.danmaku.Danmaku
+import dev.nihildigit.danmaku.DanmakuMode
 import dev.nihildigit.danmaku.SpecialDanmaku
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -47,8 +48,11 @@ import dev.bilby.player.AudioPlaybackService
 import dev.bilby.player.QueueItem
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -76,6 +80,20 @@ sealed interface CoinAttempt {
     data object Succeeded : CoinAttempt
     data class Failed(val message: String) : CoinAttempt
 }
+
+/**
+ * 发弹幕这一次的进展。与 [CoinAttempt] 同形,理由也一样:[Sent] 是"发出去了,面板可以关了",
+ * 和 [Idle] 的"此刻没有请求在飞"不是一回事。
+ */
+sealed interface DanmakuSend {
+    data object Idle : DanmakuSend
+    data object Sending : DanmakuSend
+    data object Sent : DanmakuSend
+    data class Failed(val message: String) : DanmakuSend
+}
+
+/** 弹幕只发白字,见 [dev.bilby.danmaku.DanmakuRepository.post]。 */
+private const val WHITE = 0xFFFFFF
 
 class VideoViewModel(
     initialBvid: String,
@@ -324,6 +342,73 @@ class VideoViewModel(
     private val _danmakuLoadFailed = MutableStateFlow(false)
     val danmakuLoadFailed: StateFlow<Boolean> = _danmakuLoadFailed.asStateFlow()
 
+    /**
+     * 自己刚发出去的那条弹幕。
+     *
+     * **不并进 [_danmakuPool]。** 那个池是"服务端这一段有哪些弹幕",整段替换、随 cid 重建;
+     * 而这一条要的是"此刻立刻上屏",走的是引擎的 `appendNow`(直播那条到达流用的是同一个
+     * 入口)。塞进池里的话,下一次分段追加会把它一起重编,它的出现时间是发送时的播放进度,
+     * 重编之后就会在当前位置再飘一遍。
+     *
+     * 用 [MutableSharedFlow] 而不是 StateFlow:这是一个事件,不是状态 —— 状态会在转屏后
+     * 重放,表现为转一次屏自己的弹幕又飘一次。
+     */
+    private val _selfDanmaku = MutableSharedFlow<Danmaku>(extraBufferCapacity = 4)
+    val selfDanmaku: SharedFlow<Danmaku> = _selfDanmaku.asSharedFlow()
+
+    /** 发弹幕这一次的进展,面板靠它显示转圈与失败原因。 */
+    private val _danmakuSend = MutableStateFlow<DanmakuSend>(DanmakuSend.Idle)
+    val danmakuSend: StateFlow<DanmakuSend> = _danmakuSend.asStateFlow()
+
+    /**
+     * 发一条弹幕。[cid] 与 [progressMillis] 由页面给 —— 播放器装着哪一 P、放到了哪里,
+     * 权威在服务那侧,ViewModel 手上的详情只有默认的 P1。
+     *
+     * **失败不清空草稿**:面板留在原地,人改一个字就能再发一次。成功才清,由 [DanmakuSend.Sent]
+     * 通知页面关面板。
+     */
+    fun sendDanmaku(text: String, cid: Long, progressMillis: Long) {
+        val content = text.trim()
+        if (content.isEmpty() || cid == 0L) return
+        if (_danmakuSend.value is DanmakuSend.Sending) return
+        _danmakuSend.value = DanmakuSend.Sending
+        val bvid = this.bvid
+        val startGeneration = generation
+        viewModelScope.launch {
+            when (val result = danmakuRepository.post(cid, bvid, content, progressMillis)) {
+                is BiliResult.Ok -> ifCurrent(startGeneration) {
+                    _danmakuSend.value = DanmakuSend.Sent
+                    _selfDanmaku.tryEmit(
+                        Danmaku(
+                            id = result.value,
+                            // 上屏时间由引擎按当前时钟重打(appendNow 的语义),这里给的是
+                            // 发送时的进度,只为让这条弹幕在池里也说得出自己属于哪一刻。
+                            playTimeMillis = progressMillis,
+                            mode = DanmakuMode.SCROLL,
+                            color = WHITE,
+                            text = content,
+                            fontSize = null,
+                            isSelf = true,
+                        ),
+                    )
+                }
+
+                is BiliResult.ApiError -> ifCurrent(startGeneration) {
+                    _danmakuSend.value = DanmakuSend.Failed("${result.message}(${result.code})")
+                }
+
+                is BiliResult.Failure -> ifCurrent(startGeneration) {
+                    _danmakuSend.value = DanmakuSend.Failed(result.cause.message ?: "网络错误")
+                }
+            }
+        }
+    }
+
+    /** 面板关掉了,或者失败提示看过了。 */
+    fun clearDanmakuSend() {
+        _danmakuSend.value = DanmakuSend.Idle
+    }
+
     /** 当前弹幕池所属的 cid,换 cid 时用来判断在飞的请求是否已经过期。 */
     private var danmakuCid = 0L
 
@@ -401,6 +486,7 @@ class VideoViewModel(
         _danmakuPool.value = emptyList()
         _specialDanmakuPool.value = emptyList()
         _danmakuLoadFailed.value = false
+        _danmakuSend.value = DanmakuSend.Idle
         danmakuCid = 0L
         requestedDanmakuSegments.clear()
         danmakuSegmentFailures.clear()

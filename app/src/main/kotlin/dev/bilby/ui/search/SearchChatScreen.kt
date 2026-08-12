@@ -47,7 +47,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -58,6 +57,7 @@ import dev.bilby.agent.AgentTurnState
 import dev.bilby.agent.AnswerBlock
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.AgentTurnView
+import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.components.AnswerBlocks
 import dev.bilby.agent.TraceItem
 import dev.bilby.data.SearchUser
@@ -663,16 +663,6 @@ private fun SearchModeMenu(
  * 搜索接口返回原始整数计数,这里自己做展示折算。分档除数取自资源:
  * 中文按万/亿分档,英文按 K/M,只翻译单位后缀会让英文差一个量级。
  */
-@Composable
-private fun formatCount(count: Long): String {
-    val large = integerResource(R.integer.count_divisor_large)
-    val small = integerResource(R.integer.count_divisor_small)
-    return when {
-        count >= large -> stringResource(R.string.count_large, count.toDouble() / large)
-        count >= small -> stringResource(R.string.count_small, count.toDouble() / small)
-        else -> count.toString()
-    }
-}
 
 // ---- Preview ----
 

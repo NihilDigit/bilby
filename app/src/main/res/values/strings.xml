@@ -223,6 +223,11 @@
     <string name="player_subtitle">字幕</string>
     <string name="player_subtitle_off">关闭字幕</string>
     <string name="player_danmaku">弹幕</string>
+    <string name="danmaku_send">发弹幕</string>
+    <string name="danmaku_show">显示弹幕</string>
+    <string name="danmaku_hide">隐藏弹幕</string>
+    <string name="danmaku_input_hint">发一条弹幕</string>
+    <string name="danmaku_send_failed">发送失败：%1$s</string>
     <string name="player_listen">听视频</string>
     <string name="player_lock">锁定</string>
     <string name="player_unlock">解锁</string>
@@ -437,4 +442,21 @@
     <string name="dynamic_other_title">关注动态</string>
     <string name="dynamic_other_entry">关注动态</string>
     <string name="dynamic_other_empty">关注的人最近没有发过视频以外的动态</string>
+    <string name="message_title">消息</string>
+    <string name="message_tab_whisper">私信</string>
+    <string name="message_tab_reply">回复我的</string>
+    <string name="message_tab_at">@我的</string>
+    <string name="message_tab_like">收到的赞</string>
+    <string name="message_tab_notice">系统通知</string>
+    <string name="message_empty_whisper">还没有私信</string>
+    <string name="message_empty_reply">还没有人回复你</string>
+    <string name="message_empty_at">还没有人@你</string>
+    <string name="message_empty_like">还没有收到赞</string>
+    <string name="message_empty_notice">没有系统通知</string>
+    <string name="message_actors">%1$s 等 %2$d 人</string>
+    <string name="whisper_empty">还没有消息</string>
+    <string name="whisper_input_hint">发一条私信</string>
+    <string name="whisper_send_failed">发送失败：%1$s</string>
+    <string name="whisper_unsupported">暂不支持的消息（类型 %1$d）</string>
+    <string name="whisper_system_account">系统消息</string>
 </resources>

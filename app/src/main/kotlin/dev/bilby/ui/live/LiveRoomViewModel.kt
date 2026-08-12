@@ -62,6 +62,13 @@ data class LiveRoomUiState(
     val chat: List<LiveChatLine> = emptyList(),
     val superChats: List<LiveMessage.SuperChat> = emptyList(),
     val guards: LiveGuardsState = LiveGuardsState(),
+    /** 这一条正在发。发送中输入栏不可再发,避免连点发出两条。 */
+    val sendingDanmaku: Boolean = false,
+    /**
+     * 上一次发送失败的原因。**留在这儿直到下一次发送**,不自动消失:直播间没有别的地方
+     * 说这句话,而失败的常见原因(等级不够、房间禁言、被风控)都需要人读一眼才知道下一步。
+     */
+    val sendError: String? = null,
 )
 
 /**
@@ -217,6 +224,29 @@ class LiveRoomViewModel(
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * 发一条弹幕。
+     *
+     * **发出去之后什么都不加**:自己那条会由弹幕长连接原样推回来(`LiveDanmakuClient` 按 mid
+     * 标 `isSelf`),同时进聊天栏和画面。本地再补一条就是两遍 —— 这和点播那边正相反,
+     * 那边服务端不会把弹幕推给自己,所以必须本地回显。
+     *
+     * 未开播时不发:房间没开播时服务端会拒,而界面此刻显示的是封面,弹幕发出去也无处可去。
+     */
+    fun sendDanmaku(text: String) {
+        val message = text.trim()
+        if (message.isEmpty() || _state.value.sendingDanmaku || !_state.value.isLive) return
+        _state.update { it.copy(sendingDanmaku = true, sendError = null) }
+        viewModelScope.launch {
+            val error = when (val result = repository.sendDanmaku(roomId, message)) {
+                is BiliResult.Ok -> null
+                is BiliResult.ApiError -> "${result.message}(${result.code})"
+                is BiliResult.Failure -> result.cause.message ?: "网络错误"
+            }
+            _state.update { it.copy(sendingDanmaku = false, sendError = error) }
         }
     }
 

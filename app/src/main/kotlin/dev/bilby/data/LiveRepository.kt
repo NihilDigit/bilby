@@ -10,6 +10,7 @@ import dev.bilby.api.dto.LiveRoomH5InfoDto
 import dev.bilby.api.dto.LiveRoomPlayInfoDto
 import dev.bilby.api.getData
 import dev.bilby.api.map
+import dev.bilby.api.postAction
 import dev.bilby.BiliLog
 
 /** 一条选定的直播流。[url] 已经把 `host + base_url + extra` 三段拼好。 */
@@ -112,9 +113,58 @@ class LiveRepository(private val client: BiliClient) {
         return result.map { LiveGuardPage(items = it.guardTopList, hasMore = it.hasMore == 1) }
     }
 
+    /**
+     * 发一条直播弹幕(PiliPlus `http/live.dart:37-75`)。
+     *
+     * 与点播那条(`x/v2/dm/post`)是**两个完全不同的接口**,只有"发一句话"这件事相同:
+     * 主机是 `live.bilibili.com`、业务字段全在 body、query 里只有一个要签名的 `web_location`。
+     * 照点播那条的形状发过来只会被拒。
+     *
+     * 参数照抄,包括那几个看起来可以省的:`bubble`/`room_type`/`jumpfrom`/`reply_*`/`statistics`
+     * 一个都没删 —— 风控按动作算,这一条 Bilby 还没有实测过哪些是必需的
+     * (点播那条实测下来 `dm_id`... 见 notes/danmaku.md §4,同类的坑已经踩过一次)。
+     * 表情、回复某条弹幕、气泡这些 PiliPlus 支持的形态这里都不做,只发白色滚动文本。
+     *
+     * **不做本地回显。** 自己发的弹幕会由弹幕长连接原样推回来(带自己的 mid,
+     * `LiveDanmakuClient` 据此置 `isSelf`),再补一条本地的就会看到两遍。
+     */
+    suspend fun sendDanmaku(roomId: Long, message: String): BiliResult<Unit> = client.postAction(
+        url = "${BiliConstants.LIVE_HOST}/msg/send",
+        params = mapOf("web_location" to WEB_LOCATION_SEND_MSG),
+        signedParams = true,
+        form = mapOf(
+            "bubble" to "0",
+            "msg" to message,
+            "color" to WHITE_COLOR.toString(),
+            "mode" to "1",
+            "room_type" to "0",
+            "jumpfrom" to "0",
+            "reply_mid" to "0",
+            "reply_attr" to "0",
+            "replay_dmid" to "",
+            "statistics" to STATISTICS,
+            "reply_type" to "0",
+            "reply_uname" to "",
+            "fontsize" to DEFAULT_FONT_SIZE.toString(),
+            // 点播那条的 rnd 是微秒,这条是**秒**(PiliPlus 两处分别写着 `microsecondsSinceEpoch`
+            // 和 `millisecondsSinceEpoch ~/ 1000`)。两个接口各有各的约定,不要统一。
+            "rnd" to (System.currentTimeMillis() / 1000).toString(),
+            "roomid" to roomId.toString(),
+        ),
+        // 这一条要 `csrf` 和 `csrf_token` 两个名字都在,见 BiliClient。
+        csrfTokenAlias = true,
+        referer = BiliConstants.LIVE_REFERER,
+    )
+
     companion object {
         /** 原画。取不到时服务端会自己降档,`current_qn` 会告诉我们实际给了哪一档。 */
         const val DEFAULT_QN = 10000
+
+        /** 发弹幕那条的埋点位置。它参与 WBI 签名,所以不能省。 */
+        private const val WEB_LOCATION_SEND_MSG = "444.8"
+        private const val WHITE_COLOR = 0xFFFFFF
+        private const val DEFAULT_FONT_SIZE = 25
+        private const val STATISTICS = """{"appId":100,"platform":5}"""
 
         const val GUARD_PAGE_SIZE = 20
     }

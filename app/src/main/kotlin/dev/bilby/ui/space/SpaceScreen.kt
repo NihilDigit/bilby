@@ -40,7 +40,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
@@ -79,6 +78,7 @@ import dev.bilby.data.SpaceVideoItem
 import dev.bilby.data.model.DynamicAdditional
 import dev.bilby.data.model.DynamicCard
 import dev.bilby.ui.components.FollowButton
+import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.FullScreenError
@@ -974,16 +974,6 @@ private fun SpaceHeaderActions(
  * 计数折算。分档除数也是本地化资源:中文按万/亿分档,英文按 K/M,
  * 只翻译单位后缀会让英文差一个量级。
  */
-@Composable
-private fun formatCount(value: Long): String {
-    val large = integerResource(R.integer.count_divisor_large)
-    val small = integerResource(R.integer.count_divisor_small)
-    return when {
-        value >= large -> stringResource(R.string.count_large, value.toDouble() / large)
-        value >= small -> stringResource(R.string.count_small, value.toDouble() / small)
-        else -> value.toString()
-    }
-}
 
 /** 「挖存货」的两条路:按时间看最近的,按播放量看代表作(DESIGN 2.4)。 */
 private val ArchiveOrders = listOf(

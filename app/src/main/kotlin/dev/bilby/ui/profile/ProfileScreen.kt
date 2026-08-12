@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.Settings
@@ -275,6 +276,8 @@ fun ProfileScreen(
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
+    /** 进消息页。见 MessagesEntry 那一行的说明:入口不带任何计数。 */
+    onOpenMessages: () -> Unit,
     onOpenFavFolder: (FavFolder) -> Unit,
     onSettingsClick: () -> Unit,
     /** 点账号那一块进自己的空间。 */
@@ -302,6 +305,14 @@ fun ProfileScreen(
         // 账号与下面三节之间**不画分割线**。divider 页说 full-width 用于分隔"larger sections
         // of unrelated content",并要求 sparingly;而下面每一节自己都顶着一个 SectionHeader,
         // 那行标题已经说明"换了一节"了,再加一条线是同一件事说两遍。
+        // **消息这一行画在历史记录上面,不是塞进头像那一行。** 那一行是头像 + 名字 + 个性签名
+        // + 设置齿轮,再挤一个图标只能从签名身上抠宽度。
+        //
+        // 样式照首页的「关注动态」入口(FeedScreen 里那个 ListItem):一行字加一个箭头。
+        // **不带未读计数,也不带红点** —— DESIGN 1.3 两处写着不做,而那一行的说明写得更死:
+        // 这类入口正是它们最容易被加回来的位置。
+        MessagesEntry(onOpenMessages)
+
         if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
             // Expanded 之后把三个低密度预览区分成两个可扫读的 pane：历史和稍后再看是
             // 同一类视频清单，收藏夹是另一类用户整理内容。Medium 仍保持单列，避免在
@@ -330,6 +341,27 @@ fun ProfileScreen(
 
         Spacer(Modifier.height(Spacing.Comfortable))
     }
+}
+
+/** 见调用处的说明:一行入口,没有计数。 */
+@Composable
+private fun MessagesEntry(onClick: () -> Unit) {
+    ListItem(
+        headlineContent = {
+            Text(
+                text = stringResource(R.string.message_title),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        },
+        trailingContent = {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
+    )
 }
 
 /**
@@ -724,6 +756,7 @@ private fun ProfileScreenPreview() {
             onOpenHistory = {},
             onOpenToView = {},
             onOpenOffline = {},
+            onOpenMessages = {},
             onOpenFavFolder = {},
             onSettingsClick = {},
             onOpenSelf = {},
@@ -745,6 +778,7 @@ private fun ProfileScreenErrorPreview() {
             onOpenHistory = {},
             onOpenToView = {},
             onOpenOffline = {},
+            onOpenMessages = {},
             onOpenFavFolder = {},
             onSettingsClick = {},
             onOpenSelf = {},

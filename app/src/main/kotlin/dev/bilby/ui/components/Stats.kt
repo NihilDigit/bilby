@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PlayCircle
-import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -16,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.bilby.R
@@ -52,7 +52,9 @@ fun StatRow(
             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
             playText?.let { Stat(Icons.Outlined.PlayCircle, stringResource(R.string.stat_play), it) }
-            danmakuText?.let { Stat(Icons.Outlined.Subtitles, stringResource(R.string.stat_danmaku), it) }
+            // 弹幕数用自己那个字形,不用字幕框([BilbyIcons])。这一行常常和播放页的控制条同屏,
+            // 而那上面的字幕框说的是字幕 —— 同一个符号在一屏里说两件事。
+            danmakuText?.let { Stat(BilbyIcons.Danmaku, stringResource(R.string.stat_danmaku), it) }
             dateText?.let {
                 Text(text = it, style = MaterialTheme.typography.labelSmall, color = color)
             }
@@ -70,5 +72,23 @@ private fun Stat(icon: ImageVector, label: String, value: String) {
         // 读屏只念一个数字说明不了它是什么。
         Icon(icon, contentDescription = label, modifier = Modifier.size(StatIconSize))
         Text(text = value, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+/**
+ * 计数折算。分档除数取自资源:中文按万/亿,英文按 K/M —— 只翻译单位后缀会让英文差一个量级。
+ *
+ * **整个应用只有这一份。** 它此前在 VideoTabs、SpaceScreen、DynamicCardView、SearchChatScreen
+ * 里各有一份逐字相同的私有拷贝,于是"计数怎么显示"这件事没有可改的地方:改一处剩下三处照旧,
+ * 而它们出现在同一屏上(动态流里的视频行和播放页的计数行)。
+ */
+@Composable
+fun formatCount(value: Long): String {
+    val large = integerResource(R.integer.count_divisor_large)
+    val small = integerResource(R.integer.count_divisor_small)
+    return when {
+        value >= large -> stringResource(R.string.count_large, value.toDouble() / large)
+        value >= small -> stringResource(R.string.count_small, value.toDouble() / small)
+        else -> value.toString()
     }
 }

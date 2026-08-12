@@ -127,3 +127,28 @@ data object Offline : NavKey
  */
 @Serializable
 data class LiveRoom(val roomId: Long) : NavKey
+
+/**
+ * 消息。私信、回复、@、赞、系统通知五格。
+ *
+ * 按 DESIGN 1.1 的机制表对过:内容全部是**别人对用户自己的东西的回应**,以及用户自己的
+ * 会话,不排序、不推荐、不会自己长出新东西。**入口在「我的」页,而且不带任何计数或红点**
+ * (1.3):红点把"有新东西"变成一个替用户安排注意力的信号,而这一页是他自己走进来的。
+ */
+@Serializable
+data object Messages : NavKey
+
+/**
+ * 一个私信会话。
+ *
+ * 名字随路由带,不在会话页里另查一次:列表那边刚拿到过(`account/v1/user/cards`),
+ * 而顶栏要在第一帧就有标题——否则从列表点进来会先闪一个空标题。
+ */
+@Serializable
+data class Whisper(
+    val talkerId: Long,
+    val talkerName: String,
+    val talkerFaceUrl: String,
+    /** 对面是系统通知号,没有空间可去。判据见 `WhisperSession.isSystem`。 */
+    val isSystem: Boolean,
+) : NavKey
