@@ -788,6 +788,9 @@ fun VideoScreen(
                         hideStatusBar = expandedLayout,
                         // 返回/分享画在壳外面(下面那个 if),渐变归壳画,才落得到弹幕下面。
                         topScrim = !fullscreen,
+                        // 失败态有自己的重试指示(PlaybackFailure),这时壳里那个要让开,
+                        // 不然文字后面还有一朵在转。
+                        externalLoading = (audioState.loading || state.loading) && playbackError == null,
                         onReportProgress = onReportProgress,
                         title = state.detail?.title.orEmpty(),
                 seekBarSegments = sponsorSegments.toSeekBarSegments(),
@@ -833,13 +836,10 @@ fun VideoScreen(
 
                 // 盖在画面上而不是排在下面:失败时画面本来就是黑的,而简介区在一屏之外,
                 // 提示放那儿等于没有。state.error 那一支是"流都没取到",两者不会同时出现。
-                //
-                // **取流期间必须有东西在转。** BilbyPlayer 自己只有"画面"和"封面占位"两态,
-                // 都是静止的;而失败提示被压后了 5 秒(见 playbackError),不在这里补一个
-                // 指示器的话,那 5 秒里屏幕上是一张不动的封面,和卡死分不出来。
+                // 取流/重试退避期间的指示器归 PlayerShell(externalLoading),这里只画失败态。
                 val shownError = playbackError
-                when {
-                    shownError != null -> PlaybackFailure(
+                if (shownError != null) {
+                    PlaybackFailure(
                         message = shownError,
                         // 两个 loading 都要看:重取那一步归本页(state.loading),重新装载
                         // 那一步归服务(audioState.loading)。只看后者的话,重取在飞的那一两秒
@@ -848,9 +848,6 @@ fun VideoScreen(
                         onRetry = retryPlayback,
                         modifier = Modifier.align(Alignment.Center),
                     )
-
-                    audioState.loading || state.loading ->
-                        PlaybackLoading(Modifier.align(Alignment.Center))
                 }
 
                 // 两条提示摞成一列而不是各自对齐:同时出现的机会很小(一条在起播那一刻,一条在
@@ -1130,31 +1127,6 @@ fun VideoScreen(
                 onCacheSelection(selected, quality)
             },
             onDismiss = { cacheSheetOpen = false },
-        )
-    }
-}
-
-/**
- * 取流/重试期间画面上那个转圈。
- *
- * 外观和 [PlaybackFailure] 里的重试指示是同一套媒体控件(24dp):它们出现在同一个位置,是同
- * 一件事的两个阶段,长得不一样会读成两个不同的东西。
- *
- * 底下垫一层半透明圆:这时候画面上多半是封面图,亮色封面上一个纯白的圈基本看不见。
- */
-@Composable
-private fun PlaybackLoading(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .background(FixedColors.PlayerControlScrim),
-        contentAlignment = Alignment.Center,
-    ) {
-        CircularProgressIndicator(
-            color = FixedColors.OnMedia,
-            strokeWidth = 2.dp,
-            modifier = Modifier.size(24.dp),
         )
     }
 }

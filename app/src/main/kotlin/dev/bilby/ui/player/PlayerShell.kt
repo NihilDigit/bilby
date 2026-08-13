@@ -202,6 +202,11 @@ fun PlayerShell(
      * (见 [MediaTopScrim])。
      */
     topScrim: Boolean = false,
+    /**
+     * 播放器状态之外的等待:取流协程在飞、失败后的重试退避。这些窗口里播放器停在 IDLE,
+     * 光看 BUFFERING 盖不住,由页面把服务报的 loading 传进来,和缓冲共用同一个指示器。
+     */
+    externalLoading: Boolean = false,
     modifier: Modifier = Modifier,
     gestures: PlayerGestureOptions = PlayerGestureOptions(),
     /** 长按画面时的临时倍速,由设置页给(`SettingsStore.FAST_FORWARD_SPEEDS`)。 */
@@ -416,9 +421,10 @@ fun PlayerShell(
         // 封面也拿不到时退化成纯黑——Box 本身的背景已经是黑的,不用再多画一层。
 
         // 取流在轮到这一条时才发生(LazyMediaSource),那段时间加上 prepare 画面全黑,
-        // 没有指示的话和死机分不出来。判据直接问播放器:BUFFERING 同时盖住取流、prepare
-        // 和播放途中的再缓冲,三者对观看的人是同一件事 —— 声音画面停了,但马上会回来。
-        if (buffering) {
+        // 没有指示的话和死机分不出来。BUFFERING 盖住取流、prepare 和播放途中的再缓冲;
+        // externalLoading 补上播放器停在 IDLE 的等待(重试退避)。对观看的人全是同一件事:
+        // 声音画面停了,但马上会回来 —— 所以是同一个指示器,不是几个各画各的。
+        if (buffering || externalLoading) {
             LoadingIndicator(modifier = Modifier.align(Alignment.Center))
         }
 
