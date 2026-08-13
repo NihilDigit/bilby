@@ -717,8 +717,10 @@ class AudioPlaybackService : MediaSessionService() {
      * 重新取一次流 —— 这正是重试要的:直链过期是最常见的那种失败,拿同一条地址再 prepare
      * 一次必然还是同样的错。
      *
-     * **不用"删掉再插回去"。** 当前这一条被删的那一瞬间播放器会自动前进到下一条,而那不是
-     * 用户要的东西。
+     * **顺序是插入 → seek → 删除,不用 `replaceMediaItem`。** replace 的实现同样是先插后删,
+     * 但删除正在播的条目时落点由 `resolveSubsequentPeriod` 解析,而它认随机顺序:顺序播放时
+     * 落到替换条目,随机模式下落到乱序表里随机一条。真机上出过(随机下切 P 跳去队列里
+     * 不知道哪条)。显式 seek 不经过这层解析,先 seek 过去再删旧条,落点就钉死了。
      */
     private fun reloadCurrent(
         cid: Long,
@@ -731,14 +733,16 @@ class AudioPlaybackService : MediaSessionService() {
         resolvingBvid = existing.mediaId
         playIntent = playWhenReady
         publishState(loading = true)
-        player.replaceMediaItem(
-            index,
+        player.addMediaItem(
+            index + 1,
             existing.toQueueItem().copy(cid = cid).toMediaItem(
                 resumePart = false,
                 startPositionMillis = positionOverrideMillis,
                 loadNonce = ++loadCounter,
             ),
         )
+        player.seekToDefaultPosition(index + 1)
+        player.removeMediaItem(index)
         player.prepare()
         player.playWhenReady = playWhenReady
     }

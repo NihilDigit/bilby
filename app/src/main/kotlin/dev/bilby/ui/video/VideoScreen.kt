@@ -30,6 +30,8 @@ import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
@@ -121,7 +123,7 @@ import dev.bilby.ui.components.rememberCollapsingHeaderState
  * **这里不建播放器**(DESIGN 2.4b:一个播放状态,两个 UI)。播放器归 [AudioPlaybackService]
  * 所有,页面连上去,把要播的流交给它,再通过 MediaController 控制;切到听视频只是换掉这层 UI。
  */
-@OptIn(UnstableApi::class, ExperimentalMaterial3Api::class)
+@OptIn(UnstableApi::class, ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun VideoScreen(
     /**
@@ -813,7 +815,10 @@ fun VideoScreen(
                         modifier = Modifier.align(Alignment.Center),
                     )
 
-                    else -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                    // 和壳内缓冲用同一个指示器:这里盖的是"服务还没装上这一条"的窗口,
+                    // 壳内那个盖的是装上之后的取流与缓冲,两段接起来观感是同一次等待。
+                    // CircularProgressIndicator 不用:alpha 版画一圈背景轨道,黑底上是两层圆环。
+                    else -> LoadingIndicator(modifier = Modifier.align(Alignment.Center))
                 }
 
                 if (!fullscreen) {
