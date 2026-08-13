@@ -105,7 +105,8 @@ class HistoryRepository(private val client: BiliClient) {
      * 记录,回到官方端也要在那边改回来。
      *
      * 它**只挡新记录**,已有的历史一条不动(要清得走 [clear] 或 [delete]),也不影响播放
-     * 进度:进度走 `x/v2/history/report` 的心跳,是另一条链路,暂停期间续播照常。
+     * 进度:进度走 `x/click-interface/web/heartbeat`(见 [HeartbeatReporter] 与 notes §8.1),
+     * 是另一条链路,暂停期间续播照常。
      */
     suspend fun setPaused(paused: Boolean): BiliResult<Unit> = client.postAction(
         "${BiliConstants.WEB_HOST}/x/v2/history/shadow/set",
