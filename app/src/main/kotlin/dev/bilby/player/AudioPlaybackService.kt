@@ -77,6 +77,12 @@ data class QueueState(
     val positionInQueue: Int = 0,
     val size: Int = 0,
     val shuffled: Boolean = false,
+    /**
+     * 上/下一条此刻按不按得动,来自播放器,认随机顺序。按钮可用态用这两个,不要拿
+     * [positionInQueue] 推:那是列表位置,随机播放下列表第 1 条照样可以有上一条。
+     */
+    val canPrevious: Boolean = false,
+    val canNext: Boolean = false,
     /** 队列的来源,如"直播回放""UP 主投稿"。见 [QueueBuildResult.sourceLabel]。 */
     val sourceLabel: String = "",
     /** 来源的身份,非空时 [sourceLabel] 那一行可以点进目录。见 [QueueBuildResult.source]。 */
@@ -1164,6 +1170,8 @@ class AudioPlaybackService : MediaSessionService() {
                 },
                 size = player.mediaItemCount,
                 shuffled = player.shuffleModeEnabled,
+                canPrevious = player.hasPreviousMediaItem(),
+                canNext = player.hasNextMediaItem(),
                 sourceLabel = sourceLabel,
                 source = queueSource,
                 enriching = queueEnriching,

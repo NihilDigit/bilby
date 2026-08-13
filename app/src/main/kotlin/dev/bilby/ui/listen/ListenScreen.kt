@@ -425,8 +425,8 @@ fun ListenScreen(
                     isPlaying = state.isPlaying,
                     loading = state.loading,
                     speed = speed,
-                    hasPrevious = (state.queue?.positionInQueue ?: 0) > 1,
-                    hasNext = (state.queue?.positionInQueue ?: 0) in 1 until (state.queue?.size ?: 0),
+                    hasPrevious = state.queue?.canPrevious == true,
+                    hasNext = state.queue?.canNext == true,
                     sleepTimer = sleepTimer,
                     // 倍速折进去:2x 下剩的十分钟视频只放五分钟,不折算的话这个数会一直偏大。
                     itemRemainingMillis = (duration - position)
