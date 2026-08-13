@@ -61,7 +61,7 @@ fun PlayerDanmakuLayer(
 ) {
     val isLive = feed is DanmakuFeed.Stream
     val clock = remember(player, isLive) {
-        if (isLive) LiveDanmakuClock(player) else PlayerDanmakuClock()
+        if (isLive) LiveDanmakuClock() else PlayerDanmakuClock()
     }
     val options = remember(prefs, fontSizeSp) {
         DanmakuOptions(
@@ -169,11 +169,15 @@ private class PlayerDanmakuClock : DanmakuClock {
  *
  * 直播也不需要跟媒体时间轴对齐:弹幕是"此刻到达、此刻显示",没有 seek 也没有回看,唯一的
  * 要求是单调地按 1 倍速往前走。
+ *
+ * **[isPlaying] 恒为 true,不委托给播放器。** 这条时间轴是自己的,暂停时它照走 —— 委托出去
+ * 的话两者对不上:帧循环在暂停时挂起,而每来一条弹幕又会触发一帧重排,画面于是按已经走掉的
+ * 那段时间跳一格再冻住,一卡一卡地往前挪。暂停的是画面,弹幕照流。
  */
-private class LiveDanmakuClock(private val player: Player) : DanmakuClock {
+private class LiveDanmakuClock : DanmakuClock {
     private val start = TimeSource.Monotonic.markNow()
     override val positionMillis: Long get() = start.elapsedNow().inWholeMilliseconds
-    override val isPlaying: Boolean get() = player.isPlaying
+    override val isPlaying: Boolean get() = true
     override val playbackSpeed: Float get() = 1f
 }
 
