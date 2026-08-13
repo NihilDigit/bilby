@@ -135,7 +135,6 @@ fun VideoScreen(
     related: RelatedState,
     commentState: CommentUiState,
     sponsorSegments: List<SponsorSegment>,
-    onReportProgress: (position: Long, duration: Long) -> Unit,
     onFindRelated: () -> Unit,
     /** 盘上已有的东西。缓存面板拿它把已有的那几条标出来并禁选。 */
     cached: CachedIndex = CachedIndex(),
@@ -246,7 +245,9 @@ fun VideoScreen(
 
         onDispose {
             controller?.let { connected ->
-                onReportProgress(connected.currentPosition, connected.duration.coerceAtLeast(0))
+                // 这里不再补一次进度上报。上报归服务的进度会话([dev.bilby.player.ProgressSession]),
+                // 它每 5 秒一条,离开页面时最多丢掉最后那几秒;而页面这一份**只在播放页组合着的
+                // 时候存在**,听视频、切后台、进程被杀这三种它一次都赶不上。
                 // 播放页离开就暂停,**但只在播放器装的还是本页这一条时**。听视频是页面内的
                 // 状态,不会走到这里。
                 //
@@ -771,7 +772,6 @@ fun VideoScreen(
                         // 失败态有自己的重试指示(PlaybackFailure),这时壳里那个要让开,
                         // 不然文字后面还有一朵在转。
                         externalLoading = (audioState.loading || state.loading) && playbackError == null,
-                        onReportProgress = onReportProgress,
                         title = state.detail?.title.orEmpty(),
                 seekBarSegments = sponsorSegments.toSeekBarSegments(),
                         subtitleTracks = subtitleTracks,

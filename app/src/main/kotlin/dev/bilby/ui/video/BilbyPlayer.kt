@@ -26,11 +26,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,13 +68,10 @@ import dev.nihildigit.danmaku.Danmaku
 import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.nihildigit.danmaku.DanmakuHost
 import dev.nihildigit.danmaku.DanmakuViewport
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
-
-private const val PROGRESS_REPORT_INTERVAL_MILLIS = 5_000L
 
 /**
  * 播放器画面 + 控件。非全屏时被塞进 16:9 容器,全屏时铺满整屏,两种形态共用这一个 composable,
@@ -85,7 +80,10 @@ private const val PROGRESS_REPORT_INTERVAL_MILLIS = 5_000L
  * 这里**不做**任何"下一个视频"的自动跳转(DESIGN 1.3/2.3),全屏下也不做。
  *
  * 播放器不归这里所有(DESIGN 2.4b:播放器归后台服务),所以这个 composable 只读状态、发命令,
- * 不 prepare、不 release。
+ * 不 prepare、不 release。**进度上报同样不在这里**:它归服务的进度会话
+ * ([dev.bilby.player.ProgressSession])。这一层曾经有一条 5 秒轮询,而换条的权力在服务——
+ * 听视频模式下这个 composable 根本不进组合,于是那段时间一条心跳都发不出去,自动连播时
+ * 上一条的最终位置和完播也无人上报。
  *
  * @param player 状态、控制与画面的唯一入口,实际传进来的是连到播放服务的 MediaController。
  *   Surface 也走它:`COMMAND_SET_VIDEO_SURFACE` 在 MediaController 上是有的,Surface 作为
@@ -100,7 +98,6 @@ fun BilbyPlayer(
     onQualityChange: (Int) -> Unit,
     isFullscreen: Boolean,
     onFullscreenChange: (Boolean) -> Unit,
-    onReportProgress: (positionMillis: Long, durationMillis: Long) -> Unit,
     /** 会被自动跳过的片段。只染在进度条上,不参与交互,见 [SeekBar]。 */
     seekBarSegments: List<SeekBarSegment> = emptyList(),
     /** 这条(cid)有哪些字幕轨,含 AI 生成的。为空时控制条不出现字幕按钮。 */
@@ -161,18 +158,6 @@ fun BilbyPlayer(
     /** 只在全屏时显示。竖屏下标题就在播放器正下方,再印一遍是多余的。 */
     title: String = "",
 ) {
-    val reportProgress by rememberUpdatedState(onReportProgress)
-
-    // 进程被杀不会走 onDispose,所以播放中也定期回传一次进度。服务端那份是续播的唯一来源,
-    // 只在退出时报一次的话,被杀掉的那次观看等于没发生过。**这条留在视频这一层** —— 直播
-    // 没有进度可报。
-    LaunchedEffect(player) {
-        while (true) {
-            delay(PROGRESS_REPORT_INTERVAL_MILLIS)
-            if (player.isPlaying) reportProgress(player.currentPosition, player.duration.coerceAtLeast(0))
-        }
-    }
-
     PlayerShell(
         player = player,
         attached = matchesCurrentPage,
@@ -188,7 +173,6 @@ fun BilbyPlayer(
         externalLoading = externalLoading,
         modifier = modifier,
         fastForwardSpeed = fastForwardSpeed,
-        onSeeked = { positionMillis, durationMillis -> reportProgress(positionMillis, durationMillis) },
         overlay = {
             // 弹幕层:字号由这里按形态给,层自己不认识"全屏"。
             PlayerDanmakuLayer(

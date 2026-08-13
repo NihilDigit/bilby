@@ -2029,7 +2029,6 @@ private fun VideoPane(
                     bvid,
                     container.videoRepository,
                     container.agentLoop,
-                    container.heartbeatReporter,
                     container.videoActionRepository,
                     container.settings,
                     container.sponsorBlockRepository,
@@ -2093,13 +2092,6 @@ private fun VideoPane(
         related = related,
         commentState = commentState,
         sponsorSegments = sponsorSegments,
-        // 进度只回传服务端一份(DESIGN 7)。本地不再另存:续播位置和流地址来自同一个 playurl
-        // 响应,本地那份换不到任何东西,却是"新页写下上一条进度"这类串味的唯一入口。
-        onReportProgress = { position, duration ->
-            vm.reportHeartbeat(position, duration, finished = duration > 0 && position >= duration - 1_000)
-            // 弹幕分段拉取挂在这条已有的回调上,不为它另起一条轮询——见 VideoViewModel 的注释。
-            vm.onDanmakuPlaybackPosition(position)
-        },
         onFindRelated = vm::findRelated,
         cached = cached,
         onCacheSelection = vm::cacheSelection,

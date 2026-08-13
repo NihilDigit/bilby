@@ -57,7 +57,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -168,7 +167,6 @@ internal class PlayerShellActions(
  *   改画 [placeholderCoverUrl] —— 播放器全 app 共用一份、跨页面存活,点开新内容到它真正
  *   切过去之间有一段取流窗口,这段时间里画面上还是上一条的最后几帧。
  *   **不去暂停或销毁播放器**,那会打断后台连续播放,也违反"播放器归服务所有"。
- * @param onSeeked 壳完成一次真 seek 之后回调。进度上报是页面的事(直播不报),壳不掺和。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -211,12 +209,9 @@ fun PlayerShell(
     gestures: PlayerGestureOptions = PlayerGestureOptions(),
     /** 长按画面时的临时倍速,由设置页给(`SettingsStore.FAST_FORWARD_SPEEDS`)。 */
     fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
-    onSeeked: (positionMillis: Long, durationMillis: Long) -> Unit = { _, _ -> },
     overlay: @Composable PlayerShellScope.() -> Unit = {},
     controlBar: @Composable PlayerShellScope.() -> Unit = {},
 ) {
-    val seeked by rememberUpdatedState(onSeeked)
-
     // 组件动效走 spring,不走转场那套 tween。easing-and-duration 页的注:"In the expressive
     // update, components and motion now use the motion physics system, which uses springs.
     // Products should migrate to the new system." 位移用 spatial,透明度用 effects ——
@@ -379,7 +374,6 @@ fun PlayerShell(
                 position = target
                 dragPosition = null
                 if (resumeAfterDrag) player.play()
-                seeked(target, player.duration.coerceAtLeast(0))
             }
             interactionNonce++
         },
@@ -504,7 +498,6 @@ fun PlayerShell(
                                 dragPosition?.let { target ->
                                     player.seekTo(target)
                                     position = target
-                                    seeked(target, player.duration.coerceAtLeast(0))
                                 }
                             }
                             gesture = null

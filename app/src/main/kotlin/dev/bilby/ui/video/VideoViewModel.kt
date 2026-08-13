@@ -29,10 +29,10 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import dev.bilby.data.FavFolder
-import dev.bilby.data.HeartbeatReporter
 import dev.bilby.data.MemberCard
 import dev.bilby.data.VideoActionRepository
 import dev.bilby.data.VideoDetail
@@ -97,7 +97,6 @@ class VideoViewModel(
     initialBvid: String,
     private val repository: VideoRepository,
     private val agentLoop: AgentLoop,
-    private val heartbeatReporter: HeartbeatReporter,
     private val actionRepository: VideoActionRepository,
     private val settings: SettingsStore,
     private val sponsorBlockRepository: SponsorBlockRepository,
@@ -282,9 +281,6 @@ class VideoViewModel(
      * 说话,投币没有乐观更新可回滚(见 [coin]),失败于是一点痕迹都不留。
      */
     val coinAttempt: StateFlow<CoinAttempt> = _coinAttempt.asStateFlow()
-
-    /** 本次播放会话的起点,心跳要用同一个值,不能每次上报重新取。换视频时重置,见 [resetForNewVideo]。 */
-    private var sessionStartTs = System.currentTimeMillis() / 1000
 
     private val _state = MutableStateFlow(VideoUiState())
     val state: StateFlow<VideoUiState> = _state.asStateFlow()
@@ -489,9 +485,6 @@ class VideoViewModel(
         requestedDanmakuSegments.clear()
         danmakuSegmentFailures.clear()
         lastDanmakuPositionMillis = 0L
-        // 心跳的会话起点按视频算。留着上一条的 startTs,这一条的观看时长会从上一条开始的
-        // 时刻算起,报上去的是一个越连播越离谱的数。
-        sessionStartTs = System.currentTimeMillis() / 1000
     }
 
     /**
@@ -504,6 +497,7 @@ class VideoViewModel(
         val target = bvid
         load(target)
         observeCurrentPart(target)
+        observePlaybackPosition(target)
         observeDanmakuCid(target)
         observeSubtitleTracks(target)
     }
@@ -562,11 +556,8 @@ class VideoViewModel(
         fetchDanmakuAround(cid, lastDanmakuPositionMillis)
     }
 
-    /**
-     * 播放进度驱动弹幕分段拉取。**不为此另起轮询**——播放页已经有一份(BilbyPlayer 每 5 秒
-     * 回传一次进度用于心跳),这里挂在同一个回调上,详见 VideoScreen/MainActivity 的接线。
-     */
-    fun onDanmakuPlaybackPosition(positionMillis: Long) {
+    /** 播放进度驱动弹幕分段拉取。位置从哪来见 [observePlaybackPosition]。 */
+    private fun onDanmakuPlaybackPosition(positionMillis: Long) {
         // 位置无条件记下来:开关中途被打开时要靠它知道该从哪一段拉起。
         lastDanmakuPositionMillis = positionMillis
         if (!_danmakuPrefs.value.enabled) return
@@ -581,8 +572,8 @@ class VideoViewModel(
      *
      * **预取的理由是分段边界必然出现的空窗**:分段拉取是懒的,走到 6 分钟整点才发请求,
      * 那一次请求往返期间屏上一条弹幕都没有,而这个破绽每 6 分钟准时来一次。提前量取
-     * [DANMAKU_PREFETCH_LEAD_MILLIS],比进度回调的间隔(5 秒)宽出一个数量级,不至于
-     * 正好跨过边界那一拍才想起来预取。代价是每段多提前几十秒发一个请求,请求总数不变
+     * [DANMAKU_PREFETCH_LEAD_MILLIS],比 [DANMAKU_POSITION_STEP_MILLIS] 宽出一个数量级,
+     * 不至于正好跨过边界那一拍才想起来预取。代价是每段多提前几十秒发一个请求,请求总数不变
      * ——每个段号在一条 cid 上仍然只请求一次。
      */
     private fun fetchDanmakuAround(cid: Long, positionMillis: Long) {
@@ -600,7 +591,7 @@ class VideoViewModel(
      * 而且除了一行日志之外没有任何迹象——空段和失败段在 `List<Danmaku>` 上同形,现在由
      * [dev.bilby.api.BiliResult] 分开。
      *
-     * 失败后把段号摘出来让它能重来,但**限次**:进度回调每 5 秒一次,一段 6 分钟,不限次就是
+     * 失败后把段号摘出来让它能重来,但**限次**:位置每 5 秒问一次,一段 6 分钟,不限次就是
      * 对一个正在失败的接口每段重试 70 多回,这是风控最不该踩的形状。[DANMAKU_SEGMENT_RETRIES]
      * 次之后放弃这一段,失败状态交给 [danmakuLoadFailed] 说明。
      */
@@ -854,40 +845,29 @@ class VideoViewModel(
     }
 
     /**
-     * 心跳上报。DESIGN 7 节已定案回传:它是跨端续播的必要条件,不是观看画像。
+     * 弹幕分段拉取跟着播放位置走。
      *
-     * 在线播放的续播只认服务端这一份(服务那边按 playurl 带回的位置续播),所以这里既是回传也是
-     * 我们自己下次进来的依据。
+     * 位置来自服务发的刻度(见 [dev.bilby.player.PositionTick]),不是页面自己轮询播放器:
+     * 进度上报搬进服务之后,这一层已经没有别的理由再起一条轮询,而听视频形态下播放器画面
+     * 那个 composable 根本不组合,轮询也就停了。
      *
-     * **缓存内容还要用它推进 base。** 报成功之后服务端存的就是我们报的这个数,把它记进
-     * meta.json,下次打开才分得清"服务端动了"和"这是我们自己刚报上去的"——不记的话每次重开
-     * 缓存视频都会弹一条其实来自本机的"别处已看到"。
+     * 刻度每半秒一条,这里按 [DANMAKU_POSITION_STEP_MILLIS] 收成一条:分段是 6 分钟一段,
+     * 半秒问一次除了把失败段的重试额度([DANMAKU_SEGMENT_RETRIES])在几秒内烧光之外没有任何
+     * 作用。seek 之后位置一步跨过阈值,所以拖动进度条仍然是当场拉。
+     *
+     * 只认播放器装着本页这一条的时候:播放器全 app 共用,队列翻到下一条时这条协程可能还活着。
      */
-    fun reportHeartbeat(positionMillis: Long, durationMillis: Long, finished: Boolean) {
-        val detail = _state.value.detail ?: return
-        val playback = AudioPlaybackService.state.value
-        // 播放器装的必须是本页这一条。位置和时长是从播放器读的,而全 app 只有一个播放器
-        // (DESIGN 2.4b):队列翻到下一条时本页的轮询可能还没停,不对身份就会把下一条的进度
-        // 按本页的 aid 报上去。云端那份是续播的唯一来源,报错一次,下次进来就 seek 到不存在的位置。
-        if (playback.queue?.current?.bvid != bvid) return
-        // 上报的 cid 取装载层确认过的那一个([AudioPlaybackUiState.currentCid]),不取队列的:
-        // 队列在收到打开命令的那一刻就指向新的一条,而装载还要几百毫秒,这段窗口里报上去的
-        // 就是"新 cid 配旧位置"。
-        val cid = playback.currentCid.takeIf { it != 0L } ?: return
-        // 不套 viewModelScope:这个方法最要紧的一次调用来自播放页的 onDispose,那一刻
-        // 这个 ViewModel 正在被清,scope 当场取消,请求发不出去(见 HeartbeatReporter)。
-        heartbeatReporter.report(
-            aid = detail.aid,
-            cid = cid,
-            progressSeconds = positionMillis / 1000,
-            playedTimeSeconds = positionMillis / 1000,
-            realtimeSeconds = positionMillis / 1000,
-            startTs = sessionStartTs,
-            videoDurationSeconds = durationMillis / 1000,
-            isFinished = finished,
-            // 条目不在盘上时 recordServerBase 自己就什么都不做,这里不必先查一遍。
-            onReported = { reportedMillis -> offlineStore.recordServerBase(bvid, cid, reportedMillis) },
-        )
+    private fun observePlaybackPosition(target: String) = videoScope.launch {
+        AudioPlaybackService.positionTicks
+            .map {
+                if (AudioPlaybackService.state.value.queue?.current?.bvid == target) {
+                    it.positionMillis
+                } else {
+                    -1L
+                }
+            }
+            .distinctUntilChangedBy { it / DANMAKU_POSITION_STEP_MILLIS }
+            .collect { positionMillis -> if (positionMillis >= 0) onDanmakuPlaybackPosition(positionMillis) }
     }
 
     fun toggleLike() {
@@ -1018,6 +998,9 @@ class VideoViewModel(
     }
 
     private companion object {
+        /** 位置刻度收到多粗才去问一次分段,见 [observePlaybackPosition]。 */
+        const val DANMAKU_POSITION_STEP_MILLIS = 5_000L
+
         /** 距离分段边界多久开始预取下一段,见 [fetchDanmakuAround]。 */
         const val DANMAKU_PREFETCH_LEAD_MILLIS = 30_000L
 

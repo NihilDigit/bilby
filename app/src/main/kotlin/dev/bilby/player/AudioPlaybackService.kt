@@ -4,11 +4,13 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
@@ -22,9 +24,11 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dev.bilby.BilbyApplication
 import dev.bilby.BiliLog
+import dev.bilby.BvidCodec
 import dev.bilby.PerfTrace
 import dev.bilby.R
 import dev.bilby.api.BiliResult
+import dev.bilby.data.HeartbeatReporter
 import dev.bilby.data.LiveRepository
 import dev.bilby.data.PlayInfo
 import dev.bilby.data.QueueBuildResult
@@ -198,6 +202,9 @@ class AudioPlaybackService : MediaSessionService() {
     /** 缓存列表点某一行时留下的指名,见 [PartRequest]。 */
     private lateinit var partRequest: PartRequest
 
+    /** 进度会话的上报出口,见 [ProgressSession]。 */
+    private lateinit var heartbeatReporter: HeartbeatReporter
+
     /** 这次装载放哪一 P、从哪儿起播,一次解析。见 [LoadResolver]。 */
     private lateinit var loadResolver: LoadResolver
 
@@ -261,6 +268,31 @@ class AudioPlaybackService : MediaSessionService() {
     private var loadedBvid: String? = null
     private var loadedCid: Long = 0
 
+    /**
+     * 解析完了但播放器还没走到那一条。
+     *
+     * **取流不是在切条那一刻发生的。** ExoPlayer 开着 lazy preparation,`MaskingMediaSource`
+     * 在**装载周期**被建出来时就 prepare 内层源(1.10.1 的 `MaskingMediaSource.createPeriod`
+     * → `prepareChildSource`,javap 验证),而装载周期跑在播放周期前面:当前这条缓冲满了就
+     * 轮到下一条,短视频上可能提前几十秒。于是 [resolveStream] 会在还在播上一条的时候就
+     * 解析好下一条。
+     *
+     * 解析结果直接写成"现在放的是什么"因此是错的:cid、画质清单会提前几十秒跳到下一条,
+     * 播放页据 [AudioPlaybackUiState.loadKey] 判身份,画面当场换成占位封面,而
+     * [adoptResolved] 里那句起播 seek 会落在**正在播的这一条**上。结果先存这里,等播放器
+     * 真的走到那一条再落。
+     */
+    private val resolvedItems = mutableMapOf<String, LoadedItem>()
+
+    /**
+     * 正在播的这条内容的全部进度上报,见 [ProgressSession]。直播没有会话 —— "直播不上报"
+     * 由"没有会话"表达,不写成分支。
+     */
+    private var progressSession: ProgressSession? = null
+
+    /** 位置刻度的循环。只在放着的时候跑,见 [emitPositionTick]。 */
+    private var tickJob: Job? = null
+
     /** 装的是本地副本还是网络流。写本地进度、核对云端进度只在前者有意义。 */
     private var loadedLocalCopy = false
 
@@ -302,6 +334,7 @@ class AudioPlaybackService : MediaSessionService() {
         offlineStore = container.offlineStore
         settings = container.settings
         partRequest = container.partRequest
+        heartbeatReporter = container.heartbeatReporter
         loadResolver = LoadResolver(
             localCopy = offlineStore::completedFor,
             parts = { bvid ->
@@ -381,6 +414,10 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        // 定格补发这次观看的最终位置。**排在 scope.cancel() 前面不是为了赶上它** —— 心跳跑在
+        // 应用级 scope 上(见 [HeartbeatReporter]),这里只是把"内容离开了"这件事说出来。
+        closeProgressSession()
+        tickJob?.cancel()
         retryJob?.cancel()
         // 下面的 scope.cancel() 本来就会带走它,列在这里是为了和上面两个 Job 一起读:
         // 服务没了之后没有任何一个还在飞的请求值得跑完。
@@ -393,6 +430,7 @@ class AudioPlaybackService : MediaSessionService() {
         backgroundPlaybackAllowed = false
         player.release()
         _state.value = AudioPlaybackUiState()
+        _positionTicks.value = PositionTick()
         _sleepTimerState.value = SleepTimerState()
         super.onDestroy()
     }
@@ -433,6 +471,9 @@ class AudioPlaybackService : MediaSessionService() {
         failedAttempts = 0
         lastError = null
         resolvingBvid = null
+        // 直播不建会话。上一条视频的那个在这里定格收尾,和换稿件同一条路径。
+        closeProgressSession()
+        resolvedItems.clear()
         live = next
         sourceLabel = ""
         queueSource = null
@@ -682,6 +723,10 @@ class AudioPlaybackService : MediaSessionService() {
      */
     private fun setQueue(items: List<QueueItem>, startIndex: Int) {
         persistCachedProgress()
+        // 上一条内容到此为止:定格补发它的最终位置。整份队列被换掉时不会有 transition 事件,
+        // 会话自己缓存的那个位置就是唯一的来源。
+        closeProgressSession()
+        resolvedItems.clear()
         retryJob?.cancel()
         failedAttempts = 0
         lastError = null
@@ -779,19 +824,18 @@ class AudioPlaybackService : MediaSessionService() {
                 val cached = plan.item
                 // 标题/UP/封面从索引里填。离线时这是元数据唯一的来源。
                 fillItemDisplay(bvid, cached.title, cached.upName, cached.coverUrl)
-                // 画质菜单留空:本地只有下载时选的那一档,摆一个点了没用的菜单不如不摆。
-                playInfo = null
-                currentQuality = cached.qualityId
                 val audio = offlineStore.audioFile(cached.bvid, cached.cid).takeIf { it.isFile }
-                markLoaded(
-                    cached.bvid,
-                    cached.cid,
-                    positionOverrideMillis ?: plan.startPositionMillis,
-                    localCopy = true,
+                onResolved(
+                    LoadedItem(
+                        bvid = cached.bvid,
+                        cid = cached.cid,
+                        startPositionMillis = positionOverrideMillis ?: plan.startPositionMillis,
+                        localCopy = true,
+                        // 画质菜单留空:本地只有下载时选的那一档,摆一个点了没用的菜单不如不摆。
+                        playInfo = null,
+                        quality = cached.qualityId,
+                    )
                 )
-                // 起播之后才去核对云端进度。**它不再是装载协程的子协程** —— 装载协程现在归
-                // MediaSource,换一条时这份核对靠自己开头那句"播放器装的还是这一条吗"作废。
-                scope.launch { reconcileCachedProgress(cached) }
                 return PlayerFactory.createLocalMediaSource(
                     offlineStore.videoFile(cached.bvid, cached.cid).path,
                     audio?.path,
@@ -838,13 +882,19 @@ class AudioPlaybackService : MediaSessionService() {
             }
         }
         openChain?.mark("playurlEnd")
-        playInfo = playUrl
-        currentQuality = quality
         // **秒数一定属于问的这一 P。** playurl 的 `last_play_cid` 是填的,语义是"你问的这一 P
         // 有记录吗":对得上给记录,对不上给 0(实测,notes §8.2.1)。[dev.bilby.data.resumeAtMillisFor]
         // 就是照这条判的,所以解析出哪一 P 就拿哪一 P 的秒数,这里不需要再核一遍。
-        val resumeMillis = positionOverrideMillis ?: playUrl.resumeAtMillisFor(cid)
-        markLoaded(bvid, cid, resumeMillis, localCopy = false)
+        onResolved(
+            LoadedItem(
+                bvid = bvid,
+                cid = cid,
+                startPositionMillis = positionOverrideMillis ?: playUrl.resumeAtMillisFor(cid),
+                localCopy = false,
+                playInfo = playUrl,
+                quality = quality,
+            )
+        )
         return PlayerFactory.createMediaSource(
             playUrl.streams.videoUrl,
             playUrl.streams.audioUrl,
@@ -891,7 +941,26 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /**
-     * 解析成功,播放器从这一刻起装的是这一条。**分 P 的真相从这一刻起是 [loadedCid]。**
+     * 一次装载解析出来的全部结果。**在被 [adoptResolved] 采纳之前,它不代表"现在放的是什么"**
+     * ——解析可能跑在播放器还没走到这一条的时候,见 [resolvedItems]。
+     */
+    private data class LoadedItem(
+        val bvid: String,
+        val cid: Long,
+        val startPositionMillis: Long,
+        val localCopy: Boolean,
+        val playInfo: PlayInfo?,
+        val quality: Int,
+    )
+
+    /** 解析成功。轮到它了就当场落地,没轮到就先存着。 */
+    private fun onResolved(loaded: LoadedItem) {
+        resolvedItems[loaded.bvid] = loaded
+        adoptResolved(loaded.bvid)
+    }
+
+    /**
+     * 解析结果落到"播放器正装着的那一条"上。**分 P 的真相从这一刻起是 [loadedCid]。**
      *
      * [AudioPlaybackUiState.loadKey] 认的就是它,页面据此决定挂画面还是画占位 —— 所以不能在
      * 发出装载命令的那一刻就置上:那中间还隔着一整趟取流,画面上还是上一条的最后几帧。
@@ -900,20 +969,63 @@ class AudioPlaybackService : MediaSessionService() {
      * 没发出来,位置先记在 masking 周期上,真时间线到了再落(`MaskingMediaSource` 的
      * `onChildSourceInfoRefreshed`,非零的准备位置优先于窗口默认位置)。
      */
-    private fun markLoaded(
-        bvid: String,
-        cid: Long,
-        startPositionMillis: Long,
-        localCopy: Boolean,
-    ) {
-        loadedBvid = bvid
-        loadedCid = cid
-        loadedLocalCopy = localCopy
+    private fun adoptResolved(bvid: String?) {
+        if (bvid == null || player.currentMediaItem?.mediaId != bvid) return
+        // 取走即弃:回到这一条时它会重新 prepare、重新解析,留着只会让一份旧的抢在新的前面。
+        val loaded = resolvedItems.remove(bvid) ?: return
+        loadedBvid = loaded.bvid
+        loadedCid = loaded.cid
+        loadedLocalCopy = loaded.localCopy
+        playInfo = loaded.playInfo
+        currentQuality = loaded.quality
         resolvingBvid = null
         cloudResumeMillis = null
         openChain?.mark("prepare")
-        if (startPositionMillis > 0) player.seekTo(startPositionMillis)
+        // **起播定位排在建会话之前**,于是那一次 seek 落在"还没有会话"的窗口里,不会被当成
+        // 用户跳到了这里而立刻上报。缓存条目的云端核对(下面那句)要赶在本地位置被报上去之前
+        // 问到服务端的值,否则比对的对象就是我们自己刚写进去的那个。
+        closeProgressSession()
+        if (loaded.startPositionMillis > 0) player.seekTo(loaded.startPositionMillis)
+        startProgressSession(loaded.bvid, loaded.cid)
+        startTicking()
         publishState()
+        emitPositionTick()
+        // 起播之后才去核对云端进度。**它不再是装载协程的子协程** —— 装载协程现在归
+        // MediaSource,换一条时这份核对靠自己开头那句"播放器装的还是这一条吗"作废。
+        if (loaded.localCopy) {
+            scope.launch {
+                offlineStore.completedFor(loaded.bvid, loaded.cid)?.let { reconcileCachedProgress(it) }
+            }
+        }
+    }
+
+    /**
+     * 换一个进度会话。旧的先 close(定格补发),新的从这一刻起拥有这条内容的全部上报。
+     *
+     * aid 由 bvid 换算([BvidCodec]),不为它去取一次详情:心跳接口 aid/bvid 二选一,而队列项
+     * 身上只有 bvid。换不出来(理论上只有 bvid 本身是脏的)就不建会话——宁可这一条不上报,
+     * 也不能拿一个编出来的号往服务端写,那是把进度记到别人的稿件上。
+     */
+    private fun startProgressSession(bvid: String, cid: Long) {
+        closeProgressSession()
+        val aid = BvidCodec.toAid(bvid)
+        if (aid <= 0 || cid == 0L) {
+            BiliLog.w("建不了进度会话 bvid=$bvid cid=$cid")
+            return
+        }
+        progressSession = ProgressSession(aid, cid) { playedTimeSeconds, finished ->
+            heartbeatReporter.report(aid, cid, playedTimeSeconds, finished) { reportedMillis ->
+                // 条目不在盘上时 recordServerBase 自己就什么都不做,这里不必先查一遍。
+                // 心跳成功是 serverBase 推进的唯一入口,见 [mergeCachedProgress]。
+                offlineStore.recordServerBase(bvid, cid, reportedMillis)
+            }
+        }
+    }
+
+    /** 见 [ProgressSession.close]:幂等,任何退出路径只管调,不必关心顺序和重复。 */
+    private fun closeProgressSession(atMillis: Long? = null, completed: Boolean = false) {
+        progressSession?.close(atMillis, completed)
+        progressSession = null
     }
 
     /**
@@ -945,9 +1057,9 @@ class AudioPlaybackService : MediaSessionService() {
      * 走的是 [openVideo] 里那条"已经是它了"的捷径,装载路径一步都不走,于是这中间别处产生的
      * 新进度一次也问不到。表现是只有重启 app 那条提示才弹得出来。
      *
-     * 时间上赶得及:周期心跳每 5 秒才把本地位置报上去一次(BilbyPlayer 的
-     * `PROGRESS_REPORT_INTERVAL_MILLIS`),而这一趟只是一次请求。不赶在它前面的话,云端那份
-     * 记录会先被本地进度盖掉,提示就再也没有可比的对象了。
+     * 时间上赶得及:心跳按位置每 5 秒才报一次([ProgressSession.HEARTBEAT_INTERVAL_SECONDS]),
+     * 而这一趟只是一次请求。不赶在它前面的话,云端那份记录会先被本地进度盖掉,提示就再也没有
+     * 可比的对象了。装载路径上那次核对更靠前——起播定位排在建会话之前,见 [adoptResolved]。
      *
      * 只对本地副本做:在线播放的进度本来就以服务端那份为准,没有第二份可比。
      */
@@ -1141,6 +1253,38 @@ class AudioPlaybackService : MediaSessionService() {
         publishState()
     }
 
+    /**
+     * 位置刻度的循环。**只在放着的时候跑** —— 停着的时候位置不动,刻度也就没有新内容,而这是
+     * 个每半秒醒一次的循环,停不下来就是一直醒着。
+     *
+     * 半秒一次是给弹幕时钟的:心跳按位置节流(≥5 秒),再密也不会多发。弹幕时钟在两次刻度之间
+     * 自己外推(见 [PositionTick]),所以这个间隔决定的不是弹幕的平滑度,而是外推最多偏多久。
+     */
+    private fun startTicking() {
+        if (!player.isPlaying || tickJob?.isActive == true) return
+        tickJob = scope.launch {
+            while (true) {
+                delay(POSITION_TICK_INTERVAL_MILLIS)
+                emitPositionTick()
+                progressSession?.onPosition(player.currentPosition, playerDurationMillis())
+            }
+        }
+    }
+
+    private fun emitPositionTick() {
+        _positionTicks.value = PositionTick(
+            positionMillis = player.currentPosition.coerceAtLeast(0),
+            durationMillis = playerDurationMillis(),
+            isPlaying = player.isPlaying,
+            speed = player.playbackParameters.speed,
+            anchorMillis = SystemClock.elapsedRealtime(),
+        )
+    }
+
+    /** 时间线还没到、或者放的是直播时为 0。完播判定据此按"不知道时长"处理。 */
+    private fun playerDurationMillis(): Long =
+        player.duration.takeIf { it != C.TIME_UNSET }?.coerceAtLeast(0) ?: 0
+
     private fun publishState(loading: Boolean = false) {
         _state.value = AudioPlaybackUiState(
             nowPlaying = nowPlaying(),
@@ -1212,6 +1356,7 @@ class AudioPlaybackService : MediaSessionService() {
                 failedAttempts = 0
                 lastError = null
             }
+            emitPositionTick()
             if (playbackState != Player.STATE_ENDED) {
                 publishState()
                 return
@@ -1219,6 +1364,9 @@ class AudioPlaybackService : MediaSessionService() {
             // 播到底了。位置此刻就是时长,写下去之后 [isWatchedToEnd] 认得出它 —— 不需要为
             // "看完"单独存一个标记,也就不会出现标记和位置各说各话。
             persistCachedProgress()
+            // 完播上报,**但不关会话**:这一条还装在播放器里,用户按下播放或者拖回去还能接着
+            // 看,而关掉的会话是死的,那之后的位置一个字都报不出去。会话在内容离开时才关。
+            progressSession?.onCompleted()
             // 走到 ENDED 有两种可能:队列走完了,或者被 [pauseAtEndOfMediaItems] 拦在了这一条
             // 的末尾(关掉自动连播、或者定时器设的是"播完这条")。三种都是"这次听完了",
             // 所以都归到停。
@@ -1232,8 +1380,23 @@ class AudioPlaybackService : MediaSessionService() {
             // 真停下来了就把本地副本的进度写下去。**缓冲造成的 isPlaying=false 不写** ——
             // 那时 playWhenReady 还立着,而缓冲一分钟能有好几次,每次写下的位置和上一次没区别。
             if (!isPlaying && !player.playWhenReady) persistCachedProgress()
+            emitPositionTick()
+            // 暂停本身不发,恢复才补一条(设计文档「决定 3」的表)。
+            if (isPlaying) {
+                progressSession?.onResumed(player.currentPosition, playerDurationMillis())
+                startTicking()
+            } else {
+                tickJob?.cancel()
+            }
             publishState()
         }
+
+        /**
+         * 倍速变了。刻度自己带锚点(见 [PositionTick]),所以这一条要立刻发出去 —— 弹幕时钟
+         * 正是靠新锚点才不会把新倍速追认到已经过去的那段时间上。
+         */
+        override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) =
+            emitPositionTick()
 
         /**
          * 队列换到了另一条。
@@ -1244,14 +1407,26 @@ class AudioPlaybackService : MediaSessionService() {
          *
          * 上一条的最终位置要用 [oldPosition] 里那个,不能现问播放器 —— 这一刻
          * `currentPosition` 已经属于下一条了,写下去就是把新的一条的 0 秒记成上一条的进度。
+         *
+         * **原因只在一处用得上**:`AUTO_TRANSITION` 是播放器自己走到了下一条,也就是上一条
+         * 播完了,那一次定格上报要发 `played_time=-1`。收尾本身两种原因完全一样。
          */
         override fun onPositionDiscontinuity(
             oldPosition: Player.PositionInfo,
             newPosition: Player.PositionInfo,
             reason: Int,
         ) {
-            if (oldPosition.mediaItemIndex == newPosition.mediaItemIndex) return
+            emitPositionTick()
+            if (oldPosition.mediaItemIndex == newPosition.mediaItemIndex) {
+                // 同一条里的跳转:落点已经确认,立刻上报并把节流基准挪到这里。
+                progressSession?.onSeeked(newPosition.positionMs, playerDurationMillis())
+                return
+            }
             persistCachedProgress(oldPosition.positionMs)
+            closeProgressSession(
+                atMillis = oldPosition.positionMs,
+                completed = reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION,
+            )
             // 换条了,上一条的画质清单和续播提示都不再属于现在这一条。
             playInfo = null
             currentQuality = 0
@@ -1259,6 +1434,8 @@ class AudioPlaybackService : MediaSessionService() {
             cloudResumeMillis = null
             resolvingBvid = newPosition.mediaItem?.mediaId
             publishState(loading = true)
+            // 下一条多半在这之前几十秒就解析好了(见 [resolvedItems]),现在才轮到它落地。
+            adoptResolved(newPosition.mediaItem?.mediaId)
         }
 
         /** 画面出来了才算这次打开走完。音频先出声,但用户等的是这一帧。 */
@@ -1448,6 +1625,9 @@ class AudioPlaybackService : MediaSessionService() {
         /** 退避的第一档,之后每次翻倍:1s、2s。 */
         private const val RETRY_BASE_DELAY_MILLIS = 1_000L
 
+        /** 见 [startTicking]。 */
+        private const val POSITION_TICK_INTERVAL_MILLIS = 500L
+
         @Volatile
         private var runningService: AudioPlaybackService? = null
 
@@ -1484,6 +1664,16 @@ class AudioPlaybackService : MediaSessionService() {
 
         /** UI 观察这个;控制动作走 MediaController,不要反过来改它。 */
         val state: StateFlow<AudioPlaybackUiState> = _state.asStateFlow()
+
+        private val _positionTicks = MutableStateFlow(PositionTick())
+
+        /**
+         * 播放位置的权威读数,由服务这一侧发出,见 [PositionTick]。
+         *
+         * **和 [state] 分开一条流**:它每半秒变一次,并进 [state] 的话每一个读播放状态的
+         * 组合都会跟着重组。读它的是弹幕时钟和弹幕分段拉取,两者要的都是位置本身。
+         */
+        val positionTicks: StateFlow<PositionTick> = _positionTicks.asStateFlow()
 
         private val _sleepTimerState = MutableStateFlow(SleepTimerState())
         val sleepTimerState: StateFlow<SleepTimerState> = _sleepTimerState.asStateFlow()
