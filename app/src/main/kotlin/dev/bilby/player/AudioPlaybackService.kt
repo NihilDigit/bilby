@@ -67,8 +67,8 @@ data class NowPlaying(
 )
 
 /**
- * 源是队列时才有的那部分。**不是队列源时整个为 null**,而不是"一个空队列" —— 两者在界面上
- * 要表达的东西不同:空队列是"还没打开过东西",null 是"现在放的东西压根没有下一条"。
+ * 队列那一部分的状态。**打开过任何东西之后总是非空** —— 直播也是队列里的一条(设计文档
+ * 「决定 5」),只是那份队列只有一条、上下一条都按不动。
  */
 data class QueueState(
     /** 队列当前这一条。 */
@@ -104,12 +104,10 @@ data class QueueState(
 )
 
 /**
- * 正在播的直播间。房间号是它的身份,元数据来自房间详情而不是队列。
- *
- * [qn] 带着是为了重试:断流后要重新取一次流地址,不带的话只能按默认档要,画质会在用户
- * 没动过的情况下自己跳一档。
+ * 直播已经下播了。**和"暂时取不到流"是两回事**:后者退避重试还有意义,这一种等多久都不会好,
+ * 所以它一路抛到 [AudioPlaybackService.PlayerListener.onPlayerError] 只为了在那里停下来。
  */
-internal class LiveSource(val roomId: Long, val qn: Int, val nowPlaying: NowPlaying)
+internal class LiveEndedException(message: String) : IOException(message)
 
 data class AudioPlaybackUiState(
     /** 正在放什么。没打开过任何东西时为 null。 */
@@ -120,7 +118,7 @@ data class AudioPlaybackUiState(
      * 最后一帧。
      *
      * 播放页据此决定挂画面还是画占位。用队列那一条来判会把上一条视频的残帧当成本页的画面。
-     * 视频源填 bvid;别的源填自己的标识,格式由源自己定,调用方只做相等比较。
+     * 值就是条目的 mediaId:视频是 bvid,直播是 [dev.bilby.player.liveMediaId]。
      */
     val loadKey: String? = null,
     /**
@@ -140,7 +138,7 @@ data class AudioPlaybackUiState(
     /** 画质菜单要用的清单,以及正在播的那一份流。取流归服务,页面只读。 */
     val playInfo: PlayInfo? = null,
     val currentQuality: Int = 0,
-    /** 源是队列时非空。见 [QueueState]。 */
+    /** 还没打开过任何东西时为 null。见 [QueueState]。 */
     val queue: QueueState? = null,
     /**
      * 别处看到的位置(毫秒),只在放本地副本、且服务端那份确实比本机新时非空。
@@ -191,7 +189,7 @@ class AudioPlaybackService : MediaSessionService() {
     /** 只为了问"上次播到哪一 P" —— 那个字段只有 `x/player/wbi/v2` 有,而它归这个仓库。 */
     private lateinit var subtitleRepository: SubtitleRepository
 
-    /** 只为了断流后重新取一次直播地址,见 [retryLive]。 */
+    /** 直播那条取流路径,见 [resolveLiveStream]。 */
     private lateinit var liveRepository: LiveRepository
     private lateinit var queueSourceRepository: QueueSourceRepository
 
@@ -220,19 +218,12 @@ class AudioPlaybackService : MediaSessionService() {
     private var queueSource: QueueSource? = null
 
     /**
-     * 正在播的直播间。**非空时播放器装的是直播流,与 [queue] 互斥** —— 直播是单条无限流,
-     * 没有"播完下一条",塞进队列会把"有界集合播完即停"那条约束弄坏,通知栏的上/下一条也会
-     * 指向上一段视频。
-     */
-    private var live: LiveSource? = null
-
-    /**
-     * 正在解析流的那一条,解析完(成功或失败)置回 null。
+     * 正在解析流的那一条(mediaId),解析完(成功或失败)置回 null。
      *
      * 取流归 [LazyMediaSource] 之后,服务这边不再有一个"装载 Job"可以问 isActive,而
      * [openVideo] 的幂等分支要知道"起播还在飞",理由见那里。
      */
-    private var resolvingBvid: String? = null
+    private var resolvingMediaId: String? = null
 
     /**
      * 队列补全。**和取流那条完全分开**:起播不等它,它失败也只是队列短一格,不影响正在播的
@@ -261,11 +252,11 @@ class AudioPlaybackService : MediaSessionService() {
     private var lastError: String? = null
 
     /**
-     * 当前装进播放器的是哪一条视频的哪一 P。**分 P 的真相只有这一份** —— 条目上那个
+     * 当前装进播放器的是哪一条(mediaId)、哪一 P。**分 P 的真相只有这一份** —— 条目上那个
      * [MediaItem.cidHint] 是这一次装载的指名,解析出来的那一个不回写。上报、弹幕、字幕认的
-     * 都是这里。
+     * 都是这里。直播没有分 P,[loadedCid] 恒为 0。
      */
-    private var loadedBvid: String? = null
+    private var loadedMediaId: String? = null
     private var loadedCid: Long = 0
 
     /**
@@ -438,59 +429,62 @@ class AudioPlaybackService : MediaSessionService() {
     /**
      * 打开一个直播间。
      *
-     * 和 [openVideo] 一样是幂等的,报的是房间号而不是流地址 —— 页面拿到房间详情后会再发一遍
-     * 带标题的命令,那一趟只该更新元数据,不该把刚起好的流掐掉重来。
+     * **直播就是队列里的一条**(设计文档「决定 5」):条目带着房间号和档位,取流由
+     * [resolveLiveStream] 在轮到它时做。于是重试、切档、元数据回填走的都是视频那几条路,
+     * 服务这边没有第二套状态要清。
      *
-     * **直播不进队列。** 队列在这里被清空,理由见 [live]:留着的话通知栏的上/下一条还指着
-     * 上一段视频,按下去就从直播间跳走了。
+     * 和 [openVideo] 一样是幂等的,报的是房间号而不是流地址 —— 页面拿到房间详情后会再发一遍
+     * 带标题的命令,那一趟只该更新元数据,不该把刚起好的流掐掉重来。**只有装载参数变了才
+     * 重来**:切清晰度落在这条分支上,它要的正是重新取一次流。
+     *
+     * 队列因此只有这一条:直播是单条无限流,上/下一条按不动,通知栏和车机由 Timeline 自己
+     * 得出这个结论,不必再有一个"直播时队列为 null"的特判。
      */
     private fun playLive(args: Bundle) {
-        val url = args.getString(EXTRA_LIVE_URL).orEmpty()
         val roomId = args.getLong(EXTRA_ROOM_ID)
-        if (url.isEmpty() || roomId == 0L) {
-            BiliLog.w("OPEN_LIVE 缺 url 或 roomId,忽略")
+        if (roomId == 0L) {
+            BiliLog.w("OPEN_LIVE 没带 roomId,忽略")
             return
         }
-        val next = LiveSource(
-            roomId = roomId,
-            qn = args.getInt(EXTRA_LIVE_QN),
-            nowPlaying = NowPlaying(
-                title = args.getString(EXTRA_TITLE).orEmpty(),
-                subtitle = args.getString(EXTRA_UP_NAME).orEmpty(),
-                coverUrl = args.getString(EXTRA_COVER_URL).orEmpty(),
-            ),
+        val qn = args.getInt(EXTRA_LIVE_QN)
+        val display = QueueItem(
+            bvid = liveMediaId(roomId),
+            title = args.getString(EXTRA_TITLE).orEmpty(),
+            upName = args.getString(EXTRA_UP_NAME).orEmpty(),
+            coverUrl = args.getString(EXTRA_COVER_URL).orEmpty(),
+            durationSeconds = 0,
         )
-        if (live?.roomId == roomId && player.playbackState != Player.STATE_IDLE) {
-            live = next
+
+        val current = player.currentMediaItem
+        if (current?.liveRoomId == roomId && player.playbackState != Player.STATE_IDLE) {
+            if (current.liveQn != qn) {
+                failedAttempts = 0
+                lastError = null
+                reloadCurrent { item, nonce -> item.withLoadParams(nonce, liveQn = qn) }
+                return
+            }
+            fillItemDisplay(display.bvid, display.title, display.upName, display.coverUrl)
+            if (playIntent && !player.playWhenReady) player.playWhenReady = true
             publishState()
             return
         }
 
-        retryJob?.cancel()
         enrichJob?.cancel()
-        failedAttempts = 0
-        lastError = null
-        resolvingBvid = null
-        // 直播不建会话。上一条视频的那个在这里定格收尾,和换稿件同一条路径。
-        closeProgressSession()
-        resolvedItems.clear()
-        live = next
         sourceLabel = ""
         queueSource = null
         queueEnriching = false
         queueIncomplete = false
-        loadedBvid = null
-        loadedCid = 0
-        loadedLocalCopy = false
-        // 清晰度菜单读的是视频那套 playInfo,直播的档位不同源,留着上一条视频的会给出一个
-        // 点了没用的菜单。
-        playInfo = null
-        currentQuality = 0
-
-        player.setMediaSource(PlayerFactory.createLiveMediaSource(url))
-        player.prepare()
-        player.playWhenReady = true
-        publishState(loading = true)
+        setQueue(
+            listOf(
+                liveMediaItem(
+                    display = display,
+                    roomId = roomId,
+                    qn = qn,
+                    loadNonce = nextLoadNonce(),
+                )
+            ),
+            startIndex = 0,
+        )
     }
 
     /**
@@ -514,8 +508,6 @@ class AudioPlaybackService : MediaSessionService() {
      */
     private fun openVideo(args: Bundle) {
         val bvid = args.getString(EXTRA_BVID).orEmpty()
-        // 从直播间回到视频:两种源互斥,先把直播那份摘掉,否则元数据和 loadKey 还指着房间。
-        live = null
         if (bvid.isEmpty()) {
             BiliLog.w("OPEN_VIDEO 没带 bvid,忽略")
             return
@@ -551,7 +543,7 @@ class AudioPlaybackService : MediaSessionService() {
             reconcileIfLocalCopy(bvid)
             return
         }
-        val existing = indexOfBvid(bvid)
+        val existing = indexOfMediaId(bvid)
         if (existing >= 0) {
             seekToQueueIndex(existing)
             return
@@ -575,7 +567,7 @@ class AudioPlaybackService : MediaSessionService() {
                     upName = args.getString(EXTRA_UP_NAME).orEmpty(),
                     coverUrl = args.getString(EXTRA_COVER_URL).orEmpty(),
                     durationSeconds = 0,
-                )
+                ).toMediaItem(loadNonce = nextLoadNonce())
             ),
             startIndex = 0,
         )
@@ -708,11 +700,11 @@ class AudioPlaybackService : MediaSessionService() {
             return unique
         }
 
-    /** 队列当前这一条。直播时播放器装的不是队列项,由调用方先判 [live]。 */
+    /** 队列当前这一条。直播也是队列里的一条(设计文档「决定 5」),所以这里不分情况。 */
     private fun currentItem(): QueueItem? = player.currentMediaItem?.toQueueItem()
 
-    private fun indexOfBvid(bvid: String): Int =
-        (0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId == bvid }
+    private fun indexOfMediaId(mediaId: String): Int =
+        (0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId == mediaId }
             ?: -1
 
     /**
@@ -720,8 +712,11 @@ class AudioPlaybackService : MediaSessionService() {
      *
      * `setMediaItems` 之外不另发起播命令:每一条的取流由它自己的源在轮到时做
      * (见 [LazyMediaSource]),所以这里交出去的是一整份队列,不是一条流。
+     *
+     * 上一条留下的装载状态在这里一并作废。画质清单尤其不能留:直播的档位和视频不同源,
+     * 留着上一条视频的会给出一个点了没用的菜单。
      */
-    private fun setQueue(items: List<QueueItem>, startIndex: Int) {
+    private fun setQueue(items: List<MediaItem>, startIndex: Int) {
         persistCachedProgress()
         // 上一条内容到此为止:定格补发它的最终位置。整份队列被换掉时不会有 transition 事件,
         // 会话自己缓存的那个位置就是唯一的来源。
@@ -731,17 +726,21 @@ class AudioPlaybackService : MediaSessionService() {
         failedAttempts = 0
         lastError = null
         playIntent = true
-        resolvingBvid = items.getOrNull(startIndex)?.bvid
-        val nonce = ++loadCounter
+        resolvingMediaId = items.getOrNull(startIndex)?.mediaId
+        loadedMediaId = null
+        loadedCid = 0
+        loadedLocalCopy = false
+        playInfo = null
+        currentQuality = 0
+        cloudResumeMillis = null
         publishState(loading = true)
-        player.setMediaItems(
-            items.map { it.toMediaItem(loadNonce = nonce) },
-            startIndex,
-            C.TIME_UNSET,
-        )
+        player.setMediaItems(items, startIndex, C.TIME_UNSET)
         player.prepare()
         player.playWhenReady = true
     }
+
+    /** 见 [loadNonce]:每一次"要重新取流"的装载都要一个新的。 */
+    private fun nextLoadNonce(): Int = ++loadCounter
 
     /**
      * 跳到队列里的第 [index] 条:点队列中的一项、合集里换一集。
@@ -755,18 +754,19 @@ class AudioPlaybackService : MediaSessionService() {
         failedAttempts = 0
         lastError = null
         playIntent = true
-        resolvingBvid = player.getMediaItemAt(index).mediaId
+        resolvingMediaId = player.getMediaItemAt(index).mediaId
         player.seekToDefaultPosition(index)
         player.playWhenReady = true
         publishState(loading = true)
     }
 
     /**
-     * 当前这一条按新的装载参数重来一遍:换 P、重试、切清晰度都走这里。
+     * 当前这一条按新的装载参数重来一遍:换 P、重试、切清晰度、直播换档与切纯音频都走这里。
+     * [rebuild] 拿到现在这一条和一个新的 [loadNonce],给出新参数下的那一条。
      *
      * 换掉的参数让 [LazyMediaSource.canUpdateMediaItem] 判假,播放器于是重建这一条的源、
      * 重新取一次流 —— 这正是重试要的:直链过期是最常见的那种失败,拿同一条地址再 prepare
-     * 一次必然还是同样的错。
+     * 一次必然还是同样的错。**直播因此不需要自己的重试路径**:它的地址同样是重新解析出来的。
      *
      * **顺序是插入 → seek → 删除,不用 `replaceMediaItem`。** replace 的实现同样是先插后删,
      * 但删除正在播的条目时落点由 `resolveSubsequentPeriod` 解析,而它认随机顺序:顺序播放时
@@ -774,24 +774,16 @@ class AudioPlaybackService : MediaSessionService() {
      * 不知道哪条)。显式 seek 不经过这层解析,先 seek 过去再删旧条,落点就钉死了。
      */
     private fun reloadCurrent(
-        cid: Long,
-        positionOverrideMillis: Long? = null,
         playWhenReady: Boolean = true,
+        rebuild: (MediaItem, Int) -> MediaItem,
     ) {
         val index = player.currentMediaItemIndex
         val existing = player.currentMediaItem ?: return
         persistCachedProgress()
-        resolvingBvid = existing.mediaId
+        resolvingMediaId = existing.mediaId
         playIntent = playWhenReady
         publishState(loading = true)
-        player.addMediaItem(
-            index + 1,
-            existing.toQueueItem().toMediaItem(
-                requestedCid = cid,
-                startPositionMillis = positionOverrideMillis,
-                loadNonce = ++loadCounter,
-            ),
-        )
+        player.addMediaItem(index + 1, rebuild(existing, nextLoadNonce()))
         player.seekToDefaultPosition(index + 1)
         player.removeMediaItem(index)
         player.prepare()
@@ -813,6 +805,7 @@ class AudioPlaybackService : MediaSessionService() {
      * 日志里一个字都没有。
      */
     private suspend fun resolveStream(mediaItem: MediaItem): MediaSource {
+        if (mediaItem.isLive) return resolveLiveStream(mediaItem)
         val bvid = mediaItem.mediaId
         val positionOverrideMillis = mediaItem.startPositionHint
         // 指名的那一 P:页内切 P、切清晰度与重试带着上一次解析出来的那个,缓存列表点某行
@@ -827,7 +820,7 @@ class AudioPlaybackService : MediaSessionService() {
                 val audio = offlineStore.audioFile(cached.bvid, cached.cid).takeIf { it.isFile }
                 onResolved(
                     LoadedItem(
-                        bvid = cached.bvid,
+                        mediaId = cached.bvid,
                         cid = cached.cid,
                         startPositionMillis = positionOverrideMillis ?: plan.startPositionMillis,
                         localCopy = true,
@@ -887,7 +880,7 @@ class AudioPlaybackService : MediaSessionService() {
         // 就是照这条判的,所以解析出哪一 P 就拿哪一 P 的秒数,这里不需要再核一遍。
         onResolved(
             LoadedItem(
-                bvid = bvid,
+                mediaId = bvid,
                 cid = cid,
                 startPositionMillis = positionOverrideMillis ?: playUrl.resumeAtMillisFor(cid),
                 localCopy = false,
@@ -902,6 +895,50 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /**
+     * [resolveStream] 的直播那一支。
+     *
+     * **每次都重新要一次地址,不重用手上那条。** 直播直链和 playurl 一样带时效,而这一支被
+     * 调起的时刻正是"马上要出声"。断流重试因此不需要自己的路径:重来一遍就是重新解析一遍,
+     * 和视频那边同一条。
+     *
+     * 页面也问一次同一个接口(它要开播状态和档位清单),这一趟是第二次。没有让页面把地址
+     * 递进来省掉它:递进来的是页面拿到时的那条地址,重试和切档都会把它变成一条对不上的
+     * 旧地址,而那正是"直播是普通 MediaItem"要消掉的东西。
+     */
+    private suspend fun resolveLiveStream(item: MediaItem): MediaSource {
+        val roomId = item.liveRoomId
+        // qn=0 是"页面还没拿到档位就发了命令",按默认档要,别把 0 原样传出去。
+        val qn = item.liveQn.takeIf { it > 0 } ?: LiveRepository.DEFAULT_QN
+        val playback = liveRepository.loadPlayback(roomId, qn)
+        when (playback) {
+            is BiliResult.Ok -> Unit
+            is BiliResult.ApiError -> {
+                BiliLog.w("直播取流失败 roomId=$roomId code=${playback.code} ${playback.message}")
+                throw IOException(getString(R.string.playback_error_live_stream))
+            }
+            is BiliResult.Failure -> {
+                BiliLog.w("直播取流失败 roomId=$roomId", playback.cause)
+                throw IOException(getString(R.string.playback_error_live_stream))
+            }
+        }
+        val url = playback.value.stream?.url?.takeIf { playback.value.isLive }
+            ?: throw LiveEndedException(getString(R.string.playback_error_live_ended))
+        onResolved(
+            LoadedItem(
+                mediaId = item.mediaId,
+                // 直播没有分 P,于是也没有进度会话,见 [startProgressSession]。
+                cid = 0,
+                startPositionMillis = 0,
+                localCopy = false,
+                // 档位清单归页面(它问的是同一个接口),视频那套画质菜单在直播上点不出东西。
+                playInfo = null,
+                quality = 0,
+            )
+        )
+        return PlayerFactory.createLiveMediaSource(url)
+    }
+
+    /**
      * 把解析途中拿到的标题、UP 名、封面补到队列项上。
      *
      * **推迟一拍再改。** 这一刻还在解析协程里,而这一条的源正处在自己的 prepare 中途;
@@ -913,7 +950,7 @@ class AudioPlaybackService : MediaSessionService() {
      */
     private fun fillItemDisplay(bvid: String, title: String, upName: String, coverUrl: String) {
         scope.launch(Dispatchers.Main) {
-            val index = indexOfBvid(bvid)
+            val index = indexOfMediaId(bvid)
             if (index < 0) return@launch
             val existing = player.getMediaItemAt(index)
             val merged = existing.toQueueItem().let {
@@ -934,7 +971,7 @@ class AudioPlaybackService : MediaSessionService() {
      * 本来就带着完整信息 —— 每次装载都问一遍,是给切 P、重试、切清晰度各预约一次请求。
      */
     private suspend fun fillDisplayFromDetail(bvid: String) {
-        val index = indexOfBvid(bvid)
+        val index = indexOfMediaId(bvid)
         if (index >= 0 && !player.getMediaItemAt(index).mediaMetadata.title.isNullOrEmpty()) return
         val detail = videoRepository.getVideoDetail(bvid) as? BiliResult.Ok ?: return
         fillItemDisplay(bvid, detail.value.title, detail.value.up.name, detail.value.coverUrl)
@@ -945,7 +982,7 @@ class AudioPlaybackService : MediaSessionService() {
      * ——解析可能跑在播放器还没走到这一条的时候,见 [resolvedItems]。
      */
     private data class LoadedItem(
-        val bvid: String,
+        val mediaId: String,
         val cid: Long,
         val startPositionMillis: Long,
         val localCopy: Boolean,
@@ -955,8 +992,8 @@ class AudioPlaybackService : MediaSessionService() {
 
     /** 解析成功。轮到它了就当场落地,没轮到就先存着。 */
     private fun onResolved(loaded: LoadedItem) {
-        resolvedItems[loaded.bvid] = loaded
-        adoptResolved(loaded.bvid)
+        resolvedItems[loaded.mediaId] = loaded
+        adoptResolved(loaded.mediaId)
     }
 
     /**
@@ -969,16 +1006,16 @@ class AudioPlaybackService : MediaSessionService() {
      * 没发出来,位置先记在 masking 周期上,真时间线到了再落(`MaskingMediaSource` 的
      * `onChildSourceInfoRefreshed`,非零的准备位置优先于窗口默认位置)。
      */
-    private fun adoptResolved(bvid: String?) {
-        if (bvid == null || player.currentMediaItem?.mediaId != bvid) return
+    private fun adoptResolved(mediaId: String?) {
+        if (mediaId == null || player.currentMediaItem?.mediaId != mediaId) return
         // 取走即弃:回到这一条时它会重新 prepare、重新解析,留着只会让一份旧的抢在新的前面。
-        val loaded = resolvedItems.remove(bvid) ?: return
-        loadedBvid = loaded.bvid
+        val loaded = resolvedItems.remove(mediaId) ?: return
+        loadedMediaId = loaded.mediaId
         loadedCid = loaded.cid
         loadedLocalCopy = loaded.localCopy
         playInfo = loaded.playInfo
         currentQuality = loaded.quality
-        resolvingBvid = null
+        resolvingMediaId = null
         cloudResumeMillis = null
         openChain?.mark("prepare")
         // **起播定位排在建会话之前**,于是那一次 seek 落在"还没有会话"的窗口里,不会被当成
@@ -986,7 +1023,7 @@ class AudioPlaybackService : MediaSessionService() {
         // 问到服务端的值,否则比对的对象就是我们自己刚写进去的那个。
         closeProgressSession()
         if (loaded.startPositionMillis > 0) player.seekTo(loaded.startPositionMillis)
-        startProgressSession(loaded.bvid, loaded.cid)
+        startProgressSession(loaded.mediaId, loaded.cid)
         startTicking()
         publishState()
         emitPositionTick()
@@ -994,7 +1031,7 @@ class AudioPlaybackService : MediaSessionService() {
         // MediaSource,换一条时这份核对靠自己开头那句"播放器装的还是这一条吗"作废。
         if (loaded.localCopy) {
             scope.launch {
-                offlineStore.completedFor(loaded.bvid, loaded.cid)?.let { reconcileCachedProgress(it) }
+                offlineStore.completedFor(loaded.mediaId, loaded.cid)?.let { reconcileCachedProgress(it) }
             }
         }
     }
@@ -1005,11 +1042,16 @@ class AudioPlaybackService : MediaSessionService() {
      * aid 由 bvid 换算([BvidCodec]),不为它去取一次详情:心跳接口 aid/bvid 二选一,而队列项
      * 身上只有 bvid。换不出来(理论上只有 bvid 本身是脏的)就不建会话——宁可这一条不上报,
      * 也不能拿一个编出来的号往服务端写,那是把进度记到别人的稿件上。
+     *
+     * **直播落在同一条判断上**:它没有 cid,也换不出 aid。"直播不上报"因此是没有会话,
+     * 不是某处写着一个 if。
      */
     private fun startProgressSession(bvid: String, cid: Long) {
         closeProgressSession()
+        // 没有 cid 的只有直播,那不是异常,只是这条内容没有进度可报;换不出 aid 才是。
+        if (cid == 0L) return
         val aid = BvidCodec.toAid(bvid)
-        if (aid <= 0 || cid == 0L) {
+        if (aid <= 0) {
             BiliLog.w("建不了进度会话 bvid=$bvid cid=$cid")
             return
         }
@@ -1064,7 +1106,7 @@ class AudioPlaybackService : MediaSessionService() {
      * 只对本地副本做:在线播放的进度本来就以服务端那份为准,没有第二份可比。
      */
     private fun reconcileIfLocalCopy(bvid: String) {
-        if (!loadedLocalCopy || bvid != loadedBvid) return
+        if (!loadedLocalCopy || bvid != loadedMediaId) return
         val cid = loadedCid
         scope.launch {
             offlineStore.completedFor(bvid, cid)?.let { reconcileCachedProgress(it) }
@@ -1077,7 +1119,7 @@ class AudioPlaybackService : MediaSessionService() {
         // 不了,而下次联网时 0 又必然不等于云端真值,弹一条用户根本没做过的"别处已看到"。
         val lastPlayed = subtitleRepository.lastPlayed(cached.bvid, cached.cid) ?: return
         // 回来时播放器可能已经换到别的东西上了(手快点了下一条)。
-        if (loadedBvid != cached.bvid || loadedCid != cached.cid) return
+        if (loadedMediaId != cached.bvid || loadedCid != cached.cid) return
 
         val serverMillis = if (lastPlayed.cid == cached.cid) lastPlayed.positionMillis else 0L
         offlineStore.recordServerBase(cached.bvid, cached.cid, serverMillis)
@@ -1112,7 +1154,7 @@ class AudioPlaybackService : MediaSessionService() {
      * scope 被取消 —— 写盘是这次观看留下的唯一痕迹,不能跟着一起没。
      */
     private fun persistCachedProgress(positionMillis: Long = player.currentPosition) {
-        val bvid = loadedBvid?.takeIf { loadedLocalCopy } ?: return
+        val bvid = loadedMediaId?.takeIf { loadedLocalCopy } ?: return
         val cid = loadedCid
         val position = positionMillis.coerceAtLeast(0)
         if (position <= 0) return
@@ -1123,7 +1165,7 @@ class AudioPlaybackService : MediaSessionService() {
     private fun playPart(cid: Long) {
         failedAttempts = 0
         lastError = null
-        reloadCurrent(cid)
+        reloadCurrent { item, nonce -> item.withLoadParams(nonce, requestedCid = cid) }
     }
 
     /**
@@ -1138,10 +1180,14 @@ class AudioPlaybackService : MediaSessionService() {
         currentQuality = quality
         val metered = isOnMeteredNetwork()
         scope.launch(NonCancellable) { settings.saveDefaultQuality(quality, metered) }
-        reloadCurrent(
-            currentItemCid(),
-            positionOverrideMillis = player.currentPosition.coerceAtLeast(0),
-        )
+        val position = player.currentPosition.coerceAtLeast(0)
+        reloadCurrent { item, nonce ->
+            item.withLoadParams(
+                nonce,
+                requestedCid = currentItemCid(),
+                startPositionMillis = position,
+            )
+        }
     }
 
     /**
@@ -1170,44 +1216,10 @@ class AudioPlaybackService : MediaSessionService() {
         val delayMillis = RETRY_BASE_DELAY_MILLIS shl (failedAttempts - 1)
         BiliLog.w("第 $failedAttempts 次失败,${delayMillis}ms 后重试: $reason")
         publishState(loading = true)
-        val room = live
         retryJob = scope.launch {
             delay(delayMillis)
-            // 直播和队列是互斥的两种源(见 [live]),重试也得分开走:直播时播放器装的不是
-            // 队列项,[reloadCurrent] 会拿它当一条视频重建,重试就成了"断一下就播起别的"。
-            if (room != null) {
-                retryLive(room)
-            } else {
-                reloadCurrent(currentItemCid(), playWhenReady = playWhenReady)
-            }
+            reloadThisItem(playWhenReady)
         }
-    }
-
-    /**
-     * 断流后重开直播。**重新取一次流地址,不重用手上那条** —— 理由和视频那边一样:直链带
-     * 时效,过期是最常见的那种失败,拿同一条地址再 prepare 一次必然还是同样的错。
-     *
-     * 房间已经下播时不再退避重试:那不是"暂时不通",等多久都不会好,如实说一句然后停。
-     */
-    private suspend fun retryLive(room: LiveSource) {
-        // qn=0 是"页面还没拿到档位就发了命令",按默认档要,别把 0 原样传出去。
-        val qn = room.qn.takeIf { it > 0 } ?: LiveRepository.DEFAULT_QN
-        val playback = liveRepository.loadPlayback(room.roomId, qn)
-        if (playback !is BiliResult.Ok) {
-            retryAfterFailure(getString(R.string.playback_error_live_stream), playWhenReady = true)
-            return
-        }
-        val url = playback.value.stream?.url?.takeIf { playback.value.isLive }
-        if (url == null) {
-            BiliLog.w("直播已下播 roomId=${room.roomId},不再重试")
-            lastError = getString(R.string.playback_error_live_ended)
-            stopPlayback()
-            return
-        }
-        player.setMediaSource(PlayerFactory.createLiveMediaSource(url))
-        player.prepare()
-        player.playWhenReady = true
-        publishState(loading = true)
     }
 
     /** 界面上"重试"按下。手动重试是一份新的额度,退避从头算起。 */
@@ -1215,7 +1227,19 @@ class AudioPlaybackService : MediaSessionService() {
         failedAttempts = 0
         lastError = null
         retryJob?.cancel()
-        reloadCurrent(currentItemCid())
+        reloadThisItem(playWhenReady = true)
+    }
+
+    /**
+     * 当前这一条原地重来。装载参数一个不换,只换 [loadNonce] —— 要的就是"同样的东西再取一次
+     * 流",视频沿用它那一 P,直播沿用它的档位和纯音频开关。
+     *
+     * 这一条以前分成两支(直播走一段自己的取流),而 `ACTION_RETRY` 只走视频那支:在直播间
+     * 按重试等于把直播当成一条视频重建。直播 MediaItem 化之后两支合成一支,那个 bug 随之消失。
+     */
+    private fun reloadThisItem(playWhenReady: Boolean) {
+        val cid = currentItemCid()
+        reloadCurrent(playWhenReady) { item, nonce -> item.withLoadParams(nonce, requestedCid = cid) }
     }
 
     /**
@@ -1226,7 +1250,7 @@ class AudioPlaybackService : MediaSessionService() {
      * 出现的一次。拿那个值去取流是问另一条视频的分 P,服务端回 -404,而重试从此每次都失败。
      */
     private fun currentItemCid(): Long =
-        loadedCid.takeIf { loadedBvid != null && loadedBvid == player.currentMediaItem?.mediaId }
+        loadedCid.takeIf { loadedMediaId != null && loadedMediaId == player.currentMediaItem?.mediaId }
             ?: 0L
 
     /**
@@ -1288,17 +1312,15 @@ class AudioPlaybackService : MediaSessionService() {
     private fun publishState(loading: Boolean = false) {
         _state.value = AudioPlaybackUiState(
             nowPlaying = nowPlaying(),
-            loadKey = live?.let { "$LOAD_KEY_LIVE_PREFIX${it.roomId}" } ?: loadedBvid,
+            loadKey = loadedMediaId,
             currentCid = loadedCid,
             isPlaying = player.isPlaying,
             loading = loading,
             error = lastError,
             playInfo = playInfo,
             currentQuality = currentQuality,
-            // 直播源没有队列。给一个空队列而不是 null 的话,界面分不出"没有下一条"和
-            // "还没打开过东西"。
             cloudResumeMillis = cloudResumeMillis,
-            queue = if (live != null) null else QueueState(
+            queue = QueueState(
                 current = currentItem(),
                 items = queueItems,
                 // **随机播放下这个数字是"列表里的第几条",不是"播放顺序里的第几个"。**
@@ -1339,10 +1361,10 @@ class AudioPlaybackService : MediaSessionService() {
      * 正在放什么,给界面用。
      *
      * **通知栏不走这里**:队列项自己带着 `mediaMetadata`(见 [toMediaItem]),MediaSession
-     * 直接从 playlist 读得到 —— 服务不再需要覆写 `getMediaMetadata` 往里喂。直播还没有
-     * MediaItem 化(E 阶段),所以它那份仍挂在 [live] 上。
+     * 直接从 playlist 读得到 —— 服务不再需要覆写 `getMediaMetadata` 往里喂。直播的那一份
+     * 同样挂在它自己的条目上。
      */
-    private fun nowPlaying(): NowPlaying? = live?.nowPlaying ?: currentItem()?.let {
+    private fun nowPlaying(): NowPlaying? = currentItem()?.let {
         NowPlaying(title = it.title, subtitle = it.upName, coverUrl = it.coverUrl)
     }
 
@@ -1432,7 +1454,7 @@ class AudioPlaybackService : MediaSessionService() {
             currentQuality = 0
             loadedLocalCopy = false
             cloudResumeMillis = null
-            resolvingBvid = newPosition.mediaItem?.mediaId
+            resolvingMediaId = newPosition.mediaItem?.mediaId
             publishState(loading = true)
             // 下一条多半在这之前几十秒就解析好了(见 [resolvedItems]),现在才轮到它落地。
             adoptResolved(newPosition.mediaItem?.mediaId)
@@ -1444,8 +1466,24 @@ class AudioPlaybackService : MediaSessionService() {
         override fun onPlayerError(error: PlaybackException) {
             // 直链可能在播放途中过期(403),这属于"被吞掉的失败":不留日志的话表现只是
             // 忽然不动了。
-            BiliLog.w("播放出错 bvid=$loadedBvid code=${error.errorCode}", error)
-            resolvingBvid = null
+            BiliLog.w("播放出错 id=$loadedMediaId code=${error.errorCode}", error)
+            resolvingMediaId = null
+            // 直播落后于滑动窗口:旧分片被 CDN 丢掉,播放头指着的位置已经不在流里了。文档给的
+            // 处理就是跳回窗口默认位置再 prepare,不必重新取流,也不该记进失败次数——这是直播
+            // 正常运行的一部分。**只有 HLS 会走到这里**,FLV 是 progressive 流,没有窗口。
+            if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
+                BiliLog.w("落后于直播窗口,跳回最前沿")
+                player.seekToDefaultPosition()
+                player.prepare()
+                return
+            }
+            // 下播了就停:退避重试解决的是"暂时不通",而这一种等多久都不会好。
+            val ended = generateSequence(error.cause) { it.cause }.any { it is LiveEndedException }
+            if (ended) {
+                lastError = getString(R.string.playback_error_live_ended)
+                stopPlayback()
+                return
+            }
             // 取流失败现在也走这条路(见 [resolveStream]),而它带着一句写给用户看的原因。
             // 拿不到就退回按错误码报 —— 解码器初始化失败一类本来就没有更好的说法。
             val reason = error.cause?.message?.takeIf { it.isNotBlank() }
@@ -1607,14 +1645,10 @@ class AudioPlaybackService : MediaSessionService() {
         const val EXTRA_TITLE = "title"
         const val EXTRA_UP_NAME = "upName"
         const val EXTRA_COVER_URL = "coverUrl"
-        const val EXTRA_LIVE_URL = "liveUrl"
         const val EXTRA_ROOM_ID = "roomId"
 
-        /** 页面这一刻放的档位。断流重取时按它要,见 [LiveSource.qn]。 */
+        /** 要哪一档。0 表示页面还没拿到档位清单,由服务按默认档要。见 [MediaItem.liveQn]。 */
         const val EXTRA_LIVE_QN = "liveQn"
-
-        /** [AudioPlaybackUiState.loadKey] 里直播源的前缀,和 bvid 区分开。 */
-        const val LOAD_KEY_LIVE_PREFIX = "live:"
 
         /**
          * 同一条最多试几次(含第一次)。3 次意味着最坏等 1 + 2 = 3 秒后放弃 —— 再多几档,

@@ -22,6 +22,7 @@ import androidx.media3.session.SessionCommand
 import dev.bilby.AppContainer
 import dev.bilby.BiliLog
 import dev.bilby.player.AudioPlaybackService
+import dev.bilby.player.liveMediaId
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 
@@ -77,17 +78,16 @@ fun LiveRoomRoute(
     val active = controller
     val audioState by AudioPlaybackService.state.collectAsStateWithLifecycle()
 
-    // 流地址到手就交给服务。命令是幂等的(报房间号不报地址),标题晚一步到也只是再发一遍
-    // 更新元数据,不会把已经起好的流掐掉。
-    LaunchedEffect(active, state.streamUrl, state.title) {
-        val url = state.streamUrl ?: return@LaunchedEffect
+    // 开播了就交给服务。**命令报的是房间号和档位,不是地址** —— 取流归服务(见
+    // AudioPlaybackService.resolveLiveStream),页面这一份只用来判断开没开播、能选哪几档。
+    // 命令是幂等的:标题晚一步到只更新元数据,而档位或纯音频变了才重新取一次流。
+    LaunchedEffect(active, state.isLive, state.currentQn, state.title) {
+        if (!state.isLive) return@LaunchedEffect
         val connected = active ?: return@LaunchedEffect
         connected.sendCustomCommand(
             SessionCommand(AudioPlaybackService.ACTION_OPEN_LIVE, Bundle.EMPTY),
             bundleOf(
                 AudioPlaybackService.EXTRA_ROOM_ID to roomId,
-                AudioPlaybackService.EXTRA_LIVE_URL to url,
-                // 断流后由服务自己重新取地址,那一趟要按这一档要,否则画质会自己跳。
                 AudioPlaybackService.EXTRA_LIVE_QN to state.currentQn,
                 AudioPlaybackService.EXTRA_TITLE to state.title,
                 AudioPlaybackService.EXTRA_UP_NAME to state.anchorName,
@@ -101,7 +101,7 @@ fun LiveRoomRoute(
         danmaku = vm.danmaku,
         player = active,
         // 播放器此刻装的是不是这个房间。和播放页同一个判据,只是标识换成了直播那一套。
-        attached = audioState.loadKey == "${AudioPlaybackService.LOAD_KEY_LIVE_PREFIX}$roomId",
+        attached = audioState.loadKey == liveMediaId(roomId),
         danmakuPrefs = danmakuPrefs,
         // 弹幕开关是全局设置,不是这个房间的状态 —— 在直播间关掉,回到视频页也是关的,
         // 这与视频页那边改它的效果一致。

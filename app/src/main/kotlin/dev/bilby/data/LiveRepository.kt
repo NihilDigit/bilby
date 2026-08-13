@@ -50,7 +50,8 @@ class LiveRepository(private val client: BiliClient) {
 
     /**
      * 一次把 protocol/format/codec 三个维度全要回来再挑,不是每换一档发一次请求 —— 参数照
-     * PiliPlus `live.dart:83` 逐个对齐,少一个字段签名内容就不同。
+     * PiliPlus `live.dart:83` 逐个对齐,少一个字段签名内容就不同。接口事实见
+     * `notes/live.md` §1。
      */
     suspend fun loadPlayback(roomId: Long, qn: Int = DEFAULT_QN): BiliResult<LiveRoomPlayback> {
         val result: BiliResult<LiveRoomPlayInfoDto> = client.getData(
@@ -114,7 +115,7 @@ class LiveRepository(private val client: BiliClient) {
     }
 
     /**
-     * 发一条直播弹幕(PiliPlus `http/live.dart:37-75`)。
+     * 发一条直播弹幕(PiliPlus `http/live.dart:37-75`,接口事实见 `notes/live.md` §4)。
      *
      * 与点播那条(`x/v2/dm/post`)是**两个完全不同的接口**,只有"发一句话"这件事相同:
      * 主机是 `live.bilibili.com`、业务字段全在 body、query 里只有一个要签名的 `web_location`。
@@ -176,6 +177,8 @@ class LiveRepository(private val client: BiliClient) {
  * 排在最前的是 Media3 原生支持的组合。FLV 排在后面而不是被排除:它是这三条里唯一在所有房间
  * 都存在的,而 fmp4 偶尔缺席(小主播、某些 CDN),那时宁可用 progressive 里的 FlvExtractor 播,
  * 也好过什么都不放。avc 优先于 hevc/av1 是同样的理由 —— 硬解覆盖面最广。
+ *
+ * 候选表的结构与这条优先级的代价见 `notes/live.md` §2。
  */
 private fun LiveRoomPlayInfoDto.pickStream(): LiveStreamPick? {
     val streams = playurlInfo?.playurl?.stream.orEmpty()

@@ -54,6 +54,11 @@ data class LiveRoomUiState(
     val watched: String = "",
     /** 未开播时为 false:界面显示封面和一句话,不去连弹幕流。 */
     val isLive: Boolean = false,
+    /**
+     * **只用来判断这个房间此刻有没有流可放**,不交给播放器 —— 取流归服务(见
+     * `AudioPlaybackService.resolveLiveStream`):直播地址带时效,页面这一份等到重试、切档、
+     * 切纯音频时早已经是一条对不上的旧地址。
+     */
     val streamUrl: String? = null,
     /** 这个房间能选的清晰度档位;空表示不出入口。 */
     val qualities: List<Int> = emptyList(),
@@ -207,8 +212,8 @@ class LiveRoomViewModel(
     }
 
     /**
-     * 换清晰度。重新取一次 playurl 就够 —— 地址换了之后由界面把新地址交给服务,而那条命令
-     * 报的是房间号,服务端认得出是同一个房间的换流,不会当成打开一个新房间。
+     * 换清晰度。这一趟只为了知道服务端实际给了哪一档(要不到会自己降),**换流由服务做** ——
+     * 界面把新档位交给它,那条命令报的是房间号加档位,装载参数变了才重新取一次流。
      *
      * **不动弹幕连接**:信息流跟清晰度没关系,断开重连只会白丢几条。
      */

@@ -46,6 +46,11 @@ class BilbyMediaSourceFactory(
 private const val EXTRA_ITEM_CID = "cid"
 private const val EXTRA_ITEM_START_MS = "startMs"
 private const val EXTRA_ITEM_LOAD = "load"
+private const val EXTRA_ITEM_ROOM_ID = "roomId"
+private const val EXTRA_ITEM_LIVE_QN = "liveQn"
+
+/** 直播项的 mediaId。带前缀是为了和 bvid 分得开:两种条目住在同一份 playlist 里。 */
+fun liveMediaId(roomId: Long): String = "live:$roomId"
 
 /**
  * 这一次装载指名的分 P,0 表示"没指名,由解析层决定"(见 [LoadResolver])。
@@ -72,12 +77,31 @@ val MediaItem.startPositionHint: Long?
 val MediaItem.loadNonce: Int
     get() = requestMetadata.extras?.getInt(EXTRA_ITEM_LOAD) ?: 0
 
+/** 直播间的房间号,0 表示这不是直播项。取流按它走直播接口,见 [isLive]。 */
+val MediaItem.liveRoomId: Long
+    get() = requestMetadata.extras?.getLong(EXTRA_ITEM_ROOM_ID) ?: 0L
+
+/** 直播要的档位,0 表示按默认档要。断流重取沿用它,否则画质会在用户没动过的情况下自己跳。 */
+val MediaItem.liveQn: Int
+    get() = requestMetadata.extras?.getInt(EXTRA_ITEM_LIVE_QN) ?: 0
+
+/**
+ * 这一条是直播。
+ *
+ * **判据是房间号在不在,不是 mediaId 长什么样**:前者是取流真正要用的东西,后者只是身份。
+ * 工厂按它分派(见 [BilbyMediaSourceFactory]),于是"直播是队列里的一条"这件事在别处不必
+ * 再有第二处分支。
+ */
+val MediaItem.isLive: Boolean
+    get() = liveRoomId != 0L
+
 /**
  * 队列项转成播放器认识的条目。
  *
  * 装载参数放 `requestMetadata` 而不是 `mediaId` 里:身份只有 bvid(队列去重、页面判断
  * "播的是不是我这一条"都按它),而它们是这一次装载怎么取内容的指示,解析层要在自己那条线程上
- * 读到 —— 那时发起装载的那次调用早就返回了。
+ * 读到 —— 那时发起装载的那次调用早就返回了。**也不用 `MediaItem.tag`**:tag 不进
+ * `toBundle`,过一次 session binder 就没了。
  *
  * 标题、UP 名、封面进 `mediaMetadata`,通知栏和锁屏直接读得到 —— 元数据不必再由服务覆写
  * `getMediaMetadata` 喂给 MediaSession。
@@ -89,17 +113,74 @@ fun QueueItem.toMediaItem(
 ): MediaItem = MediaItem.Builder()
     .setMediaId(bvid)
     .setRequestMetadata(
-        MediaItem.RequestMetadata.Builder()
-            .setExtras(
-                Bundle().apply {
-                    putLong(EXTRA_ITEM_CID, requestedCid)
-                    putLong(EXTRA_ITEM_START_MS, startPositionMillis ?: -1L)
-                    putInt(EXTRA_ITEM_LOAD, loadNonce)
-                }
-            )
-            .build()
+        loadParams(
+            requestedCid = requestedCid,
+            startPositionMillis = startPositionMillis,
+            loadNonce = loadNonce,
+        )
     )
     .setMediaMetadata(displayMetadata())
+    .build()
+
+/**
+ * 一个直播间在队列里的样子。**和视频项是同一种东西**,差别只在装载参数:身份是房间号,
+ * 取流走直播接口,没有分 P 也没有起播位置。
+ *
+ * [display] 的 `bvid` 必须是 [liveMediaId] —— 队列面板和页面身份都按它,而房间号本身
+ * 已经在装载参数里了。
+ */
+fun liveMediaItem(
+    display: QueueItem,
+    roomId: Long,
+    qn: Int,
+    loadNonce: Int = 0,
+): MediaItem = MediaItem.Builder()
+    .setMediaId(display.bvid)
+    .setRequestMetadata(loadParams(roomId = roomId, liveQn = qn, loadNonce = loadNonce))
+    .setMediaMetadata(display.displayMetadata())
+    .build()
+
+/**
+ * 同一条内容,换一组装载参数:换 P、切清晰度、重试、直播换档或切纯音频都走这里。
+ *
+ * **换掉的是整份参数,不是往里补一个字段。** 每个参数都在签名里给出默认值,直播的档位默认
+ * 沿用当前值 —— 不沿用的话断一次流重来,画质自己跳一档,而那件事用户没做过。
+ *
+ * 身份与展示信息原样留着:重来一遍不是换了一条内容。
+ */
+fun MediaItem.withLoadParams(
+    loadNonce: Int,
+    requestedCid: Long = 0,
+    startPositionMillis: Long? = null,
+    liveQn: Int = this.liveQn,
+): MediaItem = buildUpon()
+    .setRequestMetadata(
+        loadParams(
+            requestedCid = requestedCid,
+            startPositionMillis = startPositionMillis,
+            loadNonce = loadNonce,
+            roomId = liveRoomId,
+            liveQn = liveQn,
+        )
+    )
+    .build()
+
+private fun loadParams(
+    requestedCid: Long = 0,
+    startPositionMillis: Long? = null,
+    loadNonce: Int = 0,
+    roomId: Long = 0,
+    liveQn: Int = 0,
+): MediaItem.RequestMetadata = MediaItem.RequestMetadata.Builder()
+    .setExtras(
+        Bundle().apply {
+            putLong(EXTRA_ITEM_CID, requestedCid)
+            putLong(EXTRA_ITEM_START_MS, startPositionMillis ?: -1L)
+            putInt(EXTRA_ITEM_LOAD, loadNonce)
+            putLong(EXTRA_ITEM_ROOM_ID, roomId)
+            putInt(EXTRA_ITEM_LIVE_QN, liveQn)
+        }
+    )
     .build()
 
 /**
