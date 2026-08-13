@@ -1123,10 +1123,11 @@ fun VideoScreen(
 }
 
 /**
- * 竖排时「别处已看到」落在**整页**的下四分之一处 —— 简介/评论那一片,不是画面里。
+ * 竖排时「别处已看到」按系统 Toast 的惯例落在页面偏下 —— 简介/评论那一片,不是画面里。
+ * 曾取 0.5(下四分之一处),视觉上悬在评论区中间,不像一条提示,像一块卡住的内容。
  *
- * `BiasAlignment` 的纵向取值 −1 是顶、0 是中、1 是底,所以 0.5 落在中点与底边的正中间,
- * 也就是从下边缘往上约四分之一。**用比例而不是从底边往上垫固定 dp**:屏幕高度差得远,
- * 固定 dp 在小屏上会压到底部手势条。
+ * `BiasAlignment` 的纵向取值 −1 是顶、0 是中、1 是底,0.8 即中点再往下八成,贴近底部而
+ * 不压手势条。**用比例而不是从底边往上垫固定 dp**:屏幕高度差得远,固定 dp 在小屏上会
+ * 压到底部手势条。
  */
-private val ToastAnchorInDetail = BiasAlignment(horizontalBias = 0f, verticalBias = 0.5f)
+private val ToastAnchorInDetail = BiasAlignment(horizontalBias = 0f, verticalBias = 0.8f)
