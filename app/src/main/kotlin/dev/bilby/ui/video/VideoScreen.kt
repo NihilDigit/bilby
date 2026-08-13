@@ -35,12 +35,10 @@ import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -61,7 +59,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -102,8 +99,9 @@ import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.player.MediaBackButton
+import dev.bilby.ui.player.PlaybackFailure
+import dev.bilby.ui.player.rememberSettledPlaybackError
 import dev.bilby.ui.theme.Breakpoints
-import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.pager.rememberPagerState
@@ -474,23 +472,8 @@ fun VideoScreen(
      */
     val rawPlaybackError = audioState.error?.takeIf { audioState.queue?.current?.bvid == state.detail?.bvid }
 
-    /**
-     * **失败不立刻报。** 服务在取流路上自己会重试(见 AudioPlaybackService 的重试次数与退避),
-     * 重试期间 error 就已经是有值的了 —— 照直显示的话,一次最终成功的加载中途也会闪一下
-     * "播放失败",而那时它明明还在正常往下走。
-     *
-     * 等它稳定 [PlaybackErrorGraceMillis] 还在,才当成真失败。error 中途消失或换了内容,
-     * 这个 effect 会重启,计时从头开始。
-     */
-    var playbackError by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(rawPlaybackError) {
-        if (rawPlaybackError == null) {
-            playbackError = null
-            return@LaunchedEffect
-        }
-        delay(PlaybackErrorGraceMillis)
-        playbackError = rawPlaybackError
-    }
+    /** 失败要等它稳定下来才报,见 [rememberSettledPlaybackError]。 */
+    val playbackError = rememberSettledPlaybackError(rawPlaybackError)
 
     // SponsorBlock:默认开启。轮询而不是用 Player 的事件,是因为跳过要在片段**起点**发生,
     // 而播放器没有"位置越过某点"的回调。500ms 的粒度足够,漏跳的代价只是多看半秒。
@@ -1111,46 +1094,6 @@ fun VideoScreen(
         )
     }
 }
-
-/**
- * 播放失败盖在画面上的那一块。
- *
- * 和听视频页那一行是两个实现,因为形态差得远:这里画面是黑的、要盖在正中,那边是一行
- * 贴着播放控制的小字。共用一个 composable 只会得到一个到处是 if 的壳。
- */
-@Composable
-private fun PlaybackFailure(
-    message: String,
-    retrying: Boolean,
-    onRetry: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier.padding(Spacing.Comfortable),
-    ) {
-        Text(
-            text = message,
-            color = FixedColors.OnMedia,
-            style = MaterialTheme.typography.bodyMedium,
-            textAlign = TextAlign.Center,
-        )
-        // 重试中不给按钮:此刻按下去只会打断已经在跑的那次。
-        if (retrying) {
-            CircularProgressIndicator(
-                color = FixedColors.OnMedia,
-                modifier = Modifier.padding(top = Spacing.Cozy).size(24.dp),
-            )
-        } else {
-            TextButton(onClick = onRetry) {
-                Text(stringResource(R.string.action_retry), color = FixedColors.OnMedia)
-            }
-        }
-    }
-}
-
-/** 取流失败的宽限期。服务自己的重试最坏花 3 秒，留一点余地。 */
-private const val PlaybackErrorGraceMillis = 5_000L
 
 /**
  * 竖排时「别处已看到」落在**整页**的下四分之一处 —— 简介/评论那一片,不是画面里。
