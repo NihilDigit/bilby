@@ -121,7 +121,8 @@ roomId/qn）表达，工厂造直播源。删除 `live` 与 `queue` 的互斥字
 
 错误恢复：`ERROR_CODE_BEHIND_LIVE_WINDOW` → `seekToDefaultPosition(); prepare()`（文档标准
 处理）。注意 FLV 是 progressive 流，没有 live window，live-streaming 文档那页的能力不适用——
-取流时优先挑 HLS 是配套动作。直播重试的「下播则停」逻辑保留。
+取流时优先挑 HLS 是配套动作（`LiveRepository.pickStream` 本来就是这个顺序，E 阶段不必改）。
+直播重试的「下播则停」逻辑保留。
 
 ### 6. Surface 走 MediaController，删静态引用
 
@@ -132,6 +133,13 @@ roomId/qn）表达，工厂造直播源。删除 `live` 与 `queue` 的互斥字
 
 `setBackgroundPlaybackAllowed` 与 `pauseForAppBackground` 两条 volatile 通道暂保留（读取方
 是同步的，自定义命令异步投递解决不了），但随 playlist 落地重新评估是否仍需绕行。
+
+**E 阶段重新评估的结论：两条都保留。** playlist 落地不改变它们存在的原因——那不是「队列在哪」
+的问题，而是时序：`pauseForAppBackground` 由 `Activity.onStop` 同步调用，而自定义命令异步投递，
+「开了听视频立刻锁屏」这条路径上命令很可能还没到。E 阶段又给这个 bit 加了第二个写入方（直播的
+纯音频开关），两个写入方从不同时存在——一次只有一个播放页在组合，各自的 onDispose 都置回
+false。真要收进 session 只有一条路：把它做成 `Player` 接口上已有的东西，而 Player 上没有
+「这个内容允许后台播」这个概念。
 
 ## 进度
 
@@ -161,7 +169,19 @@ roomId/qn）表达，工厂造直播源。删除 `live` 与 `queue` 的互斥字
   进程被杀三种它一次都赶不上。
   **验收留给真机**：连播时上一条要发出 `played_time=-1`，切 P 留下一条定格上报，长按倍速时
   弹幕不再集体跳动。
-- **E 待做**：直播 MediaItem 化。
+- **E 已落地，真机未验**（commit `828413c`、`f84bcfd`、`17ff1a3`、`fc05c58`、`9e490da`，
+  2026-08-13）：直播是 playlist 里的一条，房间号与档位是它的装载参数，工厂按此分派；
+  `LiveSource`、`playLive` 的逐字段清理、`publishState` 的 `queue = null` 特判、直播那条独立的
+  重试全部删除。地址不再由页面递进来，改在轮到这一条时现取——页面那一份等到重试或切档时早就
+  过期了。`ACTION_RETRY` 由此统一：它此前无条件走视频那条重建，在直播间按下等于把直播当成一条
+  视频，这个 bug 随合流消失。`ERROR_CODE_BEHIND_LIVE_WINDOW` 按文档处理（`seekToDefaultPosition`
+  加 `prepare`，不计入失败次数），下播则停仍然保留，靠一个专门的异常类型和退避重试区分开。
+  同批还修了三件已定形的直播修缮：暂停时弹幕一卡一卡（`LiveDanmakuClock` 的 `isPlaying` 不再
+  委托给播放器）、断流后没有重试入口（失败面板从视频页提出来两处共用）、纯音频模式
+  （`only_audio=1`，接口事实进 `notes/live.md` §3；开关是页内 `rememberSaveable`，只放行退到
+  后台这一件事，离开直播间即停不变）。
+  **验收留给真机**：断流后能按重试按钮恢复；HLS 房间落后窗口时自己跳回最前沿；纯音频开着锁屏
+  不停、切回房间画面还在占位封面上；下播时停在「直播已结束」而不是退避重试三次。
 - 已知观感项：装上前后两个加载指示器是同种不同实例，切换瞬间动画相位重置，暂不处理。
 
 ## 实施顺序
