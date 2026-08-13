@@ -7,7 +7,7 @@ import dev.bilby.player.QueueItem
 
 /**
  * 建好的队列来源。**不带"当前是第几条"**:调用方按 bvid 自己定位
- * ([dev.bilby.player.PlaybackQueue.replaceKeeping])。下标在这里算好、到那边再用,中间隔着
+ * (见 `AudioPlaybackService.fillQueueAround`)。下标在这里算好、到那边再用,中间隔着
  * 一次网络往返,列表随时可能已经整体挪了一位。
  */
 data class QueueBuildResult(

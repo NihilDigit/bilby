@@ -453,19 +453,18 @@ fun VideoScreen(
         }
     }
 
+    // 随机、上下一条、跳到队列里的某一条,现在都是标准 Player 命令:队列住在播放器的 playlist
+    // 里,它自己就能答"有没有下一条",而且答完会发 onXxxChanged —— controller 那份命令缓存
+    // 于是跟得上,不必再为此单开一组自定义命令。
     val toggleShuffle: () -> Unit = {
-        send(
-            AudioPlaybackService.ACTION_SET_SHUFFLE,
-            bundleOf(AudioPlaybackService.EXTRA_SHUFFLED to !(audioState.queue?.shuffled == true)),
-        )
+        active?.shuffleModeEnabled = !(audioState.queue?.shuffled == true)
     }
 
     /** 点队列里的一条 = 让队列跳过去。页面不自己导航,它跟着队列走(见 VideoRoute)。 */
     val onPlayQueueItem: (String) -> Unit = { target ->
-        send(
-            AudioPlaybackService.ACTION_SEEK_TO_BVID,
-            bundleOf(AudioPlaybackService.EXTRA_BVID to target),
-        )
+        // 面板里的列表就是 playlist 的自然顺序(随机只改播放顺序),下标可以直接用。
+        val index = shownQueue.items.indexOfFirst { it.bvid == target }
+        if (index >= 0) active?.seekTo(index, 0)
     }
 
     val onPlayPart: (Long) -> Unit = { cid ->
@@ -575,8 +574,8 @@ fun VideoScreen(
             parts = state.detail?.pages.orEmpty(),
             currentCid = (audioState.queue?.currentCid ?: 0L),
             onPlayPart = onPlayPart,
-            onNext = { send(AudioPlaybackService.ACTION_NEXT, Bundle.EMPTY) },
-            onPrevious = { send(AudioPlaybackService.ACTION_PREVIOUS, Bundle.EMPTY) },
+            onNext = { active?.seekToNextMediaItem() },
+            onPrevious = { active?.seekToPreviousMediaItem() },
             onToggleShuffle = toggleShuffle,
             onRetry = retryPlayback,
             onSleepTimer = { mode ->

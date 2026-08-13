@@ -46,8 +46,15 @@ class BilbyMediaSourceFactory(
 private const val EXTRA_ITEM_CID = "cid"
 private const val EXTRA_ITEM_RESUME_PART = "resumePart"
 private const val EXTRA_ITEM_START_MS = "startMs"
+private const val EXTRA_ITEM_LOAD = "load"
 
-/** 队列项里带的分 P 提示,0 表示"没指定,由解析层决定"。 */
+/**
+ * 建这个条目时指定的分 P,0 表示"没指定,由解析层决定"。
+ *
+ * **这是一次性的意图,不是这一条的状态。** 正在播的是哪一 P 由服务的装载状态回答
+ * ([AudioPlaybackService.loadedCid]),解析出来的 cid 不回写到这里 —— 回写就等于把播放层的
+ * 内部状态挂到了队列的身份上,而队列的身份只有 bvid。
+ */
 val MediaItem.cidHint: Long
     get() = requestMetadata.extras?.getLong(EXTRA_ITEM_CID) ?: 0L
 
@@ -60,12 +67,21 @@ val MediaItem.startPositionHint: Long?
     get() = requestMetadata.extras?.getLong(EXTRA_ITEM_START_MS, -1L)?.takeIf { it >= 0 }
 
 /**
+ * 第几次装载这一条。**"要不要重新取流"就是靠它表达的。**
+ *
+ * 重试和切清晰度都要连取流一起重来:直链过期(403)是最常见的那种失败,拿同一条地址再
+ * prepare 一次必然还是同样的错。而 [LazyMediaSource.canUpdateMediaItem] 认为条目没变时,
+ * 播放器只换条目、不重建源 —— 那正是补标题要的行为,却让重试变成空转。两者的区别在这个数上。
+ */
+val MediaItem.loadNonce: Int
+    get() = requestMetadata.extras?.getInt(EXTRA_ITEM_LOAD) ?: 0
+
+/**
  * 队列项转成播放器认识的条目。
  *
- * cid 放在 `requestMetadata` 而不是 `mediaId` 里:身份只有 bvid(队列去重、页面判断"播的是不是
- * 我这一条"都按它),而 cid 是"这一条从哪一 P 取流",属于怎么拿到内容的那一半。
- * [resumePart] 与 [startPositionMillis] 同理 —— 它们是这一次装载的参数,解析层要在自己那条
- * 线程上读到,而那时发起装载的那次调用早就返回了。
+ * 三个装载参数放 `requestMetadata` 而不是 `mediaId` 里:身份只有 bvid(队列去重、页面判断
+ * "播的是不是我这一条"都按它),而它们是这一次装载怎么取内容的指示,解析层要在自己那条线程上
+ * 读到 —— 那时发起装载的那次调用早就返回了。
  *
  * 标题、UP 名、封面进 `mediaMetadata`,通知栏和锁屏直接读得到 —— 元数据不必再由服务覆写
  * `getMediaMetadata` 喂给 MediaSession。
@@ -73,6 +89,7 @@ val MediaItem.startPositionHint: Long?
 fun QueueItem.toMediaItem(
     resumePart: Boolean = false,
     startPositionMillis: Long? = null,
+    loadNonce: Int = 0,
 ): MediaItem = MediaItem.Builder()
     .setMediaId(bvid)
     .setRequestMetadata(
@@ -82,19 +99,40 @@ fun QueueItem.toMediaItem(
                     putLong(EXTRA_ITEM_CID, cid)
                     putBoolean(EXTRA_ITEM_RESUME_PART, resumePart)
                     putLong(EXTRA_ITEM_START_MS, startPositionMillis ?: -1L)
+                    putInt(EXTRA_ITEM_LOAD, loadNonce)
                 }
             )
             .build()
     )
-    .setMediaMetadata(
-        MediaMetadata.Builder()
-            .setTitle(title)
-            .setArtist(upName)
-            .setArtworkUri(coverUrl.takeIf { it.isNotEmpty() }?.toUri())
-            // 时长为 0 是"还不知道",不是"零秒"。填进去的话通知栏会画一条已经走到头的进度条。
-            .setDurationMs(durationSeconds.takeIf { it > 0 }?.times(1000))
-            .setIsBrowsable(false)
-            .setIsPlayable(true)
-            .build()
-    )
+    .setMediaMetadata(displayMetadata())
     .build()
+
+/**
+ * 只换展示信息的那一份条目。原来的 `requestMetadata` 原样留着 —— 装载参数一个字节都不能动,
+ * 动了就是另一次装载,播放器会重建源、画面从头开始。
+ */
+fun MediaItem.withDisplay(item: QueueItem): MediaItem =
+    buildUpon().setMediaMetadata(item.displayMetadata()).build()
+
+private fun QueueItem.displayMetadata(): MediaMetadata = MediaMetadata.Builder()
+    .setTitle(title)
+    .setArtist(upName)
+    .setArtworkUri(coverUrl.takeIf { it.isNotEmpty() }?.toUri())
+    // 时长为 0 是"还不知道",不是"零秒"。填进去的话通知栏会画一条已经走到头的进度条。
+    .setDurationMs(durationSeconds.takeIf { it > 0 }?.times(1000))
+    .setIsBrowsable(false)
+    .setIsPlayable(true)
+    .build()
+
+/**
+ * 播放器里的条目回到队列项。**队列就是 playlist**,面板要显示的东西全从这里读,服务不另存
+ * 一份列表 —— 两份列表意味着"队列现在是什么"有两个答案,而它们只在没人动过队列时相等。
+ */
+fun MediaItem.toQueueItem(): QueueItem = QueueItem(
+    bvid = mediaId,
+    cid = cidHint,
+    title = mediaMetadata.title?.toString().orEmpty(),
+    upName = mediaMetadata.artist?.toString().orEmpty(),
+    coverUrl = mediaMetadata.artworkUri?.toString().orEmpty(),
+    durationSeconds = (mediaMetadata.durationMs ?: 0L) / 1000,
+)

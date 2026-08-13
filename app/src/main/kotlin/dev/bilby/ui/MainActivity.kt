@@ -1397,7 +1397,7 @@ private fun WhisperRoute(
 
 /**
  * 已缓存的视频。点一条走的是普通的播放页 —— **离线不是另一种播放**,服务在取流之前会先看
- * 这一条有没有缓存,命中就用本地文件(见 `AudioPlaybackService.playCurrent`)。所以这里不需要
+ * 这一条有没有缓存,命中就用本地文件(见 `AudioPlaybackService.resolveStream`)。所以这里不需要
  * 一个"离线播放器",也不需要给播放页传什么标记。
  */
 @Composable

@@ -101,10 +101,15 @@ class LazyMediaSource(
      *
      * 页面拿到 bvid 就发了打开命令,那时它还不知道这条视频叫什么;标题和封面随后才到。走这条路
      * 而不是把队列项整个换掉,是因为后者会重建这个源、重新取一次流 —— 表现是标题一到位画面就
-     * 从头开始。cid 变了就不属于这一档:那是真的换 P,该重来。
+     * 从头开始。
+     *
+     * 反过来,换 P、重试、切清晰度都必须重来,它们各自换掉一个装载参数(见
+     * [cidHint]、[loadNonce]),于是自然落到这个判断的另一边。
      */
     override fun canUpdateMediaItem(newMediaItem: MediaItem): Boolean =
-        newMediaItem.mediaId == mediaItem.mediaId && newMediaItem.cidHint == mediaItem.cidHint
+        newMediaItem.mediaId == mediaItem.mediaId &&
+            newMediaItem.cidHint == mediaItem.cidHint &&
+            newMediaItem.loadNonce == mediaItem.loadNonce
 
     override fun updateMediaItem(mediaItem: MediaItem) {
         this.mediaItem = mediaItem

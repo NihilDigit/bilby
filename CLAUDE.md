@@ -135,8 +135,17 @@ is no lifecycle to manage. Three earlier attempts got this wrong by modelling it
 navigation destination, adding a `listening` flag on the service, and adding a
 "popped versus covered" judgement at the nav layer.
 
+The queue is the ExoPlayer playlist, and there is no second copy of it. Items carry the bvid
+as their `mediaId`; the cid is load state on the service, never written back into the item.
+Streams are fetched by `player/LazyMediaSource` at the moment the player reaches an entry,
+because playurl hands out time-limited CDN links — a link fetched when the queue was built
+has expired by the time a later entry is reached. A resolution failure has to reach
+`maybeThrowSourceInfoRefreshError`; swallowing one leaves the player buffering forever with
+an empty log.
+
 Multi-part videos and collections are different things. Shuffle changes play order only; the
-displayed list keeps its order and the highlight scrolls.
+displayed list keeps its order and the highlight scrolls, so the queue panel's position
+counter is the index in the list, not the position in the shuffled play order.
 
 Navigation 3 has no separate graph: the backstack is a `SnapshotStateList<NavKey>`, and it
 does not deduplicate. Both entry decorators index by the key, so one key appearing twice

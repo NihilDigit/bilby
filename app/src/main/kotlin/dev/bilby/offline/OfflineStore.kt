@@ -57,7 +57,7 @@ class OfflineStore(private val root: File, private val json: Json) {
     /**
      * 这条视频有没有能直接播的本地副本。**离线播放判的就是它,而且必须在任何一次网络之前判**
      * —— 判在补 cid 之后就已经晚了,补 cid 本身要联网(真机上"缓存了却播不动"就是这么来的,
-     * 见 `AudioPlaybackService.playCurrent`)。
+     * 见 `AudioPlaybackService.resolveStream`)。
      *
      * 所以入口按 **bvid** 查,不要求调用方先有 cid;哪一 P 由 [pickCompletedFor] 定,
      * [preferredCid] 为 0 表示"随便哪一 P 都行"(从缓存列表点进来就是这种)。
