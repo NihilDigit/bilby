@@ -14,8 +14,8 @@ import org.robolectric.annotation.Config
  * (`AudioPlaybackService.resolveStream` 按 [isLive] 分派)。分派认错的表现是直播去问 playurl
  * 或者视频去问直播接口,两种都只在真机上才看得见。
  *
- * 重来一遍时装载参数是否沿用同样在这里测:不沿用的话断一次流画质自己跳一档,而那件事
- * 用户没做过。
+ * 重来一遍时装载参数是否沿用同样在这里测:不沿用的话断一次流,直播自己变回视频、画质自己
+ * 跳一档,而那两件事用户都没做过。
  *
  * 要 Robolectric 是因为参数存在 `Bundle` 里,JVM 上它是个空壳。
  */
@@ -34,6 +34,7 @@ class LiveMediaItemTest {
         ),
         roomId = ROOM_ID,
         qn = 400,
+        onlyAudio = true,
         loadNonce = 7,
     )
 
@@ -50,6 +51,7 @@ class LiveMediaItemTest {
         assertTrue(live.isLive)
         assertEquals(ROOM_ID, live.liveRoomId)
         assertEquals(400, live.liveQn)
+        assertTrue(live.liveOnlyAudio)
         assertEquals("live:$ROOM_ID", live.mediaId)
     }
 
@@ -61,13 +63,22 @@ class LiveMediaItemTest {
     }
 
     @Test
-    fun `重来一遍沿用档位,只换 nonce`() {
+    fun `重来一遍沿用档位与纯音频,只换 nonce`() {
         val again = live.withLoadParams(loadNonce = 8)
 
         assertEquals(400, again.liveQn)
+        assertTrue(again.liveOnlyAudio)
         assertEquals(ROOM_ID, again.liveRoomId)
         assertEquals(8, again.loadNonce)
         assertEquals(live.mediaId, again.mediaId)
+    }
+
+    @Test
+    fun `换档只换档,不把纯音频带回默认值`() {
+        val again = live.withLoadParams(loadNonce = 8, liveQn = 10000)
+
+        assertEquals(10000, again.liveQn)
+        assertTrue(again.liveOnlyAudio)
     }
 
     @Test

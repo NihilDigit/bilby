@@ -48,6 +48,7 @@ private const val EXTRA_ITEM_START_MS = "startMs"
 private const val EXTRA_ITEM_LOAD = "load"
 private const val EXTRA_ITEM_ROOM_ID = "roomId"
 private const val EXTRA_ITEM_LIVE_QN = "liveQn"
+private const val EXTRA_ITEM_ONLY_AUDIO = "onlyAudio"
 
 /** 直播项的 mediaId。带前缀是为了和 bvid 分得开:两种条目住在同一份 playlist 里。 */
 fun liveMediaId(roomId: Long): String = "live:$roomId"
@@ -84,6 +85,10 @@ val MediaItem.liveRoomId: Long
 /** 直播要的档位,0 表示按默认档要。断流重取沿用它,否则画质会在用户没动过的情况下自己跳。 */
 val MediaItem.liveQn: Int
     get() = requestMetadata.extras?.getInt(EXTRA_ITEM_LIVE_QN) ?: 0
+
+/** 只要声音。服务端直接给一条纯音频流,见 `notes/live.md` §3。 */
+val MediaItem.liveOnlyAudio: Boolean
+    get() = requestMetadata.extras?.getBoolean(EXTRA_ITEM_ONLY_AUDIO) == true
 
 /**
  * 这一条是直播。
@@ -133,18 +138,22 @@ fun liveMediaItem(
     display: QueueItem,
     roomId: Long,
     qn: Int,
+    onlyAudio: Boolean,
     loadNonce: Int = 0,
 ): MediaItem = MediaItem.Builder()
     .setMediaId(display.bvid)
-    .setRequestMetadata(loadParams(roomId = roomId, liveQn = qn, loadNonce = loadNonce))
+    .setRequestMetadata(
+        loadParams(roomId = roomId, liveQn = qn, onlyAudio = onlyAudio, loadNonce = loadNonce)
+    )
     .setMediaMetadata(display.displayMetadata())
     .build()
 
 /**
  * 同一条内容,换一组装载参数:换 P、切清晰度、重试、直播换档或切纯音频都走这里。
  *
- * **换掉的是整份参数,不是往里补一个字段。** 每个参数都在签名里给出默认值,直播的档位默认
- * 沿用当前值 —— 不沿用的话断一次流重来,画质自己跳一档,而那件事用户没做过。
+ * **换掉的是整份参数,不是往里补一个字段。** 每个参数都在签名里给出默认值,直播那三个默认
+ * 沿用当前值 —— 不沿用的话断一次流重来,纯音频自己变回视频、画质自己跳一档,而那两件事
+ * 用户都没做过。
  *
  * 身份与展示信息原样留着:重来一遍不是换了一条内容。
  */
@@ -153,6 +162,7 @@ fun MediaItem.withLoadParams(
     requestedCid: Long = 0,
     startPositionMillis: Long? = null,
     liveQn: Int = this.liveQn,
+    onlyAudio: Boolean = this.liveOnlyAudio,
 ): MediaItem = buildUpon()
     .setRequestMetadata(
         loadParams(
@@ -161,6 +171,7 @@ fun MediaItem.withLoadParams(
             loadNonce = loadNonce,
             roomId = liveRoomId,
             liveQn = liveQn,
+            onlyAudio = onlyAudio,
         )
     )
     .build()
@@ -171,6 +182,7 @@ private fun loadParams(
     loadNonce: Int = 0,
     roomId: Long = 0,
     liveQn: Int = 0,
+    onlyAudio: Boolean = false,
 ): MediaItem.RequestMetadata = MediaItem.RequestMetadata.Builder()
     .setExtras(
         Bundle().apply {
@@ -179,6 +191,7 @@ private fun loadParams(
             putInt(EXTRA_ITEM_LOAD, loadNonce)
             putLong(EXTRA_ITEM_ROOM_ID, roomId)
             putInt(EXTRA_ITEM_LIVE_QN, liveQn)
+            putBoolean(EXTRA_ITEM_ONLY_AUDIO, onlyAudio)
         }
     )
     .build()

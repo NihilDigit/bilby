@@ -429,13 +429,13 @@ class AudioPlaybackService : MediaSessionService() {
     /**
      * 打开一个直播间。
      *
-     * **直播就是队列里的一条**(设计文档「决定 5」):条目带着房间号和档位,取流由
-     * [resolveLiveStream] 在轮到它时做。于是重试、切档、元数据回填走的都是视频那几条路,
-     * 服务这边没有第二套状态要清。
+     * **直播就是队列里的一条**(设计文档「决定 5」):条目带着房间号、档位和"只要声音",
+     * 取流由 [resolveLiveStream] 在轮到它时做。于是重试、切档、元数据回填走的都是视频那几条
+     * 路,服务这边没有第二套状态要清。
      *
      * 和 [openVideo] 一样是幂等的,报的是房间号而不是流地址 —— 页面拿到房间详情后会再发一遍
      * 带标题的命令,那一趟只该更新元数据,不该把刚起好的流掐掉重来。**只有装载参数变了才
-     * 重来**:切清晰度落在这条分支上,它要的正是重新取一次流。
+     * 重来**:切清晰度和开关纯音频都落在这条分支上,它们要的正是重新取一次流。
      *
      * 队列因此只有这一条:直播是单条无限流,上/下一条按不动,通知栏和车机由 Timeline 自己
      * 得出这个结论,不必再有一个"直播时队列为 null"的特判。
@@ -447,6 +447,7 @@ class AudioPlaybackService : MediaSessionService() {
             return
         }
         val qn = args.getInt(EXTRA_LIVE_QN)
+        val onlyAudio = args.getBoolean(EXTRA_LIVE_ONLY_AUDIO)
         val display = QueueItem(
             bvid = liveMediaId(roomId),
             title = args.getString(EXTRA_TITLE).orEmpty(),
@@ -457,10 +458,12 @@ class AudioPlaybackService : MediaSessionService() {
 
         val current = player.currentMediaItem
         if (current?.liveRoomId == roomId && player.playbackState != Player.STATE_IDLE) {
-            if (current.liveQn != qn) {
+            if (current.liveQn != qn || current.liveOnlyAudio != onlyAudio) {
                 failedAttempts = 0
                 lastError = null
-                reloadCurrent { item, nonce -> item.withLoadParams(nonce, liveQn = qn) }
+                reloadCurrent { item, nonce ->
+                    item.withLoadParams(nonce, liveQn = qn, onlyAudio = onlyAudio)
+                }
                 return
             }
             fillItemDisplay(display.bvid, display.title, display.upName, display.coverUrl)
@@ -480,6 +483,7 @@ class AudioPlaybackService : MediaSessionService() {
                     display = display,
                     roomId = roomId,
                     qn = qn,
+                    onlyAudio = onlyAudio,
                     loadNonce = nextLoadNonce(),
                 )
             ),
@@ -902,14 +906,14 @@ class AudioPlaybackService : MediaSessionService() {
      * 和视频那边同一条。
      *
      * 页面也问一次同一个接口(它要开播状态和档位清单),这一趟是第二次。没有让页面把地址
-     * 递进来省掉它:递进来的是页面拿到时的那条地址,重试和切档都会把它变成一条对不上的
-     * 旧地址,而那正是"直播是普通 MediaItem"要消掉的东西。
+     * 递进来省掉它:递进来的是页面拿到时的那条地址,重试、切档、切纯音频都会把它变成一条
+     * 对不上的旧地址,而那正是"直播是普通 MediaItem"要消掉的东西。
      */
     private suspend fun resolveLiveStream(item: MediaItem): MediaSource {
         val roomId = item.liveRoomId
         // qn=0 是"页面还没拿到档位就发了命令",按默认档要,别把 0 原样传出去。
         val qn = item.liveQn.takeIf { it > 0 } ?: LiveRepository.DEFAULT_QN
-        val playback = liveRepository.loadPlayback(roomId, qn)
+        val playback = liveRepository.loadPlayback(roomId, qn, onlyAudio = item.liveOnlyAudio)
         when (playback) {
             is BiliResult.Ok -> Unit
             is BiliResult.ApiError -> {
@@ -1649,6 +1653,12 @@ class AudioPlaybackService : MediaSessionService() {
 
         /** 要哪一档。0 表示页面还没拿到档位清单,由服务按默认档要。见 [MediaItem.liveQn]。 */
         const val EXTRA_LIVE_QN = "liveQn"
+
+        /**
+         * 这个直播间只要声音。**它和 [EXTRA_LIVE_QN] 一样是装载参数**:值变了就重新取一次流,
+         * 没变的那些趟只更新元数据(见 [playLive])。
+         */
+        const val EXTRA_LIVE_ONLY_AUDIO = "liveOnlyAudio"
 
         /**
          * 同一条最多试几次(含第一次)。3 次意味着最坏等 1 + 2 = 3 秒后放弃 —— 再多几档,

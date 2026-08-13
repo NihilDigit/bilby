@@ -35,6 +35,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Headset
+import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -125,6 +127,12 @@ fun LiveRoomScreen(
     danmakuPrefs: DanmakuPrefs,
     onDanmakuEnabledChange: (Boolean) -> Unit,
     onQualityChange: (Int) -> Unit,
+    /**
+     * 这个直播间只要声音。**页内的临时状态**:关掉直播间就没了,不跨房间,也不写进设置。
+     * 它只改变一件事——退到后台时播放不停,见 [dev.bilby.ui.live.LiveRoomRoute]。
+     */
+    onlyAudio: Boolean,
+    onOnlyAudioChange: (Boolean) -> Unit,
     onLoadMoreGuards: () -> Unit,
     /** 发一条弹幕。直播不需要暂停,也不做本地回显(见 LiveRoomViewModel.sendDanmaku)。 */
     onSendDanmaku: (String) -> Unit,
@@ -187,7 +195,9 @@ fun LiveRoomScreen(
             if (player != null && state.isLive && state.streamUrl != null) {
                 PlayerShell(
                     player = player,
-                    attached = attached,
+                    // 纯音频时流里根本没有视频轨,挂上画面就是一块黑。占位封面正是"播放器装的
+                    // 不是这一页要的画面"该有的样子,和取流窗口里那一段共用同一条路。
+                    attached = attached && !onlyAudio,
                     placeholderCoverUrl = state.coverUrl,
                     isFullscreen = fullscreen,
                     onFullscreenChange = { fullscreen = it },
@@ -228,6 +238,11 @@ fun LiveRoomScreen(
                             currentQn = state.currentQn,
                             onQualityChange = {
                                 onQualityChange(it)
+                                keepControlsAwake()
+                            },
+                            onlyAudio = onlyAudio,
+                            onOnlyAudioChange = {
+                                onOnlyAudioChange(it)
                                 keepControlsAwake()
                             },
                             onMenuOpenChange = { setMenuOpen(it) },
@@ -346,6 +361,8 @@ private fun LiveControlBar(
     qualities: List<Int>,
     currentQn: Int,
     onQualityChange: (Int) -> Unit,
+    onlyAudio: Boolean,
+    onOnlyAudioChange: (Boolean) -> Unit,
     onMenuOpenChange: (Boolean) -> Unit,
     onPlayPause: () -> Unit,
     onFullscreenToggle: () -> Unit,
@@ -372,6 +389,7 @@ private fun LiveControlBar(
             modifier = Modifier.weight(1f).padding(start = Spacing.Hair),
         )
         DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+        LiveAudioOnlyButton(onlyAudio, onOnlyAudioChange, isFullscreen)
         if (qualities.size > 1) {
             LiveQualityButton(
                 qualities = qualities,
@@ -391,6 +409,35 @@ private fun LiveControlBar(
             )
         }
     }
+}
+
+/**
+ * 只要声音。**换的是流本身**:服务端直接给一条纯音频流(`only_audio=1`),不是本地把画面
+ * 关掉,所以省下的是那一路视频的流量和解码。
+ *
+ * 图标随状态换,不只靠着色区分:控制条压在任意画面上,单靠一点颜色差读不出开没开。
+ */
+@Composable
+private fun LiveAudioOnlyButton(
+    onlyAudio: Boolean,
+    onOnlyAudioChange: (Boolean) -> Unit,
+    isFullscreen: Boolean,
+) {
+    ControlButton(
+        expanded = onlyAudio,
+        onClick = { onOnlyAudioChange(!onlyAudio) },
+        label = null,
+        icon = { tint ->
+            Icon(
+                imageVector = if (onlyAudio) Icons.Filled.Headset else Icons.Filled.HeadsetOff,
+                contentDescription = stringResource(
+                    if (onlyAudio) R.string.live_audio_only_off else R.string.live_audio_only_on,
+                ),
+                tint = tint,
+                modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp),
+            )
+        },
+    )
 }
 
 /**

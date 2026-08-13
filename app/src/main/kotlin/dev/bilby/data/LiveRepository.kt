@@ -50,24 +50,32 @@ class LiveRepository(private val client: BiliClient) {
 
     /**
      * 一次把 protocol/format/codec 三个维度全要回来再挑,不是每换一档发一次请求 —— 参数照
-     * PiliPlus `live.dart:83` 逐个对齐,少一个字段签名内容就不同。接口事实见
-     * `notes/live.md` §1。
+     * PiliPlus `live.dart:83` 逐个对齐,少一个字段签名内容就不同。
+     *
+     * [onlyAudio] 为真时多带一个 `only_audio=1`,服务端直接返回一条纯音频流,本地不必去关
+     * 视频轨(见 `notes/live.md` §3)。为假时这个参数**不出现**,不是 `only_audio=0`:
+     * PiliPlus 就是这么发的,而它参与 WBI 签名。
      */
-    suspend fun loadPlayback(roomId: Long, qn: Int = DEFAULT_QN): BiliResult<LiveRoomPlayback> {
+    suspend fun loadPlayback(
+        roomId: Long,
+        qn: Int = DEFAULT_QN,
+        onlyAudio: Boolean = false,
+    ): BiliResult<LiveRoomPlayback> {
         val result: BiliResult<LiveRoomPlayInfoDto> = client.getData(
             "${BiliConstants.LIVE_HOST}/xlive/web-room/v2/index/getRoomPlayInfo",
-            mapOf(
-                "room_id" to roomId.toString(),
-                "protocol" to "0,1",
-                "format" to "0,1,2",
-                "codec" to "0,1,2",
-                "qn" to qn.toString(),
-                "platform" to "web",
-                "ptype" to "8",
-                "dolby" to "5",
-                "panorama" to "1",
-                "web_location" to "444.8",
-            ),
+            buildMap {
+                put("room_id", roomId.toString())
+                put("protocol", "0,1")
+                put("format", "0,1,2")
+                put("codec", "0,1,2")
+                put("qn", qn.toString())
+                put("platform", "web")
+                put("ptype", "8")
+                put("dolby", "5")
+                put("panorama", "1")
+                if (onlyAudio) put("only_audio", "1")
+                put("web_location", "444.8")
+            },
             signed = true,
             referer = BiliConstants.LIVE_REFERER,
         )

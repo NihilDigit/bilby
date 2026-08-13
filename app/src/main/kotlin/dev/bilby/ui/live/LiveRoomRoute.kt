@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -55,6 +56,22 @@ fun LiveRoomRoute(
         initialValue = dev.bilby.data.DanmakuPrefs(),
     )
 
+    /**
+     * 这个直播间只要声音。
+     *
+     * **页内的临时状态**:`rememberSaveable` 让它活过转屏,关掉直播间就随页面消失;不持久化、
+     * 不跨房间,换一个房间回到默认的关。
+     *
+     * 它只改变一件事:退到后台时这一场不被 [AudioPlaybackService.pauseForAppBackground] 停掉。
+     * 页面仍在返回栈上、服务接着放、通知栏照常可控。离开直播间即停那条(下面的 onDispose)
+     * 不受影响 —— 直播一直在往前走,回来时听到的也不是离开时那一段。
+     */
+    var onlyAudio by rememberSaveable { mutableStateOf(false) }
+    DisposableEffect(onlyAudio) {
+        AudioPlaybackService.setBackgroundPlaybackAllowed(onlyAudio)
+        onDispose { AudioPlaybackService.setBackgroundPlaybackAllowed(false) }
+    }
+
     var controller by remember { mutableStateOf<MediaController?>(null) }
     DisposableEffect(context) {
         val future = MediaController.Builder(context, AudioPlaybackService.sessionToken(context))
@@ -81,8 +98,8 @@ fun LiveRoomRoute(
 
     // 开播了就交给服务。**命令报的是房间号和档位,不是地址** —— 取流归服务(见
     // AudioPlaybackService.resolveLiveStream),页面这一份只用来判断开没开播、能选哪几档。
-    // 命令是幂等的:标题晚一步到只更新元数据,而档位变了才重新取一次流。
-    LaunchedEffect(active, state.isLive, state.currentQn, state.title) {
+    // 命令是幂等的:标题晚一步到只更新元数据,而档位或纯音频变了才重新取一次流。
+    LaunchedEffect(active, state.isLive, state.currentQn, onlyAudio, state.title) {
         if (!state.isLive) return@LaunchedEffect
         val connected = active ?: return@LaunchedEffect
         connected.sendCustomCommand(
@@ -90,6 +107,7 @@ fun LiveRoomRoute(
             bundleOf(
                 AudioPlaybackService.EXTRA_ROOM_ID to roomId,
                 AudioPlaybackService.EXTRA_LIVE_QN to state.currentQn,
+                AudioPlaybackService.EXTRA_LIVE_ONLY_AUDIO to onlyAudio,
                 AudioPlaybackService.EXTRA_TITLE to state.title,
                 AudioPlaybackService.EXTRA_UP_NAME to state.anchorName,
                 AudioPlaybackService.EXTRA_COVER_URL to state.coverUrl,
@@ -115,6 +133,8 @@ fun LiveRoomRoute(
             scope.launch(NonCancellable) { container.settings.saveDanmakuEnabled(enabled) }
         },
         onQualityChange = vm::setQuality,
+        onlyAudio = onlyAudio,
+        onOnlyAudioChange = { onlyAudio = it },
         onLoadMoreGuards = vm::loadMoreGuards,
         onSendDanmaku = vm::sendDanmaku,
         onRetry = vm::load,
