@@ -287,15 +287,10 @@ fun VideoScreen(
     // [dismissedResumeMillis] 的注释。
     val cloudResumeMillis = audioState.cloudResumeMillis?.takeIf { it != dismissedResumeMillis }
 
-    // 画面必须接在真的 ExoPlayer 上:MediaController 没有 COMMAND_SET_VIDEO_SURFACE
-    // (Surface 是本地对象,递不到 session 那侧),这是 Media3 的已知限制。服务与 UI 同进程,
-    // 所以能直接拿到同一个播放器对象;控制仍然全部走 controller。
-    val surfacePlayer = active?.let { AudioPlaybackService.currentPlayer }
-
     // 播放器此刻装的是不是这一页的视频。播放器全 app 共用一份、跨页面存活,点开一条新视频
-    // 到播放器真正切过去之间有一段取流 + prepare 的窗口,这段时间 surfacePlayer 渲染的还是
-    // 上一条视频的最后几帧——传给 BilbyPlayer,由它决定挂画面还是画占位(不在这里暂停或
-    // 销毁播放器,那会打断后台连续播放)。
+    // 到播放器真正切过去之间有一段取流 + prepare 的窗口,这段时间画面渲染的还是上一条视频的
+    // 最后几帧——传给 BilbyPlayer,由它决定挂画面还是画占位(不在这里暂停或销毁播放器,那会
+    // 打断后台连续播放)。
     //
     // 判据是**播放器装着的那条**,不是队列指着的那条:打开命令一到队列就指向新视频了,
     // 而取流还要几百毫秒。拿队列判的话,这段时间画面会被当成本页的挂上去,用户看到的是
@@ -337,7 +332,7 @@ fun VideoScreen(
         incomplete = (audioState.queue?.incomplete == true),
     )
 
-    /** 发一条自定义命令的简写。控制一律走 controller,不碰 currentPlayer。 */
+    /** 发一条自定义命令的简写。 */
     val send: (String, Bundle) -> Unit = { action, args ->
         active?.sendCustomCommand(SessionCommand(action, Bundle.EMPTY), args)
     }
@@ -779,7 +774,6 @@ fun VideoScreen(
                 when {
                     loaded && active != null -> BilbyPlayer(
                         player = active,
-                        surfacePlayer = surfacePlayer,
                         qualities = audioState.playInfo?.availableQualities.orEmpty(),
                         currentQuality = audioState.currentQuality,
                         onQualityChange = { setQuality(it) },

@@ -44,7 +44,6 @@ sealed interface DanmakuFeed {
 @Composable
 fun PlayerDanmakuLayer(
     player: Player,
-    surfacePlayer: Player?,
     prefs: DanmakuPrefs,
     feed: DanmakuFeed,
     specialPool: List<SpecialDanmaku>,
@@ -58,9 +57,8 @@ fun PlayerDanmakuLayer(
     modifier: Modifier = Modifier,
 ) {
     val isLive = feed is DanmakuFeed.Stream
-    val clock = remember(player, surfacePlayer, isLive) {
-        if (isLive) LiveDanmakuClock(player)
-        else PlayerDanmakuClock(controller = player, surfacePlayer = surfacePlayer)
+    val clock = remember(player, isLive) {
+        if (isLive) LiveDanmakuClock(player) else PlayerDanmakuClock(player)
     }
     val options = remember(prefs, fontSizeSp) {
         DanmakuOptions(
@@ -141,26 +139,21 @@ object DanmakuFontSizeSp {
 }
 
 /**
- * 点播的弹幕时钟。
+ * 点播的弹幕时钟,位置读 MediaController。
  *
- * 位置优先读 [surfacePlayer](同进程的播放器本体)而不是 [controller](MediaController),
- * 是为了绕开后者一个真实的实现缺陷:MediaController 是 session 的跨进程代理,
- * `getCurrentPosition()` 自己在本地做"锚点位置 + 经过时间 × 倍速"外推
- * (media3-session:1.10.1,`MediaUtils.getUpdatedCurrentPositionMs`),而 `setPlaybackSpeed()`
- * 本地立刻 masking 新倍速、却不同步刷新那个锚点 —— 倍速刚变的那段窗口里外推值会跳过头,
- * 回包落地后又被纠正回去,表现为弹幕集体抖一下。`surfacePlayer` 直接读渲染器的真实进度。
+ * **已知会在倍速刚变的那一小段窗口里抖一下。** MediaController 的 `getCurrentPosition()`
+ * 在本地做"锚点位置 + 经过时间 × 倍速"外推(media3-session:1.10.1,
+ * `MediaUtils.getUpdatedCurrentPositionMs`),而 `setPlaybackSpeed()` 立刻 masking 新倍速
+ * 却不同步刷新那个锚点,于是新倍速被追认到已经过去的那段时间上,外推值跳过头,session 回包
+ * 落地后再纠正回来。长按加速每次都会经过这个窗口。
  *
- * **读位置不是发命令,不违反"控制一律走 controller"那条约定** —— 那条约束的是控制命令。
- * [surfacePlayer] 为 null(服务还没绑定,或从听视频切回来的短暂窗口)时退回 [controller]。
+ * 此前绕开它的办法是直接读同进程 ExoPlayer 的进度,那个静态引用随 Surface 改走 controller
+ * 一并删掉了 —— 跨进程能成立的东西不该靠同进程的巧合。
  */
-private class PlayerDanmakuClock(
-    private val controller: Player,
-    private val surfacePlayer: Player?,
-) : DanmakuClock {
-    private val source: Player get() = surfacePlayer ?: controller
-    override val positionMillis: Long get() = source.currentPosition
-    override val isPlaying: Boolean get() = source.isPlaying
-    override val playbackSpeed: Float get() = source.playbackParameters.speed
+private class PlayerDanmakuClock(private val player: Player) : DanmakuClock {
+    override val positionMillis: Long get() = player.currentPosition
+    override val isPlaying: Boolean get() = player.isPlaying
+    override val playbackSpeed: Float get() = player.playbackParameters.speed
 }
 
 /**

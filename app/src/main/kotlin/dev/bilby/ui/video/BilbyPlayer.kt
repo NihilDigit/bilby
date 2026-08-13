@@ -87,16 +87,14 @@ private const val PROGRESS_REPORT_INTERVAL_MILLIS = 5_000L
  * 播放器不归这里所有(DESIGN 2.4b:播放器归后台服务),所以这个 composable 只读状态、发命令,
  * 不 prepare、不 release。
  *
- * @param player 状态与控制的唯一入口,实际传进来的是连到播放服务的 MediaController。
- * @param surfacePlayer 只用来渲染画面。**MediaController 渲染不了画面**:Media3 不给它
- *   COMMAND_SET_VIDEO_SURFACE(Surface 是本地对象,递不到 session 那一侧),所以画面必须接
- *   在真的 ExoPlayer 上。两个参数指向的是同一份播放状态,不会打架。
+ * @param player 状态、控制与画面的唯一入口,实际传进来的是连到播放服务的 MediaController。
+ *   Surface 也走它:`COMMAND_SET_VIDEO_SURFACE` 在 MediaController 上是有的,Surface 作为
+ *   Parcelable 跨 binder 送到 session 那一侧。
  */
 @OptIn(UnstableApi::class)
 @Composable
 fun BilbyPlayer(
     player: Player,
-    surfacePlayer: Player?,
     qualities: List<QualityOption>,
     currentQuality: Int,
     onQualityChange: (Int) -> Unit,
@@ -144,7 +142,7 @@ fun BilbyPlayer(
      * 是否等于这一页的 bvid**,调用方(`VideoScreen`)算好再传进来。
      *
      * 播放器全 app 共用一份、跨页面存活(DESIGN 2.4b),点开新视频到它真正切过去之间有一段
-     * 取流 + prepare 的窗口——这段时间里 `surfacePlayer` 渲染的还是上一条视频的最后几帧。
+     * 取流 + prepare 的窗口——这段时间里画面渲染的还是上一条视频的最后几帧。
      * 为 false 时不挂 [PlayerSurface],改画 [placeholderCoverUrl];为 true 时正常渲染画面。
      * **不去暂停或销毁播放器**——那会打断后台连续播放,也违反"播放器归服务所有"。
      */
@@ -175,7 +173,6 @@ fun BilbyPlayer(
 
     PlayerShell(
         player = player,
-        surfacePlayer = surfacePlayer,
         attached = matchesCurrentPage,
         placeholderCoverUrl = placeholderCoverUrl,
         isFullscreen = isFullscreen,
@@ -193,7 +190,6 @@ fun BilbyPlayer(
             // 弹幕层:字号由这里按形态给,层自己不认识"全屏"。
             PlayerDanmakuLayer(
                 player = player,
-                surfacePlayer = surfacePlayer,
                 prefs = danmakuPrefs,
                 feed = DanmakuFeed.Pool(danmakuPool),
                 specialPool = specialDanmakuPool,

@@ -292,7 +292,6 @@ class AudioPlaybackService : MediaSessionService() {
             setWakeMode(C.WAKE_MODE_NETWORK)
             addListener(PlayerListener())
         }
-        currentPlayer = player
 
         // 定时到点是"这次听完了",和按下暂停同一类,所以连 playIntent 一起清 —— 不清的话
         // 回到播放页它会自己响起来,而用户设定时器正是为了让它别再响。
@@ -331,7 +330,6 @@ class AudioPlaybackService : MediaSessionService() {
         if (runningService === this) runningService = null
         // 服务都没了，“允许后台播”这个策略也跟着作废，否则下一次开普通视频会继承到上一次听视频的设置。
         backgroundPlaybackAllowed = false
-        currentPlayer = null
         player.release()
         _state.value = AudioPlaybackUiState()
         _sleepTimerState.value = SleepTimerState()
@@ -1365,24 +1363,6 @@ class AudioPlaybackService : MediaSessionService() {
         /** 退避的第一档,之后每次翻倍:1s、2s。 */
         private const val RETRY_BASE_DELAY_MILLIS = 1_000L
 
-        /**
-         * 播放页渲染画面用的真实播放器。
-         *
-         * **为什么画面不走 MediaController**:Media3 的 MediaController 不提供
-         * COMMAND_SET_VIDEO_SURFACE —— Surface 是本地对象,给不了 session 那一侧,这是
-         * Media3 的已知限制,不是我们没配好。所以画面只能接在真的 ExoPlayer 上。
-         *
-         * **这个口子只在同进程成立**:服务没有 android:process,和 UI 在同一个进程里,拿到的
-         * 是同一个对象。真跨进程时这里必然读到 null,那条路要用别的方案(比如把 Surface 送到
-         * 服务侧),不在本期范围。
-         *
-         * 只用来渲染。播放/暂停/seek/切下一条一律走 MediaController,别拿它当控制入口——
-         * 绕过 session 改状态,通知栏和耳机线控看到的就是另一份真相。
-         */
-        @Volatile
-        var currentPlayer: ExoPlayer? = null
-            private set
-
         @Volatile
         private var runningService: AudioPlaybackService? = null
 
@@ -1407,9 +1387,9 @@ class AudioPlaybackService : MediaSessionService() {
         /**
          * 应用退到后台。看视频就暂停,听视频继续。
          *
-         * 这条路由确实绕过了 MediaController,理由和 `currentPlayer` 那条一样:要表达的东西
-         * 在 MediaController 的命令集里没有对应项,而服务与 UI 同进程。服务在这里操作的是
-         * 它自己的播放器,不是外部越过 session 去控制它。
+         * 这条路由确实绕过了 MediaController:要表达的东西在 MediaController 的命令集里没有
+         * 对应项,而服务与 UI 同进程。服务在这里操作的是它自己的播放器,不是外部越过 session
+         * 去控制它。
          */
         fun pauseForAppBackground() {
             runningService?.pauseForAppBackground()

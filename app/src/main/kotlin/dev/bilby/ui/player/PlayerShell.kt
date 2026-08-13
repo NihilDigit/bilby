@@ -171,7 +171,6 @@ internal class PlayerShellActions(
 @Composable
 fun PlayerShell(
     player: Player,
-    surfacePlayer: Player?,
     attached: Boolean,
     placeholderCoverUrl: String,
     isFullscreen: Boolean,
@@ -229,7 +228,14 @@ fun PlayerShell(
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
             }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                videoAspect = videoSize.aspectOr(videoAspect)
+            }
         }
+        // 接上来时流可能已经在播了(页面重建、或从听视频切回来),那一次 onVideoSizeChanged
+        // 早就发过,只监听会一直停在默认的 16:9。
+        videoAspect = player.videoSize.aspectOr(videoAspect)
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
     }
@@ -243,21 +249,6 @@ fun PlayerShell(
     DisposableEffect(isPlaying) {
         view.keepScreenOn = isPlaying
         onDispose { view.keepScreenOn = false }
-    }
-
-    // 画面尺寸问渲染画面的那个播放器,不问 controller:controller 那边的 videoSize 要等
-    // session 同步,慢半拍就是画面先按 16:9 铺开再跳一下。
-    DisposableEffect(surfacePlayer) {
-        val listener = object : Player.Listener {
-            override fun onVideoSizeChanged(videoSize: VideoSize) {
-                videoAspect = videoSize.aspectOr(videoAspect)
-            }
-        }
-        // 接上来时流可能已经在播了(页面重建、或从听视频切回来),那一次 onVideoSizeChanged
-        // 早就发过,只监听会一直停在默认的 16:9。
-        surfacePlayer?.let { videoAspect = it.videoSize.aspectOr(videoAspect) }
-        surfacePlayer?.addListener(listener)
-        onDispose { surfacePlayer?.removeListener(listener) }
     }
 
     var position by remember { mutableLongStateOf(0L) }
@@ -401,9 +392,9 @@ fun PlayerShell(
         // 播放器真正切过去之间那段取流 + prepare 的窗口里,这里会一直显示上一条的残留帧。
         // 占位保持容器比例,不跳布局;切回真画面**不做转场**——它和取流、prepare、codec
         // 初始化撞在同一瞬间,加动效只会让"卡"更明显。
-        if (attached && surfacePlayer != null) {
+        if (attached) {
             PlayerSurface(
-                player = surfacePlayer,
+                player = player,
                 modifier = Modifier.align(Alignment.Center).aspectRatio(videoAspect),
             )
         } else if (placeholderCoverUrl.isNotEmpty()) {

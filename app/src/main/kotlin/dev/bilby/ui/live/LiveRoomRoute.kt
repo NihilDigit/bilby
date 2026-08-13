@@ -28,8 +28,7 @@ import kotlinx.coroutines.launch
 /**
  * 直播间的接线:连 session、把选好的流交给服务、把状态和弹幕流交给界面。
  *
- * 和播放页一样,**页面不持有播放器**:它连一个 [MediaController],画面接同进程的
- * `currentPlayer`(MediaController 没有 `COMMAND_SET_VIDEO_SURFACE`),控制一律走 controller。
+ * 和播放页一样,**页面不持有播放器**:它连一个 [MediaController],画面和控制都走它。
  */
 @Composable
 fun LiveRoomRoute(
@@ -77,7 +76,6 @@ fun LiveRoomRoute(
 
     val active = controller
     val audioState by AudioPlaybackService.state.collectAsStateWithLifecycle()
-    val surfacePlayer = active?.let { AudioPlaybackService.currentPlayer }
 
     // 流地址到手就交给服务。命令是幂等的(报房间号不报地址),标题晚一步到也只是再发一遍
     // 更新元数据,不会把已经起好的流掐掉。
@@ -102,7 +100,6 @@ fun LiveRoomRoute(
         state = state,
         danmaku = vm.danmaku,
         player = active,
-        surfacePlayer = surfacePlayer,
         // 播放器此刻装的是不是这个房间。和播放页同一个判据,只是标识换成了直播那一套。
         attached = audioState.loadKey == "${AudioPlaybackService.LOAD_KEY_LIVE_PREFIX}$roomId",
         danmakuPrefs = danmakuPrefs,

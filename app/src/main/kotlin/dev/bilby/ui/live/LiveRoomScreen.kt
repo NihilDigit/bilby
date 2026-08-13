@@ -120,7 +120,6 @@ fun LiveRoomScreen(
     state: LiveRoomUiState,
     danmaku: Flow<Danmaku>,
     player: Player?,
-    surfacePlayer: Player?,
     attached: Boolean,
     danmakuPrefs: DanmakuPrefs,
     onDanmakuEnabledChange: (Boolean) -> Unit,
@@ -180,7 +179,6 @@ fun LiveRoomScreen(
             if (player != null && state.isLive && state.streamUrl != null) {
                 PlayerShell(
                     player = player,
-                    surfacePlayer = surfacePlayer,
                     attached = attached,
                     placeholderCoverUrl = state.coverUrl,
                     isFullscreen = fullscreen,
@@ -200,7 +198,6 @@ fun LiveRoomScreen(
                     overlay = {
                         PlayerDanmakuLayer(
                             player = player,
-                            surfacePlayer = surfacePlayer,
                             prefs = danmakuPrefs,
                             feed = DanmakuFeed.Stream(danmaku),
                             specialPool = emptyList(),

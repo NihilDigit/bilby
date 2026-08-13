@@ -111,21 +111,23 @@ in the Gradle cache — unzip its `classes.jar` and run `javap`. The mirror answ
 is for and how it is meant to be assembled. Documentation lags the library the same way the
 public bilibili documentation lags PiliPlus.
 
-**This rule exists because of a claim nobody checked.** `player/AudioPlaybackService` states
-that `MediaController` has no `COMMAND_SET_VIDEO_SURFACE` and that a Surface cannot reach the
-session; the shipped `media3-session` carries all four `setVideoSurface*` methods and passes
-the Surface over the session binder. That sentence became the justification for a static
-player reference, and from there for treating same-process as an architectural premise. A
-comment asserting that an API does not exist is a claim about the library, and claims about
-the library are checkable.
+**This rule exists because of a claim nobody checked.** `player/AudioPlaybackService` used to
+state that `MediaController` has no `COMMAND_SET_VIDEO_SURFACE` and that a Surface cannot
+reach the session; the shipped `media3-session` carries all four `setVideoSurface*` methods
+and passes the Surface over the session binder. That sentence became the justification for a
+static player reference, and from there for treating same-process as an architectural
+premise. A comment asserting that an API does not exist is a claim about the library, and
+claims about the library are checkable.
 
 ## Architecture traps
 
 There is exactly one player. It belongs to `player/AudioPlaybackService`, a
-`MediaSessionService`. UI controls it through a `MediaController`, but video must be
-attached to the same-process `currentPlayer` reference because `MediaController` has no
-`COMMAND_SET_VIDEO_SURFACE`. Leaving a page disconnects the controller and never releases
-the player.
+`MediaSessionService`, and nothing outside the service holds a reference to it. UI reaches
+it only through a `MediaController` — control, video Surface and video size all go over the
+session. Session connections must keep the full default `Player.Commands`: with
+`COMMAND_SET_VIDEO_SURFACE` withheld the controller returns silently and the symptom is a
+black picture with nothing in the log. Leaving a page disconnects the controller and never
+releases the player.
 
 Listening mode is a state inside the video page, structurally identical to fullscreen. The
 page stays composed, the same player keeps running, and progress stays where it is, so there
