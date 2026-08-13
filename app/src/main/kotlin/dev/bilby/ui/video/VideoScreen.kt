@@ -86,7 +86,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import dev.bilby.data.VideoRelation
 import dev.bilby.player.AudioPlaybackService
-import dev.bilby.player.QueueItem
 import dev.bilby.player.SleepTimerMode
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
@@ -132,11 +131,6 @@ fun VideoScreen(
      * `matchesCurrentPage` 的用法)。这个值由 `VideoPane` 直接传,它手上现成的路由参数就是它。
      */
     bvid: String,
-    /**
-     * 导航指名的那一 P。**0 = 不指名**,由服务按详情/观看记录决定 —— 除缓存列表外的所有入口
-     * 都是 0,行为和以前一个字节都没变。
-     */
-    cid: Long = 0,
     state: VideoUiState,
     related: RelatedState,
     commentState: CommentUiState,
@@ -146,7 +140,7 @@ fun VideoScreen(
     /** 盘上已有的东西。缓存面板拿它把已有的那几条标出来并禁选。 */
     cached: CachedIndex = CachedIndex(),
     /** 缓存面板按下确认。清晰度与"要不要弹幕"都在面板里选,这里只负责把结果交出去。 */
-    onCacheSelection: (List<QueueItem>, qualityId: Int) -> Unit = { _, _ -> },
+    onCacheSelection: (List<OfflineTarget>, qualityId: Int) -> Unit = { _, _ -> },
     followState: FollowState,
     onToggleFollow: () -> Unit,
     /** UP 主等级,独立请求、独立失败——查不到就是 null,徽章不画(见 VideoViewModel.upCard)。 */
@@ -348,26 +342,18 @@ fun VideoScreen(
      * 都不同 —— 那正是重试当初必须再加一个 force 标志位去绕过的东西。
      *
      * **这句话发两遍**,因为知道 bvid 和知道这条视频叫什么之间隔着一次网络请求:
-     * 拿到 bvid 就发第一遍,服务据此立刻取流;详情回来再发一遍,补上标题、UP、封面和真正的
-     * cid。第二遍落在服务的"同一条视频"分支上,只补元数据、不重新装载。
+     * 拿到 bvid 就发第一遍,服务据此立刻取流;详情回来再发一遍,补上标题、UP 和封面。
+     * 第二遍落在服务的"同一条视频"分支上,只补元数据、不重新装载。
+     *
+     * **两遍都不带 cid。** 放到哪一 P 由播放层在装载时解析(观看记录、缓存副本、用户指名各
+     * 有优先级,见 `player/LoadResolver.kt`),页面手上只有详情里的默认 P —— 送过去就是拿
+     * 一个更差的答案盖掉刚解析出来的那个。
      */
-    LaunchedEffect(active, bvid, cid) {
+    LaunchedEffect(active, bvid) {
         if (active == null) return@LaunchedEffect
-        // 默认不带 cid:服务会用视频详情补,而那份详情正是这个页面此刻也在等的同一份请求
-        // (VideoRepository 按 bvid 合并并发详情请求),不会多打一次接口。
-        //
-        // **导航指名了哪一 P 时带上它**(只有缓存列表会指名):服务据此走缓存查找的精确匹配
-        // 那一支 —— 用户点的是 P7 就得是 P7,拿别的 P 顶上比播不了更糟,画面在动而内容是错的。
         send(
             AudioPlaybackService.ACTION_OPEN_VIDEO,
-            if (cid == 0L) {
-                bundleOf(AudioPlaybackService.EXTRA_BVID to bvid)
-            } else {
-                bundleOf(
-                    AudioPlaybackService.EXTRA_BVID to bvid,
-                    AudioPlaybackService.EXTRA_CID to cid,
-                )
-            },
+            bundleOf(AudioPlaybackService.EXTRA_BVID to bvid),
         )
     }
 
@@ -382,7 +368,6 @@ fun VideoScreen(
             AudioPlaybackService.ACTION_OPEN_VIDEO,
             bundleOf(
                 AudioPlaybackService.EXTRA_BVID to detail.bvid,
-                AudioPlaybackService.EXTRA_CID to detail.cid,
                 AudioPlaybackService.EXTRA_TITLE to detail.title,
                 AudioPlaybackService.EXTRA_UP_NAME to detail.up.name,
                 AudioPlaybackService.EXTRA_COVER_URL to detail.coverUrl,
@@ -396,8 +381,6 @@ fun VideoScreen(
      */
     val retryQueue: () -> Unit = {
         val detail = state.detail
-        // **不带 cid。** 带的话服务会拿它和正在播的那一 P 比,而这里给得出的只有默认 P1 ——
-        // 在多 P 视频的第 3 P 上点一下重试,人会被送回第 1 P。重建队列和播到哪一 P 无关。
         send(
             AudioPlaybackService.ACTION_OPEN_VIDEO,
             bundleOf(
@@ -422,9 +405,6 @@ fun VideoScreen(
      *
      * 两边都先问[playerHoldsThisPage]:队列自动连播走到下一条时,这一页可能还没被换掉,
      * 而那时发 OPEN_VIDEO 等于把播放器拽回这条视频——用户并没有要求。
-     *
-     * **不带 cid。** 带的话服务会拿它和正在播的那一 P 比,而这里给得出的只有默认 P1,
-     * 多 P 视频在第 3 P 上发条弹幕就会被送回第 1 P(同 retryQueue 那条)。
      */
     val openDanmakuInput: () -> Unit = {
         danmakuProgress = active?.currentPosition?.coerceAtLeast(0L) ?: 0L
@@ -574,7 +554,7 @@ fun VideoScreen(
             queue = audioState.queue?.items.orEmpty(),
             onPlayQueueItem = onPlayQueueItem,
             parts = state.detail?.pages.orEmpty(),
-            currentCid = (audioState.queue?.currentCid ?: 0L),
+            currentCid = audioState.currentCid,
             onPlayPart = onPlayPart,
             onNext = { active?.seekToNextMediaItem() },
             onPrevious = { active?.seekToPreviousMediaItem() },
@@ -805,7 +785,7 @@ fun VideoScreen(
                         danmakuPool = danmakuPool,
                         specialDanmakuPool = specialDanmakuPool,
                         selfDanmaku = selfDanmaku,
-                        danmakuCid = (audioState.queue?.currentCid ?: 0L),
+                        danmakuCid = audioState.currentCid,
                         matchesCurrentPage = matchesCurrentPage,
                         placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
                         modifier = Modifier.fillMaxSize(),
@@ -884,7 +864,7 @@ fun VideoScreen(
                     VideoTabs(
                         pagerState = tabPager,
                         detail = detail,
-                        currentCid = (audioState.queue?.currentCid ?: 0L),
+                        currentCid = audioState.currentCid,
                         related = related,
                         commentState = commentState,
                     // 点闪光:没问过就发起检索,问过就只是把 sheet 展开 —— 再点一次重跑
@@ -1060,7 +1040,7 @@ fun VideoScreen(
                 onSend = {
                     onSendDanmaku(
                         danmakuDraft,
-                        audioState.queue?.currentCid ?: 0L,
+                        audioState.currentCid,
                         danmakuProgress,
                     )
                 },
@@ -1097,7 +1077,8 @@ fun VideoScreen(
             } else {
                 currentParts.map { part ->
                     OfflineTarget(
-                        item = item.copy(cid = part.cid),
+                        item = item,
+                        cid = part.cid,
                         partTitle = stringResource(R.string.video_part_label, part.index, part.title),
                     )
                 }
@@ -1113,7 +1094,7 @@ fun VideoScreen(
             // 默认勾中正在播的**这一 P**,不是这条视频的第一 P:多 P 视频里用户看到第 7 P 才
             // 想起来缓存,想要的显然是第 7 P。
             initialSelection = shownQueue.currentBvid?.let {
-                offlineId(it, audioState.queue?.currentCid ?: 0L)
+                offlineId(it, audioState.currentCid)
             },
             onConfirm = { selected, quality ->
                 cacheSheetOpen = false

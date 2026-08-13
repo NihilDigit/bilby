@@ -44,23 +44,19 @@ class BilbyMediaSourceFactory(
 }
 
 private const val EXTRA_ITEM_CID = "cid"
-private const val EXTRA_ITEM_RESUME_PART = "resumePart"
 private const val EXTRA_ITEM_START_MS = "startMs"
 private const val EXTRA_ITEM_LOAD = "load"
 
 /**
- * 建这个条目时指定的分 P,0 表示"没指定,由解析层决定"。
+ * 这一次装载指名的分 P,0 表示"没指名,由解析层决定"(见 [LoadResolver])。
  *
  * **这是一次性的意图,不是这一条的状态。** 正在播的是哪一 P 由服务的装载状态回答
  * ([AudioPlaybackService.loadedCid]),解析出来的 cid 不回写到这里 —— 回写就等于把播放层的
- * 内部状态挂到了队列的身份上,而队列的身份只有 bvid。
+ * 内部状态挂到了队列的身份上,而队列的身份只有 bvid。**队列项本身不带 cid**:普通队列项
+ * (自动连播、点队列里的一条)这个值恒为 0,每次装载都重新解析一遍该放哪一 P。
  */
 val MediaItem.cidHint: Long
     get() = requestMetadata.extras?.getLong(EXTRA_ITEM_CID) ?: 0L
-
-/** 这一趟要不要顺带把"上次看到第几 P"问出来。见 [AudioPlaybackService.lastPlayedPart]。 */
-val MediaItem.resumePartHint: Boolean
-    get() = requestMetadata.extras?.getBoolean(EXTRA_ITEM_RESUME_PART) == true
 
 /** 指定的起播位置(毫秒),null 表示按续播记录起播。切清晰度要停在原地,走的是这一条。 */
 val MediaItem.startPositionHint: Long?
@@ -79,7 +75,7 @@ val MediaItem.loadNonce: Int
 /**
  * 队列项转成播放器认识的条目。
  *
- * 三个装载参数放 `requestMetadata` 而不是 `mediaId` 里:身份只有 bvid(队列去重、页面判断
+ * 装载参数放 `requestMetadata` 而不是 `mediaId` 里:身份只有 bvid(队列去重、页面判断
  * "播的是不是我这一条"都按它),而它们是这一次装载怎么取内容的指示,解析层要在自己那条线程上
  * 读到 —— 那时发起装载的那次调用早就返回了。
  *
@@ -87,7 +83,7 @@ val MediaItem.loadNonce: Int
  * `getMediaMetadata` 喂给 MediaSession。
  */
 fun QueueItem.toMediaItem(
-    resumePart: Boolean = false,
+    requestedCid: Long = 0,
     startPositionMillis: Long? = null,
     loadNonce: Int = 0,
 ): MediaItem = MediaItem.Builder()
@@ -96,8 +92,7 @@ fun QueueItem.toMediaItem(
         MediaItem.RequestMetadata.Builder()
             .setExtras(
                 Bundle().apply {
-                    putLong(EXTRA_ITEM_CID, cid)
-                    putBoolean(EXTRA_ITEM_RESUME_PART, resumePart)
+                    putLong(EXTRA_ITEM_CID, requestedCid)
                     putLong(EXTRA_ITEM_START_MS, startPositionMillis ?: -1L)
                     putInt(EXTRA_ITEM_LOAD, loadNonce)
                 }
@@ -130,7 +125,6 @@ private fun QueueItem.displayMetadata(): MediaMetadata = MediaMetadata.Builder()
  */
 fun MediaItem.toQueueItem(): QueueItem = QueueItem(
     bvid = mediaId,
-    cid = cidHint,
     title = mediaMetadata.title?.toString().orEmpty(),
     upName = mediaMetadata.artist?.toString().orEmpty(),
     coverUrl = mediaMetadata.artworkUri?.toString().orEmpty(),

@@ -39,6 +39,7 @@ import dev.bilby.live.LiveDanmakuClient
 import dev.bilby.offline.OfflineDownloadService
 import dev.bilby.offline.OfflineDownloader
 import dev.bilby.offline.OfflineStore
+import dev.bilby.player.PartRequest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -160,6 +161,12 @@ class AppContainer(context: Context) {
         val root = appContext.getExternalFilesDir(null) ?: appContext.filesDir
         OfflineStore(java.io.File(root, "offline"), json)
     }
+
+    /**
+     * 缓存列表点某一行时留下的"要放这一 P",由播放服务在装载解析时取走一次。
+     * 放在这里是因为写它的是界面、读它的是服务,而两者之间只有这个容器。见 [PartRequest]。
+     */
+    val partRequest: PartRequest = PartRequest()
 
     /**
      * 弹幕仓库认得离线缓存:缓存过的分段就地解析,不出网。这样 `VideoViewModel` 那侧的分段

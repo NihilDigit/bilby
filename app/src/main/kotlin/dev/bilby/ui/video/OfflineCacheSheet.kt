@@ -38,6 +38,7 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import dev.bilby.R
 import dev.bilby.data.QualityOption
 import dev.bilby.offline.CachedIndex
+import dev.bilby.offline.OfflineRequest
 import dev.bilby.offline.offlineId
 import dev.bilby.player.QueueItem
 import dev.bilby.player.videoQualityLabel
@@ -55,12 +56,33 @@ import dev.bilby.ui.theme.Spacing
  * [partTitle] 为空。**只有当前这条视频摊得开** —— 分 P 清单来自视频详情,队列里别的视频要各
  * 打一次详情请求才知道,而缓存面板不值得为此在打开时先发十几个请求。
  */
-data class OfflineTarget(val item: QueueItem, val partTitle: String = "") {
+data class OfflineTarget(
+    val item: QueueItem,
+    /**
+     * 要缓存这条视频的哪一 P。**0 = 还不知道**,由下载器用视频详情补(见 [OfflineRequest])。
+     *
+     * 分 P 在这里而不在 [QueueItem] 上:队列项的身份只有 bvid,分 P 是这一行自己的事 ——
+     * 当前这条视频摊成几行,每行一个 P,而队列里其他视频各只有一行。
+     */
+    val cid: Long = 0,
+    val partTitle: String = "",
+) {
     /** 列表 key 与勾选状态的键。用 (bvid, cid) 而不是 bvid:同一条视频的两个分 P 是两行。 */
-    val key: String get() = offlineId(item.bvid, item.cid)
+    val key: String get() = offlineId(item.bvid, cid)
 
-    fun isCached(cached: CachedIndex): Boolean = (item.bvid to item.cid) in cached
+    fun isCached(cached: CachedIndex): Boolean = (item.bvid to cid) in cached
 }
+
+/** 这一行落成一条下载请求。 */
+fun OfflineTarget.toOfflineRequest(qualityId: Int) = OfflineRequest(
+    bvid = item.bvid,
+    cid = cid,
+    title = item.title,
+    upName = item.upName,
+    coverUrl = item.coverUrl,
+    durationSeconds = item.durationSeconds,
+    qualityId = qualityId,
+)
 
 /**
  * 选择要缓存哪几条、用哪一档清晰度。
@@ -89,7 +111,7 @@ fun OfflineCacheSheet(
     defaultQuality: Int,
     /** 打开时默认勾中的那个单元(正在播的这一 P)。 */
     initialSelection: String?,
-    onConfirm: (selected: List<QueueItem>, qualityId: Int) -> Unit,
+    onConfirm: (selected: List<OfflineTarget>, qualityId: Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val selected = remember(targets) {
@@ -199,7 +221,7 @@ fun OfflineCacheSheet(
         }
 
         Button(
-            onClick = { onConfirm(chosen.map { it.item }, quality) },
+            onClick = { onConfirm(chosen, quality) },
             enabled = chosen.isNotEmpty(),
             modifier = Modifier
                 .fillMaxWidth()

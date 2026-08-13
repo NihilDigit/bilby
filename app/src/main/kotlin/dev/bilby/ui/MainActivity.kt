@@ -462,7 +462,6 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                     container = container,
                     bvid = key.bvid,
                     startListening = key.listening,
-                    cid = key.cid,
                     onUpClick = { push(Space(it)) },
                     onOpenQueueSource = {
                         push(CollectionContents(it.mid, it.id, it.isSeason, it.name))
@@ -508,8 +507,13 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                 CutoutSafe {
                     OfflineRoute(
                         container = container,
-                        // 带上 cid:缓存列表里一条就是一个分 P,点哪一条就该播哪一条。
-                        onPlay = { item -> push(Video(item.bvid, cid = item.cid)) },
+                        // 缓存列表里一行就是一个分 P,点哪一行就该播哪一行。**指名走
+                        // [PartRequest] 而不是路由参数**:它是这一下的意图,取走即弃,
+                        // 不该在转屏重建之后又把播放器推回这一 P(见 Destinations 的 Video)。
+                        onPlay = { item ->
+                            container.partRequest.request(item.bvid, item.cid)
+                            push(Video(item.bvid))
+                        },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -1914,8 +1918,6 @@ private fun VideoRoute(
     container: AppContainer,
     bvid: String,
     startListening: Boolean = false,
-    /** 导航指名的那一 P(只有缓存列表会给)。0 = 不指名,由详情/观看记录决定。 */
-    cid: Long = 0,
     onUpClick: (Long) -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
     onOpenVideo: (String) -> Unit,
@@ -1989,9 +1991,6 @@ private fun VideoRoute(
     VideoPane(
         container = container,
         bvid = episode,
-        // **切集之后就不再是那一 P 了。** episode 会因为切集/自动连播变成别的视频,而 cid 是
-        // 进这一页时那一条的分 P;不夹这一道的话,bvid 与 cid 会分属两条视频。
-        cid = if (episode == bvid) cid else 0L,
         listening = listening,
         onListeningChange = { listening = it },
         onUpClick = onUpClick,
@@ -2005,7 +2004,6 @@ private fun VideoRoute(
 private fun VideoPane(
     container: AppContainer,
     bvid: String,
-    cid: Long = 0,
     listening: Boolean,
     onListeningChange: (Boolean) -> Unit,
     onUpClick: (Long) -> Unit,
@@ -2091,7 +2089,6 @@ private fun VideoPane(
 
     VideoScreen(
         bvid = bvid,
-        cid = cid,
         state = state,
         related = related,
         commentState = commentState,

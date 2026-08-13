@@ -21,21 +21,19 @@ data object Search : NavKey
 data object ToView : NavKey
 
 /**
+ * **身份只有 bvid,没有 cid。** 放到哪一 P 是播放层在装载时解析出来的内部状态(见
+ * `player/LoadResolver.kt`)。写进路由的话它会跟着页面一起被复原:转屏之后又执行一遍,
+ * 把服务端记着的那一 P 顶回用户几分钟前点的那一行。缓存列表指名的那一 P 走
+ * [dev.bilby.player.PartRequest],一次性,取完即弃。
+ *
  * @param listening 直接以听视频的状态打开。**听视频仍然只有播放页一个宿主** ——
  *   空间页的「听这位 UP 的投稿」靠这个参数进来,而不是自己再承载一份听视频界面。
  *   它是目的地身份的一部分(以什么状态打开这个视频),不是可变标志位。
- * @param cid 指名打开哪一 P,0 表示不指名。
- *
- *   **这个参数是上一轮离线方案的遗留,新方案不再需要它** —— 缓存内容改走独立的
- *   [OfflineVideo] 目的地(它一进来就不该有"取详情"这条路径)。等 `MainActivity` 那侧的
- *   `entry<Offline>` 改完之后,这个参数连同它的接线应该一起删掉:留着就是一个迟早会被
- *   重新接上的口子,而它会把离线内容又送回在线播放页。
  */
 @Serializable
 data class Video(
     val bvid: String,
     val listening: Boolean = false,
-    val cid: Long = 0,
 ) : NavKey
 
 /**

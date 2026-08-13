@@ -8,7 +8,6 @@ import dev.bilby.data.PlayInfo
 import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRepository
 import dev.bilby.data.VideoStat
-import dev.bilby.player.QueueItem
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentLength
@@ -34,8 +33,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 一条要缓存的东西,由界面递进来。cid 允许为 0 —— 空间投稿来源的队列项本来就不带 cid
- * (见 [QueueItem]),由这里用视频详情补上。
+ * 一条要缓存的东西,由界面递进来。cid 允许为 0 —— 队列项的身份只有 bvid,面板上除当前这条
+ * 之外的行都不知道自己是哪一 P(见 [dev.bilby.ui.video.OfflineTarget]),由这里用视频详情补上。
  */
 data class OfflineRequest(
     val bvid: String,
@@ -46,16 +45,6 @@ data class OfflineRequest(
     val durationSeconds: Long,
     /** 用户选的清晰度档。真正下到哪一档由 [dev.bilby.player.selectStreams] 决定,可能降级。 */
     val qualityId: Int,
-)
-
-fun QueueItem.toOfflineRequest(qualityId: Int) = OfflineRequest(
-    bvid = bvid,
-    cid = cid,
-    title = title,
-    upName = upName,
-    coverUrl = coverUrl,
-    durationSeconds = durationSeconds,
-    qualityId = qualityId,
 )
 
 /**

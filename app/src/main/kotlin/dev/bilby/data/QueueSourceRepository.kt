@@ -63,10 +63,9 @@ data class QueueSource(
  * 动态那条是为**以动态形式发布的视频**加的:它们不在投稿列表里,没有它的话,从动态流
  * 点进去的视频永远只有孤零零一条。
  *
- * **建出来的队列一定含有当前这条视频,否则返回 null。** 调用方拿到队列后会把页面带来的 cid
- * 写到当前那一格上,队列里没有这条视频时那个 cid 就落到了别人头上 —— bvid 与 cid 分属两条
- * 视频,playurl 回 -404「啥都木有」。所以这里宁可返回 null(调用方退成单条队列),也不返回
- * 一份"差不多的"队列。
+ * **建出来的队列一定含有当前这条视频,否则返回 null。** 调用方是拿它去补全一份已经在播的
+ * 队列,而正在播的那一条要原样留在里面:换成一份不含它的列表,队列面板高亮的就是别人,
+ * 下一条也接错了地方。所以这里宁可返回 null(调用方退成单条队列),也不返回一份"差不多的"队列。
  */
 class QueueSourceRepository(
     private val spaceRepository: SpaceRepository,
@@ -260,7 +259,6 @@ class QueueSourceRepository(
         val items = episodes.map { ep ->
             QueueItem(
                 bvid = ep.bvid,
-                cid = ep.cid,
                 title = ep.title,
                 upName = detail.up.name,
                 coverUrl = ep.coverUrl,
@@ -284,7 +282,6 @@ class QueueSourceRepository(
 
     private fun VideoDetail.toQueueItem() = QueueItem(
         bvid = bvid,
-        cid = cid,
         title = title,
         upName = up.name,
         coverUrl = coverUrl,
@@ -293,7 +290,6 @@ class QueueSourceRepository(
 
     private fun SpaceVideoItem.toQueueItem() = QueueItem(
         bvid = bvid,
-        cid = 0L, // 空间投稿接口不返回 cid,真正播放到这一条时由调用方补取,见 QueueItem 注释
         title = title,
         upName = "",
         coverUrl = coverUrl,

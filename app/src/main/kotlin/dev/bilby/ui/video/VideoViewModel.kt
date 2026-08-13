@@ -43,9 +43,7 @@ import dev.bilby.data.VideoUp
 import dev.bilby.offline.CachedIndex
 import dev.bilby.offline.OfflineDownloader
 import dev.bilby.offline.OfflineStore
-import dev.bilby.offline.toOfflineRequest
 import dev.bilby.player.AudioPlaybackService
-import dev.bilby.player.QueueItem
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -538,7 +536,7 @@ class VideoViewModel(
      */
     private fun observeDanmakuCid(target: String) = videoScope.launch {
         AudioPlaybackService.state
-            .map { if (it.queue?.current?.bvid == target) (it.queue?.currentCid ?: 0L) else 0L }
+            .map { if (it.queue?.current?.bvid == target) it.currentCid else 0L }
             .distinctUntilChanged()
             .collect { cid ->
                 danmakuCid = cid
@@ -649,7 +647,7 @@ class VideoViewModel(
         // 等持久化的语言读回来再开始跟 cid 走,理由见 [subtitleLanLoaded]。
         subtitleLanLoaded.await()
         AudioPlaybackService.state
-            .map { if (it.queue?.current?.bvid == target) (it.queue?.currentCid ?: 0L) else 0L }
+            .map { if (it.queue?.current?.bvid == target) it.currentCid else 0L }
             .distinctUntilChanged()
             .collect { cid ->
                 // 换 cid 就取消上一条还没跑完的加载——它可能正卡在限流退避的 delay 里。
@@ -707,8 +705,8 @@ class VideoViewModel(
      * **这里不落任何状态。** 下载器是应用级的(见 AppContainer),页面退出、切集、连播都不该
      * 影响已经排进去的活儿 —— 那正是"缓存"这个功能的用途。
      */
-    fun cacheSelection(items: List<QueueItem>, qualityId: Int) {
-        offlineDownloader.enqueue(items.map { it.toOfflineRequest(qualityId) })
+    fun cacheSelection(targets: List<OfflineTarget>, qualityId: Int) {
+        offlineDownloader.enqueue(targets.map { it.toOfflineRequest(qualityId) })
     }
 
     /**
@@ -850,7 +848,7 @@ class VideoViewModel(
      */
     private fun observeCurrentPart(target: String) = videoScope.launch {
         AudioPlaybackService.state
-            .map { if (it.queue?.current?.bvid == target) (it.queue?.currentCid ?: 0L) else 0L }
+            .map { if (it.queue?.current?.bvid == target) it.currentCid else 0L }
             .distinctUntilChanged()
             .collect { cid -> if (cid != 0L) loadSponsorSegments(target, cid) }
     }
@@ -872,7 +870,10 @@ class VideoViewModel(
         // (DESIGN 2.4b):队列翻到下一条时本页的轮询可能还没停,不对身份就会把下一条的进度
         // 按本页的 aid 报上去。云端那份是续播的唯一来源,报错一次,下次进来就 seek 到不存在的位置。
         if (playback.queue?.current?.bvid != bvid) return
-        val cid = (playback.queue?.currentCid ?: 0L).takeIf { it != 0L } ?: return
+        // 上报的 cid 取装载层确认过的那一个([AudioPlaybackUiState.currentCid]),不取队列的:
+        // 队列在收到打开命令的那一刻就指向新的一条,而装载还要几百毫秒,这段窗口里报上去的
+        // 就是"新 cid 配旧位置"。
+        val cid = playback.currentCid.takeIf { it != 0L } ?: return
         // 不套 viewModelScope:这个方法最要紧的一次调用来自播放页的 onDispose,那一刻
         // 这个 ViewModel 正在被清,scope 当场取消,请求发不出去(见 HeartbeatReporter)。
         heartbeatReporter.report(
