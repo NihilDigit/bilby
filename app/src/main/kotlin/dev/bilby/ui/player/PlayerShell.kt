@@ -41,8 +41,10 @@ import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -168,6 +170,7 @@ internal class PlayerShellActions(
  *   **不去暂停或销毁播放器**,那会打断后台连续播放,也违反"播放器归服务所有"。
  * @param onSeeked 壳完成一次真 seek 之后回调。进度上报是页面的事(直播不报),壳不掺和。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun PlayerShell(
     player: Player,
@@ -222,11 +225,16 @@ fun PlayerShell(
     // 居中,多出来的地方留黑边。
     var videoAspect by remember { mutableFloatStateOf(16f / 9f) }
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
+    var buffering by remember { mutableStateOf(player.playbackState == Player.STATE_BUFFERING) }
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                buffering = playbackState == Player.STATE_BUFFERING
             }
 
             override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -236,6 +244,7 @@ fun PlayerShell(
         // 接上来时流可能已经在播了(页面重建、或从听视频切回来),那一次 onVideoSizeChanged
         // 早就发过,只监听会一直停在默认的 16:9。
         videoAspect = player.videoSize.aspectOr(videoAspect)
+        buffering = player.playbackState == Player.STATE_BUFFERING
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
     }
@@ -405,6 +414,13 @@ fun PlayerShell(
             )
         }
         // 封面也拿不到时退化成纯黑——Box 本身的背景已经是黑的,不用再多画一层。
+
+        // 取流在轮到这一条时才发生(LazyMediaSource),那段时间加上 prepare 画面全黑,
+        // 没有指示的话和死机分不出来。判据直接问播放器:BUFFERING 同时盖住取流、prepare
+        // 和播放途中的再缓冲,三者对观看的人是同一件事 —— 声音画面停了,但马上会回来。
+        if (buffering) {
+            LoadingIndicator(modifier = Modifier.align(Alignment.Center))
+        }
 
         Box(
             modifier = Modifier
