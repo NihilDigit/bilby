@@ -53,6 +53,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.IOException
 
 /**
@@ -141,13 +142,20 @@ data class AudioPlaybackUiState(
     /** 还没打开过任何东西时为 null。见 [QueueState]。 */
     val queue: QueueState? = null,
     /**
-     * 别处看到的位置(毫秒),只在放本地副本、且服务端那份确实比本机新时非空。
+     * 别处看到的位置(毫秒)。两条路径写它:放本地副本时的进度核对(见
+     * [dev.bilby.player.mergeCachedProgress]),以及页面重开时的云端核对(见
+     * [dev.bilby.player.cloudProgressWrittenElsewhere])。
      *
-     * **是一条建议,不是一次跳转。** 播放已经从本地进度起播了,这个值只让界面摆一条可点的提示,
-     * 用户点了才 seek。自动跳过去会让播放头在没有任何操作的情况下自己动 —— 那比停在一个稍旧的
-     * 位置更难理解,而"稍旧"本身是有下限的:它就是本机上次看到的地方。
+     * **是一条建议,不是一次跳转。** 播放已经从自己那份进度起播了,这个值只让界面摆一条可点的
+     * 提示,用户点了才动。自动跳过去会让播放头在没有任何操作的情况下自己动 —— 那比停在一个稍旧
+     * 的位置更难理解,而"稍旧"本身是有下限的:它就是本机上次看到的地方。
      */
     val cloudResumeMillis: Long? = null,
+    /**
+     * [cloudResumeMillis] 那个位置属于哪一 P。为 0 或等于 [currentCid] 时就是当前这一 P,
+     * 点了只 seek;不同则是别处换了 P,点了要切过去(同稿件切 P,不是换一条视频)。
+     */
+    val cloudResumeCid: Long = 0,
 )
 
 /**
@@ -284,7 +292,7 @@ class AudioPlaybackService : MediaSessionService() {
     /** 位置刻度的循环。只在放着的时候跑,见 [emitPositionTick]。 */
     private var tickJob: Job? = null
 
-    /** 装的是本地副本还是网络流。写本地进度、核对云端进度只在前者有意义。 */
+    /** 装的是本地副本还是网络流。写本地进度、按本地那份核对云端只在前者有意义。 */
     private var loadedLocalCopy = false
 
     private var playInfo: PlayInfo? = null
@@ -292,6 +300,9 @@ class AudioPlaybackService : MediaSessionService() {
 
     /** 见 [AudioPlaybackUiState.cloudResumeMillis]。装载任何新东西时清掉。 */
     private var cloudResumeMillis: Long? = null
+
+    /** 见 [AudioPlaybackUiState.cloudResumeCid]。跟着 [cloudResumeMillis] 一起写、一起清。 */
+    private var cloudResumeCid: Long = 0
 
     /**
      * 一条播完了要不要接着放下一条。见 [dev.bilby.data.PlaybackPrefs.autoNext]。
@@ -542,9 +553,22 @@ class AudioPlaybackService : MediaSessionService() {
             // 上一次补全失败就停在了单条队列上。这条命令在每次回到播放页时都会再发一遍,
             // 拿它当重试点,不必为此单开一条命令和一个按钮。
             if (queueIncomplete) enrichQueue(bvid)
-            // 回到这一页也要重新核对一次云端进度,理由见 [reconcileIfLocalCopy]。
-            // **这一趟是唯一的机会**:播放器还装着这一条,下面那些装载路径一条都走不到。
+            // **这条捷径是这个功能唯一的机会,也是它曾经整个漏掉的地方。**
+            //
+            // 装载解析只发生在冷装载。播放器常驻、跨页面存活,同一条视频再打开一次走的就是
+            // 这里——一次解析都不发生,云端一次都没被问。表现是:在网页上看到后面某一 P,
+            // 回到 Bilby 打开这条视频还停在旧位置,而杀掉 app 再进反而是对的。
+            //
+            // 根因是这条分支的幂等是假的:no-op 的判据是"这条已经装着"这个**旧状态本身**,
+            // 而不是"现状和应然一致"这个判断的输出。判据取自要被它决定的那个状态,于是它被
+            // 自己的脏状态污染——装着的那一条哪怕已经过时,也照样被认成"不用管"。
+            //
+            // 真幂等的写法是每次都重新解析一遍、结果一致就什么都不做,那样云端变了会自动落位。
+            // **没有选它**:那会在用户毫不知情的时候把一个暂停中的会话拽到别的位置甚至别的
+            // 分 P 上,而这一页此刻可能正停在他自己选的地方。所以补的是一次查询加一条提示,
+            // 跳不跳由用户点(仓库主人定的,直接落位这个方案是被否决的那个)。
             reconcileIfLocalCopy(bvid)
+            reconcileCloudProgress(bvid)
             return
         }
         val existing = indexOfMediaId(bvid)
@@ -736,7 +760,7 @@ class AudioPlaybackService : MediaSessionService() {
         loadedLocalCopy = false
         playInfo = null
         currentQuality = 0
-        cloudResumeMillis = null
+        setCloudResume(null)
         publishState(loading = true)
         player.setMediaItems(items, startIndex, C.TIME_UNSET)
         player.prepare()
@@ -1020,7 +1044,7 @@ class AudioPlaybackService : MediaSessionService() {
         playInfo = loaded.playInfo
         currentQuality = loaded.quality
         resolvingMediaId = null
-        cloudResumeMillis = null
+        setCloudResume(null)
         openChain?.mark("prepare")
         // **起播定位排在建会话之前**,于是那一次 seek 落在"还没有会话"的窗口里,不会被当成
         // 用户跳到了这里而立刻上报。缓存条目的云端核对(下面那句)要赶在本地位置被报上去之前
@@ -1059,11 +1083,13 @@ class AudioPlaybackService : MediaSessionService() {
             BiliLog.w("建不了进度会话 bvid=$bvid cid=$cid")
             return
         }
-        progressSession = ProgressSession(aid, cid) { playedTimeSeconds, finished ->
+        progressSession = ProgressSession(aid, cid) { playedTimeSeconds, finished, onConfirmed ->
             heartbeatReporter.report(aid, cid, playedTimeSeconds, finished) { reportedMillis ->
                 // 条目不在盘上时 recordServerBase 自己就什么都不做,这里不必先查一遍。
                 // 心跳成功是 serverBase 推进的唯一入口,见 [mergeCachedProgress]。
                 offlineStore.recordServerBase(bvid, cid, reportedMillis)
+                // 回到会话所在的线程再动它的状态:这个回调跑在心跳自己的 IO scope 上。
+                withContext(Dispatchers.Main.immediate) { onConfirmed() }
             }
         }
     }
@@ -1117,6 +1143,50 @@ class AudioPlaybackService : MediaSessionService() {
         }
     }
 
+    /**
+     * 页面重开时,问一次云端在这期间有没有被别处写过。
+     *
+     * 只在放网络流时做:本地副本走 [reconcileIfLocalCopy],那条路的基线是盘上记的本地进度,
+     * 两者的比对对象不同,合成一条就得在里面判"现在放的是哪种",而那正是要避免的形状。
+     *
+     * **基线是会话报上去的那一对,不是播放器当前位置**,理由见
+     * [cloudProgressWrittenElsewhere]。会话一次都没报过时那个函数返回 null,所以这里不必先判。
+     *
+     * 单 P 视频同样要问:这条路上比的是位置,不只是分 P —— 别处把同一 P 看到了更后面,是这个
+     * 功能最常见的那种情形。
+     *
+     * 回来时先对一遍身份:这一趟是异步的,期间用户可能已经切到别的视频、切了 P,或者会话被
+     * 换掉了(重试、切清晰度都会重建它)。会话对象本身也要比,`===` 比 cid 更严——同一 P 重新
+     * 装载一次,cid 一样而基线已经清零。
+     */
+    private fun reconcileCloudProgress(bvid: String) {
+        if (loadedLocalCopy || bvid != loadedMediaId) return
+        val session = progressSession ?: return
+        val cid = loadedCid
+        scope.launch {
+            val server = subtitleRepository.lastPlayed(bvid, cid)
+            if (bvid != loadedMediaId || cid != loadedCid || progressSession !== session) return@launch
+            val elsewhere = cloudProgressWrittenElsewhere(server, session.reported)
+            // 没有比出别处的位置时把上一次的结果清掉,不是直接 return:回到这一页会重新组合
+            // 一次,[CloudResumeHint] 的 visible 从 false 起步,状态里留着的旧值会让它再弹
+            // 一遍——而这一次核对刚刚说了"云端没有别处写的位置"。
+            if (elsewhere == null && cloudResumeMillis == null) return@launch
+            setCloudResume(elsewhere, cid = server?.cid ?: 0)
+            publishState()
+        }
+    }
+
+    /**
+     * 提示的位置和它属于哪一 P 一起写、一起清。
+     *
+     * 两个字段分开赋值的话,总有一条路径只改了一个,而那时提示会带着上一次的分 P——点下去就是
+     * 切到一个和这条提示无关的 P 上。
+     */
+    private fun setCloudResume(positionMillis: Long?, cid: Long = 0) {
+        cloudResumeMillis = positionMillis
+        cloudResumeCid = if (positionMillis == null) 0 else cid
+    }
+
     private suspend fun reconcileCachedProgress(cached: OfflineItem) {
         // **问不到就什么都不做。** 离线时这一句必然失败,而那正是这个功能存在的场景 ——
         // 把失败当成"服务端说 0"会把基线抹成 0,于是"云端没动过、本地说了算"这一支再也成立
@@ -1138,13 +1208,16 @@ class AudioPlaybackService : MediaSessionService() {
         // 而这一次核对刚刚说了"云端没有更新的位置"。
         if (merged == cached.watchedPositionMillis) {
             if (cloudResumeMillis != null) {
-                cloudResumeMillis = null
+                setCloudResume(null)
                 publishState()
             }
             return
         }
-        cloudResumeMillis = resumePositionMillis(merged, cached.durationSeconds * 1000)
-            .takeIf { it > 0 }
+        // 本地副本这条路上分 P 不会变:比对的两份进度都属于盘上这一 P。
+        setCloudResume(
+            resumePositionMillis(merged, cached.durationSeconds * 1000).takeIf { it > 0 },
+            cid = cached.cid,
+        )
         publishState()
     }
 
@@ -1166,10 +1239,19 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /** 换分 P。**分 P 是这条视频内部的结构,不是队列里的另一条**(CLAUDE.md),所以不动队列位置。 */
-    private fun playPart(cid: Long) {
+    private fun playPart(cid: Long, positionMillis: Long = 0) {
         failedAttempts = 0
         lastError = null
-        reloadCurrent { item, nonce -> item.withLoadParams(nonce, requestedCid = cid) }
+        reloadCurrent { item, nonce ->
+            item.withLoadParams(
+                nonce,
+                requestedCid = cid,
+                // 位置只有云端续播提示会带:那条提示说的是"别处看到这一 P 的第几秒",
+                // 切过去落在开头就等于把提示里那个数字丢了。页内切 P 不带,那一 P 从
+                // 解析器给的位置起播。
+                startPositionMillis = positionMillis.takeIf { it > 0 },
+            )
+        }
     }
 
     /**
@@ -1324,6 +1406,7 @@ class AudioPlaybackService : MediaSessionService() {
             playInfo = playInfo,
             currentQuality = currentQuality,
             cloudResumeMillis = cloudResumeMillis,
+            cloudResumeCid = cloudResumeCid,
             queue = QueueState(
                 current = currentItem(),
                 items = queueItems,
@@ -1457,7 +1540,7 @@ class AudioPlaybackService : MediaSessionService() {
             playInfo = null
             currentQuality = 0
             loadedLocalCopy = false
-            cloudResumeMillis = null
+            setCloudResume(null)
             resolvingMediaId = newPosition.mediaItem?.mediaId
             publishState(loading = true)
             // 下一条多半在这之前几十秒就解析好了(见 [resolvedItems]),现在才轮到它落地。
@@ -1577,7 +1660,10 @@ class AudioPlaybackService : MediaSessionService() {
             when (customCommand.customAction) {
                 ACTION_OPEN_VIDEO -> openVideo(args)
                 ACTION_OPEN_LIVE -> playLive(args)
-                ACTION_PLAY_PART -> playPart(args.getLong(EXTRA_CID))
+                ACTION_PLAY_PART -> playPart(
+                    args.getLong(EXTRA_CID),
+                    args.getLong(EXTRA_POSITION_MILLIS),
+                )
                 ACTION_SET_QUALITY -> setQuality(args.getInt(EXTRA_QUALITY))
                 ACTION_RETRY -> retryNow()
                 // 暂停,但**不动 playIntent**(见 [ACTION_PAGE_LEFT])。顺手写一次本地进度:
@@ -1660,6 +1746,14 @@ class AudioPlaybackService : MediaSessionService() {
 
         /** 要换到哪一 P,只属于 [ACTION_PLAY_PART]。**打开视频那条命令不带它**,见 [openVideo]。 */
         const val EXTRA_CID = "cid"
+
+        /**
+         * 切过去之后从第几毫秒起播,只属于 [ACTION_PLAY_PART],缺省(0)表示按解析器给的位置。
+         *
+         * 唯一的发送方是云端续播提示:它说的是"别处看到这一 P 的第几秒",不带位置切过去就
+         * 落在开头,提示里那个数字白读了。页内切 P 不带。
+         */
+        const val EXTRA_POSITION_MILLIS = "positionMillis"
         const val EXTRA_QUALITY = "quality"
         const val EXTRA_TITLE = "title"
         const val EXTRA_UP_NAME = "upName"

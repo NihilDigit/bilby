@@ -1,6 +1,7 @@
 package dev.bilby.player
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -15,8 +16,19 @@ class ProgressSessionTest {
 
     private val sent = mutableListOf<Pair<Long, Boolean>>()
 
+    /** 上报确认的回调,攒着不调——落地与否是两件事,要分开摆布。 */
+    private val pendingConfirmations = mutableListOf<() -> Unit>()
+
     private fun session(aid: Long = 170_001L, cid: Long = 999L) =
-        ProgressSession(aid, cid) { seconds, finished -> sent += seconds to finished }
+        ProgressSession(aid, cid) { seconds, finished, onConfirmed ->
+            sent += seconds to finished
+            pendingConfirmations += onConfirmed
+        }
+
+    private fun confirmAll() {
+        pendingConfirmations.forEach { it() }
+        pendingConfirmations.clear()
+    }
 
     @Test
     fun `位置前进不足 5 秒不发`() {
@@ -178,6 +190,37 @@ class ProgressSessionTest {
 
         session.close()
         assertEquals(listOf(14L to false), sent)
+    }
+
+    @Test
+    fun `发出去的和确认落地的分开记`() {
+        val session = session()
+        assertNull("一次都没报过时没有基线", session.reported)
+
+        session.onPosition(5_000, DURATION)
+        assertEquals(
+            "确认还没回来:发出去的记着,落地的还是空",
+            ReportedProgress(cid = 999L, sentSeconds = 5, confirmedSeconds = null, completed = false),
+            session.reported,
+        )
+
+        confirmAll()
+        assertEquals(5L, session.reported?.confirmedSeconds)
+
+        // 这一条发出去就没回来(比如断网)。落地的仍然停在上一个确认过的值上,而两个值都要
+        // 留着——云端此刻可能是其中任何一个。
+        session.onPosition(10_000, DURATION)
+        assertEquals(
+            ReportedProgress(cid = 999L, sentSeconds = 10, confirmedSeconds = 5, completed = false),
+            session.reported,
+        )
+    }
+
+    @Test
+    fun `完播那一次记成 completed`() {
+        val session = session()
+        session.onPosition(DURATION - 500, DURATION)
+        assertEquals(true, session.reported?.completed)
     }
 
     @Test

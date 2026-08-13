@@ -381,6 +381,28 @@ fun VideoScreen(
     }
 
     /**
+     * 点了云端续播提示。**这一下是用户点出来的,不是播放头自己动。**
+     *
+     * 别处看的可能是另一 P(服务端整条视频只存一对 `(cid, 秒数)`),那就要连 P 一起切过去,
+     * 并且落在提示说的那个秒数上——只 seek 的话会把当前这一 P 拖到一个属于别的 P 的位置。
+     * 切 P 是同稿件内的命令,页面身份与队列位置都不动。
+     */
+    val jumpToCloudResume: (Long) -> Unit = { positionMillis ->
+        val cid = audioState.cloudResumeCid
+        if (cid != 0L && cid != audioState.currentCid) {
+            send(
+                AudioPlaybackService.ACTION_PLAY_PART,
+                bundleOf(
+                    AudioPlaybackService.EXTRA_CID to cid,
+                    AudioPlaybackService.EXTRA_POSITION_MILLIS to positionMillis,
+                ),
+            )
+        } else {
+            active?.seekTo(positionMillis)
+        }
+    }
+
+    /**
      * 队列没建全时的重试。**没有专门的命令**:再发一遍 OPEN_VIDEO 就是重试 —— 它落在服务的
      * "同一条视频"分支,那里看到队列还停在临时队列上就会重新补全一次。
      */
@@ -836,8 +858,7 @@ fun VideoScreen(
                     if (fullscreen) {
                         CloudResumeHint(
                             positionMillis = cloudResumeMillis,
-                            // 直接 seek:这一下是用户点出来的,不是播放头自己动。
-                            onJump = { active?.seekTo(it) },
+                            onJump = jumpToCloudResume,
                             onDismiss = { dismissedResumeMillis = it },
                         )
                     }
@@ -1012,7 +1033,7 @@ fun VideoScreen(
         if (!fullscreen) {
             CloudResumeHint(
                 positionMillis = cloudResumeMillis,
-                onJump = { active?.seekTo(it) },
+                onJump = jumpToCloudResume,
                 onDismiss = { dismissedResumeMillis = it },
                 modifier = Modifier.align(ToastAnchorInDetail).padding(Spacing.Comfortable),
             )

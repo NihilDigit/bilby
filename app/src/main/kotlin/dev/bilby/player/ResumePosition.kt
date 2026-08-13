@@ -1,5 +1,6 @@
 package dev.bilby.player
 
+import dev.bilby.data.LastPlayed
 import kotlin.math.min
 
 /**
@@ -66,6 +67,41 @@ fun resumePositionMillis(positionMillis: Long, durationMillis: Long): Long =
  */
 fun mergeCachedProgress(localMillis: Long, base: Long, serverMillis: Long): Long =
     if (serverMillis != base) serverMillis else localMillis
+
+/**
+ * 云端记着的那一对是不是**别处**写的。返回别处那个位置,不是的话为 null。
+ *
+ * 用在「页面重开」那条路径上:播放器常驻,同一条视频再打开一次不触发装载,一次解析都不发生,
+ * 于是别处(网页、官方 app)在这期间写下的进度问不到。这个函数回答的就是"刚问回来的这一对,
+ * 是我们自己写的,还是别人写的"。
+ *
+ * **基线是我们自己报上去的那一对,绝不能拿播放器当前位置去比。** 心跳按位置节流(≥5 秒),
+ * 当前位置几乎总是比云端新几秒——拿它比对,每次重开页面都会把自己的节流延迟认成"别处看过"。
+ * 离开播放页时的 [ProgressSession.flush] 把云端钉在了一个我们知道的值上,这个等值判断因此
+ * 立得住;那一条补发是这里的前提,删掉它就得换判据。
+ *
+ * 正在播放时云端本来就是自己刚报的,这个函数自然返回 null,不需要为"在播/没在播"写分支。
+ *
+ * 四种为 null 的情形各自的理由:
+ * - [server] 为 null:这次没问到(离线、限流、接口出错)。和"服务端说没有记录"不是一回事,
+ *   见 [dev.bilby.data.SubtitleRepository.lastPlayed]。
+ * - 服务端没有记录(cid 为 0 或秒数不是正数):没有可跳的地方。**完播之后落在这一支**——
+ *   服务端对看完的稿件记的是 -1(历史列表里就是这个值,见 [dev.bilby.data.HistoryItem.isFinished]),
+ *   而 `last_play_time` 的负数在解析时已经被夹到 0。
+ * - [ours] 为 null:这次会话一次都没报过,没有可比的基线。此时云端那一对多半就是装载时用来
+ *   起播的那个,拿它弹一条提示等于把用户已经在的位置再提议一遍。
+ * - [ours] 的最后一次是完播:服务端此时存的是什么没有实测过(notes/playurl.md §8.1.2),
+ *   拿一个没验证的取值去判"别处",错的方向是凭空弹提示。宁可这一支不提示。
+ */
+fun cloudProgressWrittenElsewhere(server: LastPlayed?, ours: ReportedProgress?): Long? {
+    if (server == null) return null
+    if (server.cid == 0L || server.positionMillis <= 0) return null
+    if (ours == null || ours.completed) return null
+    if (server.cid != ours.cid) return server.positionMillis
+    val serverSeconds = server.positionMillis / 1000
+    if (serverSeconds == ours.sentSeconds || serverSeconds == ours.confirmedSeconds) return null
+    return server.positionMillis
+}
 
 /** 见 [finishedThresholdMillis]。 */
 private const val FINISHED_THRESHOLD_CAP_MILLIS = 10_000L

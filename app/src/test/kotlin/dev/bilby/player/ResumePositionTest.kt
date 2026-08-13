@@ -1,7 +1,9 @@
 package dev.bilby.player
 
+import dev.bilby.data.LastPlayed
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -70,5 +72,127 @@ class ResumePositionTest {
         // 看完了要能在列表里显示成看完,而这次仍然从 0 起播。两件事分开问。
         assertTrue(isWatchedToEnd(600_000, durationMillis = 600_000))
         assertEquals(0, resumePositionMillis(600_000, durationMillis = 600_000))
+    }
+
+    @Test
+    fun `云端等于自己报的就不是别处`() {
+        // 页面重开时最常见的那一趟:离开页面时的 flush 报了 300 秒,云端回的正是它。
+        assertNull(
+            cloudProgressWrittenElsewhere(
+                server = LastPlayed(cid = CID, positionMillis = 300_000),
+                ours = ours(sentSeconds = 300, confirmedSeconds = 300),
+            )
+        )
+    }
+
+    @Test
+    fun `确认还没回来时也算自己报的`() {
+        // flush 刚发出去、响应还没落地,用户已经重新进了这一页。只认确认过的那个值的话,
+        // 这里会把自己刚写上去的 300 秒当成别处写的,弹一条指着当前位置的提示。
+        assertNull(
+            cloudProgressWrittenElsewhere(
+                server = LastPlayed(cid = CID, positionMillis = 300_000),
+                ours = ours(sentSeconds = 300, confirmedSeconds = 120),
+            )
+        )
+    }
+
+    @Test
+    fun `上报失败时云端仍停在确认过的那个值上`() {
+        // 断网时那条心跳没发出去。云端还是上次确认的 120 秒——它不是别处写的。
+        assertNull(
+            cloudProgressWrittenElsewhere(
+                server = LastPlayed(cid = CID, positionMillis = 120_000),
+                ours = ours(sentSeconds = 300, confirmedSeconds = 120),
+            )
+        )
+    }
+
+    @Test
+    fun `云端和自己报的对不上就是别处写的`() {
+        // 我们停在 300 秒,云端却是 900 秒:这期间有人在网页或官方 app 上看过。
+        assertEquals(
+            900_000L,
+            cloudProgressWrittenElsewhere(
+                server = LastPlayed(cid = CID, positionMillis = 900_000),
+                ours = ours(sentSeconds = 300, confirmedSeconds = 300),
+            )
+        )
+    }
+
+    @Test
+    fun `别处换了一 P 也是别处写的`() {
+        // 服务端整条视频只存一对 (cid, 秒数),换 P 意味着这一对整个属于另一 P。
+        assertEquals(
+            60_000L,
+            cloudProgressWrittenElsewhere(
+                server = LastPlayed(cid = OTHER_CID, positionMillis = 60_000),
+                ours = ours(sentSeconds = 300, confirmedSeconds = 300),
+            )
+        )
+    }
+
+    @Test
+    fun `完播之后不提示`() {
+        // 我们最后报的是 played_time=-1,服务端此时存什么没有实测过(notes/playurl.md
+        // §8.1.2)。拿一个没验证的取值去判"别处",错的方向是凭空弹提示。
+        assertNull(
+            cloudProgressWrittenElsewhere(
+                server = LastPlayed(cid = CID, positionMillis = 600_000),
+                ours = ours(sentSeconds = 600, confirmedSeconds = 600, completed = true),
+            )
+        )
+    }
+
+    @Test
+    fun `服务端说没有记录时不提示`() {
+        // cid 为 0 是"这条视频服务端没有记录"。看完的稿件记的是 -1,解析时被夹到 0,
+        // 也落在这一支上(见 dev.bilby.data.HistoryItem.isFinished)。
+        assertNull(
+            cloudProgressWrittenElsewhere(
+                server = LastPlayed(cid = 0, positionMillis = 0),
+                ours = ours(sentSeconds = 300, confirmedSeconds = 300),
+            )
+        )
+        assertNull(
+            cloudProgressWrittenElsewhere(
+                server = LastPlayed(cid = CID, positionMillis = 0),
+                ours = ours(sentSeconds = 300, confirmedSeconds = 300),
+            )
+        )
+    }
+
+    @Test
+    fun `没问到和没有记录是两回事`() {
+        // 离线、限流、接口出错都给 null。当成"服务端说 0"的话,下次联网必然弹一条用户
+        // 根本没做过的"别处已看到"。
+        assertNull(
+            cloudProgressWrittenElsewhere(
+                server = null,
+                ours = ours(sentSeconds = 300, confirmedSeconds = 300),
+            )
+        )
+    }
+
+    @Test
+    fun `这次一次都没报过时没有可比的基线`() {
+        // 云端那一对多半就是装载时用来起播的那个,拿它弹提示等于把用户已经在的位置再提议一遍。
+        assertNull(
+            cloudProgressWrittenElsewhere(
+                server = LastPlayed(cid = CID, positionMillis = 300_000),
+                ours = null,
+            )
+        )
+    }
+
+    private fun ours(
+        sentSeconds: Long,
+        confirmedSeconds: Long?,
+        completed: Boolean = false,
+    ) = ReportedProgress(CID, sentSeconds, confirmedSeconds, completed)
+
+    private companion object {
+        const val CID = 555L
+        const val OTHER_CID = 777L
     }
 }

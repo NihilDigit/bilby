@@ -1,6 +1,21 @@
 package dev.bilby.player
 
 /**
+ * 这次会话往服务端写过的那一对,以及它落地了没有。
+ *
+ * @param cid 会话的分 P。冻结的那一个,不是"现在放的是哪一 P"。
+ * @param sentSeconds 最后一次发出去的位置。
+ * @param confirmedSeconds 最后一次**确认落地**的位置,一次都没成功过时为 null。
+ * @param completed 最后一次发出去的是不是完播(`played_time=-1`)。
+ */
+data class ReportedProgress(
+    val cid: Long,
+    val sentSeconds: Long,
+    val confirmedSeconds: Long?,
+    val completed: Boolean,
+)
+
+/**
  * 一次装载的全部进度上报(设计文档「决定 3」)。
  *
  * 身份 `(aid, cid)` 在创建时冻结,之后不可变。这是它存在的第一个理由:上报的 cid 曾经是每次
@@ -26,8 +41,13 @@ package dev.bilby.player
 class ProgressSession(
     val aid: Long,
     val cid: Long,
-    /** [finished] 为真时发 `played_time=-1`,见 [dev.bilby.data.HeartbeatReporter]。 */
-    private val report: (playedTimeSeconds: Long, finished: Boolean) -> Unit,
+    /**
+     * [finished] 为真时发 `played_time=-1`,见 [dev.bilby.data.HeartbeatReporter]。
+     *
+     * [onConfirmed] 由上报方在服务端确认之后回调,会话据此记下 [reported] 里那个"确认过的"
+     * 位置。**要在会话所在的线程上回调**(服务这边是主线程)。
+     */
+    private val report: (playedTimeSeconds: Long, finished: Boolean, onConfirmed: () -> Unit) -> Unit,
 ) {
 
     /** 最后一次看到的位置。[close] 拿不到定格位置时用它。 */
@@ -38,6 +58,14 @@ class ProgressSession(
 
     /** 上一次真的发出去的那个位置(秒)。节流基准。 */
     private var reportedSeconds = 0L
+
+    /**
+     * 这次会话往服务端写过什么。一次都没写过时为 null。
+     *
+     * 拿它当"云端那对是不是别处写的"的比对基线,见 [cloudProgressWrittenElsewhere]。
+     */
+    var reported: ReportedProgress? = null
+        private set
 
     private var closed = false
 
@@ -138,7 +166,20 @@ class ProgressSession(
         val seconds = positionMillis.coerceAtLeast(0) / 1000
         if (seconds == 0L) return
         reportedSeconds = seconds
-        report(seconds, finished || isPlayedToEnd(positionMillis, durationMillis))
+        val completed = finished || isPlayedToEnd(positionMillis, durationMillis)
+        // **发出去的和确认落地的分开记。** 两者都要,因为它们各自挡住一种误判:确认还没回来
+        // 的那个窗口是真实存在的(离开播放页的 flush 紧接着就可能重开页面),只认确认过的会把
+        // 自己刚写上去的值当成别处写的;反过来只认发出去的,一次失败的上报会让我们以为服务端
+        // 变了,而它其实还停在上一个确认过的值上。
+        reported = ReportedProgress(
+            cid = cid,
+            sentSeconds = seconds,
+            confirmedSeconds = reported?.confirmedSeconds,
+            completed = completed,
+        )
+        report(seconds, completed) {
+            reported = reported?.copy(confirmedSeconds = seconds)
+        }
     }
 
     companion object {
