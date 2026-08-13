@@ -159,9 +159,10 @@ data class AudioPlaybackUiState(
  * **播完即停**:[PlaybackQueue.next] 返回 null 时只是暂停,不循环、不从任何地方续接下一条。
  * 允许连播的前提是集合有限且由用户显式选定,续接推荐池就等于恢复了被禁的自动连播。
  *
- * **逐条取流**:播到某条时才调 [VideoRepository.getPlayUrl]。playurl 给的是带时效的 CDN
- * 直链,一次性把整个队列的地址取好,排在后面的那些等轮到时早就过期了,表现为播到某条突然
- * 403 而前面几条都正常——这种失败很难归因。这里也不做预取,理由同上:预取越早,过期风险越大。
+ * **逐条取流**:播到某条时才调 [VideoRepository.getPlayUrl],由 [LazyMediaSource] 在播放器
+ * 要放这一条的那一刻调起 [resolveStream]。playurl 给的是带时效的 CDN 直链,一次性把整个队列的
+ * 地址取好,排在后面的那些等轮到时早就过期了,表现为播到某条突然 403 而前面几条都正常——这种
+ * 失败很难归因。这里也不做预取,理由同上:预取越早,过期风险越大。
  */
 @UnstableApi
 class AudioPlaybackService : MediaSessionService() {
