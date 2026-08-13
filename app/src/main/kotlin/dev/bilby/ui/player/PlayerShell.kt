@@ -167,6 +167,8 @@ internal class PlayerShellActions(
  *   改画 [placeholderCoverUrl] —— 播放器全 app 共用一份、跨页面存活,点开新内容到它真正
  *   切过去之间有一段取流窗口,这段时间里画面上还是上一条的最后几帧。
  *   **不去暂停或销毁播放器**,那会打断后台连续播放,也违反"播放器归服务所有"。
+ *
+ *   它同时是屏幕常亮的判据:没有画面就没有理由拦着屏幕息。直播的纯音频模式据此传 false。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -249,14 +251,16 @@ fun PlayerShell(
         onDispose { player.removeListener(listener) }
     }
 
-    // 播放时屏幕常亮,暂停时不常亮——条件看的是播放状态,不是"页面在前台"。
+    // 常亮的条件是**此刻真的挂着画面**,不只是在出声,更不是"页面在前台"。有画面才有理由
+    // 不让屏幕息:人正在看。
     //
-    // 作用域只覆盖画面可见的形态,不覆盖听视频:后者的全部意义就是息屏后台放,常亮会把它
-    // 变成一个耗电的笑话。这里不用另外传一个 listening 标志去关掉它——听视频分支上这个
-    // 壳根本不会被组合,作用域天然就是对的。
+    // [attached] 就是这个判据,不必另开一条通道:它已经决定了挂 PlayerSurface 还是画占位封面。
+    // 直播的纯音频模式因此自然落在不常亮那一侧——画面位置是一张封面,而声音本来就该能息屏
+    // 接着听。听视频不受影响:那条分支上这个壳根本不会被组合。
     val view = LocalView.current
-    DisposableEffect(isPlaying) {
-        view.keepScreenOn = isPlaying
+    val keepAwake = isPlaying && attached
+    DisposableEffect(keepAwake) {
+        view.keepScreenOn = keepAwake
         onDispose { view.keepScreenOn = false }
     }
 

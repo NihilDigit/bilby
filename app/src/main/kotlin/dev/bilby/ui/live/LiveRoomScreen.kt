@@ -197,6 +197,7 @@ fun LiveRoomScreen(
                     player = player,
                     // 纯音频时流里根本没有视频轨,挂上画面就是一块黑。占位封面正是"播放器装的
                     // 不是这一页要的画面"该有的样子,和取流窗口里那一段共用同一条路。
+                    // 屏幕常亮也认这个值,于是纯音频时屏幕能自己息掉(见 PlayerShell)。
                     attached = attached && !onlyAudio,
                     placeholderCoverUrl = state.coverUrl,
                     isFullscreen = fullscreen,
