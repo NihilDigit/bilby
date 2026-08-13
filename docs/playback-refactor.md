@@ -139,7 +139,14 @@ roomId/qn）表达，工厂造直播源。删除 `live` 与 `queue` 的互斥字
 - **A、B 已完成并真机验证**（至 commit `60391eb`，2026-08-13）：Surface 走 controller、
   playlist + `LazyMediaSource` 延迟取流、`QueuePlayer` 仅存 playIntent 与循环守卫、
   随机切 P/切清晰度/重试、队列去重、加载指示器收敛为壳内一个。
-- **C 未开工**，验收标准见下节。多 P 云端续播实测不工作，修复归 C。
+- **C 已落地，真机未验**（commit `bc144d2`，2026-08-13）：装载解析器 `player/LoadResolver.kt`
+  按「用户指名 > 本地副本 > 云端」一次解析；路由 `Video` 与 `ACTION_OPEN_VIDEO` 都不再带 cid，
+  缓存列表点某行的指名走 `player/PartRequest.kt` 的一次性通道；`resumedPartBvid/resumedFromCid`
+  与 `offlineBvid` 两套防御、`QueueItem.cid` 一并删除；`QueueState.currentCid` 上提为
+  `AudioPlaybackUiState.currentCid`，上报、弹幕、字幕都读装载层确认的那一个。
+  **多 P 云端续播此前不工作的直接原因没能在真机上定位**（本轮无设备），改动删掉的是它的两个
+  产生条件：页面第二遍打开命令带着默认 P 覆盖解析结果，以及 `wbi/v2` 只在「打开视频那一次」
+  才问（队列内换一条、点队列里的一条都问不到）。这一条仍按验收标准真机跑，不过则回到这里。
 - **D 待做**：进度会话、服务侧位置流（顺带修弹幕倍速跳动，见决定 3）。
 - **E 待做**：直播 MediaItem 化。
 - 已知观感项：装上前后两个加载指示器是同种不同实例，切换瞬间动画相位重置，暂不处理。
@@ -164,13 +171,14 @@ roomId/qn）表达，工厂造直播源。删除 `live` 与 `queue` 的互斥字
   断言，A 阶段删除。
 - `CLAUDE.md` Architecture traps 一节的「video must be attached to the same-process
   `currentPlayer`」，A 阶段改写。
-- `HistoryRepository.kt:108` 注释写进度走 `x/v2/history/report`，实际是
-  `x/click-interface/web/heartbeat`，顺手更正。
-- `ui/Destinations.kt:28-33` 的 `Video.cid` 遗留说明，C 阶段随参数一起删。
+- ~~`HistoryRepository.kt:108` 注释写进度走 `x/v2/history/report`~~，已改为
+  `x/click-interface/web/heartbeat`（commit `b9021cd`）。
+- ~~`ui/Destinations.kt:28-33` 的 `Video.cid` 遗留说明~~，连同参数一起删（C 阶段）。
 
 ## 测试
 
 能抓到问题的三处：延迟 MediaSource 的 prepare/release/错误传播（B）；ProgressSession 的
-协议正确性——幂等 close、身份冻结、各触发的节流（D）；cid 解析器的优先级与降级（C）。
+协议正确性——幂等 close、身份冻结、各触发的节流（D）；cid 解析器的优先级与降级
+（C，`LoadResolverTest`，本地副本那几条同时断言两个网络源一次都没被问过）。
 `PlaybackQueue.kt` 现有测试随其退役删除，shuffle 语义由 Media3 保证，不重写断言。
 UI 与网络胶水不写。
