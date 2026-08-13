@@ -243,9 +243,6 @@ fun VideoScreen(
 
         onDispose {
             controller?.let { connected ->
-                // 这里不再补一次进度上报。上报归服务的进度会话([dev.bilby.player.ProgressSession]),
-                // 它每 5 秒一条,离开页面时最多丢掉最后那几秒;而页面这一份**只在播放页组合着的
-                // 时候存在**,听视频、切后台、进程被杀这三种它一次都赶不上。
                 // 播放页离开就暂停,**但只在播放器装的还是本页这一条时**。听视频是页面内的
                 // 状态,不会走到这里。
                 //
@@ -258,6 +255,15 @@ fun VideoScreen(
                 // 服务分不出"他不想听了"和"他去看 UP 主页了" —— 于是回到这一页只能一律停着。
                 // 谁按的这个信息只有发命令的这一方有,所以由这一方说清楚。
                 if (playerHoldsThisPage()) {
+                    // 先补一条进度再暂停。离开播放页多半就是这次观看的终点,而常规心跳带着
+                    // 5 秒节流、暂停本身又不发——"暂停,然后退出页面"这条路上,云端会停在最多
+                    // 5 秒之前。**页面给的只是时机**,报什么位置由会话说了算(见
+                    // [dev.bilby.player.ProgressSession.flush]):听视频、切后台、进程被杀
+                    // 这三种页面根本不在场,那些仍然靠会话自己的周期心跳。
+                    connected.sendCustomCommand(
+                        SessionCommand(AudioPlaybackService.ACTION_FLUSH_PROGRESS, Bundle.EMPTY),
+                        Bundle.EMPTY,
+                    )
                     connected.sendCustomCommand(
                         SessionCommand(AudioPlaybackService.ACTION_PAGE_LEFT, Bundle.EMPTY),
                         Bundle.EMPTY,

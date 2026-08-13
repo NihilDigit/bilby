@@ -1562,6 +1562,7 @@ class AudioPlaybackService : MediaSessionService() {
                         .add(SessionCommand(ACTION_SET_QUALITY, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_RETRY, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_PAGE_LEFT, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_FLUSH_PROGRESS, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SLEEP_TIMER, Bundle.EMPTY))
                         .build()
                 )
@@ -1585,6 +1586,8 @@ class AudioPlaybackService : MediaSessionService() {
                     persistCachedProgress()
                     player.pause()
                 }
+                // 直播没有会话,这条命令在直播间自然什么都不做,不必判一句"是不是直播"。
+                ACTION_FLUSH_PROGRESS -> progressSession?.flush()
                 // 分钟数是三态里唯一带参数的那个:大于 0 即定时,[SLEEP_END_OF_ITEM] 即播完这条,
                 // 其余(含缺省)即取消。用一个 Int 表达而不是再加一个布尔 extra —— 模式互斥之后
                 // 两个字段能拼出的组合比模式还多,又要在这里判一次哪个说了算。
@@ -1629,6 +1632,18 @@ class AudioPlaybackService : MediaSessionService() {
          * 这个信息只有发命令的那一方有。
          */
         const val ACTION_PAGE_LEFT = "dev.bilby.PAGE_LEFT"
+
+        /**
+         * 把这次观看的当前位置立刻报上去,见 [ProgressSession.flush]。
+         *
+         * **和 [ACTION_PAGE_LEFT] 分开两条命令**,尽管现在的调用点是同一处 onDispose:后者
+         * 早已不只在离开页面时发——打开发弹幕的输入层也发它,取的是"暂停,但不动 playIntent"
+         * 那半层意思(见 `VideoScreen` 的 `openDanmakuInput`)。并进去的话每开一次输入层就多
+         * 一条心跳,而那时用户明摆着还在这一页上。
+         *
+         * 命令里不带位置:位置归播放器,而播放器归服务。页面能提供的只有时机。
+         */
+        const val ACTION_FLUSH_PROGRESS = "dev.bilby.FLUSH_PROGRESS"
 
         const val ACTION_SLEEP_TIMER = "dev.bilby.SLEEP_TIMER"
 

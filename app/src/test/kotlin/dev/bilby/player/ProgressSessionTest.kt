@@ -100,6 +100,37 @@ class ProgressSessionTest {
     }
 
     @Test
+    fun `flush 立即补发并重置基准,会话不关`() {
+        val session = session()
+        session.onPosition(5_000, DURATION)
+        sent.clear()
+
+        // 距上次只有 2 秒,常规心跳发不出去,而离开播放页要的就是这两秒。
+        session.onPosition(7_000, DURATION)
+        session.flush()
+        assertEquals(listOf(7L to false), sent)
+
+        sent.clear()
+        // 基准挪到了 7 秒,紧跟的周期心跳不该把同一个数再报一遍。
+        session.onPosition(11_000, DURATION)
+        assertTrue(sent.isEmpty())
+        // 但会话还活着:回到这一页接着看,心跳照常。
+        session.onPosition(12_000, DURATION)
+        assertEquals(listOf(12L to false), sent)
+    }
+
+    @Test
+    fun `close 之后 flush 是空操作`() {
+        val session = session()
+        session.onPosition(20_000, DURATION)
+        session.close(30_000)
+        sent.clear()
+
+        session.flush()
+        assertTrue("会话死了,离开页面也不该再写服务端", sent.isEmpty())
+    }
+
+    @Test
     fun `close 幂等,第二次是空操作`() {
         val session = session()
         session.onPosition(20_000, DURATION)
@@ -121,6 +152,7 @@ class ProgressSessionTest {
         session.onResumed(40_000, DURATION)
         session.onSeeked(45_000, DURATION)
         session.onCompleted()
+        session.flush()
         assertTrue("会话死了就是死了,晚到的事件不该再写服务端", sent.isEmpty())
     }
 
