@@ -82,21 +82,26 @@ fun mergeCachedProgress(localMillis: Long, base: Long, serverMillis: Long): Long
  *
  * 正在播放时云端本来就是自己刚报的,这个函数自然返回 null,不需要为"在播/没在播"写分支。
  *
- * 四种为 null 的情形各自的理由:
+ * 三种为 null 的情形各自的理由:
  * - [server] 为 null:这次没问到(离线、限流、接口出错)。和"服务端说没有记录"不是一回事,
  *   见 [dev.bilby.data.SubtitleRepository.lastPlayed]。
- * - 服务端没有记录(cid 为 0 或秒数不是正数):没有可跳的地方。**完播之后落在这一支**——
- *   服务端对看完的稿件记的是 -1(历史列表里就是这个值,见 [dev.bilby.data.HistoryItem.isFinished]),
- *   而 `last_play_time` 的负数在解析时已经被夹到 0。
+ * - 服务端没有记录:cid 为 0,或者秒数不是正数。没有可跳的地方。
  * - [ours] 为 null:这次会话一次都没报过,没有可比的基线。此时云端那一对多半就是装载时用来
  *   起播的那个,拿它弹一条提示等于把用户已经在的位置再提议一遍。
- * - [ours] 的最后一次是完播:服务端此时存的是什么没有实测过(notes/playurl.md §8.1.2),
- *   拿一个没验证的取值去判"别处",错的方向是凭空弹提示。宁可这一支不提示。
+ *
+ * **完播不需要单独一支。** 服务端对看完的稿件存的是哨兵 -1 而不是时长(实测,
+ * notes/playurl.md §8.1.2:报 `played_time=-1` 之后 v2 回 `last_play_time=-1000`),而负数在
+ * [dev.bilby.data.SubtitleRepository.lastPlayed] 里已经被夹到 0,于是"云端记着我们报的那次
+ * 完播"和"云端根本没有记录"落在同一支上,两者要的行为也确实一样:没有可跳的地方。**判断因此
+ * 只做一遍**,不在夹取的两侧各判一次——那样两层里总有一层会先被改。
+ *
+ * 反过来,自己报完完播、云端却是一个正的秒数,这时它一定是别处写的(我们写上去的是 -1),
+ * 提示照弹。
  */
 fun cloudProgressWrittenElsewhere(server: LastPlayed?, ours: ReportedProgress?): Long? {
     if (server == null) return null
     if (server.cid == 0L || server.positionMillis <= 0) return null
-    if (ours == null || ours.completed) return null
+    if (ours == null) return null
     if (server.cid != ours.cid) return server.positionMillis
     val serverSeconds = server.positionMillis / 1000
     if (serverSeconds == ours.sentSeconds || serverSeconds == ours.confirmedSeconds) return null

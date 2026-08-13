@@ -4,9 +4,11 @@ package dev.bilby.player
  * 这次会话往服务端写过的那一对,以及它落地了没有。
  *
  * @param cid 会话的分 P。冻结的那一个,不是"现在放的是哪一 P"。
- * @param sentSeconds 最后一次发出去的位置。
+ * @param sentSeconds 最后一次发出去时的位置。
  * @param confirmedSeconds 最后一次**确认落地**的位置,一次都没成功过时为 null。
- * @param completed 最后一次发出去的是不是完播(`played_time=-1`)。
+ * @param completed 最后一次发出去的是不是完播。**没有它 [sentSeconds] 会读错**:完播那一次
+ *   写进服务端的是哨兵 -1,不是这个秒数(见 [dev.bilby.data.HeartbeatReporter])。
+ *   [cloudProgressWrittenElsewhere] 不必按它分支,理由在那边。
  */
 data class ReportedProgress(
     val cid: Long,

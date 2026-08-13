@@ -133,12 +133,25 @@ class ResumePositionTest {
     }
 
     @Test
-    fun `完播之后不提示`() {
-        // 我们最后报的是 played_time=-1,服务端此时存什么没有实测过(notes/playurl.md
-        // §8.1.2)。拿一个没验证的取值去判"别处",错的方向是凭空弹提示。
+    fun `自己看完之后别处又看了一段,提示`() {
+        // 我们写上去的是哨兵 -1,所以云端这个正的秒数一定是别处写的。实测:报 -1 之后 v2 回
+        // last_play_time=-1000(notes/playurl.md §8.1.2),不会变成时长,也不会归零。
+        assertEquals(
+            300_000L,
+            cloudProgressWrittenElsewhere(
+                server = LastPlayed(cid = CID, positionMillis = 300_000),
+                ours = ours(sentSeconds = 600, confirmedSeconds = 600, completed = true),
+            )
+        )
+    }
+
+    @Test
+    fun `云端记着的就是自己那次完播时不提示`() {
+        // v2 回的 -1000 在 SubtitleRepository.lastPlayed 里已经被夹到 0,和"服务端没有记录"
+        // 落在同一支上——两者要的行为一样:没有可跳的地方。
         assertNull(
             cloudProgressWrittenElsewhere(
-                server = LastPlayed(cid = CID, positionMillis = 600_000),
+                server = LastPlayed(cid = CID, positionMillis = 0),
                 ours = ours(sentSeconds = 600, confirmedSeconds = 600, completed = true),
             )
         )
@@ -146,8 +159,7 @@ class ResumePositionTest {
 
     @Test
     fun `服务端说没有记录时不提示`() {
-        // cid 为 0 是"这条视频服务端没有记录"。看完的稿件记的是 -1,解析时被夹到 0,
-        // 也落在这一支上(见 dev.bilby.data.HistoryItem.isFinished)。
+        // cid 为 0 是"这条视频服务端没有记录"。
         assertNull(
             cloudProgressWrittenElsewhere(
                 server = LastPlayed(cid = 0, positionMillis = 0),

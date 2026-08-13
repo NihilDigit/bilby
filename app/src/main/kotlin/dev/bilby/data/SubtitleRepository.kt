@@ -68,6 +68,10 @@ class SubtitleRepository(private val client: BiliClient) {
             userAgent = BiliConstants.NON_BROWSER_USER_AGENT,
         )
         val value = (result as? BiliResult.Ok)?.value ?: return null
+        // 夹取不只是防脏数据:看完的稿件服务端记的是哨兵 -1,这里回的是 -1000(实测,
+        // notes/playurl.md §8.1.2)。折成 0 之后它和"服务端没有记录"同形,而两者对调用方要的
+        // 行为一样——没有可以续播的位置。**哨兵到此为止**,不要再往上层传,那会让每个调用方
+        // 各判一遍负数,判据也就有了好几份(见 [dev.bilby.player.cloudProgressWrittenElsewhere])。
         return LastPlayed(value.lastPlayCid, value.lastPlayTimeMillis.coerceAtLeast(0))
     }
 
