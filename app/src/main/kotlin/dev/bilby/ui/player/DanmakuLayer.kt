@@ -1,5 +1,6 @@
 package dev.bilby.ui.player
 
+import android.os.SystemClock
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -9,6 +10,8 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import dev.bilby.BiliLog
 import dev.bilby.data.DanmakuPrefs
+import dev.bilby.player.AudioPlaybackService
+import dev.bilby.player.PositionTick
 import dev.nihildigit.danmaku.Danmaku
 import dev.nihildigit.danmaku.DanmakuClock
 import dev.nihildigit.danmaku.DanmakuController
@@ -58,7 +61,7 @@ fun PlayerDanmakuLayer(
 ) {
     val isLive = feed is DanmakuFeed.Stream
     val clock = remember(player, isLive) {
-        if (isLive) LiveDanmakuClock(player) else PlayerDanmakuClock(player)
+        if (isLive) LiveDanmakuClock(player) else PlayerDanmakuClock()
     }
     val options = remember(prefs, fontSizeSp) {
         DanmakuOptions(
@@ -139,21 +142,22 @@ object DanmakuFontSizeSp {
 }
 
 /**
- * 点播的弹幕时钟,位置读 MediaController。
+ * 点播的弹幕时钟,位置读服务发的刻度(见 [PositionTick])。
  *
- * **已知会在倍速刚变的那一小段窗口里抖一下。** MediaController 的 `getCurrentPosition()`
- * 在本地做"锚点位置 + 经过时间 × 倍速"外推(media3-session:1.10.1,
- * `MediaUtils.getUpdatedCurrentPositionMs`),而 `setPlaybackSpeed()` 立刻 masking 新倍速
- * 却不同步刷新那个锚点,于是新倍速被追认到已经过去的那段时间上,外推值跳过头,session 回包
- * 落地后再纠正回来。长按加速每次都会经过这个窗口。
+ * **不读 MediaController 的 `getCurrentPosition()`。** 它在本地做"锚点位置 + 经过时间 × 倍速"
+ * 外推,而 `setPlaybackSpeed()` 立刻 masking 新倍速却不同步刷新那个锚点,于是新倍速被追认到
+ * 已经过去的那段时间上,读数跳过头,session 回包落地后再纠正回来。长按加速每次都经过这个
+ * 窗口,表现是松手瞬间弹幕集体跳一下。锚点是 controller 的私有状态,那一侧无解。
  *
- * 此前绕开它的办法是直接读同进程 ExoPlayer 的进度,那个静态引用随 Surface 改走 controller
- * 一并删掉了 —— 跨进程能成立的东西不该靠同进程的巧合。
+ * 服务自己发刻度是唯一的修法:刻度带着自己的锚点,倍速一变服务立刻发新的一条。**这不是绕过
+ * MediaController** —— 控制动作(播放、暂停、跳转、倍速)照旧全走 controller,这条流上只有
+ * 状态,和播放页读 [AudioPlaybackService.state] 是同一个方向。
  */
-private class PlayerDanmakuClock(private val player: Player) : DanmakuClock {
-    override val positionMillis: Long get() = player.currentPosition
-    override val isPlaying: Boolean get() = player.isPlaying
-    override val playbackSpeed: Float get() = player.playbackParameters.speed
+private class PlayerDanmakuClock : DanmakuClock {
+    private val tick get() = AudioPlaybackService.positionTicks.value
+    override val positionMillis: Long get() = tick.positionAt(SystemClock.elapsedRealtime())
+    override val isPlaying: Boolean get() = tick.isPlaying
+    override val playbackSpeed: Float get() = tick.speed
 }
 
 /**
