@@ -134,6 +134,16 @@ roomId/qn）表达，工厂造直播源。删除 `live` 与 `queue` 的互斥字
 `setBackgroundPlaybackAllowed` 与 `pauseForAppBackground` 两条 volatile 通道暂保留（读取方
 是同步的，自定义命令异步投递解决不了），但随 playlist 落地重新评估是否仍需绕行。
 
+## 进度
+
+- **A、B 已完成并真机验证**（至 commit `60391eb`，2026-08-13）：Surface 走 controller、
+  playlist + `LazyMediaSource` 延迟取流、`QueuePlayer` 仅存 playIntent 与循环守卫、
+  随机切 P/切清晰度/重试、队列去重、加载指示器收敛为壳内一个。
+- **C 未开工**，验收标准见下节。多 P 云端续播实测不工作，修复归 C。
+- **D 待做**：进度会话、服务侧位置流（顺带修弹幕倍速跳动，见决定 3）。
+- **E 待做**：直播 MediaItem 化。
+- 已知观感项：装上前后两个加载指示器是同种不同实例，切换瞬间动画相位重置，暂不处理。
+
 ## 实施顺序
 
 依赖关系：B 是地基，C、D、E 都长在它上面；A 独立。每阶段编译通过、单测通过、各自冒烟，
