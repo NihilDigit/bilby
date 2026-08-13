@@ -93,6 +93,7 @@ import dev.bilby.ui.player.DanmakuButton
 import dev.bilby.ui.player.MediaBackButton
 import dev.bilby.ui.player.DanmakuFeed
 import dev.bilby.ui.player.DanmakuFontSizeSp
+import dev.bilby.ui.player.PlaybackFailure
 import dev.bilby.ui.player.PlayerDanmakuLayer
 import dev.bilby.ui.player.PlayerGestureOptions
 import dev.bilby.ui.player.PlayerShell
@@ -128,6 +129,13 @@ fun LiveRoomScreen(
     /** 发一条弹幕。直播不需要暂停,也不做本地回显(见 LiveRoomViewModel.sendDanmaku)。 */
     onSendDanmaku: (String) -> Unit,
     onRetry: () -> Unit,
+    /**
+     * 播到一半断了,而且服务的退避重试已经用完。**和 [LiveRoomUiState.error] 不是一回事**:
+     * 那个说的是房间信息或流地址没取到,此刻页面上还没有画面;这个说的是画面停在了最后一帧。
+     */
+    playbackError: String?,
+    retryingPlayback: Boolean,
+    onRetryPlayback: () -> Unit,
     /** 分享要给出 `live.bilibili.com/<roomId>`,而房间号不在 [state] 里。 */
     roomId: Long,
     onBack: () -> Unit,
@@ -228,6 +236,16 @@ fun LiveRoomScreen(
                         )
                     },
                 )
+                // 断流之后画面停在最后一帧,除了这一块以外页面上没有任何东西说明发生了什么,
+                // 也没有可按的地方。盖在画面正中,和视频页同一份(见 [PlaybackFailure])。
+                if (playbackError != null) {
+                    PlaybackFailure(
+                        message = playbackError,
+                        retrying = retryingPlayback,
+                        onRetry = onRetryPlayback,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
             } else {
                 LiveOffline(state, onBack = onBack, onShare = share, onRetry = onRetry)
             }

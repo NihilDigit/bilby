@@ -23,6 +23,7 @@ import dev.bilby.AppContainer
 import dev.bilby.BiliLog
 import dev.bilby.player.AudioPlaybackService
 import dev.bilby.player.liveMediaId
+import dev.bilby.ui.player.rememberSettledPlaybackError
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 
@@ -80,7 +81,7 @@ fun LiveRoomRoute(
 
     // 开播了就交给服务。**命令报的是房间号和档位,不是地址** —— 取流归服务(见
     // AudioPlaybackService.resolveLiveStream),页面这一份只用来判断开没开播、能选哪几档。
-    // 命令是幂等的:标题晚一步到只更新元数据,而档位或纯音频变了才重新取一次流。
+    // 命令是幂等的:标题晚一步到只更新元数据,而档位变了才重新取一次流。
     LaunchedEffect(active, state.isLive, state.currentQn, state.title) {
         if (!state.isLive) return@LaunchedEffect
         val connected = active ?: return@LaunchedEffect
@@ -95,6 +96,11 @@ fun LiveRoomRoute(
             ),
         )
     }
+
+    // 播放器现在停在这个房间上。**判据是队列那一条,不是 loadKey**:后者要等取流成功才置上,
+    // 而失败正是这里要认的情形。和视频页认自己那条失败用的是同一个判据。
+    val thisRoom = audioState.queue?.current?.bvid == liveMediaId(roomId)
+    val playbackError = rememberSettledPlaybackError(audioState.error?.takeIf { thisRoom })
 
     LiveRoomScreen(
         state = state,
@@ -112,6 +118,15 @@ fun LiveRoomRoute(
         onLoadMoreGuards = vm::loadMoreGuards,
         onSendDanmaku = vm::sendDanmaku,
         onRetry = vm::load,
+        playbackError = playbackError,
+        retryingPlayback = audioState.loading,
+        // 直播 MediaItem 化之后重试就是标准那一条:重新解析、重新取一次地址。
+        onRetryPlayback = {
+            active?.sendCustomCommand(
+                SessionCommand(AudioPlaybackService.ACTION_RETRY, Bundle.EMPTY),
+                Bundle.EMPTY,
+            )
+        },
         roomId = roomId,
         onBack = onBack,
         onUserClick = onUserClick,
