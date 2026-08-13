@@ -661,7 +661,19 @@ class AudioPlaybackService : MediaSessionService() {
 
     /** 队列就是 playlist,面板要的东西全从这里读。**服务不另存一份列表。** */
     private val queueItems: List<QueueItem>
-        get() = List(player.mediaItemCount) { player.getMediaItemAt(it).toQueueItem() }
+        get() {
+            val items = List(player.mediaItemCount) { player.getMediaItemAt(it).toQueueItem() }
+            val unique = items.distinctBy { it.bvid }
+            if (unique.size != items.size) {
+                // 面板拿 bvid 当 LazyColumn key,重复条目到那边是崩溃。发布口去重只是兜底,
+                // 出现这行日志说明又有生产者把同一 bvid 塞进了 playlist,要去查它。
+                BiliLog.w(
+                    "playlist 出现重复 bvid: " +
+                        items.groupingBy { it.bvid }.eachCount().filterValues { it > 1 }.keys,
+                )
+            }
+            return unique
+        }
 
     /** 队列当前这一条。直播时播放器装的不是队列项,由调用方先判 [live]。 */
     private fun currentItem(): QueueItem? = player.currentMediaItem?.toQueueItem()
@@ -752,6 +764,11 @@ class AudioPlaybackService : MediaSessionService() {
         player.removeMediaItem(index)
         player.prepare()
         player.playWhenReady = playWhenReady
+        // 上面那句 seek 会**同步**跑 onPositionDiscontinuity(ListenerSet.flushEvents 在调用
+        // 线程上直接 run),那次 publishState 读到的是删掉旧条之前的 playlist,同 bvid 两条。
+        // 这里必须再发布一次,否则带重复的快照就是本条消息的最终状态,队列面板下一帧按
+        // bvid 当 key 直接崩。真机上崩过。
+        publishQueueChange()
     }
 
     /**
