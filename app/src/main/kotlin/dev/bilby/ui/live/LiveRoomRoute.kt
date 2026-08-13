@@ -139,14 +139,21 @@ fun LiveRoomRoute(
         onSendDanmaku = vm::sendDanmaku,
         onRetry = vm::load,
         playbackError = playbackError,
-        retryingPlayback = audioState.loading,
-        // 直播 MediaItem 化之后重试就是标准那一条:重新解析、重新取一次地址。
-        onRetryPlayback = {
-            active?.sendCustomCommand(
-                SessionCommand(AudioPlaybackService.ACTION_RETRY, Bundle.EMPTY),
-                Bundle.EMPTY,
-            )
+        // 直播 MediaItem 化之后重取流就是标准那一条:重新解析、重新要一次地址,当前档位和
+        // 纯音频开关随条目原样带过去。控制条的刷新和失败面板的重试都发这一条。
+        //
+        // **播放器还没切到这个房间时不发。** 打开命令是异步投递的,页面画出控制条到服务真的
+        // 换过来之间有一小段窗口,那时这条命令重来的是上一条视频。
+        onReloadStream = {
+            if (thisRoom) {
+                active?.sendCustomCommand(
+                    SessionCommand(AudioPlaybackService.ACTION_RETRY, Bundle.EMPTY),
+                    Bundle.EMPTY,
+                )
+            }
         },
+        // 同上:别人的装载不该让这个房间的刷新按钮转圈。
+        reloadingStream = audioState.loading && thisRoom,
         roomId = roomId,
         onBack = onBack,
         onUserClick = onUserClick,

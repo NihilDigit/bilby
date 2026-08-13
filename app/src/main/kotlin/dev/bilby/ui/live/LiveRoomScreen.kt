@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.FilledIconButton
@@ -142,8 +143,13 @@ fun LiveRoomScreen(
      * 那个说的是房间信息或流地址没取到,此刻页面上还没有画面;这个说的是画面停在了最后一帧。
      */
     playbackError: String?,
-    retryingPlayback: Boolean,
-    onRetryPlayback: () -> Unit,
+    /**
+     * 重新取一次流。**失败面板上的重试和控制条上的刷新是同一个动作**,只是入口的时机不同:
+     * 面板是服务放弃之后的出口,刷新按钮让人在服务还在退避、或者画面只是卡着还没算失败时
+     * 先动手。所以它们共用这一对参数,而不是各接一条路。
+     */
+    onReloadStream: () -> Unit,
+    reloadingStream: Boolean,
     /** 分享要给出 `live.bilibili.com/<roomId>`,而房间号不在 [state] 里。 */
     roomId: Long,
     onBack: () -> Unit,
@@ -248,6 +254,11 @@ fun LiveRoomScreen(
                             },
                             onMenuOpenChange = { setMenuOpen(it) },
                             onPlayPause = { togglePlayPause() },
+                            reloading = reloadingStream,
+                            onReload = {
+                                onReloadStream()
+                                keepControlsAwake()
+                            },
                             onFullscreenToggle = { toggleFullscreen() },
                         )
                     },
@@ -257,8 +268,8 @@ fun LiveRoomScreen(
                 if (playbackError != null) {
                     PlaybackFailure(
                         message = playbackError,
-                        retrying = retryingPlayback,
-                        onRetry = onRetryPlayback,
+                        retrying = reloadingStream,
+                        onRetry = onReloadStream,
                         modifier = Modifier.align(Alignment.Center),
                     )
                 }
@@ -348,8 +359,12 @@ private fun LiveOffline(
 }
 
 /**
- * 直播的控制条:播放/暂停、人气值、弹幕开关、清晰度、全屏。**没有进度条**,那条时间轴上
- * 没有位置可拖;也没有分 P 和队列。
+ * 直播的控制条:播放/暂停、刷新、人气值、弹幕开关、纯音频、清晰度、全屏。**没有进度条**,
+ * 那条时间轴上没有位置可拖;也没有分 P 和队列。
+ *
+ * 刷新挨着播放/暂停,因为它们是同一类动作——都直接作用于"现在这一路流"。它和失败面板分工
+ * 明确:面板是服务放弃之后的出口,而网不好时画面往往只是卡着,服务还没判成失败,这个按钮
+ * 让人先于服务动手。
  */
 @Composable
 private fun LiveControlBar(
@@ -366,6 +381,9 @@ private fun LiveControlBar(
     onOnlyAudioChange: (Boolean) -> Unit,
     onMenuOpenChange: (Boolean) -> Unit,
     onPlayPause: () -> Unit,
+    /** 正在重新取流。此刻按钮换成转圈并且按不动,免得连按叠出几次请求。 */
+    reloading: Boolean,
+    onReload: () -> Unit,
     onFullscreenToggle: () -> Unit,
 ) {
     Row(
@@ -380,6 +398,23 @@ private fun LiveControlBar(
                 ),
                 tint = FixedColors.OnMedia,
             )
+        }
+        // 取流中把图标换成转圈,而不是把图标置灰:这一栏的图标本来就是固定色(压在任意画面上),
+        // 置灰要么看不出来,要么和"这个功能不可用"撞在一起。发弹幕那个按钮是同一个做法。
+        IconButton(onClick = onReload, enabled = !reloading) {
+            if (reloading) {
+                CircularProgressIndicator(
+                    color = FixedColors.OnMedia,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Filled.Refresh,
+                    contentDescription = stringResource(R.string.live_refresh),
+                    tint = FixedColors.OnMedia,
+                )
+            }
         }
         // 拿不到就留白,不写"0 人看过" —— 那是个具体而错误的数字。宽度照占,不然弹幕按钮
         // 会在这一句到货的那一刻横着跳一下。

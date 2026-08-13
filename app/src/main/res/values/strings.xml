@@ -440,6 +440,7 @@
     <!-- 直播 -->
     <string name="live_loading">正在连接直播间…</string>
     <string name="live_offline">主播还没开播</string>
+    <string name="live_refresh">刷新</string>
     <string name="live_audio_only_on">只听声音</string>
     <string name="live_audio_only_off">恢复画面</string>
     <string name="live_tab_chat">聊天</string>
