@@ -606,11 +606,14 @@ class AudioPlaybackService : MediaSessionService() {
      * 先插后面那段再插前面那段:先插前面会把当前下标推走,后面那段就落错位置。
      */
     private fun fillQueueAround(bvid: String, items: List<QueueItem>): Boolean {
-        val here = items.indexOfFirst { it.bvid == bvid }
+        // 一个 bvid 在队列里最多一条:两个队列面板都拿 bvid 当 LazyColumn key,来源列表
+        // 里的重复条目(转发动态、系列收录两次)不挡在这里就会走到那边崩掉。
+        val unique = items.distinctBy { it.bvid }
+        val here = unique.indexOfFirst { it.bvid == bvid }
         if (here < 0) return false
         val current = player.currentMediaItemIndex
-        player.addMediaItems(current + 1, items.drop(here + 1).map { it.toMediaItem() })
-        player.addMediaItems(current, items.take(here).map { it.toMediaItem() })
+        player.addMediaItems(current + 1, unique.drop(here + 1).map { it.toMediaItem() })
+        player.addMediaItems(current, unique.take(here).map { it.toMediaItem() })
         return true
     }
 
@@ -629,6 +632,10 @@ class AudioPlaybackService : MediaSessionService() {
         val cached = offlineStore.list()
             .filter { it.status == OfflineStatus.Completed }
             .sortedByDescending { it.createdAtMillis }
+            // 缓存库按 (bvid, cid) 一 P 一条,队列行是视频不是分 P(多 P 不是队列项)。
+            // 不收拢的话同一视频缓了两个 P 就是两行同 bvid,队列面板拿 bvid 当 LazyColumn
+            // key,真机上直接崩(Key was already used)。
+            .distinctBy { it.bvid }
         if (cached.none { it.bvid == bvid }) return null
         return QueueBuildResult(
             items = cached.map {
