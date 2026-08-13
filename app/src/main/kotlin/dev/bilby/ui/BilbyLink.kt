@@ -1,6 +1,7 @@
 package dev.bilby.ui
 
 import androidx.navigation3.runtime.NavKey
+import dev.bilby.BvidCodec
 
 /**
  * 一条 bilibili 链接指向应用里的哪一页。
@@ -101,40 +102,3 @@ object BilbyLink {
     private val URL_PATTERN = Regex("""https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+""")
 }
 
-/**
- * av 号转 BV 号。**用 2023 年那版算法,不是 2020 年公布的那版** —— 后者只覆盖到 `1 << 27`
- * 的 aid,新号早就超了。两版对老号给出的结果相同(`av170001` 两边都是 `BV17x411w7KC`),
- * 所以换算法不会让旧链接失效。
- *
- * 做法:`aid` 或上 `1 << 51` 再异或一个常数,按 58 进制从低位往高位填进 `BV1` 后面的九位,
- * 最后交换两对位置(3↔9、4↔7)把连号打散。
- *
- * 放在这里而不是 `api/`:它不是接口,是同一个编号的两种写法,离线可算。
- */
-internal object BvidCodec {
-
-    private const val TABLE = "FcwAPNKTMug3GV5Lj7EJnHpWsx4tb8haYeviqBz6rkCy12mUSDQX9RdoZf"
-    private const val XOR = 23_442_827_791_579L
-    private const val MAX_AID = 1L shl 51
-    private const val BASE = 58
-
-    fun fromAid(aid: Long): String {
-        val chars = "BV1000000000".toCharArray()
-        var index = chars.lastIndex
-        var remaining = (MAX_AID or aid) xor XOR
-        while (remaining > 0 && index >= 3) {
-            chars[index] = TABLE[(remaining % BASE).toInt()]
-            remaining /= BASE
-            index--
-        }
-        chars.swap(3, 9)
-        chars.swap(4, 7)
-        return String(chars)
-    }
-
-    private fun CharArray.swap(a: Int, b: Int) {
-        val tmp = this[a]
-        this[a] = this[b]
-        this[b] = tmp
-    }
-}

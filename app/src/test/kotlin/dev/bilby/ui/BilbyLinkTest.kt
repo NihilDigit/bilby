@@ -7,18 +7,9 @@ import org.junit.Test
 
 /**
  * 链接解析值得测:输入来自剪贴板和别的应用,形状由 B 站决定,我们只能穷举见过的那些。
- * av→BV 更是错了也不会报错,只会安静地打开一条别人的视频。
+ * av→BV 那一步单独测,见 [dev.bilby.BvidCodecTest]。
  */
 class BilbyLinkTest {
-
-    @Test
-    fun `av 号按 2023 版算法转 BV`() {
-        // 这一对是公开可查的:两版算法对老号给出同一个结果,拿它当锚点。
-        assertEquals("BV17x411w7KC", BvidCodec.fromAid(170_001L))
-        assertEquals("BV1xx411c7mD", BvidCodec.fromAid(2L))
-        // 超过旧算法上限(1 shl 27)的新号,旧算法根本表示不了。
-        assertEquals("BV1uawaeCEPq", BvidCodec.fromAid(113_866_688_676_587L))
-    }
 
     @Test
     fun `认得出视频、直播和空间`() {
