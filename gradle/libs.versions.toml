@@ -19,6 +19,8 @@ coil = "3.5.0"
 zxing = "3.5.4"
 
 junit = "4.13.2"
+# Media3 的 MediaSource 在准备与释放的每一步上都要一个 Looper,普通 JVM 单测里没有。
+robolectric = "4.16"
 kotlinxCoroutines = "1.11.0"
 
 # 弹幕引擎,独立仓库。开发期走 composite build(settings.gradle.kts),这个版本号只在
@@ -85,6 +87,7 @@ coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 
 junit = { module = "junit:junit", version.ref = "junit" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

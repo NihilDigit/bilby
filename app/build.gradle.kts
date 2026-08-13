@@ -112,6 +112,9 @@ android {
             // 失败都要记日志(见 CLAUDE.md),于是任何走到日志的分支在单测里都会炸——
             // 炸的不是被测逻辑,是日志本身。让这些方法返回默认值,测的才是逻辑。
             isReturnDefaultValues = true
+            // Robolectric 只服务 player/LazyMediaSourceTest:Media3 的 MediaSource 在准备和
+            // 释放的每一步上都要一个 Looper。其余单测仍是纯 JVM 的,不受影响。
+            isIncludeAndroidResources = true
         }
     }
 }
@@ -164,4 +167,5 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.ktor.client.mock)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
 }

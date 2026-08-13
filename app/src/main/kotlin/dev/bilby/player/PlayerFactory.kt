@@ -66,11 +66,13 @@ object PlayerFactory {
      * **只有 [AudioPlaybackService] 该调它**。全 app 一个播放器(DESIGN 2.4b),UI 要播放器就
      * 连 MediaController;再调一次这里就又有了两个会同时发声的播放器。
      */
-    fun createPlayer(context: Context): ExoPlayer {
+    fun createPlayer(context: Context, mediaSourceFactory: MediaSource.Factory): ExoPlayer {
         DeviceCodecs.logOnce()
         val forced = SpeedAlgorithmSelector.forcedAlgorithm(context)
         if (forced != null) PlayerLog.d("倍速算法被强制为 $forced(debug 开关)")
         return ExoPlayer.Builder(context, renderersFactory(context, forced))
+            // 队列项没有 URI,能把它变成流的只有这一个工厂(见 [BilbyMediaSourceFactory])。
+            .setMediaSourceFactory(mediaSourceFactory)
             .build()
             .apply { addAnalyticsListener(DecoderLogger()) }
     }

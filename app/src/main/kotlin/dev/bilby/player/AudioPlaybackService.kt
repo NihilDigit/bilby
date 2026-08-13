@@ -8,11 +8,13 @@ import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
@@ -49,6 +51,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.io.IOException
 
 /**
  * 通知栏、锁屏与播放页共用的展示信息。**哪种源都有**,所以它挂在状态顶层而不是队列上 ——
@@ -191,7 +194,14 @@ class AudioPlaybackService : MediaSessionService() {
      * 指向上一段视频。
      */
     private var live: LiveSource? = null
-    private var prepareJob: Job? = null
+
+    /**
+     * 正在解析流的那一条,解析完(成功或失败)置回 null。
+     *
+     * 取流归 [LazyMediaSource] 之后,服务这边不再有一个"装载 Job"可以问 isActive,而
+     * [openVideo] 的幂等分支要知道"起播还在飞",理由见那里。
+     */
+    private var resolvingBvid: String? = null
 
     /**
      * 队列补全。**和取流那条完全分开**:起播不等它,它失败也只是队列短一格,不影响正在播的
@@ -277,7 +287,7 @@ class AudioPlaybackService : MediaSessionService() {
         offlineStore = container.offlineStore
         settings = container.settings
 
-        player = PlayerFactory.createPlayer(this).apply {
+        player = PlayerFactory.createPlayer(this, BilbyMediaSourceFactory(scope, ::resolveStream)).apply {
             // 声明成音乐用途并交给播放器处理音频焦点:来电、别的 app 出声时自动暂停/避让。
             setAudioAttributes(
                 AudioAttributes.Builder()
@@ -319,7 +329,6 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
-        prepareJob?.cancel()
         retryJob?.cancel()
         // 下面的 scope.cancel() 本来就会带走它,列在这里是为了和上面两个 Job 一起读:
         // 服务没了之后没有任何一个还在飞的请求值得跑完。
@@ -383,11 +392,11 @@ class AudioPlaybackService : MediaSessionService() {
             return
         }
 
-        prepareJob?.cancel()
         retryJob?.cancel()
         enrichJob?.cancel()
         failedAttempts = 0
         lastError = null
+        resolvingBvid = null
         live = next
         queue = PlaybackQueue(emptyList())
         sourceLabel = ""
@@ -438,7 +447,7 @@ class AudioPlaybackService : MediaSessionService() {
             // cid(P1),而服务已经按观看记录切到了第 7 P;照下面这个判断,P1 ≠ loadedCid,
             // 于是"换 P"回 P1,续播白做了。所以记下续播时被替换掉的那个 cid,来自页面的
             // 同一个值直接忽略。用户真的手动切 P 走的是 ACTION_PLAY_PART,不经过这里。
-            val preparing = prepareJob?.isActive == true
+            val preparing = resolvingBvid != null
             // **正在放本地副本时,来自页面的 cid 一律忽略。** 页面手上只有详情里的默认 cid
             // (通常是 P1),而缓存的可能是别的那一 P;照下面那个判断就成了"要换 P",于是把
             // 刚起好的本地副本顶掉、改走网络 —— 缓存看起来"播了一下又跳回去"。
@@ -604,7 +613,6 @@ class AudioPlaybackService : MediaSessionService() {
         // 换东西之前先把上一条的进度写下去。此刻 [offlineBvid] 和 [loadedCid] 还指着上一条,
         // 再往下一行就被顶掉了。
         persistCachedProgress()
-        prepareJob?.cancel()
         retryJob?.cancel()
         // 换到新的一条就是一份新的额度;重试则要把已经失败的次数带着,否则退避永远停在第一档。
         if (!force) {
@@ -625,162 +633,157 @@ class AudioPlaybackService : MediaSessionService() {
         }
 
         publishState(loading = true)
-        prepareJob = scope.launch {
-            // **已缓存的就地播,而且这一句必须排在所有网络之前。**
-            //
-            // 它原先摆在补 cid 和续播分 P 后面,只越过了 playurl —— 而补 cid 走的
-            // `getVideoDetail` 本身就是一次网络往返。从缓存列表点进来的队列项是现造的、没有
-            // cid,于是第一步就去联网:真离线时那一步直接失败返回,本地那份一步都走不到;
-            // 有网时能补出来,所以表现成"有的能播有的不能"。真机上出过。
-            //
-            // 因此按 **bvid** 查而不是 (bvid, cid):cid 正是那个要联网才拿得到的东西。
-            // 哪一 P 由索引给(见 [OfflineStore.completedFor]),拿到之后当作这次要播的那一 P。
-            offlineStore.completedFor(item.bvid, item.cid)?.let { cached ->
-                queue.updateCurrentCid(cached.cid)
-                // 标题/UP/封面从索引里填。**必须赶在 load() 之前**:MediaSession 是在装载那一刻
-                // 来读 currentMetadata() 的,晚一步通知栏就挂着一条没有标题的媒体,而之后没有
-                // 任何播放器事件会让它再读一次。离线时这也是元数据唯一的来源。
-                queue.fillCurrentMetadata(cached.title, cached.upName, cached.coverUrl)
-                // 画质菜单留空:本地只有下载时选的那一档,摆一个点了没用的菜单不如不摆。
-                playInfo = null
-                currentQuality = cached.qualityId
-                val audio = offlineStore.audioFile(cached.bvid, cached.cid).takeIf { it.isFile }
-                player.setMediaSource(
-                    PlayerFactory.createLocalMediaSource(
-                        offlineStore.videoFile(cached.bvid, cached.cid).path,
-                        audio?.path,
-                    ),
-                )
-                player.prepare()
-                openChain?.mark("prepare")
-                // 续播位置取索引里那份本地进度(见 [OfflineItem.watchedPositionMillis])。
-                // **这里不问服务端**:问它要一次网络往返,而这条路径的全部意义就是没有网络时也能
-                // 起播。放本地副本就用本地那份进度,和 PiliPlus 的分工一致。
-                val startMillis = positionOverrideMillis
-                    ?: resumePositionMillis(cached.watchedPositionMillis, cached.durationSeconds * 1000)
-                if (startMillis > 0) player.seekTo(startMillis)
-                loadedBvid = cached.bvid
-                loadedCid = cached.cid
-                cloudResumeMillis = null
-                // 起播之后才去核对云端进度,而且是这次 prepare 的子协程:下一次 playCurrent 会
-                // `prepareJob?.cancel()`,这份核对跟着一起走 —— 上一条的核对结果落到新的一条上
-                // 就是串味。
-                launch { reconcileCachedProgress(cached) }
-                // 页面稍后还会拿着详情里的默认 cid 再发一遍打开命令(见 openVideo 的幂等分支)。
-                // 缓存的可能正是别的那一 P,那一趟会把刚起好的本地副本顶掉、改走网络 —— 记下
-                // "现在放的是这条视频的本地副本",让那一趟被忽略。
-                offlineBvid = cached.bvid
-                player.playWhenReady = playWhenReady
-                publishState()
-                return@launch
-            }
+        resolvingBvid = item.bvid
+        // 队列项交给播放器,取流推迟到它真的要放这一条时(见 [LazyMediaSource])。这一次装载的
+        // 参数随条目一起送过去:读到它们的是 [resolveStream],而那时这次调用早已返回。
+        player.setMediaItem(item.toMediaItem(resumePart, positionOverrideMillis))
+        player.prepare()
+        player.playWhenReady = playWhenReady
+    }
 
-            // 空间投稿来源的队列项没有 cid(列表接口不返回),约定由这里补:拿着 0 去取流
-            // 会被服务端当成无效 cid,表现是每一条都"取流失败",队列静默空转。
-            val requestedCid = item.cid.takeIf { it != 0L } ?: run {
-                when (val detail = videoRepository.getVideoDetail(item.bvid)) {
-                    is BiliResult.Ok -> {
-                        // 顺手把展示信息补上。**必须赶在 load() 之前**:MediaSession 是在
-                        // 装载那一刻来读 currentMetadata() 的,晚一步通知栏就会挂着一条没有
-                        // 标题的媒体,而之后没有任何播放器事件会让它再读一次。
-                        queue.fillCurrentMetadata(
-                            title = detail.value.title,
-                            upName = detail.value.up.name,
-                            coverUrl = detail.value.coverUrl,
-                        )
-                        detail.value.cid
-                    }
-                    else -> {
-                        BiliLog.w("补 cid 失败 bvid=${item.bvid}")
-                        retryAfterFailure(getString(R.string.playback_error_detail), playWhenReady)
-                        return@launch
-                    }
-                }
-            }
+    /**
+     * 把一个队列项解析成能播的源。**全 app 唯一一处取流**,由播放器在要放这一条时调起
+     * (见 [LazyMediaSource]),于是它跑在"马上要出声"的那一刻,而不是建队列的那一刻 ——
+     * playurl 给的 CDN 直链带时效,提前取好的那些等轮到时早过期了。
+     *
+     * **失败一律抛出去。** 播放器会把它变成 `onPlayerError`,退避重试在那里收口(见
+     * [retryAfterFailure])。在这里吞掉的话播放器会永远停在 BUFFERING:界面转圈转到天荒地老,
+     * 日志里一个字都没有。
+     */
+    private suspend fun resolveStream(mediaItem: MediaItem): MediaSource {
+        val bvid = mediaItem.mediaId
+        val positionOverrideMillis = mediaItem.startPositionHint
 
-            // 上次看到这条视频的哪一 P。**在取流之前问**:知道了才不用为错的那一 P 白取一次流。
-            // 只有打开视频那一次、且这条视频真的有多 P 时才问(见 [lastPlayedPart])。
-            val lastPlayedCid = if (resumePart) lastPlayedPart(item.bvid, requestedCid) else 0L
-            val cid = if (lastPlayedCid != 0L && lastPlayedCid != requestedCid) {
-                // 页面稍后会拿着详情里的默认 cid 再发一遍打开命令,那一趟必须当作"没有换 P
-                // 的意思",否则刚接上的这一 P 立刻被推回去。
-                resumedPartBvid = item.bvid
-                resumedFromCid = requestedCid
-                lastPlayedCid
-            } else {
-                requestedCid
-            }
-            queue.updateCurrentCid(cid)
+        // **已缓存的就地播,而且这一句必须排在所有网络之前。**
+        //
+        // 它原先摆在补 cid 和续播分 P 后面,只越过了 playurl —— 而补 cid 走的
+        // `getVideoDetail` 本身就是一次网络往返。从缓存列表点进来的队列项是现造的、没有
+        // cid,于是第一步就去联网:真离线时那一步直接失败返回,本地那份一步都走不到;
+        // 有网时能补出来,所以表现成"有的能播有的不能"。真机上出过。
+        //
+        // 因此按 **bvid** 查而不是 (bvid, cid):cid 正是那个要联网才拿得到的东西。
+        // 哪一 P 由索引给(见 [OfflineStore.completedFor]),拿到之后当作这次要播的那一 P。
+        offlineStore.completedFor(bvid, mediaItem.cidHint)?.let { cached ->
+            queue.updateCurrentCid(cached.cid)
+            // 标题/UP/封面从索引里填。离线时这是元数据唯一的来源。
+            queue.fillCurrentMetadata(cached.title, cached.upName, cached.coverUrl)
+            // 画质菜单留空:本地只有下载时选的那一档,摆一个点了没用的菜单不如不摆。
+            playInfo = null
+            currentQuality = cached.qualityId
+            val audio = offlineStore.audioFile(cached.bvid, cached.cid).takeIf { it.isFile }
+            // 续播位置取索引里那份本地进度(见 [OfflineItem.watchedPositionMillis])。
+            // **这里不问服务端**:问它要一次网络往返,而这条路径的全部意义就是没有网络时也能
+            // 起播。放本地副本就用本地那份进度,和 PiliPlus 的分工一致。
+            val startMillis = positionOverrideMillis
+                ?: resumePositionMillis(cached.watchedPositionMillis, cached.durationSeconds * 1000)
+            // 页面稍后还会拿着详情里的默认 cid 再发一遍打开命令(见 openVideo 的幂等分支)。
+            // 缓存的可能正是别的那一 P,那一趟会把刚起好的本地副本顶掉、改走网络 —— 记下
+            // "现在放的是这条视频的本地副本",让那一趟被忽略。
+            offlineBvid = cached.bvid
+            markLoaded(cached.bvid, cached.cid, startMillis)
+            // 起播之后才去核对云端进度。**它不再是装载协程的子协程** —— 装载协程现在归
+            // MediaSource,换一条时这份核对靠自己开头那句"播放器装的还是这一条吗"作废。
+            scope.launch { reconcileCachedProgress(cached) }
+            return PlayerFactory.createLocalMediaSource(
+                offlineStore.videoFile(cached.bvid, cached.cid).path,
+                audio?.path,
+            )
+        }
 
-            val prefs = settings.playerPrefs.first()
-            // 当次播放里手动切过就用那一个;否则按此刻计不计费取对应的那一档。判据每次取流
-            // 现算,所以出门断了 WiFi 之后**下一条**自然就降下来了,当前这条不动。
-            val quality = currentQuality.takeIf { it != 0 }
-                ?: prefs.defaultQualityOn(isOnMeteredNetwork())
-            openChain?.mark("playurlStart")
-            when (
-                val result = videoRepository.getPlayUrl(
-                    item.bvid,
-                    cid,
-                    preferredQuality = quality,
-                    preferredCodecs = prefs.codec.codecIds,
-                )
-            ) {
+        // 空间投稿来源的队列项没有 cid(列表接口不返回),约定由这里补:拿着 0 去取流
+        // 会被服务端当成无效 cid,表现是每一条都"取流失败",队列静默空转。
+        val requestedCid = mediaItem.cidHint.takeIf { it != 0L } ?: run {
+            when (val detail = videoRepository.getVideoDetail(bvid)) {
                 is BiliResult.Ok -> {
-                    openChain?.mark("playurlEnd")
-                    playInfo = result.value
-                    currentQuality = quality
-                    val streams = result.value.streams
-                    // **秒数属于 [lastPlayedCid] 那一 P。** playurl 只给秒数不给 P
-                    // (`PlayUrlDto.lastPlayCid` 真实响应不填,见 notes §8.2),所以装的不是
-                    // 那一 P 时必须丢掉它 —— 否则在 P1 上会从 P7 的进度处起播。
-                    val resumeMillis = when {
-                        positionOverrideMillis != null -> positionOverrideMillis
-                        lastPlayedCid != 0L && lastPlayedCid != cid -> 0L
-                        else -> result.value.resumeAtMillisFor(cid)
-                    }
-                    load(
-                        streams.videoUrl,
-                        streams.audioUrl,
-                        item.bvid,
-                        cid,
-                        resumeMillis,
+                    queue.fillCurrentMetadata(
+                        title = detail.value.title,
+                        upName = detail.value.up.name,
+                        coverUrl = detail.value.coverUrl,
                     )
-                    player.playWhenReady = playWhenReady
-                    publishState()
+                    detail.value.cid
                 }
-
-                is BiliResult.ApiError -> {
-                    BiliLog.w("取流失败 bvid=${item.bvid} code=${result.code} ${result.message}")
-                    retryAfterFailure(
-                        getString(R.string.playback_error_stream, result.message),
-                        playWhenReady,
-                    )
-                }
-
-                is BiliResult.Failure -> {
-                    BiliLog.w("取流失败 bvid=${item.bvid}", result.cause)
-                    retryAfterFailure(getString(R.string.playback_error_network), playWhenReady)
+                else -> {
+                    BiliLog.w("补 cid 失败 bvid=$bvid")
+                    throw IOException(getString(R.string.playback_error_detail))
                 }
             }
         }
-    }
 
-    private fun load(
-        videoUrl: String,
-        audioUrl: String?,
-        bvid: String,
-        cid: Long,
-        startPositionMillis: Long,
-    ) {
+        // 上次看到这条视频的哪一 P。**在取流之前问**:知道了才不用为错的那一 P 白取一次流。
+        // 只有打开视频那一次、且这条视频真的有多 P 时才问(见 [lastPlayedPart])。
+        val lastPlayedCid =
+            if (mediaItem.resumePartHint) lastPlayedPart(bvid, requestedCid) else 0L
+        val cid = if (lastPlayedCid != 0L && lastPlayedCid != requestedCid) {
+            // 页面稍后会拿着详情里的默认 cid 再发一遍打开命令,那一趟必须当作"没有换 P
+            // 的意思",否则刚接上的这一 P 立刻被推回去。
+            resumedPartBvid = bvid
+            resumedFromCid = requestedCid
+            lastPlayedCid
+        } else {
+            requestedCid
+        }
+        queue.updateCurrentCid(cid)
+
+        val prefs = settings.playerPrefs.first()
+        // 当次播放里手动切过就用那一个;否则按此刻计不计费取对应的那一档。判据每次取流
+        // 现算,所以出门断了 WiFi 之后**下一条**自然就降下来了,当前这条不动。
+        val quality = currentQuality.takeIf { it != 0 }
+            ?: prefs.defaultQualityOn(isOnMeteredNetwork())
+        openChain?.mark("playurlStart")
+        val result = videoRepository.getPlayUrl(
+            bvid,
+            cid,
+            preferredQuality = quality,
+            preferredCodecs = prefs.codec.codecIds,
+        )
+        val playUrl = when (result) {
+            is BiliResult.Ok -> result.value
+            is BiliResult.ApiError -> {
+                BiliLog.w("取流失败 bvid=$bvid code=${result.code} ${result.message}")
+                throw IOException(getString(R.string.playback_error_stream, result.message))
+            }
+            is BiliResult.Failure -> {
+                BiliLog.w("取流失败 bvid=$bvid", result.cause)
+                throw IOException(getString(R.string.playback_error_network))
+            }
+        }
+        openChain?.mark("playurlEnd")
+        playInfo = playUrl
+        currentQuality = quality
+        // **秒数属于 [lastPlayedCid] 那一 P。** playurl 只给秒数不给 P
+        // (`PlayUrlDto.lastPlayCid` 真实响应不填,见 notes §8.2),所以装的不是那一 P 时必须
+        // 丢掉它 —— 否则在 P1 上会从 P7 的进度处起播。
+        val resumeMillis = when {
+            positionOverrideMillis != null -> positionOverrideMillis
+            lastPlayedCid != 0L && lastPlayedCid != cid -> 0L
+            else -> playUrl.resumeAtMillisFor(cid)
+        }
         // 走到这里就是在线流,本地副本那个标记必须清掉,否则换到别的一 P 会被当成"忽略"。
         offlineBvid = null
-        player.setMediaSource(PlayerFactory.createMediaSource(videoUrl, audioUrl))
-        player.prepare()
-        openChain?.mark("prepare")
-        if (startPositionMillis > 0) player.seekTo(startPositionMillis)
+        markLoaded(bvid, cid, resumeMillis)
+        return PlayerFactory.createMediaSource(
+            playUrl.streams.videoUrl,
+            playUrl.streams.audioUrl,
+        )
+    }
+
+    /**
+     * 解析成功,播放器从这一刻起装的是这一条。
+     *
+     * [AudioPlaybackUiState.loadKey] 认的就是它,页面据此决定挂画面还是画占位 —— 所以不能在
+     * 发出装载命令的那一刻就置上:那中间还隔着一整趟取流,画面上还是上一条的最后几帧。
+     *
+     * seek 得起作用,是因为播放器允许对还没拿到时间线的条目定位:内层源此刻刚造好、时间线还
+     * 没发出来,位置先记着,等时间线到了再落。
+     */
+    private fun markLoaded(bvid: String, cid: Long, startPositionMillis: Long) {
         loadedBvid = bvid
         loadedCid = cid
+        resolvingBvid = null
+        cloudResumeMillis = null
+        openChain?.mark("prepare")
+        if (startPositionMillis > 0) player.seekTo(startPositionMillis)
+        publishState()
     }
 
     /**
@@ -1133,10 +1136,12 @@ class AudioPlaybackService : MediaSessionService() {
             // 直链可能在播放途中过期(403),这属于"被吞掉的失败":不留日志的话表现只是
             // 忽然不动了。
             BiliLog.w("播放出错 bvid=$loadedBvid code=${error.errorCode}", error)
-            retryAfterFailure(
-                getString(R.string.playback_error_decode, error.errorCode),
-                playWhenReady = true,
-            )
+            resolvingBvid = null
+            // 取流失败现在也走这条路(见 [resolveStream]),而它带着一句写给用户看的原因。
+            // 拿不到就退回按错误码报 —— 解码器初始化失败一类本来就没有更好的说法。
+            val reason = error.cause?.message?.takeIf { it.isNotBlank() }
+                ?: getString(R.string.playback_error_decode, error.errorCode)
+            retryAfterFailure(reason, playWhenReady = true)
         }
     }
 
