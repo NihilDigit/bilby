@@ -286,6 +286,26 @@ class OfflineDownloader(
         }
         val resolved = request.copy(cid = cid)
 
+        // 真 cid 和入队键不同时,要在真 cid 上再占一次坑。[enqueue] 的去重按入队键比,而 cid=0
+        // 与真 cid 是两把不同的键 —— 同一 P 以两种键各排一条时那道闸拦不住,并发度大于 1 的话
+        // 两个协程同时写同一个文件,交错出一份两段重叠的坏流。占位格不用管:正主下一次发布时
+        // [mergedWith] 会把它撤掉。
+        val resolvedKey = offlineId(resolved.bvid, resolved.cid)
+        val claimsResolvedKey = resolved.cid != request.cid
+        if (claimsResolvedKey && !inFlight.add(resolvedKey)) {
+            BiliLog.d("缓存去重:这一 P 已在队列里 $resolvedKey")
+            return
+        }
+        try {
+            runResolved(resolved, detail)
+        } finally {
+            if (claimsResolvedKey) inFlight.remove(resolvedKey)
+        }
+    }
+
+    private suspend fun runResolved(resolved: OfflineRequest, detail: VideoDetail?) {
+        val cid = resolved.cid
+
         // **补出 cid 之后才谈得上"是不是已经缓存过了"。** [enqueue] 那道去重在 cid 还是 0
         // 时判不了:它比的是 (bvid, cid),而 0 跟任何真 cid 都不相等。漏了这一句的后果是
         // 一条已经下好的视频从空间页再点一次缓存会整个重下一遍。
