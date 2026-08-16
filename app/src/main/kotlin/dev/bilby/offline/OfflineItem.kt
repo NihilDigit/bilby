@@ -72,6 +72,16 @@ data class OfflineItem(
     val downloadedBytes: Long = 0,
     val totalBytes: Long = 0,
     /**
+     * 服务端申报的视频流完整长度(首个响应的 Content-Length / Content-Range 总长),0 表示
+     * 还没拿到。**它是续传时"换出来的直链还是不是原来那份文件"的判据**:直链过期或进程被杀
+     * 之后续传必然拿着一个重新解析的地址,而那次解析可能落到另一次转码上 —— 从已有字节数
+     * 接着写就是把两份不同的文件粘在一起。总长不等即不同一份;两次转码出等长文件的概率
+     * 可以忽略。持久化是因为最需要它的场景正是进程死过一回。
+     */
+    val expectedVideoBytes: Long = 0,
+    /** 同 [expectedVideoBytes],音频那条流的。 */
+    val expectedAudioBytes: Long = 0,
+    /**
      * 当前下载速度。**不落盘** —— 它描述的是这一刻,而 meta.json 是给下次启动读的,存一个
      * 上次退出瞬间的速度只会让列表在还没开始下的时候就显示 "3.2 MB/s"。
      */
@@ -235,6 +245,14 @@ enum class DownloadFailure {
     /** 瞬时,退避之后同一个地址还能用。 */
     Transient,
 
+    /**
+     * 盘上的字节和远端这份文件对不上:206 的起点不是请求的偏移、换链后总长变了、或写完之后
+     * 长度超出申报的总长。**已有的字节不可信,处理方式是清掉本地从头下** —— 拿着同一份坏字节
+     * 重试多少次都还是坏的。放着不管的下场不是报错,是一份接缝处重复了一段的媒体文件:
+     * 播放器照播,弹幕从那儿开始漂移。
+     */
+    Mismatch,
+
     /** 这条流本身有问题(404、参数错),重试多少次都一样。 */
     Fatal,
 }
@@ -251,4 +269,40 @@ fun classifyHttpFailure(status: Int): DownloadFailure = when (status) {
     408, 429 -> DownloadFailure.Transient
     in 500..599 -> DownloadFailure.Transient
     else -> DownloadFailure.Fatal
+}
+
+/** 206 的 Content-Range 解析结果。[total] 为 null 对应总长写作星号(未知)的响应。 */
+data class ContentRangeInfo(val start: Long, val total: Long?)
+
+private val CONTENT_RANGE = Regex("""bytes\s+(\d+)-(\d+)/(\d+|\*)""")
+private val CONTENT_RANGE_UNSATISFIED = Regex("""bytes\s+\*/(\d+)""")
+
+/** 读 206 响应的 Content-Range。头缺失或写法不认识时返回 null,调用方按"起点未知"处理。 */
+fun parseContentRange(header: String?): ContentRangeInfo? {
+    val match = header?.let { CONTENT_RANGE.find(it) } ?: return null
+    val (start, _, total) = match.destructured
+    return ContentRangeInfo(
+        start = start.toLongOrNull() ?: return null,
+        total = total.toLongOrNull(),
+    )
+}
+
+/** 从 Content-Range 里取总长。416 回的那种不带区间、只有总长的写法也认。取不到返回 null。 */
+fun contentRangeTotal(header: String?): Long? {
+    if (header == null) return null
+    parseContentRange(header)?.total?.let { return it }
+    return CONTENT_RANGE_UNSATISFIED.find(header)?.groupValues?.get(1)?.toLongOrNull()
+}
+
+/**
+ * 一条流的响应体读到头之后,盘上的长度对不对。
+ *
+ * null = 对,收工;[DownloadFailure.Transient] = 还没到头,按已有长度续传;
+ * [DownloadFailure.Mismatch] = 比预期还长,这份字节不对,只能推倒重来。
+ * 预期总长未知时放行 —— 没有依据就维持"读到头即成功"的语义,不把拿不到头的服务端判成失败。
+ */
+fun classifyDownloadedLength(actual: Long, expected: Long): DownloadFailure? = when {
+    expected <= 0 || actual == expected -> null
+    actual < expected -> DownloadFailure.Transient
+    else -> DownloadFailure.Mismatch
 }

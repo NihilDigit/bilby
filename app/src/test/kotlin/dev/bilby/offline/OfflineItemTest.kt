@@ -191,6 +191,49 @@ class OfflineItemTest {
     }
 
     @Test
+    fun `Content-Range 读出起点和总长`() {
+        val range = parseContentRange("bytes 500-1233/1234")
+        assertEquals(500L, range?.start)
+        assertEquals(1234L, range?.total)
+    }
+
+    @Test
+    fun `Content-Range 总长未知时只有起点`() {
+        val range = parseContentRange("bytes 500-1233/*")
+        assertEquals(500L, range?.start)
+        assertNull(range?.total)
+    }
+
+    @Test
+    fun `Content-Range 缺失或不认识按起点未知处理`() {
+        // 调用方对起点未知的 206 走 Mismatch 推倒重来 —— 一个不报起点的 206 无法安全追加。
+        assertNull(parseContentRange(null))
+        assertNull(parseContentRange("pages 1-2/3"))
+    }
+
+    @Test
+    fun `416 那种只有总长的 Content-Range 也读得出总长`() {
+        assertEquals(1234L, contentRangeTotal("bytes */1234"))
+        assertEquals(1234L, contentRangeTotal("bytes 0-99/1234"))
+        assertNull(contentRangeTotal("bytes 0-99/*"))
+    }
+
+    @Test
+    fun `写完的长度短了是续传,长了是推倒重来`() {
+        // 短了 = 服务端提前收流,按已有长度接着要就行;长了 = 盘上这份字节和远端对不上,
+        // 拿着它续传只会把坏文件越接越长。
+        assertNull(classifyDownloadedLength(actual = 1234, expected = 1234))
+        assertEquals(DownloadFailure.Transient, classifyDownloadedLength(actual = 1000, expected = 1234))
+        assertEquals(DownloadFailure.Mismatch, classifyDownloadedLength(actual = 2000, expected = 1234))
+    }
+
+    @Test
+    fun `预期总长未知时读到头就算成功`() {
+        // 没有依据不下判断:分块传输拿不到 Content-Length,不能把这种服务端判成失败。
+        assertNull(classifyDownloadedLength(actual = 1000, expected = 0))
+    }
+
+    @Test
     fun `进度夹在 0 到 1 之间`() {
         // 服务端给的 Content-Length 偶尔比实际少(分块传输),超出 1 会让进度条画到框外面。
         val overshoot = OfflineItem(bvid = "BV1", cid = 1, title = "", downloadedBytes = 300, totalBytes = 200)

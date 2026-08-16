@@ -8,7 +8,9 @@ import dev.bilby.data.PlayInfo
 import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRepository
 import dev.bilby.data.VideoStat
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentLength
 import io.ktor.http.isSuccess
@@ -297,7 +299,14 @@ class OfflineDownloader(
         }
 
         // 第一次带着真 cid 发布,[mergedWith] 会顺手把 cid=0 那格占位撤掉。
-        var item = resolved.toQueuedItem().withMetadataFrom(detail, cid).copy(status = OfflineStatus.Running)
+        // 预期总长从盘上那份带过来:这里的 item 是重建的,而续传("上次没下完,点一下继续")
+        // 恰恰要拿上一次记下的总长去验这次换出来的直链 —— 不带的话最需要校验的那条路上没有校验。
+        val prior = store.read(resolved.bvid, cid)
+        var item = resolved.toQueuedItem().withMetadataFrom(detail, cid).copy(
+            status = OfflineStatus.Running,
+            expectedVideoBytes = prior?.expectedVideoBytes ?: 0,
+            expectedAudioBytes = prior?.expectedAudioBytes ?: 0,
+        )
         upsert(item)
 
         var playInfo = fetchPlayUrl(resolved) ?: run { fail(item, "取流失败"); return }
@@ -320,6 +329,13 @@ class OfflineDownloader(
                 urlOf = { it.streams.audioUrl },
                 initial = playInfo,
                 onRefreshed = { playInfo = it },
+                expectedBytes = { item.expectedAudioBytes },
+                onExpectedBytes = { bytes ->
+                    if (bytes != item.expectedAudioBytes) {
+                        item = item.copy(expectedAudioBytes = bytes)
+                        upsert(item)
+                    }
+                },
             )
             if (!audioOk) {
                 fail(item, "音频流下载失败")
@@ -333,6 +349,13 @@ class OfflineDownloader(
             urlOf = { it.streams.videoUrl },
             initial = playInfo,
             onRefreshed = { playInfo = it },
+            expectedBytes = { item.expectedVideoBytes },
+            onExpectedBytes = { bytes ->
+                if (bytes != item.expectedVideoBytes) {
+                    item = item.copy(expectedVideoBytes = bytes)
+                    upsert(item)
+                }
+            },
             // 进度只按视频那条算:音频占比小到画在同一根进度条上看不出来,而把两条加起来
             // 就得先知道音频总长,那要多等一次响应头。
             onProgress = { downloaded, total, speed ->
@@ -421,8 +444,10 @@ class OfflineDownloader(
      * 下一条流,**地址过期就换一个接着下**。
      *
      * 这是整个下载器存在的理由(见类注释第 1 条):签名直链的有效期比一部长视频的下载时间短,
-     * 而 `Range` 续传让"换地址"几乎零成本 —— 新地址指向的是同一份文件,从已有字节数接着要
-     * 就行。[urlOf] 从新的 [PlayInfo] 里挑同一条流(视频或音频)。
+     * 而 `Range` 续传让"换地址"几乎零成本。[urlOf] 从新的 [PlayInfo] 里挑同一条流(视频或
+     * 音频)。**新地址通常指向同一份文件,但这是个要验的事实,不是前提** —— 重新解析可能落到
+     * 另一次转码上,接着写就是把两份文件粘在一起。校验在 [downloadTo],粘错时走
+     * [DownloadFailure.Mismatch] 推倒重来。
      */
     private suspend fun downloadWithRefresh(
         request: OfflineRequest,
@@ -430,23 +455,37 @@ class OfflineDownloader(
         urlOf: (PlayInfo) -> String?,
         initial: PlayInfo,
         onRefreshed: (PlayInfo) -> Unit,
+        /** 这条流已经记下的完整长度,0 表示还不知道。每轮现读:上一轮可能刚把它记下来。 */
+        expectedBytes: () -> Long,
+        /** 总长有了新说法就记下来(落盘)。传 0 表示作废 —— 推倒重来之后由新响应重新申报。 */
+        onExpectedBytes: suspend (Long) -> Unit,
         onProgress: ProgressSink = { _, _, _ -> },
     ): Boolean {
         var info = initial
         var attempt = 0
         while (attempt < MAX_ATTEMPTS) {
             val url = urlOf(info) ?: return false
-            when (downloadTo(url, target, onProgress)) {
+            val lengthBefore = if (target.isFile) target.length() else 0L
+            when (downloadTo(url, target, expectedBytes(), onExpectedBytes, onProgress)) {
                 DownloadFailure.Expired -> {
                     BiliLog.w("缓存直链过期,重取 playurl bvid=${request.bvid} cid=${request.cid}")
                     info = fetchPlayUrl(request) ?: return false
                     onRefreshed(info)
                 }
                 DownloadFailure.Transient -> delay(RETRY_BASE_DELAY_MILLIS shl attempt)
+                DownloadFailure.Mismatch -> {
+                    // 细节在 downloadTo 里已经打过日志。已有的字节不可信,清掉;预期总长一并
+                    // 作废,下一轮是全新下载,总长由新响应重新申报。
+                    withContext(Dispatchers.IO) { RandomAccessFile(target, "rw").use { it.setLength(0) } }
+                    onExpectedBytes(0)
+                }
                 DownloadFailure.Fatal -> return false
                 null -> return true
             }
-            attempt++
+            // 有进展就把计数清零(Media3 DownloadManager 的语义):按连续无进展计数,长视频
+            // 下几个小时攒够三次瞬时失败并不难,而一条一直在动的下载不该被判死。
+            val lengthAfter = if (target.isFile) target.length() else 0L
+            attempt = if (lengthAfter > lengthBefore) 0 else attempt + 1
         }
         return false
     }
@@ -456,30 +495,66 @@ class OfflineDownloader(
      *
      * **服务端可能不接受 Range**(回 200 而不是 206),那时必须从头重写,不能追加 —— 追加的
      * 结果是一个前面重复了一段的文件,播放器会在那个接缝上解码失败,而失败点离原因很远。
+     *
+     * 接受 Range 也不等于接得对。续传的正确性靠三道校验,缺一道都是静默写坏:
+     * 206 的起点要正是请求的偏移;总长要和上次记下的一致(换出来的直链才算同一份文件);
+     * 读到头之后盘上的长度要正好等于总长(短了是没下完,长了是这份字节不对)。
      */
     private suspend fun downloadTo(
         url: String,
         target: File,
+        expectedBytes: Long,
+        onExpectedBytes: suspend (Long) -> Unit,
         onProgress: ProgressSink,
     ): DownloadFailure? = runCatching {
         val existing = if (target.isFile) target.length() else 0L
         client.streamGet(url, rangeStart = existing) { response ->
+            val contentRange = response.headers[HttpHeaders.ContentRange]
             when {
-                // 416 = 要的区间超出文件长度,也就是本地这份已经是完整的了。
-                response.status == HttpStatusCode.RequestedRangeNotSatisfiable -> null
+                // 416 = 要的区间超出文件长度。本地长度恰好等于总长才是"已经下完";超出的话
+                // 这份文件不对,当成功放行会把它标成 Completed。
+                response.status == HttpStatusCode.RequestedRangeNotSatisfiable ->
+                    classifyDownloadedLength(existing, contentRangeTotal(contentRange) ?: expectedBytes)
                 !response.status.isSuccess() -> classifyHttpFailure(response.status.value)
+                response.status == HttpStatusCode.PartialContent && existing > 0 ->
+                    appendFrom(response, target, existing, expectedBytes, onExpectedBytes, onProgress)
                 else -> {
-                    val append = response.status == HttpStatusCode.PartialContent && existing > 0
-                    val startAt = if (append) existing else 0L
-                    val total = startAt + (response.contentLength() ?: 0L)
-                    writeChannel(response.bodyAsChannel(), target, startAt, total, onProgress)
-                    null
+                    // 200(或首次下载):从头写,总长以这次响应申报的为准。
+                    val total = response.contentLength() ?: 0L
+                    if (total > 0) onExpectedBytes(total)
+                    writeChannel(response.bodyAsChannel(), target, 0L, total, onProgress)
+                    classifyDownloadedLength(target.length(), total)
                 }
             }
         }
     }.getOrElse { cause ->
         BiliLog.w("缓存流写盘失败 file=${target.name}", cause)
         DownloadFailure.Transient
+    }
+
+    /** 206 的追加路径,三道校验里的前两道在这里。[existing] 是发请求时的本地长度。 */
+    private suspend fun appendFrom(
+        response: HttpResponse,
+        target: File,
+        existing: Long,
+        expectedBytes: Long,
+        onExpectedBytes: suspend (Long) -> Unit,
+        onProgress: ProgressSink,
+    ): DownloadFailure? {
+        val header = response.headers[HttpHeaders.ContentRange]
+        val range = parseContentRange(header)
+        if (range == null || range.start != existing) {
+            BiliLog.w("缓存续传起点不符 想要=$existing 响应=$header file=${target.name}")
+            return DownloadFailure.Mismatch
+        }
+        val total = range.total ?: 0L
+        if (expectedBytes > 0 && total > 0 && total != expectedBytes) {
+            BiliLog.w("缓存续传总长不符 想要=$expectedBytes 响应=$total file=${target.name}")
+            return DownloadFailure.Mismatch
+        }
+        if (total > 0) onExpectedBytes(total)
+        writeChannel(response.bodyAsChannel(), target, existing, total, onProgress)
+        return classifyDownloadedLength(target.length(), if (total > 0) total else expectedBytes)
     }
 
     /**
