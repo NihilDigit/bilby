@@ -10,7 +10,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
@@ -24,6 +23,7 @@ import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -86,7 +86,7 @@ private fun OtherDynamicsList(
             .collect { if (state.hasMore && !state.appending) onLoadMore() }
     }
 
-    PullToRefreshBox(isRefreshing = state.refreshing, onRefresh = onRefresh) {
+    RefreshBox(refreshing = state.refreshing, onRefresh = onRefresh) {
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),

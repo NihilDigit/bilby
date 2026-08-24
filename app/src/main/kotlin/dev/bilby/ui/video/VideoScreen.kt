@@ -82,6 +82,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import dev.bilby.data.VideoRelation
+import dev.bilby.data.VideoTag
 import dev.bilby.player.AudioPlaybackService
 import dev.bilby.player.SleepTimerMode
 import dev.bilby.player.SubtitleCue
@@ -130,6 +131,12 @@ fun VideoScreen(
      */
     bvid: String,
     state: VideoUiState,
+    /** 这条视频的标签,展开简介才显示,见 VideoViewModel.videoTags。 */
+    videoTags: List<VideoTag>,
+    /** 第一次展开简介时拉标签,见 VideoViewModel.loadVideoTags。 */
+    onLoadTags: () -> Unit,
+    /** 点一枚标签 = 拿它的原文开一页普通搜索结果。 */
+    onTagClick: (String) -> Unit,
     related: RelatedState,
     commentState: CommentUiState,
     sponsorSegments: List<SponsorSegment>,
@@ -297,6 +304,16 @@ fun VideoScreen(
     // 而取流还要几百毫秒。拿队列判的话,这段时间画面会被当成本页的挂上去,用户看到的是
     // 上一条视频冻住的最后一帧。
     val matchesCurrentPage = audioState.loadKey == bvid
+
+    /**
+     * 播放器装着的这一页的哪一 P,装的不是这一页就是 0。
+     *
+     * **cid 和 loadKey 是一对,不能单独拿。** 换一集之后队列立刻报新
+     * 的一条、页面跟着换过来(见 MainActivity 的 VideoRoute),而 cid 要等取流回来才跟上——
+     * 这段窗口里直接读 `audioState.currentCid`,得到的是上一条视频的那一 P。弹幕引擎按它重置、
+     * 分 P 行按它高亮、发弹幕按它带参数,全都会认成本页这条视频的。
+     */
+    val currentCid = if (matchesCurrentPage) audioState.currentCid else 0L
 
     /**
      * 缓存面板开着没有。**只是这一页的一个浮层**,不是导航目的地也不是播放状态 ——
@@ -476,11 +493,21 @@ fun VideoScreen(
         if (index >= 0) active?.seekTo(index, 0)
     }
 
+    /**
+     * 换这条视频的一 P。
+     *
+     * **先问播放器装的还是不是这一页那条视频。** 这条命令换的是播放器当前那一条的装载参数,
+     * 而 cid 来自本页的详情:队列已经走到别的视频上时(自动连播),照发就是拿这条视频的分 P
+     * 号去取那条视频的流,服务端回 -404,而那个错误离原因很远。同一道判断在打开发弹幕的
+     * 输入层那里也有,理由一样。
+     */
     val onPlayPart: (Long) -> Unit = { cid ->
-        send(
-            AudioPlaybackService.ACTION_PLAY_PART,
-            bundleOf(AudioPlaybackService.EXTRA_CID to cid),
-        )
+        if (playerHoldsThisPage()) {
+            send(
+                AudioPlaybackService.ACTION_PLAY_PART,
+                bundleOf(AudioPlaybackService.EXTRA_CID to cid),
+            )
+        }
     }
 
     /** 切清晰度。位置不用页面带过去了 —— 取流的那一侧就是持有播放器的那一侧。 */
@@ -566,7 +593,8 @@ fun VideoScreen(
             queue = audioState.queue?.items.orEmpty(),
             onPlayQueueItem = onPlayQueueItem,
             parts = state.detail?.pages.orEmpty(),
-            currentCid = audioState.currentCid,
+            // 分 P 清单来自本页的详情,高亮的那一 P 就得是本页这条视频的,见上面 currentCid。
+            currentCid = currentCid,
             onPlayPart = onPlayPart,
             onNext = { active?.seekToNextMediaItem() },
             onPrevious = { active?.seekToPreviousMediaItem() },
@@ -796,7 +824,7 @@ fun VideoScreen(
                         danmakuPool = danmakuPool,
                         specialDanmakuPool = specialDanmakuPool,
                         selfDanmaku = selfDanmaku,
-                        danmakuCid = audioState.currentCid,
+                        danmakuCid = currentCid,
                         matchesCurrentPage = matchesCurrentPage,
                         placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
                         modifier = Modifier.fillMaxSize(),
@@ -874,7 +902,10 @@ fun VideoScreen(
                     VideoTabs(
                         pagerState = tabPager,
                         detail = detail,
-                        currentCid = audioState.currentCid,
+                        currentCid = currentCid,
+                        videoTags = videoTags,
+                        onLoadTags = onLoadTags,
+                        onTagClick = onTagClick,
                         related = related,
                         commentState = commentState,
                     // 点闪光:没问过就发起检索,问过就只是把 sheet 展开 —— 再点一次重跑
@@ -1050,7 +1081,10 @@ fun VideoScreen(
                 onSend = {
                     onSendDanmaku(
                         danmakuDraft,
-                        audioState.currentCid,
+                        // 页面这条视频的那一 P。发弹幕的 bvid 由 ViewModel 带,两者必须是
+                        // 同一条内容 —— 直接读 audioState 的话,换一集那一瞬发出去的是
+                        // 新 bvid 配上一条的 cid。
+                        currentCid,
                         danmakuProgress,
                     )
                 },
@@ -1103,7 +1137,9 @@ fun VideoScreen(
             defaultQuality = audioState.currentQuality,
             // 默认勾中正在播的**这一 P**,不是这条视频的第一 P:多 P 视频里用户看到第 7 P 才
             // 想起来缓存,想要的显然是第 7 P。
-            initialSelection = shownQueue.currentBvid?.let {
+            // 按播放器装着的那一条取,不按队列指着的那一条:后者在换条的那段窗口里已经是新的
+            // 一条,而 cid 还是上一条的,拼出来的身份哪一行都对不上。
+            initialSelection = audioState.loadKey?.let {
                 offlineId(it, audioState.currentCid)
             },
             onConfirm = { selected, quality ->

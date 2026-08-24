@@ -30,6 +30,7 @@ import dev.bilby.data.WhisperSession
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -95,7 +96,7 @@ fun MessageScreen(
                     MessageTab.Replies -> NoticeList(state.replies, R.string.message_empty_reply, onLoadMore, onRefresh, onOpenUri)
                     MessageTab.Mentions -> NoticeList(state.mentions, R.string.message_empty_at, onLoadMore, onRefresh, onOpenUri)
                     MessageTab.Likes -> NoticeList(state.likes, R.string.message_empty_like, onLoadMore, onRefresh, onOpenUri)
-                    MessageTab.Notices -> SysNoticeList(state.notices, onLoadMore)
+                    MessageTab.Notices -> SysNoticeList(state.notices, onLoadMore, onRefresh)
                 }
             }
         }
@@ -117,54 +118,60 @@ private fun WhisperList(
     onRefresh: () -> Unit,
     onOpen: (WhisperSession) -> Unit,
 ) {
-    PagedColumn(
-        items = state.items,
-        key = { it.talkerId },
-        loading = state.loading,
-        appending = false,
-        // 会话列表没有分页,一次给的就是全部活跃会话。
-        hasMore = false,
-        error = state.error,
-        emptyText = stringResource(R.string.message_empty_whisper),
-        onLoadMore = onLoadMore,
-        onRetry = onRefresh,
+    RefreshBox(
+        refreshing = state.refreshing,
+        onRefresh = onRefresh,
         modifier = Modifier.fillMaxSize(),
-    ) { session ->
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onOpen(session) }
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Avatar(url = session.faceUrl, size = Dimens.AvatarRow)
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+    ) {
+        PagedColumn(
+            items = state.items,
+            key = { it.talkerId },
+            loading = state.loading,
+            appending = false,
+            // 会话列表没有分页,一次给的就是全部活跃会话。
+            hasMore = false,
+            error = state.error,
+            emptyText = stringResource(R.string.message_empty_whisper),
+            onLoadMore = onLoadMore,
+            onRetry = onRefresh,
+            modifier = Modifier.fillMaxSize(),
+        ) { session ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpen(session) }
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Avatar(url = session.faceUrl, size = Dimens.AvatarRow)
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            // 系统通知号查不到名字和头像(`user/cards` 对它返回空),给一个中性
+                            // 的说法 —— 一个没有名字的空行看起来像这一条坏了。
+                            text = session.name.ifBlank { stringResource(R.string.whisper_system_account) },
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = formatRelativeTime(session.timeSeconds),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    // **未读不画红点也不画数字。** 未读的会话自然排在最前(服务端按时间排),
+                    // 而一个数字的用处只有催人回来,那是 DESIGN 1.3 点名不做的。
                     Text(
-                        // 系统通知号查不到名字和头像(`user/cards` 对它返回空),给一个中性
-                        // 的说法 —— 一个没有名字的空行看起来像这一条坏了。
-                        text = session.name.ifBlank { stringResource(R.string.whisper_system_account) },
-                        style = MaterialTheme.typography.bodyLarge,
+                        text = session.lastMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = formatRelativeTime(session.timeSeconds),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
                     )
                 }
-                // **未读不画红点也不画数字。** 未读的会话自然排在最前(服务端按时间排),
-                // 而一个数字的用处只有催人回来,那是 DESIGN 1.3 点名不做的。
-                Text(
-                    text = session.lastMessage,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
             }
         }
     }
@@ -178,66 +185,73 @@ private fun NoticeList(
     onRefresh: () -> Unit,
     onOpenUri: (String) -> Unit,
 ) {
-    PagedColumn(
-        items = state.items,
-        key = { it.id },
-        loading = state.loading,
-        appending = state.appending,
-        hasMore = state.hasMore,
-        error = state.error,
-        emptyText = stringResource(emptyTextRes),
-        onLoadMore = onLoadMore,
-        onRetry = onRefresh,
+    RefreshBox(
+        refreshing = state.refreshing,
+        onRefresh = onRefresh,
         modifier = Modifier.fillMaxSize(),
-    ) { notice ->
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                // 没有去处的通知不给点击:一个按下去有涟漪、然后什么都不发生的行读起来像坏了。
-                .then(if (notice.uri.isBlank()) Modifier else Modifier.clickable { onOpenUri(notice.uri) })
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-        ) {
-            Avatar(url = notice.avatarUrl, size = Dimens.AvatarRow)
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = if (notice.actorCount > 1) {
-                            stringResource(R.string.message_actors, notice.name, notice.actorCount)
-                        } else {
-                            notice.name
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.outline,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = formatRelativeTime(notice.timeSeconds),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                }
-                if (notice.body.isNotBlank()) {
-                    Text(text = notice.body, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                }
-                // 被回复的原文装进一层容器:没有它,一句"说得对"读不出在说什么;而它不是这条
-                // 通知的主角,所以压一档底色、缩一档字号。
-                notice.quoted?.let { quoted ->
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        shape = MaterialTheme.shapes.small,
-                        modifier = Modifier.padding(top = Spacing.Hair),
-                    ) {
+    ) {
+        PagedColumn(
+            items = state.items,
+            key = { it.id },
+            loading = state.loading,
+            appending = state.appending,
+            hasMore = state.hasMore,
+            error = state.error,
+            emptyText = stringResource(emptyTextRes),
+            onLoadMore = onLoadMore,
+            onRetry = onRefresh,
+            modifier = Modifier.fillMaxSize(),
+        ) { notice ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // 没有去处的通知不给点击:一个按下去有涟漪、然后什么都不发生的行读起来像坏了。
+                    .then(if (notice.uri.isBlank()) Modifier else Modifier.clickable { onOpenUri(notice.uri) })
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+            ) {
+                Avatar(url = notice.avatarUrl, size = Dimens.AvatarRow)
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // 谁做的这件事是这一行的主要信息,和私信会话里的对方名字同一档:
+                        // 原先它是最弱的描边色、字号还比正文小,一列通知扫下来只剩下正文。
                         Text(
-                            text = quoted,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
+                            text = if (notice.actorCount > 1) {
+                                stringResource(R.string.message_actors, notice.name, notice.actorCount)
+                            } else {
+                                notice.name
+                            },
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(Spacing.Tight),
+                            modifier = Modifier.weight(1f),
                         )
+                        Text(
+                            text = formatRelativeTime(notice.timeSeconds),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (notice.body.isNotBlank()) {
+                        Text(text = notice.body, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    }
+                    // 被回复的原文装进一层容器:没有它,一句"说得对"读不出在说什么;而它不是这条
+                    // 通知的主角,所以压一档底色、缩一档字号。
+                    notice.quoted?.let { quoted ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.padding(top = Spacing.Hair),
+                        ) {
+                            Text(
+                                text = quoted,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(Spacing.Tight),
+                            )
+                        }
                     }
                 }
             }
@@ -246,43 +260,54 @@ private fun NoticeList(
 }
 
 @Composable
-private fun SysNoticeList(state: MessageListState<SysNotice>, onLoadMore: () -> Unit) {
-    PagedColumn(
-        items = state.items,
-        key = { it.id },
-        loading = state.loading,
-        appending = state.appending,
-        hasMore = state.hasMore,
-        error = state.error,
-        emptyText = stringResource(R.string.message_empty_notice),
-        onLoadMore = onLoadMore,
+private fun SysNoticeList(
+    state: MessageListState<SysNotice>,
+    onLoadMore: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    RefreshBox(
+        refreshing = state.refreshing,
+        onRefresh = onRefresh,
         modifier = Modifier.fillMaxSize(),
-    ) { notice ->
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+    ) {
+        PagedColumn(
+            items = state.items,
+            key = { it.id },
+            loading = state.loading,
+            appending = state.appending,
+            hasMore = state.hasMore,
+            error = state.error,
+            emptyText = stringResource(R.string.message_empty_notice),
+            onLoadMore = onLoadMore,
+            onRetry = onRefresh,
+            modifier = Modifier.fillMaxSize(),
+        ) { notice ->
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = notice.title,
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    // 系统通知给的是拼好的时间字符串,不是时间戳,所以这里不折成"3 小时前"。
+                    Text(
+                        text = notice.timeText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text(
-                    text = notice.title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                // 系统通知给的是拼好的时间字符串,不是时间戳,所以这里不折成"3 小时前"。
-                Text(
-                    text = notice.timeText,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    text = notice.content,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Text(
-                text = notice.content,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }

@@ -104,7 +104,7 @@ fun SkipToast(category: String?, modifier: Modifier = Modifier) {
     LaunchedEffect(category) {
         if (category != null) {
             visible = true
-            delay(2500)
+            delay(VisibleMillis)
             visible = false
         }
     }
@@ -136,6 +136,13 @@ fun SkipToast(category: String?, modifier: Modifier = Modifier) {
         }
     }
 }
+
+/**
+ * 提示停留多久。M3 给 snackbar 的区间是 4–10 秒,这条提示做的是同一件事,取下限:
+ * 原先的 2.5 秒读不完"已跳过 赞助推广"就没了,而人这时正盯着画面突然跳了一截。
+ * 它不打断任何操作,所以也不必往上取。
+ */
+private const val VisibleMillis = 4000L
 
 /**
  * 类别配色,取自 SponsorBlock 官方扩展的默认色板 —— 用过那个扩展的人不必重新学一遍颜色。

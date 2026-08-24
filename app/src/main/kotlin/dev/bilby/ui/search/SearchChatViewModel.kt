@@ -10,7 +10,6 @@ import dev.bilby.agent.AgentTurnState
 import dev.bilby.agent.ChatMessage
 import dev.bilby.agent.TraceItem
 import dev.bilby.agent.reduce
-import dev.bilby.api.BiliResult
 import dev.bilby.data.SearchRepository
 import dev.bilby.data.SettingsStore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -95,26 +94,19 @@ class SearchChatViewModel(
     private val _state = MutableStateFlow(SearchChatUiState())
     val state: StateFlow<SearchChatUiState> = _state.asStateFlow()
 
+    /**
+     * 普通搜索整套状态机在 [NormalSearchController] 里(标签结果页共用同一套)。它是
+     * `normal` 那一格的唯一写入方,这边只镜像进 [SearchChatUiState] —— UI 仍然只看一份状态。
+     */
+    private val normal = NormalSearchController(viewModelScope, searchRepository)
+
+    init {
+        viewModelScope.launch {
+            normal.state.collect { n -> _state.update { it.copy(normal = n) } }
+        }
+    }
+
     private var nextTurnId = 1L
-    /** 普通搜索当前翻到第几页。它只有一份结果,不需要按轮次记。 */
-    private var page = 1
-
-    /**
-     * 普通搜索已经收下的 bvid。分页边界上同一条稿件会重出,而 UI 拿 bvid 当 LazyColumn 的
-     * key —— 重复即崩溃(「Key ... was already used」)。仓库那层只能管住单页内部,跨页
-     * 只有这里知道。
-     */
-    private val seenSearchBvids = mutableSetOf<String>()
-
-    /**
-     * 普通搜索这条路自己的 generation(性能计划 7.2)。query、排序或翻页目标一变就加一,
-     * 旧一代的响应落地前都要先比对这个数,对不上就是迟到的,整条丢弃 —— 包括对
-     * [seenSearchBvids]、[page] 这些跨请求共享状态的写入,不能等到 `_state.update` 才拦。
-     */
-    private var normalGeneration = 0
-
-    /** 当前这一代视频/用户请求所在的父 Job,下一代开始前先取消它,两路子请求跟着一起停。 */
-    private var searchJob: Job? = null
 
     fun onInputChange(value: String) = _state.update { it.copy(input = value) }
 
@@ -138,7 +130,7 @@ class SearchChatViewModel(
             SearchMode.Normal -> {
                 _state.update { it.copy(input = query) }
                 viewModelScope.launch { settings.addSearchHistory(query) }
-                startNormalSearch(query, _state.value.normal.order)
+                normal.search(query, _state.value.normal.order)
             }
 
             // 助理这边**照旧清空**:它是一段对话,发出去的话已经作为一轮留在上面了,输入框里
@@ -159,75 +151,13 @@ class SearchChatViewModel(
         }
     }
 
-    /**
-     * 续页只在**首页已经落地**之后才成立。列表在首页返回之前就已经排好版(此刻只有排序行
-     * 和页脚两个 item),UI 那侧的预取条件因此立刻满足;放行的话 [runNormal] 会先取消掉
-     * 正在飞的第一页,再按 [page] 发一个续页 —— 而那个 [page] 还停在上一次搜索翻到的位置,
-     * 于是同一个词每次落到一段任意偏移的结果上。
-     *
-     * 首页出错时同样不续:往一个没建立起来的结果集后面追加没有意义,那一屏给的是重试。
-     */
-    fun loadMore() {
-        val normal = _state.value.normal
-        if (normal.videoLoading || normal.videoError != null) return
-        if (normal.appending || !normal.hasMore || normal.query.isEmpty()) return
-        _state.update { it.copy(normal = it.normal.copy(appending = true)) }
-        runNormal(normal.query, page = page + 1, normal.order)
-    }
+    fun loadMore() = normal.loadMore()
 
-    /**
-     * 换关键词、换排序、重试,对结果集都是同一件事:从第一页重来。三个入口原先各自 copy
-     * 一份状态,于是各漏各的 —— 换排序漏了 `appending`(切排序时正在续页的话,被取消的那一代
-     * 不会清它,续页就此卡住),重试漏了 `hasMore`(翻到底之后下拉刷新,页面回到第一页而
-     * `hasMore` 还是 false,再也翻不动)。分页状态只在这一处归位。
-     *
-     * @param keepVisibleResults 下拉刷新用。列表留在屏幕上直到新的第一页落地,否则一下拉就
-     *   整屏空白再重画,而刷新指示器本身(`videoLoading && videos.isNotEmpty()`)也会立刻熄灭。
-     */
-    private fun startNormalSearch(query: String, order: SearchOrder, keepVisibleResults: Boolean = false) {
-        seenSearchBvids.clear()
-        _state.update {
-            it.copy(
-                normal = it.normal.copy(
-                    query = query,
-                    order = order,
-                    videos = if (keepVisibleResults) it.normal.videos else emptyList(),
-                    users = if (keepVisibleResults) it.normal.users else emptyList(),
-                    hasMore = true,
-                    appending = false,
-                    videoLoading = true,
-                    userLoading = true,
-                    videoError = null,
-                    userError = null,
-                ),
-            )
-        }
-        runNormal(query, page = 1, order)
-    }
-
-    /**
-     * 切排序等于换了一份不同的结果集,不是往当前结果里插队:只换 order 参数继续 append
-     * 会把两种排序的结果拼在一条列表里。
-     *
-     * 还没搜过东西时只记下这一档,不发请求 —— 没有关键词可搜。
-     */
-    fun onOrderChanged(order: SearchOrder) {
-        val normal = _state.value.normal
-        if (normal.order == order) return
-        if (normal.query.isEmpty()) {
-            _state.update { it.copy(normal = it.normal.copy(order = order)) }
-            return
-        }
-        startNormalSearch(normal.query, order)
-    }
+    fun onOrderChanged(order: SearchOrder) = normal.onOrderChanged(order)
 
     fun retry() {
         when (_state.value.mode) {
-            SearchMode.Normal -> {
-                val normal = _state.value.normal
-                val query = normal.query.ifEmpty { return }
-                startNormalSearch(query, normal.order, keepVisibleResults = true)
-            }
+            SearchMode.Normal -> normal.retry()
 
             SearchMode.Agent -> {
                 val turn = _state.value.agent.turns.lastOrNull() ?: return
@@ -239,87 +169,6 @@ class SearchChatViewModel(
 
     /** 重新执行当前搜索/当前助理轮次，供下拉刷新和再次进入搜索页使用。 */
     fun refresh() = retry()
-
-    /**
-     * 视频和用户两路请求独立发起(性能计划 7.1):视频先回先发布,用户回来了再并进去,
-     * 慢的或失败的那路不拖累已经能看的结果。分页(page > 1)时不重新拉用户 —— 用户结果
-     * 只在第一页有意义,原逻辑就是这样。
-     *
-     * 两路共用同一个父 Job:下一次 query/排序/翻页触发时,取消父 Job 就把两个子协程一起
-     * 停掉,不需要分别记两个 Job 引用。
-     */
-    private fun runNormal(query: String, page: Int, order: SearchOrder) {
-        val gen = ++normalGeneration
-        // 分页游标在**请求发出时**归位,不等响应回来。它是所有入口(回车、换排序、重试)共同的
-        // 收口处,写在这里比让三个调用方各自记得清一遍可靠。留到响应落地才写的那一版,意味着
-        // 首页在途期间 page 还是上一次搜索的值,任何一次续页都会从一个与本次查询无关的偏移开始。
-        if (page == 1) this.page = 1
-        searchJob?.cancel()
-        searchJob = viewModelScope.launch {
-            launch { runVideos(gen, query, page, order) }
-            if (page == 1) launch { runUsers(gen, query) }
-        }
-    }
-
-    private suspend fun runVideos(gen: Int, query: String, page: Int, order: SearchOrder) {
-        try {
-            val result = searchRepository.searchVideos(keyword = query, page = page, order = order.apiValue)
-            // 迟到的响应连 seenSearchBvids/page 这些跨请求共享的字段都不该碰,所以在提交
-            // 之前先拦一次,不能只靠 _state.update 里那道检查。
-            if (gen != normalGeneration) return
-            when (result) {
-                is BiliResult.Ok -> {
-                    this@SearchChatViewModel.page = page
-                    if (page == 1) seenSearchBvids.clear()
-                    val fresh = result.value.items.filter { seenSearchBvids.add(it.bvid) }
-                    _state.update {
-                        it.copy(
-                            normal = it.normal.copy(
-                                videos = if (page == 1) fresh else it.normal.videos + fresh,
-                                hasMore = result.value.hasMore,
-                                videoError = null,
-                            ),
-                        )
-                    }
-                }
-
-                is BiliResult.ApiError -> _state.update {
-                    it.copy(normal = it.normal.copy(videoError = "${result.message}(${result.code})"))
-                }
-
-                is BiliResult.Failure -> _state.update {
-                    it.copy(normal = it.normal.copy(videoError = result.cause.message ?: "网络错误"))
-                }
-            }
-        } finally {
-            // 按当前 generation 释放:被取消的旧一代不该把新一代刚置上的 loading 又扒下来。
-            if (gen == normalGeneration) {
-                _state.update { it.copy(normal = it.normal.copy(videoLoading = false, appending = false)) }
-            }
-        }
-    }
-
-    private suspend fun runUsers(gen: Int, query: String) {
-        try {
-            val result = searchRepository.searchUsers(query)
-            if (gen != normalGeneration) return
-            when (result) {
-                is BiliResult.Ok -> _state.update {
-                    it.copy(normal = it.normal.copy(users = result.value, userError = null))
-                }
-
-                is BiliResult.ApiError -> _state.update {
-                    it.copy(normal = it.normal.copy(userError = "${result.message}(${result.code})"))
-                }
-
-                is BiliResult.Failure -> _state.update {
-                    it.copy(normal = it.normal.copy(userError = result.cause.message ?: "网络错误"))
-                }
-            }
-        } finally {
-            if (gen == normalGeneration) _state.update { it.copy(normal = it.normal.copy(userLoading = false)) }
-        }
-    }
 
     /**
      * 会话只活在内存里,随 ViewModel 生灭,不落库。
@@ -370,3 +219,4 @@ class SearchChatViewModel(
     }
 
 }
+

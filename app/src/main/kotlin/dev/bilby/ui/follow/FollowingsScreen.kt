@@ -13,6 +13,7 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.getValue
@@ -40,7 +41,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
@@ -59,6 +59,7 @@ import dev.bilby.data.FollowRepository
 import dev.bilby.data.UpBrief
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.theme.Dimens
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -337,8 +338,8 @@ fun FollowingsScreen(
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     AdaptiveContent(modifier = modifier) {
-        PullToRefreshBox(
-            isRefreshing = state.refreshing,
+        RefreshBox(
+            refreshing = state.refreshing,
             onRefresh = onRefresh,
             modifier = Modifier.fillMaxSize(),
         ) {
@@ -449,10 +450,14 @@ private fun FollowingsControls(
                     .padding(horizontal = Spacing.Comfortable),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
             ) {
+                // 芯片视觉高度 32dp,触控区要撑到 48dp:material3 的 Chip 不像 IconButton
+                // 那样自带这层强制(查 1.5.0-alpha25 的 aar 核实过,ChipKt 里没有引用)。
+                // 芯片本身的样子不变,长高的是它占的那格。
                 FilterChip(
                     selected = state.source is FollowSource.All && state.query.isBlank(),
                     onClick = { onSelectSource(FollowSource.All) },
                     label = { Text(stringResource(R.string.followings_all)) },
+                    modifier = Modifier.minimumInteractiveComponentSize(),
                 )
                 state.groups.forEach { group ->
                     FilterChip(
@@ -461,6 +466,7 @@ private fun FollowingsControls(
                         onClick = { onSelectSource(FollowSource.Group(group)) },
                         // 分组名是用户自己起的,原样显示;人数跟在后面,不用中点分隔(见 MetaSeparator)。
                         label = { Text("${group.name}$MetaSeparator${group.count}") },
+                        modifier = Modifier.minimumInteractiveComponentSize(),
                     )
                 }
             }

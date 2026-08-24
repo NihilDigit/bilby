@@ -14,10 +14,12 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.utils.io.readUTF8Line
 import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.json.Json
 
 /**
@@ -79,7 +81,9 @@ class LlmClient(
                 delay(wait)
             }
         }
-    }
+        // SSE 是逐行读、逐行反序列化的,一次回答几百个 chunk 都在这条流里解。收集方在主线程,
+        // 上游整体挪到 Default 之后主线程只剩下拿到 delta 之后的那一步。
+    }.flowOn(Dispatchers.Default)
 
     private suspend fun FlowCollector<LlmDelta>.streamOnce(
         url: String,

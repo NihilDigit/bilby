@@ -39,11 +39,13 @@ import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoRepository
 import dev.bilby.data.VideoStat
+import dev.bilby.data.VideoTag
 import dev.bilby.data.VideoUp
 import dev.bilby.offline.CachedIndex
 import dev.bilby.offline.OfflineDownloader
 import dev.bilby.offline.OfflineStore
 import dev.bilby.player.AudioPlaybackService
+import dev.bilby.player.AudioPlaybackUiState
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -267,6 +269,35 @@ class VideoViewModel(
             .filter { it.category in prefs.categories }
     }
 
+    /** 这条视频的标签。空列表兼指"还没拉"与"没有标签"——两者都不画,不需要分。 */
+    private val _videoTags = MutableStateFlow<List<VideoTag>>(emptyList())
+    val videoTags: StateFlow<List<VideoTag>> = _videoTags.asStateFlow()
+
+    /** 标签请求发起过没有,见 [loadVideoTags] 的幂等。 */
+    private var videoTagsRequested = false
+
+    /**
+     * 拉标签。第一次展开简介时由页面调用:标签只在展开态可见,随详情 eager 拉等于每次
+     * 打开视频都白背一次请求(理由展开写在 VideoRepository.getVideoTags)。幂等,展开收起
+     * 反复点不重发;失败把闸放回去,下一次展开还有机会重试。
+     */
+    fun loadVideoTags() {
+        if (videoTagsRequested) return
+        val detail = _state.value.detail ?: return
+        videoTagsRequested = true
+        val target = bvid
+        videoScope.launch {
+            when (val tags = repository.getVideoTags(target, detail.cid)) {
+                is BiliResult.Ok -> _videoTags.value = tags.value
+                // 具体的码和 message 已由 getData 打过,这里只留场景。
+                else -> {
+                    BiliLog.w("查视频标签失败 bvid=$target")
+                    videoTagsRequested = false
+                }
+            }
+        }
+    }
+
     private val _relation = MutableStateFlow<VideoRelation?>(null)
     val relation: StateFlow<VideoRelation?> = _relation.asStateFlow()
 
@@ -471,6 +502,8 @@ class VideoViewModel(
         _staffFollowed.value = null
         _upCard.value = null
         _relation.value = null
+        _videoTags.value = emptyList()
+        videoTagsRequested = false
         _coinAttempt.value = CoinAttempt.Idle
         _favFolders.value = emptyList()
         _addedToView.value = false
@@ -526,11 +559,17 @@ class VideoViewModel(
      * 别的视频上时不该把那一条的弹幕留在这一页。换 cid 清空已请求分段集合与弹幕池——
      * 那是另一条视频的弹幕,不是"还没拉完"。
      *
+     * **cid 变成 0 也要照清一遍,那一支不能跳过。** 0 的意思是"此刻哪一 P 还没有答案":
+     * 用户按下换 P 的那一刻服务的 playPart 就报 0,要等一趟取流
+     * 回来才报出新的那一 P。跳过这一支的话,上一 P 的弹幕会在新的一 P 装载期间接着飘,
+     * 而那几百毫秒里屏幕上的画面已经不是它们对应的内容了(owner 定:切 P 当场清空)。
+     * 清完不拉:[fetchDanmakuAround] 见 cid 为 0 直接返回,新的一 P 到位时自己会拉。
+     *
      * 预取段 1 只在开关已经打开时才做,理由见 [setDanmakuEnabled]。
      */
     private fun observeDanmakuCid(target: String) = videoScope.launch {
         AudioPlaybackService.state
-            .map { if (it.queue?.current?.bvid == target) it.currentCid else 0L }
+            .map { it.cidOf(target) }
             .distinctUntilChanged()
             .collect { cid ->
                 danmakuCid = cid
@@ -638,7 +677,7 @@ class VideoViewModel(
         // 等持久化的语言读回来再开始跟 cid 走,理由见 [subtitleLanLoaded]。
         subtitleLanLoaded.await()
         AudioPlaybackService.state
-            .map { if (it.queue?.current?.bvid == target) it.currentCid else 0L }
+            .map { it.cidOf(target) }
             .distinctUntilChanged()
             .collect { cid ->
                 // 换 cid 就取消上一条还没跑完的加载——它可能正卡在限流退避的 delay 里。
@@ -647,9 +686,15 @@ class VideoViewModel(
                 //
                 // 这条 Job 挡的是**同一条视频内换分 P**;换视频由 videoScope 整组取消负责。
                 subtitleTracksJob?.cancel()
-                if (cid != 0L) {
-                    subtitleTracksJob = videoScope.launch { loadSubtitleTracks(target, cid) }
+                if (cid == 0L) {
+                    // 哪一 P 还没有答案(换 P 按下的那一刻,服务的 playPart 就报 0)。
+                    // 正在显示的那一句属于上一 P,清掉——和弹幕池同一条决策(owner 定:切 P 把
+                    // 过期内容当场清掉)。轨道清单留着不清:它只是字幕菜单的选项,新的一 P 到位
+                    // 时整份换掉,而清了会让菜单在这几百毫秒里空一下。
+                    _subtitleCues.value = emptyList()
+                    return@collect
                 }
+                subtitleTracksJob = videoScope.launch { loadSubtitleTracks(target, cid) }
             }
     }
 
@@ -839,7 +884,7 @@ class VideoViewModel(
      */
     private fun observeCurrentPart(target: String) = videoScope.launch {
         AudioPlaybackService.state
-            .map { if (it.queue?.current?.bvid == target) it.currentCid else 0L }
+            .map { it.cidOf(target) }
             .distinctUntilChanged()
             .collect { cid -> if (cid != 0L) loadSponsorSegments(target, cid) }
     }
@@ -860,11 +905,7 @@ class VideoViewModel(
     private fun observePlaybackPosition(target: String) = videoScope.launch {
         AudioPlaybackService.positionTicks
             .map {
-                if (AudioPlaybackService.state.value.queue?.current?.bvid == target) {
-                    it.positionMillis
-                } else {
-                    -1L
-                }
+                if (AudioPlaybackService.state.value.loadKey == target) it.positionMillis else -1L
             }
             .distinctUntilChangedBy { it / DANMAKU_POSITION_STEP_MILLIS }
             .collect { positionMillis -> if (positionMillis >= 0) onDanmakuPlaybackPosition(positionMillis) }
@@ -1008,3 +1049,15 @@ class VideoViewModel(
         const val DANMAKU_SEGMENT_RETRIES = 3
     }
 }
+
+/**
+ * 播放器此刻正装着 [target] 的哪一 P,不是它就是 0。
+ *
+ * **判据是 [AudioPlaybackUiState.loadKey],不是队列指着的那一条。** 队列在切过去的那一刻就
+ * 报新的一条了,而 cid 要等取流回来才跟上,两者在这段窗口里说的不是同一条内容。拿队列那一条
+ * 配这个 cid 得到的是一对不存在的组合:合集里换一集、连播走到下一条时,新那一页会立刻拿着
+ * 新 bvid 和上一条的 cid 去要弹幕、字幕和 SponsorBlock —— 拉回来的是上一条视频的内容,在新
+ * 视频上飘几百毫秒的旧弹幕,还白背了几次参数错配的请求。
+ */
+private fun AudioPlaybackUiState.cidOf(target: String): Long =
+    if (loadKey == target) currentCid else 0L

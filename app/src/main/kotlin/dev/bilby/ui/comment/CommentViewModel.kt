@@ -310,20 +310,119 @@ class CommentViewModel(
 
     fun delete(rpid: Long) {
         val comment = findComment(rpid) ?: return
+        // 位置可能定位不到(只在楼中楼预览里的那种),那时仍然发请求,只是失败之后没有
+        // 原位可放回 —— 它本来也不在乐观移除的三处之内。
+        val slot = locate(rpid)
         _state.update { current ->
             current.copy(
-                items = current.items.filterNot { it.rpid == rpid },
-                topComment = current.topComment?.takeUnless { it.rpid == rpid },
+                items = current.items.filterNot { it.rpid == rpid }.map { it.withoutPreview(rpid) },
+                topComment = current.topComment?.takeUnless { it.rpid == rpid }?.withoutPreview(rpid),
                 expandedReplies = current.expandedReplies.mapValues { (_, v) ->
                     v.copy(items = v.items.filterNot { it.rpid == rpid })
                 },
             )
         }
         viewModelScope.launch {
-            val result = repository.deleteComment(oid, rpid, type)
-            if (result is BiliResult.ApiError) setError("${result.message}(${result.code})")
-            if (result is BiliResult.Failure) setError(result.cause.message ?: "网络错误")
-            if (comment.rootRpid == rpid) subReplyNextPage.remove(rpid)
+            when (val result = repository.deleteComment(oid, rpid, type)) {
+                // 删掉的是主楼,它那一组展开结果跟着走:留着的话只是一份没人再读的副本,
+                // 而这条主楼要是又被发了一遍(同 rpid 不会,但刷新后同一楼可能重新出现),
+                // 展开按钮会直接亮出上一轮的内容。失败路径不清,那边要按原样放回去。
+                is BiliResult.Ok -> if (comment.rootRpid == rpid) {
+                    subReplyNextPage.remove(rpid)
+                    _state.update { it.copy(expandedReplies = it.expandedReplies - rpid) }
+                }
+
+                // **失败要把这一条放回原位。** 乐观移除之后不管结果,用户看到的就是"评论没了",
+                // 而它还在服务端;下次进来又出现,中间这段时间没有任何办法知道哪个是真的。
+                is BiliResult.ApiError -> {
+                    slot?.let { restore(comment, it) }
+                    setError("删除失败:${result.message}(${result.code})")
+                }
+
+                is BiliResult.Failure -> {
+                    slot?.let { restore(comment, it) }
+                    setError("删除失败:${result.cause.message ?: "网络错误"}")
+                }
+            }
+        }
+    }
+
+    /**
+     * 一条评论在列表里的位置。删除失败要放回**原位**,不是追加到末尾 —— 一条热评回到列表
+     * 尾巴上,和"删掉了又冒出来一条新的"读起来是一回事。
+     */
+    private sealed interface CommentSlot {
+        data object Top : CommentSlot
+        data class Main(val index: Int) : CommentSlot
+        data class Sub(val rootId: Long, val index: Int) : CommentSlot
+
+        /** 未展开时显示的那两三条预览楼层。**同一条回复可能同时在这里和 [Sub] 里**,见 [locate]。 */
+        data class Preview(val rootId: Long, val index: Int) : CommentSlot
+    }
+
+    /**
+     * 一条评论现在画在哪儿。
+     *
+     * **展开结果优先于预览层。** 展开之后两处都有这条回复,而 [restore] 只能放回一处 ——
+     * 放回预览层的话,屏上仍然是展开结果那一份,恢复看起来没有发生。
+     */
+    private fun locate(rpid: Long): CommentSlot? {
+        val state = _state.value
+        if (state.topComment?.rpid == rpid) return CommentSlot.Top
+        state.items.indexOfFirst { it.rpid == rpid }.takeIf { it >= 0 }?.let { return CommentSlot.Main(it) }
+        state.expandedReplies.forEach { (rootId, expanded) ->
+            val index = expanded.items.indexOfFirst { it.rpid == rpid }
+            if (index >= 0) return CommentSlot.Sub(rootId, index)
+        }
+        (listOfNotNull(state.topComment) + state.items).forEach { root ->
+            val index = root.previewReplies.indexOfFirst { it.rpid == rpid }
+            if (index >= 0) return CommentSlot.Preview(root.rpid, index)
+        }
+        return null
+    }
+
+    /** 从这一楼的预览层里摘掉一条。参数名避开 `rpid`,免得和接收者自己的那个撞上。 */
+    private fun CommentItem.withoutPreview(target: Long): CommentItem =
+        if (previewReplies.none { it.rpid == target }) this
+        else copy(previewReplies = previewReplies.filterNot { it.rpid == target })
+
+    private fun restore(comment: CommentItem, slot: CommentSlot) {
+        _state.update { current ->
+            when (slot) {
+                CommentSlot.Top -> current.copy(topComment = comment)
+
+                // 下标按当时的列表记的,期间翻了一页或刷新过就可能越界,夹回合法区间。
+                is CommentSlot.Main -> current.copy(
+                    items = current.items.toMutableList().apply {
+                        add(slot.index.coerceIn(0, size), comment)
+                    },
+                )
+
+                is CommentSlot.Sub -> {
+                    val entry = current.expandedReplies[slot.rootId] ?: return@update current
+                    val items = entry.items.toMutableList().apply {
+                        add(slot.index.coerceIn(0, size), comment)
+                    }
+                    current.copy(
+                        expandedReplies = current.expandedReplies + (slot.rootId to entry.copy(items = items)),
+                    )
+                }
+
+                is CommentSlot.Preview -> {
+                    // `this.rpid` 写全:这里比的是主楼自己的 rpid,不是被删那条的。
+                    fun CommentItem.restoreInto(): CommentItem =
+                        if (this.rpid != slot.rootId) this
+                        else copy(
+                            previewReplies = previewReplies.toMutableList().apply {
+                                add(slot.index.coerceIn(0, size), comment)
+                            },
+                        )
+                    current.copy(
+                        topComment = current.topComment?.restoreInto(),
+                        items = current.items.map { it.restoreInto() },
+                    )
+                }
+            }
         }
     }
 
@@ -337,29 +436,38 @@ class CommentViewModel(
     private fun CommentUiState.rootComment(rpid: Long): CommentItem? =
         topComment?.takeIf { it.rpid == rpid } ?: items.find { it.rpid == rpid }
 
+    /**
+     * 按 rpid 找一条评论,四处都找:置顶楼、主楼列表、**两者各自的楼中楼预览层**、已展开的
+     * 楼中楼。
+     *
+     * 置顶楼的预览层以前不在这个范围里,而 [send] 靠这个函数把 rpid 换成回复对象 ——
+     * 找不到就当成没有对象,于是"回复置顶楼下面那条"会被发成一条一级评论。
+     */
     private fun findComment(rpid: Long): CommentItem? {
         val state = _state.value
-        state.topComment?.let { if (it.rpid == rpid) return it }
-        state.items.find { it.rpid == rpid }?.let { return it }
-        state.items.forEach { top -> top.previewReplies.find { it.rpid == rpid }?.let { return it } }
+        val roots = listOfNotNull(state.topComment) + state.items
+        roots.find { it.rpid == rpid }?.let { return it }
+        roots.forEach { root -> root.previewReplies.find { it.rpid == rpid }?.let { return it } }
         state.expandedReplies.values.forEach { expanded ->
             expanded.items.find { it.rpid == rpid }?.let { return it }
         }
         return null
     }
 
-    private inline fun applyToComment(rpid: Long, transform: (CommentItem) -> CommentItem) {
+    private fun applyToComment(rpid: Long, transform: (CommentItem) -> CommentItem) {
+        // 一条主楼连同它自带的楼中楼预览走同一个变换。**置顶楼的预览层以前漏在外面**:
+        // 它和普通主楼一样带 previewReplies,而这里只认了 topComment 本身。
+        //
+        // 目标 rpid 走参数传进来,不靠闭包捕获外层那个同名参数:扩展函数里裸写 `rpid`
+        // 命中的是接收者自己的成员,`rpid == this.rpid` 会恒真。
+        fun CommentItem.applyDeep(target: Long): CommentItem = when (target) {
+            rpid -> transform(this)
+            else -> copy(previewReplies = previewReplies.map { if (it.rpid == target) transform(it) else it })
+        }
         _state.update { current ->
             current.copy(
-                topComment = current.topComment?.let { if (it.rpid == rpid) transform(it) else it },
-                items = current.items.map { top ->
-                    when {
-                        top.rpid == rpid -> transform(top)
-                        else -> top.copy(previewReplies = top.previewReplies.map {
-                            if (it.rpid == rpid) transform(it) else it
-                        })
-                    }
-                },
+                topComment = current.topComment?.applyDeep(rpid),
+                items = current.items.map { it.applyDeep(rpid) },
                 expandedReplies = current.expandedReplies.mapValues { (_, v) ->
                     v.copy(items = v.items.map { if (it.rpid == rpid) transform(it) else it })
                 },

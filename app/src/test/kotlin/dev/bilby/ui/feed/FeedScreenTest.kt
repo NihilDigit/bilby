@@ -1,18 +1,18 @@
 package dev.bilby.ui.feed
 
-import dev.bilby.data.model.FeedItem
+import dev.bilby.data.model.FeedEntry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * 已读位置分隔线按 bvid 定位,不是按下标。这条不变式是 [FeedReadPositionEntity] 存在的
+ * 已读位置分隔线按条目 id 定位,不是按下标。这条不变式是 [FeedReadPositionEntity] 存在的
  * 唯一理由(见其注释),值得单独断言 —— 光看 [indexOfReadMarker] 的实现容易被"看起来对"
  * 骗过去,真正会出错的是"插入新投稿后还认得同一条"这件事本身。
  */
 class FeedScreenTest {
 
-    private fun item(bvid: String) = FeedItem(
+    private fun item(bvid: String) = FeedEntry.Video(
         bvid = bvid,
         title = bvid,
         coverUrl = "",
@@ -29,13 +29,13 @@ class FeedScreenTest {
         val before = listOf("bv1", "bv2", "bv3").map(::item)
         val markerBvid = "bv2"
         val indexBefore = before.indexOfReadMarker(markerBvid)
-        assertEquals("bv2", before[indexBefore!!].bvid)
+        assertEquals("bv2", before[indexBefore!!].id)
 
         // 关注的人又发了两条新的,插到最前面 —— 下标全体后移,id 不变。
         val after = listOf("bv4", "bv5").map(::item) + before
         val indexAfter = after.indexOfReadMarker(markerBvid)
 
-        assertEquals("bv2", after[indexAfter!!].bvid)
+        assertEquals("bv2", after[indexAfter!!].id)
         // 下标本身必须跟着位移,否则就是"记下标"而不是"记 id",证明不了这条测试要证明的事。
         assertEquals(indexBefore + 2, indexAfter)
     }

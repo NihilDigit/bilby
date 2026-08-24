@@ -20,15 +20,28 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.unit.dp
+import dev.bilby.R
+import dev.bilby.ui.theme.Dimens
 
 /** 进度条的槽高与滑块半径。由"别挡住画面"定,不走主题刻度。 */
 private val TrackHeight = 3.dp
 private val ThumbRadius = 5.dp
 private val ThumbRadiusDragging = 8.dp
 
-/** 触摸高度和视觉高度是分开的:槽只有 3dp,3dp 高的东西在手机上根本按不中。 */
-private val TouchHeight = 24.dp
+/**
+ * 触摸高度和视觉高度是分开的:槽只有 3dp,3dp 高的东西在手机上根本按不中。
+ *
+ * 取 [Dimens.MinTouchTarget] 而不是原来的 24dp:这一条是播放器上最主要的操作,而 24dp 只有
+ * 无障碍下限的一半。代价是控制条整体高出 24dp、画面被多盖住一条,换掉的是拖不中。
+ */
+private val TouchHeight = Dimens.MinTouchTarget
 
 /**
  * 播放进度条。手写而不是用 material3 的 `Slider`:`Slider` 的滑块是 20dp 见方的实心块,
@@ -66,10 +79,28 @@ fun SeekBar(
         label = "seek-thumb",
     )
     val fraction = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+    val label = stringResource(R.string.player_progress)
 
     Box(
         modifier = modifier
             .heightIn(min = TouchHeight)
+            // 手写的进度轨没有任何自带语义:读屏在这里既读不出播到哪了,也没有可用的动作。
+            // progressBarRangeInfo 给出位置,setProgress 让读屏的"调整"手势能真的跳转 ——
+            // 拖拽手势对读屏用户是不存在的。
+            .semantics {
+                contentDescription = label
+                progressBarRangeInfo = ProgressBarRangeInfo(current = fraction, range = 0f..1f)
+                setProgress { target ->
+                    if (duration <= 0) {
+                        false
+                    } else {
+                        onSeekStart()
+                        onSeekTo(target.coerceIn(0f, 1f).toPosition(duration))
+                        onSeekFinished()
+                        true
+                    }
+                }
+            }
             .pointerInput(duration) {
                 if (duration <= 0) return@pointerInput
                 detectHorizontalDragGestures(

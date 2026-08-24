@@ -7,7 +7,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
+import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import dev.bilby.BilbyApplication
 import dev.bilby.BiliLog
@@ -67,14 +69,45 @@ class OfflineDownloadService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // 三参重载从 API 29 起就有(minSdk 正是 29),Android 14 起还必须传类型且与 manifest
         // 里声明的一致,否则直接抛 MissingForegroundServiceTypeException。
-        startForeground(
-            NOTIFICATION_ID,
-            buildNotification(NotificationProgress()),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-        )
+        //
+        // **进不了前台不算致命**,和 [setRunning] 那一侧同一个判断:下载照跑,掉的只是那层
+        // "别杀我"的保护。这一句会抛的两种情形都不是代码错误 —— 应用在后台时起前台服务被
+        // Android 12 起的后台启动限制拒绝,以及 dataSync 的六小时额度已经耗尽(见
+        // fgs/restrictions-bg-start 与 fgs/timeout),两者抛的都是
+        // ForegroundServiceStartNotAllowedException。
+        //
+        // **抛了就得把服务停掉。** 拉起这个服务用的是 `startForegroundService`,而那条路要求
+        // 服务随后必须进前台;停在这里不动的话,系统换一个理由把它崩掉。
+        runCatching {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(NotificationProgress()),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            )
+        }.onFailure {
+            BiliLog.w("缓存前台服务进不了前台,停掉服务;下载不受影响", it)
+            stopSelf()
+        }
         // START_NOT_STICKY:被系统杀掉之后不要自动重启。真正的进度在 [OfflineDownloader]
         // 手上,空转一个前台通知只会骗人。
         return START_NOT_STICKY
+    }
+
+    /**
+     * dataSync 前台服务的六小时配额用完了。
+     *
+     * **系统只给几秒钟**:这个回调之后服务已经不算前台服务,不在其中 `stopSelf()` 的话系统会抛
+     * `RemoteServiceException`(fgs/timeout)。所以这里只收自己这一层,不去等下载。
+     *
+     * 下载本身不在这个服务里(见类注释),掉的只是那层"别杀我"的保护。进程随后被回收时,盘上
+     * 那条停在半路的记录仍是 Running,下次启动读回来经 [recoveredFromInterruption]
+     * 变成可续传的失败态 —— 也就是说续传这条路已经铺好了,这里不需要再写一遍状态,而在下载器
+     * 正往同一条记录上写的时候插一手,反倒会把它的进度覆盖掉。
+     */
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        BiliLog.w("缓存前台服务超时,停掉服务;下载记录留给下次启动续传 startId=$startId type=$fgsType")
+        stopSelf()
     }
 
     override fun onDestroy() {

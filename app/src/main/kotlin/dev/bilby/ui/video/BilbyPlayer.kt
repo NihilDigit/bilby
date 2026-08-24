@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
@@ -36,6 +37,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -442,6 +445,7 @@ private fun SpeedButton(
                         onSpeedChange(option)
                     },
                     trailingIcon = if (option == speed) selectedMark else null,
+                    modifier = Modifier.selectedSemantics(option == speed),
                 )
             }
         }
@@ -486,6 +490,7 @@ private fun QualityButton(
                         onQualityChange(option.quality)
                     },
                     trailingIcon = if (option.quality == currentQuality) selectedMark else null,
+                    modifier = Modifier.selectedSemantics(option.quality == currentQuality),
                 )
             }
         }
@@ -533,10 +538,19 @@ private fun SubtitleButton(
 }
 
 /**
- * 弹幕开关。和 [SpeedButton]/[QualityButton]/[SubtitleButton] 同一套形状,但不弹菜单——
- * 只有开/关两态,点一下直接切换。借用 [ControlButton] 的 `expanded` 参数表达"开着"这个
- * 高亮态,不是真的有下拉菜单要展开。
+ * 倍速与画质菜单的选中标记。**勾而不是「·」**:小圆点既不像选中态,读屏还会把它当成一个
+ * 标点节点念出来。勾 + 主色是两条通道,色觉障碍下也读得出哪一条在用。
+ *
+ * 图标本身 `contentDescription = null` —— 选中态由行上的 [selectedSemantics] 说,
+ * 两处都说会让读屏在同一行里念两遍。字幕菜单那份在 `components/SubtitleTrackMenu.kt`。
  */
 private val selectedMark: @Composable () -> Unit = {
-    Text("·", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+    Icon(
+        Icons.Filled.Check,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+    )
 }
+
+/** 选中态挂在整行上,不挂在那个勾上:读屏念的是「1080P,已选中」,而不是孤零零一个图标。 */
+private fun Modifier.selectedSemantics(isSelected: Boolean) = semantics { selected = isSelected }

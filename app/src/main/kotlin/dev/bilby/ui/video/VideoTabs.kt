@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -96,6 +98,7 @@ import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoStat
 import dev.bilby.data.VideoStaff
+import dev.bilby.data.VideoTag
 import dev.bilby.player.QueueItem
 import dev.bilby.ui.comment.CommentSection
 import dev.bilby.ui.comment.CommentUiState
@@ -173,6 +176,12 @@ fun VideoTabs(
     pagerState: PagerState,
     detail: VideoDetail,
     currentCid: Long,
+    /** 这条视频的标签,展开简介才显示。空列表不画,见 VideoViewModel.videoTags。 */
+    videoTags: List<VideoTag>,
+    /** 第一次展开简介时拉标签,幂等,见 VideoViewModel.loadVideoTags。 */
+    onLoadTags: () -> Unit,
+    /** 点一枚标签 = 拿它的原文开一页普通搜索结果(Destinations.kt 的 SearchResult)。 */
+    onTagClick: (String) -> Unit,
     related: RelatedState,
     commentState: CommentUiState,
     onFindRelated: () -> Unit,
@@ -311,6 +320,9 @@ fun VideoTabs(
                 VideoTabIntro -> IntroTab(
                     detail = detail,
                     currentCid = currentCid,
+                    videoTags = videoTags,
+                    onLoadTags = onLoadTags,
+                    onTagClick = onTagClick,
                     related = related,
                     onFindRelated = onFindRelated,
                     onCache = onCache,
@@ -397,6 +409,9 @@ private fun DanmakuVisibilityButton(enabled: Boolean, onEnabledChange: (Boolean)
 private fun IntroTab(
     detail: VideoDetail,
     currentCid: Long,
+    videoTags: List<VideoTag>,
+    onLoadTags: () -> Unit,
+    onTagClick: (String) -> Unit,
     related: RelatedState,
     onFindRelated: () -> Unit,
     onCache: () -> Unit,
@@ -449,8 +464,14 @@ private fun IntroTab(
     ) {
         TitleBlock(
             detail = detail,
+            tags = videoTags,
+            onTagClick = onTagClick,
             expanded = infoExpanded,
-            onToggle = { infoExpanded = !infoExpanded },
+            onToggle = {
+                infoExpanded = !infoExpanded
+                // 标签到展开这一刻才拉,理由见 VideoViewModel.loadVideoTags。
+                if (infoExpanded) onLoadTags()
+            },
         )
 
         UpRow(
@@ -629,7 +650,7 @@ private fun UpRow(
                             Text(
                                 it,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.widthIn(min = StaffLabelMinWidth, max = StaffLabelMaxWidth),
@@ -665,8 +686,15 @@ private fun UpRow(
  * 而它指向的是上方——看起来像在说"上面还有东西"。横向位置两态一致(都靠右),于是这一下移动
  * 读得出来是同一个东西换了位置,不是又多出一个控件。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TitleBlock(detail: VideoDetail, expanded: Boolean, onToggle: () -> Unit) {
+private fun TitleBlock(
+    detail: VideoDetail,
+    tags: List<VideoTag>,
+    onTagClick: (String) -> Unit,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
     val indicator = @Composable {
         Icon(
             imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
@@ -703,7 +731,7 @@ private fun TitleBlock(detail: VideoDetail, expanded: Boolean, onToggle: () -> U
             Text(
                 text = detail.bvid,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (detail.description.isNotBlank()) {
                 Text(
@@ -711,6 +739,14 @@ private fun TitleBlock(detail: VideoDetail, expanded: Boolean, onToggle: () -> U
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            if (tags.isNotEmpty()) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                ) {
+                    tags.forEach { tag -> TagToken(tag, onClick = { onTagClick(tag.name) }) }
+                }
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -720,6 +756,43 @@ private fun TitleBlock(detail: VideoDetail, expanded: Boolean, onToggle: () -> U
             }
         }
     }
+}
+
+/**
+ * 一枚标签,点开是这个词的普通搜索结果页。带底色的一小块,判据同动态卡片的「置顶」
+ * (DynamicCardView 的 DynamicTagChip):排成灰字会和上面的简介连成一片。底色取
+ * surfaceContainerHigh 而不是 secondaryContainer —— 那边是单枚的排序标记,这边是成排的
+ * 元数据,染 secondary 会比简介正文还重。可点但不染 primary:一排七八枚全上 primary,
+ * 这一块会比标题还响,底色块本身已经说了"这是控件"。
+ *
+ * 搜索用的是 tag_name 原文,不是展示文本:`#` 和「BGM:」都是这里加的装饰,带进搜索词
+ * 只会让结果变差。PiliPlus 对 topic/bgm 各有专页可去,本项目没有,三种类型都落到搜索。
+ */
+@Composable
+private fun TagToken(tag: VideoTag, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        shape = MaterialTheme.shapes.extraSmall,
+    ) {
+        Text(
+            text = tag.displayText(),
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair / 2),
+        )
+    }
+}
+
+/**
+ * topic 加 #:话题和普通标签在服务端是两个体系,官方端也用 # 区分。bgm 的 tag_name 形如
+ * 「发现《歌名》」—— 那是官方 App 里 BGM 入口的按钮文案,不是标签本身,照 PiliPlus 的
+ * `_buildTags` 改写(它写作 ♫ BGM:,这里不要那个音符,字体里未必有)。
+ */
+private fun VideoTag.displayText(): String = when (type) {
+    "topic" -> "#$name"
+    "bgm" -> name.replaceFirst("发现", "BGM：")
+    else -> name
 }
 
 /**

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -30,7 +31,7 @@ import dev.bilby.ui.theme.Spacing
  * 封面宽度、行距、截断行数各差一点点,滑过去能看出接缝。合并成这一个。
  *
  * 参数是扁平的展示字段而不是某个 data 层模型:五个调用方的模型各不相同
- * (FeedItem / SearchVideo / SpaceVideoItem / ToViewItem / AnswerItem),
+ * (FeedEntry / SearchVideo / SpaceVideoItem / ToViewItem / AnswerItem),
  * 让 UI 组件认识其中任何一个都会把 data 层的形状焊进视图层。
  */
 @Immutable
@@ -74,6 +75,14 @@ fun VideoRow(
      */
     onLongClick: (() -> Unit)? = null,
     trailing: (@Composable RowScope.() -> Unit)? = null,
+    /**
+     * 这一行自己的溢出菜单。**和 [trailing] 是两个位置**:[trailing] 占满整行右侧的一列,
+     * 从标题那一列切走 48dp;这个叠在文字列的右下角,一格宽度都不占。
+     *
+     * 判据是这个操作作用于什么。多选的 Checkbox、稍后再看的删除按钮作用于"这一行",
+     * 它们该在行尾那一列;溢出菜单里装的是这一条的次要操作,挤掉标题三分之一的字换不来。
+     */
+    overflow: (@Composable () -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
@@ -99,44 +108,60 @@ fun VideoRow(
             progressFraction = item.progressFraction,
         )
 
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        ) {
-            // bodyMedium(14sp)而不是 bodyLarge(16sp)。PiliPlus 的卡片标题也是 14sp,
-            // 换来的是同样两行里多放两三个字 —— 见 Dimens.ListCoverWidth 那道算术。
-            Text(
-                text = item.title,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            // 时间和 UP 名合成一行(PiliPlus `video_card_h.dart` 的 content()):
-            // 两者都是"这条是谁什么时候发的",分两行摆会把三行文字撑到四行,
-            // 而封面高度是固定的,多出来的那行只能让行距变松、看起来更空。
-            SecondaryLine(dateText = item.dateText, upName = item.upName)
-            StatRow(playText = item.playText, danmakuText = item.danmakuText)
-            item.meta?.let {
+        Box(modifier = Modifier.weight(1f)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+                // bodyMedium(14sp)而不是 bodyLarge(16sp)。PiliPlus 的卡片标题也是 14sp,
+                // 换来的是同样两行里多放两三个字 —— 见 Dimens.ListCoverWidth 那道算术。
+                //
+                // **标题只让出按钮那一格的一半,不让出整格**:让出 48dp 就是那道算术里的
+                // 13 个字掉到 9 个;一点不让的话,标题的右边界比图标的右边界还往外,
+                // 那一列没有任何东西与它对齐,看起来是浮着的。见 [TitleOverflowGutter]。
                 Text(
-                    text = it,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            item.note?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (item.accentNote) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
+                    text = item.title,
+                    modifier = Modifier.padding(end = if (overflow != null) TitleOverflowGutter else 0.dp),
+                    style = MaterialTheme.typography.bodyMedium,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // 标题以下的几行让出按钮那一格。它们本来右边就是空的:元信息是几个 14dp 图标
+                // 加几个数字,时间和 UP 名合起来也占不满一行。
+                Column(
+                    modifier = Modifier.padding(end = if (overflow != null) OverflowReserve else 0.dp),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                ) {
+                    // 时间和 UP 名合成一行(PiliPlus `video_card_h.dart` 的 content()):
+                    // 两者都是"这条是谁什么时候发的",分两行摆会把三行文字撑到四行,
+                    // 而封面高度是固定的,多出来的那行只能让行距变松、看起来更空。
+                    SecondaryLine(dateText = item.dateText, upName = item.upName)
+                    StatRow(playText = item.playText, danmakuText = item.danmakuText)
+                    item.meta?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    item.note?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (item.accentNote) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+            // 叠在文字列右下角,不进列的布局流 —— 排进去的话这一行会跟着按钮的 48dp 长高,
+            // 而它挡住的位置上本来就没有字(见上面那圈 end padding)。
+            overflow?.let {
+                Box(modifier = Modifier.align(Alignment.BottomEnd)) { it() }
             }
         }
 
@@ -146,6 +171,17 @@ fun VideoRow(
 
 private const val DisabledContentAlpha = 0.38f
 
+/** 溢出按钮那一格:M3 的最小触控尺寸。标题以下的几行让出这么宽。 */
+private val OverflowReserve = 48.dp
+
+/**
+ * 标题让出的宽度:按钮那一格的一半。
+ *
+ * 让 12dp(图标在 48dp 触控格里的内缩)时标题的右边界正好压在图标的右边界上,量是对齐了,
+ * 看起来却像贴着;24dp 之后两者之间有一格喘息,而标题仍有 164dp,比让出整格宽 36dp。
+ */
+private val TitleOverflowGutter = OverflowReserve / 2
+
 /**
  * 一行元信息里各段之间的间隔:**两个空格,不是 `·` 或 `•`**。
  *
@@ -154,7 +190,12 @@ private const val DisabledContentAlpha = 0.38f
  */
 const val MetaSeparator = "  "
 
-/** "3 小时前  某某 UP 主"。 */
+/**
+ * "3 小时前  某某 UP 主"。
+ *
+ * 低强调文字取 `onSurfaceVariant`,不取 `outline` —— 后者是描边角色,只保证约 3:1,
+ * 浅色主题下这一行量出来 4.3:1,小字不达标。
+ */
 @Composable
 private fun SecondaryLine(dateText: String?, upName: String?) {
     val text = listOfNotNull(dateText, upName).filter { it.isNotBlank() }.joinToString(MetaSeparator)
@@ -162,7 +203,7 @@ private fun SecondaryLine(dateText: String?, upName: String?) {
     Text(
         text = text,
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.outline,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
     )

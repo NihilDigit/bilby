@@ -8,7 +8,9 @@ import dev.bilby.api.dto.LiveDanmakuInfoDto
 import dev.bilby.api.dto.LiveGuardPageDto
 import dev.bilby.api.dto.LiveRoomH5InfoDto
 import dev.bilby.api.dto.LiveRoomPlayInfoDto
+import dev.bilby.api.dto.LiveSuperChatListDto
 import dev.bilby.api.getData
+import dev.bilby.live.LiveMessage
 import dev.bilby.api.map
 import dev.bilby.api.postAction
 import dev.bilby.BiliLog
@@ -120,6 +122,37 @@ class LiveRepository(private val client: BiliClient) {
             referer = BiliConstants.LIVE_REFERER,
         )
         return result.map { LiveGuardPage(items = it.guardTopList, hasMore = it.hasMore == 1) }
+    }
+
+    /**
+     * 进房时补上此前发出、此刻仍在有效期内的醒目留言(接口事实见 `notes/live.md` §8.2)。
+     *
+     * **不签名,而且不指定 Referer。** 这一条和同一个仓库里其它几个直播接口不一样,别顺手补上
+     * `LIVE_REFERER` —— PiliPlus 对这一条发的就是一个裸的 GET(`http/live.dart:629-643`,
+     * 唯一参数 `room_id`,没有 `options`),而风控是按动作算的,另一条接口需要什么说明不了这条。
+     *
+     * 返回的条目结构与长连接推的那份相同,所以直接映射成同一个 [LiveMessage.SuperChat]:
+     * 两个来源在界面上是同一种东西,分成两个模型会让排序和去重各写一遍。
+     */
+    suspend fun loadSuperChats(roomId: Long): BiliResult<List<LiveMessage.SuperChat>> {
+        val result: BiliResult<LiveSuperChatListDto> = client.getData(
+            "${BiliConstants.LIVE_HOST}/av/v1/SuperChat/getMessageList",
+            mapOf("room_id" to roomId.toString()),
+        )
+        return result.map { dto ->
+            dto.list.map { item ->
+                LiveMessage.SuperChat(
+                    id = item.id,
+                    message = item.message,
+                    priceYuan = item.price,
+                    senderMid = item.uid,
+                    senderName = item.userInfo?.uname.orEmpty(),
+                    senderFace = item.userInfo?.face.orEmpty(),
+                    startTimeSeconds = item.startTime,
+                    endTimeSeconds = item.endTime,
+                )
+            }
+        }
     }
 
     /**

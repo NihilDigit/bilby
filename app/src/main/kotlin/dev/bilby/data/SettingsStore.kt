@@ -221,21 +221,59 @@ class SettingsStore(context: Context) {
         store.edit { p -> p[KEY_DANMAKU_FRAME_RATE] = cap.name }
     }
 
-    /** 首页动态里排除的 UP 主。只影响本机首页，不改变 B 站的关注关系。 */
+    /**
+     * 排除的 UP 主。只影响本机的关注动态流(首页与"其他动态"两半),不改变 B 站的关注关系,
+     * 也不影响"正在直播""最常访问"那两排 —— 那是导航,不是时间线。
+     *
+     * 每一项存成 `mid|名字`。**名字只为设置页里那份可撤销的名单而存**:一条动态被隐藏之后
+     * 界面上再也没有它的痕迹,只给一串数字的话,撤销时无从判断哪个是谁。按第一个 `|` 切开,
+     * 名字里再有 `|` 也不受影响。
+     */
     val excludedFeedMids: Flow<Set<Long>> = store.data.map { p ->
-        p[KEY_EXCLUDED_FEED_MIDS].orEmpty().mapNotNull { it.toLongOrNull() }.toSet()
+        p[KEY_EXCLUDED_FEED_MIDS].orEmpty().mapNotNullTo(mutableSetOf()) { it.toExcludedMid() }
     }
 
-    suspend fun excludeFeedMid(mid: Long) {
+    val excludedFeedUps: Flow<List<ExcludedUp>> = store.data.map { p ->
+        p[KEY_EXCLUDED_FEED_MIDS].orEmpty()
+            .mapNotNull { entry ->
+                val mid = entry.toExcludedMid() ?: return@mapNotNull null
+                ExcludedUp(mid = mid, name = entry.substringAfter(EXCLUDED_SEPARATOR, "").ifBlank { mid.toString() })
+            }
+            .sortedBy { it.name }
+    }
+
+    suspend fun excludeFeedMid(mid: Long, name: String) {
         store.edit { p ->
-            p[KEY_EXCLUDED_FEED_MIDS] = p[KEY_EXCLUDED_FEED_MIDS].orEmpty() + mid.toString()
+            val kept = p[KEY_EXCLUDED_FEED_MIDS].orEmpty().filterNot { it.toExcludedMid() == mid }
+            p[KEY_EXCLUDED_FEED_MIDS] = kept.toSet() + "$mid$EXCLUDED_SEPARATOR$name"
         }
     }
 
     /**
-     * 清空首页排除名单。**这是目前唯一的撤销入口** —— 排除是在动态流里单条操作的,
-     * 而那条动态被隐藏之后,再也没有地方能点回去。逐个恢复要另做界面,先给一个全清。
+     * 直播间的「本场早前的醒目留言」要不要去 danmakus.com 补。
+     *
+     * **默认开(owner 定)。** 代价说清楚:一进直播间就会把**主播的 mid** 发给一个站外服务器
+     * ——不带任何 B 站凭据,也不含用户自己的身份,但那台服务器因此知道有人在看这位主播。
+     * 关掉的含义是**一个请求都不发**,不是"发了但不显示",与 SponsorBlock 那条一致
+     * (见 VideoViewModel.loadSponsorSegments)。
      */
+    val danmakusArchiveEnabled: Flow<Boolean> = store.data.map { p ->
+        p[KEY_DANMAKUS_ARCHIVE] ?: true
+    }
+
+    suspend fun setDanmakusArchiveEnabled(enabled: Boolean) {
+        store.edit { p -> p[KEY_DANMAKUS_ARCHIVE] = enabled }
+    }
+
+    /** 撤销其中一位。 */
+    suspend fun restoreFeedMid(mid: Long) {
+        store.edit { p ->
+            p[KEY_EXCLUDED_FEED_MIDS] = p[KEY_EXCLUDED_FEED_MIDS].orEmpty()
+                .filterNot { it.toExcludedMid() == mid }
+                .toSet()
+        }
+    }
+
     suspend fun clearExcludedFeedMids() {
         store.edit { p -> p.remove(KEY_EXCLUDED_FEED_MIDS) }
     }
@@ -373,6 +411,11 @@ class SettingsStore(context: Context) {
         private val KEY_DANMAKU_FRAME_RATE = stringPreferencesKey("danmaku_frame_rate")
         private val KEY_EXCLUDED_FEED_MIDS = stringSetPreferencesKey("excluded_feed_mids")
 
+        private val KEY_DANMAKUS_ARCHIVE = booleanPreferencesKey("danmakus_archive_enabled")
+
+        /** 见 [excludedFeedMids]。 */
+        const val EXCLUDED_SEPARATOR = '|'
+
         const val DEFAULT_DANMAKU_OPACITY = 1f
 
         /**
@@ -403,6 +446,13 @@ class SettingsStore(context: Context) {
         )
     }
 }
+
+/** 排除名单里的一位。名字是排除那一刻记下的,不回头核对 —— 改名了也还是同一个人。 */
+data class ExcludedUp(val mid: Long, val name: String)
+
+/** `mid|名字` 里的 mid。旧格式(只有数字)照样认得,升级不用迁移。 */
+private fun String.toExcludedMid(): Long? =
+    substringBefore(SettingsStore.EXCLUDED_SEPARATOR).toLongOrNull()
 
 data class Credentials(
     val sessdata: String = "",

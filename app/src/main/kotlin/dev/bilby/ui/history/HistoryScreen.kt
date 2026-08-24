@@ -12,7 +12,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
@@ -26,6 +25,7 @@ import dev.bilby.api.BiliResult
 import dev.bilby.data.HistoryItem
 import dev.bilby.data.HistoryRepository
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
@@ -252,8 +252,8 @@ fun HistoryScreen(
     }
 
     AdaptiveContent(modifier = modifier) {
-        PullToRefreshBox(
-            isRefreshing = state.refreshing,
+        RefreshBox(
+            refreshing = state.refreshing,
             onRefresh = onRefresh,
             modifier = Modifier.fillMaxSize(),
         ) {

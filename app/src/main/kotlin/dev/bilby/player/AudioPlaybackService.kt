@@ -125,6 +125,11 @@ data class AudioPlaybackUiState(
     /**
      * 正在播的分 P。**它是播放层的状态,不挂在队列上**:队列项的身份只有 bvid,分 P 是这条
      * 视频内部的结构。上报进度、取弹幕、取字幕认的都是这个值 —— 装载层确认过的那一个。
+     *
+     * **它属于 [loadKey] 那一条,不属于 [QueueState.current]。** 两者在换条的那段窗口里指的
+     * 不是同一条内容:队列在切过去的那一刻就报新的一条了,而这个值要等取流回来才跟上。拿队列
+     * 那一条的 bvid 配这个 cid,得到的是一对根本不存在的组合 —— 用它去请求弹幕、字幕、
+     * SponsorBlock,拉回来的是上一条视频的内容,还白背一次带着错配参数的请求。
      */
     val currentCid: Long = 0,
     val isPlaying: Boolean = false,
@@ -406,9 +411,17 @@ class AudioPlaybackService : MediaSessionService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
+    /**
+     * 划掉任务卡片。**只保留听视频**:普通视频没有理由在没界面的情况下继续放。
+     *
+     * 该停的那一支不能用 `stopSelf()`。播放暂停、停止、失败或结束之后,`isPlaybackOngoing()`
+     * 仍会在 foreground service timeout 那段时间里为真,而只有它为假时 `stopSelf()` 才终止得了
+     * 服务。[pauseAllPlayersAndStopSelf] 就是为这一步准备的:先把各 session 的播放器停掉,
+     * 再收前台状态和服务本身。这个回调里没能把服务终止掉的话,系统会把它崩掉再重启。
+     */
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // 划掉任务卡片时只保留听视频:普通视频没有理由在没界面的情况下继续放。
-        if (!player.playWhenReady || !backgroundPlaybackAllowed) stopSelf()
+        if (player.playWhenReady && backgroundPlaybackAllowed) return
+        pauseAllPlayersAndStopSelf()
     }
 
     private fun pauseForAppBackground() {
@@ -425,12 +438,14 @@ class AudioPlaybackService : MediaSessionService() {
         // 服务没了之后没有任何一个还在飞的请求值得跑完。
         enrichJob?.cancel()
         scope.cancel()
+        // 先放播放器,再放 session:指南示例给的就是这个顺序(background-playback
+        // 「实现服务生命周期」),而 session 手上握着的正是这个播放器。
+        player.release()
         session?.release()
         session = null
         if (runningService === this) runningService = null
         // 服务都没了，“允许后台播”这个策略也跟着作废，否则下一次开普通视频会继承到上一次听视频的设置。
         backgroundPlaybackAllowed = false
-        player.release()
         _state.value = AudioPlaybackUiState()
         _positionTicks.value = PositionTick()
         _sleepTimerState.value = SleepTimerState()
@@ -849,6 +864,7 @@ class AudioPlaybackService : MediaSessionService() {
                 onResolved(
                     LoadedItem(
                         mediaId = cached.bvid,
+                        loadNonce = mediaItem.loadNonce,
                         cid = cached.cid,
                         startPositionMillis = positionOverrideMillis ?: plan.startPositionMillis,
                         localCopy = true,
@@ -868,7 +884,12 @@ class AudioPlaybackService : MediaSessionService() {
                 throw IOException(getString(R.string.playback_error_detail))
             }
 
-            is LoadPlan.Online -> return resolveOnlineStream(bvid, plan.cid, positionOverrideMillis)
+            is LoadPlan.Online -> return resolveOnlineStream(
+                bvid,
+                plan.cid,
+                positionOverrideMillis,
+                mediaItem.loadNonce,
+            )
         }
     }
 
@@ -877,6 +898,7 @@ class AudioPlaybackService : MediaSessionService() {
         bvid: String,
         cid: Long,
         positionOverrideMillis: Long?,
+        loadNonce: Int,
     ): MediaSource {
         fillDisplayFromDetail(bvid)
         val prefs = settings.playerPrefs.first()
@@ -909,6 +931,7 @@ class AudioPlaybackService : MediaSessionService() {
         onResolved(
             LoadedItem(
                 mediaId = bvid,
+                loadNonce = loadNonce,
                 cid = cid,
                 startPositionMillis = positionOverrideMillis ?: playUrl.resumeAtMillisFor(cid),
                 localCopy = false,
@@ -954,6 +977,7 @@ class AudioPlaybackService : MediaSessionService() {
         onResolved(
             LoadedItem(
                 mediaId = item.mediaId,
+                loadNonce = item.loadNonce,
                 // 直播没有分 P,于是也没有进度会话,见 [startProgressSession]。
                 cid = 0,
                 startPositionMillis = 0,
@@ -1011,6 +1035,11 @@ class AudioPlaybackService : MediaSessionService() {
      */
     private data class LoadedItem(
         val mediaId: String,
+        /**
+         * 解析的是这一条的第几次装载,见 [MediaItem.loadNonce]。**mediaId 认不出换 P**:
+         * 换 P、切清晰度、重试换的都是同一条内容的装载参数,新旧两个条目的 mediaId 一模一样。
+         */
+        val loadNonce: Int,
         val cid: Long,
         val startPositionMillis: Long,
         val localCopy: Boolean,
@@ -1035,9 +1064,18 @@ class AudioPlaybackService : MediaSessionService() {
      * `onChildSourceInfoRefreshed`,非零的准备位置优先于窗口默认位置)。
      */
     private fun adoptResolved(mediaId: String?) {
-        if (mediaId == null || player.currentMediaItem?.mediaId != mediaId) return
+        if (mediaId == null) return
+        val current = player.currentMediaItem ?: return
+        if (current.mediaId != mediaId) return
+        val loaded = resolvedItems[mediaId] ?: return
+        // **身份要连 [MediaItem.loadNonce] 一起认。** 连着切两次 P 时,第一次那条的源在第二次
+        // 被删掉、解析随之取消,但取消是有延迟的:解析协程已经走过取流、正要落结果的那一段
+        // 不会被打断,而结果按 mediaId 存,两次装载的 mediaId 又完全相同。于是中间那一 P 的
+        // cid、画质清单会落到用户真正点的那一 P 上,连带一次 seek 落在它记的位置上——新的解析
+        // 随后再盖一遍,弹幕和字幕因此闪一次上一次点的那一 P。对不上就留在原处等它自己被盖掉。
+        if (loaded.loadNonce != current.loadNonce) return
         // 取走即弃:回到这一条时它会重新 prepare、重新解析,留着只会让一份旧的抢在新的前面。
-        val loaded = resolvedItems.remove(mediaId) ?: return
+        resolvedItems.remove(mediaId)
         loadedMediaId = loaded.mediaId
         loadedCid = loaded.cid
         loadedLocalCopy = loaded.localCopy
@@ -1252,6 +1290,19 @@ class AudioPlaybackService : MediaSessionService() {
                 startPositionMillis = positionMillis.takeIf { it > 0 },
             )
         }
+        // **从这一刻起哪一 P 是没有答案的。** 旧的那一 P 已经不放了,新的还隔着一趟取流,
+        // [loadedCid] 说的是"装载层确认过的那一个",此刻它一个都确认不了。
+        //
+        // 清在这里而不是在换条那道回调里:那道回调认的是下标变没变,而换 P、切清晰度、重试
+        // 走的都是同一段插入 + seek + 删除(见 [reloadCurrent]),它区分不出来。真在那里清的话
+        // 切一次清晰度就把弹幕池整个作废、从头再拉一遍,而那一下用户换的只是码率。
+        //
+        // 排在 [reloadCurrent] 后面也是被依赖的:它那句 seek 会同步跑完换条收尾,本地进度
+        // 与定格上报都要拿旧的那一 P 才写得对,清早了它们记下的就是"没有分 P"。
+        loadedCid = 0
+        // 弹幕、字幕、分 P 高亮都跟着这个值走(见 [AudioPlaybackUiState.currentCid]),
+        // 所以要当场发出去 —— 上一 P 的弹幕不该在新的一 P 装载期间接着飘。
+        publishState(loading = true)
     }
 
     /**
@@ -1329,15 +1380,22 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /**
-     * 当前这一条已经确认的分 P,**播放器装的不是它时为 0**。
+     * 重来一遍(重试、切清晰度)该沿用哪一 P,**答不上来时为 0**(交回 [LoadResolver] 重新解析)。
      *
-     * 重来一遍(重试、切清晰度)要沿用上次解析出来的那一 P,否则多 P 视频一按重试就回到第一 P。
-     * 但装载失败时 [loadedCid] 还停在上一条视频上 —— 连播到下一条、下一条取流就失败,是最常
-     * 出现的一次。拿那个值去取流是问另一条视频的分 P,服务端回 -404,而重试从此每次都失败。
+     * 先认条目自己带的指名:那是这一次装载要放的那一 P,而"这一次装载"可能还没解析完 ——
+     * 切 P 之后紧接着的一次重试或切清晰度落在这个窗口里,此刻 [loadedCid] 记的还是切走前
+     * 那一 P。拿它去重来,用户点的那一 P 会在一次失败之后悄悄变回上一 P。
+     *
+     * 条目没有指名(自动连播、点队列里的一条)才回到 [loadedCid],那是上次解析确认的结果,
+     * 否则多 P 视频一按重试就回到第一 P。但**装的不是这一条时它作废**:连播到下一条、下一条
+     * 取流就失败是最常出现的一次,那时 [loadedCid] 还停在上一条视频上,拿它去取流是问另一条
+     * 视频的分 P,服务端回 -404,而重试从此每次都失败。
      */
-    private fun currentItemCid(): Long =
-        loadedCid.takeIf { loadedMediaId != null && loadedMediaId == player.currentMediaItem?.mediaId }
-            ?: 0L
+    private fun currentItemCid(): Long {
+        val current = player.currentMediaItem ?: return 0L
+        current.cidHint.takeIf { it != 0L }?.let { return it }
+        return loadedCid.takeIf { loadedMediaId != null && loadedMediaId == current.mediaId } ?: 0L
+    }
 
     /**
      * 随机开关翻过了。**开关本身归播放器**(`shuffleModeEnabled`),这里只把它记成下次新建
@@ -1538,9 +1596,14 @@ class AudioPlaybackService : MediaSessionService() {
             )
             // 换条了,上一条的画质清单和续播提示都不再属于现在这一条。
             playInfo = null
-            currentQuality = 0
             loadedLocalCopy = false
             setCloudResume(null)
+            // **同一条内容重来一遍不算换条。** 换 P、切清晰度、重试走的也是插入 + seek + 删除
+            // (见 [reloadCurrent]),下标同样变了,而这一层只看得见下标。当次手动选的那一档
+            // 因此不能一并清掉:清了的话切一次 P 画质就悄悄退回默认档;切清晰度更糟——刚设下
+            // 的那个值在这里被抹掉,取流只好回去读偏好,而偏好的落盘是异步的,那一趟读到的
+            // 往往还是上一档,表现为"选了 1080P 还是 720P,再选一次才生效"。
+            if (newPosition.mediaItem?.mediaId != oldPosition.mediaItem?.mediaId) currentQuality = 0
             resolvingMediaId = newPosition.mediaItem?.mediaId
             publishState(loading = true)
             // 下一条多半在这之前几十秒就解析好了(见 [resolvedItems]),现在才轮到它落地。
@@ -1589,6 +1652,9 @@ class AudioPlaybackService : MediaSessionService() {
      */
     private inner class QueuePlayer(player: Player) : ForwardingPlayer(player) {
 
+        /** 外界交进来的 listener 与包过一层的那个之间的对照表,见 [addListener]。 */
+        private val wrappedListeners = mutableMapOf<Player.Listener, Player.Listener>()
+
         /**
          * 外部控制器按下的播放/暂停。**这两个覆写是 [playIntent] 唯一的正门。**
          *
@@ -1628,6 +1694,64 @@ class AudioPlaybackService : MediaSessionService() {
                 BiliLog.w("不支持循环(DESIGN 2.4b),忽略 repeatMode=$repeatMode")
             }
         }
+
+        /**
+         * 循环这条命令对外不存在。**空实现的方法必须连命令一起撤掉** —— 只留空实现的话,
+         * 通知栏和车机照样按 `COMMAND_SET_REPEAT_MODE` 画出循环按钮,按下去毫无反应。
+         *
+         * ForwardingPlayer 撤一条命令要三步(见该类文档):空实现方法本身、这两个查询,
+         * 以及包一层 listener —— 底层播放器报的可用命令集里始终有这一条,不过滤就等于
+         * 由事件把刚撤掉的命令又告诉了外界。见 [RepeatModeHidden]。
+         */
+        override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().hideRepeatMode()
+
+        override fun isCommandAvailable(command: Int): Boolean =
+            command != Player.COMMAND_SET_REPEAT_MODE && super.isCommandAvailable(command)
+
+        /**
+         * 注册进来的 listener 换成包过一层的那个,注销时按同一张表换回去 —— ForwardingPlayer
+         * 自己也是按传进去的那个实例找回注册记录的,两边交出去的必须是同一个对象。
+         */
+        override fun addListener(listener: Player.Listener) {
+            super.addListener(wrappedListeners.getOrPut(listener) { RepeatModeHidden(listener) })
+        }
+
+        override fun removeListener(listener: Player.Listener) {
+            super.removeListener(wrappedListeners.remove(listener) ?: listener)
+        }
+    }
+
+    /**
+     * 把"循环可用"从事件里抹掉的那一层。其余回调按接口委托原样转发。
+     *
+     * 抹完之后可能什么都没变(底层那次变化只涉及这一条命令),那一次就整个不发:外界收到一次
+     * 命令集变化却发现集合和上次一模一样,已经是不一致的信号了。同一轮里的 [onEvents] 也要跟着
+     * 咽掉,否则拿 `onEvents` 统一刷新的控制器还是会被叫醒一次。
+     */
+    private class RepeatModeHidden(
+        private val delegate: Player.Listener,
+    ) : Player.Listener by delegate {
+
+        private var reported: Player.Commands? = null
+
+        /** 这一轮的命令集变化对外是不是可见的,由 [onEvents] 取走。 */
+        private var visibleChange = false
+
+        override fun onAvailableCommandsChanged(availableCommands: Player.Commands) {
+            val visible = availableCommands.hideRepeatMode()
+            if (visible == reported) return
+            reported = visible
+            visibleChange = true
+            delegate.onAvailableCommandsChanged(visible)
+        }
+
+        override fun onEvents(player: Player, events: Player.Events) {
+            val onlyCommands = events.size() == 1 && events.contains(Player.EVENT_AVAILABLE_COMMANDS_CHANGED)
+            val visible = visibleChange
+            visibleChange = false
+            if (onlyCommands && !visible) return
+            delegate.onEvents(player, events)
+        }
     }
 
     private inner class SessionCallback : MediaSession.Callback {
@@ -1647,6 +1771,7 @@ class AudioPlaybackService : MediaSessionService() {
                         .add(SessionCommand(ACTION_PAGE_LEFT, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_FLUSH_PROGRESS, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SLEEP_TIMER, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_STOP_SERVICE, Bundle.EMPTY))
                         .build()
                 )
                 .build()
@@ -1674,6 +1799,8 @@ class AudioPlaybackService : MediaSessionService() {
                 }
                 // 直播没有会话,这条命令在直播间自然什么都不做,不必判一句"是不是直播"。
                 ACTION_FLUSH_PROGRESS -> progressSession?.flush()
+                // 播放器的生命周期到此为止,见 [ACTION_STOP_SERVICE]。
+                ACTION_STOP_SERVICE -> pauseAllPlayersAndStopSelf()
                 // 分钟数是三态里唯一带参数的那个:大于 0 即定时,[SLEEP_END_OF_ITEM] 即播完这条,
                 // 其余(含缺省)即取消。用一个 Int 表达而不是再加一个布尔 extra —— 模式互斥之后
                 // 两个字段能拼出的组合比模式还多,又要在这里判一次哪个说了算。
@@ -1732,6 +1859,15 @@ class AudioPlaybackService : MediaSessionService() {
         const val ACTION_FLUSH_PROGRESS = "dev.bilby.FLUSH_PROGRESS"
 
         const val ACTION_SLEEP_TIMER = "dev.bilby.SLEEP_TIMER"
+
+        /**
+         * 播放器的生命周期到此为止,见 [stop]。
+         *
+         * 收到之后走的是 `pauseAllPlayersAndStopSelf()`,而不是把服务 `stopService` 掉:
+         * 播放停下之后 `isPlaybackOngoing()` 还会在 foreground service timeout 那段时间里为真,
+         * 那期间服务停不掉(同 [onTaskRemoved])。
+         */
+        const val ACTION_STOP_SERVICE = "dev.bilby.STOP_SERVICE"
 
         /** 分钟数,或下面两个哨兵之一。三种定时模式互斥,所以只需要这一个字段。 */
         const val EXTRA_SLEEP_MINUTES = "minutes"
@@ -1837,9 +1973,20 @@ class AudioPlaybackService : MediaSessionService() {
          * 队列从第一个播放页打开开始存在,到 backstack 上再没有播放页为止 —— 调用方是
          * MainActivity,判据是"还有没有播放页",不是"这一页是被弹出还是被覆盖"。
          * 后者是导航层的判断,CLAUDE.md 记着它被做错过。
+         *
+         * **停的动作由服务自己做。** `stopService` 和 `stopSelf` 受同一条约束:播放暂停、停止、
+         * 失败或结束之后 `isPlaybackOngoing()` 仍会在 foreground service timeout 那段时间里为真,
+         * 那期间服务停不掉,而这里要的是当场停。走 MediaController 的调用方发
+         * [ACTION_STOP_SERVICE],落到同一个 `pauseAllPlayersAndStopSelf()`。
          */
         fun stop(context: Context) {
-            context.stopService(Intent(context, AudioPlaybackService::class.java))
+            val service = runningService
+            if (service != null) {
+                service.pauseAllPlayersAndStopSelf()
+            } else {
+                // 服务没起来。这一句此时是空操作,留着是为了连带撤掉可能还在路上的那次启动。
+                context.stopService(Intent(context, AudioPlaybackService::class.java))
+            }
         }
 
         /** UI 用它建 MediaController(播放/暂停/上下条/随机/定时/打开视频都走 controller)。 */
@@ -1847,3 +1994,7 @@ class AudioPlaybackService : MediaSessionService() {
             SessionToken(context, ComponentName(context, AudioPlaybackService::class.java))
     }
 }
+
+/** 撤掉循环那一条命令。查询和事件两边都要抹,所以抹的动作只写一处,见 QueuePlayer。 */
+private fun Player.Commands.hideRepeatMode(): Player.Commands =
+    buildUpon().remove(Player.COMMAND_SET_REPEAT_MODE).build()

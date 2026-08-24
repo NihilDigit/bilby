@@ -44,3 +44,23 @@ fun MutableList<NavKey>.pushUnique(key: NavKey): Boolean {
     add(key)
     return true
 }
+
+/**
+ * 换掉栈顶那一页,并且仍然保证 [key] 全栈唯一。
+ *
+ * 用在"这一页把自己替换成另一页"的场合(如登录成功后落到主页):栈深不该因此多一层,
+ * 返回键也不该退回到刚刚离开的那一页。
+ *
+ * **先扫掉栈里别处的同 key 条目,再写栈顶。** 直接赋值只保证了不新增一层,保证不了唯一 ——
+ * 而唯一性一旦破掉,代价就是 [pushUnique] 头上那三条:共用 ViewModel、弹一份清两份的账、
+ * 同时组合直接抛异常。删除发生在赋值之前,所以栈顶写下去的时候栈里已经没有第二份。
+ *
+ * 栈空时退化成压栈:没有栈顶可换,而调用方要的是"之后站在这一页上"。
+ */
+fun MutableList<NavKey>.replaceTopUnique(key: NavKey) {
+    val top = lastIndex
+    for (i in top - 1 downTo 0) {
+        if (this[i] == key) removeAt(i)
+    }
+    if (isEmpty()) add(key) else this[lastIndex] = key
+}

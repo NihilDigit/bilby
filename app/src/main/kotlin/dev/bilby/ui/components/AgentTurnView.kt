@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -111,8 +112,10 @@ private fun ProcessHeader(
     modifier: Modifier = Modifier,
 ) {
     Row(
+        // 一行 labelLarge 加上下 12dp 是 44dp,差 4dp 够不到触摸下限。撑的是点击区,留白没动。
         modifier = modifier
             .fillMaxWidth()
+            .heightIn(min = Dimens.MinTouchTarget)
             .clickable(onClick = onToggle)
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
         verticalAlignment = Alignment.CenterVertically,

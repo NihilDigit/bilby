@@ -31,6 +31,11 @@ data class MessageListState<T>(
     val items: List<T> = emptyList(),
     val loading: Boolean = false,
     val appending: Boolean = false,
+    /**
+     * 下拉刷新中。**与 [loading] 分开**:首屏是一片空白加一个转圈,刷新是"列表还在、顶上转圈"。
+     * 合成一个字段的话,每次下拉都会把已经读到的消息整片清掉再重画。
+     */
+    val refreshing: Boolean = false,
     val loaded: Boolean = false,
     val error: String? = null,
     val cursor: NoticeCursor? = null,
@@ -92,7 +97,7 @@ class MessageViewModel(private val repository: MessageRepository) : ViewModel() 
 
     private fun load(tab: MessageTab, append: Boolean = false, reset: Boolean = false) {
         when (tab) {
-            MessageTab.Whispers -> loadWhispers()
+            MessageTab.Whispers -> loadWhispers(reset)
             MessageTab.Replies -> loadNotices(tab, append, reset) { repository.replies(it) }
             MessageTab.Mentions -> loadNotices(tab, append, reset) { repository.mentions(it) }
             MessageTab.Likes -> loadNotices(tab, append, reset) { repository.likes(it) }
@@ -100,8 +105,10 @@ class MessageViewModel(private val repository: MessageRepository) : ViewModel() 
         }
     }
 
-    private fun loadWhispers() {
-        _state.update { it.copy(whispers = it.whispers.copy(loading = true, error = null)) }
+    private fun loadWhispers(reset: Boolean = false) {
+        _state.update {
+            it.copy(whispers = it.whispers.copy(loading = !reset, refreshing = reset, error = null))
+        }
         viewModelScope.launch {
             when (val result = repository.sessions()) {
                 is BiliResult.Ok -> _state.update {
@@ -109,13 +116,21 @@ class MessageViewModel(private val repository: MessageRepository) : ViewModel() 
                         whispers = it.whispers.copy(
                             items = result.value,
                             loading = false,
+                            refreshing = false,
                             loaded = true,
                         ),
                     )
                 }
 
                 else -> _state.update {
-                    it.copy(whispers = it.whispers.copy(loading = false, loaded = true, error = result.describe()))
+                    it.copy(
+                        whispers = it.whispers.copy(
+                            loading = false,
+                            refreshing = false,
+                            loaded = true,
+                            error = result.describe(),
+                        ),
+                    )
                 }
             }
         }
@@ -129,8 +144,9 @@ class MessageViewModel(private val repository: MessageRepository) : ViewModel() 
     ) {
         val current = noticeState(tab)
         val cursor = if (append) current.cursor else null
+        // 刷新保留屏上那一份,由回来的第一页整片换掉;首次加载才走整屏转圈。
         updateNotices(tab) {
-            it.copy(loading = !append, appending = append, error = null, items = if (reset) emptyList() else it.items)
+            it.copy(loading = !append && !reset, appending = append, refreshing = reset, error = null)
         }
         viewModelScope.launch {
             when (val result = fetch(cursor)) {
@@ -140,12 +156,19 @@ class MessageViewModel(private val repository: MessageRepository) : ViewModel() 
                         cursor = result.value.nextCursor,
                         loading = false,
                         appending = false,
+                        refreshing = false,
                         loaded = true,
                     )
                 }
 
                 else -> updateNotices(tab) {
-                    it.copy(loading = false, appending = false, loaded = true, error = result.describe())
+                    it.copy(
+                        loading = false,
+                        appending = false,
+                        refreshing = false,
+                        loaded = true,
+                        error = result.describe(),
+                    )
                 }
             }
         }
@@ -162,10 +185,10 @@ class MessageViewModel(private val repository: MessageRepository) : ViewModel() 
         _state.update {
             it.copy(
                 notices = it.notices.copy(
-                    loading = !append,
+                    loading = !append && !reset,
                     appending = append,
+                    refreshing = reset,
                     error = null,
-                    items = if (reset) emptyList() else it.notices.items,
                 ),
             )
         }
@@ -177,6 +200,7 @@ class MessageViewModel(private val repository: MessageRepository) : ViewModel() 
                             items = if (append) it.notices.items + result.value else result.value,
                             loading = false,
                             appending = false,
+                            refreshing = false,
                             loaded = true,
                             // 借用同一个字段表达"还有没有下一页":空一页即到底。
                             cursor = result.value.lastOrNull()?.let { last -> NoticeCursor(last.cursor, 0) },
@@ -185,7 +209,15 @@ class MessageViewModel(private val repository: MessageRepository) : ViewModel() 
                 }
 
                 else -> _state.update {
-                    it.copy(notices = it.notices.copy(loading = false, appending = false, loaded = true, error = result.describe()))
+                    it.copy(
+                        notices = it.notices.copy(
+                            loading = false,
+                            appending = false,
+                            refreshing = false,
+                            loaded = true,
+                            error = result.describe(),
+                        ),
+                    )
                 }
             }
         }

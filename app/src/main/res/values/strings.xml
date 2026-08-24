@@ -14,7 +14,9 @@
     <string name="action_refresh">刷新</string>
     <string name="action_retry">重试</string>
     <string name="action_save">保存</string>
+    <string name="action_select">选择</string>
     <string name="action_send">发送</string>
+    <string name="action_undo">撤销</string>
 
     <!-- 列表与相对时间 -->
     <string name="list_no_more">没有更多了</string>
@@ -57,6 +59,8 @@
     <string name="feed_frequent_ups">最常访问</string>
     <string name="feed_item_actions">动态操作</string>
     <string name="feed_exclude_up">不再显示 %1$s</string>
+    <string name="feed_excluded">已不再显示 %1$s</string>
+    <string name="feed_article_badge">文章</string>
     <string name="feed_read_marker">以上是新内容</string>
 
     <!-- 搜索 -->
@@ -95,11 +99,12 @@
     <string name="toview_finished">已看完</string>
     <string name="toview_progress">看到 %1$s</string>
     <string name="toview_remove">移出稍后再看:%1$s</string>
+    <string name="toview_removed">已移出稍后再看</string>
+    <string name="toview_clear_finished_confirm">删除已看完的 %1$d 条?</string>
 
     <!-- 历史记录 -->
     <string name="history_title">历史记录</string>
     <string name="history_empty">还没有历史记录</string>
-    <string name="history_select">选择</string>
     <string name="history_select_all">全选</string>
     <string name="history_selected_count">已选 %1$d 项</string>
     <string name="history_more">更多</string>
@@ -124,6 +129,7 @@
     <string name="comment_sort_hot">最热</string>
     <string name="comment_sort_time">最新</string>
     <string name="comment_tag_up">UP 主</string>
+    <string name="comment_tag_thread_author">楼主</string>
     <string name="comment_open_space">%1$s 的个人空间</string>
     <string name="comment_tag_pinned">置顶</string>
     <string name="comment_picture">评论配图</string>
@@ -131,7 +137,11 @@
     <string name="comment_unlike">取消点赞</string>
     <string name="comment_reply">回复</string>
     <string name="comment_delete">删除评论</string>
+    <string name="comment_delete_confirm">删除这条评论?</string>
     <string name="comment_expand_replies">展开 %1$d 条回复</string>
+    <string name="comment_open_replies_panel">查看全部 %1$d 条回复</string>
+    <string name="comment_replies_time_ordered">回复按发布时间先后排列</string>
+    <string name="comment_collapse_replies">收起</string>
     <string name="comment_load_more">加载更多</string>
     <string name="comment_replies_failed">回复没加载出来</string>
     <string name="comment_no_more_replies">没有更多回复</string>
@@ -146,6 +156,9 @@
     <string name="space_tab_collections">合集</string>
     <!-- LV 换成 LevelBadge 之后,这里只剩粉丝数;等级由徽章本身表示,不再进字符串。 -->
     <string name="space_followers">%1$s粉丝</string>
+    <!-- 下两条只作读屏的 contentDescription:LevelBadge 是 Canvas,读屏读不到画出来的数字。不推翻上一行——显示给人的部分仍不进字符串。 -->
+    <string name="level_badge">等级 %1$d</string>
+    <string name="level_badge_senior">等级 %1$d,硬核会员</string>
     <string name="space_no_sign">这个人很懒,什么都没写</string>
     <string name="space_listen_up">听这位 UP 主的投稿</string>
     <string name="space_order_pubdate">最新</string>
@@ -242,6 +255,7 @@
     <string name="player_next">下一条</string>
     <string name="player_speed">倍速</string>
     <string name="player_quality">清晰度</string>
+    <string name="player_progress">播放进度</string>
     <string name="player_subtitle">字幕</string>
     <string name="player_subtitle_off">关闭字幕</string>
     <string name="player_danmaku">弹幕</string>
@@ -249,6 +263,7 @@
     <string name="danmaku_show">显示弹幕</string>
     <string name="danmaku_hide">隐藏弹幕</string>
     <string name="danmaku_input_hint">发一条弹幕</string>
+    <string name="danmaku_length_counter">%1$d / %2$d</string>
     <string name="danmaku_send_failed">发送失败：%1$s</string>
     <string name="player_listen">听视频</string>
     <string name="player_lock">锁定</string>
@@ -327,8 +342,12 @@
     <string name="settings_offline_concurrency">同时下载</string>
     <string name="settings_offline_concurrency_subtitle">调大可加快批量缓存,代价是并发请求增多,更易触发风控</string>
     <string name="settings_offline_concurrency_value">%1$d 条</string>
-    <string name="settings_feed_clear_excluded">清空不再显示的 UP 主</string>
-    <string name="settings_feed_excluded_count">当前已隐藏 %1$d 位</string>
+    <string name="settings_danmakus_archive">补全本场醒目留言</string>
+    <string name="settings_danmakus_archive_subtitle">进直播间时向 danmakus.com 查询本场早前的醒目留言。会把主播的 UID 发给这个站外服务，不含你的账号信息；关闭后不再发出这个请求</string>
+    <string name="settings_feed_excluded">不再显示的 UP 主</string>
+    <string name="settings_feed_clear_excluded">全部恢复</string>
+    <string name="settings_feed_excluded_count">%1$d 位</string>
+    <string name="settings_feed_excluded_restore">恢复</string>
     <string name="settings_section_player">播放器</string>
     <string name="settings_codec">编解码偏好</string>
     <string name="settings_codec_subtitle">改动对下一个视频生效</string>
@@ -349,6 +368,7 @@
     <string name="settings_sponsorblock_toggle_subtitle">由社区标注的赞助、片头片尾等片段</string>
     <string name="settings_sponsorblock_server">服务器地址</string>
     <string name="settings_sponsorblock_server_dialog">SponsorBlock 服务器</string>
+    <string name="settings_url_invalid">地址需以 http:// 或 https:// 开头</string>
     <string name="settings_section_about">关于</string>
     <string name="settings_section_danmaku">弹幕</string>
     <string name="settings_section_privacy">隐私与屏蔽</string>
@@ -444,8 +464,22 @@
     <string name="live_audio_only_on">只听声音</string>
     <string name="live_audio_only_off">恢复画面</string>
     <string name="live_tab_chat">聊天</string>
+    <string name="live_tab_super_chat">醒目留言</string>
     <string name="live_tab_guard">大航海</string>
     <string name="live_super_chat_price">¥%1$d</string>
+    <string name="live_super_chat_empty">暂无醒目留言</string>
+    <string name="live_chat_jump_latest">回到最新</string>
+    <string name="live_online_rank">高能榜 %1$s</string>
+    <string name="live_super_chat_earlier">本场早前</string>
+    <string name="live_super_chat_source">来自 danmakus.com 的本场记录</string>
+    <!-- 醒目留言的剩余时间。分秒两段由代码补零，此处只给形状。 -->
+    <string name="live_super_chat_remaining">剩余 %1$s</string>
+    <string name="live_guard_opened">%1$s 开通了%2$s</string>
+    <string name="live_guard_opened_months">%1$s 开通了%2$s %3$d 个月</string>
+    <string name="live_notice_started">主播已开播</string>
+    <string name="live_notice_ended">主播已下播</string>
+    <string name="live_notice_warning">直播间收到管理警告</string>
+    <string name="live_notice_self_blocked">你已被禁言，暂时无法发言</string>
     <string name="live_guard_governor">总督</string>
     <string name="live_guard_admiral">提督</string>
     <string name="live_guard_captain">舰长</string>

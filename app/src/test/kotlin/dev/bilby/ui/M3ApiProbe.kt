@@ -6,6 +6,7 @@ import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalToggleButton
 import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.LoadingIndicatorDefaults
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MotionScheme
@@ -15,6 +16,8 @@ import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.Typography
 import androidx.compose.material3.expressiveLightColorScheme
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -63,4 +66,12 @@ private fun Probe() {
 
     // 7. 加载指示器(1.4.0 上类不存在)
     LoadingIndicator()
+
+    // 8. 下拉刷新的 loading indicator 档与它的默认色(§2.7d)。旧的 Indicator 未废弃但
+    // 是 M3E 之前的箭头圈;shape/containerColor 两个成员已 @Deprecated,分界记在风格指南 §0。
+    PullToRefreshDefaults.LoadingIndicator(
+        state = rememberPullToRefreshState(),
+        isRefreshing = false,
+    )
+    LoadingIndicatorDefaults.indicatorColor
 }

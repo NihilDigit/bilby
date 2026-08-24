@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -32,10 +31,12 @@ import dev.bilby.api.BiliResult
 import dev.bilby.data.TvLoginRepository
 import dev.bilby.data.TvPollStatus
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
+import java.io.IOException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -186,7 +187,8 @@ private fun QrPlaceholder(showSpinner: Boolean) {
         shape = MaterialTheme.shapes.medium,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            if (showSpinner) CircularProgressIndicator()
+            // 走整块那一档不是行内那一档:等的是这张码本身,它占满了这个位置。
+            if (showSpinner) FullScreenLoading()
         }
     }
 }
@@ -231,8 +233,8 @@ class TvLoginViewModel(private val repository: TvLoginRepository) : ViewModel() 
             _state.value = TvLoginUiState.Requesting
             when (val qr = repository.requestQrCode()) {
                 is BiliResult.Ok -> pollUntilSettled(qr.value.authCode, qr.value.url)
-                is BiliResult.ApiError -> _state.value = TvLoginUiState.Failed("获取二维码失败: ${qr.message}")
-                is BiliResult.Failure -> _state.value = TvLoginUiState.Failed("网络错误: ${qr.cause.message}")
+                is BiliResult.ApiError -> _state.value = TvLoginUiState.Failed(SERVER_REFUSED)
+                is BiliResult.Failure -> _state.value = TvLoginUiState.Failed(networkText(qr.cause))
             }
         }
     }
@@ -261,7 +263,7 @@ class TvLoginViewModel(private val repository: TvLoginRepository) : ViewModel() 
                 // 轮询期间的网络抖动不该让用户重新扫码,继续轮到超时为止。
                 is BiliResult.Failure -> Unit
                 is BiliResult.ApiError -> {
-                    _state.value = TvLoginUiState.Failed("轮询失败(${poll.code}): ${poll.message}")
+                    _state.value = TvLoginUiState.Failed(POLL_REFUSED)
                     return
                 }
             }
@@ -269,6 +271,25 @@ class TvLoginViewModel(private val repository: TvLoginRepository) : ViewModel() 
         if (_state.value !is TvLoginUiState.Success) _state.value = TvLoginUiState.Expired
     }
 }
+
+/**
+ * 失败时屏幕上说的话。
+ *
+ * **接口的 message 和错误码都不上屏。** 登录是新手必经的第一屏,而「网络错误: Unable to
+ * resolve host」这样一行既说不出哪里出了问题,也说不出该做什么。原文和错误码
+ * [TvLoginRepository] 每条分支都已经写进 [dev.bilby.BiliLog],这里不再打第二遍。
+ */
+private const val SERVER_REFUSED = "二维码没有取到,稍后重试"
+
+/** 扫过之后接口才拒绝,当前这个码已经作废,所以说的是重新扫,不是等。 */
+private const val POLL_REFUSED = "登录没有完成,重新扫一次"
+
+/**
+ * [IOException] 一族(DNS 解析不了、连不上、超时、证书)是用户自己能处理的;
+ * 剩下的他做什么都没用,只能说清没成功。
+ */
+private fun networkText(cause: Throwable): String =
+    if (cause is IOException) "网络不通,检查网络后重试" else SERVER_REFUSED
 
 private const val PreviewUrl = "https://passport.bilibili.com/x/passport-tv-login/h5/qrcode/auth?auth_code=demo"
 
@@ -299,7 +320,9 @@ private fun TvLoginScreenExpiredPreview() {
 @Preview(showBackground = true, name = "Failed")
 @Composable
 private fun TvLoginScreenFailedPreview() {
-    BilbyTheme { TvLoginScreen(TvLoginUiState.Failed("网络连接失败"), onRefresh = {}, onDone = {}) }
+    BilbyTheme {
+        TvLoginScreen(TvLoginUiState.Failed(networkText(IOException())), onRefresh = {}, onDone = {})
+    }
 }
 
 @Preview(showBackground = true, name = "Success")

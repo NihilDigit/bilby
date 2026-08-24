@@ -15,7 +15,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +31,7 @@ import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
@@ -49,6 +49,11 @@ data class ToViewUiState(
     val count: Int = 0,
     val capacity: Int = ToViewRepository.CAPACITY,
     val clearing: Boolean = false,
+    /**
+     * 刚被移出的那一条,给撤销用。删除成功才写进来,所以它同时也是"这次真的删掉了"的信号 ——
+     * 界面拿它去弹撤销,弹过一次就调 [ToViewViewModel.consumeRemoved] 清掉。
+     */
+    val lastRemoved: ToViewItem? = null,
 )
 
 /**
@@ -84,13 +89,36 @@ class ToViewViewModel(private val repository: ToViewRepository) : ViewModel() {
         viewModelScope.launch {
             when (val result = repository.delete(item.aid)) {
                 is BiliResult.Ok -> _state.update {
-                    it.copy(items = it.items - item, count = (it.count - 1).coerceAtLeast(0))
+                    it.copy(
+                        items = it.items - item,
+                        count = (it.count - 1).coerceAtLeast(0),
+                        lastRemoved = item,
+                    )
                 }
 
                 else -> _state.update { it.copy(error = result.errorText()) }
             }
         }
     }
+
+    /**
+     * 撤销一次移出。走的是"加入稍后再看"这个接口,不是把删除请求回滚 —— 服务端没有回滚。
+     * 所以恢复之后这一条排在列表最前面:对服务端而言它就是刚加进来的一条,原来的位置找不回来。
+     */
+    fun undoDelete(item: ToViewItem) {
+        _state.update { it.copy(lastRemoved = null) }
+        viewModelScope.launch {
+            when (val result = repository.add(item.bvid)) {
+                is BiliResult.Ok -> _state.update {
+                    it.copy(items = listOf(item) + it.items, count = it.count + 1)
+                }
+
+                else -> _state.update { it.copy(error = result.errorText()) }
+            }
+        }
+    }
+
+    fun consumeRemoved() = _state.update { it.copy(lastRemoved = null) }
 
     fun clearFinished() {
         // 清空按钮在没有已看完项目时应当是 no-op，避免空列表上仍发起一次
@@ -133,8 +161,8 @@ fun ToViewScreen(
         when {
             state.loading && state.items.isEmpty() -> FullScreenLoading()
             state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry)
-            else -> PullToRefreshBox(
-                isRefreshing = state.loading && state.items.isNotEmpty(),
+            else -> RefreshBox(
+                refreshing = state.loading && state.items.isNotEmpty(),
                 onRefresh = onRefresh,
                 modifier = Modifier.fillMaxSize(),
             ) {
@@ -210,6 +238,8 @@ private fun CapacityMeter(count: Int, capacity: Int, modifier: Modifier = Modifi
                 modifier = Modifier.weight(1f),
             )
         }
+        // 这条不是等待指示,是容量刻度,所以留在 progress indicator 一侧,不换成 loading
+        // indicator:它读的是"已经占了多少",没有任何东西正在进行。
         LinearProgressIndicator(
             progress = { fraction },
             color = if (nearlyFull) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,

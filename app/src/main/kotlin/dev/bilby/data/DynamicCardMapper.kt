@@ -17,6 +17,7 @@ import dev.bilby.data.model.DynamicAuthor
 import dev.bilby.data.model.DynamicCard
 import dev.bilby.data.model.DynamicContent
 import dev.bilby.data.model.DynamicInteraction
+import dev.bilby.data.model.FeedEntry
 import kotlinx.serialization.json.Json
 
 /**
@@ -197,6 +198,50 @@ private fun MajorDto.toArticleRef(): ArticleRef? {
         ?: article?.id?.takeIf { it > 0 }?.let { it.toString() to true }
         ?: return null
     return ArticleRef(id = identity.first, isRead = identity.second)
+}
+
+/**
+ * 这一条是不是一篇专栏投稿;不是就返回 null,由调用方放进"其他动态"那一半。
+ *
+ * **判据是"正文有没有被服务端截断",也就是界面上那个「阅读全文」入口在不在** ——
+ * 图文和短动态没有它(实测数据见 [dev.bilby.api.dto.OpusSummaryDto.hasMore])。不看动态
+ * 类型:带着 itemOpusStyle 请求时长文的 type 常常是 DYNAMIC_TYPE_DRAW。也不看正文长度:
+ * 一条一千字的文字动态仍然是完整的。
+ *
+ * `desc` 非空时一律不算,与 [toSpans] 同一条顺序:那种形状的正文是完整的,后面没有别的了。
+ */
+internal fun DynamicItemDto.toFeedArticle(): FeedEntry.Article? {
+    if (type !in OPUS_TYPES) return null
+    val moduleDynamic = modules?.moduleDynamic ?: return null
+    if (moduleDynamic.desc != null) return null
+    val major = moduleDynamic.major ?: return null
+    val opus = major.opus
+    // 旧版专栏(major.article)没有 has_more,而它的 desc 按定义就是摘要。
+    val truncated = opus?.summary?.hasMore ?: (major.article != null)
+    if (!truncated) return null
+    val ref = major.toArticleRef() ?: return null
+    val author = modules.moduleAuthor ?: return null
+
+    val body = (opus?.summary?.text ?: major.article?.desc).orEmpty().trim()
+    // 标题缺失时拿正文第一行顶上,并把那一行从摘要里去掉 —— 否则同一句话在卡片上印两遍。
+    val (title, summary) = (opus?.title ?: major.article?.title)?.takeIf { it.isNotBlank() }
+        ?.let { it to body }
+        ?: body.split('\n', limit = 2).let { parts -> parts[0] to parts.getOrElse(1) { "" }.trim() }
+    if (title.isBlank()) return null
+
+    return FeedEntry.Article(
+        ref = ref,
+        title = title,
+        summary = summary,
+        coverUrl = (
+            opus?.pics?.firstOrNull()?.url
+                ?: major.article?.covers?.firstOrNull()
+                ?: major.draw?.items?.firstOrNull()?.src
+            ).orEmpty().toHttpsUrl(),
+        upName = author.name,
+        upMid = author.mid,
+        publishedAtEpochSeconds = author.pubTs,
+    )
 }
 
 /**

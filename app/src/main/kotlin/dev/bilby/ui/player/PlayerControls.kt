@@ -6,13 +6,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Share
@@ -89,6 +90,11 @@ internal fun BoxScope.MediaBackButton(
     onBack: () -> Unit,
     onShare: (() -> Unit)? = null,
     scrim: Boolean = true,
+    /**
+     * 摆在分享左边的东西(直播间的高能榜人数)。放在这里而不是让调用方自己 align 一个
+     * TopEnd —— 那样要靠一个写死的 48dp 去躲开分享按钮,而按钮尺寸不归调用方管。
+     */
+    trailing: (@Composable RowScope.() -> Unit)? = null,
 ) {
     if (scrim) MediaTopScrim()
     // 画面在横屏两栏下是全出血的,状态栏和刘海就压在这两个按钮上。竖排时页面那一层已经
@@ -110,19 +116,24 @@ internal fun BoxScope.MediaBackButton(
     // 分享和返回一样是页面级动作,所以对称地摆在这条渐变的另一端,而不是塞进四格动作栏
     // —— 那一行是「对这条视频表态」(赞/币/藏/稍后再看),分享不是表态,而且 M3 也说一处
     // 按钮不超过三个。
-    onShare?.let { share ->
-        IconButton(
-            onClick = share,
+    if (onShare != null || trailing != null) {
+        Row(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .windowInsetsPadding(safeInsets)
                 .padding(Spacing.Tight),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = Icons.Filled.Share,
-                contentDescription = stringResource(R.string.action_share),
-                tint = FixedColors.OnMedia,
-            )
+            trailing?.invoke(this)
+            onShare?.let { share ->
+                IconButton(onClick = share) {
+                    Icon(
+                        imageVector = Icons.Filled.Share,
+                        contentDescription = stringResource(R.string.action_share),
+                        tint = FixedColors.OnMedia,
+                    )
+                }
+            }
         }
     }
 }
@@ -200,10 +211,12 @@ internal fun ControlButton(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
+        // 宽度也吃这个下限。没有 label 的那几个(字幕、弹幕)只有图标 18dp 加左右 8dp,
+        // 约 34dp 宽,四个挨着排在控制条右端,按下去经常是隔壁那个。
         modifier = Modifier
             .clip(MaterialTheme.shapes.extraSmall)
             .clickable(role = Role.Button, onClick = onClick)
-            .heightIn(min = Dimens.MinTouchTarget)
+            .sizeIn(minWidth = Dimens.MinTouchTarget, minHeight = Dimens.MinTouchTarget)
             .padding(horizontal = Spacing.Tight),
     ) {
         icon(tint)

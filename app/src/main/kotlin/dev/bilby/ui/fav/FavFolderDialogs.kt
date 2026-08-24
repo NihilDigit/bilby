@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -20,6 +19,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Row
 import dev.bilby.R
+import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.theme.Spacing
 
 /** 编辑对话框往回传的动作。挤成一个对象是因为它们只在这一个对话框里成套出现。 */
@@ -57,7 +57,7 @@ fun FavFolderEditorDialog(state: FavFolderEditorState, actions: FavFolderEditorA
         },
         text = {
             if (state.loading) {
-                CircularProgressIndicator()
+                LoadingSpinner()
                 return@AlertDialog
             }
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.Cozy)) {

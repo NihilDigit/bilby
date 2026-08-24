@@ -1,11 +1,17 @@
 package dev.bilby.ui.components
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import dev.bilby.R
@@ -29,21 +35,39 @@ fun SubtitleTrackMenu(
     onSelect: (String) -> Unit,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismissRequest) {
+        val offSelected = currentLan.isEmpty()
         DropdownMenuItem(
             text = { Text(stringResource(R.string.player_subtitle_off)) },
             onClick = { onDismissRequest(); onSelect("") },
-            trailingIcon = if (currentLan.isEmpty()) subtitleSelectedMark else null,
+            trailingIcon = if (offSelected) subtitleSelectedMark else null,
+            modifier = Modifier.selectedSemantics(offSelected),
         )
         tracks.forEach { track ->
+            val trackSelected = track.lan == currentLan
             DropdownMenuItem(
                 text = { Text(track.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 onClick = { onDismissRequest(); onSelect(track.lan) },
-                trailingIcon = if (track.lan == currentLan) subtitleSelectedMark else null,
+                trailingIcon = if (trackSelected) subtitleSelectedMark else null,
+                modifier = Modifier.selectedSemantics(trackSelected),
             )
         }
     }
 }
 
+/**
+ * 选中标记。**勾而不是「·」**:小圆点既不像选中态,读屏还会把它当成一个标点节点念出来。
+ * 勾 + 主色是两条通道,色觉障碍下也读得出哪一条在用。
+ *
+ * 图标本身 `contentDescription = null` —— 选中态由行上的 [selectedSemantics] 说,
+ * 两处都说会让读屏在同一行里念两遍。
+ */
 private val subtitleSelectedMark: @Composable () -> Unit = {
-    Text("·", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+    Icon(
+        Icons.Filled.Check,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+    )
 }
+
+/** 选中态挂在整行上,不挂在那个勾上:读屏念的是「关闭字幕,已选中」,而不是孤零零一个图标。 */
+private fun Modifier.selectedSemantics(isSelected: Boolean) = semantics { selected = isSelected }

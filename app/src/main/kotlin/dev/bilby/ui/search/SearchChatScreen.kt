@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -34,7 +35,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import dev.bilby.ui.components.RefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -48,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -93,24 +95,7 @@ enum class SearchMode { Normal, Agent }
 /** 助理的一轮对话。普通搜索没有"轮"这个概念,见 [NormalSearchState]。 */
 data class SearchTurn(val id: Long, val query: String, val result: AgentTurnState)
 
-/**
- * 普通搜索的状态:**一次查询一份结果**,不留历史。它就是一个搜索页,上一次搜了什么
- * 和这一次无关。
- */
-data class NormalSearchState(
-    val query: String = "",
-    val order: SearchOrder = SearchOrder.Comprehensive,
-    val videos: List<SearchVideo> = emptyList(),
-    val users: List<SearchUser> = emptyList(),
-    // 视频和用户两路请求并行、互相独立(性能计划 7.1):慢的那路失败或还没回来
-    // 不能挡住已经到手的另一路,所以 loading/error 各记各的,不共用一份粗粒度状态。
-    val videoLoading: Boolean = false,
-    val videoError: String? = null,
-    val userLoading: Boolean = false,
-    val userError: String? = null,
-    val appending: Boolean = false,
-    val hasMore: Boolean = true,
-)
+// NormalSearchState 与它的状态机搬去了 NormalSearchController.kt:标签结果页要的是同一套。
 
 /** 助理的状态:一段可以追问下去的对话。 */
 data class AgentSearchState(val turns: List<SearchTurn> = emptyList())
@@ -188,8 +173,8 @@ fun SearchChatScreen(
             // 用户下拉时想要的是"再查一次同样的东西",而那边一次下拉是一次真金白银的请求,
             // 而且答案还会变。要重问就用输入框重新问,或者按输入框左边的新会话。
             when (state.mode) {
-                SearchMode.Normal -> PullToRefreshBox(
-                    isRefreshing = state.normal.videoLoading && state.normal.videos.isNotEmpty(),
+                SearchMode.Normal -> RefreshBox(
+                    refreshing = state.normal.videoLoading && state.normal.videos.isNotEmpty(),
                     onRefresh = onRefresh,
                     modifier = Modifier.weight(1f),
                 ) {
@@ -264,7 +249,33 @@ private fun NormalPane(
         return
     }
 
+    NormalResultList(
+        state = state,
+        onOrderChange = onOrderChange,
+        onVideoClick = onVideoClick,
+        onUserClick = onUserClick,
+        onLoadMore = onLoadMore,
+        onRetry = onRetry,
+    )
+}
+
+/**
+ * 普通搜索的结果列表:排序行、UP 主横排、视频条目、页脚,加翻到底自动续页。
+ * 搜索 tab 的普通模式和标签结果页(SearchResultScreen)共用 —— 两处是同一份结果的
+ * 两个入口,列表长两样的话,同一个词在两处给人两种页面。
+ */
+@Composable
+internal fun NormalResultList(
+    state: NormalSearchState,
+    onOrderChange: (SearchOrder) -> Unit,
+    onVideoClick: (String) -> Unit,
+    onUserClick: (Long) -> Unit,
+    onLoadMore: () -> Unit,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val listState = rememberLazyListState()
+    val userError = state.userError
     // LaunchedEffect 的块体捕获的是启动那一刻的 `state` —— 它是个 data class 值,不是 State
     // 对象,之后再怎么变都不会反映进来。原先直接读 `state.hasMore` 的写法读的是一份永远停在
     // 查询刚变那一刻的快照,两道守卫都是死的。用 rememberUpdatedState 拿最新的那一份。
@@ -281,7 +292,7 @@ private fun NormalPane(
 
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(vertical = Spacing.Cozy),
     ) {
         // 排序放结果列表上方,随内容一起滚 —— 这个页面对话式布局里没有一块常驻的
@@ -296,6 +307,22 @@ private fun NormalPane(
         }
         if (state.users.isNotEmpty()) {
             item(key = "users") { UserRow(state.users, onUserClick) }
+        }
+        // UP 主那一路失败时留一行。它原先只记进状态、从不上屏,于是"这个人不存在"和
+        // "这一路没回来"在屏幕上是同一个样子:什么都没有。重试不另给按钮 —— 下拉刷新
+        // 和重新发送都会把两路一起再发一次。
+        if (userError != null) {
+            item(key = "user_error") {
+                Text(
+                    text = userError,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(
+                        horizontal = Spacing.Comfortable,
+                        vertical = Spacing.Tight,
+                    ),
+                )
+            }
         }
         items(state.videos, key = { it.bvid }) { video ->
             VideoRow(item = video.toRowUi(), onClick = { onVideoClick(video.bvid) })
@@ -484,7 +511,10 @@ private fun UserRow(users: List<SearchUser>, onUserClick: (Long) -> Unit) {
 @Composable
 private fun UserChip(user: SearchUser, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.clickable(onClick = onClick),
+        // 头像 36dp 加两行小字,自然高度不到 48dp。视觉尺寸不动,只把可点区撑到触摸下限。
+        modifier = Modifier
+            .heightIn(min = Dimens.MinTouchTarget)
+            .clickable(role = Role.Button, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
@@ -570,9 +600,12 @@ private fun InputBar(
                 SearchField(
                     value = input,
                     onValueChange = onInputChange,
-                    // **不给占位文案。** 它和上面那句空态逐字重复,而两者总是同时出现:
-                    // 输入框空的时候,结果区正好是那一屏空态。同一句话印两遍。
-                    placeholder = "",
+                    // 占位文案同时是这个框的无障碍标签,所以不能空着 —— 读屏对着一个裸输入框
+                    // 只会念"编辑框"。它确实和空态那句重复,但只在还没搜过的那一屏重复:
+                    // 助理模式发完就清空输入框,那之后整屏没有任何东西说明这里该填什么。
+                    placeholder = stringResource(
+                        if (agent) R.string.search_agent_empty else R.string.search_empty,
+                    ),
                     // 回车即发送。DESIGN 2.2 的快路原话是"输入直接回车 = 原始 B 站搜索",
                     // 换成 SearchField 之前这条根本没实现:OutlinedTextField 的 singleLine
                     // 只是不换行,键盘上那个键什么都不做。

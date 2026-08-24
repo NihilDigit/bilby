@@ -29,6 +29,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import dev.bilby.R
@@ -118,7 +120,11 @@ fun SearchField(
                         }
                     },
                 ),
+                // hint 同时也是读屏的标签:placeholder 只是一段画在下面的 Text,输入框本身
+                // 没有任何标签,读屏念到的是一个裸输入框。必须挂在这个节点上——挂在调用方
+                // 或外层 Row 上会落到别的语义节点,输入框那一格照旧是空的。
                 modifier = Modifier.fillMaxWidth()
+                    .semantics { contentDescription = placeholder }
                     .onFocusChanged { onFocusChange(it.isFocused) }
                     .let { if (focusRequester != null) it.focusRequester(focusRequester) else it },
             )

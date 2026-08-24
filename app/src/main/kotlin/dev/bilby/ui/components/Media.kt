@@ -160,9 +160,15 @@ fun MediaBadge(text: String, modifier: Modifier = Modifier) {
         color = FixedColors.OnMedia,
         modifier = modifier
             .background(FixedColors.ScrimOnMedia, MaterialTheme.shapes.extraSmall)
-            .padding(horizontal = 4.dp, vertical = 2.dp),
+            .padding(horizontal = Spacing.Hair, vertical = BadgeTextInset),
     )
 }
+
+/**
+ * 角标里文字与遮罩上下边的距离。**比 [Spacing] 最小的一档还小**,所以没有 token 可用:
+ * 遮罩本身就是压在画面上的一小块,上下再留 4dp 会让 11sp 的时长撑成两倍高。
+ */
+private val BadgeTextInset = 2.dp
 
 /**
  * 方形封面。合集/系列用它,和视频行的 16:9 拉开距离 —— 形状本身就说明了

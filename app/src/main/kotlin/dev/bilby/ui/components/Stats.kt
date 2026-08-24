@@ -31,8 +31,10 @@ import dev.bilby.ui.theme.Spacing
  *   总共只有一百多 dp;图标 14dp 就说完同一件事,省下的宽度让日期不再被挤掉。
  * - **数字之间不再需要分隔点**。图标自己就是分隔,`·` 那一串在窄屏上会先于内容换行。
  *
- * 颜色统一取 `outline`(PiliPlus 也是),不是 `onSurfaceVariant`:这一行是列表里优先级
- * 最低的信息,和它上面的 UP 主名再拉开一档,扫列表时视线不会被数字勾住。
+ * 颜色取 `onSurfaceVariant`。这一行确实是列表里优先级最低的信息,但 `outline` 是描边角色,
+ * 只保证约 3:1:浅色主题下 `#757680` 压在 `#FAF8FF` 上量出来是 4.3:1,小字要的 4.5:1 不达标
+ * (深色主题反而够,所以这是浅色专属的看不清)。层级差交给字号 —— `labelSmall` 已经比上面
+ * 那行 UP 主名小一档,不必再靠一个对比度不够的颜色去拉开。
  */
 private val StatIconSize = 14.dp
 
@@ -42,7 +44,7 @@ fun StatRow(
     playText: String? = null,
     danmakuText: String? = null,
     dateText: String? = null,
-    color: Color = MaterialTheme.colorScheme.outline,
+    color: Color = MaterialTheme.colorScheme.onSurfaceVariant,
 ) {
     if (playText == null && danmakuText == null && dateText == null) return
     CompositionLocalProvider(LocalContentColor provides color) {

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -18,21 +19,31 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.interaction.DragInteraction
+import kotlinx.coroutines.flow.filter
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Headset
@@ -41,8 +52,8 @@ import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -56,9 +67,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
@@ -67,12 +80,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.media3.common.Player
@@ -90,7 +104,9 @@ import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.player.ControlButton
 import dev.bilby.ui.player.DanmakuButton
 import dev.bilby.ui.player.MediaBackButton
@@ -106,6 +122,7 @@ import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.FixedColors
 import dev.nihildigit.danmaku.Danmaku
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -116,8 +133,11 @@ import androidx.compose.ui.unit.dp
  * 播放器用的是和视频页同一个 [PlayerShell],只把 seek 那一档手势关掉 —— 直播的时间轴上
  * 没有"往回拖"这回事,而方向锁定、浮层、长按加速这些两边一模一样。
  *
- * 下面两屏:第一屏是醒目留言横条加滚动聊天,第二屏是大航海。**没有"推荐直播"那一类东西** ——
+ * 下面三屏:滚动消息流、此刻有效的醒目留言、大航海。**没有"推荐直播"那一类东西** ——
  * 进这个页面是因为用户点了某个 UP 的直播,不是因为有人替他挑了一个。
+ *
+ * 消息流里混着弹幕、醒目留言、上舰和系统提示,各类的样子归 [LiveFeedRow]。**礼物、进场、
+ * 进场特效、红包天选、全站广播都不显示**,那是产品决定,理由见 `docs/live-room-redesign.md` §4。
  */
 @Composable
 fun LiveRoomScreen(
@@ -284,6 +304,7 @@ fun LiveRoomScreen(
                     onBack = onBack,
                     onShare = { ShareLink.liveRoom(context, roomId, state.title) },
                     scrim = false,
+                    trailing = { OnlineRankLabel(state.onlineRank) },
                 )
             }
         }
@@ -305,6 +326,7 @@ fun LiveRoomScreen(
                         state = state,
                         onLoadMoreGuards = onLoadMoreGuards,
                         onSendDanmaku = onSendDanmaku,
+                        onUserClick = onUserClick,
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                     )
                 }
@@ -403,11 +425,7 @@ private fun LiveControlBar(
         // 置灰要么看不出来,要么和"这个功能不可用"撞在一起。发弹幕那个按钮是同一个做法。
         IconButton(onClick = onReload, enabled = !reloading) {
             if (reloading) {
-                CircularProgressIndicator(
-                    color = FixedColors.OnMedia,
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.size(Dimens.IconInline),
-                )
+                LoadingSpinner(color = FixedColors.OnMedia)
             } else {
                 Icon(
                     imageVector = Icons.Filled.Refresh,
@@ -534,14 +552,21 @@ private fun LiveRoomTabs(
     state: LiveRoomUiState,
     onLoadMoreGuards: () -> Unit,
     onSendDanmaku: (String) -> Unit,
+    onUserClick: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val pager = rememberPagerState(pageCount = { 2 })
+    val pager = rememberPagerState(pageCount = { 3 })
     val scope = rememberCoroutineScope()
+    /** 从上面那一栏点过来要看的那一条。用完由那一屏清掉,否则回头再切过去又会滚一次。 */
+    var pendingSuperChat by remember { mutableStateOf<Long?>(null) }
     Column(modifier = modifier) {
         SecondaryTabRow(selectedTabIndex = pager.currentPage) {
             // 点标签要真的翻页。原来两个 onClick 都是空的,只有左右滑动能换页 ——
             // 一个看得见、按得动、什么都不发生的标签,比没有标签更糟。
+            //
+            // **「醒目留言」这一格不带条数。** 一个会自己变大的数字说的是"有新东西,回来看",
+            // 正是风格指南 §4.2 否掉的那类注意力标记。PiliPlus 在聊天区右上角挂了一个
+            // `SC(n)` 的胶囊,这一处不照抄。
             Tab(
                 selected = pager.currentPage == 0,
                 onClick = { scope.launch { pager.animateScrollToPage(0) } },
@@ -550,6 +575,11 @@ private fun LiveRoomTabs(
             Tab(
                 selected = pager.currentPage == 1,
                 onClick = { scope.launch { pager.animateScrollToPage(1) } },
+                text = { Text(stringResource(R.string.live_tab_super_chat)) },
+            )
+            Tab(
+                selected = pager.currentPage == 2,
+                onClick = { scope.launch { pager.animateScrollToPage(2) } },
                 text = { Text(stringResource(R.string.live_tab_guard)) },
             )
         }
@@ -557,66 +587,451 @@ private fun LiveRoomTabs(
         // 再要一整屏,底部被推出可视区。
         HorizontalPager(state = pager, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
             when (page) {
-                0 -> ChatPane(state, onSendDanmaku)
-                else -> GuardPane(state, onLoadMoreGuards)
+                0 -> ChatPane(
+                    state = state,
+                    onSendDanmaku = onSendDanmaku,
+                    onUserClick = onUserClick,
+                    onSuperChatClick = { id ->
+                        // 先记下要看哪一条,再翻页 —— 翻页是动画,而那一屏要拿这个 id 定位。
+                        pendingSuperChat = id
+                        scope.launch { pager.animateScrollToPage(1) }
+                    },
+                )
+
+                1 -> SuperChatPane(
+                    state = state,
+                    onUserClick = onUserClick,
+                    target = pendingSuperChat,
+                    onTargetHandled = { pendingSuperChat = null },
+                )
+
+                else -> GuardPane(state, onLoadMoreGuards, onUserClick)
             }
         }
     }
 }
 
-/** 醒目留言横条 + 滚动聊天。SC 在上面是因为它是"付过钱、要被看见"的一类,不该混在流里冲走。 */
+/**
+ * 高能榜人数,摆在画面右上角分享的左边。
+ *
+ * **没收到过这条命令就不画**,不写"高能榜 0" —— 那是个具体而错误的数字(同一条判断见
+ * 「N 人看过」那一格)。这条命令进房后几秒才来,所以开场那几秒这里是空的。
+ *
+ * 量级折算走 [formatCount]:服务端在这条上只给数字,不像 `WATCHED_CHANGE` 给拼好的句子。
+ */
 @Composable
-private fun ChatPane(state: LiveRoomUiState, onSendDanmaku: (String) -> Unit) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        if (state.superChats.isNotEmpty()) {
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(Spacing.Cozy),
-            ) {
-                items(state.superChats, key = { it.id }) { sc -> SuperChatCard(sc) }
-            }
+private fun OnlineRankLabel(count: Int) {
+    if (count <= 0) return
+    Text(
+        text = stringResource(R.string.live_online_rank, formatCount(count.toLong())),
+        style = MaterialTheme.typography.labelMedium,
+        color = FixedColors.OnMedia,
+        modifier = Modifier.padding(end = Spacing.Hair),
+    )
+}
+
+/**
+ * 醒目留言那一栏。**没有底色,不占布局,浮在聊天最上面**(由调用方 align 到顶)。
+ *
+ * 这个位置上的横条当初被撤掉有两条理由(`docs/live-room-redesign.md` §2),现在两条都不成立:
+ * "窄屏一次只露得出一张半卡片"由 chip 解掉(一个 chip 只有头像加金额,一屏排得下四五个);
+ * "零与非零之间跳一次高度"由叠放解掉 —— 它根本不参与布局,聊天列表一格都不让。代价是盖住
+ * 最上面那几行,而那是这一栏里最旧的几条,正在往上走,自己会走开。
+ *
+ * **只放生效中的那些。** 过期的进不来,否则这一栏会一直长;要看本场早前的切到那一屏。
+ */
+@Composable
+private fun SuperChatStrip(
+    superChats: List<LiveMessage.SuperChat>,
+    onSuperChatClick: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // 秒表在这一层,重组范围就是这一栏。和 SuperChatPane 各有一只:提到共同的父层去,
+    // 每秒会把整个 pager 连着两屏一起重组。
+    var nowSeconds by remember { mutableStateOf(System.currentTimeMillis() / 1000) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1_000)
+            nowSeconds = System.currentTimeMillis() / 1000
+        }
+    }
+    val live = superChats.filter { it.endTimeSeconds > nowSeconds }
+    if (live.isEmpty()) return
+    val dark = MaterialTheme.colorScheme.surface.luminance() < DarkSurfaceLuminance
+    LazyRow(
+        modifier = modifier.fillMaxWidth(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            horizontal = Spacing.Comfortable,
+            vertical = Spacing.Tight,
+        ),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        items(live, key = { it.id }) { sc ->
+            SuperChatChip(
+                sc = sc,
+                tier = FixedColors.superChatTier(sc.priceYuan, dark),
+                onClick = { onSuperChatClick(sc.id) },
+            )
+        }
+    }
+}
+
+/**
+ * 一个 chip:头像加金额,没有昵称 —— 带上昵称一个 chip 宽一倍,一屏排不下两个,而头像本身
+ * 就是"是谁"的线索。
+ *
+ * **档位色画在金额上,不画成底色。** 那六个色值是按"在 surface 上当前景色"挑的
+ * (见 FixedColors.superChatTier),拿去当底色要另配一套对比达标的文字色。
+ */
+@Composable
+private fun SuperChatChip(sc: LiveMessage.SuperChat, tier: Color, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Row(
+            modifier = Modifier.padding(start = Spacing.Hair, end = Spacing.Cozy, top = Spacing.Hair, bottom = Spacing.Hair),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            Avatar(url = sc.senderFace, size = SuperChatChipAvatar)
+            Text(
+                text = stringResource(R.string.live_super_chat_price, sc.priceYuan),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Medium,
+                color = tier,
+            )
+        }
+    }
+}
+
+/**
+ * 此刻仍在有效期内的醒目留言,按到期时间从近到远排 —— 这一屏读的是"还剩多久",最快消失的
+ * 那条该在最上面。进房前发出的那些由 `getMessageList` 补上(见 `LiveRoomViewModel`)。
+ *
+ * **到期由本地这只秒表判,列表按它过滤。** 到期时刻是服务端定的,但没有一条命令通知"这条到点
+ * 了",所以本地每秒对一次表。撤回是另一回事,那个有命令([LiveMessage.SuperChatRemoved])。
+ */
+@Composable
+private fun SuperChatPane(
+    state: LiveRoomUiState,
+    onUserClick: (Long) -> Unit,
+    target: Long? = null,
+    onTargetHandled: () -> Unit = {},
+) {
+    var nowSeconds by remember { mutableStateOf(System.currentTimeMillis() / 1000) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1_000)
+            nowSeconds = System.currentTimeMillis() / 1000
+        }
+    }
+    // 两节都从同一份日志派生(见 LiveRoomUiState.sessionSuperChats):生效中按到期时间排,
+    // 最快消失的在最上面;本场早前按发出时间倒序。
+    val live = state.sessionSuperChats
+        .filter { it.endTimeSeconds > nowSeconds }
+        .sortedBy { it.endTimeSeconds }
+    val earlier = state.sessionSuperChats.filter { it.endTimeSeconds <= nowSeconds }
+    val listState = rememberLazyListState()
+    /**
+     * 从上面那一栏点过来的那一条:滚过去,并让它亮一下。
+     *
+     * **只滚不亮不够** —— 这一屏十条卡片长得一模一样,滚到位之后读者不知道该看哪一条。
+     */
+    var highlighted by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(target, live.size) {
+        val id = target ?: return@LaunchedEffect
+        val index = live.indexOfFirst { it.id == id }
+        onTargetHandled()
+        if (index < 0) return@LaunchedEffect
+        listState.animateScrollToItem(index)
+        highlighted = id
+        delay(HighlightMillis)
+        highlighted = null
+    }
+
+    if (live.isEmpty() && earlier.isEmpty()) {
+        // 正在补历史时给转圈,补完仍然空才说"暂无" —— 两者读起来完全不同,而这一屏在补历史
+        // 的那一两秒里本来就是空的。
+        if (state.superChatsLoading) {
+            FullScreenLoading(Modifier.fillMaxSize())
+        } else {
+            EmptyState(stringResource(R.string.live_super_chat_empty), Modifier.fillMaxSize())
+        }
+        return
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(Spacing.Comfortable),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    ) {
+        items(live, key = { superChatKey(it) }) { sc ->
+            SuperChatSummaryCard(
+                sc = sc,
+                remainingSeconds = sc.endTimeSeconds - nowSeconds,
+                highlighted = sc.id == highlighted,
+                onUserClick = onUserClick,
+            )
         }
 
-        val listState = rememberLazyListState()
-        // 新的一行追在末尾,列表自己跟到底 —— 直播的聊天栏停在中间就等于没在看直播了。
-        //
-        // key 用**最新一条的 id**,不是条数:列表封顶 200 条,到顶之后条数恒为 200,拿它当
-        // key 就再也不会触发了。也不在 LaunchedEffect 里 snapshotFlow `state` —— 它是普通
-        // 参数不是 State 对象,块里捕获的是启动那一刻那一份。
-        //
-        // 用瞬时的 scrollToItem 而不是 animateScrollToItem:直播消息密集,动画每来一条就被
-        // 取消重来一次,永远走不完,看上去就是不动。
-        val lastId = state.chat.lastOrNull()?.id
-        LaunchedEffect(lastId) {
-            if (lastId != null) listState.scrollToItem(state.chat.lastIndex)
-        }
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                horizontal = Spacing.Comfortable,
-                vertical = Spacing.Tight,
-            ),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        ) {
-            items(state.chat, key = { it.id }) { line ->
-                Row(verticalAlignment = Alignment.Top) {
+        // 本场早前那一节。**只在拿到内容时才出现**:拿不到(没开开关、这位主播没被收录、
+        // 这一场没在录、任何一步失败)就是没有这一节,不解释也不报错。
+        if (earlier.isNotEmpty()) {
+            item(key = "earlier-header") {
+                Text(
+                    text = stringResource(R.string.live_super_chat_earlier),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = Spacing.Tight),
+                )
+            }
+            items(earlier, key = { superChatKey(it) }) { sc ->
+                SuperChatSummaryCard(
+                    sc = sc,
+                    remainingSeconds = null,
+                    highlighted = sc.id == highlighted,
+                    onUserClick = onUserClick,
+                )
+            }
+            if (state.hasArchive) {
+                item(key = "earlier-source") {
+                    // 站外来的东西要说一句从哪来。**只在真有站外内容时说** —— 开关关着时这一节
+                    // 里全是你在场期间过期的那些,标 danmakus 就是句假话(见 hasArchive)。
                     Text(
-                        text = line.name + "：",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.outline,
-                        // 名字封顶三分之一行宽:B 站的用户名可以很长,不截断的话正文会被
-                        // 挤到屏幕外,而聊天要看的是正文。
+                        text = stringResource(R.string.live_super_chat_source),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = Spacing.Tight),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 汇总屏里的一条。比流里那一行多一个剩余时间,少一条档位色竖条 —— 这一屏本来就按到期时间排,
+ * 顺序已经说明了紧迫程度。
+ *
+ * **剩余时间是数字,不是进度条。** 规范给这种已知终点的等待留的形态确实是 determinate 进度条,
+ * 但一条持续跑动的进度条在直播间里就是一处一直在动的东西,而 M3 自己的可用性页写着动效要
+ * "use it sparingly since motion can be distracting"。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun SuperChatSummaryCard(
+    sc: LiveMessage.SuperChat,
+    /** 剩余时间。**null 表示这一条早过期了**(本场早前那一节),那时不画倒计时。 */
+    remainingSeconds: Long?,
+    highlighted: Boolean,
+    onUserClick: (Long) -> Unit,
+) {
+    // 亮一下用描边,不换底色:换底色会让这张卡片在那一两秒里看起来是"另一类"的东西,
+    // 而它只是刚被指过来的那一条。
+    val border by animateColorAsState(
+        targetValue = if (highlighted) MaterialTheme.colorScheme.primary else Color.Transparent,
+        label = "superChatHighlight",
+    )
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(HighlightBorderWidth, border),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(Spacing.Cozy),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(role = Role.Button) { onUserClick(sc.senderMid) },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                ) {
+                    Avatar(url = sc.senderFace, size = Dimens.AvatarRow)
+                    Text(
+                        text = sc.senderName,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = ChatNameMaxWidth),
                     )
-                    Text(
-                        text = line.text,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.weight(1f),
-                    )
+                }
+                SuperChatPrice(sc.priceYuan)
+            }
+            Text(
+                text = sc.message,
+                style = MaterialTheme.typography.bodyMediumEmphasized,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            remainingSeconds?.let {
+                Text(
+                    text = stringResource(R.string.live_super_chat_remaining, formatRemaining(it)),
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        // **等宽数字。** 不加这一句,秒数每跳一下宽度就变一次,整行跟着抖。
+                        fontFeatureSettings = TabularFigures,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 列表键。**不用 id** —— danmakus 补来的那些 id 是合成的(见 LiveRoomViewModel.toMessage),
+ * 撞一次 LazyColumn 就会崩在 "Key was already used" 上。这一串是精确值,不经哈希。
+ */
+private fun superChatKey(sc: LiveMessage.SuperChat) =
+    "${sc.senderMid}-${sc.startTimeSeconds}-${sc.message.length}"
+
+/** `分:秒`,秒补零。超过一小时的档位也照分钟数写下去,不另分一段小时。 */
+private fun formatRemaining(seconds: Long): String {
+    val safe = seconds.coerceAtLeast(0)
+    return "${safe / 60}:${(safe % 60).toString().padStart(2, '0')}"
+}
+
+/** OpenType 的等宽数字特性。数字会变的地方都该开,否则每变一次布局抖一次。 */
+private const val TabularFigures = "tnum"
+
+/**
+ * 消息流加发言栏。
+ *
+ * 弹幕、醒目留言、上舰、系统提示排在同一条流里,各类的样子归 [LiveFeedRow]。
+ *
+ * **醒目留言此前是这一屏顶上一条横滚的卡片带,现在撤掉了。** 两个代价是实打实的:数量在零和
+ * 非零之间变化时整条列表要跳一次高度;窄屏上一次只露得出一张半卡片,而横滚压在一条本来就要
+ * 竖滚的列表上面。现在它在流里出现一次(不会错过),完整清单在旁边那一屏。
+ */
+@Composable
+private fun ChatPane(
+    state: LiveRoomUiState,
+    onSendDanmaku: (String) -> Unit,
+    onUserClick: (Long) -> Unit,
+    onSuperChatClick: (Long) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        val listState = rememberLazyListState()
+        /*
+         * **只在本来就贴着底的时候跟着新消息走。** 用户往上翻是在读某一条,而这一栏每秒新增
+         * 几十行,无条件跟到底等于把他刚找到的位置一次次拽走。往上翻之后列表就停在那儿,
+         * 新消息在下面堆着;翻回底部,又开始跟。
+         *
+         * 判据留 [BottomSlack] 条余量,不是"最后一条正好可见":这段 LaunchedEffect 跑在新条目
+         * 已经进列表、但布局还没跑过的那一刻,`layoutInfo` 是上一帧的,严格比较会永远判成
+         * "已经离开底部",于是再也不跟。
+         *
+         * key 用**最新一条的 id**,不是条数:列表封顶 200 条,到顶之后条数恒为 200,拿它当
+         * key 就再也不会触发了。也不在 LaunchedEffect 里 snapshotFlow `state` —— 它是普通
+         * 参数不是 State 对象,块里捕获的是启动那一刻那一份。
+         *
+         * 用瞬时的 scrollToItem 而不是 animateScrollToItem:直播消息密集,动画每来一条就被
+         * 取消重来一次,永远走不完,看上去就是不动。同一条理由让新行没有进入动画。
+         */
+        /*
+         * **跟不跟是一个记着的意图,不是每次现算的几何。**
+         *
+         * 先前两版都从 `layoutInfo` 推断"此刻是不是贴着底",再决定要不要跟。那个推断在三种
+         * 情况下会翻:布局还没跑过时读到的是上一帧;动画落点差几像素;列表封顶从前面挤掉旧条
+         * 导致下标整体前移。每翻一次,表现都是"再也不跟了",而症状处补一个余量或补一次收口
+         * 只是把下一次翻推远一点。
+         *
+         * 现在只记一个 [following]:用户自己拖走就置 false,滚动停在底部或者按了「回到最新」
+         * 就置 true。新消息来了只问它,不问几何。
+         */
+        var following by remember { mutableStateOf(true) }
+        // 手指一搭上就算翻走了。**程序化滚动不产生 DragInteraction**,所以这里认的确实是人做的。
+        LaunchedEffect(listState) {
+            listState.interactionSource.interactions.collect {
+                if (it is DragInteraction.Start) following = false
+            }
+        }
+        // 滚动停下来时如果正好在底部,就重新开始跟 —— 不管这一下是谁滚的:用户自己划回底部
+        // 和按「回到最新」滚回底部,想要的是同一件事。
+        LaunchedEffect(listState) {
+            snapshotFlow { listState.isScrollInProgress }
+                .filter { !it }
+                .collect { if (!listState.canScrollForward) following = true }
+        }
+
+        val lastId = state.feed.lastOrNull()?.id
+        /** 「回到最新」那一下要用的实时条数:按下那一刻的下标在动画走完前就过期了。 */
+        val feedSize by rememberUpdatedState(state.feed.size.coerceAtLeast(1))
+        LaunchedEffect(lastId) {
+            if (lastId != null && following) listState.scrollToItem(state.feed.lastIndex)
+        }
+        val scope = rememberCoroutineScope()
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    horizontal = Spacing.Comfortable,
+                    vertical = Spacing.Tight,
+                ),
+                // 行之间只留间隔,不画分割线:M3 的 lists 页把 gap 定为 contained 列表的默认答案,
+                // 分割线留给"没有容器、且确实需要更强分隔"的列表。重复版式的条目更是明写着可以
+                // 只靠间距。
+                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+            ) {
+                items(state.feed, key = { it.id }) { item -> LiveFeedRow(item, onUserClick) }
+            }
+            // **浮在聊天上面,不占一栏。** 被盖住的是最上面那几行,也就是这一栏里最旧的几条,
+            // 而它们正在往上走 —— 盖住是暂时的,自己会走开。换来的是列表一格高度都不让,
+            // 有没有醒目留言都不影响读到的行数。
+            SuperChatStrip(
+                superChats = state.sessionSuperChats,
+                onSuperChatClick = onSuperChatClick,
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
+            // 翻上去之后给一条回程。**不带条数** —— 一个自己会变大的数字说的是"有多少条在等你",
+            // 那是风格指南 §4.2 否掉的那类注意力标记;这一颗只回答"怎么回去"。
+            //
+            // 用 animateScrollToItem:这一下是用户自己按的,一次滚动动画正是他要的反馈;
+            // 上面跟着新消息走的那处不能用动画,理由见那段注释。
+            androidx.compose.animation.AnimatedVisibility(
+                visible = !following && state.feed.isNotEmpty(),
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = Spacing.Tight),
+            ) {
+                Surface(
+                    onClick = {
+                        // **先立意图,再滚。** 动画落在哪儿不再影响跟不跟 —— 就算这几百毫秒里
+                        // 又来了几条、落点差在末尾之上,下一条消息也会把它接回底部。
+                        following = true
+                        scope.launch { listState.animateScrollToItem(feedSize - 1) }
+                    },
+                    shape = MaterialTheme.shapes.extraLarge,
+                    // 靠容器色浮起来,不加投影:M3E 把"分层"交给色彩,而这一颗压着的是一列
+                    // 深浅不一的聊天行,投影在其中一些上面几乎看不出来。
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            contentDescription = null,
+                            modifier = Modifier.size(Dimens.IconInline),
+                        )
+                        Text(
+                            text = stringResource(R.string.live_chat_jump_latest),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
                 }
             }
         }
@@ -687,10 +1102,7 @@ private fun LiveDanmakuInput(
                 )
                 FilledIconButton(onClick = send, enabled = enabled && !sending && text.isNotBlank()) {
                     if (sending) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(Dimens.IconInline),
-                            strokeWidth = 2.dp,
-                        )
+                        LoadingSpinner()
                     } else {
                         Icon(
                             Icons.AutoMirrored.Filled.Send,
@@ -706,71 +1118,9 @@ private fun LiveDanmakuInput(
 /** 直播弹幕的长度上限比点播短(B 站自己的输入框就是 20)。 */
 private const val LiveDanmakuMaxLength = 20
 
-/**
- * 一条醒目留言。**头像 + 名字 + 金额一行,留言一段**,读的顺序就是"谁、多少钱、说了什么"。
- *
- * 三处照风格指南改过:
- *
- * - 圆角走 `shapes.medium`,不再拿间距刻度当半径(`RoundedCornerShape(Spacing.Tight)`)——
- *   §1.4 的形状档由信息密度定,和间距是两套刻度,混用等于把两个决定绑在一起。
- * - 名字取 `outline`、留言满对比度,与评论区同一条(§2.7b):一排卡片扫过去,先看见的该是
- *   留言而不是每张卡开头的人名。
- * - 金额单独装进一个 `tertiaryContainer` 的小块。它是这条留言之所以在这儿的原因,得读得出来;
- *   而容器色和文字色成对取自同一组 role,不用 alpha 兑(§3 最后一条)。**没有用 B 站自己那对
- *   `background_color`**:那两个色是照白底设计的,深色主题下直接糊,而且它编码的是价位档,
- *   金额本身已经写在那儿了。
- *
- * 圆角按 optical roundness:外 12 − 内边距 12 = 0,取刻度末档 `extraSmall` 4(同 §2.7c)。
- */
-@Composable
-private fun SuperChatCard(sc: LiveMessage.SuperChat) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.width(Dimens.SuperChatWidth),
-    ) {
-        Column(
-            modifier = Modifier.padding(Spacing.Cozy),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                Avatar(url = sc.senderFace, size = Dimens.AvatarRow)
-                Text(
-                    text = sc.senderName,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.outline,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Surface(
-                    color = MaterialTheme.colorScheme.tertiaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-                    shape = MaterialTheme.shapes.extraSmall,
-                ) {
-                    Text(
-                        text = stringResource(R.string.live_super_chat_price, sc.priceYuan),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(horizontal = Spacing.Hair),
-                    )
-                }
-            }
-            Text(
-                text = sc.message,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
 
 @Composable
-private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit) {
+private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit, onUserClick: (Long) -> Unit) {
     val listState = rememberLazyListState()
     // 触底再拉下一页。分页是接口给的(page/page_size),不一次拉完 —— 大主播的大航海是几千人。
     LaunchedEffect(listState, state.guards.items.size) {
@@ -800,7 +1150,11 @@ private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
     ) {
         items(state.guards.items, key = { it.uid }) { guard ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // 整行可点:这一行从头到尾都在说同一个人。
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { onUserClick(guard.uid) },
+            ) {
                 Avatar(url = guard.face, size = Dimens.AvatarRow)
                 Text(
                     text = guard.username,
@@ -835,10 +1189,15 @@ private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit) {
     }
 }
 
-/** 聊天里用户名的宽度上限。留给正文的空间才是这一栏的主体。 */
-private val ChatNameMaxWidth = 112.dp
-
 private const val GUARD_PREFETCH = 5
+
+/** chip 里的头像。和 [Dimens.AvatarRow] 同一档:这一栏是要被看见的,小一号就淹在聊天里了。 */
+private val SuperChatChipAvatar = Dimens.AvatarRow
+
+/** 跳过去那一条亮多久。 */
+private const val HighlightMillis = 1_500L
+
+private val HighlightBorderWidth = 2.dp
 
 /**
  * 清晰度。档名只在全屏显示 —— 内嵌时控制条窄,一个图标就够,而档名("原画""蓝光")截断之后
@@ -879,6 +1238,7 @@ private fun LiveQualityButton(
         ) {
             // 服务端给的顺序是从低到高,菜单里反过来:清晰度菜单上手就该看见最好的那档。
             qualities.sortedDescending().forEach { qn ->
+                val current = qn == currentQn
                 DropdownMenuItem(
                     text = { Text(stringResource(qualityLabel(qn))) },
                     onClick = {
@@ -886,11 +1246,20 @@ private fun LiveQualityButton(
                         onMenuOpenChange(false)
                         onSelect(qn)
                     },
-                    trailingIcon = if (qn == currentQn) {
-                        { Text("·", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary) }
+                    // 勾 + 语义两路都给:图标那一路读屏念不出来(勾没有可见文字,
+                    // 描述交给 selected),只给语义则看得见的人分辨不出选中的是哪一档。
+                    trailingIcon = if (current) {
+                        {
+                            Icon(
+                                Icons.Filled.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
                     } else {
                         null
                     },
+                    modifier = Modifier.semantics { selected = current },
                 )
             }
         }

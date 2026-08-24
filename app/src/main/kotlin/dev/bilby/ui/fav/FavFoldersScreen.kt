@@ -21,7 +21,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +45,7 @@ import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.MetaSeparator
+import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -278,8 +278,8 @@ fun FavFoldersScreen(
             when {
                 state.loading && state.folders.isEmpty() -> FullScreenLoading()
                 state.error != null && state.folders.isEmpty() -> FullScreenError(state.error, onRetry)
-                else -> PullToRefreshBox(
-                    isRefreshing = state.refreshing,
+                else -> RefreshBox(
+                    refreshing = state.refreshing,
                     onRefresh = onRefresh,
                     modifier = Modifier.fillMaxSize(),
                 ) {

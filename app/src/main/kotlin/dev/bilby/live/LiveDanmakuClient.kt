@@ -8,16 +8,19 @@ import io.ktor.client.plugins.websocket.wss
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readBytes
 import io.ktor.websocket.send
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
@@ -25,7 +28,51 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import java.util.zip.Inflater
 
-/** 从直播间信息流里解出来、这个 app 会用到的消息。其余 cmd(礼物、进场、人气)一概丢弃。 */
+/**
+ * 一枚粉丝勋章。牌名加等级,底色与字色都由服务端给。
+ *
+ * **取 `v2_` 那一组,不取 `color_start`/`color_end` 那一组。** 两组编码的是同一件事:前者是
+ * `#RRGGBBAA` 字符串、按 APP 端深色底调过,后者是 10 进制整数、没有 alpha。混用会得到两种不同
+ * 的底色,所以选一套用到底。
+ *
+ * [anchorName] 是这枚牌子所属主播的名字。**它不在勋章对象里**,只在 `info[3]` 那个扁平数组的
+ * 第 2 位,所以两处都要解析才凑得齐一枚牌子。
+ */
+data class LiveFanMedal(
+    val name: String,
+    val level: Int,
+    /** 牌主的大航海等级,1 总督 / 2 提督 / 3 舰长,0 表示没有。 */
+    val guardLevel: Int,
+    val anchorName: String,
+    /** ARGB。服务端给的是 `#RRGGBBAA`,已经转成 Compose 要的排列。 */
+    val backgroundArgb: Int,
+    val textArgb: Int,
+)
+
+/**
+ * 一张表情弹幕的图。
+ *
+ * [official] 决定尺寸怎么算:官方表情信服务端给的宽高,房间表情和充电表情的宽高不可靠,一律按
+ * 固定边长画(见 [LiveEmoteFallbackPx])。这条判断照 PiliPlus 的 `chat_panel.dart:242-246`。
+ */
+data class LiveEmote(
+    val url: String,
+    val widthPx: Int,
+    val heightPx: Int,
+    val official: Boolean,
+)
+
+/** 房间表情与充电表情的固定边长,服务端给的宽高在这两类上对不上。 */
+const val LiveEmoteFallbackPx = 162
+
+/**
+ * 从直播间信息流里解出来、这个 app 会用到的消息。
+ *
+ * **丢弃的那些是产品决定,不是解析没做**:礼物(`SEND_GIFT`)、进场(`INTERACT_WORD`)、进场特效
+ * (`ENTRY_EFFECT`)、红包天选(`POPULARITY_RED_POCKET_*`)、全站广播(`NOTICE_MSG`)、点赞
+ * (`LIKE_INFO_V3_*`)一概不产出,理由见 `docs/live-room-redesign.md` §4。礼物连解析都不加 ——
+ * 高峰期它是消息量的大头,解析了再扔仍然白付一遍反序列化。
+ */
 sealed interface LiveMessage {
 
     /**
@@ -40,6 +87,18 @@ sealed interface LiveMessage {
         val mode: Int,
         val senderMid: Long,
         val senderName: String,
+        /**
+         * 发送者头像。**弹幕消息自带这个字段**(`info[0][15].user.base.face`),所以聊天行画
+         * 头像不需要另外拉一次用户信息。取不到时是空串,由渲染层退成占位图。
+         */
+        val senderFace: String,
+        val medal: LiveFanMedal?,
+        /** 整条弹幕就是一张图时的那张图(`info[0][13]`)。 */
+        val emote: LiveEmote?,
+        /** 正文里夹图的表情表(`extra.emots`),键是要在正文里被替换掉的那段文字。 */
+        val inlineEmotes: Map<String, LiveEmote>,
+        /** 回复某人的弹幕,这里是被回复者的名字。本项目不做跳转,只显示。 */
+        val replyName: String?,
         val isSelf: Boolean,
     ) : LiveMessage
 
@@ -59,7 +118,22 @@ sealed interface LiveMessage {
      */
     data class Watched(val text: String) : LiveMessage
 
-    /** 醒目留言。[endTimeSeconds] 到点就该从列表里撤下来,是服务端定的,不是本地计时。 */
+    /**
+     * 高能榜人数。**和 [Watched] 是两个数**:那个是"来过多少人",这个是此刻榜上有多少人
+     * (送礼、弹幕会把人推上榜)。
+     *
+     * 这里是**数字**,不是拼好的句子 —— 服务端在这条上只给 `data.count`,所以量级折算和量词
+     * 由本地来(见界面上取的那条 string)。
+     */
+    data class OnlineRankCount(val count: Int) : LiveMessage
+
+    /**
+     * 醒目留言。[endTimeSeconds] 到点就该从列表里撤下来,是服务端定的,不是本地计时。
+     *
+     * **服务端给的 `background_color` 与 `background_bottom_color` 这里不收。** 那两个值是照
+     * 白底设计的,深色主题下直接糊,而它们编码的档位本地有一张自己的表(`ui/theme/Color.kt` 的
+     * `superChatTier`)。字段本身仍然存在,记在 `notes/live.md` §8.1。
+     */
     data class SuperChat(
         val id: Long,
         val message: String,
@@ -67,11 +141,63 @@ sealed interface LiveMessage {
         val senderMid: Long,
         val senderName: String,
         val senderFace: String,
-        val backgroundColor: String,
-        val backgroundBottomColor: String,
         val startTimeSeconds: Long,
         val endTimeSeconds: Long,
     ) : LiveMessage
+
+    /**
+     * 醒目留言被撤回。一条命令带的是**一组** id(`data.ids`),不是一条。
+     *
+     * 撤回之后流里那条留着并加删除线,汇总屏那份直接移除 —— 流是这个房间发生过什么的记录,
+     * 抹掉一条会让上下文断开;汇总屏是"此刻还有效的留言",撤回的不该再占位置。
+     */
+    data class SuperChatRemoved(val ids: List<Long>) : LiveMessage
+
+    /**
+     * 上舰。
+     *
+     * **`guard_level` 越小等级越高**:1 总督、2 提督、3 舰长。这和直觉相反,而
+     * `ui/live/LiveRoomScreen.kt` 的大航海名单用的是同一套取值,两处要保持一致。
+     *
+     * **没有头像字段。** `GUARD_BUY` 的 `data` 里不含 `face`,三个来源的字段表都不含,所以这一
+     * 行只能用类别图标起头。
+     *
+     * [months] 取自 `USER_TOAST_MSG` 的 `num` 配 `unit`;只收到 `GUARD_BUY` 时它是 null ——
+     * 那条消息里的 `num` 是礼物个数,不是月数,拿来当月数会写出一个错的数字。
+     */
+    data class GuardBuy(
+        val senderMid: Long,
+        val senderName: String,
+        /** 1 总督 / 2 提督 / 3 舰长。 */
+        val guardLevel: Int,
+        val months: Int?,
+        val startTimeSeconds: Long,
+    ) : LiveMessage
+
+    /** 主播中途改了标题。 */
+    data class RoomTitleChanged(val title: String) : LiveMessage
+
+    /**
+     * 开播与下播。**这条命令改的是页面状态**,不只是流里多一行:下播之后画面停在最后一帧,
+     * 而页面此前没有任何地方说明发生了什么。
+     */
+    data class LiveStateChanged(val live: Boolean) : LiveMessage
+
+    /**
+     * 超管警告与切断。两条命令的结构完全相同,只有 cmd 名不同,所以合成一个类型。
+     *
+     * **`msg` 和 `roomid` 在顶层,没有 `data` 这一层。** 这是直播协议里少数几条不走 `data` 的
+     * 命令之一,照别处的写法去取会恒定拿到 null。
+     */
+    data class Warning(val message: String, val cutOff: Boolean) : LiveMessage
+
+    /**
+     * 有人被禁言。**只在被禁言的是自己时才该显示** —— 别人被禁言与这个用户无关,而自己被禁言
+     * 之后发弹幕会一直失败,不说一声就只剩一个没有原因的错误。是不是自己由消费方判断。
+     *
+     * `uid` 在顶层是字符串、在 `data` 里是数字,同一条消息里两种类型并存。这里取 `data` 那份。
+     */
+    data class Blocked(val uid: Long, val name: String) : LiveMessage
 }
 
 /**
@@ -96,6 +222,10 @@ class LiveDanmakuClient(
     /**
      * 连上房间并持续产出消息,直到协程被取消。断线会重连 —— 连接期间 token 可能过期,所以
      * 每次重连都重新取一遍,不复用上一次的。
+     *
+     * 整条上游走 [Dispatchers.Default]:zlib 解压和 JSON 解析都在 [dispatch] 里,而弹幕高峰
+     * 期一个压缩包解开就是几十条。收集方在主线程,不加这一句这些活全落在主线程上。点播侧
+     * 同样处理,见 `danmaku/DanmakuRepository`。
      */
     fun messages(roomId: Long, selfMid: Long): Flow<LiveMessage> = channelFlow {
         var backoffMillis = INITIAL_BACKOFF_MILLIS
@@ -108,7 +238,7 @@ class LiveDanmakuClient(
             backoffMillis = if (connected) INITIAL_BACKOFF_MILLIS else (backoffMillis * 2).coerceAtMost(MAX_BACKOFF_MILLIS)
             delay(backoffMillis)
         }
-    }
+    }.flowOn(Dispatchers.Default)
 
     /** @return 是否真的建立过连接(用于决定重连退避)。 */
     private suspend fun connectOnce(roomId: Long, selfMid: Long, out: SendChannel<LiveMessage>): Boolean {
@@ -201,16 +331,36 @@ class LiveDanmakuClient(
         }
     }
 
+    /**
+     * 一条业务命令。
+     *
+     * **每条各自 `runCatching`,一条解析失败不影响同一批里的其余消息。** 直播协议里字段的类型
+     * 和层级会变(`PREPARING` 的 `roomid` 从数字改成过字符串,`info` 数组的长度不同版本不一样),
+     * 而一个压缩包里是几十条首尾相接的消息 —— 让一条的异常冒出去会把整批一起丢掉。失败时把 cmd
+     * 记下来,否则这类问题在日志里没有任何痕迹。
+     */
     private suspend fun emitCommand(body: String, selfMid: Long, out: SendChannel<LiveMessage>) {
         val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return
         // cmd 有 `DANMU_MSG:4:0:2:2:2:0` 这种带后缀的变体,按前缀判。
         val cmd = root["cmd"]?.jsonPrimitive?.contentOrNull ?: return
-        val message = when {
-            cmd.startsWith("DANMU_MSG") -> root.parseDanmaku(selfMid)
-            cmd == "SUPER_CHAT_MESSAGE" -> root.parseSuperChat()
-            cmd == "WATCHED_CHANGE" -> root.parseWatched()
-            else -> null
-        }
+        val message = runCatching {
+            when {
+                cmd.startsWith("DANMU_MSG") -> root.parseDanmaku(selfMid)
+                cmd == "SUPER_CHAT_MESSAGE" -> root.parseSuperChat()
+                cmd == "SUPER_CHAT_MESSAGE_DELETE" -> root.parseSuperChatRemoved()
+                cmd == "WATCHED_CHANGE" -> root.parseWatched()
+                cmd == "ONLINE_RANK_COUNT" -> root.parseOnlineRank()
+                cmd == "ROOM_CHANGE" -> root.parseRoomTitle()
+                cmd == "GUARD_BUY" -> root.parseGuardBuy()
+                cmd.startsWith("USER_TOAST_MSG") -> root.parseUserToast()
+                cmd == "LIVE" -> LiveMessage.LiveStateChanged(live = true)
+                cmd == "PREPARING" -> LiveMessage.LiveStateChanged(live = false)
+                cmd == "WARNING" -> root.parseWarning(cutOff = false)
+                cmd.startsWith("CUT_OFF") -> root.parseWarning(cutOff = true)
+                cmd == "ROOM_BLOCK_MSG" -> root.parseBlocked()
+                else -> null
+            }
+        }.onFailure { BiliLog.w("直播信息流解析失败 cmd=$cmd", it) }.getOrNull()
         if (message != null) out.send(message)
     }
 
@@ -275,12 +425,18 @@ private fun JsonObject.parseDanmaku(selfMid: Long): LiveMessage.Danmaku? {
         ?: 0xFFFFFF
 
     val user = extension?.get("user") as? JsonObject
+    val base = user?.get("base") as? JsonObject
     val mid = user?.get("uid")?.jsonPrimitive?.longOrNull
         ?: (info.getOrNull(2) as? JsonArray)?.getOrNull(0)?.jsonPrimitive?.longOrNull
         ?: 0L
-    val name = (user?.get("base") as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull
+    val name = base?.get("name")?.jsonPrimitive?.contentOrNull
         ?: (info.getOrNull(2) as? JsonArray)?.getOrNull(1)?.jsonPrimitive?.contentOrNull
         ?: ""
+
+    // 回复某人的弹幕。两个字段要一起看:名字非空、且 mid 非零才算数。
+    val replyMid = extra?.get("reply_mid")?.jsonPrimitive?.longOrNull ?: 0L
+    val replyName = extra?.get("reply_uname")?.jsonPrimitive?.contentOrNull
+        ?.takeIf { it.isNotEmpty() && replyMid != 0L }
 
     return LiveMessage.Danmaku(
         id = id,
@@ -289,8 +445,160 @@ private fun JsonObject.parseDanmaku(selfMid: Long): LiveMessage.Danmaku? {
         mode = mode,
         senderMid = mid,
         senderName = name,
+        senderFace = base?.get("face")?.jsonPrimitive?.contentOrNull.orEmpty(),
+        medal = parseMedal(user?.get("medal") as? JsonObject, info.getOrNull(3) as? JsonArray),
+        emote = (head.getOrNull(13) as? JsonObject)?.parseEmote(),
+        inlineEmotes = (extra?.get("emots") as? JsonObject).parseEmoteMap(),
+        replyName = replyName,
         // `extra.send_from_me` 在实测里不可靠(PiliPlus 注释标了 invalid),按 mid 比。
         isSelf = selfMid != 0L && mid == selfMid,
+    )
+}
+
+/**
+ * 一枚粉丝勋章要两个来源才凑得齐:[medal] 是结构化的那份,牌子所属主播的名字只在 [flat]
+ * (`info[3]`)的第 2 位。**无勋章时两边的空表示不一样** —— 结构化那份是 null,扁平那份是空数组。
+ */
+private fun parseMedal(medal: JsonObject?, flat: JsonArray?): LiveFanMedal? {
+    if (medal == null) return null
+    val name = medal["name"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotEmpty() } ?: return null
+    val background = medal["v2_medal_color_start"]?.jsonPrimitive?.contentOrNull?.let(::parseHexArgb)
+    val text = medal["v2_medal_color_text"]?.jsonPrimitive?.contentOrNull?.let(::parseHexArgb)
+    return LiveFanMedal(
+        name = name,
+        level = medal["level"]?.jsonPrimitive?.intOrNull ?: 0,
+        guardLevel = medal["guard_level"]?.jsonPrimitive?.intOrNull ?: 0,
+        anchorName = flat?.getOrNull(2)?.jsonPrimitive?.contentOrNull.orEmpty(),
+        backgroundArgb = background ?: MedalFallbackBackground,
+        textArgb = text ?: MedalFallbackText,
+    )
+}
+
+/**
+ * `#RRGGBBAA` 或 `#RRGGBB` 转 ARGB。**服务端给的是 alpha 在末尾**,Compose 要的是 alpha 在
+ * 最前,所以八位那种要把末两位挪到最前面,直接当整数解会得到一个完全不同的颜色。
+ */
+private fun parseHexArgb(raw: String): Int? {
+    val hex = raw.removePrefix("#")
+    val value = hex.toLongOrNull(radix = 16) ?: return null
+    return when (hex.length) {
+        6 -> (0xFF000000L or value).toInt()
+        8 -> ((value ushr 8) or ((value and 0xFF) shl 24)).toInt()
+        else -> null
+    }
+}
+
+/** 勋章色缺失时的兜底。取中性灰配白字,不去猜一个牌子色。 */
+private val MedalFallbackBackground = 0xFF6D6D75.toInt()
+private val MedalFallbackText = 0xFFFFFFFF.toInt()
+
+private fun JsonObject.parseEmote(): LiveEmote? {
+    val url = this["url"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotEmpty() } ?: return null
+    val unique = this["emoticon_unique"]?.jsonPrimitive?.contentOrNull.orEmpty()
+    val width = this["width"]?.jsonPrimitive?.intOrNull ?: 0
+    // 高度缺省时取宽度,表情基本是方的。
+    val height = this["height"]?.jsonPrimitive?.intOrNull ?: width
+    val official = unique.startsWith("official_")
+    return LiveEmote(
+        url = url,
+        widthPx = if (official && width > 0) width else LiveEmoteFallbackPx,
+        heightPx = if (official && height > 0) height else LiveEmoteFallbackPx,
+        official = official,
+    )
+}
+
+private fun JsonObject?.parseEmoteMap(): Map<String, LiveEmote> {
+    if (this == null || isEmpty()) return emptyMap()
+    return entries.mapNotNull { (key, value) ->
+        (value as? JsonObject)?.parseEmote()?.let { key to it }
+    }.toMap()
+}
+
+/** `data.ids` 是一组 id,一条命令可能撤回好几条。 */
+private fun JsonObject.parseSuperChatRemoved(): LiveMessage.SuperChatRemoved? {
+    val ids = ((this["data"] as? JsonObject)?.get("ids") as? JsonArray)
+        ?.mapNotNull { (it as? JsonPrimitive)?.longOrNull }
+        .orEmpty()
+    return if (ids.isEmpty()) null else LiveMessage.SuperChatRemoved(ids)
+}
+
+private fun JsonObject.parseRoomTitle(): LiveMessage.RoomTitleChanged? =
+    (this["data"] as? JsonObject)?.get("title")?.jsonPrimitive?.contentOrNull
+        ?.takeIf { it.isNotEmpty() }
+        ?.let { LiveMessage.RoomTitleChanged(it) }
+
+/**
+ * 上舰。**`data.num` 是礼物个数,不是月数**,所以这里不填 [LiveMessage.GuardBuy.months] ——
+ * 月数在 `USER_TOAST_MSG` 的 `num` 配 `unit` 那一对里,见 [parseUserToast]。
+ */
+private fun JsonObject.parseGuardBuy(): LiveMessage.GuardBuy? {
+    val data = this["data"] as? JsonObject ?: return null
+    val mid = data["uid"]?.jsonPrimitive?.longOrNull ?: return null
+    return LiveMessage.GuardBuy(
+        senderMid = mid,
+        senderName = data["username"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+        guardLevel = data["guard_level"]?.jsonPrimitive?.intOrNull ?: 0,
+        months = null,
+        startTimeSeconds = data["start_time"]?.jsonPrimitive?.longOrNull ?: 0L,
+    )
+}
+
+/**
+ * 上舰的另一条通知。**它和 `GUARD_BUY` 会为同一次上舰同时下发**,所以两条都产出成
+ * [LiveMessage.GuardBuy],由消费方按 `senderMid` 加 `guardLevel` 去重(见 `LiveRoomViewModel`)。
+ * 在这里选一条丢掉不行:哪一条先到没有保证,而带月数的是这一条。
+ *
+ * 现网同时存在 v1 与 v2 两个形态,字段路径完全不同,所以两条路都试。v2 的
+ * `sender_uinfo.base` 与弹幕里的 `user.base` 同构。
+ *
+ * `toast_msg` 那句整话这里不用:它把用户名包在 `<%...%>` 里给客户端做高亮,直接渲染会露出这对
+ * 符号,而剥掉之后剩下的信息本地已经能拼出来。
+ */
+private fun JsonObject.parseUserToast(): LiveMessage.GuardBuy? {
+    val data = this["data"] as? JsonObject ?: return null
+    val sender = data["sender_uinfo"] as? JsonObject
+    val guardInfo = data["guard_info"] as? JsonObject
+    val payInfo = data["pay_info"] as? JsonObject
+
+    val mid = sender?.get("uid")?.jsonPrimitive?.longOrNull
+        ?: data["uid"]?.jsonPrimitive?.longOrNull
+        ?: return null
+    val name = (sender?.get("base") as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull
+        ?: data["username"]?.jsonPrimitive?.contentOrNull
+        ?: ""
+    val guardLevel = guardInfo?.get("guard_level")?.jsonPrimitive?.intOrNull
+        ?: data["guard_level"]?.jsonPrimitive?.intOrNull
+        ?: 0
+
+    // 单位不是「月」时(有「\*3天」这类)就不给数字 —— 拿个数当月数会写出一个错的时长。
+    val unit = payInfo?.get("unit")?.jsonPrimitive?.contentOrNull
+        ?: data["unit"]?.jsonPrimitive?.contentOrNull
+    val num = payInfo?.get("num")?.jsonPrimitive?.intOrNull
+        ?: data["num"]?.jsonPrimitive?.intOrNull
+
+    return LiveMessage.GuardBuy(
+        senderMid = mid,
+        senderName = name,
+        guardLevel = guardLevel,
+        months = num?.takeIf { unit == "月" && it > 0 },
+        startTimeSeconds = guardInfo?.get("start_time")?.jsonPrimitive?.longOrNull
+            ?: data["start_time"]?.jsonPrimitive?.longOrNull
+            ?: 0L,
+    )
+}
+
+/** `msg` 与 `roomid` 都在顶层,这两条命令没有 `data` 那一层。 */
+private fun JsonObject.parseWarning(cutOff: Boolean): LiveMessage.Warning? =
+    this["msg"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotEmpty() }
+        ?.let { LiveMessage.Warning(message = it, cutOff = cutOff) }
+
+/** 顶层 `uid` 是字符串、`data.uid` 是数字,取 `data` 那份。 */
+private fun JsonObject.parseBlocked(): LiveMessage.Blocked? {
+    val data = this["data"] as? JsonObject ?: return null
+    val uid = data["uid"]?.jsonPrimitive?.longOrNull ?: return null
+    return LiveMessage.Blocked(
+        uid = uid,
+        name = data["uname"]?.jsonPrimitive?.contentOrNull.orEmpty(),
     )
 }
 
@@ -302,6 +610,17 @@ private fun JsonObject.parseWatched(): LiveMessage.Watched? =
         ?.takeIf { it.isNotEmpty() }
         ?.let { LiveMessage.Watched(it) }
 
+/**
+ * `ONLINE_RANK_COUNT` 的 `data.count`,高能榜人数(PiliPlus `controller.dart:623-625`,
+ * 见 notes/live.md 第 6 节)。**服务端给的是数字,不是拼好的句子**,与 `WATCHED_CHANGE` 不同。
+ */
+private fun JsonObject.parseOnlineRank(): LiveMessage.OnlineRankCount? =
+    (this["data"] as? JsonObject)
+        ?.get("count")
+        ?.jsonPrimitive?.intOrNull
+        ?.takeIf { it >= 0 }
+        ?.let { LiveMessage.OnlineRankCount(it) }
+
 private fun JsonObject.parseSuperChat(): LiveMessage.SuperChat? {
     val data = this["data"] as? JsonObject ?: return null
     val user = data["user_info"] as? JsonObject
@@ -312,8 +631,6 @@ private fun JsonObject.parseSuperChat(): LiveMessage.SuperChat? {
         senderMid = data["uid"]?.jsonPrimitive?.longOrNull ?: 0L,
         senderName = user?.get("uname")?.jsonPrimitive?.contentOrNull.orEmpty(),
         senderFace = user?.get("face")?.jsonPrimitive?.contentOrNull.orEmpty(),
-        backgroundColor = data["background_color"]?.jsonPrimitive?.contentOrNull ?: "#EDF5FF",
-        backgroundBottomColor = data["background_bottom_color"]?.jsonPrimitive?.contentOrNull ?: "#2A60B2",
         startTimeSeconds = data["start_time"]?.jsonPrimitive?.longOrNull ?: 0L,
         endTimeSeconds = data["end_time"]?.jsonPrimitive?.longOrNull ?: 0L,
     )

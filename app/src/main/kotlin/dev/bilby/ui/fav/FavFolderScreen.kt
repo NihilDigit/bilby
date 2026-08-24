@@ -16,7 +16,6 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -29,6 +28,7 @@ import dev.bilby.data.FavRepository
 import dev.bilby.data.FavVideo
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -263,8 +263,8 @@ fun FavFolderScreen(
 
     Box(modifier = modifier.fillMaxSize()) {
         AdaptiveContent {
-            PullToRefreshBox(
-                isRefreshing = state.refreshing,
+            RefreshBox(
+                refreshing = state.refreshing,
                 onRefresh = onRefresh,
                 modifier = Modifier.fillMaxSize(),
             ) {

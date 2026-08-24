@@ -20,7 +20,11 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.vector.VectorPainter
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
+import dev.bilby.R
 import dev.bilby.ui.theme.FixedColors
 
 /**
@@ -46,9 +50,20 @@ fun LevelBadge(level: Int, senior: Boolean = false, height: Dp, modifier: Modifi
     val digitColor = Color.White
     val boltPainter = if (senior) rememberVectorPainter(Icons.Filled.Bolt) else null
     val aspect = (if (senior) LevelCanvas.ExtendR else LevelCanvas.TotalR) / LevelCanvas.TotalB
+    // 等级数字是画出来的,不是文字,读屏在这里什么都读不到 —— 评论区每个名字后面的等级
+    // 对读屏用户完全不存在。描述只能由外面给。
+    val label = stringResource(
+        if (senior) R.string.level_badge_senior else R.string.level_badge,
+        level,
+    )
     // matchHeightConstraintsFirst = true:高度是外部定死的(height 参数),宽度要跟着算——
     // 默认反过来(先凑宽度)在这里没有宽度约束可凑,会退化成一个不可预期的尺寸。
-    Canvas(modifier = modifier.height(height).aspectRatio(aspect, matchHeightConstraintsFirst = true)) {
+    Canvas(
+        modifier = modifier
+            .height(height)
+            .aspectRatio(aspect, matchHeightConstraintsFirst = true)
+            .semantics { contentDescription = label },
+    ) {
         val factor = size.height / LevelCanvas.TotalB
         scale(factor, factor, pivot = Offset.Zero) {
             with(LevelCanvas) {

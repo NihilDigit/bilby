@@ -10,6 +10,8 @@ import dev.bilby.api.DeviceFingerprint
 import dev.bilby.api.WbiSigner
 import dev.bilby.data.AccountRepository
 import dev.bilby.data.ArticleRepository
+import dev.bilby.data.DanmakusRepository
+import dev.bilby.data.DynamicFeedStore
 import dev.bilby.data.DynamicRepository
 import dev.bilby.data.FingerprintStore
 import dev.bilby.danmaku.DanmakuRepository
@@ -114,8 +116,19 @@ class AppContainer(context: Context) {
     }
 
     val feedCacheRepository: FeedCacheRepository by lazy {
-        FeedCacheRepository(database.feedCacheItemDao(), database.feedCacheCursorDao())
+        FeedCacheRepository(database.feedCacheItemDao())
     }
+
+    /**
+     * 关注动态流。**挂在容器上而不是某个 ViewModel 上**:首页和"其他动态"是同一条流的两个
+     * 视图,而它们分属不同的导航目的地,ViewModel 的作用域套不住两边(见 DynamicFeedStore)。
+     */
+    val dynamicFeedStore: DynamicFeedStore by lazy {
+        DynamicFeedStore(dynamicRepository, feedCacheRepository, settings)
+    }
+
+    /** 第三方直播归档,只读、无鉴权,见它自己的说明。 */
+    val danmakusRepository: DanmakusRepository by lazy { DanmakusRepository(httpClient, json) }
 
     val videoRepository: VideoRepository by lazy { VideoRepository(biliClient) }
 

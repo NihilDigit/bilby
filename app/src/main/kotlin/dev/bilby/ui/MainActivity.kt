@@ -3,7 +3,6 @@ package dev.bilby.ui
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
@@ -18,6 +17,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.Icons
@@ -49,16 +50,21 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -124,11 +130,16 @@ import dev.bilby.ui.message.WhisperViewModel
 import dev.bilby.ui.profile.ProfileViewModel
 import dev.bilby.ui.search.SearchChatScreen
 import dev.bilby.ui.search.SearchChatViewModel
+import dev.bilby.ui.search.SearchResultScreen
+import dev.bilby.ui.search.SearchResultViewModel
 import dev.bilby.ui.settings.AboutSettingsPage
 import dev.bilby.ui.settings.AgentSettingsPage
 import dev.bilby.ui.settings.DanmakuSettingsPage
 import dev.bilby.ui.settings.OfflineSettingsPage
 import dev.bilby.ui.settings.PlaybackSettingsPage
+import dev.bilby.data.model.ArticleRef
+import dev.bilby.data.model.FeedEntry
+import dev.bilby.ui.settings.ExcludedFeedPage
 import dev.bilby.ui.settings.PrivacySettingsPage
 import dev.bilby.ui.settings.SettingsScreen
 import dev.bilby.ui.settings.SettingsSection
@@ -191,7 +202,19 @@ class MainActivity : ComponentActivity() {
         setContent {
             BilbyTheme {
                 BilbyWindowChrome()
-                BilbyApp(container, incomingLink)
+                // 导航层的提示浮在整棵树上面。放在这里而不是某个页面的 Scaffold 里:说这句话的
+                // 是压栈动作,而压栈能从任何一页发起,各页面的 Scaffold 都会跟着页面一起换掉。
+                val snackbarHostState = remember { SnackbarHostState() }
+                Box(modifier = Modifier.fillMaxSize()) {
+                    BilbyApp(container, incomingLink, snackbarHostState)
+                    SnackbarHost(
+                        hostState = snackbarHostState,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .navigationBarsPadding()
+                            .imePadding(),
+                    )
+                }
             }
         }
     }
@@ -238,7 +261,11 @@ private fun StartupUpdateHost(container: AppContainer) {
 }
 
 @Composable
-private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<String?>) {
+private fun BilbyApp(
+    container: AppContainer,
+    incomingLink: MutableStateFlow<String?>,
+    snackbarHostState: SnackbarHostState,
+) {
     // DataStore 第一帧是异步的:null 表示还没读出来,此时什么都不画,
     // 否则已登录用户每次冷启动都会闪一下登录页。
     val credentials by container.settings.credentials.collectAsStateWithLifecycle(initialValue = null)
@@ -267,17 +294,20 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
      * 压栈的唯一入口。同一个 key 在栈里只留一份,规则与理由见 [pushUnique]。
      *
      * **目标就是当前这一页时说一句。** 那一下真的什么都不该发生(空间页里点他自己的 @ 就是
-     * 这种),但一个按下去有涟漪、然后毫无动静的链接读起来和坏掉没有区别 —— 这条 toast 是
+     * 这种),但一个按下去有涟漪、然后毫无动静的链接读起来和坏掉没有区别 —— 这一句是
      * 在回答"我点到了吗"。
      *
-     * 用 `Toast` 而不是 snackbar:这句话没有可执行的动作,而 snackbar 要一个 `SnackbarHost`,
-     * 各页面各有自己的 Scaffold,为一句话把它穿到导航这一层不值。
+     * 用 snackbar 而不是系统 `Toast`:Toast 不参与主题,字号、圆角、深浅色全是系统的,
+     * 和它盖着的这个应用对不上。host 在 `setContent` 那一层,理由见那里。
      */
-    val pushContext = LocalContext.current
-    val push: (NavKey) -> Unit = remember(backStack, pushContext) {
+    val snackbarScope = rememberCoroutineScope()
+    val alreadyHere = stringResource(R.string.nav_already_here)
+    val push: (NavKey) -> Unit = remember(backStack, snackbarHostState, snackbarScope, alreadyHere) {
         { key ->
             if (!backStack.pushUnique(key)) {
-                Toast.makeText(pushContext, R.string.nav_already_here, Toast.LENGTH_SHORT).show()
+                // 连点几下只留最后一条:SnackbarHostState 自带 MutatorMutex,新的一条会
+                // 取消正在显示的那条,不用自己去 dismiss。
+                snackbarScope.launch { snackbarHostState.showSnackbar(alreadyHere) }
             }
         }
     }
@@ -417,6 +447,7 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                         onSettingsClick = { push(Settings) },
                         onOpenFollowings = { push(Followings) },
                         onOpenOtherDynamics = { push(OtherDynamics) },
+                        onOpenArticle = { ref -> push(ArticlePage(ref.id, ref.isRead)) },
                         onOpenHistory = { push(History) },
                         onOpenToView = { push(ToViewList) },
                         onOpenOffline = { push(Offline) },
@@ -473,8 +504,20 @@ private fun BilbyApp(container: AppContainer, incomingLink: MutableStateFlow<Str
                     //
                     // 今天那个"点下一集不自动播放"的 bug 也出在这里:压栈时旧页的 onDispose
                     // 在新页起播之后才跑,把刚起播的下一集暂停了。替换栈顶让这个错位不成立。
-                    onOpenVideo = { backStack[backStack.lastIndex] = Video(it) },
+                    onOpenVideo = { backStack.replaceTopUnique(Video(it)) },
+                    onSearchTag = { push(SearchResult(it)) },
                 )
+            }
+            entry<SearchResult> { key ->
+                CutoutSafe {
+                    SearchResultRoute(
+                        container = container,
+                        keyword = key.keyword,
+                        onVideoClick = { push(Video(it)) },
+                        onUserClick = { push(Space(it)) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
             }
             entry<Messages> {
                 CutoutSafe {
@@ -701,6 +744,7 @@ private fun RootTabs(
     onSettingsClick: () -> Unit,
     onOpenFollowings: () -> Unit,
     onOpenOtherDynamics: () -> Unit,
+    onOpenArticle: (ArticleRef) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
@@ -710,6 +754,27 @@ private fun RootTabs(
 ) {
     var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
     val windowSize = rememberBilbyWindowSize()
+
+    // 重按当前 tab 回到顶部,navigation-bar.md 的明文要求。
+    //
+    // **每个 tab 一个计数器,不共用一个。** 共用的话,在动态页连点几下再切到个人页,
+    // 个人页看到的是一个变过的计数器,会跟着滚一次它自己没被点过的。
+    //
+    // 搜索页不接:那一页是对话式的,输入在下、一轮轮结果往上滚,顶端是最早的一轮,
+    // 回到顶不是"重来一次",而是翻到最旧的地方。
+    var feedScrollToTop by remember { mutableIntStateOf(0) }
+    var profileScrollToTop by remember { mutableIntStateOf(0) }
+    val onTabClick: (RootTab) -> Unit = { tab ->
+        if (selected == tab) {
+            when (tab) {
+                RootTab.Feed -> feedScrollToTop++
+                RootTab.Profile -> profileScrollToTop++
+                RootTab.Search -> Unit
+            }
+        } else {
+            selected = tab
+        }
+    }
 
     // IME 退让放在 Scaffold 这一层,让底栏跟着键盘一起上移。放在内层输入框上的话,
     // 底栏仍会在键盘下方占着高度,表现为输入框与键盘之间空一条。
@@ -733,7 +798,7 @@ private fun RootTabs(
                     RootTab.entries.forEach { tab ->
                         NavigationBarItem(
                             selected = selected == tab,
-                            onClick = { selected = tab },
+                            onClick = { onTabClick(tab) },
                             icon = { RootTabIcon(tab, selected == tab) },
                             label = { RootTabLabel(tab) },
                         )
@@ -744,6 +809,8 @@ private fun RootTabs(
             RootTabsContent(
                 insets = insets,
                 selected = selected,
+                feedScrollToTop = feedScrollToTop,
+                profileScrollToTop = profileScrollToTop,
                 container = container,
                 onVideoClick = onVideoClick,
                 onUserClick = onUserClick,
@@ -751,6 +818,7 @@ private fun RootTabs(
                 onSettingsClick = onSettingsClick,
                 onOpenFollowings = onOpenFollowings,
                 onOpenOtherDynamics = onOpenOtherDynamics,
+                onOpenArticle = onOpenArticle,
                 onOpenHistory = onOpenHistory,
                 onOpenToView = onOpenToView,
                 onOpenOffline = onOpenOffline,
@@ -764,19 +832,27 @@ private fun RootTabs(
         // 不需要 drawer —— M3 的 navigation rail 页把 rail 作为 drawer 的优先替代。
         Row(modifier = Modifier.fillMaxSize().imePadding()) {
             NavigationRail(modifier = Modifier.fillMaxHeight()) {
+                // 目的地居中:M3 的 navigation rail 页对平板给的就是这个摆法,三格顶在
+                // 屏幕最上沿时握持的那只手要伸到最远处。material3 的 NavigationRail 没有
+                // 排布参数(查 1.5.0-alpha25 的 aar 核实过),内部是一列 spacedBy,
+                // 所以上下各垫一个 weight 把它们挤到中间。
+                Spacer(modifier = Modifier.weight(1f))
                 RootTab.entries.forEach { tab ->
                     NavigationRailItem(
                         selected = selected == tab,
-                        onClick = { selected = tab },
+                        onClick = { onTabClick(tab) },
                         icon = { RootTabIcon(tab, selected == tab) },
                         label = { RootTabLabel(tab) },
                     )
                 }
+                Spacer(modifier = Modifier.weight(1f))
             }
             Scaffold(modifier = Modifier.weight(1f)) { insets ->
                 RootTabsContent(
                     insets = insets,
                     selected = selected,
+                    feedScrollToTop = feedScrollToTop,
+                    profileScrollToTop = profileScrollToTop,
                     container = container,
                     onVideoClick = onVideoClick,
                     onUserClick = onUserClick,
@@ -784,6 +860,7 @@ private fun RootTabs(
                     onSettingsClick = onSettingsClick,
                     onOpenFollowings = onOpenFollowings,
                     onOpenOtherDynamics = onOpenOtherDynamics,
+                    onOpenArticle = onOpenArticle,
                     onOpenHistory = onOpenHistory,
                     onOpenToView = onOpenToView,
                     onOpenOffline = onOpenOffline,
@@ -818,6 +895,9 @@ private fun RootTabLabel(tab: RootTab) {
 private fun RootTabsContent(
     insets: PaddingValues,
     selected: RootTab,
+    /** 每变一次就回到顶部。计数器而不是布尔:连按两下要滚两次,而布尔第二下没有变化。 */
+    feedScrollToTop: Int,
+    profileScrollToTop: Int,
     container: AppContainer,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
@@ -825,6 +905,7 @@ private fun RootTabsContent(
     onSettingsClick: () -> Unit,
     onOpenFollowings: () -> Unit,
     onOpenOtherDynamics: () -> Unit,
+    onOpenArticle: (ArticleRef) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
@@ -865,17 +946,20 @@ private fun RootTabsContent(
             when (tab) {
                 RootTab.Feed -> FeedPane(
                     container = container,
+                    scrollToTop = feedScrollToTop,
                     onVideoClick = onVideoClick,
                     onUserClick = onUserClick,
                     onLiveClick = onLiveClick,
                     onOpenFollowings = onOpenFollowings,
                     onOpenOtherDynamics = onOpenOtherDynamics,
+                    onOpenArticle = onOpenArticle,
                 )
 
                 RootTab.Search -> SearchPane(container, onVideoClick, onUserClick)
 
                 RootTab.Profile -> ProfilePane(
                     container = container,
+                    scrollToTop = profileScrollToTop,
                     onVideoClick = onVideoClick,
                     onUserClick = onUserClick,
                     onOpenHistory = onOpenHistory,
@@ -910,22 +994,23 @@ private fun RootTabsContent(
 @Composable
 private fun FeedPane(
     container: AppContainer,
+    scrollToTop: Int,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onLiveClick: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
     onOpenOtherDynamics: () -> Unit,
+    onOpenArticle: (ArticleRef) -> Unit,
 ) {
     val vm: FeedViewModel = viewModel(
         key = "root-feed",
         factory = viewModelFactory {
             initializer {
                 FeedViewModel(
-                    container.dynamicRepository,
+                    container.dynamicFeedStore,
                     container.followRepository,
                     container.settings,
                     container.feedReadPositionRepository,
-                    container.feedCacheRepository,
                 )
             }
         },
@@ -933,10 +1018,16 @@ private fun FeedPane(
     val state by vm.state.collectAsStateWithLifecycle()
     FeedScreen(
         state = state,
+        scrollToTop = scrollToTop,
         onLoadMore = vm::loadMore,
-        onRetry = vm::loadFirstPage,
+        onRetry = vm::retry,
         onRefresh = vm::refresh,
-        onItemClick = { onVideoClick(it.bvid) },
+        onItemClick = { entry ->
+            when (entry) {
+                is FeedEntry.Video -> onVideoClick(entry.bvid)
+                is FeedEntry.Article -> onOpenArticle(entry.ref)
+            }
+        },
         onUpClick = onUserClick,
         onLiveClick = onLiveClick,
         onExcludeUp = vm::excludeUp,
@@ -944,6 +1035,9 @@ private fun FeedPane(
         onOpenOtherDynamics = onOpenOtherDynamics,
         onScrollPositionChanged = vm::onVisibleTopChanged,
         onLocated = vm::onLocated,
+        onEnter = vm::onEnterScreen,
+        onUndoExclude = vm::undoExclude,
+        onExcludeUndoShown = vm::clearExcludeUndo,
     )
 }
 
@@ -980,8 +1074,39 @@ private fun SearchPane(
 }
 
 @Composable
+private fun SearchResultRoute(
+    container: AppContainer,
+    keyword: String,
+    onVideoClick: (String) -> Unit,
+    onUserClick: (Long) -> Unit,
+    onBack: () -> Unit,
+) {
+    // keyword 是这个目的地的身份,同一个词压两次由 pushUnique 挡住,不需要 switchTo。
+    val vm: SearchResultViewModel = viewModel(
+        factory = viewModelFactory {
+            initializer { SearchResultViewModel(keyword, container.searchRepository) }
+        },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    Scaffold(
+        topBar = { BilbyTopBar(title = keyword, onBack = onBack) },
+    ) { insets ->
+        SearchResultScreen(
+            state = state,
+            onOrderChange = vm::onOrderChanged,
+            onVideoClick = onVideoClick,
+            onUserClick = onUserClick,
+            onLoadMore = vm::loadMore,
+            onRetry = vm::retry,
+            modifier = Modifier.padding(insets),
+        )
+    }
+}
+
+@Composable
 private fun ProfilePane(
     container: AppContainer,
+    scrollToTop: Int,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onOpenHistory: () -> Unit,
@@ -1020,6 +1145,7 @@ private fun ProfilePane(
 
     ProfileScreen(
         state = state,
+        scrollToTop = scrollToTop,
         onVideoClick = onVideoClick,
         onOpenHistory = onOpenHistory,
         onOpenToView = onOpenToView,
@@ -1126,10 +1252,18 @@ private fun SettingsPageRoute(
                 onHistoryPausedChange = vm::setHistoryPaused,
                 onRetryHistoryPause = vm::loadHistoryPause,
                 onOpenBlacklist = onOpenBlacklist,
-                onClearExcludedFeed = vm::clearExcludedFeedMids,
+                onOpenExcludedFeed = { onOpenSection(SettingsSection.ExcludedFeed) },
+                onDanmakusArchiveChange = vm::setDanmakusArchive,
                 onBack = onBack,
             )
         }
+
+        SettingsSection.ExcludedFeed -> ExcludedFeedPage(
+            state = state,
+            onRestore = vm::restoreExcludedFeedMid,
+            onClearAll = vm::clearExcludedFeedMids,
+            onBack = onBack,
+        )
 
         SettingsSection.About -> AboutSettingsPage(
             state = state,
@@ -1211,7 +1345,7 @@ private fun HistoryRoute(
                         ) {
                             Icon(
                                 Icons.Outlined.Checklist,
-                                contentDescription = stringResource(R.string.history_select),
+                                contentDescription = stringResource(R.string.action_select),
                             )
                         }
                         // 两个清空收进溢出菜单:M3 的 top app bar anatomy 里 headline 之后最多
@@ -1418,39 +1552,56 @@ private fun OfflineRoute(
     val items by vm.items.collectAsStateWithLifecycle()
     val usedBytes by vm.usedBytes.collectAsStateWithLifecycle()
 
-    // 多选态就是"选中集合非空",不另设一个布尔 —— 两者永远同真同假,而分成两个状态之后
-    // "空集合 + 还在多选态"是个画得出来、退不出去的组合。
-    var selectedIds by remember { mutableStateOf(emptySet<String>()) }
+    // null 表示不在多选态,理由见 [OfflineScreen] 那个参数的注释。
+    var selectedIds by remember { mutableStateOf<Set<String>?>(null) }
     var confirmingBatchDelete by remember { mutableStateOf(false) }
-    val selected = items.filter { it.id in selectedIds }
+    val selected = items.filter { it.id in selectedIds.orEmpty() }
     // 列表里已经没有的 id 要跟着掉:删完之后集合里留着几个死 id,顶栏就一直显示"已选 3 项"。
-    LaunchedEffect(items) { selectedIds = selectedIds intersect items.map { it.id }.toSet() }
-    BackHandler(enabled = selectedIds.isNotEmpty()) { selectedIds = emptySet() }
+    LaunchedEffect(items) { selectedIds = selectedIds?.intersect(items.map { it.id }.toSet()) }
+    BackHandler(enabled = selectedIds != null) { selectedIds = null }
 
     Scaffold(
         topBar = {
-            if (selectedIds.isEmpty()) {
-                BilbyTopBar(title = stringResource(R.string.offline_title), onBack = onBack)
+            val ids = selectedIds
+            if (ids == null) {
+                BilbyTopBar(
+                    title = stringResource(R.string.offline_title),
+                    onBack = onBack,
+                    actions = {
+                        // 多选此前只能长按进入,而长按没有任何视觉提示。照历史记录页的做法
+                        // 在顶栏放一个入口,长按保留。
+                        IconButton(
+                            onClick = { selectedIds = emptySet() },
+                            enabled = items.isNotEmpty(),
+                        ) {
+                            Icon(
+                                Icons.Outlined.Checklist,
+                                contentDescription = stringResource(R.string.action_select),
+                            )
+                        }
+                    },
+                )
             } else {
                 // 多选时整条顶栏换掉,返回箭头改成"退出多选"。这是 M3 的 contextual top app bar:
                 // 顶栏是当前上下文里能做什么的唯一说明,多选期间那个上下文变了。
                 BilbyTopBar(
-                    title = stringResource(R.string.offline_selected_count, selectedIds.size),
-                    onBack = { selectedIds = emptySet() },
+                    title = stringResource(R.string.offline_selected_count, ids.size),
+                    onBack = { selectedIds = null },
                     actions = {
                         val all = items.map { it.id }.toSet()
-                        IconButton(onClick = { selectedIds = if (selectedIds == all) emptySet() else all }) {
+                        IconButton(onClick = { selectedIds = if (ids == all) emptySet() else all }) {
                             Icon(
                                 Icons.Outlined.SelectAll,
                                 contentDescription = stringResource(R.string.offline_sheet_select_all),
                             )
                         }
                         IconButton(
+                            enabled = selected.isNotEmpty(),
                             onClick = {
                                 // 一个字节都还没下的那些直接删,理由同单条(见 OfflineScreen)。
                                 if (selected.all { it.status == OfflineStatus.Queued }) {
                                     vm.deleteAll(selected)
-                                    selectedIds = emptySet()
+                                    selectedIds = null
                                 } else {
                                     confirmingBatchDelete = true
                                 }
@@ -1474,7 +1625,8 @@ private fun OfflineRoute(
             onRetry = vm::retry,
             selectedIds = selectedIds,
             onToggleSelection = { item ->
-                selectedIds = if (item.id in selectedIds) selectedIds - item.id else selectedIds + item.id
+                val current = selectedIds.orEmpty()
+                selectedIds = if (item.id in current) current - item.id else current + item.id
             },
             contentPadding = insets,
         )
@@ -1489,7 +1641,7 @@ private fun OfflineRoute(
                 TextButton(onClick = {
                     confirmingBatchDelete = false
                     vm.deleteAll(selected)
-                    selectedIds = emptySet()
+                    selectedIds = null
                 }) { Text(stringResource(R.string.action_confirm)) }
             },
             dismissButton = {
@@ -1519,11 +1671,27 @@ private fun ToViewListRoute(
         factory = viewModelFactory { initializer { ToViewViewModel(container.toViewRepository) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    var confirmingClearFinished by remember { mutableStateOf(false) }
+
+    // 移出成功之后给一次撤销。稍后再看是远程列表,删掉就得回 B 站重新找一遍那条视频,
+    // 而这个删除按钮紧挨着整行的可点区。
+    val removedMessage = stringResource(R.string.toview_removed)
+    val undoLabel = stringResource(R.string.action_undo)
+    LaunchedEffect(state.lastRemoved) {
+        val removed = state.lastRemoved ?: return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = removedMessage,
+            actionLabel = undoLabel,
+        )
+        if (result == SnackbarResult.ActionPerformed) vm.undoDelete(removed) else vm.consumeRemoved()
+    }
+
     Scaffold(
         topBar = {
             BilbyTopBar(title = stringResource(R.string.tab_toview), onBack = onBack) {
                 IconButton(
-                    onClick = vm::clearFinished,
+                    onClick = { confirmingClearFinished = true },
                     enabled = !state.clearing && state.items.any { it.isFinished },
                 ) {
                     Icon(
@@ -1533,6 +1701,7 @@ private fun ToViewListRoute(
                 }
             }
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { insets ->
         Box(modifier = Modifier.padding(insets)) {
             ToViewScreen(
@@ -1543,6 +1712,28 @@ private fun ToViewListRoute(
                 onRefresh = vm::refresh,
             )
         }
+    }
+
+    // 批量清空不给撤销:一次删掉的可能是几十条,撤销要逐条加回去,中途失败留下的是半截列表。
+    // 所以这一条走确认,和缓存删除、拉黑那几处一个待遇。
+    if (confirmingClearFinished) {
+        val count = state.items.count { it.isFinished }
+        AlertDialog(
+            onDismissRequest = { confirmingClearFinished = false },
+            title = { Text(stringResource(R.string.toview_clear_finished)) },
+            text = { Text(stringResource(R.string.toview_clear_finished_confirm, count)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmingClearFinished = false
+                    vm.clearFinished()
+                }) { Text(stringResource(R.string.action_clear)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingClearFinished = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
     }
 }
 
@@ -1709,7 +1900,9 @@ private fun OtherDynamicsRoute(
     onBack: () -> Unit,
 ) {
     val vm: OtherDynamicsViewModel = viewModel(
-        factory = viewModelFactory { initializer { OtherDynamicsViewModel(container.dynamicRepository) } },
+        factory = viewModelFactory {
+            initializer { OtherDynamicsViewModel(container.dynamicFeedStore, container.dynamicRepository) }
+        },
     )
     val state by vm.state.collectAsStateWithLifecycle()
     OtherDynamicsScreen(
@@ -1921,6 +2114,7 @@ private fun VideoRoute(
     onUpClick: (Long) -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
     onOpenVideo: (String) -> Unit,
+    onSearchTag: (String) -> Unit,
     onBack: () -> Unit,
 ) {
     // 切集**不进 backstack**。合集里的每一集互为平级,换一集不是进了一层;走 backstack 的话
@@ -1996,6 +2190,7 @@ private fun VideoRoute(
         onUpClick = onUpClick,
         onOpenQueueSource = onOpenQueueSource,
         onOpenVideo = onOpenVideo,
+        onSearchTag = onSearchTag,
         onBack = onBack,
     )
 }
@@ -2009,6 +2204,7 @@ private fun VideoPane(
     onUpClick: (Long) -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
     onOpenVideo: (String) -> Unit,
+    onSearchTag: (String) -> Unit,
     onBack: () -> Unit,
 ) {
     // **key 与 bvid 无关,一个播放页只有一个 VideoViewModel。**
@@ -2046,6 +2242,7 @@ private fun VideoPane(
     // 旧实例死活的东西。
     LaunchedEffect(bvid) { vm.switchTo(bvid) }
     val state by vm.state.collectAsStateWithLifecycle()
+    val videoTags by vm.videoTags.collectAsStateWithLifecycle()
     val related by vm.related.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -2089,6 +2286,9 @@ private fun VideoPane(
     VideoScreen(
         bvid = bvid,
         state = state,
+        videoTags = videoTags,
+        onLoadTags = vm::loadVideoTags,
+        onTagClick = onSearchTag,
         related = related,
         commentState = commentState,
         sponsorSegments = sponsorSegments,

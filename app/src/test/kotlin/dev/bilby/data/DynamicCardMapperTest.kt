@@ -523,4 +523,67 @@ class DynamicCardMapperTest {
         val card = item("DYNAMIC_TYPE_WORD", desc = "正文").copy(idStr = "").toDynamicCard()
         assertNull(card?.interaction)
     }
+
+    // ---- 首页那一半:哪些是"真正的文章" ----
+
+    private fun opusItem(type: String, hasMore: Boolean, title: String? = "一篇长文", body: String = "正文") =
+        item(
+            type,
+            MajorDto(
+                opus = OpusDto(
+                    title = title,
+                    summary = OpusSummaryDto(body, hasMore = hasMore),
+                    jumpUrl = "//www.bilibili.com/opus/998",
+                ),
+            ),
+        )
+
+    /**
+     * 判据是"阅读全文"那个入口在不在,也就是服务端说正文被截断了没有。这两条是这次把专栏
+     * 提到首页的全部依据 —— 判错的表现是图文动态涌进首页,或者长文一篇都上不来。
+     */
+    @Test
+    fun `正文没被截断的动态不是文章`() {
+        assertNull(opusItem("DYNAMIC_TYPE_DRAW", hasMore = false).toFeedArticle())
+        assertNull(opusItem("DYNAMIC_TYPE_WORD", hasMore = false).toFeedArticle())
+    }
+
+    @Test
+    fun `被截断的长文是文章,type 是 DRAW 也算`() {
+        // 带着 itemOpusStyle 请求时长文的 type 常常就是 DRAW,按 type 判会漏掉相当一部分。
+        val article = opusItem("DYNAMIC_TYPE_DRAW", hasMore = true).toFeedArticle()
+
+        assertEquals("一篇长文", article?.title)
+        assertEquals(ArticleRef("998", isRead = false), article?.ref)
+    }
+
+    @Test
+    fun `有 desc 的动态不算文章`() {
+        // desc 那条路的正文是完整的(见 toSpans),后面没有别的了。
+        val withDesc = item(
+            "DYNAMIC_TYPE_DRAW",
+            MajorDto(opus = OpusDto(summary = OpusSummaryDto("摘要", hasMore = true), jumpUrl = "//www.bilibili.com/opus/998")),
+            desc = "正文",
+        )
+        assertNull(withDesc.toFeedArticle())
+    }
+
+    @Test
+    fun `标题缺失时拿正文第一行顶上,摘要里不再重复它`() {
+        val article = opusItem("DYNAMIC_TYPE_DRAW", hasMore = true, title = null, body = "第一行\n第二行")
+            .toFeedArticle()
+
+        assertEquals("第一行", article?.title)
+        assertEquals("第二行", article?.summary)
+    }
+
+    @Test
+    fun `认不出编号的不是文章`() {
+        // 没有自己那一页的东西点开无处可去,留在"其他动态"里就地读。
+        val noJump = item(
+            "DYNAMIC_TYPE_DRAW",
+            MajorDto(opus = OpusDto(title = "标题", summary = OpusSummaryDto("摘要", hasMore = true))),
+        )
+        assertNull(noJump.toFeedArticle())
+    }
 }

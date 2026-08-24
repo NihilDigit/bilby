@@ -28,7 +28,10 @@ import dev.bilby.ui.theme.Spacing
  *
  * 和 segmented button 的分工见风格指南 §2.1:**排序用这个**(低强调、选项数可变、可横滚),
  * segmented button 留给切换视图。选中态只换字重(`labelLargeEmphasized`)和颜色
- * (`primary`/`outline`),不放大字号 —— 放大会带着行高一起变,这一排就会跳。
+ * (`primary`/`onSurfaceVariant`),不放大字号 —— 放大会带着行高一起变,这一排就会跳。
+ *
+ * 未选中取 `onSurfaceVariant` 而不是 `outline`:`outline` 是描边角色,只保证约 3:1,
+ * 而这一排未选中的项是可点的文字,浅色主题下量出来 4.3:1,小字不达标。
  *
  * **纵向留白由这一排自己负责,调用方只给左右内边距。** 那 48dp 的触摸盒本身就是这一排的
  * 高度;外面再垫上下 padding,一行字就撑到 56dp 往上,在评论区那种一屏要放很多条的地方,
@@ -79,7 +82,7 @@ fun <T> SortRow(
                     color = if (isSelected) {
                         MaterialTheme.colorScheme.primary
                     } else {
-                        MaterialTheme.colorScheme.outline
+                        MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )
             }

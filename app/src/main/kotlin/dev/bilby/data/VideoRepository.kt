@@ -8,6 +8,7 @@ import dev.bilby.api.dto.MemberCardResponseDto
 import dev.bilby.api.dto.PlayUrlDto
 import dev.bilby.api.dto.UgcSeasonDto
 import dev.bilby.api.dto.VideoDetailDto
+import dev.bilby.api.dto.VideoTagDto
 import dev.bilby.api.getData
 import dev.bilby.api.map
 import dev.bilby.api.toHttpsUrl
@@ -79,6 +80,9 @@ data class VideoStat(
 )
 
 data class VideoPart(val cid: Long, val index: Int, val title: String, val durationSeconds: Long)
+
+/** 一枚视频标签。[type] 的已知取值与各自的展示规则见 notes/video-tags.md。 */
+data class VideoTag(val name: String, val type: String)
 
 data class SeasonEpisode(
     val cid: Long,
@@ -193,6 +197,18 @@ class VideoRepository(private val client: BiliClient) {
     suspend fun getMemberCard(mid: Long): BiliResult<MemberCard> =
         client.getData<MemberCardResponseDto>(CARD_URL, mapOf("mid" to mid.toString(), "photo" to "false"))
             .map { it.toDomain() }
+
+    /**
+     * 视频标签。第一次展开简介时才拉(见 VideoViewModel.loadVideoTags),不随详情 eager 拉:
+     * 简介默认收起,标签看不见,却要每次打开视频都多背一次请求 —— [getMemberCard] 那条
+     * 风控账在这里同样成立,而这一份可以懒。公开接口,无签名,cid 照 PiliPlus 带上
+     * (notes/video-tags.md)。
+     */
+    suspend fun getVideoTags(bvid: String, cid: Long): BiliResult<List<VideoTag>> =
+        client.getData<List<VideoTagDto>>(TAG_URL, mapOf("bvid" to bvid, "cid" to cid.toString()))
+            .map { list ->
+                list.filter { it.tagName.isNotBlank() }.map { VideoTag(it.tagName, it.tagType) }
+            }
 
     /**
      * cid 必须由调用方给:同一个 bvid 下多 P/合集各有各的 cid,这里不替调用方决定播哪一 P。
@@ -368,6 +384,7 @@ class VideoRepository(private val client: BiliClient) {
 
         const val VIEW_URL = "${BiliConstants.WEB_HOST}/x/web-interface/view"
         const val CARD_URL = "${BiliConstants.WEB_HOST}/x/web-interface/card"
+        const val TAG_URL = "${BiliConstants.WEB_HOST}/x/web-interface/view/detail/tag"
         const val PLAY_URL = "${BiliConstants.WEB_HOST}/x/player/wbi/playurl"
 
         // 这里**不放默认画质**。默认只有一处:`SettingsStore.DEFAULT_QUALITY`(WiFi)与

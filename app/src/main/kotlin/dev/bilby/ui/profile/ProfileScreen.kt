@@ -21,7 +21,6 @@ import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -30,8 +29,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -41,7 +43,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
@@ -60,6 +61,7 @@ import dev.bilby.offline.OfflineDownloader
 import dev.bilby.offline.OfflineItem
 import dev.bilby.ui.offline.toRowUi
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.SectionHeader
 import dev.bilby.ui.components.TrailingEntry
@@ -271,14 +273,26 @@ fun ProfileScreen(
     onRetryHistory: () -> Unit,
     onRetryToView: () -> Unit,
     onRetryFavFolders: () -> Unit,
+    /** 每变一次就回到顶部。重按底栏上当前这一格时由 MainActivity 递增。 */
+    scrollToTop: Int = 0,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
+    val scrollState = rememberScrollState()
+    // 只认"进这次组合之后又变了":计数器在 MainActivity 手里,切走再切回来时它带着上一次的
+    // 值,而 LaunchedEffect 进组合就跑一次。
+    var handledScrollToTop by remember { mutableIntStateOf(scrollToTop) }
+    LaunchedEffect(scrollToTop) {
+        if (scrollToTop != handledScrollToTop) {
+            handledScrollToTop = scrollToTop
+            scrollState.animateScrollTo(0)
+        }
+    }
     Column(
         modifier = modifier
             .fillMaxSize()
             .padding(contentPadding)
-            .verticalScroll(rememberScrollState()),
+            .verticalScroll(scrollState),
     ) {
         AccountHeader(
             state = state,
@@ -664,22 +678,15 @@ private fun FavFolderRow(folder: FavFolder, onClick: () -> Unit) {
     )
 }
 
+/** 这一段还在读。和列表尾部、助理过程用的是同一个 [InlineProgress],只是多一圈行内留白。 */
 @Composable
 private fun InlineSectionProgress() {
-    Row(
+    InlineProgress(
+        text = stringResource(R.string.settings_loading),
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-    ) {
-        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-        Text(
-            text = stringResource(R.string.settings_loading),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
+    )
 }
 
 @Composable

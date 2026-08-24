@@ -21,7 +21,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,6 +51,7 @@ import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -217,7 +217,7 @@ private fun MessageBubble(
 
                     // 提示条在数据层就被滤掉了(见 MessageRepository.messages),这里画不到。
                     // 留一个分支只是为了让 when 穷尽 —— 真走到说明过滤那步漏了。
-                    is WhisperContent.Hint -> BubbleText(content.text, MaterialTheme.colorScheme.outline)
+                    is WhisperContent.Hint -> BubbleText(content.text, MaterialTheme.colorScheme.onSurfaceVariant)
 
                     is WhisperContent.Unsupported -> BubbleText(
                         stringResource(R.string.whisper_unsupported, content.msgType),
@@ -228,7 +228,7 @@ private fun MessageBubble(
             Text(
                 text = formatRelativeTime(message.timeSeconds),
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -362,10 +362,7 @@ private fun WhisperInput(sending: Boolean, error: String?, onSend: (String) -> U
                 )
                 FilledIconButton(onClick = send, enabled = !sending && text.isNotBlank()) {
                     if (sending) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(Dimens.IconInline),
-                            strokeWidth = 2.dp,
-                        )
+                        LoadingSpinner()
                     } else {
                         Icon(
                             Icons.AutoMirrored.Filled.Send,

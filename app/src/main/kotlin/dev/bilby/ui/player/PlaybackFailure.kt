@@ -2,8 +2,6 @@ package dev.bilby.ui.player
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -17,8 +15,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import dev.bilby.R
+import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.delay
@@ -48,9 +46,9 @@ fun PlaybackFailure(
         )
         // 重试中不给按钮:此刻按下去只会打断已经在跑的那次。
         if (retrying) {
-            CircularProgressIndicator(
+            LoadingSpinner(
+                modifier = Modifier.padding(top = Spacing.Cozy),
                 color = FixedColors.OnMedia,
-                modifier = Modifier.padding(top = Spacing.Cozy).size(24.dp),
             )
         } else {
             TextButton(onClick = onRetry) {

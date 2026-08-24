@@ -32,6 +32,15 @@ sealed interface CommentCursor {
 data class CommentItem(
     val rpid: Long,
     val rootRpid: Long, // 楼中楼列表用它请求;主楼本身该值等于 rpid
+    /**
+     * 这条回复挂在谁下面。一级评论是 0;直接回复主楼的楼中楼等于 [rootRpid];回复楼中楼里
+     * 某一条时是那一条的 rpid。
+     *
+     * **它决定正文开头有没有"回复 @某某 :"**:那一截是发送方客户端自己拼进 message 的
+     * (见 [CommentRepository.postComment]),服务端不另给字段。所以渲染楼中楼时要靠
+     * `parentRpid != rootRpid` 判断正文是否已自带回复对象,不能只看 message 的字面。
+     */
+    val parentRpid: Long = 0L,
     val mid: Long,
     val uname: String,
     val avatarUrl: String,
@@ -187,7 +196,15 @@ class CommentRepository(
         }
     }
 
-    /** 发评论,`replyTo` 为空即发主楼一级评论,非空即回复该楼(notes §1.7)。 */
+    /**
+     * 发评论,`replyTo` 为空即发主楼一级评论,非空即回复该楼(notes §1.7)。
+     *
+     * **回复楼中楼里的某一条时,"回复 @某某 :"由这里拼进正文。** 服务端不记录回复对象:
+     * `parent` 只用于挂树,取出来的条目里没有任何字段说明它冲着谁,所有客户端读到的
+     * 那一截都是发送方自己写进 message 的字面文本(PiliPlus 同样在
+     * `lib/pages/video/reply_new/view.dart:400` 拼这一串)。不拼的话,这条回复在官方
+     * 客户端和网页端也一样看不出在跟谁说话。见 notes §1.7。
+     */
     suspend fun postComment(
         oid: Long,
         message: String,
@@ -201,10 +218,21 @@ class CommentRepository(
                 put("root", it.rootRpid.toString())
                 put("parent", it.rpid.toString())
             }
-            put("message", message)
+            put("message", replyTo.prefixReplyTarget(message))
         }
         return client.postForm<ReplyAddResponseDto>(ADD_URL, form).map {}
     }
+
+    /**
+     * 回复对象是楼中楼里的一条(`rootRpid != rpid`)时给正文加前缀,回复主楼时不加 ——
+     * 主楼那一条就排在这组回复的上面,读者看得见挂在谁下面。
+     *
+     * 前后两个空格与冒号照抄站上的既有形态,**不带进 `at_name_to_mid`**:那份名单是给
+     * 用户显式 @ 出来的人用的,自动前缀里的名字不进去,于是它渲染出来是普通文字而不是
+     * 一个指向对方的链接 —— 官方客户端拼出来的也是这样。
+     */
+    private fun CommentItem?.prefixReplyTarget(message: String): String =
+        if (this != null && rootRpid != rpid) " 回复 @$uname : $message" else message
 
     /** 只允许删自己的评论,UI 层已经按 mid 过滤入口,这里不重复校验——服务端本身也会拒绝越权删除。 */
     suspend fun deleteComment(oid: Long, rpid: Long, type: Int = VIDEO_COMMENT_TYPE): BiliResult<Unit> {
@@ -232,6 +260,7 @@ class CommentRepository(
         return CommentItem(
             rpid = rpid,
             rootRpid = root.takeIf { it != 0L } ?: rootOverride ?: rpid,
+            parentRpid = parent,
             mid = myMid,
             uname = member.uname.decodeHtmlEntities(),
             avatarUrl = member.avatar.toHttpsUrl(),

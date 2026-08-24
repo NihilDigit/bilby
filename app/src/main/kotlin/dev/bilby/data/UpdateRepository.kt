@@ -11,10 +11,13 @@ import io.ktor.http.isSuccess
 import io.ktor.utils.io.core.isEmpty
 import io.ktor.utils.io.core.readBytes
 import io.ktor.utils.io.readRemaining
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.IOException
 
 /** GitHub release 里我们要的那几项。其余字段一律忽略,见 [Json] 的 ignoreUnknownKeys。 */
 @Serializable
@@ -97,8 +100,21 @@ class UpdateRepository(
         )
     }.getOrElse {
         BiliLog.w("查更新失败", it)
-        UpdateCheck.Failed(it.message ?: "网络错误")
+        UpdateCheck.Failed(checkFailureText(it))
     }
+
+    /**
+     * 查更新失败在界面上说的话。
+     *
+     * **归类必须在这一层做。** 异常的 message 是给日志看的("Unable to resolve host ..."),
+     * 而 [UpdateCheck.Failed] 到了 ViewModel 手里只是一个字符串,那边分不出它是写好的文案
+     * 还是异常原文,于是原文照样上屏。原文已经由上面那行 [BiliLog] 记走,这里不重复留一份。
+     *
+     * 与设置页下载失败那一句同一套措辞(见 `ui/settings/SettingsViewModel` 的
+     * `downloadFailureText`):一行副标题只有一句话的位置,要回答的是"再点一次还是先换个网"。
+     */
+    private fun checkFailureText(cause: Throwable): String =
+        if (cause is IOException) "网络不通,检查网络后重试" else "检查更新没有完成,稍后重试"
 
     /**
      * 下载到给定文件。[onProgress] 收到的是 0..1;总长未知(服务端没给 Content-Length)时
@@ -106,32 +122,44 @@ class UpdateRepository(
      *
      * 边下边写而不是整包读进内存:APK 有几十 MB,一次性 `bodyAsBytes()` 在低内存设备上
      * 是实打实的 OOM 风险。
+     *
+     * **[target] 的准备也归这里**:建目录、删掉上一次的残包都在同一个 IO 块里做完。调用方
+     * 拿到的是一个路径,而准备它的每一步都碰磁盘 —— 留在调用方就是留在主线程。上一次下到
+     * 一半的残包会让安装器报"解析包出现问题",而那句提示指不向真正的原因。
+     *
+     * [onProgress] 在 IO 线程上被调,调用方拿它更新的必须是线程安全的容器(现有两处都是
+     * `MutableStateFlow`)。
      */
     suspend fun download(
         info: UpdateInfo,
         target: File,
         onProgress: (Float) -> Unit,
-    ): Result<File> = runCatching {
-        val response = httpClient.get(info.downloadUrl) { header("User-Agent", "Bilby") }
-        if (!response.status.isSuccess()) error("下载失败:HTTP ${response.status.value}")
+    ): Result<File> = withContext(Dispatchers.IO) {
+        runCatching {
+            target.parentFile?.mkdirs()
+            target.delete()
 
-        val total = info.sizeBytes.takeIf { it > 0 } ?: Long.MAX_VALUE
-        var written = 0L
-        val channel = response.bodyAsChannel()
-        target.outputStream().use { out ->
-            while (!channel.isClosedForRead) {
-                val packet = channel.readRemaining(DOWNLOAD_CHUNK)
-                while (!packet.isEmpty) {
-                    val bytes = packet.readBytes()
-                    out.write(bytes)
-                    written += bytes.size
-                    onProgress((written.toFloat() / total).coerceIn(0f, 1f))
+            val response = httpClient.get(info.downloadUrl) { header("User-Agent", "Bilby") }
+            if (!response.status.isSuccess()) error("下载失败:HTTP ${response.status.value}")
+
+            val total = info.sizeBytes.takeIf { it > 0 } ?: Long.MAX_VALUE
+            var written = 0L
+            val channel = response.bodyAsChannel()
+            target.outputStream().use { out ->
+                while (!channel.isClosedForRead) {
+                    val packet = channel.readRemaining(DOWNLOAD_CHUNK)
+                    while (!packet.isEmpty) {
+                        val bytes = packet.readBytes()
+                        out.write(bytes)
+                        written += bytes.size
+                        onProgress((written.toFloat() / total).coerceIn(0f, 1f))
+                    }
                 }
             }
-        }
-        onProgress(1f)
-        target
-    }.onFailure { BiliLog.w("下载更新包失败", it) }
+            onProgress(1f)
+            target
+        }.onFailure { BiliLog.w("下载更新包失败", it) }
+    }
 
     /**
      * 只认 `x.y.z` 形式的数字段,逐段比。

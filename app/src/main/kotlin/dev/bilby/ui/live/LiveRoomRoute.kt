@@ -47,7 +47,13 @@ fun LiveRoomRoute(
         key = "live-$roomId",
         factory = viewModelFactory {
             initializer {
-                LiveRoomViewModel(roomId, container.liveRepository, container.liveDanmakuClient, container.settings)
+                LiveRoomViewModel(
+                    roomId,
+                    container.liveRepository,
+                    container.liveDanmakuClient,
+                    container.settings,
+                    container.danmakusRepository,
+                )
             }
         },
     )

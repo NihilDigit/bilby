@@ -93,9 +93,8 @@ class StartupUpdateViewModel(
         if (_state.value is StartupUpdateState.Downloading) return
         _state.value = StartupUpdateState.Downloading(info, 0f)
         viewModelScope.launch {
+            // 只拼路径,不碰磁盘:建目录和删残包由 [UpdateRepository.download] 在 IO 线程上做。
             val target = File(downloadDir, info.assetName)
-            // 上一次下到一半的残包会让安装器报"解析包出现问题",而那句话指不向真正的原因。
-            if (target.exists()) target.delete()
             val result = updateRepository.download(info, target) { progress ->
                 _state.update { current ->
                     if (current is StartupUpdateState.Downloading) {
@@ -180,6 +179,7 @@ fun StartupUpdateDialog(
                     )
                 }
                 when (state) {
+                    // 下载报得出百分比,归 progress indicator;转圈那一档只覆盖进度不可知的等待。
                     is StartupUpdateState.Downloading -> LinearProgressIndicator(
                         progress = { state.progress },
                         modifier = Modifier

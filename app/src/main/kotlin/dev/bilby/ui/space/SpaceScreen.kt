@@ -60,7 +60,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import dev.bilby.BiliLog
 import dev.bilby.R
 import dev.bilby.ui.dynamic.DynamicAction
@@ -98,6 +102,7 @@ import dev.bilby.ui.components.LivePulse
 import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SortRow
 import dev.bilby.ui.components.SquareCover
@@ -831,8 +836,8 @@ fun SpaceScreen(
                     }
                 }
             }
-            PullToRefreshBox(
-                isRefreshing = state.refreshing,
+            RefreshBox(
+                refreshing = state.refreshing,
                 onRefresh = onRefresh,
                 modifier = Modifier.weight(1f),
             ) {
@@ -844,7 +849,7 @@ fun SpaceScreen(
                     !collectionsKnown -> FullScreenLoading()
                     // **页头的连接挂在这里,不是挂在外层那个 Column 上。**
                     //
-                    // 嵌套滚动从内往外传:列表 → 这里 → PullToRefreshBox → 外层。挂在外层时
+                    // 嵌套滚动从内往外传:列表 → 这里 → RefreshBox → 外层。挂在外层时
                     // 页头排在下拉刷新之后,列表到顶后剩下的下滑量先被刷新吃掉,页头再也拿不到
                     // —— 表现是收起之后展不开,而且"想把页头拉回来"这个动作变成了刷新。
                     // 挂在刷新框里面之后顺序对了:先把页头顶回来,它满了才轮到刷新。
@@ -1002,7 +1007,7 @@ private fun SpaceHeader(
                     Text(
                         text = stringResource(R.string.space_followers, formatCount(profile.follower)),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -1073,6 +1078,7 @@ private fun SpaceHeader(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SpaceHeaderActions(
     followState: FollowState,
@@ -1094,11 +1100,22 @@ private fun SpaceHeaderActions(
     ) {
         // 听这位 UP 的投稿:队列取自当前投稿列表,和播放页那份队列同源
         // (DESIGN 2.4b:有限且用户显式选定的集合)。
-        IconButton(onClick = onListenUp, enabled = canListen) {
-            Icon(
-                Icons.Filled.Headphones,
-                contentDescription = stringResource(R.string.space_listen_up),
-            )
+        //
+        // 一只耳机猜不出是"听这位 UP 主的投稿",所以挂一条 tooltip 把动作名说出来
+        // (M3 icon buttons 页对纯图标按钮给的就是这个办法)。不改成带文字的按钮是量出来的:
+        // 360dp 宽减去左右 16、头像 56、间距 12,再减去溢出菜单 48 和关注按钮约 76,
+        // 名字只剩 88dp;换成图标加三个字的按钮要 92dp,名字会掉到 44dp、两个字就截断。
+        TooltipBox(
+            positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+            tooltip = { PlainTooltip { Text(stringResource(R.string.space_listen_up)) } },
+            state = rememberTooltipState(),
+        ) {
+            IconButton(onClick = onListenUp, enabled = canListen) {
+                Icon(
+                    Icons.Filled.Headphones,
+                    contentDescription = stringResource(R.string.space_listen_up),
+                )
+            }
         }
         if (followState == FollowState.Blocked) {
             // [FollowButton] 在这一档什么都不画,不补一个出口的话这一页就没有回头路 ——

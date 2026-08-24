@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -28,6 +29,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -55,6 +57,8 @@ import androidx.compose.ui.unit.dp
 import dev.bilby.BuildConfig
 import dev.bilby.data.UpdateInfo
 import java.io.File
+import java.net.URI
+import java.net.URISyntaxException
 import dev.bilby.R
 import dev.bilby.data.CodecPreference
 import dev.bilby.ui.components.BilbyIcons
@@ -110,17 +114,20 @@ fun SettingsScreen(
                     icon = Icons.Outlined.PlayCircleOutline,
                     // 摘要给 WiFi 那一档:它是绝大多数时候真正生效的那个值。
                     value = state.loaded.then { videoQualityLabel(state.defaultQualityWifi) },
+                    target = RowTarget.Page,
                     onClick = { onOpenSection(SettingsSection.Playback) },
                 )
                 SettingRow(
                     title = stringResource(R.string.settings_section_danmaku),
                     icon = BilbyIcons.Danmaku,
+                    target = RowTarget.Page,
                     onClick = { onOpenSection(SettingsSection.Danmaku) },
                 )
                 SettingRow(
                     title = stringResource(R.string.settings_section_sponsorblock),
                     icon = Icons.Outlined.FastForward,
                     value = state.loaded.then { onOffLabel(state.sponsorBlock.enabled) },
+                    target = RowTarget.Page,
                     onClick = { onOpenSection(SettingsSection.SponsorBlock) },
                 )
                 SettingRow(
@@ -129,6 +136,7 @@ fun SettingsScreen(
                     value = state.loaded.then {
                         stringResource(R.string.settings_offline_concurrency_value, state.offlineConcurrency)
                     },
+                    target = RowTarget.Page,
                     onClick = { onOpenSection(SettingsSection.Offline) },
                 )
                 SettingRow(
@@ -141,17 +149,20 @@ fun SettingsScreen(
                             notConfigured
                         }
                     },
+                    target = RowTarget.Page,
                     onClick = { onOpenSection(SettingsSection.Agent) },
                 )
                 SettingRow(
                     title = stringResource(R.string.settings_section_privacy),
                     icon = Icons.Outlined.Shield,
+                    target = RowTarget.Page,
                     onClick = { onOpenSection(SettingsSection.Privacy) },
                 )
                 SettingRow(
                     title = stringResource(R.string.settings_section_about),
                     icon = Icons.Outlined.Info,
                     value = BuildConfig.VERSION_NAME,
+                    target = RowTarget.Page,
                     onClick = { onOpenSection(SettingsSection.About) },
                 )
                 // **登出留在首页,不进任何子页。** 它是这一页唯一的破坏性动作,埋进二级菜单
@@ -369,16 +380,29 @@ internal fun UpdateRow(
         is UpdateState.Failed ->
             stringResource(R.string.settings_update_failed, state.message)
     }
-    SettingRow(
-        title = stringResource(R.string.settings_update),
-        subtitle = subtitle,
-        onClick = when (state) {
-            is UpdateState.Available -> ({ onDownload(state.info) })
-            is UpdateState.Ready -> ({ onInstall(state.apk) })
-            UpdateState.Checking, is UpdateState.Downloading -> null
-            else -> onCheck
-        },
-    )
+    val downloading = state as? UpdateState.Downloading
+    Column {
+        SettingRow(
+            title = stringResource(R.string.settings_update),
+            subtitle = subtitle,
+            onClick = when (state) {
+                is UpdateState.Available -> ({ onDownload(state.info) })
+                is UpdateState.Ready -> ({ onInstall(state.apk) })
+                UpdateState.Checking, is UpdateState.Downloading -> null
+                else -> onCheck
+            },
+        )
+        // 下载是这一页唯一有真实百分比的等待,所以给 determinate 而不是转圈。副标题里
+        // 那个数字精确,但一串跳动的数字看不出走得快还是慢,而这正是等待时要判断的事。
+        if (downloading != null) {
+            LinearProgressIndicator(
+                progress = { downloading.progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            )
+        }
+    }
 }
 
 @Composable
@@ -398,7 +422,16 @@ internal fun SectionTitle(text: String) {
 }
 
 /**
- * @param value 这一项**当前是什么**,显示在行尾箭头之前。设置首页那七个入口靠它做到"不点进去
+ * 点这一行之后人会到哪里。行尾图标据此分开:去下一页给箭头,离开应用给外链图标,
+ * 弹对话框和当场执行的不给。
+ *
+ * 从前所有可点行一律画箭头,于是"点进去还有一页"这个承诺被用在了三种不同的行为上 ——
+ * 而箭头在 M3 的 list 里说的就是这一件事,给多了它就不再说明任何事情。
+ */
+internal enum class RowTarget { Page, External, Here }
+
+/**
+ * @param value 这一项**当前是什么**,显示在行尾图标之前。设置首页那七个入口靠它做到"不点进去
  *   也知道现在设成了什么" —— 一层菜单换来的如果是每次都得点进去看一眼,那这层菜单是净亏。
  */
 @Composable
@@ -411,8 +444,14 @@ internal fun SettingRow(
      * 子页里的每一行是一项设置而不是一个去处,逐行配图标只会让人以为它们还能再点进去。
      */
     icon: ImageVector? = null,
+    target: RowTarget = RowTarget.Here,
     onClick: (() -> Unit)? = null,
 ) {
+    val trailingIcon = when (target) {
+        RowTarget.Page -> Icons.AutoMirrored.Filled.KeyboardArrowRight
+        RowTarget.External -> Icons.AutoMirrored.Filled.OpenInNew
+        RowTarget.Here -> null
+    }
     ListItem(
         headlineContent = { Text(title, style = MaterialTheme.typography.bodyLarge) },
         leadingContent = icon?.let {
@@ -433,7 +472,7 @@ internal fun SettingRow(
                 )
             }
         },
-        trailingContent = if (onClick != null || value != null) {
+        trailingContent = if (trailingIcon != null || value != null) {
             {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (value != null) {
@@ -443,9 +482,9 @@ internal fun SettingRow(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    if (onClick != null) {
+                    if (trailingIcon != null) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            imageVector = trailingIcon,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -524,6 +563,8 @@ internal fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Ll
     var apiKey by rememberSaveable { mutableStateOf(initial.apiKey) }
     var model by rememberSaveable { mutableStateOf(initial.model) }
     var keyVisible by remember { mutableStateOf(false) }
+    // 空着是合法的:那是"不配助理"。挡的只是填了、但填得不成形的那一种。
+    val baseUrlValid = baseUrl.isBlank() || isHttpUrl(baseUrl)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -534,6 +575,12 @@ internal fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Ll
                     value = baseUrl,
                     onValueChange = { baseUrl = it },
                     label = { Text(stringResource(R.string.settings_llm_base_url)) },
+                    isError = !baseUrlValid,
+                    supportingText = if (baseUrlValid) {
+                        null
+                    } else {
+                        ({ Text(stringResource(R.string.settings_url_invalid)) })
+                    },
                     singleLine = true,
                 )
                 OutlinedTextField(
@@ -572,15 +619,18 @@ internal fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Ll
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                onConfirm(
-                    LlmConfig(
-                        baseUrl = baseUrl.trim(),
-                        apiKey = apiKey.trim(),
-                        model = model.trim().ifBlank { SettingsStore.DEFAULT_LLM_MODEL },
-                    ),
-                )
-            }) { Text(stringResource(R.string.action_save)) }
+            TextButton(
+                enabled = baseUrlValid,
+                onClick = {
+                    onConfirm(
+                        LlmConfig(
+                            baseUrl = baseUrl.trim(),
+                            apiKey = apiKey.trim(),
+                            model = model.trim().ifBlank { SettingsStore.DEFAULT_LLM_MODEL },
+                        ),
+                    )
+                },
+            ) { Text(stringResource(R.string.action_save)) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
@@ -588,15 +638,26 @@ internal fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Ll
     )
 }
 
+/**
+ * 改一个服务地址。
+ *
+ * **label 常驻,不靠 placeholder 说明填的是什么。** placeholder 一开始打字就没了,而这个框
+ * 里要填的是一串没有自明性的地址;对话框标题在小屏上又会被弹起的键盘顶出视野。
+ *
+ * 校验只挡形态不对的输入,保存按钮跟着一起禁掉 —— 存进去一个不成形的地址,症状要等到下一次
+ * 播放时才以"跳过没生效"的样子出现,那时没人会想到是这里。
+ */
 @Composable
-internal fun TextFieldDialog(
+internal fun UrlFieldDialog(
     title: String,
+    label: String,
     initial: String,
     placeholder: String,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
     var value by rememberSaveable { mutableStateOf(initial) }
+    val valid = isHttpUrl(value)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -604,18 +665,48 @@ internal fun TextFieldDialog(
             OutlinedTextField(
                 value = value,
                 onValueChange = { value = it },
+                label = { Text(label) },
                 placeholder = { Text(placeholder) },
+                isError = !valid,
+                // 错误态配一句说明,不只是把框描红:M3 的 text fields 页把两者算一件事,
+                // 而一个只变红的框说不出它嫌哪里不对。没有错误时传 null,那一行不占高度。
+                supportingText = if (valid) {
+                    null
+                } else {
+                    ({ Text(stringResource(R.string.settings_url_invalid)) })
+                },
                 singleLine = true,
             )
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(value) }) { Text(stringResource(R.string.action_save)) }
+            TextButton(onClick = { onConfirm(value.trim()) }, enabled = valid) {
+                Text(stringResource(R.string.action_save))
+            }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         },
     )
 }
+
+/**
+ * 地址形态是不是对的。只认 http/https 加一个非空主机名 —— 能不能连上要发出去才知道,
+ * 这里挡的是漏掉协议头、把一整段说明粘进来这类当场就看得出来的输入。
+ *
+ * 用 [URI] 而不是自己写正则:它按 RFC 3986 拆,而手写的正则每次都会漏掉端口、路径
+ * 或 IPv6 里的某一种写法。
+ */
+private fun isHttpUrl(value: String): Boolean {
+    val uri = try {
+        URI(value.trim())
+    } catch (malformed: URISyntaxException) {
+        return false
+    }
+    val scheme = uri.scheme?.lowercase() ?: return false
+    return scheme in HttpSchemes && !uri.host.isNullOrBlank()
+}
+
+private val HttpSchemes = setOf("http", "https")
 
 /**
  * 值没到齐时不给摘要。**留空,不是给一个默认值** —— 首页每行右侧那串字是"现在是什么"的

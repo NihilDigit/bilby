@@ -45,7 +45,6 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomSheetScaffold
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -108,6 +107,8 @@ import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.ChoiceRow
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.CompactVideoRow
+import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SubtitleTrackMenu
 import dev.bilby.ui.components.VideoCover
@@ -289,7 +290,7 @@ fun ListenScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 when {
-                    state.loading -> CircularProgressIndicator()
+                    state.loading -> FullScreenLoading()
                     state.error != null -> Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
@@ -672,7 +673,8 @@ private fun PlaybackControls(
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
             if (loading) {
                 Box(modifier = Modifier.size(56.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                    // 跟它替掉的播放键同宽:小一圈会让这一格在取流那一瞬间塌下去。
+                    LoadingSpinner(size = 40.dp)
                 }
             } else {
                 IconButton(onClick = onPlayPause, modifier = Modifier.size(56.dp)) {

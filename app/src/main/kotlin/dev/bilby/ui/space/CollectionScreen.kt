@@ -3,7 +3,6 @@ package dev.bilby.ui.space
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -16,6 +15,7 @@ import dev.bilby.data.SpaceVideoItem
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.appendDistinctBy
 import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.theme.Breakpoints
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -138,8 +138,8 @@ fun CollectionScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
             maxWidth = Breakpoints.ReadableWidth,
         ) {
-            PullToRefreshBox(
-                isRefreshing = state.refreshing,
+            RefreshBox(
+                refreshing = state.refreshing,
                 onRefresh = onRefresh,
                 modifier = Modifier.fillMaxSize(),
             ) {

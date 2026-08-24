@@ -179,4 +179,34 @@ object FixedColors {
         level == 5 -> Color(0xFFEE672A)
         else -> Color(0xFFF04C49)
     }
+
+    /**
+     * 醒目留言的档位色,画成流里那一行左侧 4dp 宽的竖条。
+     *
+     * **不用服务端给的 `background_color` / `background_bottom_color`。** 那两个值是照白底设计
+     * 的,深色主题下直接糊(接口字段本身记在 `notes/live.md` §8.1)。这里是一张本地表,手法同上面
+     * 的 [MentionLight] / [MentionDark]:一档一个色相,明度分深浅两套 ——
+     * **携带语义的是色相,承担可读性的是明度。**
+     *
+     * 色相是**刻意拉开**的,不是照抄 B 站那六个值。照抄的问题是它最贵那两档(¥1000 与 ¥2000)
+     * 的区别主要在明度上(色相只差 4.7°),而这里的明度已经被拿去保证对比度了,归一之后两档会变成
+     * 同一个红。现在的排布是冷到暖随价位单调升高,相邻两档色相至少差 19.8°。
+     *
+     * 全部取彩度 48、浅色 tone 45 / 深色 tone 72,于是六档对各自主题 surface 的对比度落在
+     * 5.08–5.12 与 8.57–8.64 之间。**统一到同一档的用意是没有哪一档的竖条比别档更抢眼** ——
+     * 这条竖条标的是档位,不是"快看这条"。图形元素只要 3:1,这里有富余。
+     *
+     * **颜色不是唯一线索**:金额数字就写在同一行里,分不出颜色的读者读数字。
+     *
+     * 价位到色相的对应关系待真机核对 —— 那六个价位取自 B 站现行的档位表,如果实测下来 SC 的
+     * `price` 落在别的刻度上,改这里的阈值,色相阶梯不用动。
+     */
+    fun superChatTier(priceYuan: Int, dark: Boolean): Color = when {
+        priceYuan >= 2000 -> if (dark) Color(0xFFFD90AA) else Color(0xFFA94C65)
+        priceYuan >= 1000 -> if (dark) Color(0xFFFF9286) else Color(0xFFAC4D44)
+        priceYuan >= 500 -> if (dark) Color(0xFFF19E43) else Color(0xFF9C5B00)
+        priceYuan >= 100 -> if (dark) Color(0xFFD5AC33) else Color(0xFF846700)
+        priceYuan >= 50 -> if (dark) Color(0xFF55BBF0) else Color(0xFF00729D)
+        else -> if (dark) Color(0xFF88B0FF) else Color(0xFF3D6AB5)
+    }
 }

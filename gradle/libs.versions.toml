@@ -59,7 +59,6 @@ androidx-media3-exoplayer-dash = { module = "androidx.media3:media3-exoplayer-da
 androidx-media3-ui-compose = { module = "androidx.media3:media3-ui-compose", version.ref = "media3" }
 # 直播流走 HLS-fmp4：Media3 原生支持，而 FLV 那条要靠 progressive 里的 FlvExtractor 撑无限流。
 androidx-media3-exoplayer-hls = { module = "androidx.media3:media3-exoplayer-hls", version.ref = "media3" }
-androidx-media3-datasource-okhttp = { module = "androidx.media3:media3-datasource-okhttp", version.ref = "media3" }
 androidx-media3-session = { module = "androidx.media3:media3-session", version.ref = "media3" }
 
 androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }

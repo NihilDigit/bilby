@@ -5,14 +5,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import dev.bilby.BuildConfig
 import dev.bilby.R
@@ -50,6 +55,9 @@ enum class SettingsSection {
 
     /** SponsorBlock 的九个分类。再降一层,理由见 [SponsorBlockSettingsPage]。 */
     SponsorCategories,
+
+    /** 排除的 UP 主名单。从隐私页再降一层,理由见 [ExcludedFeedPage]。 */
+    ExcludedFeed,
     Offline,
     Agent,
     Privacy,
@@ -230,6 +238,7 @@ fun SponsorBlockSettingsPage(
                     prefs.categories.count { it in CATEGORY_LABELS },
                     CATEGORY_LABELS.size,
                 ),
+                target = RowTarget.Page,
                 onClick = onOpenCategories,
             )
             // 服务器地址和分类不是一类东西:那些是"跳什么",这个是"问谁"。
@@ -241,12 +250,16 @@ fun SponsorBlockSettingsPage(
         }
     }
     if (editingServer) {
-        TextFieldDialog(
+        UrlFieldDialog(
             title = stringResource(R.string.settings_sponsorblock_server_dialog),
+            label = stringResource(R.string.settings_sponsorblock_server),
             initial = prefs.serverUrl,
             placeholder = SettingsStore.DEFAULT_SB_SERVER,
             onDismiss = { editingServer = false },
-            onConfirm = { onChange(prefs.copy(serverUrl = it)) },
+            onConfirm = {
+                editingServer = false
+                onChange(prefs.copy(serverUrl = it))
+            },
         )
     }
 }
@@ -342,7 +355,12 @@ fun AgentSettingsPage(
         LlmDialog(
             initial = state.llm ?: LlmConfig("", "", SettingsStore.DEFAULT_LLM_MODEL),
             onDismiss = { editing = false },
-            onConfirm = onLlmChange,
+            // 保存也要收起对话框。原先只有取消收,按下保存之后配置存进去了、框还开着,
+            // 读起来像没生效,于是再按一次。
+            onConfirm = {
+                editing = false
+                onLlmChange(it)
+            },
         )
     }
 }
@@ -357,7 +375,8 @@ fun PrivacySettingsPage(
     onHistoryPausedChange: (Boolean) -> Unit,
     onRetryHistoryPause: () -> Unit,
     onOpenBlacklist: () -> Unit,
-    onClearExcludedFeed: () -> Unit,
+    onOpenExcludedFeed: () -> Unit,
+    onDanmakusArchiveChange: (Boolean) -> Unit,
     onBack: () -> Unit,
 ) {
     SettingsSubPage(stringResource(R.string.settings_section_privacy), onBack, state.loaded) {
@@ -382,13 +401,61 @@ fun PrivacySettingsPage(
                 onCheckedChange = onHistoryPausedChange,
             )
         }
-        SettingRow(title = stringResource(R.string.blacklist_title), onClick = onOpenBlacklist)
+        SettingRow(
+            title = stringResource(R.string.blacklist_title),
+            target = RowTarget.Page,
+            onClick = onOpenBlacklist,
+        )
+        // 和上面几项一样是"谁能知道我在看什么":这一条要发给站外服务器,副标题把发的是什么
+        // 说清楚 —— 一个只写"补全醒目留言"的开关,读者无从判断该不该关。
+        ToggleSettingRow(
+            title = stringResource(R.string.settings_danmakus_archive),
+            subtitle = stringResource(R.string.settings_danmakus_archive_subtitle),
+            checked = state.danmakusArchive,
+            onCheckedChange = onDanmakusArchiveChange,
+        )
         // 一个都没排除过的人不需要看见这个概念。
-        if (state.excludedFeedCount > 0) {
+        if (state.excludedFeedUps.isNotEmpty()) {
+            SettingRow(
+                title = stringResource(R.string.settings_feed_excluded),
+                subtitle = stringResource(R.string.settings_feed_excluded_count, state.excludedFeedUps.size),
+                target = RowTarget.Page,
+                onClick = onOpenExcludedFeed,
+            )
+        }
+    }
+}
+
+/**
+ * 排除的 UP 主。**逐个撤销**,不是只给一个"全部清空"。
+ *
+ * 排除是在动态流里单条操作的,那条动态被隐藏之后界面上再没有它的痕迹,撤销无处可落 ——
+ * 于是从前只能整份清空,而那要求用户为了找回一个人放弃其余全部。名字在排除那一刻就记下了
+ * (见 SettingsStore.excludedFeedMids),这一页才画得出来。
+ */
+@Composable
+fun ExcludedFeedPage(
+    state: SettingsUiState,
+    onRestore: (Long) -> Unit,
+    onClearAll: () -> Unit,
+    onBack: () -> Unit,
+) {
+    SettingsSubPage(stringResource(R.string.settings_feed_excluded), onBack, state.loaded) {
+        state.excludedFeedUps.forEach { up ->
+            ListItem(
+                headlineContent = { Text(up.name, style = MaterialTheme.typography.bodyLarge) },
+                trailingContent = {
+                    TextButton(onClick = { onRestore(up.mid) }) {
+                        Text(stringResource(R.string.settings_feed_excluded_restore))
+                    }
+                },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            )
+        }
+        if (state.excludedFeedUps.size > 1) {
             SettingRow(
                 title = stringResource(R.string.settings_feed_clear_excluded),
-                subtitle = stringResource(R.string.settings_feed_excluded_count, state.excludedFeedCount),
-                onClick = onClearExcludedFeed,
+                onClick = onClearAll,
             )
         }
     }
@@ -412,7 +479,12 @@ fun AboutSettingsPage(
             title = stringResource(R.string.settings_license),
             subtitle = "GPL-3.0-or-later",
         )
-        SettingRow(title = stringResource(R.string.settings_github), onClick = onOpenGithub)
+        // 这一行走出应用去浏览器,所以给外链图标而不是箭头:箭头说的是"应用里还有一页"。
+        SettingRow(
+            title = stringResource(R.string.settings_github),
+            target = RowTarget.External,
+            onClick = onOpenGithub,
+        )
         UpdateRow(
             state = state.update,
             onCheck = onCheckUpdate,

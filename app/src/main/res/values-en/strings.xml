@@ -8,7 +8,9 @@
     <string name="action_refresh">Refresh</string>
     <string name="action_retry">Retry</string>
     <string name="action_save">Save</string>
+    <string name="action_select">Select</string>
     <string name="action_send">Send</string>
+    <string name="action_undo">Undo</string>
 
     <string name="list_no_more">End of list</string>
     <string name="time_just_now">Just now</string>
@@ -39,6 +41,8 @@
     <string name="feed_frequent_ups">Most visited</string>
     <string name="feed_item_actions">Post actions</string>
     <string name="feed_exclude_up">Hide %1$s from home</string>
+    <string name="feed_excluded">%1$s is now hidden</string>
+    <string name="feed_article_badge">Article</string>
     <string name="feed_read_marker">New since your last visit</string>
 
     <string name="search_empty">Search videos and creators</string>
@@ -71,9 +75,10 @@
     <string name="toview_finished">Watched</string>
     <string name="toview_progress">Left off at %1$s</string>
     <string name="toview_remove">Remove from Watch later: %1$s</string>
+    <string name="toview_removed">Removed from Watch later</string>
+    <string name="toview_clear_finished_confirm">Delete %1$d watched items?</string>
 
     <string name="history_title">History</string>
-    <string name="history_select">Select</string>
     <string name="history_select_all">Select all</string>
     <string name="history_selected_count">%1$d selected</string>
     <string name="history_more">More</string>
@@ -91,6 +96,7 @@
     <string name="comment_sort_hot">Top</string>
     <string name="comment_sort_time">Newest</string>
     <string name="comment_tag_up">Creator</string>
+    <string name="comment_tag_thread_author">Author</string>
     <string name="comment_open_space">Space of %1$s</string>
     <string name="comment_tag_pinned">Pinned</string>
     <string name="comment_picture">Comment image</string>
@@ -98,7 +104,11 @@
     <string name="comment_unlike">Unlike</string>
     <string name="comment_reply">Reply</string>
     <string name="comment_delete">Delete comment</string>
+    <string name="comment_delete_confirm">Delete this comment?</string>
     <string name="comment_expand_replies">Show %1$d replies</string>
+    <string name="comment_open_replies_panel">View all %1$d replies</string>
+    <string name="comment_replies_time_ordered">Replies are ordered by time posted</string>
+    <string name="comment_collapse_replies">Collapse</string>
     <string name="comment_load_more">Load more</string>
     <string name="comment_replies_failed">Replies failed to load</string>
     <string name="comment_no_more_replies">No more replies</string>
@@ -111,6 +121,8 @@
     <string name="space_tab_dynamics">Posts</string>
     <string name="space_tab_collections">Collections</string>
     <string name="space_followers">%1$s followers</string>
+    <string name="level_badge">Level %1$d</string>
+    <string name="level_badge_senior">Level %1$d, senior member</string>
     <string name="space_no_sign">This person is lazy and left nothing behind</string>
     <string name="space_listen_up">Listen to this creator\'s videos</string>
     <string name="space_order_pubdate">Newest</string>
@@ -201,6 +213,7 @@
     <string name="player_next">Next</string>
     <string name="player_speed">Speed</string>
     <string name="player_quality">Quality</string>
+    <string name="player_progress">Playback progress</string>
     <string name="player_subtitle">Subtitles</string>
     <string name="player_subtitle_off">Subtitles off</string>
     <string name="player_danmaku">Danmaku</string>
@@ -208,6 +221,7 @@
     <string name="danmaku_show">Show danmaku</string>
     <string name="danmaku_hide">Hide danmaku</string>
     <string name="danmaku_input_hint">Send a danmaku</string>
+    <string name="danmaku_length_counter">%1$d / %2$d</string>
     <string name="danmaku_send_failed">Failed to send: %1$s</string>
     <string name="player_listen">Listen</string>
     <string name="player_lock">Lock</string>
@@ -265,8 +279,12 @@
     <string name="settings_offline_concurrency">Simultaneous downloads</string>
     <string name="settings_offline_concurrency_subtitle">A higher number caches a batch sooner, at the cost of more requests in flight and a greater chance of tripping risk control</string>
     <string name="settings_offline_concurrency_value">%1$d at a time</string>
-    <string name="settings_feed_clear_excluded">Clear hidden creators</string>
-    <string name="settings_feed_excluded_count">%1$d hidden right now</string>
+    <string name="settings_danmakus_archive">Fill in earlier Super Chats</string>
+    <string name="settings_danmakus_archive_subtitle">Ask danmakus.com for Super Chats sent earlier in the current stream. This sends the streamer\'s UID to that third-party service and nothing about your account; turning it off stops the request entirely</string>
+    <string name="settings_feed_excluded">Hidden creators</string>
+    <string name="settings_feed_clear_excluded">Restore all</string>
+    <string name="settings_feed_excluded_count">%1$d</string>
+    <string name="settings_feed_excluded_restore">Restore</string>
     <string name="settings_section_player">Player</string>
     <string name="settings_codec">Codec preference</string>
     <string name="settings_codec_subtitle">Takes effect on the next video</string>
@@ -287,6 +305,7 @@
     <string name="settings_sponsorblock_toggle_subtitle">Sponsor, intro and outro segments marked by the community</string>
     <string name="settings_sponsorblock_server">Server URL</string>
     <string name="settings_sponsorblock_server_dialog">SponsorBlock server</string>
+    <string name="settings_url_invalid">The URL must start with http:// or https://</string>
     <string name="settings_section_about">About</string>
     <string name="settings_section_danmaku">Danmaku</string>
     <string name="settings_section_privacy">Privacy and blocking</string>
@@ -372,7 +391,59 @@
     <string name="profile_logout">Log out</string>
     <string name="profile_view_all">View all</string>
     <string name="profile_favorites_empty">No favourite folders yet</string>
+    <string name="coin_failed">Could not give coins: %1$s</string>
+    <string name="player_brightness">Brightness %1$d%%</string>
+    <string name="player_volume">Volume %1$d%%</string>
+    <string name="player_seek_forward">Forward %1$d s</string>
+    <string name="player_seek_backward">Back %1$d s</string>
+    <string name="listen_retrying">%1$s, retrying…</string>
+    <string name="playback_error_stream">Could not get the stream: %1$s</string>
+    <string name="playback_error_network">Network error, could not get the stream</string>
+    <string name="playback_error_detail">Could not read the video details</string>
+    <string name="playback_error_decode">Playback failed (%1$d)</string>
+    <string name="playback_error_live_stream">Could not get the live stream</string>
+    <string name="playback_error_live_ended">The stream has ended</string>
+    <string name="settings_auto_next">Play the next item automatically</string>
+    <string name="settings_auto_next_subtitle">When one item finishes, the next in the queue plays. Turn this off and playback stops at the end; switching by hand is unaffected</string>
+
+    <!-- Live -->
+    <string name="live_loading">Connecting to the stream…</string>
+    <string name="live_offline">This streamer is offline</string>
+    <string name="live_refresh">Refresh</string>
+    <string name="live_audio_only_on">Audio only</string>
+    <string name="live_audio_only_off">Show video</string>
+    <string name="live_tab_chat">Chat</string>
+    <string name="live_tab_super_chat">Super Chats</string>
+    <string name="live_tab_guard">Guards</string>
+    <!-- Super Chats are priced in CNY; the symbol stays. -->
+    <string name="live_super_chat_price">¥%1$d</string>
+    <string name="live_super_chat_empty">No Super Chats yet</string>
+    <string name="live_chat_jump_latest">Jump to latest</string>
+    <string name="live_online_rank">Top fans %1$s</string>
+    <string name="live_super_chat_earlier">Earlier this stream</string>
+    <string name="live_super_chat_source">From the danmakus.com record of this stream</string>
+    <!-- Remaining time on a Super Chat. Minutes and seconds are padded in code; this is only the shape. -->
+    <string name="live_super_chat_remaining">%1$s left</string>
+    <string name="live_guard_opened">%1$s became a %2$s</string>
+    <string name="live_guard_opened_months">%1$s became a %2$s for %3$d months</string>
+    <string name="live_notice_started">The stream has started</string>
+    <string name="live_notice_ended">The stream has ended</string>
+    <string name="live_notice_warning">This room received a moderator warning</string>
+    <string name="live_notice_self_blocked">You have been muted and cannot post for now</string>
+    <string name="live_guard_governor">Governor</string>
+    <string name="live_guard_admiral">Admiral</string>
+    <string name="live_guard_captain">Captain</string>
     <string name="live_guard_empty">No guard members yet</string>
+    <string name="space_live_now">Live</string>
+    <string name="player_enter_fullscreen">Fullscreen</string>
+    <!-- Quality tiers, named as bilibili names them. -->
+    <string name="live_quality_dolby">Dolby</string>
+    <string name="live_quality_4k">4K</string>
+    <string name="live_quality_original">Original</string>
+    <string name="live_quality_blu_ray">Blu-ray</string>
+    <string name="live_quality_ultra">Ultra HD</string>
+    <string name="live_quality_high">HD</string>
+    <string name="live_quality_smooth">Smooth</string>
     <string name="settings_fast_forward_speed">Press-and-hold speed</string>
     <string name="settings_fast_forward_speed_subtitle">Temporary speed while the picture is held; restored on release</string>
     <string name="player_seek_release_to_cancel">Release to cancel</string>

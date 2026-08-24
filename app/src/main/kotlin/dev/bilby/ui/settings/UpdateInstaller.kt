@@ -18,9 +18,13 @@ import java.io.File
  */
 internal object UpdateInstaller {
 
-    /** 下载目录。和 `res/xml/file_paths.xml` 里暴露的那一个子目录必须一致。 */
-    fun downloadDir(context: Context): File =
-        File(context.cacheDir, "updates").apply { mkdirs() }
+    /**
+     * 下载目录。和 `res/xml/file_paths.xml` 里暴露的那一个子目录必须一致。
+     *
+     * **只算路径,不建目录。** 这个函数在组合期被调到,而建目录是磁盘 IO;
+     * 目录由 [dev.bilby.data.UpdateRepository.download] 在 IO 线程上确保存在。
+     */
+    fun downloadDir(context: Context): File = File(context.cacheDir, "updates")
 
     fun install(context: Context, apk: File) {
         val uri = runCatching {

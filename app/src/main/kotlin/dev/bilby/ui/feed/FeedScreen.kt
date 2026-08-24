@@ -12,6 +12,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,7 +31,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
@@ -51,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -73,11 +78,12 @@ import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import androidx.compose.ui.tooling.preview.Preview
 import dev.bilby.R
-import dev.bilby.data.model.FeedItem
+import dev.bilby.data.model.FeedEntry
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
@@ -88,7 +94,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
 
 data class FeedUiState(
-    val items: List<FeedItem> = emptyList(),
+    val items: List<FeedEntry> = emptyList(),
     val loading: Boolean = false, // 首屏加载
     val appending: Boolean = false, // 追加下一页
     val hasMore: Boolean = true,
@@ -117,17 +123,29 @@ data class FeedUiState(
     /** 一共有几个人在播。可能大于 [liveUps] 的长度,服务端只给这一屏的那几个。 */
     val liveCount: Int = 0,
     /**
-     * 进这一屏时读到的「上次读到哪儿了」(DESIGN 2.1)。只在进屏那一刻取一次快照,
-     * 不随之后的滚动落盘而更新 —— 否则分隔线会追着当前滚动位置跑,变成什么都分不出来。
+     * 进这一屏时读到的「上次读到哪儿了」(DESIGN 2.1)。每次进屏取一次快照,进屏期间不随滚动
+     * 落盘而更新 —— 跟着落盘走的话分隔线会追着当前滚动位置跑,什么都分不出来;而只在 VM 创建
+     * 时取一次的那一版,这条线会钉在一个越来越旧的位置活满整个进程(见 FeedViewModel.onEnterScreen)。
      * null 表示从没记过(第一次用)或还没读出来。
      */
-    val readMarkerBvid: String? = null,
+    val readMarkerEntryId: String? = null,
     /**
-     * 开屏定位还没做过。做过之后永远为 false —— 它和 [readMarkerBvid] 是两件事:分隔线要一直
+     * 开屏定位还没做过。做过之后永远为 false —— 它和 [readMarkerEntryId] 是两件事:分隔线要一直
      * 画着(用户翻回去还得认得出哪儿是分界),而"滚到分隔线"只发生一次。
      */
     val pendingLocate: Boolean = true,
+    /** 刚排除掉一位,等着给一句话和一个撤销。见 [ExcludeUndo]。 */
+    val excludeUndo: ExcludeUndo? = null,
 )
+
+/**
+ * 刚被排除的那一位。**排除当场生效,撤销在这条 snackbar 上**,不再先弹一个确认对话框:
+ * 一个可撤销的操作不值得一次拦截,而排除现在真的撤得回来了(设置里那份名单可以逐个恢复)。
+ *
+ * [id] 是本地递增的序号,不是 mid:连着排除同一个人两次(撤销之后又排除)要能重新弹一次,
+ * 而按 mid 做 key 的 LaunchedEffect 认不出第二次。
+ */
+data class ExcludeUndo(val id: Long, val mid: Long, val name: String)
 
 /**
  * 已读位置在当前已加载列表里的下标。**用 id 定位而不是记下标本身**是 DESIGN 2.1 的原话
@@ -137,9 +155,9 @@ data class FeedUiState(
  * 不为了找它而自动多翻页 —— 见 FeedViewModel 的取舍);记录就是列表最新一条,上面没有
  * 「新内容」可分。
  */
-internal fun List<FeedItem>.indexOfReadMarker(lastReadBvid: String?): Int? =
-    lastReadBvid
-        ?.let { bvid -> indexOfFirst { it.bvid == bvid } }
+internal fun List<FeedEntry>.indexOfReadMarker(lastReadEntryId: String?): Int? =
+    lastReadEntryId
+        ?.let { entryId -> indexOfFirst { it.id == entryId } }
         ?.takeIf { it > 0 }
 
 private const val PrefetchThreshold = 5
@@ -164,26 +182,57 @@ fun FeedScreen(
     onRefresh: () -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
-    onItemClick: (FeedItem) -> Unit,
+    onItemClick: (FeedEntry) -> Unit,
     onUpClick: (Long) -> Unit,
     /** 从「正在直播」那张名单里选了一个,进他的直播间。 */
     onLiveClick: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
     /** 折起来的那一半:图文、转发、直播……(DESIGN 2.1)。 */
     onOpenOtherDynamics: () -> Unit = {},
-    onExcludeUp: (Long) -> Unit = {},
+    onExcludeUp: (Long, String) -> Unit = { _, _ -> },
     onScrollPositionChanged: (String) -> Unit = {},
     /** 开屏定位已经做过(或确定做不成)。见 [FeedUiState.pendingLocate]。 */
     onLocated: () -> Unit = {},
+    /** 进这一屏。分隔线的位置在这时取快照,见 [FeedUiState.readMarkerEntryId]。 */
+    onEnter: () -> Unit = {},
+    /** snackbar 上那个「撤销」被按了。 */
+    onUndoExclude: (Long) -> Unit = {},
+    /** 那句话说完了,见 [FeedViewModel.clearExcludeUndo]。 */
+    onExcludeUndoShown: () -> Unit = {},
+    /** 每变一次就回到顶部。重按底栏上当前这一格时由 MainActivity 递增。 */
+    scrollToTop: Int = 0,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
-    when {
-        state.loading && state.items.isEmpty() -> FullScreenLoading(modifier)
-        state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry, modifier)
-        else -> FeedList(
-            state, onRefresh, onLoadMore, onItemClick, onUpClick, onLiveClick, onExcludeUp,
-            onOpenFollowings, onOpenOtherDynamics, onScrollPositionChanged, onLocated, modifier, contentPadding,
+    // 这段 composition 的寿命就是"这一次进屏":进 UP 空间、切 tab 都会销毁它,回来时重跑。
+    LaunchedEffect(Unit) { onEnter() }
+
+    // snackbar 的宿主在这一页自己身上,不穿到导航层 —— 同一条判断见 FavFolderScreen 的注释。
+    val snackbarHostState = remember { SnackbarHostState() }
+    val undo = state.excludeUndo
+    val undoText = undo?.let { stringResource(R.string.feed_excluded, it.name) }
+    val undoLabel = stringResource(R.string.action_undo)
+    LaunchedEffect(undo?.id) {
+        if (undo == null || undoText == null) return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(message = undoText, actionLabel = undoLabel)
+        if (result == SnackbarResult.ActionPerformed) onUndoExclude(undo.mid) else onExcludeUndoShown()
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        when {
+            state.loading && state.items.isEmpty() -> FullScreenLoading()
+            state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry)
+            else -> FeedList(
+                state, onRefresh, onLoadMore, onItemClick, onUpClick, onLiveClick, onExcludeUp,
+                onOpenFollowings, onOpenOtherDynamics, onScrollPositionChanged, onLocated, scrollToTop,
+                Modifier, contentPadding,
+            )
+        }
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = contentPadding.calculateBottomPadding()),
         )
     }
 }
@@ -193,19 +242,30 @@ private fun FeedList(
     state: FeedUiState,
     onRefresh: () -> Unit,
     onLoadMore: () -> Unit,
-    onItemClick: (FeedItem) -> Unit,
+    onItemClick: (FeedEntry) -> Unit,
     onUpClick: (Long) -> Unit,
     onLiveClick: (Long) -> Unit,
-    onExcludeUp: (Long) -> Unit,
+    onExcludeUp: (Long, String) -> Unit,
     onOpenFollowings: () -> Unit,
     onOpenOtherDynamics: () -> Unit,
     onScrollPositionChanged: (String) -> Unit,
     onLocated: () -> Unit,
+    scrollToTop: Int,
     modifier: Modifier,
     contentPadding: PaddingValues,
 ) {
     val listState = rememberLazyListState()
-    val markerIndex = state.items.indexOfReadMarker(state.readMarkerBvid)
+    // 只认"进这次组合之后又变了"。计数器由 MainActivity 持有,切走再切回来时它带着上一次的
+    // 值,而 LaunchedEffect 进组合就跑一次 —— 光判非零的话,每次回到动态页都会补滚一下,
+    // 把下面那套「上次看到哪」的定位覆盖掉。
+    var handledScrollToTop by remember { mutableIntStateOf(scrollToTop) }
+    LaunchedEffect(scrollToTop) {
+        if (scrollToTop != handledScrollToTop) {
+            handledScrollToTop = scrollToTop
+            listState.animateScrollToItem(0)
+        }
+    }
+    val markerIndex = state.items.indexOfReadMarker(state.readMarkerEntryId)
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     // 那一排头像排在动态流前面,分隔线/条目在 LazyColumn 里的绝对下标要把它加回来。
     // **宽屏下它不在这个列表里**(挪到了旁边的次区),这时不能加,否则开屏定位会差一格。
@@ -245,13 +305,13 @@ private fun FeedList(
         listState.scrollToItem(baseOffset + target)
     }
 
-    // 顶部可见条目上报给 ViewModel 去抖落盘。用 layoutInfo 里第一个「是视频条目」的 key,
+    // 顶部可见条目上报给 ViewModel 去抖落盘。用 layoutInfo 里第一个「是投稿条目」的 key,
     // 不用 firstVisibleItemIndex 反查 —— 分隔线、顶部 UP 排都会占用 LazyColumn 的下标,
     // 换算回 state.items 的下标要跟着这两样是否存在反复调整,直接认 key 更不容易算错。
-    val bvidSet = remember(state.items) { state.items.mapTo(HashSet()) { it.bvid } }
-    LaunchedEffect(listState, bvidSet) {
+    val idSet = remember(state.items) { state.items.mapTo(HashSet()) { it.id } }
+    LaunchedEffect(listState, idSet) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo }
-            .mapNotNull { visible -> visible.firstOrNull { (it.key as? String) in bvidSet }?.key as? String }
+            .mapNotNull { visible -> visible.firstOrNull { (it.key as? String) in idSet }?.key as? String }
             .distinctUntilChanged()
             .collect { onScrollPositionChanged(it) }
     }
@@ -260,8 +320,8 @@ private fun FeedList(
     // 还是 128dp,右边多出来的全是空白;而拆成两栏会让"下一条是什么"变成两条线索,
     // 这一页的读法本来就是一条时间线往下走。
     val feedList: @Composable (Modifier) -> Unit = { listModifier ->
-        PullToRefreshBox(
-            isRefreshing = state.refreshing,
+        RefreshBox(
+            refreshing = state.refreshing,
             onRefresh = onRefresh,
             modifier = listModifier,
         ) {
@@ -285,7 +345,8 @@ private fun FeedList(
                 )
             }
         }
-        // 首页装不下的另一半(图文、转发、直播、专栏)的入口。
+        // 首页装不下的另一半(图文、纯文字、转发、直播)的入口。**专栏不在里面**:它是投稿,
+        // 和视频一样排在首页的时间序里(见 DynamicRepository 的分流)。
         //
         // **一行字,不是一格卡片,也不占顶栏。** 首页的主体是投稿时间序,这条入口通往的是
         // 另一种东西,不是它的续篇。放在这里而不是列表末尾,是因为这条时间序流实际上翻不到底
@@ -312,14 +373,14 @@ private fun FeedList(
         }
         val beforeMarker = if (markerIndex != null) state.items.subList(0, markerIndex) else state.items
         val fromMarker = if (markerIndex != null) state.items.subList(markerIndex, state.items.size) else emptyList()
-        items(beforeMarker, key = { it.bvid }) { item ->
-            FeedVideoItem(item, onItemClick, onExcludeUp)
+        items(beforeMarker, key = { it.id }) { item ->
+            FeedEntryItem(item, onItemClick, onExcludeUp)
         }
         if (markerIndex != null) {
             item(key = "read-marker") { ReadMarkerDivider() }
         }
-        items(fromMarker, key = { it.bvid }) { item ->
-            FeedVideoItem(item, onItemClick, onExcludeUp)
+        items(fromMarker, key = { it.id }) { item ->
+            FeedEntryItem(item, onItemClick, onExcludeUp)
         }
             item(key = "footer") {
                 ListFooter(
@@ -429,28 +490,51 @@ private fun FrequentUpsPane(
     }
 }
 
-/** 单条动态行,含「不再显示」的长按菜单。从 [FeedList] 拆出来是因为分隔线要把 items(...) 切成两段,两段用的是同一份行 UI。 */
+/** 单条投稿行,含「不再显示」的菜单。从 [FeedList] 拆出来是因为分隔线要把 items(...) 切成两段,两段用的是同一份行 UI。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun FeedVideoItem(item: FeedItem, onItemClick: (FeedItem) -> Unit, onExcludeUp: (Long) -> Unit) {
-    // 「不再显示」挂在长按上,不占行内位置:这是一个偶尔用一次的操作,而每一行都摆一个
-    // 三点按钮,等于让一个次要动作在整页里重复几十遍,还把标题能用的宽度切掉一块。
+private fun FeedEntryItem(item: FeedEntry, onItemClick: (FeedEntry) -> Unit, onExcludeUp: (Long, String) -> Unit) {
+    // **菜单只有行尾这一个入口,长按已经去掉。** 长按此前是并行的第二个入口,理由是"已经会用
+    // 的人不必改习惯";但长按没有任何视觉提示,而 M3 手势那一页给长按定的语义是"选中项",
+    // 留着它等于让同一个操作有一个说不通的别名。
     var menuOpen by remember { mutableStateOf(false) }
-    Box {
-        VideoRow(
-            item = item.toRowUi(),
-            onClick = { onItemClick(item) },
-            onLongClick = { menuOpen = true },
-        )
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.feed_exclude_up, item.upName)) },
-                onClick = {
-                    menuOpen = false
-                    onExcludeUp(item.upMid)
-                },
-            )
-        }
-    }
+    VideoRow(
+        item = item.toRowUi(),
+        onClick = { onItemClick(item) },
+        overflow = {
+            // 菜单挂在按钮上,不挂在整行上 —— 挂在行上时 Popup 以整行为锚,菜单从行的左下角
+            // 弹出来,离按下去的那个点半屏远。
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(
+                        Icons.Outlined.MoreVert,
+                        contentDescription = stringResource(R.string.feed_item_actions),
+                    )
+                }
+                // M3E 的 vertical menu:容器圆角、standard 配色(surfaceContainerLow),菜单项
+                // 自己也有形状 —— 基线菜单的项是一条通栏矩形,按下去的状态层跟着是方的。
+                // 这一份只有一项,所以用 standaloneItemShape(既是首项也是末项的那一档)。
+                DropdownMenu(
+                    expanded = menuOpen,
+                    onDismissRequest = { menuOpen = false },
+                    shape = MenuDefaults.shape,
+                    containerColor = MenuDefaults.containerColor,
+                ) {
+                    // **当场生效,撤销在 snackbar 上**(见 [ExcludeUndo])。从前这里还隔着一个
+                    // 确认对话框,理由是撤销无处可落;设置里那份名单可以逐个恢复之后,那个理由
+                    // 不成立了,而一个撤得回来的操作不值得一次拦截。
+                    DropdownMenuItem(
+                        onClick = {
+                            menuOpen = false
+                            onExcludeUp(item.upMid, item.upName)
+                        },
+                        text = { Text(stringResource(R.string.feed_exclude_up, item.upName)) },
+                        shape = MenuDefaults.standaloneItemShape,
+                    )
+                }
+            }
+        },
+    )
 }
 
 /**
@@ -478,20 +562,38 @@ private fun ReadMarkerDivider(modifier: Modifier = Modifier) {
 }
 
 
+/**
+ * 两种投稿共用 [VideoRow] 的版式,不另画一种行:一条专栏在这条时间线里和一条视频是同一层
+ * 东西,版式差一点点就会在滑动时看出接缝(这正是 VideoRow 当初把五处合成一份的理由)。
+ *
+ * 区别落在两处:封面角标那一格,视频写时长、专栏写「文章」——它是"这条是什么"最先被扫到的
+ * 位置;以及正文摘要那一行,视频没有。
+ */
 @Composable
-private fun FeedItem.toRowUi() = VideoRowUi(
-    title = title,
-    coverUrl = coverUrl,
-    durationText = durationText,
-    upName = upName,
-    dateText = formatRelativeTime(publishedAtEpochSeconds),
-    playText = playCount,
-    danmakuText = danmakuCount,
-)
+private fun FeedEntry.toRowUi(): VideoRowUi = when (this) {
+    is FeedEntry.Video -> VideoRowUi(
+        title = title,
+        coverUrl = coverUrl,
+        durationText = durationText,
+        upName = upName,
+        dateText = formatRelativeTime(publishedAtEpochSeconds),
+        playText = playCount,
+        danmakuText = danmakuCount,
+    )
+
+    is FeedEntry.Article -> VideoRowUi(
+        title = title,
+        coverUrl = coverUrl,
+        durationText = stringResource(R.string.feed_article_badge),
+        upName = upName,
+        dateText = formatRelativeTime(publishedAtEpochSeconds),
+        note = summary.takeIf { it.isNotBlank() },
+    )
+}
 
 // ---- Preview ----
 
-private fun previewItem(bvid: String, title: String, minutesAgo: Long) = FeedItem(
+private fun previewItem(bvid: String, title: String, minutesAgo: Long) = FeedEntry.Video(
     bvid = bvid,
     title = title,
     coverUrl = "https://i0.hdslb.com/bfs/archive/preview.jpg",

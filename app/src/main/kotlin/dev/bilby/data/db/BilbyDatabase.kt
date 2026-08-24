@@ -8,6 +8,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -19,68 +20,50 @@ interface FeedReadPositionDao {
     suspend fun upsert(entity: FeedReadPositionEntity)
 }
 
-/** [FeedCacheItemDao.sortIndicesFor] 的投影:合并新一页时只需要知道哪些 bvid 已经存在、
- * 存在的话原来的顺序位置是多少,不需要整行。 */
-data class BvidSortIndex(val bvid: String, val sortIndex: Long)
-
 @Dao
 interface FeedCacheItemDao {
     @Query("SELECT * FROM feed_cache_item ORDER BY sortIndex ASC")
     suspend fun loadAllOrdered(): List<FeedCacheItemEntity>
 
-    @Query("SELECT bvid, sortIndex FROM feed_cache_item WHERE bvid IN (:bvids)")
-    suspend fun sortIndicesFor(bvids: List<String>): List<BvidSortIndex>
-
-    @Query("SELECT MIN(sortIndex) FROM feed_cache_item")
-    suspend fun minSortIndex(): Long?
-
-    @Query("SELECT MAX(sortIndex) FROM feed_cache_item")
-    suspend fun maxSortIndex(): Long?
+    @Query("DELETE FROM feed_cache_item")
+    suspend fun deleteAll()
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertAll(items: List<FeedCacheItemEntity>)
+    suspend fun insertAll(items: List<FeedCacheItemEntity>)
 
-    // 只留 sortIndex 最小(最新)的 limit 条,其余一律丢 —— 无界缓存迟早变成一个没人知道
-    // 多大的本地库。
-    @Query(
-        """
-        DELETE FROM feed_cache_item WHERE bvid NOT IN (
-            SELECT bvid FROM feed_cache_item ORDER BY sortIndex ASC LIMIT :limit
-        )
-        """
-    )
-    suspend fun trimToNewest(limit: Int)
-}
-
-@Dao
-interface FeedCacheCursorDao {
-    @Query("SELECT * FROM feed_cache_cursor WHERE id = 0")
-    suspend fun get(): FeedCacheCursorEntity?
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsert(entity: FeedCacheCursorEntity)
+    /**
+     * 整段换掉。**清空再写,不是逐条 upsert** —— 缓存存的是"服务端最新那一页现在长什么样",
+     * 而 upsert 表达不了"这一条不在了":取关之后那个人的投稿就是靠这一步消失的。
+     */
+    @Transaction
+    suspend fun replaceAll(items: List<FeedCacheItemEntity>) {
+        deleteAll()
+        insertAll(items)
+    }
 }
 
 @Database(
     entities = [
         FeedReadPositionEntity::class,
         FeedCacheItemEntity::class,
-        FeedCacheCursorEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class BilbyDatabase : RoomDatabase() {
     abstract fun feedReadPositionDao(): FeedReadPositionDao
     abstract fun feedCacheItemDao(): FeedCacheItemDao
-    abstract fun feedCacheCursorDao(): FeedCacheCursorDao
 
     companion object {
         fun create(context: Context): BilbyDatabase =
             Room.databaseBuilder(context, BilbyDatabase::class.java, "bilby.db")
-                // 三张表(读到哪了、动态流缓存条目、续接游标)全部是可再生的派生数据,个人应用
-                // 不值得为它们维护迁移脚本 —— 版本升级直接丢重建。缓存表丢了的后果只是下次进
-                // 动态流又要空等一次网络(退回 v5 之前的首屏转圈),不影响正确性。
+                // 两张表(读到哪了、动态流缓存条目)都是可再生的派生数据,个人应用不值得为
+                // 它们维护迁移脚本 —— 版本升级直接丢重建。缓存表丢了的后果只是下次进动态流
+                // 又要空等一次网络(退回 v5 之前的首屏转圈),不影响正确性。
+                //
+                // 续接游标表(v7 删)曾在这里。它是为"翻页翻到的深度要跨进程留住"服务的,
+                // 而那份深列表同时也是一份没人能删掉东西的第二真值:取关的人不会消失、
+                // 头部刷新不敢覆盖游标,都是它带来的。改成只留最新一段之后它没有了用处。
                 //
                 // 播放进度表(v4 删)与 agent 会话三张表(v5 删)都曾在这里。前者的位置读自
                 // 全 app 唯一的播放器,按页面身份落盘会串味;后者是助理上下文,存下来既没有

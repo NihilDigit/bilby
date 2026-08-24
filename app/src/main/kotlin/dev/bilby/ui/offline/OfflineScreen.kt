@@ -98,14 +98,20 @@ fun OfflineScreen(
     onPlay: (OfflineItem) -> Unit,
     onDelete: (OfflineItem) -> Unit,
     onRetry: (OfflineItem) -> Unit,
-    /** 已选中的条目 id。非空即处于多选态 —— 不另设一个布尔,两者永远同真同假。 */
-    selectedIds: Set<String> = emptySet(),
+    /**
+     * 已选中的条目 id,null 表示不在多选态。
+     *
+     * 不另设一个布尔:那样"空集合 + 还在多选态"是个画得出来、退不出去的组合。用 null 而不是
+     * 空集合当出口,是因为顶栏那个「多选」按钮要能在一个都没选的情况下进多选态 ——
+     * 拿"集合非空"当判据的话,这个入口无从表达。稍后再看的历史页是同一套(见 HistoryRoute)。
+     */
+    selectedIds: Set<String>? = null,
     onToggleSelection: (OfflineItem) -> Unit = {},
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     var pendingDelete by remember { mutableStateOf<OfflineItem?>(null) }
-    val selecting = selectedIds.isNotEmpty()
+    val selecting = selectedIds != null
 
     if (items.isEmpty()) {
         EmptyState(message = stringResource(R.string.offline_empty), modifier = modifier.fillMaxSize())
@@ -114,7 +120,7 @@ fun OfflineScreen(
 
     LazyColumn(modifier = modifier.fillMaxSize(), contentPadding = contentPadding) {
         items(items, key = { it.id }) { item ->
-            val selected = item.id in selectedIds
+            val selected = selectedIds != null && item.id in selectedIds
             VideoRow(
                 item = item.toRowUi(),
                 // 多选态下点一行是勾选,不是播 —— 进了多选还去播放,等于长按一下就再也删不成批。

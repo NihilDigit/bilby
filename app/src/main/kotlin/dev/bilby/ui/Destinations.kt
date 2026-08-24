@@ -17,6 +17,15 @@ data object Home : NavKey
 @Serializable
 data object Search : NavKey
 
+/**
+ * 一个关键词的普通搜索结果页,入口是播放页简介里的标签。按 1.1 的机制表对过:关键词来自
+ * 用户点的那枚标签,结果就是搜索 tab 普通模式对同一个词给出的那一份,不多不少,排序与
+ * 翻页也同一套。压栈而不是跳搜索 tab:返回要回到那条视频,而搜索 tab 在根部,跳过去等于
+ * 把整条栈弹掉。
+ */
+@Serializable
+data class SearchResult(val keyword: String) : NavKey
+
 @Serializable
 data object ToView : NavKey
 

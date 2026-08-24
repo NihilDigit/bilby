@@ -7,10 +7,12 @@ import dev.bilby.data.UpdateCheck
 import dev.bilby.data.UpdateInfo
 import dev.bilby.data.UpdateRepository
 import java.io.File
+import java.io.IOException
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.data.CodecPreference
 import dev.bilby.agent.LlmClient
+import dev.bilby.data.ExcludedUp
 import dev.bilby.data.LlmConfig
 import dev.bilby.data.DanmakuPrefs
 import dev.nihildigit.danmaku.DanmakuDensity
@@ -68,8 +70,10 @@ data class SettingsUiState(
     val autoNext: Boolean = true,
     /** 弹幕设置整体存一份,不为每个档位开一个平行字段——理由同 VideoViewModel 的 danmakuPrefs。 */
     val danmaku: DanmakuPrefs = DanmakuPrefs(),
-    /** 首页排除了多少个 UP。为 0 时那一行不显示 —— 没排除过的人不需要看见这个概念。 */
-    val excludedFeedCount: Int = 0,
+    /** 排除的 UP 主,名字已经带上。为空时那一行不显示 —— 没排除过的人不需要看见这个概念。 */
+    val excludedFeedUps: List<ExcludedUp> = emptyList(),
+    /** 直播间要不要去 danmakus.com 补本场早前的醒目留言。见 SettingsStore.danmakusArchiveEnabled。 */
+    val danmakusArchive: Boolean = true,
     val offlineConcurrency: Int = SettingsStore.DEFAULT_OFFLINE_CONCURRENCY,
     val update: UpdateState = UpdateState.Idle,
     /** 服务端的「暂停记录观看历史」。不是本机偏好,所以有读不到这一档,见 [HistoryPause]。 */
@@ -157,15 +161,16 @@ class SettingsViewModel(
     }
 
     /**
-     * 下载到应用缓存目录。同名文件先删掉再下:上一次下到一半的残包会让安装器报
-     * "解析包出现问题",而那句提示指不向真正的原因。
+     * 下载到应用缓存目录。
+     *
+     * **只拼路径,不碰磁盘。** [viewModelScope] 跑在 `Main.immediate` 上,建目录和删残包
+     * 都是磁盘 IO;两件事都归 [UpdateRepository.download],它整段在 `Dispatchers.IO` 上。
      */
     fun downloadUpdate(info: UpdateInfo, dir: File) {
         if (_state.value.update is UpdateState.Downloading) return
         _state.update { it.copy(update = UpdateState.Downloading(info, 0f)) }
         viewModelScope.launch {
             val target = File(dir, info.assetName)
-            if (target.exists()) target.delete()
             val result = updateRepository.download(info, target) { progress ->
                 _state.update { current ->
                     if (current.update is UpdateState.Downloading) {
@@ -179,7 +184,7 @@ class SettingsViewModel(
                 it.copy(
                     update = result.fold(
                         onSuccess = { apk -> UpdateState.Ready(info, apk) },
-                        onFailure = { error -> UpdateState.Failed(error.message ?: "下载失败") },
+                        onFailure = { error -> UpdateState.Failed(downloadFailureText(error)) },
                     )
                 )
             }
@@ -250,14 +255,27 @@ class SettingsViewModel(
             }
         }
         viewModelScope.launch {
-            settings.excludedFeedMids.collect { mids ->
-                _state.update { it.copy(excludedFeedCount = mids.size) }
+            settings.excludedFeedUps.collect { ups ->
+                _state.update { it.copy(excludedFeedUps = ups) }
+            }
+        }
+        viewModelScope.launch {
+            settings.danmakusArchiveEnabled.collect { enabled ->
+                _state.update { it.copy(danmakusArchive = enabled) }
             }
         }
     }
 
     fun clearExcludedFeedMids() {
         persist { settings.clearExcludedFeedMids() }
+    }
+
+    fun restoreExcludedFeedMid(mid: Long) {
+        persist { settings.restoreFeedMid(mid) }
+    }
+
+    fun setDanmakusArchive(enabled: Boolean) {
+        persist { settings.setDanmakusArchiveEnabled(enabled) }
     }
 
     /**
@@ -353,6 +371,16 @@ class SettingsViewModel(
     }
 
 }
+
+/**
+ * 下载失败在那一行副标题上说的话。
+ *
+ * 异常自己的 message 是给日志看的("Unexpected end of stream"),那一行只有一句话的位置,
+ * 要回答的是"再点一次还是先换个网"。原文由 [UpdateRepository.download] 打进
+ * [dev.bilby.BiliLog],这里不重复留一份 —— 这个类经手 LLM 的 key,全文不出现日志调用。
+ */
+private fun downloadFailureText(cause: Throwable): String =
+    if (cause is IOException) "网络不通,检查网络后重试" else "下载没有完成,重试一次"
 
 /** 本机对某个编码有没有硬解。设置页只列真支持的,不列一个选了也白选的选项。 */
 fun CodecPreference.requiredCodecId(): Int? = when (this) {

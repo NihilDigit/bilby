@@ -2,6 +2,7 @@ package dev.bilby.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,20 +12,25 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Inbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.LoadingIndicatorDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.R
 import dev.bilby.ui.theme.Spacing
@@ -34,15 +40,24 @@ import dev.bilby.ui.theme.Spacing
  * 顺带固定一条规矩:**首屏和翻页用不同的粗细。** 首屏转圈是"这一屏还没有内容",占整屏;
  * 翻页转圈是"下面还有",只占一行的高度。以前两处用的是同一个尺寸,翻页时那个大圈看起来
  * 像整页重载了。
+ *
+ * 全 app 的等待指示只有这四档,别处不要直接调 material3 的指示器:
+ *
+ * - 整屏首载 —— [FullScreenLoading]
+ * - 行内一个转圈 —— [LoadingSpinner],跟一行说明时用 [InlineProgress]
+ * - 列表尾部续页 —— [ListFooter]
+ * - 下拉刷新 —— [RefreshBox]
+ *
+ * 这四档全部走 M3 Expressive 的 loading indicator。**报得出百分比的等待不在其列**,那是
+ * progress indicator,直接用 `LinearProgressIndicator`(更新下载、稍后再看容量条)。M3 把
+ * 两者分开的判据是进度可不可知,不是形状:loading indicator 覆盖 200ms–5s 的不可知等待,
+ * progress indicator 覆盖有真实百分比、通常超过 5s 的那种,且不允许从前者过渡到后者。
  */
 
 /**
  * 首屏加载。整屏居中一个指示器,不放骨架屏 —— 骨架屏是在假装内容马上就到。
  *
- * 用 [LoadingIndicator] 而不是 `CircularProgressIndicator`(material3 1.5.0-alpha25 才有):
- * M3 把两者分开了 —— loading indicator 用于"短暂等待、进度不可知",progress indicator 用于
- * "有真实进度可报"。首屏拉一页动态正是前者,我们从来报不出百分比。
- * 翻页和上传那种也报不出进度,但它们不占整屏,仍用小号 circular(见 [ListFooter])。
+ * 不带尺寸:48dp 的默认值就是为整屏居中定的。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -50,6 +65,60 @@ fun FullScreenLoading(modifier: Modifier = Modifier) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         LoadingIndicator()
     }
+}
+
+/**
+ * 下拉刷新。**必须走这里,不要直接用 `PullToRefreshBox`** —— 它默认那个指示器仍是
+ * M3 Expressive 之前的箭头圈(`PullToRefreshDefaults.Indicator`),整个 app 十几处下拉
+ * 会各自长成旧样子,而 M3E 恰恰把 loading indicator 定为下拉刷新的组件。
+ *
+ * 指示器和 [PullToRefreshBox] 共用同一个 state:分成两个的话指示器收不到拖拽距离,
+ * 手指往下拉时它一动不动,松手才突然出现。
+ *
+ * 用 contained 那一档(默认色就是 primaryContainer / onPrimaryContainer):指示器压在列表
+ * 内容上,没有容器托底时深浅两套主题里都可能撞上正文。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun RefreshBox(
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val state = rememberPullToRefreshState()
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = onRefresh,
+        modifier = modifier,
+        state = state,
+        indicator = {
+            PullToRefreshDefaults.LoadingIndicator(
+                state = state,
+                isRefreshing = refreshing,
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
+        },
+        content = content,
+    )
+}
+
+/**
+ * 行内一个转圈,不带文字:按钮里替掉图标、对话框里占住内容位、播放条上替掉播放键。
+ *
+ * [color] 是给压在画面上的那几处准备的 —— 直播间和播放器的控件用固定色,不跟主题走。
+ *
+ * [size] 只在"它替掉的那个图标本来就不是常规尺寸"时才传,例如听音页 40dp 的播放键。
+ * 一行文字旁边、按钮里、列表尾部都用默认值,那是同一件事,没有理由是三个尺寸。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun LoadingSpinner(
+    modifier: Modifier = Modifier,
+    size: Dp = InlineSpinnerSize,
+    color: Color = LoadingIndicatorDefaults.indicatorColor,
+) {
+    LoadingIndicator(modifier = modifier.size(size), color = color)
 }
 
 /**
@@ -172,7 +241,7 @@ fun ListFooter(
         contentAlignment = Alignment.Center,
     ) {
         when {
-            appending -> CircularProgressIndicator(modifier = Modifier.size(InlineSpinnerSize))
+            appending -> LoadingSpinner()
             !hasMore -> Text(
                 text = stringResource(R.string.list_no_more),
                 style = MaterialTheme.typography.bodySmall,
@@ -182,7 +251,7 @@ fun ListFooter(
     }
 }
 
-/** 一行之内的"正在做某事",用于助理过程、队列加载。 */
+/** 一行之内的"正在做某事":[LoadingSpinner] 加一句说明。用于助理过程、队列加载、个人页分段。 */
 @Composable
 fun InlineProgress(text: String, modifier: Modifier = Modifier) {
     Row(
@@ -190,7 +259,7 @@ fun InlineProgress(text: String, modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
-        CircularProgressIndicator(modifier = Modifier.size(HairSpinnerSize), strokeWidth = 2.dp)
+        LoadingSpinner()
         Text(
             text = text,
             style = MaterialTheme.typography.bodySmall,
@@ -202,8 +271,11 @@ fun InlineProgress(text: String, modifier: Modifier = Modifier) {
 /** 空态与错误态的状态图标。比正文大一档,但远小于插图——它是标识不是画面。 */
 private val StateIconSize = 40.dp
 
-/** 列表底部翻页用。默认 40dp 在一行文字旁边太大。 */
+/**
+ * 行内转圈的尺寸。默认 48dp 在一行文字旁边太大,24dp 是 loading indicator 规格里的下限,
+ * 再小那个形变的形状只剩几个像素,看不出它在动。
+ *
+ * 这里原来分两档:翻页 24、跟在文字旁边的 16。16 那一档正是掉到下限以下的那个,
+ * 而两处要说的是同一件事,没有理由是两个尺寸。
+ */
 private val InlineSpinnerSize = 24.dp
-
-/** 跟在一行文字旁边、和字号同量级。 */
-private val HairSpinnerSize = 16.dp

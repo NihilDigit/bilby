@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -18,6 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +41,11 @@ import dev.bilby.ui.theme.Spacing
  *
  * 只用 small 这一档:medium/large flexible 是给"标题本身是内容"的页面用的(相册、文章),
  * Bilby 的每一页标题都只是个路牌,给它三行高度是浪费首屏。
+ *
+ * @param scrollBehavior 传进来之后内容滚上去时顶栏换一档容器色(M3 app bars 的 on-scroll
+ *   fill),顶栏和内容之间才有边界可言。默认 null:调用方还得把同一个 behavior 的
+ *   `nestedScrollConnection` 挂到自己那层 `Scaffold` 上,这里给不了,所以只有接好了的页面
+ *   才传,没传的照旧是一条不变色的顶栏。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,6 +53,7 @@ fun BilbyTopBar(
     title: String,
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
+    scrollBehavior: TopAppBarScrollBehavior? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     TopAppBar(
@@ -65,6 +73,7 @@ fun BilbyTopBar(
         },
         actions = actions,
         colors = TopAppBarDefaults.topAppBarColors(),
+        scrollBehavior = scrollBehavior,
         modifier = modifier,
     )
 }
@@ -85,8 +94,10 @@ fun SectionHeader(
     onTitleClick: (() -> Unit)? = null,
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
+    // 整行也吃这个下限,不只是下面那个可点分支:否则同一页里可点的小节标题比不可点的高 10dp,
+    // 「播放队列」和「找相关」两条并排就对不齐了。
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().heightIn(min = Dimens.MinTouchTarget),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val titleStyle = MaterialTheme.typography.titleSmall
@@ -101,8 +112,11 @@ fun SectionHeader(
         } else {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
+                // titleSmall 一行加上下 8dp 只有 38dp 左右,够不到 48dp 的触摸下限。
+                // 撑的是点击区,字号和上下留白都没动。
                 modifier = Modifier
                     .weight(1f)
+                    .heightIn(min = Dimens.MinTouchTarget)
                     .clip(MaterialTheme.shapes.small)
                     .clickable(role = Role.Button, onClick = onTitleClick)
                     .padding(vertical = Spacing.Tight),

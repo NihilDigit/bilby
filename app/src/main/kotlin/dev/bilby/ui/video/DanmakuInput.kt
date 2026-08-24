@@ -11,14 +11,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material3.CircularProgressIndicator
+import dev.bilby.ui.components.LoadingSpinner
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -36,10 +35,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.unit.dp
 import dev.bilby.R
-import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 
 /**
@@ -133,13 +131,23 @@ fun DanmakuInputLayer(
                         ),
                         textStyle = TextStyle(fontSize = MaterialTheme.typography.bodyLarge.fontSize),
                         shape = MaterialTheme.shapes.large,
+                        // 有上限就要有计数器(M3 text fields 的字符限制模式),贴右下角。
+                        // 没有它,第 100 个字之后按键静默失效,看起来是键盘坏了。
+                        supportingText = {
+                            Text(
+                                text = stringResource(
+                                    R.string.danmaku_length_counter,
+                                    text.length,
+                                    MaxLength,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.End,
+                            )
+                        },
                     )
                     FilledIconButton(onClick = onSend, enabled = canSend(text, state)) {
                         if (state is DanmakuSend.Sending) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(Dimens.IconInline),
-                                strokeWidth = 2.dp,
-                            )
+                            LoadingSpinner()
                         } else {
                             Icon(
                                 Icons.AutoMirrored.Filled.Send,

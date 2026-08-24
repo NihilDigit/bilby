@@ -142,3 +142,33 @@ data class LiveGuardItemDto(
     /** 1 总督、2 提督、3 舰长。 */
     @SerialName("guard_level") val guardLevel: Int = 3,
 )
+
+/**
+ * `av/v1/SuperChat/getMessageList`,进房时补上此前发出、**此刻仍在有效期内**的醒目留言。
+ * 不签名,唯一参数是 `room_id`(见 `notes/live.md` §8.2)。
+ *
+ * 条目结构与长连接推送的 `SUPER_CHAT_MESSAGE` 的 `data` 相同 —— PiliPlus 两处共用一个
+ * `fromJson`。这里只取会用到的那几个字段:档位色本地有一张表,不收服务端那两个色。
+ */
+@Serializable
+data class LiveSuperChatListDto(
+    val list: List<LiveSuperChatItemDto> = emptyList(),
+)
+
+@Serializable
+data class LiveSuperChatItemDto(
+    val id: Long = 0L,
+    val uid: Long = 0L,
+    /** 人民币整数元,直接显示,不再换算。 */
+    val price: Int = 0,
+    val message: String = "",
+    @SerialName("start_time") val startTime: Long = 0L,
+    @SerialName("end_time") val endTime: Long = 0L,
+    @SerialName("user_info") val userInfo: LiveSuperChatUserDto? = null,
+)
+
+@Serializable
+data class LiveSuperChatUserDto(
+    val uname: String = "",
+    val face: String = "",
+)
