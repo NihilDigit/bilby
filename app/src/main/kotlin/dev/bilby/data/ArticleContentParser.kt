@@ -7,7 +7,8 @@ import dev.bilby.api.dto.TextNodeDto
 import dev.bilby.api.toHttpsUrl
 import dev.bilby.data.model.ArticleBlock
 import dev.bilby.data.model.ArticleImage
-import dev.bilby.data.model.ArticleSpan
+import dev.bilby.data.model.RichLinkIcon
+import dev.bilby.data.model.RichSpan
 import dev.bilby.data.model.LinkCardKind
 import dev.bilby.data.model.ListEntry
 
@@ -106,17 +107,17 @@ private fun card(
     )
 }
 
-private fun List<TextNodeDto>.toSpans(): List<ArticleSpan> = mapNotNull { it.toSpan() }
+private fun List<TextNodeDto>.toSpans(): List<RichSpan> = mapNotNull { it.toSpan() }
 
-private fun TextNodeDto.toSpan(): ArticleSpan? = when {
+private fun TextNodeDto.toSpan(): RichSpan? = when {
     type == "TEXT_NODE_TYPE_FORMULA" && formula != null ->
-        formula.latexContent.takeIf { it.isNotBlank() }?.let(ArticleSpan::Formula)
+        formula.latexContent.takeIf { it.isNotBlank() }?.let(RichSpan::Formula)
 
     type == "TEXT_NODE_TYPE_RICH" && rich != null -> when (rich.type) {
         "RICH_TEXT_NODE_TYPE_EMOJI" -> rich.emoji
             ?.let { listOf(it.webpUrl, it.gifUrl, it.iconUrl).firstOrNull(String::isNotBlank) }
             ?.let {
-                ArticleSpan.Emoji(
+                RichSpan.Emoji(
                     url = it.toHttpsUrl(),
                     // 表情读屏时念的是 `[doge]` 这种原文,不是 URL。
                     alt = rich.origText.ifBlank { rich.text },
@@ -125,12 +126,12 @@ private fun TextNodeDto.toSpan(): ArticleSpan? = when {
             }
 
         "RICH_TEXT_NODE_TYPE_AT" -> rich.rid.toLongOrNull()
-            ?.let { ArticleSpan.Mention(text = rich.text, mid = it) }
-            ?: rich.text.takeIf { it.isNotBlank() }?.let { ArticleSpan.Text(it) }
+            ?.let { RichSpan.Mention(text = rich.text, mid = it) }
+            ?: rich.text.takeIf { it.isNotBlank() }?.let { RichSpan.Text(it) }
 
         // 纯文字节点也会包在 rich 里,这时它不是链接,不能染成可点的颜色。
         "RICH_TEXT_NODE_TYPE_TEXT" -> rich.text.takeIf { it.isNotBlank() }?.let {
-            ArticleSpan.Text(
+            RichSpan.Text(
                 text = it,
                 bold = rich.style?.bold == true,
                 italic = rich.style?.italic == true,
@@ -141,19 +142,19 @@ private fun TextNodeDto.toSpan(): ArticleSpan? = when {
         // 站外链接、BV 号、话题、抽奖、投票都落在这里。有地址就是链接,没有(抽奖那种要
         // 自己拼 h5 地址)就退回纯文字 —— 画一个点了没反应的链接比不画更糟。
         else -> when {
-            rich.jumpUrl.isNotBlank() -> ArticleSpan.Link(
+            rich.jumpUrl.isNotBlank() -> RichSpan.Link(
                 text = rich.text,
                 url = rich.jumpUrl.toHttpsUrl(),
-                showIcon = rich.type == "RICH_TEXT_NODE_TYPE_WEB",
+                icon = if (rich.type == "RICH_TEXT_NODE_TYPE_WEB") RichLinkIcon.Web else RichLinkIcon.None,
             )
 
-            rich.text.isNotBlank() -> ArticleSpan.Text(rich.text)
+            rich.text.isNotBlank() -> RichSpan.Text(rich.text)
             else -> null
         }
     }
 
     else -> word?.words?.takeIf { it.isNotEmpty() }?.let {
-        ArticleSpan.Text(
+        RichSpan.Text(
             text = it,
             bold = word.style?.bold == true,
             italic = word.style?.italic == true,

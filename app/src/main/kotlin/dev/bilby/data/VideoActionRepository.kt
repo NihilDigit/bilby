@@ -6,12 +6,31 @@ import dev.bilby.api.BiliResult
 import dev.bilby.api.appPostAction
 import dev.bilby.api.dto.ArchiveRelationDto
 import dev.bilby.api.dto.FavFolderListDto
+import dev.bilby.api.dto.TripleDto
 import dev.bilby.api.getData
 import dev.bilby.api.map
 import dev.bilby.api.postAction
+import dev.bilby.api.postForm
 
 /** 视频当前是否已赞/已投币/已收藏,来自 archive/relation。 */
 data class VideoRelation(val liked: Boolean, val coined: Int, val favored: Boolean)
+
+/**
+ * 一次三连各项的回执,见 [VideoActionRepository.triple]。
+ *
+ * **三样各有各的成败。** 硬币不够、收藏夹满、已经赞过,都会让整个请求成功而其中一项是 false。
+ * 把它折成一个布尔就等于替服务端宣布"都成了",而界面上那三个图标随后会和真实状态对不上。
+ */
+data class TripleResult(
+    val liked: Boolean,
+    val coined: Boolean,
+    val favored: Boolean,
+    /** 这一下投进去几枚。没投成时是 0。 */
+    val coins: Int,
+) {
+    /** 三样一个都没成。整条命令没起作用,要当失败报出来。 */
+    val allFailed: Boolean get() = !liked && !coined && !favored
+}
 
 data class FavFolder(val id: Long, val title: String, val containsThis: Boolean, val count: Int)
 
@@ -51,6 +70,35 @@ class VideoActionRepository(private val client: BiliClient) {
             "select_like" to if (alsoLike) "1" else "0",
         ),
     )
+
+    /**
+     * 一键三连:点赞、投币、收藏到默认收藏夹,一次请求。
+     *
+     * **这一条走网页端 cookie + csrf,不跟着点赞和投币走 app 端。** 那两条改走 app 端是因为
+     * 网页端对第三方客户端回 -403(notes/auth-model.md),而风控是逐个动作的:一条接口收
+     * 什么凭据说明不了旁边那条。PiliPlus 的三连用的就是网页端这条(`http/video.dart:404-427`),
+     * 照它做。Referer 指到这条视频的播放页,不是站点首页。
+     *
+     * 表单字段、Referer 与逐项回执的形状见 notes/auth-model.md §5.4。
+     *
+     * **不假定三样都成**:硬币不够时 `coin` 回 false 而整个请求仍然是成功的,
+     * 界面据回执点亮,不据"我发过这条命令"(见 [TripleResult])。
+     */
+    suspend fun triple(aid: Long, bvid: String): BiliResult<TripleResult> = client.postForm<TripleDto>(
+        TRIPLE_URL,
+        form = mapOf(
+            "aid" to aid.toString(),
+            "eab_x" to "2",
+            "ramval" to "0",
+            "source" to "web_normal",
+            "ga" to "1",
+            "spmid" to TRIPLE_SPMID,
+            "statistics" to TRIPLE_STATISTICS,
+        ),
+        referer = "${BiliConstants.MAIN_HOST}/video/$bvid",
+    ).map { dto ->
+        TripleResult(liked = dto.like, coined = dto.coin, favored = dto.fav, coins = dto.multiply)
+    }
 
     /**
      * rid 传 aid(不是 bvid),type=2 固定表示视频稿件。add/del 两个列表至少要有一个非空,
@@ -107,5 +155,10 @@ class VideoActionRepository(private val client: BiliClient) {
         private const val COIN_URL = "${BiliConstants.APP_HOST}/x/v2/view/coin/add"
         private const val FAV_DEAL_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/resource/batch-deal"
         private const val FAV_FOLDER_LIST_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/folder/created/list-all"
+
+        /** 三连。**网页端**,理由见 [VideoActionRepository.triple]。 */
+        private const val TRIPLE_URL = "${BiliConstants.WEB_HOST}/x/web-interface/archive/like/triple"
+        private const val TRIPLE_SPMID = "333.788.0.0"
+        private const val TRIPLE_STATISTICS = """{"appId":100,"platform":5}"""
     }
 }

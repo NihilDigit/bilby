@@ -86,6 +86,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
@@ -658,24 +659,56 @@ private fun SuperChatStrip(
     val live = superChats.filter { it.endTimeSeconds > nowSeconds }
     if (live.isEmpty()) return
     val dark = MaterialTheme.colorScheme.surface.luminance() < DarkSurfaceLuminance
-    LazyRow(
-        modifier = modifier.fillMaxWidth(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            horizontal = Spacing.Comfortable,
-            vertical = Spacing.Tight,
-        ),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        items(live, key = { it.id }) { sc ->
-            SuperChatChip(
-                sc = sc,
-                tier = FixedColors.superChatTier(sc.priceYuan, dark),
-                onClick = { onSuperChatClick(sc.id) },
-            )
+    // 托一层底。chip 本身是不透明的,乱的是**缝**:聊天正文从 chip 之间和两端穿出来,和金额
+    // 混在一行里读不出哪几个字是一起的。底色压住那些缝,这一栏就成了一件东西。
+    //
+    // 不做背景高斯:Compose 1.12 与 material3 1.5 都没有背景模糊(`Modifier.blur` 模糊的是
+    // 自己的内容),自己实现要把整个聊天列表画进 GraphicsLayer 再模糊重绘 —— 弹幕每秒都在滚,
+    // 那是每帧一次全列表离屏渲染,压在正在解码的画面旁边。
+    Column(modifier = modifier.fillMaxWidth()) {
+        LazyRow(
+            modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface.copy(alpha = StripScrimAlpha)),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                horizontal = Spacing.Comfortable,
+                vertical = Spacing.Tight,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            items(live, key = { it.id }) { sc ->
+                SuperChatChip(
+                    sc = sc,
+                    tier = FixedColors.superChatTier(sc.priceYuan, dark),
+                    onClick = { onSuperChatClick(sc.id) },
+                )
+            }
         }
+        // 底边渐隐,不留一条硬边。硬边会读成"上面是另一栏",而这一栏是浮在聊天上的 ——
+        // 被盖住的那几行正在往上走,渐隐让它们走出去而不是被切断。
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(StripFadeHeight)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.surface.copy(alpha = StripScrimAlpha),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
     }
 }
+
+/**
+ * 托底的不透明度。压得住正文,又留得出"下面还有东西"这个印象 —— 全不透明会让这一栏读成
+ * 一条固定的顶栏,而它其实是会自己消失的。
+ */
+private const val StripScrimAlpha = 0.92f
+
+/** 底边渐隐的高度。一行聊天大约 20dp,渐隐比它短,盖住的行不会整行淡掉。 */
+private val StripFadeHeight = 12.dp
 
 /**
  * 一个 chip:头像加金额,没有昵称 —— 带上昵称一个 chip 宽一倍,一屏排不下两个,而头像本身

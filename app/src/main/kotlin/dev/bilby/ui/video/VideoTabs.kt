@@ -1,5 +1,29 @@
 package dev.bilby.ui.video
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.ViewConfiguration
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.foundation.layout.Box
@@ -29,11 +53,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material.icons.filled.WatchLater
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -41,7 +63,6 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.outlined.DownloadForOffline
-import androidx.compose.material.icons.outlined.MonetizationOn
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.outlined.WatchLater
@@ -80,7 +101,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.graphics.vector.ImageVector
+import android.os.SystemClock
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -216,6 +243,8 @@ fun VideoTabs(
     favFolders: List<FavFolder>,
     addedToView: Boolean,
     onLike: () -> Unit,
+    /** 一键三连,长按点赞触发。见 [ActionButtonsRow]。 */
+    onTriple: () -> Unit,
     onAddToView: () -> Unit,
     /** 切到听视频那一屏。按钮在动作栏里,挨着稍后再看。 */
     onListen: () -> Unit,
@@ -237,7 +266,8 @@ fun VideoTabs(
     onSendComment: (String, Long?) -> Unit,
     onLikeComment: (Long) -> Unit,
     onDeleteComment: (Long) -> Unit,
-    onSeekComment: (Long) -> Unit = {},
+    /** 点了评论里的时间戳。null 表示此刻跳不了,时间戳会画成普通文字。 */
+    onSeekComment: ((Long) -> Unit)? = null,
     /** 评论正文里的 @ 点开是那个人的空间,和上面 UP 那一行同一个去处。 */
     onCommentUserClick: (Long) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -349,6 +379,7 @@ fun VideoTabs(
                     favFolders = favFolders,
                     addedToView = addedToView,
                     onLike = onLike,
+                    onTriple = onTriple,
                     onAddToView = onAddToView,
                     onListen = onListen,
                     onCoin = onCoin,
@@ -437,6 +468,7 @@ private fun IntroTab(
     favFolders: List<FavFolder>,
     addedToView: Boolean,
     onLike: () -> Unit,
+    onTriple: () -> Unit,
     onAddToView: () -> Unit,
     onListen: () -> Unit,
     onCoin: (count: Int, alsoLike: Boolean) -> Unit,
@@ -469,11 +501,10 @@ private fun IntroTab(
     ) {
         TitleBlock(
             detail = detail,
-            expanded = infoExpanded,
-            onToggle = {
-                infoExpanded = !infoExpanded
-                // 标签到展开这一刻才拉,理由见 VideoViewModel.loadVideoTags。
-                if (infoExpanded) onLoadTags()
+            onOpenIntro = {
+                infoExpanded = true
+                // 标签到这一刻才拉,理由见 VideoViewModel.loadVideoTags。
+                onLoadTags()
             },
         )
 
@@ -500,6 +531,7 @@ private fun IntroTab(
             favFolders = favFolders,
             addedToView = addedToView,
             onLike = onLike,
+            onTriple = onTriple,
             onAddToView = onAddToView,
             onCoin = onCoin,
             coinAttempt = coinAttempt,
@@ -521,82 +553,96 @@ private fun IntroTab(
         // 见 QueueSourceRepository.fromSeason)。
 
         /*
-         * **剩下这块空间归谁,由展开与否决定:收起是播放队列,展开是简介正文。**
+         * **剩下这块空间永远归播放队列。**
          *
-         * 这一栏的性质是"各组件按需吃满整屏,整栏不产生滚动条",队列在自己那块里滚。展开态
-         * 原先破坏的正是这条:标题不限行、简介整段、标签铺开,这一块自己就可能超过一屏,而
-         * 它上面没有任何可滚的容器。溢出之后 Column 给后面的兄弟节点的 maxHeight 是 0,
+         * 这一栏的性质是"各组件按需吃满整屏,整栏不产生滚动条",队列在自己那块里滚。简介
+         * 原先内联展开,破坏的正是这条:标题不限行、简介整段、标签铺开,这一块自己就可能超过
+         * 一屏,而它上面没有任何可滚的容器。溢出之后 Column 给后面兄弟节点的 maxHeight 是 0,
          * `UpRow` 里那枚等级徽章的 `height(11.dp)` 被夹成 0,`aspectRatio` 在高度约束不可满足时
          * 退到按宽度算,于是横向铺满整行——"徽章忽然变得很大"和"简介滑不动"是同一次溢出。
          *
-         * 修的是前提:展开不再把这一栏撑长,而是**换掉底下那块内容的占用者**。两者都拿
-         * `weight(1f)`、都在自己内部滚,这一栏因此在任何时刻都正好一屏。
+         * 修过一版是"展开时把这块的占用者从队列换成简介"。它不再溢出,但**控件和效果不挨着**:
+         * 三角在标题那一行,真正变的是隔着 UP 行和动作栏的这一块,点下去像别的地方变了。
          *
-         * 队列让位是对的:人此刻在读简介,不在挑下一条。上面的标题、UP 行、动作栏都留着,
-         * 它们高度有界,而且是这一页的身份和动作——把它们一起换掉会让人以为进了另一个页面。
-         *
-         * 找相关的结果不在这里,在页面底部的 sheet 里(见 VideoScreen):它是对当前视频问的
-         * 一句话,不该把简介页顶下去。
+         * 现在简介走面板([IntroSheet]):从下方推上来盖住这一页,关掉回到原样。找相关用的是
+         * 同一种形状(见 VideoScreen),理由也一样 —— 它是对当前这条视频的一次追问,
+         * 不该把这一栏的结构顶掉。
          */
-        if (infoExpanded) {
-            IntroDetail(
-                detail = detail,
-                tags = videoTags,
-                onTagClick = onTagClick,
-                modifier = Modifier.padding(top = Spacing.Hair).weight(1f),
-            )
-        } else {
-            QueueSection(
-                queue = queue,
-                onSelectEpisode = onSelectEpisode,
-                onOpenQueueSource = onOpenQueueSource,
-                onToggleShuffle = onToggleShuffle,
-                onFindRelated = onFindRelated,
-                onCache = onCache,
-                onRetryQueue = onRetryQueue,
-                modifier = Modifier.padding(top = Spacing.Hair).weight(1f),
-            )
-        }
+        QueueSection(
+            queue = queue,
+            onSelectEpisode = onSelectEpisode,
+            onOpenQueueSource = onOpenQueueSource,
+            onToggleShuffle = onToggleShuffle,
+            onFindRelated = onFindRelated,
+            onCache = onCache,
+            onRetryQueue = onRetryQueue,
+            modifier = Modifier.padding(top = Spacing.Hair).weight(1f),
+        )
+    }
+
+    if (infoExpanded) {
+        IntroSheet(
+            detail = detail,
+            tags = videoTags,
+            // **先关面板,再跳走。** `ModalBottomSheet` 自己注册了一个 BackHandler(预测式返回
+            // 要用),它在组合树里比导航那一层更靠后,于是先接住返回。留着面板跳到搜索页之后,
+            // 这一页仍在栈里、面板仍在组合中,搜索页的第一次返回被它吃掉 —— 表现是"返回键
+            // 没反应",而实际上是在关一个看不见的面板。`LiveNowSheet` 那处是同一条规矩。
+            onTagClick = { tag ->
+                infoExpanded = false
+                onTagClick(tag)
+            },
+            onDismiss = { infoExpanded = false },
+        )
     }
 }
 
 /**
- * 展开后的简介正文:bvid、简介、标签。**在自己这块里滚**,不把整栏撑长(理由见 [IntroTab]
- * 里那段说明)。
+ * 简介面板:完整标题、bvid、简介正文、标签。
  *
- * 标题和计数行不在这里,它们收起时也在,归 [TitleBlock] —— 展开只让这块内容出现,不重排
- * 上面已经站住的东西。
+ * **走面板而不是就地展开**,理由见 [IntroTab] 里那段说明 —— 简介长度没有上界,而那一栏
+ * 的性质是"整栏不产生滚动条"。面板自成一层,想多长有多长,在自己内部滚。
+ *
+ * **完整标题在这里再给一次。** 上面那一行恒定两行截断,长标题正是最需要看全的那一种;
+ * 而这一层盖住了页面,不重复给的话人得先关掉面板才能读标题。
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun IntroDetail(
+private fun IntroSheet(
     detail: VideoDetail,
     tags: List<VideoTag>,
     onTagClick: (String) -> Unit,
-    modifier: Modifier = Modifier,
+    onDismiss: () -> Unit,
 ) {
-    Column(
-        modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-    ) {
-        Text(
-            text = detail.bvid,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (detail.description.isNotBlank()) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Comfortable)
+                .padding(bottom = Spacing.Loose)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            Text(text = detail.title, style = MaterialTheme.typography.titleMedium)
             Text(
-                text = detail.description,
-                style = MaterialTheme.typography.bodySmall,
+                text = detail.bvid,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-        if (tags.isNotEmpty()) {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                tags.forEach { tag -> TagToken(tag, onClick = { onTagClick(tag.name) }) }
+            if (detail.description.isNotBlank()) {
+                Text(
+                    text = detail.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (tags.isNotEmpty()) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                ) {
+                    tags.forEach { tag -> TagToken(tag, onClick = { onTagClick(tag.name) }) }
+                }
             }
         }
     }
@@ -762,19 +808,21 @@ private fun UpRow(
 @Composable
 private fun TitleBlock(
     detail: VideoDetail,
-    expanded: Boolean,
-    onToggle: () -> Unit,
+    onOpenIntro: () -> Unit,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle),
+            .clickable(onClick = onOpenIntro),
         verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
+        // **标题恒定两行。** 点它开的是 [IntroSheet],完整标题在那里 —— 这一行不再跟着变,
+        // 上下两块的位置因此是稳的。原先点一下标题会从 2 行长到 4 行,把底下整栏推一截,
+        // 而人此刻眼睛盯着的是标题本身。
         Text(
             text = detail.title,
             style = MaterialTheme.typography.titleMedium,
-            maxLines = if (expanded) TitleExpandedMaxLines else 2,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -784,20 +832,18 @@ private fun TitleBlock(
                 danmakuText = formatCount(detail.stat.danmaku),
                 dateText = formatDate(detail.publishedAtEpochSeconds),
             )
+            // **不用上下箭头。** 那一对说的是"就地展开/收起",而这里点下去是从下方推上来
+            // 一层面板 —— 内容不在这一行底下长出来。指向右的那一枚是 Material 里"点进去
+            // 还有东西"的惯用记号,和这件事对得上。
             Icon(
-                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                contentDescription = stringResource(
-                    if (expanded) R.string.video_intro_collapse else R.string.video_intro_expand,
-                ),
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = stringResource(R.string.video_intro_open),
                 tint = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.size(Dimens.IconInline),
             )
         }
     }
 }
-
-/** 展开态标题的行数上限。见 [TitleBlock]:这一块的高度有界,标题不能自己吃掉半屏。 */
-private const val TitleExpandedMaxLines = 4
 
 /**
  * 一枚标签,点开是这个词的普通搜索结果页。带底色的一小块,判据同动态卡片的「置顶」
@@ -862,6 +908,7 @@ private fun ActionButtonsRow(
     favFolders: List<FavFolder>,
     addedToView: Boolean,
     onLike: () -> Unit,
+    onTriple: () -> Unit,
     onCoin: (count: Int, alsoLike: Boolean) -> Unit,
     coinAttempt: CoinAttempt,
     onCoinDialogClosed: () -> Unit,
@@ -875,7 +922,37 @@ private fun ActionButtonsRow(
     // 收藏夹列表是异步拉的:点击时先发起请求,等 favFolders 到位再弹框。
     var awaitingFavFolders by rememberSaveable { mutableStateOf(false) }
 
+    /** 手指此刻按在点赞那一格上没有。见 [ActionItem] 的 `onHoldingChange`。 */
+    var holdingLike by remember { mutableStateOf(false) }
+
+    /**
+     * 按住点赞时那圈进度环画到哪儿了。**长满的那一刻正是三连成立的那一刻。**
+     *
+     * 这一圈不是装饰,是这个动作唯一的可发现性:长按点赞三连是 B 站的老手势,但按下去到它
+     * 成立之间什么都不发生,没有环的话第一次按的人会以为自己点歪了,松手就只剩一次普通点赞。
+     *
+     * **进度提到这一层,是因为环要同时出现在赞、币、收藏三格上。** 三连动的就是这三样,
+     * 环只长在点赞那一格的话,读出来是"按住点赞会发生点什么",而不是"这三样会一起发生"。
+     * 手势仍然只在点赞那一格,另外两格光画环、不接管长按。
+     */
+    val holdProgress by animateFloatAsState(
+        targetValue = if (holdingLike) 1f else 0f,
+        animationSpec = if (holdingLike) {
+            // 前 [TapMaxMillis] 毫秒不画,那一段还属于"点一下"。环一出现就意味着这一按已经
+            // 不是点赞了(松手也不点赞,见 [ActionItem] 里的 onClick),两者因此必须同一个数。
+            tween(
+                durationMillis = TripleHoldMillis - TapMaxMillis,
+                delayMillis = TapMaxMillis,
+                easing = LinearEasing,
+            )
+        } else {
+            snap()
+        },
+        label = "tripleHoldProgress",
+    )
+
     Row(modifier = modifier.fillMaxWidth()) {
+        // 长按三连挂在点赞上,这是 B 站的老手势;不另开一格,那一排已经有五个动作了。
         ActionItem(
             modifier = Modifier.weight(1f),
             selected = relation?.liked == true,
@@ -887,6 +964,10 @@ private fun ActionButtonsRow(
             selectedIcon = Icons.Filled.ThumbUp,
             icon = Icons.Outlined.ThumbUp,
             onClick = onLike,
+            onLongClick = onTriple,
+            longClickLabel = stringResource(R.string.video_triple),
+            onHoldingChange = { holdingLike = it },
+            holdProgress = holdProgress,
         )
         // 投币点下去是弹框(问投几枚)而不是直接投,但"已投币"是一个实实在在的可显示状态,
         // 所以它和点赞用同一种表达,区别只在点击后发生什么。
@@ -896,9 +977,10 @@ private fun ActionButtonsRow(
             enabled = relation != null,
             label = formatCount(stat.coin),
             contentDescription = stringResource(R.string.video_action_coin),
-            selectedIcon = Icons.Filled.MonetizationOn,
-            icon = Icons.Outlined.MonetizationOn,
+            // 硬币这一格不走 Material 图标,自己画一个圆加一个 B,见 [CoinGlyph]。
+            glyph = { tint -> CoinGlyph(tint = tint, filled = (relation?.coined ?: 0) > 0) },
             onClick = { showCoinDialog = true },
+            holdProgress = holdProgress,
         )
         ActionItem(
             modifier = Modifier.weight(1f),
@@ -912,6 +994,7 @@ private fun ActionButtonsRow(
                 awaitingFavFolders = true
                 onOpenFavPicker()
             },
+            holdProgress = holdProgress,
         )
         // 稍后再看:**只进不出**。已加入后点击不做任何事 —— 移除在稍后再看页面做,
         // 那里是个列表,划掉一条是自然动作;在这里做 toggle 就得先拉整个列表才能知道当前状态。
@@ -993,31 +1076,125 @@ private fun ActionItem(
     enabled: Boolean,
     label: String,
     contentDescription: String,
-    icon: ImageVector,
-    selectedIcon: ImageVector,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 未选中的字形。传 [glyph] 的那一格不用它。 */
+    icon: ImageVector? = null,
+    /** 选中的字形。同上。 */
+    selectedIcon: ImageVector? = null,
+    /**
+     * 长按做的事。只有点赞那一格有(一键三连),别的格传 null —— 传了就意味着这一格能长按。
+     */
+    onLongClick: (() -> Unit)? = null,
+    longClickLabel: String? = null,
+    /**
+     * 手指按在能长按的那一格上时报上去,由 [ActionButtonsRow] 换算成进度。
+     *
+     * **不读 `interactionSource` 的按下态。** `clickable` 在可滚动容器里会把按下这条交互
+     * 压后 150ms 才发出(免得滑动时一路闪涟漪),而这一排正长在评论区那条滚动列表里 ——
+     * 环于是比手指晚 150ms 起步,在 400ms 的长按窗口里只画得出三分之二就被判定长按了,
+     * 看上去和没有环一样。这里直接听指针按下,`requireUnconsumed = false` 且全程不消费,
+     * 底下那层 `combinedClickable` 照常收到同一串事件。
+     */
+    onHoldingChange: (Boolean) -> Unit = {},
+    /** 这一格上那圈进度环画到哪儿了。0 就是不画,见 [ActionButtonsRow]。 */
+    holdProgress: Float = 0f,
+    /**
+     * 自己画这一格的字形,不走 [icon]/[selectedIcon]。硬币那一格用它 —— 圆里的 B 是一个
+     * 真字,交给字体画比自己描点靠谱(见 [CoinGlyph])。
+     */
+    glyph: (@Composable (tint: Color) -> Unit)? = null,
 ) {
     val tint = when {
         !enabled -> MaterialTheme.colorScheme.outlineVariant
         selected -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.outline
     }
+    val holdable = enabled && onLongClick != null
+    val currentOnHoldingChange by rememberUpdatedState(onHoldingChange)
+
+    /**
+     * 这一按是什么时候按下去的。用来分开"点一下"和"按住又松手",见下面 `onClick` 那一句。
+     *
+     * **读的是按下那一刻,不是松手那一刻。** 两个 pointerInput 节点在 Main 这一趟的先后
+     * 不定,松手之后再去比标志位可能已经晚了;按下必然远early于松手,拿它当基准没有竞态。
+     */
+    var pressedAtMillis by remember { mutableLongStateOf(0L) }
+
+    WithHoldTimeout(holdable) {
     Column(
         modifier = modifier
             .clip(MaterialTheme.shapes.small)
-            .clickable(enabled = enabled, onClick = onClick)
+            .then(
+                if (!holdable) {
+                    Modifier
+                } else {
+                    Modifier.pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            pressedAtMillis = SystemClock.uptimeMillis()
+                            currentOnHoldingChange(true)
+                            waitForUpOrCancellation()
+                            currentOnHoldingChange(false)
+                        }
+                    }
+                },
+            )
+            .combinedClickable(
+                enabled = enabled,
+                // **按住又松手不算点赞。** 手指一压过 [TapMaxMillis] 那圈进度环就开始画,
+                // 这一下从那一刻起表达的已经是"我要三连";没走完就松手是**取消**,
+                // 补一次点赞等于把取消办成了另一件事,而这两件事在硬币上不可逆的那一半正好相反。
+                //
+                // 判据是这一按持续了多久,不是环画到哪儿:环是 [ActionButtonsRow] 那一层的
+                // 动画状态,这里够不着,而且它退场时还有一段回落,拿它判会把刚松手那几十毫秒
+                // 也算成"还在按"。
+                onClick = {
+                    val heldMillis = SystemClock.uptimeMillis() - pressedAtMillis
+                    if (!holdable || heldMillis <= TapMaxMillis) onClick()
+                },
+                onLongClick = onLongClick,
+                onLongClickLabel = longClickLabel,
+            )
             .heightIn(min = Dimens.MinTouchTarget)
             .padding(vertical = Spacing.Hair),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Icon(
-            imageVector = if (selected) selectedIcon else icon,
-            contentDescription = contentDescription,
-            tint = tint,
-            modifier = Modifier.size(ActionIconSize),
-        )
+        val ring = MaterialTheme.colorScheme.primary
+        Box(
+            contentAlignment = Alignment.Center,
+            // **环画在图标外面,但不占布局。** 原先它是一个 28dp 的 `Canvas` 兄弟节点,
+            // 于是这个 Box 在环出现的那一刻从 20dp 长到 28dp,整排跟着抬一下 —— 一个为了
+            // 说明"正在按住"的东西,自己先把界面顶动了。
+            //
+            // `drawBehind` 只画不量:Box 始终是图标那么大,环从它的边界往外画。这一层没有
+            // 裁剪(外面那个 `clip` 在整格上,90×48 里放得下 28dp 的环),所以画得出来。
+            modifier = Modifier.drawBehind {
+                if (holdProgress <= 0f) return@drawBehind
+                val inset = HoldRingInset.toPx()
+                drawArc(
+                    color = ring,
+                    startAngle = -90f,
+                    sweepAngle = 360f * holdProgress,
+                    useCenter = false,
+                    topLeft = Offset(-inset, -inset),
+                    size = Size(size.width + inset * 2, size.height + inset * 2),
+                    style = Stroke(width = HoldRingStroke.toPx(), cap = StrokeCap.Round),
+                )
+            },
+        ) {
+            val vector = if (selected) selectedIcon else icon
+            when {
+                glyph != null -> glyph(tint)
+                vector != null -> Icon(
+                    imageVector = vector,
+                    contentDescription = contentDescription,
+                    tint = tint,
+                    modifier = Modifier.size(ActionIconSize),
+                )
+            }
+        }
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
@@ -1026,9 +1203,110 @@ private fun ActionItem(
             overflow = TextOverflow.Ellipsis,
         )
     }
+    }
+}
+
+/**
+ * 把长按阈值换成 [TripleHoldMillis]。**必须包住整个子树,不能写成一个 Modifier** ——
+ * `combinedClickable` 的手势节点是从自己所在的那个组合位置读 `LocalViewConfiguration` 的,
+ * 挂在它后面的修饰符改不到它。
+ *
+ * 只覆盖长按这一项,触摸 slop、双击间隔照旧走系统那一份:换掉的是"按多久算长按",不是
+ * 这台设备的手感。
+ */
+@Composable
+private fun WithHoldTimeout(enabled: Boolean, content: @Composable () -> Unit) {
+    if (!enabled) {
+        content()
+        return
+    }
+    val base = LocalViewConfiguration.current
+    val overridden = remember(base) {
+        object : ViewConfiguration by base {
+            override val longPressTimeoutMillis: Long get() = TripleHoldMillis.toLong()
+        }
+    }
+    CompositionLocalProvider(LocalViewConfiguration provides overridden, content = content)
+}
+
+/**
+ * 硬币:一个圆,中间一个 B。
+ *
+ * **B 交给字体画,不自己描点。** 先手写过一版路径(一竖加两个碗,实心态再靠 evenOdd 挖出
+ * 两个字腔),在 20dp 上是糊的 —— 字腔只剩一两个物理像素,而字体厂商为这个尺寸做了 hinting,
+ * 手写坐标做不到。`Text` 还顺带解决了粗细和光学重心。
+ *
+ * **字号按 dp 折算,不跟系统字号缩放。** 圆是 dp 定死的,B 若跟着系统字号长大就会顶破它;
+ * 这一个字是图标的一部分,不是可读的正文。
+ *
+ * 已投是实心圆挖出白字,未投是圈环加同色的字 —— 两个明显不同的字形,不只靠颜色区分
+ * (风格指南 §2.6)。挖出来那个字取 `background`,也就是主题根部那层 `Surface` 真正画的底色
+ * (见 `ui/theme/Theme.kt`)。
+ */
+@Composable
+private fun CoinGlyph(tint: Color, filled: Boolean, modifier: Modifier = Modifier) {
+    val background = MaterialTheme.colorScheme.background
+    val density = LocalDensity.current
+    val letterSize = remember(density) { with(density) { CoinLetterSize.toSp() } }
+    Box(
+        modifier = modifier
+            .size(ActionIconSize)
+            .then(
+                if (filled) {
+                    Modifier.background(tint, CircleShape)
+                } else {
+                    Modifier.border(CoinRingStroke, tint, CircleShape)
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "B",
+            color = if (filled) background else tint,
+            style = TextStyle(
+                fontSize = letterSize,
+                // 行高等于字号、并关掉字体自带的上下留白,字才落在圆心上 —— 默认那两样都会
+                // 把这一个字往下推,在 20dp 的圆里看得出来。
+                lineHeight = letterSize,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                platformStyle = PlatformTextStyle(includeFontPadding = false),
+            ),
+        )
+    }
 }
 
 private val ActionIconSize = 20.dp
+
+/** 圈环的粗细,以及圆里那个 B 的字号。字占圆的六成左右,再大就贴边。 */
+private val CoinRingStroke = 1.6.dp
+private val CoinLetterSize = 12.dp
+
+/** 进度环离图标的距离,以及它自己的粗细。环要绕开图标,不能压在字形上。 */
+private val HoldRingInset = 4.dp
+private val HoldRingStroke = 2.dp
+
+/**
+ * 按住多久算一次三连。
+ *
+ * 系统默认的长按是 400–500ms,对一个不可逆、要花掉当天硬币的动作太短 —— 在评论区往下滑的
+ * 时候指腹压住这一格半秒是常有的事。
+ *
+ * **一秒试下来还是短。** 三连要花硬币,而误触的代价是不可逆的;这一格又长在一片可滑动的
+ * 内容里,手指落上去本来就带着别的意图。宁可让真心想三连的人多按半拍,也不要让滑动的人
+ * 花掉一枚币。一秒半同时给了那圈环足够的时间被看清 —— 环走完就是三连成立,松手什么都不发生。
+ */
+private const val TripleHoldMillis = 1_500
+
+/**
+ * 按到多久还算"点一下"。
+ *
+ * 超过它就当作已经在为三连蓄力:那圈进度环从这一刻开始画,松手是取消、不补点赞
+ * (见 [ActionItem] 的 `onClick`)。两处必须用同一个数,否则会出现"环已经在转,松手却点了赞"。
+ *
+ * 200ms 明显长过一次有意的轻点(通常在 120ms 以内),又远短于 [TripleHoldMillis]。
+ */
+private const val TapMaxMillis = 200
 
 /**
  * 投币面板。上限是**这条视频一共几枚**而不是"这一次几枚":自制稿两枚,转载稿一枚

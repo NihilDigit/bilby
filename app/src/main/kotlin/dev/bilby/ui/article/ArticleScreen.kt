@@ -54,6 +54,7 @@ import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.ShareLink
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.BiliRichText
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.CoverCornerRadius
@@ -237,7 +238,7 @@ private fun ArticleBlockView(
                         .fillMaxHeight()
                         .background(MaterialTheme.colorScheme.outlineVariant),
                 )
-                ArticleParagraph(
+                BiliRichText(
                     spans = block.spans,
                     style = body,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -247,7 +248,7 @@ private fun ArticleBlockView(
                 )
             }
         } else {
-            ArticleParagraph(
+            BiliRichText(
                 spans = block.spans,
                 style = body,
                 centered = block.centered,
@@ -257,7 +258,7 @@ private fun ArticleBlockView(
             )
         }
 
-        is ArticleBlock.Heading -> ArticleParagraph(
+        is ArticleBlock.Heading -> BiliRichText(
             spans = block.spans,
             style = MaterialTheme.typography.titleMedium,
             onLinkClick = onLinkClick,
@@ -288,7 +289,7 @@ private fun ArticleBlockView(
                         style = body,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    ArticleParagraph(
+                    BiliRichText(
                         spans = entry.spans,
                         style = body,
                         onLinkClick = onLinkClick,

@@ -58,6 +58,8 @@
     <!-- 没划过特别关注时那一排退回 B 站的「最常访问」,标题跟着换 -->
     <string name="feed_frequent_ups">最常访问</string>
     <string name="feed_item_actions">动态操作</string>
+    <string name="feed_toview_added">已加入稍后再看</string>
+    <string name="feed_toview_failed">加入稍后再看失败</string>
     <string name="feed_exclude_up">不再显示 %1$s</string>
     <string name="feed_excluded">已不再显示 %1$s</string>
     <string name="feed_article_badge">文章</string>
@@ -141,7 +143,6 @@
     <string name="comment_expand_replies">展开 %1$d 条回复</string>
     <string name="comment_open_replies_panel">查看全部 %1$d 条回复</string>
     <string name="comment_view_thread">查看这组回复</string>
-    <string name="comment_replies_time_ordered">回复按发布时间先后排列</string>
     <string name="comment_collapse_replies">收起</string>
     <string name="comment_load_more">加载更多</string>
     <string name="comment_replies_failed">回复没加载出来</string>
@@ -152,9 +153,11 @@
     <!-- 长按复制。第一条是读屏念出来的动作名(触摸那一侧没有可见文字),第二条是复制之后的
          回执,只在 Android 12L 及以下出现——13 起系统自带复制预览浮层,见 CommentCopy.kt。
          第三条是写进剪贴板的 ClipData 标签,描述这段内容是什么,不是一个动作。 -->
-    <string name="comment_copy">复制评论</string>
     <string name="comment_copied">已复制</string>
     <string name="comment_copy_clip_label">评论</string>
+    <!-- 自由复制。长按正文打开,文字可任意选中,整条复制走面板底部那个按钮 -->
+    <string name="text_select_title">选择文本</string>
+    <string name="text_select_copy_all">复制全文</string>
 
     <!-- 个人空间 -->
     <string name="space_title">个人空间</string>
@@ -186,10 +189,9 @@
     <string name="video_follow_staff">关注 %1$s</string>
     <string name="video_tab_comment">评论</string>
     <string name="video_tab_comment_count">评论 %1$s</string>
-    <string name="video_intro_expand">展开简介</string>
+    <string name="video_intro_open">简介</string>
     <string name="video_resume">继续播放</string>
     <string name="video_replay">重新播放</string>
-    <string name="video_intro_collapse">收起简介</string>
     <string name="video_cloud_resume">别处已看到 %1$s</string>
     <string name="video_cloud_resume_jump">跳转</string>
     <string name="video_cloud_resume_dismiss">忽略</string>
@@ -204,6 +206,12 @@
     <string name="video_action_toview">稍后看</string>
     <string name="video_action_toview_added">已加入</string>
     <string name="video_action_toview_desc">加入稍后再看</string>
+    <!-- 一键三连。长按点赞触发,结果由服务端逐项回执,提示据回执报 -->
+    <string name="video_triple">一键三连</string>
+    <string name="video_triple_all">已三连</string>
+    <string name="video_triple_some">已%1$s</string>
+    <string name="video_triple_none">三连没有成功</string>
+    <string name="video_triple_separator">、</string>
     <string name="video_parts">分 P</string>
     <string name="video_episodes">选集</string>
     <string name="video_part_label">P%1$d %2$s</string>

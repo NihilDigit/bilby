@@ -19,6 +19,21 @@ data class ArchiveRelationDto(
 )
 
 /**
+ * `POST x/web-interface/archive/like/triple` 的响应体(data 节点)。
+ *
+ * 三个布尔是**逐项回执**,不是"请求成功了没有":硬币不够时 `coin` 回 false 而信封的
+ * code 仍是 0。字段照 PiliPlus 的 `models_new/triple/ugc_triple.dart`。
+ */
+@Serializable
+data class TripleDto(
+    val like: Boolean = false,
+    val coin: Boolean = false,
+    val fav: Boolean = false,
+    /** 这一下投进去几枚。 */
+    val multiply: Int = 0,
+)
+
+/**
  * `GET x/v3/fav/folder/created/list-all` 的响应体(data 节点)。同样不在两份笔记范围内,
  * 字段依据 bilibili-API-collect 的 fav/list.md。
  */

@@ -11,7 +11,7 @@ import androidx.compose.ui.unit.dp
 /**
  * 这个应用自己画的图标。
  *
- * 目前只有弹幕一个,原因是 Material Symbols 里能读成"弹幕"的符号在播放页**已经各有主人**:
+ * 弹幕在这里,是因为 Material Symbols 里能读成"弹幕"的符号在播放页**已经各有主人**:
  * 气泡是评论(标签行左边就写着"评论"),字幕框是字幕(控制条上那一个)。借用任何一个都会让
  * 同一页里一个符号说两件事。PiliPlus 遇到的是同一个问题,它的解法也是自带一对字形
  * (`CustomIcons.dm_on` / `dm_off`,`pages/video/view.dart:1424-1427`)。

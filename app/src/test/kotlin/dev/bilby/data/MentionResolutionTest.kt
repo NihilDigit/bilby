@@ -1,6 +1,5 @@
-package dev.bilby.ui.comment
+package dev.bilby.data
 
-import dev.bilby.data.CommentMention
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

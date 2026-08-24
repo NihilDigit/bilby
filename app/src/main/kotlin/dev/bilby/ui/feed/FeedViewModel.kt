@@ -8,6 +8,7 @@ import dev.bilby.data.DynamicFeedHalf
 import dev.bilby.data.DynamicFeedStore
 import dev.bilby.data.FollowRepository
 import dev.bilby.data.SettingsStore
+import dev.bilby.data.ToViewRepository
 import dev.bilby.data.db.FeedReadPositionRepository
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +26,7 @@ class FeedViewModel(
     private val followRepository: FollowRepository,
     private val settings: SettingsStore,
     private val readPositionRepository: FeedReadPositionRepository,
+    private val toViewRepository: ToViewRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(FeedUiState(loading = true))
@@ -42,6 +44,9 @@ class FeedViewModel(
 
     /** 见 [ExcludeUndo.id]。 */
     private var undoSeq = 0L
+
+    /** 见 [ToViewNotice.id]。 */
+    private var noticeSeq = 0L
 
     init {
         // 列表与状态都来自 [DynamicFeedStore],这一层不持有第二份。排除名单在 store 里就已经
@@ -188,6 +193,34 @@ class FeedViewModel(
 
     /** 那句话已经说完(撤销没被按,或者被别的顶掉)。清掉之后重进这一屏不会再弹一次。 */
     fun clearExcludeUndo() = _state.update { it.copy(excludeUndo = null) }
+
+    /**
+     * 加入稍后再看。**只进不出**,和播放页那一处同一套规矩(见 `VideoViewModel.addToView`):
+     * 移除在稍后再看那一页做,那里是个列表,划掉一条是自然动作。
+     *
+     * **没有乐观更新可回滚,所以成败都要报一句。** 这一行上没有任何位置能显示"已加入"——
+     * 播放页那一格图标会点亮,这里的菜单点完就收起来了。不报的话,成功和失败在界面上完全同形。
+     */
+    fun addToView(bvid: String) {
+        viewModelScope.launch {
+            val succeeded = when (val result = toViewRepository.add(bvid)) {
+                is BiliResult.Ok -> true
+                is BiliResult.ApiError -> {
+                    BiliLog.w("toview/add 失败(${result.code}): ${result.message}")
+                    false
+                }
+
+                is BiliResult.Failure -> {
+                    BiliLog.w("toview/add 异常", result.cause)
+                    false
+                }
+            }
+            _state.update { it.copy(toViewNotice = ToViewNotice(id = ++noticeSeq, succeeded = succeeded)) }
+        }
+    }
+
+    /** 那句话说完了。 */
+    fun clearToViewNotice() = _state.update { it.copy(toViewNotice = null) }
 
     private companion object {
         const val READ_POSITION_DEBOUNCE_MS = 1_200L

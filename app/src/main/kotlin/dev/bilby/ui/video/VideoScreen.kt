@@ -163,6 +163,10 @@ fun VideoScreen(
     favFolders: List<FavFolder>,
     addedToView: Boolean,
     onLike: () -> Unit,
+    /** 一键三连,长按点赞触发。 */
+    onTriple: () -> Unit,
+    /** 最近一次三连的结果,由 [TripleToast] 报一句。 */
+    tripleOutcome: TripleOutcome?,
     onAddToView: () -> Unit,
     onCoin: (count: Int, alsoLike: Boolean) -> Unit,
     coinAttempt: CoinAttempt,
@@ -560,8 +564,12 @@ fun VideoScreen(
     /**
      * 播放失败的提示。**只在播放器装的确实是本页这一条时显示** —— 播放器全 app 共用一个,
      * 队列走到别的视频上时,那一条的失败不该盖到这一页上。
+     *
+     * 身份用路由参数 [bvid],和 [playerHoldsThisPage]、[matchesCurrentPage] 同源。用
+     * `state.detail?.bvid` 的那一版在详情还没回来或请求失败时是 null,谁也对不上,于是失败
+     * 被整个吞掉 —— 而画面此刻正落在那个纯黑加转圈的分支上,什么都不说地一直转。
      */
-    val rawPlaybackError = audioState.error?.takeIf { audioState.queue?.current?.bvid == state.detail?.bvid }
+    val rawPlaybackError = audioState.error?.takeIf { audioState.queue?.current?.bvid == bvid }
 
     /** 失败要等它稳定下来才报,见 [rememberSettledPlaybackError]。 */
     val playbackError = rememberSettledPlaybackError(rawPlaybackError)
@@ -938,6 +946,9 @@ fun VideoScreen(
                         )
                     }
                     SkipToast(skippedCategory)
+                    // 三连的回执和跳过提示摞在同一列:两条都是"刚刚发生了一件事",
+                    // 各挑一个位置的话同时出现时会互相盖住。
+                    TripleToast(tripleOutcome)
                 }
 
                 // 切集面板。挂在画面这个 Box 里,所以它盖住的正好是画面,而不是整页 ——
@@ -995,6 +1006,7 @@ fun VideoScreen(
                         favFolders = favFolders,
                         addedToView = addedToView,
                         onLike = onLike,
+                        onTriple = onTriple,
                         onAddToView = onAddToView,
                         onCoin = onCoin,
                         coinAttempt = coinAttempt,
@@ -1017,11 +1029,23 @@ fun VideoScreen(
                     // 这一页还停在原来那条的评论区(见页面顶部对 matchesCurrentPage 的说明),
                     // 不对身份就会拿着 A 的评论里的时间戳去跳 B。
                     //
+                    // **判据是队列指着谁,不是取流回来没有。** 用 matchesCurrentPage 的那一版
+                    // 在整个取流窗口里静默丢掉点击 —— 评论比流先到,那几百毫秒里点下去什么都
+                    // 不发生,而时间戳照样画成能点的样子,表现就是"空降坐标有时候点不动"。
+                    // 队列这一刻已经指向本页这条了,而播放器允许对还没拿到时间线的条目定位
+                    // (见 AudioPlaybackService.adoptResolved 的说明),所以这一跳落得下去。
+                    //
+                    // 跳不了的时候传 null,让时间戳退回普通文字:一个看起来能点、点了没反应的
+                    // 东西比一段普通文字更糟。
+                    //
                     // 再夹一次时长:评论里的时间戳可能指向分 P 或者干脆写错,超出末尾的 seek
-                    // 会直接把这一条播完并翻到下一条。
-                        onSeekComment = { millis ->
-                            val controller = active
-                            if (controller != null && matchesCurrentPage) {
+                    // 会直接把这一条播完并翻到下一条。时长还不知道时不夹,播放器自己会截到窗口内。
+                    // 判据读 [audioState] 而不是叫 `playerHoldsThisPage()`:后者读的是
+                    // StateFlow 的 `.value`,在组合里不订阅,队列换过之后这一格不会重算。
+                        onSeekComment = active
+                            ?.takeIf { audioState.queue?.current?.bvid == bvid }
+                            ?.let { controller ->
+                            { millis: Long ->
                                 val end = controller.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
                                 controller.seekTo(millis.coerceIn(0L, end))
                             }

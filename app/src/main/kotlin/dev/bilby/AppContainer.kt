@@ -146,7 +146,7 @@ class AppContainer(context: Context) {
 
     val articleRepository: ArticleRepository by lazy { ArticleRepository(biliClient) }
 
-    val relationRepository: RelationRepository by lazy { RelationRepository(biliClient) }
+    val relationRepository: RelationRepository by lazy { RelationRepository(biliClient, settings) }
 
     val toViewRepository: ToViewRepository by lazy { ToViewRepository(biliClient) }
 

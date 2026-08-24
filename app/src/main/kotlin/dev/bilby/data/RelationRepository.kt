@@ -8,6 +8,7 @@ import dev.bilby.api.getData
 import dev.bilby.api.map
 import dev.bilby.api.postAction
 import dev.bilby.api.toHttpsUrl
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.intOrNull
@@ -25,7 +26,10 @@ enum class FollowState {
     Following,
     Mutual,
     Blocked,
-    /** 这是自己的空间,没有关注这个动作。 */
+    /**
+     * 这是自己,没有关注这个动作。**由本地 mid 判定,不从 `attribute` 读**——
+     * 见 [RelationRepository.stateOf]。
+     */
     Self,
     ;
 
@@ -44,12 +48,21 @@ enum class FollowState {
          *
          * 1 是悄悄关注,这个应用不区分,并进 [Following] —— 从"我关没关他"这个问题上看它就是
          * 关注了。
+         *
+         * **-1 不在这张表里,落进兜底的 [None]。** 它原先被读成 [Self],于是自己的空间页
+         * 永远等不到那一档:查自己 `attribute` 回的是 0,按钮照常显示"关注"。[Self] 现在由
+         * [RelationRepository.stateOf] 按本地 mid 判。
+         *
+         * **别拿 PiliPlus 里那个 -1 来对照,两者不是一回事。** 它读的是 app 端空间接口的
+         * `data.relation`,那一侧 -1 表示**我拉黑了对方**(`member/controller.dart:94-96`
+         * 把它映射成 128);而它传给按钮的那个 -1 是自己造的哨兵,来自
+         * `relation == -999 && guestRelation == -1`,含义是**对方拉黑了我**。这条接口
+         * (`x/relation` 的 `attribute`)的取值域里没有负数。
          */
         fun of(attribute: Int): FollowState = when (attribute) {
             1, 2 -> Following
             4, 6 -> Mutual
             128 -> Blocked
-            -1 -> Self
             else -> None
         }
     }
@@ -90,15 +103,28 @@ data class BlacklistPage(val users: List<BlockedUser>, val total: Int)
  * 参数是**分开放**的:`statistics` 与 `x-bili-device-req-json` 在 query,业务字段在 body。
  * Referer/Origin 指到该 UP 的空间页,不是站点首页。这三点照抄 PiliPlus,放错会被拒。
  */
-class RelationRepository(private val client: BiliClient) {
+class RelationRepository(
+    private val client: BiliClient,
+    private val settings: SettingsStore,
+) {
 
     /**
      * 单个用户的关注态。空间页不需要它(`acc/info` 自带 relation),播放页需要:
      * 视频详情里只有 UP 的 mid 和名字,没有关系。PiliPlus 在播放页同样单独查这条。
+     *
+     * **"这是自己"在发请求之前判,判据是 Cookie 里的 `DedeUserID`。** 接口没有表达这件事的
+     * 取值:查自己回的 `attribute` 是 0,和"没关注"同形,于是自己的空间页画出一个关注自己的
+     * 按钮。PiliPlus 也是本地比 mid(`member/view.dart:110` 把 `isOwner` 传进头部卡片),
+     * 不问服务端。顺带省掉一次注定没有答案的请求。
      */
-    suspend fun stateOf(mid: Long): BiliResult<FollowState> =
-        client.getData<RelationDto>(STATE, mapOf("fid" to mid.toString()))
+    suspend fun stateOf(mid: Long): BiliResult<FollowState> {
+        if (mid != 0L && mid == selfMid()) return BiliResult.Ok(FollowState.Self)
+        return client.getData<RelationDto>(STATE, mapOf("fid" to mid.toString()))
             .map { FollowState.of(it.attribute) }
+    }
+
+    /** 当前登录账号的 mid。未登录、或凭据里没有这一项时是 0。 */
+    private suspend fun selfMid(): Long = settings.credentials.first().dedeUserId.toLongOrNull() ?: 0L
 
     /**
      * 一次问一批人的关注态,给联合投稿那一排头像用。

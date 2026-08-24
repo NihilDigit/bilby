@@ -11,7 +11,8 @@ import dev.bilby.api.dto.ModuleDynamicDto
 import dev.bilby.api.toHttpsUrl
 import dev.bilby.data.model.ArticleImage
 import dev.bilby.data.model.ArticleRef
-import dev.bilby.data.model.ArticleSpan
+import dev.bilby.data.model.RichLinkIcon
+import dev.bilby.data.model.RichSpan
 import dev.bilby.data.model.DynamicAdditional
 import dev.bilby.data.model.DynamicAuthor
 import dev.bilby.data.model.DynamicCard
@@ -257,7 +258,7 @@ private fun ModuleDynamicDto?.toSpans(): DynamicText {
     val desc = this?.desc
     if (desc != null) {
         val spans = desc.richTextNodes.toSpans()
-            .ifEmpty { desc.text.takeIf { it.isNotBlank() }?.let { listOf(ArticleSpan.Text(it)) }.orEmpty() }
+            .ifEmpty { desc.text.takeIf { it.isNotBlank() }?.let { listOf(RichSpan.Text(it)) }.orEmpty() }
         // 走到这里的正文是完整的,见 DynamicCard.textIsSummary。
         return DynamicText(spans, isSummary = false)
     }
@@ -268,12 +269,12 @@ private fun ModuleDynamicDto?.toSpans(): DynamicText {
     val body = opus?.summary?.richTextNodes.orEmpty().toSpans()
         .ifEmpty {
             (opus?.summary?.text ?: major.article?.desc).orEmpty()
-                .takeIf { it.isNotBlank() }?.let { listOf(ArticleSpan.Text(it)) }.orEmpty()
+                .takeIf { it.isNotBlank() }?.let { listOf(RichSpan.Text(it)) }.orEmpty()
         }
     val spans = when {
         title == null -> body
-        body.isEmpty() -> listOf(ArticleSpan.Text(title, bold = true))
-        else -> listOf(ArticleSpan.Text("$title\n", bold = true)) + body
+        body.isEmpty() -> listOf(RichSpan.Text(title, bold = true))
+        else -> listOf(RichSpan.Text("$title\n", bold = true)) + body
     }
     // 截断与否由服务端说(见 OpusSummaryDto.hasMore)。旧版专栏那条没有这个字段,而它的
     // `article.desc` 按定义就是摘要,所以只要有内容就算截断过。
@@ -282,7 +283,7 @@ private fun ModuleDynamicDto?.toSpans(): DynamicText {
 }
 
 /** [toSpans] 的返回值。两样东西一起算出来,分成两个函数会让同一条分支写两遍。 */
-private data class DynamicText(val spans: List<ArticleSpan>, val isSummary: Boolean)
+private data class DynamicText(val spans: List<RichSpan>, val isSummary: Boolean)
 
 /**
  * 从跳转地址里认出专栏的编号。`/opus/<id>` 是新版,`/read/cv<id>` 是旧版 —— 两套编号取哪条
@@ -388,13 +389,13 @@ private fun DynamicAdditionalDto.toAdditional(): DynamicAdditional? = when (type
 }
 
 /**
- * 动态正文的富文本节点 -> 与专栏共用的 [ArticleSpan]。节点类型是同一族
+ * 动态正文的富文本节点 -> 与专栏共用的 [RichSpan]。节点类型是同一族
  * `RICH_TEXT_NODE_TYPE_*`,处理规则也一样:有跳转地址才做成链接,没有的退回纯文字。
  */
-private fun List<DynamicRichNodeDto>.toSpans(): List<ArticleSpan> = mapNotNull { node ->
+private fun List<DynamicRichNodeDto>.toSpans(): List<RichSpan> = mapNotNull { node ->
     when (node.type) {
         "RICH_TEXT_NODE_TYPE_EMOJI" -> node.emoji?.iconUrl?.takeIf { it.isNotBlank() }?.let {
-            ArticleSpan.Emoji(
+            RichSpan.Emoji(
                 url = it.toHttpsUrl(),
                 alt = node.origText.ifBlank { node.text },
                 scale = node.emoji.size.toFloat().takeIf { size -> size > 0f } ?: 1f,
@@ -402,22 +403,22 @@ private fun List<DynamicRichNodeDto>.toSpans(): List<ArticleSpan> = mapNotNull {
         }
 
         "RICH_TEXT_NODE_TYPE_AT" -> node.rid.toLongOrNull()
-            ?.let { ArticleSpan.Mention(node.text, it) }
-            ?: node.text.takeIf { it.isNotBlank() }?.let { ArticleSpan.Text(it) }
+            ?.let { RichSpan.Mention(node.text, it) }
+            ?: node.text.takeIf { it.isNotBlank() }?.let { RichSpan.Text(it) }
 
         // 纯文字节点取 origText:`text` 在部分节点上是被服务端折过的展示文案(如把一条长链接
         // 折成"网页链接"),origText 才是作者写下的原话。PiliPlus 的 rich_node_panel.dart:71 同此。
         "RICH_TEXT_NODE_TYPE_TEXT" -> node.origText.ifBlank { node.text }
-            .takeIf { it.isNotBlank() }?.let { ArticleSpan.Text(it) }
+            .takeIf { it.isNotBlank() }?.let { RichSpan.Text(it) }
 
         else -> when {
-            node.jumpUrl.isNotBlank() -> ArticleSpan.Link(
+            node.jumpUrl.isNotBlank() -> RichSpan.Link(
                 text = node.text,
                 url = node.jumpUrl.toHttpsUrl(),
-                showIcon = node.type == "RICH_TEXT_NODE_TYPE_WEB",
+                icon = if (node.type == "RICH_TEXT_NODE_TYPE_WEB") RichLinkIcon.Web else RichLinkIcon.None,
             )
 
-            node.text.isNotBlank() -> ArticleSpan.Text(node.text)
+            node.text.isNotBlank() -> RichSpan.Text(node.text)
             else -> null
         }
     }

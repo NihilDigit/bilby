@@ -420,7 +420,9 @@ suspend inline fun <reified T> BiliClient.postForm(
     url: String,
     form: Map<String, String> = emptyMap(),
     withCsrf: Boolean = true,
-): BiliResult<T> = runCatching { rawPostForm(url, form, withCsrf).body<BiliResponse<T>>() }
+    /** 指到发起这次写操作的那一页。三连要求它指向该视频的播放页,不是站点首页。 */
+    referer: String? = null,
+): BiliResult<T> = runCatching { rawPostForm(url, form, withCsrf, referer = referer).body<BiliResponse<T>>() }
     .fold(
         onSuccess = { envelope ->
             val data = envelope.data

@@ -32,7 +32,7 @@ import dev.bilby.api.dto.OpusSummaryDto
 import dev.bilby.api.dto.ReserveButtonDto
 import dev.bilby.api.dto.ReserveButtonTextDto
 import dev.bilby.data.model.ArticleRef
-import dev.bilby.data.model.ArticleSpan
+import dev.bilby.data.model.RichSpan
 import dev.bilby.data.model.DynamicAdditional
 import dev.bilby.data.model.DynamicContent
 import org.junit.Assert.assertEquals
@@ -134,7 +134,7 @@ class DynamicCardMapperTest {
             desc = "午安\n现在是纽芬兰的凌晨四点多",
         ).toDynamicCard()
 
-        assertEquals("午安\n现在是纽芬兰的凌晨四点多", (card?.text?.single() as ArticleSpan.Text).text)
+        assertEquals("午安\n现在是纽芬兰的凌晨四点多", (card?.text?.single() as RichSpan.Text).text)
         assertNull(card?.article)
         assertNull(card?.content)
         // desc 是这条动态自己写的话,一个字不少。界面据此把它整段铺开,不收也不给"阅读全文"。
@@ -155,7 +155,7 @@ class DynamicCardMapperTest {
             ),
         ).toDynamicCard()
 
-        val spans = card?.text.orEmpty().filterIsInstance<ArticleSpan.Text>()
+        val spans = card?.text.orEmpty().filterIsInstance<RichSpan.Text>()
         assertEquals(listOf("一篇专栏\n", "摘要"), spans.map { it.text })
         assertEquals(true, spans.first().bold)
         // 没有 has_more 就是完整的一条,哪怕它走的是 opus 这条路。请求带着 itemOpusStyle 时
@@ -196,7 +196,7 @@ class DynamicCardMapperTest {
             MajorDto(article = ArticleDto(id = 456L, title = "老专栏", desc = "开头两句")),
         ).toDynamicCard()
 
-        assertEquals(listOf("老专栏\n", "开头两句"), card?.text.orEmpty().filterIsInstance<ArticleSpan.Text>().map { it.text })
+        assertEquals(listOf("老专栏\n", "开头两句"), card?.text.orEmpty().filterIsInstance<RichSpan.Text>().map { it.text })
         assertEquals(true, card?.textIsSummary)
     }
 
@@ -240,8 +240,8 @@ class DynamicCardMapperTest {
             ),
         ).toDynamicCard()
 
-        assertEquals("第一次遇到这种情况", (card?.text?.get(0) as ArticleSpan.Text).text)
-        assertEquals("https://e.png", (card?.text?.get(1) as ArticleSpan.Emoji).url)
+        assertEquals("第一次遇到这种情况", (card?.text?.get(0) as RichSpan.Text).text)
+        assertEquals("https://e.png", (card?.text?.get(1) as RichSpan.Emoji).url)
     }
 
     private fun reserveCard(reserve: AdditionalReserveDto) = item(
@@ -440,7 +440,7 @@ class DynamicCardMapperTest {
             ),
         ).toDynamicCard()
 
-        assertEquals("原动态的正文", (card?.forwarded?.text?.single() as ArticleSpan.Text).text)
+        assertEquals("原动态的正文", (card?.forwarded?.text?.single() as RichSpan.Text).text)
         assertTrue(card?.forwarded?.content is DynamicContent.Images)
         assertNull(card?.forwardTips)
     }
@@ -451,7 +451,7 @@ class DynamicCardMapperTest {
         val inner = item("DYNAMIC_TYPE_FORWARD", desc = "第二层", orig = item("DYNAMIC_TYPE_AV", MajorDto(archive = archive)))
         val card = item("DYNAMIC_TYPE_FORWARD", desc = "第一层", orig = inner).toDynamicCard()
 
-        assertEquals("第二层", (card?.forwarded?.text?.first() as ArticleSpan.Text).text)
+        assertEquals("第二层", (card?.forwarded?.text?.first() as RichSpan.Text).text)
         assertNull(card?.forwarded?.forwarded)
     }
 

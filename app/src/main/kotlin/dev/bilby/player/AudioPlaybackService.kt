@@ -285,6 +285,10 @@ class AudioPlaybackService : MediaSessionService() {
      * 播放页据 [AudioPlaybackUiState.loadKey] 判身份,画面当场换成占位封面,而
      * [adoptResolved] 里那句起播 seek 会落在**正在播的这一条**上。结果先存这里,等播放器
      * 真的走到那一条再落。
+     *
+     * **落地之后不删,只把起播位置清零**(见 [adoptResolved])。在队列里退回一条已经放过的
+     * 视频不会重新 prepare 它的源,也就不会有第二份解析结果 —— 删掉的话那一条再也没有东西
+     * 可采纳,播放页会一直停在纯黑加转圈上。
      */
     private val resolvedItems = mutableMapOf<String, LoadedItem>()
 
@@ -1067,15 +1071,35 @@ class AudioPlaybackService : MediaSessionService() {
         if (mediaId == null) return
         val current = player.currentMediaItem ?: return
         if (current.mediaId != mediaId) return
-        val loaded = resolvedItems[mediaId] ?: return
+        val loaded = resolvedItems[mediaId] ?: run {
+            BiliLog.d("还没有这一条的解析结果,等它落地 id=$mediaId")
+            return
+        }
         // **身份要连 [MediaItem.loadNonce] 一起认。** 连着切两次 P 时,第一次那条的源在第二次
         // 被删掉、解析随之取消,但取消是有延迟的:解析协程已经走过取流、正要落结果的那一段
         // 不会被打断,而结果按 mediaId 存,两次装载的 mediaId 又完全相同。于是中间那一 P 的
         // cid、画质清单会落到用户真正点的那一 P 上,连带一次 seek 落在它记的位置上——新的解析
         // 随后再盖一遍,弹幕和字幕因此闪一次上一次点的那一 P。对不上就留在原处等它自己被盖掉。
-        if (loaded.loadNonce != current.loadNonce) return
-        // 取走即弃:回到这一条时它会重新 prepare、重新解析,留着只会让一份旧的抢在新的前面。
-        resolvedItems.remove(mediaId)
+        if (loaded.loadNonce != current.loadNonce) {
+            BiliLog.d("解析结果属于上一次装载,不采纳 id=$mediaId")
+            return
+        }
+        // **留着,只把起播位置消费掉。**
+        //
+        // 这条记录里混着两种东西:一种是这次装载的描述(cid、本地副本、画质清单),播放器
+        // 每次落到这一条上都要用;另一种是一次性的意图([LoadedItem.startPositionMillis],
+        // 起播定位)。原先整条取走即弃,理由写着"回到这一条时它会重新 prepare、重新解析" ——
+        // 那句不成立:播放器保留着已经准备好的 period,在队列里退回一条已经放过的视频不会
+        // 重新调 `prepareSourceInternal`,于是没有第二次解析,这里也就没有第二份记录。
+        //
+        // 结果是 [loadedMediaId] 停在上一条上,而 [playInfo] 已被换条那一步清空 —— 播放页
+        // 据这两个值判断"播放器装的是不是本页这一条",两个都对不上就落到那个纯黑加转圈的
+        // 分支,声音却照常在放。更糟的是 [openVideo] 的幂等分支按队列判身份,队列指的确实
+        // 是这一条,于是重开这一页、重发命令全是 no-op,这个状态没有出口。
+        //
+        // 描述留下来可以重复采纳,起播位置置零则保证不会把人拽回上次的续播点:退回一条
+        // 已经放过的视频,要的是停在它本来的位置。
+        resolvedItems[mediaId] = loaded.copy(startPositionMillis = 0)
         loadedMediaId = loaded.mediaId
         loadedCid = loaded.cid
         loadedLocalCopy = loaded.localCopy

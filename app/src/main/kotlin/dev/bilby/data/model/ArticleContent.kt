@@ -27,12 +27,12 @@ sealed interface ArticleBlock {
 
     /** 正文段落。[quote] 为真时是引用块(`para_type == 4`),两者的文字结构完全一样。 */
     data class Paragraph(
-        val spans: List<ArticleSpan>,
+        val spans: List<RichSpan>,
         val centered: Boolean = false,
         val quote: Boolean = false,
     ) : ArticleBlock
 
-    data class Heading(val spans: List<ArticleSpan>) : ArticleBlock
+    data class Heading(val spans: List<RichSpan>) : ArticleBlock
 
     /** 一段里的图。一张和多张在版式上是两回事,但都是这一块,由渲染层按张数排。 */
     data class Images(val images: List<ArticleImage>) : ArticleBlock
@@ -66,7 +66,7 @@ sealed interface ArticleBlock {
 
 enum class LinkCardKind { Video, Live, Article, Music, Common, Gone }
 
-data class ListEntry(val order: Int, val spans: List<ArticleSpan>)
+data class ListEntry(val order: Int, val spans: List<RichSpan>)
 
 data class ArticleImage(val url: String, val width: Int, val height: Int) {
     /**
@@ -78,37 +78,4 @@ data class ArticleImage(val url: String, val width: Int, val height: Int) {
     private companion object {
         const val LONG_IMAGE_RATIO = 2.5f
     }
-}
-
-/** 一段文字里的一节。 */
-sealed interface ArticleSpan {
-
-    /**
-     * @param colorArgb 作者指定的字色,null 表示没指定。**是否采用由渲染层决定** ——
-     *   这些颜色全是照网页白底挑的,深色主题下有相当一部分会掉到看不清,得先过一遍对比度
-     *   (见 `ui/article/ArticleText.kt`)。数据层不做这个判断:它不知道当前主题的底色。
-     * @param fontSizeSp 作者指定的字号,null 表示用正文默认字号。
-     */
-    data class Text(
-        val text: String,
-        val bold: Boolean = false,
-        val italic: Boolean = false,
-        val strikethrough: Boolean = false,
-        val colorArgb: Int? = null,
-        val fontSizeSp: Float? = null,
-    ) : ArticleSpan
-
-    /** [showIcon] 为真时行内补一个链条记号:站外链接与正文同色,不加记号读不出它能点。 */
-    data class Link(val text: String, val url: String, val showIcon: Boolean = false) : ArticleSpan
-
-    data class Mention(val text: String, val mid: Long) : ArticleSpan
-
-    data class Emoji(val url: String, val alt: String, val scale: Float) : ArticleSpan
-
-    /**
-     * 公式。**保留 LaTeX 源码,不渲染成图**:B 站那条 `x/web-frontend/mathjax/tex` 返回的是
-     * SVG,要额外引 coil-svg 才画得出来,而专栏里带公式的比例极低。原样显示至少读得懂,
-     * 显示不出来的空白读不懂。
-     */
-    data class Formula(val latex: String) : ArticleSpan
 }

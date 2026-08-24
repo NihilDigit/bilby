@@ -1021,6 +1021,7 @@ private fun FeedPane(
                     container.followRepository,
                     container.settings,
                     container.feedReadPositionRepository,
+                    container.toViewRepository,
                 )
             }
         },
@@ -1048,6 +1049,8 @@ private fun FeedPane(
         onEnter = vm::onEnterScreen,
         onUndoExclude = vm::undoExclude,
         onExcludeUndoShown = vm::clearExcludeUndo,
+        onAddToView = vm::addToView,
+        onToViewNoticeShown = vm::clearToViewNotice,
     )
 }
 
@@ -2263,6 +2266,7 @@ private fun VideoPane(
     val scope = rememberCoroutineScope()
     val relation by vm.relation.collectAsStateWithLifecycle()
     val coinAttempt by vm.coinAttempt.collectAsStateWithLifecycle()
+    val tripleOutcome by vm.tripleOutcome.collectAsStateWithLifecycle()
     val favFolders by vm.favFolders.collectAsStateWithLifecycle()
     val sponsorSegments by vm.sponsorSegments.collectAsStateWithLifecycle()
     val followState by vm.followState.collectAsStateWithLifecycle()
@@ -2318,6 +2322,8 @@ private fun VideoPane(
         relation = relation,
         favFolders = favFolders,
         onLike = vm::toggleLike,
+        onTriple = vm::triple,
+        tripleOutcome = tripleOutcome,
         addedToView = addedToView,
         onAddToView = vm::addToView,
         onCoin = vm::coin,

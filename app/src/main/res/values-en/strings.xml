@@ -40,6 +40,8 @@
     <string name="feed_special_ups">Special follows</string>
     <string name="feed_frequent_ups">Most visited</string>
     <string name="feed_item_actions">Post actions</string>
+    <string name="feed_toview_added">Added to Watch later</string>
+    <string name="feed_toview_failed">Could not add to Watch later</string>
     <string name="feed_exclude_up">Hide %1$s from home</string>
     <string name="feed_excluded">%1$s is now hidden</string>
     <string name="feed_article_badge">Article</string>
@@ -108,7 +110,6 @@
     <string name="comment_expand_replies">Show %1$d replies</string>
     <string name="comment_open_replies_panel">View all %1$d replies</string>
     <string name="comment_view_thread">View this thread</string>
-    <string name="comment_replies_time_ordered">Replies are ordered by time posted</string>
     <string name="comment_collapse_replies">Collapse</string>
     <string name="comment_load_more">Load more</string>
     <string name="comment_replies_failed">Replies failed to load</string>
@@ -116,9 +117,10 @@
     <string name="comment_replying_to">Replying to @%1$s</string>
     <string name="comment_input_hint">Say something nice</string>
     <string name="comment_input_hint_reply">Reply to %1$s</string>
-    <string name="comment_copy">Copy comment</string>
     <string name="comment_copied">Copied</string>
     <string name="comment_copy_clip_label">Comment</string>
+    <string name="text_select_title">Select text</string>
+    <string name="text_select_copy_all">Copy all</string>
 
     <string name="space_title">Profile</string>
     <string name="space_tab_archives">Videos</string>
@@ -146,10 +148,9 @@
     <string name="video_follow_staff">Follow %1$s</string>
     <string name="video_tab_comment">Comments</string>
     <string name="video_tab_comment_count">Comments %1$s</string>
-    <string name="video_intro_expand">Show description</string>
+    <string name="video_intro_open">Description</string>
     <string name="video_resume">Resume</string>
     <string name="video_replay">Replay</string>
-    <string name="video_intro_collapse">Hide description</string>
     <string name="video_cloud_resume">Watched to %1$s elsewhere</string>
     <string name="video_cloud_resume_jump">Jump</string>
     <string name="video_cloud_resume_dismiss">Dismiss</string>
@@ -164,6 +165,11 @@
     <string name="video_action_toview">Later</string>
     <string name="video_action_toview_added">Added</string>
     <string name="video_action_toview_desc">Add to Watch later</string>
+    <string name="video_triple">Like, coin and favorite</string>
+    <string name="video_triple_all">Liked, coined and favorited</string>
+    <string name="video_triple_some">Done: %1$s</string>
+    <string name="video_triple_none">Nothing went through</string>
+    <string name="video_triple_separator">", "</string>
     <string name="video_parts">Parts</string>
     <string name="video_episodes">Episodes</string>
     <string name="video_part_label">P%1$d %2$s</string>

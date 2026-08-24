@@ -3,7 +3,7 @@ package dev.bilby.data.model
 /**
  * 一条动态,已经从接口的 `type` + `major` 组合收敛成界面认得的形状。
  *
- * **正文复用 [ArticleSpan]**,不另起一套:动态正文的 `rich_text_nodes` 与专栏正文里的 `rich`
+ * **正文复用 [RichSpan]**,不另起一套:动态正文的 `rich_text_nodes` 与专栏正文里的 `rich`
  * 节点是同一族 `RICH_TEXT_NODE_TYPE_*` 取值(@提及、话题、表情、站外链接),两套模型只会让
  * 同一段判断写两遍,而渲染层也已经有一份能画它的组件。
  *
@@ -20,7 +20,7 @@ data class DynamicCard(
     val type: String,
     val author: DynamicAuthor,
     val publishedAtEpochSeconds: Long,
-    val text: List<ArticleSpan> = emptyList(),
+    val text: List<RichSpan> = emptyList(),
     /**
      * [text] 是**摘要**而不是全文,后面还有没读到的内容。
      *

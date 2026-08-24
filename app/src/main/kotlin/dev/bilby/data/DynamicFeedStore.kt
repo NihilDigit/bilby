@@ -62,6 +62,14 @@ class DynamicFeedStore(
     private var nextOffset: String? = null
 
     /**
+     * 现在这份列表是由上游几页拼出来的。**刷新据此决定要重建多深**,见 [runFetch]。
+     *
+     * 用页数而不是条数:上游的游标以页为单位,而一页里两半各分到多少每次都不同,按条数算
+     * 会在最后一页上多要或少要一整页。
+     */
+    private var loadedPages = 0
+
+    /**
      * 一次只发一条请求。**抢不到就直接返回,不排队** —— 排队的那次醒来时看到的是已经变过的
      * 列表和游标,它拿着旧参数继续做完,结果不是重复一页就是跳过一页。
      */
@@ -145,31 +153,46 @@ class DynamicFeedStore(
     }
 
     /**
-     * 取到这一半有东西为止,至多 [MAX_AUTO_PAGES] 页。
+     * 首屏与追加取到这一半有东西为止,至多 [MAX_AUTO_PAGES] 页;**刷新把原先翻到的深度整个
+     * 重建一遍**,取 [loadedPages] 页。
      *
-     * **判据是"要用它的这一半拿到了几条",不是"这一页解析出了几条"** ——一页里两半各分到多少
-     * 差别很大,整页都是投稿视频是常态。另一半的收获照样进列表,不像从前那样被丢掉:同一次
-     * 请求同时喂两个视图,是这条流合并之后最实际的好处。
+     * 判据是"要用它的这一半拿到了几条",不是"这一页解析出了几条" ——一页里两半各分到多少
+     * 差别很大,整页都是投稿视频是常态。另一半的收获照样进列表:同一次请求同时喂两个视图,
+     * 是这条流合并之后最实际的好处。
      *
-     * 上限是防止在坏数据上无限翻页,不是内容策略。
+     * **刷新不能沿用那条"够了就停"的规则。** 沿用的话它取一页就停,而下面是整份替换,于是
+     * 翻了十页再下拉,剩下的就是第一页——列表在用户眼皮底下缩回一屏,读到哪儿也一并丢了。
+     * 重建一遍比往前拼接贵,换来的是一份和"重新打开这一页"完全一致的列表:上游这段时间里
+     * 删掉的、改过的、换了顺序的都跟着变,拼接只会把旧的那份原样留在下面。
+     *
+     * 两处上限都是防止在坏数据上无限翻页,不是内容策略。
      */
     private suspend fun runFetch(half: DynamicFeedHalf, append: Boolean) {
         val freshHome = mutableListOf<FeedEntry>()
         val freshOther = mutableListOf<DynamicCard>()
         var offset = if (append) nextOffset else null
         var hasMore = true
-        for (page in 0 until MAX_AUTO_PAGES) {
+        var pages = 0
+        // 手上已经有列表、又不是追加,就是一次刷新 —— 首屏(列表还空着)走的是 append 那套。
+        val rebuilding = !append && loadedPages > 0
+        val budget = if (rebuilding) loadedPages.coerceAtMost(MAX_REBUILD_PAGES) else MAX_AUTO_PAGES
+        if (rebuilding && loadedPages > MAX_REBUILD_PAGES) {
+            BiliLog.w("刷新只重建 $MAX_REBUILD_PAGES 页,原有 $loadedPages 页")
+        }
+        while (pages < budget) {
             when (val result = repository.loadFeed(offset)) {
                 is BiliResult.Ok -> {
+                    pages++
                     freshHome += result.value.home
                     freshOther += result.value.other
                     offset = result.value.nextOffset
                     hasMore = result.value.hasMore && result.value.nextOffset != null
+                    if (!hasMore) break
                     val gained = when (half) {
                         DynamicFeedHalf.Home -> freshHome.isNotEmpty()
                         DynamicFeedHalf.Other -> freshOther.isNotEmpty()
                     }
-                    if (gained || !hasMore) break
+                    if (!rebuilding && gained) break
                 }
 
                 is BiliResult.ApiError -> return setError("${result.message}(${result.code})")
@@ -187,9 +210,11 @@ class DynamicFeedStore(
                 val seen = current.mapTo(HashSet(current.size)) { it.id }
                 current + freshOther.filter { seen.add(it.id) }
             }
+            loadedPages += pages
         } else {
             _home.value = freshHome
             _other.value = freshOther
+            loadedPages = pages
         }
         nextOffset = offset
         runCatching { cache.saveHead(_home.value) }
@@ -203,5 +228,11 @@ class DynamicFeedStore(
 
     private companion object {
         const val MAX_AUTO_PAGES = 3
+
+        /**
+         * 刷新最多重建这么多页。翻得比这更深的人再刷新会看到列表缩短一截——代价是一次刷新
+         * 至多 12 趟串行请求,再往上等待时间比丢掉的那几屏更难接受。真截断了会记一行日志。
+         */
+        const val MAX_REBUILD_PAGES = 12
     }
 }

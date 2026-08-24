@@ -136,6 +136,8 @@ data class FeedUiState(
     val pendingLocate: Boolean = true,
     /** 刚排除掉一位,等着给一句话和一个撤销。见 [ExcludeUndo]。 */
     val excludeUndo: ExcludeUndo? = null,
+    /** 刚加过稍后再看,报一句就完。见 [ToViewNotice]。 */
+    val toViewNotice: ToViewNotice? = null,
 )
 
 /**
@@ -146,6 +148,15 @@ data class FeedUiState(
  * 而按 mid 做 key 的 LaunchedEffect 认不出第二次。
  */
 data class ExcludeUndo(val id: Long, val mid: Long, val name: String)
+
+/**
+ * 刚把一条加进稍后再看。**只报一句,没有撤销** —— 稍后再看是只进不出的,移除在那一页做
+ * (见 [FeedViewModel.addToView])。
+ *
+ * [succeeded] 要带上:这个动作在列表上留不下任何痕迹,不报的话成功和失败完全同形。
+ * [id] 是本地递增的序号,理由同 [ExcludeUndo.id] —— 连着加两条要能各弹一次。
+ */
+data class ToViewNotice(val id: Long, val succeeded: Boolean)
 
 /**
  * 已读位置在当前已加载列表里的下标。**用 id 定位而不是记下标本身**是 DESIGN 2.1 的原话
@@ -199,6 +210,10 @@ fun FeedScreen(
     onUndoExclude: (Long) -> Unit = {},
     /** 那句话说完了,见 [FeedViewModel.clearExcludeUndo]。 */
     onExcludeUndoShown: () -> Unit = {},
+    /** 把一条投稿加进稍后再看。只对视频给,专栏没有这个动作。 */
+    onAddToView: (String) -> Unit = {},
+    /** 那句话说完了,见 [FeedViewModel.clearToViewNotice]。 */
+    onToViewNoticeShown: () -> Unit = {},
     /** 每变一次就回到顶部。重按底栏上当前这一格时由 MainActivity 递增。 */
     scrollToTop: Int = 0,
     modifier: Modifier = Modifier,
@@ -218,14 +233,23 @@ fun FeedScreen(
         if (result == SnackbarResult.ActionPerformed) onUndoExclude(undo.mid) else onExcludeUndoShown()
     }
 
+    val toViewNotice = state.toViewNotice
+    val toViewAdded = stringResource(R.string.feed_toview_added)
+    val toViewFailed = stringResource(R.string.feed_toview_failed)
+    LaunchedEffect(toViewNotice?.id) {
+        if (toViewNotice == null) return@LaunchedEffect
+        snackbarHostState.showSnackbar(if (toViewNotice.succeeded) toViewAdded else toViewFailed)
+        onToViewNoticeShown()
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         when {
             state.loading && state.items.isEmpty() -> FullScreenLoading()
             state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry)
             else -> FeedList(
                 state, onRefresh, onLoadMore, onItemClick, onUpClick, onLiveClick, onExcludeUp,
-                onOpenFollowings, onOpenOtherDynamics, onScrollPositionChanged, onLocated, scrollToTop,
-                Modifier, contentPadding,
+                onAddToView, onOpenFollowings, onOpenOtherDynamics, onScrollPositionChanged, onLocated,
+                scrollToTop, Modifier, contentPadding,
             )
         }
         SnackbarHost(
@@ -246,6 +270,7 @@ private fun FeedList(
     onUpClick: (Long) -> Unit,
     onLiveClick: (Long) -> Unit,
     onExcludeUp: (Long, String) -> Unit,
+    onAddToView: (String) -> Unit,
     onOpenFollowings: () -> Unit,
     onOpenOtherDynamics: () -> Unit,
     onScrollPositionChanged: (String) -> Unit,
@@ -374,13 +399,13 @@ private fun FeedList(
         val beforeMarker = if (markerIndex != null) state.items.subList(0, markerIndex) else state.items
         val fromMarker = if (markerIndex != null) state.items.subList(markerIndex, state.items.size) else emptyList()
         items(beforeMarker, key = { it.id }) { item ->
-            FeedEntryItem(item, onItemClick, onExcludeUp)
+            FeedEntryItem(item, onItemClick, onExcludeUp, onAddToView)
         }
         if (markerIndex != null) {
             item(key = "read-marker") { ReadMarkerDivider() }
         }
         items(fromMarker, key = { it.id }) { item ->
-            FeedEntryItem(item, onItemClick, onExcludeUp)
+            FeedEntryItem(item, onItemClick, onExcludeUp, onAddToView)
         }
             item(key = "footer") {
                 ListFooter(
@@ -493,7 +518,12 @@ private fun FrequentUpsPane(
 /** 单条投稿行,含「不再显示」的菜单。从 [FeedList] 拆出来是因为分隔线要把 items(...) 切成两段,两段用的是同一份行 UI。 */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun FeedEntryItem(item: FeedEntry, onItemClick: (FeedEntry) -> Unit, onExcludeUp: (Long, String) -> Unit) {
+private fun FeedEntryItem(
+    item: FeedEntry,
+    onItemClick: (FeedEntry) -> Unit,
+    onExcludeUp: (Long, String) -> Unit,
+    onAddToView: (String) -> Unit,
+) {
     // **菜单只有行尾这一个入口,长按已经去掉。** 长按此前是并行的第二个入口,理由是"已经会用
     // 的人不必改习惯";但长按没有任何视觉提示,而 M3 手势那一页给长按定的语义是"选中项",
     // 留着它等于让同一个操作有一个说不通的别名。
@@ -513,13 +543,29 @@ private fun FeedEntryItem(item: FeedEntry, onItemClick: (FeedEntry) -> Unit, onE
                 }
                 // M3E 的 vertical menu:容器圆角、standard 配色(surfaceContainerLow),菜单项
                 // 自己也有形状 —— 基线菜单的项是一条通栏矩形,按下去的状态层跟着是方的。
-                // 这一份只有一项,所以用 standaloneItemShape(既是首项也是末项的那一档)。
+                //
+                // **形状按项数取。** 只有一项时它既是首项也是末项(standalone);两项时上下
+                // 各取 leading / trailing,中间那条边是直的 —— 两项都用 standalone 的话,
+                // 两块圆角贴在一起会在中缝挤出一道空隙。专栏没有"稍后再看",所以这个菜单
+                // 真的会在一项和两项之间变。
+                val canAddToView = item is FeedEntry.Video
                 DropdownMenu(
                     expanded = menuOpen,
                     onDismissRequest = { menuOpen = false },
                     shape = MenuDefaults.shape,
                     containerColor = MenuDefaults.containerColor,
                 ) {
+                    if (canAddToView) {
+                        // 只进不出,和播放页那一格同一套规矩(见 [FeedViewModel.addToView])。
+                        DropdownMenuItem(
+                            onClick = {
+                                menuOpen = false
+                                onAddToView((item as FeedEntry.Video).bvid)
+                            },
+                            text = { Text(stringResource(R.string.video_action_toview_desc)) },
+                            shape = MenuDefaults.leadingItemShape,
+                        )
+                    }
                     // **当场生效,撤销在 snackbar 上**(见 [ExcludeUndo])。从前这里还隔着一个
                     // 确认对话框,理由是撤销无处可落;设置里那份名单可以逐个恢复之后,那个理由
                     // 不成立了,而一个撤得回来的操作不值得一次拦截。
@@ -529,7 +575,11 @@ private fun FeedEntryItem(item: FeedEntry, onItemClick: (FeedEntry) -> Unit, onE
                             onExcludeUp(item.upMid, item.upName)
                         },
                         text = { Text(stringResource(R.string.feed_exclude_up, item.upName)) },
-                        shape = MenuDefaults.standaloneItemShape,
+                        shape = if (canAddToView) {
+                            MenuDefaults.trailingItemShape
+                        } else {
+                            MenuDefaults.standaloneItemShape
+                        },
                     )
                 }
             }

@@ -1,6 +1,7 @@
 package dev.bilby.ui.video
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
@@ -74,6 +76,14 @@ import dev.nihildigit.danmaku.DanmakuHost
 import dev.nihildigit.danmaku.DanmakuViewport
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+
+/**
+ * 进度条那一行和按钮那一行叠多少。
+ *
+ * 12dp 是进度槽下方那块空 padding(16dp)减去 4dp 余量 —— 叠满会贴到槽本身,
+ * 拖到最下沿时手指就落在按钮上了。
+ */
+private val ControlRowOverlap = 12.dp
 
 private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
@@ -308,18 +318,25 @@ private fun PlayerControlBar(
         )
 
     // 进度条独占一行:挤在按钮行里只剩几十 dp 可拖,而拖拽是这里最主要的操作。
-    // 进度条独占一行:挤在按钮行里只剩几十 dp 可拖,而拖拽是这里最主要的操作。
     //
     // 其余控件就一行摆完。**不按宽度分行** —— 手机竖屏(360–410dp)是主力窗口,按宽度分行
     // 等于在主力形态上永远是两行,而这一行本来就摆得下:图标 22dp、全屏时才给画质档名。
-    Column(modifier = container) {
+    //
+    // **两行负间距叠着放。** 两者都是 48dp 的触摸区,而画出来的东西一个 16dp(进度槽)、
+    // 一个 22dp(图标),各自上下留着十几 dp 的空 —— 两块空 padding 摞在一起就是 29dp 的
+    // 视觉空隙,读起来像两组不相干的控件。让它们共用一部分:叠 [ControlRowOverlap] 之后
+    // 看着是一组,而两边的触摸区都还在 36dp 以上。
+    //
+    // 进度条画在上层([zIndex]),叠掉的那一截归它 —— 拖拽要的精度比点一个 22dp 的图标高,
+    // 而按钮叠掉的只是自己顶上的空 padding,图标本身一点没被盖到。
+    Column(modifier = container, verticalArrangement = Arrangement.spacedBy(-ControlRowOverlap)) {
         SeekBar(
             position,
             duration,
             onSeekStart,
             onSeekTo,
             onSeekFinished,
-            Modifier.fillMaxWidth(),
+            Modifier.fillMaxWidth().zIndex(1f),
             segments = segments,
         )
         Row(verticalAlignment = Alignment.CenterVertically) {

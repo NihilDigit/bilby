@@ -18,7 +18,8 @@ import dev.bilby.api.dto.ParagraphPicDto
 import dev.bilby.api.dto.RichTextDto
 import dev.bilby.api.dto.TextNodeDto
 import dev.bilby.data.model.ArticleBlock
-import dev.bilby.data.model.ArticleSpan
+import dev.bilby.data.model.RichLinkIcon
+import dev.bilby.data.model.RichSpan
 import dev.bilby.data.model.LinkCardKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -179,7 +180,7 @@ class ArticleContentParserTest {
             ),
         ).toArticleBlocks()
 
-        assertTrue((blocks.single() as ArticleBlock.Paragraph).spans.single() is ArticleSpan.Text)
+        assertTrue((blocks.single() as ArticleBlock.Paragraph).spans.single() is RichSpan.Text)
     }
 
     @Test
@@ -197,8 +198,8 @@ class ArticleContentParserTest {
         ).toArticleBlocks()
 
         val spans = (blocks.single() as ArticleBlock.Paragraph).spans
-        assertTrue(spans[0] is ArticleSpan.Text)
-        assertEquals(ArticleSpan.Link("站外", "https://example.com", showIcon = true), spans[1])
+        assertTrue(spans[0] is RichSpan.Text)
+        assertEquals(RichSpan.Link("站外", "https://example.com", icon = RichLinkIcon.Web), spans[1])
     }
 
     @Test
@@ -216,8 +217,8 @@ class ArticleContentParserTest {
         ).toArticleBlocks()
 
         val spans = (blocks.single() as ArticleBlock.Paragraph).spans
-        assertEquals(ArticleSpan.Mention("@某人", 12345L), spans[0])
-        assertTrue(spans[1] is ArticleSpan.Text)
+        assertEquals(RichSpan.Mention("@某人", 12345L), spans[0])
+        assertTrue(spans[1] is RichSpan.Text)
     }
 
     @Test
@@ -240,7 +241,7 @@ class ArticleContentParserTest {
             ),
         ).toArticleBlocks()
 
-        val emoji = (blocks.single() as ArticleBlock.Paragraph).spans.single() as ArticleSpan.Emoji
+        val emoji = (blocks.single() as ArticleBlock.Paragraph).spans.single() as RichSpan.Emoji
         assertEquals("https://g.gif", emoji.url)
         assertEquals("[doge]", emoji.alt)
         assertEquals(2f, emoji.scale, 0f)

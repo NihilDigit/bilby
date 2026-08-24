@@ -36,6 +36,7 @@ import dev.bilby.data.FavFolder
 import dev.bilby.data.MemberCard
 import dev.bilby.data.VideoActionRepository
 import dev.bilby.data.VideoDetail
+import dev.bilby.data.TripleResult
 import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoRepository
 import dev.bilby.data.VideoStat
@@ -80,6 +81,17 @@ sealed interface CoinAttempt {
     data object Succeeded : CoinAttempt
     data class Failed(val message: String) : CoinAttempt
 }
+
+/**
+ * 一次三连的结果,给那条一次性提示用(见 `ui/video/TripleToast.kt`)。
+ *
+ * **成功也要报一句。** 三样里成了哪几样只有服务端知道 —— 硬币不够时收藏和点赞照常生效,
+ * 而界面上只有投币那一格没亮,人分不出是没投成还是自己看错了。
+ *
+ * [seq] 让同样的结果连着发生两次也能各弹一次提示:数据类相等的两个值在 `LaunchedEffect`
+ * 的 key 上是同一个,不带序号的话第二次长按什么都不会出现。
+ */
+data class TripleOutcome(val seq: Long, val result: TripleResult?, val error: String?)
 
 /**
  * 发弹幕这一次的进展。与 [CoinAttempt] 同形,理由也一样:[Sent] 是"发出去了,面板可以关了",
@@ -312,6 +324,13 @@ class VideoViewModel(
      * 说话,投币没有乐观更新可回滚(见 [coin]),失败于是一点痕迹都不留。
      */
     val coinAttempt: StateFlow<CoinAttempt> = _coinAttempt.asStateFlow()
+
+    private val _tripleOutcome = MutableStateFlow<TripleOutcome?>(null)
+
+    /** 最近一次三连的结果。见 [TripleOutcome]、[triple]。 */
+    val tripleOutcome: StateFlow<TripleOutcome?> = _tripleOutcome.asStateFlow()
+
+    private var tripleSeq = 0L
 
     private val _state = MutableStateFlow(VideoUiState())
     val state: StateFlow<VideoUiState> = _state.asStateFlow()
@@ -973,6 +992,56 @@ class VideoViewModel(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * 一键三连。长按点赞触发,见 `VideoTabs.ActionButtonsRow`。
+     *
+     * **没有乐观更新,状态一律照服务端的逐项回执落。** 三样里哪几样成得了取决于当天的硬币、
+     * 收藏夹和已有的赞,先亮再回滚会同时闪三处。这一点上它和投币是同一类动作,不和点赞同类。
+     *
+     * 计数按"这一下真的改了什么"补:已经赞过的再三连一次,`liked` 回 true 而赞数不该 +1。
+     */
+    fun triple() {
+        val current = _relation.value ?: return
+        val detail = _state.value.detail ?: return
+        val startGeneration = generation
+        viewModelScope.launch {
+            val outcome = when (val result = actionRepository.triple(detail.aid, detail.bvid)) {
+                is BiliResult.Ok -> {
+                    val value = result.value
+                    if (value.allFailed) {
+                        BiliLog.w("三连三样都没成 bvid=${detail.bvid}")
+                    }
+                    ifCurrent(startGeneration) {
+                        _relation.value = current.copy(
+                            liked = current.liked || value.liked,
+                            coined = current.coined + value.coins,
+                            favored = current.favored || value.favored,
+                        )
+                        adjustStat {
+                            it.copy(
+                                like = it.like + if (value.liked && !current.liked) 1 else 0,
+                                coin = it.coin + value.coins,
+                                favorite = it.favorite + if (value.favored && !current.favored) 1 else 0,
+                            )
+                        }
+                    }
+                    TripleOutcome(++tripleSeq, value, null)
+                }
+
+                is BiliResult.ApiError -> {
+                    BiliLog.w("三连失败(${result.code}): ${result.message}")
+                    TripleOutcome(++tripleSeq, null, "${result.message}(${result.code})")
+                }
+
+                is BiliResult.Failure -> {
+                    BiliLog.w("三连异常: ${result.cause}")
+                    TripleOutcome(++tripleSeq, null, result.cause.message ?: "网络错误")
+                }
+            }
+            ifCurrent(startGeneration) { _tripleOutcome.value = outcome }
         }
     }
 

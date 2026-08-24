@@ -28,7 +28,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.OndemandVideo
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -62,17 +61,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.foundation.text.InlineTextContent
-import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.Placeholder
-import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.LinkAnnotation
-import androidx.compose.ui.text.TextLinkStyles
-import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
@@ -81,6 +72,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.bilby.R
 import dev.bilby.data.CommentItem
+import dev.bilby.data.parseCommentSpans
+import dev.bilby.ui.components.BiliRichText
+import dev.bilby.ui.components.SelectableTextDialog
 import dev.bilby.data.CommentLink
 import dev.bilby.data.CommentMention
 import dev.bilby.data.CommentSort
@@ -92,10 +86,8 @@ import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SortRow
-import dev.bilby.ui.components.inlineEmoteSize
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
-import dev.bilby.ui.theme.LocalMentionColor
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.formatRelativeTime
 import java.time.Instant
@@ -135,7 +127,8 @@ fun CommentSection(
     onSend: (text: String, replyTo: Long?) -> Unit,
     onLike: (id: Long) -> Unit,
     onDelete: (id: Long) -> Unit,
-    onSeek: (Long) -> Unit = {},
+    /** 点了评论里的时间戳。**没有可跳的视频时传 null**,那时时间戳画成普通文字。 */
+    onSeek: ((Long) -> Unit)? = null,
     /** 点正文里的 @ 去那个人的空间。配不到 mid 的 @ 不是链接,不会走到这里。 */
     onUserClick: (mid: Long) -> Unit = {},
     /**
@@ -169,6 +162,12 @@ fun CommentSection(
     // 楼中楼面板另有一份自己的([SubReplyPanel]),不共用这个:`ModalBottomSheet` 自成一个
     // window 画在活动窗口之上,这一份在它底下,从面板里复制会往一个看不见的地方报。
     val snackbarHostState = remember { SnackbarHostState() }
+
+    /**
+     * 此刻要选中哪一段文字。**挂在列表之外这一层**,不挂在行里 —— 挂在行里的话,面板一打开
+     * 那一行还在滚动区里,一被 `LazyColumn` 回收面板就跟着消失。
+     */
+    var selectionTarget by remember { mutableStateOf<String?>(null) }
 
     // **收起是本地状态,不回收 ViewModel 里那份展开结果。** 一楼展开到第三页再收起,
     // 重新展开时如果连结果一起丢了,就是重新翻三页 —— 而用户收起的意思是"这一段先不占地方",
@@ -269,7 +268,7 @@ fun CommentSection(
                         onSeek = onSeek,
                         onUserClick = onUserClick,
                         onOpenLink = onOpenLink,
-                        snackbar = snackbarHostState,
+                        onSelectText = { selectionTarget = it },
                     )
                 }
             }
@@ -312,7 +311,7 @@ fun CommentSection(
                     onSeek = onSeek,
                     onUserClick = onUserClick,
                     onOpenLink = onOpenLink,
-                    snackbar = snackbarHostState,
+                    onSelectText = { selectionTarget = it },
                 )
             }
 
@@ -339,10 +338,17 @@ fun CommentSection(
                 modifier = Modifier.align(Alignment.TopCenter),
             )
             // 贴着列表下缘,不贴屏幕下缘:再往下就是常驻输入栏,盖住它等于挡掉这一刻
-            // 唯一还能做的事。只在 Android 12L 及以下会出现,见 CommentCopy.kt。
+            // 唯一还能做的事。只在 Android 12L 及以下会出现,见 SelectableTextDialog。
             SnackbarHost(
                 hostState = snackbarHostState,
                 modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
+        selectionTarget?.let { target ->
+            SelectableTextDialog(
+                text = target,
+                snackbar = snackbarHostState,
+                onDismiss = { selectionTarget = null },
             )
         }
         // 输入栏底色是 surfaceContainer,和上面列表的 surface 已经差着一档 —— 边界靠色阶
@@ -392,8 +398,20 @@ fun CommentSection(
             },
             onDelete = onDelete,
             onSeek = onSeek,
-            onUserClick = onUserClick,
-            onOpenLink = onOpenLink,
+            // **跳走之前先关面板。** `ModalBottomSheet` 自己注册了一个 BackHandler(预测式
+            // 返回要用),它在组合树里比导航那一层更靠后,于是先接住返回。留着面板跳到空间页
+            // 或浏览器落地页之后,这一页仍在栈里、面板仍在组合中,新页的第一次返回被它吃掉 ——
+            // 表现是"返回键没反应",而实际上是在关一个看不见的面板。
+            //
+            // 跳转之后这一组回复也不该留着:人已经去看别的了,回来时该看到的是评论列表本身。
+            onUserClick = { mid ->
+                panelRoot = null
+                onUserClick(mid)
+            },
+            onOpenLink = { url ->
+                panelRoot = null
+                onOpenLink(url)
+            },
             onDismiss = { panelRoot = null },
         )
     }
@@ -442,11 +460,12 @@ private fun CommentRow(
     onExpandReplies: (Long) -> Unit,
     onCollapseReplies: (Long) -> Unit,
     onOpenPanel: (Long) -> Unit,
-    onSeek: (Long) -> Unit,
+    onSeek: ((Long) -> Unit)?,
     onUserClick: (Long) -> Unit,
     onOpenLink: (String) -> Unit,
     /** 长按复制的回执落在哪。就近取所在 window 的那一份,理由见 [CommentSection] 里的注释。 */
-    snackbar: SnackbarHostState,
+    /** 长按正文要选中它,由评论区那一层弹面板。见 [selectTextOnLongPress]。 */
+    onSelectText: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var viewerIndex by remember { mutableStateOf<Int?>(null) }
@@ -529,7 +548,7 @@ private fun CommentRow(
                 onOpenLink = onOpenLink,
                 // 复制原文,不是渲染出来的样子。理由见 [copyOnLongPress] 的 `text` 参数,
                 // 以及下面 SubReplyRow 那处同样的调用。
-                modifier = Modifier.copyOnLongPress(comment.message.trim(), snackbar),
+                modifier = Modifier.selectTextOnLongPress(comment.message.trim(), onSelectText),
             )
 
             if (comment.pictureUrls.isNotEmpty()) {
@@ -561,7 +580,7 @@ private fun CommentRow(
                 onSeek = onSeek,
                 onUserClick = onUserClick,
                 onOpenLink = onOpenLink,
-                snackbar = snackbar,
+                onSelectText = onSelectText,
             )
         }
     }
@@ -625,8 +644,8 @@ private val CommentBodyStyle
  * 摊开之后的楼中楼正文。**字号和主楼一样是 14sp,只把行高收一档(24 → 22)。**
  *
  * 上一版取的是 `bodySmall` 12sp:那是把层级压在字号上,而一条回复和一条评论是同一种东西 ——
- * 读者读到楼中楼时并没有换一副眼镜。层级由头像尺寸和缩进承担(见 [SubReplyAvatarSize]),
- * 那两样不影响这段文字本身好不好读。PiliPlus 在楼中楼那一级同样是 14 号字
+ * 读者读到楼中楼时并没有换一副眼镜。层级由缩进承担,缩进不影响这段文字本身好不好读。
+ * PiliPlus 在楼中楼那一级同样是 14 号字
  * (`reply_item_grpc.dart` 的 `_buildContent`,`replyLevel` 只改缩进和截断,不改字号)。
  */
 private val SubReplyBodyStyle
@@ -638,15 +657,6 @@ private val SubReplyPreviewStyle
 
 /** 预览层每条截到两行。PiliPlus 的 `replyItemRow` 同样是 2。 */
 private const val SubReplyPreviewMaxLines = 2
-
-/**
- * 楼中楼的头像,主楼那档([Dimens.AvatarRow] 36dp)的三分之二。
- *
- * **不进 `Dimens`,因为它不是第四档通用头像尺寸**,是这一处的层级刻度:主楼 36、回复 24,
- * 差 12dp 一眼分得出,而风格指南 §2.7 挡掉的是"36 和 40 谁也看不出来"那种档位。
- * 要在别处也画一圈小头像时再提到 `Dimens` 里,现在提上去只会是一个只有一个调用点的常量。
- */
-private val SubReplyAvatarSize = 24.dp
 
 private val GridSpacing = 4.dp
 
@@ -788,10 +798,10 @@ private fun SubReplies(
     onReplyTo: (CommentItem) -> Unit,
     onLike: (Long) -> Unit,
     onDelete: (Long) -> Unit,
-    onSeek: (Long) -> Unit,
+    onSeek: ((Long) -> Unit)?,
     onUserClick: (Long) -> Unit,
     onOpenLink: (String) -> Unit,
-    snackbar: SnackbarHostState,
+    onSelectText: (String) -> Unit,
 ) {
     // 大楼交给面板,这里只留预览层和一个入口。**expanded 一律不看**:回复发出去之后
     // ViewModel 会给这一楼重新拉一份(见 CommentViewModel.send),不挡住的话那几百条会
@@ -824,8 +834,6 @@ private fun SubReplies(
         modifier = Modifier.fillMaxWidth().padding(top = Spacing.Tight),
     ) {
         Column(modifier = Modifier.padding(vertical = Spacing.Hair)) {
-            // 时间序这件事只在摊开之后才有意义:预览层是服务端挑的几条,本来就不成序列。
-            if (openThread != null) TimeOrderNotice()
             shown.forEach { sub ->
                 // 预览层和摊开之后是两种形态,不是同一种的两个开关位。预览是"这一楼底下在说
                 // 什么"的一瞥:没有头像、没有按钮、名字接进正文同一段、两行截断。摊开之后每条
@@ -838,7 +846,7 @@ private fun SubReplies(
                         onSeek = onSeek,
                         onUserClick = onUserClick,
                         onOpenLink = onOpenLink,
-                        snackbar = snackbar,
+                        onSelectText = onSelectText,
                     )
                 } else {
                     SubReplyRow(
@@ -851,7 +859,7 @@ private fun SubReplies(
                         onSeek = onSeek,
                         onUserClick = onUserClick,
                         onOpenLink = onOpenLink,
-                        snackbar = snackbar,
+                        onSelectText = onSelectText,
                         modifier = Modifier.padding(horizontal = Spacing.Tight),
                     )
                 }
@@ -923,10 +931,10 @@ private fun SubReplies(
 private fun SubReplyPreviewRow(
     comment: CommentItem,
     onOpenThread: () -> Unit,
-    onSeek: (Long) -> Unit,
+    onSeek: ((Long) -> Unit)?,
     onUserClick: (Long) -> Unit,
     onOpenLink: (String) -> Unit,
-    snackbar: SnackbarHostState,
+    onSelectText: (String) -> Unit,
 ) {
     val label = stringResource(R.string.comment_view_thread)
     val nameColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -949,8 +957,9 @@ private fun SubReplyPreviewRow(
     // 于是落在文字上的短按再也传不到外面这层 clickable —— 而文字几乎铺满整行,等于把
     // "点开这一组"废掉。`combinedClickable` 把两件事收在同一个节点上,不存在谁先谁后。
     //
-    // 触觉反馈由 combinedClickable 自己给,所以这里用的是不带震动的 [rememberCopyAction]。
-    val copy = rememberCopyAction(comment.message.trim(), snackbar)
+    // 触觉反馈由 combinedClickable 自己给,所以这里不走 [selectTextOnLongPress] —— 那一份
+    // 自己补震动,挂在这里会震两回。
+    val message = comment.message.trim()
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -958,8 +967,8 @@ private fun SubReplyPreviewRow(
                 role = Role.Button,
                 onClickLabel = label,
                 onClick = onOpenThread,
-                onLongClickLabel = stringResource(R.string.comment_copy),
-                onLongClick = copy,
+                onLongClickLabel = stringResource(R.string.text_select_title),
+                onLongClick = { onSelectText(message) },
             )
             .padding(horizontal = Spacing.Tight, vertical = Spacing.Tight),
     ) {
@@ -976,23 +985,6 @@ private fun SubReplyPreviewRow(
             onOpenLink = onOpenLink,
         )
     }
-}
-
-/**
- * 「按发布时间先后排列」。
- *
- * **是一行说明,不是排序控件。** `x/v2/reply/reply` 的 `sort` 参数服务端忽略 —— 传 0/1/2/3
- * 返回完全相同(notes §1.3),楼中楼只有时间序这一种。主列表顶上那个 [SortBar] 是真能换的,
- * 这里摆一个同样式的控件只会让人以为楼中楼也能换成最热,点下去没有反应。
- */
-@Composable
-private fun TimeOrderNotice(modifier: Modifier = Modifier) {
-    Text(
-        text = stringResource(R.string.comment_replies_time_ordered),
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
-    )
 }
 
 /**
@@ -1035,10 +1027,11 @@ private fun SubReplyActionRow(
 
 /**
  * 摊开之后的楼中楼一条。**结构和主楼是同一套**:头像、名字、等级、时间与属地、正文、配图、
- * 一行动作(点赞 / 回复 / 删除)。层级由两件事表达,不由"少给几样信息"表达:
+ * 一行动作(点赞 / 回复 / 删除)。**层级只由缩进表达**,不由"少给几样信息"表达:
+ * 这一整组落在主楼正文的左缘([CommentTextInset])之后,又各自让出一个头像宽。
  *
- * - **头像尺寸**:主楼 36dp,这里 [SubReplyAvatarSize] 24dp。
- * - **缩进**:这一整组落在主楼正文的左缘([CommentTextInset])之后,又各自让出一个头像宽。
+ * 头像和主楼**同一档**([Dimens.AvatarRow])。上一版收到 24dp,想再加一层刻度,但缩进已经
+ * 把层级说清楚了,而两种尺寸的头像排在同一列里,读出来是"这些人不是一类人"。
  *
  * 上一版把层级压在"没有头像、没有时间、正文小一号"上,结果是摊开之后的一条回复读起来像
  * 一行日志:说话的人是谁没有面孔,什么时候说的看不到,而点赞和回复根本没有入口。
@@ -1057,10 +1050,10 @@ private fun SubReplyRow(
     onReplyTo: (CommentItem) -> Unit,
     onLike: (Long) -> Unit,
     onDelete: (Long) -> Unit,
-    onSeek: (Long) -> Unit,
+    onSeek: ((Long) -> Unit)?,
     onUserClick: (Long) -> Unit,
     onOpenLink: (String) -> Unit,
-    snackbar: SnackbarHostState,
+    onSelectText: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var viewerIndex by remember { mutableStateOf<Int?>(null) }
@@ -1079,7 +1072,7 @@ private fun SubReplyRow(
                 .openSpace(comment, onUserClick),
             contentAlignment = Alignment.TopCenter,
         ) {
-            Avatar(url = comment.avatarUrl, size = SubReplyAvatarSize)
+            Avatar(url = comment.avatarUrl, size = Dimens.AvatarRow)
         }
         Column(modifier = Modifier.weight(1f)) {
             // 名字与"时间  属地"两行合成一个可点节点,理由同主楼:名字那一行只有 20dp 高,
@@ -1146,7 +1139,7 @@ private fun SubReplyRow(
                 // 回复楼中楼时正文开头自带一截"回复 @某某 :",那是发送方写进 message 的
                 // 字面文本(见 CommentRepository.postComment),原样留着 —— 它就是这条的正文,
                 // 而剥掉它要去猜那一截到底有多长,名字改过就会剥错。
-                modifier = Modifier.copyOnLongPress(comment.message.trim(), snackbar),
+                modifier = Modifier.selectTextOnLongPress(comment.message.trim(), onSelectText),
             )
 
             // 配图以前整个没画。一条只发了张图的回复因此渲染成一行空白 —— 看起来像接口少给了
@@ -1225,7 +1218,7 @@ private fun SubReplyPanel(
     sending: Boolean,
     onSendReply: () -> Unit,
     onDelete: (Long) -> Unit,
-    onSeek: (Long) -> Unit,
+    onSeek: ((Long) -> Unit)?,
     onUserClick: (Long) -> Unit,
     onOpenLink: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -1239,6 +1232,9 @@ private fun SubReplyPanel(
     // **面板自己的 snackbar 宿主,不用外面那一份。** `ModalBottomSheet` 自成一个 window,
     // 画在活动窗口之上;评论区那份 host 在它底下,从面板里复制会报到一个看不见的地方。
     val snackbarHostState = remember { SnackbarHostState() }
+
+    /** 面板里选中的那一段。和外面那份分开,理由同上:两个 window 各画各的。 */
+    var panelSelectionTarget by remember { mutableStateOf<String?>(null) }
 
     val listState = rememberLazyListState()
     val shown = expanded?.items?.takeIf { it.isNotEmpty() } ?: root.previewReplies
@@ -1267,10 +1263,9 @@ private fun SubReplyPanel(
                     onSeek = onSeek,
                     onUserClick = onUserClick,
                     onOpenLink = onOpenLink,
-                    snackbar = snackbarHostState,
+                    onSelectText = { panelSelectionTarget = it },
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                TimeOrderNotice(modifier = Modifier.padding(start = Spacing.Comfortable))
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.weight(1f),
@@ -1283,7 +1278,7 @@ private fun SubReplyPanel(
                         if (index > 0) {
                             HorizontalDivider(
                                 modifier = Modifier.padding(
-                                    start = Spacing.Comfortable + SubReplyAvatarSize + Spacing.Tight,
+                                    start = Spacing.Comfortable + Dimens.AvatarRow + Spacing.Tight,
                                     end = Spacing.Comfortable,
                                 ),
                                 color = MaterialTheme.colorScheme.outlineVariant,
@@ -1299,7 +1294,7 @@ private fun SubReplyPanel(
                             onSeek = onSeek,
                             onUserClick = onUserClick,
                             onOpenLink = onOpenLink,
-                            snackbar = snackbarHostState,
+                            onSelectText = { panelSelectionTarget = it },
                             modifier = Modifier.padding(horizontal = Spacing.Comfortable),
                         )
                     }
@@ -1342,6 +1337,13 @@ private fun SubReplyPanel(
                 hostState = snackbarHostState,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
+            panelSelectionTarget?.let { target ->
+                SelectableTextDialog(
+                    text = target,
+                    snackbar = snackbarHostState,
+                    onDismiss = { panelSelectionTarget = null },
+                )
+            }
             // 浮在面板内容之上。回复对象一为空就整层退场,面板本身不动 —— 位置和滚动偏移
             // 都在那个没有被重组掉的 LazyColumn 里。
             if (replyTo != null) {
@@ -1370,10 +1372,10 @@ private fun PanelRoot(
     root: CommentItem,
     onLike: (Long) -> Unit,
     onReply: () -> Unit,
-    onSeek: (Long) -> Unit,
+    onSeek: ((Long) -> Unit)?,
     onUserClick: (Long) -> Unit,
     onOpenLink: (String) -> Unit,
-    snackbar: SnackbarHostState,
+    onSelectText: (String) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -1433,7 +1435,7 @@ private fun PanelRoot(
                 onOpenLink = onOpenLink,
                 // 这里截了行(见 [PanelRootMaxLines]),但复制的是整条正文 ——
                 // 截断是这块地方放不下,不是内容只有这么多。
-                modifier = Modifier.copyOnLongPress(root.message.trim(), snackbar),
+                modifier = Modifier.selectTextOnLongPress(root.message.trim(), onSelectText),
             )
             CommentActions(
                 comment = root,
@@ -1525,86 +1527,11 @@ private fun CommentInputBar(
 }
 
 /**
- * 正文里要特殊处理的三种东西:表情占位符 `[doge]`、@提及、跳转链接。
- * 一次扫描全认出来 —— 分成两遍就得处理"第二遍的匹配落在第一遍的替换里"这种交叉。
+ * 评论正文。**解析在 `data/CommentRichText.kt`,渲染在 `ui/components/BiliRichText.kt`**,
+ * 这里只把评论区特有的几个参数摊平送过去。
  *
- * 表情键的长度设了上限:`[` 到 `]` 之间不限长的话,一句"[这里省略一万字]看看"会被整段
- * 当成一个表情键去查表(查不到,原样显示,但白扫一遍)。B 站的表情名都很短。
- */
-internal val RichTokenRegex = Regex("""\[[^\[\]]{1,20}]|@[^\s@]+|https?://\S+|(?<!\d)(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?!\d)""")
-
-/**
- * 带上这条评论自己的链接 key 之后的扫描器。没有链接时直接复用 [RichTokenRegex],
- * 不为每条评论重新编译一个正则 —— 评论列表滚动时这是热路径,而绝大多数评论没有链接。
- *
- * **key 按长度倒序排在最前面。** 一条评论里 `av2` 和 `av2333` 可以同时出现,正则的交替是
- * 最左最先匹配,短的排在前面就会把长的咬掉一截,剩下 `333` 落在正文里。PiliPlus 拼这个正则
- * 时按 map 原序 join(`reply_item_grpc.dart` 的 `_buildMessage`),没有排序,这一点不照抄。
- *
- * 链接 key 排在 [RichTokenRegex] 之前还有第二个作用:一条整链接(`https://...`)同时命中
- * 这里的 key 和那边的 URL 分支,先匹配到 key 才能拿到标题。
- */
-internal fun richTokenRegex(links: Map<String, CommentLink>): Regex {
-    if (links.isEmpty()) return RichTokenRegex
-    val keys = links.keys.sortedByDescending { it.length }.joinToString("|") { Regex.escape(it) }
-    return Regex("$keys|${RichTokenRegex.pattern}")
-}
-
-/**
- * 一个 @ 能点开:[mid] 是去处,[length] 是这个 token 里属于名字的那一截。
- * 后者存在是因为正则按空白切,"@张三,你看" 会整串落进一个 token,而只有 "@张三" 是人。
- */
-internal data class MentionLink(val mid: Long, val length: Int)
-
-/**
- * 把正文里的 @ 和接口给的 [CommentMention] 对上,返回「token 起点 -> 去处」。
- *
- * **不能只按名字匹配**:members 里的 uname 是此刻的昵称,正文留的是发帖当时的昵称,
- * 抽样 11 条有 5 条对不上(全是 "回复 @旧名 :" 这种楼中楼)。所以分两轮:
- *
- * 一、名字能对上的先认领,长名字优先 —— 否则昵称 "abc" 会抢走 "@abcd" 这个 token。
- * 二、剩下的人按出现顺序配剩下的 token,**且只在两边数量相等时才配**。数量不等意味着
- *    正文里有 @ 不属于任何一个人(邮箱、"@一下"),这时按顺序配会把链接接到别人身上,
- *    而一个指向错误用户的链接比不可点更糟。
- */
-internal fun resolveMentions(
-    tokens: List<MatchResult>,
-    mentions: List<CommentMention>,
-): Map<Int, MentionLink> {
-    if (mentions.isEmpty()) return emptyMap()
-    val atTokens = tokens.filter { it.value.startsWith('@') }
-    if (atTokens.isEmpty()) return emptyMap()
-
-    val links = mutableMapOf<Int, MentionLink>()
-    val unnamed = mutableListOf<CommentMention>()
-    for (mention in mentions.sortedByDescending { it.uname.length }) {
-        val needle = "@${mention.uname}"
-        val hit = atTokens.firstOrNull { it.range.first !in links && it.value.startsWith(needle) }
-        if (hit != null) links[hit.range.first] = MentionLink(mention.mid, needle.length) else unnamed += mention
-    }
-
-    val free = atTokens.filter { it.range.first !in links }
-    if (unnamed.size == free.size) {
-        free.forEachIndexed { index, token ->
-            links[token.range.first] = MentionLink(unnamed[index].mid, token.value.length)
-        }
-    }
-    return links
-}
-
-/**
- * 评论正文。
- *
- * **表情内联回文字流**,不再是"正文里留着 `[doge]` 三个字、底下另起一行摆一排图标"——
- * 那样读者得自己把图标和占位符对应回去,而且表情出现两次时下面那排根本对不上。
- * 走 `InlineTextContent`:占位符在 [AnnotatedString] 里留一个带 id 的空位,
- * 渲染时把图片填进去,换行、对齐、选中都跟着文字走。
- *
- * @提及与链接标成 [LocalMentionColor]。**能配到 mid 的 @ 是链接,配不到的只染色** ——
- * 见 [resolveMentions],不是所有 @ 都能确定指向谁。
- *
- * 站内链接由 `jump_url` 解析出标题和去处(见 CommentRepository.toCommentLink),在这里排在
- * 最前面:同一串 `https://...` 也匹配裸 URL 那一支,落到那边就只剩一串地址。
+ * 留着这层薄壳而不是让四个调用点各自 parse 一遍,是因为解析结果要 `remember` 住:评论列表
+ * 滚动时重组很频繁,而一条正文的 token 扫描和 @ 归属只跟这几个入参有关,和滚动无关。
  */
 @Composable
 private fun CommentText(
@@ -1613,158 +1540,27 @@ private fun CommentText(
     mentions: List<CommentMention>,
     style: androidx.compose.ui.text.TextStyle,
     maxLines: Int = Int.MAX_VALUE,
-    /**
-     * 接在正文之前、和正文同属一段文字流的一截。楼中楼预览层用它把发言人的名字放在正文前面。
-     *
-     * 名字单独一个 `Text` 的话,一条三个字的回复也要占掉两行 —— 而预览层拢共只有两三行的
-     * 位置。接进同一段之后,名字和正文一起折行、一起按 [maxLines] 截断。
-     */
     prefix: AnnotatedString? = null,
     /** 正文里被服务端标成链接的那几段,见 [dev.bilby.data.CommentLink]。 */
     links: Map<String, CommentLink> = emptyMap(),
-    onSeek: (Long) -> Unit = {},
+    onSeek: ((Long) -> Unit)? = null,
     onUserClick: (Long) -> Unit = {},
     onOpenLink: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val mention = LocalMentionColor.current
-    val used = remember(message, emotes) { linkedMapOf<String, String>() }
-
-    // 时间戳走 LinkAnnotation 而不是自己接 pointerInput:点击命中、按压反馈和无障碍(读屏会把
-    // 它读成链接)都由文本层负责。手写那版要把 TextLayoutResult 存进 State 再当 pointerInput
-    // 的 key,于是每次布局都要撤销重建一次手势检测器——评论列表滚动时那是热路径。
-    //
-    // 回调用 rememberUpdatedState 取最新的一份:注解串是 remember 出来的,直接捕获会把第一次
-    // 组合时的 onSeek 焊死在里面,而它捕获着当时的 MediaController。
-    val currentOnSeek by rememberUpdatedState(onSeek)
-    val currentOnUserClick by rememberUpdatedState(onUserClick)
-    val currentOnOpenLink by rememberUpdatedState(onOpenLink)
-    val text = remember(message, emotes, mentions, mention, prefix, links) {
-        used.clear()
-        val tokens = richTokenRegex(links).findAll(message).toList()
-        val mentionLinks = resolveMentions(tokens, mentions)
-        buildAnnotatedString {
-            prefix?.let { append(it) }
-            var last = 0
-            for (match in tokens) {
-                append(message.substring(last, match.range.first))
-                val token = match.value
-                val siteLink = links[token]
-                val emoteUrl = emotes[token]
-                val timestampMillis = if (emoteUrl == null) parseTimestampMillis(token) else null
-                val mentionLink = mentionLinks[match.range.first]
-                when {
-                    // 链接排在最前面。一条 `https://...` 同时是这里的 key 和下面的 URL 分支,
-                    // 而只有这一支拿得到标题 —— 落到 URL 分支就又是一串裸地址。
-                    siteLink != null -> withLink(
-                        LinkAnnotation.Clickable(
-                            tag = "site-link",
-                            styles = TextLinkStyles(style = SpanStyle(color = mention)),
-                        ) { currentOnOpenLink(siteLink.url) },
-                    ) {
-                        // 图标用本地矢量,不拉接口给的 `prefix_icon`。视频链接那张图全站是同一
-                        // 张,拉它等于每条评论多一次图床请求;更实际的问题是行内占位符要先定死
-                        // 宽高,而那张图的比例接口不给 —— 猜错就是一张被压扁的图标。
-                        //
-                        // 不传 alternateText,用它默认的替换字符。**传空串是不行的**:
-                        // 占位符的注解盖的就是这段文字,长度为 0 就等于没有占位符,图标不画。
-                        appendInlineContent(LinkIconId)
-                        append(siteLink.title)
-                    }
-
-                    emoteUrl != null -> {
-                        used[token] = emoteUrl
-                        appendInlineContent(token, token)
-                    }
-
-                    timestampMillis != null -> withLink(
-                        LinkAnnotation.Clickable(
-                            tag = "timestamp",
-                            styles = TextLinkStyles(
-                                style = SpanStyle(color = mention, textDecoration = TextDecoration.Underline),
-                            ),
-                        ) { currentOnSeek(timestampMillis) },
-                    ) { append(token) }
-
-                    mentionLink != null -> {
-                        withLink(
-                            LinkAnnotation.Clickable(
-                                tag = "mention",
-                                styles = TextLinkStyles(style = SpanStyle(color = mention)),
-                            ) { currentOnUserClick(mentionLink.mid) },
-                        ) { append(token.take(mentionLink.length)) }
-                        // 名字后面粘着的标点回归正文色:"@张三,你看" 里只有前半截是人。
-                        append(token.drop(mentionLink.length))
-                    }
-
-                    else -> withStyle(SpanStyle(color = mention)) { append(token) }
-                }
-                last = match.range.last + 1
-            }
-            append(message.substring(last))
-        }
+    val spans = remember(message, emotes, mentions, links) {
+        parseCommentSpans(message, emotes, links, mentions)
     }
-
-    // 尺寸与动态、专栏共用一处判断:同一个表情在三页里该是同一个大小,而三处正文字号不同。
-    // 楼中楼的行高比主楼矮一档,那一档里表情跟着收 —— 收的判断也在 inlineEmoteSize 里。
-    val emoteSize = inlineEmoteSize(style)
-    val inline = used.mapValues { (_, url) ->
-        InlineTextContent(
-            Placeholder(emoteSize, emoteSize, PlaceholderVerticalAlign.TextCenter),
-        ) {
-            BiliAsyncImage(url = url, contentDescription = null, modifier = Modifier.fillMaxSize())
-        }
-    } + if (links.isEmpty()) {
-        emptyMap()
-    } else {
-        // 图标跟着字号走,不跟着表情走:它是这段文字的一部分,比正文大一圈会把行撑开。
-        val iconSize = style.fontSize
-        mapOf(
-            LinkIconId to InlineTextContent(
-                Placeholder(iconSize, iconSize, PlaceholderVerticalAlign.TextCenter),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.OndemandVideo,
-                    contentDescription = null,
-                    tint = mention,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            },
-        )
-    }
-
-    Text(
-        text = text,
+    BiliRichText(
+        spans = spans,
         style = style,
-        inlineContent = inline,
+        onLinkClick = onOpenLink,
+        onMentionClick = onUserClick,
+        onSeek = onSeek,
         maxLines = maxLines,
-        overflow = TextOverflow.Ellipsis,
+        prefix = prefix,
         modifier = modifier,
     )
-}
-
-/**
- * 站内链接前那枚图标的 inline content id。**全评论区一个 id 就够**:图标只有一种,
- * 而 `InlineTextContent` 的 id 只需要在同一段 [AnnotatedString] 里区分不同的占位符 ——
- * 表情要一个 token 一个 id 是因为每个表情的图不一样。
- */
-private const val LinkIconId = "site-link-icon"
-
-private fun parseTimestampMillis(token: String): Long? {
-    val parts = token.split(':').mapNotNull { it.toLongOrNull() }
-    if (parts.size != token.count { it == ':' } + 1) return null
-    val seconds = when (parts.size) {
-        2 -> {
-            if (parts[1] >= 60) return null
-            parts[0] * 60 + parts[1]
-        }
-        3 -> {
-            if (parts[1] >= 60 || parts[2] >= 60) return null
-            parts[0] * 3600 + parts[1] * 60 + parts[2]
-        }
-        else -> return null
-    }
-    return seconds * 1000L
 }
 
 // ---- Preview ----

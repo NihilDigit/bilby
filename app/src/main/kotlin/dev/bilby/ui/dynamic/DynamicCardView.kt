@@ -44,7 +44,7 @@ import dev.bilby.data.model.DynamicCard
 import dev.bilby.data.model.DynamicContent
 import dev.bilby.data.model.DynamicInteraction
 import dev.bilby.ui.CalendarEvent
-import dev.bilby.ui.article.ArticleParagraph
+import dev.bilby.ui.components.BiliRichText
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.components.BiliAsyncImage
@@ -331,7 +331,7 @@ private fun DynamicText(card: DynamicCard, onAction: (DynamicAction) -> Unit) {
     val collapsed = card.textIsSummary && !expanded
 
     if (card.text.isNotEmpty()) {
-        ArticleParagraph(
+        BiliRichText(
             spans = card.text,
             style = MaterialTheme.typography.bodyLarge.copy(lineHeight = DynamicTextLineHeight),
             onLinkClick = { onAction(DynamicAction.OpenUrl(it)) },
