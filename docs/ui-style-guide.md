@@ -28,9 +28,13 @@
 | `Shapes` 的 `largeIncreased` / `extraLargeIncreased` / `extraExtraLarge` | `Shape.kt` 十档刻度 | 只有五档,中间档要在组件处写死 |
 | `Typography` 的 15 档 `*Emphasized` | `Type.kt` | 不存在,强调只能靠 `FontWeight` 手改 |
 | `ButtonGroup` + `toggleableItem`/`clickableItem` | 播放页动作栏 | 不存在,要退回手排 Row + 自己维护选中态配色和触摸目标 |
-| `LoadingIndicator` | `FullScreenLoading` | 不存在,退回 `CircularProgressIndicator` |
+| `LoadingIndicator` | `FullScreenLoading` / `LoadingSpinner`(§2.7d) | 不存在,退回 `CircularProgressIndicator` |
+| `PullToRefreshDefaults.LoadingIndicator` | `RefreshBox`(§2.7d) | 不存在,退回 `PullToRefreshDefaults.Indicator` 那个箭头圈 |
 
-**全部需要 `@OptIn(ExperimentalMaterial3ExpressiveApi::class)`。**
+**全部需要 `@OptIn(ExperimentalMaterial3ExpressiveApi::class)`。** 只有这一个注解,
+`PullToRefreshDefaults.LoadingIndicator` 和它的两个配色 `loadingIndicatorColor` /
+`loadingIndicatorContainerColor` 都在同一个 marker 下面;同一个 `PullToRefreshDefaults` 上的
+`shape` 和 `containerColor` 则是 `@Deprecated`,别照着旧代码抄。
 
 ### 探针在哪、怎么用
 
@@ -268,13 +272,15 @@ M3 还有两条硬规矩:chip **不能单独出现一个**(必须成组),按钮�
 
 ### 2.3b 计数用图标,不拼成中文串
 
-播放量/弹幕数走 `components/StatRow`(图标 14dp + `labelSmall`,色取 `outline`),
+播放量/弹幕数走 `components/StatRow`(图标 14dp + `labelSmall`,色取 `onSurfaceVariant`),
 不再拼 `"12.3万播放 · 888弹幕 · 3小时前"`。理由是宽度:"播放""弹幕"各两个汉字约 24dp,
 而列表行里一整行元信息只有一百多 dp;图标 14dp 说完同一件事,省下的宽度让日期不再被挤掉。
 图标本身就是分隔,`·` 那一串在窄屏上会先于内容换行。
 
-`outline` 而不是 `onSurfaceVariant`:这一行是列表里优先级最低的信息,和它上面的
-UP 主名再拉开一档,扫列表时视线不会被数字勾住。PiliPlus 的 `StatWidget` 同样取 outline。
+低强调色用 `onSurfaceVariant`,不用 `outline`:这一行是列表里优先级最低的信息,要和
+上面的 UP 主名拉开一档,但 M3 里 `outline` 是描边角色,只按约 3:1 对比校准,浅色主题下
+当小字不达 4.5:1(2026-08 审计实测 4.3:1)。文字的低强调角色就是 `onSurfaceVariant`。
+PiliPlus 的 `StatWidget` 取 outline,这一点不照抄。
 
 列表行的三行分工也照 PiliPlus 的 `video_card_h.dart`:
 **标题(2 行)/ 发布时间 + UP 名(1 行)/ 计数图标(1 行)**。时间和人名合成一行,
@@ -436,7 +442,7 @@ Bilby 每一页的标题都只是个路牌,给它三行高度是浪费首屏。
 - `FullScreenLoading` / `FullScreenError` / `EmptyState` / `ListFooter` / `InlineProgress`
 - `BilbyTopBar` / `SectionHeader`
 
-loading 的规矩:**首屏和翻页用不同的粗细** —— 首屏占整屏,翻页只占一行高度。
+- `RefreshBox` / `LoadingSpinner` —— 见 §2.7d,**等待指示只能从那四档里选**。
 
 ---
 
@@ -449,8 +455,9 @@ loading 的规矩:**首屏和翻页用不同的粗细** —— 首屏占整屏,�
   汉字墨迹几乎占满 em 框,`bodyMedium` 那档 14/22 在一条五六行的长评论里会糊成一片。
   **不要去改 `Typography.bodyMedium`**:那一档还给列表标题、队列条目用着,它们要的是紧凑。
   行高按**这段文字有多长**定,不按字号定。
-- **用户名用 `outline`,正文才是满对比度。** 反过来的话,一屏几十条评论里视线全被每条开头
-  的名字拽住。PiliPlus 也是把 `member.name` 画成 outline 的。
+- **用户名用 `onSurfaceVariant`,正文才是满对比度。** 反过来的话,一屏几十条评论里视线
+  全被每条开头的名字拽住。PiliPlus 把 `member.name` 画成 outline,低强调这层照抄,
+  色不照抄:`outline` 是描边角色,浅色主题下当小字不达 4.5:1(见 2.3b)。
 - **表情内联进文字流**,走 `InlineTextContent`。以前是正文里留着 `[doge]` 三个字、底下另起
   一行摆一排图标 —— 读者得自己对应回去,而且同一个表情出现两次时下面那排根本对不上。
 - **楼中楼是一个容器装一组,不是一条一张卡片。** 每条各套一个 `Surface` 的话,三条回复就是
@@ -530,6 +537,45 @@ roundness)。最里面一档按公式该是 8 − 8 = 0,取 4 —— 直角套�
 **上限是这一行的行高**。装扮表情(`emoji.size == 2`)按基准翻倍是 44sp,而动态正文的行高只有
 26sp —— Compose 的 `lineHeight` 是硬定的行距,占位符比它高时不会把行撑开,而是压到上下两行的
 字上。PiliPlus 撞不上这条,Flutter 的 `WidgetSpan` 会把行撑高。
+
+### 2.7d 等待指示:四档,全部在 `ui/components/States.kt`
+
+**M3 把 loading indicator 和 progress indicator 分成两个组件,判据是进度可不可知,不是形状。**
+镜像的 `components/loading-indicator.md` 给的是一张按时长的表:200ms 以内不给指示,
+200ms–5s 用 loading indicator,超过 5s 且报得出百分比用 progress indicator;并且明写了
+**不许从 loading indicator 过渡到 determinate progress indicator**。同一页还有一句
+"It should replace most uses of the indeterminate circular progress indicator" ——
+不带百分比的转圈在 M3E 里已经不是 `CircularProgressIndicator` 了。
+
+进度不可知的那一侧,全应用只有四档,别处不要直接调 material3 的指示器:
+
+| 档 | 用什么 | 尺寸 | 用在 |
+|---|---|---|---|
+| 整块首载 | `FullScreenLoading()` | 48dp(默认) | 列表首屏、登录页的二维码位 |
+| 行内 | `LoadingSpinner()` | 24dp | 按钮里替掉图标、对话框、播放条 |
+| 行内带说明 | `InlineProgress(text)` | 24dp + 一行字 | 助理过程、个人页分段、队列加载 |
+| 列表尾部续页 | `ListFooter(appending = true)` | 24dp | 所有翻页列表 |
+| 下拉刷新 | `RefreshBox(refreshing, onRefresh)` | contained,48dp | 十一个可刷新页面 |
+
+几条踩出来的:
+
+- **下拉刷新必须走 `RefreshBox`,不能直接用 `PullToRefreshBox`。** 后者在 1.5.0-alpha25 里
+  默认的指示器仍是 expressive 之前的箭头圈(`PullToRefreshDefaults.Indicator`),而 M3E
+  恰恰把 loading indicator 定为下拉刷新的组件。这是从 aar 里读出来的,不是从文档:
+  `javap -c` 看 `PullToRefreshKt` 的默认参数,调的是 `Indicator-2poqoh4`。
+- **指示器和刷新框共用同一个 `PullToRefreshState`。** 分成两个的话指示器收不到拖拽距离,
+  手指往下拉时它一动不动,松手才突然出现。
+- **下拉用 contained 那一档**(默认 `primaryContainer` / `onPrimaryContainer`)。镜像原文:
+  容器"should be used with pull-to-refresh behavior",理由是指示器压在正文上,没有容器托底时
+  深浅两套主题里都可能撞上内容。
+- **24dp 是下限。** 镜像给的可用区间是 24–240dp,再小那个形变的形状只剩几个像素,看不出在动。
+  按钮里的转圈以前是 20dp,比它替掉的那个 24dp 图标还小,按下去时按钮会缩一下。
+- **报得出百分比的等待不在这四档里**,直接用 `LinearProgressIndicator`:更新下载
+  (`ui/update/StartupUpdate.kt`、设置页的更新行)、稍后再看的容量条。容量条那条严格说连等待
+  都不是,它读的是"已经占了多少",调用点有注释挡着,别把它换成转圈。
+- **wavy 那一档没有用。** 镜像把 flat 和 wavy 说成"use the shape that best fits the product's
+  tone",不是对错问题;wavy 的作用是"make longer processes feel less static",而这个应用不做
+  争夺注意力的动效(§4.2)。要改是产品决定,不是照规范补齐。
 
 ### 2.8 设置页:一条判据,不是一张清单
 
