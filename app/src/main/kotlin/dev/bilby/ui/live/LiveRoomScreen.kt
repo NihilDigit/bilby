@@ -889,10 +889,14 @@ private fun SuperChatSummaryCard(
 
 /**
  * 列表键。**不用 id** —— danmakus 补来的那些 id 是合成的(见 LiveRoomViewModel.toMessage),
- * 撞一次 LazyColumn 就会崩在 "Key was already used" 上。这一串是精确值,不经哈希。
+ * 撞一次 LazyColumn 就会崩在 "Key was already used" 上。
+ *
+ * 三段与 LiveRoomViewModel 的去重键逐字段相同,唯一性由那份去重保证:键会撞的两条在进这份
+ * 清单之前就已经并成一条。**留言要整条写进键里**,取长度不行 —— 同一个人在同一秒发两条等长
+ * 的留言,去重留下两条而键相同,崩的正是这个键要避开的地方。
  */
 private fun superChatKey(sc: LiveMessage.SuperChat) =
-    "${sc.senderMid}-${sc.startTimeSeconds}-${sc.message.length}"
+    "${sc.senderMid}-${sc.startTimeSeconds}-${sc.message}"
 
 /** `分:秒`,秒补零。超过一小时的档位也照分钟数写下去,不另分一段小时。 */
 private fun formatRemaining(seconds: Long): String {

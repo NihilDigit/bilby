@@ -108,12 +108,44 @@ data class ReplyContentDto(
     /**
      * 被 @ 到的人。notes §1.4 把它记成未强类型化的 UNSURE 字段,拉真实响应确认了:它是一个
      * 数组,每项的结构和 [ReplyMemberDto] 同形(mid 同样是字符串)。这里只取 @ 需要的两项。
-     *
-     * jump_url 仍然不解析:那是一个以**匹配文本**为 key 的 map,value 里给的是
-     * `bilibili://search?keyword=...` 这类站内 schema,落到本应用只有搜索一个去处,
-     * 而正文里那几个字本来就能被选中复制去搜。
      */
     val members: List<ReplyAtMemberDto> = emptyList(),
+    /** 正文里被服务端认定为链接的那几段,key 是正文里的字面文本。见 notes §1.4a。 */
+    @SerialName("jump_url") val jumpUrl: Map<String, ReplyJumpUrlDto> = emptyMap(),
+)
+
+/**
+ * `content.jump_url` 的一项。字段与取值以真实响应为准,记在 notes §1.4a。
+ *
+ * 这个 map 承担两件不同的事,靠 [extra] 区分,**不能一视同仁地渲染**:
+ *
+ * - `extra.is_word_search == true` 是"热词",服务端把正文里任意一个词标成站内搜索入口
+ *   (`bilibili://search?keyword=...`)。抽样到的 28 条全是这一类。
+ * - `extra` 整个不存在的那些才是真链接。视频链接的 [clickReport] 就是 aid,
+ *   `av170001` 和 `BV1xx411c7mD` 两种 key 都是如此(后者的 clickReport 是 `"2"`)。
+ *
+ * 所以**认路要认 [clickReport],不要去解析 key 那串字**:同一条视频有 av 和 BV 两种写法,
+ * 而 aid 只有一个。
+ */
+@Serializable
+data class ReplyJumpUrlDto(
+    /** 视频链接是视频标题,热词是那个词本身。 */
+    val title: String = "",
+    /** 链接前面那枚小图标,视频和热词各一张。 */
+    @SerialName("prefix_icon") val prefixIcon: String = "",
+    /**
+     * 视频链接是 aid 的十进制字符串;专栏笔记是 `{"cvid":...}` 这样一段 JSON
+     * (取自 PiliPlus `reply_item_grpc.dart` 的 `addUrl`,本轮抽样没抓到,notes 里标着 UNSURE);
+     * 热词是空串。
+     */
+    @SerialName("click_report") val clickReport: String = "",
+    /** `extra` 不存在即不是热词。热词那一类不落地,理由见类文档。 */
+    val extra: ReplyJumpExtraDto? = null,
+)
+
+@Serializable
+data class ReplyJumpExtraDto(
+    @SerialName("is_word_search") val isWordSearch: Boolean = false,
 )
 
 /**

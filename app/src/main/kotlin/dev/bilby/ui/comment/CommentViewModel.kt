@@ -275,13 +275,33 @@ class CommentViewModel(
     fun send(text: String, replyTo: Long?) {
         if (text.isBlank() || _state.value.sending) return
         val target = replyTo?.let { rpid -> findComment(rpid) }
+        val sourceOid = oid
+        val gen = generation
         _state.update { it.copy(sending = true) }
         viewModelScope.launch {
-            when (val result = repository.postComment(oid, text, target, type)) {
+            val result = repository.postComment(sourceOid, text, target, type)
+            // 这一趟属于按下发送的那个视频,落地时页面可能已经切集([switchTo])。放行的话:
+            // 成功之后那两条续拉会拿着上一条视频的 rpid 去请求现在这条,失败则把上一条的
+            // 报错画在现在这条的页脚上。sending 不用收 —— 切集会整份重建 state。
+            if (gen != generation) return@launch
+            when (result) {
                 is BiliResult.Ok -> {
                     _state.update { it.copy(sending = false) }
-                    // notes §1.7:发送成功后拿不到可靠的新评论结构,不做本地拼接,直接重拉受影响的列表。
-                    if (target == null) loadFirstPage() else expandRepliesFresh(target.rootRpid)
+                    // notes §1.7:发送成功后拿不到可靠的新评论结构,不做本地拼接,重拉受影响的列表。
+                    when {
+                        target == null -> loadFirstPage()
+
+                        // **这一楼已经摊开的话,接着请求当前这一页并按 rpid 合并,不清空重来。**
+                        // 清空重拉第一页有两个毛病,面板形态下都很显眼:楼中楼是时间序,新回复
+                        // 落在**最后**一页,第一页根本看不到它;而已经翻出来的几十条连同滚动
+                        // 位置会一起丢掉,人刚回复完就被扔回这一组的开头。
+                        //
+                        // expandReplies 从 subReplyNextPage 记的那一页接着取,并用
+                        // appendDistinctBy 合并,所以已经显示的都留在原位,新的接在后面。
+                        target.rootRpid in _state.value.expandedReplies -> expandReplies(target.rootRpid)
+
+                        else -> expandRepliesFresh(target.rootRpid)
+                    }
                 }
 
                 is BiliResult.ApiError -> {
@@ -298,12 +318,19 @@ class CommentViewModel(
     fun like(rpid: Long) {
         val comment = findComment(rpid) ?: return
         val nextLiked = !comment.liked
+        val sourceOid = oid
+        val gen = generation
         applyToComment(rpid) { it.copy(liked = nextLiked, likeCount = it.likeCount + if (nextLiked) 1 else -1) }
         viewModelScope.launch {
-            val result = repository.likeComment(oid, rpid, nextLiked, type)
+            val result = repository.likeComment(sourceOid, rpid, nextLiked, type)
             if (result is BiliResult.ApiError || result is BiliResult.Failure) {
                 // 乐观更新失败要退回去,不然点赞状态和服务端永久不一致。
-                applyToComment(rpid) { it.copy(liked = !nextLiked, likeCount = it.likeCount + if (nextLiked) -1 else 1) }
+                //
+                // 换了一代就不退:那条乐观更新写在的那份列表已经不在屏上。同一个视频内换排序
+                // 或刷新同样作废 —— 重拉回来的那份就是服务端的真值,再补一次减一会让计数少一。
+                if (gen == generation) {
+                    applyToComment(rpid) { it.copy(liked = !nextLiked, likeCount = it.likeCount + if (nextLiked) -1 else 1) }
+                }
             }
         }
     }
@@ -313,6 +340,8 @@ class CommentViewModel(
         // 位置可能定位不到(只在楼中楼预览里的那种),那时仍然发请求,只是失败之后没有
         // 原位可放回 —— 它本来也不在乐观移除的三处之内。
         val slot = locate(rpid)
+        val sourceOid = oid
+        val gen = generation
         _state.update { current ->
             current.copy(
                 items = current.items.filterNot { it.rpid == rpid }.map { it.withoutPreview(rpid) },
@@ -323,7 +352,12 @@ class CommentViewModel(
             )
         }
         viewModelScope.launch {
-            when (val result = repository.deleteComment(oid, rpid, type)) {
+            val result = repository.deleteComment(sourceOid, rpid, type)
+            // 切集之后这条响应属于上一个视频。失败路径尤其不能放行:[restore] 会按当时记下的
+            // 位置把上一条视频的那条评论插进现在这份列表,而它在这儿既不属于任何一楼,
+            // rpid 也不在列表里 —— 屏上多出一条来路不明的评论。
+            if (gen != generation) return@launch
+            when (result) {
                 // 删掉的是主楼,它那一组展开结果跟着走:留着的话只是一份没人再读的副本,
                 // 而这条主楼要是又被发了一遍(同 rpid 不会,但刷新后同一楼可能重新出现),
                 // 展开按钮会直接亮出上一轮的内容。失败路径不清,那边要按原样放回去。
@@ -387,6 +421,10 @@ class CommentViewModel(
         else copy(previewReplies = previewReplies.filterNot { it.rpid == target })
 
     private fun restore(comment: CommentItem, slot: CommentSlot) {
+        // 乐观移除到失败落地之间可能翻了一页,而服务端上那条还在,同一条会随下一页自己回来。
+        // 这时再插一次就是同一个 rpid 两行,而列表按 rpid 作键,LazyColumn 崩在
+        // "Key was already used" 上。
+        if (locate(comment.rpid) != null) return
         _state.update { current ->
             when (slot) {
                 CommentSlot.Top -> current.copy(topComment = comment)

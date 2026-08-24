@@ -1652,9 +1652,6 @@ class AudioPlaybackService : MediaSessionService() {
      */
     private inner class QueuePlayer(player: Player) : ForwardingPlayer(player) {
 
-        /** 外界交进来的 listener 与包过一层的那个之间的对照表,见 [addListener]。 */
-        private val wrappedListeners = mutableMapOf<Player.Listener, Player.Listener>()
-
         /**
          * 外部控制器按下的播放/暂停。**这两个覆写是 [playIntent] 唯一的正门。**
          *
@@ -1688,69 +1685,23 @@ class AudioPlaybackService : MediaSessionService() {
             persistShuffled(shuffleModeEnabled)
         }
 
-        /** 播完即停是产品约束(DESIGN 2.4b),循环不接受外部设置。 */
+        /**
+         * 播完即停是产品约束(DESIGN 2.4b),循环不接受外部设置。
+         *
+         * **只留空实现,不再从命令集里把这一条撤掉。** 撤命令那一版(`getAvailableCommands`、
+         * `isCommandAvailable`,加一层过滤 `onAvailableCommandsChanged` 的 listener)换来的是
+         * 通知栏不画一个按下去没反应的循环键;代价是整个应用的暂停键失效、媒体通知不出现 ——
+         * 命令集是所有控制器共用的一份契约,界面里的 MediaController、通知栏、车机、耳机线控
+         * 全从它出发,而 `MediaController` 在命令不可用时是**静默返回**,一行日志都没有。
+         *
+         * Media3 也正是为此把"覆写 ForwardingPlayer 的方法"标为不推荐:那些覆写会打破 Player
+         * 的接口契约。真要撤这一条命令,得改用 `ForwardingSimpleBasePlayer`,而不是在这里手写。
+         * 一个多余的循环按钮换不来这个风险。
+         */
         override fun setRepeatMode(repeatMode: Int) {
             if (repeatMode != Player.REPEAT_MODE_OFF) {
                 BiliLog.w("不支持循环(DESIGN 2.4b),忽略 repeatMode=$repeatMode")
             }
-        }
-
-        /**
-         * 循环这条命令对外不存在。**空实现的方法必须连命令一起撤掉** —— 只留空实现的话,
-         * 通知栏和车机照样按 `COMMAND_SET_REPEAT_MODE` 画出循环按钮,按下去毫无反应。
-         *
-         * ForwardingPlayer 撤一条命令要三步(见该类文档):空实现方法本身、这两个查询,
-         * 以及包一层 listener —— 底层播放器报的可用命令集里始终有这一条,不过滤就等于
-         * 由事件把刚撤掉的命令又告诉了外界。见 [RepeatModeHidden]。
-         */
-        override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().hideRepeatMode()
-
-        override fun isCommandAvailable(command: Int): Boolean =
-            command != Player.COMMAND_SET_REPEAT_MODE && super.isCommandAvailable(command)
-
-        /**
-         * 注册进来的 listener 换成包过一层的那个,注销时按同一张表换回去 —— ForwardingPlayer
-         * 自己也是按传进去的那个实例找回注册记录的,两边交出去的必须是同一个对象。
-         */
-        override fun addListener(listener: Player.Listener) {
-            super.addListener(wrappedListeners.getOrPut(listener) { RepeatModeHidden(listener) })
-        }
-
-        override fun removeListener(listener: Player.Listener) {
-            super.removeListener(wrappedListeners.remove(listener) ?: listener)
-        }
-    }
-
-    /**
-     * 把"循环可用"从事件里抹掉的那一层。其余回调按接口委托原样转发。
-     *
-     * 抹完之后可能什么都没变(底层那次变化只涉及这一条命令),那一次就整个不发:外界收到一次
-     * 命令集变化却发现集合和上次一模一样,已经是不一致的信号了。同一轮里的 [onEvents] 也要跟着
-     * 咽掉,否则拿 `onEvents` 统一刷新的控制器还是会被叫醒一次。
-     */
-    private class RepeatModeHidden(
-        private val delegate: Player.Listener,
-    ) : Player.Listener by delegate {
-
-        private var reported: Player.Commands? = null
-
-        /** 这一轮的命令集变化对外是不是可见的,由 [onEvents] 取走。 */
-        private var visibleChange = false
-
-        override fun onAvailableCommandsChanged(availableCommands: Player.Commands) {
-            val visible = availableCommands.hideRepeatMode()
-            if (visible == reported) return
-            reported = visible
-            visibleChange = true
-            delegate.onAvailableCommandsChanged(visible)
-        }
-
-        override fun onEvents(player: Player, events: Player.Events) {
-            val onlyCommands = events.size() == 1 && events.contains(Player.EVENT_AVAILABLE_COMMANDS_CHANGED)
-            val visible = visibleChange
-            visibleChange = false
-            if (onlyCommands && !visible) return
-            delegate.onEvents(player, events)
         }
     }
 
@@ -1954,6 +1905,26 @@ class AudioPlaybackService : MediaSessionService() {
         /** UI 观察这个;控制动作走 MediaController,不要反过来改它。 */
         val state: StateFlow<AudioPlaybackUiState> = _state.asStateFlow()
 
+        /**
+         * **当场读一次播放位置**,服务没起来(或播放器还没建)时为 null。
+         *
+         * [positionTicks] 是半秒一条的快照,消费方要更细的粒度得自己外推;而外推要有一个速率,
+         * 唯一能拿到的是 `playbackParameters.speed` —— 那是**请求**的倍速,立刻生效,而位置要
+         * 等已经写进 AudioTrack 的那几百毫秒旧倍速音频放完才跟上(media3 用一队 checkpoint 记
+         * 着新参数从哪个输出位置起算,见 `DefaultAudioSink.applyMediaPositionParameters`)。
+         * 两者在变速的那一小段里说的不是同一件事,而弹幕位置是位置的直接函数,差多少就跳多少。
+         *
+         * `ExoPlayer.getCurrentPosition()` 每次调用现算,本身就是逐帧连续的,所以要位置的人
+         * 直接问它就没有第二个估计器,也就没有可分歧的东西。**这和 `MediaController` 的那个
+         * 同名方法不是一回事** —— 那一侧是跨进程的外推,锚点是它的私有状态(见
+         * [dev.bilby.player.PositionTick]);这一侧就是播放器本人。
+         *
+         * **只能在主线程调**:ExoPlayer 认自己的 application looper,而服务与界面同进程、
+         * 都在主线程上。控制动作仍旧全走 MediaController,这里出去的只有状态。
+         */
+        fun currentPositionMillis(): Long? =
+            runningService?.takeIf { it::player.isInitialized }?.player?.currentPosition
+
         private val _positionTicks = MutableStateFlow(PositionTick())
 
         /**
@@ -1994,7 +1965,3 @@ class AudioPlaybackService : MediaSessionService() {
             SessionToken(context, ComponentName(context, AudioPlaybackService::class.java))
     }
 }
-
-/** 撤掉循环那一条命令。查询和事件两边都要抹,所以抹的动作只写一处,见 QueuePlayer。 */
-private fun Player.Commands.hideRepeatMode(): Player.Commands =
-    buildUpon().remove(Player.COMMAND_SET_REPEAT_MODE).build()

@@ -41,6 +41,8 @@ fun DynamicDetailScreen(
     onCommentSort: (CommentSort) -> Unit,
     onCommentRefresh: () -> Unit,
     onCommentLoadMore: () -> Unit,
+    /** 评论正文里引的那条链接。站内解析归导航层,见 MainActivity 的 openLink。 */
+    onOpenLink: (String) -> Unit,
     onExpandReplies: (rootId: Long) -> Unit,
     onSendComment: (text: String, replyTo: Long?) -> Unit,
     onLikeComment: (id: Long) -> Unit,
@@ -76,6 +78,7 @@ fun DynamicDetailScreen(
                 // 那会让人以为是没读到,而实际上这里本来就没有可读的东西。
                 if (card.interaction?.hasComments == true) {
                     CommentSection(
+                        onOpenLink = onOpenLink,
                         state = commentState,
                         onSort = onCommentSort,
                         onRefresh = onCommentRefresh,

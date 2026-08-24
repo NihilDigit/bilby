@@ -4,6 +4,7 @@ import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
 import dev.bilby.api.dto.ReplyItemDto
+import dev.bilby.api.dto.ReplyJumpUrlDto
 import dev.bilby.api.dto.ReplyMainResponseDto
 import dev.bilby.api.dto.ReplyReplyResponseDto
 import dev.bilby.api.dto.ReplyAddResponseDto
@@ -55,6 +56,11 @@ data class CommentItem(
     val emotes: Map<String, String>, // 占位符文本(如 "[doge]") -> 图片地址
     /** 正文里被 @ 到的人,顺序即接口给的顺序。名字与 mid 的对应见 CommentSection.resolveMentions。 */
     val mentions: List<CommentMention>,
+    /**
+     * 正文里被服务端标成链接的那几段,key 是正文里的**字面文本**(`av170001`、`BV1xx411c7mD`、
+     * 或者一整条 https 链接)。空 map 表示这条评论里没有可落地的链接。
+     */
+    val links: Map<String, CommentLink>,
     val pictureUrls: List<String>,
     val subReplyCount: Int,
     val previewReplies: List<CommentItem>, // 展开前先用它垫着,展开后由 loadSubReplies 的结果替换
@@ -62,6 +68,22 @@ data class CommentItem(
 
 /** 一个被 @ 到的人。[uname] 是**当前**昵称,不一定等于正文里那串字。 */
 data class CommentMention(val mid: Long, val uname: String)
+
+/**
+ * 正文里的一段链接。
+ *
+ * [url] 是一条**普通的 https 站内地址**,不是 `bilibili://` schema,也不是自定义的路由串:
+ * 全应用的站内落地只有 `ui/BilbyLink.kt` 的 `destinationOf` 一个入口(通知、专栏正文、
+ * 分享进来的链接都走它),这里造一个它认得的地址,认不出来的自然交给浏览器。
+ * 不在这一层判断"能不能打开",那是落地那一侧的事。
+ */
+data class CommentLink(
+    /** 显示出来的字,取接口给的标题;视频链接就是视频标题。 */
+    val title: String,
+    val url: String,
+)
+// 接口另给一个 `prefix_icon`(标题前那枚小图标的地址),这里不带 —— 渲染用的是本地矢量,
+// 理由见 CommentSection 里那处注释。要改成拉接口那张图的话,字段名记在 notes §1.4a。
 
 data class CommentPage(
     val topComment: CommentItem?,
@@ -282,6 +304,9 @@ class CommentRepository(
                 member.mid.toLongOrNull()?.takeIf { it != 0L }
                     ?.let { CommentMention(it, member.uname.decodeHtmlEntities()) }
             },
+            links = content.jumpUrl
+                .mapNotNull { (text, dto) -> dto.toCommentLink(text)?.let { text to it } }
+                .toMap(),
             pictureUrls = content.pictures?.map { it.imgSrc.toHttpsUrl() }.orEmpty(),
             // rcount 而不是 count:后者含已删除/不可见的回复,按它算出来的"还有 N 条"点开是
             // 空的(见 ReplyItemDto.rcount)。
@@ -290,9 +315,53 @@ class CommentRepository(
         )
     }
 
+    /**
+     * 一条 `jump_url` 变成能落地的链接,认不出去处就返回 null 让正文照原样显示。
+     *
+     * **热词整类丢掉。** `extra.is_word_search` 为真的那些是服务端把正文里任意一个词标成
+     * 站内搜索入口(`bilibili://search?keyword=…`),抽样到的 28 条全是这一类。染成可点色
+     * 之后一屏评论里到处是链接,而点过去只是拿这个词搜一遍 —— 那几个字本来就能选中复制。
+     *
+     * **认路认 `click_report`,不认 key 那串字。** 同一条视频在正文里可能写成 `av170001`
+     * 也可能写成 `BV1xx411c7mD`,而两者的 `click_report` 都是同一个 aid。见 notes §1.4a。
+     */
+    private fun ReplyJumpUrlDto.toCommentLink(text: String): CommentLink? {
+        if (extra?.isWordSearch == true) return null
+        val target = when {
+            clickReport.isNotEmpty() && clickReport.all(Char::isDigit) ->
+                "$SITE_HOST/video/av$clickReport"
+
+            // 专栏笔记的 click_report 是 `{"cvid":123,...}`。这一支照 PiliPlus 的 addUrl
+            // (`isCv = clickReport.startsWith('{"cvid')`),本轮抽样没抓到实例,notes §1.4a
+            // 里标着 UNSURE —— 取不出数字就当认不出来,不猜一个可能打不开的去处。
+            clickReport.startsWith(CVID_PREFIX) ->
+                CVID_PATTERN.find(clickReport)?.groupValues?.get(1)?.let { "$SITE_HOST/read/cv$it" }
+
+            // 正文里粘的是一整条链接时,key 本身就是地址。
+            text.startsWith("http://") || text.startsWith("https://") -> text
+
+            else -> null
+        }
+        // 标题为空就没有可显示的字。退回原样,让正文里那串 URL 保持可读,而不是渲染成一个空链接。
+        return target?.takeIf { title.isNotEmpty() }?.let { CommentLink(title = title, url = it) }
+    }
+
     private fun String.escapeForJsonString(): String = replace("\\", "\\\\").replace("\"", "\\\"")
 
     private companion object {
+        /**
+         * 站内链接落地用的站点地址。**不是 [BiliConstants.WEB_HOST]** —— 那个是 api 域名,
+         * 拼出来的 `https://api.bilibili.com/video/av2` 虽然也能被 `BilbyLink` 认出来
+         * (它按 `.bilibili.com` 后缀匹配),但那是个不存在的页面地址,交给浏览器兜底时会 404。
+         */
+        const val SITE_HOST = "https://www.bilibili.com"
+
+        // 写成转义串而不是 raw string:`"""{"cvid"""` 那种写法要数引号才看得出边界在哪。
+        const val CVID_PREFIX = "{\"cvid"
+
+        // 前导引号不进模式,同样是为了不写出 `""""cvid...` 这种四连引号开头的 raw string。
+        val CVID_PATTERN = Regex("""cvid"\s*:\s*(\d+)""")
+
         const val MAIN_URL_ANON = "${BiliConstants.WEB_HOST}/x/v2/reply/main"
         const val MAIN_URL_LOGGED = "${BiliConstants.WEB_HOST}/x/v2/reply"
         const val SUBREPLY_URL = "${BiliConstants.WEB_HOST}/x/v2/reply/reply"

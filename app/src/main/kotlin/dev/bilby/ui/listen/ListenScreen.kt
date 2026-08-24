@@ -94,7 +94,9 @@ import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import dev.bilby.R
-import dev.bilby.data.VideoPart
+import dev.bilby.ui.player.EpisodeList
+import dev.bilby.ui.player.EpisodeRow
+import dev.bilby.ui.player.EpisodeTarget
 import dev.bilby.formatDurationMillis
 import dev.bilby.player.AudioPlaybackUiState
 import dev.bilby.player.QueueItem
@@ -188,20 +190,16 @@ fun ListenScreen(
     player: Player?,
     state: AudioPlaybackUiState,
     sleepTimer: SleepTimerState,
-    queue: List<QueueItem>,
-    onPlayQueueItem: (bvid: String) -> Unit,
     /**
-     * 当前视频的分 P。**分 P 与队列是两条并列的轴**(CLAUDE.md:多 P 视频和合集是两回事):
-     * 队列装的是不同 bvid 的视频,分 P 是同一个 bvid 下的不同 cid。播放页两条都给,
-     * 听视频这边一度只有队列 —— 于是多 P 视频进来就换不了 P。
+     * 切集清单:一列视频,正在播的那一条底下摊开它的分 P。**和播放页、全屏共用同一份**
+     * (构造点在 `VideoScreen`,见 [dev.bilby.ui.player.buildEpisodeRows])。
      *
-     * DESIGN 2.4b 说的是"一个播放状态,两个 UI",两个 UI 能去的地方本来就该一样,
-     * 差别只在有没有画面。**分 P 留在页面上、不进队列 Sheet**:它是当前这条稿件的内部
-     * 导航,和队列是并列的两条轴,塞进同一个 Sheet 会读成"分 P 也是队列的一部分"。
+     * 分 P 原先是页面上单独的一排 chip,理由是"它和队列是并列的两条轴,塞进同一个 Sheet
+     * 会读成分 P 也是队列的一部分"。**二级列表推翻了那条**:缩进本身就说明了分 P 属于哪
+     * 一条,而摆成两块时"走到第几条"和"放到第几 P"是两个高亮,人要在两块之间对位。
      */
-    parts: List<VideoPart> = emptyList(),
-    currentCid: Long = 0L,
-    onPlayPart: (cid: Long) -> Unit = {},
+    episodes: List<EpisodeRow>,
+    onSelectEpisode: (EpisodeTarget) -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onToggleShuffle: () -> Unit,
@@ -327,11 +325,10 @@ fun ListenScreen(
             sheetContent = {
                 AdaptiveContent(modifier = Modifier.fillMaxWidth(), maxWidth = Breakpoints.MediaWidth) {
                     QueueSheetContent(
-                        queue = queue,
-                        currentBvid = state.queue?.current?.bvid,
+                        episodes = episodes,
                         shuffled = (state.queue?.shuffled == true),
                         onToggleShuffle = onToggleShuffle,
-                        onPlayQueueItem = onPlayQueueItem,
+                        onSelectEpisode = onSelectEpisode,
                     )
                 }
             },
@@ -446,12 +443,6 @@ fun ListenScreen(
                     FailureRow(message = message, retrying = state.loading, onRetry = onRetry)
                 }
 
-                // 分 P 排在最后、紧贴队列把手之上:它是"正在放的这一条"的内部结构,和队列是
-                // 两条并列的轴(见上面参数上的注释),不能塞进队列 Sheet。单 P 视频不显示——
-                // 一个只有 P1 的选择器是纯噪声。
-                if (parts.size > 1) {
-                    PartRow(parts = parts, currentCid = currentCid, onPlayPart = onPlayPart)
-                }
                 }
             }
         }
@@ -776,11 +767,10 @@ private fun FailureRow(message: String, retrying: Boolean, onRetry: () -> Unit) 
  */
 @Composable
 private fun QueueSheetContent(
-    queue: List<QueueItem>,
-    currentBvid: String?,
+    episodes: List<EpisodeRow>,
     shuffled: Boolean,
     onToggleShuffle: () -> Unit,
-    onPlayQueueItem: (String) -> Unit,
+    onSelectEpisode: (EpisodeTarget) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         // 标题只写名字,**不带条数**。条数在唱片页的「N / M」里,而且它在这里没有可操作性
@@ -805,10 +795,13 @@ private fun QueueSheetContent(
                 )
             }
         }
-        QueueList(
-            queue = queue,
-            currentBvid = currentBvid,
-            onPlayQueueItem = onPlayQueueItem,
+        EpisodeList(
+            rows = episodes,
+            onSelect = onSelectEpisode,
+            contentPadding = PaddingValues(
+                horizontal = Spacing.Comfortable,
+                vertical = Spacing.Tight,
+            ),
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -904,50 +897,6 @@ private fun SleepTimerDialog(
             }
         },
     )
-}
-
-@Composable
-private fun QueueList(
-    queue: List<QueueItem>,
-    currentBvid: String?,
-    onPlayQueueItem: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val listState = rememberLazyListState()
-
-    // 列表按自然顺序摆着不动,切歌时让高亮那条滚到中间。随机播放不重排列表——
-    // 列表跟着重排会让人找不到刚才看的那条在哪。
-    LaunchedEffect(currentBvid, queue) {
-        val index = queue.indexOfFirst { it.bvid == currentBvid }
-        if (index < 0) return@LaunchedEffect
-        // 这个 LazyColumn 现在挂在常驻的 BottomSheetScaffold 上,不再是每次打开都重新进组合的
-        // ModalBottomSheet——但展开动画期间第一帧 layoutInfo 仍可能是空的,时序坑本身没变,
-        // 等布局真的跑过一次(totalItemsCount > 0)再滚,不然滚动会扑空、居中那步被整个跳过。
-        // 成本是零,删掉会退回原 bug,所以保留。
-        snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
-        listState.animateScrollToItem(index)
-        val info = listState.layoutInfo
-        val row = info.visibleItemsInfo.firstOrNull { it.index == index }
-        if (row != null) {
-            listState.animateScrollToItem(index, -(info.viewportSize.height - row.size) / 2)
-        }
-    }
-
-    LazyColumn(
-        state = listState,
-        modifier = modifier,
-        contentPadding = PaddingValues(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-    ) {
-        items(queue, key = { it.bvid }) { item ->
-            CompactVideoRow(
-                title = item.title,
-                coverUrl = item.coverUrl,
-                subtitle = item.upName,
-                selected = item.bvid == currentBvid,
-                onClick = { onPlayQueueItem(item.bvid) },
-            )
-        }
-    }
 }
 
 
@@ -1069,13 +1018,13 @@ private fun LyricsView(
  * cue,跟着轮询线性扫是白烧 CPU。落在两句之间的空档里时 [indexNear] 给最近讲完的那一句:
  * 滚动跟着它走,但不高亮它——句子已经念完了,继续标它是错的信息。
  *
- * **居中滚动只做一次 `animateScrollToItem`,不再"滚一次、量高度、补第二次"。** 旧写法是
- * `QueueList` 那一套:先把目标项滚到贴顶,再读它的实际高度补一次居中动画。两次动画背靠背
+ * **居中滚动只做一次 `animateScrollToItem`。** 旧写法是切集清单那一套(见
+ * `ui/player/EpisodeList.kt`):先把目标项滚到贴顶,再读它的实际高度补一次居中动画。两次动画背靠背
  * 播放,在切歌这种偶发场景不明显,歌词是每一句都触发,肉眼看到的就是"跳一下、再挪一下"的
  * 一跳一跳。改成用 [BoxWithConstraints] 在真正开始滚动之前就拿到视口高度,把它的一半设成
  * `contentPadding` 的上下边——`animateScrollToItem(index)` 把目标项滚到贴着这段留白的
  * 末尾时,视觉上正好落在视口中间,一次动画到位。副作用是这个高度在真正滚动前就已知,
- * 不再需要等 `LazyColumn` 完成一次布局才能读 `layoutInfo`,`QueueList` 里那个等布局就绪的
+ * 不再需要等 `LazyColumn` 完成一次布局才能读 `layoutInfo`,切集清单里那个等布局就绪的
  * `snapshotFlow` 也就不需要了(那是给"滚完再读实际高度"这一步准备的,这里没有那一步)。
  *
  * 颜色用主题色,不再是 [FixedColors.OnMedia] 上兑 alpha。那一套的前提是"背后是调暗后的
@@ -1245,37 +1194,3 @@ private fun formatRemaining(millis: Long): String {
 
 private fun formatSpeed(speed: Float): String =
     if (speed == speed.toInt().toFloat()) "${speed.toInt()}x" else "${speed}x"
-
-
-/**
- * 分 P 选择器。横排而不是竖排:分 P 通常几条到十几条,标题短,横着一行扫得完;
- * 竖排会把它撑成和下面的队列一样重的一块,而它只是当前这条视频的内部结构。
- */
-@Composable
-private fun PartRow(
-    parts: List<VideoPart>,
-    currentCid: Long,
-    onPlayPart: (cid: Long) -> Unit,
-) {
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = Spacing.Comfortable),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-        modifier = Modifier.padding(bottom = Spacing.Cozy),
-    ) {
-        itemsIndexed(parts, key = { _, part -> part.cid }) { index, part ->
-            val selected = part.cid == currentCid
-            FilterChip(
-                selected = selected,
-                onClick = { onPlayPart(part.cid) },
-                label = {
-                    Text(
-                        "P${index + 1} ${part.title}",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 160.dp),
-                    )
-                },
-            )
-        }
-    }
-}

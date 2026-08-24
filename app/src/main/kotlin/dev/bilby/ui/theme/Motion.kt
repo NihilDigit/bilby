@@ -107,6 +107,28 @@ object Motion {
         tween(Duration.Short3, easing = Easing.StandardAccelerate)
     val TopLevelEnterFade: FiniteAnimationSpec<Float> =
         tween(Duration.Medium1, delayMillis = Duration.Short3, easing = Easing.StandardDecelerate)
+
+    /**
+     * 预测式返回。**和普通返回是同一套形状(五分之一屏的滑动加淡出),只是时间轴归手指管。**
+     *
+     * `NavDisplay` 把系统给的手势进度喂进 `SeekableTransitionState.seekTo(progress)`
+     * (反编译 navigation3-ui 1.1.5 核实过),于是规格在这里的作用变了:它不再决定"放多久",
+     * 而是把进度映射成动画取值 —— 时长是那把比例尺,缓动就是映射曲线。
+     *
+     * **不能用 `snap()`。** 零时长在 seek 之下意味着进度一大于 0 就已经走到终点:画面在手势的
+     * 第一帧整段跳完,之后再不跟手,而松手时也没有可播的东西。这里原先正是 `snap()`,理由写着
+     * "进度由手指给,配 tween 会让动画和手势各走各的" —— 那句话把 seek 和普通播放搞混了。
+     *
+     * 缓动取 [Easing.StandardDecelerate](0, 0, 0, 1),这正是预测式返回指南要求"把 progress 先
+     * 过一遍"的那条曲线。旧注释说它拿不到,是因为当时把它当成要在进度上另做一步 —— 在 seek
+     * 之下它就是规格自己的缓动。
+     *
+     * 时长仍然有意义:手势取消或松手完成时,`NavDisplay` 用同一条规格把剩下那段播完。
+     */
+    val PredictivePopSlide: FiniteAnimationSpec<IntOffset> =
+        tween(Duration.Medium4, easing = Easing.StandardDecelerate)
+    val PredictivePopFade: FiniteAnimationSpec<Float> =
+        tween(Duration.Medium4, easing = Easing.StandardDecelerate)
 }
 
 /**

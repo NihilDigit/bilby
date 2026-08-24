@@ -107,6 +107,7 @@
     <string name="comment_delete_confirm">Delete this comment?</string>
     <string name="comment_expand_replies">Show %1$d replies</string>
     <string name="comment_open_replies_panel">View all %1$d replies</string>
+    <string name="comment_view_thread">View this thread</string>
     <string name="comment_replies_time_ordered">Replies are ordered by time posted</string>
     <string name="comment_collapse_replies">Collapse</string>
     <string name="comment_load_more">Load more</string>
@@ -115,6 +116,9 @@
     <string name="comment_replying_to">Replying to @%1$s</string>
     <string name="comment_input_hint">Say something nice</string>
     <string name="comment_input_hint_reply">Reply to %1$s</string>
+    <string name="comment_copy">Copy comment</string>
+    <string name="comment_copied">Copied</string>
+    <string name="comment_copy_clip_label">Comment</string>
 
     <string name="space_title">Profile</string>
     <string name="space_tab_archives">Videos</string>
@@ -143,6 +147,8 @@
     <string name="video_tab_comment">Comments</string>
     <string name="video_tab_comment_count">Comments %1$s</string>
     <string name="video_intro_expand">Show description</string>
+    <string name="video_resume">Resume</string>
+    <string name="video_replay">Replay</string>
     <string name="video_intro_collapse">Hide description</string>
     <string name="video_cloud_resume">Watched to %1$s elsewhere</string>
     <string name="video_cloud_resume_jump">Jump</string>
@@ -159,6 +165,7 @@
     <string name="video_action_toview_added">Added</string>
     <string name="video_action_toview_desc">Add to Watch later</string>
     <string name="video_parts">Parts</string>
+    <string name="video_episodes">Episodes</string>
     <string name="video_part_label">P%1$d %2$s</string>
     <string name="video_find_related">Find related</string>
     <string name="video_queue_loading">Loading queue…</string>

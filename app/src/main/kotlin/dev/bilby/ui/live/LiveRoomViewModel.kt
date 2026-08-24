@@ -15,6 +15,7 @@ import dev.bilby.live.LiveEmote
 import dev.bilby.live.LiveFanMedal
 import dev.bilby.live.LiveMessage
 import dev.nihildigit.danmaku.Danmaku
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -190,6 +191,9 @@ class LiveRoomViewModel(
     /** 系统提示的本地编号,见 [pushNotice]。 */
     private var noticeSeq = 0L
 
+    /** 信息流那条连接,见 [connectDanmaku]。 */
+    private var danmakuJob: Job? = null
+
     /**
      * 弹幕内容流。`playTimeMillis` 恒为 0,**由渲染层重打** —— 服务端时间戳和播放器时间轴
      * 不是同一根,而渲染层手里就有播放器位置。
@@ -239,8 +243,12 @@ class LiveRoomViewModel(
                             anchorMid = if (value.uid != 0L) value.uid else it.anchorMid,
                         )
                     }
+                    // **信息流不看开没开播。** 中途开播这件事本身是从这条连接上来的
+                    // (LIVE,见 notes/live.md §10.3),未开播就不连的话,未开播时进的房
+                    // 永远等不到开播,只能退出去再进来。
+                    connectDanmaku()
+                    // 两份历史仍然只在开播时拉:未开播时「本场」指的是上一场。
                     if (value.isLive) {
-                        connectDanmaku()
                         loadSuperChatHistory()
                         loadArchivedSuperChats()
                     }
@@ -316,7 +324,10 @@ class LiveRoomViewModel(
      * 弹幕走独立的流,聊天与醒目留言进 [state]。
      */
     private fun connectDanmaku() {
-        viewModelScope.launch {
+        // 失败面板上的重试会再走一遍 [load],而断线重连归客户端自己管(见
+        // LiveDanmakuClient.messages),这里再连一次只会多出一个收集器,每条弹幕上屏两遍。
+        if (danmakuJob?.isActive == true) return
+        danmakuJob = viewModelScope.launch {
             // **登录态在这里现取**,不在构造时捕获:凭据是个 flow,VM 建出来那一刻它可能
             // 还没发出第一个值,拿到的是 0。用登录态签出来的 token 配一个 uid=0 的认证包,
             // 服务端有理由拒绝,而被拒之后它只是把连接关掉。
@@ -547,6 +558,14 @@ class LiveRoomViewModel(
             _state.update { it.copy(isLive = false, streamUrl = null) }
             return
         }
+        // **开播是新的一场,场次级的状态跟着翻篇。** 醒目留言那份日志按场次算,上一场的留在
+        // 屏上会让「本场早前」显示的是别的场次的留言。
+        //
+        // 不重新拉两份历史:这一场从此刻起,之前没有可补的,而 danmakus 那侧的「本场」此刻
+        // 指的还是上一场。大航海不清 —— 那一份挂在主播身上,不随场次变。
+        //
+        // 流也不清:它是这个页面上发生过什么的记录,两场之间隔着一行下播和一行开播,读得出来。
+        _state.update { it.copy(sessionSuperChats = emptyList(), hasArchive = false) }
         viewModelScope.launch {
             val playback = repository.loadPlayback(roomId)
             if (playback is BiliResult.Ok) {

@@ -154,9 +154,40 @@ object DanmakuFontSizeSp {
  * 状态,和播放页读 [AudioPlaybackService.state] 是同一个方向。
  */
 private class PlayerDanmakuClock : DanmakuClock {
+
     private val tick get() = AudioPlaybackService.positionTicks.value
-    override val positionMillis: Long get() = tick.positionAt(SystemClock.elapsedRealtime())
+
+    /**
+     * **每帧当场问播放器,不外推。**
+     *
+     * 弹幕的横坐标是播放位置的直接函数(`x = viewport.right - (t - emitTime) * 每毫秒像素`,
+     * 见 [DanmakuHost] 的类注释),排布本身跟倍速无关。所以位置读数抖多少,弹幕就跳多少 ——
+     * 这一层唯一要保证的事,就是 [DanmakuClock] 契约里那句"逐帧连续"。
+     *
+     * 半秒一条的刻度([AudioPlaybackService.positionTicks])不满足这一条,消费方必须自己外推,
+     * 而外推需要一个速率,能拿到的只有 `playbackParameters.speed` —— **那是请求的倍速,不是
+     * 位置正在遵守的倍速**。长按加速的那一刻它立刻变成 3×,而位置还要按 1× 走完已经写进
+     * AudioTrack 的那几百毫秒(media3 用一队 checkpoint 记着新参数从哪个输出位置起算,见
+     * `DefaultAudioSink.applyMediaPositionParameters`)。外推于是跑到真实位置前面,等下一条
+     * 刻度落地再被拽回来 —— 按下和松开各跳一次,方向相反。
+     *
+     * 那个差是外推这件事本身带来的,不是刻度不够密:请求倍速和实际倍速在过渡期里本来就不是
+     * 同一个数,改用"实测速率"只会把跳变翻个方向。**所以不外推**:服务与界面同进程,
+     * `ExoPlayer.getCurrentPosition()` 每次调用现算、本身就连续,直接问它就没有第二个估计器,
+     * 也就没有可分歧的东西([AudioPlaybackService.currentPositionMillis])。
+     *
+     * **这不是"改用 MediaController 的 getCurrentPosition"** —— 那一侧才是要避开的东西:
+     * 它在自己进程里按"锚点 + 经过时间 × 倍速"外推,锚点是它的私有状态,变速时同样对不齐,
+     * 而且外部既读不到也刷不了(见 [PositionTick])。这里问的是播放器本人。
+     *
+     * 服务还没起来时退回刻度:那时播放器根本不存在,读数只能是最后一次已知的位置。
+     */
+    override val positionMillis: Long
+        get() = AudioPlaybackService.currentPositionMillis()
+            ?: tick.positionAt(SystemClock.elapsedRealtime())
+
     override val isPlaying: Boolean get() = tick.isPlaying
+
     override val playbackSpeed: Float get() = tick.speed
 }
 

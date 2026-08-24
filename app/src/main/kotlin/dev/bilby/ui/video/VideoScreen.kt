@@ -70,7 +70,11 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import dev.bilby.BiliLog
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import dev.bilby.R
+import dev.bilby.ui.theme.FixedColors
+import dev.bilby.ui.player.EpisodeTarget
+import dev.bilby.ui.player.buildEpisodeRows
 import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
@@ -167,6 +171,8 @@ fun VideoScreen(
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
     onPlayEpisode: (bvid: String) -> Unit,
     onRelatedVideoClick: (bvid: String) -> Unit,
+    /** 评论正文里引的那条链接。站内解析归导航层,见 MainActivity 的 openLink。 */
+    onOpenLink: (String) -> Unit,
     onCommentSort: (CommentSort) -> Unit,
     onCommentRefresh: () -> Unit,
     onCommentLoadMore: () -> Unit,
@@ -325,6 +331,13 @@ fun VideoScreen(
     var danmakuInputOpen by rememberSaveable { mutableStateOf(false) }
 
     /**
+     * 全屏的切集面板开着没有。**只是全屏这一形态里的一个浮层**,退出全屏就该没有 ——
+     * 竖屏下切集有自己的位置(简介页那排 chip 和播放队列),再浮一块出来是第二套入口。
+     */
+    var episodePanelOpen by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(fullscreen) { if (!fullscreen) episodePanelOpen = false }
+
+    /**
      * 输入层里的草稿。**按 bvid 存**:连播走到下一条时这一页并不重建(见 VideoViewModel 的
      * switchTo),不带 key 的话上一条没发出去的半句话会跟到下一条视频上。
      */
@@ -336,10 +349,24 @@ fun VideoScreen(
      */
     var danmakuProgress by remember { mutableLongStateOf(0L) }
 
+    /**
+     * 切集清单。**整页只在这里拼一次**,详情页、听视频、全屏三处都从它取数 —— 三种形态
+     * 能去的地方本来就该一样,差别只在怎么画(见 `ui/player/EpisodeList.kt`)。
+     *
+     * 它同时是"这一刻能不能切 P"的唯一判据:身份对不上时当前那条的 `parts` 是空的,
+     * 于是 chip 那一排和二级列表一并不出现,而不是画出来点不动。
+     */
+    val episodeRows = buildEpisodeRows(
+        queue = audioState.queue?.items.orEmpty(),
+        currentBvid = audioState.queue?.current?.bvid,
+        pageBvid = state.detail?.bvid,
+        parts = state.detail?.pages.orEmpty(),
+        currentCid = currentCid,
+    )
+
     /** 队列的唯一来源是服务。页面只是把它摆出来,不自己攒一份。 */
     val shownQueue = QueueUiState(
-        items = audioState.queue?.items.orEmpty(),
-        currentBvid = audioState.queue?.current?.bvid,
+        rows = episodeRows,
         sourceLabel = audioState.queue?.sourceLabel.orEmpty(),
         source = audioState.queue?.source,
         shuffled = (audioState.queue?.shuffled == true),
@@ -489,24 +516,33 @@ fun VideoScreen(
     /** 点队列里的一条 = 让队列跳过去。页面不自己导航,它跟着队列走(见 VideoRoute)。 */
     val onPlayQueueItem: (String) -> Unit = { target ->
         // 面板里的列表就是 playlist 的自然顺序(随机只改播放顺序),下标可以直接用。
-        val index = shownQueue.items.indexOfFirst { it.bvid == target }
+        val index = episodeRows.indexOfFirst { it.bvid == target }
         if (index >= 0) active?.seekTo(index, 0)
     }
 
     /**
      * 换这条视频的一 P。
      *
-     * **先问播放器装的还是不是这一页那条视频。** 这条命令换的是播放器当前那一条的装载参数,
-     * 而 cid 来自本页的详情:队列已经走到别的视频上时(自动连播),照发就是拿这条视频的分 P
-     * 号去取那条视频的流,服务端回 -404,而那个错误离原因很远。同一道判断在打开发弹幕的
-     * 输入层那里也有,理由一样。
+     * 身份不必在这里再判一次:分 P 只在 [episodeRows] 认过身份之后才存在(见
+     * `buildEpisodeRows`),对不上时那一排 chip 和二级列表整个不出现,发不出这条命令。
+     * 原先这里挂着一道 `playerHoldsThisPage()` 守卫,于是自动连播走到别的视频那段窗口里,
+     * chip 画得出来、点下去什么都不发生。
      */
     val onPlayPart: (Long) -> Unit = { cid ->
-        if (playerHoldsThisPage()) {
-            send(
-                AudioPlaybackService.ACTION_PLAY_PART,
-                bundleOf(AudioPlaybackService.EXTRA_CID to cid),
-            )
+        send(
+            AudioPlaybackService.ACTION_PLAY_PART,
+            bundleOf(AudioPlaybackService.EXTRA_CID to cid),
+        )
+    }
+
+    /**
+     * 切集的唯一入口。**两种目标对应两条命令**:跳队列是标准 Player 命令,换分 P 是同稿件内的
+     * 自定义命令。分派收在这一处,三种形态各自只管把清单画出来。
+     */
+    val onSelectEpisode: (EpisodeTarget) -> Unit = { target ->
+        when (target) {
+            is EpisodeTarget.Video -> onPlayQueueItem(target.bvid)
+            is EpisodeTarget.Part -> onPlayPart(target.cid)
         }
     }
 
@@ -590,12 +626,8 @@ fun VideoScreen(
             player = active,
             state = audioState,
             sleepTimer = sleepTimerState,
-            queue = audioState.queue?.items.orEmpty(),
-            onPlayQueueItem = onPlayQueueItem,
-            parts = state.detail?.pages.orEmpty(),
-            // 分 P 清单来自本页的详情,高亮的那一 P 就得是本页这条视频的,见上面 currentCid。
-            currentCid = currentCid,
-            onPlayPart = onPlayPart,
+            episodes = episodeRows,
+            onSelectEpisode = onSelectEpisode,
             onNext = { active?.seekToNextMediaItem() },
             onPrevious = { active?.seekToPreviousMediaItem() },
             onToggleShuffle = toggleShuffle,
@@ -690,6 +722,9 @@ fun VideoScreen(
      */
     val canCollapsePlayer = !playerPinned && tabPager.settledPage != VideoTabIntro
     val playerScroll = rememberCollapsingHeaderState { canCollapsePlayer }
+    // 画面收到底时留下一条快捷播放条的高度,那块位置由它占住(见 QuickPlayBar)。
+    // 收不干净是有意的:收干净之后"把画面拿回来"就没有入口了,只能靠一路往回滚。
+    with(LocalDensity.current) { playerScroll.minVisiblePx = QuickPlayBarHeight.toPx() }
     // 又钉起来就把画面收回来。**不是 snap 而是动画**:此刻手指多半不在屏幕上(点的是通知栏
     // 或者画面上的播放键),瞬移读不出"它回来了"这件事。翻回简介页是个例外,那时手指在滑,
     // 但那一下本来就跟着页面走,动画反而顺。
@@ -827,6 +862,18 @@ fun VideoScreen(
                         danmakuCid = currentCid,
                         matchesCurrentPage = matchesCurrentPage,
                         placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
+                        topBarActions = {
+                            // 没有可切的东西就不给入口:单条队列的单 P 视频点开只有它自己。
+                            if (episodeRows.hasSomethingToSwitch()) {
+                                IconButton(onClick = { episodePanelOpen = true }) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.PlaylistPlay,
+                                        contentDescription = stringResource(R.string.video_episodes),
+                                        tint = FixedColors.OnMedia,
+                                    )
+                                }
+                            }
+                        },
                         modifier = Modifier.fillMaxSize(),
                     )
 
@@ -892,6 +939,18 @@ fun VideoScreen(
                     }
                     SkipToast(skippedCategory)
                 }
+
+                // 切集面板。挂在画面这个 Box 里,所以它盖住的正好是画面,而不是整页 ——
+                // 全屏时两者相等,退出全屏时它已经被上面那个 LaunchedEffect 关掉了。
+                if (fullscreen) {
+                    EpisodePanel(
+                        visible = episodePanelOpen && !locked,
+                        rows = episodeRows,
+                        sourceLabel = shownQueue.sourceLabel,
+                        onSelect = onSelectEpisode,
+                        onDismiss = { episodePanelOpen = false },
+                    )
+                }
             }
         }
 
@@ -902,7 +961,7 @@ fun VideoScreen(
                     VideoTabs(
                         pagerState = tabPager,
                         detail = detail,
-                        currentCid = currentCid,
+                        onSelectEpisode = onSelectEpisode,
                         videoTags = videoTags,
                         onLoadTags = onLoadTags,
                         onTagClick = onTagClick,
@@ -926,7 +985,6 @@ fun VideoScreen(
                         onToggleFollow = onToggleFollow,
                         upCard = upCard,
                         queue = shownQueue,
-                        onPlayQueueItem = onPlayQueueItem,
                         onOpenQueueSource = onOpenQueueSource,
                         onToggleShuffle = toggleShuffle,
                         onRetryQueue = retryQueue,
@@ -943,9 +1001,9 @@ fun VideoScreen(
                         onCoinDialogClosed = onCoinDialogClosed,
                         onOpenFavPicker = onOpenFavPicker,
                         onFavConfirm = onFavConfirm,
-                        onPlayPart = onPlayPart,
                         onPlayEpisode = onPlayEpisode,
                         onRelatedVideoClick = onRelatedVideoClick,
+                        onOpenLink = onOpenLink,
                         onCommentSort = onCommentSort,
                         onCommentRefresh = onCommentRefresh,
                         // 画面收起着的时候下滑先把它拉回来,那一下不该被读成刷新。
@@ -1026,6 +1084,11 @@ fun VideoScreen(
                             .background(Color.Black),
                     )
                 }
+                // **画面和快捷播放条叠在同一块位置上。** 画面收起时留下的正是这条的高度
+                // (playerScroll.minVisiblePx),条画在这块残留区上,盖住画面还露着的那一小截。
+                // 不把条排在画面上面或下面:那样它要么在展开态凭空占一行,要么在收起态浮到
+                // 评论第一行上。见 QuickPlayBar。
+                Box {
                 playerPane(
                     if (fullscreen) {
                         Modifier.fillMaxSize()
@@ -1046,6 +1109,26 @@ fun VideoScreen(
                             .consumeWindowInsets(safeInsets)
                     },
                 )
+                if (!fullscreen) {
+                    QuickPlayBar(
+                        title = state.detail?.title.orEmpty(),
+                        // 播完停在末尾,此时"继续"没有可继续的地方,按下应是从头来过。
+                        finished = active?.playbackState == Player.STATE_ENDED,
+                        onBack = onBack,
+                        onExpand = { scope.launch { playerScroll.expand() } },
+                        onPlay = {
+                            // 播完之后先回到开头:直接 play() 在末尾上是没有反应的,
+                            // 这一条和播放器控制条里那颗按钮的判断相同(见 PlayerShell)。
+                            if (active?.playbackState == Player.STATE_ENDED) active.seekTo(0)
+                            active?.play()
+                            // 展开不用在这里做:放起来之后 playerPinned 变真,
+                            // 上面那个 LaunchedEffect(playerPinned) 会把画面收回来。
+                        },
+                        visibility = playerScroll.collapsedFraction,
+                        modifier = Modifier.align(Alignment.TopCenter),
+                    )
+                }
+                }
                 // 全屏时画面独占整屏,简介整块不参与布局。
                 //
                 // **weight(1f) 而不是 fillMaxWidth()。** AdaptiveContent 内部会 fillMaxSize,
@@ -1114,16 +1197,17 @@ fun VideoScreen(
         // 当前这条视频摊成分 P,别的队列项各占一行。**分 P 清单只有当前这条有** —— 它来自
         // 已经在手上的这份详情,而队列里其他视频要各打一次详情请求才知道有几 P,不值得在
         // 打开面板时先发十几个请求去换一个多数视频用不上的选项。
-        val currentParts = state.detail?.takeIf { it.bvid == shownQueue.currentBvid }?.pages.orEmpty()
-        val targets = shownQueue.items.flatMap { item ->
-            if (item.bvid != shownQueue.currentBvid || currentParts.size <= 1) {
+        val partsByBvid = episodeRows.associate { it.bvid to it.parts }
+        val targets = audioState.queue?.items.orEmpty().flatMap { item ->
+            val parts = partsByBvid[item.bvid].orEmpty()
+            if (parts.isEmpty()) {
                 listOf(OfflineTarget(item))
             } else {
-                currentParts.map { part ->
+                parts.map { part ->
                     OfflineTarget(
                         item = item,
                         cid = part.cid,
-                        partTitle = stringResource(R.string.video_part_label, part.index, part.title),
+                        partTitle = stringResource(R.string.video_part_label, part.ordinal, part.title),
                     )
                 }
             }

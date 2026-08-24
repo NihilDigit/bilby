@@ -61,22 +61,33 @@ class WsolaAudioProcessor(
     private var monoPending = FloatArray(0)
     private var monoMid = FloatArray(0)
 
-    /** 实测伸缩比。播放器要拿它把播放时长换算回媒体时长,用标称 speed 会有微小误差。 */
-    private var consumedFrames = 0L
-    private var producedFrames = 0L
 
     fun setSpeed(speed: Float) {
         require(speed > 0f)
         pendingSpeed = speed
     }
 
-    /** 播放时长 → 媒体时长。2× 时 1 秒播放对应 2 秒媒体。 */
+    /**
+     * 播放时长 → 媒体时长。2× 时 1 秒播放对应 2 秒媒体。
+     *
+     * **用标称倍速,不用实测的"消耗帧数 / 产出帧数"。**
+     *
+     * 这里原先取实测比例,理由是"标称值有微小误差"。那条理由把误差算错了地方:传进来的
+     * [playoutDuration] 是**从这一段倍速生效起累计**的播放时长,而实测比例是**此刻**的一个
+     * 瞬时估计——两者相乘,比例上的抖动就被乘上了已经过去的整段时长。WSOLA 每块前移多少由
+     * 相关度搜索定,逐块本来就在标称值附近摆动(长跑均值由 `skipRemainder` 兜住),于是
+     * 千分之几的比例噪声在长按十秒之后就是几十毫秒的位置噪声,而且越按越大。
+     *
+     * 表现是长按倍速时弹幕在 x 轴上来回抖:`AudioPlaybackService` 每半秒按
+     * `player.currentPosition` 打一次锚点([dev.bilby.player.PositionTick]),弹幕时钟在两次
+     * 锚点之间按标称倍速外推——锚点自己在抖,外推是直的,每半秒对齐一次就是一次可见的回跳。
+     * 1× 时看不到,因为那时 `isActive()` 为假、这个处理器根本不在链路上,换算走的是精确路径。
+     *
+     * 标称值在这里没有可言的误差:WSOLA 的长跑伸缩比按设计就等于 `speed`,而实测比例唯一能
+     * 修正的系统性偏差,恰好只存在于刚 flush 完的那段——那正是它自己最不准的时候。
+     */
     fun getMediaDuration(playoutDuration: Long): Long =
-        if (producedFrames > MIN_FRAMES_FOR_MEASURED_RATIO) {
-            playoutDuration * consumedFrames / producedFrames
-        } else {
-            (playoutDuration * speed.toDouble()).toLong()
-        }
+        (playoutDuration * speed.toDouble()).toLong()
 
     override fun getDurationAfterProcessorApplied(durationUs: Long): Long =
         (durationUs / speed.toDouble()).toLong()
@@ -125,8 +136,6 @@ class WsolaAudioProcessor(
         configureLengths()
         pendingFrames = 0
         skipRemainder = 0.0
-        consumedFrames = 0
-        producedFrames = 0
         midBuffer = ShortArray(overlapFrames * channelCount)
         monoMid = FloatArray(max(overlapFrames, 1))
     }
@@ -203,7 +212,6 @@ class WsolaAudioProcessor(
             // 2) 序列中段原样复制。
             val copyFrames = sequenceFrames - 2 * overlapFrames
             out.put(pending, (offset + overlapFrames) * channelCount, copyFrames * channelCount)
-            producedFrames += overlapFrames + copyFrames
 
             // 3) 序列末尾留作下一块的相似度基准。
             System.arraycopy(
@@ -217,8 +225,6 @@ class WsolaAudioProcessor(
 
         if (drainTail && pendingFrames > 0) {
             out.put(pending, 0, pendingFrames * channelCount)
-            producedFrames += pendingFrames
-            consumedFrames += pendingFrames
             pendingFrames = 0
         }
 
@@ -234,7 +240,6 @@ class WsolaAudioProcessor(
             pending, 0, (pendingFrames - frames) * channelCount,
         )
         pendingFrames -= frames
-        consumedFrames += frames
     }
 
     /**
@@ -330,9 +335,6 @@ class WsolaAudioProcessor(
 
         const val MIN_SAMPLE_RATE = 8_000
         const val MAX_CHANNELS = 8
-
-        /** 低于这个数说明刚 flush 完没多久,实测比例还没意义,先用标称倍速。 */
-        const val MIN_FRAMES_FOR_MEASURED_RATIO = 30_000L
 
         const val SPEED_EPSILON = 0.01f
     }

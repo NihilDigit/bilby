@@ -7,7 +7,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.snap
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -312,6 +311,21 @@ private fun BilbyApp(
         }
     }
 
+    /**
+     * 正文里的一条链接。**先按站内解析,认不出来才交给浏览器。**
+     *
+     * 专栏正文、通知、评论里引的多是 BV 号和别人的空间,那些在这个应用里有落点,一律外跳
+     * 等于把读者赶出去再走回来;而活动页、会员购这类站内没有对应页面,只能外跳。
+     *
+     * 收在这一层是因为它出现在四个地方(专栏、通知、评论、动态详情),而判断只有一条。
+     * 原先每处各抄一份,四份里已经有一份写法不同。
+     */
+    val context = LocalContext.current
+    val openLink: (String) -> Unit = { url ->
+        val destination = BilbyLink.destinationOf(url)
+        if (destination != null) push(destination) else ShareLink.openInBrowser(context, url)
+    }
+
     // 新版本提示。挂在这一层而不是首页里:它和用户此刻在哪一页无关,而首页会随 tab 切换
     // 离开组合 —— 挂在那儿的话,开屏正好停在别的 tab 上就永远不弹。
     // **登录之后才挂**:上面那道 return 挡着,登录页不该被一个更新弹窗盖住。
@@ -361,7 +375,6 @@ private fun BilbyApp(
      *
      * 转屏不受影响:manifest 声明了 configChanges,Activity 不重建,onStop 不会跑。
      */
-    val context = LocalContext.current
     val hasVideoPage = backStack.any { it is Video }
     LaunchedEffect(hasVideoPage) {
         if (!hasVideoPage) AudioPlaybackService.stop(context)
@@ -426,15 +439,23 @@ private fun BilbyApp(
                     )
             }
         },
-        // 预测式返回这一段的进度由手指给,配 tween 会让动画和手势各走各的,所以用 snap。
+        // 预测式返回。形状和普通返回一致(五分之一屏的滑动加淡出),差别只在时间轴归手指管:
+        // NavDisplay 把手势进度喂给 SeekableTransitionState.seekTo,规格因此是"进度 → 取值"的
+        // 映射,不是"放多久"。缓动与时长的取法见 Motion.PredictivePopSlide 上的说明。
         //
-        // 还差三样规范要求的东西,都卡在 NavDisplay 这个 API 上:progress 要先过一遍
-        // standard decelerate 再用(它由 NavDisplay 内部驱动,这里拿不到)、退出页缩到 90% 与
-        // 进入页从 110% 收回、35% 的 fade through 阈值。见 developer.android.com 的
-        // predictive back 指南。要补齐得绕开 predictivePopTransitionSpec 自己接手势。
+        // 减弱动效时同样退成纯淡出,判据同上面两条。
         predictivePopTransitionSpec = { _ ->
-            (slideInHorizontally(snap()) { -it / 5 } + fadeIn(snap())) togetherWith
-                (slideOutHorizontally(snap()) { it / 5 } + fadeOut(snap()))
+            if (reducedMotion) {
+                fadeIn(Motion.PredictivePopFade) togetherWith fadeOut(Motion.PredictivePopFade)
+            } else {
+                (
+                    slideInHorizontally(Motion.PredictivePopSlide) { -it / Motion.ForwardSlideFraction } +
+                        fadeIn(Motion.PredictivePopFade)
+                    ) togetherWith (
+                    slideOutHorizontally(Motion.PredictivePopSlide) { it / Motion.ForwardSlideFraction } +
+                        fadeOut(Motion.PredictivePopFade)
+                    )
+            }
         },
         entryProvider = entryProvider {
             entry<Home> {
@@ -505,6 +526,7 @@ private fun BilbyApp(
                     // 今天那个"点下一集不自动播放"的 bug 也出在这里:压栈时旧页的 onDispose
                     // 在新页起播之后才跑,把刚起播的下一集暂停了。替换栈顶让这个错位不成立。
                     onOpenVideo = { backStack.replaceTopUnique(Video(it)) },
+                    onOpenLink = openLink,
                     onSearchTag = { push(SearchResult(it)) },
                 )
             }
@@ -526,10 +548,7 @@ private fun BilbyApp(
                         onOpenWhisper = { push(Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem)) },
                         // 通知里的 uri 是站内链接,认得出来就在应用内落地,认不出来
                         // (活动页、会员购这类)交给浏览器 —— 同专栏正文里的链接一条路。
-                        onOpenUri = { uri ->
-                            val destination = BilbyLink.destinationOf(uri)
-                            if (destination != null) push(destination) else ShareLink.openInBrowser(context, uri)
-                        },
+                        onOpenUri = openLink,
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -603,6 +622,7 @@ private fun BilbyApp(
                         onVideoClick = { push(Video(it)) },
                         onUpClick = { push(Space(it)) },
                         onArticleClick = { id, isRead -> push(ArticlePage(id, isRead)) },
+                        onOpenLink = openLink,
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -673,17 +693,7 @@ private fun BilbyApp(
                     ArticleRoute(
                         container = container,
                         key = key,
-                        onOpenLink = { url ->
-                            // 专栏正文里的链接先按站内解析。**认不出来才交给浏览器** ——
-                            // 文中引用的多是 BV 号和别人的空间,那些在这个应用里有落点,
-                            // 一律外跳等于把读者赶出去再走回来。
-                            val destination = BilbyLink.destinationOf(url)
-                            if (destination != null) {
-                                push(destination)
-                            } else {
-                                ShareLink.openInBrowser(context, url)
-                            }
-                        },
+                        onOpenLink = openLink,
                         onUpClick = { push(Space(it)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
@@ -1931,6 +1941,7 @@ private fun DynamicDetailRoute(
     onVideoClick: (String) -> Unit,
     onUpClick: (Long) -> Unit,
     onArticleClick: (String, Boolean) -> Unit,
+    onOpenLink: (String) -> Unit,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1978,6 +1989,7 @@ private fun DynamicDetailRoute(
         onCommentSort = { commentVm?.setSort(it) },
         onCommentRefresh = { commentVm?.refresh() },
         onCommentLoadMore = { commentVm?.loadMore() },
+        onOpenLink = onOpenLink,
         onExpandReplies = { commentVm?.expandReplies(it) },
         onSendComment = { text, replyTo -> commentVm?.send(text, replyTo) },
         onLikeComment = { commentVm?.like(it) },
@@ -2112,6 +2124,7 @@ private fun VideoRoute(
     bvid: String,
     startListening: Boolean = false,
     onUpClick: (Long) -> Unit,
+    onOpenLink: (String) -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
     onOpenVideo: (String) -> Unit,
     onSearchTag: (String) -> Unit,
@@ -2188,6 +2201,7 @@ private fun VideoRoute(
         listening = listening,
         onListeningChange = { listening = it },
         onUpClick = onUpClick,
+        onOpenLink = onOpenLink,
         onOpenQueueSource = onOpenQueueSource,
         onOpenVideo = onOpenVideo,
         onSearchTag = onSearchTag,
@@ -2202,6 +2216,7 @@ private fun VideoPane(
     listening: Boolean,
     onListeningChange: (Boolean) -> Unit,
     onUpClick: (Long) -> Unit,
+    onOpenLink: (String) -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
     onOpenVideo: (String) -> Unit,
     onSearchTag: (String) -> Unit,
@@ -2312,6 +2327,7 @@ private fun VideoPane(
         onFavConfirm = vm::confirmFavorite,
         onPlayEpisode = onOpenVideo,
         onRelatedVideoClick = onOpenVideo,
+        onOpenLink = onOpenLink,
         onCommentSort = { commentVm?.setSort(it) },
         onCommentRefresh = { commentVm?.refresh() },
         onCommentLoadMore = { commentVm?.loadMore() },

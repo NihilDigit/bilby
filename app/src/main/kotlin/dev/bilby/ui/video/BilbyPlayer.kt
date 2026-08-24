@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -160,6 +161,8 @@ fun BilbyPlayer(
     modifier: Modifier = Modifier,
     /** 只在全屏时显示。竖屏下标题就在播放器正下方,再印一遍是多余的。 */
     title: String = "",
+    /** 全屏顶栏右端的东西,现在是切集入口。见 [PlayerShell] 的同名参数。 */
+    topBarActions: @Composable RowScope.() -> Unit = {},
 ) {
     PlayerShell(
         player = player,
@@ -176,6 +179,7 @@ fun BilbyPlayer(
         externalLoading = externalLoading,
         modifier = modifier,
         fastForwardSpeed = fastForwardSpeed,
+        topBarActions = topBarActions,
         overlay = {
             // 弹幕层:字号由这里按形态给,层自己不认识"全屏"。
             PlayerDanmakuLayer(

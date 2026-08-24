@@ -87,6 +87,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.bilby.R
+import dev.bilby.ui.player.EpisodePart
+import dev.bilby.ui.player.EpisodeRow
+import dev.bilby.ui.player.EpisodeTarget
+import dev.bilby.ui.player.currentIndex
 import dev.bilby.formatDurationSeconds
 import dev.bilby.agent.AgentTurnState
 import dev.bilby.data.CommentSort
@@ -137,14 +141,18 @@ data class RelatedState(
  * currentBvid 驱动列表里的高亮,shuffled 驱动顺序/随机按钮的文案。
  */
 data class QueueUiState(
-    val items: List<QueueItem> = emptyList(),
-    val currentBvid: String? = null,
+    /**
+     * 这份队列摊出来的切集清单,**三种形态(详情页、听视频、全屏)共用同一份**,构造点只有
+     * `VideoScreen` 一处(见 [dev.bilby.ui.player.buildEpisodeRows])。差别只在怎么画:
+     * 这一页把当前那条的分 P 摊成一排 chip,另外两种摊成二级列表。
+     */
+    val rows: List<EpisodeRow> = emptyList(),
     val sourceLabel: String = "",
     /** 来源的身份。非空时标题行可以点进那个合集的目录;为空的来源没有目录页可去。 */
     val source: QueueSource? = null,
     val shuffled: Boolean = false,
     /**
-     * 完整队列还没建好。**此刻 [items] 里那一条不是队列,是占位** —— 起播时先装的临时队列
+     * 完整队列还没建好。**此刻 [rows] 里那一条不是队列,是占位** —— 起播时先装的临时队列
      * (见 AudioPlaybackService.openVideo),把它当队列摆出来会读成"这个 UP 只有一条投稿"。
      *
      * 这里不再看播放状态里的 `loading`:那一个说的是取流,而取流和建队列现在是并行的两件事。
@@ -175,7 +183,7 @@ fun VideoTabs(
      */
     pagerState: PagerState,
     detail: VideoDetail,
-    currentCid: Long,
+    onSelectEpisode: (EpisodeTarget) -> Unit,
     /** 这条视频的标签,展开简介才显示。空列表不画,见 VideoViewModel.videoTags。 */
     videoTags: List<VideoTag>,
     /** 第一次展开简介时拉标签,幂等,见 VideoViewModel.loadVideoTags。 */
@@ -198,7 +206,6 @@ fun VideoTabs(
     onToggleFollow: () -> Unit,
     upCard: MemberCard?,
     queue: QueueUiState,
-    onPlayQueueItem: (bvid: String) -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
     onToggleShuffle: () -> Unit,
     onRetryQueue: () -> Unit,
@@ -217,9 +224,10 @@ fun VideoTabs(
     onCoinDialogClosed: () -> Unit,
     onOpenFavPicker: () -> Unit,
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
-    onPlayPart: (cid: Long) -> Unit,
     onPlayEpisode: (bvid: String) -> Unit,
     onRelatedVideoClick: (bvid: String) -> Unit,
+    /** 评论正文里引的那条链接。站内解析归导航层,见 MainActivity 的 openLink。 */
+    onOpenLink: (String) -> Unit,
     onCommentSort: (CommentSort) -> Unit,
     onCommentRefresh: () -> Unit,
     /** 播放器是不是完全展开着。评论区的下拉刷新只在这时接管手势。 */
@@ -319,7 +327,7 @@ fun VideoTabs(
             when (page) {
                 VideoTabIntro -> IntroTab(
                     detail = detail,
-                    currentCid = currentCid,
+                    onSelectEpisode = onSelectEpisode,
                     videoTags = videoTags,
                     onLoadTags = onLoadTags,
                     onTagClick = onTagClick,
@@ -334,7 +342,6 @@ fun VideoTabs(
                     onToggleFollow = onToggleFollow,
                     upCard = upCard,
                     queue = queue,
-                    onPlayQueueItem = onPlayQueueItem,
                     onOpenQueueSource = onOpenQueueSource,
                     onToggleShuffle = onToggleShuffle,
                     onRetryQueue = onRetryQueue,
@@ -349,12 +356,12 @@ fun VideoTabs(
                     onCoinDialogClosed = onCoinDialogClosed,
                     onOpenFavPicker = onOpenFavPicker,
                     onFavConfirm = onFavConfirm,
-                    onPlayPart = onPlayPart,
                     onPlayEpisode = onPlayEpisode,
                     onRelatedVideoClick = onRelatedVideoClick,
                 )
 
                 else -> CommentSection(
+                    onOpenLink = onOpenLink,
                     state = commentState,
                     onSort = onCommentSort,
                     onRefresh = onCommentRefresh,
@@ -408,7 +415,7 @@ private fun DanmakuVisibilityButton(enabled: Boolean, onEnabledChange: (Boolean)
 @Composable
 private fun IntroTab(
     detail: VideoDetail,
-    currentCid: Long,
+    onSelectEpisode: (EpisodeTarget) -> Unit,
     videoTags: List<VideoTag>,
     onLoadTags: () -> Unit,
     onTagClick: (String) -> Unit,
@@ -420,7 +427,6 @@ private fun IntroTab(
     onToggleFollow: () -> Unit,
     upCard: MemberCard?,
     queue: QueueUiState,
-    onPlayQueueItem: (bvid: String) -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
     onToggleShuffle: () -> Unit,
     onRetryQueue: () -> Unit,
@@ -438,7 +444,6 @@ private fun IntroTab(
     onCoinDialogClosed: () -> Unit,
     onOpenFavPicker: () -> Unit,
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
-    onPlayPart: (Long) -> Unit,
     onPlayEpisode: (String) -> Unit,
     onRelatedVideoClick: (String) -> Unit,
 ) {
@@ -464,8 +469,6 @@ private fun IntroTab(
     ) {
         TitleBlock(
             detail = detail,
-            tags = videoTags,
-            onTagClick = onTagClick,
             expanded = infoExpanded,
             onToggle = {
                 infoExpanded = !infoExpanded
@@ -506,30 +509,96 @@ private fun IntroTab(
             onListen = onListen,
         )
 
-        if (detail.pages.size > 1) {
-            PartRow(
-                labels = detail.pages.map { it.index to it.title },
-                isCurrent = { index -> detail.pages.getOrNull(index)?.cid == currentCid },
-                onClick = { index -> detail.pages[index].cid.let(onPlayPart) },
-            )
+        // 分 P 来自切集清单里当前那一条,不再另从详情取一遍。清单已经把"这一刻能不能切 P"
+        // 判过了(见 buildEpisodeRows):对不上身份时它是空的,这一排因此整个不出现。
+        val currentParts = queue.rows.firstOrNull { it.isCurrent }?.parts.orEmpty()
+        if (currentParts.isNotEmpty()) {
+            PartRow(parts = currentParts, onSelect = onSelectEpisode)
         }
 
         // 合集的分集 chip 行不再单独显示:内容已经在下面的播放队列列表里,
         // 重复一遍没有信息量(合集场景下队列来源就是这个合集,
         // 见 QueueSourceRepository.fromSeason)。
 
-        // 找相关的结果不在这里,在页面底部的 sheet 里(见 VideoScreen):
-        // 它是对当前视频问的一句话,不该把简介页顶下去。
-        QueueSection(
-            queue = queue,
-            onPlayQueueItem = onPlayQueueItem,
-            onOpenQueueSource = onOpenQueueSource,
-            onToggleShuffle = onToggleShuffle,
-            onFindRelated = onFindRelated,
-            onCache = onCache,
-            onRetryQueue = onRetryQueue,
-            modifier = Modifier.padding(top = Spacing.Hair).weight(1f),
+        /*
+         * **剩下这块空间归谁,由展开与否决定:收起是播放队列,展开是简介正文。**
+         *
+         * 这一栏的性质是"各组件按需吃满整屏,整栏不产生滚动条",队列在自己那块里滚。展开态
+         * 原先破坏的正是这条:标题不限行、简介整段、标签铺开,这一块自己就可能超过一屏,而
+         * 它上面没有任何可滚的容器。溢出之后 Column 给后面的兄弟节点的 maxHeight 是 0,
+         * `UpRow` 里那枚等级徽章的 `height(11.dp)` 被夹成 0,`aspectRatio` 在高度约束不可满足时
+         * 退到按宽度算,于是横向铺满整行——"徽章忽然变得很大"和"简介滑不动"是同一次溢出。
+         *
+         * 修的是前提:展开不再把这一栏撑长,而是**换掉底下那块内容的占用者**。两者都拿
+         * `weight(1f)`、都在自己内部滚,这一栏因此在任何时刻都正好一屏。
+         *
+         * 队列让位是对的:人此刻在读简介,不在挑下一条。上面的标题、UP 行、动作栏都留着,
+         * 它们高度有界,而且是这一页的身份和动作——把它们一起换掉会让人以为进了另一个页面。
+         *
+         * 找相关的结果不在这里,在页面底部的 sheet 里(见 VideoScreen):它是对当前视频问的
+         * 一句话,不该把简介页顶下去。
+         */
+        if (infoExpanded) {
+            IntroDetail(
+                detail = detail,
+                tags = videoTags,
+                onTagClick = onTagClick,
+                modifier = Modifier.padding(top = Spacing.Hair).weight(1f),
+            )
+        } else {
+            QueueSection(
+                queue = queue,
+                onSelectEpisode = onSelectEpisode,
+                onOpenQueueSource = onOpenQueueSource,
+                onToggleShuffle = onToggleShuffle,
+                onFindRelated = onFindRelated,
+                onCache = onCache,
+                onRetryQueue = onRetryQueue,
+                modifier = Modifier.padding(top = Spacing.Hair).weight(1f),
+            )
+        }
+    }
+}
+
+/**
+ * 展开后的简介正文:bvid、简介、标签。**在自己这块里滚**,不把整栏撑长(理由见 [IntroTab]
+ * 里那段说明)。
+ *
+ * 标题和计数行不在这里,它们收起时也在,归 [TitleBlock] —— 展开只让这块内容出现,不重排
+ * 上面已经站住的东西。
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun IntroDetail(
+    detail: VideoDetail,
+    tags: List<VideoTag>,
+    onTagClick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    ) {
+        Text(
+            text = detail.bvid,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (detail.description.isNotBlank()) {
+            Text(
+                text = detail.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (tags.isNotEmpty()) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                tags.forEach { tag -> TagToken(tag, onClick = { onTagClick(tag.name) }) }
+            }
+        }
     }
 }
 
@@ -672,40 +741,30 @@ private fun UpRow(
 }
 
 /**
- * 标题 + 计数行 + (展开后)bvid 与简介。
+ * 标题 + 计数行 + 展开指示。**两态都只有这些**,展开后多出来的 bvid、简介、标签归
+ * [IntroDetail],它接管的是这一栏底下那块空间。
  *
- * 这三段合成一个可展开的块,是照 PiliPlus 的 `introduction/ugc/view.dart`(它的
- * `ExpandablePanel` 收起时只给标题两行,展开后才露出 bvid、简介和标签)。
- * 以前标题不限行数、简介另有一个展开开关,长标题会把 UP 主那一行和动作栏一起顶下去,
- * 而简介的展开箭头又落在半屏之外 —— 两个开关管的其实是同一件事:这条视频要看多细。
+ * 标题与计数行合成一个可展开的块,是照 PiliPlus 的 `introduction/ugc/view.dart`(它的
+ * `ExpandablePanel` 收起时只给标题两行,展开后才露出 bvid、简介和标签)。以前标题不限行数、
+ * 简介另有一个展开开关,长标题会把 UP 主那一行和动作栏一起顶下去,而简介的展开箭头又落在
+ * 半屏之外 —— 两个开关管的其实是同一件事:这条视频要看多细。
  *
  * 展开指示不放标题末尾:标题会截断,截断处的箭头看起来像正文的一部分。
  *
- * **它跟着内容的末端走,不固定在计数行。** 收起时内容到计数行为止,箭头在那一行右端;展开之后
- * 内容一直延伸到简介末尾,箭头留在原地就意味着"收起"这个动作离它作用的那段文字隔着大半屏,
- * 而它指向的是上方——看起来像在说"上面还有东西"。横向位置两态一致(都靠右),于是这一下移动
- * 读得出来是同一个东西换了位置,不是又多出一个控件。
+ * **两态都留在计数行右端,不再跟着内容末端走。** 它以前展开后会移到简介末尾,理由是"收起"
+ * 这个动作不该离它作用的那段文字隔着大半屏;而正文现在住在一块自己滚动的区域里,箭头跟过去
+ * 就等于藏在滚动条底下——不滚到底根本看不见它,而收起是此刻唯一的出路。区域有界之后原来那条
+ * 理由不再成立,固定位置反倒让两态之间只有箭头方向在变。
+ *
+ * 展开态的标题限行:标题最长八十字,`titleMedium` 下约四行,不封顶的话它自己也能吃掉半屏,
+ * 而这里的整块高度是有界的。
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TitleBlock(
     detail: VideoDetail,
-    tags: List<VideoTag>,
-    onTagClick: (String) -> Unit,
     expanded: Boolean,
     onToggle: () -> Unit,
 ) {
-    val indicator = @Composable {
-        Icon(
-            imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-            contentDescription = stringResource(
-                if (expanded) R.string.video_intro_collapse else R.string.video_intro_expand,
-            ),
-            tint = MaterialTheme.colorScheme.outline,
-            modifier = Modifier.size(Dimens.IconInline),
-        )
-    }
-
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -715,7 +774,7 @@ private fun TitleBlock(
         Text(
             text = detail.title,
             style = MaterialTheme.typography.titleMedium,
-            maxLines = if (expanded) Int.MAX_VALUE else 2,
+            maxLines = if (expanded) TitleExpandedMaxLines else 2,
             overflow = TextOverflow.Ellipsis,
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -725,38 +784,20 @@ private fun TitleBlock(
                 danmakuText = formatCount(detail.stat.danmaku),
                 dateText = formatDate(detail.publishedAtEpochSeconds),
             )
-            if (!expanded) indicator()
-        }
-        if (expanded) {
-            Text(
-                text = detail.bvid,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Icon(
+                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = stringResource(
+                    if (expanded) R.string.video_intro_collapse else R.string.video_intro_expand,
+                ),
+                tint = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(Dimens.IconInline),
             )
-            if (detail.description.isNotBlank()) {
-                Text(
-                    text = detail.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (tags.isNotEmpty()) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                ) {
-                    tags.forEach { tag -> TagToken(tag, onClick = { onTagClick(tag.name) }) }
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                indicator()
-            }
         }
     }
 }
+
+/** 展开态标题的行数上限。见 [TitleBlock]:这一块的高度有界,标题不能自己吃掉半屏。 */
+private const val TitleExpandedMaxLines = 4
 
 /**
  * 一枚标签,点开是这个词的普通搜索结果页。带底色的一小块,判据同动态卡片的「置顶」
@@ -1148,28 +1189,27 @@ private fun FavPickerDialog(
  */
 @Composable
 private fun PartRow(
-    labels: List<Pair<Int, String>>,
-    isCurrent: (Int) -> Boolean,
-    onClick: (Int) -> Unit,
+    parts: List<EpisodePart>,
+    onSelect: (EpisodeTarget) -> Unit,
 ) {
-    var sheetOpen by rememberSaveable(labels.size) { mutableStateOf(false) }
+    var sheetOpen by rememberSaveable(parts.size) { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
         SectionHeader(stringResource(R.string.video_parts)) {
-            if (labels.size > PartRowExpandThreshold) {
+            if (parts.size > PartRowExpandThreshold) {
                 TextButton(onClick = { sheetOpen = true }) {
-                    Text(stringResource(R.string.video_parts_expand, labels.size))
+                    Text(stringResource(R.string.video_parts_expand, parts.size))
                 }
             }
         }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
-            itemsIndexed(labels) { index, pair ->
+            items(parts, key = { it.cid }) { part ->
                 FilterChip(
-                    selected = isCurrent(index),
-                    onClick = { onClick(index) },
+                    selected = part.isCurrent,
+                    onClick = { onSelect(EpisodeTarget.Part(part.cid)) },
                     label = {
                         Text(
-                            stringResource(R.string.video_part_label, pair.first, pair.second),
+                            stringResource(R.string.video_part_label, part.ordinal, part.title),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             // 分 P 名常常把视频标题又抄一遍("1-四时小路只是在聊天+"),不封顶
@@ -1190,10 +1230,9 @@ private fun PartRow(
 
     if (sheetOpen) {
         PartSheet(
-            labels = labels,
-            isCurrent = isCurrent,
-            onPick = { index ->
-                onClick(index)
+            parts = parts,
+            onPick = {
+                onSelect(EpisodeTarget.Part(it.cid))
                 sheetOpen = false
             },
             onDismiss = { sheetOpen = false },
@@ -1212,26 +1251,25 @@ private fun PartRow(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PartSheet(
-    labels: List<Pair<Int, String>>,
-    isCurrent: (Int) -> Boolean,
-    onPick: (Int) -> Unit,
+    parts: List<EpisodePart>,
+    onPick: (EpisodePart) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val listState = rememberLazyListState()
     // 开的时候把当前这一 P 滚到可见:一百条里默认停在第一条,等于每次都要自己找。
     LaunchedEffect(Unit) {
-        val current = labels.indices.firstOrNull { isCurrent(it) } ?: return@LaunchedEffect
-        listState.scrollToItem(current)
+        val current = parts.indexOfFirst { it.isCurrent }
+        if (current >= 0) listState.scrollToItem(current)
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         LazyColumn(state = listState) {
-            itemsIndexed(labels) { index, pair ->
-                val selected = isCurrent(index)
+            items(parts, key = { it.cid }) { part ->
+                val selected = part.isCurrent
                 ListItem(
                     headlineContent = {
                         Text(
-                            stringResource(R.string.video_part_label, pair.first, pair.second),
+                            stringResource(R.string.video_part_label, part.ordinal, part.title),
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -1249,7 +1287,7 @@ private fun PartSheet(
                         .selectable(
                             selected = selected,
                             role = Role.Button,
-                            onClick = { onPick(index) },
+                            onClick = { onPick(part) },
                         ),
                 )
             }
@@ -1270,7 +1308,7 @@ private val PartChipMaxWidth = 160.dp
  * (见 QueueSourceRepository),不是"从推荐池续接",不违反 1.3 的推荐禁令。
  *
  * 这个列表同时就是「听视频」要播的队列本身,点条目直接切歌,不需要另外构造队列。
- * queue.items 为空且不在加载中时不显示这一块。
+ * queue.rows 为空且不在加载中时不显示这一块。
  *
  * **整块装在一层 [Surface] 容器里**,照 PiliPlus 的 `introduction/ugc/widgets/season.dart`
  * (它把合集面板包进 `Material(color: onInverseSurface, borderRadius: 6)`)。
@@ -1286,7 +1324,7 @@ private val PartChipMaxWidth = 160.dp
 @Composable
 private fun QueueSection(
     queue: QueueUiState,
-    onPlayQueueItem: (String) -> Unit,
+    onSelectEpisode: (EpisodeTarget) -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
     onToggleShuffle: () -> Unit,
     onFindRelated: () -> Unit,
@@ -1294,7 +1332,7 @@ private fun QueueSection(
     onRetryQueue: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    if (!queue.enriching && !queue.incomplete && queue.items.isEmpty()) return
+    if (!queue.enriching && !queue.incomplete && queue.rows.isEmpty()) return
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -1303,7 +1341,7 @@ private fun QueueSection(
     ) {
         QueueContent(
             queue = queue,
-            onPlayQueueItem = onPlayQueueItem,
+            onSelectEpisode = onSelectEpisode,
             onOpenQueueSource = onOpenQueueSource,
             onToggleShuffle = onToggleShuffle,
             onFindRelated = onFindRelated,
@@ -1316,7 +1354,7 @@ private fun QueueSection(
 @Composable
 private fun QueueContent(
     queue: QueueUiState,
-    onPlayQueueItem: (String) -> Unit,
+    onSelectEpisode: (EpisodeTarget) -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
     onToggleShuffle: () -> Unit,
     onFindRelated: () -> Unit,
@@ -1418,21 +1456,21 @@ private fun QueueContent(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                items(queue.items, key = { it.bvid }) { item ->
+                items(queue.rows, key = { it.bvid }) { row ->
                     CompactVideoRow(
-                        title = item.title,
-                        coverUrl = item.coverUrl,
-                        subtitle = if (item.durationSeconds > 0) formatDurationSeconds(item.durationSeconds) else null,
-                        selected = item.bvid == queue.currentBvid,
-                        onClick = { onPlayQueueItem(item.bvid) },
+                        title = row.title,
+                        coverUrl = row.coverUrl,
+                        subtitle = if (row.durationSeconds > 0) formatDurationSeconds(row.durationSeconds) else null,
+                        selected = row.isCurrent,
+                        onClick = { onSelectEpisode(EpisodeTarget.Video(row.bvid)) },
                     )
                 }
             }
 
             // 当前项居中:队列是"前后各 25 条",只滚到可见位置的话它会贴在顶或底,
             // 看不出前后还有多少。
-            LaunchedEffect(queue.currentBvid, queue.items) {
-                val index = queue.items.indexOfFirst { it.bvid == queue.currentBvid }
+            LaunchedEffect(queue.rows) {
+                val index = queue.rows.currentIndex()
                 if (index >= 0) {
                     listState.scrollToItem(index)
                     val info = listState.layoutInfo

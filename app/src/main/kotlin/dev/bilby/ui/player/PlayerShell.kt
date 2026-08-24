@@ -20,6 +20,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -211,6 +213,8 @@ fun PlayerShell(
     gestures: PlayerGestureOptions = PlayerGestureOptions(),
     /** 长按画面时的临时倍速,由设置页给(`SettingsStore.FAST_FORWARD_SPEEDS`)。 */
     fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
+    /** 全屏顶栏右端的东西。只在全屏、控件可见且未锁定时组合(顶栏本身就这样)。 */
+    topBarActions: @Composable RowScope.() -> Unit = {},
     overlay: @Composable PlayerShellScope.() -> Unit = {},
     controlBar: @Composable PlayerShellScope.() -> Unit = {},
 ) {
@@ -653,7 +657,15 @@ fun PlayerShell(
                     color = FixedColors.OnMedia,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    // **只有这一个带权重的孩子。** 之前是标题 `weight(1f, fill = false)` 再跟
+                    // 一个 `Spacer(weight(1f))`,两个权重把剩余宽度对半分,右端那颗按钮因此停在
+                    // 中间偏右。标题吃掉全部剩余宽度,动作自然被顶到边上。
+                    modifier = Modifier.weight(1f),
                 )
+                // 顶栏右端的槽。**切集放这里,不放控制条** —— 控制条上的东西回答的都是"这个
+                // 播放器现在怎么放"(倍速、清晰度、字幕、弹幕、全屏),而切集回答的是"在放
+                // 哪一条",和它左边那个标题是同一类。风格指南 §4.3 那条判据问的正是这个。
+                topBarActions()
             }
         }
 

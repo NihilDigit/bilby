@@ -42,9 +42,25 @@ class CollapsingHeaderState(private val canCollapse: () -> Boolean = { true }) {
     var heightPx by mutableFloatStateOf(0f)
         internal set
 
-    /** 已经收起了多少(px,负值向上)。范围是 `[-heightPx, 0]`。 */
+    /** 已经收起了多少(px,负值向上)。范围是 `[-collapsibleHeightPx, 0]`。 */
     var offsetPx by mutableFloatStateOf(0f)
         internal set
+
+    /**
+     * 收到底时**仍要留下**的高度(px),默认 0(收干净)。
+     *
+     * 播放页留的是一条快捷播放条的高度:画面收走之后那块位置不空着,由一条能把画面拿回来、
+     * 也能接着播的条占住(见 `ui/video/QuickPlayBar.kt`)。留高度而不是把条浮在下面的内容上——
+     * 浮着就会盖住评论的第一行,而那一行没有任何理由被挡。
+     */
+    var minVisiblePx by mutableFloatStateOf(0f)
+
+    /** 可以收掉的那一段。留白之外的部分才收得动。 */
+    private val collapsibleHeightPx: Float get() = (heightPx - minVisiblePx).coerceAtLeast(0f)
+
+    /** 收起进度,0 是完全展开,1 是收到底。快捷播放条按它淡入。 */
+    val collapsedFraction: Float
+        get() = if (collapsibleHeightPx <= 0f) 0f else (-offsetPx / collapsibleHeightPx).coerceIn(0f, 1f)
 
     /**
      * **上滑时先收页头,下滑时先滚列表。**
@@ -58,7 +74,7 @@ class CollapsingHeaderState(private val canCollapse: () -> Boolean = { true }) {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
             val delta = available.y
             if (!canCollapse() || delta >= 0f) return Offset.Zero
-            val next = (offsetPx + delta).coerceIn(-heightPx, 0f)
+            val next = (offsetPx + delta).coerceIn(-collapsibleHeightPx, 0f)
             val consumed = next - offsetPx
             offsetPx = next
             return Offset(0f, consumed)
@@ -71,7 +87,7 @@ class CollapsingHeaderState(private val canCollapse: () -> Boolean = { true }) {
         ): Offset {
             val delta = available.y
             if (delta <= 0f) return Offset.Zero
-            val next = (offsetPx + delta).coerceIn(-heightPx, 0f)
+            val next = (offsetPx + delta).coerceIn(-collapsibleHeightPx, 0f)
             val taken = next - offsetPx
             offsetPx = next
             return Offset(0f, taken)
@@ -114,7 +130,7 @@ fun Modifier.collapsingHeader(state: CollapsingHeaderState): Modifier = layout {
     if (state.heightPx != placeable.height.toFloat()) {
         state.heightPx = placeable.height.toFloat()
         // 页头变高(签名多了一行)时,已经收起的量可能超出新的上限。
-        state.offsetPx = state.offsetPx.coerceIn(-state.heightPx, 0f)
+        state.offsetPx = state.offsetPx.coerceIn(-(placeable.height - state.minVisiblePx).coerceAtLeast(0f), 0f)
     }
     val visibleHeight = (placeable.height + state.offsetPx).roundToInt().coerceAtLeast(0)
     layout(placeable.width, visibleHeight) {
