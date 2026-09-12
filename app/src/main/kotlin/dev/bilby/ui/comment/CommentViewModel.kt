@@ -3,7 +3,7 @@ package dev.bilby.ui.comment
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.api.BiliResult
-import dev.bilby.ui.appendDistinctBy
+import dev.bilby.appendDistinctBy
 import dev.bilby.data.CommentCursor
 import dev.bilby.data.CommentItem
 import dev.bilby.data.CommentRepository

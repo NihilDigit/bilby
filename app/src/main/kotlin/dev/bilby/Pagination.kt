@@ -1,4 +1,4 @@
-package dev.bilby.ui
+package dev.bilby
 
 /**
  * 分页追加,按 [key] 去掉与已有条目重复的那些。

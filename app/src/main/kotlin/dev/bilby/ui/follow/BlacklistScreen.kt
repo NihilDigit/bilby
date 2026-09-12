@@ -17,7 +17,7 @@ import dev.bilby.api.BiliResult
 import dev.bilby.data.BlockedUser
 import dev.bilby.data.RelationRepository
 import dev.bilby.ui.AdaptiveContent
-import dev.bilby.ui.appendDistinctBy
+import dev.bilby.appendDistinctBy
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.formatRelativeTime

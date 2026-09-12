@@ -547,6 +547,19 @@ class AudioPlaybackService : MediaSessionService() {
             return
         }
 
+        // **指名在这里取走,三条路各自兑现。**
+        //
+        // 从前它只有一个读点,在 [resolveStream] 里 —— 也就是只有冷装载才会去看。而打开一条
+        // 视频有三条路:这条已经在放(下面的幂等分支)、在队列里但不是当前条、根本不在队列。
+        // 前两条都不产生冷装载,于是缓存列表里点当前这条视频的另一个分 P,指名原地蒸发,
+        // 画面停在原来那一集 —— 这就是"有时候切不动集",是不是"有时候"取决于那条视频在不在
+        // 队列里、以及它的源有没有被提前解析过。
+        //
+        // 更难看的是它**没被取走就一直挂着**:`request` 只在下一次 `request` 时被覆盖,于是
+        // 那条作废的指名会等到这条视频某次真的冷装载,再把播放位置推到用户几分钟前点的那一 P。
+        // [PartRequest] 的 KDoc 说自己要防的正是这件事,它防住了转屏重建,没防住"永远没人取"。
+        val requestedCid = partRequest.consume(bvid)
+
         if (currentItem()?.bvid == bvid) {
             // **这一趟多半是来送元数据的。** 页面拿到 bvid 就发了第一遍命令(那时它还不知道
             // 这条视频叫什么),详情回来再发第二遍 —— 落到的就是这里。不采纳的话通知栏和队列
@@ -586,6 +599,9 @@ class AudioPlaybackService : MediaSessionService() {
             // **没有选它**:那会在用户毫不知情的时候把一个暂停中的会话拽到别的位置甚至别的
             // 分 P 上,而这一页此刻可能正停在他自己选的地方。所以补的是一次查询加一条提示,
             // 跳不跳由用户点(仓库主人定的,直接落位这个方案是被否决的那个)。
+            // 指名兑现成一次真正的切 P —— 和页内点另一集走的是同一条路。已经在放的就是那一 P
+            // 时什么都不做:重来一遍只会把画面打回这一 P 的开头。
+            if (requestedCid != 0L && requestedCid != loadedCid) playPart(requestedCid)
             reconcileIfLocalCopy(bvid)
             reconcileCloudProgress(bvid)
             return
@@ -593,6 +609,10 @@ class AudioPlaybackService : MediaSessionService() {
         val existing = indexOfMediaId(bvid)
         if (existing >= 0) {
             seekToQueueIndex(existing)
+            // seek 之后当前条已经是它了,于是指名和上面走同一条兑现路径。这里不能指望冷装载
+            // 顺手带上:队列里排在后面的条目常常早几十秒就被 ExoPlayer 解析过了,那种情况下
+            // 这一跳根本不会再解析一次。
+            if (requestedCid != 0L) playPart(requestedCid)
             return
         }
 
@@ -614,7 +634,7 @@ class AudioPlaybackService : MediaSessionService() {
                     upName = args.getString(EXTRA_UP_NAME).orEmpty(),
                     coverUrl = args.getString(EXTRA_COVER_URL).orEmpty(),
                     durationSeconds = 0,
-                ).toMediaItem(loadNonce = nextLoadNonce())
+                ).toMediaItem(requestedCid = requestedCid, loadNonce = nextLoadNonce())
             ),
             startIndex = 0,
         )
@@ -855,9 +875,12 @@ class AudioPlaybackService : MediaSessionService() {
         if (mediaItem.isLive) return resolveLiveStream(mediaItem)
         val bvid = mediaItem.mediaId
         val positionOverrideMillis = mediaItem.startPositionHint
-        // 指名的那一 P:页内切 P、切清晰度与重试带着上一次解析出来的那个,缓存列表点某行
-        // 留在 [PartRequest] 里。两者都是一次性的意图,取走即弃。
-        val requestedCid = mediaItem.cidHint.takeIf { it != 0L } ?: partRequest.consume(bvid)
+        // 指名的那一 P,全部来自条目自己。页内切 P、切清晰度、重试带着上一次解析出来的那个;
+        // 缓存列表点某行写进 [PartRequest] 的那份,由 [openVideo] 在入口取走并放进 cidHint。
+        //
+        // **这里曾经是 PartRequest 的读点**,而它只在冷装载时跑到,于是另外两条打开路径上的
+        // 指名无人认领(见 [openVideo])。读点收到入口之后这里只认条目。
+        val requestedCid = mediaItem.cidHint
 
         when (val plan = loadResolver.resolve(bvid, requestedCid)) {
             is LoadPlan.LocalCopy -> {
@@ -1051,8 +1074,24 @@ class AudioPlaybackService : MediaSessionService() {
         val quality: Int,
     )
 
-    /** 解析成功。轮到它了就当场落地,没轮到就先存着。 */
+    /**
+     * 解析成功。轮到它了就当场落地,没轮到就先存着。
+     *
+     * **迟到的旧解析不许覆盖已经存下的新解析。** 这张表只按 mediaId 索引,而同一条视频可以
+     * 有好几轮解析在飞(快速连点两集:第二次装载的 nonce 更大,但第一次那轮已经拿到 playurl、
+     * 只差落结果,取消赶不上它)。没有这道判断的话,后到的旧结果会把新记录盖成一份 nonce 过期
+     * 的东西:[adoptResolved] 的 nonce 守卫挡着它不采纳,所以**不会切错 P**,但表里从此留着
+     * 一条永远采纳不了的脏记录,而它正是"退回这条视频时唯一能采纳的东西"。届时
+     * `onPositionDiscontinuity` 已经把 [playInfo] 清空,页面落到纯黑加转圈,且那个状态没有出口。
+     *
+     * nonce 是单调递增的,所以比大小就够判新旧,不需要另记时间戳。
+     */
     private fun onResolved(loaded: LoadedItem) {
+        val known = resolvedItems[loaded.mediaId]
+        if (known != null && loaded.loadNonce < known.loadNonce) {
+            BiliLog.d("迟到的旧解析,不覆盖 id=${loaded.mediaId} nonce=${loaded.loadNonce}<${known.loadNonce}")
+            return
+        }
         resolvedItems[loaded.mediaId] = loaded
         adoptResolved(loaded.mediaId)
     }
@@ -1455,10 +1494,19 @@ class AudioPlaybackService : MediaSessionService() {
     private fun startTicking() {
         if (!player.isPlaying || tickJob?.isActive == true) return
         tickJob = scope.launch {
+            // 这个协程的寿命就是一段连续播放:isPlaying 转 false 时被取消(见
+            // onIsPlayingChanged),再放是新的一轮。所以局部变量就够表达"连续放了多久",
+            // 不需要一个要记得清的字段。
+            val playingSince = SystemClock.elapsedRealtime()
             while (true) {
                 delay(POSITION_TICK_INTERVAL_MILLIS)
                 emitPositionTick()
                 progressSession?.onPosition(player.currentPosition, playerDurationMillis())
+                if (failedAttempts > 0 &&
+                    SystemClock.elapsedRealtime() - playingSince >= RETRY_RESET_AFTER_PLAYING_MILLIS
+                ) {
+                    failedAttempts = 0
+                }
             }
         }
     }
@@ -1540,11 +1588,14 @@ class AudioPlaybackService : MediaSessionService() {
     private inner class PlayerListener : Player.Listener {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            // 真的播出声了才算这条链路是好的。清零放在 load() 里是不够的:装载成功、解码失败
-            // 的组合会让每一条都先清零再失败,退避的档位永远停在第一级。
+            // **到了 READY 只清错误提示,不清重试计数。** 清零放在 load() 里曾经不够:装载成功、
+            // 解码失败的组合会让每一条都先清零再失败,退避的档位永远停在第一级。挪到这里之后
+            // 同一个洞换了个位置——READY 只说明缓冲够了,音频轨要到 render() 真去喂帧时才可能
+            // 炸,于是 READY→崩→重试→READY 一样把计数按回 0,每秒重来一遍,MAX_ATTEMPTS 永远
+            // 够不着。真机上的 Hi-Res 无损轨就是这么无限循环的。
+            // 计数改由 [startTicking] 在连续播够一段之后清,那才是"这条链路确实是好的"。
             if (playbackState == Player.STATE_READY) {
                 openChain?.mark("ready")
-                failedAttempts = 0
                 lastError = null
             }
             emitPositionTick()
@@ -1891,6 +1942,14 @@ class AudioPlaybackService : MediaSessionService() {
 
         /** 见 [startTicking]。 */
         private const val POSITION_TICK_INTERVAL_MILLIS = 500L
+
+        /**
+         * 连续播够这么久才认为这条内容是好的,把重试计数清零(见 [startTicking])。
+         *
+         * 取 5 秒是对着 `PlaybackFailure` 那边的宽限期定的:界面也要等错误稳定 5 秒才显示。
+         * 两处用同一个时长,于是"界面开始报错"和"重试额度不再续"说的是同一件事。
+         */
+        private const val RETRY_RESET_AFTER_PLAYING_MILLIS = 5_000L
 
         @Volatile
         private var runningService: AudioPlaybackService? = null

@@ -34,6 +34,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.ModalBottomSheet
 import dev.bilby.ui.components.LoadingSpinner
+import dev.bilby.ui.components.rememberLoadingVisible
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -317,8 +318,10 @@ fun CommentSection(
 
             item(key = "footer") {
                 if (state.loading) {
+                    // 位置照占,指示器等够 200ms 才出现(见 [rememberLoadingVisible])——评论
+                    // 常常一开口就到,画了也只够抽一下。位置留着是为了那一下不把列表顶一跳。
                     Box(Modifier.fillMaxWidth().padding(Spacing.Comfortable), Alignment.Center) {
-                        LoadingSpinner()
+                        if (rememberLoadingVisible()) LoadingSpinner()
                     }
                 } else {
                     ListFooter(

@@ -69,7 +69,7 @@ import dev.bilby.BiliLog
 import dev.bilby.R
 import dev.bilby.ui.dynamic.DynamicAction
 import dev.bilby.ui.dynamic.DynamicCardView
-import dev.bilby.ui.appendDistinctBy
+import dev.bilby.appendDistinctBy
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.ShareLink
 import dev.bilby.ui.BilbyWindowSize

@@ -23,6 +23,12 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -55,15 +61,46 @@ import dev.bilby.ui.theme.Spacing
  */
 
 /**
+ * 指示器该不该画出来。**等到这一刻还没结束的等待才配有指示器。**
+ *
+ * 上面那段说明里 M3 给 loading indicator 定的范围是 200ms–5s 的不可知等待,下界不是随口定的:
+ * 这个指示器一上来跑的是一条 `dampingRatio = 0.6f` 的欠阻尼弹簧形变(材料 1.5.0-alpha25 的
+ * `LoadingIndicator.kt:401`),整圈旋转要 4666ms。它生命最初那几十毫秒正是整个循环里变化
+ * 最快、幅度最大的一段 —— 只活两三帧的话,画出来的只有弹簧的前沿,看着是猛地抽一下,
+ * 读不出"在转"。
+ *
+ * 而"只活两三帧"是常态而非例外:UI state 一律以 `loading = true` 开局,数据却可能已经在
+ * 进程内的 store 里(动态流是 app 级单例),或者来自一次本地 Room 查询。清掉这个标志的续体
+ * 排在当前帧之后,于是首帧必然画一次指示器,下一帧就换成完整列表。
+ *
+ * 所以补的是"晚一点再出现",不是"出现了就多留一会":后者会把真正快的加载也拖慢。
+ */
+@Composable
+fun rememberLoadingVisible(): Boolean {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(LoadingAppearDelayMillis)
+        visible = true
+    }
+    return visible
+}
+
+/** 见 [rememberLoadingVisible]。取 M3 给 loading indicator 定的那个下界。 */
+private const val LoadingAppearDelayMillis = 200L
+
+/**
  * 首屏加载。整屏居中一个指示器,不放骨架屏 —— 骨架屏是在假装内容马上就到。
  *
  * 不带尺寸:48dp 的默认值就是为整屏居中定的。
+ *
+ * 占位的 [Box] 无条件铺满:指示器还没到出现的时候,这一屏也该是它自己的空白,而不是让下面
+ * 的东西先顶上来再被推开。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun FullScreenLoading(modifier: Modifier = Modifier) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        LoadingIndicator()
+        if (rememberLoadingVisible()) LoadingIndicator()
     }
 }
 

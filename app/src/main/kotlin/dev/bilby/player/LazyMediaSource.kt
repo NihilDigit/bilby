@@ -10,6 +10,7 @@ import androidx.media3.exoplayer.source.ForwardingTimeline
 import androidx.media3.exoplayer.source.MediaPeriod
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.upstream.Allocator
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -69,6 +70,10 @@ class LazyMediaSource(
         val current = ++generation
         resolveJob = scope.launch {
             val result = runCatching { resolve(mediaItem) }
+            // 取消的那一轮什么都不回:`runCatching` 连 `CancellationException` 一起收,照直
+            // 往下走的话,一次"这条不要了"会被当成一次解析失败送回播放线程。它随后会被
+            // [generation] 丢掉,但那是接住,不是不该发生。
+            if (result.exceptionOrNull() is CancellationException) return@launch
             handler.post { onResolved(current, result) }
         }
     }

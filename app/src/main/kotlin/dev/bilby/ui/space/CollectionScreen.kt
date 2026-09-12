@@ -13,7 +13,7 @@ import dev.bilby.api.BiliResult
 import dev.bilby.data.SpaceRepository
 import dev.bilby.data.SpaceVideoItem
 import dev.bilby.ui.AdaptiveContent
-import dev.bilby.ui.appendDistinctBy
+import dev.bilby.appendDistinctBy
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.theme.Breakpoints

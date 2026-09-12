@@ -146,6 +146,7 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer.hls)
     implementation(libs.androidx.media3.ui.compose)
     implementation(libs.androidx.media3.session)
+    implementation(libs.androidx.media3.extractor)
 
     implementation(libs.androidx.room.runtime)
     ksp(libs.androidx.room.compiler)

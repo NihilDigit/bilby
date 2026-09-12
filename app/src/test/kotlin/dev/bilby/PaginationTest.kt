@@ -1,4 +1,4 @@
-package dev.bilby.ui
+package dev.bilby
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame

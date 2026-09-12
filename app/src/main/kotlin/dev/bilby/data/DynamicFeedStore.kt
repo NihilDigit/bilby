@@ -1,6 +1,7 @@
 package dev.bilby.data
 
 import dev.bilby.BiliLog
+import dev.bilby.appendDistinctBy
 import dev.bilby.api.BiliResult
 import dev.bilby.data.db.FeedCacheRepository
 import dev.bilby.data.model.DynamicCard
@@ -59,6 +60,38 @@ class DynamicFeedStore(
 
     val status: StateFlow<DynamicFeedStatus> = _status.asStateFlow()
 
+    /*
+     * 下面四个是 [_home] 与 [_other] 仅有的写入口(点赞那处是逐条 map,改不了条数和 id),
+     * 存在的理由只有一个:**列表里不能有两条相同的 id**。
+     *
+     * 这条约束从前是调用方的义务,而 `appendDistinctBy` 那时就已经在仓库里了,还带着一条
+     * "线上崩过一次,key 是评论的 rpid" 的注释 —— 即便如此,这个文件的三处拼接仍然漏了两处
+     * (整段替换那两条路裸赋值),第三处把去重手抄了一遍。义务型的约束就是这样失效的:
+     * 订阅列表因此崩过,key 是 bvid,杀掉重启照样崩,因为冷启动会把同一份重复再拼一次。
+     *
+     * 所以把去重挪进写入口。现在这个文件里写不出一条没去过重的赋值。
+     *
+     * **为什么 bvid 重复是正常输入而不是脏数据**:同一个视频可以同时以 DYNAMIC_TYPE_AV 和
+     * DYNAMIC_TYPE_UGC_SEASON 出现两条动态(两者字段结构一致,见 notes/dynamic-feed.md
+     * 第 199 行),跨页边界上服务端也会把同一条再给一遍。合成一条正是该有的显示结果。
+     */
+
+    private fun replaceHome(items: List<FeedEntry>) {
+        _home.value = items.distinctBy { it.id }
+    }
+
+    private fun appendHome(items: List<FeedEntry>) {
+        _home.update { current -> current.appendDistinctBy(items) { it.id } }
+    }
+
+    private fun replaceOther(cards: List<DynamicCard>) {
+        _other.value = cards.distinctBy { it.id }
+    }
+
+    private fun appendOther(cards: List<DynamicCard>) {
+        _other.update { current -> current.appendDistinctBy(cards) { it.id } }
+    }
+
     private var nextOffset: String? = null
 
     /**
@@ -92,7 +125,7 @@ class DynamicFeedStore(
         if (cached.isNotEmpty()) {
             // 缓存非空就先铺出来,首屏不空等网络;随后的头部请求会把它整段换掉。**这次请求
             // 不打转圈**:用户没要求刷新,顶上转一圈只会让人以为自己碰到了什么。
-            _home.value = cached
+            replaceHome(cached)
             _status.update { it.copy(loading = false) }
         }
         fetch(half, append = false, spinner = false)
@@ -201,19 +234,12 @@ class DynamicFeedStore(
         }
 
         if (append) {
-            // 分页边界上服务端偶尔会把同一条再给一遍,按 id 去重;不重排也不更新已有那条。
-            _home.update { current ->
-                val seen = current.mapTo(HashSet(current.size)) { it.id }
-                current + freshHome.filter { seen.add(it.id) }
-            }
-            _other.update { current ->
-                val seen = current.mapTo(HashSet(current.size)) { it.id }
-                current + freshOther.filter { seen.add(it.id) }
-            }
+            appendHome(freshHome)
+            appendOther(freshOther)
             loadedPages += pages
         } else {
-            _home.value = freshHome
-            _other.value = freshOther
+            replaceHome(freshHome)
+            replaceOther(freshOther)
             loadedPages = pages
         }
         nextOffset = offset

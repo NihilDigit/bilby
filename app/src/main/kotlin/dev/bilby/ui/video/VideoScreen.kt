@@ -909,9 +909,14 @@ fun VideoScreen(
                 }
 
                 // 盖在画面上而不是排在下面:失败时画面本来就是黑的,而简介区在一屏之外,
-                // 提示放那儿等于没有。state.error 那一支是"流都没取到",两者不会同时出现。
+                // 提示放那儿等于没有。
                 // 取流/重试退避期间的指示器归 PlayerShell(externalLoading),这里只画失败态。
-                val shownError = playbackError
+                //
+                // **`state.error` 画过了就不再画这一条。** 这里原先写着"两者不会同时出现",
+                // 那句话不成立:详情取不到时取流同样会失败(一条不存在的 bvid 就两样都占),
+                // 于是两条提示叠在同一个居中位置,字压着字,下面共用一个重试按钮,谁都读不出来。
+                // 留下的是详情那一条 —— 它是根因,而取流失败只是它的后果。
+                val shownError = playbackError.takeIf { state.error == null }
                 if (shownError != null) {
                     PlaybackFailure(
                         message = shownError,

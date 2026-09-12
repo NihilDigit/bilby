@@ -60,6 +60,9 @@ androidx-media3-ui-compose = { module = "androidx.media3:media3-ui-compose", ver
 # 直播流走 HLS-fmp4：Media3 原生支持，而 FLV 那条要靠 progressive 里的 FlvExtractor 撑无限流。
 androidx-media3-exoplayer-hls = { module = "androidx.media3:media3-exoplayer-hls", version.ref = "media3" }
 androidx-media3-session = { module = "androidx.media3:media3-session", version.ref = "media3" }
+# exoplayer 已经传递带进来了，显式声明是因为我们直接用了它的 FlacStreamMetadata
+# （见 PlayerFactory 的 flacMaxFrameSize）。用谁的 API 就声明谁。
+androidx-media3-extractor = { module = "androidx.media3:media3-extractor", version.ref = "media3" }
 
 androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }

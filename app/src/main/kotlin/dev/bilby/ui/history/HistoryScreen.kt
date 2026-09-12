@@ -19,7 +19,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
 import dev.bilby.R
-import dev.bilby.ui.appendDistinctBy
+import dev.bilby.appendDistinctBy
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.api.BiliResult
 import dev.bilby.data.HistoryItem

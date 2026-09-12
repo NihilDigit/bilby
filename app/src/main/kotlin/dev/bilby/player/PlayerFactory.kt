@@ -2,8 +2,17 @@ package dev.bilby.player
 
 import android.content.Context
 import android.net.Uri
+import android.os.Handler
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.audio.AudioRendererEventListener
+import androidx.media3.exoplayer.audio.MediaCodecAudioRenderer
+import androidx.media3.exoplayer.mediacodec.MediaCodecAdapter
+import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
+import androidx.media3.extractor.FlacStreamMetadata
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.FileDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -97,6 +106,35 @@ object PlayerFactory {
      */
     private fun renderersFactory(context: Context, forced: SpeedAlgorithm?): RenderersFactory =
         object : DefaultRenderersFactory(context) {
+            /**
+             * 只放一个 [FlacInputSizeAudioRenderer],不调 super。
+             *
+             * super 在这个方法里做的另一件事是按 [EXTENSION_RENDERER_MODE] 反射加载扩展
+             * renderer,而下面把它设成了 OFF —— 那段代码在这个工厂里本来就是空转。
+             */
+            override fun buildAudioRenderers(
+                context: Context,
+                extensionRendererMode: Int,
+                mediaCodecSelector: MediaCodecSelector,
+                enableDecoderFallback: Boolean,
+                audioSink: AudioSink,
+                eventHandler: Handler,
+                eventListener: AudioRendererEventListener,
+                out: ArrayList<Renderer>,
+            ) {
+                out.add(
+                    FlacInputSizeAudioRenderer(
+                        context,
+                        codecAdapterFactory,
+                        mediaCodecSelector,
+                        enableDecoderFallback,
+                        eventHandler,
+                        eventListener,
+                        audioSink,
+                    )
+                )
+            }
+
             override fun buildAudioSink(
                 context: Context,
                 enableFloatOutput: Boolean,
@@ -208,3 +246,78 @@ object PlayerFactory {
         }
     }
 }
+
+/**
+ * 补上分片 MP4 里 FLAC 轨的 `maxInputSize`,别的一概照旧。
+ *
+ * B 站的 Hi-Res 无损轨播不了,报 `播放失败(1004)`,链条是这样的:
+ *
+ * 1. `MediaCodecAudioRenderer.getCodecMaxInputSize` 的全部内容是 `return format.maxInputSize`;
+ * 2. 而整个 extractor 里只有 `Mp4Extractor` 会设这个值(从 `stsz` 的最大样本尺寸推),
+ *    `FragmentedMp4Extractor` 一次都没设 —— B 站的 `.m4s` 正是分片 MP4(`mvex` + `moof`);
+ * 3. 于是 `KEY_MAX_INPUT_SIZE` 不下发,MediaCodec 用默认的 32 KB 输入缓冲,而一帧 96 kHz/24bit
+ *    的无损有 33 KB,`DecoderInputBuffer` 抛 `InsufficientCapacityException`;
+ * 4. 这一下本身不致命,但它留下半截状态,下一帧撞上 `DefaultAudioSink.handleBuffer` 开头的
+ *    `checkArgument`,抛出一个没有 message 的 `IllegalArgumentException`,变成
+ *    `ERROR_CODE_FAILED_RUNTIME_CHECK`。界面上只剩那个 1004。
+ *
+ * AAC 帧一两 KB,所以同一条路上别的音轨从来不出事,只有无损会顶破。
+ *
+ * **取值不是估的,是 FLAC 头里写着的。** STREAMINFO 有一个 max frame size 字段,Media3 自己在
+ * `FlacStreamMetadata.getFormat` 里也正是拿它当 `maxInputSize`(FLAC 走 `FlacExtractor` 进来时
+ * 就没这个毛病)。这里只是把同一个决定补到 MP4 这条路上,所以复用它的解析,不自己数字节。
+ *
+ * 容器里的采样率是 0(`AudioSampleEntry` 那个字段是 16.16 定点,整数部分 16 位,96 kHz 存不下),
+ * 这里**不去修它**:`onOutputFormatChanged` 交给 AudioSink 的采样率取自解码器的输出格式,不是
+ * 容器,所以那个 0 只会让能力检查多打一行 `NoSupport` 警告,不影响出声。改它等于改解码器选择,
+ * 那是另一件事,得另外验。
+ */
+@UnstableApi
+private class FlacInputSizeAudioRenderer(
+    context: Context,
+    codecAdapterFactory: MediaCodecAdapter.Factory,
+    mediaCodecSelector: MediaCodecSelector,
+    enableDecoderFallback: Boolean,
+    eventHandler: Handler,
+    eventListener: AudioRendererEventListener,
+    audioSink: AudioSink,
+) : MediaCodecAudioRenderer(
+    context,
+    codecAdapterFactory,
+    mediaCodecSelector,
+    enableDecoderFallback,
+    eventHandler,
+    eventListener,
+    audioSink,
+) {
+    override fun getCodecMaxInputSize(
+        codecInfo: MediaCodecInfo,
+        format: Format,
+        streamFormats: Array<out Format>,
+    ): Int {
+        val inherited = super.getCodecMaxInputSize(codecInfo, format, streamFormats)
+        // 容器给得出尺寸就用容器的。只在它答不上来时才去翻 FLAC 头,别的编码一律原样。
+        if (inherited != Format.NO_VALUE) return inherited
+        return format.flacMaxFrameSize() ?: inherited
+    }
+}
+
+/**
+ * 从 csd 里读 FLAC 的最大帧长,读不出来时为 null。
+ *
+ * csd 的样子由 `BoxParser` 的 `dfLa` 分支决定:`"fLaC"` 四个字节,接一个 4 字节的元数据块头,
+ * 再接 STREAMINFO 本体 —— 所以本体从第 8 个字节开始,而 `FlacStreamMetadata` 要的偏移正是
+ * "第一个字节(最小块长)的位置"。
+ */
+private fun Format.flacMaxFrameSize(): Int? {
+    if (sampleMimeType != MimeTypes.AUDIO_FLAC) return null
+    val csd = initializationData.firstOrNull() ?: return null
+    if (csd.size < FLAC_STREAM_INFO_OFFSET + FLAC_STREAM_INFO_SIZE) return null
+    return FlacStreamMetadata(csd, FLAC_STREAM_INFO_OFFSET).maxFrameSize.takeIf { it > 0 }
+}
+
+/** `"fLaC"` 魔数 4 字节 + 元数据块头 4 字节。 */
+private const val FLAC_STREAM_INFO_OFFSET = 8
+
+/** STREAMINFO 本体固定 34 字节,少于这个数说明 csd 是残的,不去解析。 */
+private const val FLAC_STREAM_INFO_SIZE = 34

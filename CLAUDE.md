@@ -246,6 +246,6 @@ The assistant needs an OpenAI-compatible endpoint. Debug builds can bake one in 
 `LLM_BASE_URL` and `LLM_API_KEY` in `local.properties` (see `local.properties.example`);
 release builds leave them empty, and any build accepts them from the settings page.
 
-Write tests only where they can catch something. The queue logic in
-`player/PlaybackQueue.kt`, WBI signing, stream selection, and the agent loop's protocol
+Write tests only where they can catch something. Which part to play
+(`player/LoadResolver.kt`), WBI signing, stream selection, and the agent loop's protocol
 correctness qualify. UI and network glue do not.

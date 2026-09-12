@@ -18,6 +18,7 @@ import io.ktor.http.Parameters
 import io.ktor.http.contentType
 import io.ktor.http.setCookie
 import kotlinx.serialization.json.JsonObject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -333,6 +334,27 @@ fun BiliResponse<*>.describeFailure(): String =
     if (code == 0) "(code=0 但 data 为空,可能是响应结构与 DTO 不符)"
     else "(${code}): $message"
 
+/**
+ * 传输层抛出来的东西 → [BiliResult.Failure]。**取消不在此列,原样抛回去。**
+ *
+ * `runCatching` 捕获的是 `Throwable`,`CancellationException` 也在内 —— 而它不是一次失败,
+ * 它是结构化并发用来通知"这个请求不要了"的手段。折成 `Failure` 有两层代价:
+ *
+ * - 调用方把 `Failure` 变成界面文案的地方,用户自己的取消动作(离开页面、切 tab、搜索时改
+ *   关键词)会闪出一条"网络错误",而什么都没出错;日志里同时多一行凭空的"异常"。
+ * - 协程被取消之后不再当场退出,而是带着一个失败继续跑错误分支。切集时这条路真的走到过:
+ *   删掉旧队列条目 → `LazyMediaSource` 取消解析 → playurl 在挂起点被取消 → 这里把它记成
+ *   取流失败。那一次恰好被 generation 守卫接住,换个调用方就未必。
+ *
+ * 三个出口共用这一份,不各写一遍 —— 少写一处就等于这条规矩没有。
+ */
+@PublishedApi
+internal fun transportFailure(label: String, cause: Throwable): BiliResult<Nothing> {
+    if (cause is CancellationException) throw cause
+    BiliLog.w("$label 异常", cause)
+    return BiliResult.Failure(cause)
+}
+
 /** 把信封拆开:传输失败、业务失败、成功三分。 */
 suspend inline fun <reified T> BiliClient.getData(
     url: String,
@@ -353,10 +375,7 @@ suspend inline fun <reified T> BiliClient.getData(
                 BiliResult.ApiError(envelope.code, envelope.message)
             }
         },
-        onFailure = {
-            BiliLog.w("GET ${url.pathOnly()} 异常", it)
-            BiliResult.Failure(it)
-        },
+        onFailure = { transportFailure("GET ${url.pathOnly()}", it) },
     )
 
 /**
@@ -410,10 +429,7 @@ private suspend inline fun BiliClient.envelopeResult(
             BiliResult.ApiError(envelope.code, envelope.message)
         }
     },
-    onFailure = {
-        BiliLog.w("POST ${url.pathOnly()} 异常", it)
-        BiliResult.Failure(it)
-    },
+    onFailure = { transportFailure("POST ${url.pathOnly()}", it) },
 )
 
 suspend inline fun <reified T> BiliClient.postForm(
@@ -436,8 +452,5 @@ suspend inline fun <reified T> BiliClient.postForm(
                 BiliResult.ApiError(envelope.code, envelope.message)
             }
         },
-        onFailure = {
-            BiliLog.w("POST ${url.pathOnly()} 异常", it)
-            BiliResult.Failure(it)
-        },
+        onFailure = { transportFailure("POST ${url.pathOnly()}", it) },
     )
