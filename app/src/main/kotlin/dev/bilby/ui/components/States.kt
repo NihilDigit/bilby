@@ -1,5 +1,6 @@
 package dev.bilby.ui.components
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -87,6 +88,59 @@ fun rememberLoadingVisible(): Boolean {
 
 /** 见 [rememberLoadingVisible]。取 M3 给 loading indicator 定的那个下界。 */
 private const val LoadingAppearDelayMillis = 200L
+
+/**
+ * 首屏的三态:整屏转圈 / 整屏出错 / 内容。**四个列表页原本各写一遍同一个 `when`**
+ * (动态、稍后再看、收藏夹列表、[PagedColumn]),而且都是硬切 —— 上一屏整块消失、下一屏整块
+ * 出现,读起来像换了一页。
+ *
+ * 用 [Crossfade] 而不是 `AnimatedContent`:这里换的是同一块区域的三种填充,没有方向可言,
+ * 而 `AnimatedContent` 默认还要连着尺寸一起过渡 —— 整屏转圈和一屏列表的尺寸本来就一样,
+ * 那份 `SizeTransform` 只会在切换时多抖一下。spec 取 `motionScheme` 的 effects 档:淡入淡出
+ * 是"效果"不是空间位移,而整屏三态属于组件层(风格指南 §6 那张表),不是转场。
+ *
+ * **切换的键是"哪一种态",不是错误文案本身**([Phase] 把文案带进 target,而不是在分支里
+ * 读外面的 `error`):淡出还没走完时旧分支仍在组合,那一刻 `error` 已经是 null 了。
+ *
+ * @param isEmpty 列表当前有没有内容。**转圈和错误都只在首屏(列表为空)时占整屏**,列表已经
+ *   有内容时翻页的转圈和失败归 [ListFooter] —— 已经读到的东西不该被一次翻页失败清掉。
+ */
+@Composable
+fun FirstScreenState(
+    loading: Boolean,
+    error: String?,
+    isEmpty: Boolean,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val phase = when {
+        loading && isEmpty -> Phase.Loading
+        error != null && isEmpty -> Phase.Failed(error)
+        else -> Phase.Content
+    }
+    Crossfade(
+        targetState = phase,
+        animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
+        modifier = modifier.fillMaxSize(),
+        label = "first-screen",
+    ) { current ->
+        when (current) {
+            Phase.Loading -> FullScreenLoading()
+            is Phase.Failed -> FullScreenError(current.message, onRetry)
+            Phase.Content -> content()
+        }
+    }
+}
+
+/** [FirstScreenState] 的三态。错误文案带在态里,理由见那个函数。 */
+private sealed interface Phase {
+    data object Loading : Phase
+
+    data class Failed(val message: String) : Phase
+
+    data object Content : Phase
+}
 
 /**
  * 首屏加载。整屏居中一个指示器,不放骨架屏 —— 骨架屏是在假装内容马上就到。

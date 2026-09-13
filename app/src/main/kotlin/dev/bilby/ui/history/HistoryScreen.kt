@@ -1,5 +1,10 @@
 package dev.bilby.ui.history
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,7 +17,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.ViewModel
@@ -237,6 +246,7 @@ fun HistoryScreen(
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     val selecting = selectedIds != null
+    val haptics = LocalHapticFeedback.current
 
     // 删除失败要说出来。这条路径没有乐观更新,失败之后屏上什么都没变 —— 不给一句话的话,
     // 用户看到的是"点了删除,记录还在"。
@@ -270,6 +280,17 @@ fun HistoryScreen(
                 contentPadding = contentPadding,
             ) { item ->
                 val selected = selectedIds != null && item.oid in selectedIds
+                // 选中态淡入,不是跳变。与 OfflineScreen 同一套(那边还要在图标和勾选框之间
+                // 换内容,这一页行尾平时是空的)。
+                val rowColor by animateColorAsState(
+                    targetValue = if (selected) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        Color.Transparent
+                    },
+                    animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
+                    label = "history-row-selected",
+                )
                 VideoRow(
                     item = item.toRowUi(),
                     // 多选态下点一行是勾选,不是打开:进了多选还去播放,等于长按一下就再也
@@ -277,16 +298,31 @@ fun HistoryScreen(
                     onClick = { if (selecting) onToggleSelection(item) else onItemClick(item) },
                     // 长按只是快捷方式,不是唯一入口 —— 顶栏另有一个「选择」。长按没有任何
                     // 视觉提示,只发现得了点击的人也必须能进多选。
-                    onLongClick = { onToggleSelection(item) },
-                    // 整行染色而不是只画一个勾:勾在行尾,而人是从左往右扫的。
-                    modifier = if (selected) {
-                        Modifier.background(MaterialTheme.colorScheme.secondaryContainer)
-                    } else {
-                        Modifier
+                    //
+                    // 进多选态那一下给触感:屏上多出来的只是一列勾选框。已经在多选态里时不震,
+                    // 那一下和点击等价。
+                    onLongClick = {
+                        if (!selecting) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onToggleSelection(item)
                     },
+                    // 整行染色而不是只画一个勾:勾在行尾,而人是从左往右扫的。
+                    modifier = Modifier.background(rowColor),
                     // onCheckedChange = null:整行已经是一个可点节点,勾选框自己再接一次
                     // 点击会让读屏把它和这一行当成两件事。
-                    trailing = { if (selecting) Checkbox(checked = selected, onCheckedChange = null) },
+                    //
+                    // 平时这一格是空的,进多选时整列勾选框一起出现 —— 淡入带着宽度一起过渡,
+                    // 否则标题那一列会被瞬间挤窄一格,几十行同时重排。
+                    trailing = {
+                        // transitionSpec 不是组合上下文,主题里的 spec 要先在外面取出来。
+                        val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+                        AnimatedContent(
+                            targetState = selecting,
+                            transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
+                            label = "history-row-trailing",
+                        ) { inSelection ->
+                            if (inSelection) Checkbox(checked = selected, onCheckedChange = null)
+                        }
+                    },
                 )
             }
         }

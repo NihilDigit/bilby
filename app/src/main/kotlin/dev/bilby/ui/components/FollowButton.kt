@@ -37,6 +37,12 @@ fun FollowButton(
     state: FollowState,
     onClick: () -> Unit,
     prominent: Boolean = true,
+    /**
+     * 要取关的是谁。**给了就写进确认框的标题**——一屏上可能同时有几个关注按钮(关注列表页),
+     * 一个只写「取消关注」的框说不出按下去会取关哪一个。拿不到名字时退回不带名字的标题,
+     * 而不是留一处空白。
+     */
+    name: String = "",
 ) {
     var confirmingUnfollow by remember { mutableStateOf(false) }
     when (state) {
@@ -61,19 +67,29 @@ fun FollowButton(
     if (confirmingUnfollow) {
         AlertDialog(
             onDismissRequest = { confirmingUnfollow = false },
-            // 不写说明。**"取消关注"这四个字已经说完了这件事**,再补一句"取消后要重新找到
-            // 这个人"是在教用户关注是怎么回事。PiliPlus 的取关面板同样只有选项没有说明
+            // 不写说明。**标题已经说完了这件事**,再补一句"取消后要重新找到这个人"是在教用户
+            // 关注是怎么回事。PiliPlus 的取关面板同样只有选项没有说明
             // (request_utils.dart 的 relationMod 那一段)。
-            title = { Text(stringResource(R.string.follow_unfollow_confirm_title)) },
+            title = {
+                Text(
+                    if (name.isBlank()) {
+                        stringResource(R.string.follow_unfollow_confirm_title)
+                    } else {
+                        stringResource(R.string.follow_unfollow_confirm_named, name)
+                    },
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     confirmingUnfollow = false
                     onClick()
                 }) { Text(stringResource(R.string.follow_unfollow_confirm_title)) }
             },
+            // 「保留」而不是「取消」。两个按钮上都带着「取消」两个字的时候,读者得先分清哪个
+            // 取消的是关注、哪个取消的是这个框 —— 而这是个不可逆动作的最后一道闸。
             dismissButton = {
                 TextButton(onClick = { confirmingUnfollow = false }) {
-                    Text(stringResource(R.string.action_cancel))
+                    Text(stringResource(R.string.follow_unfollow_keep))
                 }
             },
         )

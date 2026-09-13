@@ -42,8 +42,7 @@ import dev.bilby.data.FavFolderDetail
 import dev.bilby.data.FavRepository
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.EmptyState
-import dev.bilby.ui.components.FullScreenError
-import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.FirstScreenState
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.theme.Spacing
@@ -275,10 +274,13 @@ fun FavFoldersScreen(
 
     Box(modifier = modifier.fillMaxSize()) {
         AdaptiveContent {
-            when {
-                state.loading && state.folders.isEmpty() -> FullScreenLoading()
-                state.error != null && state.folders.isEmpty() -> FullScreenError(state.error, onRetry)
-                else -> RefreshBox(
+            FirstScreenState(
+                loading = state.loading,
+                error = state.error,
+                isEmpty = state.folders.isEmpty(),
+                onRetry = onRetry,
+            ) {
+                RefreshBox(
                     refreshing = state.refreshing,
                     onRefresh = onRefresh,
                     modifier = Modifier.fillMaxSize(),
@@ -292,12 +294,14 @@ fun FavFoldersScreen(
                                 )
                             }
                         }
+                        // 新建和删除都在这一页做,删掉一行时下面几行不该硬跳一格。
                         items(state.folders, key = { it.id }) { folder ->
                             FavFolderRow(
                                 folder = folder,
                                 onClick = { onOpenFolder(folder) },
                                 onEdit = { onEdit(folder) },
                                 onDelete = { onDelete(folder) },
+                                modifier = Modifier.animateItem(),
                             )
                         }
                     }
@@ -329,6 +333,7 @@ private fun FavFolderRow(
     onClick: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val visibility = stringResource(
         if (folder.isPublic) R.string.fav_folder_public else R.string.fav_folder_private,
@@ -362,7 +367,7 @@ private fun FavFolderRow(
                 onDelete = onDelete,
             )
         },
-        modifier = Modifier.clickable(role = Role.Button, onClick = onClick),
+        modifier = modifier.clickable(role = Role.Button, onClick = onClick),
     )
 }
 

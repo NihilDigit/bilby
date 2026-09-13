@@ -27,6 +27,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.interaction.DragInteraction
 import kotlinx.coroutines.flow.filter
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.graphics.luminance
@@ -365,7 +366,8 @@ private fun LiveOffline(
             Text(
                 text = when {
                     state.loading -> stringResource(R.string.live_loading)
-                    state.error != null -> state.error
+                    // state 里存的是资源 id,见 [LiveRoomUiState.error]。
+                    state.error != null -> stringResource(state.error)
                     else -> stringResource(R.string.live_offline)
                 },
                 style = MaterialTheme.typography.bodyMedium,
@@ -590,7 +592,6 @@ private fun LiveRoomTabs(
             when (page) {
                 0 -> ChatPane(
                     state = state,
-                    onSendDanmaku = onSendDanmaku,
                     onUserClick = onUserClick,
                     onSuperChatClick = { id ->
                         // 先记下要看哪一条,再翻页 —— 翻页是动画,而那一屏要拿这个 id 定位。
@@ -609,6 +610,21 @@ private fun LiveRoomTabs(
                 else -> GuardPane(state, onLoadMoreGuards, onUserClick)
             }
         }
+
+        // **常驻输入栏,而且在 pager 外面** —— 三屏共用一条。"在这个房间里说话"和当前看的是
+        // 哪一屏无关,而它跟着 pager 走的时候,划到大航海那一屏就没法发言了,键盘还留在
+        // 屏幕上。
+        //
+        // 不是弹出面板:播放页那边的弹幕输入要盖一层、还要暂停视频,是因为那一行按钮下面就是
+        // 简介和评论,没有它的位置;直播间本来就有一条聊天栏,输入栏接在它下面读起来就是
+        // "在这儿说话",和评论区是同一个形状。直播也没什么好暂停的。
+        LiveDanmakuInput(
+            sending = state.sendingDanmaku,
+            error = state.sendError,
+            // 未开播时不给输入:此刻画面是一张封面,服务端也会拒。
+            enabled = state.isLive,
+            onSend = onSendDanmaku,
+        )
     }
 }
 
@@ -725,7 +741,11 @@ private fun SuperChatChip(sc: LiveMessage.SuperChat, tier: Color, onClick: () ->
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
         Row(
-            modifier = Modifier.padding(start = Spacing.Hair, end = Spacing.Cozy, top = Spacing.Hair, bottom = Spacing.Hair),
+            // 头像 36dp 加上下 4dp 是 44dp,差 4dp 到触摸下限;这一栏浮在聊天行上面,按不中
+            // 的那一下会落到底下的弹幕上,什么都不会发生。撑高不改头像尺寸。
+            modifier = Modifier
+                .heightIn(min = Dimens.MinTouchTarget)
+                .padding(start = Spacing.Hair, end = Spacing.Cozy, top = Spacing.Hair, bottom = Spacing.Hair),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
@@ -941,9 +961,13 @@ private fun formatRemaining(seconds: Long): String {
 private const val TabularFigures = "tnum"
 
 /**
- * 消息流加发言栏。
+ * 消息流。
  *
  * 弹幕、醒目留言、上舰、系统提示排在同一条流里,各类的样子归 [LiveFeedRow]。
+ *
+ * **发言栏不在这里,在 [LiveRoomTabs] 的 pager 外面。** 它原先是这一屏的最后一个子节点,
+ * 于是划到醒目留言或大航海那两屏时它跟着划走,而"在这个房间里说话"跟当前看的是哪一屏无关;
+ * 更难受的是键盘开着时划一下,输入栏走了键盘还在,屏幕底下剩一块空。
  *
  * **醒目留言此前是这一屏顶上一条横滚的卡片带,现在撤掉了。** 两个代价是实打实的:数量在零和
  * 非零之间变化时整条列表要跳一次高度;窄屏上一次只露得出一张半卡片,而横滚压在一条本来就要
@@ -952,7 +976,6 @@ private const val TabularFigures = "tnum"
 @Composable
 private fun ChatPane(
     state: LiveRoomUiState,
-    onSendDanmaku: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onSuperChatClick: (Long) -> Unit,
 ) {
@@ -1055,7 +1078,11 @@ private fun ChatPane(
                     contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+                        // 一个图标加四个字只有 32dp 高。这一颗浮在聊天行上面,而它下面就是
+                        // 可点的弹幕行:按偏一点不是"没反应",是点开了别人的头像。
+                        modifier = Modifier
+                            .heightIn(min = Dimens.MinTouchTarget)
+                            .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
                     ) {
@@ -1073,16 +1100,6 @@ private fun ChatPane(
             }
         }
 
-        // **常驻输入栏,不是弹出面板。** 播放页那边的弹幕输入要盖一层、还要暂停视频,是因为
-        // 那一行按钮下面就是简介和评论,没有它的位置;直播间本来就有一条聊天栏,输入栏接在
-        // 它下面读起来就是"在这儿说话",和评论区是同一个形状。直播也没什么好暂停的。
-        LiveDanmakuInput(
-            sending = state.sendingDanmaku,
-            error = state.sendError,
-            // 未开播时不给输入:此刻画面是一张封面,服务端也会拒。
-            enabled = state.isLive,
-            onSend = onSendDanmaku,
-        )
     }
 }
 
@@ -1171,7 +1188,7 @@ private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit, onUserClic
     if (state.guards.items.isEmpty()) {
         when {
             state.guards.error != null ->
-                FullScreenError(state.guards.error, onLoadMore, Modifier.fillMaxSize())
+                FullScreenError(stringResource(state.guards.error), onLoadMore, Modifier.fillMaxSize())
 
             !state.guards.loading ->
                 EmptyState(stringResource(R.string.live_guard_empty), Modifier.fillMaxSize())
@@ -1187,10 +1204,14 @@ private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit, onUserClic
         verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
     ) {
         items(state.guards.items, key = { it.uid }) { guard ->
-            // 整行可点:这一行从头到尾都在说同一个人。
+            // 整行可点:这一行从头到尾都在说同一个人。头像 36dp 撑不到 48dp 的触摸下限,
+            // 而这是一列密排的行,按偏一点就点到隔壁那个人身上去了。
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { onUserClick(guard.uid) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = Dimens.MinTouchTarget)
+                    .clickable(role = Role.Button) { onUserClick(guard.uid) },
             ) {
                 Avatar(url = guard.face, size = Dimens.AvatarRow)
                 Text(
@@ -1219,7 +1240,7 @@ private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit, onUserClic
                 appending = state.guards.loading,
                 hasMore = true,
                 hasItems = true,
-                error = state.guards.error,
+                error = state.guards.error?.let { stringResource(it) },
                 onRetry = onLoadMore,
             )
         }

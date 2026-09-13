@@ -18,7 +18,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.sp
 import dev.bilby.ui.theme.Spacing
+
+/** 正文行高。24 与评论正文同一档,理由见 [MarkdownText] 的 `style` 参数。 */
+private val BodyLineHeight = 24.sp
 
 /**
  * 助理答案里的 markdown。**只认一个最小子集**,没有引第三方渲染器。
@@ -39,7 +43,13 @@ import dev.bilby.ui.theme.Spacing
 fun MarkdownText(
     text: String,
     modifier: Modifier = Modifier,
-    style: TextStyle = MaterialTheme.typography.bodyMedium,
+    /**
+     * 正文那一档。**行高 24sp,字号仍是 `bodyMedium` 的 14sp** —— 判据和评论正文那条完全一样
+     * (风格指南 §2.7b:行高,不是字号):助理的答案常是五六行连排的汉字,而汉字墨迹几乎占满
+     * em 框,`bodyMedium` 自带的 14/22 在这个长度上会糊成一片。不去改 `Typography.bodyMedium`,
+     * 那一档还给列表标题和队列条目用着,它们要的是紧凑。
+     */
+    style: TextStyle = MaterialTheme.typography.bodyMedium.copy(lineHeight = BodyLineHeight),
     /**
      * 遇到标题内容属于这一组的,这一节连同它后面的全部不画。
      *
@@ -52,9 +62,11 @@ fun MarkdownText(
 ) {
     val blocks = remember(text, stopAtHeadings) { parseMarkdown(text).upTo(stopAtHeadings) }
     val codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest
+    // 块间距 8dp。**行高抬到 24 之后 4dp 不够了**:行内间距(24 − 14 ≈ 10dp 分摊到上下)已经
+    // 超过块间距,于是同一段里的换行看起来比段与段之间还开,一段答案读不出分了几段。
     Column(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
         blocks.forEach { block ->
             when (block) {
@@ -91,7 +103,12 @@ fun MarkdownText(
 }
 
 private fun List<MdSpan>.toAnnotated(codeBackground: Color): AnnotatedString = buildAnnotatedString {
+    // 上一段落的末字要带进下一段。**记号切开的是样式,不是句子**:"这样**加粗**,那样"里那个
+    // 逗号是新一段的第一个字符,单看这一段它前面什么都没有,而它在读者眼里紧跟着一个汉字。
+    var tail: Char? = null
     this@toAnnotated.forEach { span ->
+        // 行内代码原样照抄:`page_size,` 里那个逗号是代码的一部分,换成全角就不是同一串字了。
+        val text = if (span.code) span.text else normalizeCjkPunctuation(span.text, tail)
         withStyle(
             SpanStyle(
                 fontWeight = if (span.bold) FontWeight.Bold else null,
@@ -100,10 +117,68 @@ private fun List<MdSpan>.toAnnotated(codeBackground: Color): AnnotatedString = b
                 background = if (span.code) codeBackground else Color.Unspecified,
             ),
         ) {
-            append(span.text)
+            append(text)
         }
+        tail = text.lastOrNull() ?: tail
     }
 }
+
+/**
+ * 汉字之间的半角标点改成全角。
+ *
+ * **在渲染这一侧做,不在 prompt 里要求。** 模型混用半角和全角是稳定现象,而 prompt 管不住它:
+ * 同一段答案里"第一,"是半角、"第二,"是全角的情况实测就有。半角逗号在汉字之间的问题不是好不
+ * 好看 —— 它自带的右侧空白只有全角的一半,而汉字之间本来没有词间空隙,于是断句处几乎看不出
+ * 停顿;反过来全角标点后面再跟一个 ASCII 空格又会开出一道两个字宽的缝。
+ *
+ * **判据是两侧,不只是前面一个字:**
+ *
+ * - 前一个字符必须是 CJK。`bvid, 3` 这种参数列表因此不动。
+ * - 后一个字符是行尾、空白,或者又是 CJK。`宽高比 16:9`、`见 notes/comment.md:12` 里的冒号
+ *   后面跟的是数字和字母,不动 —— 那些是数值和路径,不是句读。
+ *
+ * 换成全角之后**紧跟的一个 ASCII 空格一并吃掉**:全角标点自带的右侧空白就是那一格,
+ * 再留一个空格等于连开两格。
+ *
+ * @param precededBy 这一段之前那个字符(样式记号把一句话切成几段时用得上,见 `toAnnotated`)。
+ *   null 表示这一段就是一行的开头,那时行首的标点留在原样 —— 它没有"前一个字"。
+ */
+internal fun normalizeCjkPunctuation(text: String, precededBy: Char? = null): String {
+    if (text.none { it in HalfWidthPunctuation }) return text
+    val out = StringBuilder(text.length)
+    var i = 0
+    while (i < text.length) {
+        val c = text[i]
+        val fullWidth = FullWidthOf[c]
+        // 前一个字符看的是已经写出去的那一份,不是原文 —— 上一轮吃掉空格之后两者会错开。
+        val previous = out.lastOrNull() ?: precededBy
+        val next = text.getOrNull(i + 1)
+        if (fullWidth != null && previous != null && previous.isCjk() &&
+            (next == null || next.isWhitespace() || next.isCjk())
+        ) {
+            out.append(fullWidth)
+            i++
+            if (next == ' ') i++
+        } else {
+            out.append(c)
+            i++
+        }
+    }
+    return out.toString()
+}
+
+private val FullWidthOf = mapOf(',' to '，', ':' to '：', ';' to '；', '?' to '？', '!' to '！')
+
+private val HalfWidthPunctuation = FullWidthOf.keys
+
+/**
+ * 汉字、日文假名、以及全角标点本身。**全角标点算在内**,否则"这样,那样,"里第二个半角逗号
+ * 前面是一个全角逗号,会被判成"前面不是汉字"而留在原样。
+ */
+private fun Char.isCjk(): Boolean = this in '一'..'鿿' || // CJK 统一汉字
+    this in '぀'..'ヿ' || // 平假名与片假名
+    this in '　'..'〿' || // CJK 符号与标点(、。「」)
+    this in '＀'..'￯' // 全角形式(，：；?!)
 
 // ---- 解析。以下与 Compose 无关,单测直接吃这一段。 ----
 

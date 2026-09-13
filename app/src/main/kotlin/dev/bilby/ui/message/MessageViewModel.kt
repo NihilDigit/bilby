@@ -1,8 +1,10 @@
 package dev.bilby.ui.message
 
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.api.BiliResult
+import dev.bilby.ui.errorTextRes
 import dev.bilby.data.MessageRepository
 import dev.bilby.data.Notice
 import dev.bilby.data.NoticeCursor
@@ -37,7 +39,11 @@ data class MessageListState<T>(
      */
     val refreshing: Boolean = false,
     val loaded: Boolean = false,
-    val error: String? = null,
+    /**
+     * 失败时屏幕上说哪一句,存的是资源 id 而不是拼好的串 —— ViewModel 里没有 Context,
+     * 拼好的中文既不跟语言设置走也没法在测试里断言。映射与理由见 [dev.bilby.ui.errorTextRes]。
+     */
+    @StringRes val error: Int? = null,
     val cursor: NoticeCursor? = null,
 ) {
     val hasMore: Boolean get() = !loaded || cursor != null
@@ -128,7 +134,7 @@ class MessageViewModel(private val repository: MessageRepository) : ViewModel() 
                             loading = false,
                             refreshing = false,
                             loaded = true,
-                            error = result.describe(),
+                            error = result.errorTextRes("私信会话列表"),
                         ),
                     )
                 }
@@ -167,7 +173,7 @@ class MessageViewModel(private val repository: MessageRepository) : ViewModel() 
                         appending = false,
                         refreshing = false,
                         loaded = true,
-                        error = result.describe(),
+                        error = result.errorTextRes("消息列表 $tab"),
                     )
                 }
             }
@@ -215,7 +221,7 @@ class MessageViewModel(private val repository: MessageRepository) : ViewModel() 
                             appending = false,
                             refreshing = false,
                             loaded = true,
-                            error = result.describe(),
+                            error = result.errorTextRes("系统通知"),
                         ),
                     )
                 }
@@ -242,7 +248,13 @@ class MessageViewModel(private val repository: MessageRepository) : ViewModel() 
     }
 }
 
-/** 失败的一句话。两类失败要分开说:业务码能告诉人为什么,网络异常只能说没连上。 */
+/**
+ * 失败的一句话,**只剩私信会话页([WhisperViewModel])在用**。
+ *
+ * 这一份把接口原话和错误码直接摆到屏幕上,已经被 [dev.bilby.ui.errorTextRes] 取代;
+ * 私信那一页没跟着改是因为它不在这一轮的边界内,换掉它要一起动 `WhisperUiState` 两个字段的
+ * 类型。**别在新代码里用它。**
+ */
 internal fun BiliResult<*>.describe(): String = when (this) {
     is BiliResult.Ok -> ""
     is BiliResult.ApiError -> "$message($code)"

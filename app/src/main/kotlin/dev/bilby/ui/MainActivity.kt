@@ -49,6 +49,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
@@ -65,6 +66,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -1101,8 +1103,14 @@ private fun SearchResultRoute(
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    // **这一页起,每个二级页面的顶栏都接上滚动行为。** `BilbyTopBar` 一直有这个参数,但没有
+    // 一个调用方传过,于是顶栏和内容之间没有边界:列表第一行贴着顶栏往上走,看起来像是从
+    // 标题底下钻出来的。pinned 而不是 enterAlways —— 顶栏上写着"这是哪一页",而这些页面没有
+    // 底栏兜底;滑走之后返回箭头也跟着走了。
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
-        topBar = { BilbyTopBar(title = keyword, onBack = onBack) },
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        topBar = { BilbyTopBar(title = keyword, onBack = onBack, scrollBehavior = scrollBehavior) },
     ) { insets ->
         SearchResultScreen(
             state = state,
@@ -1344,78 +1352,100 @@ private fun HistoryRoute(
     }
     BackHandler(enabled = selectedIds != null) { selectedIds = null }
 
+    // 见 [SearchResultRoute] 里那段说明。多选态那条顶栏也接同一个 behavior:两条是同一个位置
+    // 的两种长相,只有一条变色的话切进多选就像顶栏换了一层底。
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            val ids = selectedIds
-            if (ids == null) {
-                BilbyTopBar(
-                    title = stringResource(R.string.history_title),
-                    onBack = onBack,
-                    actions = {
-                        IconButton(
-                            onClick = { selectedIds = emptySet() },
-                            enabled = state.items.isNotEmpty() && !state.mutating,
-                        ) {
-                            Icon(
-                                Icons.Outlined.Checklist,
-                                contentDescription = stringResource(R.string.action_select),
-                            )
-                        }
-                        // 两个清空收进溢出菜单:M3 的 top app bar anatomy 里 headline 之后最多
-                        // 两个 icon button,而这一页的常态还要留一个给「选择」。
-                        IconButton(onClick = { menuExpanded = true }, enabled = !state.mutating) {
-                            Icon(
-                                Icons.Outlined.MoreVert,
-                                contentDescription = stringResource(R.string.history_more),
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = menuExpanded,
-                            onDismissRequest = { menuExpanded = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.history_clear_finished)) },
-                                enabled = finished.isNotEmpty(),
-                                onClick = {
-                                    menuExpanded = false
-                                    confirmingClearFinished = true
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.history_clear_all)) },
-                                enabled = state.items.isNotEmpty(),
-                                onClick = {
-                                    menuExpanded = false
-                                    confirmingClearAll = true
-                                },
-                            )
-                        }
-                    },
-                )
-            } else {
-                // 多选时整条顶栏换掉,返回箭头改成"退出多选"(M3 的 contextual top app bar)。
-                BilbyTopBar(
-                    title = stringResource(R.string.history_selected_count, ids.size),
-                    onBack = { selectedIds = null },
-                    actions = {
-                        val all = state.items.map { it.oid }.toSet()
-                        IconButton(onClick = { selectedIds = if (ids == all) emptySet() else all }) {
-                            Icon(
-                                Icons.Outlined.SelectAll,
-                                contentDescription = stringResource(R.string.history_select_all),
-                            )
-                        }
-                        IconButton(
-                            onClick = { confirmingDeleteSelected = true },
-                            enabled = ids.isNotEmpty() && !state.mutating,
-                        ) {
-                            Icon(
-                                Icons.Outlined.DeleteOutline,
-                                contentDescription = stringResource(R.string.action_delete),
-                            )
-                        }
-                    },
-                )
+            // **进出多选是换一条顶栏,不是换几个图标**,所以两条之间淡入淡出,不硬切。
+            // 硬切的表现是标题和整排动作在一帧里全变,而人只按了一下「选择」—— 读起来像
+            // 跳到了另一个页面。风格指南 §6 那张表:这是组件层的显隐,取 motionScheme 的
+            // effects 档,不是转场的 tween。
+            //
+            // **`contentKey` 认的是"在不在多选态",不是那个集合本身。** 不给的话每勾一条
+            // (集合换了个新实例)就重新淡一次,而「已选 3 项」正是要在淡不动的时候连续变。
+            // 退场那一帧 AnimatedContent 手里仍是上一个非空集合,所以 ids 在那条分支里不为 null。
+            // transitionSpec 不是组合上下文,主题里的 spec 要先在外面取出来。
+            val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+            AnimatedContent(
+                targetState = selectedIds,
+                transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
+                contentKey = { it != null },
+                label = "history-top-bar",
+            ) { ids ->
+                if (ids == null) {
+                    BilbyTopBar(
+                        title = stringResource(R.string.history_title),
+                        onBack = onBack,
+                        scrollBehavior = scrollBehavior,
+                        actions = {
+                            IconButton(
+                                onClick = { selectedIds = emptySet() },
+                                enabled = state.items.isNotEmpty() && !state.mutating,
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Checklist,
+                                    contentDescription = stringResource(R.string.action_select),
+                                )
+                            }
+                            // 两个清空收进溢出菜单:M3 的 top app bar anatomy 里 headline 之后最多
+                            // 两个 icon button,而这一页的常态还要留一个给「选择」。
+                            IconButton(onClick = { menuExpanded = true }, enabled = !state.mutating) {
+                                Icon(
+                                    Icons.Outlined.MoreVert,
+                                    contentDescription = stringResource(R.string.history_more),
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = menuExpanded,
+                                onDismissRequest = { menuExpanded = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.history_clear_finished)) },
+                                    enabled = finished.isNotEmpty(),
+                                    onClick = {
+                                        menuExpanded = false
+                                        confirmingClearFinished = true
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.history_clear_all)) },
+                                    enabled = state.items.isNotEmpty(),
+                                    onClick = {
+                                        menuExpanded = false
+                                        confirmingClearAll = true
+                                    },
+                                )
+                            }
+                        },
+                    )
+                } else {
+                    // 多选时整条顶栏换掉,返回箭头改成"退出多选"(M3 的 contextual top app bar)。
+                    BilbyTopBar(
+                        title = stringResource(R.string.history_selected_count, ids.size),
+                        onBack = { selectedIds = null },
+                        scrollBehavior = scrollBehavior,
+                        actions = {
+                            val all = state.items.map { it.oid }.toSet()
+                            IconButton(onClick = { selectedIds = if (ids == all) emptySet() else all }) {
+                                Icon(
+                                    Icons.Outlined.SelectAll,
+                                    contentDescription = stringResource(R.string.history_select_all),
+                                )
+                            }
+                            IconButton(
+                                onClick = { confirmingDeleteSelected = true },
+                                enabled = ids.isNotEmpty() && !state.mutating,
+                            ) {
+                                Icon(
+                                    Icons.Outlined.DeleteOutline,
+                                    contentDescription = stringResource(R.string.action_delete),
+                                )
+                            }
+                        },
+                    )
+                }
             }
         },
     ) { insets ->
@@ -1573,60 +1603,75 @@ private fun OfflineRoute(
     LaunchedEffect(items) { selectedIds = selectedIds?.intersect(items.map { it.id }.toSet()) }
     BackHandler(enabled = selectedIds != null) { selectedIds = null }
 
+    // 见 [SearchResultRoute];两条顶栏同接一个 behavior,同历史记录页。
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            val ids = selectedIds
-            if (ids == null) {
-                BilbyTopBar(
-                    title = stringResource(R.string.offline_title),
-                    onBack = onBack,
-                    actions = {
-                        // 多选此前只能长按进入,而长按没有任何视觉提示。照历史记录页的做法
-                        // 在顶栏放一个入口,长按保留。
-                        IconButton(
-                            onClick = { selectedIds = emptySet() },
-                            enabled = items.isNotEmpty(),
-                        ) {
-                            Icon(
-                                Icons.Outlined.Checklist,
-                                contentDescription = stringResource(R.string.action_select),
-                            )
-                        }
-                    },
-                )
-            } else {
-                // 多选时整条顶栏换掉,返回箭头改成"退出多选"。这是 M3 的 contextual top app bar:
-                // 顶栏是当前上下文里能做什么的唯一说明,多选期间那个上下文变了。
-                BilbyTopBar(
-                    title = stringResource(R.string.offline_selected_count, ids.size),
-                    onBack = { selectedIds = null },
-                    actions = {
-                        val all = items.map { it.id }.toSet()
-                        IconButton(onClick = { selectedIds = if (ids == all) emptySet() else all }) {
-                            Icon(
-                                Icons.Outlined.SelectAll,
-                                contentDescription = stringResource(R.string.offline_sheet_select_all),
-                            )
-                        }
-                        IconButton(
-                            enabled = selected.isNotEmpty(),
-                            onClick = {
-                                // 一个字节都还没下的那些直接删,理由同单条(见 OfflineScreen)。
-                                if (selected.all { it.status == OfflineStatus.Queued }) {
-                                    vm.deleteAll(selected)
-                                    selectedIds = null
-                                } else {
-                                    confirmingBatchDelete = true
-                                }
-                            },
-                        ) {
-                            Icon(
-                                Icons.Outlined.DeleteOutline,
-                                contentDescription = stringResource(R.string.action_delete),
-                            )
-                        }
-                    },
-                )
+            // 淡入淡出而不是硬切,`contentKey` 认"在不在多选态" —— 判据与理由逐条同
+            // [HistoryRoute],两页的多选顶栏本来就该是同一个做法。
+            // transitionSpec 不是组合上下文,主题里的 spec 要先在外面取出来。
+            val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+            AnimatedContent(
+                targetState = selectedIds,
+                transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
+                contentKey = { it != null },
+                label = "offline-top-bar",
+            ) { ids ->
+                if (ids == null) {
+                    BilbyTopBar(
+                        title = stringResource(R.string.offline_title),
+                        onBack = onBack,
+                        scrollBehavior = scrollBehavior,
+                        actions = {
+                            // 多选此前只能长按进入,而长按没有任何视觉提示。照历史记录页的做法
+                            // 在顶栏放一个入口,长按保留。
+                            IconButton(
+                                onClick = { selectedIds = emptySet() },
+                                enabled = items.isNotEmpty(),
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Checklist,
+                                    contentDescription = stringResource(R.string.action_select),
+                                )
+                            }
+                        },
+                    )
+                } else {
+                    // 多选时整条顶栏换掉,返回箭头改成"退出多选"。这是 M3 的 contextual top app bar:
+                    // 顶栏是当前上下文里能做什么的唯一说明,多选期间那个上下文变了。
+                    BilbyTopBar(
+                        title = stringResource(R.string.offline_selected_count, ids.size),
+                        onBack = { selectedIds = null },
+                        scrollBehavior = scrollBehavior,
+                        actions = {
+                            val all = items.map { it.id }.toSet()
+                            IconButton(onClick = { selectedIds = if (ids == all) emptySet() else all }) {
+                                Icon(
+                                    Icons.Outlined.SelectAll,
+                                    contentDescription = stringResource(R.string.offline_sheet_select_all),
+                                )
+                            }
+                            IconButton(
+                                enabled = selected.isNotEmpty(),
+                                onClick = {
+                                    // 一个字节都还没下的那些直接删,理由同单条(见 OfflineScreen)。
+                                    if (selected.all { it.status == OfflineStatus.Queued }) {
+                                        vm.deleteAll(selected)
+                                        selectedIds = null
+                                    } else {
+                                        confirmingBatchDelete = true
+                                    }
+                                },
+                            ) {
+                                Icon(
+                                    Icons.Outlined.DeleteOutline,
+                                    contentDescription = stringResource(R.string.action_delete),
+                                )
+                            }
+                        },
+                    )
+                }
             }
         },
     ) { insets ->
@@ -1700,9 +1745,16 @@ private fun ToViewListRoute(
         if (result == SnackbarResult.ActionPerformed) vm.undoDelete(removed) else vm.consumeRemoved()
     }
 
+    // 见 [SearchResultRoute]。
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            BilbyTopBar(title = stringResource(R.string.tab_toview), onBack = onBack) {
+            BilbyTopBar(
+                title = stringResource(R.string.tab_toview),
+                onBack = onBack,
+                scrollBehavior = scrollBehavior,
+            ) {
                 IconButton(
                     onClick = { confirmingClearFinished = true },
                     enabled = !state.clearing && state.items.any { it.isFinished },
@@ -1763,7 +1815,12 @@ private fun FavFolderRoute(
         factory = viewModelFactory { initializer { FavFolderViewModel(mediaId, container.favRepository) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
-    Scaffold(topBar = { BilbyTopBar(title = title, onBack = onBack) }) { insets ->
+    // 见 [SearchResultRoute]。
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        topBar = { BilbyTopBar(title = title, onBack = onBack, scrollBehavior = scrollBehavior) },
+    ) { insets ->
         FavFolderScreen(
             state = state,
             onItemClick = { onVideoClick(it.bvid) },
@@ -1791,8 +1848,17 @@ private fun FollowingsRoute(
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    // 见 [SearchResultRoute]。
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
-        topBar = { BilbyTopBar(title = stringResource(R.string.followings_title), onBack = onBack) },
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        topBar = {
+            BilbyTopBar(
+                title = stringResource(R.string.followings_title),
+                onBack = onBack,
+                scrollBehavior = scrollBehavior,
+            )
+        },
     ) { insets ->
         FollowingsScreen(
             state = state,
@@ -2013,8 +2079,17 @@ private fun FavFoldersRoute(
         factory = viewModelFactory { initializer { FavFoldersViewModel(container.favRepository) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    // 见 [SearchResultRoute]。
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
-        topBar = { BilbyTopBar(title = stringResource(R.string.fav_folders_title), onBack = onBack) },
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        topBar = {
+            BilbyTopBar(
+                title = stringResource(R.string.fav_folders_title),
+                onBack = onBack,
+                scrollBehavior = scrollBehavior,
+            )
+        },
     ) { insets ->
         FavFoldersScreen(
             state = state,
@@ -2047,8 +2122,17 @@ private fun BlacklistRoute(container: AppContainer, onBack: () -> Unit) {
         factory = viewModelFactory { initializer { BlacklistViewModel(container.relationRepository) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    // 见 [SearchResultRoute]。
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
-        topBar = { BilbyTopBar(title = stringResource(R.string.blacklist_title), onBack = onBack) },
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        topBar = {
+            BilbyTopBar(
+                title = stringResource(R.string.blacklist_title),
+                onBack = onBack,
+                scrollBehavior = scrollBehavior,
+            )
+        },
     ) { insets ->
         BlacklistScreen(
             state = state,

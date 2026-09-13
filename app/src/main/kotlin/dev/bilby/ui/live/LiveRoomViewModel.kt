@@ -1,9 +1,11 @@
 package dev.bilby.ui.live
 
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
 import dev.bilby.api.BiliResult
+import dev.bilby.ui.errorTextRes
 import dev.bilby.api.dto.LiveGuardItemDto
 import dev.bilby.danmaku.danmakuModeOrNull
 import dev.bilby.data.ArchivedSuperChat
@@ -17,6 +19,7 @@ import dev.bilby.live.LiveMessage
 import dev.nihildigit.danmaku.Danmaku
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -97,7 +100,12 @@ sealed interface LiveFeedItem {
         val kind: Kind,
         val message: String? = null,
     ) : LiveFeedItem {
-        enum class Kind { LiveStarted, LiveEnded, Warning, CutOff, SelfBlocked }
+        /**
+         * [Disconnected] / [Reconnected] 说的不是房间里发生了什么,而是**这条连接**的事。
+         * 仍然走同一个 [Notice]:它们出现的位置就该在流里、按时间排 —— 断线那一刻之前的
+         * 消息读到了,之后的没读到,而这个分界只有在流里才说得清。
+         */
+        enum class Kind { LiveStarted, LiveEnded, Warning, CutOff, SelfBlocked, Disconnected, Reconnected }
     }
 }
 
@@ -107,12 +115,13 @@ data class LiveGuardsState(
     val page: Int = 0,
     val loading: Boolean = false,
     val hasMore: Boolean = true,
-    val error: String? = null,
+    @StringRes val error: Int? = null,
 )
 
 data class LiveRoomUiState(
     val loading: Boolean = true,
-    val error: String? = null,
+    /** 失败说哪一句,存的是资源 id。映射与理由见 [dev.bilby.ui.errorTextRes]。 */
+    @StringRes val error: Int? = null,
     val title: String = "",
     val anchorName: String = "",
     val anchorFace: String = "",
@@ -194,6 +203,15 @@ class LiveRoomViewModel(
     /** 信息流那条连接,见 [connectDanmaku]。 */
     private var danmakuJob: Job? = null
 
+    /** 最近一条消息到达的时刻。null 表示一条都还没来过,见 [watchConnection]。 */
+    private var lastMessageAtMillis: Long? = null
+
+    /**
+     * 此刻认为连着。**开场就是 true** —— 进房那几秒还没有消息,但那不叫"断开";真的断了由
+     * [watchConnection] 判。
+     */
+    private var connected = true
+
     /**
      * 弹幕内容流。`playTimeMillis` 恒为 0,**由渲染层重打** —— 服务端时间戳和播放器时间轴
      * 不是同一根,而渲染层手里就有播放器位置。
@@ -255,12 +273,11 @@ class LiveRoomViewModel(
                     loadMoreGuards()
                 }
 
-                is BiliResult.ApiError -> _state.update {
-                    it.copy(loading = false, error = playback.message)
-                }
-
-                is BiliResult.Failure -> _state.update {
-                    it.copy(loading = false, error = playback.cause.message)
+                // 接口原话和异常 message 都不上屏,收成三句里的一句;原文与错误码由
+                // errorTextRes 打进 BiliLog(见 dev.bilby.ui.errorTextRes)。这一句会画在
+                // 封面正中央的那块遮罩上,而在那儿最该回答的是"是没开播,还是我这边没读到"。
+                else -> _state.update {
+                    it.copy(loading = false, error = playback.errorTextRes("直播间取流"))
                 }
             }
         }
@@ -332,7 +349,10 @@ class LiveRoomViewModel(
             // 还没发出第一个值,拿到的是 0。用登录态签出来的 token 配一个 uid=0 的认证包,
             // 服务端有理由拒绝,而被拒之后它只是把连接关掉。
             val selfMid = settings.credentials.first().dedeUserId.toLongOrNull() ?: 0L
+            launch { watchConnection() }
             danmakuClient.messages(roomId, selfMid).collect { message ->
+                lastMessageAtMillis = System.currentTimeMillis()
+                onReconnected()
                 when (message) {
                     is LiveMessage.Danmaku -> onDanmaku(message)
                     // 进房时那一份只在那一刻准,之后靠这条命令跟。人气值(Popularity)不再显示,
@@ -411,6 +431,42 @@ class LiveRoomViewModel(
      */
     private fun append(item: LiveFeedItem) {
         _state.update { it.copy(feed = (it.feed + item).takeLast(MAX_FEED_ITEMS)) }
+    }
+
+    /**
+     * 连接活着没有。**判据是心跳,不是连接对象本身。**
+     *
+     * `LiveDanmakuClient.messages` 把断线和重连整个包在自己里面(见那个函数):失败被
+     * `runCatching` 吃掉、退避之后重连,流本身既不结束也不抛,所以这一层看不到任何事件。
+     * 能看到的是**没东西来了** —— 那条连接每 30 秒发一次心跳,回包带着人气值上来
+     * (`LiveMessage.Popularity`),所以"超过两轮心跳没有任何消息"就是断了。房间再冷也不影响
+     * 这个判据,心跳与有没有人说话无关。
+     *
+     * 改这个超时之前先看 `LiveDanmakuClient.HEARTBEAT_INTERVAL_MILLIS`:两者是一对。
+     */
+    private suspend fun watchConnection() {
+        while (true) {
+            delay(CONNECTION_CHECK_INTERVAL_MILLIS)
+            val last = lastMessageAtMillis ?: continue
+            if (System.currentTimeMillis() - last > CONNECTION_TIMEOUT_MILLIS) onDisconnected()
+        }
+    }
+
+    /**
+     * 断了。**只在第一次断的时候留一行**,超时之后每轮检查都再留一行的话,网一直不好就是
+     * 满屏「连接已断开」。
+     */
+    private fun onDisconnected() {
+        if (!connected) return
+        connected = false
+        pushNotice(LiveFeedItem.Notice.Kind.Disconnected)
+    }
+
+    /** 又有消息了。**开场第一条不算重连** —— 那时还没断过,`connected` 一直是 true。 */
+    private fun onReconnected() {
+        if (connected) return
+        connected = true
+        pushNotice(LiveFeedItem.Notice.Kind.Reconnected)
     }
 
     private fun pushNotice(kind: LiveFeedItem.Notice.Kind, message: String? = null) {
@@ -654,12 +710,15 @@ class LiveRoomViewModel(
                     )
                 }
 
-                is BiliResult.ApiError -> _state.update {
-                    it.copy(guards = it.guards.copy(loading = false, error = page.message))
-                }
-
-                is BiliResult.Failure -> _state.update {
-                    it.copy(guards = it.guards.copy(loading = false, error = page.cause.message))
+                // 同上面那条:原话与错误码只进 BiliLog。这一处和取流那一处是同一个毛病,
+                // 一起改掉,免得同一页两种说法。
+                else -> _state.update {
+                    it.copy(
+                        guards = it.guards.copy(
+                            loading = false,
+                            error = page.errorTextRes("直播间取大航海"),
+                        ),
+                    )
                 }
             }
         }
@@ -667,6 +726,15 @@ class LiveRoomViewModel(
 
     private companion object {
         const val MAX_FEED_ITEMS = 200
+
+        /**
+         * 多久看一次连接还在不在,以及多久没消息算断。
+         *
+         * 超时取两轮心跳多一点:一轮(`LiveDanmakuClient.HEARTBEAT_INTERVAL_MILLIS` = 30s)
+         * 会被网络抖动误判,三轮以上又要一分半才说得出"断了",而那时人已经自己看出来了。
+         */
+        const val CONNECTION_CHECK_INTERVAL_MILLIS = 10_000L
+        const val CONNECTION_TIMEOUT_MILLIS = 70_000L
         /**
          * 本场日志封顶,超了从最旧的丢(owner 定)。
          *

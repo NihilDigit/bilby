@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -52,7 +52,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
 import dev.bilby.R
 import dev.bilby.agent.AgentStep
 import dev.bilby.agent.AgentTurnState
@@ -68,7 +67,6 @@ import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
-import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.KeepScrolledToBottom
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.SearchField
@@ -332,17 +330,24 @@ internal fun NormalResultList(
             // 表现就是没有用户条,不是整屏错误。
             when {
                 state.videoError != null -> FullScreenError(state.videoError, onRetry, Modifier.fillMaxWidth())
-                state.videoLoading -> InlineProgress(
-                    stringResource(R.string.search_loading),
-                    Modifier.padding(Spacing.Comfortable),
-                )
 
-                state.appending -> InlineProgress(
-                    stringResource(R.string.search_loading_more),
-                    Modifier.padding(Spacing.Comfortable),
-                )
+                // **首屏走 `FullScreenLoading`,不是行内一行「搜索中…」。**
+                // 那一行原先挂在一个只有排序行的列表底下,读起来像"结果已经出完了,底下还有
+                // 一条在加载";而这是整屏唯一的内容,该占整屏。它自带 200ms 的出现延迟
+                // (`rememberLoadingVisible`,见 States.kt),命中缓存的那一下不会闪一个转圈。
+                state.videoLoading && state.videos.isEmpty() ->
+                    FullScreenLoading(Modifier.fillParentMaxHeight())
 
                 state.videos.isEmpty() -> EmptyState(stringResource(R.string.search_no_results))
+
+                // 有内容之后的续页和到底交给 [ListFooter],和其余翻页列表同一份长相
+                // (风格指南 §2.7d 那张表的最后一档)。原先续页也是一行「加载更多…」,
+                // 而别处都是一个居中的转圈。
+                else -> ListFooter(
+                    appending = state.appending || state.videoLoading,
+                    hasMore = state.hasMore,
+                    hasItems = true,
+                )
             }
         }
     }
@@ -383,7 +388,9 @@ private fun SearchHistoryList(
                     Icons.Filled.History,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
+                    // 行内图标只有 Dimens 里那一档。18 是手写的,和别处的 20 差两个 dp ——
+                    // 单看不出来,和搜索结果行并排时那一列图标就不齐。
+                    modifier = Modifier.size(Dimens.IconInline),
                 )
                 Text(
                     query,
@@ -479,19 +486,23 @@ private fun UserBubble(text: String, modifier: Modifier = Modifier) {
             color = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             shape = MaterialTheme.shapes.large,
+            // **上限按可用宽度的比例算,不写死 280dp。** 那个数是按 360dp 宽的手机定的,平板上
+            // 一句长问句会在整屏宽度的中间断成好几行,右边留着一大片空;而窄屏上它比屏幕还宽,
+            // 等于没有上限。留出的那两成是"这一侧是我说的话"这个形状本身 —— 气泡铺满整行就
+            // 和下面助理的正文分不开了。
+            modifier = Modifier.fillMaxWidth(BubbleWidthFraction).wrapContentWidth(Alignment.End),
         ) {
             Text(
                 text = text,
                 style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier
-                    .widthIn(max = BubbleMaxWidth)
-                    .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+                modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
             )
         }
     }
 }
 
-private val BubbleMaxWidth = 280.dp
+/** 用户气泡最宽占多少。留出的两成让"谁在说话"从形状上就读得出来。 */
+private const val BubbleWidthFraction = 0.8f
 
 // ---- 普通模式 ----
 

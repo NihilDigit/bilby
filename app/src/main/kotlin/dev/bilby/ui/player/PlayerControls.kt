@@ -17,10 +17,15 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,19 +60,22 @@ internal fun DanmakuButton(
     onEnabledChange: (Boolean) -> Unit,
     isFullscreen: Boolean,
 ) {
-    ControlButton(
-        expanded = enabled,
-        onClick = { onEnabledChange(!enabled) },
-        label = null,
-        icon = { tint ->
-            Icon(
-                if (enabled) BilbyIcons.Danmaku else BilbyIcons.DanmakuOff,
-                stringResource(if (enabled) R.string.danmaku_hide else R.string.danmaku_show),
-                tint = tint,
-                modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp),
-            )
-        },
-    )
+    val description = stringResource(if (enabled) R.string.danmaku_hide else R.string.danmaku_show)
+    PlayerTooltip(description) {
+        ControlButton(
+            expanded = enabled,
+            onClick = { onEnabledChange(!enabled) },
+            label = null,
+            icon = { tint ->
+                Icon(
+                    if (enabled) BilbyIcons.Danmaku else BilbyIcons.DanmakuOff,
+                    description,
+                    tint = tint,
+                    modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp),
+                )
+            },
+        )
+    }
 }
 
 /**
@@ -169,14 +177,18 @@ private val MediaScrimHeight = 72.dp
  *
  * 图标不是装饰:百分比数字回答不了"这是音量还是亮度",而横屏时手指正压在半屏上,
  * 文字很容易被挡住一半。
+ *
+ * **摆位归调用方**,所以不是 `BoxScope` 扩展:它套在 `AnimatedVisibility` 里淡入淡出
+ * (见 [PlayerShell]),而那一层的 content scope 不是 `BoxScope`,`align` 得挂在外面那个
+ * `AnimatedVisibility` 上。
  */
 @Composable
-internal fun BoxScope.PlayerHintOverlay(
+internal fun PlayerHintOverlay(
     icon: ImageVector,
     text: String,
     modifier: Modifier = Modifier,
 ) {
-    Overlay(modifier = modifier.align(Alignment.Center)) {
+    Overlay(modifier = modifier) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
@@ -198,6 +210,28 @@ internal fun BoxScope.PlayerHintOverlay(
 
 /** 比正文大一档,和 titleMedium 的行高对得上。 */
 private val HintIconSize = 22.dp
+
+/**
+ * 控制条上那几个纯图标按钮的 tooltip。**长按说出这个按钮叫什么**——倍速、清晰度、字幕、
+ * 弹幕、全屏、锁,六个图标挨着排在画面右下角,而它们的字形没有一个是约定俗成到不必解释的
+ * (M3 的 icon buttons 页对纯图标按钮给的办法就是挂 tooltip)。
+ *
+ * [text] 直接复用按钮自己的 `contentDescription`,不另写一条:读屏念的和长按看到的是同一句,
+ * 分成两条迟早各自漂移。
+ *
+ * 包一层函数而不是在六处各写一遍 `TooltipBox`:那三行样板里有两行(位置提供者、state)在
+ * 每一处都一模一样,而抄六遍的东西改一处就会漏五处。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun PlayerTooltip(text: String, content: @Composable () -> Unit) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(text) } },
+        state = rememberTooltipState(),
+        content = content,
+    )
+}
 
 /** 图标按钮,可选地在图标右边挂一小段文字(当前倍速、当前清晰度)。 */
 @Composable
@@ -226,9 +260,12 @@ internal fun ControlButton(
                 style = MaterialTheme.typography.labelSmall,
                 color = tint,
                 maxLines = 1,
-                // **不设宽度上限**:这里的标签是画质档名("1080P60"、"1080P 高码率"),
+                // **不设宽度上限,也不截断**:这里的标签是画质档名("1080P60"、"1080P 高码率"),
                 // 截断之后两个档看起来一模一样,那正是这个标签唯一要回答的问题。
-                // 只在全屏显示(内嵌时 label 传 null),横屏有的是宽度,不会挤掉别的控件。
+                //
+                // 代价由调用方承担:控制条先把这一行量一遍,量不下就整条不给档名(见
+                // `ui/video/BilbyPlayer.kt` 的 `PlayerControlBar`)。以前这里写的是"只在全屏
+                // 显示,横屏有的是宽度" —— 竖屏视频的全屏是竖着的,只有 360–410dp。
                 modifier = Modifier.padding(start = Spacing.Hair),
             )
         }

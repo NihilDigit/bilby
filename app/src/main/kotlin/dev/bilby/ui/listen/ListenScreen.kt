@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -48,6 +49,7 @@ import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -86,6 +88,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -113,6 +116,8 @@ import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SubtitleTrackMenu
+import dev.bilby.ui.components.menuSelectedMark
+import dev.bilby.ui.components.selectedSemantics
 import dev.bilby.ui.components.VideoCover
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.theme.Breakpoints
@@ -155,8 +160,20 @@ private const val DiscRotationPeriodMillis = 36_000
 /** 歌词模式顶栏里那张封面的宽度。高度由 16:10 定,见风格指南 §1.3b。 */
 private val LyricsHeaderCoverWidth = 88.dp
 
-/** 歌词区上下各留出的空白。 */
-private val LyricsEdgeSpacing = 24.dp
+/** 上一条 / 下一条的图标。比列表里的行内图标大一档 —— 它们是这一屏的主要操作之一。 */
+private val SkipIconSize = 32.dp
+
+/**
+ * 播放键的容器与图标。**比两侧那两颗大一档**,因为它是这一行里唯一的主操作。
+ *
+ * 64 是留过余量的:控制行五等分,360dp 宽减去左右各 16dp 之后每格 65.6dp。再大一档
+ * (M3 的 large icon button 是 96dp)在这一行里就得改排布,不只是换个数。
+ */
+private val PlayButtonSize = 64.dp
+private val PlayIconSize = 36.dp
+
+/** 队列顺序那个按钮的图标,跟在文字左边。M3 给按钮前置图标定的就是 18dp。 */
+private val OrderIconSize = 18.dp
 
 /** 片头虚拟空行的 key。cue 的 key 是 `fromMillis`(Long),这里用字符串不会撞上。 */
 private const val LeadInKey = "lyrics_lead_in"
@@ -218,6 +235,7 @@ fun ListenScreen(
     modifier: Modifier = Modifier,
 ) {
     var position by remember { mutableLongStateOf(0L) }
+    var bufferedPosition by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var dragPosition by remember { mutableStateOf<Long?>(null) }
     var resumeAfterDrag by remember { mutableStateOf(false) }
@@ -228,6 +246,7 @@ fun ListenScreen(
     LaunchedEffect(player) {
         while (true) {
             if (dragPosition == null) position = player?.currentPosition ?: 0L
+            bufferedPosition = player?.bufferedPosition ?: 0L
             duration = player?.duration?.coerceAtLeast(0) ?: 0L
             delay(500)
         }
@@ -372,6 +391,7 @@ fun ListenScreen(
                     SeekBar(
                         position = displayPosition,
                         duration = duration,
+                        bufferedPosition = bufferedPosition,
                         onSeekStart = {
                             resumeAfterDrag = player.isPlaying
                             player.pause()
@@ -401,7 +421,9 @@ fun ListenScreen(
                         Text(
                             text = formatDurationMillis(displayPosition),
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
+                            // outline 那一档是给描边和分隔线定的,压在正文里对比度不够
+                            // (风格指南 §1.1)。次要文字一律 onSurfaceVariant。
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             autoSize = timeAutoSize,
                             textAlign = TextAlign.Start,
@@ -410,7 +432,7 @@ fun ListenScreen(
                         Text(
                             text = formatDurationMillis(duration),
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             autoSize = timeAutoSize,
                             textAlign = TextAlign.End,
@@ -592,7 +614,7 @@ private fun DiscView(
                     Text(
                         "${(state.queue?.positionInQueue ?: 0)} / ${(state.queue?.size ?: 0)}",
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.outline,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -645,9 +667,14 @@ private fun PlaybackControls(
             }
             DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) {
                 SPEED_OPTIONS.forEach { option ->
+                    // 选中态和看视频的倍速菜单共用同一份标记([menuSelectedMark]):这里原先
+                    // 一个勾都没有,七档倍速里哪一档在用只能靠记住刚才按钮上写的是几。
+                    val selected = option == speed
                     DropdownMenuItem(
                         text = { Text(formatSpeed(option)) },
                         onClick = { speedMenuOpen = false; onSpeedChange(option) },
+                        trailingIcon = if (selected) menuSelectedMark else null,
+                        modifier = Modifier.selectedSemantics(selected),
                     )
                 }
             }
@@ -657,24 +684,27 @@ private fun PlaybackControls(
                 Icon(
                     Icons.Filled.SkipPrevious,
                     contentDescription = stringResource(R.string.player_previous),
-                    modifier = Modifier.size(32.dp),
+                    modifier = Modifier.size(SkipIconSize),
                 )
             }
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
             if (loading) {
-                Box(modifier = Modifier.size(56.dp), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.size(PlayButtonSize), contentAlignment = Alignment.Center) {
                     // 跟它替掉的播放键同宽:小一圈会让这一格在取流那一瞬间塌下去。
-                    LoadingSpinner(size = 40.dp)
+                    LoadingSpinner(size = PlayIconSize)
                 }
             } else {
-                IconButton(onClick = onPlayPause, modifier = Modifier.size(56.dp)) {
+                // **有容器的按钮**,不是一个裸图标。这一行五格里只有它是主操作,而五个同色
+                // 同大小的图标排开时,主次全靠位置猜;填充的圆底是 M3 给"一处只有一个"的
+                // 强调按钮的办法。跟着放大一档,和两侧的上一条/下一条分出层级。
+                FilledIconButton(onClick = onPlayPause, modifier = Modifier.size(PlayButtonSize)) {
                     Icon(
                         imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                         contentDescription = stringResource(
                             if (isPlaying) R.string.player_pause else R.string.player_play,
                         ),
-                        modifier = Modifier.size(40.dp),
+                        modifier = Modifier.size(PlayIconSize),
                     )
                 }
             }
@@ -684,7 +714,7 @@ private fun PlaybackControls(
                 Icon(
                     Icons.Filled.SkipNext,
                     contentDescription = stringResource(R.string.player_next),
-                    modifier = Modifier.size(32.dp),
+                    modifier = Modifier.size(SkipIconSize),
                 )
             }
         }
@@ -787,12 +817,24 @@ private fun QueueSheetContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             // 靠右:左边是标题,顺序切换是对整个列表的操作,和标题分列两端读起来是一组。
-            TextButton(onClick = onToggleShuffle) {
-                Icon(Icons.Filled.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
-                Text(
-                    stringResource(if (shuffled) R.string.queue_order_shuffle else R.string.queue_order_sequential),
-                    modifier = Modifier.padding(start = Spacing.Hair),
+            //
+            // **图标跟着状态换,和文字说的是同一件事。** 这里原先恒定是 `Shuffle`:文字写着
+            // 「顺序播放」而旁边画着交叉的箭头,两个符号一个说顺序、一个说随机,而它们本来
+            // 是同一个读数。图标不给 contentDescription —— 文字已经念出来了。
+            val orderLabel =
+                stringResource(if (shuffled) R.string.queue_order_shuffle else R.string.queue_order_sequential)
+            TextButton(
+                onClick = onToggleShuffle,
+                // 读屏念的是「顺序播放,按钮」,听起来像"按下去会变成顺序播放",而实际相反。
+                // stateDescription 把这句归到状态那一栏,念出来是「按钮,顺序播放」。
+                modifier = Modifier.semantics { stateDescription = orderLabel },
+            ) {
+                Icon(
+                    if (shuffled) Icons.Filled.Shuffle else Icons.AutoMirrored.Filled.PlaylistPlay,
+                    contentDescription = null,
+                    modifier = Modifier.size(OrderIconSize),
                 )
+                Text(orderLabel, modifier = Modifier.padding(start = Spacing.Hair))
             }
         }
         EpisodeList(
@@ -993,13 +1035,21 @@ private fun LyricsView(
                 // 边界出现和消失,像被裁掉而不是滚出去。留白加在这里而不是 LazyColumn 的
                 // contentPadding 上 —— 后者是给"当前句居中"用的(halfViewport),两者混在
                 // 一个参数里,以后改任何一个都要重新算另一个。
-                modifier = Modifier.fillMaxSize().padding(vertical = LyricsEdgeSpacing),
+                modifier = Modifier.fillMaxSize().padding(vertical = Spacing.Loose),
             )
-            // 和唱片页那个字幕按钮同一个位置、同一个图标,亮着表示字幕开着。点它 =
+            // 和唱片页那个字幕按钮同一个位置、同一个图标、同一个底,亮着表示字幕开着。点它 =
             // **选中「无字幕」**,退出歌词是这件事的结果,不是另一个动作。
-            // 底下是 surface 不是封面,所以不套 scrim 底、不用 FixedColors —— 那一套是给
-            // "压在画面上"的控件准备的,这一页已经没有画面了。
-            IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.Cozy)) {
+            //
+            // 底跟唱片页共用([subtitleButtonContainer])。这里原先不套底,理由是"这一页没有
+            // 画面了";而它和唱片页那颗是同一颗按钮的两个状态,来回切换时除了位置不动,长相
+            // 也不该变 —— 一颗有底一颗没底,看起来是两个按钮。
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(Spacing.Cozy)
+                    .subtitleButtonContainer(),
+            ) {
                 Icon(
                     Icons.Filled.Subtitles,
                     contentDescription = stringResource(R.string.player_subtitle),
@@ -1140,9 +1190,7 @@ private fun SubtitleTrackCornerButton(
     Box(modifier = modifier) {
         IconButton(
             onClick = { expanded = true },
-            modifier = Modifier
-                .clip(CircleShape)
-                .background(FixedColors.ScrimOnMedia),
+            modifier = Modifier.subtitleButtonContainer(),
         ) {
             Icon(
                 Icons.Filled.Subtitles,
@@ -1159,6 +1207,14 @@ private fun SubtitleTrackCornerButton(
         )
     }
 }
+
+/**
+ * 字幕按钮的圆底。唱片页和歌词页共用 —— 同一颗按钮在两页之间切换,位置和长相都不该动。
+ *
+ * 圆形 + [FixedColors.ScrimOnMedia]:它浮在唱片/歌词区上,而那块区域相当于看视频时的画面
+ * 位置(docs/ui-style-guide.md §4.3),不给底的话图标直接落在内容上。
+ */
+private fun Modifier.subtitleButtonContainer() = clip(CircleShape).background(FixedColors.ScrimOnMedia)
 
 /**
  * 距离真正停下来还有多久。不定时时返回 null。

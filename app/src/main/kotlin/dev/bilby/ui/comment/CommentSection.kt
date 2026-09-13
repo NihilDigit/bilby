@@ -1,5 +1,7 @@
 package dev.bilby.ui.comment
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +26,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ThumbUp
@@ -49,6 +53,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,13 +68,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.bilby.R
@@ -204,6 +207,28 @@ fun CommentSection(
     // 而对着的是上一楼里某条已经翻不到的回复。
     LaunchedEffect(panelRoot) {
         if (panelRoot == null) panelReplyTo = null
+    }
+
+    // **草稿只在发出去之后才清。** 以前是按下发送就清,于是一次失败同时拿走两样东西:刚写的
+    // 那段字,以及"它到底发出去了没有"的答案 —— 屏上既没有新评论也没有输入内容,而失败原因
+    // 画在整个评论区的页脚上,在十几屏之外。现在失败原因就在输入栏上方一行,草稿还在框里。
+    //
+    // 成功与失败在 ViewModel 的协程里分道,界面读不到那个分支,只能读它报的成功计数
+    // ([CommentUiState.sentCount])。**记住上次见到的那个数,不拿这个 effect 的首次执行当信号**:
+    // 它在进入这一页时也会跑一遍,那样会把进程重建之后刚恢复出来的草稿抹掉。
+    // **判据是"这个数变大了",不是"和记着的那个不一样"。** 进程重建之后 ViewModel 是新的,
+    // 计数从 0 起,而 rememberSaveable 恢复出来的是重建之前那个数 —— 按"不一样"判会在回到
+    // 这一页的第一帧把刚恢复的草稿清掉,正是这一条要防的事。
+    var seenSentCount by rememberSaveable { mutableIntStateOf(state.sentCount) }
+    LaunchedEffect(state.sentCount) {
+        if (state.sentCount <= seenSentCount) {
+            seenSentCount = state.sentCount
+            return@LaunchedEffect
+        }
+        seenSentCount = state.sentCount
+        inputText = ""
+        replyTarget = null
+        panelReplyTo = null
     }
 
     // 面板开着的时候主楼被刷掉了(下拉刷新之后它不在第一页了),把面板一起关掉:
@@ -362,11 +387,9 @@ fun CommentSection(
             replyTarget = replyTarget?.let { id -> findUname(state, id) },
             onCancelReply = { replyTarget = null },
             sending = state.sending,
-            onSend = {
-                onSend(inputText, replyTarget)
-                inputText = ""
-                replyTarget = null
-            },
+            // 草稿和回复对象都不在这里清,交给上面那个数着成功次数的 effect。
+            sendError = state.sendError,
+            onSend = { onSend(inputText, replyTarget) },
         )
     }
 
@@ -391,14 +414,10 @@ fun CommentSection(
             inputText = inputText,
             onInputChange = { inputText = it },
             sending = state.sending,
-            onSendReply = {
-                onSend(inputText, panelReplyTo)
-                inputText = ""
-                panelReplyTo = null
-                // 底部那条常驻输入栏和这里共用 inputText。它自己的回复对象要一起清掉,
-                // 否则关掉面板之后它还顶着"回复 @某某",而那条草稿已经发出去了。
-                replyTarget = null
-            },
+            sendError = state.sendError,
+            // 草稿、面板里的回复对象、以及底部那条常驻输入栏的回复对象(两者共用 inputText)
+            // 一律等成功回执再清,清在那个数着成功次数的 effect 里。
+            onSendReply = { onSend(inputText, panelReplyTo) },
             onDelete = onDelete,
             onSeek = onSeek,
             // **跳走之前先关面板。** `ModalBottomSheet` 自己注册了一个 BackHandler(预测式
@@ -644,7 +663,7 @@ private val CommentBodyStyle
     @Composable get() = MaterialTheme.typography.bodyMedium.copy(lineHeight = 24.sp)
 
 /**
- * 摊开之后的楼中楼正文。**字号和主楼一样是 14sp,只把行高收一档(24 → 22)。**
+ * 楼中楼正文,预览和摊开共用。**字号和主楼一样是 14sp,只把行高收一档(24 → 22)。**
  *
  * 上一版取的是 `bodySmall` 12sp:那是把层级压在字号上,而一条回复和一条评论是同一种东西 ——
  * 读者读到楼中楼时并没有换一副眼镜。层级由缩进承担,缩进不影响这段文字本身好不好读。
@@ -653,10 +672,6 @@ private val CommentBodyStyle
  */
 private val SubReplyBodyStyle
     @Composable get() = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp)
-
-/** 预览层那两三行。同字号,行高再收一档 —— 它只有两行的位置,行距占掉的就是内容。 */
-private val SubReplyPreviewStyle
-    @Composable get() = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp)
 
 /** 预览层每条截到两行。PiliPlus 的 `replyItemRow` 同样是 2。 */
 private const val SubReplyPreviewMaxLines = 2
@@ -838,24 +853,20 @@ private fun SubReplies(
     ) {
         Column(modifier = Modifier.padding(vertical = Spacing.Hair)) {
             shown.forEach { sub ->
-                // 预览层和摊开之后是两种形态,不是同一种的两个开关位。预览是"这一楼底下在说
-                // 什么"的一瞥:没有头像、没有按钮、名字接进正文同一段、两行截断。摊开之后每条
-                // 都是一条完整的回复,该有的都有 —— 这正是 PiliPlus 的分法,`replyItemRow`
-                // 与 `ReplyItemGrpc(replyLevel: 2)` 两个 widget,不是一个 widget 的两个参数。
-                if (openThread == null) {
-                    SubReplyPreviewRow(
-                        comment = sub,
-                        onOpenThread = openThisThread,
-                        onSeek = onSeek,
-                        onUserClick = onUserClick,
-                        onOpenLink = onOpenLink,
-                        onSelectText = onSelectText,
-                    )
-                } else {
+                // **按 rpid 给每条一个稳定身份。** 预览那几条([CommentItem.previewReplies])和
+                // 摊开之后的那一份([ExpandedReplies.items])是两个不同的列表对象,但开头几条是
+                // 同一批回复。不给 key 的话 Compose 按位置认节点,展开时它们照样能对上;而一旦
+                // 有条被删掉或者服务端换了顺序,位置就错开,正文和头像会串到别人身上。
+                //
+                // 有了 key,同一条回复在两种形态之间是**同一个节点**:正文从两行长到全文、
+                // 动作行从无到有,都发生在它身上,所以下面那些动画才有东西可动。
+                key(sub.rpid) {
                     SubReplyRow(
                         comment = sub,
+                        form = if (openThread == null) SubReplyForm.Preview else SubReplyForm.Full,
                         rootAuthorMid = comment.mid,
                         canDelete = myMid != null && myMid == sub.mid,
+                        onOpenThread = openThisThread,
                         onReplyTo = onReplyTo,
                         onLike = onLike,
                         onDelete = onDelete,
@@ -924,70 +935,20 @@ private fun SubReplies(
 }
 
 /**
- * 楼中楼预览层的一条:名字接在正文前面,同一段文字流,两行截断,没有头像也没有按钮。
+ * 楼中楼那一条的两种形态。
  *
- * **整条点下去是打开这一组,不是回复它。** 预览是一瞥,不是可操作的条目 —— 想说话得先看清
- * 上下文,而这里只有两行。回复和点赞的入口在摊开之后的 [SubReplyRow] 上。
- * PiliPlus 的 `replyItemRow` 也是整条 `InkWell` 通向 `replyReply`。
+ * **是一个组件的两个形态,不是两个组件。** 上一版按 PiliPlus 的分法写成两个 composable
+ * (`replyItemRow` 与 `ReplyItemGrpc(replyLevel: 2)`),预览那一份名字接进正文同一段、没有头像、
+ * 没有按钮。代价是展开的那一下整条被换掉:刚才读的那两行原地消失,另一条长相不同的东西
+ * 出现在同一个位置,而它们本是同一条回复。合成一个之后,展开只是这一个节点上的几处变化 ——
+ * 正文从两行长到全文,动作行淡入,左边那张头像一动不动。
  */
-@Composable
-private fun SubReplyPreviewRow(
-    comment: CommentItem,
-    onOpenThread: () -> Unit,
-    onSeek: ((Long) -> Unit)?,
-    onUserClick: (Long) -> Unit,
-    onOpenLink: (String) -> Unit,
-    onSelectText: (String) -> Unit,
-) {
-    val label = stringResource(R.string.comment_view_thread)
-    val nameColor = MaterialTheme.colorScheme.onSurfaceVariant
-    // 名字靠字重和颜色跟正文分开,不靠 primary。一格预览里三个名字全染成可点色的话,
-    // 这一小块会比它所属的主楼还响,而它们在这一层本来就点不动(整条通向的是打开这一组)。
-    val prefix = remember(comment.uname, comment.parentRpid, comment.rootRpid, nameColor) {
-        buildAnnotatedString {
-            withStyle(SpanStyle(color = nameColor, fontWeight = FontWeight.Medium)) {
-                append(comment.uname)
-            }
-            // **回复对象已经写在正文开头时,名字后面不加冒号。** 那一截"回复 @某某 :"是发送方
-            // 拼进 message 的字面文本(见 CommentRepository.postComment),再补一个冒号读出来
-            // 就是"甲:回复 @乙 :……"。判据是 parentRpid,不是去正文里认那几个字 ——
-            // 正文本来就可能以"回复"两个字开头。那一截自带前导空格,所以这里补空字符串。
-            append(if (comment.parentRpid == comment.rootRpid) ": " else "")
-        }
-    }
-    // **这一处的长按挂在整行上,不挂在正文上**,和另外三处不同。原因是这一行本来就可点
-    // (点开这一组):正文上再放一个消费型的手势检测器,它作为子节点会先拿到 down 并消费掉,
-    // 于是落在文字上的短按再也传不到外面这层 clickable —— 而文字几乎铺满整行,等于把
-    // "点开这一组"废掉。`combinedClickable` 把两件事收在同一个节点上,不存在谁先谁后。
-    //
-    // 触觉反馈由 combinedClickable 自己给,所以这里不走 [selectTextOnLongPress] —— 那一份
-    // 自己补震动,挂在这里会震两回。
-    val message = comment.message.trim()
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(
-                role = Role.Button,
-                onClickLabel = label,
-                onClick = onOpenThread,
-                onLongClickLabel = stringResource(R.string.text_select_title),
-                onLongClick = { onSelectText(message) },
-            )
-            .padding(horizontal = Spacing.Tight, vertical = Spacing.Tight),
-    ) {
-        CommentText(
-            message = comment.message,
-            emotes = comment.emotes,
-            mentions = comment.mentions,
-            style = SubReplyPreviewStyle,
-            maxLines = SubReplyPreviewMaxLines,
-            prefix = prefix,
-            links = comment.links,
-            onSeek = onSeek,
-            onUserClick = onUserClick,
-            onOpenLink = onOpenLink,
-        )
-    }
+private enum class SubReplyForm {
+    /** 未展开时的一瞥:两行截断,不给时间、属地、标记和动作行,整条点下去是打开这一组。 */
+    Preview,
+
+    /** 摊开之后(内联与面板共用):一条完整的回复。 */
+    Full,
 }
 
 /**
@@ -1029,17 +990,18 @@ private fun SubReplyActionRow(
 }
 
 /**
- * 摊开之后的楼中楼一条。**结构和主楼是同一套**:头像、名字、等级、时间与属地、正文、配图、
- * 一行动作(点赞 / 回复 / 删除)。**层级只由缩进表达**,不由"少给几样信息"表达:
- * 这一整组落在主楼正文的左缘([CommentTextInset])之后,又各自让出一个头像宽。
+ * 楼中楼的一条,两种形态共用(见 [SubReplyForm])。**结构和主楼是同一套**:头像、名字、等级、
+ * 时间与属地、正文、配图、一行动作(点赞 / 回复 / 删除)。**层级只由缩进表达**,不由"少给几样
+ * 信息"表达:这一整组落在主楼正文的左缘([CommentTextInset])之后,又各自让出一个头像宽。
  *
- * 头像和主楼**同一档**([Dimens.AvatarRow])。上一版收到 24dp,想再加一层刻度,但缩进已经
- * 把层级说清楚了,而两种尺寸的头像排在同一列里,读出来是"这些人不是一类人"。
+ * 头像和主楼**同一档**([Dimens.AvatarRow]),**预览形态也画**。上一版预览层不给头像,而头像正是
+ * 这一列最靠左的那样东西:它一出现,右边所有文字的左缘就跟着挪,展开的那一下整段文字横向平移
+ * 一个头像宽,读起来像换了一条内容。现在两种形态的左缘是同一条。
  *
- * 上一版把层级压在"没有头像、没有时间、正文小一号"上,结果是摊开之后的一条回复读起来像
- * 一行日志:说话的人是谁没有面孔,什么时候说的看不到,而点赞和回复根本没有入口。
- * PiliPlus 在这一级用的就是主楼那个 widget(`ReplyItemGrpc(replyLevel: 2)`),
- * 只把缩进和截断换掉。
+ * 展开时变的三样:正文的 `maxLines` 从 [SubReplyPreviewMaxLines] 放开到不限(高度过
+ * `animateContentSize` 长出来)、时间与属地那一行和动作行淡入、整条那个"打开这一组"的点击
+ * 让位给里面各自的落点。**预览形态里不给头像单独的点击**:整条已经是一个可点节点,再往里嵌
+ * 一个会把点在头像上的那一下从"打开这一组"变成"去他空间",而这一层还没给出足够上下文。
  *
  * 容器色见外层:M3 把 surface container 这一族定义为"容器填充",`surfaceVariant`
  * 现在主要是给它的 on 色(低强调文字)留位置的,拿它当底在深色主题下会亮出一大截。
@@ -1047,9 +1009,12 @@ private fun SubReplyActionRow(
 @Composable
 private fun SubReplyRow(
     comment: CommentItem,
+    form: SubReplyForm,
     /** 主楼作者的 mid,用来认出"楼主"。楼主同时是 UP 主时只挂 UP 主那一枚,见下。 */
     rootAuthorMid: Long,
     canDelete: Boolean,
+    /** 预览形态下整条的落点。摊开之后用不到 —— 那时这一组已经打开了。 */
+    onOpenThread: () -> Unit,
     onReplyTo: (CommentItem) -> Unit,
     onLike: (Long) -> Unit,
     onDelete: (Long) -> Unit,
@@ -1060,19 +1025,49 @@ private fun SubReplyRow(
     modifier: Modifier = Modifier,
 ) {
     var viewerIndex by remember { mutableStateOf<Int?>(null) }
+    val full = form == SubReplyForm.Full
+    val message = comment.message.trim()
 
-    // **整条不再是一个"回复"按钮。** 那是上一版没有可见入口时的将就:一条看不出能点的
-    // 文字,点下去会把输入栏切到回复态,而点赞和去空间在同一块区域里各自还想要自己的落点。
-    // 现在回复是这一行末尾一个写着"回复"的按钮,整条因此可以让给里面那几个真正的目标。
+    // 尺寸变化走 spatial 档,显隐走 effects 档(风格指南 §6 的那张表:组件动效一律取
+    // motionScheme 的 spring,tween 只留给整屏转场)。
+    val growSpec = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
+
+    // **预览形态的长按挂在整行上,不挂在正文上。** 原因是这一行本来就可点(点开这一组):
+    // 正文上再放一个消费型的手势检测器,它作为子节点会先拿到 down 并消费掉,于是落在文字上的
+    // 短按再也传不到外面这层 clickable —— 而文字几乎铺满整行,等于把"点开这一组"废掉。
+    // `combinedClickable` 把两件事收在同一个节点上,不存在谁先谁后。触觉反馈由它自己给,
+    // 所以这里不走 [selectTextOnLongPress] —— 那一份自己补震动,挂在这里会震两回。
+    //
+    // 摊开之后整条不再可点:回复是行末那个写着"回复"的按钮,头像和名字各自通向空间,
+    // 整条让给里面那几个真正的目标。
+    val rowClick = if (full) {
+        Modifier
+    } else {
+        Modifier.combinedClickable(
+            role = Role.Button,
+            onClickLabel = stringResource(R.string.comment_view_thread),
+            onClick = onOpenThread,
+            onLongClickLabel = stringResource(R.string.text_select_title),
+            onLongClick = { onSelectText(message) },
+        )
+    }
+
+    // **[modifier] 排在 rowClick 之后**,不在最前面。调用方传进来的只有左右内边距(内联那一路
+    // 8dp、面板那一路 16dp),放在点击之前的话那两条边就不可点了 —— 而预览形态下整行可点正是
+    // 这一层唯一的动作,右边那片看上去同属这一行的空白必须按得动。
     Row(
-        modifier = modifier.fillMaxWidth().padding(vertical = Spacing.Tight),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(rowClick)
+            .then(modifier)
+            .padding(vertical = Spacing.Tight),
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
-        // 头像 24dp,热区往下补到 48dp:这一列的高度由右边整条回复决定,往下扩不挤走任何东西。
+        // 热区往下补到 48dp:这一列的高度由右边整条回复决定,往下扩不挤走任何东西。
         Box(
             modifier = Modifier
                 .heightIn(min = Dimens.MinTouchTarget)
-                .openSpace(comment, onUserClick),
+                .then(if (full) Modifier.openSpace(comment, onUserClick) else Modifier),
             contentAlignment = Alignment.TopCenter,
         ) {
             Avatar(url = comment.avatarUrl, size = Dimens.AvatarRow)
@@ -1083,8 +1078,13 @@ private fun SubReplyRow(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = Dimens.MinTouchTarget)
-                    .openSpace(comment, onUserClick),
+                    .then(
+                        if (full) {
+                            Modifier.heightIn(min = Dimens.MinTouchTarget).openSpace(comment, onUserClick)
+                        } else {
+                            Modifier
+                        },
+                    ),
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1099,38 +1099,47 @@ private fun SubReplyRow(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    LevelBadge(
-                        level = comment.level,
-                        senior = comment.isSeniorMember,
-                        height = Dimens.LevelBadgeHeight,
-                    )
-                    // 两枚标记互斥。UP 主在自己视频下发的主楼,楼主和 UP 主是同一个人,并排挂
-                    // 两枚只是把同一件事说了两遍,而 UP 主是其中信息量更大的那个。
-                    when {
-                        comment.isUploader -> Tag(
-                            stringResource(R.string.comment_tag_up),
-                            MaterialTheme.colorScheme.primaryContainer,
-                            MaterialTheme.colorScheme.onPrimaryContainer,
+                    // 等级和标记只在摊开之后给。预览层每条只有两行的位置,那一排徽章会把
+                    // 这一瞥挤成一张身份卡,而这一层要回答的问题只是"底下在说什么"。
+                    if (full) {
+                        LevelBadge(
+                            level = comment.level,
+                            senior = comment.isSeniorMember,
+                            height = Dimens.LevelBadgeHeight,
                         )
+                        // 两枚标记互斥。UP 主在自己视频下发的主楼,楼主和 UP 主是同一个人,
+                        // 并排挂两枚只是把同一件事说了两遍,而 UP 主是其中信息量更大的那个。
+                        when {
+                            comment.isUploader -> Tag(
+                                stringResource(R.string.comment_tag_up),
+                                MaterialTheme.colorScheme.primaryContainer,
+                                MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
 
-                        comment.mid != 0L && comment.mid == rootAuthorMid -> Tag(
-                            stringResource(R.string.comment_tag_thread_author),
-                            MaterialTheme.colorScheme.secondaryContainer,
-                            MaterialTheme.colorScheme.onSecondaryContainer,
-                        )
+                            comment.mid != 0L && comment.mid == rootAuthorMid -> Tag(
+                                stringResource(R.string.comment_tag_thread_author),
+                                MaterialTheme.colorScheme.secondaryContainer,
+                                MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                        }
                     }
                 }
-                SubLine(comment)
+                AnimatedVisibility(visible = full) { SubLine(comment) }
             }
 
             Spacer(Modifier.height(Spacing.Hair))
+            // **两种形态一个字号一个行高**,只有 `maxLines` 不同。上一版预览层单独收一档行高
+            // (20sp),于是展开时每一行的基线都要挪一点,整段文字在长高的同时还在重排。
+            //
             // 摊开之后不截行:摊开就是用户明确要读这一组,而一条被永久截断的回复在这个页面里
-            // 没有第二个地方能读全。
+            // 没有第二个地方能读全。高度差交给 `animateContentSize` —— 它量的是这个节点自己
+            // 的测量结果,所以两行到全文这一段是连续的,不是跳一下。
             CommentText(
                 message = comment.message,
                 emotes = comment.emotes,
                 mentions = comment.mentions,
                 style = SubReplyBodyStyle,
+                maxLines = if (full) Int.MAX_VALUE else SubReplyPreviewMaxLines,
                 links = comment.links,
                 onSeek = onSeek,
                 onUserClick = onUserClick,
@@ -1142,12 +1151,20 @@ private fun SubReplyRow(
                 // 回复楼中楼时正文开头自带一截"回复 @某某 :",那是发送方写进 message 的
                 // 字面文本(见 CommentRepository.postComment),原样留着 —— 它就是这条的正文,
                 // 而剥掉它要去猜那一截到底有多长,名字改过就会剥错。
-                modifier = Modifier.selectTextOnLongPress(comment.message.trim(), onSelectText),
+                //
+                // 预览形态下长按归整行(见上面 [rowClick]),这里只挂 animateContentSize。
+                modifier = Modifier
+                    .animateContentSize(growSpec)
+                    .then(
+                        if (full) Modifier.selectTextOnLongPress(message, onSelectText) else Modifier,
+                    ),
             )
 
             // 配图以前整个没画。一条只发了张图的回复因此渲染成一行空白 —— 看起来像接口少给了
             // 内容,而它在主楼那一级一直是好的。PiliPlus 在每一级都画 `ImageGridView`。
-            if (comment.pictureUrls.isNotEmpty()) {
+            //
+            // 预览形态不画:那一层只有两行的位置,一个九宫格会把它撑成半屏。
+            if (full && comment.pictureUrls.isNotEmpty()) {
                 PictureGrid(
                     urls = comment.pictureUrls,
                     onClick = { index -> viewerIndex = index },
@@ -1158,13 +1175,15 @@ private fun SubReplyRow(
             // 和主楼共用同一组动作,不另写一份小号的:点赞在两级走的是同一个
             // `x/v2/reply/action`(notes §1.7),回复走同一个 `x/v2/reply/add`,
             // 长得不一样只会让人以为这里的点赞是另一回事。
-            CommentActions(
-                comment = comment,
-                canDelete = canDelete,
-                onLike = onLike,
-                onDelete = onDelete,
-                onReply = { onReplyTo(comment) },
-            )
+            AnimatedVisibility(visible = full) {
+                CommentActions(
+                    comment = comment,
+                    canDelete = canDelete,
+                    onLike = onLike,
+                    onDelete = onDelete,
+                    onReply = { onReplyTo(comment) },
+                )
+            }
         }
     }
 
@@ -1219,6 +1238,7 @@ private fun SubReplyPanel(
     inputText: String,
     onInputChange: (String) -> Unit,
     sending: Boolean,
+    sendError: String?,
     onSendReply: () -> Unit,
     onDelete: (Long) -> Unit,
     onSeek: ((Long) -> Unit)?,
@@ -1289,8 +1309,11 @@ private fun SubReplyPanel(
                         }
                         SubReplyRow(
                             comment = sub,
+                            // 面板里只有摊开这一种形态:进面板本身就是"打开这一组"那个动作的结果。
+                            form = SubReplyForm.Full,
                             rootAuthorMid = root.mid,
                             canDelete = myMid != null && myMid == sub.mid,
+                            onOpenThread = {},
                             onReplyTo = onReplyTo,
                             onLike = onLike,
                             onDelete = onDelete,
@@ -1355,6 +1378,7 @@ private fun SubReplyPanel(
                     text = inputText,
                     onTextChange = onInputChange,
                     sending = sending,
+                    sendError = sendError,
                     onSend = onSendReply,
                     onDismiss = onCancelReply,
                 )
@@ -1466,6 +1490,18 @@ private fun Tag(text: String, container: Color, content: Color) {
     }
 }
 
+/**
+ * 评论区底部那条常驻输入栏。
+ *
+ * **仍然是 `OutlinedTextField`,没有换成 [dev.bilby.ui.components.SearchField]。** 后者是按
+ * 搜索那一处的形态定的(风格指南 §2.4b):单行、`ImeAction.Search`、前面一个放大镜、尾部一个
+ * 清空。评论要多行(一条评论常有三四行)、要 `ImeAction.Send`、要一个字数计数器,而放大镜和
+ * 清空都不该出现在这里 —— 套上去等于把那个组件改成两种东西。形状照 `ui/video/DanmakuInput.kt`
+ * 的那一条:失败原因在上方一行,计数器贴右下角,发送键在右边。
+ *
+ * @param sendError 这一次发送失败的原因。**报在这里,不报在列表页脚**:人此刻看着的是这条
+ *   输入栏,而失败之后要做的事(改一个字再发、或者直接重试)都在这一带。
+ */
 @Composable
 private fun CommentInputBar(
     text: String,
@@ -1473,10 +1509,12 @@ private fun CommentInputBar(
     replyTarget: String?,
     onCancelReply: () -> Unit,
     sending: Boolean,
+    sendError: String?,
     onSend: () -> Unit,
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
         Column {
+            SendErrorRow(error = sendError, sending = sending, onRetry = onSend)
             if (replyTarget != null) {
                 Row(
                     modifier = Modifier
@@ -1512,6 +1550,11 @@ private fun CommentInputBar(
                         )
                     },
                     maxLines = 4,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(
+                        onSend = { if (!sending && text.isNotBlank()) onSend() },
+                    ),
+                    supportingText = draftCounter(text.length),
                     shape = MaterialTheme.shapes.large,
                 )
                 FilledIconButton(onClick = onSend, enabled = !sending && text.isNotBlank()) {
@@ -1543,7 +1586,6 @@ private fun CommentText(
     mentions: List<CommentMention>,
     style: androidx.compose.ui.text.TextStyle,
     maxLines: Int = Int.MAX_VALUE,
-    prefix: AnnotatedString? = null,
     /** 正文里被服务端标成链接的那几段,见 [dev.bilby.data.CommentLink]。 */
     links: Map<String, CommentLink> = emptyMap(),
     onSeek: ((Long) -> Unit)? = null,
@@ -1561,7 +1603,6 @@ private fun CommentText(
         onMentionClick = onUserClick,
         onSeek = onSeek,
         maxLines = maxLines,
-        prefix = prefix,
         modifier = modifier,
     )
 }

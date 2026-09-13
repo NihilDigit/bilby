@@ -12,6 +12,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonObject
+import java.io.IOException
 
 /**
  * 循环本体,以及 DESIGN 3.3 的三条硬规矩所在地。三条都在代码里,**不在 prompt 里** ——
@@ -83,7 +84,13 @@ class AgentLoop(
 
             val deltas = runCatching { llm.stream(messages, available).toList() }.getOrElse {
                 BiliLog.w("LLM 请求失败", it)
-                emit(AgentEvent.Failed(it.message ?: "LLM 请求失败"))
+                // **异常原文不上屏。** 这一句原先是 `it.message`,于是搜索结果下面会出现
+                // 「Unable to resolve host "api.example.com"」这种话:读到它的人拿它做不了
+                // 任何事,而原文和堆栈上面那行 BiliLog 已经收了。分档与 `ui/ErrorText.kt`
+                // 的三句对齐(这条链路没有 B 站登录态可言,所以只有网络与被拒两档);
+                // 这里写字面量而不是取资源 id,是因为 [AgentEvent.Failed] 带的是字符串,
+                // 换成 @StringRes 要一起动 AgentEvent 与 AgentTurn。
+                emit(AgentEvent.Failed(if (it is IOException) "网络不可用" else "请求被拒绝"))
                 return@flow
             }
 

@@ -67,8 +67,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -85,6 +87,7 @@ import dev.bilby.data.SettingsStore
 import dev.bilby.formatDurationMillis
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.components.BiliAsyncImage
+import dev.bilby.ui.components.rememberLoadingVisible
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.delay
@@ -118,6 +121,8 @@ class PlayerShellScope internal constructor(
     val controlsVisible: Boolean,
     /** 显示用位置:拖拽中是拖到的目标,否则是播放器当前位置。 */
     val positionMillis: Long,
+    /** 已缓冲到哪儿,画在进度条上。拖拽中不跟着拖走 —— 它说的是流,不是手指。 */
+    val bufferedPositionMillis: Long,
     val durationMillis: Long,
     val speed: Float,
     internal val actions: PlayerShellActions,
@@ -227,9 +232,11 @@ fun PlayerShell(
     val scaleSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
     val effectsSpec = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
 
-    // 竖屏视频、4:3 老片都存在,写死 16:9 会把画面拉变形。容器比例由外面定,画面按真实比例
-    // 居中,多出来的地方留黑边。
-    var videoAspect by remember { mutableFloatStateOf(16f / 9f) }
+    // 画面比例。**null 是"还不知道",不是一个兜底值。** 竖屏视频、4:3 老片都存在,而写死的
+    // 16:9 在 9:16 的流上不是差一点:`aspectRatio(16f / 9f)` 正好铺满 16:9 的容器,画面被横着
+    // 拉开,看不出这是个"还没量到"的状态。不知道就不摆比例 —— 那时还没有帧,看到的是黑底;
+    // 量到之后按真实比例收进去,多出来的地方留黑边。
+    var videoAspect by remember { mutableStateOf<Float?>(null) }
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
     var buffering by remember { mutableStateOf(player.playbackState == Player.STATE_BUFFERING) }
 
@@ -243,13 +250,27 @@ fun PlayerShell(
                 buffering = playbackState == Player.STATE_BUFFERING
             }
 
-            override fun onVideoSizeChanged(videoSize: VideoSize) {
-                videoAspect = videoSize.aspectOr(videoAspect)
+            // **每一批事件都重读一次尺寸,不是只听 onVideoSizeChanged。**
+            //
+            // 这里的 player 是 MediaController,尺寸是从 session 同步过来的,而"同步到了"
+            // 和"发了一条 onVideoSizeChanged"是两回事。翻 media3 1.10.1 的 session 源码,
+            // 有两处同步不发事件:
+            //
+            // - 连上的那一刻,`MediaControllerImplBase.onConnected` 把整份 PlayerInfo 直接
+            //   赋值,一条 Player 事件都不发;而在那之前 `MediaController.getVideoSize()`
+            //   硬编码返回 `VideoSize.UNKNOWN`。也就是说"连上时就已经知道的那个尺寸"既不在
+            //   下面那句初始读里,也不会以事件的形式到。
+            // - 之后只要还有 masked 命令在飞,`onPlayerInfoChanged` 会把收到的 PlayerInfo
+            //   攒进 `pendingPlayerInfo` 直接 return,不派发。这一页进来就发一条 masked 命令
+            //   (VideoScreen 里关视频轨那句 `trackSelectionParameters`)。
+            //
+            // 漏掉的后果是画面一直按上一条(或未知)的比例摆着,而重读一个字段不花什么。
+            override fun onEvents(source: Player, events: Player.Events) {
+                videoAspect = source.videoSize.displayAspectOr(videoAspect)
             }
         }
-        // 接上来时流可能已经在播了(页面重建、或从听视频切回来),那一次 onVideoSizeChanged
-        // 早就发过,只监听会一直停在默认的 16:9。
-        videoAspect = player.videoSize.aspectOr(videoAspect)
+        // 接上来时流可能已经在播了(页面重建、或从听视频切回来),那一次事件早就发过。
+        videoAspect = player.videoSize.displayAspectOr(videoAspect)
         buffering = player.playbackState == Player.STATE_BUFFERING
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
@@ -269,6 +290,7 @@ fun PlayerShell(
     }
 
     var position by remember { mutableLongStateOf(0L) }
+    var bufferedPosition by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var dragPosition by remember { mutableStateOf<Long?>(null) }
     var resumeAfterDrag by remember { mutableStateOf(false) }
@@ -282,6 +304,9 @@ fun PlayerShell(
     var interactionNonce by remember { mutableIntStateOf(0) }
 
     val context = LocalContext.current
+    // 手势的反馈只有画面正中那个浮层,而横屏时手指往往正压在它上面。触感补的是"这一下认了"
+    // 这件事:长按真的进了加速、锁真的合上了、拖到取消区了。
+    val haptics = LocalHapticFeedback.current
     val brightness = rememberWindowBrightness()
     val volume = rememberMediaVolume(context)
 
@@ -321,11 +346,21 @@ fun PlayerShell(
         }
     }
 
-    LaunchedEffect(player) {
+    // **有人在看这个读数的时候查得勤一些。** 控件收起时进度条和时间都不在屏上,500ms 只是
+    // 为了让下次唤出控件时数字已经是对的;控件展开或正在拖动时这个数就是屏幕上一直在动的
+    // 东西,500ms 的量化让秒数看起来一顿一顿,而拖完松手那一下的回弹也要等最多半秒。
+    //
+    // 不一律用快的那一档:控件收起是这一页最常见的状态(还包括息屏只出声),而轮询本身要
+    // 跨 binder 问一次 session。
+    val pollInterval =
+        if (controlsVisible || dragPosition != null) POSITION_POLL_ACTIVE_MILLIS
+        else POSITION_POLL_IDLE_MILLIS
+    LaunchedEffect(player, pollInterval) {
         while (true) {
             if (dragPosition == null) position = player.currentPosition
+            bufferedPosition = player.bufferedPosition
             duration = player.duration.coerceAtLeast(0)
-            delay(POSITION_POLL_INTERVAL_MILLIS)
+            delay(pollInterval)
         }
     }
 
@@ -341,7 +376,9 @@ fun PlayerShell(
     // 的 key 会让全屏反复重设方向。
     FullscreenEffect(
         isFullscreen,
-        isPortraitVideo = videoAspect < 1f,
+        // 还不知道比例时按横屏处理(旧行为):比例总在第一帧之前到,
+        // EVENT_VIDEO_SIZE_CHANGED 早于 EVENT_RENDERED_FIRST_FRAME。
+        isPortraitVideo = videoAspect?.let { it < 1f } == true,
         fullBleed = fullBleed,
         hideStatusBar = hideStatusBar,
     )
@@ -399,6 +436,7 @@ fun PlayerShell(
             locked = locked,
             controlsVisible = controlsVisible,
             positionMillis = displayPosition,
+            bufferedPositionMillis = bufferedPosition,
             durationMillis = duration,
             speed = userSpeed,
             actions = actions,
@@ -411,7 +449,11 @@ fun PlayerShell(
         if (attached) {
             PlayerSurface(
                 player = player,
-                modifier = Modifier.align(Alignment.Center).aspectRatio(videoAspect),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    // 比例未知时铺满容器:此刻还没有帧,摆一个猜的比例只会让第一帧落进错的
+                    // 矩形里,而 SurfaceView 上的画面是被拉到 view 的矩形里的,不会自己留边。
+                    .then(videoAspect?.let { Modifier.aspectRatio(it) } ?: Modifier.fillMaxSize()),
             )
         } else if (placeholderCoverUrl.isNotEmpty()) {
             BiliAsyncImage(
@@ -426,8 +468,14 @@ fun PlayerShell(
         // 没有指示的话和死机分不出来。BUFFERING 盖住取流、prepare 和播放途中的再缓冲;
         // externalLoading 补上播放器停在 IDLE 的等待(重试退避)。对观看的人全是同一件事:
         // 声音画面停了,但马上会回来 —— 所以是同一个指示器,不是几个各画各的。
+        //
+        // **短于 200ms 的缓冲不给指示器**([rememberLoadingVisible])。拖动进度、切清晰度、
+        // 每次 seek 之后播放器都会进 BUFFERING 一两帧,画面正中闪一下圈比不闪更像出了问题。
+        // 计时器嵌在条件内侧:那样每一次缓冲窗口都重新开始数,而不是整页只宽限开头那一次。
         if (buffering || externalLoading) {
-            LoadingIndicator(modifier = Modifier.align(Alignment.Center))
+            if (rememberLoadingVisible()) {
+                LoadingIndicator(modifier = Modifier.align(Alignment.Center))
+            }
         }
 
         Box(
@@ -469,6 +517,9 @@ fun PlayerShell(
                             if (!gestures.fastForward) return@detectTapGestures
                             isFastForwarding = true
                             player.setPlaybackSpeed(fastForwardSpeed)
+                            // 长按到底了没有,光看画面分不出来:2x 的画面和 1x 的画面在最初那
+                            // 半秒里差不多。系统长按本来就带这一下,这个手势没有理由例外。
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                         },
                         onPress = {
                             tryAwaitRelease()
@@ -522,7 +573,16 @@ fun PlayerShell(
                         change.consume()
                         accumulated += delta
                         if (seekCancelArmed != null) {
-                            seekCancelArmed = inSeekCancelZone(change.position, width, height)
+                            val inZone = inSeekCancelZone(change.position, width, height)
+                            // 进区的那一下给触感,出区不给:取消区没有边框,手指还压在画面上,
+                            // 浮层上那行字改成"松手取消"是唯一的提示,而手指正挡在它附近。
+                            // 只报"越过了门槛"这一次,所以判的是 false → true 那一次跳变。
+                            if (inZone && seekCancelArmed == false) {
+                                haptics.performHapticFeedback(
+                                    HapticFeedbackType.GestureThresholdActivate,
+                                )
+                            }
+                            seekCancelArmed = inZone
                         }
 
                         // 方向在第一段位移里定下,之后不再改判:不锁轴的话,横划途中手指
@@ -618,7 +678,22 @@ fun PlayerShell(
 
             else -> null
         }
-        hint?.let { (icon, text) -> PlayerHintOverlay(icon = icon, text = text) }
+        // 退场的那几帧里 hint 已经是 null 了,而那时框还在屏上,总得有话可说 —— 留住最后一份
+        // 非空的内容,和 [dev.bilby.ui.video.TripleToast] 里的 `shown` 是同一个写法。
+        var shownHint by remember { mutableStateOf<Pair<ImageVector, String>?>(null) }
+        LaunchedEffect(hint) { if (hint != null) shownHint = hint }
+
+        // 淡入淡出而不是直接出现:四种手势的浮层在同一个位置上互相替换,硬切时看起来像画面上
+        // 闪了一下。**只给透明度,不给位移或缩放** —— 它是"手势正在发生"的读数,位置固定在正中
+        // 才不用每次重新找;effects 那一档也正是无回弹的那组。
+        AnimatedVisibility(
+            visible = hint != null,
+            enter = fadeIn(effectsSpec),
+            exit = fadeOut(effectsSpec),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            shownHint?.let { (icon, text) -> PlayerHintOverlay(icon = icon, text = text) }
+        }
 
         // 全屏顶栏。全屏下没有别的东西说明"在看什么"和"怎么退出":系统栏是隐藏的,
         // 返回手势在锁屏态下也被吃掉了。竖屏不显示,那里标题就在播放器下面第一行。
@@ -687,14 +762,25 @@ fun PlayerShell(
                 .windowInsetsPadding(WindowInsets.barsAndCutout)
                 .padding(end = Spacing.Cozy),
         ) {
-            IconButton(onClick = { onLockedChange(!locked) }) {
-                Icon(
-                    imageVector = if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
-                    contentDescription = stringResource(
-                        if (locked) R.string.player_unlock else R.string.player_lock,
-                    ),
-                    tint = FixedColors.OnMedia,
-                )
+            val lockDescription =
+                stringResource(if (locked) R.string.player_unlock else R.string.player_lock)
+            PlayerTooltip(lockDescription) {
+                IconButton(
+                    onClick = {
+                        // 锁上之后整块画面都不响应,而这件事在画面上只表现为"控件没了"——
+                        // 和自动隐藏长得一模一样。两种触感分开:合上和打开是相反的动作。
+                        haptics.performHapticFeedback(
+                            if (locked) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn,
+                        )
+                        onLockedChange(!locked)
+                    },
+                ) {
+                    Icon(
+                        imageVector = if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                        contentDescription = lockDescription,
+                        tint = FixedColors.OnMedia,
+                    )
+                }
             }
         }
 
@@ -836,13 +922,29 @@ private fun nudgeSeek(player: Player, deltaMillis: Long) {
     player.seekTo(if (duration > 0) target.coerceIn(0L, duration) else target.coerceAtLeast(0L))
 }
 
-private fun VideoSize.aspectOr(fallback: Float): Float =
-    if (width > 0 && height > 0) width.toFloat() / height else fallback
+/**
+ * **显示比例,不是像素数之比。** `pixelWidthHeightRatio` 不为 1 的流(变形拉伸编码,少见但
+ * 存在)像素本身是长方形的,按 width/height 摆会把画面压扁。media3 自己的
+ * `PresentationState.getVideoSizeDp` 也是这么折算的。
+ *
+ * 尺寸未知(UNKNOWN,或换条时中间那一下的 0×0)时返回 [fallback]:保留上一个已知比例,
+ * 画面不会先缩成一条再弹回来。
+ */
+private fun VideoSize.displayAspectOr(fallback: Float?): Float? {
+    if (width <= 0 || height <= 0) return fallback
+    val par = if (pixelWidthHeightRatio > 0f) pixelWidthHeightRatio else 1f
+    return width * par / height
+}
 
 private const val CONTROLS_HIDE_DELAY_MILLIS = 3_000L
 private const val DOUBLE_TAP_SEEK_MILLIS = 10_000L
 private const val HINT_VISIBLE_MILLIS = 700L
-private const val POSITION_POLL_INTERVAL_MILLIS = 500L
+
+/** 控件在屏上、或者正在拖:这个读数是用户此刻盯着的东西。见取值处的说明。 */
+private const val POSITION_POLL_ACTIVE_MILLIS = 200L
+
+/** 控件收起(含息屏只出声):没人看,只要下次唤出时是对的就行。 */
+private const val POSITION_POLL_IDLE_MILLIS = 500L
 
 /** 控制条渐变的最暗端。壳的全屏顶栏与视频控制条共用同一个值,两处各写一份就会渐变对不上。 */
 internal val ControlScrimBottom = Color(0xB3000000)

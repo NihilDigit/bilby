@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.FilledIconButton
@@ -32,6 +34,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import dev.bilby.R
 import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.theme.Dimens
@@ -65,6 +69,8 @@ fun ReplyInputLayer(
     text: String,
     onTextChange: (String) -> Unit,
     sending: Boolean,
+    /** 这一次发送失败的原因,报在输入框上方一行。见 [SendErrorRow]。 */
+    sendError: String?,
     onSend: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
@@ -102,6 +108,7 @@ fun ReplyInputLayer(
                 .imePadding(),
         ) {
             Column {
+                SendErrorRow(error = sendError, sending = sending, onRetry = onSend)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -139,6 +146,11 @@ fun ReplyInputLayer(
                             )
                         },
                         maxLines = 4,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(
+                            onSend = { if (!sending && text.isNotBlank()) onSend() },
+                        ),
+                        supportingText = draftCounter(text.length),
                         shape = MaterialTheme.shapes.large,
                     )
                     FilledIconButton(onClick = onSend, enabled = !sending && text.isNotBlank()) {
@@ -156,3 +168,58 @@ fun ReplyInputLayer(
         }
     }
 }
+
+/**
+ * 发送失败那一行:原因 + 一个重试。摆在输入框**上方**,不是 snackbar 也不是列表页脚 ——
+ * 人此刻看着的是这条输入栏,而失败之后要做的两件事(改一个字再发、直接重试)都在这一带。
+ * 形状照 `ui/video/DanmakuInput.kt` 那一条,它已经在真机上验过。
+ *
+ * 重试就是再发一次同一份草稿,所以 [onRetry] 和发送键是同一个 lambda。正在发的时候不画上
+ * 一次的失败:那句话此刻说的不是眼前这件事。
+ */
+@Composable
+internal fun SendErrorRow(error: String?, sending: Boolean, onRetry: () -> Unit) {
+    if (error == null || sending) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = Spacing.Comfortable, end = Spacing.Hair),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(R.string.comment_send_failed, error),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        TextButton(onClick = onRetry) { Text(stringResource(R.string.action_retry)) }
+    }
+}
+
+/**
+ * 输入框右下角的字数计数,**过了 [CounterFrom] 才出现**,而且不拦输入。
+ *
+ * 和弹幕那条计数器不是一件事:弹幕有 100 字的硬上限(PiliPlus 的 `danmaku.dart` 注明),
+ * 超出的按键必须被拦住并且要有计数器解释为什么。评论这一侧 **PiliPlus 没有任何客户端长度
+ * 限制**(`pages/video/reply_new/view.dart` 里没有 `maxLength`,也没有 LengthLimiting 的
+ * formatter),所以这里不敢写一个上限去拦:写错了就是一条合法评论发不出去,而且只在长评论上
+ * 才犯。1000 是站内 web 版编辑器的那个数,拿来当"快到头了"的刻度,真正的判决交给服务端 ——
+ * 被拒之后草稿留在框里,原因在上面那一行,这正是这一轮修好的那条路。
+ *
+ * 返回 null 而不是返回一个空的 supportingText:那个槽位一存在就占掉一行高度。
+ */
+@Composable
+internal fun draftCounter(length: Int): (@Composable () -> Unit)? {
+    if (length < CounterFrom) return null
+    val label = stringResource(R.string.input_length_counter, length, SoftLimit)
+    return {
+        Text(text = label, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.End)
+    }
+}
+
+/** 站内 web 版评论编辑器的字数刻度。**不是本地上限**,理由见 [draftCounter]。 */
+private const val SoftLimit = 1000
+
+/** 到这个长度才把计数器画出来。写两句话的人不需要被提醒还剩多少。 */
+private const val CounterFrom = 800

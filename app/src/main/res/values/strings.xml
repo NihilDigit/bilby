@@ -158,6 +158,11 @@
     <!-- 自由复制。长按正文打开,文字可任意选中,整条复制走面板底部那个按钮 -->
     <string name="text_select_title">选择文本</string>
     <string name="text_select_copy_all">复制全文</string>
+    <!-- 发送失败与字数计数。失败报在输入栏上方一行(不在列表页脚),草稿留在框里,旁边一个重试。
+         计数器过刻度才出现,而且不拦输入——上限由服务端判,见 ReplyInputLayer 的 draftCounter。
+         计数这一条私信输入栏也用,所以名字不带 comment 前缀。 -->
+    <string name="comment_send_failed">发送失败：%1$s</string>
+    <string name="input_length_counter">%1$d / %2$d</string>
 
     <!-- 个人空间 -->
     <string name="space_title">个人空间</string>
@@ -563,6 +568,8 @@
     <string name="dynamic_other_title">关注动态</string>
     <string name="dynamic_other_entry">关注动态</string>
     <string name="dynamic_other_empty">关注的人最近没有发过视频以外的动态</string>
+    <!-- 被转发的那条:名字与正文点下去退回原文那一页。只作读屏的 onClickLabel,界面上没有这行字。 -->
+    <string name="dynamic_open_origin">查看原动态</string>
     <string name="message_title">消息</string>
     <string name="message_tab_whisper">私信</string>
     <string name="message_tab_reply">回复我的</string>
@@ -580,4 +587,20 @@
     <string name="whisper_send_failed">发送失败：%1$s</string>
     <string name="whisper_unsupported">暂不支持的消息（类型 %1$d）</string>
     <string name="whisper_system_account">系统消息</string>
+
+    <!-- 失败的三句话。产出口只有 ui/ErrorText.kt,接口原文与错误码只进 BiliLog。 -->
+    <string name="error_network">网络不可用</string>
+    <string name="error_login_expired">登录已过期</string>
+    <string name="error_refused">请求被拒绝</string>
+
+    <!-- 取关确认 -->
+    <string name="follow_unfollow_confirm_named">取消关注 %1$s？</string>
+    <string name="follow_unfollow_keep">保留</string>
+
+    <!-- 排除名单全部恢复的确认 -->
+    <string name="settings_feed_clear_excluded_message">排除名单会清空，这些 UP 主的投稿重新出现在动态里。</string>
+
+    <!-- 直播间的连接状态提示 -->
+    <string name="live_notice_disconnected">连接已断开</string>
+    <string name="live_notice_reconnected">已重新连接</string>
 </resources>

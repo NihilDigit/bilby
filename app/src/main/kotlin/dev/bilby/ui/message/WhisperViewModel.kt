@@ -25,6 +25,14 @@ data class WhisperUiState(
     val error: String? = null,
     val sending: Boolean = false,
     val sendError: String? = null,
+    /**
+     * 成功发出过几条。**草稿只在这个数变大之后才清**(见 [WhisperScreen] 的 `WhisperInput`)。
+     *
+     * 界面那侧把草稿存在 `rememberSaveable` 里,而这一份状态是发送结果唯一的落点:成功与失败
+     * 在协程里分道,界面拿不到那个分支。用计数而不是布尔量是因为连发两条时布尔量的第二次
+     * 没有边沿,那条草稿会留在框里。
+     */
+    val sentCount: Int = 0,
 )
 
 /**
@@ -77,8 +85,9 @@ class WhisperViewModel(
         _state.update { it.copy(sending = true, sendError = null) }
         viewModelScope.launch {
             when (val result = repository.send(selfMid, talkerId, message)) {
+                // 计数前进只发生在这里,界面靠它认出"这条真的发出去了",才把草稿清掉。
                 is BiliResult.Ok -> {
-                    _state.update { it.copy(sending = false) }
+                    _state.update { it.copy(sending = false, sendError = null, sentCount = it.sentCount + 1) }
                     load()
                 }
 

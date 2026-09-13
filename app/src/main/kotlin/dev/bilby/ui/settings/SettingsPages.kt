@@ -1,16 +1,23 @@
 package dev.bilby.ui.settings
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -18,6 +25,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import dev.bilby.BuildConfig
 import dev.bilby.R
@@ -65,8 +73,8 @@ enum class SettingsSection {
 }
 
 /**
- * 子页的外壳:顶栏、返回、可读宽度、滚动。抽出来是因为八页一模一样,而漏掉其中一样
- * (比如某一页忘了限宽)在平板上一眼看得出来。
+ * 子页的外壳:顶栏、返回、可读宽度、滚动、装行的那个容器。抽出来是因为八页一模一样,
+ * 而漏掉其中一样(比如某一页忘了限宽)在平板上一眼看得出来。
  */
 @Composable
 private fun SettingsSubPage(
@@ -77,9 +85,21 @@ private fun SettingsSubPage(
      * [SettingsUiState.loaded]。顶栏照画:标题和返回不依赖任何一项设置,先出来才不会闪。
      */
     ready: Boolean = true,
+    /**
+     * 内容自己分组时传 false。**一页只有一节的时候节名就是顶栏标题**,所以默认把整页内容
+     * 装进一个 [SettingsGroup];分类页那样内部还有 [GroupLabel] 分几组的,由它自己逐组套,
+     * 否则组标题会被关到容器里面,读起来像是这一组的第一行。
+     */
+    grouped: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    Scaffold(topBar = { BilbyTopBar(title = title, onBack = onBack) }) { insets ->
+    // pinned 而不是 enterAlways:顶栏留着不动,只在内容滚起来之后换一档容器色。八页的内容
+    // 都短,滚起来的那一下顶栏跟着一起走反而像页面跳了一下。
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    Scaffold(
+        topBar = { BilbyTopBar(title = title, onBack = onBack, scrollBehavior = scrollBehavior) },
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+    ) { insets ->
         AdaptiveContent(
             modifier = Modifier.fillMaxSize().padding(insets),
             maxWidth = Breakpoints.ReadableWidth,
@@ -90,7 +110,9 @@ private fun SettingsSubPage(
                     .verticalScroll(rememberScrollState())
                     .padding(bottom = Spacing.Spacious),
             ) {
-                if (ready) content()
+                if (ready) {
+                    if (grouped) SettingsGroup { content() } else content()
+                }
             }
         }
     }
@@ -230,23 +252,37 @@ fun SponsorBlockSettingsPage(
             checked = prefs.enabled,
             onCheckedChange = { onChange(prefs.copy(enabled = it)) },
         )
-        if (prefs.enabled) {
-            SettingRow(
-                title = stringResource(R.string.settings_sponsorblock_categories),
-                value = stringResource(
-                    R.string.settings_sponsorblock_enabled_count,
-                    prefs.categories.count { it in CATEGORY_LABELS },
-                    CATEGORY_LABELS.size,
-                ),
-                target = RowTarget.Page,
-                onClick = onOpenCategories,
-            )
-            // 服务器地址和分类不是一类东西:那些是"跳什么",这个是"问谁"。
-            SettingRow(
-                title = stringResource(R.string.settings_sponsorblock_server),
-                subtitle = "${prefs.serverUrl}\n${stringResource(R.string.settings_sponsorblock_server_subtitle)}",
-                onClick = { editingServer = true },
-            )
+        // 关掉时这两行不适用,但**它们的出现和消失要看得见**:直接 `if` 掉的话页面在同一次
+        // 点击里换掉了两行的高度,读起来像整页跳了一下,而跳的原因(刚按下的那个开关)
+        // 已经滚出视线的可能也有。沿竖轴展开收起就把因果连起来了。
+        //
+        // spec 取 motionScheme 的 fast 档:这一块是组件显隐,不是转场(风格指南 §6 那张表),
+        // 而且它紧跟着一次点击,慢一档就成了"按下去要等一下"。
+        AnimatedVisibility(
+            visible = prefs.enabled,
+            enter = expandVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
+                fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()),
+            exit = shrinkVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
+                fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
+        ) {
+            Column {
+                SettingRow(
+                    title = stringResource(R.string.settings_sponsorblock_categories),
+                    value = stringResource(
+                        R.string.settings_sponsorblock_enabled_count,
+                        prefs.categories.count { it in CATEGORY_LABELS },
+                        CATEGORY_LABELS.size,
+                    ),
+                    target = RowTarget.Page,
+                    onClick = onOpenCategories,
+                )
+                // 服务器地址和分类不是一类东西:那些是"跳什么",这个是"问谁"。
+                SettingRow(
+                    title = stringResource(R.string.settings_sponsorblock_server),
+                    subtitle = "${prefs.serverUrl}\n${stringResource(R.string.settings_sponsorblock_server_subtitle)}",
+                    onClick = { editingServer = true },
+                )
+            }
         }
     }
     if (editingServer) {
@@ -271,22 +307,30 @@ fun SponsorCategoriesPage(
     onBack: () -> Unit,
 ) {
     val prefs = state.sponsorBlock
-    SettingsSubPage(stringResource(R.string.settings_sponsorblock_categories), onBack, state.loaded) {
+    // 这一页内部还分几组,组标题要留在容器外面,所以不用外壳那个默认的整页容器。
+    SettingsSubPage(
+        title = stringResource(R.string.settings_sponsorblock_categories),
+        onBack = onBack,
+        ready = state.loaded,
+        grouped = false,
+    ) {
         CATEGORY_GROUPS.forEach { (groupTitle, categories) ->
             GroupLabel(stringResource(groupTitle))
-            categories.forEach { category ->
-                val label = CATEGORY_LABELS[category] ?: return@forEach
-                ToggleSettingRow(
-                    title = stringResource(label),
-                    // 类别名解释不了自己,判断"要不要跳过它"靠的是这一行。
-                    subtitle = CATEGORY_DESCRIPTIONS[category]?.let { stringResource(it) },
-                    checked = category in prefs.categories,
-                    onCheckedChange = { checked ->
-                        val next = if (checked) prefs.categories + category else prefs.categories - category
-                        onChange(prefs.copy(categories = next))
-                    },
-                    useCheckbox = true,
-                )
+            SettingsGroup {
+                categories.forEach { category ->
+                    val label = CATEGORY_LABELS[category] ?: return@forEach
+                    ToggleSettingRow(
+                        title = stringResource(label),
+                        // 类别名解释不了自己,判断"要不要跳过它"靠的是这一行。
+                        subtitle = CATEGORY_DESCRIPTIONS[category]?.let { stringResource(it) },
+                        checked = category in prefs.categories,
+                        onCheckedChange = { checked ->
+                            val next = if (checked) prefs.categories + category else prefs.categories - category
+                            onChange(prefs.copy(categories = next))
+                        },
+                        useCheckbox = true,
+                    )
+                }
             }
         }
     }
@@ -340,6 +384,11 @@ fun AgentSettingsPage(
             } ?: stringResource(R.string.settings_loading),
             onClick = { editing = true },
         )
+        // **这一行故意保留接口原话**,是全应用唯一的例外。别处收成三句
+        // (`ui/ErrorText.kt`)的理由是"用户拿错误码做不了任何事";这里反过来 ——
+        // 这条连的是用户自己填的 base URL 和 key,而这一行的用途就是告诉他填错在哪。
+        // 换成「请求被拒绝」之后 401、DNS 解析失败、模型名不存在读起来一模一样,
+        // 这个冒烟测试就没用了。
         SettingRow(
             title = stringResource(R.string.settings_llm_test),
             subtitle = when (val test = state.llmTest) {
@@ -440,6 +489,7 @@ fun ExcludedFeedPage(
     onClearAll: () -> Unit,
     onBack: () -> Unit,
 ) {
+    var confirmingClearAll by rememberSaveable { mutableStateOf(false) }
     SettingsSubPage(stringResource(R.string.settings_feed_excluded), onBack, state.loaded) {
         state.excludedFeedUps.forEach { up ->
             ListItem(
@@ -455,9 +505,31 @@ fun ExcludedFeedPage(
         if (state.excludedFeedUps.size > 1) {
             SettingRow(
                 title = stringResource(R.string.settings_feed_clear_excluded),
-                onClick = onClearAll,
+                onClick = { confirmingClearAll = true },
             )
         }
+    }
+    // **一次点掉整份名单要确认。** 逐条恢复是可逆的(把人再排除一次就行),整份清空不是:
+    // 名字只在排除那一刻记下来(SettingsStore.excludedFeedMids),清掉之后这一页就没有内容,
+    // 想找回其中某一个得等他下次发投稿才看得见。形状照登出那个框:标题是动作名,一句说明,
+    // 确认按钮再写一遍动作名。
+    if (confirmingClearAll) {
+        AlertDialog(
+            onDismissRequest = { confirmingClearAll = false },
+            title = { Text(stringResource(R.string.settings_feed_clear_excluded)) },
+            text = { Text(stringResource(R.string.settings_feed_clear_excluded_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmingClearAll = false
+                    onClearAll()
+                }) { Text(stringResource(R.string.settings_feed_clear_excluded)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingClearAll = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
     }
 }
 

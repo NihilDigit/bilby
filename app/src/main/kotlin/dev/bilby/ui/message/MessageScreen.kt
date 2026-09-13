@@ -15,12 +15,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.R
@@ -74,17 +76,30 @@ fun MessageScreen(
         if (index != pager.currentPage) pager.animateScrollToPage(index)
     }
 
+    // pinned:标签栏就在顶栏底下,顶栏自己再滑走的话标签会跟着往上跑,而它是这块区域的控制器
+    // (风格指南 §7 引 tabs 页那句"Tabs control the UI region displayed below them")。
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
-        modifier = modifier,
-        topBar = { BilbyTopBar(title = stringResource(R.string.message_title), onBack = onBack) },
+        modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        topBar = {
+            BilbyTopBar(
+                title = stringResource(R.string.message_title),
+                onBack = onBack,
+                scrollBehavior = scrollBehavior,
+            )
+        },
     ) { insets ->
         Column(modifier = Modifier.fillMaxSize().padding(insets)) {
             // 五格在窄屏上放不下等宽固定标签("私信""回复我的""@我的""收到的赞""系统通知"),
             // 所以用可滚动的那一种:它按内容给宽度,装不下就横滚,而不是把每一格挤到三个字。
-            PrimaryScrollableTabRow(selectedTabIndex = tabs.indexOf(state.tab), edgePadding = Spacing.Cozy) {
+            //
+            // **指示条认 `pager.currentPage`,不认 `state.tab`。** 上面那个效应只在 settledPage
+            // 上回写 tab(路过的一页不该触发加载),于是指示条整段拖动都停在原处,翻页判定过了
+            // 才突然跳一格。播放页那条指示条同一条判据,见 `video/VideoTabs.kt`。
+            PrimaryScrollableTabRow(selectedTabIndex = pager.currentPage, edgePadding = Spacing.Cozy) {
                 tabs.forEachIndexed { index, tab ->
                     Tab(
-                        selected = tabs.indexOf(state.tab) == index,
+                        selected = pager.currentPage == index,
                         onClick = { scope.launch { pager.animateScrollToPage(index) } },
                         text = { Text(stringResource(tab.labelRes()), maxLines = 1, softWrap = false) },
                     )
@@ -130,7 +145,8 @@ private fun WhisperList(
             appending = false,
             // 会话列表没有分页,一次给的就是全部活跃会话。
             hasMore = false,
-            error = state.error,
+            // state 里存的是资源 id(见 [MessageListState.error]),文案在这一层取。
+            error = state.error?.let { stringResource(it) },
             emptyText = stringResource(R.string.message_empty_whisper),
             onLoadMore = onLoadMore,
             onRetry = onRefresh,
@@ -196,7 +212,8 @@ private fun NoticeList(
             loading = state.loading,
             appending = state.appending,
             hasMore = state.hasMore,
-            error = state.error,
+            // state 里存的是资源 id(见 [MessageListState.error]),文案在这一层取。
+            error = state.error?.let { stringResource(it) },
             emptyText = stringResource(emptyTextRes),
             onLoadMore = onLoadMore,
             onRetry = onRefresh,
@@ -276,7 +293,8 @@ private fun SysNoticeList(
             loading = state.loading,
             appending = state.appending,
             hasMore = state.hasMore,
-            error = state.error,
+            // state 里存的是资源 id(见 [MessageListState.error]),文案在这一层取。
+            error = state.error?.let { stringResource(it) },
             emptyText = stringResource(R.string.message_empty_notice),
             onLoadMore = onLoadMore,
             onRetry = onRefresh,

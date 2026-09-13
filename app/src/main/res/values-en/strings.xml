@@ -121,6 +121,9 @@
     <string name="comment_copy_clip_label">Comment</string>
     <string name="text_select_title">Select text</string>
     <string name="text_select_copy_all">Copy all</string>
+    <!-- Send failure and draft counter. Shared with the whisper input, hence the unprefixed name. -->
+    <string name="comment_send_failed">Failed to send: %1$s</string>
+    <string name="input_length_counter">%1$d / %2$d</string>
 
     <string name="space_title">Profile</string>
     <string name="space_tab_archives">Videos</string>
@@ -514,6 +517,8 @@
     <string name="dynamic_other_title">Following posts</string>
     <string name="dynamic_other_entry">Following posts</string>
     <string name="dynamic_other_empty">The people you follow have posted nothing but videos lately</string>
+    <!-- Forwarded post: the name and body open the original. Screen-reader label only. -->
+    <string name="dynamic_open_origin">Open the original post</string>
     <string name="message_title">Messages</string>
     <string name="message_tab_whisper">Chats</string>
     <string name="message_tab_reply">Replies</string>
@@ -531,4 +536,20 @@
     <string name="whisper_send_failed">Failed to send: %1$s</string>
     <string name="whisper_unsupported">Unsupported message (type %1$d)</string>
     <string name="whisper_system_account">System</string>
+
+    <!-- The three failure lines. Produced only by ui/ErrorText.kt; codes go to BiliLog. -->
+    <string name="error_network">Network unavailable</string>
+    <string name="error_login_expired">Sign-in expired</string>
+    <string name="error_refused">Request refused</string>
+
+    <!-- Unfollow confirmation -->
+    <string name="follow_unfollow_confirm_named">Unfollow %1$s?</string>
+    <string name="follow_unfollow_keep">Keep</string>
+
+    <!-- Confirmation for restoring every excluded uploader -->
+    <string name="settings_feed_clear_excluded_message">The exclusion list is emptied and posts from these uploaders return to the feed.</string>
+
+    <!-- Live room connection notices -->
+    <string name="live_notice_disconnected">Disconnected</string>
+    <string name="live_notice_reconnected">Reconnected</string>
 </resources>

@@ -13,8 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
@@ -35,11 +34,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,17 +45,14 @@ import androidx.lifecycle.viewModelScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Headphones
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.TooltipBox
@@ -73,6 +66,7 @@ import dev.bilby.appendDistinctBy
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.ShareLink
 import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.errorTextRes
 import dev.bilby.api.BiliResult
 import dev.bilby.data.FollowGroup
 import dev.bilby.data.FollowRepository
@@ -95,7 +89,7 @@ import dev.bilby.ui.follow.GroupPickerState
 import dev.bilby.ui.components.FollowButton
 import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.components.Avatar
-import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.BilbyFlexibleTopBar
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.LivePulse
@@ -135,7 +129,8 @@ enum class SpaceTab(@param:StringRes val label: Int) {
 
 data class SpaceUiState(
     val loading: Boolean = true, // 首次加载 profile
-    val error: String? = null,
+    /** 失败说哪一句,存的是资源 id。映射与理由见 [dev.bilby.ui.errorTextRes]。 */
+    @StringRes val error: Int? = null,
     val profile: SpaceProfile? = null,
     val activeTab: SpaceTab = SpaceTab.Archives,
     /** null = 尚未取合集列表；false = 已确认该 UP 没有合集/系列。 */
@@ -166,7 +161,7 @@ data class SpaceArchiveTabState(
     val loading: Boolean = false,
     val appending: Boolean = false,
     val hasMore: Boolean = true,
-    val error: String? = null,
+    @StringRes val error: Int? = null,
 )
 
 data class SpaceListTabState(
@@ -175,7 +170,7 @@ data class SpaceListTabState(
     val loading: Boolean = false,
     val appending: Boolean = false,
     val hasMore: Boolean = true,
-    val error: String? = null,
+    @StringRes val error: Int? = null,
 )
 
 data class SpaceCollectionsTabState(
@@ -185,7 +180,7 @@ data class SpaceCollectionsTabState(
     val loading: Boolean = false,
     val appending: Boolean = false,
     val hasMore: Boolean = true,
-    val error: String? = null,
+    @StringRes val error: Int? = null,
 )
 
 /**
@@ -495,7 +490,7 @@ class SpaceViewModel(
                         archives = archives.copy(
                             loading = false,
                             appending = false,
-                            error = result.errorText(),
+                            error = result.errorTextRes("空间页取投稿"),
                         ),
                     )
                 }
@@ -555,7 +550,7 @@ class SpaceViewModel(
                         dynamics = dynamics.copy(
                             loading = false,
                             appending = false,
-                            error = result.errorText(),
+                            error = result.errorTextRes("空间页取动态"),
                         ),
                     )
                 }
@@ -616,7 +611,7 @@ class SpaceViewModel(
                         collections = collections.copy(
                             loading = false,
                             appending = false,
-                            error = result.errorText(),
+                            error = result.errorTextRes("空间页取合集"),
                         ),
                     )
                 }
@@ -665,16 +660,13 @@ class SpaceViewModel(
                         it.copy(loading = false, profile = profile.value.copy(followState = followState))
                     }
                 }
-                else -> _state.update { it.copy(loading = false, error = profile.errorText()) }
+                else -> _state.update {
+                    it.copy(loading = false, error = profile.errorTextRes("空间页取资料"))
+                }
             }
         }
     }
 
-    private fun BiliResult<*>.errorText(): String = when (this) {
-        is BiliResult.ApiError -> "$message($code)"
-        is BiliResult.Failure -> cause.message ?: "网络错误"
-        is BiliResult.Ok -> ""
-    }
 }
 
 // ---------------- UI ----------------
@@ -718,45 +710,31 @@ fun SpaceScreen(
 ) {
     val context = LocalContext.current
 
-    // 空间内搜索是页内的次要动作,不是空间内容本身,所以展开态只是本页的 UI 状态,
-    // 不进 ViewModel —— 离开页面就该忘掉,不需要记住"上次展开过"。
-    var archiveSearchExpanded by remember { mutableStateOf(false) }
+    // **名字归顶栏,不再固定写「个人空间」。** 那条旧判断("标题是路牌,名字归头部区")的前提是
+    // 顶栏只有 small 一档 —— 一个 64dp 高、字号 titleLarge 的槽位里,名字确实只能被截断。
+    // medium flexible 的展开态给它整行 `headlineMedium`,而这一页从头到尾讲的就是这个人;
+    // 头部区因此不再重复印名字,两处印一遍的问题也就不存在了。判据见 [BilbyFlexibleTopBar]。
+    //
+    // exitUntilCollapsed:往下滚时顶栏先收回 64dp,再轮到头部区(那一层的连接挂在 RefreshBox
+    // 里面,见下面)。两级收起在同一个手势里依次发生 —— onPreScroll 从外往里传,所以顶栏在前。
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     Scaffold(
-        modifier = modifier,
-        // 标题固定"个人空间":名字归下面的头部区,顶栏只是路牌。
+        modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            BilbyTopBar(
-                title = stringResource(R.string.space_title),
+            BilbyFlexibleTopBar(
+                // 资料还没回来时退回路牌,不留空标题。
+                title = state.profile?.name?.takeIf { it.isNotBlank() }
+                    ?: stringResource(R.string.space_title),
                 onBack = onBack,
+                scrollBehavior = scrollBehavior,
                 actions = {
-                    // 只在投稿页给这个入口:动态、合集两个标签没有可搜索的内容。
-                    if (state.activeTab == SpaceTab.Archives) {
-                        IconButton(
-                            onClick = {
-                                // 收起即清空:图标只有两个诚实的状态可言 —— 展开 = 可能在筛,
-                                // 收起 = 一定没筛。只隐藏输入框而留着关键词的话,列表会在看不见
-                                // 筛选条件的情况下继续被筛,读起来像"投稿莫名其妙变少了"。
-                                //
-                                // 清输入框和重拉列表是两件事,判据也各是各的:输入框里有字才要
-                                // 清,筛选**真的生效过**才要重拉。合成一个条件时,"打了字没按
-                                // 回车就收起"会白白重拉一次全量,而"把字删空但没按回车再收起"
-                                // 反而留着上一次的筛选不动 —— 正是上面说的那种看不见的筛。
-                                if (archiveSearchExpanded) {
-                                    if (state.archives.keyword.isNotEmpty()) onArchiveKeywordChanged("")
-                                    if (state.archives.appliedKeyword.isNotEmpty()) onArchiveSearch()
-                                }
-                                archiveSearchExpanded = !archiveSearchExpanded
-                            },
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Search,
-                                contentDescription = stringResource(R.string.space_search_action),
-                            )
-                        }
-                    }
                     // 分享这位 UP 的主页。放顶栏而不是头部区:头部区那一行是"对这个人的
                     // 动作"(关注、听他的投稿),分享的是页面本身。
+                    //
+                    // **搜索图标没了。** 输入框现在常驻在投稿列表的表头里(见 [ArchivesTab]),
+                    // 而一个图标 + 一个展开态换来的只是省下一行、代价是"收起时到底还在不在筛"
+                    // 得靠一条注释解释清楚。表头会跟着列表滚走,那一行本来就不常占版面。
                     IconButton(onClick = { ShareLink.space(context, mid, state.profile?.name.orEmpty()) }) {
                         Icon(
                             imageVector = Icons.Filled.Share,
@@ -843,7 +821,8 @@ fun SpaceScreen(
             ) {
                 when {
                     state.loading && state.profile == null -> FullScreenLoading()
-                    state.error != null && state.profile == null -> FullScreenError(state.error, onRetry)
+                    state.error != null && state.profile == null ->
+                        FullScreenError(stringResource(state.error), onRetry)
                     // tab 栏还没画出来,内容先不画:否则内容会先顶在页头下面,等 tab 栏出现
                     // 再被推下去一截。
                     !collectionsKnown -> FullScreenLoading()
@@ -860,7 +839,6 @@ fun SpaceScreen(
                         when (tabs.getOrNull(page)) {
                             SpaceTab.Archives -> ArchivesTab(
                                 state.archives,
-                                searchExpanded = archiveSearchExpanded,
                                 onOrderChanged = onArchiveOrderChanged,
                                 onKeywordChanged = onArchiveKeywordChanged,
                                 onSearch = onArchiveSearch,
@@ -955,11 +933,12 @@ fun SpaceScreen(
 }
 
 /**
- * 空间头部。参照 PiliPlus 的 `pages/member/widget/user_info_card.dart`:头像 + 名字 +
- * 一行数据 + 签名,签名单独占整行宽度。
+ * 空间头部。参照 PiliPlus 的 `pages/member/widget/user_info_card.dart`:头像 + 一行数据 +
+ * 签名,签名单独占整行宽度。
  *
- * 名字放在这里而不是顶栏:顶栏的标题是路牌("个人空间"),头部才是这个人本身。
- * 两处都印名字的话同屏出现两遍,而顶栏那一份还会被截断得更早。
+ * **名字不在这里,在顶栏上。** 这条和之前反了:旧结论是"顶栏标题是路牌,名字归头部",前提是
+ * 顶栏只有 small 一档、名字在那里会被截断。换成 medium flexible 之后展开态有整行
+ * `headlineMedium`,名字在那儿比在这儿显眼,而且滚起来收进小标题也一直在(见 [SpaceScreen])。
  *
  * **没有头图**。接口层的 `SpaceProfile` 目前不带 `top_photo`,补它要动 `api/dto`,
  * 不在这一轮的边界内 —— 见报告里的"需要接口层配合"。
@@ -991,12 +970,7 @@ private fun SpaceHeader(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
             ) {
-                Text(
-                    text = profile.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                // 名字在顶栏上(见 [SpaceScreen]),这里不再印第二遍。
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
@@ -1023,13 +997,20 @@ private fun SpaceHeader(
         }
         // 签名可能很长又基本没信息量,给两行封顶;放在下面一整行是因为它旁边没有头像时
         // 能多放十来个字,而挤在头像右边只剩半行。
-        Text(
-            text = profile.sign.ifBlank { stringResource(R.string.space_no_sign) },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
+        //
+        // **没填签名就整行不画。** 原先兜一句「这个人很懒,什么都没写」—— 那是 B 站网页端的
+        // 占位文案,而它说的是一件我们并不知道的事(没填签名不等于懒),还替这个人下了判断。
+        // 空着的那一行也不是"数据还没到",没有需要说明的东西。「我的」页(`AccountHeader`)
+        // 一直是这个做法,两页现在对上了。
+        if (profile.sign.isNotBlank()) {
+            Text(
+                text = profile.sign,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
 
         // 正在直播时才出现,而且只出现在这里 —— 直播间的唯一入口是"我点了这个人",
         // 不是一个可以浏览的列表(DESIGN 1.1)。
@@ -1155,7 +1136,8 @@ private fun SpaceHeaderActions(
                 }
             }
             // 空间页整页都在讲这个人,关注是这一页最主要的动作,用 filled。
-            FollowButton(state = followState, onClick = onToggleFollow)
+            // 名字传给取关确认框:那个框上写着要取关谁,比只写"取消关注"少一次回想。
+            FollowButton(state = followState, onClick = onToggleFollow, name = name)
         }
     }
 
@@ -1183,14 +1165,21 @@ private val ArchiveOrders = listOf(
  * 投稿页。排序用 [SortRow](风格指南 §2.1),空间内搜索回车才发请求 —— 输入即搜索会让
  * 每敲一个字打一次接口。
  *
- * 搜索输入框不再常驻:顶栏的搜索图标(见 [SpaceScreen])才是入口,点开才展开这个输入框,
- * 收起后连排序都不用跟它分宽度 —— 之前两个占满宽度的控件叠在一起,视觉重量压过了下面
- * 的投稿列表。
+ * **搜索框常驻,而且和排序一起排进列表的表头里。**
+ *
+ * 之前的做法是顶栏一个搜索图标,点开才展开输入框。那一版有两个毛病,都是"收起"带来的:
+ * 收起时输入框不见了而筛选还在,于是"投稿莫名其妙变少了";为了不让它发生,收起那一下要判
+ * 「输入框里有字吗」和「筛选真的生效过吗」两个条件,而这两个条件的差别得靠十行注释说清。
+ * 常驻之后这些状态全不存在 —— 筛没筛,看一眼输入框就知道。
+ *
+ * **表头进 `PagedColumn` 的 header 槽,不钉在列表上面。** 钉住的话它和上面的页头、tab 栏
+ * 三层叠着占掉小半屏,而这一页要看的是列表;放进表头之后它跟着列表一起滚走,要用时往上一拉
+ * 就回来。风格指南 §7 引 transitions 页那句"Components can enter and exit from beyond the
+ * screen bounds based on a scroll gesture. This allows for more screen space to browse."
  */
 @Composable
 private fun ArchivesTab(
     state: SpaceArchiveTabState,
-    searchExpanded: Boolean,
     onOrderChanged: (SpaceArchiveOrder) -> Unit,
     onKeywordChanged: (String) -> Unit,
     onSearch: () -> Unit,
@@ -1198,54 +1187,44 @@ private fun ArchivesTab(
     onVideoClick: (SpaceVideoItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        ) {
-            SortRow(
-                options = ArchiveOrders,
-                selected = state.order,
-                onSelect = onOrderChanged,
-            )
-            if (searchExpanded) {
-                // 图标的意义是省版面,不是多加一次点击 —— 展开完还要再点一下输入框,
-                // 省下的成本就还回去了。keyboard.show() 是保险:某些机型上 requestFocus
-                // 不是用户手势触发的直接点击,系统不一定会自动弹键盘。
-                val focusRequester = remember { FocusRequester() }
-                val keyboard = LocalSoftwareKeyboardController.current
-                LaunchedEffect(Unit) {
-                    focusRequester.requestFocus()
-                    keyboard?.show()
-                }
+    VideoListTab(
+        items = state.items,
+        appending = state.appending,
+        hasMore = state.hasMore,
+        loading = state.loading,
+        // state 里存的是资源 id,文案在这一层取(见 [SpaceArchiveTabState.error])。
+        error = state.error?.let { stringResource(it) },
+        // 空是因为**生效中**的那个关键词没搜到东西,不是因为输入框里现在有什么字。
+        emptyText = stringResource(
+            if (state.appliedKeyword.isBlank()) {
+                R.string.space_empty_archives
+            } else {
+                R.string.space_empty_archives_search
+            },
+        ),
+        onLoadMore = onLoadMore,
+        onVideoClick = onVideoClick,
+        modifier = modifier,
+        header = {
+            // 搜索框在排序之上:先定"在哪些投稿里找",再定"怎么排"。
+            Column(
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
                 SearchField(
                     value = state.keyword,
                     onValueChange = onKeywordChanged,
                     placeholder = stringResource(R.string.space_search_hint),
-                    focusRequester = focusRequester,
                     onSearch = onSearch,
                 )
+                SortRow(
+                    options = ArchiveOrders,
+                    selected = state.order,
+                    onSelect = onOrderChanged,
+                )
             }
-        }
-        VideoListTab(
-            items = state.items,
-            appending = state.appending,
-            hasMore = state.hasMore,
-            loading = state.loading,
-            error = state.error,
-            // 空是因为**生效中**的那个关键词没搜到东西,不是因为输入框里现在有什么字。
-            emptyText = stringResource(
-                if (state.appliedKeyword.isBlank()) {
-                    R.string.space_empty_archives
-                } else {
-                    R.string.space_empty_archives_search
-                },
-            ),
-            onLoadMore = onLoadMore,
-            onVideoClick = onVideoClick,
-            modifier = Modifier.weight(1f),
-        )
-    }
+        },
+    )
 }
 
 @Composable
@@ -1261,7 +1240,7 @@ private fun CollectionsTab(
         loading = state.loading,
         appending = state.appending,
         hasMore = state.hasMore,
-        error = state.error,
+        error = state.error?.let { stringResource(it) },
         emptyText = stringResource(R.string.space_empty_collections),
         onLoadMore = onLoadMore,
         modifier = modifier,
@@ -1318,7 +1297,7 @@ private fun DynamicListTab(
         loading = state.loading,
         appending = state.appending,
         hasMore = state.hasMore,
-        error = state.error,
+        error = state.error?.let { stringResource(it) },
         emptyText = stringResource(R.string.space_empty_dynamics),
         onLoadMore = onLoadMore,
         modifier = modifier,
@@ -1362,7 +1341,15 @@ private fun DynamicRow(
     }
 }
 
-/** 投稿 tab 与合集目录([CollectionScreen])共用的视频列表。 */
+/**
+ * 投稿 tab 与合集目录([CollectionScreen])共用的视频列表。
+ *
+ * @param error 已经取好文案的那一句。**这里仍然收字符串**,不收资源 id:两个调用方一个把
+ *   资源 id 存在 state 里(投稿 tab),一个还在 state 里存字符串(合集目录),统一成 id 要
+ *   一起动那一页,不在这一轮的边界内。
+ * @param header 列表顶上跟着一起滚的那一块(投稿 tab 的搜索框与排序)。**它是列表的第一个
+ *   条目,不是钉在列表上面的一条** —— 钉住的话页头、tab 栏、它三层叠起来占掉小半屏。
+ */
 @Composable
 internal fun VideoListTab(
     items: List<SpaceVideoItem>,
@@ -1374,7 +1361,13 @@ internal fun VideoListTab(
     onLoadMore: () -> Unit,
     onVideoClick: (SpaceVideoItem) -> Unit,
     modifier: Modifier = Modifier,
+    header: (@Composable () -> Unit)? = null,
 ) {
+    // 类型写出来,不靠 let 往里推:`header` 要变成 `LazyListScope.() -> Unit`,而 lambda 的
+    // 接收者靠期望类型才定得下来。
+    val headerItem: (LazyListScope.() -> Unit)? = header?.let { block ->
+        { item(key = "header") { block() } }
+    }
     PagedColumn(
         items = items,
         key = { it.bvid },
@@ -1385,6 +1378,7 @@ internal fun VideoListTab(
         emptyText = emptyText,
         onLoadMore = onLoadMore,
         modifier = modifier,
+        header = headerItem,
     ) { item ->
         // 整页都是同一个 UP,不重复印 UP 名(upName 留空)。
         VideoRow(

@@ -10,8 +10,10 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -258,14 +260,24 @@ private fun GuardRow(item: LiveFeedItem.Guard, onUserClick: (Long) -> Unit, modi
         shape = MaterialTheme.shapes.small,
         // 整行可点,不只是名字那几个字:这一行整句都在说同一个人,而"某某"在译文里的位置
         // 由 strings 决定,按子串去找它是在解析自己刚拼出来的句子。
-        modifier = modifier.fillMaxWidth().clickable(role = Role.Button) { onUserClick(item.mid) },
+        //
+        // 一行 `bodyMedium` 加上下 4dp 只有 26dp 左右,够不到 48dp 的触摸下限;撑的是点击区,
+        // 字号和内边距都没动(风格指南 §3 第一条)。
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = Dimens.MinTouchTarget)
+            .clickable(role = Role.Button) { onUserClick(item.mid) },
     ) {
         Text(
             text = item.months?.let {
                 stringResource(R.string.live_guard_opened_months, item.name, level, it)
             } ?: stringResource(R.string.live_guard_opened, item.name, level),
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
+            // 触摸区撑到 48dp 之后文字要跟着居中:Surface 不替内容对齐,不加这一句字会贴在
+            // 色块顶上,看起来像下半块是空的。
+            modifier = Modifier
+                .wrapContentHeight(Alignment.CenterVertically)
+                .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
         )
     }
 }
@@ -273,8 +285,8 @@ private fun GuardRow(item: LiveFeedItem.Guard, onUserClick: (Long) -> Unit, modi
 /**
  * 系统提示。
  *
- * 开播与下播居中一行灰字;超管警告和自己被禁言换成 `errorContainer` 的一块 —— 那两条要求读者
- * 立刻做点什么(调整内容、停止发言),而开播下播只是陈述。
+ * 开播下播、以及连接断开与恢复,都是居中一行灰字,没有头像;超管警告和自己被禁言换成
+ * `errorContainer` 的一块 —— 那两条要求读者立刻做点什么(调整内容、停止发言),其余的只是陈述。
  *
  * **超管那两条用服务端的原话。** 「图片内容不适宜,请立即调整」是一条具体指示,本地改写只会
  * 丢掉读者真正需要的那部分。
@@ -289,6 +301,10 @@ private fun NoticeRow(item: LiveFeedItem.Notice, modifier: Modifier = Modifier) 
             LiveFeedItem.Notice.Kind.LiveStarted -> R.string.live_notice_started
             LiveFeedItem.Notice.Kind.LiveEnded -> R.string.live_notice_ended
             LiveFeedItem.Notice.Kind.SelfBlocked -> R.string.live_notice_self_blocked
+            // 连接状态那两条走这里的低强调分支:它们不要求读者做什么(重连是自动的),
+            // 只是标出"这段中间的消息没读到"。所以不进上面那个 errorContainer 的块。
+            LiveFeedItem.Notice.Kind.Disconnected -> R.string.live_notice_disconnected
+            LiveFeedItem.Notice.Kind.Reconnected -> R.string.live_notice_reconnected
             else -> R.string.live_notice_warning
         },
     )

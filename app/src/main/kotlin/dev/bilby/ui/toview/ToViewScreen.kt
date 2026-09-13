@@ -28,8 +28,7 @@ import dev.bilby.data.ToViewItem
 import dev.bilby.data.ToViewRepository
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.EmptyState
-import dev.bilby.ui.components.FullScreenError
-import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.FirstScreenState
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.VideoRow
@@ -158,10 +157,13 @@ fun ToViewScreen(
     modifier: Modifier = Modifier,
 ) {
     AdaptiveContent(modifier = modifier) {
-        when {
-            state.loading && state.items.isEmpty() -> FullScreenLoading()
-            state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry)
-            else -> RefreshBox(
+        FirstScreenState(
+            loading = state.loading,
+            error = state.error,
+            isEmpty = state.items.isEmpty(),
+            onRetry = onRetry,
+        ) {
+            RefreshBox(
                 refreshing = state.loading && state.items.isNotEmpty(),
                 onRefresh = onRefresh,
                 modifier = Modifier.fillMaxSize(),
@@ -179,10 +181,12 @@ fun ToViewScreen(
                                 )
                             }
                         }
+                        // 这一页的条目会被单条移出(下面那个 Close 按钮),动画认 aid。
                         items(state.items, key = { it.aid }) { item ->
                             VideoRow(
                                 item = item.toRowUi(),
                                 onClick = { onItemClick(item) },
+                                modifier = Modifier.animateItem(),
                                 trailing = {
                                     // 图标用 Close 而不是 Delete:这里是"从列表里拿掉",
                                     // 不是把视频删了。垃圾桶图标承诺的破坏性比实际动作大。

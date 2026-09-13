@@ -30,6 +30,7 @@ import dev.bilby.data.SPECIAL_GROUP_ID
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SortRow
+import dev.bilby.ui.components.fadingRightEdge
 import dev.bilby.ui.theme.Spacing
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -443,9 +444,15 @@ private fun FollowingsControls(
             modifier = Modifier.fillMaxWidth().padding(end = Spacing.Tight),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // 右边沿渐隐,和动态页那排头像共用一份(见 [fadingRightEdge])。这一排的右端
+            // 钉着「管理分组」,滚动时被它切一半的是一枚圆角芯片。
+            //
+            // 渐隐挂在 horizontalScroll 之前:它作用于"这一排量出来的那个视口",挂在滚动之后
+            // 会跟着内容一起滚,渐变落在某一枚芯片上不动了。
             Row(
                 modifier = Modifier
                     .weight(1f)
+                    .fadingRightEdge()
                     .horizontalScroll(rememberScrollState())
                     .padding(horizontal = Spacing.Comfortable),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),

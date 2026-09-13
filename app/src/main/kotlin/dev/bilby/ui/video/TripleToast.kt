@@ -66,7 +66,7 @@ fun TripleToast(outcome: TripleOutcome?, modifier: Modifier = Modifier) {
             }
         }
         visible = true
-        delay(VisibleMillis)
+        delay(MediaToastVisibleMillis)
         visible = false
     }
 
@@ -97,5 +97,3 @@ fun TripleToast(outcome: TripleOutcome?, modifier: Modifier = Modifier) {
         }
     }
 }
-
-private const val VisibleMillis = 2_500L

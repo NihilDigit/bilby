@@ -1,6 +1,9 @@
 package dev.bilby.ui.components
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -21,6 +24,8 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -75,13 +80,28 @@ fun SearchField(
     onFocusChange: (Boolean) -> Unit = {},
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
+    // 焦点态。**必须是同一个 interactionSource 既交给 BasicTextField 又在这里读**:
+    // 光标在框里而容器没反应,是这个组件没有描边、没有 label 之后唯一缺的那点反馈。
+    val interactionSource = remember { MutableInteractionSource() }
+    val focused by interactionSource.collectIsFocusedAsState()
+    // 层次靠 surfaceContainer 的色阶差,不靠描边和阴影(风格指南 §1.1),所以聚焦也只升一档
+    // 色阶,不长出一圈 primary 描边 —— 那是 OutlinedTextField 的表达方式,这个框整套语言
+    // 都不用描边。
+    val container by animateColorAsState(
+        targetValue = if (focused) {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
+        label = "search-field-container",
+    )
     Row(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = FieldHeight)
-            // 层次靠 surfaceContainer 的色阶差,不靠描边和阴影(风格指南 §1.1)。
             .background(
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                color = container,
                 shape = MaterialTheme.shapes.largeIncreased,
             )
             .padding(start = Spacing.Cozy, end = Spacing.Hair),
@@ -120,6 +140,7 @@ fun SearchField(
                         }
                     },
                 ),
+                interactionSource = interactionSource,
                 // hint 同时也是读屏的标签:placeholder 只是一段画在下面的 Text,输入框本身
                 // 没有任何标签,读屏念到的是一个裸输入框。必须挂在这个节点上——挂在调用方
                 // 或外层 Row 上会落到别的语义节点,输入框那一格照旧是空的。

@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -15,6 +16,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MediumFlexibleTopAppBar
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -39,8 +41,9 @@ import dev.bilby.ui.theme.Spacing
  * 状态栏下的留白各不相同,滚动时内容还会直接压到状态栏文字上。TopAppBar 自带 windowInsets
  * 处理和滚动时的容器色变化,这些不该每页重写一遍。
  *
- * 只用 small 这一档:medium/large flexible 是给"标题本身是内容"的页面用的(相册、文章),
- * Bilby 的每一页标题都只是个路牌,给它三行高度是浪费首屏。
+ * 除了两页之外都用 small 这一档:medium/large flexible 是给"标题本身是内容"的页面用的,
+ * 而 Bilby 的页面标题基本都是路牌(「历史记录」「收藏夹」),给它三行高度是浪费首屏。
+ * 两个例外走 [BilbyFlexibleTopBar],判据写在那里。
  *
  * @param scrollBehavior 传进来之后内容滚上去时顶栏换一档容器色(M3 app bars 的 on-scroll
  *   fill),顶栏和内容之间才有边界可言。默认 null:调用方还得把同一个 behavior 的
@@ -72,6 +75,60 @@ fun BilbyTopBar(
             }
         },
         actions = actions,
+        colors = TopAppBarDefaults.topAppBarColors(),
+        scrollBehavior = scrollBehavior,
+        modifier = modifier,
+    )
+}
+
+/**
+ * 名字本身就是这一页的内容时用的顶栏:**「我的」和个人空间这两页**。
+ *
+ * §2.5 那条"只用 small 一档"是按"标题是不是路牌"立的,而这两页的标题不是路牌 ——
+ * 顶栏上写的是这个账号/这位 UP 的名字,它是整页在讲的那个东西。展开态给它
+ * `headlineMedium`(136dp 高),滚起来收回 64dp 只留一行小标题,让出去的高度归下面的列表。
+ *
+ * **副标题在收起态也在。** material3 的 `MediumFlexibleTopAppBar` 把同一个 `subtitle`
+ * 槽位同时用作 `smallSubtitle`(读 1.5.0-alpha25 的 sources 核实过),所以这里只放得下一行
+ * 短字,放不了头像和那排数据 —— 那些留在顶栏下面的第一块内容里。
+ *
+ * @param windowInsets 默认让开状态栏。根 tab 里那一层 `Scaffold` 已经把顶部 inset padding
+ *   过了一遍(见 `MainActivity` 的 `RootTabsContent`),那种调用方要传 `WindowInsets(0)`,
+ *   否则状态栏高度会被让开两次。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BilbyFlexibleTopBar(
+    title: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    onBack: (() -> Unit)? = null,
+    scrollBehavior: TopAppBarScrollBehavior? = null,
+    windowInsets: WindowInsets = TopAppBarDefaults.windowInsets,
+    actions: @Composable RowScope.() -> Unit = {},
+) {
+    MediumFlexibleTopAppBar(
+        title = {
+            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        },
+        subtitle = subtitle?.let {
+            {
+                Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        },
+        navigationIcon = {
+            if (onBack != null) {
+                IconButton(onClick = onBack) {
+                    // 同 BilbyTopBar:RTL 下返回箭头必须翻过来。
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.action_back),
+                    )
+                }
+            }
+        },
+        actions = actions,
+        windowInsets = windowInsets,
         colors = TopAppBarDefaults.topAppBarColors(),
         scrollBehavior = scrollBehavior,
         modifier = modifier,

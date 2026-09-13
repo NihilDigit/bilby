@@ -30,19 +30,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
@@ -80,10 +72,10 @@ import androidx.compose.ui.tooling.preview.Preview
 import dev.bilby.R
 import dev.bilby.data.model.FeedEntry
 import dev.bilby.ui.components.EmptyState
-import dev.bilby.ui.components.FullScreenError
-import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.FirstScreenState
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.RefreshBox
+import dev.bilby.ui.components.fadingRightEdge
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
@@ -243,10 +235,13 @@ fun FeedScreen(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        when {
-            state.loading && state.items.isEmpty() -> FullScreenLoading()
-            state.error != null && state.items.isEmpty() -> FullScreenError(state.error, onRetry)
-            else -> FeedList(
+        FirstScreenState(
+            loading = state.loading,
+            error = state.error,
+            isEmpty = state.items.isEmpty(),
+            onRetry = onRetry,
+        ) {
+            FeedList(
                 state, onRefresh, onLoadMore, onItemClick, onUpClick, onLiveClick, onExcludeUp,
                 onAddToView, onOpenFollowings, onOpenOtherDynamics, onScrollPositionChanged, onLocated,
                 scrollToTop, Modifier, contentPadding,
@@ -398,14 +393,16 @@ private fun FeedList(
         }
         val beforeMarker = if (markerIndex != null) state.items.subList(0, markerIndex) else state.items
         val fromMarker = if (markerIndex != null) state.items.subList(markerIndex, state.items.size) else emptyList()
+        // animateItem:「不再显示这个 UP」当场生效,那一刻被摘掉的可能是连着好几条,
+        // 下面几十行硬切着往上跳一格;条目认的是 FeedEntry.id,翻页追加也走同一条动效。
         items(beforeMarker, key = { it.id }) { item ->
-            FeedEntryItem(item, onItemClick, onExcludeUp, onAddToView)
+            FeedEntryItem(item, onItemClick, onExcludeUp, onAddToView, Modifier.animateItem())
         }
         if (markerIndex != null) {
-            item(key = "read-marker") { ReadMarkerDivider() }
+            item(key = "read-marker") { ReadMarkerDivider(Modifier.animateItem()) }
         }
         items(fromMarker, key = { it.id }) { item ->
-            FeedEntryItem(item, onItemClick, onExcludeUp, onAddToView)
+            FeedEntryItem(item, onItemClick, onExcludeUp, onAddToView, Modifier.animateItem())
         }
             item(key = "footer") {
                 ListFooter(
@@ -493,6 +490,7 @@ private fun FrequentUpsPane(
                 },
                 leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarStack) },
                 modifier = Modifier
+                    .animateItem()
                     .fillMaxWidth()
                     .clickable(role = Role.Button) { onUpClick(up.mid) },
             )
@@ -523,6 +521,7 @@ private fun FeedEntryItem(
     onItemClick: (FeedEntry) -> Unit,
     onExcludeUp: (Long, String) -> Unit,
     onAddToView: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     // **菜单只有行尾这一个入口,长按已经去掉。** 长按此前是并行的第二个入口,理由是"已经会用
     // 的人不必改习惯";但长按没有任何视觉提示,而 M3 手势那一页给长按定的语义是"选中项",
@@ -531,6 +530,7 @@ private fun FeedEntryItem(
     VideoRow(
         item = item.toRowUi(),
         onClick = { onItemClick(item) },
+        modifier = modifier,
         overflow = {
             // 菜单挂在按钮上,不挂在整行上 —— 挂在行上时 Popup 以整行为锚,菜单从行的左下角
             // 弹出来,离按下去的那个点半屏远。
@@ -737,7 +737,7 @@ private fun FrequentUpsRow(
     //
     // 钉住入口之后两头都成立:名单要多长有多长,入口的位置不随屏宽和关注人数变。
     Row(
-        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Tight),
         verticalAlignment = Alignment.Top,
     ) {
         LazyRow(
@@ -745,7 +745,7 @@ private fun FrequentUpsRow(
             // 但硬切在一个圆形上读起来像被右边那个入口盖住了。渐隐把切口变成"没画完",
             // 那正是它的意思。左边不淡:那儿是这一排的开头,不是被截断的地方。
             modifier = Modifier.weight(1f).fadingRightEdge(),
-            contentPadding = PaddingValues(horizontal = 12.dp),
+            contentPadding = PaddingValues(horizontal = Spacing.Cozy),
             horizontalArrangement = Arrangement.spacedBy(SlotGap),
         ) {
             // 正在直播的那一格排在最前面,是这一排的**前置项**而不是成员之一(见 LiveNowSlot)。
@@ -776,7 +776,7 @@ private fun FrequentUpsRow(
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
-                .padding(vertical = 4.dp)
+                .padding(vertical = Spacing.Hair)
                 .padding(end = SlotInset * 2)
                 .clip(CircleShape)
                 .clickable(role = Role.Button, onClick = onOpenFollowings)
@@ -795,8 +795,12 @@ private fun FrequentUpsRow(
 }
 
 /**
- * 这一排里的一格:上面是 48dp 的圆,下面一行字,宽度固定,格与格之间才对得齐。
+ * 这一排里的一格:上面是 48dp 的圆,下面最多两行字,宽度固定,格与格之间才对得齐。
  *
+ * **两行而不是一行。** 这一格只有 [AvatarSlotWidth] 宽,而 B 站的用户名长度没有上限,
+ * 一行截断之后剩下的常常是"某某某某..."这种认不出是谁的前四个字 —— 而这一排存在的意义
+ * 正是一眼认出人。两行不会把这一排撑高多少:labelSmall 一行 16dp,而这一格本来就比
+ * 头像高出一截。
  */
 @Composable
 private fun UpSlot(
@@ -808,18 +812,18 @@ private fun UpSlot(
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(MaterialTheme.shapes.small)
             .clickable(onClick = onClick)
-            .padding(vertical = 4.dp, horizontal = SlotInset)
+            .padding(vertical = Spacing.Hair, horizontal = SlotInset)
             .width(AvatarSlotWidth),
     ) {
         content()
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 4.dp),
+            modifier = Modifier.padding(top = Spacing.Hair),
         )
     }
 }
@@ -840,26 +844,6 @@ private val SlotInset = 2.dp
  * 48dp,在 60dp 的格子里两边各留 6dp。
  */
 private val SlotGap = Spacing.Tight
-
-/**
- * 右边沿渐隐:内容画完之后,用一道从不透明到透明的渐变按 `DstIn` 混合把最右边那几 dp 擦掉。
- *
- * **必须 `CompositingStrategy.Offscreen`**:混合模式作用在"已经画好的一层"上,不离屏合成的话
- * `DstIn` 会跟这一层底下的东西作用,把背景一起擦出一个透明洞。
- */
-private fun Modifier.fadingRightEdge(width: Dp = 24.dp): Modifier = this
-    .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
-    .drawWithContent {
-        drawContent()
-        drawRect(
-            brush = Brush.horizontalGradient(
-                colors = listOf(Color.Black, Color.Transparent),
-                startX = size.width - width.toPx(),
-                endX = size.width,
-            ),
-            blendMode = BlendMode.DstIn,
-        )
-    }
 
 /**
  * 这一排最多摆几个人。

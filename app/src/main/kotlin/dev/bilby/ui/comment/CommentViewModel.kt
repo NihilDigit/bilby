@@ -31,6 +31,20 @@ data class CommentUiState(
     val hasMore: Boolean = true,
     val error: String? = null,
     val sending: Boolean = false,
+    /**
+     * 这一次发送失败的原因。**和 [error] 分开**:那一份画在整个评论区的页脚上,而人此刻正看着
+     * 屏幕最下面那条输入栏 —— 报在十几屏之外等于没报,表现就是"按了发送什么都没发生,评论
+     * 也不见了"。失败之后要做的事(改一个字再发、或者直接重试)都在输入栏那一带。
+     */
+    val sendError: String? = null,
+    /**
+     * 成功发出过几条。**草稿只在这个数变了之后才清。**
+     *
+     * 界面那侧把草稿存在 `rememberSaveable` 里(见 [CommentSection]),而这一份状态是发送结果
+     * 唯一的落点:成功与失败在协程里分道,界面拿不到那个分支,只能读状态。用计数而不是布尔量
+     * 是因为连发两条时布尔量的第二次没有边沿,那条草稿会留在框里。
+     */
+    val sentCount: Int = 0,
     /** 服务端给的评论总数,用于 tab 标题;0 表示还没拿到。 */
     val total: Int = 0,
     // rootRpid -> 展开后的楼中楼全量列表(含继续翻页)。不在这个 map 里的楼层用
@@ -119,8 +133,11 @@ class CommentViewModel(
         expandJobs.clear()
         cursor = null
         subReplyNextPage.clear()
+        // sentCount 跟着留下来。发一级评论成功后正是走这条路重拉整页(见 [send]),清零的话
+        // 界面那边看到的是"计数又变了一次",刚清掉的草稿会被再清一遍 —— 这一次碰巧无害,
+        // 但它让这个计数不再只在发送成功时前进,下一个读它的人会被骗。
         _state.update {
-            CommentUiState(myMid = it.myMid, sort = it.sort, loading = true)
+            CommentUiState(myMid = it.myMid, sort = it.sort, loading = true, sentCount = it.sentCount)
         }
         fetch(append = false)
     }
@@ -277,7 +294,7 @@ class CommentViewModel(
         val target = replyTo?.let { rpid -> findComment(rpid) }
         val sourceOid = oid
         val gen = generation
-        _state.update { it.copy(sending = true) }
+        _state.update { it.copy(sending = true, sendError = null) }
         viewModelScope.launch {
             val result = repository.postComment(sourceOid, text, target, type)
             // 这一趟属于按下发送的那个视频,落地时页面可能已经切集([switchTo])。放行的话:
@@ -286,7 +303,7 @@ class CommentViewModel(
             if (gen != generation) return@launch
             when (result) {
                 is BiliResult.Ok -> {
-                    _state.update { it.copy(sending = false) }
+                    _state.update { it.copy(sending = false, sendError = null, sentCount = it.sentCount + 1) }
                     // notes §1.7:发送成功后拿不到可靠的新评论结构,不做本地拼接,重拉受影响的列表。
                     when {
                         target == null -> loadFirstPage()
@@ -304,12 +321,13 @@ class CommentViewModel(
                     }
                 }
 
+                // 失败落在 sendError 上,不落在 error 上,理由见那个字段的注释。
                 is BiliResult.ApiError -> {
-                    _state.update { it.copy(sending = false, error = "${result.message}(${result.code})") }
+                    _state.update { it.copy(sending = false, sendError = "${result.message}(${result.code})") }
                 }
 
                 is BiliResult.Failure -> {
-                    _state.update { it.copy(sending = false, error = result.cause.message ?: "网络错误") }
+                    _state.update { it.copy(sending = false, sendError = result.cause.message ?: "网络错误") }
                 }
             }
         }

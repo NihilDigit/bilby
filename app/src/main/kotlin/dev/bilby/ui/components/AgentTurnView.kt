@@ -1,5 +1,10 @@
 package dev.bilby.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -67,8 +72,19 @@ fun AgentTurnView(
                 collapsedSummary = turn.steps.lastOrNull()?.label.orEmpty(),
                 onToggle = { processExpanded = !processExpanded },
             )
-            if (processExpanded) {
-                turn.steps.forEach { step -> StepRow(step = step, onVideoClick = onVideoClick) }
+            // 答案一到就自动折叠,折叠是这一块自己发生的事,不是换页:沿竖轴展开收起,
+            // 让"过程收到那一行标题里去了"能被看见。直接 if 掉的话几行过程会凭空消失,
+            // 用户下一次点开也不知道点开的是刚才那块。
+            AnimatedVisibility(
+                visible = processExpanded,
+                enter = expandVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
+                    fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()),
+                exit = shrinkVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
+                    fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
+            ) {
+                Column {
+                    turn.steps.forEach { step -> StepRow(step = step, onVideoClick = onVideoClick) }
+                }
             }
         }
 

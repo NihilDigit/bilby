@@ -1,5 +1,10 @@
 package dev.bilby.ui.offline
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +27,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -112,6 +120,7 @@ fun OfflineScreen(
 ) {
     var pendingDelete by remember { mutableStateOf<OfflineItem?>(null) }
     val selecting = selectedIds != null
+    val haptics = LocalHapticFeedback.current
 
     if (items.isEmpty()) {
         EmptyState(message = stringResource(R.string.offline_empty), modifier = modifier.fillMaxSize())
@@ -121,6 +130,17 @@ fun OfflineScreen(
     LazyColumn(modifier = modifier.fillMaxSize(), contentPadding = contentPadding) {
         items(items, key = { it.id }) { item ->
             val selected = selectedIds != null && item.id in selectedIds
+            // 选中态淡入,不是跳变:一次长按同时换掉整行底色和行尾那一格,两处一起硬切
+            // 读起来像换了一份列表。取 effects 档 —— 变的是颜色,没有任何东西在移动。
+            val rowColor by animateColorAsState(
+                targetValue = if (selected) {
+                    MaterialTheme.colorScheme.secondaryContainer
+                } else {
+                    Color.Transparent
+                },
+                animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
+                label = "offline-row-selected",
+            )
             VideoRow(
                 item = item.toRowUi(),
                 // 多选态下点一行是勾选,不是播 —— 进了多选还去播放,等于长按一下就再也删不成批。
@@ -132,36 +152,48 @@ fun OfflineScreen(
                         else -> onPlay(item)
                     }
                 },
-                onLongClick = { onToggleSelection(item) },
+                onLongClick = {
+                    // 进多选态的那一下要有触感:屏上的变化只是多出一列勾选框,而长按本身
+                    // 没有任何提示。已经在多选态里时不再震 —— 那一下只是勾选,和点击等价。
+                    if (!selecting) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onToggleSelection(item)
+                },
                 // 选中的那几行要能一眼扫出来。整行染色而不是只画一个勾:勾在行尾,而人是从
                 // 左往右扫的,只靠行尾那个小方块得逐行去对。
-                modifier = if (selected) {
-                    Modifier.background(MaterialTheme.colorScheme.secondaryContainer)
-                } else {
-                    Modifier
-                },
+                modifier = Modifier.animateItem().background(rowColor),
                 trailing = {
-                    if (selecting) {
-                        Checkbox(checked = selected, onCheckedChange = null)
-                    } else {
-                        // **还没开始下的那条不问。** 确认框存在的理由是"删掉就要重下几百 MB",
-                        // 而排队中的这条一个字节都还没下,取消它的代价是零 —— 再弹一次确认只是
-                        // 让取消一批误选的条目变成点两下一条。
-                        IconButton(
-                            onClick = {
-                                if (item.status == OfflineStatus.Queued) onDelete(item) else pendingDelete = item
-                            },
-                        ) {
-                            Icon(
-                                Icons.Outlined.DeleteOutline,
-                                contentDescription = stringResource(R.string.offline_delete, item.title),
-                            )
+                    // 删除图标和勾选框占的是同一格,所以是**换内容**而不是各自显隐:两个
+                    // 48dp 的东西在同一个位置上直接对调,读起来像图标变成了方块。
+                    // transitionSpec 不是组合上下文,主题里的 spec 要先在外面取出来。
+                    val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+                    AnimatedContent(
+                        targetState = selecting,
+                        transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
+                        label = "offline-row-trailing",
+                    ) { inSelection ->
+                        if (inSelection) {
+                            Checkbox(checked = selected, onCheckedChange = null)
+                        } else {
+                            // **还没开始下的那条不问。** 确认框存在的理由是"删掉就要重下几百 MB",
+                            // 而排队中的这条一个字节都还没下,取消它的代价是零 —— 再弹一次确认只是
+                            // 让取消一批误选的条目变成点两下一条。
+                            IconButton(
+                                onClick = {
+                                    if (item.status == OfflineStatus.Queued) onDelete(item) else pendingDelete = item
+                                },
+                            ) {
+                                Icon(
+                                    Icons.Outlined.DeleteOutline,
+                                    contentDescription = stringResource(R.string.offline_delete, item.title),
+                                )
+                            }
                         }
                     }
                 },
             )
         }
-        item {
+        // 给个 key:上面那些条目都是带 key 的,删掉一批之后这一行不该跟着按下标重新认一次。
+        item(key = "used-space") {
             Text(
                 text = stringResource(R.string.offline_used_space, formatBytes(usedBytes)),
                 style = MaterialTheme.typography.bodySmall,

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -84,12 +87,16 @@ fun ArticleScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    // pinned 而不是 enterAlways:一篇专栏是一口气读下去的,顶栏往上滑走再滑回来,视线要在
+    // 正文和一条时隐时现的横条之间分心。滚起来只换一档容器色,正文和顶栏之间才有边界。
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
-        modifier = modifier,
+        modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             BilbyTopBar(
                 title = stringResource(R.string.article_title),
                 onBack = onBack,
+                scrollBehavior = scrollBehavior,
                 actions = {
                     // 站内读得到时它仍然有用:图表类专栏在网页上是可横向拖的,我们这里只有一张图。
                     state.article?.webUrl?.let { url ->
@@ -195,10 +202,14 @@ private fun ArticleHeader(article: Article, onMentionClick: (Long) -> Unit) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            modifier = Modifier.clickable(
-                role = Role.Button,
-                enabled = article.authorMid != 0L,
-            ) { onMentionClick(article.authorMid) },
+            // 头像 36dp,这一行本来就只有那么高,够不到 48dp 的触摸下限。撑的是点击区,
+            // 头像尺寸和两行字都没动(风格指南 §3 第一条)。
+            modifier = Modifier
+                .heightIn(min = Dimens.MinTouchTarget)
+                .clickable(
+                    role = Role.Button,
+                    enabled = article.authorMid != 0L,
+                ) { onMentionClick(article.authorMid) },
         ) {
             Avatar(url = article.authorFaceUrl, size = Dimens.AvatarRow)
             Column {

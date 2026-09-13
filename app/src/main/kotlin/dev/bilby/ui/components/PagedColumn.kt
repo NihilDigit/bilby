@@ -1,5 +1,6 @@
 package dev.bilby.ui.components
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyColumn
@@ -49,47 +50,56 @@ fun <T> PagedColumn(
     header: (LazyListScope.() -> Unit)? = null,
     itemContent: @Composable (T) -> Unit,
 ) {
-    if (loading && items.isEmpty()) {
-        FullScreenLoading(modifier)
-        return
-    }
-    if (error != null && items.isEmpty()) {
-        FullScreenError(error, onRetry, modifier)
-        return
-    }
-
-    // 触底预取。**在 composition 之外用 snapshotFlow 观察**,不能在 composable body 里直接
-    // 调 onLoadMore —— 那样每次重组都会再请求一次。
-    LaunchedEffect(listState, hasMore, appending) {
-        snapshotFlow { listState.layoutInfo }
-            .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-            .distinctUntilChanged()
-            .filter { (last, total) -> last != null && last >= total - 1 - PrefetchThreshold }
-            .collect { if (hasMore && !appending) onLoadMore() }
-    }
-
-    LazyColumn(
-        state = listState,
-        modifier = modifier.fillMaxSize(),
-        contentPadding = contentPadding,
+    FirstScreenState(
+        loading = loading,
+        error = error,
+        isEmpty = items.isEmpty(),
+        onRetry = onRetry,
+        modifier = modifier,
     ) {
-        header?.invoke(this)
-
-        if (items.isEmpty()) {
-            // 空态占满列表视口,不是只占一个条目的高度 —— 一行灰字挂在顶上读起来像加载没完。
-            item(key = "empty") { EmptyState(emptyText, Modifier.fillParentMaxSize()) }
+        // 触底预取。**在 composition 之外用 snapshotFlow 观察**,不能在 composable body 里直接
+        // 调 onLoadMore —— 那样每次重组都会再请求一次。
+        //
+        // 放在内容这一支里,和三态收敛之前的位置等价:首屏还在转圈时它本来也不该发请求。
+        LaunchedEffect(listState, hasMore, appending) {
+            snapshotFlow { listState.layoutInfo }
+                .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
+                .distinctUntilChanged()
+                .filter { (last, total) -> last != null && last >= total - 1 - PrefetchThreshold }
+                .collect { if (hasMore && !appending) onLoadMore() }
         }
 
-        items(items, key = key) { item -> itemContent(item) }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = contentPadding,
+        ) {
+            header?.invoke(this)
 
-        item(key = "footer") {
-            ListFooter(
-                appending = appending,
-                hasMore = hasMore,
-                hasItems = items.isNotEmpty(),
-                error = error,
-                onRetry = onLoadMore,
-            )
+            if (items.isEmpty()) {
+                // 空态占满列表视口,不是只占一个条目的高度 —— 一行灰字挂在顶上读起来像加载没完。
+                item(key = "empty") { EmptyState(emptyText, Modifier.fillParentMaxSize()) }
+            }
+
+            // **`animateItem` 在这里给一次,所有翻页列表就都有了。** 条目的增删在这些页面是
+            // 常事(历史删一批、关注切分组、收藏夹取消收藏),硬切会让下面几十行瞬移一格。
+            // 它靠 [key] 认条目,所以调用方那个 key 必须是真的稳定标识,不能是下标。
+            //
+            // 包一层 Box 而不是把 modifier 递给 itemContent:递出去等于要求每个调用方都把它
+            // 接到自己那一行的根上,漏一个就是这一页没有动效,而漏没漏要逐页读才看得出来。
+            items(items, key = key) { item ->
+                Box(modifier = Modifier.animateItem()) { itemContent(item) }
+            }
+
+            item(key = "footer") {
+                ListFooter(
+                    appending = appending,
+                    hasMore = hasMore,
+                    hasItems = items.isNotEmpty(),
+                    error = error,
+                    onRetry = onLoadMore,
+                )
+            }
         }
     }
 }

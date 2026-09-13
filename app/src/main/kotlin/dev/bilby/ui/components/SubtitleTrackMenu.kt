@@ -39,7 +39,7 @@ fun SubtitleTrackMenu(
         DropdownMenuItem(
             text = { Text(stringResource(R.string.player_subtitle_off)) },
             onClick = { onDismissRequest(); onSelect("") },
-            trailingIcon = if (offSelected) subtitleSelectedMark else null,
+            trailingIcon = if (offSelected) menuSelectedMark else null,
             modifier = Modifier.selectedSemantics(offSelected),
         )
         tracks.forEach { track ->
@@ -47,7 +47,7 @@ fun SubtitleTrackMenu(
             DropdownMenuItem(
                 text = { Text(track.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 onClick = { onDismissRequest(); onSelect(track.lan) },
-                trailingIcon = if (trackSelected) subtitleSelectedMark else null,
+                trailingIcon = if (trackSelected) menuSelectedMark else null,
                 modifier = Modifier.selectedSemantics(trackSelected),
             )
         }
@@ -55,13 +55,17 @@ fun SubtitleTrackMenu(
 }
 
 /**
- * 选中标记。**勾而不是「·」**:小圆点既不像选中态,读屏还会把它当成一个标点节点念出来。
- * 勾 + 主色是两条通道,色觉障碍下也读得出哪一条在用。
+ * 下拉菜单里的选中标记。**勾而不是「·」**:小圆点既不像选中态,读屏还会把它当成一个标点节点
+ * 念出来。勾 + 主色是两条通道,色觉障碍下也读得出哪一条在用。
  *
  * 图标本身 `contentDescription = null` —— 选中态由行上的 [selectedSemantics] 说,
  * 两处都说会让读屏在同一行里念两遍。
+ *
+ * **字幕、倍速、清晰度三种菜单共用这一份**(看视频控制条、听视频控制行都在内)。它们是同一种
+ * 东西:一列选项里标出正在用的那个;各写一份的话勾的颜色、挂不挂语义迟早分家 —— 听视频的
+ * 倍速菜单原先就是那个漏掉的:既没有勾,读屏也听不出哪一档在用。
  */
-private val subtitleSelectedMark: @Composable () -> Unit = {
+internal val menuSelectedMark: @Composable () -> Unit = {
     Icon(
         Icons.Filled.Check,
         contentDescription = null,
@@ -70,4 +74,4 @@ private val subtitleSelectedMark: @Composable () -> Unit = {
 }
 
 /** 选中态挂在整行上,不挂在那个勾上:读屏念的是「关闭字幕,已选中」,而不是孤零零一个图标。 */
-private fun Modifier.selectedSemantics(isSelected: Boolean) = semantics { selected = isSelected }
+internal fun Modifier.selectedSemantics(isSelected: Boolean) = semantics { selected = isSelected }

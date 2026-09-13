@@ -110,16 +110,18 @@ fun VideoRow(
 
         Box(modifier = Modifier.weight(1f)) {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-                // bodyMedium(14sp)而不是 bodyLarge(16sp)。PiliPlus 的卡片标题也是 14sp,
-                // 换来的是同样两行里多放两三个字 —— 见 Dimens.ListCoverWidth 那道算术。
+                // bodyLarge(16sp)。这一行是整条的标题,它下面几行是 labelSmall 和 bodySmall,
+                // 标题用 14sp 时与它们只差 2sp —— 一列列表扫下来认不出哪一行是主的。M3 给
+                // list item 的 headline 定的也是 bodyLarge。字号占掉的行宽从封面那边让出来,
+                // 见 Dimens.ListCoverWidth 那道算术。
                 //
                 // **标题只让出按钮那一格的一半,不让出整格**:让出 48dp 就是那道算术里的
-                // 13 个字掉到 9 个;一点不让的话,标题的右边界比图标的右边界还往外,
+                // 11 个字掉到 8 个;一点不让的话,标题的右边界比图标的右边界还往外,
                 // 那一列没有任何东西与它对齐,看起来是浮着的。见 [TitleOverflowGutter]。
                 Text(
                     text = item.title,
                     modifier = Modifier.padding(end = if (overflow != null) TitleOverflowGutter else 0.dp),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyLarge,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -178,7 +180,8 @@ private val OverflowReserve = 48.dp
  * 标题让出的宽度:按钮那一格的一半。
  *
  * 让 12dp(图标在 48dp 触控格里的内缩)时标题的右边界正好压在图标的右边界上,量是对齐了,
- * 看起来却像贴着;24dp 之后两者之间有一格喘息,而标题仍有 164dp,比让出整格宽 36dp。
+ * 看起来却像贴着;24dp 之后两者之间有一格喘息,而标题仍有 164dp(16sp 下 10 个汉字),
+ * 比让出整格宽 36dp。
  */
 private val TitleOverflowGutter = OverflowReserve / 2
 

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -29,17 +30,21 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -51,7 +56,9 @@ import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.KeepScrolledToBottom
 import dev.bilby.ui.components.LoadingSpinner
+import dev.bilby.ui.components.rememberBottomFollow
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -91,7 +98,10 @@ fun WhisperScreen(
             )
         },
     ) { insets ->
-        Column(modifier = Modifier.fillMaxSize().padding(insets)) {
+        // **躲让键盘放在这一层,不放在输入栏上。** 挂在输入栏内层的话只有它自己上移,上面那段
+        // 消息列表高度不变、被键盘盖住下半截 —— 打字时看不到自己在回哪一句。整列一起退让之后
+        // 列表被压短,最后一条仍然贴在输入栏上方。
+        Column(modifier = Modifier.fillMaxSize().padding(insets).imePadding()) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     state.loading && state.messages.isEmpty() -> FullScreenLoading()
@@ -102,7 +112,12 @@ fun WhisperScreen(
                     else -> MessageList(state, onOpenVideo, onOpenArticle)
                 }
             }
-            WhisperInput(sending = state.sending, error = state.sendError, onSend = onSend)
+            WhisperInput(
+                sending = state.sending,
+                error = state.sendError,
+                sentCount = state.sentCount,
+                onSend = onSend,
+            )
         }
     }
 }
@@ -114,14 +129,16 @@ private fun MessageList(
     onOpenArticle: (String) -> Unit,
 ) {
     val listState = rememberLazyListState()
-    // 新消息在末尾,进来就停在最后一条:聊天从上往下读,但要看的是最新那句。
-    LaunchedEffect(state.messages.size) {
-        if (state.messages.isNotEmpty()) listState.scrollToItem(state.messages.lastIndex)
-    }
+    // 新消息在末尾,所以默认贴着底边走。**用 [rememberBottomFollow] 而不是每次 messages.size
+    // 变就 scrollToItem**:发送成功后整个会话是重拉的(见 WhisperViewModel.send),而每一次重拉
+    // 都会让那个 effect 再跑一遍 —— 人正往上翻旧消息时被拽回底部,而他手里那几句就是他要看的。
+    // 判据交给那一份:只有用户自己没有往回滑过才跟随,滑回底部就恢复。
+    val follow = rememberBottomFollow(listState)
+    KeepScrolledToBottom(state = listState, follow = follow, enabled = true)
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(Spacing.Comfortable),
+        modifier = Modifier.fillMaxSize().nestedScroll(follow.connection),
+        contentPadding = PaddingValues(Spacing.Comfortable),
         verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
         items(state.messages, key = { it.seqno }) { message ->
@@ -324,26 +341,66 @@ private fun WhisperTopBar(name: String, faceUrl: String, onOpenSpace: (() -> Uni
     )
 }
 
+/**
+ * 会话页底部那条输入栏。
+ *
+ * **草稿只在发出去之后才清。** 以前是按下发送就清,于是一次失败同时拿走两样东西:刚打的那句话,
+ * 以及"它到底发出去了没有"的答案 —— 屏上既没有新气泡也没有输入内容。现在失败原因就在输入框
+ * 上方一行,带一个重试,草稿还在框里。
+ *
+ * 成功与失败在 ViewModel 的协程里分道,界面读不到那个分支,只能读它报的成功计数
+ * ([WhisperUiState.sentCount])。**判据是"这个数变大了",不是"和记着的那个不一样"**:进程重建
+ * 之后 ViewModel 是新的,计数从 0 起,而 `rememberSaveable` 恢复出来的是重建之前那个数,
+ * 按"不一样"判会在回到这一页的第一帧把刚恢复的草稿清掉。
+ *
+ * 这一份和评论区那条(`ui/comment/CommentSection.kt` 的 `CommentInputBar`)各写一份,没有抽成
+ * 共用组件:两边的字符串、提示语和回复态都不一样,而 `ui/message` 去 import `ui/comment` 的内部
+ * 组件是把依赖方向弄反。形状一致由风格指南 §2.7 约束,不由代码共用保证 —— 弹幕那条
+ * (`ui/video/DanmakuInput.kt`)本来就是第三份。
+ */
 @Composable
-private fun WhisperInput(sending: Boolean, error: String?, onSend: (String) -> Unit) {
+private fun WhisperInput(sending: Boolean, error: String?, sentCount: Int, onSend: (String) -> Unit) {
     var text by rememberSaveable { mutableStateOf("") }
-    val send = {
-        onSend(text)
-        text = ""
+    var seenSentCount by rememberSaveable { mutableIntStateOf(sentCount) }
+    LaunchedEffect(sentCount) {
+        if (sentCount > seenSentCount) text = ""
+        seenSentCount = sentCount
     }
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.imePadding()) {
+    val send = { onSend(text) }
+
+    // 过了刻度才出现,而且不拦输入 —— 私信长度上限同样只有服务端说得准,理由与评论那一侧同
+    // (见 `ui/comment/ReplyInputLayer.kt` 的 draftCounter)。返回 null 而不是一个空的槽位:
+    // 那个槽位一存在就占掉一行高度。
+    val counter: (@Composable () -> Unit)? = if (text.length < CounterFrom) {
+        null
+    } else {
+        val label = stringResource(R.string.input_length_counter, text.length, SoftLimit)
+        val slot: @Composable () -> Unit = {
+            Text(text = label, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.End)
+        }
+        slot
+    }
+
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
         Column {
-            error?.let {
-                Text(
-                    text = stringResource(R.string.whisper_send_failed, it),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(
-                        start = Spacing.Comfortable,
-                        end = Spacing.Comfortable,
-                        top = Spacing.Tight,
-                    ),
-                )
+            // 失败原因摆在输入框上面,不做 toast:人正看着这条输入栏,而失败之后要做的两件事
+            // (改一句再发、直接重试)都在这一带。正在发的时候不画上一次的失败。
+            if (error != null && !sending) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = Spacing.Comfortable, end = Spacing.Hair),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(R.string.whisper_send_failed, error),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    TextButton(onClick = send) { Text(stringResource(R.string.action_retry)) }
+                }
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(Spacing.Tight),
@@ -357,7 +414,10 @@ private fun WhisperInput(sending: Boolean, error: String?, onSend: (String) -> U
                     placeholder = { Text(stringResource(R.string.whisper_input_hint)) },
                     maxLines = 4,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { if (text.isNotBlank()) send() }),
+                    keyboardActions = KeyboardActions(
+                        onSend = { if (!sending && text.isNotBlank()) send() },
+                    ),
+                    supportingText = counter,
                     shape = MaterialTheme.shapes.large,
                 )
                 FilledIconButton(onClick = send, enabled = !sending && text.isNotBlank()) {
@@ -374,6 +434,12 @@ private fun WhisperInput(sending: Boolean, error: String?, onSend: (String) -> U
         }
     }
 }
+
+/** 私信正文的字数刻度。**不是本地上限**,判决在服务端,理由见 `draftCounter` 的说明。 */
+private const val SoftLimit = 500
+
+/** 到这个长度才把计数器画出来。 */
+private const val CounterFrom = 400
 
 /** 气泡里的封面。比列表行那个小一号:这里最宽只有一个气泡。 */
 private val CardCoverWidth = 96.dp

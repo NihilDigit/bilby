@@ -3,6 +3,7 @@ package dev.bilby.ui.settings
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -35,10 +36,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,6 +50,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -95,9 +99,18 @@ fun SettingsScreen(
     var confirmingLogout by rememberSaveable { mutableStateOf(false) }
     val notConfigured = stringResource(R.string.settings_not_configured)
 
+    // pinned 而不是 enterAlways:顶栏留着不动,内容滚起来之后只换一档容器色。这一页八行入口
+    // 刚够一屏,顶栏跟着一起走反而像页面自己跳了一下。
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
-        modifier = modifier.fillMaxSize(),
-        topBar = { BilbyTopBar(title = stringResource(R.string.settings_title), onBack = onBack) },
+        modifier = modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
+        topBar = {
+            BilbyTopBar(
+                title = stringResource(R.string.settings_title),
+                onBack = onBack,
+                scrollBehavior = scrollBehavior,
+            )
+        },
     ) { insets ->
         AdaptiveContent(
             modifier = Modifier.fillMaxSize().padding(insets),
@@ -109,70 +122,75 @@ fun SettingsScreen(
                     .verticalScroll(rememberScrollState())
                     .padding(bottom = Spacing.Spacious),
             ) {
-                SettingRow(
-                    title = stringResource(R.string.settings_section_player),
-                    icon = Icons.Outlined.PlayCircleOutline,
-                    // 摘要给 WiFi 那一档:它是绝大多数时候真正生效的那个值。
-                    value = state.loaded.then { videoQualityLabel(state.defaultQualityWifi) },
-                    target = RowTarget.Page,
-                    onClick = { onOpenSection(SettingsSection.Playback) },
-                )
-                SettingRow(
-                    title = stringResource(R.string.settings_section_danmaku),
-                    icon = BilbyIcons.Danmaku,
-                    target = RowTarget.Page,
-                    onClick = { onOpenSection(SettingsSection.Danmaku) },
-                )
-                SettingRow(
-                    title = stringResource(R.string.settings_section_sponsorblock),
-                    icon = Icons.Outlined.FastForward,
-                    value = state.loaded.then { onOffLabel(state.sponsorBlock.enabled) },
-                    target = RowTarget.Page,
-                    onClick = { onOpenSection(SettingsSection.SponsorBlock) },
-                )
-                SettingRow(
-                    title = stringResource(R.string.settings_section_offline),
-                    icon = Icons.Outlined.DownloadForOffline,
-                    value = state.loaded.then {
-                        stringResource(R.string.settings_offline_concurrency_value, state.offlineConcurrency)
-                    },
-                    target = RowTarget.Page,
-                    onClick = { onOpenSection(SettingsSection.Offline) },
-                )
-                SettingRow(
-                    title = stringResource(R.string.settings_section_agent),
-                    icon = Icons.Outlined.AutoAwesome,
-                    value = state.llm?.let { llm ->
-                        if (llm.isConfigured) {
-                            stringResource(R.string.settings_configured)
-                        } else {
-                            notConfigured
-                        }
-                    },
-                    target = RowTarget.Page,
-                    onClick = { onOpenSection(SettingsSection.Agent) },
-                )
-                SettingRow(
-                    title = stringResource(R.string.settings_section_privacy),
-                    icon = Icons.Outlined.Shield,
-                    target = RowTarget.Page,
-                    onClick = { onOpenSection(SettingsSection.Privacy) },
-                )
-                SettingRow(
-                    title = stringResource(R.string.settings_section_about),
-                    icon = Icons.Outlined.Info,
-                    value = BuildConfig.VERSION_NAME,
-                    target = RowTarget.Page,
-                    onClick = { onOpenSection(SettingsSection.About) },
-                )
+                // 七个去处装成一组。行与行之间不画线,边界由这个容器的底色和圆角承担。
+                SettingsGroup {
+                    SettingRow(
+                        title = stringResource(R.string.settings_section_player),
+                        icon = Icons.Outlined.PlayCircleOutline,
+                        // 摘要给 WiFi 那一档:它是绝大多数时候真正生效的那个值。
+                        value = state.loaded.then { videoQualityLabel(state.defaultQualityWifi) },
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.Playback) },
+                    )
+                    SettingRow(
+                        title = stringResource(R.string.settings_section_danmaku),
+                        icon = BilbyIcons.Danmaku,
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.Danmaku) },
+                    )
+                    SettingRow(
+                        title = stringResource(R.string.settings_section_sponsorblock),
+                        icon = Icons.Outlined.FastForward,
+                        value = state.loaded.then { onOffLabel(state.sponsorBlock.enabled) },
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.SponsorBlock) },
+                    )
+                    SettingRow(
+                        title = stringResource(R.string.settings_section_offline),
+                        icon = Icons.Outlined.DownloadForOffline,
+                        value = state.loaded.then {
+                            stringResource(R.string.settings_offline_concurrency_value, state.offlineConcurrency)
+                        },
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.Offline) },
+                    )
+                    SettingRow(
+                        title = stringResource(R.string.settings_section_agent),
+                        icon = Icons.Outlined.AutoAwesome,
+                        value = state.llm?.let { llm ->
+                            if (llm.isConfigured) {
+                                stringResource(R.string.settings_configured)
+                            } else {
+                                notConfigured
+                            }
+                        },
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.Agent) },
+                    )
+                    SettingRow(
+                        title = stringResource(R.string.settings_section_privacy),
+                        icon = Icons.Outlined.Shield,
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.Privacy) },
+                    )
+                    SettingRow(
+                        title = stringResource(R.string.settings_section_about),
+                        icon = Icons.Outlined.Info,
+                        value = BuildConfig.VERSION_NAME,
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.About) },
+                    )
+                }
                 // **登出留在首页,不进任何子页。** 它是这一页唯一的破坏性动作,埋进二级菜单
                 // 反而更危险:找不到的时候人会挨个点进去翻。
                 SectionTitle(stringResource(R.string.settings_section_account))
-                SettingRow(
-                    title = stringResource(R.string.settings_logout),
-                    icon = Icons.AutoMirrored.Outlined.Logout,
-                    onClick = { confirmingLogout = true },
-                )
+                SettingsGroup {
+                    SettingRow(
+                        title = stringResource(R.string.settings_logout),
+                        icon = Icons.AutoMirrored.Outlined.Logout,
+                        onClick = { confirmingLogout = true },
+                    )
+                }
             }
         }
     }
@@ -194,6 +212,32 @@ fun SettingsScreen(
                 }
             },
         )
+    }
+}
+
+/**
+ * 一组设置行的容器。**标题留在外面,行在里面。**
+ *
+ * 依据是风格指南 §2.3c 引的 M3 lists 页:"Use gaps for **contained** lists…
+ * Limit dividers to uncontained or complex lists" —— M3 Expressive 的默认答案是 containment,
+ * 而这一页从前既没有容器也没有分割线,一节的边界只能靠一行标题上方那段留白猜。
+ *
+ * 底色取 `surfaceContainer` 不取 `surfaceContainerLow`:后者在浅色主题下和页面的 `surface`
+ * 只差一点,真机上那圈边界几乎看不出来,等于白做了一个容器(§2.3c 里同一条,踩过两次)。
+ *
+ * **里面的行底色必须透明**,由 [SettingRow] / [ToggleSettingRow] 自己声明 ——
+ * `ListItem` 默认画 `surface`,摆进这个容器里每一行都会变成一块比容器亮的补丁。
+ */
+@Composable
+internal fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
+    ) {
+        Column(content = content)
     }
 }
 
@@ -289,7 +333,11 @@ internal fun CodecSection(
  * 那个答案现在写在行尾。
  *
  * 对话框而不是下拉菜单:档位最多的那两项(默认画质)有七档,下拉菜单在小屏上会顶到边缘,
- * 而对话框自带滚动和标题。
+ * 而对话框有标题、有自己的最大高度。
+ *
+ * **滚动要自己给。** `AlertDialog` 的 `text` 槽位不滚 —— 它只把内容约束在对话框的最大高度里,
+ * 超出的部分直接被裁掉。默认画质那七档在小屏横屏下就超了,末尾两档点不到,而且看不出还有。
+ * 这里以前的注释写着"对话框自带滚动",那是一句没核实的断言。
  */
 @Composable
 internal fun <T> ChoiceRow(
@@ -313,7 +361,7 @@ internal fun <T> ChoiceRow(
         title = { Text(title) },
         text = {
             // selectableGroup:读屏把这几行念成一组单选,而不是几个互不相干的按钮。
-            Column(modifier = Modifier.selectableGroup()) {
+            Column(modifier = Modifier.selectableGroup().verticalScroll(rememberScrollState())) {
                 options.forEach { option ->
                     ListItem(
                         headlineContent = { Text(label(option)) },
@@ -494,6 +542,9 @@ internal fun SettingRow(
         } else {
             null
         },
+        // 透明,底色归 [SettingsGroup]。`ListItem` 默认画 `surface`,摆进容器里每一行都会变成
+        // 一块比容器亮的补丁,几行排下来就是一条条横杠(风格指南 §2.3c 同一条)。
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier
             .then(
                 if (onClick != null) {
@@ -539,6 +590,8 @@ internal fun ToggleSettingRow(
                 Switch(checked = checked, onCheckedChange = null)
             }
         },
+        // 透明,理由同 [SettingRow]。
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier
             .fillMaxWidth()
             // toggleable 在 padding **外面**:反过来的话内边距那一圈不在触摸区里,涟漪也只

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
@@ -126,18 +127,50 @@ fun DynamicCardView(
             modifier = Modifier.padding(if (nested) Spacing.Tight else Spacing.Cozy),
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
+            // **被转发的那条点得开,落点是它自己那一页。** 以前整张嵌套卡片除了里面的视频、
+            // 直播这些块之外没有任何落点:一条转发别人图文的动态,想读原文只能点外层那条转发的
+            // 评论入口,进去看到的是转发者的评论区。原文的评论、完整正文都在
+            // [DynamicAction.OpenDynamic] 那一页。
+            //
+            // **可点的只有名字那一行和正文,不是整张卡片。** 里面的块各自已经有落点(视频进播放页、
+            // 直播进直播间、投票进那条动态),在它们头上再罩一层可点区等于同一次点击有两个候选答案,
+            // 而外层那层永远只是"退回去看原文"。
+            //
+            // 这一层不动颜色。§2.7c 把 `primary` 在这张卡片里限定成两处("正在直播"和"阅读全文"),
+            // 而"退回原文"是整块内容的落点,不是一行入口 —— 它靠位置说明自己,不靠染色。
+            val openForwarded: (() -> Unit)? = if (nested) {
+                { onAction(DynamicAction.OpenDynamic(card.id)) }
+            } else {
+                null
+            }
+
             if (!nested) {
                 DynamicAuthorRow(card, onAction, showAuthor)
             } else if (card.author.name.isNotBlank()) {
                 // 嵌套那一层只留一行名字:再摆一次头像会让转发卡片看起来像两条并排的动态。
+                // 名字这一行高度不够 48dp,所以热区往下补 —— 这一层里它上下都是留白,扩不挤走东西。
                 Text(
                     text = card.author.name,
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = if (openForwarded == null) {
+                        Modifier
+                    } else {
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(MaterialTheme.shapes.extraSmall)
+                            .clickable(
+                                role = Role.Button,
+                                onClickLabel = stringResource(R.string.dynamic_open_origin),
+                                onClick = openForwarded,
+                            )
+                            .heightIn(min = Dimens.MinTouchTarget)
+                            .wrapContentHeight()
+                    },
                 )
             }
 
-            DynamicText(card = card, onAction = onAction)
+            DynamicText(card = card, onAction = onAction, onBodyClick = openForwarded)
 
             // 话题不染 primary:这一页里 primary 只标"这段能点",而话题在本应用里没有落点
             // (没有话题页,也不该有——那是一条按热度排的池子)。染成可点色再点不动最难受。
@@ -197,8 +230,12 @@ fun DynamicCardView(
  * 的主要动作,占满一行的宽度;这里只有两项,而它们下面还接着下一条动态 —— 竖排会让每张卡片
  * 都多出一截高度,一屏少放小半条内容。
  *
- * 未选中取 `outline`:这一行是卡片里优先级最低的东西,和上面的正文再拉开一档(同 §2.3b 的
- * 计数行)。选中的赞取 `primary` 并换成实心图标 —— **形态跟着状态变,不只是变色**(§2.6),
+ * 未选中取 `onSurfaceVariant`。**以前取的是 `outline`,注释还引 §2.3b 当依据,而那一节的结论
+ * 正好相反**:`outline` 在 M3 里是描边角色,只按约 3:1 校准,浅色主题下当小字不达 4.5:1
+ * (2026-08 审计实测 4.3:1)。文字的低强调角色就是 `onSurfaceVariant`。和正文拉开一档这件事
+ * 它同样做得到,而这一行里图标旁边就是数字,它是文字。
+ *
+ * 选中的赞取 `primary` 并换成实心图标 —— **形态跟着状态变,不只是变色**(§2.6),
  * 只靠颜色的话色觉障碍用户读不出自己点没点。
  *
  * 触摸区靠 `heightIn(min = 48dp)` 加 `weight(1f)` 撑起来,和播放页动作栏是同一条(§3)。
@@ -254,7 +291,11 @@ private fun ActionCell(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    val tint = if (selected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Row(
         modifier = modifier
             .clip(MaterialTheme.shapes.small)
@@ -324,9 +365,17 @@ private fun blockStyle(nested: Boolean) = BlockStyle(
  * 配图都在那边),认不出就地展开——那时摘要是仅有的一份内容。做成一行字而不是按钮:一屏
  * 十几条动态,每条顶一个 tonal 按钮会排成一列按钮墙,而风格指南 §2.4 给整屏只留一个高强调
  * 按钮。触摸区仍按 48dp 撑开。
+ *
+ * @param onBodyClick 非 null 时正文整段可点(被转发的那条用它退回原文)。**只罩在正文上,不罩
+ *   下面那行出口**:那一行自己就是一个按钮,套在一起等于同一次点击有两个答案。正文里的链接、
+ *   @提及、时间戳走的是 `LinkAnnotation`,只吃落在那一截上的点击,剩下的照旧传到这一层。
  */
 @Composable
-private fun DynamicText(card: DynamicCard, onAction: (DynamicAction) -> Unit) {
+private fun DynamicText(
+    card: DynamicCard,
+    onAction: (DynamicAction) -> Unit,
+    onBodyClick: (() -> Unit)? = null,
+) {
     var expanded by remember(card.id) { mutableStateOf(false) }
     val collapsed = card.textIsSummary && !expanded
 
@@ -337,6 +386,18 @@ private fun DynamicText(card: DynamicCard, onAction: (DynamicAction) -> Unit) {
             onLinkClick = { onAction(DynamicAction.OpenUrl(it)) },
             onMentionClick = { onAction(DynamicAction.OpenUser(it)) },
             maxLines = if (collapsed) DynamicTextMaxLines else Int.MAX_VALUE,
+            modifier = if (onBodyClick == null) {
+                Modifier
+            } else {
+                Modifier
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.extraSmall)
+                    .clickable(
+                        role = Role.Button,
+                        onClickLabel = stringResource(R.string.dynamic_open_origin),
+                        onClick = onBodyClick,
+                    )
+            },
         )
     }
 
@@ -829,13 +890,16 @@ private fun DynamicImageGrid(images: List<ArticleImage>) {
         return
     }
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-        images.chunked(columns).forEach { row ->
+        // **下标按行号算,不用 `images.indexOf(image)` 反查。** 同一条动态里重复配同一张图时
+        // (九宫格拼图、同一张表情图铺几格)`indexOf` 把每一格都指回第一次出现的那个下标,
+        // 点第三张打开的是第一张。评论区的 `PictureGrid` 是同一处坑。
+        images.chunked(columns).forEachIndexed { rowIndex, row ->
             Row(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                row.forEach { image ->
-                    val index = images.indexOf(image)
+                row.forEachIndexed { columnIndex, image ->
+                    val index = rowIndex * columns + columnIndex
                     BiliAsyncImage(
                         url = image.url,
                         contentDescription = null,

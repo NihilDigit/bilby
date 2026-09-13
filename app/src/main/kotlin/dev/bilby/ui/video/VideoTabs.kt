@@ -54,6 +54,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.WatchLater
@@ -102,10 +105,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.graphics.vector.ImageVector
 import android.os.SystemClock
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -1676,18 +1676,23 @@ private fun QueueContent(
             }
             // 顺序/随机只有两态,是个开关而不是两个选项,所以用带图标的 text button
             // 而不是 segmented button —— 后者会让人以为还有第三格。
-            TextButton(onClick = onToggleShuffle, contentPadding = PaddingValues(horizontal = Spacing.Tight)) {
-                Icon(Icons.Filled.Shuffle, contentDescription = null, modifier = Modifier.size(Dimens.IconInline))
-                Text(
-                    text = stringResource(
-                        if (queue.shuffled) {
-                            R.string.queue_order_shuffle
-                        } else {
-                            R.string.queue_order_sequential
-                        },
-                    ),
-                    modifier = Modifier.padding(start = Spacing.Hair),
+            //
+            // 文字写的是当前状态,图标必须跟着状态换:原先图标恒为 Shuffle 而文字写「顺序」,
+            // 两个通道给的是相反的信号。听视频页的同款按钮是同一套(ListenScreen)。
+            val orderLabel = stringResource(
+                if (queue.shuffled) R.string.queue_order_shuffle else R.string.queue_order_sequential,
+            )
+            TextButton(
+                onClick = onToggleShuffle,
+                contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                modifier = Modifier.semantics { stateDescription = orderLabel },
+            ) {
+                Icon(
+                    if (queue.shuffled) Icons.Filled.Shuffle else Icons.AutoMirrored.Filled.PlaylistPlay,
+                    contentDescription = null,
+                    modifier = Modifier.size(Dimens.IconInline),
                 )
+                Text(text = orderLabel, modifier = Modifier.padding(start = Spacing.Hair))
             }
         }
 

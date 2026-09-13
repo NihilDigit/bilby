@@ -63,6 +63,18 @@ fun SeekBar(
     activeColor: Color = MaterialTheme.colorScheme.primary,
     inactiveColor: Color = MaterialTheme.colorScheme.surfaceContainerHighest,
     /**
+     * 已缓冲到哪儿。0 表示不画 —— 直播和还没起播的时候这个数没有意义。
+     *
+     * 它回答的是"往前拖到哪里不用等"。没有这一段时,网络慢和播放器卡死在画面上是同一个样子:
+     * 进度不动、转圈在转,而缓冲条还在往前爬就说明流在进来。
+     */
+    bufferedPosition: Long = 0L,
+    /**
+     * 缓冲段的颜色。**取 primaryContainer,落在底色与已播之间**:缓冲是"比底色确定、比已播
+     * 次要"的第三档,而三条线挤在 3dp 高的同一道槽里,只能靠明度分开。
+     */
+    bufferedColor: Color = MaterialTheme.colorScheme.primaryContainer,
+    /**
      * 会被自动跳过的片段(SponsorBlock)。**只染色,不可交互。**
      *
      * 在进度条上多加一种手势会和拖动、点击跳转打架;而"这一段我不想跳"的正确入口是设置里
@@ -79,6 +91,8 @@ fun SeekBar(
         label = "seek-thumb",
     )
     val fraction = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+    val bufferedFraction =
+        if (duration > 0) (bufferedPosition.toFloat() / duration).coerceIn(0f, 1f) else 0f
     val label = stringResource(R.string.player_progress)
 
     Box(
@@ -144,6 +158,18 @@ fun SeekBar(
                 strokeWidth = trackPx,
                 cap = StrokeCap.Round,
             )
+            // 缓冲段压在底色上、片段与已播之下。**在片段底下**是因为缓冲通常已经跑到画面之外
+            // 那么远,盖在上面的话整条 SponsorBlock 染色都会被它遮掉,而那个染色要回答的
+            // "前面哪儿有段"比"那一段缓冲了没有"有用。
+            if (bufferedFraction > fraction) {
+                drawLine(
+                    color = bufferedColor,
+                    start = Offset(0f, trackY),
+                    end = Offset(size.width * bufferedFraction, trackY),
+                    strokeWidth = trackPx,
+                    cap = StrokeCap.Round,
+                )
+            }
             // 片段画在底色之上、已播进度之下:进度条的首要信息是"播到哪了",
             // 片段是背景标注,盖住进度会本末倒置。
             if (duration > 0) {
