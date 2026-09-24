@@ -1,8 +1,5 @@
 package dev.bilby.ui.video
 
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.layout.layout
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -11,8 +8,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.height
-import androidx.compose.ui.draw.clip
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -57,7 +52,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import android.os.Bundle
@@ -69,9 +63,18 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import dev.bilby.BiliLog
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.PictureInPictureAlt
+import dev.bilby.ui.player.enterPip
+import dev.bilby.ui.player.rememberIsInPipMode
+import dev.bilby.ui.player.supportsPip
+import dev.bilby.ui.player.videoAspect
 import dev.bilby.R
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.player.EpisodeTarget
+import dev.bilby.ui.player.PlayerIconButton
+import dev.bilby.ui.player.CenterPlayButton
+import dev.bilby.ui.theme.PlayerTheme
 import dev.bilby.ui.player.QueueEdges
 import dev.bilby.ui.player.buildEpisodeRows
 import dev.bilby.data.CommentSort
@@ -177,7 +180,7 @@ fun VideoScreen(
     onTriple: () -> Unit,
     /** 最近一次三连的结果,由 [TripleToast] 报一句。 */
     tripleOutcome: TripleOutcome?,
-    onAddToView: () -> Unit,
+    onToggleToView: () -> Unit,
     onCoin: (count: Int, alsoLike: Boolean) -> Unit,
     coinAttempt: CoinAttempt,
     onCoinDialogClosed: () -> Unit,
@@ -556,6 +559,13 @@ fun VideoScreen(
         )
     }
 
+    val setAudioQuality: (Int) -> Unit = { quality ->
+        send(
+            AudioPlaybackService.ACTION_SET_AUDIO_QUALITY,
+            bundleOf(AudioPlaybackService.EXTRA_QUALITY to quality),
+        )
+    }
+
     /** 重试只有一个实现了:流归服务取,它自己就能重来。 */
     val retryPlayback: () -> Unit = { send(AudioPlaybackService.ACTION_RETRY, Bundle.EMPTY) }
 
@@ -656,6 +666,13 @@ fun VideoScreen(
                     Bundle().apply { putInt(AudioPlaybackService.EXTRA_SLEEP_MINUTES, minutes) },
                 )
             },
+            onSleepTimerAdjust = { deltaMinutes ->
+                active.sendCustomCommand(
+                    SessionCommand(AudioPlaybackService.ACTION_SLEEP_TIMER, Bundle.EMPTY),
+                    Bundle().apply { putInt(AudioPlaybackService.EXTRA_SLEEP_DELTA_MINUTES, deltaMinutes) },
+                )
+            },
+            onAudioQualityChange = setAudioQuality,
             // 退出听视频就是把这个壳关掉,**没有第二件事**。队列不动、播放不停、视频轨由上面
             // 那个 LaunchedEffect 自己打开。页面此刻可能已经不是队列当前那一条了(听的时候
             // 连播过去了),跟过去是 VideoRoute 的职责 —— 它盯着队列,不需要这里通知。
@@ -719,13 +736,19 @@ fun VideoScreen(
         onDispose { player.removeListener(listener) }
     }
     val tabPager = rememberPagerState(pageCount = { VideoTabCount })
-    val playerPinned = playing || fullscreen || expandedLayout
+    /*
+     * **画中画借全屏的布局,不借全屏的行为。** 进了小窗,整个窗口就是那块画面,简介、返回键、
+     * 快捷播放条都不该在里面 —— 这正是全屏的布局。但 [fullscreen] 同时牵着转屏、藏系统栏和
+     * 返回键的处理,小窗里一样都不该发生,所以布局看 [immersive],行为仍看 [fullscreen]。
+     */
+    val inPip = rememberIsInPipMode()
+    val immersive = fullscreen || inPip
+    val pipSupported = remember(context) { context.supportsPip() }
+    val playerPinned = playing || immersive || expandedLayout
     val playerScroll = rememberCollapsingHeaderState { !playerPinned }
     // 画面收到底时留下一条快捷播放条的高度,那块位置由它占住(见 QuickPlayBar)。
     // 收不干净是有意的:收干净之后"把画面拿回来"就没有入口了,只能靠一路往回滚。
-    // 收起后留下的是快捷播放条那一截,再加上被详情面板压住的那一条(见 [DetailPaneOverlap]):
-    // 条本身贴顶,多出来的那一截藏在面板的圆角底下。
-    with(LocalDensity.current) { playerScroll.minVisiblePx = (QuickPlayBarHeight + DetailPaneOverlap).toPx() }
+    with(LocalDensity.current) { playerScroll.minVisiblePx = QuickPlayBarHeight.toPx() }
     // 又钉起来就把画面收回来。**不是 snap 而是动画**:此刻手指多半不在屏幕上(点的是通知栏
     // 或者画面上的播放键),瞬移读不出"它回来了"这件事。翻回简介页是个例外,那时手指在滑,
     // 但那一下本来就跟着页面走,动画反而顺。
@@ -733,7 +756,7 @@ fun VideoScreen(
         if (playerPinned) playerScroll.expand()
     }
 
-    if (relatedOpen && !fullscreen) {
+    if (relatedOpen && !immersive) {
         ModalBottomSheet(onDismissRequest = { relatedOpen = false }) {
             RelatedSheet(
                 related = related,
@@ -792,17 +815,23 @@ fun VideoScreen(
         Box(modifier = paneModifier.background(Color.Black)) {
             // **判据是"服务装上东西了没有",不是"有没有 playInfo"。**
             //
-            // playInfo 是取流的产物,而放本地缓存那条路径压根不取流 —— 服务在命中缓存时
-            // 故意把它置成 null(本地只有下载时选的那一档,画质菜单摆出来点了没用)。
-            // 照 playInfo 判的话,缓存的视频永远落到下面那个转圈分支:播放器其实早就
-            // READY 了(真机上量到 237ms),只是没有人把画面挂上去。
+            // playInfo 是取流的产物,而有几种本地装载压根不取流:从缓存列表进来、没网、在线失败
+            // 退回本地副本(docs/playback-refactor.md 决定 4)。这几种里它是 null。照 playInfo 判
+            // 的话,这些视频永远落到下面那个转圈分支:播放器其实早就 READY 了(真机上量到
+            // 237ms),只是没有人把画面挂上去。有网从别处进来、只把媒体源换成本地文件时,
+            // playInfo 照常在。
             val loaded = matchesCurrentPage || audioState.playInfo != null
+            val shellShown = loaded && active != null
+            val share = { ShareLink.video(context, bvid, state.detail?.title.orEmpty()) }
             when {
-                loaded && active != null -> BilbyPlayer(
+                shellShown -> BilbyPlayer(
                     player = active,
                     qualities = audioState.playInfo?.availableQualities.orEmpty(),
                     currentQuality = audioState.currentQuality,
                     onQualityChange = { setQuality(it) },
+                    audioOptions = audioState.playInfo?.streams?.audioOptions.orEmpty(),
+                    currentAudio = audioState.playInfo?.streams?.audioId ?: 0,
+                    onAudioChange = setAudioQuality,
                     fastForwardSpeed = fastForwardSpeed,
                     isFullscreen = fullscreen,
                     onFullscreenChange = { fullscreen = it },
@@ -835,15 +864,30 @@ fun VideoScreen(
                     topBarActions = {
                         // 没有可切的东西就不给入口:单条队列的单 P 视频点开只有它自己。
                         if (episodeRows.hasSomethingToSwitch()) {
-                            IconButton(onClick = { episodePanelOpen = true }) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.PlaylistPlay,
-                                    contentDescription = stringResource(R.string.video_episodes),
-                                    tint = FixedColors.OnMedia,
-                                )
-                            }
+                            PlayerIconButton(
+                                onClick = { episodePanelOpen = true },
+                                icon = Icons.AutoMirrored.Filled.PlaylistPlay,
+                                contentDescription = stringResource(R.string.video_episodes),
+                            )
                         }
                     },
+                    embeddedTopActions = {
+                        // 画中画在分享左边:它和分享一样是"把这条视频带到别处"的动作,而不是
+                        // 控制条上那类"这个播放器怎么放"。设备不支持时不给。
+                        if (pipSupported) {
+                            PlayerIconButton(
+                                onClick = { context.enterPip(active.videoAspect()) },
+                                icon = Icons.Filled.PictureInPictureAlt,
+                                contentDescription = stringResource(R.string.player_pip),
+                            )
+                        }
+                        PlayerIconButton(
+                            onClick = share,
+                            icon = Icons.Filled.Share,
+                            contentDescription = stringResource(R.string.action_share),
+                        )
+                    },
+                    pip = inPip,
                     modifier = Modifier.fillMaxSize(),
                 )
 
@@ -854,18 +898,23 @@ fun VideoScreen(
                     modifier = Modifier.align(Alignment.Center),
                 )
 
-                // 和壳内缓冲用同一个指示器:这里盖的是"服务还没装上这一条"的窗口,
-                // 壳内那个盖的是装上之后的取流与缓冲,两段接起来观感是同一次等待。
-                // CircularProgressIndicator 不用:alpha 版画一圈背景轨道,黑底上是两层圆环。
-                else -> LoadingIndicator(modifier = Modifier.align(Alignment.Center))
+                // **和壳内那颗中央播放键的加载形态一模一样**:这里盖的是"服务还没装上这一条"
+                // 的窗口,壳内那颗盖的是装上之后的取流与缓冲,两段接起来观感是同一次等待。
+                // 这里原先是一个不带底色的 LoadingIndicator,壳接上来那一刻它换成一颗带底色的键,
+                // 看上去是指示器闪了一下、换了个样子。
+                else -> PlayerTheme {
+                    Box(modifier = Modifier.align(Alignment.Center)) {
+                        CenterPlayButton(isPlaying = true, loading = true, large = fullscreen, onClick = {})
+                    }
+                }
             }
 
-            if (!fullscreen) {
+            if (!immersive) {
                 MediaBackButton(
                     onBack = onBack,
-                    onShare = {
-                        ShareLink.video(context, bvid, state.detail?.title.orEmpty())
-                    },
+                    // 播放器在时分享归壳,跟控件一起显隐;壳还没上来(取流中、失败)时没有控件
+                    // 可跟,留在这里常驻。
+                    onShare = share.takeIf { !shellShown },
                     scrim = false,
                 )
             }
@@ -900,7 +949,8 @@ fun VideoScreen(
             // 大 —— 竖排时它的"底部"就是进度条那一带,提示会浮在进度条上,两个可按的东西
             // 叠在一起。竖排那一份挂在整页那一层(见下面 rootBox 里那处),锚在屏幕的下
             // 四分之一,落在简介/评论上方,拇指够得着又不压任何控件。
-            Column(
+            // 小窗里一条都不画:那几百 dp 宽的窗口里一条提示就盖掉半个画面,而且点不到。
+            if (!inPip) Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
                 modifier = Modifier.align(Alignment.TopCenter).padding(Spacing.Comfortable),
@@ -992,7 +1042,7 @@ fun VideoScreen(
                     addedToView = addedToView,
                     onLike = onLike,
                     onTriple = onTriple,
-                    onAddToView = onAddToView,
+                    onToggleToView = onToggleToView,
                     onCoin = onCoin,
                     coinAttempt = coinAttempt,
                     onCoinDialogClosed = onCoinDialogClosed,
@@ -1058,10 +1108,10 @@ fun VideoScreen(
             // 原先这里给的是 `fillMaxWidth().aspectRatio(16:9)`,于是画面只有左栏宽度的
             // 九分之十六那么高,在更高的列里垂直居中——上下各露出一条页面底色。那条白带
             // 才是"横屏不沉浸"的真身,和根容器的 inset 无关。
-            playerPane(Modifier.weight(if (fullscreen) 1f else 2f).fillMaxHeight())
+            playerPane(Modifier.weight(if (immersive) 1f else 2f).fillMaxHeight())
             // 文字这一栏躲开系统栏与刘海,**但不躲 start 那一侧**:它的左边挨着的是播放器,
             // 不是屏幕边缘,垫了就在画面和简介之间劈出一道缝。
-            if (!fullscreen) {
+            if (!immersive) {
                 tabsPane(
                     Modifier
                         .weight(1f)
@@ -1083,7 +1133,7 @@ fun VideoScreen(
             // 压在它们身上,而那两个是这一页仅有的页级动作。现在画面从状态栏下沿开始,
             // 上面那条黑边和画面的黑底连成一块 —— 拿到的是"没有一条突兀的浅色带",
             // 而不是"多出一块可用面积";后者本来也没多少,一条状态栏而已。
-            if (!fullscreen) {
+            if (!immersive) {
                 Spacer(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1097,7 +1147,7 @@ fun VideoScreen(
             // 评论第一行上。见 QuickPlayBar。
             Box {
             playerPane(
-                if (fullscreen) {
+                if (immersive) {
                     Modifier.fillMaxSize()
                 } else {
                     // **消费掉系统栏那份 inset。** 上面那条黑边只是"取了 inset 的高度"
@@ -1116,7 +1166,7 @@ fun VideoScreen(
                         .consumeWindowInsets(safeInsets)
                 },
             )
-            if (!fullscreen) {
+            if (!immersive) {
                 // 刻度放着时半秒一条,只在 lambda 里读:读在这里的话整块画面跟着半秒重组一次,
                 // 而条在放着的时候根本不出现。停着时服务每次停下、拖动都会发一条,不必轮询。
                 val tick by AudioPlaybackService.positionTicks.collectAsStateWithLifecycle()
@@ -1155,12 +1205,10 @@ fun VideoScreen(
             // 底下,详情这一块嵌在它上面,而不是两块上下拼接、中间一条硬边。压住的那一条
             // 画面上没有东西:内嵌控制条底部让出了同样的高度(见 BilbyPlayer 的
             // PlayerControlBar),快捷播放条那一截也多留了同样的高度(见上面的 minVisiblePx)。
-            if (!fullscreen) {
+            if (!immersive) {
                 tabsPane(
                     Modifier
                         .weight(1f)
-                        .overlapAbove(DetailPaneOverlap)
-                        .clip(RoundedCornerShape(topStart = DetailPaneOverlap, topEnd = DetailPaneOverlap))
                         .background(MaterialTheme.colorScheme.surface)
                         .windowInsetsPadding(WindowInsets.horizontalCutout),
                 )
@@ -1168,7 +1216,7 @@ fun VideoScreen(
         }
     }
 
-    if (!fullscreen) {
+    if (!immersive) {
         CloudResumeHint(
             positionMillis = cloudResumeMillis,
             onJump = jumpToCloudResume,
@@ -1260,27 +1308,4 @@ fun VideoScreen(
  */
 private val ToastAnchorInDetail = BiasAlignment(horizontalBias = 0f, verticalBias = 0.8f)
 
-/**
- * 详情面板压住画面底边的高度,也是面板顶上两角的圆角。取 `shapes.medium` 那一档的 12dp:
- * 再大,画面底下被压住的那一截就开始吃掉控制条;再小,圆角读不出来。
- */
-internal val DetailPaneOverlap = 12.dp
-
-/**
- * 往上多占 [overlap] 的高度并盖住上一个兄弟的底边,自己对外报的尺寸不变。
- *
- * 不用 `offset`:它只挪画的位置不挪量出来的尺寸,往上挪之后底部会空出同样高的一条。
- * 这里测量时多要这一截、摆放时上移,排在后面的兄弟画在上层,于是正好盖住前一个。
- */
-private fun Modifier.overlapAbove(overlap: Dp): Modifier = layout { measurable, constraints ->
-    val extra = overlap.roundToPx()
-    val placeable = measurable.measure(
-        constraints.copy(
-            minHeight = constraints.minHeight + extra,
-            maxHeight = if (constraints.hasBoundedHeight) constraints.maxHeight + extra else constraints.maxHeight,
-        ),
-    )
-    val height = (placeable.height - extra).coerceAtLeast(0)
-    layout(placeable.width, height) { placeable.place(0, -extra) }
-}
 

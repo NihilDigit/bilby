@@ -1,5 +1,6 @@
 package dev.bilby.ui.live
 
+import android.text.format.DateUtils
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -50,17 +51,13 @@ import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.HighQuality
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
@@ -102,14 +99,28 @@ import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.FollowButton
+import dev.bilby.ui.components.ListSkeleton
+import dev.bilby.ui.components.PersonRowSkeleton
+import dev.bilby.ui.components.SkeletonLine
+import dev.bilby.ui.components.skeleton
+import androidx.compose.foundation.shape.CircleShape
+import dev.bilby.ui.components.PillInputField
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.foundation.layout.fillMaxHeight
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
-import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.player.ControlButton
+import dev.bilby.ui.player.CenterPlayButton
+import dev.bilby.ui.player.enterPip
+import dev.bilby.ui.player.rememberIsInPipMode
+import dev.bilby.ui.player.supportsPip
+import dev.bilby.ui.player.videoAspect
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import dev.bilby.ui.player.DanmakuButton
 import dev.bilby.ui.player.MediaBackButton
 import dev.bilby.ui.player.DanmakuFeed
@@ -118,6 +129,7 @@ import dev.bilby.ui.player.PlaybackFailure
 import dev.bilby.ui.player.PlayerDanmakuLayer
 import dev.bilby.ui.player.PlayerGestureOptions
 import dev.bilby.ui.player.PlayerShell
+import dev.bilby.ui.player.PlayerIconButton
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
@@ -177,11 +189,17 @@ fun LiveRoomScreen(
     onBack: () -> Unit,
     /** 进主播的个人空间。mid 由 [state] 带,这一页不认识导航。 */
     onUserClick: (Long) -> Unit,
+    /** 关注或取关主播。取关的确认框由按钮自己弹(见 FollowButton)。 */
+    onToggleFollow: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var fullscreen by remember { mutableStateOf(false) }
     var locked by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    // 画中画借全屏的布局,不借全屏的行为(转屏、藏系统栏、返回键),理由同播放页。
+    val inPip = rememberIsInPipMode()
+    val immersive = fullscreen || inPip
+    val pipSupported = remember(context) { context.supportsPip() }
     val share = { ShareLink.liveRoom(context, roomId, state.title) }
 
     // 和普通视频页同一套返回语义:先解锁,再退出沉浸,最后才离开直播间。
@@ -193,7 +211,7 @@ fun LiveRoomScreen(
     // 上方补一条黑边;宽屏下状态栏整条收起来。下面的 Tab 自己躲左右和底部。
     val expandedLayout = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     Column(modifier = modifier.fillMaxSize()) {
-        if (!fullscreen && !expandedLayout) {
+        if (!immersive && !expandedLayout) {
             Spacer(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -203,7 +221,7 @@ fun LiveRoomScreen(
         }
         Box(
             modifier = (
-                if (fullscreen) Modifier.fillMaxSize()
+                if (immersive) Modifier.fillMaxSize()
                 // widthIn 在 fillMaxWidth 之前,否则上限夹不动(见 AdaptiveContent 的说明)。
                 else Modifier
                     .align(Alignment.CenterHorizontally)
@@ -223,11 +241,13 @@ fun LiveRoomScreen(
             if (player != null && state.isLive && state.streamUrl != null) {
                 PlayerShell(
                     player = player,
-                    // 纯音频时流里根本没有视频轨,挂上画面就是一块黑。占位封面正是"播放器装的
-                    // 不是这一页要的画面"该有的样子,和取流窗口里那一段共用同一条路。
-                    // 屏幕常亮也认这个值,于是纯音频时屏幕能自己息掉(见 PlayerShell)。
+                    // 纯音频时流里根本没有视频轨,挂上画面就是一块黑。屏幕常亮也认这个值,于是
+                    // 纯音频时屏幕能自己息掉(见 PlayerShell)。
                     attached = attached && !onlyAudio,
-                    placeholderCoverUrl = state.coverUrl,
+                    // **纯音频不走壳的占位封面。** 那一张是给取流窗口的,铺满整块画面;直播封面
+                    // 分辨率低,全屏下铺满就糊成一片,而纯音频会一直停在这个状态。纯音频的封面
+                    // 在 overlay 里按原比例缩小画(见 [AudioOnlyCover])。
+                    placeholderCoverUrl = if (onlyAudio) "" else state.coverUrl,
                     isFullscreen = fullscreen,
                     onFullscreenChange = { fullscreen = it },
                     locked = locked,
@@ -242,20 +262,40 @@ fun LiveRoomScreen(
                     // 倍速设成 3x —— 在一条一直往前走的流上,那只是冲到最前沿然后卡住等数据。
                     // 亮度和音量照旧,它们跟内容是什么无关。
                     gestures = PlayerGestureOptions(seek = false, fastForward = false),
-                    overlay = {
-                        PlayerDanmakuLayer(
-                            player = player,
-                            prefs = danmakuPrefs,
-                            feed = DanmakuFeed.Stream(danmaku),
-                            specialPool = emptyList(),
-                            // 直播没有分 P,房间号就是"这池弹幕属于谁"。
-                            cid = state.anchorMid,
-                            fontSizeSp = if (fullscreen) DanmakuFontSizeSp.Fullscreen else DanmakuFontSizeSp.Embedded,
+                    // 分享与高能榜人数跟控件一起显隐,同播放页:常驻的话它们一直压在画面右上角。
+                    pip = inPip,
+                    embeddedTopActions = {
+                        OnlineRankLabel(state.onlineRank)
+                        // 画中画在分享左边,同播放页。
+                        if (pipSupported) {
+                            PlayerIconButton(
+                                onClick = { context.enterPip(player.videoAspect()) },
+                                icon = Icons.Filled.PictureInPictureAlt,
+                                contentDescription = stringResource(R.string.player_pip),
+                            )
+                        }
+                        PlayerIconButton(
+                            onClick = share,
+                            icon = Icons.Filled.Share,
+                            contentDescription = stringResource(R.string.action_share),
                         )
+                    },
+                    overlay = {
+                        if (onlyAudio) AudioOnlyCover(state.coverUrl)
+                        if (!inPip || danmakuPrefs.inPip) {
+                            PlayerDanmakuLayer(
+                                player = player,
+                                prefs = danmakuPrefs,
+                                feed = DanmakuFeed.Stream(danmaku),
+                                specialPool = emptyList(),
+                                // 直播没有分 P,房间号就是"这池弹幕属于谁"。
+                                cid = state.anchorMid,
+                                fontSizeSp = DanmakuFontSizeSp.of(fullscreen, inPip),
+                            )
+                        }
                     },
                     controlBar = {
                         LiveControlBar(
-                            isPlaying = isPlaying,
                             isFullscreen = isFullscreen,
                             watched = state.watched,
                             danmakuEnabled = danmakuPrefs.enabled,
@@ -275,7 +315,6 @@ fun LiveRoomScreen(
                                 keepControlsAwake()
                             },
                             onMenuOpenChange = { setMenuOpen(it) },
-                            onPlayPause = { togglePlayPause() },
                             reloading = reloadingStream,
                             onReload = {
                                 onReloadStream()
@@ -299,19 +338,14 @@ fun LiveRoomScreen(
                 LiveOffline(state, onBack = onBack, onShare = share, onRetry = onRetry)
             }
 
-            if (!fullscreen && player != null && state.isLive && state.streamUrl != null) {
+            if (!immersive && player != null && state.isLive && state.streamUrl != null) {
                 // 正在直播时 PlayerShell 没有页面级返回动作,把它放在画面左上角,和普通视频页
-                // 同一条返回路径;顶部渐变保证亮色画面上箭头仍有对比度。
-                MediaBackButton(
-                    onBack = onBack,
-                    onShare = { ShareLink.liveRoom(context, roomId, state.title) },
-                    scrim = false,
-                    trailing = { OnlineRankLabel(state.onlineRank) },
-                )
+                // 同一条返回路径;顶部渐变保证亮色画面上箭头仍有对比度。分享在壳里,跟控件走。
+                MediaBackButton(onBack = onBack, scrim = false)
             }
         }
 
-        if (!fullscreen) {
+        if (!immersive) {
             AdaptiveContent(
                 // 上边没有 inset 要躲,那一侧是画面;左右和底下要躲。
                 modifier = Modifier
@@ -323,7 +357,7 @@ fun LiveRoomScreen(
                 maxWidth = Breakpoints.ReadableWidth,
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    LiveAnchorRow(state = state, onUserClick = onUserClick)
+                    LiveAnchorRow(state = state, onUserClick = onUserClick, onToggleFollow = onToggleFollow)
                     LiveRoomTabs(
                         state = state,
                         onLoadMoreGuards = onLoadMoreGuards,
@@ -336,6 +370,27 @@ fun LiveRoomScreen(
         }
     }
 }
+
+/**
+ * 纯音频时画面正中那张封面:**按原比例缩小,不铺满。** 直播封面多是低分辨率的小图,铺满
+ * 全屏的画面就糊成一片;缩到画面高度的一半上下,它读起来是"这一场是什么",而不是一张坏掉的画面。
+ */
+@Composable
+private fun AudioOnlyCover(url: String) {
+    if (url.isEmpty()) return
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        BiliAsyncImage(
+            url = url,
+            contentDescription = null,
+            modifier = Modifier
+                .fillMaxHeight(AudioOnlyCoverHeightFraction)
+                .aspectRatio(16f / 9f)
+                .clip(MaterialTheme.shapes.medium),
+        )
+    }
+}
+
+private const val AudioOnlyCoverHeightFraction = 0.5f
 
 /** 未开播、或者流没取到。封面配一句话,不空着一块黑。 */
 @Composable
@@ -355,6 +410,16 @@ private fun LiveOffline(
         }
         // 和正在直播时同一个位置、同一份渐变:开没开播不该改变"怎么离开这一页"。
         MediaBackButton(onBack = onBack, onShare = onShare)
+        // **在等就画播放键的加载形态,不写一句"加载中"。** 播放器壳接上来时正中就是这颗键,
+        // 从占位到画面不换东西,同播放页起播那一段。已经知道在播、只是播放器还没连上的那一下
+        // 也算在等 —— 那时这里原先写的是"未开播",是句假话。
+        val waiting = state.loading || (state.isLive && state.error == null)
+        if (waiting) {
+            Box(modifier = Modifier.align(Alignment.Center)) {
+                CenterPlayButton(isPlaying = true, loading = true, large = false, onClick = {})
+            }
+            return@Box
+        }
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
@@ -365,7 +430,6 @@ private fun LiveOffline(
         ) {
             Text(
                 text = when {
-                    state.loading -> stringResource(R.string.live_loading)
                     // state 里存的是资源 id,见 [LiveRoomUiState.error]。
                     state.error != null -> stringResource(state.error)
                     else -> stringResource(R.string.live_offline)
@@ -374,7 +438,7 @@ private fun LiveOffline(
                 color = FixedColors.OnMedia,
             )
             // 只有失败才给重试。未开播不是错误,再拉一次也还是没开播。
-            if (!state.loading && state.error != null) {
+            if (state.error != null) {
                 TextButton(onClick = onRetry) {
                     Text(stringResource(R.string.action_retry), color = FixedColors.OnMedia)
                 }
@@ -393,7 +457,6 @@ private fun LiveOffline(
  */
 @Composable
 private fun LiveControlBar(
-    isPlaying: Boolean,
     isFullscreen: Boolean,
     /** 「N 人看过」整句,服务端拼好的。空串就不画这一格,见 LiveRoomUiState.watched。 */
     watched: String,
@@ -405,45 +468,36 @@ private fun LiveControlBar(
     onlyAudio: Boolean,
     onOnlyAudioChange: (Boolean) -> Unit,
     onMenuOpenChange: (Boolean) -> Unit,
-    onPlayPause: () -> Unit,
     /** 正在重新取流。此刻按钮换成转圈并且按不动,免得连按叠出几次请求。 */
     reloading: Boolean,
     onReload: () -> Unit,
     onFullscreenToggle: () -> Unit,
 ) {
+    // 播放键不在这里:画面正中那颗(PlayerShell 的 CenterPlayButton)是视频和直播共用的。
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Tight),
     ) {
-        IconButton(onClick = onPlayPause) {
-            Icon(
-                imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                contentDescription = stringResource(
-                    if (isPlaying) R.string.player_pause else R.string.player_play,
-                ),
-                tint = FixedColors.OnMedia,
-            )
-        }
-        // 取流中把图标换成转圈,而不是把图标置灰:这一栏的图标本来就是固定色(压在任意画面上),
-        // 置灰要么看不出来,要么和"这个功能不可用"撞在一起。发弹幕那个按钮是同一个做法。
-        IconButton(onClick = onReload, enabled = !reloading) {
-            if (reloading) {
-                LoadingSpinner(color = FixedColors.OnMedia)
-            } else {
-                Icon(
-                    imageVector = Icons.Filled.Refresh,
-                    contentDescription = stringResource(R.string.live_refresh),
-                    tint = FixedColors.OnMedia,
-                )
+        // 取流中把图标换成转圈,而不是把图标置灰:置灰压在任意画面上要么看不出来,要么和
+        // "这个功能不可用"撞在一起。发弹幕那个按钮是同一个做法。
+        if (reloading) {
+            IconButton(onClick = {}, enabled = false) {
+                LoadingSpinner(color = MaterialTheme.colorScheme.onSurface)
             }
+        } else {
+            PlayerIconButton(
+                onClick = onReload,
+                icon = Icons.Filled.Refresh,
+                contentDescription = stringResource(R.string.live_refresh),
+            )
         }
         // 拿不到就留白,不写"0 人看过" —— 那是个具体而错误的数字。宽度照占,不然弹幕按钮
         // 会在这一句到货的那一刻横着跳一下。
         Text(
             text = watched,
             style = MaterialTheme.typography.labelMedium,
-            color = FixedColors.OnMedia,
-            modifier = Modifier.weight(1f).padding(start = Spacing.Hair),
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f).padding(start = Spacing.Tight),
         )
         DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
         LiveAudioOnlyButton(onlyAudio, onOnlyAudioChange, isFullscreen)
@@ -456,15 +510,13 @@ private fun LiveControlBar(
                 onMenuOpenChange = onMenuOpenChange,
             )
         }
-        IconButton(onClick = onFullscreenToggle) {
-            Icon(
-                imageVector = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-                contentDescription = stringResource(
-                    if (isFullscreen) R.string.player_exit_fullscreen else R.string.player_fullscreen,
-                ),
-                tint = FixedColors.OnMedia,
-            )
-        }
+        PlayerIconButton(
+            onClick = onFullscreenToggle,
+            icon = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+            contentDescription = stringResource(
+                if (isFullscreen) R.string.player_exit_fullscreen else R.string.player_fullscreen,
+            ),
+        )
     }
 }
 
@@ -498,7 +550,7 @@ private fun LiveAudioOnlyButton(
 }
 
 /**
- * 主播那一行:头像、名字、这场的标题,整行进他的个人空间。
+ * 主播那一行:头像、名字、这场的标题,整行进他的个人空间;行尾是关注。
  *
  * **这一页此前没有任何地方能到主播的空间**,而"这个人还发过什么"正是看直播时最容易起的
  * 念头 —— 之前只能退回上一页再从别处找他。头像和名字本来也只存在于通知栏里,页面上一个
@@ -511,7 +563,7 @@ private fun LiveAudioOnlyButton(
  * 名字念成两件无关的东西,而且只有那个小圆点能点(风格指南 §3)。
  */
 @Composable
-private fun LiveAnchorRow(state: LiveRoomUiState, onUserClick: (Long) -> Unit) {
+private fun LiveAnchorRow(state: LiveRoomUiState, onUserClick: (Long) -> Unit, onToggleFollow: () -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
@@ -540,13 +592,28 @@ private fun LiveAnchorRow(state: LiveRoomUiState, onUserClick: (Long) -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            // 开播时刻。写绝对时刻而不是"已播 2 小时":后者要每分钟重算一遍,而人想知道的多半
+            // 是"是不是刚开"或"从几点播到现在",一个时刻两件事都答得了。当天只写时刻,跨了天
+            // 带上日期 —— 通宵的直播跨过零点很常见,只写"23:10"会读成今晚。
+            state.liveStartedAt?.let { startedAt ->
+                val context = LocalContext.current
+                val millis = startedAt * 1000
+                val flags = DateUtils.FORMAT_SHOW_TIME or
+                    if (DateUtils.isToday(millis)) 0 else DateUtils.FORMAT_SHOW_DATE
+                Text(
+                    text = stringResource(R.string.live_started_at, DateUtils.formatDateTime(context, millis, flags)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
         }
-        Icon(
-            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(Dimens.IconInline),
-        )
+        // 行尾是关注,不是一个 → 箭头:整行可点已经说明了"进空间",箭头只是重复;而关注
+        // 此前要进了空间才按得到。样式同播放页 UP 那一行(不突出的那一档):这一页的主角是
+        // 这场直播,不是这个人。关注态还没查到时不画,免得先闪一个「关注」。
+        state.followState?.let { follow ->
+            FollowButton(state = follow, onClick = onToggleFollow, prominent = false, name = state.anchorName)
+        }
     }
 }
 
@@ -809,7 +876,10 @@ private fun SuperChatPane(
         // 正在补历史时给转圈,补完仍然空才说"暂无" —— 两者读起来完全不同,而这一屏在补历史
         // 的那一两秒里本来就是空的。
         if (state.superChatsLoading) {
-            FullScreenLoading(Modifier.fillMaxSize())
+            ListSkeleton(
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Comfortable),
+                count = SuperChatSkeletonCards,
+            ) { SuperChatCardSkeleton() }
         } else {
             EmptyState(stringResource(R.string.live_super_chat_empty), Modifier.fillMaxSize())
         }
@@ -939,6 +1009,33 @@ private fun SuperChatSummaryCard(
         }
     }
 }
+
+/**
+ * [SuperChatSummaryCard] 的占位:同一个容器、同一个内边距,头像加名字一行、留言两行。
+ * 卡片之间的间隔由下边距给,[ListSkeleton] 是一列紧排的行。
+ */
+@Composable
+private fun SuperChatCardSkeleton() {
+    Column(
+        modifier = Modifier
+            .padding(bottom = Spacing.Tight)
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh, MaterialTheme.shapes.medium)
+            .padding(Spacing.Cozy),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+            Box(Modifier.size(Dimens.AvatarRow).skeleton(CircleShape))
+            SkeletonLine(Modifier.fillMaxWidth(SkeletonNameFraction))
+        }
+        SkeletonLine(Modifier.fillMaxWidth())
+        SkeletonLine(Modifier.fillMaxWidth(SkeletonSecondLineFraction))
+    }
+}
+
+private const val SuperChatSkeletonCards = 3
+private const val SkeletonNameFraction = 0.35f
+private const val SkeletonSecondLineFraction = 0.6f
 
 /**
  * 列表键。**不用 id** —— danmakus 补来的那些 id 是合成的(见 LiveRoomViewModel.toMessage),
@@ -1104,11 +1201,14 @@ private fun ChatPane(
 }
 
 /**
- * 直播间的发言栏。形状照评论区的 `CommentInputBar`(风格指南 §2.7:同一件事只有一份样子),
- * 差别只有两处:这里没有"回复某人"那一行,以及多一条失败提示。
+ * 直播间的发言栏。胶囊与私信共用一份([PillInputField]),单行:直播弹幕上限 20 字,
+ * 长高没有意义。
  *
  * 草稿在发送时就清空,和评论区一样。失败时那句话没了 —— 这是评论区当初的取舍,两处保持一致
  * 比这里单独更聪明重要。
+ *
+ * **没有底条。** 原先外面套一层 surfaceContainer 的条,里面再放一个描边框,底部两层框;胶囊
+ * 自己有底色,直接落在页面上。
  */
 @Composable
 private fun LiveDanmakuInput(
@@ -1122,50 +1222,33 @@ private fun LiveDanmakuInput(
         onSend(text)
         text = ""
     }
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.imePadding()) {
-        Column {
-            // 失败原因贴在输入框上面。直播间没有别的地方说这句话,而"等级不够""房间禁言"
-            // 这几种失败,人得读一眼才知道下一步该干什么。
-            error?.let {
-                Text(
-                    text = stringResource(R.string.danmaku_send_failed, it),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(
-                        start = Spacing.Comfortable,
-                        end = Spacing.Comfortable,
-                        top = Spacing.Tight,
-                    ),
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(Spacing.Tight),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { if (it.length <= LiveDanmakuMaxLength) text = it },
-                    modifier = Modifier.weight(1f),
-                    enabled = enabled,
-                    placeholder = { Text(stringResource(R.string.danmaku_input_hint)) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { if (text.isNotBlank()) send() }),
-                    shape = MaterialTheme.shapes.large,
-                )
-                FilledIconButton(onClick = send, enabled = enabled && !sending && text.isNotBlank()) {
-                    if (sending) {
-                        LoadingSpinner()
-                    } else {
-                        Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            contentDescription = stringResource(R.string.action_send),
-                        )
-                    }
-                }
-            }
+    Column(
+        modifier = Modifier
+            .imePadding()
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+    ) {
+        // 失败原因贴在输入框上面。直播间没有别的地方说这句话,而"等级不够""房间禁言"
+        // 这几种失败,人得读一眼才知道下一步该干什么。
+        error?.let {
+            Text(
+                text = stringResource(R.string.danmaku_send_failed, it),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = Spacing.Hair),
+            )
         }
+        PillInputField(
+            value = text,
+            onValueChange = { if (it.length <= LiveDanmakuMaxLength) text = it },
+            placeholder = stringResource(R.string.danmaku_input_hint),
+            canSend = enabled && !sending && text.isNotBlank(),
+            sending = sending,
+            onSend = send,
+            enabled = enabled,
+            maxLines = 1,
+        )
     }
 }
 
@@ -1193,7 +1276,14 @@ private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit, onUserClic
             !state.guards.loading ->
                 EmptyState(stringResource(R.string.live_guard_empty), Modifier.fillMaxSize())
 
-            else -> FullScreenLoading(Modifier.fillMaxSize())
+            // 骨架与下面一行同尺寸:头像 AvatarRow,行高 48,行距 Cozy(上下各垫一半)。
+            else -> ListSkeleton(modifier = Modifier.padding(top = Spacing.Tight)) {
+                PersonRowSkeleton(
+                    avatarSize = Dimens.AvatarRow,
+                    verticalPadding = Spacing.Cozy / 2,
+                    minHeight = Dimens.MinTouchTarget,
+                )
+            }
         }
         return
     }

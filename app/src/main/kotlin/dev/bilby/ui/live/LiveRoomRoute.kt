@@ -53,6 +53,8 @@ fun LiveRoomRoute(
                     container.liveDanmakuClient,
                     container.settings,
                     container.danmakusRepository,
+                    container.messageRepository::userFaces,
+                    container.relationRepository,
                 )
             }
         },
@@ -163,6 +165,7 @@ fun LiveRoomRoute(
         roomId = roomId,
         onBack = onBack,
         onUserClick = onUserClick,
+        onToggleFollow = vm::toggleFollow,
         modifier = modifier,
     )
 }

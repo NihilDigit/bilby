@@ -73,14 +73,11 @@ fun QuickPlayBar(
     // 完全展开时整条不进组合:它此刻既看不见也不该接触摸,而画面正占着这块位置。
     if (visibility <= 0f) return
 
-    // **铺满画面收起后的整块残留,而不只是条本身那 64dp。** 残留区底下那一截压在详情面板
-    // 底下,面板的两个圆角正落在里面;条只盖上半截的话,角里露出来的是画面,白条下面左右
-    // 各一个黑点。底色与面板相同,角也就看不出来,收起后是平整的一块。
     Surface(
         color = MaterialTheme.colorScheme.surface,
         modifier = modifier
             .fillMaxWidth()
-            .height(QuickPlayBarHeight + DetailPaneOverlap)
+            .height(QuickPlayBarHeight)
             // 淡入而不是滑入:它出现的位置就是画面正在退出的那块,两个东西一起动会看不出
             // 谁是谁。透明度跟着手指走,松手停在哪就是哪,和画面的收起量始终对得上。
             .alpha(visibility)

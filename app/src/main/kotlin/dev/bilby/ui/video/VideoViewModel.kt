@@ -227,35 +227,47 @@ class VideoViewModel(
     }
 
     /**
-     * 是否已加入稍后再看。**只进不出**:没有便宜的办法知道当前视频在不在列表里
-     * (要判断就得把整个列表拉下来),而移除本来就该在稍后再看页面做 —— 那里是个列表,
-     * 划掉一条是自然动作。所以这个状态只从 false 走到 true,不是一个 toggle。
+     * 这一页里是否已加入稍后再看。**进页面时一律当作不在**:没有便宜的办法知道当前视频在不在
+     * 列表里(要判断就得把整个列表拉下来),所以它只反映"在这一页点过什么"。
+     *
+     * 但点过之后是个 toggle:刚点进去又想撤回,是在这一页当场发生的事,让人跑去稍后再看页
+     * 找那一条是把一个手滑变成一趟差事。PiliPlus 同样是加/删两个接口来回切。
      */
     private val _addedToView = MutableStateFlow(false)
     val addedToView: StateFlow<Boolean> = _addedToView.asStateFlow()
 
+    /** 进行中的那一次加/删。在飞时再点不发第二个请求,两个请求的到达顺序没法保证。 */
+    private var toViewInFlight = false
+
     /**
-     * 加入稍后再看。乐观更新:点了立刻切成已加入态,不等接口回来,也不回头拉列表确认 ——
-     * 重拉会让计数闪两次,和点赞/收藏的处理一致。失败则回滚并留日志
-     * (DESIGN 8:任何被吞掉的失败都必须留下一行能定位的日志)。
+     * 加入或移出稍后再看。乐观更新:点了立刻切换,不等接口回来,也不回头拉列表确认 ——
+     * 和点赞/收藏的处理一致。失败则回滚并留日志。移出按 aid(接口只认 aid,见
+     * [ToViewRepository.delete]),详情还没到手时拿不到,这一下不动。
      */
-    fun addToView() {
-        if (_addedToView.value) return
-        _addedToView.value = true
+    fun toggleToView() {
+        if (toViewInFlight) return
+        val adding = !_addedToView.value
+        val aid = _state.value.detail?.aid
+        if (!adding && aid == null) return
+        toViewInFlight = true
+        _addedToView.value = adding
         val target = bvid
         val startGeneration = generation
         viewModelScope.launch {
-            when (val result = toViewRepository.add(target)) {
+            val result = if (adding) toViewRepository.add(target) else toViewRepository.delete(aid!!)
+            val path = if (adding) "toview/add" else "toview/dels"
+            when (result) {
                 is BiliResult.Ok -> Unit
                 is BiliResult.ApiError -> {
-                    ifCurrent(startGeneration) { _addedToView.value = false }
-                    BiliLog.w("toview/add 失败(${result.code}): ${result.message}")
+                    ifCurrent(startGeneration) { _addedToView.value = !adding }
+                    BiliLog.w("$path 失败(${result.code}): ${result.message}")
                 }
                 is BiliResult.Failure -> {
-                    ifCurrent(startGeneration) { _addedToView.value = false }
-                    BiliLog.w("toview/add 异常", result.cause)
+                    ifCurrent(startGeneration) { _addedToView.value = !adding }
+                    BiliLog.w("$path 异常", result.cause)
                 }
             }
+            toViewInFlight = false
         }
     }
 
@@ -784,6 +796,10 @@ class VideoViewModel(
     }
 
     private fun load(target: String) = videoScope.launch {
+        // 缓存过的视频先拿缓存索引里那份把页面撑起来,网络那份回来再换掉。弱网下详情可能要
+        // 等到超时,而画面在放本地文件、早就 READY 了,标题简介不该跟着网络一起等。
+        // "先判断有没有网"挡不住这种情况:弱网时系统照样报有网。
+        fallBackToCache(target)
         when (val detail = repository.getVideoDetail(target)) {
             is BiliResult.Ok -> {
                 _state.update { it.copy(detail = detail.value, loading = false) }
@@ -836,7 +852,8 @@ class VideoViewModel(
     }
 
     /**
-     * 详情拉不到时,拿缓存索引里那一份把页面撑起来。
+     * 拿缓存索引里那一份把页面撑起来:打开时先撑一次(网络那份回来再换掉,见 [load]),
+     * 详情拉不到时再撑一次。
      *
      * **这是缓存条目存那一整份元信息的用处**(见 [dev.bilby.offline.OfflineItem]):没有它,
      * 离线打开一条已缓存的视频是"画面在放,而页面是一片错误提示" —— 播放走的是本地文件,

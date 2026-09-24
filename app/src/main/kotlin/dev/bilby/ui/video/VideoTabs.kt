@@ -39,7 +39,6 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.border
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -51,7 +50,6 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ViewConfiguration
-import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.StrokeCap
@@ -129,7 +127,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import android.os.SystemClock
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
@@ -160,6 +157,7 @@ import dev.bilby.ui.comment.CommentSection
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.AvatarBadge
+import dev.bilby.ui.components.CoinGlyph
 import dev.bilby.ui.components.BilbyIcons
 import dev.bilby.ui.components.rememberExpandedSheetState
 import dev.bilby.ui.components.formatCount
@@ -294,7 +292,7 @@ fun VideoTabs(
     onLike: () -> Unit,
     /** 一键三连,长按点赞触发。见 [ActionButtonsRow]。 */
     onTriple: () -> Unit,
-    onAddToView: () -> Unit,
+    onToggleToView: () -> Unit,
     /** 切到听视频那一屏。按钮在动作栏里,挨着稍后再看。 */
     onListen: () -> Unit,
     onCoin: (count: Int, alsoLike: Boolean) -> Unit,
@@ -431,7 +429,7 @@ fun VideoTabs(
                     addedToView = addedToView,
                     onLike = onLike,
                     onTriple = onTriple,
-                    onAddToView = onAddToView,
+                    onToggleToView = onToggleToView,
                     onListen = onListen,
                     onCoin = onCoin,
                     coinAttempt = coinAttempt,
@@ -724,7 +722,7 @@ private fun IntroTab(
     addedToView: Boolean,
     onLike: () -> Unit,
     onTriple: () -> Unit,
-    onAddToView: () -> Unit,
+    onToggleToView: () -> Unit,
     onListen: () -> Unit,
     onCoin: (count: Int, alsoLike: Boolean) -> Unit,
     coinAttempt: CoinAttempt,
@@ -813,7 +811,7 @@ private fun IntroTab(
                 addedToView = addedToView,
                 onLike = onLike,
                 onTriple = onTriple,
-                onAddToView = onAddToView,
+                onToggleToView = onToggleToView,
                 onCoin = onCoin,
                 coinAttempt = coinAttempt,
                 onCoinDialogClosed = onCoinDialogClosed,
@@ -948,6 +946,7 @@ private fun UpRow(
                 modifier = Modifier
                     .weight(1f)
                     .clickable { onUpClick(mid) }
+                    .padding(start = UpAvatarInset)
                     .heightIn(min = Dimens.MinTouchTarget),
             ) {
                 Avatar(url = faceUrl, size = UpAvatarSize)
@@ -1097,9 +1096,16 @@ private fun TitleBlock(
                 danmakuText = formatCount(detail.stat.danmaku),
                 dateText = formatDate(detail.publishedAtEpochSeconds),
             )
-            // BV 号接在日期后面,和它同属"这条稿件是哪一条"的元信息。收起时也显示:要复制它
-            // 不该先展开一整段简介,而这一行在 360dp 上放得下(三项统计 + BV + 箭头约 310dp)。
-            BvidLabel(bvid = detail.bvid, modifier = Modifier.padding(start = Spacing.Tight))
+            // BV 号接在日期后面,和它同属"这条稿件是哪一条"的元信息。收起时也显示,这一行在
+            // 360dp 上放得下(三项统计 + BV + 箭头约 310dp)。
+            //
+            // **收起时只显示,不能复制。** 收起时整块是"点开简介"的一个大按钮,这一段字夹在
+            // 中间接走点击的话,点在它上面的那一下既不展开,还悄悄往剪贴板里写了东西。
+            BvidLabel(
+                bvid = detail.bvid,
+                copyable = expanded,
+                modifier = Modifier.padding(start = Spacing.Tight),
+            )
             Spacer(modifier = Modifier.weight(1f))
             Icon(
                 imageVector = Icons.Outlined.KeyboardArrowDown,
@@ -1172,7 +1178,7 @@ private fun TagToken(tag: VideoTag, onClick: () -> Unit) {
  * 一会儿([NeedsCopyNotice])。简介页附近没有 snackbar 宿主,为这一处挂一个不值得。
  */
 @Composable
-private fun BvidLabel(bvid: String, modifier: Modifier = Modifier) {
+private fun BvidLabel(bvid: String, copyable: Boolean, modifier: Modifier = Modifier) {
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val clipLabel = stringResource(R.string.video_bvid_clip_label)
@@ -1191,7 +1197,7 @@ private fun BvidLabel(bvid: String, modifier: Modifier = Modifier) {
         softWrap = false,
         modifier = modifier
             .clip(MaterialTheme.shapes.extraSmall)
-            .clickable(onClickLabel = stringResource(R.string.video_bvid_copy)) {
+            .clickable(enabled = copyable, onClickLabel = stringResource(R.string.video_bvid_copy)) {
                 scope.launch {
                     clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(clipLabel, bvid)))
                     if (NeedsCopyNotice) justCopied = true
@@ -1244,7 +1250,7 @@ private fun ActionButtonsRow(
     onCoinDialogClosed: () -> Unit,
     onOpenFavPicker: () -> Unit,
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
-    onAddToView: () -> Unit,
+    onToggleToView: () -> Unit,
     onListen: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1338,8 +1344,7 @@ private fun ActionButtonsRow(
             },
             holdProgress = holdProgress,
         )
-        // 稍后再看:**只进不出**。已加入后点击不做任何事 —— 移除在稍后再看页面做,
-        // 那里是个列表,划掉一条是自然动作;在这里做 toggle 就得先拉整个列表才能知道当前状态。
+        // 稍后再看:在这一页里是个 toggle,进页面时总是未加入态(见 VideoViewModel.addedToView)。
         ActionItem(
             modifier = Modifier.weight(1f),
             shape = horizontalSegmentShape(index = 3, count = ActionCount),
@@ -1351,7 +1356,7 @@ private fun ActionButtonsRow(
             contentDescription = stringResource(R.string.video_action_toview_desc),
             selectedIcon = Icons.Filled.WatchLater,
             icon = Icons.Outlined.WatchLater,
-            onClick = { if (!addedToView) onAddToView() },
+            onClick = onToggleToView,
         )
         // 听视频挨着稍后再看:这两件事是同一类决定——**这条视频我打算怎么消费**(现在只听、
         // 还是回头再看),而左边三个是对内容表态。它原先在画面底部那条控制条上,那里全是
@@ -1593,52 +1598,6 @@ private fun WithHoldTimeout(enabled: Boolean, content: @Composable () -> Unit) {
     CompositionLocalProvider(LocalViewConfiguration provides overridden, content = content)
 }
 
-/**
- * 硬币:一个圆,中间一个 B。
- *
- * **B 交给字体画,不自己描点。** 先手写过一版路径(一竖加两个碗,实心态再靠 evenOdd 挖出
- * 两个字腔),在 20dp 上是糊的 —— 字腔只剩一两个物理像素,而字体厂商为这个尺寸做了 hinting,
- * 手写坐标做不到。`Text` 还顺带解决了粗细和光学重心。
- *
- * **字号按 dp 折算,不跟系统字号缩放。** 圆是 dp 定死的,B 若跟着系统字号长大就会顶破它;
- * 这一个字是图标的一部分,不是可读的正文。
- *
- * 已投是实心圆挖出白字,未投是圈环加同色的字 —— 两个明显不同的字形,不只靠颜色区分
- * (风格指南 §2.6)。挖出来那个字取 [cutout],也就是这一格的底色:格子有了自己的底色之后,
- * 主题根部那层 `background` 已经不是这个字周围真正的颜色。
- */
-@Composable
-private fun CoinGlyph(tint: Color, filled: Boolean, cutout: Color, modifier: Modifier = Modifier) {
-    val density = LocalDensity.current
-    val letterSize = remember(density) { with(density) { CoinLetterSize.toSp() } }
-    Box(
-        modifier = modifier
-            .size(ActionIconSize)
-            .then(
-                if (filled) {
-                    Modifier.background(tint, CircleShape)
-                } else {
-                    Modifier.border(CoinRingStroke, tint, CircleShape)
-                },
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = "B",
-            color = if (filled) cutout else tint,
-            style = TextStyle(
-                fontSize = letterSize,
-                // 行高等于字号、并关掉字体自带的上下留白,字才落在圆心上 —— 默认那两样都会
-                // 把这一个字往下推,在 20dp 的圆里看得出来。
-                lineHeight = letterSize,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                platformStyle = PlatformTextStyle(includeFontPadding = false),
-            ),
-        )
-    }
-}
-
 private val ActionIconSize = 20.dp
 
 /** 星形字形的尺寸,见 [ActionItem] 的 iconSize。 */
@@ -1649,10 +1608,6 @@ private val ActionIconBox = 24.dp
 
 /** 字形与下面那行计数之间的距离。 */
 private val ActionLabelGap = 4.dp
-
-/** 圈环的粗细,以及圆里那个 B 的字号。字占圆的六成左右,再大就贴边。 */
-private val CoinRingStroke = 1.6.dp
-private val CoinLetterSize = 12.dp
 
 /** 进度环离图标的距离,以及它自己的粗细。环要绕开图标,不能压在字形上。 */
 private val HoldRingInset = 4.dp
@@ -2270,6 +2225,12 @@ private val BeforeSectionHeaderGap = 4.dp
 /** 单个 UP 那一行的头像。比联合投稿那一排大一档:这里只有一个人,名字也升到了 titleSmall。 */
 private val UpAvatarSize = 40.dp
 
+/**
+ * UP 头像比页边多缩进的量。下面队列条目里封面缩进 16dp(lists.md 的 leading element left
+ * padding),头像取一半:贴页边时它和封面差着一截,缩满 16dp 又显得离左边太远。联合投稿那一排
+ * 不补:格子本身比头像宽,单边让出的已经比这条线多。
+ */
+private val UpAvatarInset = 8.dp
 /** 分 P 横排里一格的宽度。两行 bodySmall 标题各放得下七八个字。 */
 private val PartCardWidth = 128.dp
 

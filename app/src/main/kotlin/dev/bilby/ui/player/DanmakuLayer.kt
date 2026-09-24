@@ -139,6 +139,18 @@ fun PlayerDanmakuLayer(
 object DanmakuFontSizeSp {
     const val Embedded = 15f
     const val Fullscreen = 18f
+
+    /**
+     * 画中画小窗只有屏宽的三分之一上下,而 sp 不随窗口缩:按内嵌那一档画,一行弹幕就占掉小窗
+     * 一半宽,几条就把画面盖满。
+     */
+    const val Pip = 11f
+
+    fun of(fullscreen: Boolean, pip: Boolean): Float = when {
+        pip -> Pip
+        fullscreen -> Fullscreen
+        else -> Embedded
+    }
 }
 
 /**

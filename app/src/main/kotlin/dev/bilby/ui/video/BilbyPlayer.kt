@@ -9,6 +9,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemGestures
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -18,14 +21,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,16 +34,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -57,6 +50,13 @@ import dev.bilby.ui.player.ControlButton
 import dev.bilby.ui.player.ControlScrimBottom
 import dev.bilby.ui.player.DanmakuButton
 import dev.bilby.ui.player.PlayerShell
+import dev.bilby.ui.player.PlayerIconButton
+import dev.bilby.ui.player.PlayerSidePanel
+import dev.bilby.ui.components.rememberExpandedSheetState
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import dev.bilby.ui.player.PlayerTooltip
 import dev.bilby.ui.player.formatSpeed
 import dev.bilby.data.QualityOption
@@ -69,11 +69,7 @@ import dev.bilby.ui.player.DanmakuFontSizeSp
 import dev.bilby.ui.player.PlayerDanmakuLayer
 import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SeekBarSegment
-import dev.bilby.ui.components.SubtitleTrackMenu
-import dev.bilby.ui.components.menuSelectedMark
-import dev.bilby.ui.components.selectedSemantics
 import dev.bilby.ui.theme.Breakpoints
-import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.data.DanmakuPrefs
@@ -92,19 +88,14 @@ import kotlinx.coroutines.flow.emptyFlow
  */
 private val ControlRowOverlap = 12.dp
 
-private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
-
 /**
  * 字幕离画面底沿多远。两档:控制条在屏上时要整体抬到它上面去,不然字幕压在进度条和
  * 那排按钮上;控制条收起后只留一点边距,贴太近会被圆角或手势条切到。
  *
- * 88 是量出来的:控制条最矮的形态(内嵌、不分行)约 72dp 高,再留一档间距。
+ * 88:控制条最矮的形态(内嵌的一行)约 76dp 高,再留一档间距。
  */
 private val SubtitleBottomWithControls = 88.dp
 private val SubtitleBottomBare = 24.dp
-
-/** 时间读数里的数字,量宽度时统一换成 0。 */
-private val DigitPattern = Regex("\\d")
 
 /**
  * 播放器画面 + 控件。非全屏时被塞进 16:9 容器,全屏时铺满整屏,两种形态共用这一个 composable,
@@ -122,13 +113,17 @@ private val DigitPattern = Regex("\\d")
  *   Surface 也走它:`COMMAND_SET_VIDEO_SURFACE` 在 MediaController 上是有的,Surface 作为
  *   Parcelable 跨 binder 送到 session 那一侧。
  */
-@OptIn(UnstableApi::class)
+@OptIn(UnstableApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun BilbyPlayer(
     player: Player,
     qualities: List<QualityOption>,
     currentQuality: Int,
     onQualityChange: (Int) -> Unit,
+    /** 音质那一段,见 [PlayerSettingsContent]。 */
+    audioOptions: List<Int> = emptyList(),
+    currentAudio: Int = 0,
+    onAudioChange: (Int) -> Unit = {},
     isFullscreen: Boolean,
     onFullscreenChange: (Boolean) -> Unit,
     /** 会被自动跳过的片段。只染在进度条上,不参与交互,见 [SeekBar]。 */
@@ -192,7 +187,13 @@ fun BilbyPlayer(
     title: String = "",
     /** 全屏顶栏右端的东西,现在是切集入口。见 [PlayerShell] 的同名参数。 */
     topBarActions: @Composable RowScope.() -> Unit = {},
+    /** 内嵌时右上角的东西,现在是分享。见 [PlayerShell] 的同名参数。 */
+    embeddedTopActions: @Composable RowScope.() -> Unit = {},
+    /** 窗口在画中画里。见 [PlayerShell] 的同名参数;弹幕画不画看 [DanmakuPrefs.inPip]。 */
+    pip: Boolean = false,
 ) {
+    /** 播放设置面板开着没有。见 [PlayerSettingsContent]。 */
+    var settingsOpen by remember { mutableStateOf(false) }
     PlayerShell(
         player = player,
         attached = matchesCurrentPage,
@@ -209,17 +210,21 @@ fun BilbyPlayer(
         modifier = modifier,
         fastForwardSpeed = fastForwardSpeed,
         topBarActions = topBarActions,
+        embeddedTopActions = embeddedTopActions,
+        pip = pip,
         overlay = {
             // 弹幕层:字号由这里按形态给,层自己不认识"全屏"。
-            PlayerDanmakuLayer(
-                player = player,
-                prefs = danmakuPrefs,
-                feed = DanmakuFeed.Pool(danmakuPool),
-                specialPool = specialDanmakuPool,
-                selfDanmaku = selfDanmaku,
-                cid = danmakuCid,
-                fontSizeSp = if (isFullscreen) DanmakuFontSizeSp.Fullscreen else DanmakuFontSizeSp.Embedded,
-            )
+            if (!pip || danmakuPrefs.inPip) {
+                PlayerDanmakuLayer(
+                    player = player,
+                    prefs = danmakuPrefs,
+                    feed = DanmakuFeed.Pool(danmakuPool),
+                    specialPool = specialDanmakuPool,
+                    selfDanmaku = selfDanmaku,
+                    cid = danmakuCid,
+                    fontSizeSp = DanmakuFontSizeSp.of(isFullscreen, pip),
+                )
+            }
 
             // 字幕层。**不走 Media3 的 SubtitleConfiguration**:那要求先把 JSON 转成 VTT 再挂到
             // MediaItem 上,而这里的 MediaItem 是 AudioPlaybackService 拼的 DASH 合并源,插字幕轨
@@ -263,31 +268,24 @@ fun BilbyPlayer(
         controlBar = {
             PlayerControlBar(
                 segments = seekBarSegments,
-                isPlaying = isPlaying,
                 position = positionMillis,
                 bufferedPosition = bufferedPositionMillis,
                 duration = durationMillis,
                 speed = speed,
                 qualities = qualities,
                 currentQuality = currentQuality,
+                subtitleTracks = subtitleTracks,
+                currentSubtitleLan = currentSubtitleLan,
                 isFullscreen = isFullscreen,
-                onPlayPause = { togglePlayPause() },
                 onSeekStart = { onSeekStart() },
                 onSeekTo = { onSeekTo(it) },
                 onSeekFinished = { onSeekFinished() },
-                onSpeedChange = { setSpeed(it) },
-                onQualityChange = {
-                    onQualityChange(it)
-                    keepControlsAwake()
-                },
-                subtitleTracks = subtitleTracks,
-                currentSubtitleLan = currentSubtitleLan,
-                onSubtitleTrackChange = {
-                    onSubtitleTrackChange(it)
-                    keepControlsAwake()
+                onOpenSettings = {
+                    settingsOpen = true
+                    // 面板开着时控件不自动收:面板关了人还要回到控制条上。
+                    setMenuOpen(true)
                 },
                 onFullscreenToggle = { toggleFullscreen() },
-                onMenuOpenChange = { setMenuOpen(it) },
                 danmakuEnabled = danmakuPrefs.enabled,
                 onDanmakuEnabledChange = {
                     onDanmakuEnabledChange(it)
@@ -295,191 +293,171 @@ fun BilbyPlayer(
                 },
             )
         },
+        panel = {
+            val close = {
+                settingsOpen = false
+                setMenuOpen(false)
+            }
+            val settings: @Composable () -> Unit = {
+                PlayerSettingsContent(
+                    speed = speed,
+                    onSpeedChange = { setSpeed(it) },
+                    qualities = qualities,
+                    currentQuality = currentQuality,
+                    onQualityChange = onQualityChange,
+                    subtitleTracks = subtitleTracks,
+                    currentSubtitleLan = currentSubtitleLan,
+                    onSubtitleTrackChange = onSubtitleTrackChange,
+                    audioOptions = audioOptions,
+                    currentAudio = currentAudio,
+                    onAudioChange = onAudioChange,
+                )
+            }
+            // 全屏从右边划出(横屏下底部 sheet 只剩一条缝),内嵌从底部弹出。内容是同一份。
+            if (isFullscreen) {
+                PlayerSidePanel(visible = settingsOpen, onDismiss = close) {
+                    Text(
+                        stringResource(R.string.player_settings),
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(
+                            start = Spacing.Comfortable,
+                            end = Spacing.Comfortable,
+                            top = Spacing.Comfortable,
+                        ),
+                    )
+                    settings()
+                }
+            } else if (settingsOpen) {
+                ModalBottomSheet(onDismissRequest = close, sheetState = rememberExpandedSheetState()) {
+                    settings()
+                    Spacer(modifier = Modifier.height(Spacing.Comfortable))
+                }
+            }
+        },
     )
 
 }
 
+/**
+ * 底部控制条。播放键不在这里,在画面正中(见 PlayerShell 的 CenterPlayButton)。
+ *
+ * 两种排法,**按宽度分,不按是不是全屏分**:
+ *
+ * - **窄**(内嵌,以及竖屏视频的全屏):一行 ——「时间 进度条 时长 [弹幕] ⚙ ⛶」。倍速、清晰度、
+ *   字幕收进 ⚙ 打开的播放设置面板。内嵌画面只有两百来 dp 高,两行控制条加上顶上的返回键,
+ *   中间就放不下播放键了。
+ * - **宽**(横屏全屏):进度条独占一行,下面一行是读数和几枚写着当前档位的 chip
+ *   (「1.5x」「1080P」),点任何一枚都打开同一块设置面板。
+ *
+ * 原先是一行按钮加一套"量一遍装不装得下、装不下就给不给档名、再装不下就分两行"的估算,
+ * 窄屏上是六七个一样大的白色线框挤在右下角。现在窄的时候档位全在面板里,估算就不需要了。
+ */
 @Composable
 private fun PlayerControlBar(
     segments: List<SeekBarSegment>,
-    isPlaying: Boolean,
     position: Long,
     bufferedPosition: Long,
     duration: Long,
     speed: Float,
     qualities: List<QualityOption>,
     currentQuality: Int,
+    subtitleTracks: List<SubtitleTrack>,
+    currentSubtitleLan: String,
     isFullscreen: Boolean,
-    onPlayPause: () -> Unit,
     onSeekStart: () -> Unit,
     onSeekTo: (Long) -> Unit,
     onSeekFinished: () -> Unit,
-    onSpeedChange: (Float) -> Unit,
-    onQualityChange: (Int) -> Unit,
-    subtitleTracks: List<SubtitleTrack>,
-    currentSubtitleLan: String,
-    onSubtitleTrackChange: (String) -> Unit,
+    onOpenSettings: () -> Unit,
     onFullscreenToggle: () -> Unit,
-    onMenuOpenChange: (Boolean) -> Unit,
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
 ) {
     val safeInsets = WindowInsets.barsAndCutout
     val container = Modifier
         .fillMaxWidth()
-        // 渐变而不是一整条半透明黑。控件底下是画面本身,一条硬边的黑带会把画面横着切一刀,
-        // 而渐变只在最需要对比度的地方(文字所在的下缘)压到最暗。B 站与 PiliPlus 的
-        // 播放器同样是自下而上的渐变。
+        // 渐变而不是一整条半透明黑。控件底下是画面本身,一条硬边的黑带会把画面横着切一刀。
+        // 按钮现在自带容器(见 PlayerControls 的 mediaControlContainer),渐变只需托住读数。
         .background(
             Brush.verticalGradient(
                 listOf(Color.Transparent, FixedColors.PlayerControlScrim, ControlScrimBottom),
             ),
         )
-        // 挖孔和手势条会切掉贴边的控件。**无条件躲**,不再只在全屏时躲:横屏两栏下画面
-        // 也是全出血的,手势条同样压在控制条上。竖排时页面那一层已经躲过并消费掉了这份
-        // inset,这里量到的是 0,不会重复叠加。
+        // 挖孔和手势条会切掉贴边的控件。**无条件躲**:横屏两栏下画面也是全出血的。竖排时页面
+        // 那一层已经躲过并消费掉了这份 inset,这里量到的是 0,不会重复叠加。
         .windowInsetsPadding(safeInsets)
         .padding(
-            start = if (isFullscreen) 16.dp else 8.dp,
-            end = if (isFullscreen) 16.dp else 8.dp,
-            top = 16.dp,
-            // 内嵌时画面底边被详情面板压住一条(VideoScreen 的 DetailPaneOverlap),按钮行让出来。
-            bottom = if (isFullscreen) 8.dp else DetailPaneOverlap,
+            start = if (isFullscreen) Spacing.Comfortable else Spacing.Tight,
+            end = if (isFullscreen) Spacing.Comfortable else Spacing.Tight,
+            top = Spacing.Comfortable,
+            bottom = Spacing.Tight,
         )
 
-    val timeText = "${formatDurationMillis(position)} / ${formatDurationMillis(duration)}"
-    // 量宽度用的是位数相同、数字全换成 0 的模板,不是当下的读数:Roboto 的数字等宽,量出来
-    // 一样宽,而模板不随秒数变 —— 用真读数的话,跨过 9:59 → 10:00 的那一秒整条控制条会从
-    // 一行翻成两行。
-    val timeTemplate = timeText.replace(DigitPattern, "0")
-    val timeStyle =
-        if (isFullscreen) MaterialTheme.typography.labelLarge
-        else MaterialTheme.typography.labelSmall
-    val labelStyle = MaterialTheme.typography.labelSmall
-    val secondaryIconSize = if (isFullscreen) 22.dp else 18.dp
-
-    val speedLabel = if (speed == 1f) null else formatSpeed(speed)
-    val currentQualityLabel = qualities.firstOrNull { it.quality == currentQuality }?.label
-    val currentSubtitleLabel = subtitleTracks.firstOrNull { it.lan == currentSubtitleLan }?.displayName
-
-    val measurer = rememberTextMeasurer()
-    val density = LocalDensity.current
+    val seekBar: @Composable (Modifier) -> Unit = { modifier ->
+        SeekBar(
+            position,
+            duration,
+            onSeekStart,
+            onSeekTo,
+            onSeekFinished,
+            modifier
+                // **全屏时让开系统返回手势的那一条。** 全屏横屏下进度条两端就是屏幕左右边缘,
+                // 从边缘起手往里拖进度会被系统读成返回。内嵌不让:那时两端离屏幕边缘本来就只有
+                // 这条控制条的内边距,再收一截就短得难拖。
+                .then(
+                    if (isFullscreen) {
+                        Modifier.windowInsetsPadding(
+                            WindowInsets.systemGestures.only(WindowInsetsSides.Horizontal),
+                        )
+                    } else {
+                        Modifier
+                    },
+                ),
+            bufferedPosition = bufferedPosition,
+            segments = segments,
+        )
+    }
 
     BoxWithConstraints(modifier = container) {
-        fun width(text: String, style: TextStyle): Dp =
-            with(density) { measurer.measure(text, style).size.width.toDp() }
-
-        // 一个次级按钮占多宽:图标加左右各 8dp,带档名时再加 4dp 和档名本身;不足触摸下限的
-        // 按下限算([ControlButton] 自己就是这么撑的)。
-        fun buttonWidth(label: String?): Dp {
-            val content = secondaryIconSize + 8.dp * 2 +
-                (label?.let { 4.dp + width(it, labelStyle) } ?: 0.dp)
-            return maxOf(content, Dimens.MinTouchTarget)
-        }
-
-        fun secondaryWidth(withLabels: Boolean): Dp {
-            var total = buttonWidth(speedLabel)
-            if (qualities.isNotEmpty()) total += buttonWidth(currentQualityLabel.takeIf { withLabels })
-            if (subtitleTracks.isNotEmpty()) {
-                total += buttonWidth(currentSubtitleLabel.takeIf { withLabels })
-            }
-            // 弹幕开关只有图标,而且只在全屏留在这条控制条上。
-            if (isFullscreen) total += Dimens.MinTouchTarget
-            return total
-        }
-
-        /** 一行摆完要多宽:播放键 + 读数 + 次级控件 + 全屏键,两颗 IconButton 各按触摸下限算。 */
-        fun rowWidth(withLabels: Boolean): Dp =
-            Dimens.MinTouchTarget * 2 + width(timeTemplate, timeStyle) + secondaryWidth(withLabels)
-
-        // **摆不下就把次级控件另起一行,判据是量出来的宽度,不是"是不是全屏"。**
-        //
-        // `Row` 既不换行也不缩:装不下时它照旧按声明顺序摆,排在最后的全屏按钮就落到容器
-        // 外面去了 —— 看不见也点不着,而它是内嵌与全屏之间唯一的来回。全屏那套密度光触摸
-        // 下限就摆不下:竖屏视频全屏(或平板分屏)只有 360–410dp,去掉两边 16dp 剩 328dp,
-        // 而四个次级按钮各占 [Dimens.MinTouchTarget] 就是 192dp,加播放键、全屏键和 14sp 的
-        // 读数约 400dp。内嵌那套只要 315dp 左右(三个按钮、11sp 读数、不给档名),360dp 上
-        // 照旧一行 —— 风格指南 §7 那条"compact 逐像素照旧"因此没有被动到。
-        val labelled = isFullscreen &&
-            maxWidth >= Breakpoints.StackedControlBar &&
-            rowWidth(withLabels = true) <= maxWidth
-        val stacked = rowWidth(withLabels = labelled) > maxWidth
-
-        // 两种排布摆的是同一组控件,所以只写一份 —— 各写一份的话分行那一支迟早少一个按钮。
-        val secondary: @Composable () -> Unit = {
-            SecondaryControls(
-                qualities = qualities,
-                currentQuality = currentQuality,
-                subtitleTracks = subtitleTracks,
-                currentSubtitleLan = currentSubtitleLan,
-                danmakuEnabled = danmakuEnabled,
-                speed = speed,
-                speedLabel = speedLabel,
-                qualityLabel = currentQualityLabel.takeIf { labelled },
-                subtitleLabel = currentSubtitleLabel.takeIf { labelled },
-                iconSize = secondaryIconSize,
-                isFullscreen = isFullscreen,
-                onSpeedChange = onSpeedChange,
-                onQualityChange = onQualityChange,
-                onSubtitleTrackChange = onSubtitleTrackChange,
-                onDanmakuEnabledChange = onDanmakuEnabledChange,
-                onMenuOpenChange = onMenuOpenChange,
-            )
-        }
-
-        // 进度条独占一行:挤在按钮行里只剩几十 dp 可拖,而拖拽是这里最主要的操作。
-        //
-        // **两行负间距叠着放。** 两者都是 48dp 的触摸区,而画出来的东西一个 16dp(进度槽)、
-        // 一个 22dp(图标),各自上下留着十几 dp 的空 —— 两块空 padding 摞在一起就是 29dp 的
-        // 视觉空隙,读起来像两组不相干的控件。让它们共用一部分:叠 [ControlRowOverlap] 之后
-        // 看着是一组,而两边的触摸区都还在 36dp 以上。
-        //
-        // 进度条画在上层([zIndex]),叠掉的那一截归它 —— 拖拽要的精度比点一个 22dp 的图标高,
-        // 而按钮叠掉的只是自己顶上的空 padding,图标本身一点没被盖到。
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(-ControlRowOverlap),
-        ) {
-            SeekBar(
-                position,
-                duration,
-                onSeekStart,
-                onSeekTo,
-                onSeekFinished,
-                Modifier.fillMaxWidth().zIndex(1f),
-                bufferedPosition = bufferedPosition,
-                segments = segments,
-            )
-            // 按钮区自己一列:负间距只该吃进度槽下面那块空 padding,两行按钮之间没有那块空档,
-            // 叠上去就是图标压图标。
-            Column(modifier = Modifier.fillMaxWidth()) {
-                if (stacked) {
-                    // 靠右:它接着下面那一行的右端,而左端是播放键和读数。
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        secondary()
-                    }
+        val wide = isFullscreen && maxWidth >= Breakpoints.StackedControlBar
+        if (!wide) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TimeLabel(position, modifier = Modifier.padding(start = Spacing.Tight))
+                seekBar(Modifier.weight(1f))
+                TimeLabel(duration, secondary = true, modifier = Modifier.padding(end = Spacing.Hair))
+                // 全屏没有标签行,弹幕开关只能在这里;内嵌时它在标签行那枚胶囊里。
+                if (isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+                val settingsLabel = stringResource(R.string.player_settings)
+                PlayerTooltip(settingsLabel) {
+                    PlayerIconButton(onClick = onOpenSettings, icon = Icons.Filled.Tune, contentDescription = settingsLabel)
                 }
+                FullscreenButton(isFullscreen, onFullscreenToggle)
+            }
+        } else {
+            // **两行负间距叠着放。** 两者都是 48dp 的触摸区,画出来的东西却只有十几 dp 高,两块
+            // 空 padding 摞在一起读起来像两组不相干的控件。叠 [ControlRowOverlap] 之后看着是一组,
+            // 两边的触摸区都还在 36dp 以上。进度条画在上层,叠掉的那一截归它。
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(-ControlRowOverlap),
+            ) {
+                seekBar(Modifier.fillMaxWidth().zIndex(1f))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    PlayPauseButton(isPlaying, onPlayPause, if (isFullscreen) 30.dp else 22.dp)
-                    Text(
-                        timeText,
-                        style = timeStyle,
-                        color = FixedColors.OnMedia,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        // **这一行唯一带权重的孩子**,而且是读数而不是一个 Spacer:带权重的孩子
-                        // 拿的是无权重的孩子量完之后剩下的那份,所以挤起来先让的是读数,不是排在
-                        // 最后的全屏按钮 —— 上面那套宽度估算只决定给不给档名、要不要分行,估歪了
-                        // 也不会把按钮顶到容器外面去。左对齐加 fill,右端的按钮照旧贴着边
-                        // (两个权重对半分剩余宽度会让它停在中间偏右,壳里的全屏顶栏踩过)。
-                        modifier = Modifier.weight(1f),
+                    Row(
+                        verticalAlignment = Alignment.Bottom,
+                        modifier = Modifier.weight(1f).padding(start = Spacing.Tight),
+                    ) {
+                        TimeLabel(position, large = true)
+                        TimeLabel(duration, large = true, secondary = true, prefix = " / ")
+                    }
+                    SettingChips(
+                        speed = speed,
+                        qualityLabel = qualities.firstOrNull { it.quality == currentQuality }?.label,
+                        subtitleLabel = subtitleTracks.firstOrNull { it.lan == currentSubtitleLan }?.displayName,
+                        hasSubtitles = subtitleTracks.isNotEmpty(),
+                        onOpenSettings = onOpenSettings,
                     )
-                    if (!stacked) secondary()
-                    FullscreenButton(isFullscreen, onFullscreenToggle, if (isFullscreen) 26.dp else 22.dp)
+                    DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+                    FullscreenButton(isFullscreen, onFullscreenToggle)
                 }
             }
         }
@@ -487,218 +465,87 @@ private fun PlayerControlBar(
 }
 
 /**
- * 倍速 / 画质 / 字幕 / 弹幕 / 听视频。抽出来只是为了让上面那个 Row 读得完,没有第二个调用方。
- *
- * **档名由调用方给,不在这里按"是不是全屏"算。** 给不给档名取决于这一行量出来装不装得下
- * (见 [PlayerControlBar]),而算那个的地方必须先知道档名有多长。
+ * 读数。当前位置用 onSurface,总时长用 onSurfaceVariant:两级明度,一眼先读到"现在在哪"。
+ * 数字取等宽(`tnum`):秒数每跳一下,等宽之外的数字会让整行左右抖。
  */
 @Composable
-private fun SecondaryControls(
-    qualities: List<QualityOption>,
-    currentQuality: Int,
-    subtitleTracks: List<SubtitleTrack>,
-    currentSubtitleLan: String,
-    danmakuEnabled: Boolean,
-    speed: Float,
-    speedLabel: String?,
-    qualityLabel: String?,
-    subtitleLabel: String?,
-    iconSize: Dp,
-    isFullscreen: Boolean,
-    onSpeedChange: (Float) -> Unit,
-    onQualityChange: (Int) -> Unit,
-    onSubtitleTrackChange: (String) -> Unit,
-    onDanmakuEnabledChange: (Boolean) -> Unit,
-    onMenuOpenChange: (Boolean) -> Unit,
+private fun TimeLabel(
+    millis: Long,
+    modifier: Modifier = Modifier,
+    large: Boolean = false,
+    secondary: Boolean = false,
+    prefix: String = "",
 ) {
-    SpeedButton(speed, speedLabel, onSpeedChange, onMenuOpenChange, iconSize)
-    QualityButton(qualities, currentQuality, onQualityChange, onMenuOpenChange, qualityLabel, iconSize)
-    SubtitleButton(
-        subtitleTracks,
-        currentSubtitleLan,
-        onSubtitleTrackChange,
-        onMenuOpenChange,
-        subtitleLabel,
-        iconSize,
+    Text(
+        text = prefix + formatDurationMillis(millis),
+        style = (if (large) MaterialTheme.typography.labelLarge else MaterialTheme.typography.labelMedium)
+            .copy(fontFeatureSettings = "tnum"),
+        color = if (secondary) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+        maxLines = 1,
+        modifier = modifier,
     )
-    // **弹幕开关只在全屏留在这条控制条上。** 内嵌时它在标签行右端、挨着"发弹幕"(见 VideoTabs),
-    // 那里两个控件说的是同一件事:这条视频的弹幕看不看、发不发。全屏没有标签行,只能回到这里,
-    // 发弹幕则不给 —— 横屏起键盘会铺掉大半个画面,而弹幕是发给眼前这一帧的。
-    //
-    // 直播间不受影响:它没有标签行,开关一直在控制条上(见 LiveRoomScreen)。
-    if (isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-    // 听视频**不在这条控制条上**,它在简介页的动作栏里、挨着稍后再看(见 VideoTabs)。
-    // 这条控制条上的东西回答的都是"这个播放器现在怎么放"(倍速、清晰度、字幕、弹幕、全屏),
-    // 而听视频换掉的是整页的形态。放在这里时它混在五个播放参数中间,读不出这层区别。
 }
 
-
-
+/**
+ * 宽排法里那几枚写着当前档位的 chip。**点哪一枚都是打开同一块设置面板**,不是各开一个菜单:
+ * 三者本来就是同一组设置,面板里三段都在,各开一个菜单只会让人记住三个位置。
+ * 没有字幕轨时那一枚不画,字幕关着时只画图标(写「关闭」读起来像按下去会关掉)。
+ */
 @Composable
-private fun PlayPauseButton(isPlaying: Boolean, onClick: () -> Unit, iconSize: Dp) {
-    IconButton(onClick = onClick) {
-        Icon(
-            imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-            contentDescription = stringResource(
-                if (isPlaying) R.string.player_pause else R.string.player_play,
-            ),
-            tint = FixedColors.OnMedia,
-            modifier = Modifier.size(iconSize),
+private fun SettingChips(
+    speed: Float,
+    qualityLabel: String?,
+    subtitleLabel: String?,
+    hasSubtitles: Boolean,
+    onOpenSettings: () -> Unit,
+) {
+    val speedDescription = stringResource(R.string.player_speed)
+    PlayerTooltip(speedDescription) {
+        ControlButton(
+            expanded = false,
+            onClick = onOpenSettings,
+            label = formatSpeed(speed),
+            icon = { tint -> Icon(Icons.Filled.Speed, speedDescription, tint = tint, modifier = Modifier.size(ChipIconSize)) },
         )
+    }
+    if (qualityLabel != null) {
+        val description = stringResource(R.string.player_quality)
+        PlayerTooltip(description) {
+            ControlButton(
+                expanded = false,
+                onClick = onOpenSettings,
+                label = qualityLabel,
+                icon = { tint -> Icon(Icons.Filled.HighQuality, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+            )
+        }
+    }
+    if (hasSubtitles) {
+        val description = stringResource(R.string.player_subtitle)
+        PlayerTooltip(description) {
+            ControlButton(
+                expanded = false,
+                onClick = onOpenSettings,
+                label = subtitleLabel,
+                icon = { tint -> Icon(Icons.Filled.Subtitles, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+            )
+        }
     }
 }
 
+private val ChipIconSize = 18.dp
+
 @Composable
-private fun FullscreenButton(isFullscreen: Boolean, onClick: () -> Unit, iconSize: Dp) {
+private fun FullscreenButton(isFullscreen: Boolean, onClick: () -> Unit) {
     val description = stringResource(
         if (isFullscreen) R.string.player_exit_fullscreen else R.string.player_fullscreen,
     )
     PlayerTooltip(description) {
-        IconButton(onClick = onClick) {
-            Icon(
-                imageVector = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-                contentDescription = description,
-                tint = FixedColors.OnMedia,
-                modifier = Modifier.size(iconSize),
-            )
-        }
-    }
-}
-
-@Composable
-private fun SpeedButton(
-    speed: Float,
-    label: String?,
-    onSpeedChange: (Float) -> Unit,
-    onMenuOpenChange: (Boolean) -> Unit,
-    iconSize: Dp,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val description = stringResource(R.string.player_speed)
-    Box {
-        PlayerTooltip(description) {
-            ControlButton(
-                expanded = expanded,
-                onClick = { expanded = true; onMenuOpenChange(true) },
-                label = label,
-                icon = { tint ->
-                    Icon(
-                        Icons.Filled.Speed,
-                        description,
-                        tint = tint,
-                        modifier = Modifier.size(iconSize),
-                    )
-                },
-            )
-        }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false; onMenuOpenChange(false) },
-        ) {
-            SPEED_OPTIONS.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(formatSpeed(option)) },
-                    onClick = {
-                        expanded = false
-                        onMenuOpenChange(false)
-                        onSpeedChange(option)
-                    },
-                    trailingIcon = if (option == speed) menuSelectedMark else null,
-                    modifier = Modifier.selectedSemantics(option == speed),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun QualityButton(
-    qualities: List<QualityOption>,
-    currentQuality: Int,
-    onQualityChange: (Int) -> Unit,
-    onMenuOpenChange: (Boolean) -> Unit,
-    label: String?,
-    iconSize: Dp,
-) {
-    if (qualities.isEmpty()) return
-    var expanded by remember { mutableStateOf(false) }
-    val description = stringResource(R.string.player_quality)
-    Box {
-        PlayerTooltip(description) {
-            ControlButton(
-                expanded = expanded,
-                onClick = { expanded = true; onMenuOpenChange(true) },
-                label = label,
-                icon = { tint ->
-                    Icon(
-                        Icons.Filled.HighQuality,
-                        description,
-                        tint = tint,
-                        modifier = Modifier.size(iconSize),
-                    )
-                },
-            )
-        }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false; onMenuOpenChange(false) },
-        ) {
-            qualities.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(option.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    onClick = {
-                        expanded = false
-                        onMenuOpenChange(false)
-                        onQualityChange(option.quality)
-                    },
-                    trailingIcon = if (option.quality == currentQuality) menuSelectedMark else null,
-                    modifier = Modifier.selectedSemantics(option.quality == currentQuality),
-                )
-            }
-        }
-    }
-}
-
-/**
- * 字幕轨选择,和 [SpeedButton]/[QualityButton] 是同一套形状。没有轨(这条视频没有字幕、
- * 或者还没拉回来)时不出现——一个只有"关闭"一个选项的菜单是纯噪声。
- */
-@Composable
-private fun SubtitleButton(
-    tracks: List<SubtitleTrack>,
-    currentLan: String,
-    onChange: (String) -> Unit,
-    onMenuOpenChange: (Boolean) -> Unit,
-    label: String?,
-    iconSize: Dp,
-) {
-    if (tracks.isEmpty()) return
-    var expanded by remember { mutableStateOf(false) }
-    val description = stringResource(R.string.player_subtitle)
-    Box {
-        PlayerTooltip(description) {
-            ControlButton(
-                expanded = expanded,
-                onClick = { expanded = true; onMenuOpenChange(true) },
-                label = label,
-                icon = { tint ->
-                    Icon(
-                        Icons.Filled.Subtitles,
-                        description,
-                        tint = tint,
-                        modifier = Modifier.size(iconSize),
-                    )
-                },
-            )
-        }
-        // 菜单内容和听视频封面右上角那个按钮共用一份,见 SubtitleTrackMenu 上的注释。
-        SubtitleTrackMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false; onMenuOpenChange(false) },
-            tracks = tracks,
-            currentLan = currentLan,
-            onSelect = onChange,
+        PlayerIconButton(
+            onClick = onClick,
+            icon = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+            contentDescription = description,
         )
     }
 }
+
 

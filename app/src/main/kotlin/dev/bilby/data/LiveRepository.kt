@@ -34,6 +34,8 @@ data class LiveRoomPlayback(
     val liveStatus: Int,
     val isPortrait: Boolean,
     val stream: LiveStreamPick?,
+    /** 这一场什么时候开播的,秒。没在播时为 null(接口那时给的是哨兵值,见 LiveRoomPlayInfoDto)。 */
+    val liveStartEpochSeconds: Long? = null,
 ) {
     val isLive: Boolean get() = liveStatus == LIVE_STATUS_LIVE
 
@@ -88,6 +90,9 @@ class LiveRepository(private val client: BiliClient) {
                 liveStatus = dto.liveStatus,
                 isPortrait = dto.isPortrait,
                 stream = dto.pickStream(),
+                liveStartEpochSeconds = dto.liveTime.takeIf {
+                    dto.liveStatus == LiveRoomPlayback.LIVE_STATUS_LIVE && it > 0
+                },
             )
         }
     }

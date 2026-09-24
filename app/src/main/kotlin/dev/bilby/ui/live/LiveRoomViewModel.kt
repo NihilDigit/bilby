@@ -10,6 +10,8 @@ import dev.bilby.api.dto.LiveGuardItemDto
 import dev.bilby.danmaku.danmakuModeOrNull
 import dev.bilby.data.ArchivedSuperChat
 import dev.bilby.data.DanmakusRepository
+import dev.bilby.data.FollowState
+import dev.bilby.data.RelationRepository
 import dev.bilby.data.LiveRepository
 import dev.bilby.data.LiveRoomPlayback
 import dev.bilby.live.LiveDanmakuClient
@@ -134,6 +136,8 @@ data class LiveRoomUiState(
     val watched: String = "",
     /** 未开播时为 false:界面显示封面和一句话,不去连弹幕流。 */
     val isLive: Boolean = false,
+    /** 这一场的开播时刻,秒。没在播或拿不到时为 null,那一行不画。 */
+    val liveStartedAt: Long? = null,
     /**
      * **只用来判断这个房间此刻有没有流可放**,不交给播放器 —— 取流归服务(见
      * `AudioPlaybackService.resolveLiveStream`):直播地址带时效,页面这一份等到重试、切档、
@@ -177,6 +181,8 @@ data class LiveRoomUiState(
      * 说这句话,而失败的常见原因(等级不够、房间禁言、被风控)都需要人读一眼才知道下一步。
      */
     val sendError: String? = null,
+    /** 主播的关注态。null = 还没查到(或主播 mid 还不知道),那时不画关注按钮。 */
+    val followState: FollowState? = null,
 )
 
 /**
@@ -192,6 +198,9 @@ class LiveRoomViewModel(
     private val danmakuClient: LiveDanmakuClient,
     private val settings: dev.bilby.data.SettingsStore,
     private val danmakusRepository: DanmakusRepository,
+    /** 一批 mid 的头像。danmakus 补来的醒目留言不带头像,见 [loadArchivedSuperChats]。 */
+    private val userFaces: suspend (Collection<Long>) -> Map<Long, String>,
+    private val relationRepository: RelationRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LiveRoomUiState())
@@ -255,6 +264,7 @@ class LiveRoomViewModel(
                         it.copy(
                             loading = false,
                             isLive = value.isLive,
+                            liveStartedAt = value.liveStartEpochSeconds,
                             streamUrl = value.stream?.url,
                             qualities = value.stream?.acceptQn.orEmpty(),
                             currentQn = value.stream?.qn ?: 0,
@@ -265,6 +275,7 @@ class LiveRoomViewModel(
                     // (LIVE,见 notes/live.md §10.3),未开播就不连的话,未开播时进的房
                     // 永远等不到开播,只能退出去再进来。
                     connectDanmaku()
+                    loadFollowState()
                     // 两份历史仍然只在开播时拉:未开播时「本场」指的是上一场。
                     if (value.isLive) {
                         loadSuperChatHistory()
@@ -317,6 +328,52 @@ class LiveRoomViewModel(
                     sessionSuperChats = state.sessionSuperChats.mergeSuperChats(archived.map { it.toMessage() }),
                     hasArchive = true,
                 )
+            }
+            // 先上屏再补头像:列表不必等这一轮,头像到了再换进去。查不到的仍是空串,照旧不画。
+            val faces = userFaces(archived.map { it.senderMid })
+            BiliLog.d("danmakus 本场早前:补到 ${faces.size} 个头像")
+            if (faces.isEmpty()) return@launch
+            _state.update { state ->
+                state.copy(
+                    sessionSuperChats = state.sessionSuperChats.map { sc ->
+                        if (sc.senderFace.isEmpty()) {
+                            faces[sc.senderMid]?.let { sc.copy(senderFace = it) } ?: sc
+                        } else {
+                            sc
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    /** 主播的关注态。房间信息里只有 mid,关系要另查,同播放页(VideoViewModel)。 */
+    private fun loadFollowState() {
+        val mid = _state.value.anchorMid
+        if (mid == 0L || _state.value.followState != null) return
+        viewModelScope.launch {
+            when (val result = relationRepository.stateOf(mid)) {
+                is BiliResult.Ok -> _state.update { it.copy(followState = result.value) }
+                else -> BiliLog.w("查主播关注状态失败: $result")
+            }
+        }
+    }
+
+    /**
+     * 关注或取关主播。**乐观更新、失败回滚、不重拉**,同播放页的 toggleFollow;互关取关后
+     * 退回"未关注",理由也同那边。
+     */
+    fun toggleFollow() {
+        val mid = _state.value.anchorMid
+        val current = _state.value.followState ?: return
+        if (mid == 0L || current == FollowState.Self || current == FollowState.Blocked) return
+        val following = current.isFollowing
+        _state.update { it.copy(followState = if (following) FollowState.None else FollowState.Following) }
+        viewModelScope.launch {
+            val result = if (following) relationRepository.unfollow(mid) else relationRepository.follow(mid)
+            if (result !is BiliResult.Ok) {
+                BiliLog.w("${if (following) "取关主播" else "关注主播"}失败: $result")
+                _state.update { it.copy(followState = current) }
             }
         }
     }
@@ -529,7 +586,8 @@ class LiveRoomViewModel(
             priceYuan = priceYuan,
             senderMid = senderMid,
             senderName = senderName,
-            // danmakus 不给头像 URL(notes 的字段表),空串由渲染层判成"这一条不画头像"。
+            // danmakus 不给头像 URL(notes 的字段表),先留空串,由 [loadArchivedSuperChats]
+            // 另查一轮补上;补不到时渲染层判成"这一条不画头像"。
             senderFace = "",
             startTimeSeconds = sentAt,
             endTimeSeconds = sentAt,
@@ -629,6 +687,8 @@ class LiveRoomViewModel(
                 _state.update {
                     it.copy(
                         isLive = value.isLive,
+                        // 重新取流时一并刷新:下播又开播的话,这是新的一场。
+                        liveStartedAt = value.liveStartEpochSeconds,
                         streamUrl = value.stream?.url,
                         qualities = value.stream?.acceptQn ?: it.qualities,
                         currentQn = value.stream?.qn ?: it.currentQn,

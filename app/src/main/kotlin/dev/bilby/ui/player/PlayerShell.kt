@@ -8,12 +8,15 @@ import android.os.Build
 import android.view.ViewTreeObserver
 import android.view.WindowManager
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -36,17 +39,12 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.BrightnessLow
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.FastForward
-import androidx.compose.material.icons.filled.FastRewind
-import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -66,7 +64,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -84,11 +81,11 @@ import androidx.media3.common.VideoSize
 import androidx.media3.ui.compose.PlayerSurface
 import dev.bilby.R
 import dev.bilby.data.SettingsStore
-import dev.bilby.formatDurationMillis
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.rememberLoadingVisible
 import dev.bilby.ui.theme.FixedColors
+import dev.bilby.ui.theme.PlayerTheme
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.delay
 import kotlin.math.abs
@@ -220,17 +217,38 @@ fun PlayerShell(
     fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
     /** 全屏顶栏右端的东西。只在全屏、控件可见且未锁定时组合(顶栏本身就这样)。 */
     topBarActions: @Composable RowScope.() -> Unit = {},
+    /**
+     * 内嵌时右上角的东西(视频页的分享)。**跟控件一起显隐**:画面上常驻一颗按钮,看视频时它
+     * 一直压在画面的右上角。左上角的返回不走这里,见 [MediaBackButton] 为什么它常驻。
+     */
+    embeddedTopActions: @Composable RowScope.() -> Unit = {},
     overlay: @Composable PlayerShellScope.() -> Unit = {},
     controlBar: @Composable PlayerShellScope.() -> Unit = {},
+    /**
+     * 盖在一切之上的面板(播放设置)。**单独一个槽,不放进 [controlBar]**:控制条整条随显隐进出,
+     * 面板放在里面就被它一起收走;也不放进 [overlay]:那一层在控制条下面,面板会被控制条压住。
+     */
+    panel: @Composable PlayerShellScope.() -> Unit = {},
+    /**
+     * 窗口此刻在画中画里。**只剩画面和 overlay**:控件收起、中央播放键不画。overlay 照画,
+     * 小窗里弹幕画不画由调用方按设置决定(见 BilbyPlayer)。小窗上的触摸不会交给应用,点它
+     * 出来的是系统那一层(播放、暂停由 MediaSession 自动给),所以不必另外关手势。
+     */
+    pip: Boolean = false,
 ) {
     // 组件动效走 spring,不走转场那套 tween。easing-and-duration 页的注:"In the expressive
     // update, components and motion now use the motion physics system, which uses springs.
     // Products should migrate to the new system." 位移用 spatial,透明度用 effects ——
     // effects 那组是无回弹的,透明度回弹既没有物理意义也看得出来。
-    val spatialSpec = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
+    //
+    // 取 standard 那一套,不取外层主题的 expressive:理由同 [PlayerTheme]。这几个规格在壳的
+    // 主题层外面就算好了,读 MaterialTheme 拿到的还是外层那一套,所以直接点名。
+    val motion = PlayerMotion
+    val spatialSpec = motion.fastSpatialSpec<IntSize>()
     // scaleIn/scaleOut 动的是 Float,和展开收起不是同一个类型参数。
-    val scaleSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
-    val effectsSpec = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+    val scaleSpec = motion.fastSpatialSpec<Float>()
+    val spatialOffsetSpec = motion.fastSpatialSpec<IntOffset>()
+    val effectsSpec = motion.fastEffectsSpec<Float>()
 
     // 画面比例。**null 是"还不知道",不是一个兜底值。** 竖屏视频、4:3 老片都存在,而写死的
     // 16:9 在 9:16 的流上不是差一点:`aspectRatio(16f / 9f)` 正好铺满 16:9 的容器,画面被横着
@@ -238,7 +256,18 @@ fun PlayerShell(
     // 量到之后按真实比例收进去,多出来的地方留黑边。
     var videoAspect by remember { mutableStateOf<Float?>(null) }
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
+    /**
+     * "要不要放",不是"此刻在不在出声"。中央播放键的形态看它:缓冲中、取流中 [isPlaying] 都是
+     * false,拿它画的话,起播那几百毫秒里加载的空档会闪出一帧"停着"的正圆播放键,紧接着又变回
+     * 加载、再变成暂停。
+     */
+    var playWhenReady by remember { mutableStateOf(player.playWhenReady) }
     var buffering by remember { mutableStateOf(player.playbackState == Player.STATE_BUFFERING) }
+    /**
+     * 这个壳挂上以来播放器到过 READY 没有。**起播那一段等待和播放途中的缓冲分开对待**,
+     * 见下面 loadingVisible 的说明。
+     */
+    var everReady by remember { mutableStateOf(player.playbackState == Player.STATE_READY) }
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -246,8 +275,13 @@ fun PlayerShell(
                 isPlaying = playing
             }
 
+            override fun onPlayWhenReadyChanged(ready: Boolean, reason: Int) {
+                playWhenReady = ready
+            }
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 buffering = playbackState == Player.STATE_BUFFERING
+                if (playbackState == Player.STATE_READY) everReady = true
             }
 
             // **每一批事件都重读一次尺寸,不是只听 onVideoSizeChanged。**
@@ -272,6 +306,7 @@ fun PlayerShell(
         // 接上来时流可能已经在播了(页面重建、或从听视频切回来),那一次事件早就发过。
         videoAspect = player.videoSize.displayAspectOr(videoAspect)
         buffering = player.playbackState == Player.STATE_BUFFERING
+        playWhenReady = player.playWhenReady
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
     }
@@ -317,8 +352,26 @@ fun PlayerShell(
     /** 纵划时浮层要显示的百分比。 */
     var adjustValue by remember { mutableFloatStateOf(0f) }
 
-    /** 双击 ±10 秒的短暂提示,非 null 时显示;正负决定文案。 */
+    /**
+     * 双击进退的短暂提示,非 null 时显示;正负决定贴哪一边。**提示还在时同方向再双击就累加**
+     * (见 [accumulateNudge]),换方向从头算。每次双击照旧只往前后挪 10 秒,累加的只是读数。
+     */
     var seekNudgeMillis by remember { mutableStateOf<Long?>(null) }
+
+    /**
+     * 双击画面中间切了播放/暂停。**让中央播放键亮一下**,它从一种形态变到另一种的那一下就是
+     * 反馈;不把整套控件都唤出来 —— 人只是想停一下,不是要调什么。
+     *
+     * 计数器而不是布尔:连着双击两次要各亮一次,布尔第二次没有变化。
+     */
+    var playToggleFlash by remember { mutableIntStateOf(0) }
+    var flashVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(playToggleFlash) {
+        if (playToggleFlash == 0) return@LaunchedEffect
+        flashVisible = true
+        delay(PLAY_TOGGLE_FLASH_MILLIS)
+        flashVisible = false
+    }
 
     /**
      * 横划 seek 时手指是不是落在了取消区(顶部两角)。非 null 表示"松手就取消"。
@@ -364,10 +417,23 @@ fun PlayerShell(
         }
     }
 
+    // 自动隐藏的时长按系统无障碍设置放宽。设置里「操作时长」调长了的人,就是来不及在 3 秒里
+    // 找到按钮的人;控件里有图标、有文字、有可点的东西,三样都报上去,系统按最宽的那条给。
+    val accessibilityManager = LocalAccessibilityManager.current
+    val hideDelayMillis = remember(accessibilityManager) {
+        accessibilityManager?.calculateRecommendedTimeoutMillis(
+            CONTROLS_HIDE_DELAY_MILLIS,
+            containsIcons = true,
+            containsText = true,
+            containsControls = true,
+        ) ?: CONTROLS_HIDE_DELAY_MILLIS
+    }
+    // 进画中画那一刻把控件收起;出来之后照常点一下再唤出。
+    LaunchedEffect(pip) { if (pip) controlsVisible = false }
     LaunchedEffect(controlsVisible, isPlaying, dragPosition, menuOpen, interactionNonce) {
         // 暂停时控件常驻:此时用户多半正要点什么,把它藏掉只会逼人再点一次。
         if (controlsVisible && isPlaying && dragPosition == null && !menuOpen) {
-            delay(CONTROLS_HIDE_DELAY_MILLIS)
+            delay(hideDelayMillis)
             controlsVisible = false
         }
     }
@@ -386,8 +452,10 @@ fun PlayerShell(
     val displayPosition = dragPosition ?: position
 
     val togglePlayPause = {
+        // 看 playWhenReady,和中央播放键画出来的形态同一个判据:缓冲中键上画的是"暂停",
+        // 按下去就该是暂停,而不是因为此刻还没出声就再发一次播放。
         when {
-            player.isPlaying -> player.pause()
+            player.playWhenReady -> player.pause()
             else -> player.playOrReplay()
         }
         interactionNonce += 1
@@ -422,6 +490,9 @@ fun PlayerShell(
         },
     )
 
+    // 壳里的一切(控件、菜单、手势提示,以及调用方塞进来的 overlay 与控制条)都按深色主题取色,
+    // 见 [PlayerTheme]。
+    PlayerTheme {
     Box(modifier = modifier.background(Color.Black)) {
         val scope = PlayerShellScope(
             box = this,
@@ -466,9 +537,30 @@ fun PlayerShell(
         // **短于 200ms 的缓冲不给指示器**([rememberLoadingVisible])。拖动进度、切清晰度、
         // 每次 seek 之后播放器都会进 BUFFERING 一两帧,画面正中闪一下圈比不闪更像出了问题。
         // 计时器嵌在条件内侧:那样每一次缓冲窗口都重新开始数,而不是整页只宽限开头那一次。
-        if (buffering || externalLoading) {
-            if (rememberLoadingVisible()) {
-                LoadingIndicator(modifier = Modifier.align(Alignment.Center))
+        //
+        // 指示器本身画在中央播放键里(见下面的 [CenterPlayButton]),这里只算要不要显示。
+        //
+        // **起播那一段不走 200ms 的门槛。** 门槛是给播放途中的短暂缓冲的;起播之前页面已经在
+        // 画面正中摆着同一颗键的加载形态(见 VideoScreen 的占位),壳接上来之后再等 200ms 才亮,
+        // 中间就闪出一帧"暂停"的方块。所以第一次 READY 之前,在等就立刻显示。
+        val waiting = buffering || externalLoading
+        val loadingNow = when {
+            !waiting -> false
+            !everReady -> true
+            else -> rememberLoadingVisible()
+        }
+        // **退场留一段宽限。** 起播是两段等待接力:先是取流(externalLoading),再是播放器缓冲
+        // (BUFFERING),交接处常有一两帧、有时一两百毫秒两者都是 false。没有宽限的话指示器在
+        // 空档里撤掉又回来,播放键跟着闪一下原形。起播那一段空档更长,宽限也给得更长。
+        //
+        // 初值取这一刻的读数:壳挂上时已经在等,键就直接以加载形态出现,不从别的形态变过去。
+        var loadingVisible by remember { mutableStateOf(loadingNow) }
+        LaunchedEffect(loadingNow) {
+            if (loadingNow) {
+                loadingVisible = true
+            } else {
+                delay(if (everReady) LOADING_EXIT_GRACE_MILLIS else STARTUP_EXIT_GRACE_MILLIS)
+                loadingVisible = false
             }
         }
 
@@ -497,13 +589,16 @@ fun PlayerShell(
                             when {
                                 gestures.seek && offset.x < quarter ->
                                     nudgeSeek(player, -DOUBLE_TAP_SEEK_MILLIS)
-                                        .also { seekNudgeMillis = -DOUBLE_TAP_SEEK_MILLIS }
+                                        .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, -DOUBLE_TAP_SEEK_MILLIS) }
 
                                 gestures.seek && offset.x > size.width - quarter ->
                                     nudgeSeek(player, DOUBLE_TAP_SEEK_MILLIS)
-                                        .also { seekNudgeMillis = DOUBLE_TAP_SEEK_MILLIS }
+                                        .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, DOUBLE_TAP_SEEK_MILLIS) }
 
-                                else -> togglePlayPause()
+                                else -> {
+                                    togglePlayPause()
+                                    playToggleFlash++
+                                }
                             }
                             interactionNonce++
                         },
@@ -614,79 +709,105 @@ fun PlayerShell(
 
         // 顶部渐变在 overlay **之前**,于是弹幕落在它上面而不是底下。托的是页面画在壳外面的
         // 那两个按钮(返回、分享),见 [MediaTopScrim]。
-        if (topScrim) MediaTopScrim()
+        //
+        // **跟控件一起显隐,不常驻。** 常驻时看视频的大部分时间里画面顶上都压着一截黑,而常驻的
+        // 返回键自带半透明容器(mediaControlContainer),不靠这条渐变也看得清。控件出来时它托住
+        // 右上角的分享与控件那一层,同全屏顶栏。
+        androidx.compose.animation.AnimatedVisibility(
+            visible = topScrim && controlsVisible && !locked,
+            enter = fadeIn(effectsSpec),
+            exit = fadeOut(effectsSpec),
+            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(),
+        ) {
+            Box(modifier = Modifier.fillMaxWidth()) { MediaTopScrim() }
+        }
 
         // 内容层:压在画面与手势层之上、控制条之下——声明顺序即 z 序。没有 pointerInput,
         // 不拦截手势,底下的双击/拖拽照常命中。
         scope.overlay()
 
-        // 手势反馈只有这一处。四种手势(长按加速、音量、亮度、进退)共用画面正中的同一个框,
-        // 各自只换图标和那一行字 —— 以前它们分散在三个位置、三种字号,同一类操作要学三次。
+        // 手势反馈分三处,按手势发生在哪儿摆(见 [PlayerHud] 的说明):连续调整在正中、
+        // 双击在落点那一侧、长按加速在顶上。
         //
-        // 优先级按"哪个正在发生"排:拖拽中的进退最要紧,它还要显示能不能取消。
-        val hint: Pair<ImageVector, String>? = when {
-            dragPosition != null -> {
-                val forward = displayPosition >= position
-                val icon = when {
-                    seekCancelArmed == true -> Icons.Filled.Close
-                    forward -> Icons.Filled.FastForward
-                    else -> Icons.Filled.FastRewind
-                }
-                val text = if (seekCancelArmed == true) {
-                    stringResource(R.string.player_seek_release_to_cancel)
-                } else {
-                    "${formatDurationMillis(displayPosition)} / ${formatDurationMillis(duration)}"
-                }
-                icon to text
-            }
+        // 正中那一处的优先级按"哪个正在发生"排:拖拽中的进退最要紧,它还要显示能不能取消。
+        val currentGesture = gesture
+        val hud: PlayerHud? = when {
+            // 只认画面上的横划。拖进度条时读数在手指上方的气泡里(见 SeekBar 的 timeBubble),
+            // 这里再亮一个框就是同一个时间印两遍。
+            dragPosition != null && currentGesture is PlayerGesture.Seek -> PlayerHud.Seek(
+                targetMillis = displayPosition,
+                durationMillis = duration,
+                deltaMillis = displayPosition - currentGesture.startPositionMillis,
+                cancelArmed = seekCancelArmed == true,
+            )
 
-            (gesture as? PlayerGesture.Adjust)?.kind == VerticalAdjust.Brightness -> {
+            (currentGesture as? PlayerGesture.Adjust)?.kind == VerticalAdjust.Brightness -> {
                 val percent = (adjustValue * 100).roundToInt()
-                val icon =
-                    if (adjustValue >= 0.5f) Icons.Filled.BrightnessHigh else Icons.Filled.BrightnessLow
-                icon to stringResource(R.string.player_brightness, percent)
-            }
-
-            (gesture as? PlayerGesture.Adjust)?.kind == VerticalAdjust.Volume -> {
-                val percent = (adjustValue * 100).roundToInt()
-                val icon = when {
-                    adjustValue <= 0f -> Icons.AutoMirrored.Filled.VolumeOff
-                    adjustValue < 0.5f -> Icons.AutoMirrored.Filled.VolumeDown
-                    else -> Icons.AutoMirrored.Filled.VolumeUp
-                }
-                icon to stringResource(R.string.player_volume, percent)
-            }
-
-            isFastForwarding -> Icons.Filled.FastForward to
-                stringResource(R.string.player_fast_forwarding, formatSpeed(fastForwardSpeed))
-
-            seekNudgeMillis != null -> {
-                val delta = seekNudgeMillis ?: 0L
-                val icon = if (delta >= 0) Icons.Filled.Forward10 else Icons.Filled.Replay10
-                val label = stringResource(
-                    if (delta >= 0) R.string.player_seek_forward else R.string.player_seek_backward,
-                    abs(delta) / 1000,
+                PlayerHud.Level(
+                    icon = if (adjustValue >= 0.5f) Icons.Filled.BrightnessHigh else Icons.Filled.BrightnessLow,
+                    label = stringResource(R.string.player_brightness, percent),
+                    value = adjustValue,
                 )
-                icon to label
+            }
+
+            (currentGesture as? PlayerGesture.Adjust)?.kind == VerticalAdjust.Volume -> {
+                val percent = (adjustValue * 100).roundToInt()
+                PlayerHud.Level(
+                    icon = when {
+                        adjustValue <= 0f -> Icons.AutoMirrored.Filled.VolumeOff
+                        adjustValue < 0.5f -> Icons.AutoMirrored.Filled.VolumeDown
+                        else -> Icons.AutoMirrored.Filled.VolumeUp
+                    },
+                    label = stringResource(R.string.player_volume, percent),
+                    value = adjustValue,
+                )
             }
 
             else -> null
         }
-        // 退场的那几帧里 hint 已经是 null 了,而那时框还在屏上,总得有话可说 —— 留住最后一份
+        // 退场的那几帧里 hud 已经是 null 了,而那时框还在屏上,总得有东西可画 —— 留住最后一份
         // 非空的内容,和 [dev.bilby.ui.video.TripleToast] 里的 `shown` 是同一个写法。
-        var shownHint by remember { mutableStateOf<Pair<ImageVector, String>?>(null) }
-        LaunchedEffect(hint) { if (hint != null) shownHint = hint }
+        var shownHud by remember { mutableStateOf<PlayerHud?>(null) }
+        if (hud != null) shownHud = hud
 
-        // 淡入淡出而不是直接出现:四种手势的浮层在同一个位置上互相替换,硬切时看起来像画面上
-        // 闪了一下。**只给透明度,不给位移或缩放** —— 它是"手势正在发生"的读数,位置固定在正中
+        // 淡入淡出而不是直接出现:三种读数在同一个位置上互相替换,硬切时看起来像画面上闪了
+        // 一下。**只给透明度,不给位移或缩放** —— 它是"手势正在发生"的读数,位置固定在正中
         // 才不用每次重新找;effects 那一档也正是无回弹的那组。
         AnimatedVisibility(
-            visible = hint != null,
+            visible = hud != null,
             enter = fadeIn(effectsSpec),
             exit = fadeOut(effectsSpec),
             modifier = Modifier.align(Alignment.Center),
         ) {
-            shownHint?.let { (icon, text) -> PlayerHintOverlay(icon = icon, text = text) }
+            shownHud?.let { PlayerHudOverlay(it) }
+        }
+
+        // 双击:贴着点下去的那一侧。方向在退场时也要留住,否则淡出那几帧会跳到另一边。
+        var shownNudge by remember { mutableStateOf(0L) }
+        seekNudgeMillis?.let { shownNudge = it }
+        AnimatedVisibility(
+            visible = seekNudgeMillis != null,
+            enter = fadeIn(effectsSpec),
+            exit = fadeOut(effectsSpec),
+            modifier = Modifier
+                .align(if (shownNudge >= 0) Alignment.CenterEnd else Alignment.CenterStart)
+                .fillMaxHeight()
+                .fillMaxWidth(DoubleTapArcFraction),
+        ) {
+            DoubleTapSeekHint(shownNudge)
+        }
+
+        // 长按加速:顶上居中,从上沿滑进来 —— 它贴着哪条边就从哪条边进(transitions 页)。
+        AnimatedVisibility(
+            visible = isFastForwarding,
+            enter = slideInVertically(spatialOffsetSpec) { -it } + fadeIn(effectsSpec),
+            exit = slideOutVertically(spatialOffsetSpec) { -it } + fadeOut(effectsSpec),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .windowInsetsPadding(WindowInsets.barsAndCutout)
+                .padding(top = Spacing.Comfortable),
+        ) {
+            SpeedBoostCapsule(stringResource(R.string.player_fast_forwarding, formatSpeed(fastForwardSpeed)))
         }
 
         // 全屏顶栏。全屏下没有别的东西说明"在看什么"和"怎么退出":系统栏是隐藏的,
@@ -696,11 +817,15 @@ fun PlayerShell(
         // by their location on screen, expanding away from the device edge. A menu at the top of
         // the screen expands downwards";Android 那一档还要求
         // "components expand and collapse along the x or y axis as they slide on and off screen"。
-        // 所以顶栏是从上边缘展开,而不是原地淡入。
+        // 所以顶栏从上边缘进出,而不是原地淡入。
+        //
+        // **滑半个栏高加淡入,不是展开。** 展开(expandVertically)是把整块裁着长出来,渐变底和
+        // 按钮一起被切着露出,读起来像一块幕布在拉;整栏滑进来又动得太多,一轻触就是半屏在动。
+        // 滑一半、透明度补上另一半,方向还在,幅度小了。
         AnimatedVisibility(
             visible = isFullscreen && controlsVisible && !locked,
-            enter = expandVertically(spatialSpec, expandFrom = Alignment.Top) + fadeIn(effectsSpec),
-            exit = shrinkVertically(spatialSpec, shrinkTowards = Alignment.Top) + fadeOut(effectsSpec),
+            enter = slideInVertically(spatialOffsetSpec) { -it / 2 } + fadeIn(effectsSpec),
+            exit = slideOutVertically(spatialOffsetSpec) { -it / 2 } + fadeOut(effectsSpec),
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
             Row(
@@ -713,13 +838,11 @@ fun PlayerShell(
                     .windowInsetsPadding(WindowInsets.barsAndCutout)
                     .padding(end = Spacing.Comfortable, bottom = Spacing.Comfortable),
             ) {
-                IconButton(onClick = { onFullscreenChange(false) }) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(R.string.player_exit_fullscreen),
-                        tint = FixedColors.OnMedia,
-                    )
-                }
+                PlayerIconButton(
+                    onClick = { onFullscreenChange(false) },
+                    icon = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.player_exit_fullscreen),
+                )
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleSmall,
@@ -736,6 +859,20 @@ fun PlayerShell(
                 // 哪一条",和它左边那个标题是同一类。风格指南 §4.3 那条判据问的正是这个。
                 topBarActions()
             }
+        }
+
+        // 内嵌时的右上角。和全屏顶栏同一套进出,只是没有那条渐变底:内嵌态的渐变是上面那条
+        // [topScrim],画在弹幕之下,同样跟控件走。
+        AnimatedVisibility(
+            visible = !isFullscreen && controlsVisible && !locked,
+            enter = slideInVertically(spatialOffsetSpec) { -it / 2 } + fadeIn(effectsSpec),
+            exit = slideOutVertically(spatialOffsetSpec) { -it / 2 } + fadeOut(effectsSpec),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .windowInsetsPadding(WindowInsets.barsAndCutout)
+                .padding(Spacing.Tight),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) { embeddedTopActions() }
         }
 
         // 锁按钮:锁上后它是唯一还能点的东西。只在全屏显示。
@@ -759,7 +896,7 @@ fun PlayerShell(
             val lockDescription =
                 stringResource(if (locked) R.string.player_unlock else R.string.player_lock)
             PlayerTooltip(lockDescription) {
-                IconButton(
+                PlayerIconButton(
                     onClick = {
                         // 锁上之后整块画面都不响应,而这件事在画面上只表现为"控件没了"——
                         // 和自动隐藏长得一模一样。两种触感分开:合上和打开是相反的动作。
@@ -768,27 +905,57 @@ fun PlayerShell(
                         )
                         onLockedChange(!locked)
                     },
-                ) {
-                    Icon(
-                        imageVector = if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
-                        contentDescription = lockDescription,
-                        tint = FixedColors.OnMedia,
-                    )
-                }
+                    icon = if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                    contentDescription = lockDescription,
+                    // 锁着时用选中态的底色:这时它是画面上唯一的东西,得一眼认出"现在是锁着的"。
+                    selected = locked,
+                )
             }
         }
 
-        // 控制条贴着下边缘,所以从下边缘展开。
+        // 中央播放键。**控件在时它在;控件收起而仍在加载时,只留它一个,承载加载指示。**
+        //
+        // 播放键原先是控制条左端一个和倍速、清晰度同样大小的裸图标,整排六七个白色线框挤在
+        // 右下角,分不出哪个是主的。它是这个播放器最常按的东西,放大、放到正中。
+        //
+        // 锁上时不出现:锁上之后唯一能点的是解锁按钮。
+        //
+        // **手势读数在屏时让开。** 两者都在正中,播放键画在读数之后,控件还没收起时开始横划,
+        // 暂停那个方块就压在进退读数上。手势进行中没有人要去点播放键,松手后读数淡出、它再回来。
+        AnimatedVisibility(
+            visible = !pip && hud == null && ((controlsVisible && !locked) || loadingVisible || flashVisible),
+            enter = scaleIn(scaleSpec, initialScale = CenterButtonEnterScale) + fadeIn(effectsSpec),
+            exit = scaleOut(scaleSpec, targetScale = CenterButtonEnterScale) + fadeOut(effectsSpec),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            CenterPlayButton(
+                isPlaying = playWhenReady,
+                loading = loadingVisible,
+                large = isFullscreen,
+                onClick = {
+                    togglePlayPause()
+                },
+            )
+        }
+
+        // 控制条贴着下边缘,所以从下边缘进出,幅度同顶栏:滑半个栏高加淡入。
         AnimatedVisibility(
             visible = controlsVisible && !locked,
-            enter = expandVertically(spatialSpec, expandFrom = Alignment.Bottom) + fadeIn(effectsSpec),
-            exit = shrinkVertically(spatialSpec, shrinkTowards = Alignment.Bottom) + fadeOut(effectsSpec),
+            enter = slideInVertically(spatialOffsetSpec) { it / 2 } + fadeIn(effectsSpec),
+            exit = slideOutVertically(spatialOffsetSpec) { it / 2 } + fadeOut(effectsSpec),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             scope.controlBar()
         }
+
+        scope.panel()
+    }
     }
 }
+
+/** 双击读数的累加:同方向加上去,换方向从这一下重新算。 */
+private fun accumulateNudge(current: Long?, step: Long): Long =
+    if (current != null && (current > 0) == (step > 0)) current + step else step
 
 @Composable
 internal fun Overlay(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
@@ -931,6 +1098,22 @@ private fun VideoSize.displayAspectOr(fallback: Float?): Float? {
 }
 
 private const val CONTROLS_HIDE_DELAY_MILLIS = 3_000L
+
+/** 加载指示撤掉之前再留多久,见 loadingVisible。比两段等待之间的空档长,又短到看不出拖沓。 */
+private const val LOADING_EXIT_GRACE_MILLIS = 300L
+
+/** 双击切播放后中央播放键亮多久。够看清它变了形,又不久到像是控件被唤出来了。 */
+private const val PLAY_TOGGLE_FLASH_MILLIS = 700L
+
+/** 起播那一段的宽限:取流落地到 prepare 进 BUFFERING 之间的空档比播放途中长。 */
+private const val STARTUP_EXIT_GRACE_MILLIS = 800L
+
+/** 播放器里的动效,见 [PlayerTheme]。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+private val PlayerMotion = MotionScheme.standard()
+
+/** 中央播放键进出时从多大缩放起。0.6 而不是 0:从无到有的缩放太猛,读起来像弹出一个对话框。 */
+private const val CenterButtonEnterScale = 0.6f
 private const val DOUBLE_TAP_SEEK_MILLIS = 10_000L
 private const val HINT_VISIBLE_MILLIS = 700L
 
@@ -946,7 +1129,7 @@ internal val ControlScrimBottom = Color(0xB3000000)
 internal fun formatSpeed(speed: Float): String =
     if (speed % 1f == 0f) "${speed.toInt()}x" else "${speed}x"
 
-private tailrec fun Context.findActivity(): Activity? = when (this) {
+internal tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
     else -> null

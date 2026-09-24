@@ -37,27 +37,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Bedtime
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomSheetScaffold
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -74,6 +66,40 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.activity.compose.BackHandler
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.ToggleButton
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.graphics.Color
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.ui.text.TextStyle
+import dev.bilby.ui.theme.rememberFlexFont
+import dev.bilby.ui.theme.ReadoutAxes
+import dev.bilby.ui.theme.rememberClockFont
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.ui.text.withStyle
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.semantics.role
+import dev.bilby.ui.components.rememberExpandedSheetState
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.drag
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material3.SheetValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -102,6 +128,10 @@ import dev.bilby.R
 import dev.bilby.ui.player.EpisodeList
 import dev.bilby.ui.player.EpisodeTarget
 import dev.bilby.ui.player.playOrReplay
+import dev.bilby.ui.player.CenterPlayButton
+import dev.bilby.ui.player.ControlButton
+import dev.bilby.ui.player.PlayerIconButton
+import dev.bilby.ui.video.PlayerSettingsContent
 import dev.bilby.data.QueueSource
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.SectionHeader
@@ -115,14 +145,10 @@ import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
 import dev.bilby.player.indexNear
 import dev.bilby.ui.components.BilbyTopBar
-import dev.bilby.ui.components.ChoiceRow
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.FullScreenLoading
-import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SubtitleTrackMenu
-import dev.bilby.ui.components.menuSelectedMark
-import dev.bilby.ui.components.selectedSemantics
 import dev.bilby.ui.components.VideoCover
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.theme.Breakpoints
@@ -134,15 +160,8 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
-
 /** 倍速折算的除数下限。倍速滑到极小值时不让剩余时长炸成天文数字。 */
 private const val MinSpeedForEstimate = 0.1f
-
-/** 定时 Slider 的范围与步进:10~120 分钟,每格 5 分钟。 */
-private val SLEEP_TIMER_RANGE = 10f..120f
-private const val SLEEP_TIMER_STEPS = 21
-private const val SLEEP_TIMER_DEFAULT_MINUTES = 30f
 
 /**
  * 唱片占「剩余空间」的比例(取宽高中较小的一边)。留一点边距而不是顶满,
@@ -165,17 +184,12 @@ private const val DiscRotationPeriodMillis = 36_000
 /** 歌词模式顶栏里那张封面的宽度。高度由 16:10 定,见风格指南 §1.3b。 */
 private val LyricsHeaderCoverWidth = 88.dp
 
-/** 上一条 / 下一条的图标。比列表里的行内图标大一档 —— 它们是这一屏的主要操作之一。 */
-private val SkipIconSize = 32.dp
+/** 上一条 / 下一条的图标与容器。比控制条上的图标按钮大一档 —— 它们是这一屏的主要操作之一。 */
+private val SkipIconSize = 28.dp
+private val SkipButtonSize = 52.dp
 
-/**
- * 播放键的容器与图标。**比两侧那两颗大一档**,因为它是这一行里唯一的主操作。
- *
- * 64 是留过余量的:控制行五等分,360dp 宽减去左右各 16dp 之后每格 65.6dp。再大一档
- * (M3 的 large icon button 是 96dp)在这一行里就得改排布,不只是换个数。
- */
-private val PlayButtonSize = 64.dp
-private val PlayIconSize = 36.dp
+/** 倍速、定时那两枚 chip 里的图标,和视频控制条上的 chip 同一档。 */
+private val ChipIconSize = 18.dp
 
 /** 队列顺序那个按钮的图标,跟在文字左边。M3 给按钮前置图标定的就是 18dp。 */
 private val OrderIconSize = 18.dp
@@ -199,6 +213,156 @@ private val QueueHandleHeight = 132.dp
  * 100ms 对最短也有一两秒的句子够用,不需要拉到帧级——帧级驱动是弹幕那种场景才要的。
  */
 private const val LyricsPollIntervalMillis = 100L
+
+/**
+ * 唱片下面那个大数字:放到哪了。**这一页没有画面,除了唱片之外能看的就是这个数。**
+ *
+ * - 位置在标题和 UP 名之下、进度条之上,居中:它和进度条说的是同一件事,挨着放。
+ *   总时长也写在这里("1:35 / 2:28"),进度条两端不再有字。
+ * - 字体是可变的 Roboto Flex([rememberFlexFont]),"Flex" 字样那种黑体块:字重顶满、
+ *   字宽拉满,笔画再加粗、字腔收窄,读起来像一块计数牌而不是一行字。
+ *   一按住唱片或进度条就染主题色 —— "你正攥着它";松手变回去。字形不跟着变:它平时已经
+ *   是最黑的那一档附近,按住再变黑看不出来,只让整块数字晃一下。
+ *   `h:mm:ss` 比 `mm:ss` 长,不缩字号,而是把字宽轴收回一些。
+ * - 数字等宽(`tnum`):秒数每跳一下,不等宽的数字会让整行左右抖。
+ * - 取消区里数字不换,只退成次要色;"松手取消进退"浮在唱片上([CancelPill]),不占这一行。
+ */
+@Composable
+private fun TimeReadout(
+    positionMillis: Long,
+    durationMillis: Long,
+    active: Boolean,
+    cancelArmed: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val spec = spring<Float>(stiffness = Spring.StiffnessMediumLow)
+    val text = formatDurationMillis(positionMillis)
+    val totalText = if (durationMillis > 0L) formatDurationMillis(durationMillis) else ""
+    val width by animateFloatAsState(
+        if (maxOf(text.length, totalText.length) > ShortTimeLength) ReadoutWidthLong else ReadoutWidthNormal,
+        spec,
+        label = "readout-width",
+    )
+    // 取消区里退成次要色:这个数此刻不会生效,松手就回到原处。
+    val color by animateColorAsState(
+        when {
+            cancelArmed -> MaterialTheme.colorScheme.onSurfaceVariant
+            active -> MaterialTheme.colorScheme.primary
+            else -> MaterialTheme.colorScheme.onSurface
+        },
+        label = "readout-color",
+    )
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        ReadoutText(text, totalText, width, color)
+    }
+}
+
+/**
+ * 取消区里浮出来的那一句:图标加字,装在 errorContainer 的胶囊里,**浮在唱片正中,不占布局**。
+ *
+ * 和视频播放器横划取消同一种说法(叉号加"松手取消进退",见 PlayerHudOverlay)。试过两种
+ * 占位的写法:把大数字换成一行红字,红字比数字高,进出取消区时整页上下跳;红字本身浮在一片
+ * 空白里,既不像提示也不像按钮。浮在唱片上时手指正离开唱片,眼睛还在那儿。
+ */
+@Composable
+private fun CancelPill(modifier: Modifier = Modifier) {
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = CircleShape,
+        modifier = modifier,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+        ) {
+            Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(ChipIconSize))
+            Text(
+                stringResource(R.string.player_seek_release_to_cancel),
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReadoutText(text: String, totalText: String, width: Float, color: Color) {
+    // 总时长跟在后面,同一个字体实例,只是小一号、次要色:它一起加粗一起收窄,
+    // 读起来是这块计数牌的下半句,而不是另一处的另一个数。
+    val totalColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val annotated = buildAnnotatedString {
+        append(text)
+        if (totalText.isNotEmpty()) {
+            withStyle(SpanStyle(fontSize = ReadoutTotalSize, color = totalColor)) {
+                append(" / ")
+                append(totalText)
+            }
+        }
+    }
+    Text(
+        annotated,
+        style = TextStyle(
+            fontFamily = rememberFlexFont(ReadoutWeight, width, ReadoutFigureHeight, ReadoutInk),
+            fontSize = ReadoutSize,
+            lineHeight = ReadoutLineHeight,
+            fontFeatureSettings = "tnum",
+            textAlign = TextAlign.Center,
+        ),
+        color = color,
+        maxLines = 1,
+    )
+}
+
+/** 取消提示出现时从这个比例放大到原大,和播放器中央按钮一样的进场。 */
+private const val CancelPillEnterScale = 0.8f
+
+private val ReadoutSize = 44.sp
+private val ReadoutTotalSize = 22.sp
+/**
+ * 比字号小:数字只有字号的六成多高,按字号给行高,上下各空出一截,数字和进度条之间就隔着
+ * 一段看不见的行距。字形不会被裁,Text 不裁剪越出行框的部分。
+ */
+private val ReadoutLineHeight = 34.sp
+// 轴值见 ReadoutAxes。
+private const val ReadoutWeight = ReadoutAxes.Weight
+private const val ReadoutInk = ReadoutAxes.Ink
+private const val ReadoutWidthNormal = ReadoutAxes.Width
+private const val ReadoutWidthLong = ReadoutAxes.WidthLong
+private const val ReadoutFigureHeight = ReadoutAxes.FigureHeight
+/** "mm:ss" 的长度。更长就是 "h:mm:ss",收窄字宽。 */
+private const val ShortTimeLength = 5
+
+/**
+ * 往上挪 [amount],对外报的高度同样减掉这么多:压住上一个兄弟的底边,下面的东西跟着上来。
+ * 不用 `offset`:它只挪画的位置,量出来的高度不变,下面照样空着那一截。越出报告尺寸的
+ * 那一截仍然接得到触摸,排在后面的兄弟画在上层,所以被压住的一方要是那个不接触摸的。
+ */
+private fun Modifier.pullUp(amount: Dp): Modifier = layout { measurable, constraints ->
+    val px = amount.roundToPx()
+    val placeable = measurable.measure(constraints)
+    layout(placeable.width, (placeable.height - px).coerceAtLeast(0)) { placeable.place(0, -px) }
+}
+
+/** 进度条压进大数字行框的量:数字行框下半截和进度条触控区上半截都是空的。 */
+private val SeekBarOverlapAbove = 8.dp
+/** 控制行压进进度条触控区下半截的量。 */
+private val ControlsOverlapDisc = 16.dp
+private val ControlsOverlapLyrics = 6.dp
+
+/** 转唱片的取消区:离圆心超过半径的这么多倍。 */
+private const val CancelRadiusRatio = 1.5f
+
+/** 拖进度条时唱片跟转的换算起点,见 DiscView。 */
+private class BarScrub {
+    var active = false
+    var baseAngle = 0f
+    var restPosition = 0L
+}
+
+/** 这个向量指向的角度,度数,屏幕坐标下顺时针为正。 */
+private fun Offset.degrees(): Float = Math.toDegrees(kotlin.math.atan2(y, x).toDouble()).toFloat()
 
 /**
  * 听视频界面。播放器归 [dev.bilby.player.AudioPlaybackService] 所有,这里只读状态、发命令
@@ -235,6 +399,10 @@ fun ListenScreen(
     onToggleShuffle: () -> Unit,
     /** 三选一,见 [dev.bilby.player.SleepTimerMode]。 */
     onSleepTimer: (SleepTimerMode) -> Unit,
+    /** 在正在走的定时上加减几分钟。 */
+    onSleepTimerAdjust: (Int) -> Unit,
+    /** 倍速面板里的音质一段,见 [PlayerSettingsContent]。 */
+    onAudioQualityChange: (Int) -> Unit = {},
     /** 手动重试当前这条。退避耗尽之后由用户决定是再试还是按下一条跳过。 */
     onRetry: () -> Unit,
     onBack: () -> Unit,
@@ -279,6 +447,35 @@ fun ListenScreen(
     }
 
     val displayPosition = dragPosition ?: position
+    // 当前这条还要放多久。倍速折进去:2x 下剩的十分钟视频只放五分钟,不折算的话这个数会
+    // 一直偏大。控制行的定时 chip 和定时面板的大数字都用它。
+    val itemRemainingMillis = (duration - position)
+        .takeIf { duration > 0L && it > 0L }
+        ?.let { (it / speed.coerceAtLeast(MinSpeedForEstimate)).toLong() }
+
+    // 拖动进度的三步,进度条和唱片共用(见 DiscView):按下先停,拖动只改显示的位置,松手才真
+    // seek —— 每帧 seek 会让播放器不停丢缓冲重新起播。
+    val seekStart: () -> Unit = {
+        resumeAfterDrag = player?.isPlaying == true
+        player?.pause()
+    }
+    val seekTo: (Long) -> Unit = { dragPosition = it }
+    val seekFinished: () -> Unit = {
+        dragPosition?.let { target ->
+            player?.seekTo(target)
+            position = target
+            if (resumeAfterDrag) player?.play()
+        }
+        dragPosition = null
+    }
+
+    /** 转唱片时手指离开盘面够远:松手就不 seek。和播放器横划进退的取消区是同一件事。 */
+    var scrubCancelArmed by remember { mutableStateOf(false) }
+    val seekCancelled: () -> Unit = {
+        dragPosition = null
+        scrubCancelArmed = false
+        if (resumeAfterDrag) player?.play()
+    }
 
     // **歌词是这一页的一个状态,不是另一页;而且这个状态是推导出来的,不另存一份。**
     // 入口只有唱片右上角那个字幕按钮:选中一条轨就进歌词,选「无字幕」就回唱片。
@@ -305,12 +502,24 @@ fun ListenScreen(
         // 写在唱片正下方,顶栏再写「听视频」是把画面已经说清的事又说一遍。
         //
         // 歌词模式要封面 + 标题:整屏只剩歌词,没有任何地方写着这是哪一条。
+        //
+        // **字幕按钮在顶栏的操作位,两个模式同一处。** 它原先浮在唱片/歌词区的右上角,而歌词
+        // 模式的顶栏比唱片模式高一截,一选字幕、标题一出来,按钮就被顶栏往下压一段。放进顶栏
+        // 并贴顶对齐(见 [LyricsHeader])之后,两种顶栏里它的位置分毫不差。
         topBar = {
             val item = state.queue?.current
+            val subtitleButton: @Composable () -> Unit = {
+                SubtitleBarButton(
+                    tracks = subtitleTracks,
+                    currentLan = subtitleLan,
+                    lyricsShown = showLyrics,
+                    onSelect = onSelectSubtitle,
+                )
+            }
             if (showLyrics && item != null) {
-                LyricsHeader(item = item, onBack = onBack)
+                LyricsHeader(item = item, onBack = onBack, trailing = subtitleButton)
             } else {
-                BilbyTopBar(title = "", onBack = onBack)
+                BilbyTopBar(title = "", onBack = onBack, actions = { subtitleButton() })
             }
         },
     ) { insets ->
@@ -403,49 +612,72 @@ fun ListenScreen(
                             subtitleTracks = subtitleTracks,
                             subtitleLan = subtitleLan,
                             onSelectSubtitle = onSelectSubtitle,
+                            duration = duration,
+                            position = displayPosition,
+                            scrubbing = dragPosition != null,
+                            onScrubStart = seekStart,
+                            onScrub = seekTo,
+                            onScrubEnd = seekFinished,
+                            onScrubCancelArmed = { scrubCancelArmed = it },
+                            onScrubCancel = seekCancelled,
+                            cancelArmed = scrubCancelArmed,
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
                 }
 
                 // 进度条 + 控制行贴底,不跟着有没有字幕挪位置——两种呈现共用同一段。
-                Column(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
+                //
+                // **两端的时间叠在进度条触控区的下半截里,不另占一行。** 进度条为了 48dp 的触控
+                // 高度,细线上下各空着二十多 dp;时间再排在它下面,线和控制行之间就隔了两段空白。
+                // 时间不接触摸,叠进去之后拖动照样落在进度条上。
+                //
+                // 大数字、进度条、控制行三样也彼此压住一截(见 [pullUp]):进度条上下那两段空白
+                // 是触控区,不是间距,照原样排开的话三样东西之间各隔着二十多 dp 的空。
+                if (!showLyrics) {
+                    TimeReadout(
+                        positionMillis = displayPosition,
+                        durationMillis = duration,
+                        active = dragPosition != null,
+                        cancelArmed = scrubCancelArmed,
+                        modifier = Modifier.fillMaxWidth().padding(top = Spacing.Comfortable),
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .then(if (showLyrics) Modifier else Modifier.pullUp(SeekBarOverlapAbove))
+                        .padding(horizontal = Spacing.Comfortable),
+                ) {
                     // 和播放器用同一个进度条组件:两处的拖拽语义完全一样,分开写迟早各自漂移。
                     SeekBar(
                         position = displayPosition,
                         duration = duration,
                         bufferedPosition = bufferedPosition,
-                        onSeekStart = {
-                            resumeAfterDrag = player.isPlaying
-                            player.pause()
-                        },
-                        onSeekTo = { dragPosition = it },
-                        onSeekFinished = {
-                            dragPosition?.let { target ->
-                                player.seekTo(target)
-                                position = target
-                                if (resumeAfterDrag) player.play()
-                            }
-                            dragPosition = null
-                        },
+                        onSeekStart = seekStart,
+                        onSeekTo = seekTo,
+                        onSeekFinished = seekFinished,
+                        // 这一页没有画面,进度条是整屏唯一在动的东西,见 SeekBar 的 wavy。
+                        wavy = true,
+                        playing = state.isPlaying,
+                        speed = speed,
+                        // 时间就在进度条正下方,手指上方再印一遍是重复。
+                        timeBubble = false,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    // **两个时间自动缩到放得下为止。** 长视频是 `h:mm:ss`,字体缩放调大之后
-                    // 这一行放不下 —— 默认行为是换行,表现成最后一位数字掉到第二行,还把整条
-                    // 控制区顶高一行;禁掉换行则变成截断,一个时间少一位比换行更糟。
+                    // 唱片模式下两个时间都在大数字里([TimeReadout]),这里不写;歌词模式没有
+                    // 那个大数字,两端各写一个小字。
                     //
-                    // 两边各 `weight(1f)`,不是 `SpaceBetween`:autoSize 要有界宽度才知道该缩
-                    // 多少,松约束下它永远认为放得下。对齐改由 textAlign 给,视觉位置不变。
-                    Row(modifier = Modifier.fillMaxWidth()) {
+                    // **两个时间自动缩到放得下为止。** 长视频是 `h:mm:ss`,字体缩放调大之后
+                    // 这一行放不下 —— 默认行为是换行,禁掉换行则变成截断,一个时间少一位比换行
+                    // 更糟。两边各 `weight(1f)`:autoSize 要有界宽度才知道该缩多少。
+                    if (showLyrics) Row(modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter)) {
                         val timeAutoSize = TextAutoSize.StepBased(
                             minFontSize = 9.sp,
-                            maxFontSize = MaterialTheme.typography.labelSmall.fontSize,
+                            maxFontSize = MaterialTheme.typography.labelMedium.fontSize,
                         )
                         Text(
                             text = formatDurationMillis(displayPosition),
-                            style = MaterialTheme.typography.labelSmall,
-                            // outline 那一档是给描边和分隔线定的,压在正文里对比度不够
-                            // (风格指南 §1.1)。次要文字一律 onSurfaceVariant。
+                            style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             autoSize = timeAutoSize,
@@ -454,7 +686,9 @@ fun ListenScreen(
                         )
                         Text(
                             text = formatDurationMillis(duration),
-                            style = MaterialTheme.typography.labelSmall,
+                            style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                            // outline 那一档是给描边和分隔线定的,压在正文里对比度不够
+                            // (风格指南 §1.1)。次要文字一律 onSurfaceVariant。
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             autoSize = timeAutoSize,
@@ -465,21 +699,23 @@ fun ListenScreen(
                 }
 
                 PlaybackControls(
+                    // 歌词模式下进度条底下叠着两端的时间,只能压得浅一点。
+                    modifier = Modifier.pullUp(if (showLyrics) ControlsOverlapLyrics else ControlsOverlapDisc),
                     isPlaying = state.isPlaying,
                     loading = state.loading,
                     speed = speed,
                     hasPrevious = state.queue?.canPrevious == true,
                     hasNext = state.queue?.canNext == true,
                     sleepTimer = sleepTimer,
-                    // 倍速折进去:2x 下剩的十分钟视频只放五分钟,不折算的话这个数会一直偏大。
-                    itemRemainingMillis = (duration - position)
-                        .takeIf { duration > 0L && it > 0L }
-                        ?.let { (it / speed.coerceAtLeast(MinSpeedForEstimate)).toLong() },
+                    itemRemainingMillis = itemRemainingMillis,
                     onPlayPause = { if (player.isPlaying) player.pause() else player.playOrReplay() },
                     onPrevious = onPrevious,
                     onNext = onNext,
                     onSpeedChange = { player.setPlaybackSpeed(it) },
                     onOpenSleepTimer = { sleepSheetOpen = true },
+                    audioOptions = state.playInfo?.streams?.audioOptions.orEmpty(),
+                    currentAudio = state.playInfo?.streams?.audioId ?: 0,
+                    onAudioChange = onAudioQualityChange,
                 )
 
                 // 失败就摆在控制条底下,不悄悄跳到下一条:跳过之后用户只看到"忽然换了一条",
@@ -496,7 +732,9 @@ fun ListenScreen(
     if (sleepSheetOpen) {
         SleepTimerDialog(
             sleepTimer = sleepTimer,
+            itemRemainingMillis = itemRemainingMillis,
             onSet = onSleepTimer,
+            onAdjust = onSleepTimerAdjust,
             onDismiss = { sleepSheetOpen = false },
         )
     }
@@ -524,9 +762,24 @@ private fun DiscView(
     subtitleTracks: List<SubtitleTrack>,
     subtitleLan: String,
     onSelectSubtitle: (String) -> Unit,
+    duration: Long,
+    /** 显示用位置:拖动中是目标位置。转唱片从按下那一刻的这个值起算。 */
+    position: Long,
+    /** 正在拖进度(唱片或进度条)。此时唱片的角度跟着手,不再自己转。 */
+    scrubbing: Boolean,
+    onScrubStart: () -> Unit,
+    onScrub: (Long) -> Unit,
+    onScrubEnd: () -> Unit,
+    /** 手指进出了取消区(离开盘面够远)。 */
+    onScrubCancelArmed: (Boolean) -> Unit,
+    /** 在取消区里松手:不 seek,一切回到按下之前。 */
+    onScrubCancel: () -> Unit,
+    /** 此刻松手是取消,读数换成那句话。 */
+    cancelArmed: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val item = state.queue?.current ?: return
+    val currentPosition by rememberUpdatedState(position)
     // 外面套一层 Box,只为让字幕按钮的参照物是**传进来的整块区域**,和歌词模式一致。
     // 挂在下面那个 Column 上不行:它自带 Loose/Comfortable 的内边距,按钮会被一并推进去,
     // 于是两个模式里同一个按钮仍然落在两个位置 —— 而它是同一个按钮的两个状态,
@@ -536,13 +789,18 @@ private fun DiscView(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = Spacing.Loose, vertical = Spacing.Comfortable),
+                // 底边不留:标题和 UP 名下面紧接着就是大数字(排在这一块外面)。
+                .padding(start = Spacing.Loose, end = Spacing.Loose, top = Spacing.Comfortable),
         ) {
             // BoxWithConstraints 而不是 fillMaxWidth(fraction) + aspectRatio(1f):唱片要占的是
             // "剩余空间"里较短的那一边,横屏或者窗口矮的时候按宽度定size会把圆形顶出可视区域。
+            //
+            // **唱片贴着这块区域的下沿,不居中。** 竖屏上区域比宽高,居中时多出来的高度上下
+            // 对半分,下面那一半正夹在唱片和标题之间,标题读起来不像这张唱片的。多出来的
+            // 高度全留在上面,落在顶栏和唱片之间。
             BoxWithConstraints(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentAlignment = Alignment.Center,
+                contentAlignment = Alignment.BottomCenter,
             ) {
                 val discSize = min(maxWidth, maxHeight) * DiscSizeFraction
 
@@ -552,8 +810,33 @@ private fun DiscView(
                 // 页面不可见时应用根本不出帧,旋转的开销只存在于用户正盯着它看的时候,
                 // 而那恰好是它唯一有价值的时候。
                 val angle = remember { Animatable(0f) }
-                LaunchedEffect(state.isPlaying, speed) {
-                    if (!state.isPlaying) return@LaunchedEffect
+                // 转唱片时手指拧过去的角度。单独一份,叠在 [angle] 上;松手时并进去。
+                var scrubTurn by remember { mutableFloatStateOf(0f) }
+                val scope = rememberCoroutineScope()
+                // 这一次拖动是不是在唱片上拧的。不是的话就是在拖进度条。
+                var discGesture by remember { mutableStateOf(false) }
+
+                // **拖进度条时唱片也跟着转**,按同一个比例:整条时长对应一圈。转唱片能拖进度,
+                // 反过来拖进度时唱片纹丝不动的话,两件事读起来就不是同一回事了。
+                //
+                // 起点记在按下之前的那一刻:进度条按下去就已经跳到手指的位置,等拖动开始再记,
+                // 点下去那一跳就不转了。记在普通字段里而不是状态里,它只供下面换算用,不驱动重组。
+                val barScrub = remember { BarScrub() }
+                if (scrubbing && !barScrub.active && !discGesture) {
+                    barScrub.active = true
+                    barScrub.baseAngle = angle.value
+                } else if (!scrubbing) {
+                    barScrub.active = false
+                    barScrub.restPosition = position
+                }
+                LaunchedEffect(position, scrubbing) {
+                    if (barScrub.active && duration > 0) {
+                        val turn = (position - barScrub.restPosition).toFloat() / duration * 360f
+                        angle.snapTo(barScrub.baseAngle + turn)
+                    }
+                }
+                LaunchedEffect(state.isPlaying, speed, scrubbing) {
+                    if (!state.isPlaying || scrubbing) return@LaunchedEffect
                     val rotationPeriod = (DiscRotationPeriodMillis / speed.coerceAtLeast(0.1f))
                         .roundToInt()
                         .coerceAtLeast(1)
@@ -566,13 +849,80 @@ private fun DiscView(
                     )
                 }
 
-                Box(modifier = Modifier.size(discSize)) {
+                Box(
+                    modifier = Modifier
+                        .size(discSize)
+                        // **转唱片就是拖进度。** 转一圈等于整条时长,和从进度条左端拖到右端是
+                        // 同一段;顺时针往前,逆时针往后。唱片跟着手指转,松手才 seek,和拖进度条
+                        // 同一套三步(见 ListenScreen 的 seekStart/seekTo/seekFinished)。
+                        //
+                        // 只认落在盘面上的按下,轴孔外、圆以外的都不接:这块区域的四角是空白,
+                        // 在那儿划一下不该拨动进度。起手要过触摸阈值,单击不算。
+                        .pointerInput(duration) {
+                            if (duration <= 0) return@pointerInput
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                val center = Offset(size.width / 2f, size.height / 2f)
+                                if ((down.position - center).getDistance() > minOf(size.width, size.height) / 2f) {
+                                    return@awaitEachGesture
+                                }
+                                val first = awaitTouchSlopOrCancellation(down.id) { change, _ ->
+                                    change.consume()
+                                } ?: return@awaitEachGesture
+                                val startPosition = currentPosition
+                                var lastAngle = (first.position - center).degrees()
+                                var turned = 0f
+                                // **手指离开盘面够远就是取消**,松手不 seek。和播放器横划进退的取消区
+                                // 是同一种做法:拧过头了、改主意了,不用再拧回去。
+                                // 边界放在盘面外再走出半个半径:贴着盘沿拧时手指常常滑出圆外一点,
+                                // 那不该算取消。
+                                val cancelRadius = minOf(size.width, size.height) / 2f * CancelRadiusRatio
+                                var cancelArmed = false
+                                discGesture = true
+                                onScrubStart()
+                                drag(first.id) { change ->
+                                    val armed = (change.position - center).getDistance() > cancelRadius
+                                    if (armed != cancelArmed) {
+                                        cancelArmed = armed
+                                        onScrubCancelArmed(armed)
+                                    }
+                                    val a = (change.position - center).degrees()
+                                    // 跨过 ±180° 那条线时按最短的一段算,否则一跨线就差一整圈。
+                                    var delta = a - lastAngle
+                                    if (delta > 180f) delta -= 360f
+                                    if (delta < -180f) delta += 360f
+                                    lastAngle = a
+                                    turned += delta
+                                    scrubTurn = turned
+                                    val target = startPosition + (turned / 360f * duration).toLong()
+                                    onScrub(target.coerceIn(0L, duration))
+                                    change.consume()
+                                }
+                                if (cancelArmed) {
+                                    onScrubCancel()
+                                    // 取消:唱片转回按下时的角度,拧过的那一段不作数。
+                                    scope.launch {
+                                        Animatable(scrubTurn).animateTo(0f) { scrubTurn = value }
+                                        discGesture = false
+                                    }
+                                } else {
+                                    onScrubEnd()
+                                    // 拧过的角度并进唱片本身的角度:松手后它从手放开的地方接着转。
+                                    scope.launch {
+                                        angle.snapTo(angle.value + scrubTurn)
+                                        scrubTurn = 0f
+                                        discGesture = false
+                                    }
+                                }
+                            }
+                        },
+                ) {
                     // 盘体、同心纹路、轴孔。纹路的透明度低到几乎看不见是**故意**的:
                     // 它不是给人读的装饰,是让旋转成为可见事实——纯色圆盘转起来和静止的一模一样。
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .graphicsLayer { rotationZ = angle.value }
+                            .graphicsLayer { rotationZ = angle.value + scrubTurn }
                             .drawBehind {
                                 val r = size.minDimension / 2f
                                 val c = Offset(size.width / 2f, size.height / 2f)
@@ -606,6 +956,17 @@ private fun DiscView(
                                 .clip(CircleShape)
                                 .background(FixedColors.VinylHole),
                         )
+                    }
+                    // 浮在唱片正中,不进布局流,见 CancelPill。排在转动的那一层外面:它是提示,
+                    // 不是唱片上的字,不跟着转。
+                    // 写全名:外层是 Column,不写的话解析到 ColumnScope 那个重载,那个在 Box 里调不了。
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = cancelArmed,
+                        enter = fadeIn() + scaleIn(initialScale = CancelPillEnterScale),
+                        exit = fadeOut() + scaleOut(targetScale = CancelPillEnterScale),
+                        modifier = Modifier.align(Alignment.Center),
+                    ) {
+                        CancelPill()
                     }
                 }
             }
@@ -647,12 +1008,6 @@ private fun DiscView(
                 }
             }
         }
-        SubtitleTrackCornerButton(
-            tracks = subtitleTracks,
-            currentLan = subtitleLan,
-            onSelect = onSelectSubtitle,
-            modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.Cozy),
-        )
     }
 }
 
@@ -662,6 +1017,7 @@ private fun DiscView(
  * `weight(1f)` 的 `Box` 而不是让内容自然排开——这样中间那格永远是行宽的正中央,
  * 不会因为两侧内容宽度不一样(倍速带文字、定时只是个图标)把播放键推偏。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlaybackControls(
     isPlaying: Boolean,
@@ -677,114 +1033,102 @@ private fun PlaybackControls(
     onNext: () -> Unit,
     onSpeedChange: (Float) -> Unit,
     onOpenSleepTimer: () -> Unit,
+    modifier: Modifier = Modifier,
+    audioOptions: List<Int> = emptyList(),
+    currentAudio: Int = 0,
+    onAudioChange: (Int) -> Unit = {},
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+        modifier = modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
     ) {
-        var speedMenuOpen by remember { mutableStateOf(false) }
+        // **这一行和视频播放器是同一套控件**:倍速、定时是 chip(带容器、写着当前档位),上一条/
+        // 下一条是带容器的图标按钮,正中是那颗会变形的播放键(见 ui/player/PlayerControls.kt)。
+        // 同一个播放器两个壳,按钮长两样的话,从看视频切到听视频像是换了一个应用。
+        var speedSheetOpen by remember { mutableStateOf(false) }
         val speedLabel = stringResource(R.string.player_speed)
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            // 只有数字,不配图标:「1x」自己已经读得出是倍速,旁边那个表盘图标不添信息,
-            // 却让这一格比同排其余四个纯图标按钮宽出一截。读屏靠 contentDescription 补。
-            TextButton(
-                onClick = { speedMenuOpen = true },
-                modifier = Modifier.semantics { contentDescription = speedLabel },
+            ControlButton(
+                expanded = speedSheetOpen,
+                onClick = { speedSheetOpen = true },
+                label = formatSpeed(speed),
+                icon = { tint ->
+                    Icon(Icons.Filled.Speed, speedLabel, tint = tint, modifier = Modifier.size(ChipIconSize))
+                },
+            )
+        }
+        // 倍速面板和视频播放器那块是同一份内容:倍速与音质两段。听视频没有画面,清晰度不给;
+        // 字幕在顶栏的歌词按钮上。
+        if (speedSheetOpen) {
+            ModalBottomSheet(
+                onDismissRequest = { speedSheetOpen = false },
+                sheetState = rememberExpandedSheetState(),
             ) {
-                Text(formatSpeed(speed))
-            }
-            DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) {
-                SPEED_OPTIONS.forEach { option ->
-                    // 选中态和看视频的倍速菜单共用同一份标记([menuSelectedMark]):这里原先
-                    // 一个勾都没有,七档倍速里哪一档在用只能靠记住刚才按钮上写的是几。
-                    val selected = option == speed
-                    DropdownMenuItem(
-                        text = { Text(formatSpeed(option)) },
-                        onClick = { speedMenuOpen = false; onSpeedChange(option) },
-                        trailingIcon = if (selected) menuSelectedMark else null,
-                        modifier = Modifier.selectedSemantics(selected),
-                    )
-                }
-            }
-        }
-        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            IconButton(onClick = onPrevious, enabled = hasPrevious) {
-                Icon(
-                    Icons.Filled.SkipPrevious,
-                    contentDescription = stringResource(R.string.player_previous),
-                    modifier = Modifier.size(SkipIconSize),
+                PlayerSettingsContent(
+                    speed = speed,
+                    onSpeedChange = onSpeedChange,
+                    qualities = emptyList(),
+                    currentQuality = 0,
+                    onQualityChange = {},
+                    subtitleTracks = emptyList(),
+                    currentSubtitleLan = "",
+                    onSubtitleTrackChange = {},
+                    audioOptions = audioOptions,
+                    currentAudio = currentAudio,
+                    onAudioChange = onAudioChange,
                 )
+                Spacer(modifier = Modifier.height(Spacing.Loose))
             }
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            if (loading) {
-                Box(modifier = Modifier.size(PlayButtonSize), contentAlignment = Alignment.Center) {
-                    // 跟它替掉的播放键同宽:小一圈会让这一格在取流那一瞬间塌下去。
-                    LoadingSpinner(size = PlayIconSize)
-                }
-            } else {
-                // **有容器的按钮**,不是一个裸图标。这一行五格里只有它是主操作,而五个同色
-                // 同大小的图标排开时,主次全靠位置猜;填充的圆底是 M3 给"一处只有一个"的
-                // 强调按钮的办法。跟着放大一档,和两侧的上一条/下一条分出层级。
-                FilledIconButton(onClick = onPlayPause, modifier = Modifier.size(PlayButtonSize)) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        contentDescription = stringResource(
-                            if (isPlaying) R.string.player_pause else R.string.player_play,
-                        ),
-                        modifier = Modifier.size(PlayIconSize),
-                    )
-                }
-            }
+            PlayerIconButton(
+                onClick = onPrevious,
+                icon = Icons.Filled.SkipPrevious,
+                contentDescription = stringResource(R.string.player_previous),
+                enabled = hasPrevious,
+                iconSize = SkipIconSize,
+                modifier = Modifier.size(SkipButtonSize),
+            )
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            IconButton(onClick = onNext, enabled = hasNext) {
-                Icon(
-                    Icons.Filled.SkipNext,
-                    contentDescription = stringResource(R.string.player_next),
-                    modifier = Modifier.size(SkipIconSize),
-                )
-            }
+            // 和视频画面正中那颗是同一个组件:停着是 primary 的正圆,放着变成圆角方块,取流时
+            // 变回正圆、里面转加载指示 —— 加载不再是换掉按钮的另一个圈,按钮所在的这一格也就
+            // 不会在取流那一瞬间塌下去。
+            CenterPlayButton(
+                isPlaying = isPlaying,
+                loading = loading,
+                // 不用全屏那一档(72dp,放着时 83dp 宽):控制行五等分,360dp 宽的屏上每格
+                // 只有 65.6dp。
+                large = false,
+                onClick = onPlayPause,
+            )
+        }
+        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+            PlayerIconButton(
+                onClick = onNext,
+                icon = Icons.Filled.SkipNext,
+                contentDescription = stringResource(R.string.player_next),
+                enabled = hasNext,
+                iconSize = SkipIconSize,
+                modifier = Modifier.size(SkipButtonSize),
+            )
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
             val label = sleepTimerLabel(sleepTimer, itemRemainingMillis)
             val sleepLabel = stringResource(R.string.sleep_timer_off)
             // **计时中就只剩数字,图标让位,不是在图标下面再挂一行。** 挂一行的写法会让整条
-            // 控制行在开始计时的那一刻长高一截,播放键跟着往下跳 —— 一个设定动作不该挪动
-            // 旁边四个按钮的位置。换成同一格里图标与数字二选一,行高恒定。
-            if (label != null) {
-                TextButton(
-                    onClick = onOpenSleepTimer,
-                    // **内边距压到最小。** 控制行是五个等宽格子,每格约 1/5 屏宽,而 TextButton
-                    // 默认左右各 24dp —— `1:59:55` 这种 h:mm:ss 在剩下的空间里放不下,默认行为
-                    // 是换行,于是最后一位掉到第二行、整条控制行跟着长高一行。
-                    contentPadding = PaddingValues(horizontal = Spacing.Hair),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = sleepLabel },
-                ) {
-                    Text(
-                        label,
-                        color = MaterialTheme.colorScheme.primary,
-                        // 压完边距仍可能不够(大字号 + h:mm:ss),再让它自己缩。缩比换行和截断
-                        // 都好:时间少一位就是错的信息,而换行会挪动旁边四个按钮。
-                        maxLines = 1,
-                        autoSize = TextAutoSize.StepBased(
-                            minFontSize = 9.sp,
-                            maxFontSize = MaterialTheme.typography.labelLarge.fontSize,
-                        ),
-                        textAlign = TextAlign.Center,
-                    )
-                }
-            } else {
-                IconButton(onClick = onOpenSleepTimer) {
-                    Icon(
-                        Icons.Filled.Bedtime,
-                        contentDescription = sleepLabel,
-                        tint = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-            }
+            // 控制行在开始计时的那一刻长高一截,播放键跟着往下跳。同一枚 chip 里图标与数字
+            // 二选一,计时中换成选中态的底色,行高恒定。
+            ControlButton(
+                expanded = label != null,
+                onClick = onOpenSleepTimer,
+                label = label,
+                icon = { tint ->
+                    if (label == null) {
+                        Icon(Icons.Filled.Bedtime, sleepLabel, tint = tint, modifier = Modifier.size(ChipIconSize))
+                    }
+                },
+            )
         }
     }
 }
@@ -908,119 +1252,183 @@ private fun QueueSheetContent(
 }
 
 /**
- * 定时停止。**是 Dialog 不是 BottomSheet**:定时长是一次性的、要确认的决定,确认完就走;
- * BottomSheet 暗示的是"可以边看边调"。
+ * 定时停止:一张底部 sheet,**点一下就生效并收起**,没有「确认」。
  *
- * **值只在「确认」时提交。** 这里原先把 `onSet` 挂在 `Slider` 的 `onValueChange` 上,于是
- * 值只在滑块**移动**时才生效——打开时停在默认的 30 分钟,想要 30 就必须先拖走再拖回来,
- * 因为"没动"这个状态永远提交不了。默认值成了唯一选不中的值。顺带那个写法还会在拖动过程中
- * 每一帧重启一次计时器。
+ * 原先是对话框 + 滑块 + 确认:10 到 120 分钟、5 分钟一档,拖到想要的那一档再按确认,三步做
+ * 一件事;而睡前定时要的几乎总是那么几个整数。现在是一片预设(15 到 120 分钟)加「播完当前」,
+ * 选中哪个就是哪个。两种定时互斥,摆在同一片单选里,它们是"什么时候停"这一个问题的答案。
  *
- * 5 分钟一档由 `SLEEP_TIMER_STEPS` 保证(10..120 分 22 段),刻度点不画:22 个点连成一串
- * 比轨道本身还抢眼,而步进是 `SliderState` 自己管的,不靠画出来才生效。
+ * 顶上是一块闹钟式的钟面([SleepClock]),下面是预设。当前生效的那一档亮着。
  */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SleepTimerDialog(
     sleepTimer: SleepTimerState,
+    /** 当前这条还要放多久,已按倍速折算。「播完当前视频」时钟面上显示它。 */
+    itemRemainingMillis: Long?,
     onSet: (SleepTimerMode) -> Unit,
+    onAdjust: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var minutes by remember {
-        mutableFloatStateOf(
-            (sleepTimer.mode as? SleepTimerMode.After)?.minutes?.toFloat() ?: SLEEP_TIMER_DEFAULT_MINUTES,
-        )
+    val mode = sleepTimer.mode
+    val choose: (SleepTimerMode) -> Unit = {
+        onSet(it)
+        onDismiss()
     }
-    var endOfItem by remember { mutableStateOf(sleepTimer.mode == SleepTimerMode.EndOfItem) }
-    val active = sleepTimer.mode != SleepTimerMode.Off
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.sleep_timer_off)) },
-        text = {
-            // 两个模式互斥,所以是单选而不是"滑块 + 开关"。开关那版把它们摆成正交的两件事,
-            // 而它们其实是同一个问题的两个答案:什么时候停。
-            Column {
-                ChoiceRow(
-                    selected = endOfItem,
-                    onSelect = { endOfItem = true },
-                    // 对话框里用完整那句(和「30 分钟后停止」句式对齐);控制行那一格空间只够
-                    // 「播完当前」,用的是另一条 string。
-                    label = stringResource(R.string.sleep_timer_end_of_item_option),
-                )
-                ChoiceRow(
-                    selected = !endOfItem,
-                    onSelect = { endOfItem = false },
-                    label = stringResource(R.string.sleep_timer_stop_in, minutes.roundToInt()),
-                )
-                // 滑块归"定时"那一项,选中才可动 —— 拖它同时也是在选它,免得先点一下再拖两下。
-                Slider(
-                    value = minutes,
-                    onValueChange = {
-                        minutes = it
-                        endOfItem = false
-                    },
-                    valueRange = SLEEP_TIMER_RANGE,
-                    steps = SLEEP_TIMER_STEPS,
-                    track = { sliderState ->
-                        SliderDefaults.Track(sliderState = sliderState, drawTick = { _, _ -> })
-                    },
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    onSet(
-                        if (endOfItem) SleepTimerMode.EndOfItem else SleepTimerMode.After(minutes.roundToInt()),
-                    )
-                    onDismiss()
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberExpandedSheetState()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Loose),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            SleepClock(
+                mode = mode,
+                remainingMillis = when (mode) {
+                    is SleepTimerMode.After -> sleepTimer.remainingMillis
+                    SleepTimerMode.EndOfItem -> itemRemainingMillis
+                    SleepTimerMode.Off -> null
                 },
-            ) {
-                Text(stringResource(R.string.action_confirm))
-            }
-        },
-        dismissButton = {
-            Row {
-                // 已经在计时时,「关闭定时」和「取消」是两件事:前者停掉计时,后者只是关掉
-                // 这个弹窗、什么都不改。没在计时时前者没有对象,不出现。
-                if (active) {
-                    TextButton(
-                        onClick = {
-                            onSet(SleepTimerMode.Off)
-                            onDismiss()
-                        },
-                    ) {
-                        Text(stringResource(R.string.sleep_timer_cancel))
+                onAdjust = onAdjust,
+                onCancel = { choose(SleepTimerMode.Off) },
+            )
+
+            Spacer(modifier = Modifier.height(Spacing.Hair))
+            SleepPresets.chunked(SleepPresetColumns).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                    row.forEach { minutes ->
+                        ToggleButton(
+                            checked = (mode as? SleepTimerMode.After)?.minutes == minutes,
+                            onCheckedChange = { choose(SleepTimerMode.After(minutes)) },
+                            modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
+                        ) {
+                            Text(stringResource(R.string.sleep_timer_minutes, minutes))
+                        }
                     }
                 }
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
             }
-        },
-    )
+            ToggleButton(
+                checked = mode == SleepTimerMode.EndOfItem,
+                onCheckedChange = { choose(SleepTimerMode.EndOfItem) },
+                modifier = Modifier.fillMaxWidth().semantics { role = Role.RadioButton },
+            ) {
+                Text(stringResource(R.string.sleep_timer_end_of_item_option))
+            }
+        }
+    }
 }
+
+/**
+ * 定时面板的顶栏:左边是钟面,右边是控件,像一只闹钟。
+ *
+ * **左边**有时间就是一个大的瘦高数字,不另写"还剩":一个在走的数本身就说明了。
+ * - 按时长:剩余时间。
+ * - 播完当前视频:这一条还剩多久。
+ * - 没有定时(或这一条的时长还没拿到):没有数可写,这个位置写面板标题「定时关闭」。
+ *
+ * **右边**的控件一直在,不可用时置灰,不隐藏:位置固定,人记得住它们在哪;有无定时之间
+ * 切换时这一行也不变形。
+ * - 「−1」「+1」挪的是正在走的倒计时本身(秒数原样保留,见 SleepTimer.extend),点了不收
+ *   面板 —— 微调就是要连着按几下、看着数字变。只在按时长计时时可用。
+ * - 「取消定时」在它们下面。取消在这里是一个动作,不是关掉面板;关面板用下滑或点外面。
+ *
+ * 这一行的高度由右边那两层控件定,比大数字高,所以左边在标题和数字之间换时整行不跳。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun SleepClock(
+    mode: SleepTimerMode,
+    remainingMillis: Long?,
+    onAdjust: (Int) -> Unit,
+    onCancel: () -> Unit,
+) {
+    val adjustable = mode is SleepTimerMode.After
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Box(modifier = Modifier.weight(1f)) {
+            if (remainingMillis != null) {
+                Text(
+                    text = formatDurationMillis(remainingMillis),
+                    style = TextStyle(
+                        fontFamily = rememberClockFont(),
+                        fontSize = CountdownSize,
+                        lineHeight = CountdownSize,
+                        fontFeatureSettings = "tnum",
+                    ),
+                    maxLines = 1,
+                )
+            } else {
+                Text(
+                    stringResource(R.string.sleep_timer_off),
+                    style = MaterialTheme.typography.titleLarge,
+                )
+            }
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                val less = stringResource(R.string.sleep_timer_less)
+                val more = stringResource(R.string.sleep_timer_more)
+                FilledTonalIconButton(
+                    onClick = { onAdjust(-1) },
+                    // 剩余不到两分钟时再减就只剩一分钟的下限了(见 SleepTimer),按不动比按了没反应清楚。
+                    enabled = adjustable && (remainingMillis ?: 0L) > SleepAdjustFloorMillis,
+                    shapes = IconButtonDefaults.shapes(),
+                    modifier = Modifier.semantics { contentDescription = less },
+                ) {
+                    Text("−1", style = MaterialTheme.typography.labelLarge)
+                }
+                FilledTonalIconButton(
+                    onClick = { onAdjust(1) },
+                    enabled = adjustable,
+                    shapes = IconButtonDefaults.shapes(),
+                    modifier = Modifier.semantics { contentDescription = more },
+                ) {
+                    Text("+1", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+            TextButton(onClick = onCancel, enabled = mode != SleepTimerMode.Off) {
+                Text(stringResource(R.string.sleep_timer_cancel))
+            }
+        }
+    }
+}
+
+/** 倒计时的字号。字形是瘦高的那一种(ClockAxes),和听视频那块矮胖的读数正好相反。 */
+private val CountdownSize = 72.sp
+
+/** 定时的几档。睡前常用的就这几个整数;要更细的档位时,「播完当前」往往才是想要的。 */
+private val SleepPresets = listOf(15, 30, 45, 60, 90, 120)
+private const val SleepPresetColumns = 3
+
+/** 剩余不到这么多时「−1」按不动:再减就撞上 SleepTimer 那一分钟的下限。 */
+private const val SleepAdjustFloorMillis = 120_000L
 
 
 /**
  * 歌词模式的顶栏:返回箭头 + 封面 + 标题(至多三行)。
  *
  * 只有这个模式需要它 —— 唱片模式下标题就在唱片正下方,顶栏留一个退出按钮就够。两个模式的
- * 顶栏因此不一样高,右上角那个字幕按钮的位置会跟着差一截;这是权衡过的:让歌词模式认得出
- * 在听哪一条,比让一个按钮在两个模式间纹丝不动更值。
+ * 顶栏因此不一样高;按钮位置靠贴顶对齐保持不动,见下面 Row 里的说明。
  *
  * 不用 [BilbyTopBar]:`TopAppBar` 的高度是固定的一行,塞不下封面加三行标题。自己排一个 Row,
  * 状态栏内边距用 `TopAppBarDefaults.windowInsets` 取,和其余页面的顶栏对齐同一套。
  */
 @Composable
-private fun LyricsHeader(item: QueueItem, onBack: () -> Unit) {
+private fun LyricsHeader(item: QueueItem, onBack: () -> Unit, trailing: @Composable () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surface) {
         Row(
-            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
             modifier = Modifier
                 .fillMaxWidth()
                 .windowInsetsPadding(TopAppBarDefaults.windowInsets)
-                .padding(end = Spacing.Comfortable, top = Spacing.Tight, bottom = Spacing.Tight),
+                // 左右各 4dp:TopAppBar 给导航图标和操作区的边距就是这么多,横向也对得上。
+                .padding(horizontal = Spacing.Hair, vertical = Spacing.Tight),
         ) {
+            // **两颗按钮贴顶,不居中。** 贴顶时它们的中心离上沿 8 + 24 = 32dp,正是 64dp 高的
+            // 普通顶栏里按钮的位置 —— 在唱片和歌词之间切换,返回和字幕都原地不动。居中的话
+            // 这一栏有多高(标题一行还是三行)它们就往下挪多少。
             IconButton(onClick = onBack) {
                 // AutoMirrored:supportsRtl 开着,RTL 语言下返回箭头必须翻过来。
                 Icon(
@@ -1028,14 +1436,18 @@ private fun LyricsHeader(item: QueueItem, onBack: () -> Unit) {
                     contentDescription = stringResource(R.string.action_back),
                 )
             }
-            VideoCover(url = item.coverUrl, modifier = Modifier.width(LyricsHeaderCoverWidth))
+            VideoCover(
+                url = item.coverUrl,
+                modifier = Modifier.width(LyricsHeaderCoverWidth).align(Alignment.CenterVertically),
+            )
             Text(
                 item.title,
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).align(Alignment.CenterVertically),
             )
+            trailing()
         }
     }
 }
@@ -1095,25 +1507,7 @@ private fun LyricsView(
                 // 一个参数里,以后改任何一个都要重新算另一个。
                 modifier = Modifier.fillMaxSize().padding(vertical = Spacing.Loose),
             )
-            // 和唱片页那个字幕按钮同一个位置、同一个图标、同一个底,亮着表示字幕开着。点它 =
-            // **选中「无字幕」**,退出歌词是这件事的结果,不是另一个动作。
-            //
-            // 底跟唱片页共用([subtitleButtonContainer])。这里原先不套底,理由是"这一页没有
-            // 画面了";而它和唱片页那颗是同一颗按钮的两个状态,来回切换时除了位置不动,长相
-            // 也不该变 —— 一颗有底一颗没底,看起来是两个按钮。
-            IconButton(
-                onClick = onBack,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(Spacing.Cozy)
-                    .subtitleButtonContainer(),
-            ) {
-                Icon(
-                    Icons.Filled.Subtitles,
-                    contentDescription = stringResource(R.string.player_subtitle),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
+            // 字幕按钮在顶栏里(见 ListenScreen 的 topBar),点它退出歌词。
         }
     }
 }
@@ -1228,32 +1622,34 @@ private fun LyricsList(
 }
 
 /**
- * 字幕轨切换,浮在唱片 / 歌词区右上角。**归属播放器控件层,不是页面顶栏**:它和倍速、
- * 进度条是同一类东西,听视频模式下唱片占的正是播放器画面的位置,浮在它上面等价于全屏时
- * 浮在画面上的控件(docs/ui-style-guide.md §4.3)。唱片模式和歌词模式都要挂——没有它,
- * 字幕就只能从看视频页开,这个页面上永远打不开。没有可用轨时整个按钮不出现。
+ * 顶栏右端的字幕按钮,唱片与歌词两个模式同一颗。没有它,字幕就只能从看视频页开,这个页面上
+ * 永远打不开;没有可用轨时整个按钮不出现。
  *
- * 圆形 scrim 底 + [FixedColors.OnMedia] 图标,和 [SubtitleTrackMenu] 那份下拉菜单共用,
- * 与看视频控制条上的字幕按钮是同一功能的两具躯壳,见 SubtitleTrackMenu 上的注释。
+ * - 唱片模式:点开是轨道菜单(和看视频控制条那份共用,见 [SubtitleTrackMenu]),选一条就进歌词。
+ * - 歌词模式:点它就是**选中「无字幕」**,退出歌词是这件事的结果,不是另一个动作。
+ *
+ * 字幕开着时图标染 primary,这是"当前状态",不是"点了会怎样"。放在顶栏上,底色就是顶栏的,
+ * 不再垫一圈 scrim —— 那圈底是它浮在唱片区上时为了压住底下内容才要的。
  */
 @Composable
-private fun SubtitleTrackCornerButton(
+private fun SubtitleBarButton(
     tracks: List<SubtitleTrack>,
     currentLan: String,
+    lyricsShown: Boolean,
     onSelect: (String) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     if (tracks.isEmpty()) return
     var expanded by remember { mutableStateOf(false) }
-    Box(modifier = modifier) {
-        IconButton(
-            onClick = { expanded = true },
-            modifier = Modifier.subtitleButtonContainer(),
-        ) {
+    Box {
+        IconButton(onClick = { if (lyricsShown) onSelect("") else expanded = true }) {
             Icon(
                 Icons.Filled.Subtitles,
                 contentDescription = stringResource(R.string.player_subtitle),
-                tint = if (currentLan.isNotEmpty()) MaterialTheme.colorScheme.primary else FixedColors.OnMedia,
+                tint = if (currentLan.isNotEmpty()) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
             )
         }
         SubtitleTrackMenu(
@@ -1265,14 +1661,6 @@ private fun SubtitleTrackCornerButton(
         )
     }
 }
-
-/**
- * 字幕按钮的圆底。唱片页和歌词页共用 —— 同一颗按钮在两页之间切换,位置和长相都不该动。
- *
- * 圆形 + [FixedColors.ScrimOnMedia]:它浮在唱片/歌词区上,而那块区域相当于看视频时的画面
- * 位置(docs/ui-style-guide.md §4.3),不给底的话图标直接落在内容上。
- */
-private fun Modifier.subtitleButtonContainer() = clip(CircleShape).background(FixedColors.ScrimOnMedia)
 
 /**
  * 距离真正停下来还有多久。不定时时返回 null。

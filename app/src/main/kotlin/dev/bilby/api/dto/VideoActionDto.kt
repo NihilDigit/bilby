@@ -40,13 +40,29 @@ data class TripleDto(
 @Serializable
 data class FavFolderListDto(val count: Int = 0, val list: List<FavFolderDto> = emptyList())
 
-/** `GET x/v3/fav/folder/info` 返回的也是这个形状,收藏夹管理页复用它,见 notes/fav.md。 */
+/**
+ * `GET x/v3/fav/folder/created/list` 的 data 节点:分页,每项带封面与简介。list-all 不带封面,
+ * 这是两者的分工,见 notes/fav.md §1。没有收藏夹时 `list` 是 null。
+ */
+@Serializable
+data class FavFolderPageDto(
+    val count: Int = 0,
+    val list: List<FavFolderDto>? = null,
+    @SerialName("has_more") val hasMore: Boolean = false,
+)
+
+/**
+ * `GET x/v3/fav/folder/info`、created/list 的每一项、resource/list 的 `info` 都是这个形状,
+ * 见 notes/fav.md。
+ */
 @Serializable
 data class FavFolderDto(
     val id: Long = 0L,
     val title: String = "",
     /** list-all 不保证带简介,folder/info 才一定有。取值的差别见 notes/fav.md。 */
     val intro: String = "",
+    /** list-all 不给;created/list 与 folder/info 给。可能是空串,调用方按没有封面处理。 */
+    val cover: String = "",
     /** 位域:默认夹与公开性都在里面。判据在 `data/FavFolderDetail`,不要在调用点裸写位运算。 */
     val attr: Int = 0,
     /**
