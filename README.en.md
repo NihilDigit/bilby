@@ -86,8 +86,7 @@ Planned:
 
 - [ ] Interface: keep refining the details
 - [ ] Better adaptive layout
-- [ ] Player behaviour refinement
-- [ ] Refine coining, liking and the other site actions
+- [ ] Move the app to Kotlin Multiplatform
 - [ ] Filtering low-quality comments and moments
 - [ ] Performance work
 - [ ] Clean up abstractions and data flow
