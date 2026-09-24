@@ -36,9 +36,13 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.outlined.Delete
@@ -422,7 +426,7 @@ fun CommentSection(
 private const val CommentToVideo = 0L
 
 /** 草稿表过 Bundle:摊成 [key, 正文, key, 正文…]。 */
-private val DraftsSaver = listSaver<SnapshotStateMap<Long, String>, String>(
+internal val DraftsSaver = listSaver<SnapshotStateMap<Long, String>, String>(
     save = { map -> map.flatMap { (key, text) -> listOf(key.toString(), text) } },
     restore = { flat ->
         mutableStateMapOf<Long, String>().apply {
@@ -459,7 +463,7 @@ private val FabSize = 56.dp
  * 一条评论能做的几件事。主列表、楼中楼、详情面板三处共用同一份,不在每一层把七个回调
  * 逐个往下传。
  */
-private class CommentRowActions(
+internal class CommentRowActions(
     /** 非空且与某条评论的 mid 相同时,那一条可删除。 */
     val myMid: Long?,
     val onReply: (CommentItem) -> Unit,
@@ -496,11 +500,12 @@ private fun SortBar(sort: CommentSort, onSort: (CommentSort) -> Unit) {
         CommentSort.HOT to R.string.comment_sort_hot,
         CommentSort.TIME to R.string.comment_sort_time,
     )
+    // 左右只垫 Tight:下拉按钮自带内边距,再垫一档页边距,▾ 就离右缘比正文远一截。
     SortRow(
         options = options,
         selected = sort,
         onSelect = onSort,
-        modifier = Modifier.padding(horizontal = Spacing.Comfortable),
+        modifier = Modifier.padding(horizontal = Spacing.Tight),
     )
 }
 
@@ -1132,69 +1137,16 @@ private fun CommentThreadSheet(
         sheetState = rememberExpandedSheetState(),
     ) {
         Box(modifier = Modifier.fillMaxHeight(ThreadSheetHeightFraction)) {
-            LazyColumn(
-                state = listState,
+            CommentThreadList(
+                root = root,
+                replies = shown,
+                loadingMore = loadingMore,
+                failed = expanded?.error != null,
+                actions = actions,
+                onRetry = onLoadMore,
+                listState = listState,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = Spacing.Tight),
-            ) {
-                item(key = "root") { CommentRow(comment = root, actions = actions) }
-                item(key = "replies-header") {
-                    // 主楼与回复之间的分界。不画线:这里要说的是"下面是几条回复",
-                    // 一句话比一根线说得清楚。
-                    Text(
-                        text = stringResource(R.string.comment_thread_replies, root.subReplyCount),
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(
-                            start = Spacing.Comfortable,
-                            end = Spacing.Comfortable,
-                            top = Spacing.Tight,
-                            bottom = Spacing.Hair,
-                        ),
-                    )
-                }
-                items(shown, key = { sub -> sub.rpid }) { sub ->
-                    CommentRow(
-                        comment = sub,
-                        actions = actions,
-                        threadAuthorMid = root.mid,
-                        modifier = Modifier.animateItem(),
-                    )
-                }
-                item(key = "sheet-footer") {
-                    // 三种结局各有各的出口:失败必须说出来,否则看起来就是"翻到这里就没有了"。
-                    when {
-                        loadingMore -> Box(
-                            modifier = Modifier.fillMaxWidth().padding(Spacing.Comfortable),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            LoadingSpinner()
-                        }
-
-                        expanded.error != null -> Box(
-                            modifier = Modifier.fillMaxWidth(),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            TextButton(onClick = onLoadMore) {
-                                Text(
-                                    stringResource(R.string.comment_replies_failed) + "  " +
-                                        stringResource(R.string.action_retry),
-                                )
-                            }
-                        }
-
-                        else -> Box(
-                            modifier = Modifier.fillMaxWidth().padding(Spacing.Comfortable),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = stringResource(R.string.comment_no_more_replies),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-            }
+            )
             SnackbarHost(
                 hostState = snackbarHostState,
                 modifier = Modifier.align(Alignment.BottomCenter),
@@ -1210,6 +1162,125 @@ private fun CommentThreadSheet(
         }
     }
 }
+
+/**
+ * 一楼的完整列表:根评论、"N 条回复"那一行、每条回复、底部的三种结局。**详情面板
+ * ([CommentThreadSheet])与评论详情页([CommentThreadScreen])共用这一份**,两处长得一样,
+ * 一处改了另一处不会漂走。翻页与预取归调用方:面板的数据在 CommentViewModel 的展开状态里,
+ * 详情页另有自己的 ViewModel。
+ *
+ * @param highlightRpid 此刻要高亮的那一条,null 即不高亮。调用方负责在一会儿之后把它清掉,
+ *   高亮随之淡出(见 [flashBackground])。
+ * @param failed 最近一次续页失败。底部给一个重试,不说"没有更多了"。
+ */
+@Composable
+internal fun CommentThreadList(
+    root: CommentItem,
+    replies: List<CommentItem>,
+    loadingMore: Boolean,
+    failed: Boolean,
+    actions: CommentRowActions,
+    onRetry: () -> Unit,
+    listState: LazyListState,
+    modifier: Modifier = Modifier,
+    highlightRpid: Long? = null,
+    contentPadding: PaddingValues = PaddingValues(bottom = Spacing.Tight),
+) {
+    LazyColumn(
+        state = listState,
+        modifier = modifier,
+        contentPadding = contentPadding,
+    ) {
+        item(key = "root") {
+            CommentRow(
+                comment = root,
+                actions = actions,
+                modifier = Modifier.flashBackground(highlightRpid == root.rpid),
+            )
+        }
+        item(key = "replies-header") {
+            // 主楼与回复之间的分界。不画线:这里要说的是"下面是几条回复",
+            // 一句话比一根线说得清楚。
+            Text(
+                text = stringResource(R.string.comment_thread_replies, root.subReplyCount),
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(
+                    start = Spacing.Comfortable,
+                    end = Spacing.Comfortable,
+                    top = Spacing.Tight,
+                    bottom = Spacing.Hair,
+                ),
+            )
+        }
+        items(replies, key = { sub -> sub.rpid }) { sub ->
+            CommentRow(
+                comment = sub,
+                actions = actions,
+                threadAuthorMid = root.mid,
+                modifier = Modifier
+                    .animateItem()
+                    .flashBackground(highlightRpid == sub.rpid),
+            )
+        }
+        item(key = "thread-footer") {
+            // 三种结局各有各的出口:失败必须说出来,否则看起来就是"翻到这里就没有了"。
+            when {
+                loadingMore -> Box(
+                    modifier = Modifier.fillMaxWidth().padding(Spacing.Comfortable),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    LoadingSpinner()
+                }
+
+                failed -> Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    TextButton(onClick = onRetry) {
+                        Text(
+                            stringResource(R.string.comment_replies_failed) + "  " +
+                                stringResource(R.string.action_retry),
+                        )
+                    }
+                }
+
+                else -> Box(
+                    modifier = Modifier.fillMaxWidth().padding(Spacing.Comfortable),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = stringResource(R.string.comment_no_more_replies),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 被定位的那一条铺一层底色,[active] 变回 false 时淡出。
+ *
+ * 用 secondaryContainer 整块铺底,不是描边或加粗:要回答的是"刚才点的是哪一条",一块底色
+ * 在一屏评论里扫一眼就找得到,而它淡掉之后这一条和别的回复长得一样,不留一个常驻的标记。
+ * 透明度只在淡入淡出的过程里用,停住时是 0 或 1,不是兑出来的一个常驻底色(风格指南 §3)。
+ */
+@Composable
+private fun Modifier.flashBackground(active: Boolean): Modifier {
+    val alpha = remember { Animatable(0f) }
+    LaunchedEffect(active) {
+        alpha.animateTo(
+            targetValue = if (active) 1f else 0f,
+            animationSpec = tween(if (active) FlashInMillis else FlashOutMillis),
+        )
+    }
+    val color = MaterialTheme.colorScheme.secondaryContainer
+    return drawBehind { drawRect(color.copy(alpha = alpha.value)) }
+}
+
+private const val FlashInMillis = 200
+private const val FlashOutMillis = 900
 
 /**
  * "UP 主""楼主""置顶"这类标记。容器色和文字色成对取自同一组 role,不再用

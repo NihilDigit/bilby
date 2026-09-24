@@ -89,14 +89,16 @@ data class Space(val mid: Long) : NavKey
 @Serializable
 data object Followings : NavKey
 
-/**
- * 一个收藏夹的内容。收藏夹与稍后再看在产品上是同一类东西:用户自己挑好的有限存货
- * (DESIGN 1.2 否决点心盒时给的正是这个理由),所以两者并排在第三屏。
- */
 /** 稍后再看的列表本身。第三屏改成入口页之后,它从 tab 里搬到这里。 */
 @Serializable
 data object ToViewList : NavKey
 
+/**
+ * 一个收藏夹的内容。收藏夹与稍后再看在产品上是同一类东西:用户自己挑好的有限存货
+ * (DESIGN 1.2 否决点心盒时给的正是这个理由),所以两者并排在第三屏。
+ *
+ * @param title 只管顶栏的第一帧;内容接口回来之后顶栏换成它给的名字(可能在别处改过)。
+ */
 @Serializable
 data class FavFolderContents(val mediaId: Long, val title: String) : NavKey
 
@@ -200,6 +202,27 @@ data class LiveRoom(val roomId: Long) : NavKey
 data object Messages : NavKey
 
 /**
+ * 私信里收起来的「UP 主推送」:最后一条是 UP 主投稿推送的那些会话。从会话列表末尾那一栏进来,
+ * 判据见 `WhisperSession.lastIsUpPush`。
+ */
+@Serializable
+data object MessagePushes : NavKey
+
+/** 自己账号的硬币收支记录。从「我的」页进来,见 `ui/profile/CoinLogScreen.kt`。 */
+@Serializable
+data object CoinLog : NavKey
+
+/**
+ * 一条评论所在的那一楼:根评论与它底下的全部回复,打开时滚到 [targetRpid] 并短暂高亮。
+ * 从「回复我的」「@我的」「收到的赞」与带评论定位的站内链接进来,见 `BilbyLink.commentThreadOf`。
+ *
+ * @param oid 评论区所在内容的 id(视频是 aid,动态是评论区 oid),与 [type] 一起定位评论区。
+ * @param targetRpid 要定位的那一条;就是根评论本身时等于 [rootRpid]。
+ */
+@Serializable
+data class CommentThread(val oid: Long, val type: Int, val rootRpid: Long, val targetRpid: Long) : NavKey
+
+/**
  * 一个私信会话。
  *
  * 名字随路由带,不在会话页里另查一次:列表那边刚拿到过(`account/v1/user/cards`),
@@ -212,4 +235,9 @@ data class Whisper(
     val talkerFaceUrl: String,
     /** 对面是系统通知号,没有空间可去。判据见 `WhisperSession.isSystem`。 */
     val isSystem: Boolean,
+    /**
+     * 从「UP 主推送」进来:会话里几乎只有投稿推送,不画输入栏。判据与推送页收起会话的那条相同
+     * (`WhisperSession.lastIsUpPush`),从别处进同一个会话仍然能回话。
+     */
+    val upPushes: Boolean = false,
 ) : NavKey

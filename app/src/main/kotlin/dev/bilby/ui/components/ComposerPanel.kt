@@ -31,11 +31,7 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.BottomSheetDefaults
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -48,13 +44,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.bilby.R
 import dev.bilby.ui.theme.Spacing
@@ -74,8 +69,9 @@ import dev.bilby.ui.theme.Spacing
  * `ModalBottomSheet`,自成一个窗口,在那里回复时这一层画在那张 sheet 里面,画在外面会被它盖住;
  * 那张 sheet 本身就盖着下面的一切。
  *
- * 形状照 PiliPlus 的 `pages/video/reply_new/view.dart`:顶上一行说写给谁,中间是**没有边框的**
- * 输入区,底部一行放计数和发送。发送是这张面板上唯一的按钮,取 filled(风格指南 §2.4)。
+ * 顶上一行说写给谁,下面是填充胶囊的输入区,发送键在胶囊右下角,和私信、直播间的输入栏同一个
+ * 样子([PillInputField])。原先照 PiliPlus 的 `pages/video/reply_new/view.dart`,输入区没有
+ * 边框、底部另起一行放发送按钮;几处输入栏换成胶囊之后,这里还是另一种样子就成了例外。
  * 面板的圆角与底色取底部面板那一套(`BottomSheetDefaults`),它读起来就是一张从底下来的面板。
  *
  * 关掉(点遮罩、返回)不丢草稿,草稿归调用方。
@@ -157,36 +153,24 @@ fun ComposerPanel(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = Spacing.Comfortable),
                 )
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-                ) {
-                    if (text.isEmpty()) {
-                        Text(
-                            text = placeholder,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    BasicTextField(
-                        value = text,
-                        onValueChange = onTextChange,
-                        singleLine = singleLine,
-                        minLines = if (singleLine) 1 else MultiLineMinLines,
-                        maxLines = if (singleLine) 1 else MultiLineMaxLines,
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                        keyboardOptions = KeyboardOptions(imeAction = if (singleLine) ImeAction.Send else ImeAction.Default),
-                        keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
-                        // 占位和标题都只是画在旁边的 Text,输入框本身没有标签;读屏的标签
-                        // 必须挂在这个节点上。
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(focusRequester)
-                            .semantics { contentDescription = title },
-                    )
-                }
+                // 输入区与私信、直播间同一个胶囊,发送键在胶囊右下角。
+                PillInputField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    placeholder = placeholder,
+                    canSend = canSend,
+                    sending = sending,
+                    onSend = onSend,
+                    minLines = if (singleLine) 1 else MultiLineMinLines,
+                    maxLines = if (singleLine) 1 else MultiLineMaxLines,
+                    imeSend = singleLine,
+                    // 占位和标题都只是画在旁边的 Text,输入框本身没有标签;读屏的标签
+                    // 必须挂在这个节点上。
+                    fieldModifier = Modifier
+                        .focusRequester(focusRequester)
+                        .semantics { contentDescription = title },
+                    modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Cozy),
+                )
                 if (error != null && !sending) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(start = Spacing.Comfortable, end = Spacing.Hair),
@@ -201,28 +185,18 @@ fun ComposerPanel(
                         TextButton(onClick = onSend) { Text(stringResource(R.string.action_retry)) }
                     }
                 }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Tight),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(modifier = Modifier.weight(1f)) {
-                        if (counter != null) {
-                            Text(
-                                text = counter,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    Button(onClick = onSend, enabled = canSend) {
-                        if (sending) {
-                            LoadingSpinner()
-                        } else {
-                            Text(stringResource(R.string.action_send))
-                        }
-                    }
+                // 计数在胶囊外右下,过了刻度才出现,同私信那条。发送键已经在胶囊里,这里不再
+                // 单独一行按钮。
+                if (counter != null) {
+                    Text(
+                        text = counter,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Tight),
+                    )
                 }
             }
         }

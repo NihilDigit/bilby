@@ -179,6 +179,8 @@ data class ReplyControlDto(
 data class ReplyReplyResponseDto(
     val page: ReplyPageDto? = null,
     val upper: ReplyUpperDto? = null,
+    /** 这一楼的根评论本身。评论详情页从这里取根评论,不另打一次请求(文档镜像 comment/list.md)。 */
+    val root: ReplyItemDto? = null,
     val replies: List<ReplyItemDto>? = null,
 )
 

@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.api.BiliResult
 import dev.bilby.ui.errorTextRes
+import dev.bilby.data.MessagePage
 import dev.bilby.data.MessageRepository
 import dev.bilby.data.Notice
 import dev.bilby.data.NoticeCursor
@@ -24,17 +25,18 @@ import kotlinx.coroutines.launch
 enum class MessageTab { Whispers, Replies, Mentions, Likes, Notices }
 
 /**
- * 一格的状态。五格结构相同(一份列表 + 一个游标),所以共用一份泛型状态而不是各写各的。
+ * 一格的状态。五格结构相同(一份列表 + 一个游标),所以共用一份泛型状态而不是各写各的;
+ * 游标的形状各接口不同,由 [C] 带着(见 [MessagePage])。
  *
  * [cursor] 为 null 有两种含义,由 [loaded] 区分:还没拉过,或者已经到底了。合成一个字段的话,
  * 到底之后每次滑到底部都会重新拉第一页。
  */
-data class MessageListState<T>(
+data class MessageListState<T, C>(
     val items: List<T> = emptyList(),
     val loading: Boolean = false,
     val appending: Boolean = false,
     /**
-     * 下拉刷新中。**与 [loading] 分开**:首屏是一片空白加一个转圈,刷新是"列表还在、顶上转圈"。
+     * 下拉刷新中。**与 [loading] 分开**:首屏是一屏骨架,刷新是"列表还在、顶上转圈"。
      * 合成一个字段的话,每次下拉都会把已经读到的消息整片清掉再重画。
      */
     val refreshing: Boolean = false,
@@ -44,18 +46,20 @@ data class MessageListState<T>(
      * 拼好的中文既不跟语言设置走也没法在测试里断言。映射与理由见 [dev.bilby.ui.errorTextRes]。
      */
     @StringRes val error: Int? = null,
-    val cursor: NoticeCursor? = null,
+    val cursor: C? = null,
 ) {
     val hasMore: Boolean get() = !loaded || cursor != null
 }
 
 data class MessageUiState(
     val tab: MessageTab = MessageTab.Whispers,
-    val whispers: MessageListState<WhisperSession> = MessageListState(),
-    val replies: MessageListState<Notice> = MessageListState(),
-    val mentions: MessageListState<Notice> = MessageListState(),
-    val likes: MessageListState<Notice> = MessageListState(),
-    val notices: MessageListState<SysNotice> = MessageListState(),
+    /** 游标是上一页最后一个会话的微秒时间戳,见 [MessageRepository.sessions]。 */
+    val whispers: MessageListState<WhisperSession, Long> = MessageListState(),
+    val replies: MessageListState<Notice, NoticeCursor> = MessageListState(),
+    val mentions: MessageListState<Notice, NoticeCursor> = MessageListState(),
+    val likes: MessageListState<Notice, NoticeCursor> = MessageListState(),
+    /** 游标是上一页最后一条自带的 `cursor`,见 [MessageRepository.sysNotices]。 */
+    val notices: MessageListState<SysNotice, Long> = MessageListState(),
 )
 
 /**
@@ -79,19 +83,23 @@ class MessageViewModel(private val repository: MessageRepository) : ViewModel() 
         if (!tabState(tab).loaded) load(tab)
     }
 
-    /** 下拉刷新:从头拉一遍,游标归零。 */
-    fun refresh() = load(_state.value.tab, reset = true)
+    /**
+     * 下拉刷新:从头拉一遍,游标归零。
+     *
+     * **格子由调用方指名,不读 [MessageUiState.tab]。** 五格在一个 pager 里,翻页途中相邻两格
+     * 同时在组合里,而 `tab` 只在翻页停稳之后才更新 —— 读它的话,路过的那一格触底预取会替
+     * 另一格续页。
+     */
+    fun refresh(tab: MessageTab) = load(tab, reset = true)
 
-    fun loadMore() {
-        val tab = _state.value.tab
+    /** 续页。格子由调用方指名,理由见 [refresh]。 */
+    fun loadMore(tab: MessageTab) {
         val current = tabState(tab)
-        // 私信会话列表不分页:服务端一次给的就是全部活跃会话,没有游标可续。
-        if (tab == MessageTab.Whispers) return
-        if (current.loading || current.appending || !current.hasMore) return
+        if (current.loading || current.appending || current.refreshing || !current.hasMore) return
         load(tab, append = true)
     }
 
-    private fun tabState(tab: MessageTab): MessageListState<*> = with(_state.value) {
+    private fun tabState(tab: MessageTab): MessageListState<*, *> = with(_state.value) {
         when (tab) {
             MessageTab.Whispers -> whispers
             MessageTab.Replies -> replies
@@ -103,160 +111,91 @@ class MessageViewModel(private val repository: MessageRepository) : ViewModel() 
 
     private fun load(tab: MessageTab, append: Boolean = false, reset: Boolean = false) {
         when (tab) {
-            MessageTab.Whispers -> loadWhispers(reset)
-            MessageTab.Replies -> loadNotices(tab, append, reset) { repository.replies(it) }
-            MessageTab.Mentions -> loadNotices(tab, append, reset) { repository.mentions(it) }
-            MessageTab.Likes -> loadNotices(tab, append, reset) { repository.likes(it) }
-            MessageTab.Notices -> loadSysNotices(reset)
-        }
-    }
+            MessageTab.Whispers -> loadPage(
+                append, reset, "私信会话列表", MessageUiState::whispers,
+                { s, l -> s.copy(whispers = l) }, WhisperSession::talkerId, repository::sessions,
+            )
 
-    private fun loadWhispers(reset: Boolean = false) {
-        _state.update {
-            it.copy(whispers = it.whispers.copy(loading = !reset, refreshing = reset, error = null))
-        }
-        viewModelScope.launch {
-            when (val result = repository.sessions()) {
-                is BiliResult.Ok -> _state.update {
-                    it.copy(
-                        whispers = it.whispers.copy(
-                            items = result.value,
-                            loading = false,
-                            refreshing = false,
-                            loaded = true,
-                        ),
-                    )
-                }
+            MessageTab.Replies -> loadPage(
+                append, reset, "回复我的", MessageUiState::replies,
+                { s, l -> s.copy(replies = l) }, Notice::id, repository::replies,
+            )
 
-                else -> _state.update {
-                    it.copy(
-                        whispers = it.whispers.copy(
-                            loading = false,
-                            refreshing = false,
-                            loaded = true,
-                            error = result.errorTextRes("私信会话列表"),
-                        ),
-                    )
-                }
-            }
-        }
-    }
+            MessageTab.Mentions -> loadPage(
+                append, reset, "@我的", MessageUiState::mentions,
+                { s, l -> s.copy(mentions = l) }, Notice::id, repository::mentions,
+            )
 
-    private fun loadNotices(
-        tab: MessageTab,
-        append: Boolean,
-        reset: Boolean,
-        fetch: suspend (NoticeCursor?) -> BiliResult<dev.bilby.data.NoticePage>,
-    ) {
-        val current = noticeState(tab)
-        val cursor = if (append) current.cursor else null
-        // 刷新保留屏上那一份,由回来的第一页整片换掉;首次加载才走整屏转圈。
-        updateNotices(tab) {
-            it.copy(loading = !append && !reset, appending = append, refreshing = reset, error = null)
-        }
-        viewModelScope.launch {
-            when (val result = fetch(cursor)) {
-                is BiliResult.Ok -> updateNotices(tab) {
-                    it.copy(
-                        items = if (append) it.items + result.value.items else result.value.items,
-                        cursor = result.value.nextCursor,
-                        loading = false,
-                        appending = false,
-                        refreshing = false,
-                        loaded = true,
-                    )
-                }
+            MessageTab.Likes -> loadPage(
+                append, reset, "收到的赞", MessageUiState::likes,
+                { s, l -> s.copy(likes = l) }, Notice::id, repository::likes,
+            )
 
-                else -> updateNotices(tab) {
-                    it.copy(
-                        loading = false,
-                        appending = false,
-                        refreshing = false,
-                        loaded = true,
-                        error = result.errorTextRes("消息列表 $tab"),
-                    )
-                }
-            }
+            MessageTab.Notices -> loadPage(
+                append, reset, "系统通知", MessageUiState::notices,
+                { s, l -> s.copy(notices = l) }, SysNotice::id, repository::sysNotices,
+            )
         }
     }
 
     /**
-     * 系统通知的游标是**最后一条自己带的 `cursor`**,不是响应里另给的一份 —— 这个接口没有
-     * cursor 字段,续页要用上一页最后一条的值。到底的判据是"这一页少于一整页"。
+     * 五格共用的一次取数。[read] 与 [write] 指明读写状态里的哪一格。
+     *
+     * 刷新保留屏上那一份,由回来的第一页整片换掉;首次加载才走骨架。
+     *
+     * **续页按 [key] 去重,续页没带来任何新条目就当作到底。** 会话列表的 `end_ts` 是否包含边界
+     * 那一个没有实测过(notes/private-message.md §5),包含的话边界那个会话会出现两次;而一个
+     * 忽略了游标、每次都回第一页的接口,在这里会变成无休止的触底续页。
      */
-    private fun loadSysNotices(reset: Boolean) {
-        val current = _state.value.notices
-        val append = current.loaded && !reset && current.items.isNotEmpty()
-        val cursor = if (append) current.items.last().cursor else null
-        _state.update {
-            it.copy(
-                notices = it.notices.copy(
-                    loading = !append && !reset,
-                    appending = append,
-                    refreshing = reset,
-                    error = null,
-                ),
-            )
+    private fun <T, C> loadPage(
+        append: Boolean,
+        reset: Boolean,
+        where: String,
+        read: (MessageUiState) -> MessageListState<T, C>,
+        write: (MessageUiState, MessageListState<T, C>) -> MessageUiState,
+        key: (T) -> Any,
+        fetch: suspend (C?) -> BiliResult<MessagePage<T, C>>,
+    ) {
+        val cursor = if (append) read(_state.value).cursor else null
+        _state.update { s ->
+            write(s, read(s).copy(loading = !append && !reset, appending = append, refreshing = reset, error = null))
         }
         viewModelScope.launch {
-            when (val result = repository.sysNotices(cursor)) {
-                is BiliResult.Ok -> _state.update {
-                    it.copy(
-                        notices = it.notices.copy(
-                            items = if (append) it.notices.items + result.value else result.value,
+            when (val result = fetch(cursor)) {
+                is BiliResult.Ok -> _state.update { s ->
+                    val current = read(s)
+                    val page = result.value
+                    val merged = if (append) (current.items + page.items).distinctBy(key) else page.items
+                    val stalled = append && merged.size == current.items.size
+                    write(
+                        s,
+                        current.copy(
+                            items = merged,
+                            cursor = if (stalled) null else page.next,
                             loading = false,
                             appending = false,
                             refreshing = false,
                             loaded = true,
-                            // 借用同一个字段表达"还有没有下一页":空一页即到底。
-                            cursor = result.value.lastOrNull()?.let { last -> NoticeCursor(last.cursor, 0) },
                         ),
                     )
                 }
 
-                else -> _state.update {
-                    it.copy(
-                        notices = it.notices.copy(
-                            loading = false,
-                            appending = false,
-                            refreshing = false,
-                            loaded = true,
-                            error = result.errorTextRes("系统通知"),
-                        ),
-                    )
+                else -> {
+                    val error = result.errorTextRes(where)
+                    _state.update { s ->
+                        write(
+                            s,
+                            read(s).copy(
+                                loading = false,
+                                appending = false,
+                                refreshing = false,
+                                loaded = true,
+                                error = error,
+                            ),
+                        )
+                    }
                 }
             }
         }
     }
-
-    private fun noticeState(tab: MessageTab): MessageListState<Notice> = with(_state.value) {
-        when (tab) {
-            MessageTab.Replies -> replies
-            MessageTab.Mentions -> mentions
-            else -> likes
-        }
-    }
-
-    private fun updateNotices(tab: MessageTab, block: (MessageListState<Notice>) -> MessageListState<Notice>) {
-        _state.update {
-            when (tab) {
-                MessageTab.Replies -> it.copy(replies = block(it.replies))
-                MessageTab.Mentions -> it.copy(mentions = block(it.mentions))
-                else -> it.copy(likes = block(it.likes))
-            }
-        }
-    }
-}
-
-/**
- * 失败的一句话,**只剩私信会话页([WhisperViewModel])在用**。
- *
- * 这一份把接口原话和错误码直接摆到屏幕上,已经被 [dev.bilby.ui.errorTextRes] 取代;
- * 私信那一页没跟着改是因为它不在这一轮的边界内,换掉它要一起动 `WhisperUiState` 两个字段的
- * 类型。**别在新代码里用它。**
- */
-internal fun BiliResult<*>.describe(): String = when (this) {
-    is BiliResult.Ok -> ""
-    is BiliResult.ApiError -> "$message($code)"
-    is BiliResult.Failure -> cause.message ?: "网络错误"
 }

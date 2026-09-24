@@ -94,7 +94,15 @@ data class CommentPage(
     val total: Int = 0,
 )
 
-data class SubReplyPage(val items: List<CommentItem>, val nextPage: Int?, val hasMore: Boolean)
+data class SubReplyPage(
+    val items: List<CommentItem>,
+    val nextPage: Int?,
+    val hasMore: Boolean,
+    /** 这一楼的根评论。评论详情页用它;楼中楼展开用不到。 */
+    val root: CommentItem? = null,
+    /** 这一楼一共多少条回复,取自分页的 count。 */
+    val total: Int = 0,
+)
 
 /** 视频稿件评论区(notes §1.1)。是各方法 `type` 的默认值,不再是唯一值。 */
 const val VIDEO_COMMENT_TYPE = 1
@@ -214,6 +222,8 @@ class CommentRepository(
                 items = dto.replies.orEmpty().map { it.toCommentItem(uploaderMid, rootOverride = rootRpid) },
                 nextPage = if (hasMore) page + 1 else null,
                 hasMore = hasMore,
+                root = dto.root?.toCommentItem(uploaderMid),
+                total = p?.count ?: 0,
             )
         }
     }

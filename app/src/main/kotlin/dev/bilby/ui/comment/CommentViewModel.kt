@@ -74,6 +74,8 @@ class CommentViewModel(
      * 种类型;动态详情页是另一个页面、另一个实例。
      */
     private val type: Int = VIDEO_COMMENT_TYPE,
+    /** 当前登录账号的 mid,0 表示没登录。用来判断哪几条评论是自己的、可以删。 */
+    private val myMid: suspend () -> Long = { 0L },
 ) : ViewModel() {
 
     /**
@@ -120,10 +122,12 @@ class CommentViewModel(
 
     init {
         loadFirstPage()
-    }
-
-    fun setMyMid(mid: Long?) {
-        _state.update { it.copy(myMid = mid) }
+        // 自己是谁由这里读,不由调用方设:原先有一个 setMyMid 等调用方来喊,全应用没有一处喊过,
+        // 于是播放页和动态页的评论区里,自己的评论从来不显示删除。
+        viewModelScope.launch {
+            val mid = myMid().takeIf { it != 0L }
+            _state.update { it.copy(myMid = mid) }
+        }
     }
 
     fun loadFirstPage() {

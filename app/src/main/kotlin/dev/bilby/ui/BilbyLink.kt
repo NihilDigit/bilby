@@ -2,6 +2,7 @@ package dev.bilby.ui
 
 import androidx.navigation3.runtime.NavKey
 import dev.bilby.BvidCodec
+import dev.bilby.data.VIDEO_COMMENT_TYPE
 
 /**
  * 一条 bilibili 链接指向应用里的哪一页。
@@ -38,6 +39,7 @@ object BilbyLink {
      * "分享到第几 P"再一起想,而不是现在留一个两条规则谁赢不确定的入口。
      */
     fun destinationOf(url: String): NavKey? {
+        commentThreadOf(url)?.let { return it }
         val host = hostOf(url) ?: return null
         val path = pathOf(url)
         val segments = path.split('/').filter { it.isNotEmpty() }
@@ -49,6 +51,13 @@ object BilbyLink {
         if (host == "space.bilibili.com") {
             val mid = segments.firstOrNull()?.toLongOrNull() ?: return null
             return Space(mid)
+        }
+        // 动态的网页地址。私信里的动态分享与部分通知给的就是这一种;不认的话会落到下面的
+        // 视频分支,一串纯数字不是 BV 号,于是整条交给浏览器。
+        if (host == "t.bilibili.com") {
+            return segments.firstOrNull()
+                ?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
+                ?.let { DynamicDetail(it) }
         }
         // `endsWith("bilibili.com")` 会放行 `evilbilibili.com` —— 少一个点就是另一个域名。
         if (host != "bilibili.com" && !host.endsWith(".bilibili.com")) return null
@@ -89,6 +98,90 @@ object BilbyLink {
 
         else -> null
     }
+
+    /**
+     * 指向某一条评论的链接,落到评论详情页([CommentThread])。认不出评论定位的返回 null。
+     *
+     * 认的几种写法照 PiliPlus 的 `utils/app_scheme.dart`(见 notes/private-message.md §8):
+     *
+     * - `bilibili://comment/detail/{type}/{oid}/{root}/?anchor={rpid}`,`msg_fold` 同形;
+     * - `bilibili://video/{aid}?comment_root_id=…&comment_secondary_id=…`,评论区类型为 1;
+     * - `bilibili://following/detail/{动态 id}?comment_root_id=…`,`opus/detail` 同形;
+     * - `https://www.bilibili.com/video/{BV|av}?comment_root_id=…`。
+     *
+     * 动态那两种只给了动态 id,而评论区的 oid 与类型不一定就是它(图文动态的评论区挂在另一个
+     * id 上):消息中心的条目另给了 `subject_id`、`business_id`,调用方传进来时优先用那两个;
+     * 不给时照 PiliPlus 退到动态 id 与类型 17。
+     *
+     * `comment_secondary_id` 或 `anchor` 缺省时,要定位的就是根评论本身。
+     */
+    fun commentThreadOf(url: String, subjectId: Long = 0, businessId: Int = 0): CommentThread? {
+        val uri = runCatching { java.net.URI(url.trim()) }.getOrNull() ?: return null
+        val query = queryOf(uri.rawQuery)
+        val segments = uri.path.orEmpty().split('/').filter { it.isNotEmpty() }
+        val scheme = uri.scheme?.lowercase()
+        val host = uri.host?.lowercase()?.removePrefix("www.")?.removePrefix("m.")
+
+        fun thread(oid: Long?, type: Int, root: Long?, target: Long?): CommentThread? {
+            if (oid == null || oid <= 0 || root == null || root <= 0) return null
+            return CommentThread(oid = oid, type = type, rootRpid = root, targetRpid = target ?: root)
+        }
+        val root = query["comment_root_id"]?.toLongOrNull()
+        val secondary = query["comment_secondary_id"]?.toLongOrNull()
+
+        if (scheme == "bilibili") {
+            return when (host) {
+                "comment" -> if (segments.firstOrNull() == "detail" || segments.firstOrNull() == "msg_fold") {
+                    val rootId = segments.getOrNull(3)?.toLongOrNull()
+                    thread(
+                        oid = segments.getOrNull(2)?.toLongOrNull(),
+                        type = segments.getOrNull(1)?.toIntOrNull() ?: return null,
+                        root = rootId,
+                        target = query["anchor"]?.toLongOrNull() ?: rootId,
+                    )
+                } else {
+                    null
+                }
+
+                "video" -> thread(segments.firstOrNull()?.toLongOrNull(), VIDEO_COMMENT_TYPE, root, secondary)
+
+                "following", "opus" -> if (segments.firstOrNull() == "detail") {
+                    val dynamicId = segments.getOrNull(1)?.toLongOrNull()
+                    thread(
+                        oid = subjectId.takeIf { it > 0 } ?: dynamicId,
+                        type = businessId.takeIf { it > 0 } ?: DYNAMIC_COMMENT_TYPE,
+                        root = root,
+                        target = secondary,
+                    )
+                } else {
+                    null
+                }
+
+                else -> null
+            }
+        }
+        if (host != "bilibili.com" || root == null) return null
+        val videoIndex = segments.indexOf("video")
+        val id = segments.getOrNull(videoIndex + 1)?.takeIf { videoIndex >= 0 } ?: return null
+        val aid = when {
+            id.startsWith("BV") -> runCatching { BvidCodec.toAid(id) }.getOrNull()
+            id.startsWith("av", ignoreCase = true) -> id.drop(2).toLongOrNull()
+            else -> null
+        }
+        return thread(aid, VIDEO_COMMENT_TYPE, root, secondary)
+    }
+
+    private fun queryOf(raw: String?): Map<String, String> =
+        raw.orEmpty().split('&').mapNotNull { pair ->
+            val eq = pair.indexOf('=')
+            if (eq <= 0) return@mapNotNull null
+            pair.substring(0, eq) to runCatching {
+                java.net.URLDecoder.decode(pair.substring(eq + 1), "UTF-8")
+            }.getOrDefault(pair.substring(eq + 1))
+        }.toMap()
+
+    /** 动态的评论区类型。PiliPlus 在链接只给了动态 id 时同样按 17 处理(`app_scheme.dart` 的 following)。 */
+    private const val DYNAMIC_COMMENT_TYPE = 17
 
     private fun hostOf(url: String): String? = runCatching {
         java.net.URI(url.trim()).host?.lowercase()?.removePrefix("www.")
