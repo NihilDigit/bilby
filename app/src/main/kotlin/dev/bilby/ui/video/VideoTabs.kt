@@ -108,6 +108,7 @@ import dev.bilby.R
 import dev.bilby.ui.player.EpisodePart
 import dev.bilby.ui.player.EpisodeRow
 import dev.bilby.ui.player.EpisodeTarget
+import dev.bilby.ui.player.QueueEdges
 import dev.bilby.ui.player.currentIndex
 import dev.bilby.formatDurationSeconds
 import dev.bilby.agent.AgentTurnState
@@ -199,13 +200,15 @@ data class QueueUiState(
     val shuffled: Boolean = false,
     /**
      * 完整队列还没建好。**此刻 [rows] 里那一条不是队列,是占位** —— 起播时先装的临时队列
-     * (见 AudioPlaybackService.openVideo),把它当队列摆出来会读成"这个 UP 只有一条投稿"。
+     * (见 AudioPlaybackService.openFrame),把它当队列摆出来会读成"这个 UP 只有一条投稿"。
      *
      * 这里不再看播放状态里的 `loading`:那一个说的是取流,而取流和建队列现在是并行的两件事。
      */
     val enriching: Boolean = false,
     /** 队列没建成,停在临时队列上。可重试,见 [QueueContent]。 */
     val incomplete: Boolean = false,
+    /** 两头续取,只给完整队列面板用。页内那一段只摊当前项附近几条,不续。 */
+    val edges: QueueEdges? = null,
 )
 
 private const val VideoTabIntro = 0
@@ -652,6 +655,7 @@ private fun FullQueueSheet(
         EpisodeList(
             rows = queue.rows,
             onSelect = onSelectEpisode,
+            edges = queue.edges,
             contentPadding = PaddingValues(bottom = Spacing.Loose),
             modifier = Modifier.fillMaxWidth().fillMaxHeight(FullQueueHeightFraction),
         )
@@ -1855,7 +1859,7 @@ private fun LazyListScope.queueItems(
         }
 
         // 只有一条的队列自己解释不了自己:看不出是"这个 UP 只发过这一条"还是"来源没拉到"。
-        // 说出后者并给一次重试,重试走的是再发一遍 OPEN_VIDEO(见 VideoScreen)。
+        // 说出后者并给一次重试,重试是 ACTION_RETRY_QUEUE(见 VideoScreen)。
         // 文案不染 error 色,重试用 text button —— 一次拉取失败不该被渲染成需要下决心的事
         // (风格指南 §2.4)。
         queue.incomplete -> item(key = "queue-status") {

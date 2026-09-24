@@ -39,6 +39,7 @@ import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.player.EpisodeList
 import dev.bilby.ui.player.EpisodeRow
 import dev.bilby.ui.player.EpisodeTarget
+import dev.bilby.ui.player.QueueEdges
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 
@@ -62,6 +63,7 @@ fun BoxScope.EpisodePanel(
     sourceLabel: String,
     onSelect: (EpisodeTarget) -> Unit,
     onDismiss: () -> Unit,
+    edges: QueueEdges? = null,
 ) {
     // 遮罩。压暗是为了让面板这一侧读得出来是上层,同时接住面板之外的那一下点击 ——
     // 全屏下画面本身带着自己的手势(单击出控件、双击 seek),不接住的话点在画面上会既关面板
@@ -131,6 +133,7 @@ fun BoxScope.EpisodePanel(
                 )
                 EpisodeList(
                     rows = rows,
+                    edges = edges,
                     onSelect = {
                         onSelect(it)
                         onDismiss()

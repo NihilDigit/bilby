@@ -7,7 +7,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
-import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.ForwardingSimpleBasePlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
@@ -31,7 +31,10 @@ import dev.bilby.api.BiliResult
 import dev.bilby.data.HeartbeatReporter
 import dev.bilby.data.LiveRepository
 import dev.bilby.data.PlayInfo
-import dev.bilby.data.QueueBuildResult
+import dev.bilby.data.QueueContext
+import dev.bilby.data.QueueFeed
+import dev.bilby.data.OpenedQueue
+import dev.bilby.data.decodeQueueContext
 import dev.bilby.data.QueueSource
 import dev.bilby.data.QueueSourceRepository
 import dev.bilby.data.SettingsStore
@@ -76,19 +79,22 @@ data class QueueState(
     val current: QueueItem? = null,
     /** 队列内容,自然顺序(随机只改播放顺序,不改列表怎么摆)。 */
     val items: List<QueueItem> = emptyList(),
-    /** 1-based,直接显示。队列空时为 0。 */
-    val positionInQueue: Int = 0,
     val size: Int = 0,
     val shuffled: Boolean = false,
     /**
-     * 上/下一条此刻按不按得动,来自播放器,认随机顺序。按钮可用态用这两个,不要拿
-     * [positionInQueue] 推:那是列表位置,随机播放下列表第 1 条照样可以有上一条。
+     * 上/下一条此刻按不按得动,来自播放器,认随机顺序,也认分 P。按钮可用态用这两个,不要拿
+     * [sourcePosition] 推:那是列表位置,随机播放下列表第 1 条照样可以有上一条。
      */
     val canPrevious: Boolean = false,
     val canNext: Boolean = false,
-    /** 队列的来源,如"直播回放""UP 主投稿"。见 [QueueBuildResult.sourceLabel]。 */
+    /**
+     * 这份队列属于哪个视频页(帧,docs/queue-redesign.md 决定 3)。视频页只在它等于自己的帧时
+     * 才跟着队列走;直播与没有视频页的时候为 null。
+     */
+    val frameId: String? = null,
+    /** 队列的来源,如"直播回放""UP 主投稿"。见 [dev.bilby.data.OpenedQueue.label]。 */
     val sourceLabel: String = "",
-    /** 来源的身份,非空时 [sourceLabel] 那一行可以点进目录。见 [QueueBuildResult.source]。 */
+    /** 来源的身份,非空时 [sourceLabel] 那一行可以点进目录。见 [dev.bilby.data.OpenedQueue.source]。 */
     val source: QueueSource? = null,
     /**
      * 队列还在补全,现在这份队列只有正在播的这一条。**播放不等它**,所以这不是"正在加载"
@@ -99,9 +105,21 @@ data class QueueState(
     /**
      * 队列补全失败了,现在这份队列只有正在播的这一条。**播放本身是好的**,失败的只是"这条
      * 视频属于哪个集合"。摆出来是因为队列里只剩一条这件事本身看不出是"这个 UP 只有一条投稿"
-     * 还是"来源没拉到",而后者重试一下往往就好了。重试点是再发一次 [ACTION_OPEN_VIDEO]。
+     * 还是"来源没拉到",而后者重试一下往往就好了。重试点是 [AudioPlaybackService.ACTION_RETRY_QUEUE]。
      */
     val incomplete: Boolean = false,
+    /** 来源在已读部分之前/之后还有。完整队列面板滚到头时据此续取。 */
+    val canExtendBefore: Boolean = false,
+    val canExtendAfter: Boolean = false,
+    /** 那一头的续取正在飞。 */
+    val extendingBefore: Boolean = false,
+    val extendingAfter: Boolean = false,
+    /**
+     * 当前条在整份来源里是第几条(1 起)与来源总条数。不知道时为 null,「N / M」不显示 ——
+     * 队列只读了来源的一段,[size] 是已读的条数,拿它当 M 会让三千条的 UP 读成"共 40 条"。
+     */
+    val sourcePosition: Int? = null,
+    val sourceTotal: Int? = null,
 )
 
 /**
@@ -174,8 +192,8 @@ data class AudioPlaybackUiState(
  * **方向是单向的:队列变,界面跟。** 界面永远不反过来推播放器。通知栏按下一条、耳机线控
  * 双击、听视频里点队列中的一条,走的都是同一条路——改队列,然后由界面跟到 [state] 上来。
  *
- * **打开界面是幂等的。** [ACTION_OPEN_VIDEO] 报的是 bvid 而不是流地址:队列当前就是这条、
- * 播放器也正装着它时,这条命令什么都不做。转屏、退出全屏、从听视频退回、通知栏切过一条
+ * **打开界面是幂等的。** 视频页报的是自己的帧([ACTION_ACTIVATE_FRAME]),不是 bvid 也不是
+ * 流地址:这一帧已经是活帧时这条命令只管续播。转屏、退出全屏、从听视频退回、通知栏切过一条
  * 之后再回到界面,全都落在这条分支上。
  *
  * **队列就是播放器的 playlist。** 服务不另存一份列表:两份列表意味着"队列现在是什么"有两个
@@ -227,15 +245,15 @@ class AudioPlaybackService : MediaSessionService() {
      */
     private var loadCounter = 0
 
-    private var sourceLabel = ""
-    private var queueSource: QueueSource? = null
-
     /**
-     * 正在解析流的那一条(mediaId),解析完(成功或失败)置回 null。
-     *
-     * 取流归 [LazyMediaSource] 之后,服务这边不再有一个"装载 Job"可以问 isActive,而
-     * [openVideo] 的幂等分支要知道"起播还在飞",理由见那里。
+     * 队列栈(docs/queue-redesign.md 决定 3)。每个视频页是一帧,**活帧就是 playlist**,别的帧存着
+     * 离开时的快照。按帧 id 存,不记先后:先后由导航栈决定,找相关替换栈顶、同一页被挪到栈顶都会
+     * 重排它,服务再记一份顺序就是第二份真相。帧的去留由 [retainFrames] 按导航栈对齐。
      */
+    private val frames = mutableMapOf<String, Frame>()
+    private var liveFrame: Frame? = null
+
+    /** 正在解析流的那一条(mediaId),解析完(成功或失败)置回 null。 */
     private var resolvingMediaId: String? = null
 
     /**
@@ -244,14 +262,14 @@ class AudioPlaybackService : MediaSessionService() {
      */
     private var enrichJob: Job? = null
 
-    /** 每打开一条新视频 +1。迟到的补全结果靠它作废,见 [enrichQueue]。 */
+    /** 每补全一次 +1。迟到的补全结果靠它作废,见 [enrichFrame]。 */
     private var openGeneration = 0
 
-    /** 补全在飞/补全失败,两者都表示当前停在只有一条的临时队列上。 */
-    private var queueEnriching = false
-    private var queueIncomplete = false
+    /** 两头各自的续取,见 [extendQueue]。活帧退到栈里时一并取消。 */
+    private var extendBeforeJob: Job? = null
+    private var extendAfterJob: Job? = null
 
-    /** 起播链路的测量。只在 [openVideo] 起头,只在 [finishOpenChain] 收尾。 */
+    /** 起播链路的测量。只在 [openFrame] 起头,只在 [finishOpenChain] 收尾。 */
     private var openChain: PerfTrace.Chain? = null
 
     /** 当前这一条已经连续失败了几次。见 [retryAfterFailure]。真的播出声(STATE_READY)时清零。 */
@@ -271,6 +289,19 @@ class AudioPlaybackService : MediaSessionService() {
      */
     private var loadedMediaId: String? = null
     private var loadedCid: Long = 0
+
+    /**
+     * 装着的这条视频按顺序的全部分 P,上一条/下一条与自动连播据此先在 P 之间走。随
+     * [loadedCid] 一起落、一起清。放本地副本时只含已缓存完成的 P:此时队列是缓存库,
+     * 人多半离线,切到没缓存的 P 就停在取流失败上。
+     */
+    private var loadedParts: List<Long> = emptyList()
+
+    /**
+     * 这一次播到末尾已经收过尾。队列末条上两道回调(`END_OF_MEDIA_ITEM` 与 `STATE_ENDED`)
+     * 会先后到达,见 [onReachedEnd]。重新放起来时清掉。
+     */
+    private var endHandled = false
 
     /**
      * 解析完了但播放器还没走到那一条。
@@ -399,18 +430,25 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /**
-     * 这一条播完之后停不停。**队列前进归播放器,所以"不前进"也得由播放器表达。**
+     * 这一条播完之后要不要由我们接手。**队列前进归播放器,所以"不前进"也得由播放器表达。**
      *
-     * 关掉自动连播,和定时器设成"播完这条就停",要的是同一件事:走到这一条的末尾就停在那里。
-     * `pauseAtEndOfMediaItems` 正是这个语义,而且播放器会照常报一次 STATE_ENDED,
-     * [PlayerListener.onPlaybackStateChanged] 那条收尾路径不必分情况。
+     * 三种情况要在末尾停下:关掉自动连播、定时器设成"播完这条"、这条视频还有下一 P
+     * (该接的是下一 P,不是队列里的下一条)。`pauseAtEndOfMediaItems` 停在末尾时回调
+     * `onPlayWhenReadyChanged(END_OF_MEDIA_ITEM)`,接手在 [onReachedEnd]。
+     *
+     * **非末条停下时不进 STATE_ENDED。** 1.10.1 的 `ExoPlayerImplInternal.doSomeWork` 先以
+     * END_OF_MEDIA_ITEM 把 playWhenReady 置 false,只有 period 是 final 时才再 setState(ENDED)
+     * (javap 验证)。收尾曾只挂在 ENDED 上,于是非末条的完播上报与定时器的"播完这条"都没有
+     * 发生。
      *
      * 自己在 ENDED 里判"要不要 seekToNext"是走不通的:自动连播开着时播放器根本不经过 ENDED,
      * 它直接换条。
      */
     private fun applyStopAtEndOfItem() {
         player.pauseAtEndOfMediaItems =
-            !autoNextEnabled || sleepTimer.state.value.mode == SleepTimerMode.EndOfItem
+            !autoNextEnabled ||
+            sleepTimer.state.value.mode == SleepTimerMode.EndOfItem ||
+            neighbourPart(1) != null
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
@@ -463,7 +501,7 @@ class AudioPlaybackService : MediaSessionService() {
      * 取流由 [resolveLiveStream] 在轮到它时做。于是重试、切档、元数据回填走的都是视频那几条
      * 路,服务这边没有第二套状态要清。
      *
-     * 和 [openVideo] 一样是幂等的,报的是房间号而不是流地址 —— 页面拿到房间详情后会再发一遍
+     * 和 [activateFrame] 一样是幂等的,报的是房间号而不是流地址 —— 页面拿到房间详情后会再发一遍
      * 带标题的命令,那一趟只该更新元数据,不该把刚起好的流掐掉重来。**只有装载参数变了才
      * 重来**:切清晰度和开关纯音频都落在这条分支上,它们要的正是重新取一次流。
      *
@@ -502,11 +540,8 @@ class AudioPlaybackService : MediaSessionService() {
             return
         }
 
-        enrichJob?.cancel()
-        sourceLabel = ""
-        queueSource = null
-        queueEnriching = false
-        queueIncomplete = false
+        // 直播不是帧。盖在视频页上面时先把那一帧存下来,返回时它换回自己的队列。
+        suspendLiveFrame()
         setQueue(
             listOf(
                 liveMediaItem(
@@ -522,172 +557,254 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /**
-     * 播放页打开了一条视频。
-     *
-     * **这条命令是幂等的**,而且是结构性的幂等:它报的是 bvid,不是流地址。队列当前就是这条、
-     * 播放器也正装着它时直接返回 —— 转屏、退出全屏、从听视频退回、通知栏切过一条之后再回到
-     * 界面,走的都是这条分支。原先页面交的是流地址,"是不是同一次播放"只能靠字符串相等去猜,
-     * 而 playurl 每次签名都不同,于是重试还得专门加一个标志位去绕过那道比较。
-     *
-     * **它带的只有 bvid 与展示信息,没有 cid。** 放到哪一 P 由 [LoadResolver] 在装载时解析,
-     * 页面手上只有详情里的默认 P —— 送过来就是拿一个更差的答案盖掉刚解析出来的那个。
-     *
-     * 队列里已经有这条(合集里换一集、点队列中的一条)就跳过去;没有就**先装一份只有这条的
-     * 临时队列并立刻起播**,真正的来源(合集,或退到 UP 投稿,DESIGN 2.4b)由 [enrichQueue]
-     * 在后台补上。
-     *
-     * 起播曾经压在建队列后面。建队列要拉一次视频详情、再二分探测空间投稿(约 log2(页数) 次
-     * 请求),这些都是"这条视频属于哪个集合"的元数据,和"这条视频怎么放出声"没有关系 ——
-     * 每一次点开都要先等完一轮它们。队列仍然是唯一真相,只是它先短一格。
+     * 队列栈的一帧:一个视频页,以及它的队列。活帧的队列就是 playlist,只有退到栈里时才有
+     * [snapshot]。
      */
-    private fun openVideo(args: Bundle) {
-        val bvid = args.getString(EXTRA_BVID).orEmpty()
-        if (bvid.isEmpty()) {
-            BiliLog.w("OPEN_VIDEO 没带 bvid,忽略")
-            return
-        }
+    private class Frame(val id: String, val context: QueueContext) {
+        var label = ""
+        var source: QueueSource? = null
 
-        // **指名在这里取走,三条路各自兑现。**
-        //
-        // 从前它只有一个读点,在 [resolveStream] 里 —— 也就是只有冷装载才会去看。而打开一条
-        // 视频有三条路:这条已经在放(下面的幂等分支)、在队列里但不是当前条、根本不在队列。
-        // 前两条都不产生冷装载,于是缓存列表里点当前这条视频的另一个分 P,指名原地蒸发,
-        // 画面停在原来那一集 —— 这就是"有时候切不动集",是不是"有时候"取决于那条视频在不在
-        // 队列里、以及它的源有没有被提前解析过。
-        //
-        // 更难看的是它**没被取走就一直挂着**:`request` 只在下一次 `request` 时被覆盖,于是
-        // 那条作废的指名会等到这条视频某次真的冷装载,再把播放位置推到用户几分钟前点的那一 P。
-        // [PartRequest] 的 KDoc 说自己要防的正是这件事,它防住了转屏重建,没防住"永远没人取"。
-        val requestedCid = partRequest.consume(bvid)
+        /** 队列背后的来源,续取靠它。补全成功之前为 null。 */
+        var feed: QueueFeed? = null
 
-        if (currentItem()?.bvid == bvid) {
-            // **这一趟多半是来送元数据的。** 页面拿到 bvid 就发了第一遍命令(那时它还不知道
-            // 这条视频叫什么),详情回来再发第二遍 —— 落到的就是这里。不采纳的话通知栏和队列
-            // 面板上这条永远没有标题和封面。
-            fillItemDisplay(
-                bvid,
-                title = args.getString(EXTRA_TITLE).orEmpty(),
-                upName = args.getString(EXTRA_UP_NAME).orEmpty(),
-                coverUrl = args.getString(EXTRA_COVER_URL).orEmpty(),
-            )
-            // 回到这一页了。播放器停着而 [playIntent] 还立着,说明上次停下不是用户的意思
-            // (多半是离开页面去看别的),接着播。**这一句就是"非本意的停止,回来续播"的
-            // 全部实现** —— 它不需要知道自己是被弹回来的还是被重新露出来的,那两个问题
-            // 正是之前三次尝试栽进去的地方。
-            //
-            // **这条命令再也动不了分 P。** 它以前带着页面手上那个默认 cid(多 P 时就是 P1),
-            // 于是服务刚按观看记录切到第 7 P,页面的第二遍命令就把它推回 P1;为此长出过两道
-            // 防御(记下"被续播替换掉的那个 cid"、记下"现在放的是本地副本")。入口收成只有
-            // bvid 之后,页面没有可以覆盖的东西,两道防御连同这条分支一起删掉。换 P 是
-            // [ACTION_PLAY_PART],那是用户当场表达的意思。
-            if (playIntent && !player.playWhenReady) player.playWhenReady = true
-            publishState()
-            // 上一次补全失败就停在了单条队列上。这条命令在每次回到播放页时都会再发一遍,
-            // 拿它当重试点,不必为此单开一条命令和一个按钮。
-            if (queueIncomplete) enrichQueue(bvid)
-            // **这条捷径是这个功能唯一的机会,也是它曾经整个漏掉的地方。**
-            //
-            // 装载解析只发生在冷装载。播放器常驻、跨页面存活,同一条视频再打开一次走的就是
-            // 这里——一次解析都不发生,云端一次都没被问。表现是:在网页上看到后面某一 P,
-            // 回到 Bilby 打开这条视频还停在旧位置,而杀掉 app 再进反而是对的。
-            //
-            // 根因是这条分支的幂等是假的:no-op 的判据是"这条已经装着"这个**旧状态本身**,
-            // 而不是"现状和应然一致"这个判断的输出。判据取自要被它决定的那个状态,于是它被
-            // 自己的脏状态污染——装着的那一条哪怕已经过时,也照样被认成"不用管"。
-            //
-            // 真幂等的写法是每次都重新解析一遍、结果一致就什么都不做,那样云端变了会自动落位。
-            // **没有选它**:那会在用户毫不知情的时候把一个暂停中的会话拽到别的位置甚至别的
-            // 分 P 上,而这一页此刻可能正停在他自己选的地方。所以补的是一次查询加一条提示,
-            // 跳不跳由用户点(仓库主人定的,直接落位这个方案是被否决的那个)。
-            // 指名兑现成一次真正的切 P —— 和页内点另一集走的是同一条路。已经在放的就是那一 P
-            // 时什么都不做:重来一遍只会把画面打回这一 P 的开头。
-            if (requestedCid != 0L && requestedCid != loadedCid) playPart(requestedCid)
-            reconcileIfLocalCopy(bvid)
-            reconcileCloudProgress(bvid)
-            return
-        }
-        val existing = indexOfMediaId(bvid)
-        if (existing >= 0) {
-            seekToQueueIndex(existing)
-            // seek 之后当前条已经是它了,于是指名和上面走同一条兑现路径。这里不能指望冷装载
-            // 顺手带上:队列里排在后面的条目常常早几十秒就被 ExoPlayer 解析过了,那种情况下
-            // 这一跳根本不会再解析一次。
-            if (requestedCid != 0L) playPart(requestedCid)
-            return
-        }
-
-        finishOpenChain("superseded")
-        openChain = PerfTrace.chain("openVideo").also { it.mark("command") }
-
-        // 临时队列用命令里带着的东西现造,**带多少算多少**:页面在拿到详情之前就发第一遍
-        // 命令了,那时它手里只有 bvid。标题和封面由第二遍命令补(见上面的幂等分支),
-        // 放哪一 P 由 [LoadResolver] 在装载时解析。
-        sourceLabel = ""
-        queueSource = null
-        openChain?.mark("tempQueue")
-
-        setQueue(
-            listOf(
-                QueueItem(
-                    bvid = bvid,
-                    title = args.getString(EXTRA_TITLE).orEmpty(),
-                    upName = args.getString(EXTRA_UP_NAME).orEmpty(),
-                    coverUrl = args.getString(EXTRA_COVER_URL).orEmpty(),
-                    durationSeconds = 0,
-                ).toMediaItem(requestedCid = requestedCid, loadNonce = nextLoadNonce())
-            ),
-            startIndex = 0,
-        )
-        enrichQueue(bvid)
+        /** 补全在飞/补全失败,两者都表示当前停在只有一条的临时队列上。 */
+        var enriching = false
+        var incomplete = false
+        var extendingBefore = false
+        var extendingAfter = false
+        var snapshot: FrameSnapshot? = null
     }
 
     /**
-     * 把临时队列换成真正的来源。与起播并行,失败只是队列短一格。
+     * 帧离开时的样子。分 P 与位置一并存下:返回到这一页,要的是停在离开时看到的地方,而云端
+     * 进度有 5 秒心跳的滞后,换回来时再问它会落到几秒之前。
+     */
+    private class FrameSnapshot(
+        val items: List<QueueItem>,
+        val index: Int,
+        val cid: Long,
+        val positionMillis: Long,
+        val shuffled: Boolean,
+    )
+
+    /**
+     * 视频页到了前台,报出自己的帧(docs/queue-redesign.md 决定 3)。页面进入组合、重连控制器、
+     * 关掉弹幕输入层时都发这一条。
+     *
+     * **按帧判断,不按 bvid。** 原先的 OPEN_VIDEO 按 bvid 判,而页面手上的 bvid 可能已经过期:
+     * 离开期间队列往前走了,重发一遍就把播放器拽回旧的那条;别的视频页换过队列,重发一遍就
+     * 按旧那条的归属重建队列。帧 id 只回答"这一页是不是活帧",页面没有可以覆盖的东西。
+     *
+     * 三种情况:
+     * - 已是活帧:回到了这一页,见 [resumeFrame]。
+     * - 有快照:返回到了栈里更早的一页,换回它离开时的队列、当前条与位置。
+     * - 都没有:新压的一页,或者进程被杀后重建。按帧的入口上下文打开,[EXTRA_BVID] 是页面此刻
+     *   显示的那一条。
+     */
+    private fun activateFrame(args: Bundle) {
+        val frameId = args.getString(EXTRA_FRAME_ID).orEmpty()
+        val bvid = args.getString(EXTRA_BVID).orEmpty()
+        if (frameId.isEmpty() || bvid.isEmpty()) {
+            BiliLog.w("ACTIVATE_FRAME 缺 frameId 或 bvid,忽略")
+            return
+        }
+        // **指名在入口取走。** 它是一次性的:没被取走就一直挂着,等这条视频某次冷装载时再把
+        // 播放位置推到用户几分钟前点的那一 P(见 [PartRequest])。
+        val requestedCid = partRequest.consume(bvid)
+
+        val live = liveFrame
+        if (live?.id == frameId) {
+            resumeFrame(live, bvid, requestedCid)
+            return
+        }
+        val context = args.getString(EXTRA_QUEUE_CONTEXT)?.let(::decodeQueueContext) ?: QueueContext.Affiliation
+        suspendLiveFrame()
+        val frame = frames.getOrPut(frameId) { Frame(frameId, context) }
+        val snapshot = frame.snapshot
+        if (snapshot != null) restoreFrame(frame, snapshot) else openFrame(frame, bvid, requestedCid)
+    }
+
+    /**
+     * 回到了活帧那一页(从 UP 主页返回、转屏重连、关掉弹幕输入层)。
+     *
+     * 播放器停着而 [playIntent] 还立着,说明上次停下不是用户的意思(多半是离开页面去看别的),
+     * 接着播。**这一句就是"非本意的停止,回来续播"的全部实现** —— 它不需要知道自己是被弹回来的
+     * 还是被重新露出来的,那两个问题正是之前三次尝试栽进去的地方。
+     *
+     * 云端进度也在这里核对。装载解析只发生在冷装载,播放器常驻、跨页面存活,回到同一条视频一次
+     * 解析都不发生:在网页上看到后面某一 P,回到 Bilby 还停在旧位置。核对只摆一条提示,跳不跳由
+     * 用户点(仓库主人定的,直接落位这个方案被否决过)。
+     */
+    private fun resumeFrame(frame: Frame, bvid: String, requestedCid: Long) {
+        if (playIntent && !player.playWhenReady) player.playWhenReady = true
+        val current = currentItem()?.bvid
+        if (current != null) {
+            // 指名兑现成一次真正的切 P。已经在放的就是那一 P 时什么都不做:重来一遍只会把画面
+            // 打回这一 P 的开头。
+            if (current == bvid && requestedCid != 0L && requestedCid != loadedCid) playPart(requestedCid)
+            reconcileIfLocalCopy(current)
+            reconcileCloudProgress(current)
+        }
+        publishState()
+        // 上一次补全失败就停在了单条队列上,回到页面时顺手再试一次。
+        if (frame.incomplete && current != null) enrichFrame(frame, current)
+    }
+
+    /**
+     * 活帧退到栈里:存下它此刻的队列、当前条、分 P 与位置,等它回到栈顶时换回来。
+     *
+     * 补全与续取一并取消。续取在请求返回之前被取消不改动来源的游标,返回之后到插入 playlist
+     * 之间没有挂起点,取消插不进去,所以来源与快照不会错开一段。
+     */
+    private fun suspendLiveFrame() {
+        val frame = liveFrame ?: return
+        liveFrame = null
+        enrichJob?.cancel()
+        extendBeforeJob?.cancel()
+        extendAfterJob?.cancel()
+        // 补全被打断时快照里是临时队列,换回来时再补一次。
+        if (frame.enriching) {
+            frame.enriching = false
+            frame.incomplete = true
+        }
+        val current = player.currentMediaItem ?: return
+        if (current.isLive) return
+        val items = queueItems
+        val index = items.indexOfFirst { it.bvid == current.mediaId }
+        if (index < 0) return
+        frame.snapshot = FrameSnapshot(
+            items = items,
+            index = index,
+            cid = if (loadedMediaId == current.mediaId) loadedCid else 0,
+            positionMillis = player.currentPosition,
+            shuffled = player.shuffleModeEnabled,
+        )
+    }
+
+    /** 换回一帧离开时的样子。 */
+    private fun restoreFrame(frame: Frame, snapshot: FrameSnapshot) {
+        frame.snapshot = null
+        val current = snapshot.items[snapshot.index]
+        val items = snapshot.items.mapIndexed { index, item ->
+            if (index == snapshot.index) {
+                item.toMediaItem(
+                    requestedCid = snapshot.cid,
+                    startPositionMillis = snapshot.positionMillis,
+                    loadNonce = nextLoadNonce(),
+                )
+            } else {
+                item.toMediaItem()
+            }
+        }
+        replaceQueue(items, snapshot.index)
+        player.shuffleModeEnabled = snapshot.shuffled
+        // 帧在 playlist 换完之后才认领:[setQueue] 途中会发布一次状态,那时 playlist 里还是
+        // 上一帧的内容,先认领的话这一页会跟着那一刻的当前条换一次详情。
+        liveFrame = frame
+        publishQueueChange()
+        if (frame.incomplete) enrichFrame(frame, current.bvid)
+    }
+
+    /**
+     * 新的一帧。**先装一份只有这条的临时队列并立刻起播**,真正的来源由 [enrichFrame] 在后台补上。
+     *
+     * 起播曾经压在建队列后面。建队列要拉详情、翻来源,这些都是"这条视频属于哪个集合"的元数据,
+     * 和"这条视频怎么放出声"没有关系 —— 每一次点开都要先等完一轮它们。
+     *
+     * 临时条目只有 bvid:标题与封面由取流时的详情补上(见 [fillDisplayFromDetail]),放哪一 P 由
+     * [LoadResolver] 在装载时解析。
+     */
+    private fun openFrame(frame: Frame, bvid: String, requestedCid: Long) {
+        finishOpenChain("superseded")
+        openChain = PerfTrace.chain("openVideo").also { it.mark("command") }
+        val temporary = QueueItem(bvid = bvid, title = "", upName = "", coverUrl = "", durationSeconds = 0)
+            .toMediaItem(requestedCid = requestedCid, loadNonce = nextLoadNonce())
+        val kept = replaceQueue(listOf(temporary), 0)
+        openChain?.mark("tempQueue")
+        liveFrame = frame
+        if (kept && requestedCid != 0L && requestedCid != loadedCid) playPart(requestedCid)
+        enrichFrame(frame, bvid)
+    }
+
+    /**
+     * 换一份队列,从第 [index] 条起。**播放器正在放的就是那一条时留着它**,只换两边:它的流已经
+     * 解析好、正在出声,换成等价的新条目就是重新取一次流、画面从头开始。从 UP 主页点开正在放的
+     * 这条视频、返回到放着同一条视频的上一页,都落在这里。
+     *
+     * @return 是否留下了正在放的那一条。
+     */
+    private fun replaceQueue(items: List<MediaItem>, index: Int): Boolean {
+        val current = player.currentMediaItem
+        if (current == null || current.isLive || current.mediaId != items[index].mediaId) {
+            setQueue(items, index)
+            return false
+        }
+        val here = player.currentMediaItemIndex
+        player.removeMediaItems(here + 1, player.mediaItemCount)
+        player.removeMediaItems(0, here)
+        player.addMediaItems(1, items.drop(index + 1))
+        player.addMediaItems(0, items.take(index))
+        if (playIntent && !player.playWhenReady) player.playWhenReady = true
+        return true
+    }
+
+    /**
+     * 按帧的入口上下文建队列,补到正在播的这一条前后。与起播并行,失败只是队列短一格。
      *
      * **结果要过两道校验才敢用**,各挡一件事:
-     * - generation 挡"补全期间用户又打开了别的视频"。那一次已经装了自己的临时队列并起播,
-     *   这份结果属于上一条,写进去就是把队列换成另一条视频的集合。
-     * - 当前 bvid 再挡一次,因为队列还会被 SEEK_TO_BVID、通知栏的上/下一条移动,那些路径
-     *   不碰 generation。
-     *
-     * 补进去的两段按 bvid 在来源里定位,不依赖来源给的下标:定位不到时来源会降级成
-     * "从最新 N 条开始",那份列表里根本没有这条视频。
+     * - generation 与活帧挡"补全期间用户又打开了别的视频"。那一次已经装了自己的临时队列,这份
+     *   结果属于上一帧,写进去就是把队列换成另一条视频的集合。
+     * - 当前 bvid 再挡一次,因为队列还会被通知栏的上/下一条移动,那些路径不碰 generation。
      */
-    private fun enrichQueue(bvid: String) {
+    private fun enrichFrame(frame: Frame, bvid: String) {
         enrichJob?.cancel()
-        queueIncomplete = false
-        queueEnriching = true
+        frame.incomplete = false
+        frame.enriching = true
         val generation = ++openGeneration
         val chain = PerfTrace.chain("queueEnrich")
         enrichJob = scope.launch {
-            val built = offlineQueue(bvid) ?: queueSourceRepository.forVideo(bvid)
+            val opened = openQueue(frame.context, bvid)
             chain.mark("built")
-            if (generation != openGeneration || currentItem()?.bvid != bvid) {
-                // 不动 queueEnriching:此刻它属于顶掉这次的那一轮补全。
+            if (generation != openGeneration || liveFrame !== frame || currentItem()?.bvid != bvid) {
+                // 不动 enriching:此刻它属于顶掉这次的那一轮补全。
                 chain.mark("stale")
                 chain.end()
                 return@launch
             }
-            queueEnriching = false
-            if (built == null || !fillQueueAround(bvid, built.items)) {
+            frame.enriching = false
+            if (opened == null || !fillQueueAround(bvid, opened.items)) {
                 // 宁可只有一条,也不能换上一份不含这条视频的队列:正在播的那一条会从队列里
                 // 消失,而队列界面高亮的是别人。
                 BiliLog.w("队列补全失败或来源里没有当前视频,留在单条队列 bvid=$bvid")
-                queueIncomplete = true
+                frame.incomplete = true
                 chain.mark("failed")
                 chain.end()
                 publishQueueChange()
                 return@launch
             }
-            sourceLabel = built.sourceLabel
-            queueSource = built.source
+            frame.label = opened.label
+            frame.source = opened.source
+            frame.feed = opened.feed
             player.shuffleModeEnabled = settings.playbackPrefs.first().shuffled
             chain.count("items", player.mediaItemCount.toLong())
             chain.end()
             publishQueueChange()
+            extendNearEdges()
         }
-        // 补全在飞这件事本身要发出去:上面 setQueue 发的那一份还是"队列只有一条"。
+        // 补全在飞这件事本身要发出去:此刻队列还只有一条。
         publishQueueChange()
+    }
+
+    /**
+     * 入口上下文打不开时(多半是离线),本地有这条视频的完整副本就退到缓存库:缓存库不联网,
+     * 而放着本地副本的人此刻多半正好没网,队列里其余条目全要联网的话下一条就停在取流失败上。
+     */
+    private suspend fun openQueue(context: QueueContext, bvid: String): OpenedQueue? {
+        if (context == QueueContext.Offline) return queueSourceRepository.offline(bvid)
+        return queueSourceRepository.open(context, bvid)
+            ?: queueSourceRepository.offline(bvid)?.also {
+                BiliLog.w("队列:入口来源打不开,本地有副本,退到缓存库 bvid=$bvid")
+            }
     }
 
     /**
@@ -710,38 +827,67 @@ class AudioPlaybackService : MediaSessionService() {
         return true
     }
 
+    /** 播放走到离队列任一头不足 [EXTEND_THRESHOLD] 条时往那头续取,人不必自己翻到头。 */
+    private fun extendNearEdges() {
+        val count = player.mediaItemCount
+        if (count == 0) return
+        val index = player.currentMediaItemIndex
+        if (index < EXTEND_THRESHOLD) extendQueue(before = true)
+        if (count - 1 - index < EXTEND_THRESHOLD) extendQueue(before = false)
+    }
+
     /**
-     * 本地有完整副本时,队列就是**整个缓存库**(owner 定)。
+     * 往队列的一头续一段(docs/queue-redesign.md 决定 4)。两个调用方:播放走到一头附近
+     * ([extendNearEdges]),以及完整队列面板滚到一头(页面发 [ACTION_EXTEND_QUEUE])。
+     * 同一头同时只有一个请求在飞。
      *
-     * 判据和 [resolveStream] 挑本地副本用的是同一条:盘上有这条视频的完整副本。两处必须一致 ——
-     * 一旦放的是本地文件而队列却是"这条视频所属的合集",队列里除了这一条以外全要联网,而人
-     * 此刻多半正好没网,下一条就停在取流失败上。
-     *
-     * 顺带解决的是补全在离线时必然失败:[QueueSourceRepository.forVideo] 要拉详情和空间投稿,
-     * 没网就只剩一条的队列 —— 而缓存列表本身是一份用户亲手选定的有限集合,拿它当队列不违反
-     * "队列内容由用户自己选定"(DESIGN 2.4b)。
+     * 续回来的条目按 bvid 去掉 playlist 里已有的:来源在两次请求之间会挪(新投稿把旧的往后推),
+     * 同一条可能在相邻两页各出现一次。整段都是重复时接着往下续,否则面板停在头上不再触发。
      */
-    private suspend fun offlineQueue(bvid: String): QueueBuildResult? {
-        val cached = offlineStore.list()
-            .filter { it.status == OfflineStatus.Completed }
-            .sortedByDescending { it.createdAtMillis }
-            // 缓存库按 (bvid, cid) 一 P 一条,队列行是视频不是分 P(多 P 不是队列项)。
-            // 不收拢的话同一视频缓了两个 P 就是两行同 bvid,队列面板拿 bvid 当 LazyColumn
-            // key,真机上直接崩(Key was already used)。
-            .distinctBy { it.bvid }
-        if (cached.none { it.bvid == bvid }) return null
-        return QueueBuildResult(
-            items = cached.map {
-                QueueItem(
-                    bvid = it.bvid,
-                    title = it.title,
-                    upName = it.upName,
-                    coverUrl = it.coverUrl,
-                    durationSeconds = it.durationSeconds,
-                )
-            },
-            sourceLabel = "已缓存",
-        )
+    private fun extendQueue(before: Boolean) {
+        val frame = liveFrame ?: return
+        val feed = frame.feed ?: return
+        if (before) {
+            if (frame.extendingBefore || !feed.hasBefore) return
+            frame.extendingBefore = true
+        } else {
+            if (frame.extendingAfter || !feed.hasAfter) return
+            frame.extendingAfter = true
+        }
+        publishQueueChange()
+        val job = scope.launch {
+            val loaded = try {
+                if (before) feed.loadBefore() else feed.loadAfter()
+            } finally {
+                if (before) frame.extendingBefore = false else frame.extendingAfter = false
+            }
+            if (loaded == null) {
+                BiliLog.w("队列续取失败 before=$before,留待下次触发")
+                publishQueueChange()
+                return@launch
+            }
+            val present = (0 until player.mediaItemCount).mapTo(HashSet()) { player.getMediaItemAt(it).mediaId }
+            val fresh = loaded.distinctBy { it.bvid }.filter { it.bvid !in present }.map { it.toMediaItem() }
+            if (before) player.addMediaItems(0, fresh) else player.addMediaItems(player.mediaItemCount, fresh)
+            publishQueueChange()
+            if (fresh.isEmpty() && loaded.isNotEmpty()) extendQueue(before)
+        }
+        if (before) extendBeforeJob = job else extendAfterJob = job
+    }
+
+    /**
+     * 导航栈上不再有的帧丢掉。活帧的页面出栈时,播放器照常放着它的队列,只是这份队列不再
+     * 属于任何一页:之后回到栈里更早的视频页,那一页按自己的快照换回来。
+     */
+    private fun retainFrames(ids: Set<String>) {
+        frames.keys.retainAll(ids)
+        val live = liveFrame ?: return
+        if (live.id in ids) return
+        liveFrame = null
+        enrichJob?.cancel()
+        extendBeforeJob?.cancel()
+        extendAfterJob?.cancel()
+        publishQueueChange()
     }
 
     /**
@@ -796,6 +942,7 @@ class AudioPlaybackService : MediaSessionService() {
         resolvingMediaId = items.getOrNull(startIndex)?.mediaId
         loadedMediaId = null
         loadedCid = 0
+        loadedParts = emptyList()
         loadedLocalCopy = false
         playInfo = null
         currentQuality = 0
@@ -876,10 +1023,10 @@ class AudioPlaybackService : MediaSessionService() {
         val bvid = mediaItem.mediaId
         val positionOverrideMillis = mediaItem.startPositionHint
         // 指名的那一 P,全部来自条目自己。页内切 P、切清晰度、重试带着上一次解析出来的那个;
-        // 缓存列表点某行写进 [PartRequest] 的那份,由 [openVideo] 在入口取走并放进 cidHint。
+        // 缓存列表点某行写进 [PartRequest] 的那份,由 [activateFrame] 在入口取走并放进 cidHint。
         //
         // **这里曾经是 PartRequest 的读点**,而它只在冷装载时跑到,于是另外两条打开路径上的
-        // 指名无人认领(见 [openVideo])。读点收到入口之后这里只认条目。
+        // 指名无人认领(见 [activateFrame])。读点收到入口之后这里只认条目。
         val requestedCid = mediaItem.cidHint
 
         when (val plan = loadResolver.resolve(bvid, requestedCid)) {
@@ -918,6 +1065,38 @@ class AudioPlaybackService : MediaSessionService() {
                 mediaItem.loadNonce,
             )
         }
+    }
+
+    /**
+     * 见 [loadedParts]。在线时详情多半还在缓存里(装载解析刚问过)。离线取不到详情时给空,
+     * 于是只在视频之间切 —— 缓存索引里没有分 P 的序号,按 cid 排是在猜顺序。
+     */
+    private suspend fun partsOf(bvid: String, localOnly: Boolean): List<Long> {
+        val cids = when (val detail = videoRepository.getVideoDetail(bvid)) {
+            is BiliResult.Ok -> detail.value.pages.map { it.cid }
+            else -> {
+                BiliLog.w("取不到分 P 清单,切换只在视频之间 bvid=$bvid")
+                return emptyList()
+            }
+        }
+        if (!localOnly) return cids
+        val cached = offlineStore.list()
+            .filter { it.bvid == bvid && it.status == OfflineStatus.Completed }
+            .mapTo(HashSet()) { it.cid }
+        return cids.filter { it in cached }
+    }
+
+    /**
+     * 与 [loadedCid] 相隔 [offset] 的那一 P,没有则为 null。
+     *
+     * 先认播放器此刻装的还是不是那一条:换条之后、新一条落地之前,[loadedCid] 仍是上一条的,
+     * 拿它去切 P 就是把上一条视频的 cid 装到这一条上。
+     */
+    private fun neighbourPart(offset: Int): Long? {
+        if (player.currentMediaItem?.mediaId != loadedMediaId) return null
+        val here = loadedParts.indexOf(loadedCid)
+        if (here < 0) return null
+        return loadedParts.getOrNull(here + offset)
     }
 
     /** [resolveStream] 的在线那一支。分出来只是因为解析与取流是两件事,读起来不该缠在一起。 */
@@ -1133,14 +1312,17 @@ class AudioPlaybackService : MediaSessionService() {
         //
         // 结果是 [loadedMediaId] 停在上一条上,而 [playInfo] 已被换条那一步清空 —— 播放页
         // 据这两个值判断"播放器装的是不是本页这一条",两个都对不上就落到那个纯黑加转圈的
-        // 分支,声音却照常在放。更糟的是 [openVideo] 的幂等分支按队列判身份,队列指的确实
-        // 是这一条,于是重开这一页、重发命令全是 no-op,这个状态没有出口。
+        // 分支,声音却照常在放。更糟的是重开这一页只落到 [resumeFrame],装载路径一步都不走,
+        // 这个状态没有出口。
         //
         // 描述留下来可以重复采纳,起播位置置零则保证不会把人拽回上次的续播点:退回一条
         // 已经放过的视频,要的是停在它本来的位置。
         resolvedItems[mediaId] = loaded.copy(startPositionMillis = 0)
+        // 同一条视频内换 P 时清单不变,留着它,上一条/下一条在重新取回之前也不会暂时失灵。
+        if (loaded.mediaId != loadedMediaId) loadedParts = emptyList()
         loadedMediaId = loaded.mediaId
         loadedCid = loaded.cid
+        loadPartsOf(loaded)
         loadedLocalCopy = loaded.localCopy
         playInfo = loaded.playInfo
         currentQuality = loaded.quality
@@ -1162,6 +1344,21 @@ class AudioPlaybackService : MediaSessionService() {
             scope.launch {
                 offlineStore.completedFor(loaded.mediaId, loaded.cid)?.let { reconcileCachedProgress(it) }
             }
+        }
+    }
+
+    /**
+     * 分 P 清单不随装载一起等:放本地副本时人多半离线,弱网下取详情要等到超时,起播不该陪着等。
+     * 回来时装着的已经不是这一次装载就作废。
+     */
+    private fun loadPartsOf(loaded: LoadedItem) {
+        scope.launch {
+            val parts = partsOf(loaded.mediaId, localOnly = loaded.localCopy)
+            val current = player.currentMediaItem ?: return@launch
+            if (current.mediaId != loaded.mediaId || current.loadNonce != loaded.loadNonce) return@launch
+            loadedParts = parts
+            applyStopAtEndOfItem()
+            publishQueueChange()
         }
     }
 
@@ -1227,7 +1424,7 @@ class AudioPlaybackService : MediaSessionService() {
      *
      * **不是装载路径的一部分,而是"又进了一次这条视频"。** 核对本来只发生在装载那一刻,
      * 而播放器是单例、离开播放页也不卸载 —— 从缓存目录点进来看一会儿、退出去、再点回来,
-     * 走的是 [openVideo] 里那条"已经是它了"的捷径,装载路径一步都不走,于是这中间别处产生的
+     * 走的是 [resumeFrame],装载路径一步都不走,于是这中间别处产生的
      * 新进度一次也问不到。表现是只有重启 app 那条提示才弹得出来。
      *
      * 时间上赶得及:心跳按位置每 5 秒才报一次([ProgressSession.HEARTBEAT_INTERVAL_SECONDS]),
@@ -1540,22 +1737,25 @@ class AudioPlaybackService : MediaSessionService() {
             queue = QueueState(
                 current = currentItem(),
                 items = queueItems,
+                size = player.mediaItemCount,
                 // **随机播放下这个数字是"列表里的第几条",不是"播放顺序里的第几个"。**
                 // 列表本身不重排(随机只改播放顺序),高亮跟着滚动 —— 那么这一格跟着列表走才
                 // 对得上眼睛看到的位置,而且开关随机时它不会平白跳一下。
-                positionInQueue = if (player.mediaItemCount > 0) {
-                    player.currentMediaItemIndex + 1
-                } else {
-                    0
-                },
-                size = player.mediaItemCount,
+                sourcePosition = liveFrame?.feed?.offsetOfFirst?.takeIf { player.mediaItemCount > 0 }
+                    ?.let { it + player.currentMediaItemIndex + 1 },
+                sourceTotal = liveFrame?.feed?.total,
                 shuffled = player.shuffleModeEnabled,
-                canPrevious = player.hasPreviousMediaItem(),
-                canNext = player.hasNextMediaItem(),
-                sourceLabel = sourceLabel,
-                source = queueSource,
-                enriching = queueEnriching,
-                incomplete = queueIncomplete,
+                canPrevious = player.hasPreviousMediaItem() || neighbourPart(-1) != null,
+                canNext = player.hasNextMediaItem() || neighbourPart(1) != null,
+                frameId = liveFrame?.id,
+                sourceLabel = liveFrame?.label.orEmpty(),
+                source = liveFrame?.source,
+                enriching = liveFrame?.enriching == true,
+                incomplete = liveFrame?.incomplete == true,
+                canExtendBefore = liveFrame?.feed?.hasBefore == true,
+                canExtendAfter = liveFrame?.feed?.hasAfter == true,
+                extendingBefore = liveFrame?.extendingBefore == true,
+                extendingAfter = liveFrame?.extendingAfter == true,
             ),
         )
     }
@@ -1585,6 +1785,30 @@ class AudioPlaybackService : MediaSessionService() {
         NowPlaying(title = it.title, subtitle = it.upName, coverUrl = it.coverUrl)
     }
 
+    /**
+     * 播到了这一条的末尾:队列走完(STATE_ENDED),或被 [applyStopAtEndOfItem] 拦在末尾。
+     * 队列末条上两者先后都到,[endHandled] 让第二次成为空操作。
+     */
+    private fun onReachedEnd() {
+        if (endHandled) return
+        endHandled = true
+        // 位置此刻就是时长,写下去之后 [isWatchedToEnd] 认得出它 —— 不需要为"看完"单独存
+        // 一个标记,也就不会出现标记和位置各说各话。
+        persistCachedProgress()
+        // 完播上报,**但不关会话**:这一条还装在播放器里,用户按下播放或者拖回去还能接着
+        // 看,而关掉的会话是死的,那之后的位置一个字都报不出去。会话在内容离开时才关。
+        progressSession?.onCompleted()
+        // "播完这条"按 P 计:人听到的一段就是一 P,定时器到这里为止。
+        val nextPart = neighbourPart(1)
+        if (nextPart != null && autoNextEnabled && sleepTimer.state.value.mode != SleepTimerMode.EndOfItem) {
+            playPart(nextPart)
+            return
+        }
+        // **手动的下一条不受影响** —— 那走 `seekToNext`,是用户当场表达的意思。
+        sleepTimer.onItemFinished()
+        stopPlayback()
+    }
+
     private inner class PlayerListener : Player.Listener {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -1603,19 +1827,11 @@ class AudioPlaybackService : MediaSessionService() {
                 publishState()
                 return
             }
-            // 播到底了。位置此刻就是时长,写下去之后 [isWatchedToEnd] 认得出它 —— 不需要为
-            // "看完"单独存一个标记,也就不会出现标记和位置各说各话。
-            persistCachedProgress()
-            // 完播上报,**但不关会话**:这一条还装在播放器里,用户按下播放或者拖回去还能接着
-            // 看,而关掉的会话是死的,那之后的位置一个字都报不出去。会话在内容离开时才关。
-            progressSession?.onCompleted()
-            // 走到 ENDED 有两种可能:队列走完了,或者被 [pauseAtEndOfMediaItems] 拦在了这一条
-            // 的末尾(关掉自动连播、或者定时器设的是"播完这条")。三种都是"这次听完了",
-            // 所以都归到停。
-            //
-            // **手动的下一条不受影响** —— 那走 `seekToNextMediaItem`,是用户当场表达的意思。
-            sleepTimer.onItemFinished()
-            stopPlayback()
+            onReachedEnd()
+        }
+
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) onReachedEnd()
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -1625,6 +1841,7 @@ class AudioPlaybackService : MediaSessionService() {
             emitPositionTick()
             // 暂停本身不发,恢复才补一条(设计文档「决定 3」的表)。
             if (isPlaying) {
+                endHandled = false
                 progressSession?.onResumed(player.currentPosition, playerDurationMillis())
                 startTicking()
             } else {
@@ -1673,6 +1890,8 @@ class AudioPlaybackService : MediaSessionService() {
             playInfo = null
             loadedLocalCopy = false
             setCloudResume(null)
+            // 上一条的"还有下一 P"不能拦在这一条的末尾;这一条的清单落地后会再算一次。
+            applyStopAtEndOfItem()
             // **同一条内容重来一遍不算换条。** 换 P、切清晰度、重试走的也是插入 + seek + 删除
             // (见 [reloadCurrent]),下标同样变了,而这一层只看得见下标。当次手动选的那一档
             // 因此不能一并清掉:清了的话切一次 P 画质就悄悄退回默认档;切清晰度更糟——刚设下
@@ -1683,6 +1902,7 @@ class AudioPlaybackService : MediaSessionService() {
             publishState(loading = true)
             // 下一条多半在这之前几十秒就解析好了(见 [resolvedItems]),现在才轮到它落地。
             adoptResolved(newPosition.mediaItem?.mediaId)
+            extendNearEdges()
         }
 
         /** 画面出来了才算这次打开走完。音频先出声,但用户等的是这一帧。 */
@@ -1718,65 +1938,77 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /**
-     * **只剩两件事:记住"用户想不想听",以及挡住循环。**
+     * **三件事:记住"用户想不想听"、上一条/下一条先在分 P 之间走、挡住循环。**
      *
      * 上/下一条、随机、元数据原先都在这里被接管,因为队列不在播放器里 —— 播放器只装当前
      * 这一条,timeline 答不上"有没有下一条"。队列住进 playlist 之后这些问题播放器自己就能答,
      * 而且答完会发对应的 `onXxxChanged`,MediaController 那份命令缓存于是跟得上,
      * 通知栏和 app 内的按钮走同一条标准命令。
+     *
+     * 基类是 `ForwardingSimpleBasePlayer` 而不是 `ForwardingPlayer`:后者的覆写会打破 Player
+     * 的接口契约(Media3 因此不推荐),前者把每个操作收成一个 `handleXxx`,状态仍从被包的
+     * 播放器现读。
      */
-    private inner class QueuePlayer(player: Player) : ForwardingPlayer(player) {
+    private inner class QueuePlayer(player: Player) : ForwardingSimpleBasePlayer(player) {
 
         /**
-         * 外部控制器按下的播放/暂停。**这两个覆写是 [playIntent] 唯一的正门。**
+         * 外部控制器按下的播放/暂停。**这是 [playIntent] 唯一的正门。**
          *
          * 通知栏、锁屏、耳机线控、车机都经过 MediaSession 落到这里,界面里的播放/暂停按钮走
          * MediaController 也落到这里 —— 也就是说凡是用户亲手表达"放"或"停"的地方,全都在这条
          * 路上。反过来,切后台([pauseForAppBackground])、来电避让(播放器内部处理音频焦点)、
          * 页面离开([ACTION_PAGE_LEFT])都直接动 `player`,不经过这里,于是那个 bit 不受影响。
          */
-        override fun play() {
-            playIntent = true
-            super.play()
-        }
-
-        override fun pause() {
-            playIntent = false
-            super.pause()
-        }
-
-        /** 有些控制器不发 play/pause 而是直接设这个标志,两条路要给出同一个结果。 */
-        override fun setPlayWhenReady(playWhenReady: Boolean) {
+        override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
             playIntent = playWhenReady
-            super.setPlayWhenReady(playWhenReady)
+            return super.handleSetPlayWhenReady(playWhenReady)
         }
 
         /**
          * 随机开关本身归播放器,这里只把它记成下次新建队列的初值 —— 通知栏、车机和 app 内的
          * 按钮走的是同一条命令,所以记在哪条路上都一样,记一次就够。
          */
-        override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) {
-            super.setShuffleModeEnabled(shuffleModeEnabled)
+        override fun handleSetShuffleModeEnabled(shuffleModeEnabled: Boolean): ListenableFuture<*> {
             persistShuffled(shuffleModeEnabled)
+            return super.handleSetShuffleModeEnabled(shuffleModeEnabled)
         }
 
         /**
          * 播完即停是产品约束(DESIGN 2.4b),循环不接受外部设置。
          *
-         * **只留空实现,不再从命令集里把这一条撤掉。** 撤命令那一版(`getAvailableCommands`、
-         * `isCommandAvailable`,加一层过滤 `onAvailableCommandsChanged` 的 listener)换来的是
-         * 通知栏不画一个按下去没反应的循环键;代价是整个应用的暂停键失效、媒体通知不出现 ——
-         * 命令集是所有控制器共用的一份契约,界面里的 MediaController、通知栏、车机、耳机线控
-         * 全从它出发,而 `MediaController` 在命令不可用时是**静默返回**,一行日志都没有。
-         *
-         * Media3 也正是为此把"覆写 ForwardingPlayer 的方法"标为不推荐:那些覆写会打破 Player
-         * 的接口契约。真要撤这一条命令,得改用 `ForwardingSimpleBasePlayer`,而不是在这里手写。
+         * **只留空实现,不从命令集里撤掉这一条。** 撤命令那一版换来的是通知栏不画一个按下去
+         * 没反应的循环键;代价是整个应用的暂停键失效、媒体通知不出现 —— 命令集是所有控制器
+         * 共用的一份契约,而 `MediaController` 在命令不可用时是**静默返回**,一行日志都没有。
          * 一个多余的循环按钮换不来这个风险。
          */
-        override fun setRepeatMode(repeatMode: Int) {
+        override fun handleSetRepeatMode(repeatMode: Int): ListenableFuture<*> {
             if (repeatMode != Player.REPEAT_MODE_OFF) {
                 BiliLog.w("不支持循环(DESIGN 2.4b),忽略 repeatMode=$repeatMode")
             }
+            return Futures.immediateVoidFuture()
+        }
+
+        /**
+         * 上一条/下一条**先在分 P 之间走**。分 P 不是队列项(见 [QueueItem]),播放器不知道它们,
+         * 所以只能在命令这一层接住。通知栏、耳机线控与 app 内按钮都发 `seekToNext/Previous`,
+         * 在这里一处兑现。
+         *
+         * 队列末条上 `BasePlayer.seekToNext` 走 `ignoreSeek`,仍以 INDEX_UNSET 调到这里
+         * (1.10.1 javap 验证),末条视频的下一 P 因此可达。
+         *
+         * 上一条沿用标准语义的前半截:播过 `maxSeekToPreviousPosition` 先回本 P 开头,
+         * 那一段交给基类。`*_MEDIA_ITEM` 两条命令不在此列,它们是"跳到队列里另一条"。
+         */
+        override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {
+            val part = when (seekCommand) {
+                Player.COMMAND_SEEK_TO_NEXT -> neighbourPart(1)
+                Player.COMMAND_SEEK_TO_PREVIOUS ->
+                    if (player.currentPosition <= player.maxSeekToPreviousPosition) neighbourPart(-1) else null
+                else -> null
+            }
+            if (part == null) return super.handleSeek(mediaItemIndex, positionMs, seekCommand)
+            playPart(part)
+            return Futures.immediateVoidFuture()
         }
     }
 
@@ -1789,7 +2021,9 @@ class AudioPlaybackService : MediaSessionService() {
             MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(
                     MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
-                        .add(SessionCommand(ACTION_OPEN_VIDEO, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_ACTIVATE_FRAME, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_RETRY_QUEUE, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_EXTEND_QUEUE, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_OPEN_LIVE, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_PLAY_PART, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SET_QUALITY, Bundle.EMPTY))
@@ -1809,7 +2043,9 @@ class AudioPlaybackService : MediaSessionService() {
             args: Bundle,
         ): ListenableFuture<SessionResult> {
             when (customCommand.customAction) {
-                ACTION_OPEN_VIDEO -> openVideo(args)
+                ACTION_ACTIVATE_FRAME -> activateFrame(args)
+                ACTION_RETRY_QUEUE -> liveFrame?.let { frame -> currentItem()?.let { enrichFrame(frame, it.bvid) } }
+                ACTION_EXTEND_QUEUE -> extendQueue(before = args.getBoolean(EXTRA_BEFORE))
                 ACTION_OPEN_LIVE -> playLive(args)
                 ACTION_PLAY_PART -> playPart(
                     args.getLong(EXTRA_CID),
@@ -1845,8 +2081,21 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     companion object {
-        /** 打开一条视频。幂等,见 [openVideo]。 */
-        const val ACTION_OPEN_VIDEO = "dev.bilby.OPEN_VIDEO"
+        /** 视频页到了前台,报出自己的帧。幂等,见 [activateFrame]。 */
+        const val ACTION_ACTIVATE_FRAME = "dev.bilby.ACTIVATE_FRAME"
+
+        /** 队列没建成,再建一次。见 [QueueState.incomplete]。 */
+        const val ACTION_RETRY_QUEUE = "dev.bilby.RETRY_QUEUE"
+
+        /** 往队列的一头续取,[EXTRA_BEFORE] 指明哪头。见 [extendQueue]。 */
+        const val ACTION_EXTEND_QUEUE = "dev.bilby.EXTEND_QUEUE"
+
+        const val EXTRA_FRAME_ID = "frameId"
+
+        /** [QueueContext] 的 JSON,见 [dev.bilby.data.encodeQueueContext]。 */
+        const val EXTRA_QUEUE_CONTEXT = "queueContext"
+
+        const val EXTRA_BEFORE = "before"
 
         /** 打开一个直播间。幂等,见 [playLive]。 */
         const val ACTION_OPEN_LIVE = "dev.bilby.OPEN_LIVE"
@@ -1906,7 +2155,7 @@ class AudioPlaybackService : MediaSessionService() {
 
         const val EXTRA_BVID = "bvid"
 
-        /** 要换到哪一 P,只属于 [ACTION_PLAY_PART]。**打开视频那条命令不带它**,见 [openVideo]。 */
+        /** 要换到哪一 P,只属于 [ACTION_PLAY_PART]。**报帧的那条命令不带它**,见 [activateFrame]。 */
         const val EXTRA_CID = "cid"
 
         /**
@@ -1936,6 +2185,9 @@ class AudioPlaybackService : MediaSessionService() {
          * 一条已经删掉的视频要让人干等十几秒才等来那句"播不了"。
          */
         private const val MAX_ATTEMPTS = 3
+
+        /** 当前条离队列一头不足几条时往那头续取,见 [extendNearEdges]。 */
+        private const val EXTEND_THRESHOLD = 3
 
         /** 退避的第一档,之后每次翻倍:1s、2s。 */
         private const val RETRY_BASE_DELAY_MILLIS = 1_000L
@@ -1981,6 +2233,16 @@ class AudioPlaybackService : MediaSessionService() {
          */
         fun pauseForAppBackground() {
             runningService?.pauseForAppBackground()
+        }
+
+        /**
+         * 导航栈上还剩哪些视频页(帧 id)。不在里面的帧连同快照丢掉。
+         *
+         * 同进程直接调,和 [stop] 同一个理由:这是导航栈的事实,不是播放控制;调用方是
+         * MainActivity,它看得到整个导航栈,而 MediaController 只属于某一个页面。
+         */
+        fun retainFrames(ids: Set<String>) {
+            runningService?.retainFrames(ids)
         }
 
         private val _state = MutableStateFlow(AudioPlaybackUiState())

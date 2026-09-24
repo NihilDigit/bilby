@@ -1,6 +1,8 @@
 package dev.bilby.ui.player
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -9,14 +11,18 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -28,7 +34,9 @@ import dev.bilby.formatDurationSeconds
 import dev.bilby.data.VideoPart
 import dev.bilby.player.QueueItem
 import dev.bilby.ui.components.CompactVideoRow
+import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 
 /**
@@ -131,6 +139,18 @@ fun buildEpisodeRows(
     )
 }
 
+/**
+ * 队列两头还能不能续、正不正在续,以及续的动作(docs/queue-redesign.md 决定 4)。
+ * 滚到一头就往那头续,人不必找一个"加载更多"按钮。
+ */
+class QueueEdges(
+    val canLoadBefore: Boolean,
+    val canLoadAfter: Boolean,
+    val loadingBefore: Boolean,
+    val loadingAfter: Boolean,
+    val onLoad: (before: Boolean) -> Unit,
+)
+
 /** 正在播的那一条在清单里的下标,没有则 -1。滚动定位与「N / M」都用它。 */
 fun List<EpisodeRow>.currentIndex(): Int = indexOfFirst { it.isCurrent }
 
@@ -153,23 +173,50 @@ fun EpisodeList(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     state: LazyListState = rememberLazyListState(),
+    /** 队列面板才有;没有时两头不续。 */
+    edges: QueueEdges? = null,
 ) {
     val currentIndex = remember(rows) { rows.currentIndex() }
+    val currentBvid = rows.getOrNull(currentIndex)?.bvid
 
     // 列表按自然顺序摆着不动,切集时让高亮那条滚到中间。随机播放不重排列表——列表跟着重排
     // 会让人找不到刚才看的那条在哪。
     //
     // 居中而不是"滚到可见":队列是当前视频前后各一段,只滚到可见的话它会贴在顶或底,
     // 看不出前后还有多少。
-    LaunchedEffect(currentIndex, rows.size) {
+    //
+    // **只在当前条换了时居中,不看条数。** 两头续取会改条数,按条数重新居中的话,人往上翻到
+    // 头、续回来一页,列表就被拽回当前条,永远翻不过去。往前插入的条目不会挪动视野:条目
+    // 按 bvid 作 key,LazyColumn 守住的是第一个可见条目,不是下标。
+    LaunchedEffect(currentBvid) {
         if (currentIndex < 0) return@LaunchedEffect
         // 展开动画期间第一帧 layoutInfo 可能是空的,等布局真的跑过一次再滚,否则滚动扑空、
         // 居中那步被整个跳过。
         snapshotFlow { state.layoutInfo.totalItemsCount }.first { it > 0 }
-        state.scrollToItem(currentIndex)
+        // 顶上那行续取进度也占一个下标。
+        val target = currentIndex + if (edges?.loadingBefore == true) 1 else 0
+        state.scrollToItem(target)
         val info = state.layoutInfo
-        val row = info.visibleItemsInfo.firstOrNull { it.index == currentIndex } ?: return@LaunchedEffect
-        state.scrollToItem(currentIndex, -(info.viewportSize.height - row.size) / 2)
+        val row = info.visibleItemsInfo.firstOrNull { it.index == target } ?: return@LaunchedEffect
+        state.scrollToItem(target, -(info.viewportSize.height - row.size) / 2)
+    }
+
+    if (edges != null) {
+        val latest by rememberUpdatedState(edges)
+        LaunchedEffect(state) {
+            snapshotFlow {
+                val info = state.layoutInfo
+                val visible = info.visibleItemsInfo
+                val atTop = visible.firstOrNull()?.index == 0
+                val atBottom = info.totalItemsCount > 0 && visible.lastOrNull()?.index == info.totalItemsCount - 1
+                val wantBefore = atTop && latest.canLoadBefore && !latest.loadingBefore
+                val wantAfter = atBottom && latest.canLoadAfter && !latest.loadingAfter
+                wantBefore to wantAfter
+            }.distinctUntilChanged().collect { (wantBefore, wantAfter) ->
+                if (wantBefore) latest.onLoad(true)
+                if (wantAfter) latest.onLoad(false)
+            }
+        }
     }
 
     LazyColumn(
@@ -178,6 +225,9 @@ fun EpisodeList(
         contentPadding = contentPadding,
         verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
+        if (edges?.loadingBefore == true) {
+            item(key = "loading-before") { EdgeProgress() }
+        }
         rows.forEach { row ->
             item(key = row.bvid) {
                 CompactVideoRow(
@@ -201,6 +251,20 @@ fun EpisodeList(
                 PartListItem(part = part, onClick = { onSelect(EpisodeTarget.Part(part.cid)) })
             }
         }
+        if (edges?.loadingAfter == true) {
+            item(key = "loading-after") { EdgeProgress() }
+        }
+    }
+}
+
+/** 续取在飞。一行高的小圈,不占一条视频的高度:它只说"还有,在来的路上"。 */
+@Composable
+private fun EdgeProgress() {
+    Box(
+        modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.Tight),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(Dimens.IconInline), strokeWidth = 2.dp)
     }
 }
 

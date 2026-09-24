@@ -82,7 +82,7 @@ class FavRepository(
             mapOf(
                 "media_id" to mediaId.toString(),
                 "pn" to page.toString(),
-                "ps" to PAGE_SIZE.toString(),
+                "ps" to Paging.PAGE_SIZE.toString(),
                 "order" to "mtime",
                 "type" to "0",
                 "tid" to "0",
@@ -190,6 +190,11 @@ class FavRepository(
         attr = attr,
     )
 
+    /** 收藏夹内容一页的条数。列表页据此算出点中的那条落在第几页(见 QueueContext.FavFolder)。 */
+    object Paging {
+        const val PAGE_SIZE = 20
+    }
+
     private companion object {
         const val FOLDER_LIST_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/folder/created/list-all"
         const val FOLDER_INFO_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/folder/info"
@@ -198,7 +203,6 @@ class FavRepository(
         const val FOLDER_DEL_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/folder/del"
         const val RESOURCE_LIST_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/resource/list"
         const val RESOURCE_DEAL_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/resource/batch-deal"
-        const val PAGE_SIZE = 20
 
         /** 视频稿件在收藏体系里的资源类型。 */
         const val VIDEO_RESOURCE_TYPE = 2

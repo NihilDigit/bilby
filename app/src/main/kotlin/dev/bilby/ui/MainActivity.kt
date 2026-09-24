@@ -102,6 +102,10 @@ import androidx.compose.material.icons.outlined.DeleteSweep
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FavFolderDetail
 import dev.bilby.data.PlayerPrefs
+import dev.bilby.data.FavRepository
+import dev.bilby.data.QueueContext
+import dev.bilby.data.SpaceRepository
+import dev.bilby.ui.space.queueContext
 import dev.bilby.data.QueueSource
 import dev.bilby.offline.OfflineItem
 import dev.bilby.offline.OfflineStatus
@@ -170,6 +174,7 @@ import androidx.compose.runtime.remember
 import dev.bilby.player.AudioPlaybackService
 import dev.bilby.ui.listen.ListenScreen
 import dev.bilby.ui.live.LiveRoomRoute
+import dev.bilby.ui.video.PlayerFrame
 import dev.bilby.ui.video.VideoScreen
 import dev.bilby.ui.video.VideoViewModel
 
@@ -305,7 +310,7 @@ private fun BilbyApp(
     val alreadyHere = stringResource(R.string.nav_already_here)
     val push: (NavKey) -> Unit = remember(backStack, snackbarHostState, snackbarScope, alreadyHere) {
         { key ->
-            if (!backStack.pushUnique(key)) {
+            if (!backStack.pushUnique(key.withNewFrame())) {
                 // 连点几下只留最后一条:SnackbarHostState 自带 MutatorMutex,新的一条会
                 // 取消正在显示的那条,不用自己去 dismiss。
                 snackbarScope.launch { snackbarHostState.showSnackbar(alreadyHere) }
@@ -381,6 +386,11 @@ private fun BilbyApp(
     LaunchedEffect(hasVideoPage) {
         if (!hasVideoPage) AudioPlaybackService.stop(context)
     }
+
+    // 队列栈的帧与导航栈上的视频页一一对应,出栈的那些由服务丢掉(docs/queue-redesign.md
+    // 决定 3)。帧的先后只在这里,服务不另记。
+    val videoFrames = backStack.mapNotNullTo(HashSet()) { (it as? Video)?.frame }
+    LaunchedEffect(videoFrames) { AudioPlaybackService.retainFrames(videoFrames) }
 
     NavDisplay(
         backStack = backStack,
@@ -465,6 +475,7 @@ private fun BilbyApp(
                     RootTabs(
                         container = container,
                         onVideoClick = { push(Video(it)) },
+                        onToViewItemClick = { push(Video(it, context = QueueContext.ToView)) },
                         onUserClick = { push(Space(it)) },
                         onLiveClick = { push(LiveRoom(it)) },
                         onSettingsClick = { push(Settings) },
@@ -514,8 +525,7 @@ private fun BilbyApp(
             entry<Video> { key ->
                 VideoRoute(
                     container = container,
-                    bvid = key.bvid,
-                    startListening = key.listening,
+                    key = key,
                     onUpClick = { push(Space(it)) },
                     onOpenQueueSource = {
                         push(CollectionContents(it.mid, it.id, it.isSeason, it.name))
@@ -527,7 +537,7 @@ private fun BilbyApp(
                     //
                     // 今天那个"点下一集不自动播放"的 bug 也出在这里:压栈时旧页的 onDispose
                     // 在新页起播之后才跑,把刚起播的下一集暂停了。替换栈顶让这个错位不成立。
-                    onOpenVideo = { backStack.replaceTopUnique(Video(it)) },
+                    onOpenVideo = { backStack.replaceTopUnique(Video(it).withNewFrame()) },
                     onOpenLink = openLink,
                     onSearchTag = { push(SearchResult(it)) },
                 )
@@ -576,7 +586,7 @@ private fun BilbyApp(
                         // 不该在转屏重建之后又把播放器推回这一 P(见 Destinations 的 Video)。
                         onPlay = { item ->
                             container.partRequest.request(item.bvid, item.cid)
-                            push(Video(item.bvid))
+                            push(Video(item.bvid, context = QueueContext.Offline))
                         },
                         onBack = { backStack.removeLastOrNull() },
                     )
@@ -586,7 +596,7 @@ private fun BilbyApp(
                 CutoutSafe {
                     ToViewListRoute(
                         container = container,
-                        onVideoClick = { push(Video(it)) },
+                        onVideoClick = { push(Video(it, context = QueueContext.ToView)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -597,7 +607,7 @@ private fun BilbyApp(
                         container = container,
                         mediaId = key.mediaId,
                         title = key.title,
-                        onVideoClick = { push(Video(it)) },
+                        onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -653,8 +663,8 @@ private fun BilbyApp(
                     SpaceRoute(
                         container,
                         key.mid,
-                        onVideoClick = { push(Video(it)) },
-                        onListenUp = { push(Video(it, listening = true)) },
+                        onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
+                        onListenUp = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
                         onLiveClick = { push(LiveRoom(it)) },
                         onCollectionClick = {
                             push(CollectionContents(key.mid, it.id, it.isSeason, it.name))
@@ -671,7 +681,7 @@ private fun BilbyApp(
                     CollectionRoute(
                         container = container,
                         key = key,
-                        onVideoClick = { push(Video(it)) },
+                        onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -751,6 +761,8 @@ private fun CutoutSafe(content: @Composable () -> Unit) {
 private fun RootTabs(
     container: AppContainer,
     onVideoClick: (String) -> Unit,
+    /** 「我的」页稍后再看预览里的一条:队列是稍后再看,不是这条视频的归属。 */
+    onToViewItemClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onLiveClick: (Long) -> Unit,
     onSettingsClick: () -> Unit,
@@ -825,6 +837,7 @@ private fun RootTabs(
                 profileScrollToTop = profileScrollToTop,
                 container = container,
                 onVideoClick = onVideoClick,
+                onToViewItemClick = onToViewItemClick,
                 onUserClick = onUserClick,
                 onLiveClick = onLiveClick,
                 onSettingsClick = onSettingsClick,
@@ -867,6 +880,7 @@ private fun RootTabs(
                     profileScrollToTop = profileScrollToTop,
                     container = container,
                     onVideoClick = onVideoClick,
+                    onToViewItemClick = onToViewItemClick,
                     onUserClick = onUserClick,
                     onLiveClick = onLiveClick,
                     onSettingsClick = onSettingsClick,
@@ -912,6 +926,7 @@ private fun RootTabsContent(
     profileScrollToTop: Int,
     container: AppContainer,
     onVideoClick: (String) -> Unit,
+    onToViewItemClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onLiveClick: (Long) -> Unit,
     onSettingsClick: () -> Unit,
@@ -973,6 +988,7 @@ private fun RootTabsContent(
                     container = container,
                     scrollToTop = profileScrollToTop,
                     onVideoClick = onVideoClick,
+                    onToViewItemClick = onToViewItemClick,
                     onUserClick = onUserClick,
                     onOpenHistory = onOpenHistory,
                     onOpenToView = onOpenToView,
@@ -1129,6 +1145,7 @@ private fun ProfilePane(
     container: AppContainer,
     scrollToTop: Int,
     onVideoClick: (String) -> Unit,
+    onToViewItemClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
@@ -1168,6 +1185,7 @@ private fun ProfilePane(
         state = state,
         scrollToTop = scrollToTop,
         onVideoClick = onVideoClick,
+        onToViewItemClick = onToViewItemClick,
         onOpenHistory = onOpenHistory,
         onOpenToView = onOpenToView,
         onOpenOffline = onOpenOffline,
@@ -1807,7 +1825,7 @@ private fun FavFolderRoute(
     container: AppContainer,
     mediaId: Long,
     title: String,
-    onVideoClick: (String) -> Unit,
+    onVideoClick: (String, QueueContext) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: FavFolderViewModel = viewModel(
@@ -1823,7 +1841,11 @@ private fun FavFolderRoute(
     ) { insets ->
         FavFolderScreen(
             state = state,
-            onItemClick = { onVideoClick(it.bvid) },
+            onItemClick = { item ->
+                val index = state.items.indexOf(item).coerceAtLeast(0)
+                val page = index / FavRepository.Paging.PAGE_SIZE + 1
+                onVideoClick(item.bvid, QueueContext.FavFolder(mediaId, title, page))
+            },
             onLoadMore = vm::loadMore,
             onRetry = vm::retry,
             onRefresh = vm::refresh,
@@ -1888,8 +1910,8 @@ private fun FollowingsRoute(
 private fun SpaceRoute(
     container: AppContainer,
     mid: Long,
-    onVideoClick: (String) -> Unit,
-    onListenUp: (String) -> Unit,
+    onVideoClick: (String, QueueContext) -> Unit,
+    onListenUp: (String, QueueContext) -> Unit,
     onLiveClick: (Long) -> Unit,
     onCollectionClick: (SpaceCollectionItem) -> Unit,
     onDynamicAction: (DynamicAction) -> Unit,
@@ -1920,7 +1942,11 @@ private fun SpaceRoute(
         onLoadMoreDynamics = vm::loadMoreDynamics,
         onLoadMoreCollections = vm::loadMoreCollections,
         onCollectionClick = onCollectionClick,
-        onVideoClick = { onVideoClick(it.bvid) },
+        // 队列就是投稿栏眼前这份:排序与生效中的搜索词一起带上,页号按这条在列表里的位置算。
+        onVideoClick = { item ->
+            val index = state.archives.items.indexOf(item).coerceAtLeast(0)
+            onVideoClick(item.bvid, state.archives.queueContext(mid, page = index / SpaceRepository.ARCHIVE_PAGE_SIZE + 1))
+        },
         onDynamicAction = onDynamicAction,
         onLikeDynamic = vm::likeDynamic,
         onLiveClick = onLiveClick,
@@ -1933,7 +1959,7 @@ private fun SpaceRoute(
         // 听这位 UP 的投稿:挑第一条进播放页并直接以听的状态打开。**宿主只有播放页一个** ——
         // 空间页不承载听视频界面,否则又会多出一处需要单独维护的生命周期。
         onListenUp = {
-            state.archives.items.firstOrNull()?.let { onListenUp(it.bvid) }
+            state.archives.items.firstOrNull()?.let { onListenUp(it.bvid, state.archives.queueContext(mid, page = 1)) }
         },
         onBack = onBack,
         onRetry = vm::retry,
@@ -1950,7 +1976,7 @@ private fun SpaceRoute(
 private fun CollectionRoute(
     container: AppContainer,
     key: CollectionContents,
-    onVideoClick: (String) -> Unit,
+    onVideoClick: (String, QueueContext) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: CollectionViewModel = viewModel(
@@ -1968,7 +1994,11 @@ private fun CollectionRoute(
         onBack = onBack,
         onLoadMore = { vm.loadMore() },
         onRefresh = vm::refresh,
-        onVideoClick = { onVideoClick(it.bvid) },
+        onVideoClick = { item ->
+            val index = state.items.indexOf(item).coerceAtLeast(0)
+            val page = index / SpaceRepository.COLLECTION_PAGE_SIZE + 1
+            onVideoClick(item.bvid, QueueContext.Collection(key.mid, key.id, key.isSeason, key.name, page))
+        },
     )
 }
 
@@ -2208,8 +2238,7 @@ private fun ArticleRoute(
 @Composable
 private fun VideoRoute(
     container: AppContainer,
-    bvid: String,
-    startListening: Boolean = false,
+    key: Video,
     onUpClick: (Long) -> Unit,
     onOpenLink: (String) -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
@@ -2217,17 +2246,32 @@ private fun VideoRoute(
     onSearchTag: (String) -> Unit,
     onBack: () -> Unit,
 ) {
-    // 切集**不进 backstack**。合集里的每一集互为平级,换一集不是进了一层;走 backstack 的话
-    // NavDisplay 只会按下钻处理,而这里根本没有层级关系。
-    //
-    // 这也把建模摆正了:压栈过一版(每集攒一层)、替换栈顶过一版(语义仍是导航),两版都是在
-    // 用导航层表达一件页内的事。CLAUDE.md 记着听视频被三次错误地建模成导航目的地,切集是
-    // 同一个坑的另一个入口。
-    //
-    // **`bvid` 必须当 key**:不给 key 的话,导航到另一条视频时这个位置会把上一条的
-    // `episode` 复原回来,而 `VideoPane` 的 ViewModel key 就是它 —— 结果是点开新视频先看到
-    // 上一条的详情页,要等播放器真正切过去、下面那个 LaunchedEffect 才纠正回来。
-    var episode by rememberSaveable(bvid) { mutableStateOf(bvid) }
+    val frame = remember(key.frame) { PlayerFrame(key.frame, key.context) }
+
+    /**
+     * 这一页此刻显示哪条视频。**这一页是活帧时就是队列当前条**,页面跟着队列走,不是反过来:
+     * 推队列的可能是通知栏的下一条、耳机线控、听视频里点的某一项、或者一条播完自动连播,
+     * 这些路径没有一条经过界面。
+     *
+     * 不是活帧时停在离开时那一条。它随页面保存:返回到这一页时服务按快照换回队列,进程被杀
+     * 之后则按它和入口上下文重建(见 AudioPlaybackService.activateFrame)。
+     *
+     * 原先靠路由 bvid 与一道"队列报出这一条之后才开始跟"的门同步,那道门是 `remember`,
+     * 进 UP 主页一趟就丢,回来之后页面不再跟队列,而重连控制器时按页面手上的旧 bvid 重发
+     * 打开命令,把播放器拽回旧的那条。帧 id 让"跟不跟"只剩一个判据。
+     *
+     * 切集**不进 backstack**:合集里的每一集互为平级,换一集不是进了一层。
+     *
+     * **换页不做转场。** 横滑表达的是"我横着挪了一格",那是给用户手势配的;自动连播不是
+     * 用户动作,滑一下会让人以为自己划了屏。
+     */
+    var shownBvid by rememberSaveable(key.frame) { mutableStateOf(key.bvid) }
+    val audioState by AudioPlaybackService.state.collectAsStateWithLifecycle()
+    val isLiveFrame = audioState.queue?.frameId == key.frame
+    val queueCurrent = audioState.queue?.current?.bvid
+    LaunchedEffect(isLiveFrame, queueCurrent) {
+        if (isLiveFrame && queueCurrent != null) shownBvid = queueCurrent
+    }
 
     /**
      * 听视频**提到切集之外**。
@@ -2237,54 +2281,14 @@ private fun VideoRoute(
      * 被踢回有画面的界面。
      *
      * 提到这里仍然不是导航目的地 —— 它只是换了个持有者,backstack 上依旧只有一个播放页。
+     * key 是帧:同一页内切集不退出听视频,而点开另一条视频是新的一帧,回到 [Video.listening]。
      */
-    //
-    // key 用的是路由参数 `bvid` 而不是上面那个 `episode`:这正好表达了注释说的那条边界 ——
-    // 同一条路由内切集不该退出听视频,而点开**另一条**视频是一次新的进入,该回到 [startListening]。
-    var listening by rememberSaveable(bvid) { mutableStateOf(startListening) }
-
-    /**
-     * **页面跟着队列走,不是反过来。**
-     *
-     * 队列在服务那边,推它的可能是通知栏的下一条、耳机线控、听视频里点的某一项、或者
-     * 一条播完自动连播。这些路径没有一条经过界面,所以"这一页在放哪条视频"只能由队列回答。
-     *
-     * 原先没有这一条:听视频里连播到别的视频、退回播放页后,页面还停在进来时那一条 ——
-     * 标题、简介、点赞数全是 A 的,而播放器在放 E。
-     *
-     * **换页不做转场。** 横滑表达的是"我横着挪了一格",那是给用户手势配的;自动连播不是
-     * 用户动作,滑一下会让人以为自己划了屏。而且它恰好和取流、prepare、codec 初始化撞在同一
-     * 瞬间,滑进来的还是一块空页(详情要等一次网络往返)——三样凑在一起,读起来就是卡。
-     */
-    val audioState by AudioPlaybackService.state.collectAsStateWithLifecycle()
-
-    /**
-     * **但要等队列先追上这一条,才开始跟着它走。**
-     *
-     * 刚点开一条新视频时,服务还在放上一条 —— 队列要重建、取流、prepare,这中间有一段
-     * 几百毫秒到几秒的窗口,`audioState.queue?.current` 报的仍是**上一条**。此时若无条件跟随,
-     * 这一句会立刻把 `episode` 从刚请求的 bvid 拽回旧的那条,于是"打开新播放页却在放老视频";
-     * 等新的真正开播,又翻回来 —— 用户看到的是页面自己跳了两次。
-     *
-     * 所以先不跟:直到队列**报出这一条自己**(说明播放确实切过来了)才放行。之后的连播、
-     * 通知栏切歌、耳机线控就都能正常带着页面走。
-     *
-     * 代价是这一条始终没播成(取流失败)时页面不再跟队列 —— 那反而是对的:此刻页面该停在
-     * 用户点开的那一条上显示失败,而不是悄悄变成另一条视频的详情。
-     */
-    var followingQueue by remember(bvid) { mutableStateOf(false) }
-    LaunchedEffect(audioState.queue?.current?.bvid) {
-        val target = audioState.queue?.current?.bvid ?: return@LaunchedEffect
-        if (!followingQueue) {
-            if (target == bvid) followingQueue = true
-            return@LaunchedEffect
-        }
-        if (target != episode) episode = target
-    }
+    var listening by rememberSaveable(key.frame) { mutableStateOf(key.listening) }
 
     VideoPane(
         container = container,
-        bvid = episode,
+        bvid = shownBvid,
+        frame = frame,
         listening = listening,
         onListeningChange = { listening = it },
         onUpClick = onUpClick,
@@ -2300,6 +2304,7 @@ private fun VideoRoute(
 private fun VideoPane(
     container: AppContainer,
     bvid: String,
+    frame: PlayerFrame,
     listening: Boolean,
     onListeningChange: (Boolean) -> Unit,
     onUpClick: (Long) -> Unit,
@@ -2388,6 +2393,7 @@ private fun VideoPane(
 
     VideoScreen(
         bvid = bvid,
+        frame = frame,
         state = state,
         videoTags = videoTags,
         onLoadTags = vm::loadVideoTags,
@@ -2415,7 +2421,6 @@ private fun VideoPane(
         onCoinDialogClosed = vm::clearCoinAttempt,
         onOpenFavPicker = vm::openFavPicker,
         onFavConfirm = vm::confirmFavorite,
-        onPlayEpisode = onOpenVideo,
         onRelatedVideoClick = onOpenVideo,
         onOpenLink = onOpenLink,
         onCommentSort = { commentVm?.setSort(it) },

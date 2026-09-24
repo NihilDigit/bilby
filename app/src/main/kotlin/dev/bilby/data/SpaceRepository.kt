@@ -14,8 +14,10 @@ import dev.bilby.api.dto.SpaceSeasonSeriesEntryDto
 import dev.bilby.api.dto.SpaceSeasonSeriesResponseDto
 import dev.bilby.api.dto.SpaceUserInfoDto
 import dev.bilby.api.dto.RelationStatDto
+import dev.bilby.api.dto.ArchiveCursorResponseDto
 import dev.bilby.api.dto.ArchiveSearchResponseDto
 import dev.bilby.api.dto.VListItemDto
+import dev.bilby.api.getAppData
 import dev.bilby.api.getData
 import dev.bilby.api.map
 import dev.bilby.api.propagateFailure
@@ -69,6 +71,28 @@ enum class SpaceArchiveOrder(val apiValue: String) {
 
 data class SpaceArchivePage(val total: Int, val items: List<SpaceVideoItem>)
 
+/** 投稿游标接口的一条。时长是数值秒,UP 名接口给了就带上。 */
+data class CursorArchiveItem(
+    val aid: Long,
+    val bvid: String,
+    val title: String,
+    val coverUrl: String,
+    val durationSeconds: Long,
+    val upName: String,
+)
+
+/**
+ * 以某条投稿为游标取到的一页,按发布时间倒序(新的在前)。
+ *
+ * @param hasNewer 这一页之前(更新)还有没有。
+ * @param hasOlder 这一页之后(更旧)还有没有。
+ */
+data class CursorArchivePage(
+    val items: List<CursorArchiveItem>,
+    val hasNewer: Boolean,
+    val hasOlder: Boolean,
+)
+
 /**
  * 空间动态 tab 的一条。**每条都是一张 [card]**,类型分发在 `DynamicCardMapper` 里做完,这里不再
  * 按形态分一遍 —— 以前分过,于是空间页认得的类型比 PiliPlus 少一大半,直播、音频、番剧更新在
@@ -110,6 +134,14 @@ data class SpaceCollectionDetailPage(val total: Int, val items: List<SpaceVideoI
  * 裸调返回 -400/-403(notes 1.1、1.3、1.5 节)。
  */
 class SpaceRepository(private val client: BiliClient) {
+
+    companion object {
+        /** 投稿列表一页的条数。列表页据此算出点中的那条落在第几页(见 QueueContext.UpArchive)。 */
+        const val ARCHIVE_PAGE_SIZE = 30
+
+        /** 合集/系列目录一页的条数,同上。 */
+        const val COLLECTION_PAGE_SIZE = 30
+    }
 
     /**
      * 这个人的直播间号,没开通过直播间返回 null。
@@ -200,7 +232,7 @@ class SpaceRepository(private val client: BiliClient) {
     ): BiliResult<SpaceArchivePage> {
         val params = buildMap {
             put("mid", mid.toString())
-            put("ps", "30")
+            put("ps", ARCHIVE_PAGE_SIZE.toString())
             // 分区筛选,0 即不限。PiliPlus 恒定带上(member.dart:363),我们没有分区筛选
             // 这个功能,但少一个参数就是少一个字段,签名内容也跟着不同。
             put("tid", "0")
@@ -220,6 +252,56 @@ class SpaceRepository(private val client: BiliClient) {
         )
         return result.map { dto ->
             SpaceArchivePage(dto.page.count, dto.list.vlist.map { it.toVideoItem() })
+        }
+    }
+
+    /**
+     * 以 [aid] 为游标取这位 UP 的投稿,**不受页号深度影响**:web 投稿接口的深 `pn` 会被服务端
+     * 夹住(见 [loadArchives] 的调用方历史),这个接口按 aid 定位,几十万条的 UP 也一次命中
+     * (notes/space-and-search.md 1.4.3)。
+     *
+     * @param newer true 取游标之前(更新)的一页,false 取之后(更旧)的一页。
+     * @param includeCursor 取更旧的那页时把游标自己放在第一条。取更新的那页不认这个参数。
+     *
+     * 更新的那一页接口仍按倒序给(紧邻游标的在末尾),这里原样返回,调用方直接接在前面。
+     * 游标不在这位 UP 的投稿里(动态视频、直播回放)时返回 -1200,不是空页。
+     */
+    suspend fun loadArchiveCursor(
+        mid: Long,
+        aid: Long,
+        newer: Boolean,
+        includeCursor: Boolean = false,
+    ): BiliResult<CursorArchivePage> {
+        val params = buildMap {
+            put("vmid", mid.toString())
+            put("aid", aid.toString())
+            put("ps", "20")
+            put("order", "pubdate")
+            put("build", "2001100")
+            put("mobi_app", "android_hd")
+            put("platform", "android")
+            put("qn", "80")
+            if (newer) put("sort", "asc") else if (includeCursor) put("include_cursor", "true")
+        }
+        return client.getAppData<ArchiveCursorResponseDto>(
+            "${BiliConstants.APP_HOST}/x/v2/space/archive/cursor",
+            params,
+        ).map { dto ->
+            CursorArchivePage(
+                items = dto.item.mapNotNull { item ->
+                    val itemAid = item.param.toLongOrNull() ?: return@mapNotNull null
+                    CursorArchiveItem(
+                        aid = itemAid,
+                        bvid = item.bvid,
+                        title = item.title,
+                        coverUrl = item.cover.toHttpsUrl(),
+                        durationSeconds = item.duration,
+                        upName = item.author,
+                    )
+                },
+                hasNewer = dto.hasPrev,
+                hasOlder = dto.hasNext,
+            )
         }
     }
 
@@ -253,7 +335,7 @@ class SpaceRepository(private val client: BiliClient) {
                 "mid" to mid.toString(),
                 "season_id" to id.toString(),
                 "sort_reverse" to "false",
-                "page_size" to "30",
+                "page_size" to COLLECTION_PAGE_SIZE.toString(),
                 "page_num" to page.toString(),
                 "web_location" to "333.1387",
             )
@@ -262,7 +344,7 @@ class SpaceRepository(private val client: BiliClient) {
                 "mid" to mid.toString(),
                 "series_id" to id.toString(),
                 "sort" to "desc",
-                "ps" to "30",
+                "ps" to COLLECTION_PAGE_SIZE.toString(),
                 "pn" to page.toString(),
                 "web_location" to "333.1387",
             )

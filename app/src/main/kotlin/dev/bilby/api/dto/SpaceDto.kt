@@ -139,3 +139,24 @@ data class SeasonArchiveDto(
 
 @Serializable
 data class SeasonArchiveStatDto(val view: Long = 0L, val danmaku: Long = 0L)
+
+/** App 端空间投稿游标接口 `x/v2/space/archive/cursor`(notes/space-and-search.md 1.4.3)。 */
+@Serializable
+data class ArchiveCursorResponseDto(
+    val item: List<ArchiveCursorItemDto> = emptyList(),
+    val count: Int = 0,
+    @SerialName("has_prev") val hasPrev: Boolean = false,
+    @SerialName("has_next") val hasNext: Boolean = false,
+)
+
+@Serializable
+data class ArchiveCursorItemDto(
+    /** aid,字符串形式。 */
+    val param: String = "",
+    val bvid: String = "",
+    val title: String = "",
+    val cover: String = "",
+    /** 数值秒,不是 web 投稿列表那种 "12:34" 字符串。 */
+    val duration: Long = 0,
+    val author: String = "",
+)

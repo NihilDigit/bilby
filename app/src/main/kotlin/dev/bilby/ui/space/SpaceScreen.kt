@@ -73,6 +73,7 @@ import dev.bilby.data.FollowRepository
 import dev.bilby.data.FollowState
 import dev.bilby.data.UpBrief
 import dev.bilby.data.RelationRepository
+import dev.bilby.data.QueueContext
 import dev.bilby.data.SpaceArchiveOrder
 import dev.bilby.data.SpaceCollectionItem
 import dev.bilby.data.SpaceProfile
@@ -163,6 +164,13 @@ data class SpaceArchiveTabState(
     val hasMore: Boolean = true,
     @StringRes val error: Int? = null,
 )
+
+/**
+ * 投稿栏眼前这份列表作为队列上下文:排序与**生效中的**搜索词(输入框里没按回车的字不算),
+ * 页号由调用方按点中的那条算。
+ */
+fun SpaceArchiveTabState.queueContext(mid: Long, page: Int) =
+    QueueContext.UpArchive(mid = mid, order = order, keyword = appliedKeyword, page = page)
 
 data class SpaceListTabState(
     val items: List<SpaceDynamicItem> = emptyList(),

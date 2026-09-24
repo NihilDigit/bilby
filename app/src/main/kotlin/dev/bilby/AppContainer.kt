@@ -220,7 +220,7 @@ class AppContainer(context: Context) {
     val updateRepository: UpdateRepository by lazy { UpdateRepository(httpClient, json) }
 
     val queueSourceRepository: QueueSourceRepository by lazy {
-        QueueSourceRepository(spaceRepository, videoRepository)
+        QueueSourceRepository(spaceRepository, videoRepository, favRepository, toViewRepository, offlineStore)
     }
 
     val llmClient: LlmClient by lazy {

@@ -253,6 +253,8 @@ class ProfileViewModel(
 fun ProfileScreen(
     state: ProfileUiState,
     onVideoClick: (String) -> Unit,
+    /** 稍后再看预览里的一条。队列是稍后再看,与 [onVideoClick] 分开。 */
+    onToViewItemClick: (String) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
@@ -353,7 +355,7 @@ fun ProfileScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         HistorySection(state.history, onVideoClick, onOpenHistory, onRetryHistory)
-                        ToViewSection(state.toView, onVideoClick, onOpenToView, onRetryToView)
+                        ToViewSection(state.toView, onToViewItemClick, onOpenToView, onRetryToView)
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         // 缓存跟着收藏走:两者都是"我自己存下来的东西",而上面两块是"我看过/打算看的"。
@@ -363,7 +365,7 @@ fun ProfileScreen(
                 }
             } else {
                 HistorySection(state.history, onVideoClick, onOpenHistory, onRetryHistory)
-                ToViewSection(state.toView, onVideoClick, onOpenToView, onRetryToView)
+                ToViewSection(state.toView, onToViewItemClick, onOpenToView, onRetryToView)
                 FavFoldersSection(state.favFolders, onOpenFavFolder, onOpenFavFolders, onRetryFavFolders)
                 OfflineSection(state.offline, onOpenOffline)
             }
@@ -804,6 +806,7 @@ private fun ProfileScreenPreview() {
                 ),
             ),
             onVideoClick = {},
+            onToViewItemClick = {},
             onOpenHistory = {},
             onOpenToView = {},
             onOpenOffline = {},
@@ -827,6 +830,7 @@ private fun ProfileScreenErrorPreview() {
         ProfileScreen(
             state = ProfileUiState(accountLoading = false, accountError = R.string.error_network),
             onVideoClick = {},
+            onToViewItemClick = {},
             onOpenHistory = {},
             onOpenToView = {},
             onOpenOffline = {},

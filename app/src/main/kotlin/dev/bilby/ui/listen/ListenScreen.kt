@@ -100,6 +100,7 @@ import dev.bilby.R
 import dev.bilby.ui.player.EpisodeList
 import dev.bilby.ui.player.EpisodeRow
 import dev.bilby.ui.player.EpisodeTarget
+import dev.bilby.ui.player.QueueEdges
 import dev.bilby.formatDurationMillis
 import dev.bilby.player.AudioPlaybackUiState
 import dev.bilby.player.QueueItem
@@ -217,6 +218,8 @@ fun ListenScreen(
      */
     episodes: List<EpisodeRow>,
     onSelectEpisode: (EpisodeTarget) -> Unit,
+    /** 队列两头续取,见 [QueueEdges]。 */
+    queueEdges: QueueEdges? = null,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onToggleShuffle: () -> Unit,
@@ -345,6 +348,7 @@ fun ListenScreen(
                 AdaptiveContent(modifier = Modifier.fillMaxWidth(), maxWidth = Breakpoints.MediaWidth) {
                     QueueSheetContent(
                         episodes = episodes,
+                        edges = queueEdges,
                         shuffled = (state.queue?.shuffled == true),
                         onToggleShuffle = onToggleShuffle,
                         onSelectEpisode = onSelectEpisode,
@@ -608,11 +612,16 @@ private fun DiscView(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if ((state.queue?.size ?: 0) > 0) {
+                val sourcePosition = state.queue?.sourcePosition
+                val sourceTotal = state.queue?.sourceTotal
+                if (sourcePosition != null && sourceTotal != null) {
                     // 队列位置和 UP 名同行:它是"这是第几条",属于同一句话的后半截,
                     // 单独占一行会让唱片和进度条之间空出一整行。
+                    //
+                    // 数的是在整份来源里的位置,不是 playlist 下标:队列只读了来源的一段,
+                    // 拿已读条数当 M 会让三千条的 UP 读成"共 40 条"。来源给不出总数时不显示。
                     Text(
-                        "${(state.queue?.positionInQueue ?: 0)} / ${(state.queue?.size ?: 0)}",
+                        "$sourcePosition / $sourceTotal",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -798,6 +807,7 @@ private fun FailureRow(message: String, retrying: Boolean, onRetry: () -> Unit) 
 @Composable
 private fun QueueSheetContent(
     episodes: List<EpisodeRow>,
+    edges: QueueEdges?,
     shuffled: Boolean,
     onToggleShuffle: () -> Unit,
     onSelectEpisode: (EpisodeTarget) -> Unit,
@@ -840,6 +850,7 @@ private fun QueueSheetContent(
         EpisodeList(
             rows = episodes,
             onSelect = onSelectEpisode,
+            edges = edges,
             contentPadding = PaddingValues(
                 horizontal = Spacing.Comfortable,
                 vertical = Spacing.Tight,

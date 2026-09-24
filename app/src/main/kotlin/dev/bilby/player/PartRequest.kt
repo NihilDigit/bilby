@@ -7,7 +7,7 @@ package dev.bilby.player
  * 「决定 1」),分 P 是播放层的内部状态。指名的意图因此不能挂在导航参数上 —— 那样它会跟着
  * 页面一起被复原,转屏之后又执行一遍,把服务端记着的那一 P 顶回用户几分钟前点的那一行。
  *
- * 所以它走这里:点的那一下写进来,[AudioPlaybackService.openVideo] 一进门就取走一次,取完
+ * 所以它走这里:点的那一下写进来,[AudioPlaybackService.activateFrame] 一进门就取走一次,取完
  * 即空。页内切 P 不经过这里,它本来就是一条命令([AudioPlaybackService.ACTION_PLAY_PART])。
  *
  * **读点只能有一个,而且必须在"打开视频"的入口上。** 它曾经在装载解析里,也就是只有冷装载

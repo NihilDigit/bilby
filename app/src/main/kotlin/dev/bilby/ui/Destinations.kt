@@ -1,8 +1,10 @@
 package dev.bilby.ui
 
 import androidx.navigation3.runtime.NavKey
+import dev.bilby.data.QueueContext
 import dev.bilby.ui.settings.SettingsSection
 import kotlinx.serialization.Serializable
+import java.util.UUID
 
 /**
  * Nav3 的 backstack 就是一个 SnapshotStateList<NavKey>,没有独立的图定义。
@@ -43,7 +45,22 @@ data object ToView : NavKey
 data class Video(
     val bvid: String,
     val listening: Boolean = false,
+    /** 点开这条视频时用户眼前的那份列表,队列就是它。见 [QueueContext]。 */
+    val context: QueueContext = QueueContext.Affiliation,
+    /**
+     * 这一页在队列栈里的帧 id(docs/queue-redesign.md 决定 3)。**每次压栈都是新的一帧**,
+     * 同一条视频从别处再点开一次也是:栈里的每一页各自记着自己的队列。它也让 key 全栈唯一,
+     * [pushUnique] 对视频页因此总是压栈。
+     *
+     * **由压栈的那一处分配([withNewFrame]),不在构造时生成。** 解析一条链接得到的是"要去哪",
+     * 还不是栈上的一页;构造时现生成的话,同一个目的地构造两次就不相等了。
+     */
+    val frame: String = "",
 ) : NavKey
+
+/** 压栈前给视频页分配帧 id。已经有的(恢复出来的)原样留着。 */
+fun NavKey.withNewFrame(): NavKey =
+    if (this is Video && frame.isEmpty()) copy(frame = UUID.randomUUID().toString()) else this
 
 /**
  * 设置页。它不是产品面的第六个界面,是必要的杂物间(DESIGN 2 节)——

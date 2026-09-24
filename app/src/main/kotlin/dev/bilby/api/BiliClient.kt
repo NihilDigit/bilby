@@ -116,6 +116,23 @@ class BiliClient(
         }
 
     /**
+     * app 端路线的读接口。签名、UA 与身份 header 同 [appPostForm],另带 PiliPlus 给 app 请求
+     * 统一加的 `bili-http-engine: cronet`(`member.dart:155-160`)。空间投稿的 aid 游标接口
+     * 只在这条路线上(notes/space-and-search.md 1.4.3)。
+     */
+    suspend fun appGet(url: String, params: Map<String, String>): HttpResponse {
+        val credentials = settings.credentials.first()
+        val accessKey = credentials.accessKey
+        val signed = AppSign.sign(if (accessKey.isEmpty()) params else params + ("access_key" to accessKey))
+        return http.get(url) {
+            header(HttpHeaders.UserAgent, BiliConstants.APP_USER_AGENT)
+            header("bili-http-engine", "cronet")
+            applyIdentityHeaders(credentials)
+            signed.forEach { (k, v) -> parameter(k, v) }
+        }
+    }
+
+    /**
      * app 端路线(app.bilibili.com):参数里带 access_key 并做 appkey 签名,**不带 Cookie**。
      * 网页端与 app 端是两套授权,混着发只会两边都不认。
      */
@@ -372,6 +389,24 @@ suspend inline fun <reified T> BiliClient.getData(
             } else {
                 BiliLog.w("GET ${url.pathOnly()} 失败${envelope.describeFailure()}")
                 if (envelope.code == CODE_NOT_LOGGED_IN) invalidateIfLoggedOut()
+                BiliResult.ApiError(envelope.code, envelope.message)
+            }
+        },
+        onFailure = { transportFailure("GET ${url.pathOnly()}", it) },
+    )
+
+/** [BiliClient.appGet] 的信封拆解,三分法同 [getData]。 */
+suspend inline fun <reified T> BiliClient.getAppData(
+    url: String,
+    params: Map<String, String>,
+): BiliResult<T> = runCatching { appGet(url, params).body<BiliResponse<T>>() }
+    .fold(
+        onSuccess = { envelope ->
+            val data = envelope.data
+            if (envelope.code == 0 && data != null) {
+                BiliResult.Ok(data)
+            } else {
+                BiliLog.w("GET ${url.pathOnly()} 失败${envelope.describeFailure()}")
                 BiliResult.ApiError(envelope.code, envelope.message)
             }
         },

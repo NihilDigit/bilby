@@ -69,12 +69,15 @@ import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import dev.bilby.R
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.player.EpisodeTarget
+import dev.bilby.ui.player.QueueEdges
 import dev.bilby.ui.player.buildEpisodeRows
 import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
 import dev.bilby.data.MemberCard
+import dev.bilby.data.QueueContext
 import dev.bilby.data.QueueSource
+import dev.bilby.data.encodeQueueContext
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.delay
@@ -114,6 +117,12 @@ import dev.bilby.ui.components.collapsingHeader
 import dev.bilby.ui.components.rememberCollapsingHeaderState
 
 /**
+ * 视频页在队列栈里的那一帧(docs/queue-redesign.md 决定 3):帧 id 与点开时的入口上下文,
+ * 都来自导航 key。
+ */
+data class PlayerFrame(val id: String, val context: QueueContext)
+
+/**
  * 播放页。**没有相关推荐栏、没有自动连播**(DESIGN 2.3/1.3);「找相关」占的是官方相关
  * 推荐的位置,但要用户点了才跑,见 VideoTabs。
  *
@@ -129,6 +138,8 @@ fun VideoScreen(
      * `matchesCurrentPage` 的用法)。这个值由 `VideoPane` 直接传,它手上现成的路由参数就是它。
      */
     bvid: String,
+    /** 这一页在队列栈里的帧,见 [PlayerFrame]。 */
+    frame: PlayerFrame,
     state: VideoUiState,
     /** 这条视频的标签,展开简介才显示,见 VideoViewModel.videoTags。 */
     videoTags: List<VideoTag>,
@@ -168,7 +179,6 @@ fun VideoScreen(
     onCoinDialogClosed: () -> Unit,
     onOpenFavPicker: () -> Unit,
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
-    onPlayEpisode: (bvid: String) -> Unit,
     onRelatedVideoClick: (bvid: String) -> Unit,
     /** 评论正文里引的那条链接。站内解析归导航层,见 MainActivity 的 openLink。 */
     onOpenLink: (String) -> Unit,
@@ -234,11 +244,11 @@ fun VideoScreen(
      */
     var dismissedResumeMillis by rememberSaveable { mutableStateOf<Long?>(null) }
 
-    // 判据用路由参数 [bvid],与 `matchesCurrentPage` 同源。用 `state.detail?.bvid` 的那一版
-    // 在详情请求失败时是 null:那时页面早已凭 bvid 发过打开命令、播放器正放着本页这一条,
-    // 而 null 谁也对不上,离开页面音频就继续响。
+    // 判据是帧,不是 bvid:队列在这一页不在场时(UP 主页、找相关)自动连播到了别的视频,
+    // 这份队列仍是这一页的。用 `state.detail?.bvid` 的那一版在详情请求失败时是 null,离开页面
+    // 音频就继续响;用 bvid 的那一版在连播之后认不出自己的队列。
     val playerHoldsThisPage = {
-        AudioPlaybackService.state.value.queue?.current?.bvid == bvid
+        AudioPlaybackService.state.value.queue?.frameId == frame.id
     }
 
     DisposableEffect(context) {
@@ -364,18 +374,6 @@ fun VideoScreen(
         currentCid = currentCid,
     )
 
-    /** 队列的唯一来源是服务。页面只是把它摆出来,不自己攒一份。 */
-    val shownQueue = QueueUiState(
-        rows = episodeRows,
-        sourceLabel = audioState.queue?.sourceLabel.orEmpty(),
-        source = audioState.queue?.source,
-        shuffled = (audioState.queue?.shuffled == true),
-        // 判据从"取流转圈且队列是空的"换成"完整队列建好了没有"。起播现在不等建队列,队列里
-        // 那一条是临时占位而不是队列内容(见 AudioPlaybackService.openVideo),按旧判据永远
-        // 是"有队列",面板上会摆出一条孤零零的视频。
-        enriching = (audioState.queue?.enriching == true),
-        incomplete = (audioState.queue?.incomplete == true),
-    )
 
     /** 发一条自定义命令的简写。 */
     val send: (String, Bundle) -> Unit = { action, args ->
@@ -383,45 +381,34 @@ fun VideoScreen(
     }
 
     /**
-     * 打开这条视频。**这是页面对播放器说的唯一一句话**,而且是幂等的:服务那边队列已经是
-     * 这条、播放器也正装着它时,这条命令什么都不做。
+     * 这一页到了前台。**这是页面对播放器说的唯一一句"我在这儿"**,报的是帧,不是 bvid
+     * (见 AudioPlaybackService.activateFrame):
      *
-     * 于是转屏、退出全屏、从听视频退回、通知栏切过一条之后再回到界面,全都不会重新装载。
-     * 原先页面交的是流地址,"是不是同一次播放"只能靠字符串相等去猜,而 playurl 每次签名
-     * 都不同 —— 那正是重试当初必须再加一个 force 标志位去绕过的东西。
+     * - 新压的一页:服务按帧的入口上下文建队列,从 [bvid] 起播。
+     * - 返回到这一页:服务换回它离开时的队列、当前条与位置。
+     * - 这一页本来就是活帧(转屏、从 UP 主页回来、重连控制器):只续播。
      *
-     * **这句话发两遍**,因为知道 bvid 和知道这条视频叫什么之间隔着一次网络请求:
-     * 拿到 bvid 就发第一遍,服务据此立刻取流;详情回来再发一遍,补上标题、UP 和封面。
-     * 第二遍落在服务的"同一条视频"分支上,只补元数据、不重新装载。
+     * 原先发的是带 bvid 的打开命令,随控制器重连重发,而页面手上的 bvid 可能已经过期 ——
+     * 离开期间队列往前走了,回来就被拽回旧的那条。
      *
-     * **两遍都不带 cid。** 放到哪一 P 由播放层在装载时解析(观看记录、缓存副本、用户指名各
-     * 有优先级,见 `player/LoadResolver.kt`),页面手上只有详情里的默认 P —— 送过去就是拿
-     * 一个更差的答案盖掉刚解析出来的那个。
+     * **只在连上控制器时发,不跟着 [bvid] 发。** 这一页内切集是队列自己走的,页面跟着它换
+     * [bvid];跟着 bvid 再发一遍就又成了"页面推播放器"。
+     *
+     * 不带 cid:放到哪一 P 由播放层在装载时解析(`player/LoadResolver.kt`)。标题与封面也
+     * 不带:服务取流时自己从详情补。
      */
-    LaunchedEffect(active, bvid) {
-        if (active == null) return@LaunchedEffect
+    val activate: () -> Unit = {
         send(
-            AudioPlaybackService.ACTION_OPEN_VIDEO,
-            bundleOf(AudioPlaybackService.EXTRA_BVID to bvid),
-        )
-    }
-
-    LaunchedEffect(active, state.detail?.bvid) {
-        val detail = state.detail ?: return@LaunchedEffect
-        if (active == null) return@LaunchedEffect
-        // **详情必须是这一页这条视频的。** 视频页现在整页只有一个 ViewModel、靠 switchTo 换
-        // 内容,上一条的详情有可能还挂在状态里;不认身份就会拿旧 bvid 去开播,把用户刚点开的
-        // 这条顶掉。
-        if (detail.bvid != bvid) return@LaunchedEffect
-        send(
-            AudioPlaybackService.ACTION_OPEN_VIDEO,
+            AudioPlaybackService.ACTION_ACTIVATE_FRAME,
             bundleOf(
-                AudioPlaybackService.EXTRA_BVID to detail.bvid,
-                AudioPlaybackService.EXTRA_TITLE to detail.title,
-                AudioPlaybackService.EXTRA_UP_NAME to detail.up.name,
-                AudioPlaybackService.EXTRA_COVER_URL to detail.coverUrl,
+                AudioPlaybackService.EXTRA_FRAME_ID to frame.id,
+                AudioPlaybackService.EXTRA_QUEUE_CONTEXT to encodeQueueContext(frame.context),
+                AudioPlaybackService.EXTRA_BVID to bvid,
             ),
         )
+    }
+    LaunchedEffect(active) {
+        if (active != null) activate()
     }
 
     /**
@@ -446,36 +433,52 @@ fun VideoScreen(
         }
     }
 
-    /**
-     * 队列没建全时的重试。**没有专门的命令**:再发一遍 OPEN_VIDEO 就是重试 —— 它落在服务的
-     * "同一条视频"分支,那里看到队列还停在临时队列上就会重新补全一次。
-     */
-    val retryQueue: () -> Unit = {
-        val detail = state.detail
-        send(
-            AudioPlaybackService.ACTION_OPEN_VIDEO,
-            bundleOf(
-                AudioPlaybackService.EXTRA_BVID to bvid,
-                AudioPlaybackService.EXTRA_TITLE to detail?.title.orEmpty(),
-                AudioPlaybackService.EXTRA_UP_NAME to detail?.up?.name.orEmpty(),
-                AudioPlaybackService.EXTRA_COVER_URL to detail?.coverUrl.orEmpty(),
-            ),
+    /** 队列没建全时的重试。 */
+    val retryQueue: () -> Unit = { send(AudioPlaybackService.ACTION_RETRY_QUEUE, Bundle.EMPTY) }
+
+    /** 完整队列滚到一头,往那头续取。见 AudioPlaybackService.extendQueue。 */
+    val queueEdges = audioState.queue?.let { queue ->
+        QueueEdges(
+            canLoadBefore = queue.canExtendBefore,
+            canLoadAfter = queue.canExtendAfter,
+            loadingBefore = queue.extendingBefore,
+            loadingAfter = queue.extendingAfter,
+            onLoad = { before ->
+                send(
+                    AudioPlaybackService.ACTION_EXTEND_QUEUE,
+                    bundleOf(AudioPlaybackService.EXTRA_BEFORE to before),
+                )
+            },
         )
     }
+
+    /** 队列的唯一来源是服务。页面只是把它摆出来,不自己攒一份。 */
+    val shownQueue = QueueUiState(
+        rows = episodeRows,
+        sourceLabel = audioState.queue?.sourceLabel.orEmpty(),
+        source = audioState.queue?.source,
+        shuffled = (audioState.queue?.shuffled == true),
+        // 判据从"取流转圈且队列是空的"换成"完整队列建好了没有"。起播现在不等建队列,队列里
+        // 那一条是临时占位而不是队列内容(见 AudioPlaybackService.openFrame),按旧判据永远
+        // 是"有队列",面板上会摆出一条孤零零的视频。
+        enriching = (audioState.queue?.enriching == true),
+        incomplete = (audioState.queue?.incomplete == true),
+        edges = queueEdges,
+    )
 
     /**
      * 打开/关闭发弹幕的输入层。**暂停与恢复复用服务已有的那一对命令,不新造一套。**
      *
      * 打开发 [AudioPlaybackService.ACTION_PAGE_LEFT]:它的语义正是"暂停,但不动 playIntent"
-     * ——也就是"这次停下不是用户的意思"。关闭再发一遍 [AudioPlaybackService.ACTION_OPEN_VIDEO],
-     * 落在服务的幂等分支上,那里那句 `if (playIntent && !playWhenReady)` 就是恢复。
+     * ——也就是"这次停下不是用户的意思"。关闭再报一次帧([activate]),落在服务的活帧分支上,
+     * 那里那句 `if (playIntent && !playWhenReady)` 就是恢复。
      *
      * 于是**打开面板期间用户从通知栏按了暂停**这种情况自动是对的:那一下走 `QueuePlayer.pause()`
      * 把 playIntent 清了,关面板时不会自作主张再放起来。页面自己记一个"打开前在不在播"的
      * 快照做不到这一点,它只知道打开那一刻的事。
      *
-     * 两边都先问[playerHoldsThisPage]:队列自动连播走到下一条时,这一页可能还没被换掉,
-     * 而那时发 OPEN_VIDEO 等于把播放器拽回这条视频——用户并没有要求。
+     * 两边都先问[playerHoldsThisPage]:播放器装的不是这一页的队列时(直播盖在上面),报帧
+     * 就是把播放器换回这一页——用户并没有要求。
      */
     val openDanmakuInput: () -> Unit = {
         danmakuProgress = active?.currentPosition?.coerceAtLeast(0L) ?: 0L
@@ -490,12 +493,7 @@ fun VideoScreen(
     val closeDanmakuInput: () -> Unit = {
         danmakuInputOpen = false
         onDanmakuSendConsumed()
-        if (playerHoldsThisPage()) {
-            send(
-                AudioPlaybackService.ACTION_OPEN_VIDEO,
-                bundleOf(AudioPlaybackService.EXTRA_BVID to bvid),
-            )
-        }
+        if (playerHoldsThisPage()) activate()
     }
 
     // 发出去了就关面板并清草稿。**清草稿只在这里**:失败时留着,人改一个字就能再发一次。
@@ -632,8 +630,10 @@ fun VideoScreen(
             sleepTimer = sleepTimerState,
             episodes = episodeRows,
             onSelectEpisode = onSelectEpisode,
-            onNext = { active?.seekToNextMediaItem() },
-            onPrevious = { active?.seekToPreviousMediaItem() },
+            queueEdges = queueEdges,
+            // 不带 MediaItem 的那一对:服务在这两条命令上先走分 P(QueuePlayer.handleSeek)。
+            onNext = { active?.seekToNext() },
+            onPrevious = { active?.seekToPrevious() },
             onToggleShuffle = toggleShuffle,
             onRetry = retryPlayback,
             onSleepTimer = { mode ->
@@ -917,6 +917,7 @@ fun VideoScreen(
                     sourceLabel = shownQueue.sourceLabel,
                     onSelect = onSelectEpisode,
                     onDismiss = { episodePanelOpen = false },
+                    edges = queueEdges,
                 )
             }
         }
