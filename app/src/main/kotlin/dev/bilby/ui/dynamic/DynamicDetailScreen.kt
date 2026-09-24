@@ -1,6 +1,9 @@
 package dev.bilby.ui.dynamic
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -62,7 +65,14 @@ fun DynamicDetailScreen(
                 Modifier.padding(padding),
             )
 
-            else -> AdaptiveContent(modifier = Modifier.padding(padding)) {
+            // **只让顶栏,底边交给里面。** 评论区底部那条输入栏的底色要铺到屏幕底边、在底色里面
+            // 让导航栏(见 CommentSection 的 CommentInputBar);这里要是按 Scaffold 给的 padding
+            // 把底边也让掉,输入栏下面就露出一条页面底色。
+            else -> AdaptiveContent(
+                modifier = Modifier
+                    .padding(top = padding.calculateTopPadding())
+                    .consumeWindowInsets(PaddingValues(top = padding.calculateTopPadding())),
+            ) {
                 val cardView: @Composable () -> Unit = {
                     DynamicCardView(
                         card = card,
@@ -95,7 +105,8 @@ fun DynamicDetailScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .verticalScroll(rememberScrollState()),
+                            .verticalScroll(rememberScrollState())
+                            .navigationBarsPadding(),
                     ) {
                         cardView()
                     }

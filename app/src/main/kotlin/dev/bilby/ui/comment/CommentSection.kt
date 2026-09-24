@@ -1,99 +1,107 @@
 package dev.bilby.ui.comment
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
+import dev.bilby.ui.components.WindowOverlay
+import dev.bilby.ui.components.ComposerPanel
+import dev.bilby.ui.components.rememberExpandedSheetState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.snapshots.SnapshotStateMap
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material3.Button
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
-import androidx.compose.material3.pulltorefresh.pullToRefresh
-import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.ModalBottomSheet
-import dev.bilby.ui.components.LoadingSpinner
-import dev.bilby.ui.components.rememberLoadingVisible
-import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.pullToRefresh
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.bilby.R
 import dev.bilby.data.CommentItem
-import dev.bilby.data.parseCommentSpans
-import dev.bilby.ui.components.BiliRichText
-import dev.bilby.ui.components.SelectableTextDialog
 import dev.bilby.data.CommentLink
 import dev.bilby.data.CommentMention
 import dev.bilby.data.CommentSort
+import dev.bilby.data.parseCommentSpans
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
-import dev.bilby.ui.components.ImageViewer
+import dev.bilby.ui.components.BiliRichText
 import dev.bilby.ui.components.EmptyState
+import dev.bilby.ui.components.ImageViewer
 import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.MetaSeparator
+import dev.bilby.ui.components.SelectableTextDialog
 import dev.bilby.ui.components.SortRow
+import dev.bilby.ui.components.rememberLoadingVisible
+import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
-import dev.bilby.ui.formatRelativeTime
 import java.time.Instant
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -102,23 +110,21 @@ import kotlinx.coroutines.flow.map
 private const val PrefetchThreshold = 5
 
 /**
- * 楼中楼超过这么多条就改用底部面板,不在主列表里就地摊开。
- *
- * **这不是给列表设的上限**,是同一份内容换一个容器:面板里那份不翻页上限、不截断,该有
- * 多少条给多少条。分界的理由是内联那条路把整组回复组合在主列表的**一个** LazyColumn item
- * 里 —— 几百条一次性进组合树,而 lazy 的懒只作用在 item 之间。少于这个数的楼就地展开更省事,
- * 多的那些交给面板,它自己有一个 LazyColumn。
- *
- * 判据取服务端报的子回复总数([CommentItem.subReplyCount],即 `rcount`),在拉之前就能定,
- * 所以不会出现"展开到一半才改换容器"。
- */
-private const val SubReplyPanelThreshold = 7
-
-/**
  * 可嵌进播放页的评论区(DESIGN 2.3)。不是整页:自带 LazyColumn 提供滚动,但不假设自己
- * 独占屏幕,调用方通过 [modifier] 给出高度约束。楼中楼默认只显示
- * [CommentItem.previewReplies],点「展开」才请求更多;超过 [SubReplyPanelThreshold] 条的
- * 那些改在底部面板里读,见 [SubReplyPanel]。
+ * 独占屏幕,调用方通过 [modifier] 给出高度约束。
+ *
+ * **写评论从两处进:右下角的 FAB 评论这条视频,单击一条评论回复这个人。** 写在一张 sheet 里
+ * ([ComposerPanel]),不是屏幕底部常驻的一条输入栏。常驻那一条试过三版(描边框、圆角
+ * 填充框、docked toolbar),三版的共同问题是:它一直占着屏幕底部一条,而绝大多数时候人是在读;
+ * 要回复谁还得先让它拿到焦点、再想办法让它放掉焦点。PiliPlus 的做法相同:评论区一个常驻的
+ * FAB,写评论是一个从底部升起的面板(`pages/video/reply/view.dart` 的 `fab`、
+ * `common/reply_controller.dart` 的 `onReply`)。M3 的 FAB 页把它定为"the primary action on a
+ * screen",并且 "FABs remain in place on scroll",所以它不随滚动藏起来。
+ *
+ * **单击一条评论就是回复它**,主楼、楼中楼、详情面板里的每一条都是;长按是选中正文。
+ *
+ * **楼中楼一律完整显示**。回复比主楼自带的那几条多的楼,末尾一行「查看全部 N 条回复」打开
+ * 详情面板([CommentThreadSheet]),那里是读一整组回复的唯一地方。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -155,15 +161,13 @@ fun CommentSection(
     header: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    var replyTarget by rememberSaveable { mutableStateOf<Long?>(null) }
-    var inputText by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
 
     // **snackbar 的宿主在评论区自己身上**,不从导航层穿进来 —— 同一条判断见 `FavFolderScreen`
     // 那处注释。这里还多一层理由:评论区是播放页 tab 里的一块,它上面那半屏是播放器,
     // 把回执报到整页底部会盖在播放控件上。
     //
-    // 楼中楼面板另有一份自己的([SubReplyPanel]),不共用这个:`ModalBottomSheet` 自成一个
+    // 详情面板另有一份自己的([CommentThreadSheet]),不共用这个:`ModalBottomSheet` 自成一个
     // window 画在活动窗口之上,这一份在它底下,从面板里复制会往一个看不见的地方报。
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -173,52 +177,32 @@ fun CommentSection(
      */
     var selectionTarget by remember { mutableStateOf<String?>(null) }
 
-    // **收起是本地状态,不回收 ViewModel 里那份展开结果。** 一楼展开到第三页再收起,
-    // 重新展开时如果连结果一起丢了,就是重新翻三页 —— 而用户收起的意思是"这一段先不占地方",
-    // 不是"忘掉它"。ViewModel 那边按 rootRpid 缓存,这里只记哪些楼此刻不展示。
-    //
-    // 不进 rememberSaveable:被它记着的 expandedReplies 本来就活不过进程重建,只留一份
-    // "收起"标记的话,回来看到的是一个展不开的空壳。
-    val collapsed = remember { mutableStateListOf<Long>() }
+    /**
+     * 正在写给谁。null 是没在写;[CommentToVideo] 是评论这条视频;其余是被回复那条的 rpid。
+     * 编辑面板只有这一张,主列表和详情面板都往这里写。
+     */
+    var composing by rememberSaveable { mutableStateOf<Long?>(null) }
 
-    // 收起过的那一楼再点"展开"只是把它放回来,不重新发请求 —— 结果一直在 ViewModel 里。
-    // 其余情形(首次展开、翻下一页、失败重试)一律透传出去。
-    val expandOrRestore: (Long) -> Unit = { rootId ->
-        val restored = collapsed.remove(rootId) && state.expandedReplies[rootId] != null
-        if (!restored) onExpandReplies(rootId)
-    }
+    /**
+     * 草稿**按回复对象各存一份**,照 PiliPlus 的 `savedReplies[key]`。写了一半关掉面板去看别的,
+     * 回来点同一个人,字还在;点另一个人则是另一份,不会把写给甲的半句话带到乙那里。
+     */
+    val drafts = rememberSaveable(saver = DraftsSaver) { mutableStateMapOf<Long, String>() }
 
-    // 展开结果被 ViewModel 清掉时(下拉刷新、或者回复发出去之后重拉这一楼),收起标记跟着清。
-    // 留着的话,重新拉回来的那一组一上来就是收着的 —— 而用户刚做的动作正是为了看它。
-    LaunchedEffect(state.expandedReplies) {
-        collapsed.retainAll { it in state.expandedReplies }
-    }
+    /** 最近一次按下发送时写给的是谁。成功回执回来时按它清掉那一份草稿。 */
+    var sentTarget by rememberSaveable { mutableStateOf<Long?>(null) }
 
     // 面板正在读哪一楼。整个面板长在这个 composable 里,不进导航栈:它是评论区内部的一层,
     // 页面本身没有换,返回键由 ModalBottomSheet 自己接管。
     var panelRoot by rememberSaveable { mutableStateOf<Long?>(null) }
     val panelComment = panelRoot?.let { id -> findRoot(state, id) }
 
-    // 面板里选中的回复对象。**和 [replyTarget] 分成两份**:那一份驱动底部那条常驻输入栏,
-    // 而面板正盖在它上面,把面板里的选择写进它,人看不到任何反应。两份都清空才算没有在回复。
-    var panelReplyTo by rememberSaveable { mutableStateOf<Long?>(null) }
-
-    // 面板关掉时把它带的回复态一起收掉。留着的话下次打开面板,输入层直接是展开的,
-    // 而对着的是上一楼里某条已经翻不到的回复。
-    LaunchedEffect(panelRoot) {
-        if (panelRoot == null) panelReplyTo = null
-    }
-
-    // **草稿只在发出去之后才清。** 以前是按下发送就清,于是一次失败同时拿走两样东西:刚写的
-    // 那段字,以及"它到底发出去了没有"的答案 —— 屏上既没有新评论也没有输入内容,而失败原因
-    // 画在整个评论区的页脚上,在十几屏之外。现在失败原因就在输入栏上方一行,草稿还在框里。
+    // **草稿只在发出去之后才清。** 失败时草稿留在框里,原因就在编辑面板上一行。
     //
     // 成功与失败在 ViewModel 的协程里分道,界面读不到那个分支,只能读它报的成功计数
-    // ([CommentUiState.sentCount])。**记住上次见到的那个数,不拿这个 effect 的首次执行当信号**:
-    // 它在进入这一页时也会跑一遍,那样会把进程重建之后刚恢复出来的草稿抹掉。
-    // **判据是"这个数变大了",不是"和记着的那个不一样"。** 进程重建之后 ViewModel 是新的,
-    // 计数从 0 起,而 rememberSaveable 恢复出来的是重建之前那个数 —— 按"不一样"判会在回到
-    // 这一页的第一帧把刚恢复的草稿清掉,正是这一条要防的事。
+    // ([CommentUiState.sentCount])。**判据是"这个数变大了",不是"和记着的那个不一样"。**
+    // 进程重建之后 ViewModel 是新的,计数从 0 起,而 rememberSaveable 恢复出来的是重建之前
+    // 那个数 —— 按"不一样"判会在回到这一页的第一帧把刚恢复的草稿清掉。
     var seenSentCount by rememberSaveable { mutableIntStateOf(state.sentCount) }
     LaunchedEffect(state.sentCount) {
         if (state.sentCount <= seenSentCount) {
@@ -226,9 +210,9 @@ fun CommentSection(
             return@LaunchedEffect
         }
         seenSentCount = state.sentCount
-        inputText = ""
-        replyTarget = null
-        panelReplyTo = null
+        sentTarget?.let { drafts.remove(it) }
+        sentTarget = null
+        composing = null
     }
 
     // 面板开着的时候主楼被刷掉了(下拉刷新之后它不在第一页了),把面板一起关掉:
@@ -249,11 +233,45 @@ fun CommentSection(
             }
     }
 
-    // 输入栏跟着键盘走。放在这一层而不是输入框上:内层退让的话,输入栏上面那段列表
-    // 不会跟着上移,打字时看不到自己在回复哪一条。
-    Column(modifier = modifier.imePadding()) {
-        // 下拉刷新只套列表,不套输入栏:输入栏是常驻控件,被下拉手势带着往下走没有道理。
-        //
+    val rowActions = CommentRowActions(
+        myMid = state.myMid,
+        onReply = { comment -> composing = comment.rpid },
+        onLike = onLike,
+        onDelete = onDelete,
+        onSeek = onSeek,
+        onUserClick = onUserClick,
+        onOpenLink = onOpenLink,
+        onSelectText = { selectionTarget = it },
+    )
+
+    /**
+     * 写评论的面板,画在此刻最上面那个窗口里:楼中楼详情开着时画在那张 sheet 里面(它自成一个
+     * 窗口,画在外面会被盖住),否则画在评论区上面。见 [ComposerPanel]。
+     */
+    val composer: (@Composable () -> Unit)? = composing?.let { target ->
+        {
+            val draft = drafts[target].orEmpty()
+            val replyName = if (target == CommentToVideo) null else findUname(state, target)
+            ComposerPanel(
+                title = replyName?.let { stringResource(R.string.comment_replying_to, it) }
+                    ?: stringResource(R.string.comment_write),
+                text = draft,
+                onTextChange = { drafts[target] = it },
+                placeholder = stringResource(R.string.comment_input_hint),
+                sending = state.sending,
+                error = state.sendError?.let { stringResource(R.string.comment_send_failed, it) },
+                counter = commentDraftCounter(draft.length),
+                onSend = {
+                    sentTarget = target
+                    onSend(drafts[target].orEmpty(), target.takeIf { it != CommentToVideo })
+                },
+                // 关掉不丢草稿:它还在 [drafts] 里,下次写给同一个人时原样回来。
+                onDismiss = { composing = null },
+            )
+        }
+    }
+
+    Box(modifier = modifier) {
         // **[refreshEnabled] 为假时整个手势不接管。** 嵌套滚动从内往外传,而播放器那个收起
         // 页头的连接挂在这一整块的祖先上(见 VideoScreen),这里的刷新框离列表更近:不设这道
         // 闸的话,列表到顶后剩下的下滑量会先被刷新吃掉,播放器再也展不开 —— 空间页正是这么
@@ -261,7 +279,7 @@ fun CommentSection(
         val pullState = rememberPullToRefreshState()
         Box(
             modifier = Modifier
-                .weight(1f)
+                .fillMaxSize()
                 .pullToRefresh(
                     isRefreshing = state.refreshing,
                     state = pullState,
@@ -269,109 +287,96 @@ fun CommentSection(
                     onRefresh = onRefresh,
                 ),
         ) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(vertical = Spacing.Tight),
-        ) {
-            header?.let { item(key = "header") { it() } }
-            item(key = "sort-bar") { SortBar(state.sort, onSort) }
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                // 底部留出 FAB 与导航栏:列表铺到屏幕底边(手势条下面照样是列表),最后一条
+                // 能滚到 FAB 上面。
+                // 顶上不再留白:第一项是排序栏,它为了 48dp 的触摸区自己已经在字的上方空出十几 dp,
+                // 再加这里的 8dp 和播放页标签行的下边距,标签与"最热"之间空出一整行。
+                contentPadding = PaddingValues(bottom = fabClearance()),
+            ) {
+                header?.let { item(key = "header") { it() } }
+                item(key = "sort-bar") { SortBar(state.sort, onSort) }
 
-            state.topComment?.let { top ->
-                item(key = "top-${top.rpid}") {
-                    CommentRow(
-                        comment = top,
-                        pinned = true,
-                        myMid = state.myMid,
-                        expanded = state.expandedReplies[top.rpid],
-                        collapsed = top.rpid in collapsed,
-                        onReplyTo = { replyTarget = it.rpid },
-                        onLike = onLike,
-                        onDelete = onDelete,
-                        onExpandReplies = expandOrRestore,
-                        onCollapseReplies = { collapsed += it },
-                        onOpenPanel = { panelRoot = it },
-                        onSeek = onSeek,
-                        onUserClick = onUserClick,
-                        onOpenLink = onOpenLink,
-                        onSelectText = { selectionTarget = it },
-                    )
-                }
-            }
-
-            // 出错时不叠空态:一次失败不等于"这条视频没人评论",两句话一起出现只会互相拆台。
-            if (!state.loading && state.error == null && state.items.isEmpty() && state.topComment == null) {
-                item(key = "empty") { EmptyState(stringResource(R.string.comment_empty)) }
-            }
-
-            itemsIndexed(state.items, key = { _, comment -> comment.rpid }) { index, comment ->
-                // **主楼之间画 inset 分割线。** 一条热评加上楼中楼容器可以占到半屏,
-                // 只靠留白的话上一条的楼中楼和下一条的头像挨在一起,读不出哪里换了人。
-                //
-                // 用 inset 而不是 full-width:M3 divider 页把 inset 定义为"分隔一个区块内部
-                // 的相关内容",并要求它对齐头像这类锚定元素的前缘 —— 评论列表正是那一页
-                // 举的"一列邮件"的例子。full-width 是留给不相关的大段内容的,评论条与条之间
-                // 不是那个关系。
-                //
-                // **只画在两条评论之间。** 无条件画在每条前面的话,列表第一条那根会落在排序栏
-                // 底下,看起来像是给"最热/最新"加了一条下划线 —— 而排序栏和评论列表之间没有
-                // 需要分隔的东西,它们是同一批内容和它的排序方式。
-                if (index > 0 || state.topComment != null) {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(start = CommentTextInset, end = Spacing.Comfortable),
-                        color = MaterialTheme.colorScheme.outlineVariant,
-                    )
-                }
-                CommentRow(
-                    comment = comment,
-                    pinned = false,
-                    myMid = state.myMid,
-                    expanded = state.expandedReplies[comment.rpid],
-                    collapsed = comment.rpid in collapsed,
-                    onReplyTo = { replyTarget = it.rpid },
-                    onLike = onLike,
-                    onDelete = onDelete,
-                    onExpandReplies = expandOrRestore,
-                    onCollapseReplies = { collapsed += it },
-                    onOpenPanel = { panelRoot = it },
-                    onSeek = onSeek,
-                    onUserClick = onUserClick,
-                    onOpenLink = onOpenLink,
-                    onSelectText = { selectionTarget = it },
-                )
-            }
-
-            item(key = "footer") {
-                if (state.loading) {
-                    // 位置照占,指示器等够 200ms 才出现(见 [rememberLoadingVisible])——评论
-                    // 常常一开口就到,画了也只够抽一下。位置留着是为了那一下不把列表顶一跳。
-                    Box(Modifier.fillMaxWidth().padding(Spacing.Comfortable), Alignment.Center) {
-                        if (rememberLoadingVisible()) LoadingSpinner()
+                // **条与条之间只留白,不画线。** 上一版画的是 inset 分割线,真机上一屏七八根细线
+                // 把列表切成一格一格,读起来像表格。M3 divider 页另有一句 "List items with
+                // repetitive formats may not require an inset divider, in which using only the
+                // margin between items is acceptable",评论正是重复版式,而每条开头的头像本身
+                // 就标出了"换了一个人"。条间距由 [CommentRow] 的上下内边距给。
+                state.topComment?.let { top ->
+                    item(key = "top-${top.rpid}") {
+                        CommentRow(
+                            comment = top,
+                            actions = rowActions,
+                            pinned = true,
+                            modifier = Modifier.animateItem(),
+                        ) {
+                            SubReplies(
+                                root = top,
+                                expanded = state.expandedReplies[top.rpid],
+                                actions = rowActions,
+                                onOpenThread = { panelRoot = top.rpid },
+                            )
+                        }
                     }
-                } else {
-                    ListFooter(
-                        appending = state.appending,
-                        hasMore = state.hasMore,
-                        hasItems = state.items.isNotEmpty() || state.topComment != null,
-                        error = state.error,
-                        onRetry = onLoadMore,
-                    )
+                }
+
+                // 出错时不叠空态:一次失败不等于"这条视频没人评论",两句话一起出现只会互相拆台。
+                if (!state.loading && state.error == null && state.items.isEmpty() && state.topComment == null) {
+                    item(key = "empty") { EmptyState(stringResource(R.string.comment_empty)) }
+                }
+
+                items(state.items, key = { comment -> comment.rpid }) { comment ->
+                    CommentRow(
+                        comment = comment,
+                        actions = rowActions,
+                        modifier = Modifier.animateItem(),
+                    ) {
+                        SubReplies(
+                            root = comment,
+                            expanded = state.expandedReplies[comment.rpid],
+                            actions = rowActions,
+                            onOpenThread = { panelRoot = comment.rpid },
+                        )
+                    }
+                }
+
+                item(key = "footer") {
+                    if (state.loading) {
+                        // 位置照占,指示器等够 200ms 才出现(见 [rememberLoadingVisible])——评论
+                        // 常常一开口就到,画了也只够抽一下。位置留着是为了那一下不把列表顶一跳。
+                        Box(Modifier.fillMaxWidth().padding(Spacing.Comfortable), Alignment.Center) {
+                            if (rememberLoadingVisible()) LoadingSpinner()
+                        }
+                    } else {
+                        ListFooter(
+                            appending = state.appending,
+                            hasMore = state.hasMore,
+                            hasItems = state.items.isNotEmpty() || state.topComment != null,
+                            error = state.error,
+                            onRetry = onLoadMore,
+                        )
+                    }
                 }
             }
-        }
             // LoadingIndicator 档,不是旧的箭头圈:判据和默认配色见 docs/ui-style-guide.md §2.7d。
             PullToRefreshDefaults.LoadingIndicator(
                 state = pullState,
                 isRefreshing = state.refreshing,
                 modifier = Modifier.align(Alignment.TopCenter),
             )
-            // 贴着列表下缘,不贴屏幕下缘:再往下就是常驻输入栏,盖住它等于挡掉这一刻
-            // 唯一还能做的事。只在 Android 12L 及以下会出现,见 SelectableTextDialog。
+            // 只在 Android 12L 及以下会出现,见 SelectableTextDialog。
             SnackbarHost(
                 hostState = snackbarHostState,
-                modifier = Modifier.align(Alignment.BottomCenter),
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
             )
         }
+        WriteFab(
+            contentDescription = stringResource(R.string.comment_write),
+            onClick = { composing = CommentToVideo },
+            modifier = Modifier.align(Alignment.BottomEnd),
+        )
         selectionTarget?.let { target ->
             SelectableTextDialog(
                 text = target,
@@ -379,53 +384,26 @@ fun CommentSection(
                 onDismiss = { selectionTarget = null },
             )
         }
-        // 输入栏底色是 surfaceContainer,和上面列表的 surface 已经差着一档 —— 边界靠色阶
-        // 表达就够了(§1.1),再压一条线是同一件事说两遍,而 divider 页要求 sparingly。
-        CommentInputBar(
-            text = inputText,
-            onTextChange = { inputText = it },
-            replyTarget = replyTarget?.let { id -> findUname(state, id) },
-            onCancelReply = { replyTarget = null },
-            sending = state.sending,
-            // 草稿和回复对象都不在这里清,交给上面那个数着成功次数的 effect。
-            sendError = state.sendError,
-            onSend = { onSend(inputText, replyTarget) },
-        )
+        // 挂到窗口最上面:遮罩要盖住画面和标签行,点哪里都算不写了。
+        if (panelComment == null) composer?.let { WindowOverlay(it) }
     }
 
-    // 面板挂在 Column 外面。挂在里面的话它会被算进上面那份 `imePadding` 的布局,
-    // 而 ModalBottomSheet 自己就是一个 window,两层退让叠在一起。
+    // 详情面板挂在外面:ModalBottomSheet 自己就是一个 window。
     if (panelComment != null) {
-        SubReplyPanel(
+        CommentThreadSheet(
             root = panelComment,
             expanded = state.expandedReplies[panelComment.rpid],
             myMid = state.myMid,
             onLoadMore = { onExpandReplies(panelComment.rpid) },
             onLike = onLike,
-            // **选回复对象不再关面板。** 关掉它是上一版的做法,理由是"输入栏在面板底下,
-            // 面板开着打不了字" —— 那个理由只说明底部那条常驻输入栏用不上,不说明必须把面板
-            // 连同上下文一起收走。人是在这一组回复里读到某条才想回它的,面板一关,他刚读的
-            // 那几条、滚到的位置全没了,发完还得自己找回来。现在改成在面板之上浮一层输入,
-            // 见 [ReplyInputLayer]。
-            replyTo = panelReplyTo,
-            replyToName = panelReplyTo?.let { id -> findUname(state, id) },
-            onReplyTo = { panelReplyTo = it.rpid },
-            onCancelReply = { panelReplyTo = null },
-            inputText = inputText,
-            onInputChange = { inputText = it },
-            sending = state.sending,
-            sendError = state.sendError,
-            // 草稿、面板里的回复对象、以及底部那条常驻输入栏的回复对象(两者共用 inputText)
-            // 一律等成功回执再清,清在那个数着成功次数的 effect 里。
-            onSendReply = { onSend(inputText, panelReplyTo) },
+            onCompose = { rpid -> composing = rpid },
+            composer = composer,
             onDelete = onDelete,
             onSeek = onSeek,
             // **跳走之前先关面板。** `ModalBottomSheet` 自己注册了一个 BackHandler(预测式
             // 返回要用),它在组合树里比导航那一层更靠后,于是先接住返回。留着面板跳到空间页
             // 或浏览器落地页之后,这一页仍在栈里、面板仍在组合中,新页的第一次返回被它吃掉 ——
             // 表现是"返回键没反应",而实际上是在关一个看不见的面板。
-            //
-            // 跳转之后这一组回复也不该留着:人已经去看别的了,回来时该看到的是评论列表本身。
             onUserClick = { mid ->
                 panelRoot = null
                 onUserClick(mid)
@@ -437,6 +415,63 @@ fun CommentSection(
             onDismiss = { panelRoot = null },
         )
     }
+
+}
+
+/** [composing] 里表示"评论这条视频"的那个值。rpid 从 1 起,0 不会和哪条评论撞上。 */
+private const val CommentToVideo = 0L
+
+/** 草稿表过 Bundle:摊成 [key, 正文, key, 正文…]。 */
+private val DraftsSaver = listSaver<SnapshotStateMap<Long, String>, String>(
+    save = { map -> map.flatMap { (key, text) -> listOf(key.toString(), text) } },
+    restore = { flat ->
+        mutableStateMapOf<Long, String>().apply {
+            flat.chunked(2).forEach { (key, text) -> key.toLongOrNull()?.let { put(it, text) } }
+        }
+    },
+)
+
+/**
+ * 写评论的 FAB。贴右下角,躲开导航栏;外边距 16dp 是 M3 FAB 的默认位置。
+ * 图标用铅笔(写),不用回复箭头:点它是写一条新评论,不是回复谁。
+ */
+@Composable
+private fun WriteFab(contentDescription: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    FloatingActionButton(
+        onClick = onClick,
+        modifier = modifier
+            .navigationBarsPadding()
+            .padding(Spacing.Comfortable),
+    ) {
+        Icon(Icons.Outlined.Edit, contentDescription = contentDescription)
+    }
+}
+
+/** 列表底部要留的高度:FAB 56dp 加上下两份 16dp 外边距,再加导航栏。 */
+@Composable
+private fun fabClearance(): Dp =
+    FabSize + Spacing.Comfortable * 2 +
+        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
+private val FabSize = 56.dp
+
+/**
+ * 一条评论能做的几件事。主列表、楼中楼、详情面板三处共用同一份,不在每一层把七个回调
+ * 逐个往下传。
+ */
+private class CommentRowActions(
+    /** 非空且与某条评论的 mid 相同时,那一条可删除。 */
+    val myMid: Long?,
+    val onReply: (CommentItem) -> Unit,
+    val onLike: (Long) -> Unit,
+    val onDelete: (Long) -> Unit,
+    val onSeek: ((Long) -> Unit)?,
+    val onUserClick: (Long) -> Unit,
+    val onOpenLink: (String) -> Unit,
+    /** 长按正文要选中它,由所在那一层弹面板。 */
+    val onSelectText: (String) -> Unit,
+) {
+    fun canDelete(comment: CommentItem): Boolean = myMid != null && myMid == comment.mid
 }
 
 /** 主楼(含置顶楼)。楼中楼不在这里找 —— 面板只认主楼。 */
@@ -469,33 +504,58 @@ private fun SortBar(sort: CommentSort, onSort: (CommentSort) -> Unit) {
     )
 }
 
+/**
+ * 整条可点:单击回复,长按选中正文(弹 [SelectableTextDialog],整条复制在面板底部)。
+ *
+ * **长按挂在整条上,不挂在正文上。** 上一版在正文上单独挂了一个 `detectTapGestures` 做长按,
+ * 它作为子节点先拿到 down 并消费掉,落在文字上的单击就再也传不到外面这层 —— 而文字几乎铺满
+ * 整条,等于把"单击回复"废掉。`combinedClickable` 把两件事收在同一个节点上,触觉反馈也由它
+ * 自己给。
+ *
+ * **正文里的链接、@ 与时间戳不受影响,这一点查过实现。** Compose 把 `LinkAnnotation` 渲染成盖在
+ * 链接范围上的子 `Box`,各自带 `combinedClickable`(foundation 的
+ * `TextLinkScope.LinksComposables`),指针事件在 Main 这一趟子先于父,点在链接上由链接接住。
+ * 代价是长按正好压在链接上不会弹选择面板,旁边随便哪里都能长按。头像、名字、点赞同理。
+ *
+ * 选中的是原文,不是渲染出来的样子:表情按服务端存的 `[doge]`,链接按正文里那串字
+ * (`av170001`、`https://…`)—— 粘出去的 `av170001` 对方能打开,一行视频标题什么都不是。
+ */
+@Composable
+private fun Modifier.replyOnClick(comment: CommentItem, actions: CommentRowActions): Modifier =
+    combinedClickable(
+        role = Role.Button,
+        onClickLabel = stringResource(R.string.comment_reply),
+        onClick = { actions.onReply(comment) },
+        onLongClickLabel = stringResource(R.string.text_select_title),
+        onLongClick = { actions.onSelectText(comment.message.trim()) },
+    )
+
+/**
+ * 一条主楼,或详情面板里的一条回复(那里回复是主角,和主楼同一个排法)。
+ *
+ * @param threadAuthorMid 所在那一楼的楼主。非 0 时,这个人的回复挂「楼主」标记。
+ * @param replies 排在底行之后的楼中楼。详情面板里不传。
+ */
 @Composable
 private fun CommentRow(
     comment: CommentItem,
-    pinned: Boolean,
-    myMid: Long?,
-    expanded: ExpandedReplies?,
-    collapsed: Boolean,
-    onReplyTo: (CommentItem) -> Unit,
-    onLike: (Long) -> Unit,
-    onDelete: (Long) -> Unit,
-    onExpandReplies: (Long) -> Unit,
-    onCollapseReplies: (Long) -> Unit,
-    onOpenPanel: (Long) -> Unit,
-    onSeek: ((Long) -> Unit)?,
-    onUserClick: (Long) -> Unit,
-    onOpenLink: (String) -> Unit,
-    /** 长按复制的回执落在哪。就近取所在 window 的那一份,理由见 [CommentSection] 里的注释。 */
-    /** 长按正文要选中它,由评论区那一层弹面板。见 [selectTextOnLongPress]。 */
-    onSelectText: (String) -> Unit,
+    actions: CommentRowActions,
     modifier: Modifier = Modifier,
+    pinned: Boolean = false,
+    threadAuthorMid: Long = 0L,
+    replies: (@Composable () -> Unit)? = null,
 ) {
     var viewerIndex by remember { mutableStateOf<Int?>(null) }
 
+    // 上 12、下 4:底行按钮的触摸区比图标高出 8dp,视觉上已经留了一截,再加 4 与下一条的
+    // 12 合起来,两条评论之间是 24dp 左右的空白 —— 这就是没有分割线之后的分隔。
+    //
+    // 内边距在点击之后:涟漪铺满整条,贴着屏幕两边,而不是缩在内容那一块里。
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = Spacing.Comfortable, end = Spacing.Cozy, top = Spacing.Cozy, bottom = Spacing.Hair),
+            .replyOnClick(comment, actions)
+            .padding(start = Spacing.Comfortable, end = Spacing.Comfortable, top = Spacing.Cozy, bottom = Spacing.Hair),
         horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
     ) {
         // 头像本身仍是 36dp,热区往下补到 48dp:这一列的高度由右边那一整条评论决定,
@@ -503,76 +563,29 @@ private fun CommentRow(
         Box(
             modifier = Modifier
                 .heightIn(min = Dimens.MinTouchTarget)
-                .openSpace(comment, onUserClick),
+                .openSpace(comment, actions.onUserClick),
             contentAlignment = Alignment.TopCenter,
         ) {
             Avatar(url = comment.avatarUrl, size = Dimens.AvatarRow)
         }
         Column(modifier = Modifier.weight(1f)) {
-            // 头部两行(名字 / 时间  属地)是一块整的元信息,照 PiliPlus 的
-            // `reply_item_grpc.dart` 的 _buildHeader。
-            //
-            // **两行合起来是一个可点节点。** 名字那一行只有 20dp 高,单独接点击按不中;
-            // 而时间和属地说的也是同一个人发的这条评论,读屏把它们念成一个"去他的空间"
-            // 比念成两件事更接近实情。
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = Dimens.MinTouchTarget)
-                    .openSpace(comment, onUserClick),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    // **用户名低一档强调,不用满对比度。** 一屏几十条评论,真正要读的是正文;
-                    // 名字和正文一样重的话,视线会被每条开头的名字拽住,整片看起来就是一团。
-                    //
-                    // 低强调的文字角色是 onSurfaceVariant。`outline` 是描边角色,只保证 3:1,
-                    // 浅色主题下这一行是 4.3:1,不到小字要求的 4.5:1。
-                    Text(
-                        text = comment.uname,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    LevelBadge(level = comment.level, senior = comment.isSeniorMember, height = Dimens.LevelBadgeHeight)
-                    if (comment.isUploader) {
-                        Tag(
-                            stringResource(R.string.comment_tag_up),
-                            MaterialTheme.colorScheme.primaryContainer,
-                            MaterialTheme.colorScheme.onPrimaryContainer,
-                        )
-                    }
-                    if (pinned) {
-                        Tag(
-                            stringResource(R.string.comment_tag_pinned),
-                            MaterialTheme.colorScheme.tertiaryContainer,
-                            MaterialTheme.colorScheme.onTertiaryContainer,
-                        )
-                    }
-                }
-                SubLine(comment)
+            // **头部只有名字这一行。** 时间与属地在正文下面,和点赞排成一行(见 [CommentFooter])。
+            // 名字那一行只有 16dp 高,单独按不中;去空间的主要落点是左边的头像(热区补到 48dp),
+            // 名字是附带的第二个落点。
+            NameLine(comment = comment, modifier = Modifier.openSpace(comment, actions.onUserClick)) {
+                CommentTags(comment, pinned = pinned, threadAuthorMid = threadAuthorMid)
             }
-
-            Spacer(Modifier.height(Spacing.Tight))
+            Spacer(Modifier.height(Spacing.Hair))
             CommentText(
                 message = comment.message,
                 emotes = comment.emotes,
                 mentions = comment.mentions,
                 style = CommentBodyStyle,
                 links = comment.links,
-                onSeek = onSeek,
-                onUserClick = onUserClick,
-                onOpenLink = onOpenLink,
-                // 复制原文,不是渲染出来的样子。理由见 [copyOnLongPress] 的 `text` 参数,
-                // 以及下面 SubReplyRow 那处同样的调用。
-                modifier = Modifier.selectTextOnLongPress(comment.message.trim(), onSelectText),
+                onSeek = actions.onSeek,
+                onUserClick = actions.onUserClick,
+                onOpenLink = actions.onOpenLink,
             )
-
             if (comment.pictureUrls.isNotEmpty()) {
                 PictureGrid(
                     urls = comment.pictureUrls,
@@ -580,30 +593,8 @@ private fun CommentRow(
                     modifier = Modifier.padding(top = Spacing.Tight),
                 )
             }
-
-            CommentActions(
-                comment = comment,
-                canDelete = myMid != null && myMid == comment.mid,
-                onLike = onLike,
-                onDelete = onDelete,
-                onReply = { onReplyTo(comment) },
-            )
-            SubReplies(
-                comment = comment,
-                expanded = expanded,
-                collapsed = collapsed,
-                myMid = myMid,
-                onExpandReplies = onExpandReplies,
-                onCollapseReplies = onCollapseReplies,
-                onOpenPanel = onOpenPanel,
-                onReplyTo = onReplyTo,
-                onLike = onLike,
-                onDelete = onDelete,
-                onSeek = onSeek,
-                onUserClick = onUserClick,
-                onOpenLink = onOpenLink,
-                onSelectText = onSelectText,
-            )
+            CommentFooter(comment = comment, actions = actions, endInset = RootFooterEndInset)
+            replies?.invoke()
         }
     }
 
@@ -635,21 +626,69 @@ private fun Modifier.openSpace(comment: CommentItem, onUserClick: (Long) -> Unit
     ) { onUserClick(comment.mid) }
 }
 
-/** "3 小时前  IP属地:广东"。11sp,和名字同属元信息那一块。 */
+/**
+ * 名字、等级,以及调用方给的标记。**用户名低一档强调,不用满对比度**:一屏几十条评论,真正要读的
+ * 是正文;名字和正文一样重的话,视线会被每条开头的名字拽住。低强调的文字角色是
+ * `onSurfaceVariant`,`outline` 是描边角色,浅色主题下只有 4.3:1。
+ */
 @Composable
-private fun SubLine(comment: CommentItem) {
-    val text = listOf(formatRelativeTime(comment.ctimeEpochSeconds), comment.ipLocation)
+private fun NameLine(
+    comment: CommentItem,
+    modifier: Modifier = Modifier,
+    tags: @Composable () -> Unit = {},
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+        modifier = modifier,
+    ) {
+        Text(
+            text = comment.uname,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        LevelBadge(level = comment.level, senior = comment.isSeniorMember, height = Dimens.LevelBadgeHeight)
+        tags()
+    }
+}
+
+/**
+ * 「UP 主」「楼主」「置顶」。前两枚互斥:UP 主在自己视频下发的楼,楼主和 UP 主是同一个人,
+ * 并排挂两枚只是把同一件事说了两遍,而 UP 主是其中信息量更大的那个。
+ */
+@Composable
+private fun CommentTags(comment: CommentItem, pinned: Boolean, threadAuthorMid: Long) {
+    when {
+        comment.isUploader -> Tag(
+            stringResource(R.string.comment_tag_up),
+            MaterialTheme.colorScheme.primaryContainer,
+            MaterialTheme.colorScheme.onPrimaryContainer,
+        )
+
+        threadAuthorMid != 0L && comment.mid == threadAuthorMid -> Tag(
+            stringResource(R.string.comment_tag_thread_author),
+            MaterialTheme.colorScheme.secondaryContainer,
+            MaterialTheme.colorScheme.onSecondaryContainer,
+        )
+    }
+    if (pinned) {
+        Tag(
+            stringResource(R.string.comment_tag_pinned),
+            MaterialTheme.colorScheme.tertiaryContainer,
+            MaterialTheme.colorScheme.onTertiaryContainer,
+        )
+    }
+}
+
+/** "3 小时前  IP属地:广东"。 */
+@Composable
+private fun commentMeta(comment: CommentItem): String =
+    listOf(formatRelativeTime(comment.ctimeEpochSeconds), comment.ipLocation)
         .filter { it.isNotBlank() }
         .joinToString(MetaSeparator)
-    if (text.isEmpty()) return
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
-}
 
 /**
  * 评论正文的字号与行高。**行高是这一屏可读性的主要杠杆**:`bodyMedium` 是 14/22,
@@ -663,18 +702,12 @@ private val CommentBodyStyle
     @Composable get() = MaterialTheme.typography.bodyMedium.copy(lineHeight = 24.sp)
 
 /**
- * 楼中楼正文,预览和摊开共用。**字号和主楼一样是 14sp,只把行高收一档(24 → 22)。**
- *
- * 上一版取的是 `bodySmall` 12sp:那是把层级压在字号上,而一条回复和一条评论是同一种东西 ——
- * 读者读到楼中楼时并没有换一副眼镜。层级由缩进承担,缩进不影响这段文字本身好不好读。
- * PiliPlus 在楼中楼那一级同样是 14 号字
- * (`reply_item_grpc.dart` 的 `_buildContent`,`replyLevel` 只改缩进和截断,不改字号)。
+ * 楼中楼正文。**字号和主楼一样是 14sp,只把行高收一档(24 → 22)。** 一条回复和一条评论是
+ * 同一种东西,读者读到楼中楼时并没有换一副眼镜;层级由头像尺寸、缩进与底色承担。PiliPlus 在
+ * 楼中楼那一级同样是 14 号字(`reply_item_grpc.dart` 的 `_buildContent`)。
  */
 private val SubReplyBodyStyle
     @Composable get() = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp)
-
-/** 预览层每条截到两行。PiliPlus 的 `replyItemRow` 同样是 2。 */
-private const val SubReplyPreviewMaxLines = 2
 
 private val GridSpacing = 4.dp
 
@@ -685,7 +718,6 @@ private val GridSpacing = 4.dp
  *
  * 单张那格用 4:3 而不是按原图比例,是因为接口层的 `ReplyPictureDto` 只解析了 `img_src`,
  * 没有 `img_width`/`img_height` —— 拿不到原始比例就没法像 PiliPlus 那样按比例定尺寸。
- * 补这两个字段要动 `api/dto`,不在这一轮的边界内。
  */
 @Composable
 private fun PictureGrid(urls: List<String>, onClick: (Int) -> Unit, modifier: Modifier = Modifier) {
@@ -729,461 +761,256 @@ private fun PictureGrid(urls: List<String>, onClick: (Int) -> Unit, modifier: Mo
 private const val SinglePictureWidthFraction = 0.7f
 
 /**
- * 正文相对屏幕左缘的缩进 = 页边距 16 + 头像 36 + 头像与文字的间距 12。
- * inset 分割线对齐到这里,也就是对齐头像的**后**缘、正文的前缘(M3 divider 页对
- * inset divider 的要求:与锚定元素对齐)。
- */
-private val CommentTextInset = Spacing.Comfortable + Dimens.AvatarRow + Spacing.Cozy
-
-/**
- * 点赞 / 回复 / 删除。三个按钮以前都是 32dp 见方,低于 48dp 的最小触摸目标 ——
- * 在正文旁边一行密排着,误触相邻按钮的概率不低,而"删除"就在里面。
- * 现在统一用默认尺寸的 IconButton(自带 48dp 触摸区),视觉上仍靠 16dp 的图标保持轻。
+ * 正文下面那一行:左边时间与属地,右边点赞与删除。主楼、楼中楼、面板里的回复共用。
+ *
+ * **时间打头,不是按钮打头。** 这一行从按钮开始的话,图标带着按钮自己的内边距,比正文左缘
+ * 缩进一截;时间是文字,天然贴着正文左缘。点赞落在行尾,和 PiliPlus 一样
+ * (`reply_item_grpc.dart` 的 `buttonAction`)。
+ *
+ * **没有回复按钮**:单击整条就是回复(见 [replyOnClick])。
+ *
+ * 按钮取 XS 档,**视觉 32、触摸 48**:material 组件自己补足 48dp 的触摸区(icon-buttons 页
+ * "Extra small and small icon buttons must have a target size of 48x48dp or larger"),
+ * 这一行因此仍是 48dp 高,多出来的上下各 8dp 正好是它和正文、和下一条之间的留白。
  */
 @Composable
-private fun CommentActions(
+private fun CommentFooter(
     comment: CommentItem,
-    canDelete: Boolean,
-    onLike: (Long) -> Unit,
-    onDelete: (Long) -> Unit,
-    onReply: () -> Unit,
-) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = { onLike(comment.rpid) }) {
-            Icon(
-                imageVector = if (comment.liked) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp,
-                contentDescription = stringResource(
-                    if (comment.liked) R.string.comment_unlike else R.string.comment_like,
-                ),
-                tint = if (comment.liked) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                modifier = Modifier.size(SmallIconSize),
-            )
-        }
-        Text(
-            text = "${comment.likeCount}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        TextButton(onClick = onReply) { Text(stringResource(R.string.comment_reply)) }
-        if (canDelete) {
-            var confirming by remember { mutableStateOf(false) }
-            IconButton(onClick = { confirming = true }) {
-                Icon(
-                    Icons.Outlined.Delete,
-                    contentDescription = stringResource(R.string.comment_delete),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(SmallIconSize),
-                )
-            }
-            // 删除不可逆,而这个图标就排在点赞和回复旁边。同一套确认对话框投币和删除缓存
-            // 已经在用,标准不一致比没有确认更糟。
-            if (confirming) {
-                AlertDialog(
-                    onDismissRequest = { confirming = false },
-                    title = { Text(stringResource(R.string.comment_delete_confirm)) },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            confirming = false
-                            onDelete(comment.rpid)
-                        }) { Text(stringResource(R.string.action_delete)) }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { confirming = false }) {
-                            Text(stringResource(R.string.action_cancel))
-                        }
-                    },
-                )
-            }
-        }
-    }
-}
-
-private val SmallIconSize = 16.dp
-
-@Composable
-private fun SubReplies(
-    comment: CommentItem,
-    expanded: ExpandedReplies?,
-    collapsed: Boolean,
-    myMid: Long?,
-    onExpandReplies: (Long) -> Unit,
-    onCollapseReplies: (Long) -> Unit,
-    onOpenPanel: (Long) -> Unit,
-    onReplyTo: (CommentItem) -> Unit,
-    onLike: (Long) -> Unit,
-    onDelete: (Long) -> Unit,
-    onSeek: ((Long) -> Unit)?,
-    onUserClick: (Long) -> Unit,
-    onOpenLink: (String) -> Unit,
-    onSelectText: (String) -> Unit,
-) {
-    // 大楼交给面板,这里只留预览层和一个入口。**expanded 一律不看**:回复发出去之后
-    // ViewModel 会给这一楼重新拉一份(见 CommentViewModel.send),不挡住的话那几百条会
-    // 落回主列表里就地摊开,正是面板要避免的那件事。
-    val usesPanel = comment.subReplyCount >= SubReplyPanelThreshold
-
-    // 此刻摊开着的那一份结果。收起过就当没有,哪怕它还缓存在 ViewModel 里。
-    val openThread = expanded?.takeIf { !collapsed && !usesPanel }
-
-    // 已展开就用展开结果(含翻页累加),否则用主楼自带的预览楼层垫着,避免展开前一片空白。
-    //
-    // **第一页还在飞的时候仍然用预览层**:`expanded` 一被创建就非 null 但 items 是空的,
-    // 直接读它会让已经显示着的两三条回复在点下按钮的瞬间消失,只剩一个转圈 —— 看起来像
-    // "一点就把内容点没了"。
-    val shown = openThread?.items?.takeIf { it.isNotEmpty() } ?: comment.previewReplies
-    val remaining = comment.subReplyCount - shown.size
-    if (shown.isEmpty() && remaining <= 0) return
-
-    // 这一组的入口只有一个动作:把它打开。走面板还是就地摊开是容器的选择,不是两件事,
-    // 所以预览层的每一条、整组末尾那一行、以及它们的读屏标签都指向这同一个 lambda。
-    val openThisThread: () -> Unit =
-        if (usesPanel) ({ onOpenPanel(comment.rpid) }) else ({ onExpandReplies(comment.rpid) })
-
-    // **一个容器装下整组楼中楼,不是每条一张卡片。** 以前每条各套一个 Surface,
-    // 三条回复就是三块圆角色块摞在一起,比主楼本身还抢眼。PiliPlus 的 `replyItemRow`
-    // 也是一个容器里排若干行(`lib/pages/video/reply/widgets/reply_item_grpc.dart`)。
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = MaterialTheme.shapes.small,
-        modifier = Modifier.fillMaxWidth().padding(top = Spacing.Tight),
-    ) {
-        Column(modifier = Modifier.padding(vertical = Spacing.Hair)) {
-            shown.forEach { sub ->
-                // **按 rpid 给每条一个稳定身份。** 预览那几条([CommentItem.previewReplies])和
-                // 摊开之后的那一份([ExpandedReplies.items])是两个不同的列表对象,但开头几条是
-                // 同一批回复。不给 key 的话 Compose 按位置认节点,展开时它们照样能对上;而一旦
-                // 有条被删掉或者服务端换了顺序,位置就错开,正文和头像会串到别人身上。
-                //
-                // 有了 key,同一条回复在两种形态之间是**同一个节点**:正文从两行长到全文、
-                // 动作行从无到有,都发生在它身上,所以下面那些动画才有东西可动。
-                key(sub.rpid) {
-                    SubReplyRow(
-                        comment = sub,
-                        form = if (openThread == null) SubReplyForm.Preview else SubReplyForm.Full,
-                        rootAuthorMid = comment.mid,
-                        canDelete = myMid != null && myMid == sub.mid,
-                        onOpenThread = openThisThread,
-                        onReplyTo = onReplyTo,
-                        onLike = onLike,
-                        onDelete = onDelete,
-                        onSeek = onSeek,
-                        onUserClick = onUserClick,
-                        onOpenLink = onOpenLink,
-                        onSelectText = onSelectText,
-                        modifier = Modifier.padding(horizontal = Spacing.Tight),
-                    )
-                }
-            }
-            // **每一条出口都要留下痕迹。** 以前失败和"这一页什么都没返回"两种结局都落进
-            // `expanded != null && !hasMore && items 为空`,而这个组合在下面一条分支都不匹配 ——
-            // 按钮消失、回复没有、错误画在整个评论区的页脚上,看起来就是"点了展开什么都没发生"。
-            when {
-                // 大楼的入口通向面板,数字报的是总数而不是"还剩多少":面板里是完整的一份,
-                // 预览的那两三条也在里面。
-                usesPanel -> SubReplyActionRow(
-                    text = stringResource(R.string.comment_open_replies_panel, comment.subReplyCount),
-                    onClick = openThisThread,
-                )
-
-                openThread == null && remaining > 0 -> SubReplyActionRow(
-                    text = stringResource(R.string.comment_expand_replies, remaining),
-                    onClick = openThisThread,
-                )
-
-                openThread != null && openThread.loadingMore -> Box(
-                    modifier = Modifier.fillMaxWidth().heightIn(min = Dimens.MinTouchTarget),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    LoadingSpinner()
-                }
-
-                // 失败就地重试:按钮和它解释的那次点击在同一个容器里。
-                openThread?.error != null -> SubReplyActionRow(
-                    text = stringResource(R.string.comment_replies_failed) + "  " +
-                        stringResource(R.string.action_retry),
-                    onClick = { onExpandReplies(comment.rpid) },
-                )
-
-                openThread != null && openThread.hasMore -> SubReplyActionRow(
-                    text = stringResource(R.string.comment_load_more),
-                    onClick = { onExpandReplies(comment.rpid) },
-                )
-
-                // 服务端说到头了,但一条都没给出来(计数里含已删除或被折叠的回复时会这样)。
-                openThread != null && shown.isEmpty() -> Text(
-                    text = stringResource(R.string.comment_no_more_replies),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Tight),
-                )
-            }
-            // 收起单独一行,不和上面那些并排:两个按钮挤在一行里,每个都只剩半幅宽度可点,
-            // 而整行可点正是这一轮要修的事。一楼能摊开几百条,收起之前唯一的办法是一路滚过去。
-            if (openThread != null && shown.isNotEmpty()) {
-                SubReplyActionRow(
-                    text = stringResource(R.string.comment_collapse_replies),
-                    onClick = { onCollapseReplies(comment.rpid) },
-                    emphasized = false,
-                )
-            }
-        }
-    }
-}
-
-/**
- * 楼中楼那一条的两种形态。
- *
- * **是一个组件的两个形态,不是两个组件。** 上一版按 PiliPlus 的分法写成两个 composable
- * (`replyItemRow` 与 `ReplyItemGrpc(replyLevel: 2)`),预览那一份名字接进正文同一段、没有头像、
- * 没有按钮。代价是展开的那一下整条被换掉:刚才读的那两行原地消失,另一条长相不同的东西
- * 出现在同一个位置,而它们本是同一条回复。合成一个之后,展开只是这一个节点上的几处变化 ——
- * 正文从两行长到全文,动作行淡入,左边那张头像一动不动。
- */
-private enum class SubReplyForm {
-    /** 未展开时的一瞥:两行截断,不给时间、属地、标记和动作行,整条点下去是打开这一组。 */
-    Preview,
-
-    /** 摊开之后(内联与面板共用):一条完整的回复。 */
-    Full,
-}
-
-/**
- * 「展开 N 条回复」这一类整组入口。**整行可点,不是一个靠左的文字按钮。**
- *
- * `TextButton` 的触摸区只有文字那一小截,而它排在一个占满宽度的容器里 —— 右边那一大片空白
- * 看上去同属这一行,点下去却没有反应。占满宽度之后,可点范围和它看起来的范围一致,
- * 48dp 的最小触摸目标(风格指南 §3)也顺带满足了。
- *
- * @param emphasized 这一行通向更多内容时为真,取 `primary`。判据是 §2.7c 那条
- *   「primary 只标此刻能点进去的入口」:展开、查看全部、加载更多都是入口,收起不是。
- */
-@Composable
-private fun SubReplyActionRow(
-    text: String,
-    onClick: () -> Unit,
-    emphasized: Boolean = true,
-    centered: Boolean = false,
+    actions: CommentRowActions,
+    modifier: Modifier = Modifier,
+    /** 右端再往里收多少。主楼传 [RootFooterEndInset],见那里。 */
+    endInset: Dp = 0.dp,
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
+            .tuckUp(FooterTuck)
             .fillMaxWidth()
-            .heightIn(min = Dimens.MinTouchTarget)
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = Spacing.Tight, vertical = Spacing.Tight),
-        horizontalArrangement = if (centered) Arrangement.Center else Arrangement.Start,
+            .padding(end = endInset),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = text,
-            style = MaterialTheme.typography.labelLarge,
-            color = if (emphasized) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
+            text = commentMeta(comment),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Row(
+            modifier = Modifier.offset(x = FooterTrailingNudge),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LikeButton(comment = comment, onLike = actions.onLike)
+            if (actions.canDelete(comment)) DeleteButton(onDelete = { actions.onDelete(comment.rpid) })
+        }
+    }
+}
+
+/**
+ * 点赞:图标 + 计数,一个按钮。计数原先是按钮旁边一段不可点的字,按在数字上什么都不发生。
+ * 零赞不写 0,只留图标 —— 一列评论里满是 "0" 只是噪声。
+ *
+ * 已赞换实心图标并取 `primary`,不只是变色(icon-buttons 页对 toggle 的要求:未选中描边、
+ * 选中实心)。
+ */
+@Composable
+private fun LikeButton(comment: CommentItem, onLike: (Long) -> Unit) {
+    val tint = if (comment.liked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    TextButton(
+        onClick = { onLike(comment.rpid) },
+        modifier = Modifier.heightIn(min = ButtonDefaults.ExtraSmallContainerHeight),
+        contentPadding = PaddingValues(horizontal = Spacing.Tight),
+        colors = ButtonDefaults.textButtonColors(contentColor = tint),
+    ) {
+        Icon(
+            imageVector = if (comment.liked) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp,
+            contentDescription = stringResource(if (comment.liked) R.string.comment_unlike else R.string.comment_like),
+            modifier = Modifier.size(IconButtonDefaults.extraSmallIconSize),
+        )
+        if (comment.likeCount > 0) {
+            Spacer(Modifier.width(ButtonDefaults.ExtraSmallIconSpacing))
+            Text(text = "${comment.likeCount}", style = MaterialTheme.typography.labelMedium)
+        }
+    }
+}
+
+/** 删除不可逆,而这个图标就排在点赞旁边。同一套确认对话框投币和删除缓存已经在用。 */
+@Composable
+private fun DeleteButton(onDelete: () -> Unit) {
+    var confirming by remember { mutableStateOf(false) }
+    IconButton(onClick = { confirming = true }, modifier = Modifier.size(IconButtonDefaults.extraSmallContainerSize())) {
+        Icon(
+            Icons.Outlined.Delete,
+            contentDescription = stringResource(R.string.comment_delete),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(IconButtonDefaults.extraSmallIconSize),
+        )
+    }
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text(stringResource(R.string.comment_delete_confirm)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirming = false
+                    onDelete()
+                }) { Text(stringResource(R.string.action_delete)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirming = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             },
         )
     }
 }
 
 /**
- * 楼中楼的一条,两种形态共用(见 [SubReplyForm])。**结构和主楼是同一套**:头像、名字、等级、
- * 时间与属地、正文、配图、一行动作(点赞 / 回复 / 删除)。**层级只由缩进表达**,不由"少给几样
- * 信息"表达:这一整组落在主楼正文的左缘([CommentTextInset])之后,又各自让出一个头像宽。
+ * 主楼的点赞往里收一截,和它底下楼中楼的点赞落在同一条竖线上。楼中楼的正文右缘比主楼的窄了
+ * 容器的内边距(12dp),两级各自贴着自己的右缘时,点赞一上一下错开这么多,一屏看下来是锯齿。
+ * 对齐到楼中楼那一条而不是反过来:楼中楼的点赞再往右就贴到容器边上了。
+ */
+private val RootFooterEndInset = Spacing.Cozy
+
+/**
+ * 尾部按钮右移这一截,图标的右缘才对得上页边距:按钮的内边距是透明的,不挪的话点赞图标
+ * 比上面正文的右缘缩进一个内边距。
+ */
+private val FooterTrailingNudge = Spacing.Tight
+
+/**
+ * 底行往上压进正文的高度。这一行的高度是点赞按钮 48dp 的触摸区撑的,图标只有 32dp,正文与
+ * "时间  属地"之间因此空出一大截。压上去的这 8dp 落在正文最后一行字形下方的行距里,不盖字;
+ * 按钮的触摸区照旧是 48dp。
+ */
+private val FooterTuck = Spacing.Tight
+
+/**
+ * 往上压 [amount]:照常测量,对外报的高度少这一截,摆的时候上移同样多,于是盖住上一个兄弟的
+ * 底边。不用 `offset`:它只挪画的位置不挪量出来的尺寸,上移之后底下会空出同样高的一条。
+ */
+private fun Modifier.tuckUp(amount: Dp): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints)
+    val tuck = amount.roundToPx().coerceAtMost(placeable.height)
+    layout(placeable.width, placeable.height - tuck) { placeable.place(0, -tuck) }
+}
+
+/**
+ * 一楼的楼中楼,**一律完整显示**:头像、名字与标记、正文、配图、时间与点赞,单击回复这一条。
  *
- * 头像和主楼**同一档**([Dimens.AvatarRow]),**预览形态也画**。上一版预览层不给头像,而头像正是
- * 这一列最靠左的那样东西:它一出现,右边所有文字的左缘就跟着挪,展开的那一下整段文字横向平移
- * 一个头像宽,读起来像换了一条内容。现在两种形态的左缘是同一条。
+ * 上一版有一个预览态:两行截断、没有时间和按钮,点一下才长成完整的样子。这一下的代价是每条
+ * 回复都要点两次才能回它,而它换来的只是两三条回复各省一行。
  *
- * 展开时变的三样:正文的 `maxLines` 从 [SubReplyPreviewMaxLines] 放开到不限(高度过
- * `animateContentSize` 长出来)、时间与属地那一行和动作行淡入、整条那个"打开这一组"的点击
- * 让位给里面各自的落点。**预览形态里不给头像单独的点击**:整条已经是一个可点节点,再往里嵌
- * 一个会把点在头像上的那一下从"打开这一组"变成"去他空间",而这一层还没给出足够上下文。
+ * 显示哪几条:这一楼**已经拿全**时显示全部 —— 主楼自带的几条就是全部,或者刚发完回复、
+ * ViewModel 把这一楼重新拉了一份完整的(见 CommentViewModel.send)。没拿全就显示主楼自带的
+ * 那几条,末尾一行「查看全部 N 条回复」打开详情面板。**主列表里不翻页**:一楼能有几百条,
+ * 在这里就地摊开会把后面的主楼推出好几屏,而收起之前唯一的办法是一路滚过去。
  *
- * 容器色见外层:M3 把 surface container 这一族定义为"容器填充",`surfaceVariant`
- * 现在主要是给它的 on 色(低强调文字)留位置的,拿它当底在深色主题下会亮出一大截。
+ * **一个容器装下整组,不是每条一张卡片。** 每条各套一个 Surface 的话,三条回复就是三块圆角
+ * 色块摞在一起,比主楼本身还抢眼。PiliPlus 的 `replyItemRow` 也是一个容器里排若干行。
+ */
+@Composable
+private fun SubReplies(
+    root: CommentItem,
+    expanded: ExpandedReplies?,
+    actions: CommentRowActions,
+    onOpenThread: () -> Unit,
+) {
+    val complete = expanded?.takeIf { !it.hasMore && !it.loadingMore && it.items.isNotEmpty() }?.items
+    val shown = complete ?: root.previewReplies
+    val hasMore = complete == null && root.subReplyCount > root.previewReplies.size
+    if (shown.isEmpty() && !hasMore) return
+
+    // 圆角取 medium 12dp,与容器内边距 12dp 相配(optical roundness:外圆角 − 内边距 ≈ 内层
+    // 圆角,里面最大的元素是圆头像)。
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Tight),
+    ) {
+        Column(modifier = Modifier.padding(top = Spacing.Tight, bottom = if (hasMore) 0.dp else Spacing.Hair)) {
+            shown.forEach { sub ->
+                // **按 rpid 给每条一个稳定身份。** 重新拉过的那一份和主楼自带的几条是两个列表
+                // 对象,开头几条是同一批回复;不给 key 的话一旦有条被删或者服务端换了顺序,
+                // 位置就错开,正文和头像会串到别人身上。
+                key(sub.rpid) {
+                    SubReplyRow(
+                        comment = sub,
+                        rootAuthorMid = root.mid,
+                        actions = actions,
+                    )
+                }
+            }
+            if (hasMore) {
+                ViewAllRow(
+                    text = stringResource(R.string.comment_open_replies_panel, root.subReplyCount),
+                    onClick = onOpenThread,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 楼中楼里的一条。**结构和主楼是同一套**:头像、名字与标记、正文、配图、底行。层级只由三样
+ * 表达:24dp 的小头像([Dimens.AvatarNested])、缩在主楼正文左缘之后、以及容器的底色。
  */
 @Composable
 private fun SubReplyRow(
     comment: CommentItem,
-    form: SubReplyForm,
-    /** 主楼作者的 mid,用来认出"楼主"。楼主同时是 UP 主时只挂 UP 主那一枚,见下。 */
+    /** 主楼作者的 mid,用来认出"楼主"。 */
     rootAuthorMid: Long,
-    canDelete: Boolean,
-    /** 预览形态下整条的落点。摊开之后用不到 —— 那时这一组已经打开了。 */
-    onOpenThread: () -> Unit,
-    onReplyTo: (CommentItem) -> Unit,
-    onLike: (Long) -> Unit,
-    onDelete: (Long) -> Unit,
-    onSeek: ((Long) -> Unit)?,
-    onUserClick: (Long) -> Unit,
-    onOpenLink: (String) -> Unit,
-    onSelectText: (String) -> Unit,
-    modifier: Modifier = Modifier,
+    actions: CommentRowActions,
 ) {
     var viewerIndex by remember { mutableStateOf<Int?>(null) }
-    val full = form == SubReplyForm.Full
-    val message = comment.message.trim()
 
-    // 尺寸变化走 spatial 档,显隐走 effects 档(风格指南 §6 的那张表:组件动效一律取
-    // motionScheme 的 spring,tween 只留给整屏转场)。
-    val growSpec = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
-
-    // **预览形态的长按挂在整行上,不挂在正文上。** 原因是这一行本来就可点(点开这一组):
-    // 正文上再放一个消费型的手势检测器,它作为子节点会先拿到 down 并消费掉,于是落在文字上的
-    // 短按再也传不到外面这层 clickable —— 而文字几乎铺满整行,等于把"点开这一组"废掉。
-    // `combinedClickable` 把两件事收在同一个节点上,不存在谁先谁后。触觉反馈由它自己给,
-    // 所以这里不走 [selectTextOnLongPress] —— 那一份自己补震动,挂在这里会震两回。
-    //
-    // 摊开之后整条不再可点:回复是行末那个写着"回复"的按钮,头像和名字各自通向空间,
-    // 整条让给里面那几个真正的目标。
-    val rowClick = if (full) {
-        Modifier
-    } else {
-        Modifier.combinedClickable(
-            role = Role.Button,
-            onClickLabel = stringResource(R.string.comment_view_thread),
-            onClick = onOpenThread,
-            onLongClickLabel = stringResource(R.string.text_select_title),
-            onLongClick = { onSelectText(message) },
-        )
-    }
-
-    // **[modifier] 排在 rowClick 之后**,不在最前面。调用方传进来的只有左右内边距(内联那一路
-    // 8dp、面板那一路 16dp),放在点击之前的话那两条边就不可点了 —— 而预览形态下整行可点正是
-    // 这一层唯一的动作,右边那片看上去同属这一行的空白必须按得动。
+    // 左右 12dp、上 4dp:容器顶上另有 8dp,底行按钮的触摸区又带着 8dp 的留白,
+    // 条与条之间因此是 12dp 左右。上一版左右只有 8dp,文字贴着容器边。
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(rowClick)
-            .then(modifier)
-            .padding(vertical = Spacing.Tight),
+            .replyOnClick(comment, actions)
+            .padding(start = Spacing.Cozy, end = Spacing.Cozy, top = Spacing.Hair),
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
-        // 热区往下补到 48dp:这一列的高度由右边整条回复决定,往下扩不挤走任何东西。
         Box(
             modifier = Modifier
                 .heightIn(min = Dimens.MinTouchTarget)
-                .then(if (full) Modifier.openSpace(comment, onUserClick) else Modifier),
+                .openSpace(comment, actions.onUserClick),
             contentAlignment = Alignment.TopCenter,
         ) {
-            Avatar(url = comment.avatarUrl, size = Dimens.AvatarRow)
+            Avatar(url = comment.avatarUrl, size = Dimens.AvatarNested)
         }
         Column(modifier = Modifier.weight(1f)) {
-            // 名字与"时间  属地"两行合成一个可点节点,理由同主楼:名字那一行只有 20dp 高,
-            // 单独接点击按不中,而这两行说的是同一个人发的同一条回复。
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .then(
-                        if (full) {
-                            Modifier.heightIn(min = Dimens.MinTouchTarget).openSpace(comment, onUserClick)
-                        } else {
-                            Modifier
-                        },
-                    ),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        text = comment.uname,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    // 等级和标记只在摊开之后给。预览层每条只有两行的位置,那一排徽章会把
-                    // 这一瞥挤成一张身份卡,而这一层要回答的问题只是"底下在说什么"。
-                    if (full) {
-                        LevelBadge(
-                            level = comment.level,
-                            senior = comment.isSeniorMember,
-                            height = Dimens.LevelBadgeHeight,
-                        )
-                        // 两枚标记互斥。UP 主在自己视频下发的主楼,楼主和 UP 主是同一个人,
-                        // 并排挂两枚只是把同一件事说了两遍,而 UP 主是其中信息量更大的那个。
-                        when {
-                            comment.isUploader -> Tag(
-                                stringResource(R.string.comment_tag_up),
-                                MaterialTheme.colorScheme.primaryContainer,
-                                MaterialTheme.colorScheme.onPrimaryContainer,
-                            )
-
-                            comment.mid != 0L && comment.mid == rootAuthorMid -> Tag(
-                                stringResource(R.string.comment_tag_thread_author),
-                                MaterialTheme.colorScheme.secondaryContainer,
-                                MaterialTheme.colorScheme.onSecondaryContainer,
-                            )
-                        }
-                    }
-                }
-                AnimatedVisibility(visible = full) { SubLine(comment) }
+            NameLine(comment = comment, modifier = Modifier.openSpace(comment, actions.onUserClick)) {
+                CommentTags(comment, pinned = false, threadAuthorMid = rootAuthorMid)
             }
-
             Spacer(Modifier.height(Spacing.Hair))
-            // **两种形态一个字号一个行高**,只有 `maxLines` 不同。上一版预览层单独收一档行高
-            // (20sp),于是展开时每一行的基线都要挪一点,整段文字在长高的同时还在重排。
-            //
-            // 摊开之后不截行:摊开就是用户明确要读这一组,而一条被永久截断的回复在这个页面里
-            // 没有第二个地方能读全。高度差交给 `animateContentSize` —— 它量的是这个节点自己
-            // 的测量结果,所以两行到全文这一段是连续的,不是跳一下。
+            // 回复楼中楼时正文开头自带一截"回复 @某某 :",那是发送方写进 message 的字面文本
+            // (见 CommentRepository.postComment),原样留着 —— 它就是这条的正文,而剥掉它要去猜
+            // 那一截到底有多长,名字改过就会剥错。
             CommentText(
                 message = comment.message,
                 emotes = comment.emotes,
                 mentions = comment.mentions,
                 style = SubReplyBodyStyle,
-                maxLines = if (full) Int.MAX_VALUE else SubReplyPreviewMaxLines,
                 links = comment.links,
-                onSeek = onSeek,
-                onUserClick = onUserClick,
-                onOpenLink = onOpenLink,
-                // **复制原文,不是渲染出来的样子。** 表情按服务端存的 `[doge]` 进剪贴板,
-                // 链接同样按正文里那串字(`av170001`、`https://…`)而不是渲染出来的标题:
-                // 粘出去的 `av170001` 对方能打开,粘出去一行视频标题什么都不是。
-                //
-                // 回复楼中楼时正文开头自带一截"回复 @某某 :",那是发送方写进 message 的
-                // 字面文本(见 CommentRepository.postComment),原样留着 —— 它就是这条的正文,
-                // 而剥掉它要去猜那一截到底有多长,名字改过就会剥错。
-                //
-                // 预览形态下长按归整行(见上面 [rowClick]),这里只挂 animateContentSize。
-                modifier = Modifier
-                    .animateContentSize(growSpec)
-                    .then(
-                        if (full) Modifier.selectTextOnLongPress(message, onSelectText) else Modifier,
-                    ),
+                onSeek = actions.onSeek,
+                onUserClick = actions.onUserClick,
+                onOpenLink = actions.onOpenLink,
             )
-
-            // 配图以前整个没画。一条只发了张图的回复因此渲染成一行空白 —— 看起来像接口少给了
-            // 内容,而它在主楼那一级一直是好的。PiliPlus 在每一级都画 `ImageGridView`。
-            //
-            // 预览形态不画:那一层只有两行的位置,一个九宫格会把它撑成半屏。
-            if (full && comment.pictureUrls.isNotEmpty()) {
+            // 配图在每一级都画。一条只发了张图的回复不画的话渲染成一行空白,看起来像接口少给了
+            // 内容。PiliPlus 在每一级都画 `ImageGridView`。
+            if (comment.pictureUrls.isNotEmpty()) {
                 PictureGrid(
                     urls = comment.pictureUrls,
                     onClick = { index -> viewerIndex = index },
                     modifier = Modifier.padding(top = Spacing.Tight),
                 )
             }
-
-            // 和主楼共用同一组动作,不另写一份小号的:点赞在两级走的是同一个
-            // `x/v2/reply/action`(notes §1.7),回复走同一个 `x/v2/reply/add`,
-            // 长得不一样只会让人以为这里的点赞是另一回事。
-            AnimatedVisibility(visible = full) {
-                CommentActions(
-                    comment = comment,
-                    canDelete = canDelete,
-                    onLike = onLike,
-                    onDelete = onDelete,
-                    onReply = { onReplyTo(comment) },
-                )
-            }
+            // 和主楼共用同一行,不另写一份小号的:点赞在两级走的是同一个 `x/v2/reply/action`
+            // (notes §1.7),长得不一样只会让人以为这里的点赞是另一回事。
+            CommentFooter(comment = comment, actions = actions)
         }
     }
 
@@ -1196,50 +1023,66 @@ private fun SubReplyRow(
     }
 }
 
-/** 面板占屏高的比例。留出上面那一截是为了看得见底下还是评论区,而不是"进了一个新页面"。 */
-private const val PanelHeightFraction = 0.88f
-
 /**
- * 主楼正文在面板顶上最多铺几行。**它在主列表里是完整的**,面板存在的理由是下面那几百条回复;
- * 顶上钉着的这一块要是能长到半屏,回复就没地方了。
+ * 「查看全部 N 条回复」。**整行可点,不是一个靠左的文字按钮**:它排在一个占满宽度的容器里,
+ * 右边那一大片空白看上去同属这一行,点下去却没有反应的话读起来就是坏了。48dp 的最小触摸
+ * 目标(风格指南 §3)也顺带满足。
+ *
+ * 字的左缘对齐楼中楼正文,不对齐头像:它说的是"还有多少条回复",属于上面那几条的延续。
+ * `labelMedium` 取 `primary`:一屏好几个楼都有这一行,`labelLarge` 的粗体比评论正文还醒目;
+ * 颜色仍是 primary,判据是 §2.7c 那条「primary 只标此刻能点进去的入口」。
  */
-private const val PanelRootMaxLines = 10
+@Composable
+private fun ViewAllRow(text: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = Dimens.MinTouchTarget)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(start = SubReplyTextInset, end = Spacing.Cozy),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+
+/** 楼中楼正文在容器里的左缘:容器内边距 + 头像 + 头像与文字的间距。 */
+private val SubReplyTextInset = Spacing.Cozy + Dimens.AvatarNested + Spacing.Tight
+
+/** 面板占屏高的比例。留出上面那一截是为了看得见底下还是评论区,而不是"进了一个新页面"。 */
+private const val ThreadSheetHeightFraction = 0.9f
 
 /**
- * 一楼的完整楼中楼,底部面板形态。超过 [SubReplyPanelThreshold] 条的楼走这条路。
+ * 一楼的完整回复,底部面板形态。「查看全部 N 条回复」打开它。
+ *
+ * **主楼是列表的第一条,跟着一起滚。** 上一版把主楼钉在面板顶上(最多十行)、下面画一条线,
+ * 一条长主楼能占掉面板的三分之一,回复只剩下半截;而人打开面板是来读回复的,主楼读过了。
+ * 回复和主楼同一个排法(36dp 头像、同样的底行):在这里回复是主角,不再是缩在容器里的附属。
+ *
+ * 写回复和主列表是同一套:单击哪一条就回复哪一条,点主楼就是回复这一楼。**这里不放 FAB**:
+ * 面板是来读和回这一组回复的,主楼就排在第一条,再挂一个"回复这一楼"的按钮是同一件事的
+ * 第二个入口。编辑面板画在这张 sheet 里面(见 [ComposerPanel])。
  *
  * **不是一个导航目的地。** 它长在 [CommentSection] 里,页面没有换,返回键由 `ModalBottomSheet`
- * 自己注册的 BackHandler 接管 —— 走导航要么新增一个 NavKey(而 Navigation 3 的 backstack 不去重,
- * 见 `ui/NavBackStackPolicy.kt`),要么在播放页上叠一层,两条都比这里要处理的事多。
- *
- * 数据和内联那条路共用 `CommentViewModel.expandedReplies`:面板只是另一个显示这份结果的地方,
- * 没有第二份分页状态。翻页仍然是 `expandReplies(rootId)`。
- *
- * **回复某一条不关面板**,在面板之上浮一层输入([ReplyInputLayer])。上一版是关掉面板再让
- * 底部那条常驻输入栏接手,而人是在这一组回复里读到某条才想回它的 —— 面板一关,他刚读的那几条
- * 和滚到的位置全没了。
- *
- * 输入层长在**这个 sheet 自己的窗口里**,不是 [CommentSection] 里的兄弟节点:`ModalBottomSheet`
- * 是一个独立的 window,画在活动窗口之上,兄弟节点会被它整个盖住。
+ * 自己注册的 BackHandler 接管。数据和主列表共用 `CommentViewModel.expandedReplies`,翻页仍然是
+ * `expandReplies(rootId)`,没有第二份分页状态。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SubReplyPanel(
+private fun CommentThreadSheet(
     root: CommentItem,
     expanded: ExpandedReplies?,
     myMid: Long?,
     onLoadMore: () -> Unit,
     onLike: (Long) -> Unit,
-    /** 面板里此刻在回复哪一条。null 即没有在回复,输入层不出现。 */
-    replyTo: Long?,
-    replyToName: String?,
-    onReplyTo: (CommentItem) -> Unit,
-    onCancelReply: () -> Unit,
-    inputText: String,
-    onInputChange: (String) -> Unit,
-    sending: Boolean,
-    sendError: String?,
-    onSendReply: () -> Unit,
+    /** 写一条回复给这个 rpid。回复这一楼本身传的是主楼的 rpid。 */
+    onCompose: (Long) -> Unit,
+    /** 正在写时的编辑面板,画在这张 sheet 里面(它自成一个窗口)。 */
+    composer: (@Composable () -> Unit)?,
     onDelete: (Long) -> Unit,
     onSeek: ((Long) -> Unit)?,
     onUserClick: (Long) -> Unit,
@@ -1252,12 +1095,20 @@ private fun SubReplyPanel(
         if (expanded == null) loadFirstPage()
     }
 
-    // **面板自己的 snackbar 宿主,不用外面那一份。** `ModalBottomSheet` 自成一个 window,
-    // 画在活动窗口之上;评论区那份 host 在它底下,从面板里复制会报到一个看不见的地方。
+    // **面板自己的 snackbar 宿主,不用外面那一份**,理由见 [CommentSection] 里那处。
     val snackbarHostState = remember { SnackbarHostState() }
+    var selectionTarget by remember { mutableStateOf<String?>(null) }
 
-    /** 面板里选中的那一段。和外面那份分开,理由同上:两个 window 各画各的。 */
-    var panelSelectionTarget by remember { mutableStateOf<String?>(null) }
+    val actions = CommentRowActions(
+        myMid = myMid,
+        onReply = { comment -> onCompose(comment.rpid) },
+        onLike = onLike,
+        onDelete = onDelete,
+        onSeek = onSeek,
+        onUserClick = onUserClick,
+        onOpenLink = onOpenLink,
+        onSelectText = { selectionTarget = it },
+    )
 
     val listState = rememberLazyListState()
     val shown = expanded?.items?.takeIf { it.isNotEmpty() } ?: root.previewReplies
@@ -1275,308 +1126,119 @@ private fun SubReplyPanel(
             }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        // 输入层要浮在这一列之上,所以外面套一个 Box —— Column 里再加一项只会把列表挤短。
-        Box(modifier = Modifier.fillMaxHeight(PanelHeightFraction)) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                PanelRoot(
-                    root = root,
-                    onLike = onLike,
-                    onReply = { onReplyTo(root) },
-                    onSeek = onSeek,
-                    onUserClick = onUserClick,
-                    onOpenLink = onOpenLink,
-                    onSelectText = { panelSelectionTarget = it },
-                )
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(bottom = Spacing.Loose),
-                ) {
-                    itemsIndexed(shown, key = { _, sub -> sub.rpid }) { index, sub ->
-                        // 条与条之间画 inset 分割线,理由同主列表:面板里这一列是 uncontained 的
-                        // (M3 lists 页把 gap 留给 contained 列表),而每条占四行以上,只靠留白
-                        // 读不出哪里换了人。左端对齐楼中楼头像的后缘,也就是这一条正文的前缘。
-                        if (index > 0) {
-                            HorizontalDivider(
-                                modifier = Modifier.padding(
-                                    start = Spacing.Comfortable + Dimens.AvatarRow + Spacing.Tight,
-                                    end = Spacing.Comfortable,
-                                ),
-                                color = MaterialTheme.colorScheme.outlineVariant,
-                            )
+    // 跳过半开:一组回复就是要往下读的,停在半开只是多一次上拉。
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberExpandedSheetState(),
+    ) {
+        Box(modifier = Modifier.fillMaxHeight(ThreadSheetHeightFraction)) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = Spacing.Tight),
+            ) {
+                item(key = "root") { CommentRow(comment = root, actions = actions) }
+                item(key = "replies-header") {
+                    // 主楼与回复之间的分界。不画线:这里要说的是"下面是几条回复",
+                    // 一句话比一根线说得清楚。
+                    Text(
+                        text = stringResource(R.string.comment_thread_replies, root.subReplyCount),
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(
+                            start = Spacing.Comfortable,
+                            end = Spacing.Comfortable,
+                            top = Spacing.Tight,
+                            bottom = Spacing.Hair,
+                        ),
+                    )
+                }
+                items(shown, key = { sub -> sub.rpid }) { sub ->
+                    CommentRow(
+                        comment = sub,
+                        actions = actions,
+                        threadAuthorMid = root.mid,
+                        modifier = Modifier.animateItem(),
+                    )
+                }
+                item(key = "sheet-footer") {
+                    // 三种结局各有各的出口:失败必须说出来,否则看起来就是"翻到这里就没有了"。
+                    when {
+                        loadingMore -> Box(
+                            modifier = Modifier.fillMaxWidth().padding(Spacing.Comfortable),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            LoadingSpinner()
                         }
-                        SubReplyRow(
-                            comment = sub,
-                            // 面板里只有摊开这一种形态:进面板本身就是"打开这一组"那个动作的结果。
-                            form = SubReplyForm.Full,
-                            rootAuthorMid = root.mid,
-                            canDelete = myMid != null && myMid == sub.mid,
-                            onOpenThread = {},
-                            onReplyTo = onReplyTo,
-                            onLike = onLike,
-                            onDelete = onDelete,
-                            onSeek = onSeek,
-                            onUserClick = onUserClick,
-                            onOpenLink = onOpenLink,
-                            onSelectText = { panelSelectionTarget = it },
-                            modifier = Modifier.padding(horizontal = Spacing.Comfortable),
-                        )
-                    }
 
-                    item(key = "panel-footer") {
-                        // 三种结局各有各的出口,理由同内联那条路:失败必须说出来,否则
-                        // 看起来就是"翻到这里就没有了"。
-                        when {
-                            loadingMore -> Box(
-                                modifier = Modifier.fillMaxWidth().padding(Spacing.Comfortable),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                LoadingSpinner()
-                            }
-
-                            expanded?.error != null -> SubReplyActionRow(
-                                text = stringResource(R.string.comment_replies_failed) + "  " +
-                                    stringResource(R.string.action_retry),
-                                onClick = onLoadMore,
-                                centered = true,
-                            )
-
-                            else -> Box(
-                                modifier = Modifier.fillMaxWidth().padding(Spacing.Comfortable),
-                                contentAlignment = Alignment.Center,
-                            ) {
+                        expanded.error != null -> Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            TextButton(onClick = onLoadMore) {
                                 Text(
-                                    text = stringResource(R.string.comment_no_more_replies),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    stringResource(R.string.comment_replies_failed) + "  " +
+                                        stringResource(R.string.action_retry),
                                 )
                             }
+                        }
+
+                        else -> Box(
+                            modifier = Modifier.fillMaxWidth().padding(Spacing.Comfortable),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.comment_no_more_replies),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
             }
-            // 复制回执落在面板自己这一层。排在输入层之前:两者都贴着下缘,而输入层是此刻
-            // 正在用的东西,不该被一条一闪而过的回执压住。
             SnackbarHost(
                 hostState = snackbarHostState,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
-            panelSelectionTarget?.let { target ->
-                SelectableTextDialog(
-                    text = target,
-                    snackbar = snackbarHostState,
-                    onDismiss = { panelSelectionTarget = null },
-                )
-            }
-            // 浮在面板内容之上。回复对象一为空就整层退场,面板本身不动 —— 位置和滚动偏移
-            // 都在那个没有被重组掉的 LazyColumn 里。
-            if (replyTo != null) {
-                ReplyInputLayer(
-                    targetName = replyToName,
-                    text = inputText,
-                    onTextChange = onInputChange,
-                    sending = sending,
-                    sendError = sendError,
-                    onSend = onSendReply,
-                    onDismiss = onCancelReply,
-                )
-            }
+            composer?.invoke()
+        }
+        selectionTarget?.let { target ->
+            SelectableTextDialog(
+                text = target,
+                snackbar = snackbarHostState,
+                onDismiss = { selectionTarget = null },
+            )
         }
     }
 }
 
 /**
- * 钉在面板顶上的主楼。**不复用 [CommentRow]**:那一份自己会再画一组楼中楼,而这里正是
- * 那组楼中楼的容器,套下去就是无限层。
+ * "UP 主""楼主""置顶"这类标记。容器色和文字色成对取自同一组 role,不再用
+ * `color.copy(alpha=0.15f)` 兑一个底色 —— 那样兑出来的对比度取决于底下是什么。
  *
- * 删除入口不在这里 —— 主列表里那一行有,而在这个面板里删掉主楼,面板自己就没有了立足处。
- * 配图同理留在主列表:一个九宫格钉在顶上会把回复挤到屏幕外,而它在底下那一屏是完整的。
- */
-@Composable
-private fun PanelRoot(
-    root: CommentItem,
-    onLike: (Long) -> Unit,
-    onReply: () -> Unit,
-    onSeek: ((Long) -> Unit)?,
-    onUserClick: (Long) -> Unit,
-    onOpenLink: (String) -> Unit,
-    onSelectText: (String) -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = Spacing.Comfortable, end = Spacing.Cozy, bottom = Spacing.Hair),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-    ) {
-        Box(
-            modifier = Modifier
-                .heightIn(min = Dimens.MinTouchTarget)
-                .openSpace(root, onUserClick),
-            contentAlignment = Alignment.TopCenter,
-        ) {
-            Avatar(url = root.avatarUrl, size = Dimens.AvatarRow)
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = Dimens.MinTouchTarget)
-                    .openSpace(root, onUserClick),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        text = root.uname,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    LevelBadge(level = root.level, senior = root.isSeniorMember, height = Dimens.LevelBadgeHeight)
-                    if (root.isUploader) {
-                        Tag(
-                            stringResource(R.string.comment_tag_up),
-                            MaterialTheme.colorScheme.primaryContainer,
-                            MaterialTheme.colorScheme.onPrimaryContainer,
-                        )
-                    }
-                }
-                SubLine(root)
-            }
-            Spacer(Modifier.height(Spacing.Tight))
-            CommentText(
-                message = root.message,
-                emotes = root.emotes,
-                mentions = root.mentions,
-                style = CommentBodyStyle,
-                maxLines = PanelRootMaxLines,
-                links = root.links,
-                onSeek = onSeek,
-                onUserClick = onUserClick,
-                onOpenLink = onOpenLink,
-                // 这里截了行(见 [PanelRootMaxLines]),但复制的是整条正文 ——
-                // 截断是这块地方放不下,不是内容只有这么多。
-                modifier = Modifier.selectTextOnLongPress(root.message.trim(), onSelectText),
-            )
-            CommentActions(
-                comment = root,
-                canDelete = false,
-                onLike = onLike,
-                onDelete = {},
-                onReply = onReply,
-            )
-        }
-    }
-}
-
-/**
- * "UP主""置顶"这类标记。容器色和文字色成对取自同一组 role,不再用 `color.copy(alpha=0.15f)`
- * 兑一个底色 —— 那样兑出来的对比度取决于底下是什么,深色主题里经常糊成一团。
+ * **和等级徽章差不多高**:它们排在同一行、同样是名字的附注。上一版用 `labelSmall` 11sp 加上下
+ * 内边距,比等级徽章高出一截,排在楼中楼 12sp 的名字后面几乎和名字一样重。字号取 9sp,
+ * 同 PiliPlus 的 `PBadge(size: small, fontSize: 9)`。
  */
 @Composable
 private fun Tag(text: String, container: Color, content: Color) {
     Surface(color = container, contentColor = content, shape = MaterialTheme.shapes.extraSmall) {
         Text(
             text = text,
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = Spacing.Hair, vertical = 1.dp),
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = TagTextSize, lineHeight = TagTextSize),
+            modifier = Modifier.padding(horizontal = TagHorizontalPadding, vertical = TagVerticalPadding),
         )
     }
 }
 
-/**
- * 评论区底部那条常驻输入栏。
- *
- * **仍然是 `OutlinedTextField`,没有换成 [dev.bilby.ui.components.SearchField]。** 后者是按
- * 搜索那一处的形态定的(风格指南 §2.4b):单行、`ImeAction.Search`、前面一个放大镜、尾部一个
- * 清空。评论要多行(一条评论常有三四行)、要 `ImeAction.Send`、要一个字数计数器,而放大镜和
- * 清空都不该出现在这里 —— 套上去等于把那个组件改成两种东西。形状照 `ui/video/DanmakuInput.kt`
- * 的那一条:失败原因在上方一行,计数器贴右下角,发送键在右边。
- *
- * @param sendError 这一次发送失败的原因。**报在这里,不报在列表页脚**:人此刻看着的是这条
- *   输入栏,而失败之后要做的事(改一个字再发、或者直接重试)都在这一带。
- */
-@Composable
-private fun CommentInputBar(
-    text: String,
-    onTextChange: (String) -> Unit,
-    replyTarget: String?,
-    onCancelReply: () -> Unit,
-    sending: Boolean,
-    sendError: String?,
-    onSend: () -> Unit,
-) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-        Column {
-            SendErrorRow(error = sendError, sending = sending, onRetry = onSend)
-            if (replyTarget != null) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = Spacing.Comfortable, end = Spacing.Hair)
-                        .heightIn(min = Dimens.MinTouchTarget),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        stringResource(R.string.comment_replying_to, replyTarget),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    TextButton(onClick = onCancelReply) { Text(stringResource(R.string.action_cancel)) }
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(Spacing.Tight),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = onTextChange,
-                    modifier = Modifier.weight(1f),
-                    placeholder = {
-                        Text(
-                            if (replyTarget != null) {
-                                stringResource(R.string.comment_input_hint_reply, replyTarget)
-                            } else {
-                                stringResource(R.string.comment_input_hint)
-                            },
-                        )
-                    },
-                    maxLines = 4,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(
-                        onSend = { if (!sending && text.isNotBlank()) onSend() },
-                    ),
-                    supportingText = draftCounter(text.length),
-                    shape = MaterialTheme.shapes.large,
-                )
-                FilledIconButton(onClick = onSend, enabled = !sending && text.isNotBlank()) {
-                    if (sending) {
-                        LoadingSpinner()
-                    } else {
-                        Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            contentDescription = stringResource(R.string.action_send),
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
+private val TagTextSize = 9.sp
+private val TagHorizontalPadding = 3.dp
+private val TagVerticalPadding = 1.dp
 
 /**
  * 评论正文。**解析在 `data/CommentRichText.kt`,渲染在 `ui/components/BiliRichText.kt`**,
  * 这里只把评论区特有的几个参数摊平送过去。
  *
- * 留着这层薄壳而不是让四个调用点各自 parse 一遍,是因为解析结果要 `remember` 住:评论列表
+ * 留着这层薄壳而不是让各调用点各自 parse 一遍,是因为解析结果要 `remember` 住:评论列表
  * 滚动时重组很频繁,而一条正文的 token 扫描和 @ 归属只跟这几个入参有关,和滚动无关。
  */
 @Composable
@@ -1642,8 +1304,6 @@ private fun previewComment(
     links = emptyMap(),
     pictureUrls = emptyList(),
     subReplyCount = if (nested) 2 else 0,
-    // 楼中楼要挂回这一楼:rootRpid/parentRpid 都指向主楼,才是"直接回复主楼"那一种,
-    // 名字后面因此带冒号(见 SubReplyRow)。
     previewReplies = if (!nested) {
         emptyList()
     } else {

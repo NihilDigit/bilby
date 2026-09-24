@@ -343,7 +343,8 @@ private fun PlayerControlBar(
             start = if (isFullscreen) 16.dp else 8.dp,
             end = if (isFullscreen) 16.dp else 8.dp,
             top = 16.dp,
-            bottom = if (isFullscreen) 8.dp else 0.dp,
+            // 内嵌时画面底边被详情面板压住一条(VideoScreen 的 DetailPaneOverlap),按钮行让出来。
+            bottom = if (isFullscreen) 8.dp else DetailPaneOverlap,
         )
 
     val timeText = "${formatDurationMillis(position)} / ${formatDurationMillis(duration)}"

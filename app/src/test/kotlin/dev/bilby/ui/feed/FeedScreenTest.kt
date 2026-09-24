@@ -19,6 +19,7 @@ class FeedScreenTest {
         durationText = "",
         upName = "",
         upMid = 0L,
+        upFaceUrl = "",
         publishedAtEpochSeconds = 0L,
         playCount = "",
         danmakuCount = "",

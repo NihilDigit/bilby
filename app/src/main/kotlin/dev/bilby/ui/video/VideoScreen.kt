@@ -1,5 +1,8 @@
 package dev.bilby.ui.video
 
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.layout.layout
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -103,6 +106,7 @@ import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.player.MediaBackButton
 import dev.bilby.ui.player.PlaybackFailure
+import dev.bilby.ui.player.playOrReplay
 import dev.bilby.ui.player.rememberSettledPlaybackError
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
@@ -620,17 +624,21 @@ fun VideoScreen(
         // 直接穿透到 MainActivity 的 backStack.removeLastOrNull(),整个播放页被弹掉、
         // 人回到动态流而播放器还在后台放。全屏那半边已经有同样一句(BilbyPlayer.kt)。
         //
-        // 队列 Sheet 打开时不用另外处理:ModalBottomSheet 自己注册的 BackHandler 在组合树里
-        // 更靠后,会先接住那一次返回把 Sheet 关掉,这句退听视频要按第二次才轮到——这个先后
-        // 顺序是被依赖的,不是巧合。
+        // 队列 Sheet 展开时的那一次返回归 ListenScreen:它在组合树里更靠后,注册的 BackHandler
+        // 先接住返回、把 Sheet 收回把手,这句退听视频要按第二次才轮到。这个先后顺序是被依赖的。
+        // 那是 BottomSheetScaffold,不像 ModalBottomSheet 自带返回处理,得自己注册。
         BackHandler { onListeningChange(false) }
         ListenScreen(
             player = active,
             state = audioState,
             sleepTimer = sleepTimerState,
-            episodes = episodeRows,
+            queue = shownQueue,
+            // 页面那个 `playing` 在下面才声明(它服务于画面钉住的判据),这里读服务的状态,
+            // 两者说的是同一件事。
+            playing = audioState.isPlaying,
             onSelectEpisode = onSelectEpisode,
-            queueEdges = queueEdges,
+            onRetryQueue = retryQueue,
+            onOpenQueueSource = onOpenQueueSource,
             // 不带 MediaItem 的那一对:服务在这两条命令上先走分 P(QueuePlayer.handleSeek)。
             onNext = { active?.seekToNext() },
             onPrevious = { active?.seekToPrevious() },
@@ -715,7 +723,9 @@ fun VideoScreen(
     val playerScroll = rememberCollapsingHeaderState { !playerPinned }
     // 画面收到底时留下一条快捷播放条的高度,那块位置由它占住(见 QuickPlayBar)。
     // 收不干净是有意的:收干净之后"把画面拿回来"就没有入口了,只能靠一路往回滚。
-    with(LocalDensity.current) { playerScroll.minVisiblePx = QuickPlayBarHeight.toPx() }
+    // 收起后留下的是快捷播放条那一截,再加上被详情面板压住的那一条(见 [DetailPaneOverlap]):
+    // 条本身贴顶,多出来的那一截藏在面板的圆角底下。
+    with(LocalDensity.current) { playerScroll.minVisiblePx = (QuickPlayBarHeight + DetailPaneOverlap).toPx() }
     // 又钉起来就把画面收回来。**不是 snap 而是动画**:此刻手指多半不在屏幕上(点的是通知栏
     // 或者画面上的播放键),瞬移读不出"它回来了"这件事。翻回简介页是个例外,那时手指在滑,
     // 但那一下本来就跟着页面走,动画反而顺。
@@ -918,6 +928,7 @@ fun VideoScreen(
                     onSelect = onSelectEpisode,
                     onDismiss = { episodePanelOpen = false },
                     edges = queueEdges,
+                    playing = playing,
                 )
             }
         }
@@ -942,7 +953,24 @@ fun VideoScreen(
                         relatedOpen = true
                     },
                     onListen = { onListeningChange(true) },
-                    onSendDanmaku = openDanmakuInput,
+                    danmakuInput = DanmakuInput(
+                        open = danmakuInputOpen,
+                        draft = danmakuDraft,
+                        onDraftChange = { danmakuDraft = it },
+                        send = danmakuSend,
+                        onOpen = openDanmakuInput,
+                        onClose = closeDanmakuInput,
+                        onSend = {
+                            onSendDanmaku(
+                                danmakuDraft,
+                                // 页面这条视频的那一 P。发弹幕的 bvid 由 ViewModel 带,两者必须是
+                                // 同一条内容 —— 直接读 audioState 的话,换一集那一瞬发出去的是
+                                // 新 bvid 配上一条的 cid。
+                                currentCid,
+                                danmakuProgress,
+                            )
+                        },
+                    ),
                     danmakuEnabled = danmakuPrefs.enabled,
                     onDanmakuEnabledChange = onDanmakuEnabledChange,
                     onCache = { cacheSheetOpen = true },
@@ -1089,17 +1117,22 @@ fun VideoScreen(
                 },
             )
             if (!fullscreen) {
+                // 刻度放着时半秒一条,只在 lambda 里读:读在这里的话整块画面跟着半秒重组一次,
+                // 而条在放着的时候根本不出现。停着时服务每次停下、拖动都会发一条,不必轮询。
+                val tick by AudioPlaybackService.positionTicks.collectAsStateWithLifecycle()
                 QuickPlayBar(
                     title = state.detail?.title.orEmpty(),
                     // 播完停在末尾,此时"继续"没有可继续的地方,按下应是从头来过。
-                    finished = active?.playbackState == Player.STATE_ENDED,
+                    finished = audioState.stoppedAtEnd,
+                    progress = {
+                        tick.takeIf { matchesCurrentPage && it.durationMillis > 0 }
+                            ?.let { (it.positionMillis.toFloat() / it.durationMillis).coerceIn(0f, 1f) }
+                    },
                     onBack = onBack,
                     onExpand = { scope.launch { playerScroll.expand() } },
                     onPlay = {
-                        // 播完之后先回到开头:直接 play() 在末尾上是没有反应的,
-                        // 这一条和播放器控制条里那颗按钮的判断相同(见 PlayerShell)。
-                        if (active?.playbackState == Player.STATE_ENDED) active.seekTo(0)
-                        active?.play()
+                        // 和播放器控制条里那颗按钮是同一个判断,见 playOrReplay。
+                        active?.playOrReplay()
                         // 展开不用在这里做:放起来之后 playerPinned 变真,
                         // 上面那个 LaunchedEffect(playerPinned) 会把画面收回来。
                     },
@@ -1117,8 +1150,20 @@ fun VideoScreen(
             //
             // 横向挖孔在这里躲:单栏也可能是横屏(600–840dp 的中等宽度),那时挖孔在侧边,
             // 画面照旧铺过去,但下面的标题和评论不能被切。竖屏时它量到 0。
+            //
+            // **面板压住画面底边一条,顶上两角圆起来,角里露出的是画面。** 画面像是沉在面板
+            // 底下,详情这一块嵌在它上面,而不是两块上下拼接、中间一条硬边。压住的那一条
+            // 画面上没有东西:内嵌控制条底部让出了同样的高度(见 BilbyPlayer 的
+            // PlayerControlBar),快捷播放条那一截也多留了同样的高度(见上面的 minVisiblePx)。
             if (!fullscreen) {
-                tabsPane(Modifier.weight(1f).windowInsetsPadding(WindowInsets.horizontalCutout))
+                tabsPane(
+                    Modifier
+                        .weight(1f)
+                        .overlapAbove(DetailPaneOverlap)
+                        .clip(RoundedCornerShape(topStart = DetailPaneOverlap, topEnd = DetailPaneOverlap))
+                        .background(MaterialTheme.colorScheme.surface)
+                        .windowInsetsPadding(WindowInsets.horizontalCutout),
+                )
             }
         }
     }
@@ -1133,25 +1178,10 @@ fun VideoScreen(
     }
     }
 
-    // 全屏下不给:那时这一行按钮根本不组合,而横屏起键盘会铺掉大半个画面——发弹幕要看着
-    // 画面发,盖掉画面就没有可发的对象了。想发先退出全屏。
-    if (danmakuInputOpen && !fullscreen) {
-        DanmakuInputLayer(
-            text = danmakuDraft,
-            onTextChange = { danmakuDraft = it },
-            state = danmakuSend,
-            onSend = {
-                onSendDanmaku(
-                    danmakuDraft,
-                    // 页面这条视频的那一 P。发弹幕的 bvid 由 ViewModel 带,两者必须是
-                    // 同一条内容 —— 直接读 audioState 的话,换一集那一瞬发出去的是
-                    // 新 bvid 配上一条的 cid。
-                    currentCid,
-                    danmakuProgress,
-                )
-            },
-            onDismiss = closeDanmakuInput,
-        )
+    // 全屏下不给:那时标签行根本不组合,而横屏起键盘会铺掉大半个画面 —— 发弹幕要看着画面发,
+    // 盖掉画面就没有可发的对象了。写到一半转进全屏,就当退出输入(草稿留着)。
+    LaunchedEffect(fullscreen) {
+        if (fullscreen && danmakuInputOpen) closeDanmakuInput()
     }
     }
 
@@ -1229,3 +1259,28 @@ fun VideoScreen(
  * 压到底部手势条。
  */
 private val ToastAnchorInDetail = BiasAlignment(horizontalBias = 0f, verticalBias = 0.8f)
+
+/**
+ * 详情面板压住画面底边的高度,也是面板顶上两角的圆角。取 `shapes.medium` 那一档的 12dp:
+ * 再大,画面底下被压住的那一截就开始吃掉控制条;再小,圆角读不出来。
+ */
+internal val DetailPaneOverlap = 12.dp
+
+/**
+ * 往上多占 [overlap] 的高度并盖住上一个兄弟的底边,自己对外报的尺寸不变。
+ *
+ * 不用 `offset`:它只挪画的位置不挪量出来的尺寸,往上挪之后底部会空出同样高的一条。
+ * 这里测量时多要这一截、摆放时上移,排在后面的兄弟画在上层,于是正好盖住前一个。
+ */
+private fun Modifier.overlapAbove(overlap: Dp): Modifier = layout { measurable, constraints ->
+    val extra = overlap.roundToPx()
+    val placeable = measurable.measure(
+        constraints.copy(
+            minHeight = constraints.minHeight + extra,
+            maxHeight = if (constraints.hasBoundedHeight) constraints.maxHeight + extra else constraints.maxHeight,
+        ),
+    )
+    val height = (placeable.height - extra).coerceAtLeast(0)
+    layout(placeable.width, height) { placeable.place(0, -extra) }
+}
+

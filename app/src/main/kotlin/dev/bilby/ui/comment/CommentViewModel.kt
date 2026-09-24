@@ -514,10 +514,11 @@ class CommentViewModel(
         // 一条主楼连同它自带的楼中楼预览走同一个变换。**置顶楼的预览层以前漏在外面**:
         // 它和普通主楼一样带 previewReplies,而这里只认了 topComment 本身。
         //
-        // 目标 rpid 走参数传进来,不靠闭包捕获外层那个同名参数:扩展函数里裸写 `rpid`
-        // 命中的是接收者自己的成员,`rpid == this.rpid` 会恒真。
+        // **比对对象必须写成 `this.rpid`。** 扩展函数里裸写 `rpid` 命中的是外层那个同名参数,
+        // 不是接收者的成员:Kotlin 里局部变量与外层参数的优先级高于隐式接收者的成员。于是
+        // `target == rpid` 恒真,点一条的赞整页每条主楼都亮起来(服务端只收到一次,重进即好)。
         fun CommentItem.applyDeep(target: Long): CommentItem = when (target) {
-            rpid -> transform(this)
+            this.rpid -> transform(this)
             else -> copy(previewReplies = previewReplies.map { if (it.rpid == target) transform(it) else it })
         }
         _state.update { current ->

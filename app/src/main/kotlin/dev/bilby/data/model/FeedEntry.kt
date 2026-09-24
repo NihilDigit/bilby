@@ -14,6 +14,8 @@ sealed interface FeedEntry {
     val id: String
     val upMid: Long
     val upName: String
+    /** 取不到时为空串,界面照常画名字,只是不带头像。 */
+    val upFaceUrl: String
     val publishedAtEpochSeconds: Long
 
     /**
@@ -26,6 +28,7 @@ sealed interface FeedEntry {
         val durationText: String,
         override val upName: String,
         override val upMid: Long,
+        override val upFaceUrl: String,
         override val publishedAtEpochSeconds: Long,
         val playCount: String,
         val danmakuCount: String,
@@ -49,6 +52,7 @@ sealed interface FeedEntry {
         val coverUrl: String,
         override val upName: String,
         override val upMid: Long,
+        override val upFaceUrl: String,
         override val publishedAtEpochSeconds: Long,
     ) : FeedEntry {
         // 两套编号取的接口不同(notes/article.md 第 0 节),所以键里要带上是哪一套,

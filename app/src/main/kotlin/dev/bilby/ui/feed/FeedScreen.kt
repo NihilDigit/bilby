@@ -8,8 +8,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -63,7 +65,6 @@ import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.formatRelativeTime
-import dev.bilby.ui.components.TrailingEntry
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -291,8 +292,8 @@ private fun FeedList(
     // 「最常访问」那一格在没人可显示时整格不画,正在直播的那一格自己也可以撑起它 ——
     // 判据必须和下面渲染时用的是同一个,差一格就是开屏定位落错一条。
     val hasUpsRow = state.topUps.isNotEmpty() || state.liveUps.isNotEmpty()
-    // 「其他动态」那一行**两种宽度下都在列表里**,所以恒占一格。它不像「最常访问」那样会被
-    // 挪到旁边:那一排是一组人,占得住次区一整栏;这一行只有一句话。
+    // 标题行**两种宽度下都在列表里**,所以恒占一格。它不像「最常访问」那样会被挪到旁边:
+    // 那一排是一组人,占得住次区一整栏;这一行只有一个标题和一个入口。
     val baseOffset = (if (!wide && hasUpsRow) 1 else 0) + 1
 
     var liveSheetOpen by rememberSaveable { mutableStateOf(false) }
@@ -349,6 +350,11 @@ private fun FeedList(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = contentPadding,
             ) {
+        // 首页装不下的另一半(图文、纯文字、转发、直播)的入口挂在标题行右边。**专栏不在
+        // 里面**:它是投稿,和视频一样排在首页的时间序里(见 DynamicRepository 的分流)。
+        item(key = "header") {
+            FeedHeader(onOpenOtherDynamics = onOpenOtherDynamics)
+        }
         // 窄屏时「最常访问」仍然跟着列表一起滚,不吸顶:吸顶会让它变成常驻的入口带,
         // 而这一页的主体是动态流。宽屏下它挪到旁边的次区去了,这里就不再出现。
         if (!wide && hasUpsRow) {
@@ -363,29 +369,6 @@ private fun FeedList(
                     onOpenFollowings = onOpenFollowings,
                 )
             }
-        }
-        // 首页装不下的另一半(图文、纯文字、转发、直播)的入口。**专栏不在里面**:它是投稿,
-        // 和视频一样排在首页的时间序里(见 DynamicRepository 的分流)。
-        //
-        // **一行字,不是一格卡片,也不占顶栏。** 首页的主体是投稿时间序,这条入口通往的是
-        // 另一种东西,不是它的续篇。放在这里而不是列表末尾,是因为这条时间序流实际上翻不到底
-        // (见函数头注释),末尾没人到得了。
-        //
-        // **但不降调。** 这一行的字曾经是 onSurfaceVariant,理由抄的是 DESIGN 2.1 那句
-        // 「折叠为一个不显眼的入口」—— 而那正是 CLAUDE.md 点名删掉的那类发明:把入口做得
-        // 更难找不是克制,是替用户决定他不该去那儿。它是一条普通入口,就按普通入口画。
-        //
-        // **永远不给它红点、未读计数或带数量的角标。** 那些是 DESIGN 1.3 永不实现清单上的
-        // 第一条,而这一行正是它们最容易被加回来的位置 —— 「顺手显示有几条新的」听起来是
-        // 信息,实际是把一条静态入口变成催人回来的提醒。
-        //
-        // 文案不写「刷」这类口语,也不用中点分隔(见 MetaSeparator)。
-        item(key = "other-dynamics") {
-            TrailingEntry(
-                text = stringResource(R.string.dynamic_other_entry),
-                icon = Icons.AutoMirrored.Filled.Article,
-                onClick = onOpenOtherDynamics,
-            )
         }
         if (state.items.isEmpty()) {
             item(key = "empty") { EmptyState(stringResource(R.string.feed_empty)) }
@@ -454,6 +437,56 @@ private fun FeedList(
             },
             onDismiss = { liveSheetOpen = false },
         )
+    }
+}
+
+/**
+ * 列表顶上那一行:页名,右边是「关注动态」。
+ *
+ * **标题跟着列表滚,不做顶栏。** 三个根页都没有顶栏,单给这一页加一条的话,底栏切过来时
+ * 页面顶部的形状会变;而这一行只在开头有用,滚走之后底栏已经说明了这是哪一页。
+ *
+ * **入口挂在标题行上,不单占一行。** 它原先独占一行、贴右,左边整片空着;它通往的是这一页
+ * 装不下的另一半,和页名放在一起读起来正是"这一页,以及它旁边那一页"。放在开头而不是列表
+ * 末尾,是因为这条时间序流实际上翻不到底(见 [FeedScreen]),末尾没人到得了。
+ *
+ * **但不降调。** 它曾经是 onSurfaceVariant,理由抄的是 DESIGN 2.1 那句「折叠为一个不显眼的
+ * 入口」—— 那正是 CLAUDE.md 点名删掉的那类发明:把入口做得更难找不是克制,是替用户决定
+ * 他不该去那儿。TextButton 默认的 primary 就是一条普通入口该有的样子。
+ *
+ * **永远不给它红点、未读计数或带数量的角标。** 那些是 DESIGN 1.3 永不实现清单上的第一条,
+ * 而这里正是它们最容易被加回来的位置 —— 「顺手显示有几条新的」听起来是信息,实际是把一条
+ * 静态入口变成催人回来的提醒。
+ */
+@Composable
+private fun FeedHeader(onOpenOtherDynamics: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = Spacing.Comfortable, end = Spacing.Tight, top = Spacing.Tight),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(R.string.tab_feed),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onOpenOtherDynamics) {
+            Icon(
+                Icons.AutoMirrored.Filled.Article,
+                contentDescription = null,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+            Text(
+                text = stringResource(R.string.dynamic_other_entry),
+                modifier = Modifier.padding(start = Spacing.Tight, end = Spacing.Hair),
+            )
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+        }
     }
 }
 
@@ -617,6 +650,10 @@ private fun ReadMarkerDivider(modifier: Modifier = Modifier) {
  *
  * 区别落在两处:封面角标那一格,视频写时长、专栏写「文章」——它是"这条是什么"最先被扫到的
  * 位置;以及正文摘要那一行,视频没有。
+ *
+ * **不带播放数和弹幕数。** 在这条时间线上决定点不点的是谁、什么时候发的,那一行已经有了;
+ * 刚发几分钟的投稿计数都是个位数,摆出来只是一行噪音,还把每一行撑高一截。搜索结果里计数
+ * 是判断依据,那里照旧带。
  */
 @Composable
 private fun FeedEntry.toRowUi(): VideoRowUi = when (this) {
@@ -626,8 +663,7 @@ private fun FeedEntry.toRowUi(): VideoRowUi = when (this) {
         durationText = durationText,
         upName = upName,
         dateText = formatRelativeTime(publishedAtEpochSeconds),
-        playText = playCount,
-        danmakuText = danmakuCount,
+        upFaceUrl = upFaceUrl,
     )
 
     is FeedEntry.Article -> VideoRowUi(
@@ -636,6 +672,7 @@ private fun FeedEntry.toRowUi(): VideoRowUi = when (this) {
         durationText = stringResource(R.string.feed_article_badge),
         upName = upName,
         dateText = formatRelativeTime(publishedAtEpochSeconds),
+        upFaceUrl = upFaceUrl,
         note = summary.takeIf { it.isNotBlank() },
     )
 }
@@ -649,6 +686,7 @@ private fun previewItem(bvid: String, title: String, minutesAgo: Long) = FeedEnt
     durationText = "12:34",
     upName = "某知名UP主",
     upMid = 12345L,
+    upFaceUrl = "",
     publishedAtEpochSeconds = Instant.now().epochSecond - minutesAgo * 60,
     playCount = "12.3万",
     danmakuCount = "888",
@@ -713,17 +751,12 @@ private fun FrequentUpsRow(
     onOpenLiveNow: () -> Unit,
     onOpenFollowings: () -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-    // **不给这一排小标题,但保留下面那条分割线。**
+    // **不给这一排小标题,也不给分割线,和列表之间只隔一段留白。**
     //
-    // 依据是 divider.md 的两条:"Only use dividers if items can't be grouped with open space"
-    // 和 "Use dividers to group things, not separate individual items"。这一排是**导航**
-    // (点进空间),下面是**内容**(时间序动态),分的是两个区域而不是两个条目 —— 正是它该用
-    // 的地方;而留白在这里不够用,底下紧跟着就是列表项,一段空白只会被读成内边距。
-    //
-    // 标题去掉是因为它和分割线在说同一件事(cards.md:219 把 spacing / headlines / dividers
-    // 并列为三选一),而它还要跟着名单来源在「特别关注」和「最常访问」之间切换 —— 一行会变的
-    // 字,读者每次都得先认一遍;一排头像本来就说得清自己是谁。
+    // 小标题要跟着名单来源在「特别关注」和「最常访问」之间切换 —— 一行会变的字,读者每次都得
+    // 先认一遍;一排头像本来就说得清自己是谁。分割线曾经留着,依据是 divider.md 的"Use
+    // dividers to group things",但它横在页面最上面一屏,是整页最硬的一道线,而导航区和内容区
+    // 的形状本来就不同(一排圆、一列方封面),靠留白分得开。
     //
     // **不给它 surfaceContainer 底色。** 试过,不好看,而且是误用:roles.md:172 把 surface
     // 分给 background area、surface container 分给 **navigation area**(底栏、rail、抽屉
@@ -736,7 +769,7 @@ private fun FrequentUpsRow(
     //
     // 钉住入口之后两头都成立:名单要多长有多长,入口的位置不随屏宽和关注人数变。
     Row(
-        modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Tight),
+        modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Cozy),
         verticalAlignment = Alignment.Top,
     ) {
         LazyRow(
@@ -766,10 +799,6 @@ private fun FrequentUpsRow(
         // **只有一个箭头,不写字。** 「关注列表」四个字说的是箭头本来就在说的事,而它顶在
         // 一排人名中间,读起来像队尾还站着一个叫这个名字的人。名字留给读屏(contentDescription)。
         //
-        // 箭头和下面那行「关注动态」的箭头竖着对齐:那一行是 ListItem,尾部图标按 M3 的 16dp
-        // 内边距摆,24dp 图标的中心落在右边缘往里 28dp;这里 48dp 的方框里图标居中,末尾留
-        // [SlotInset] × 2,中心同样是 4 + 24 = 28。
-        //
         // 高度和头像那一格的头像对齐(都是 48dp、都从行顶往下 4dp),所以下面少一行字也不会
         // 让它浮在半空。
         Box(
@@ -788,18 +817,14 @@ private fun FrequentUpsRow(
             )
         }
     }
-    // 见这个函数开头:这条线分的是导航区和内容区两块,不是两个条目。
-    HorizontalDivider()
-    }
 }
 
 /**
- * 这一排里的一格:上面是 48dp 的圆,下面最多两行字,宽度固定,格与格之间才对得齐。
+ * 这一排里的一格:上面是 48dp 的圆,下面一行字,宽度固定,格与格之间才对得齐。
  *
- * **两行而不是一行。** 这一格只有 [AvatarSlotWidth] 宽,而 B 站的用户名长度没有上限,
- * 一行截断之后剩下的常常是"某某某某..."这种认不出是谁的前四个字 —— 而这一排存在的意义
- * 正是一眼认出人。两行不会把这一排撑高多少:labelSmall 一行 16dp,而这一格本来就比
- * 头像高出一截。
+ * **一行,不是两行。** 两行版的用意是长名字不被截成认不出的前四个字,实际效果是一排里有的
+ * 格一行、有的两行,名字的下沿高低不齐,而这一排横着扫过去读的正是那条下沿。认人主要靠
+ * 头像,名字是确认;截掉的后半截多半是「official」「Channel」这类后缀。
  */
 @Composable
 private fun UpSlot(
@@ -820,14 +845,14 @@ private fun UpSlot(
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            maxLines = 2,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = Spacing.Hair),
         )
     }
 }
 
-/** 比头像宽一点,让两行字的名字也能各自居中而不互相挤。 */
+/** 比头像宽一点,名字多站得下一两个字。 */
 private val AvatarSlotWidth = 60.dp
 
 /** 每格自己的左右内边距。算箭头对齐时要用到,见「关注列表」那一格的注释。 */

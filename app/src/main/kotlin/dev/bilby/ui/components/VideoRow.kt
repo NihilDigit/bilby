@@ -8,6 +8,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -43,6 +47,12 @@ data class VideoRowUi(
     val upName: String? = null,
     /** 发布时间。和 [upName] 排在同一行,顺序按 PiliPlus:先时间后人名。 */
     val dateText: String? = null,
+    /**
+     * UP 主头像。给了就画在那一行最前面,并且**人名排到时间前面**:只有订阅流给它,那里
+     * 决定点不点的先是谁发的,头像又和页首那排关注对得上,扫一眼就认得出人。别处的列表
+     * 要么整页同一个人(空间),要么人名只是附注(搜索),不给。
+     */
+    val upFaceUrl: String? = null,
     /** 播放量与弹幕数。走 [StatRow] 的图标形式,不再拼成中文串。 */
     val playText: String? = null,
     val danmakuText: String? = null,
@@ -96,7 +106,11 @@ fun VideoRow(
             // 失效稿件仍保留在收藏夹里,但它必须看起来不可打开。仅禁用语义和点击
             // 会留下一个“看起来正常、点了没反应”的粗糙行。
             .alpha(if (enabled) 1f else DisabledContentAlpha)
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight)
+            // 行高取封面与文字里高的那个,文字列再撑满这个高度:文字比封面矮时,标题贴封面
+            // 上沿、元信息贴下沿,两列的上下边都对齐。原先是整列居中,文字只有两层时上下
+            // 各空出一截,标题和封面的上沿差着半行,哪条边都不齐。
+            .height(IntrinsicSize.Min),
         horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
         // 字体放大或助理理由变长时,右侧内容可能高过固定比例的封面。
         // 居中比把封面钉在顶部更稳定,不会在行尾留下明显的“封面下坠”空白。
@@ -108,8 +122,11 @@ fun VideoRow(
             progressFraction = item.progressFraction,
         )
 
-        Box(modifier = Modifier.weight(1f)) {
-            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+            Column(
+                modifier = Modifier.fillMaxHeight(),
+                verticalArrangement = Arrangement.SpaceBetween,
+            ) {
                 // bodyLarge(16sp)。这一行是整条的标题,它下面几行是 labelSmall 和 bodySmall,
                 // 标题用 14sp 时与它们只差 2sp —— 一列列表扫下来认不出哪一行是主的。M3 给
                 // list item 的 headline 定的也是 bodyLarge。字号占掉的行宽从封面那边让出来,
@@ -127,14 +144,18 @@ fun VideoRow(
                 )
                 // 标题以下的几行让出按钮那一格。它们本来右边就是空的:元信息是几个 14dp 图标
                 // 加几个数字,时间和 UP 名合起来也占不满一行。
+                // 上边距是标题与这一块之间的最小间隔:文字撑满封面高度时 SpaceBetween 分不出
+                // 空隙来。
                 Column(
-                    modifier = Modifier.padding(end = if (overflow != null) OverflowReserve else 0.dp),
+                    modifier = Modifier
+                        .padding(top = Spacing.Hair)
+                        .padding(end = if (overflow != null) OverflowReserve else 0.dp),
                     verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
                 ) {
                     // 时间和 UP 名合成一行(PiliPlus `video_card_h.dart` 的 content()):
                     // 两者都是"这条是谁什么时候发的",分两行摆会把三行文字撑到四行,
                     // 而封面高度是固定的,多出来的那行只能让行距变松、看起来更空。
-                    SecondaryLine(dateText = item.dateText, upName = item.upName)
+                    SecondaryLine(dateText = item.dateText, upName = item.upName, upFaceUrl = item.upFaceUrl)
                     StatRow(playText = item.playText, danmakuText = item.danmakuText)
                     item.meta?.let {
                         Text(
@@ -162,8 +183,13 @@ fun VideoRow(
             }
             // 叠在文字列右下角,不进列的布局流 —— 排进去的话这一行会跟着按钮的 48dp 长高,
             // 而它挡住的位置上本来就没有字(见上面那圈 end padding)。
+            //
+            // **图标对准最后一行字的中线,不是按钮框贴底。** 贴底时 48dp 的框往上伸到标题
+            // 第二行,文字只有两层时图标和标题末尾挤在一起,看着也像悬在半空。往下挪半个框
+            // 减半行,图标落在元信息那一行上;多出来的那截触控区伸进行的下边距,被下一行
+            // 盖住的部分归下一行,抢不走它的点击。
             overflow?.let {
-                Box(modifier = Modifier.align(Alignment.BottomEnd)) { it() }
+                Box(modifier = Modifier.align(Alignment.BottomEnd).offset(y = OverflowDrop)) { it() }
             }
         }
 
@@ -185,6 +211,15 @@ private val OverflowReserve = 48.dp
  */
 private val TitleOverflowGutter = OverflowReserve / 2
 
+/** labelSmall 与 bodySmall 的行高,最后一行只会是这两种之一。 */
+private val LastLineHeight = 16.dp
+
+/** 溢出按钮往下挪多少,图标中线才对得上最后一行的中线。 */
+private val OverflowDrop = (OverflowReserve - LastLineHeight) / 2
+
+/** 元信息行里的头像。比行高略大一点,圆形在一行小字旁边看着才不显小。 */
+private val InlineAvatarSize = 18.dp
+
 /**
  * 一行元信息里各段之间的间隔:**两个空格,不是 `·` 或 `•`**。
  *
@@ -200,16 +235,24 @@ const val MetaSeparator = "  "
  * 浅色主题下这一行量出来 4.3:1,小字不达标。
  */
 @Composable
-private fun SecondaryLine(dateText: String?, upName: String?) {
-    val text = listOfNotNull(dateText, upName).filter { it.isNotBlank() }.joinToString(MetaSeparator)
+private fun SecondaryLine(dateText: String?, upName: String?, upFaceUrl: String?) {
+    // 带头像时人名在前,见 [VideoRowUi.upFaceUrl]。
+    val parts = if (upFaceUrl != null) listOf(upName, dateText) else listOf(dateText, upName)
+    val text = parts.filterNotNull().filter { it.isNotBlank() }.joinToString(MetaSeparator)
     if (text.isEmpty()) return
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+    ) {
+        if (!upFaceUrl.isNullOrEmpty()) Avatar(url = upFaceUrl, size = InlineAvatarSize)
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 /**

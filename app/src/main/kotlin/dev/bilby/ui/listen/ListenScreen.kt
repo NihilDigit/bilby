@@ -73,6 +73,8 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.activity.compose.BackHandler
+import androidx.compose.material3.SheetValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -98,9 +100,12 @@ import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import dev.bilby.R
 import dev.bilby.ui.player.EpisodeList
-import dev.bilby.ui.player.EpisodeRow
 import dev.bilby.ui.player.EpisodeTarget
-import dev.bilby.ui.player.QueueEdges
+import dev.bilby.ui.player.playOrReplay
+import dev.bilby.data.QueueSource
+import dev.bilby.ui.components.InlineProgress
+import dev.bilby.ui.components.SectionHeader
+import dev.bilby.ui.video.QueueUiState
 import dev.bilby.formatDurationMillis
 import dev.bilby.player.AudioPlaybackUiState
 import dev.bilby.player.QueueItem
@@ -112,7 +117,6 @@ import dev.bilby.player.indexNear
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.ChoiceRow
 import dev.bilby.ui.components.BiliAsyncImage
-import dev.bilby.ui.components.CompactVideoRow
 import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.SeekBar
@@ -209,17 +213,23 @@ fun ListenScreen(
     state: AudioPlaybackUiState,
     sleepTimer: SleepTimerState,
     /**
-     * 切集清单:一列视频,正在播的那一条底下摊开它的分 P。**和播放页、全屏共用同一份**
-     * (构造点在 `VideoScreen`,见 [dev.bilby.ui.player.buildEpisodeRows])。
+     * 播放队列,**和详情页、全屏是同一份** `QueueUiState`(构造点在 `VideoScreen`)。
      *
-     * 分 P 原先是页面上单独的一排 chip,理由是"它和队列是并列的两条轴,塞进同一个 Sheet
-     * 会读成分 P 也是队列的一部分"。**二级列表推翻了那条**:缩进本身就说明了分 P 属于哪
-     * 一条,而摆成两块时"走到第几条"和"放到第几 P"是两个高亮,人要在两块之间对位。
+     * 原先这里只拿切集清单、续取和随机开关三样,于是完整队列还在建的时候,起播时那一条
+     * 临时占位被当成整份队列摆出来,建失败也没有重试;标题只能写「播放队列」,不知道放的是
+     * 哪份收藏夹、哪个合集。整份传进来,这几件事和详情页同一个判据。
+     *
+     * 分 P 摊在当前那条底下(见 [dev.bilby.ui.player.EpisodeList]):摆成两块时"走到第几条"
+     * 和"放到第几 P"是两个高亮,人要在两块之间对位。
      */
-    episodes: List<EpisodeRow>,
+    queue: QueueUiState,
+    /** 正在放还是停着,决定队列里当前那条的指示跳不跳。 */
+    playing: Boolean,
     onSelectEpisode: (EpisodeTarget) -> Unit,
-    /** 队列两头续取,见 [QueueEdges]。 */
-    queueEdges: QueueEdges? = null,
+    /** 完整队列没建成时重试。 */
+    onRetryQueue: () -> Unit,
+    /** 点队列标题进来源的目录(合集、系列)。 */
+    onOpenQueueSource: (QueueSource) -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onToggleShuffle: () -> Unit,
@@ -334,11 +344,19 @@ fun ListenScreen(
         }
 
         val sheetState = rememberBottomSheetScaffoldState()
+        // BottomSheetScaffold 不管返回键(ModalBottomSheet 才管),不拦的话展开队列之后一按
+        // 返回,落到的是外面那句"退出听视频"。看 targetValue 而不是 currentValue:拉到一半
+        // 松手、正往上弹的那一刻按返回,也该是收回。
+        val sheetScope = rememberCoroutineScope()
+        BackHandler(enabled = sheetState.bottomSheetState.targetValue == SheetValue.Expanded) {
+            sheetScope.launch { sheetState.bottomSheetState.partialExpand() }
+        }
 
-        // 队列没建过(queueSize == 0)时收起到 0——一个空把手拉起来什么都没有,是纯噪声。
-        // 建过之后把手常显,不需要再点一行入口才能看到它,见 VideoScreen 找相关那个 sheet
-        // 的同一个判据。
-        val peek = if ((state.queue?.size ?: 0) > 0) QueueHandleHeight else 0.dp
+        // 队列没建过时收起到 0——一个空把手拉起来什么都没有,是纯噪声。建过之后把手常显,
+        // 不需要再点一行入口才能看到它。建队列中与建失败也露出来:把手那一行正是说明这两件事
+        // 的地方。
+        val hasQueue = queue.rows.isNotEmpty() || queue.enriching || queue.incomplete
+        val peek = if (hasQueue) QueueHandleHeight else 0.dp
 
         BottomSheetScaffold(
             scaffoldState = sheetState,
@@ -347,11 +365,12 @@ fun ListenScreen(
             sheetContent = {
                 AdaptiveContent(modifier = Modifier.fillMaxWidth(), maxWidth = Breakpoints.MediaWidth) {
                     QueueSheetContent(
-                        episodes = episodes,
-                        edges = queueEdges,
-                        shuffled = (state.queue?.shuffled == true),
+                        queue = queue,
+                        playing = playing,
                         onToggleShuffle = onToggleShuffle,
                         onSelectEpisode = onSelectEpisode,
+                        onRetryQueue = onRetryQueue,
+                        onOpenQueueSource = onOpenQueueSource,
                     )
                 }
             },
@@ -456,7 +475,7 @@ fun ListenScreen(
                     itemRemainingMillis = (duration - position)
                         .takeIf { duration > 0L && it > 0L }
                         ?.let { (it / speed.coerceAtLeast(MinSpeedForEstimate)).toLong() },
-                    onPlayPause = { if (player.isPlaying) player.pause() else player.play() },
+                    onPlayPause = { if (player.isPlaying) player.pause() else player.playOrReplay() },
                     onPrevious = onPrevious,
                     onNext = onNext,
                     onSpeedChange = { player.setPlaybackSpeed(it) },
@@ -806,26 +825,25 @@ private fun FailureRow(message: String, retrying: Boolean, onRetry: () -> Unit) 
  */
 @Composable
 private fun QueueSheetContent(
-    episodes: List<EpisodeRow>,
-    edges: QueueEdges?,
-    shuffled: Boolean,
+    queue: QueueUiState,
+    playing: Boolean,
     onToggleShuffle: () -> Unit,
     onSelectEpisode: (EpisodeTarget) -> Unit,
+    onRetryQueue: () -> Unit,
+    onOpenQueueSource: (QueueSource) -> Unit,
 ) {
+    val shuffled = queue.shuffled
     Column(modifier = Modifier.fillMaxWidth()) {
-        // 标题只写名字,**不带条数**。条数在唱片页的「N / M」里,而且它在这里没有可操作性
-        // ——知道有 23 条,既不改变要不要展开,也不改变点哪一条;它原先还独占一整行,
-        // 那一行的高度还不如让队列多露一截出来。
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.fillMaxWidth().padding(start = Spacing.Comfortable, end = Spacing.Tight),
+        // 标题是这份队列的来源,和详情页那一段的标题行是同一个组件、同一个判据:合集/系列点得进
+        // 目录,UP 投稿之类没有目录页的不给入口。来源名还没有时退回「播放队列」。
+        //
+        // **不带条数**。条数在唱片页的「N / M」里,而且它在这里没有可操作性 —— 知道有 23 条,
+        // 既不改变要不要展开,也不改变点哪一条。
+        SectionHeader(
+            title = queue.sourceLabel.ifEmpty { stringResource(R.string.listen_queue_title) },
+            onTitleClick = queue.source?.let { source -> { onOpenQueueSource(source) } },
+            modifier = Modifier.padding(start = Spacing.Comfortable, end = Spacing.Tight),
         ) {
-            Text(
-                stringResource(R.string.listen_queue_title),
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             // 靠右:左边是标题,顺序切换是对整个列表的操作,和标题分列两端读起来是一组。
             //
             // **图标跟着状态换,和文字说的是同一件事。** 这里原先恒定是 `Shuffle`:文字写着
@@ -847,16 +865,45 @@ private fun QueueSheetContent(
                 Text(orderLabel, modifier = Modifier.padding(start = Spacing.Hair))
             }
         }
-        EpisodeList(
-            rows = episodes,
-            onSelect = onSelectEpisode,
-            edges = edges,
-            contentPadding = PaddingValues(
-                horizontal = Spacing.Comfortable,
-                vertical = Spacing.Tight,
-            ),
-            modifier = Modifier.fillMaxWidth(),
-        )
+        // 三种状态与详情页那一段(VideoTabs 的 queueItems)同一套文案与判据。
+        when {
+            // 此刻列表里那一条是起播时的临时占位,不是队列内容,摆出来会读成"来源只有这一条"。
+            queue.enriching -> InlineProgress(
+                stringResource(R.string.video_queue_loading),
+                Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            )
+
+            queue.incomplete -> Row(
+                modifier = Modifier.padding(start = Spacing.Comfortable),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                Text(
+                    text = stringResource(R.string.video_queue_incomplete),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                TextButton(
+                    onClick = onRetryQueue,
+                    contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                ) {
+                    Text(stringResource(R.string.action_retry))
+                }
+            }
+
+            else -> EpisodeList(
+                rows = queue.rows,
+                onSelect = onSelectEpisode,
+                edges = queue.edges,
+                playing = playing,
+                contentPadding = PaddingValues(
+                    horizontal = Spacing.Comfortable,
+                    vertical = Spacing.Tight,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 }
 

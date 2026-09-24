@@ -1,5 +1,38 @@
 package dev.bilby.ui.video
 
+import dev.bilby.ui.components.LoadingSpinner
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.imeAnimationTarget
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.material3.ripple
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.indication
+import androidx.compose.ui.semantics.role
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonGroupDefaults
+import androidx.compose.material3.ToggleButtonDefaults
+import androidx.compose.material3.ToggleButton
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -76,7 +109,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -109,6 +141,7 @@ import dev.bilby.ui.player.EpisodePart
 import dev.bilby.ui.player.EpisodeRow
 import dev.bilby.ui.player.EpisodeTarget
 import dev.bilby.ui.player.QueueEdges
+import dev.bilby.ui.player.QueueRowItem
 import dev.bilby.ui.player.currentIndex
 import dev.bilby.formatDurationSeconds
 import dev.bilby.agent.AgentTurnState
@@ -128,6 +161,7 @@ import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.AvatarBadge
 import dev.bilby.ui.components.BilbyIcons
+import dev.bilby.ui.components.rememberExpandedSheetState
 import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.components.BadgedAvatar
 import dev.bilby.ui.components.ChoiceRow
@@ -165,7 +199,6 @@ import android.content.ClipData
 import kotlinx.coroutines.delay
 import dev.bilby.ui.components.NeedsCopyNotice
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.foundation.layout.fillMaxHeight
 import dev.bilby.ui.player.EpisodeList
@@ -236,8 +269,8 @@ fun VideoTabs(
     onTagClick: (String) -> Unit,
     commentState: CommentUiState,
     onFindRelated: () -> Unit,
-    /** 打开发弹幕的输入层。面板本身挂在页面那一层(见 VideoScreen),这里只是入口。 */
-    onSendDanmaku: () -> Unit,
+    /** 写弹幕,见 [DanmakuInput]。 */
+    danmakuInput: DanmakuInput,
     /** 弹幕显示开关。全屏时这一行不组合,那时的开关在播放控制条上。 */
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
@@ -297,74 +330,79 @@ fun VideoTabs(
 
     Column(modifier = modifier.fillMaxSize()) {
         /*
-         * **标签吃掉右边两个控件之外的全部宽度。**
+         * **左边一组连接按钮切换简介/评论,右边一个弹幕胶囊(开关 + 发弹幕)。**
          *
-         * 这里曾经照 PiliPlus 把标签限死在每个 96dp(`pages/video/view.dart:1376-1406`),
-         * 结果是两头不讨好:"评论 1234" 在 96dp 里放不下,标签换到第二行、整条行跟着变高;
-         * 而右边又空出一大块——限宽块靠左、按钮靠右,中间那段谁都不占。PiliPlus 自己不换行
-         * (它给 Tab 传的是 `softWrap: false`,宁可溢出),但那是拿截断换的,同一个问题没有解掉。
+         * 同一行放视图切换和弹幕入口是哔哩系客户端的惯例(PiliPlus `pages/video/view.dart` 的
+         * `buildTabBar`,官方客户端同样如此)。两个弹幕入口在这里读得出是"这条视频的弹幕";
+         * 挪进播放控制条就混进倍速、清晰度那一组"播放器怎么放"里。
          *
-         * 给标签 `weight(1f)` 之后两件事一起没了:宽度按屏幕分,4 位数装得下;中间也不再有
-         * 无主的空白。标签本身仍然单行不换行 —— 计数再长(“评论 1.2万”)也只该截断,不该把
-         * 这一行撑成两倍高。
+         * **不用 tabs。** tabs 页要求容器 "extend the full width of the window and be divided into
+         * equal sections",右边一放弹幕入口这一条就守不住;按惯例把标签挤在左边一截,又是一排
+         * 小字加一根只画到一半的分割线,和右边的按钮各说各话。button groups 页把连接组的用途写成
+         * "select options, switch views, or sort elements in a page",切换视图正在其中,于是两边
+         * 做视图切换;右边的胶囊和它同高、同底色,一行是一个整体,和下面的内容只靠留白分开,不画线。
          *
-         * **弹幕的显示开关也在这里,挨着"发弹幕"**,照 PiliPlus 的同一行。两个控件说的是同一
-         * 件事——这条视频的弹幕看不看、发不发,摆在一起才读得出它们是一对;开关原先在播放控制条
-         * 上,和倍速、清晰度、字幕并排,那条条控制的是"播放器怎么放",弹幕混在里面像是第五个
-         * 播放参数。
+         * 配色和简介页的动作栏同一套:未选中 `surfaceContainer`,选中 `secondaryContainer`。组件
+         * 默认的选中是 primary 实心,一行两组都顶着 primary 色块比下面的内容还重(风格指南 §2.1)。
          *
-         * 全屏没有这一行,开关回到控制条上(见 BilbyPlayer.SecondaryControls),那里是它唯一
-         * 够得着的位置;发弹幕全屏不给。
+         * 内容区仍然能左右滑着翻页,左边那组跟着 pager 的页码走。全屏没有这一行,弹幕开关回到
+         * 控制条上(见 BilbyPlayer.SecondaryControls),发弹幕全屏不给。
          */
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(modifier = Modifier.weight(1f)) {
-                // **用组件默认的指示条,不自己画。** 这里曾经读 `currentPage +
-                // currentPageOffsetFraction` 做插值,让指示条全程贴着手指走;规范并不要求那样
-                // —— tabs 页对指示条只说"apply an underline and color change to the active
-                // tab",交互一节写的是 "The selected indicator becomes active and **shifts into
-                // position once the touch has been engaged**",也就是选中之后移过去,而不是
-                // 跟着拖动连续插值。
-                //
-                // 那份自定义代价不小:一个 `tabIndicatorLayout` 的手写测量、首帧 positions 为空
-                // 的特判、以及一段"这个扩展的接收者到底是什么"的考据。删掉之后行为仍然合规,
-                // 而滑动翻页本身照旧(内容区能滑是 tabs 页明写的用法)。
-                //
-                // 自带的分割线要关掉:它只画到自己那点宽度为止,右半行会缺一截。通栏那条画在
-                // 整行下面。
-                SecondaryTabRow(selectedTabIndex = pagerState.currentPage, divider = {}) {
-                    titles.forEachIndexed { index, title ->
-                        Tab(
-                            selected = pagerState.currentPage == index,
-                            onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
-                            text = {
-                                Text(
-                                    text = title,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            },
-                        )
+        val toggleColors = ToggleButtonDefaults.toggleButtonColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+            checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 写弹幕时视图切换退场,胶囊铺满整行:这时要的是输入的宽度,切页可以等写完。
+            AnimatedVisibility(
+                visible = !danmakuInput.open,
+                enter = expandHorizontally(expandFrom = Alignment.Start) + fadeIn(),
+                exit = shrinkHorizontally(shrinkTowards = Alignment.Start) + fadeOut(),
+            ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
+                titles.forEachIndexed { index, title ->
+                    ToggleButton(
+                        checked = pagerState.currentPage == index,
+                        onCheckedChange = { scope.launch { pagerState.animateScrollToPage(index) } },
+                        shapes = when (index) {
+                            0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                            titles.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                            else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                        },
+                        colors = toggleColors,
+                        modifier = Modifier.semantics { role = Role.Tab },
+                    ) {
+                        Text(text = title, maxLines = 1, softWrap = false)
                     }
                 }
             }
-            // 发弹幕用文字、显示开关用图标:两者一个是动作、一个是状态,形状不同才不会被
-            // 读成两个并列的按钮。文字在前,和 PiliPlus 的顺序一致。
-            TextButton(
-                onClick = onSendDanmaku,
-                contentPadding = PaddingValues(horizontal = Spacing.Cozy),
-            ) {
-                Text(
-                    text = stringResource(R.string.danmaku_send),
-                    style = MaterialTheme.typography.labelLarge,
-                )
+            Spacer(modifier = Modifier.width(Spacing.Tight))
             }
-            DanmakuVisibilityButton(
+            }
+            DanmakuCapsule(
                 enabled = danmakuEnabled,
                 onEnabledChange = onDanmakuEnabledChange,
+                input = danmakuInput,
+                modifier = Modifier.weight(1f),
             )
         }
-        HorizontalDivider()
+        // 发送失败的原因就在胶囊底下一行,草稿留在胶囊里,改一个字再按发送就是重试。
+        (danmakuInput.send as? DanmakuSend.Failed)?.takeIf { danmakuInput.open }?.let { failed ->
+            Text(
+                text = stringResource(R.string.danmaku_send_failed, failed.message),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable),
+            )
+        }
         // weight 而不是 fillMaxSize:在 Column 里 fillMaxSize 会让 pager 从 tab 栏下面再要
         // 一整屏的高度,底部那一截被推出可视区。
         HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
@@ -425,33 +463,238 @@ fun VideoTabs(
     }
 }
 
+
 /**
- * 弹幕显示开关(标签行版)。
+ * 发弹幕这件事在标签行上的全部状态。**写弹幕就在胶囊里写**,不另开面板:弹幕是对着这一帧发的,
+ * 胶囊就在画面正下方,人写的时候眼睛不用离开画面;键盘从底下升起,盖住的是简介和评论,
+ * 不是画面。
  *
- * **不复用 [dev.bilby.ui.player.DanmakuButton]**:那一个的未选中色是 `FixedColors.OnMedia`
- * (压在画面上的白),摆到这条浅色的标签行上就是白底白字。图标([BilbyIcons.Danmaku])两处
- * 共用,于是全屏与内嵌看起来仍是同一个开关。
- *
- * 内容描述说的是**按下去会怎样**,不是当前状态:状态由字形和颜色一起表达,而读屏用户需要的
- * 是这一下的后果。
+ * 暂停与续播归调用方(VideoScreen 的 openDanmakuInput / closeDanmakuInput),这里只报时机。
  */
+class DanmakuInput(
+    /** 此刻是不是在写。 */
+    val open: Boolean,
+    val draft: String,
+    val onDraftChange: (String) -> Unit,
+    val send: DanmakuSend,
+    val onOpen: () -> Unit,
+    /** 退出输入:返回、键盘收起、点别处、发送成功都走这里。草稿不清,清在发送成功那一处。 */
+    val onClose: () -> Unit,
+    val onSend: () -> Unit,
+)
+
+/**
+ * 弹幕胶囊:平时左端是弹幕开关、其余是"发一条弹幕"的输入口;点输入口,胶囊本身就变成输入框。
+ * 照哔哩哔哩官方客户端竖屏播放页那一个:长得像输入框,人一眼知道点这里是写弹幕;开关长在它
+ * 左端,两件事读得出是一对。
+ *
+ * **触摸区 48dp,画出来的胶囊 40dp**:和左边那组连接按钮同高(它们也是视觉 40、触摸 48),
+ * 涟漪只画在胶囊里,不溢出到上下那两截透明的触摸区上。
+ *
+ * 写的时候开关退场:它和"正在写的这条"无关,留着只是挤掉输入的宽度。
+ *
+ * **长度上限 100 字**(服务端的,PiliPlus `danmaku.dart:12` 注明),超出的按键在这里拦住;
+ * 过了 [CounterFrom] 在尾部显示计数,不然第 100 个字之后按键静默失效,看起来是键盘坏了。
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun DanmakuVisibilityButton(enabled: Boolean, onEnabledChange: (Boolean) -> Unit) {
-    IconButton(onClick = { onEnabledChange(!enabled) }) {
+private fun DanmakuCapsule(
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    input: DanmakuInput,
+    modifier: Modifier = Modifier,
+) {
+    val capsuleColor = if (input.open) {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+    } else {
+        MaterialTheme.colorScheme.surfaceContainer
+    }
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val sending = input.send is DanmakuSend.Sending
+    val hint = stringResource(R.string.danmaku_input_hint)
+    val stillOpen by rememberUpdatedState(input.open)
+    val canSend = input.draft.isNotBlank() && !sending
+
+    LaunchedEffect(input.open) {
+        if (input.open) {
+            focusRequester.requestFocus()
+            keyboard?.show()
+        }
+    }
+    // **键盘开始收起就退出输入。** 返回键先被输入法拿去收键盘,焦点却还留在胶囊上;看的是
+    // 键盘的动画目标而不是可不可见,`isImeVisible` 要等收起动画播完才变,那时画面已经晚了一拍
+    // 才接着放。只在它变化时判断:请求焦点的那一帧目标还是 0。
+    val imeHiding = WindowInsets.imeAnimationTarget.getBottom(LocalDensity.current) == 0
+    LaunchedEffect(imeHiding) {
+        if (imeHiding && input.open) focusManager.clearFocus()
+    }
+
+    Box(modifier = modifier.height(Dimens.MinTouchTarget)) {
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .padding(vertical = CapsuleInset)
+                .background(capsuleColor, CircleShape),
+        )
+        Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+            AnimatedVisibility(
+                visible = !input.open,
+                enter = expandHorizontally(expandFrom = Alignment.Start) + fadeIn(),
+                exit = shrinkHorizontally(shrinkTowards = Alignment.Start) + fadeOut(),
+            ) {
+                DanmakuToggle(enabled = enabled, onEnabledChange = onEnabledChange)
+            }
+            if (input.open) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = Spacing.Comfortable),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (input.draft.isEmpty()) {
+                        Text(
+                            text = hint,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
+                    var wasFocused by remember { mutableStateOf(false) }
+                    BasicTextField(
+                        value = input.draft,
+                        onValueChange = { if (it.length <= DanmakuMaxLength) input.onDraftChange(it) },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = { if (canSend) input.onSend() }),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(focusRequester)
+                            // 放掉焦点就是退出输入。判"曾经拿到过":刚进组合的那一帧焦点还没到,
+                            // 那一下的 false 不能当成放掉。
+                            .onFocusChanged { state ->
+                                if (state.isFocused) wasFocused = true
+                                else if (wasFocused && stillOpen) input.onClose()
+                            }
+                            .semantics { contentDescription = hint },
+                    )
+                }
+                if (input.draft.length >= CounterFrom) {
+                    Text(
+                        text = stringResource(R.string.danmaku_length_counter, input.draft.length, DanmakuMaxLength),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = Spacing.Hair),
+                    )
+                }
+                AnimatedVisibility(
+                    visible = canSend || sending,
+                    enter = scaleIn() + fadeIn(),
+                    exit = scaleOut() + fadeOut(),
+                ) {
+                    // 胶囊里唯一的强调:填充的发送键,和胶囊同一个圆。
+                    FilledIconButton(
+                        onClick = input.onSend,
+                        enabled = canSend,
+                        modifier = Modifier.size(ButtonDefaults.MinHeight),
+                    ) {
+                        if (sending) {
+                            LoadingSpinner()
+                        } else {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = stringResource(R.string.action_send),
+                                modifier = Modifier.size(Dimens.IconInline),
+                            )
+                        }
+                    }
+                }
+            } else {
+                val sendSource = remember { MutableInteractionSource() }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable(
+                            interactionSource = sendSource,
+                            indication = null,
+                            role = Role.Button,
+                            onClick = input.onOpen,
+                        ),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    CapsuleRipple(sendSource, RoundedCornerShape(topEndPercent = 50, bottomEndPercent = 50))
+                    Text(
+                        // 草稿还在就把它亮出来:写了一半退出去,胶囊上看得见那半句。
+                        text = input.draft.ifEmpty { hint },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(end = Spacing.Comfortable),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 胶囊左端的弹幕开关。`toggleable`,读屏念"开关,已开启";开与关换的是字形,不只是颜色。 */
+@Composable
+private fun DanmakuToggle(enabled: Boolean, onEnabledChange: (Boolean) -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    Box(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(Dimens.MinTouchTarget)
+            .toggleable(
+                value = enabled,
+                interactionSource = source,
+                indication = null,
+                role = Role.Switch,
+                onValueChange = onEnabledChange,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        CapsuleRipple(source, RoundedCornerShape(topStartPercent = 50, bottomStartPercent = 50))
         Icon(
             imageVector = if (enabled) BilbyIcons.Danmaku else BilbyIcons.DanmakuOff,
-            contentDescription = stringResource(
-                if (enabled) R.string.danmaku_hide else R.string.danmaku_show,
-            ),
-            tint = if (enabled) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.outline
-            },
-            modifier = Modifier.size(Dimens.IconInline),
+            contentDescription = stringResource(R.string.danmaku_show),
+            tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(Dimens.IconAction),
         )
     }
 }
+
+/** 服务端对弹幕正文的长度上限(PiliPlus `danmaku.dart:12` 注明的 100 字符)。 */
+private const val DanmakuMaxLength = 100
+
+/** 到这个长度才显示计数。写一句话的人不需要被提醒还剩多少。 */
+private const val CounterFrom = 80
+
+/** 按压涟漪,只画在胶囊那 40dp 里。 */
+@Composable
+private fun BoxScope.CapsuleRipple(source: MutableInteractionSource, shape: Shape) {
+    Box(
+        modifier = Modifier
+            .matchParentSize()
+            .padding(vertical = CapsuleInset)
+            .clip(shape)
+            .indication(source, ripple()),
+    )
+}
+
+/**
+ * 48dp 的触摸区里,胶囊上下各让出这么多,画出来和左边那组按钮一样高。
+ *
+ * **取 `ToggleButtonDefaults.MinHeight`,不取 `ButtonDefaults.MinHeight`。** 后者在 1.5.0-alpha25
+ * 里不是常量:判定为精确指针时返回 36dp,否则才是 Small 按钮的 40dp(javap 看的 getter),真机上
+ * 就拿到了 36,胶囊比旁边的按钮矮一截。左边那组是 `ToggleButton`,它量的是前者,一个固定的 40dp。
+ */
+private val CapsuleInset = (Dimens.MinTouchTarget - ToggleButtonDefaults.MinHeight) / 2
 
 /**
  * 简介页:视频信息在上,播放队列接在下面,整页是一个列表。
@@ -622,6 +865,7 @@ private fun IntroTab(
     if (fullQueueOpen) {
         FullQueueSheet(
             queue = queue,
+            playing = playing,
             onSelectEpisode = { target ->
                 fullQueueOpen = false
                 onSelectEpisode(target)
@@ -642,6 +886,7 @@ private fun IntroTab(
 @Composable
 private fun FullQueueSheet(
     queue: QueueUiState,
+    playing: Boolean,
     onSelectEpisode: (EpisodeTarget) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -650,13 +895,15 @@ private fun FullQueueSheet(
     // 的一部分,sheet 打开就停在这个高度,视口就是看得见的那一块。
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = rememberExpandedSheetState(),
     ) {
         EpisodeList(
             rows = queue.rows,
             onSelect = onSelectEpisode,
             edges = queue.edges,
-            contentPadding = PaddingValues(bottom = Spacing.Loose),
+            playing = playing,
+            // 左右留页边距:分段列表项自己不带外边距,贴着 sheet 边缘时圆角看不出来。
+            contentPadding = PaddingValues(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Loose),
             modifier = Modifier.fillMaxWidth().fillMaxHeight(FullQueueHeightFraction),
         )
     }
@@ -850,10 +1097,9 @@ private fun TitleBlock(
                 danmakuText = formatCount(detail.stat.danmaku),
                 dateText = formatDate(detail.publishedAtEpochSeconds),
             )
-            // BV 号接在日期后面,和它同属"这条稿件是哪一条"的元信息;展开才显示。
-            if (expanded) {
-                BvidLabel(bvid = detail.bvid, modifier = Modifier.padding(start = Spacing.Tight))
-            }
+            // BV 号接在日期后面,和它同属"这条稿件是哪一条"的元信息。收起时也显示:要复制它
+            // 不该先展开一整段简介,而这一行在 360dp 上放得下(三项统计 + BV + 箭头约 310dp)。
+            BvidLabel(bvid = detail.bvid, modifier = Modifier.padding(start = Spacing.Tight))
             Spacer(modifier = Modifier.weight(1f))
             Icon(
                 imageVector = Icons.Outlined.KeyboardArrowDown,
@@ -941,6 +1187,8 @@ private fun BvidLabel(bvid: String, modifier: Modifier = Modifier) {
         text = if (justCopied) stringResource(R.string.video_bvid_copied) else bvid,
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        softWrap = false,
         modifier = modifier
             .clip(MaterialTheme.shapes.extraSmall)
             .clickable(onClickLabel = stringResource(R.string.video_bvid_copy)) {
@@ -1789,7 +2037,7 @@ private fun PartSheet(
     )
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = rememberExpandedSheetState(),
     ) {
         LazyColumn(
             state = listState,
@@ -1885,7 +2133,7 @@ private fun LazyListScope.queueItems(
 
         else -> {
             itemsIndexed(shownRows, key = { _, row -> row.bvid }) { index, row ->
-                QueueListItem(
+                QueueRowItem(
                     row = row,
                     playing = playing,
                     index = index,
@@ -1899,55 +2147,6 @@ private fun LazyListScope.queueItems(
                 }
             }
         }
-    }
-}
-
-/**
- * 队列里的一条。
- *
- * 容器色是这里唯一改掉的默认值:分段列表项默认用 `surface`,是给放在带底色的分组背景上用的;
- * 这一页本身就是 `surface`,照默认画,未选中的条目和页面分不开。
- *
- * 选中不只靠颜色(lists.md 的 Accessibility):正在播的那条尾部另有一个播放指示([PlayingIndicator]),
- * 放着时跳动。
- */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun QueueListItem(row: EpisodeRow, playing: Boolean, index: Int, count: Int, onClick: () -> Unit) {
-    SegmentedListItem(
-        selected = row.isCurrent,
-        onClick = onClick,
-        shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
-        colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        modifier = Modifier.padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
-        // 居中,不用默认值:默认在条目高过 88dp 时把首尾元素顶到上沿(lists.md 规格表),两行标题
-        // 加一行时长就过线,播放指示于是跑到右上角,而且只在那一条变成当前项时才露出来。
-        verticalAlignment = Alignment.CenterVertically,
-        // 时长压在封面右下角,不另占一行:标题两行加一行时长会把条目撑过 88dp,封面放大到和两行
-        // 标题一样高之后,整条的高度就只由这两样定。
-        leadingContent = {
-            ListCover(
-                url = row.coverUrl,
-                width = QueueCoverWidth,
-                cornerRadius = QueueCoverCorner,
-                durationText = if (row.durationSeconds > 0) formatDurationSeconds(row.durationSeconds) else "",
-            )
-        },
-        trailingContent = if (row.isCurrent) {
-            {
-                PlayingIndicator(
-                    active = playing,
-                    contentDescription = stringResource(
-                        if (playing) R.string.video_queue_now_playing else R.string.video_queue_paused,
-                    ),
-                    modifier = Modifier.size(Dimens.IconInline),
-                )
-            }
-        } else {
-            null
-        },
-    ) {
-        Text(text = row.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -2082,9 +2281,6 @@ private val PartTagGap = 6.dp
 
 private const val PartTagId = "partTag"
 
-/** 队列条目封面的圆角。列表项自己的圆角在 4dp 到 16dp 之间变,封面取中间一档。 */
-private val QueueCoverCorner = 8.dp
-
 /** 动作栏有几格。 */
 private const val ActionCount = 5
 
@@ -2103,9 +2299,6 @@ private fun horizontalSegmentShape(index: Int, count: Int): Shape {
 
 private val ActionOuterCorner = 16.dp
 private val ActionInnerCorner = 4.dp
-
-/** 队列条目的封面宽度。16:9 下约 54dp 高,和两行标题齐平。 */
-private val QueueCoverWidth = 96.dp
 
 /** 页内队列在当前项前后各摊几条。其余在完整队列里,由段尾的「查看全部」打开。 */
 private const val InlineQueueRadius = 2

@@ -1,5 +1,6 @@
 package dev.bilby.ui
 
+import dev.bilby.ui.components.OverlayHost
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -212,7 +213,10 @@ class MainActivity : ComponentActivity() {
                 // 是压栈动作,而压栈能从任何一页发起,各页面的 Scaffold 都会跟着页面一起换掉。
                 val snackbarHostState = remember { SnackbarHostState() }
                 Box(modifier = Modifier.fillMaxSize()) {
-                    BilbyApp(container, incomingLink, snackbarHostState)
+                    // 页面深处的组件可以把一层画到整个窗口最上面,见 OverlayHost。
+                    OverlayHost {
+                        BilbyApp(container, incomingLink, snackbarHostState)
+                    }
                     SnackbarHost(
                         hostState = snackbarHostState,
                         modifier = Modifier

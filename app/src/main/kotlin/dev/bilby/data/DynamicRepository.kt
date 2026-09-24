@@ -148,6 +148,7 @@ class DynamicRepository(private val client: BiliClient) {
             durationText = archive.durationText,
             upName = author.name,
             upMid = author.mid,
+            upFaceUrl = author.face.toHttpsUrl(),
             publishedAtEpochSeconds = author.pubTs,
             playCount = archive.stat?.play ?: "",
             danmakuCount = archive.stat?.danmaku ?: "",

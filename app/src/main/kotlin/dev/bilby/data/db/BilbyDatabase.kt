@@ -47,7 +47,7 @@ interface FeedCacheItemDao {
         FeedReadPositionEntity::class,
         FeedCacheItemEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class BilbyDatabase : RoomDatabase() {

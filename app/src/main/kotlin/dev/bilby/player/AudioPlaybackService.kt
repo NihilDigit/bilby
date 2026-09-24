@@ -179,6 +179,13 @@ data class AudioPlaybackUiState(
      * 点了只 seek;不同则是别处换了 P,点了要切过去(同稿件切 P,不是换一条视频)。
      */
     val cloudResumeCid: Long = 0,
+    /**
+     * 这一条播到末尾停着,之后没有再放、也没有挪过位置。此时"继续"无处可续,播放键应当从头来。
+     *
+     * 不能拿 `STATE_ENDED` 代替:被 `pauseAtEndOfMediaItems` 拦在末尾的非末条不进 ENDED
+     * (见 [AudioPlaybackService.applyStopAtEndOfItem]),关掉自动连播或还有下一 P 时都是这样。
+     */
+    val stoppedAtEnd: Boolean = false,
 )
 
 /**
@@ -299,7 +306,8 @@ class AudioPlaybackService : MediaSessionService() {
 
     /**
      * 这一次播到末尾已经收过尾。队列末条上两道回调(`END_OF_MEDIA_ITEM` 与 `STATE_ENDED`)
-     * 会先后到达,见 [onReachedEnd]。重新放起来时清掉。
+     * 会先后到达,见 [onReachedEnd]。重新放起来、或位置挪动(拖动、换条)时清掉。
+     * 同时就是 [AudioPlaybackUiState.stoppedAtEnd]。
      */
     private var endHandled = false
 
@@ -1734,6 +1742,7 @@ class AudioPlaybackService : MediaSessionService() {
             currentQuality = currentQuality,
             cloudResumeMillis = cloudResumeMillis,
             cloudResumeCid = cloudResumeCid,
+            stoppedAtEnd = endHandled,
             queue = QueueState(
                 current = currentItem(),
                 items = queueItems,
@@ -1876,9 +1885,13 @@ class AudioPlaybackService : MediaSessionService() {
             reason: Int,
         ) {
             emitPositionTick()
+            // 停在末尾之后拖回去,就不再是"播完了":播放键该接着放,而不是从头来。
+            val leftEnd = endHandled
+            endHandled = false
             if (oldPosition.mediaItemIndex == newPosition.mediaItemIndex) {
                 // 同一条里的跳转:落点已经确认,立刻上报并把节流基准挪到这里。
                 progressSession?.onSeeked(newPosition.positionMs, playerDurationMillis())
+                if (leftEnd) publishState()
                 return
             }
             persistCachedProgress(oldPosition.positionMs)

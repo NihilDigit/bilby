@@ -369,7 +369,7 @@ private fun WhisperInput(sending: Boolean, error: String?, sentCount: Int, onSen
     val send = { onSend(text) }
 
     // 过了刻度才出现,而且不拦输入 —— 私信长度上限同样只有服务端说得准,理由与评论那一侧同
-    // (见 `ui/comment/ReplyInputLayer.kt` 的 draftCounter)。返回 null 而不是一个空的槽位:
+    // (见 `ui/comment/CommentInputParts.kt` 的 commentDraftCounter)。返回 null 而不是一个空的槽位:
     // 那个槽位一存在就占掉一行高度。
     val counter: (@Composable () -> Unit)? = if (text.length < CounterFrom) {
         null
@@ -435,7 +435,7 @@ private fun WhisperInput(sending: Boolean, error: String?, sentCount: Int, onSen
     }
 }
 
-/** 私信正文的字数刻度。**不是本地上限**,判决在服务端,理由见 `draftCounter` 的说明。 */
+/** 私信正文的字数刻度。**不是本地上限**,判决在服务端,理由见 `commentDraftCounter` 的说明。 */
 private const val SoftLimit = 500
 
 /** 到这个长度才把计数器画出来。 */

@@ -56,7 +56,7 @@ fun StatRow(
             playText?.let { Stat(Icons.Outlined.PlayCircle, stringResource(R.string.stat_play), it) }
             // 弹幕数用自己那个字形,不用字幕框([BilbyIcons])。这一行常常和播放页的控制条同屏,
             // 而那上面的字幕框说的是字幕 —— 同一个符号在一屏里说两件事。
-            danmakuText?.let { Stat(BilbyIcons.Danmaku, stringResource(R.string.stat_danmaku), it) }
+            danmakuText?.let { Stat(BilbyIcons.DanmakuCount, stringResource(R.string.stat_danmaku), it) }
             dateText?.let {
                 Text(text = it, style = MaterialTheme.typography.labelSmall, color = color)
             }

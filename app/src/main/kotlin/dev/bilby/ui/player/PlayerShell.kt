@@ -388,13 +388,7 @@ fun PlayerShell(
     val togglePlayPause = {
         when {
             player.isPlaying -> player.pause()
-            // 播完之后位置停在末尾,直接 play() 不会有反应,应有行为是重播。
-            player.playbackState == Player.STATE_ENDED -> {
-                player.seekTo(0)
-                player.play()
-            }
-
-            else -> player.play()
+            else -> player.playOrReplay()
         }
         interactionNonce += 1
     }

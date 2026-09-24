@@ -134,7 +134,7 @@ fun SettingsScreen(
                     )
                     SettingRow(
                         title = stringResource(R.string.settings_section_danmaku),
-                        icon = BilbyIcons.Danmaku,
+                        icon = BilbyIcons.DanmakuCount,
                         target = RowTarget.Page,
                         onClick = { onOpenSection(SettingsSection.Danmaku) },
                     )

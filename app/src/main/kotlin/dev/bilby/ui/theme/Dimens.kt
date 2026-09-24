@@ -93,7 +93,7 @@ object Dimens {
     val TraceCardWidth = 120.dp
 
     /**
-     * 头像三档,**按用途分,不按大小分**:同一个用途在全 app 只有一个尺寸,而"中"和"小"
+     * 头像四档,**按用途分,不按大小分**:同一个用途在全 app 只有一个尺寸,而"中"和"小"
      * 这种名字挡不住第四档被加进来。所有头像都走 [dev.bilby.ui.components.Avatar],
      * 别在别处手搓 `clip(CircleShape)` —— 那样漏掉的是 `ContentScale.Crop`,
      * 表现是非正方形的头像被拉长,而且只在漏掉的那几处拉长。
@@ -103,6 +103,13 @@ object Dimens {
      * 而两个名字让人以为该有区别。
      */
     val AvatarRow = 36.dp
+
+    /**
+     * 楼中楼里的一个人。它排在主楼正文之下、一个底色容器之内,和主楼同一档的话三条回复就是
+     * 三个与主楼等大的头像,层级读不出来,正文也只剩半屏宽。预览与展开两种形态都画它,
+     * 展开时左缘因此不动(见 `ui/comment/CommentSection.kt` 的 SubReplyRow)。
+     */
+    val AvatarNested = 24.dp
 
     /** 成排站着的头像:首页那一排关注、正在直播那一叠的前脸。 */
     val AvatarStack = 48.dp

@@ -1,20 +1,21 @@
 package dev.bilby.ui.player
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ListItem
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -24,16 +25,17 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.R
 import dev.bilby.formatDurationSeconds
 import dev.bilby.data.VideoPart
 import dev.bilby.player.QueueItem
-import dev.bilby.ui.components.CompactVideoRow
+import dev.bilby.ui.components.ListCover
+import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -175,6 +177,8 @@ fun EpisodeList(
     state: LazyListState = rememberLazyListState(),
     /** 队列面板才有;没有时两头不续。 */
     edges: QueueEdges? = null,
+    /** 正在放还是停着,决定当前那条尾部的指示跳不跳。 */
+    playing: Boolean = false,
 ) {
     val currentIndex = remember(rows) { rows.currentIndex() }
     val currentBvid = rows.getOrNull(currentIndex)?.bvid
@@ -219,41 +223,96 @@ fun EpisodeList(
         }
     }
 
+    // 视频与分 P 摊平成一组分段:分 P 是当前那条的内部结构,排在同一组里,首尾圆角才落在
+    // 整份清单的两头,而不是分 P 前后各断开一次。
+    val segmentCount = rows.size + rows.sumOf { it.parts.size }
     LazyColumn(
         state = state,
         modifier = modifier,
         contentPadding = contentPadding,
-        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
         if (edges?.loadingBefore == true) {
             item(key = "loading-before") { EdgeProgress() }
         }
+        var segment = 0
         rows.forEach { row ->
+            val rowSegment = segment++
             item(key = row.bvid) {
-                CompactVideoRow(
-                    title = row.title,
-                    coverUrl = row.coverUrl,
-                    // 时长优先于 UP 名:这份清单里绝大多数条目是同一个 UP 的,重复印一样的
-                    // 名字占掉的正是能读出"这条多长"的那一行。取不到时长才退回 UP 名 ——
-                    // 系列与动态两条来源的窗口条目没有时长(见 QueueSourceRepository)。
-                    subtitle = if (row.durationSeconds > 0) {
-                        formatDurationSeconds(row.durationSeconds)
-                    } else {
-                        row.upName.takeIf { it.isNotEmpty() }
-                    },
-                    selected = row.isCurrent,
+                QueueRowItem(
+                    row = row,
+                    playing = playing,
+                    index = rowSegment,
+                    count = segmentCount,
                     onClick = { onSelect(EpisodeTarget.Video(row.bvid)) },
                 )
             }
             // 二级:当前这条的分 P。**key 带上 bvid**,否则连播走到另一条多 P 视频时,
             // 两组分 P 的 cid 都是 Long,复用会把上一条的选中态带过来。
-            items(row.parts, key = { "${row.bvid}-${it.cid}" }) { part ->
-                PartListItem(part = part, onClick = { onSelect(EpisodeTarget.Part(part.cid)) })
+            val firstPartSegment = segment
+            segment += row.parts.size
+            itemsIndexed(row.parts, key = { _, part -> "${row.bvid}-${part.cid}" }) { i, part ->
+                PartListItem(
+                    part = part,
+                    index = firstPartSegment + i,
+                    count = segmentCount,
+                    onClick = { onSelect(EpisodeTarget.Part(part.cid)) },
+                )
             }
         }
         if (edges?.loadingAfter == true) {
             item(key = "loading-after") { EdgeProgress() }
         }
+    }
+}
+
+/**
+ * 队列里的一条视频。**详情页那几条预览、完整队列、听视频、全屏面板是同一种行**:四处原先两种
+ * 长相,预览是分段列表,其余三处是 `CompactVideoRow`,点「查看全部」像是换了一个 app。
+ *
+ * 容器色是这里唯一改掉的默认值:分段列表项默认用 `surface`,是给放在带底色的分组背景上用的;
+ * 这几处底下都是 surface 一档,照默认画,未选中的条目和底色分不开。
+ *
+ * 选中不只靠颜色(lists.md 的 Accessibility):正在播的那条尾部另有一个播放指示,放着时跳动。
+ *
+ * 时长压在封面右下角,不另占一行,也就不再退回 UP 名 —— 取不到时长的条目(系列与动态两条
+ * 来源的窗口条目,见 QueueSourceRepository)角上空着。这份清单里绝大多数条目是同一个 UP 的,
+ * 名字印一列也读不出什么。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun QueueRowItem(row: EpisodeRow, playing: Boolean, index: Int, count: Int, onClick: () -> Unit) {
+    SegmentedListItem(
+        selected = row.isCurrent,
+        onClick = onClick,
+        shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
+        colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier.padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
+        // 居中,不用默认值:默认在条目高过 88dp 时把首尾元素顶到上沿(lists.md 规格表),两行标题
+        // 加一行时长就过线,播放指示于是跑到右上角,而且只在那一条变成当前项时才露出来。
+        verticalAlignment = Alignment.CenterVertically,
+        leadingContent = {
+            ListCover(
+                url = row.coverUrl,
+                width = QueueCoverWidth,
+                cornerRadius = QueueCoverCorner,
+                durationText = if (row.durationSeconds > 0) formatDurationSeconds(row.durationSeconds) else "",
+            )
+        },
+        trailingContent = if (row.isCurrent) {
+            {
+                PlayingIndicator(
+                    active = playing,
+                    contentDescription = stringResource(
+                        if (playing) R.string.video_queue_now_playing else R.string.video_queue_paused,
+                    ),
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+            }
+        } else {
+            null
+        },
+    ) {
+        Text(text = row.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -269,37 +328,43 @@ private fun EdgeProgress() {
 }
 
 /**
- * 二级行。**缩进 + 只有文字**,不给封面:分 P 共用整条视频的一张封面,每行印一遍等于一列
- * 完全相同的图,而"这是同一条视频的内部结构"正是缩进已经说清的事。
+ * 二级行,和视频行同在一组分段里。**只有文字**,不给封面:分 P 共用整条视频的一张封面,每行
+ * 印一遍等于一列完全相同的图。封面那一格空着留位,文字因此和上面视频标题落在同一条竖线上,
+ * 读得出是父子。
  *
- * 当前这一 P 只换文字颜色,不加选中背景:上一级已经是一块 secondaryContainer,里面再套一块
- * 会让二级看起来比一级还重。这一条与 `VideoTabs.PartSheet` 的取舍相同。
+ * 当前这一 P 只换文字颜色,不走分段的选中态:上一级已经是一块 secondaryContainer,紧挨着再来
+ * 一块会让二级看起来比一级还重。这一条与 `VideoTabs.PartSheet` 的取舍相同。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun PartListItem(part: EpisodePart, onClick: () -> Unit) {
-    ListItem(
-        headlineContent = {
-            Text(
-                stringResource(R.string.video_part_label, part.ordinal, part.title),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        },
-        colors = ListItemDefaults.colors(
-            containerColor = Color.Transparent,
-            headlineColor = if (part.isCurrent) {
+private fun PartListItem(part: EpisodePart, index: Int, count: Int, onClick: () -> Unit) {
+    SegmentedListItem(
+        selected = false,
+        onClick = onClick,
+        shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
+        colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier
+            .padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap)
+            .semantics { selected = part.isCurrent },
+        verticalAlignment = Alignment.CenterVertically,
+        leadingContent = { Spacer(modifier = Modifier.width(QueueCoverWidth)) },
+    ) {
+        Text(
+            stringResource(R.string.video_part_label, part.ordinal, part.title),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (part.isCurrent) {
                 MaterialTheme.colorScheme.primary
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = PartIndent)
-            .selectable(selected = part.isCurrent, role = Role.Button, onClick = onClick),
-    )
+        )
+    }
 }
 
-/** 二级行的缩进。对齐一级行封面右缘之后的文字,让两级读起来是同一条竖线上的父子关系。 */
-private val PartIndent = Spacing.Spacious
+/** 队列条目的封面宽度。16:9 下约 54dp 高,和两行标题齐平。 */
+private val QueueCoverWidth = 96.dp
+
+/** 队列条目封面的圆角。列表项自己的圆角在 4dp 到 16dp 之间变,封面取中间一档。 */
+private val QueueCoverCorner = 8.dp

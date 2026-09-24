@@ -241,6 +241,7 @@ internal fun DynamicItemDto.toFeedArticle(): FeedEntry.Article? {
             ).orEmpty().toHttpsUrl(),
         upName = author.name,
         upMid = author.mid,
+        upFaceUrl = author.face.toHttpsUrl(),
         publishedAtEpochSeconds = author.pubTs,
     )
 }

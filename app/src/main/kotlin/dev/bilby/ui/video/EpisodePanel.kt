@@ -64,6 +64,7 @@ fun BoxScope.EpisodePanel(
     onSelect: (EpisodeTarget) -> Unit,
     onDismiss: () -> Unit,
     edges: QueueEdges? = null,
+    playing: Boolean = false,
 ) {
     // 遮罩。压暗是为了让面板这一侧读得出来是上层,同时接住面板之外的那一下点击 ——
     // 全屏下画面本身带着自己的手势(单击出控件、双击 seek),不接住的话点在画面上会既关面板
@@ -86,7 +87,7 @@ fun BoxScope.EpisodePanel(
     // 而外层的 widthIn 决定了内层 fillMaxWidth 看到的 maxWidth —— 结果是 0.42 × 400 = 168dp,
     // 一块连 72dp 封面加两行标题都排不下的窄条。
     //
-    // 下限同样是必需的:条目用的是全应用统一的 `CompactVideoRow`(封面 72dp + 两行文字),
+    // 下限同样是必需的:条目是队列统一的那一种(`QueueRowItem`,封面 96dp + 两行文字),
     // 比它窄就不是"窄一点",是封面和标题一起被挤没。
     val windowWidth = with(LocalDensity.current) {
         LocalWindowInfo.current.containerSize.width.toDp()
@@ -134,6 +135,7 @@ fun BoxScope.EpisodePanel(
                 EpisodeList(
                     rows = rows,
                     edges = edges,
+                    playing = playing,
                     onSelect = {
                         onSelect(it)
                         onDismiss()
@@ -157,7 +159,7 @@ fun BoxScope.EpisodePanel(
 /** 面板宽度占屏宽的比例。 */
 private const val PanelWidthFraction = 0.42f
 
-/** 条目排得开的最小宽度:封面 72dp + 两行标题 + 两侧内边距。 */
+/** 条目排得开的最小宽度:封面 96dp + 两行标题 + 两侧内边距。 */
 private val PanelMinWidth = 280.dp
 
 /** 上限。再宽条目本身也用不上,只是把画面挡得更多。 */

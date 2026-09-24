@@ -49,6 +49,7 @@ data class FeedCacheItemEntity(
     val coverUrl: String,
     val upName: String,
     val upMid: Long,
+    val upFaceUrl: String = "",
     val publishedAtEpochSeconds: Long,
     /** 以下三列只有 [kind] 为 [KIND_VIDEO] 时有意义。 */
     val durationText: String = "",

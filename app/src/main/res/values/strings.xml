@@ -140,16 +140,13 @@
     <string name="comment_reply">回复</string>
     <string name="comment_delete">删除评论</string>
     <string name="comment_delete_confirm">删除这条评论?</string>
-    <string name="comment_expand_replies">展开 %1$d 条回复</string>
     <string name="comment_open_replies_panel">查看全部 %1$d 条回复</string>
-    <string name="comment_view_thread">查看这组回复</string>
-    <string name="comment_collapse_replies">收起</string>
-    <string name="comment_load_more">加载更多</string>
+    <string name="comment_thread_replies">%1$d 条回复</string>
     <string name="comment_replies_failed">回复没加载出来</string>
     <string name="comment_no_more_replies">没有更多回复</string>
     <string name="comment_replying_to">回复 @%1$s</string>
     <string name="comment_input_hint">发条友善的评论</string>
-    <string name="comment_input_hint_reply">回复 %1$s</string>
+    <string name="comment_write">发表评论</string>
     <!-- 长按复制。第一条是读屏念出来的动作名(触摸那一侧没有可见文字),第二条是复制之后的
          回执,只在 Android 12L 及以下出现——13 起系统自带复制预览浮层,见 CommentCopy.kt。
          第三条是写进剪贴板的 ClipData 标签,描述这段内容是什么,不是一个动作。 -->
@@ -159,7 +156,7 @@
     <string name="text_select_title">选择文本</string>
     <string name="text_select_copy_all">复制全文</string>
     <!-- 发送失败与字数计数。失败报在输入栏上方一行(不在列表页脚),草稿留在框里,旁边一个重试。
-         计数器过刻度才出现,而且不拦输入——上限由服务端判,见 ReplyInputLayer 的 draftCounter。
+         计数器过刻度才出现,而且不拦输入——上限由服务端判,见 CommentInputParts 的 draftCounter。
          计数这一条私信输入栏也用,所以名字不带 comment 前缀。 -->
     <string name="comment_send_failed">发送失败：%1$s</string>
     <string name="input_length_counter">%1$d / %2$d</string>
