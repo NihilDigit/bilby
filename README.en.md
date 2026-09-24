@@ -22,7 +22,7 @@ suggestions.
 <img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/video.png" width="240" height="528" alt="Playback and queue">
 <img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/in-video.png" width="240" height="528" alt="On tap, the agent searches based on the current video">
 </p>
-<p align="center">The home feed carries only uploaders you follow; the queue comes from the collection or the uploader; when needed, the agent can search for related content based on the video you are watching</p>
+<p align="center">The home feed carries only uploaders you follow; the queue follows the list the video was opened from; when needed, the agent can search for related content based on the video you are watching</p>
 
 ## Redesigned, native listening support
 
@@ -54,39 +54,41 @@ the description and comments on the right. Phone layouts are unaffected.</p>
 
 Done:
 
-- [x] Feed: following feed (with per-uploader muting), most-visited uploaders (live ones open the room directly), full following list, watch-later, history with cloud progress and resume
+- [x] Feed: following feed (with per-uploader muting), special or most-visited uploaders (live ones open the room directly), uploader pushes
+- [x] Following list: filter by group, sort by most visited or most recent, search; special and mutual follows are marked, unfollow from the row
+- [x] History: resume where you left; delete one, multi-select, clear watched or everything; pause recording
+- [x] Watch later: clear invalid or watched videos
 - [x] Moments: videos, reposts, image posts, text, live, articles and reservations; bodies and images shown as posted, emotes inline, reservations added to the calendar
 - [x] Articles read in-app: text, images, link cards, code blocks and formulas
 - [x] Uploader pages: uploads, moments, and collections/series tabs, with in-space search
-- [x] Playback: fullscreen, quality, speed (WSOLA), double-tap to seek or pause, long-press fast-forward, drag-to-seek, swipe for brightness and volume, lock, multi-part videos that resume on the part you left; progress synced to the cloud
-- [x] Listening: same player as normal playback, screen-off background play, notification, lock screen and headset controls, sleep timer; shuffle queue; the subtitle track doubles as line-by-line lyrics, tap a line to seek
-- [x] Live: watch a room with danmaku, quality, fullscreen, and superchats
-- [x] Offline: pick videos from the playback queue (select-all available), choose a quality, danmaku kept alongside; concurrency is configurable and the speed is shown; cached items live under the profile tab, support long-press multi-delete, play without the network, and form a queue of the whole library; with no network the video page shows the cached title, description and counts
+- [x] Playback: fullscreen, picture-in-picture, video and audio quality, speed (WSOLA), double-tap to seek or pause, long-press fast-forward, drag-to-seek, swipe for brightness and volume, lock; progress synced to the cloud; default video and audio quality set separately for Wi-Fi and metered networks, and a pick in the player applies to the current playback only by default
+- [x] Queue: follows the list the video was opened from (collection, uploads, favourites, watch later, offline), parts included; kept per page, so leaving the video page and coming back finds the queue intact
+- [x] Listening: same player as normal playback, screen-off background play, notification, lock screen and headset controls, a sleep timer adjustable by the minute; shuffle queue; the subtitle track doubles as line-by-line lyrics, tap a line to seek
+- [x] Live: watch a room with danmaku, quality, audio only, fullscreen, picture-in-picture and superchats; follow the streamer
+- [x] Offline: pick videos from the playback queue (select-all available), choose a quality, danmaku kept alongside; concurrency is configurable and the speed is shown; cached items live under the profile tab, support long-press multi-delete, play without the network, and form a queue of the whole library; with no network the video page shows the cached title, description and counts; progress watched offline is reported once back online; on a weak network the local copy plays directly
 - [x] Danmaku: scrolling, top and bottom, following the playback clock, adjustable opacity; post from the video page (yours appears at once) or from the bar under the live chat
 - [x] Subtitles: multiple tracks, under the picture during normal playback, as a transcript while listening; AI subtitle repair
-- [x] Comments: read, sort, expand reply threads, post and reply, like, delete, tap a timestamp to seek, zoom images and swipe between them
-- [x] Actions: like, coin, favourite, follow; joint submissions credit each uploader separately
+- [x] Comments: read, sort, expand reply threads, post and reply, like, delete, tap a timestamp to seek, zoom images and swipe between them; reply, mention and like notifications open the original comment
+- [x] Actions: like, coin, favourite, follow, watch later; joint submissions credit each uploader separately and can be followed one by one; like and reply to moments; coin history
+- [x] Favourites: create, rename and delete folders, edit the description and visibility; unfavouriting inside a folder can be undone
+- [x] Follow groups and the blocklist: add, rename and delete groups, set groups per uploader; block and unblock
 - [x] Agent: conversational site-wide search and "find related" from the video page; reads descriptions and top comments, candidates each with a reason; multi-turn follow-ups, visible execution trace, replies rendered as Markdown
-- [x] Messages: chats, replies, mentions, likes and system notices; text chats send and receive, video and article messages open in the app
+- [x] Messages: chats, replies, mentions, likes and system notices; text chats send and receive, video and article messages open in the app; uploader pushes get their own page, with the note shown apart from the pushed video
 - [x] Links and sharing: opens bilibili links and b23.tv short links, shares videos and live rooms
 - [x] SponsorBlock segments skipped by default, server configurable
-- [x] Interface: Material 3 Expressive, motion rebuilt from the spec; two-pane layout on tablets; edge-to-edge and display cutout handling
-- [x] In-app self-update; Material You dynamic color
+- [x] Interface: Material 3 Expressive, motion rebuilt from the spec; skeletons while loading; two-pane layout on tablets; edge-to-edge and display cutout handling
+- [x] Appearance: follow the system, light or dark, with a pure black option for dark; system dynamic color or one of nine built-in palettes; interface language in Simplified Chinese or English
+- [x] In-app self-update
+- [x] Playback progress model rebuilt: parts, local copies and cloud conflicts handled correctly
+- [x] Following feed rebuilt: uploads and articles in one stream, unfollowing and muting take effect at once, "where you left off" located per visit
 
 Planned:
 
-- [ ] Interface: refine the experience and follow the Material 3 Expressive spec throughout
-- [ ] Rework the following feed, starting from its data flow
+- [ ] Interface: keep refining the details
 - [ ] Better adaptive layout
-- [ ] Picture-in-picture
 - [ ] Player behaviour refinement
-- [ ] Live room improvements
 - [ ] Refine coining, liking and the other site actions
-- [ ] Deleting and clearing history
-- [ ] Favourites management: create, rename and delete folders, unfavourite from the list
-- [ ] Follow groups and the blocklist
-- [ ] Liking and commenting on moments
-- [ ] Filtering low-quality comments
+- [ ] Filtering low-quality comments and moments
 - [ ] Performance work
 - [ ] Clean up abstractions and data flow
 - [ ] Comment pruning
