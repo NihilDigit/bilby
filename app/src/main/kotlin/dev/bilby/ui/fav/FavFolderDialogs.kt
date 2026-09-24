@@ -97,7 +97,7 @@ fun FavFolderEditorDialog(state: FavFolderEditorState, actions: FavFolderEditorA
                 )
                 state.error?.let {
                     Text(
-                        text = it,
+                        text = stringResource(it),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -147,7 +147,7 @@ fun FavFolderDeleteDialog(state: FavFolderDeletion, actions: FavFolderDeletionAc
                 Text(stringResource(R.string.fav_folder_delete_message, state.folder.title, state.folder.count))
                 state.error?.let {
                     Text(
-                        text = it,
+                        text = stringResource(it),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )

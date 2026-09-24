@@ -20,6 +20,7 @@ import dev.bilby.ui.AdaptiveContent
 import dev.bilby.appendDistinctBy
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.ListItemPersonSkeleton
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.Dimens
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -122,6 +123,7 @@ fun BlacklistScreen(
         PagedColumn(
             items = state.users,
             key = { it.mid },
+            skeletonRow = { ListItemPersonSkeleton() },
             loading = state.loading,
             appending = state.appending,
             hasMore = state.hasMore,

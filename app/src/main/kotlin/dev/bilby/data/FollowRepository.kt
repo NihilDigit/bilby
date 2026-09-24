@@ -21,7 +21,12 @@ data class UpBrief(
     val sign: String = "",
     /** 在「特别关注」分组里。三条关注列表接口都带这个字段。 */
     val special: Boolean = false,
+    /** 互相关注。只有关注列表那几条接口给得出,其余来源一律 false。 */
+    val mutual: Boolean = false,
 )
+
+/** 关注列表的一页。[total] 是关注总数,只有全部关注那条接口给。 */
+data class FollowingsPage(val items: List<UpBrief>, val total: Int?)
 
 /** 关注列表的两种排法,都由服务端算,本地不重排。 */
 enum class FollowOrder(val param: String) {
@@ -133,7 +138,7 @@ class FollowRepository(
      * 两种排法都是服务端给的:`attention` 是 B 站按访问频次算好的"最常访问",空串是按关注
      * 时间倒序的"最近关注"。本地不重排也不加权(见类注释)。
      */
-    suspend fun followings(page: Int, order: FollowOrder): BiliResult<List<UpBrief>> {
+    suspend fun followings(page: Int, order: FollowOrder): BiliResult<FollowingsPage> {
         val mid = settings.credentials.first().dedeUserId
         return client.getData<FollowingsDto>(
             FOLLOWINGS_URL,
@@ -144,7 +149,7 @@ class FollowRepository(
                 "order" to "desc",
                 "order_type" to order.param,
             ),
-        ).map { dto -> dto.list.map { it.toBrief() } }
+        ).map { dto -> FollowingsPage(dto.list.map { it.toBrief() }, dto.total) }
     }
 
     /**
@@ -245,7 +250,14 @@ class FollowRepository(
     }
 
     private fun FollowingDto.toBrief() =
-        UpBrief(mid = mid, name = uname, faceUrl = face.toHttpsUrl(), sign = sign, special = special == 1)
+        UpBrief(
+            mid = mid,
+            name = uname,
+            faceUrl = face.toHttpsUrl(),
+            sign = sign,
+            special = special == 1,
+            mutual = FollowState.of(attribute) == FollowState.Mutual,
+        )
 
     private fun dev.bilby.api.dto.PortalUpDto.toBrief() =
         UpBrief(mid = mid, name = uname, faceUrl = face.toHttpsUrl())

@@ -38,9 +38,9 @@ import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
+import dev.bilby.formatDurationSeconds
+import dev.bilby.ui.formatRelativeTime
 import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -340,7 +340,7 @@ internal fun HistoryItem.toRowUi() = VideoRowUi(
     meta = if (isFinished) {
         stringResource(R.string.history_finished)
     } else {
-        stringResource(R.string.history_progress, formatProgress(progressSeconds))
+        stringResource(R.string.history_progress, formatDurationSeconds(progressSeconds))
     },
     progressFraction = when {
         isFinished -> 1f
@@ -349,28 +349,6 @@ internal fun HistoryItem.toRowUi() = VideoRowUi(
     },
 )
 
-private fun formatProgress(seconds: Long): String =
-    "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}"
-
-private val AbsoluteDateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-
-/**
- * "3 小时前" 这类相对时间。同一份逻辑 FeedScreen 里也有一份(私有,不能跨文件复用)——
- * 两处都在标"这条内容是什么时候来的",字面完全一致,拆成公共函数反而要为一件小事
- * 新开一个文件,收益不大。
- */
-@Composable
-private fun formatRelativeTime(epochSeconds: Long, nowEpochSeconds: Long = Instant.now().epochSecond): String {
-    val diff = nowEpochSeconds - epochSeconds
-    return when {
-        diff < 60 -> stringResource(R.string.time_just_now)
-        diff < 3600 -> stringResource(R.string.time_minutes_ago, diff / 60)
-        diff < 24 * 3600 -> stringResource(R.string.time_hours_ago, diff / 3600)
-        diff < 2 * 24 * 3600 -> stringResource(R.string.time_yesterday)
-        diff < 7 * 24 * 3600 -> stringResource(R.string.time_days_ago, diff / (24 * 3600))
-        else -> Instant.ofEpochSecond(epochSeconds).atZone(ZoneId.systemDefault()).format(AbsoluteDateFormatter)
-    }
-}
 
 // ---- Preview ----
 

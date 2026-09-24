@@ -4,7 +4,8 @@ import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
 import dev.bilby.api.dto.FavFolderDto
-import dev.bilby.api.dto.FavFolderListDto
+import dev.bilby.api.dto.FavFolderPageDto
+import dev.bilby.api.dto.FavMediaDto
 import dev.bilby.api.dto.FavResourceListDto
 import dev.bilby.api.getData
 import dev.bilby.api.map
@@ -12,20 +13,53 @@ import dev.bilby.api.postAction
 import dev.bilby.api.toHttpsUrl
 import kotlinx.coroutines.flow.first
 
-/** 收藏夹里的一条视频。 */
+/** 收藏夹里的一条。多数是视频稿件,也可能是音频或剧集,见 [isVideo]。 */
 data class FavVideo(
+    /** 内容 id,含义随 [type] 变(视频是 aid)。取消收藏要连同 [type] 一起带回去。 */
     val aid: Long,
+    val type: Int,
     val bvid: String,
     val title: String,
     val coverUrl: String,
     val durationSeconds: Long,
     val upName: String,
     val playCount: Long,
+    val danmakuCount: Long,
+    val favTimeEpochSeconds: Long,
     /** 稿件已失效(删稿/转私密)。这种条目照常列出来但不可点 —— 悄悄隐藏会让人以为自己记错了。 */
     val invalid: Boolean,
-)
+    /** 剧集的类别名(「番剧」「电影」)。只有 type 24 带。 */
+    val ogvTypeName: String = "",
+) {
+    /**
+     * 视频稿件。音频与剧集不在本应用的范围里(UGC-only),照常列出、不可打开、不进队列 ——
+     * 拿它们的 id 当 aid 去开播放页,打开的是另一个不相干的稿件。
+     */
+    val isVideo: Boolean get() = type == TYPE_VIDEO
 
-data class FavPage(val items: List<FavVideo>, val hasMore: Boolean)
+    val playable: Boolean get() = isVideo && !invalid && bvid.isNotEmpty()
+
+    companion object {
+        const val TYPE_VIDEO = 2
+        const val TYPE_AUDIO = 12
+        const val TYPE_OGV = 24
+    }
+}
+
+/**
+ * @param info 这个收藏夹本身。resource/list 每一页都带,内容页的页头与顶栏标题用它 ——
+ *   路由带过来的标题可能已经在别处改过。
+ */
+data class FavPage(val items: List<FavVideo>, val hasMore: Boolean, val info: FavFolderDetail?)
+
+data class FavFolderPage(val items: List<FavFolderDetail>, val hasMore: Boolean)
+
+/** 收藏夹内容的排序。取值照 PiliPlus 的 `FavOrderType`,枚举名就是接口的 `order`。 */
+enum class FavOrder(val apiValue: String) {
+    Mtime("mtime"), // 最近收藏
+    View("view"), // 最多播放
+    Pubtime("pubtime"), // 最近投稿
+}
 
 /**
  * 一个收藏夹的完整信息。[FavFolder] 只够收藏面板用(标题、条数、这个视频在不在里面),
@@ -37,6 +71,8 @@ data class FavFolderDetail(
     val intro: String,
     val count: Int,
     val attr: Int,
+    /** 空串表示没有封面。list-all 不给这个字段,所以列表走 created/list,见 notes/fav.md §1。 */
+    val coverUrl: String = "",
 ) {
     /** 默认收藏夹。它删不掉,所以列表里直接不给删除入口,而不是点了报错。 */
     val isDefault: Boolean get() = attr and ATTR_NOT_DEFAULT == 0
@@ -64,55 +100,52 @@ class FavRepository(
     private val settings: SettingsStore,
 ) {
 
-    /** 用户自建的收藏夹。不带 rid,所以每项的 fav_state 无意义,这里也不读它。 */
-    suspend fun folders(): BiliResult<List<FavFolder>> {
+    /**
+     * 用户自建的收藏夹,一页。走 created/list 而不是 list-all:后者不带封面,而列表和「我的」
+     * 都要画封面(notes/fav.md §1)。PiliPlus 的收藏夹页与「我的」页走的也是这一个。
+     */
+    suspend fun folderPage(page: Int): BiliResult<FavFolderPage> {
         val mid = settings.credentials.first().dedeUserId
-        return client.getData<FavFolderListDto>(
-            FOLDER_LIST_URL,
-            mapOf("up_mid" to mid, "type" to "2"),
-        ).map { dto ->
-            dto.list.map { FavFolder(id = it.id, title = it.title, containsThis = false, count = it.mediaCount) }
-        }
+        return client.getData<FavFolderPageDto>(
+            FOLDER_PAGE_URL,
+            mapOf(
+                "up_mid" to mid,
+                "pn" to page.toString(),
+                "ps" to Paging.FOLDER_PAGE_SIZE.toString(),
+            ),
+        ).map { dto -> FavFolderPage(dto.list.orEmpty().map { it.toDetail() }, dto.hasMore) }
     }
 
-    /** 收藏夹内容。`order=mtime` 是收藏时间倒序,与 B 站默认一致。 */
-    suspend fun folderContents(mediaId: Long, page: Int): BiliResult<FavPage> =
+    /**
+     * 收藏夹内容。
+     *
+     * @param keyword 夹内搜索词,空串即不筛。
+     */
+    suspend fun folderContents(
+        mediaId: Long,
+        page: Int,
+        order: FavOrder = FavOrder.Mtime,
+        keyword: String = "",
+    ): BiliResult<FavPage> =
         client.getData<FavResourceListDto>(
             RESOURCE_LIST_URL,
             mapOf(
                 "media_id" to mediaId.toString(),
                 "pn" to page.toString(),
                 "ps" to Paging.PAGE_SIZE.toString(),
-                "order" to "mtime",
+                "keyword" to keyword,
+                "order" to order.apiValue,
                 "type" to "0",
                 "tid" to "0",
+                "platform" to "web",
             ),
         ).map { dto ->
             FavPage(
-                items = dto.medias.orEmpty().map {
-                    FavVideo(
-                        aid = it.id,
-                        bvid = it.bvid,
-                        title = it.title,
-                        coverUrl = it.cover.toHttpsUrl(),
-                        durationSeconds = it.duration,
-                        upName = it.upper.name,
-                        playCount = it.cntInfo.play,
-                        invalid = it.attr != 0,
-                    )
-                },
+                items = dto.medias.orEmpty().map { it.toFavVideo() },
                 hasMore = dto.hasMore,
+                info = dto.info?.toDetail(),
             )
         }
-
-    /** 管理页要的那份收藏夹列表:比 [folders] 多带简介与 attr。接口是同一个,见 notes/fav.md。 */
-    suspend fun folderDetails(): BiliResult<List<FavFolderDetail>> {
-        val mid = settings.credentials.first().dedeUserId
-        return client.getData<FavFolderListDto>(
-            FOLDER_LIST_URL,
-            mapOf("up_mid" to mid, "type" to "2"),
-        ).map { dto -> dto.list.map { it.toDetail() } }
-    }
 
     /**
      * 单个收藏夹的信息。**编辑前必须拉这一次**:list-all 不保证带 intro,拿列表里那份去填
@@ -161,25 +194,26 @@ class FavRepository(
         mapOf("media_ids" to mediaIds.joinToString(","), "platform" to "web"),
     )
 
-    suspend fun removeFromFolder(mediaId: Long, aid: Long): BiliResult<Unit> =
-        dealResource(aid, addMediaIds = emptyList(), delMediaIds = listOf(mediaId))
+    /** 清掉这个收藏夹里的失效内容。服务端判哪些算失效,本地不必先知道,见 notes/fav.md §7。 */
+    suspend fun cleanInvalid(mediaId: Long): BiliResult<Unit> = client.postAction(
+        RESOURCE_CLEAN_URL,
+        mapOf("media_id" to mediaId.toString(), "platform" to "web"),
+    )
 
-    /** 撤销一次 [removeFromFolder]:同一条 resources 换到 add_media_ids 上,别无差别。 */
-    suspend fun restoreToFolder(mediaId: Long, aid: Long): BiliResult<Unit> =
-        dealResource(aid, addMediaIds = listOf(mediaId), delMediaIds = emptyList())
 
-    /** 两个列表都必须传,没有的那个传空串;resources 的格式是 `aid:type`。见 notes/fav.md。 */
-    private suspend fun dealResource(
-        aid: Long,
-        addMediaIds: List<Long>,
-        delMediaIds: List<Long>,
-    ): BiliResult<Unit> = client.postAction(
-        RESOURCE_DEAL_URL,
-        mapOf(
-            "resources" to "$aid:$VIDEO_RESOURCE_TYPE",
-            "add_media_ids" to addMediaIds.joinToString(","),
-            "del_media_ids" to delMediaIds.joinToString(","),
-        ),
+    private fun FavMediaDto.toFavVideo() = FavVideo(
+        aid = id,
+        type = type,
+        bvid = bvid,
+        title = title,
+        coverUrl = cover.toHttpsUrl(),
+        durationSeconds = duration,
+        upName = upper.name,
+        playCount = cntInfo.play,
+        danmakuCount = cntInfo.danmaku,
+        favTimeEpochSeconds = favTime,
+        invalid = attr !in VALID_MEDIA_ATTRS,
+        ogvTypeName = ogv?.typeName.orEmpty(),
     )
 
     private fun FavFolderDto.toDetail() = FavFolderDetail(
@@ -188,23 +222,27 @@ class FavRepository(
         intro = intro,
         count = mediaCount,
         attr = attr,
+        coverUrl = cover.takeIf { it.isNotBlank() }?.toHttpsUrl().orEmpty(),
     )
 
-    /** 收藏夹内容一页的条数。列表页据此算出点中的那条落在第几页(见 QueueContext.FavFolder)。 */
     object Paging {
+        /** 收藏夹内容一页的条数。列表页据此算出点中的那条落在第几页(见 QueueContext.FavFolder)。 */
         const val PAGE_SIZE = 20
+
+        /** created/list 一页几个收藏夹。照 PiliPlus 的 20。 */
+        const val FOLDER_PAGE_SIZE = 20
     }
 
     private companion object {
-        const val FOLDER_LIST_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/folder/created/list-all"
+        const val FOLDER_PAGE_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/folder/created/list"
         const val FOLDER_INFO_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/folder/info"
         const val FOLDER_ADD_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/folder/add"
         const val FOLDER_EDIT_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/folder/edit"
         const val FOLDER_DEL_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/folder/del"
         const val RESOURCE_LIST_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/resource/list"
-        const val RESOURCE_DEAL_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/resource/batch-deal"
+        const val RESOURCE_CLEAN_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/resource/clean"
 
-        /** 视频稿件在收藏体系里的资源类型。 */
-        const val VIDEO_RESOURCE_TYPE = 2
+        /** 内容的 attr 取这两个值时条目正常,见 [FavMediaDto.attr]。 */
+        val VALID_MEDIA_ATTRS = setOf(0, 16)
     }
 }

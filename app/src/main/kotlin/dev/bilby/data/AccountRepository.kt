@@ -3,7 +3,11 @@ package dev.bilby.data
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
+import dev.bilby.BiliLog
 import dev.bilby.api.dto.NavInfoDto
+import dev.bilby.api.dto.NavStatDto
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import dev.bilby.api.getData
 import dev.bilby.api.propagateFailure
 import dev.bilby.api.toHttpsUrl
@@ -16,6 +20,10 @@ data class AccountInfo(
     val isSeniorMember: Boolean,
     /** 个性签名。可能为空,拿不到时也是空——个人页对空签名的处理是整行不显示。 */
     val sign: String,
+    /** 硬币余额,小数。投币前看一眼够不够用。 */
+    val coins: Double,
+    /** 关注数。拿不到时为 null,那一格不画,不写 0 —— 0 是一个真的数。 */
+    val following: Int?,
 )
 
 /**
@@ -41,16 +49,36 @@ class AccountRepository(
 
         // 签名拿不到就留空,不阻断头像/名字/等级的展示——签名是头部的锦上添花,
         // 不该让第二次请求的成败决定整个头部能不能显示。
-        val sign = (spaceRepository.loadUserInfo(nav.value.mid) as? BiliResult.Ok)?.value?.sign.orEmpty()
-        return BiliResult.Ok(nav.value.toDomain(sign))
+        // 签名和关注数两路并发:都是锦上添花,互不依赖,串着等是白白叠两次往返。
+        return coroutineScope {
+            val sign = async {
+                (spaceRepository.loadUserInfo(nav.value.mid) as? BiliResult.Ok)?.value?.sign.orEmpty()
+            }
+            val following = async {
+                when (val stat = client.getData<NavStatDto>("${BiliConstants.WEB_HOST}/x/web-interface/nav/stat")) {
+                    is BiliResult.Ok -> stat.value.following
+                    is BiliResult.ApiError -> {
+                        BiliLog.w("nav/stat 失败(${stat.code}): ${stat.message}")
+                        null
+                    }
+                    is BiliResult.Failure -> {
+                        BiliLog.w("nav/stat 异常", stat.cause)
+                        null
+                    }
+                }
+            }
+            BiliResult.Ok(nav.value.toDomain(sign.await(), following.await()))
+        }
     }
 
-    private fun NavInfoDto.toDomain(sign: String) = AccountInfo(
+    private fun NavInfoDto.toDomain(sign: String, following: Int?) = AccountInfo(
         mid = mid,
         name = uname,
         faceUrl = face.toHttpsUrl(),
         level = levelInfo.currentLevel,
         isSeniorMember = isSeniorMember == 1,
         sign = sign,
+        coins = money,
+        following = following,
     )
 }

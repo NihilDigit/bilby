@@ -61,6 +61,8 @@ data class FollowingDto(
     val sign: String = "",
     /** 1 = 在特别关注分组里。三条列表接口都带这个字段,分组接口也一样。 */
     val special: Int = 0,
+    /** 关系,取值同 `x/relation` 的 attribute,按 `FollowState.of` 解(notes/space-and-search.md §1.7)。 */
+    val attribute: Int = 0,
 )
 
 /**

@@ -8,41 +8,36 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Mail
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.outlined.DownloadForOffline
+import androidx.compose.material.icons.outlined.Mail
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.Star
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,23 +48,54 @@ import dev.bilby.R
 import dev.bilby.api.BiliResult
 import dev.bilby.data.AccountInfo
 import dev.bilby.data.AccountRepository
-import dev.bilby.data.FavFolder
+import dev.bilby.data.FavFolderDetail
 import dev.bilby.data.FavRepository
 import dev.bilby.data.HistoryItem
 import dev.bilby.data.HistoryRepository
-import dev.bilby.data.SettingsStore
 import dev.bilby.data.ToViewItem
 import dev.bilby.data.ToViewRepository
 import dev.bilby.offline.OfflineDownloader
 import dev.bilby.offline.OfflineItem
+import dev.bilby.offline.OfflineStatus
+import dev.bilby.offline.OfflineStore
+import dev.bilby.ui.components.MetaSeparator
+import dev.bilby.ui.fav.FavFolderCard
+import dev.bilby.ui.fav.FavFolderCover
+import dev.bilby.ui.fav.favFolderMeta
+import androidx.compose.foundation.layout.width
+import dev.bilby.ui.offline.formatBytes
 import dev.bilby.ui.offline.toRowUi
 import dev.bilby.ui.components.Avatar
-import dev.bilby.ui.components.BilbyFlexibleTopBar
+import dev.bilby.ui.components.formatCount
+import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.theme.Breakpoints
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.dp
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.SectionHeader
-import dev.bilby.ui.components.TrailingEntry
-import dev.bilby.ui.components.VideoRow
+import dev.bilby.ui.components.VideoRowUi
+import dev.bilby.ui.components.SkeletonLine
+import dev.bilby.ui.components.SkeletonPulse
+import dev.bilby.ui.components.skeleton
+import dev.bilby.ui.components.CoverAspectRatio
+import dev.bilby.ui.components.CoverCornerRadius
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.outlined.PeopleAlt
+import dev.bilby.ui.components.CoinGlyph
+import androidx.compose.ui.graphics.Color
+import dev.bilby.ui.components.ListCover
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.SegmentedListItem
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.errorTextRes
 import dev.bilby.ui.rememberBilbyWindowSize
@@ -79,10 +105,11 @@ import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.toview.toRowUi
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -100,29 +127,31 @@ data class ProfileUiState(
     val account: AccountInfo? = null,
     val history: ProfilePreviewState<HistoryItem> = ProfilePreviewState(),
     val toView: ProfilePreviewState<ToViewItem> = ProfilePreviewState(),
-    val favFolders: ProfilePreviewState<FavFolder> = ProfilePreviewState(),
+    val favFolders: ProfilePreviewState<FavFolderDetail> = ProfilePreviewState(),
     /**
      * 已缓存的视频。**没有 loading 也没有 error** —— 它读的是本地目录,由
      * [dev.bilby.offline.OfflineDownloader] 常驻持有,不存在"正在拉"这个状态。
      */
     val offline: List<OfflineItem> = emptyList(),
+    /** 缓存目录占了多少字节。一次目录遍历,只在缓存增删时重算,见 [ProfileViewModel] 的 init。 */
+    val offlineUsedBytes: Long = 0L,
 )
 
 /**
  * 账号信息、历史记录预览、稍后再看预览、收藏夹列表 —— 四样各自独立加载,一个失败
  * 不连坐其它三个:收藏夹拉不到就只显示那一节的失败态,不影响历史记录或稍后再看照常展示。
  *
- * 历史记录与稍后再看只取**第一页的前 5 条**,不做翻页:这一页是概览,不是列表,
- * 要看全部就走"查看全部"进各自的完整页面(DESIGN 1.1:有限集合,不在概览页再造一个
- * 能无限滚的地方)。收藏夹本身条数不多,列表不设上限。
+ * 历史记录与稍后再看只取**第一页的前 [PreviewCount] 条**,不做翻页:这一页是概览,不是列表,
+ * 要看全部就点小节标题进各自的完整页面(DESIGN 1.1:有限集合,不在概览页再造一个能无限滚的
+ * 地方)。收藏夹取 created/list 的第一页,横排成一行封面卡片,更多的在收藏夹页。
  */
 class ProfileViewModel(
-    private val settings: SettingsStore,
     private val accountRepository: AccountRepository,
     private val historyRepository: HistoryRepository,
     private val toViewRepository: ToViewRepository,
     private val favRepository: FavRepository,
     offlineDownloader: OfflineDownloader,
+    private val offlineStore: OfflineStore,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ProfileUiState())
@@ -133,6 +162,17 @@ class ProfileViewModel(
         // 缓存列表是本地状态,跟着下载器走就行 —— 它不参与上面那四块的"重进就重拉"。
         viewModelScope.launch {
             offlineDownloader.items.collect { items -> _state.update { it.copy(offline = items) } }
+        }
+        // 已用空间只在"有哪些条目、哪些下完了"变的时候重算:下载器每次进度更新都会发一份新列表,
+        // 每次都遍历一遍目录不值。
+        viewModelScope.launch {
+            offlineDownloader.items
+                .map { items -> items.map { it.id to (it.status == OfflineStatus.Completed) }.toSet() }
+                .distinctUntilChanged()
+                .collect {
+                    val bytes = offlineStore.usedBytes()
+                    _state.update { it.copy(offlineUsedBytes = bytes) }
+                }
         }
     }
 
@@ -205,9 +245,10 @@ class ProfileViewModel(
     fun retryFavFolders() {
         _state.update { it.copy(favFolders = it.favFolders.copy(loading = true, error = null)) }
         viewModelScope.launch {
-            when (val result = favRepository.folders()) {
+            // 只取第一页:这一节是一行横滑的卡片,不在概览页翻页。
+            when (val result = favRepository.folderPage(1)) {
                 is BiliResult.Ok -> _state.update {
-                    it.copy(favFolders = it.favFolders.copy(loading = false, items = result.value))
+                    it.copy(favFolders = it.favFolders.copy(loading = false, items = result.value.items))
                 }
 
                 else -> _state.update {
@@ -217,37 +258,20 @@ class ProfileViewModel(
         }
     }
 
-    /**
-     * 同 `SettingsViewModel.logout`(已删除,搬到这里):清凭据必须扛得住页面本身随时被
-     * 销毁(`NonCancellable`),停播放服务要 Context,由调用方在拿到 `onDone` 之后做。
-     */
-    fun logout(onDone: () -> Unit) {
-        viewModelScope.launch(NonCancellable) {
-            settings.clearCredentials()
-            onDone()
-        }
-    }
-
-    private companion object {
-        /**
-         * 每一节预览几条。**硬编码,不做"加载更多"**(DESIGN 2.7):这一页是概览,要看全的进那一页。
-         * 一个能在这里无限往下滚的地方,和 1.1 表里"无限滚动"那一格没有区别,哪怕滚的是自己看过的。
-         *
-         * 取 3 不取 5:两节预览加上收藏夹要一起放进一屏,5 条时光历史记录就吃掉整屏,
-         * 底下两节要滚很久才见得到,那就不再是概览了。
-         */
-        const val PreviewCount = 3
-    }
 }
 
 /**
- * 「我的」:账号头部 + 历史记录/稍后再看预览 + 收藏夹列表。
+ * 每一节预览几条。**硬编码,不做"加载更多"**(DESIGN 2.7):这一页是概览,要看全的进那一页。
+ * 一个能在这里无限往下滚的地方,和 1.1 表里"无限滚动"那一格没有区别,哪怕滚的是自己看过的。
  *
- * 这一页是底部导航的根 tab。三个根 tab 都不再有共用顶栏(标题和底栏标签逐字重复,
- * M3 对 top app bar 的定义是"显示信息与操作",两样都没有就是死高度)——设置是这一页
- * 唯一的页级操作,挂在账号头部那一行的末尾,紧跟在"登出"右边:两者都是"这个账号相关的
- * 操作",摆在一起比孤零零挂在屏幕角上更说得通(`IconButton` 自带 48dp 触摸区,见
- * [AccountHeader])。
+ * 取 3 不取 5:两节预览加上收藏夹要一起放进一屏,5 条时光历史记录就吃掉整屏,
+ * 底下两节要滚很久才见得到,那就不再是概览了。缓存那一节同一个数,它在本地排序截取。
+ */
+private const val PreviewCount = 3
+
+/**
+ * 「我的」:账号卡 + 历史记录、稍后再看、收藏夹、缓存四节概览。每一节的标题就是进完整页的
+ * 入口。这一页是底部导航的根 tab,没有顶栏,见 [AccountCard]。
  */
 @Composable
 fun ProfileScreen(
@@ -255,12 +279,18 @@ fun ProfileScreen(
     onVideoClick: (String) -> Unit,
     /** 稍后再看预览里的一条。队列是稍后再看,与 [onVideoClick] 分开。 */
     onToViewItemClick: (String) -> Unit,
+    /** 缓存预览里的一条。一行是一个分 P,所以给整条缓存,不只给 bvid。 */
+    onOfflineItemClick: (OfflineItem) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
     /** 进消息页。见 MessagesEntry 那一行的说明:入口不带任何计数。 */
     onOpenMessages: () -> Unit,
-    onOpenFavFolder: (FavFolder) -> Unit,
+    /** 账号卡上的「关注」那一格,进关注列表。 */
+    onOpenFollowings: () -> Unit,
+    /** 账号卡上的「硬币」那一格,进硬币记录。 */
+    onOpenCoinLog: () -> Unit,
+    onOpenFavFolder: (FavFolderDetail) -> Unit,
     /** 进收藏夹列表页。新建、改名、删除收藏夹都在那里。 */
     onOpenFavFolders: () -> Unit,
     onSettingsClick: () -> Unit,
@@ -285,64 +315,26 @@ fun ProfileScreen(
             scrollState.animateScrollTo(0)
         }
     }
-    // **名字归顶栏。** 这一页从前没有顶栏,理由是"标题和底栏标签逐字重复、没有页级操作"
-    // (见 `MainActivity` 的 `RootTabs`)。这条理由对一个写着账号名的顶栏不成立:那不是「我的」
-    // 两个字的复读,是这一页在讲的那个东西,而齿轮就是它的页级操作。取 medium flexible 而不是
-    // small:展开态 136dp 给名字一行 `headlineMedium`,往下滚收回 64dp,让出的高度归下面的
-    // 概览列表 —— 判据与写法见 [BilbyFlexibleTopBar]。
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    // **没有顶栏。** 名字、设置、消息都收进最上面那张账号卡([AccountCard]):顶栏里只剩一个
+    // 名字和一个齿轮时,名字、等级、签名、消息入口分在顶栏、卡片、分割线下三处,读起来是散的。
     Column(
         modifier = modifier
             .fillMaxSize()
             .padding(contentPadding)
-            .nestedScroll(scrollBehavior.nestedScrollConnection),
+            .verticalScroll(scrollState),
     ) {
-        BilbyFlexibleTopBar(
-            // 账号还没拉到时退回底栏那一格的名字,不留空标题:空的顶栏读起来像这一页坏了。
-            title = state.account?.name ?: stringResource(R.string.tab_profile),
-            scrollBehavior = scrollBehavior,
-            // **顶部 inset 已经在根 tab 那一层 padding 过了**(`RootTabsContent` 的
-            // `padding(top = insets.calculateTopPadding())`),顶栏再让一次就是两倍状态栏高。
-            windowInsets = WindowInsets(0),
-            actions = {
-                IconButton(onClick = onSettingsClick) {
-                    Icon(
-                        Icons.Outlined.Settings,
-                        contentDescription = stringResource(R.string.settings_title),
-                    )
-                }
-            },
-        )
-        // weight 而不是 fillMaxSize:顶栏的高度会随收起变,剩多少由 Column 现算,
-        // 而 fillMaxSize 要的是"整屏",两者在展开态差着 136dp。
-        Column(modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(scrollState)) {
-            AccountHeader(
-                state = state,
-                onOpenSelf = onOpenSelf,
-                onRetry = onRetryAccount,
-            )
-
-            // **分割线画在这里,分节之间不画。**
-            //
-            // divider.md:121「Use full-width dividers to separate larger sections of unrelated
-            // content」、:161「To separate a different kind of content, use a full-width divider」——
-            // 线以上是这个账号本身,线以下都是"去看点什么"的去处(私信、历史、稍后再看、收藏夹、
-            // 缓存),是两类内容。
-            //
-            // 分节之间不画则是同一页 137 行那句「use sparingly. Too many divider lines will make an
-            // interface look cluttered」:那几节彼此相关,而且各自顶着一个 SectionHeader,标题已经
-            // 说明"换了一节",再加线是同一件事说两遍。
-            HorizontalDivider()
-
-            // **消息这一行画在历史记录上面,不是塞进头像那一行。** 那一行是头像 + 等级徽章 +
-            // 个性签名,再挤一个图标只能从签名身上抠宽度。
-            //
-            // 它落在分割线**以下**,和首页那个同款入口与分割线的关系一致(头像排 → 线 → 其他动态
-            // 入口 → 时间序流)。同一个控件在两页里跟线的上下关系反过来,是最容易被当成随手摆的。
-            //
-            // **不带未读计数,也不带红点** —— DESIGN 1.3 两处写着不做,而 [TrailingEntry] 的说明
-            // 写得更死:这类入口正是它们最容易被加回来的位置。
-            MessagesEntry(onOpenMessages)
+            // 宽屏限宽:卡片横跨整屏时,名字在最左、两个图标在最右,中间是一大片空。
+            AdaptiveContent(maxWidth = Breakpoints.ReadableWidth) {
+                AccountCard(
+                    state = state,
+                    onOpenSelf = onOpenSelf,
+                    onOpenMessages = onOpenMessages,
+                    onOpenFollowings = onOpenFollowings,
+                    onOpenCoinLog = onOpenCoinLog,
+                    onSettingsClick = onSettingsClick,
+                    onRetry = onRetryAccount,
+                )
+            }
 
             if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
                 // Expanded 之后把三个低密度预览区分成两个可扫读的 pane：历史和稍后再看是
@@ -360,228 +352,502 @@ fun ProfileScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         // 缓存跟着收藏走:两者都是"我自己存下来的东西",而上面两块是"我看过/打算看的"。
                         FavFoldersSection(state.favFolders, onOpenFavFolder, onOpenFavFolders, onRetryFavFolders)
-                        OfflineSection(state.offline, onOpenOffline)
+                        OfflineSection(state.offline, state.offlineUsedBytes, onOfflineItemClick, onOpenOffline)
                     }
                 }
             } else {
                 HistorySection(state.history, onVideoClick, onOpenHistory, onRetryHistory)
                 ToViewSection(state.toView, onToViewItemClick, onOpenToView, onRetryToView)
                 FavFoldersSection(state.favFolders, onOpenFavFolder, onOpenFavFolders, onRetryFavFolders)
-                OfflineSection(state.offline, onOpenOffline)
+                OfflineSection(state.offline, state.offlineUsedBytes, onOfflineItemClick, onOpenOffline)
             }
 
             Spacer(Modifier.height(Spacing.Comfortable))
-        }
     }
 }
 
 /**
- * 消息入口。见调用处的说明:**没有计数**。
+ * 这一页最上面的账号卡:头像、名字加等级、个性签名,下面是关注、硬币、私信三连。整张卡点下去进自己的
+ * 空间 —— 这一页看得到的是"我攒了什么",而"我发了什么"在空间页。
  *
- * 缩到行尾的一个 [TrailingEntry],不再是铺满整行的列表项 —— 它标的是"去哪儿",而这一页
- * 其余的行都是"我攒了什么"。原先同形同宽地摆在最上面,读起来就像那些预览区的一员。
+ * - **一张卡装下"我"的全部**,取代原先的顶栏(名字、齿轮)+ 头像行 + 分割线 + 分割线下的消息
+ *   入口。同一个人的几样东西分在四处,中间还隔一道线,读不出是一组。底色取 surfaceContainer,
+ *   卡与下面各节的边界由底色和圆角承担,不再要那道线。
+ * - **名字和等级一行**:等级是名字的附注,单独占一行时它读起来像一条标题。
+ * - **设置在右上角,和名字一行**。放在签名旁边会把签名挤窄,名字那一行本来就有空。
+ *   签名因此能伸到和下面三连同一条右边界。
+ * - **关注、硬币、私信三格相连**,形状沿用视频动作栏的分段。私信不带未读计数、不带红点
+ *   (DESIGN 1.3)。每一格和设置都是独立的点击目标,不触发整卡的"进空间"。
+ * - **签名为空时那一行不画**,不给"这个人很懒"一类的占位:签名本来就可能没填。
+ * - 账号还没到或拉取失败时,卡照样在:两个图标不依赖账号,设置在失败时尤其要够得着。
+ *   还在读时左边是头像和名字的骨架([SkeletonPulse]),失败时换成一句话加重试。
+ *   下面各节不依赖账号信息,不被这一次请求的成败连坐。
  */
 @Composable
-private fun MessagesEntry(onClick: () -> Unit) {
-    TrailingEntry(
-        text = stringResource(R.string.message_title),
-        icon = Icons.Filled.Mail,
-        onClick = onClick,
-    )
-}
-
-/**
- * 头像 + 等级徽章 + 个性签名,整行可点,进自己的空间 —— 这一页看得到的是"我攒了什么"
- * (历史、稍后再看、收藏夹),而"我发了什么"在空间页。
- *
- * **名字和设置齿轮都搬到顶栏去了**(见 [ProfileScreen] 里那段说明)。名字在这儿再印一遍会
- * 和顶栏的标题撞成两份,而 `MediumFlexibleTopAppBar` 收起之后标题一直在,所以搬走不丢信息;
- * 齿轮是页级操作,`actions` 正是它的位置。剩下的三样留在这里,是因为顶栏那个 subtitle 槽位
- * 在收起态也要显示,只放得下一行短字。
- *
- * **不用 `ListItem`。** 它的内边距叠在这个 Column 自己的 padding 上,和下面第一节之间
- * 撑出一段空隙;三行形态还有各自的最小高度,签名那一行也被它的排布挤掉了宽度。
- *
- * **签名为空时那一行不画**——
- * 不给"这个人很懒"一类的占位文案,那是空间页(`SpaceHeader`)的处理,这里没有那个理由:
- * 签名本来就可能没填,不是"数据还没到"。
- *
- * 三态都不是整屏级别的:失败或还在读的时候,下面的三个板块照常能加载 ——
- * 它们不依赖账号信息,不该被这一次请求的成败连坐。
- */
-@Composable
-private fun AccountHeader(
+private fun AccountCard(
     state: ProfileUiState,
     onOpenSelf: (Long) -> Unit,
+    onOpenMessages: () -> Unit,
+    onOpenFollowings: () -> Unit,
+    onOpenCoinLog: () -> Unit,
+    onSettingsClick: () -> Unit,
     onRetry: () -> Unit,
 ) {
-    // **上下留白归里面那一行,不归这个 Column。** 它是可点区域,留白算在里面涟漪才盖得住;
-    // 两边各留一份的话上下就是 12 + 8。这里只负责左右两侧的对齐。
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+    val account = state.account
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.extraLarge,
+        modifier = Modifier
+            .fillMaxWidth()
+            // 上边距和左右一样是 16:没有顶栏之后卡片就是页面的第一样东西,贴着状态栏像被裁了一截。
+            .padding(Spacing.Comfortable),
     ) {
-        state.account?.let { account ->
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(MaterialTheme.shapes.large)
-                    // **role 要给。** 不给的话读屏只念出里面那几段文字,念不出"这是个可以点的
-                    // 东西",而这一行是进自己空间的唯一入口。
-                    .clickable(role = Role.Button) { onOpenSelf(account.mid) }
-                    .padding(vertical = Spacing.Cozy),
-            ) {
-                Avatar(url = account.faceUrl, size = Dimens.AvatarHeader)
+        Column(
+            verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+            modifier = Modifier
+                // **role 要给。** 不给的话读屏只念出里面那几段文字,念不出"这是个可以点的东西",
+                // 而这张卡是进自己空间的唯一入口。
+                .then(
+                    if (account != null) {
+                        Modifier.clickable(role = Role.Button) { onOpenSelf(account.mid) }
+                    } else {
+                        Modifier
+                    },
+                )
+                // 左边 16:头像的左沿和下面预览区封面的左沿对齐(同是 16 + 16,见 PreviewRow)。
+                // 右边只留 4:两个图标按钮自带 48dp 触控格,图标本身离卡边已经有 16。
+                .padding(start = Spacing.Comfortable, top = Spacing.Comfortable, bottom = Spacing.Comfortable, end = Spacing.Hair),
+        ) {
+        // 设置在右上角,和名字同一行;签名因此能一直延伸到右边的页边线,和左边一样宽。
+        val settingsButton: @Composable () -> Unit = {
+            IconButton(onClick = onSettingsClick) {
+                Icon(
+                    Icons.Outlined.Settings,
+                    contentDescription = stringResource(R.string.settings_title),
+                    modifier = Modifier.size(AccountActionIconSize),
+                )
+            }
+        }
+        Row(
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
+            modifier = Modifier.heightIn(min = AccountAvatarSize),
+        ) {
+            if (account != null) {
+                Avatar(url = account.faceUrl, size = AccountAvatarSize)
                 Column(modifier = Modifier.weight(1f)) {
-                    LevelBadge(
-                        level = account.level,
-                        senior = account.isSeniorMember,
-                        height = Dimens.LevelBadgeHeight,
-                    )
+                    // 名字、等级、一个 ›:› 是"整张卡点得进去"的唯一视觉提示,跟在名字后面而不是
+                    // 卡片右端 —— 右端是设置,它去别处,摆在它旁边会读成第二个按钮。
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                text = account.name,
+                                style = MaterialTheme.typography.titleLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            LevelBadge(
+                                level = account.level,
+                                senior = account.isSeniorMember,
+                                height = Dimens.LevelBadgeHeight,
+                            )
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(Dimens.IconInline),
+                            )
+                        }
+                        settingsButton()
+                    }
                     if (account.sign.isNotBlank()) {
+                        // 右边补 12:卡片右内边距只有 4(留给设置的触控格),补齐之后签名的右沿和
+                        // 设置图标的右沿都在离卡边 16 的那条线上,和左边对称。
                         Text(
                             text = account.sign,
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(end = Spacing.Cozy),
                         )
                     }
                 }
-                // 箭头说明这一行点下去还有一页。它替掉了原先那个设置齿轮的位置,而齿轮在顶栏。
-                Icon(
-                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = stringResource(R.string.space_title),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            } else {
+                Box(modifier = Modifier.weight(1f)) {
+                    if (state.accountError != null) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = stringResource(state.accountError),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f, fill = false),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            TextButton(onClick = onRetry) { Text(stringResource(R.string.action_retry)) }
+                        }
+                    } else {
+                        // 头像、名字、签名各一块,位置和尺寸同真实内容:账号到了只是颜色在变。
+                        SkeletonPulse {
+                            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable)) {
+                                Box(Modifier.size(AccountAvatarSize).skeleton(CircleShape))
+                                Column(
+                                    modifier = Modifier.weight(1f).padding(top = Spacing.Tight),
+                                    verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                                ) {
+                                    SkeletonLine(Modifier.fillMaxWidth(0.5f), height = AccountNameSkeletonHeight)
+                                    SkeletonLine(Modifier.fillMaxWidth(0.8f))
+                                }
+                            }
+                        }
+                    }
+                }
+                settingsButton()
             }
-        } ?: Row(
-            // 失败/加载态没有上面那块可点区域,自己补上同一份上下留白,免得账号一拉到
-            // 整页内容就往下跳一截。
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = Dimens.AvatarHeader)
-                .padding(vertical = Spacing.Cozy),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-        ) {
-            // 失败时给一句话加一个重试;还在读的时候什么都不画 —— 骨架屏是在假装内容马上就到
-            // (DESIGN 4.2)。设置齿轮不在这几条分支里了,它在顶栏上,账号拉没拉到都在。
-            if (state.accountError != null) {
-                Text(
-                    text = stringResource(state.accountError),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+        }
+        // 关注、硬币、消息三连,横跨整张卡。右边补 12,理由同签名那一行。
+        AccountActions(
+            account = account,
+            onOpenFollowings = onOpenFollowings,
+            onOpenCoinLog = onOpenCoinLog,
+            onOpenMessages = onOpenMessages,
+            modifier = Modifier.padding(end = Spacing.Cozy),
+        )
+        }
+    }
+}
+
+/**
+ * 账号卡底下那一排三连:关注、硬币、消息。**外形照视频页的动作栏**(赞、币、藏那一排):
+ * 三段连成一组,整排首尾大圆角、中间小圆角、段间一道细缝,每段字形、数、名字排成一行。同一个
+ * 应用里"一排能点的东西"只长一个样子。
+ *
+ * - 关注:自己一个个点出来的数,点它进关注列表。
+ * - 硬币:投币时要用的余额,点它进硬币记录,看每一枚的去向。连成一组之后每一段都得能按,
+ *   一段按不动的会被读成坏了。
+ * - 消息:私信与回复、@、赞的入口。不带未读数,不带红点(DESIGN 1.3)。
+ * - 粉丝数、经验条不放:它们随别人的行为变化,摆在自己的主页上就是一个引人回来刷新的数
+ *   (风格指南 §4.2)。
+ *
+ * 数还没拿到(账号在读、关注数这一次没取到)时那一段只写名字,不写 0 —— 0 是一个真的数。
+ */
+@Composable
+private fun AccountActions(
+    account: AccountInfo?,
+    onOpenFollowings: () -> Unit,
+    onOpenCoinLog: () -> Unit,
+    onOpenMessages: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val segments = listOf(
+        AccountSegmentSpec(
+            icon = { tint ->
+                Icon(Icons.Outlined.PeopleAlt, contentDescription = null, tint = tint, modifier = Modifier.size(SegmentIconSize))
+            },
+            value = account?.following?.let { formatSegmentValue(it.toDouble()) },
+            label = stringResource(R.string.profile_following),
+            onClick = onOpenFollowings,
+        ),
+        AccountSegmentSpec(
+            // 和视频页投币那一格同一个字形(圈里一个 B),空心:余额不是"已投"那种状态。
+            icon = { tint ->
+                CoinGlyph(
+                    tint = tint,
+                    filled = false,
+                    cutout = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    size = SegmentCoinSize,
                 )
-                TextButton(onClick = onRetry) { Text(stringResource(R.string.action_retry)) }
+            },
+            value = account?.let { formatSegmentValue(it.coins) },
+            label = stringResource(R.string.profile_coins),
+            onClick = onOpenCoinLog,
+        ),
+        AccountSegmentSpec(
+            icon = { tint ->
+                Icon(Icons.Outlined.Mail, contentDescription = null, tint = tint, modifier = Modifier.size(SegmentIconSize))
+            },
+            value = null,
+            label = stringResource(R.string.message_title),
+            onClick = onOpenMessages,
+            weight = MessagesSegmentWeight,
+        ),
+    )
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(SegmentGap),
+        modifier = modifier.fillMaxWidth().height(IntrinsicSize.Min),
+    ) {
+        segments.forEachIndexed { index, segment ->
+            AccountSegment(
+                spec = segment,
+                shape = segmentShape(index, segments.size),
+                modifier = Modifier.weight(segment.weight).fillMaxHeight(),
+            )
+        }
+    }
+}
+
+private class AccountSegmentSpec(
+    val icon: @Composable (tint: Color) -> Unit,
+    /** 这一段的数;为 null 时只写 [label]。 */
+    val value: String?,
+    val label: String,
+    val onClick: () -> Unit,
+    /** 这一段在整排里分到的宽度比例。 */
+    val weight: Float = 1f,
+)
+
+@Composable
+private fun AccountSegment(spec: AccountSegmentSpec, shape: Shape, modifier: Modifier = Modifier) {
+    Surface(
+        onClick = spec.onClick,
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = modifier,
+    ) {
+        // 字形、数、名字排成一行。竖排时没有数的那一段比旁边两段少一行,居中之后哪一行都对
+        // 不上;横排成一行就没有这个问题,整排也矮了一截。
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.heightIn(min = SegmentMinHeight).padding(horizontal = Spacing.Tight),
+        ) {
+            spec.icon(MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+                spec.value?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
+                        maxLines = 1,
+                        modifier = Modifier.alignByBaseline(),
+                    )
+                }
+                Text(
+                    spec.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    modifier = Modifier.alignByBaseline(),
+                )
             }
         }
     }
 }
 
-/** 历史记录预览:最近 5 条,"查看全部"进完整的历史记录页。 */
+/** 三连第 [index] 段的外形,同视频页动作栏:整排首尾 16dp,中间 4dp。 */
+private fun segmentShape(index: Int, count: Int): Shape {
+    val start = if (index == 0) SegmentOuterCorner else SegmentInnerCorner
+    val end = if (index == count - 1) SegmentOuterCorner else SegmentInnerCorner
+    return RoundedCornerShape(topStart = start, bottomStart = start, topEnd = end, bottomEnd = end)
+}
+
+private val SegmentOuterCorner = 16.dp
+private val SegmentInnerCorner = 4.dp
+private val SegmentGap = 2.dp
+/**
+ * Material 图标的字形只占 24dp 画布里 20dp 的活动区,硬币却是画满自己那个框的圆。两者同写
+ * 20 时信封和人像比硬币小一圈;图标取 24、硬币取 20,可见的字形才一样大,同视频页动作栏。
+ */
+private val SegmentIconSize = 24.dp
+private val SegmentCoinSize = 20.dp
+
+/** 消息那一段没有数,和前两段等宽时两边空出一大截。 */
+private const val MessagesSegmentWeight = 0.75f
+
+/** 一行排开之后每一段的高度,取触控目标的最小值。 */
+private val SegmentMinHeight = 48.dp
+
+
+/**
+ * 三连里的数。**过了 999 一律写成 K、M**,不走全应用的 [formatCount]:那一套中文到一万才进位,
+ * 四位数加一位小数的硬币余额("1194.1")在三等分的一格里太长,数字与字形横排之后更放不下。
+ * 这样每一格的数最长 5 个字符("999.5"、"12.3K")。
+ *
+ * 1000 以内的硬币余额保留小数:整数不带 ".0",投过币剩的半枚写成 "42.5"。
+ */
+private fun formatSegmentValue(value: Double): String = when {
+    value >= 999_950 -> "%.1fM".format(value / 1_000_000)
+    value >= 1_000 -> "%.1fK".format(value / 1_000)
+    value % 1.0 == 0.0 -> value.toLong().toString()
+    else -> "%.1f".format(value)
+}
+
+/** 账号卡的头像。72 试过,整张卡显得太满;64 仍比列表里的头像大一档。 */
+private val AccountAvatarSize = 64.dp
+
+/** 消息与设置两个图标。比默认的 24 大一号,和 72dp 的头像、放大了的名字相称;触控格仍是 48。 */
+private val AccountActionIconSize = 28.dp
+
+/** 名字那一行的骨架高度,对应 titleLarge 的字形高。 */
+private val AccountNameSkeletonHeight = 18.dp
+
+/** 历史记录预览:最近 [PreviewCount] 条,点标题进完整的历史记录页。 */
 @Composable
 private fun HistorySection(
     state: ProfilePreviewState<HistoryItem>,
     onVideoClick: (String) -> Unit,
-    onViewAll: () -> Unit,
+    onOpen: () -> Unit,
     onRetry: () -> Unit,
 ) {
     PreviewSection(
         title = stringResource(R.string.history_title),
         state = state,
         emptyText = stringResource(R.string.history_empty),
-        onViewAll = onViewAll,
+        onOpen = onOpen,
         onRetry = onRetry,
-    ) { item ->
-        VideoRow(item = item.toRowUi(), onClick = { onVideoClick(item.bvid) })
+    ) { item, index, count ->
+        PreviewRow(item = item.toRowUi(), index = index, count = count, onClick = { onVideoClick(item.bvid) })
     }
 }
 
-/** 稍后再看预览:同上,"查看全部"进完整的稍后再看列表。 */
+/** 稍后再看预览:同上,点标题进完整的稍后再看列表。 */
 @Composable
 private fun ToViewSection(
     state: ProfilePreviewState<ToViewItem>,
     onVideoClick: (String) -> Unit,
-    onViewAll: () -> Unit,
+    onOpen: () -> Unit,
     onRetry: () -> Unit,
 ) {
     PreviewSection(
         title = stringResource(R.string.tab_toview),
         state = state,
         emptyText = stringResource(R.string.toview_empty),
-        onViewAll = onViewAll,
+        onOpen = onOpen,
         onRetry = onRetry,
         hideWhenEmpty = true,
-    ) { item ->
-        VideoRow(item = item.toRowUi(), onClick = { onVideoClick(item.bvid) })
+    ) { item, index, count ->
+        // 剧集与课程在这里同样打不开,判据同稍后再看页。
+        PreviewRow(
+            item = item.toRowUi(),
+            index = index,
+            count = count,
+            enabled = item.playable,
+            onClick = { if (item.playable) onVideoClick(item.bvid) },
+        )
     }
 }
 
 /**
- * 已缓存的视频预览。**一条都没有时整节不画**,和稍后再看同一条判据:没缓存过东西的人不需要
- * 先认识"离线缓存"这个概念,才能看懂自己页面上多出来的一行字。
+ * 预览区的一行:和播放页队列同一种带底色的分段列表项(见 `EpisodeList.QueueRowItem`)。
+ *
+ * **预览用分段卡片,完整页用平铺行。** 这几条是一屏概览里的一小组,底色和首尾圆角把它们圈成
+ * 一块,和上面的账号卡、旁边的收藏夹卡片同一种"一块一块"的读法;完整页是一整屏的列表,
+ * 那里一行一张卡只会让列表变成一摞补丁。
+ *
+ * 分段容器的左沿对齐页边(16dp),封面在容器里再缩进 16dp(lists.md 的 leading padding),
+ * 于是和账号卡里头像的左沿落在同一条线上(卡片 16dp + 卡内 16dp)。
+ *
+ * 行里只有标题和一行状态(看到哪了、已看完),时间、UP 名、计数都不带:概览里要认出的是
+ * "哪一条",细节在完整页。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun PreviewRow(
+    item: VideoRowUi,
+    index: Int,
+    count: Int,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    SegmentedListItem(
+        onClick = onClick,
+        enabled = enabled,
+        shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
+        colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier.padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
+        // 居中,理由同 QueueRowItem:两行标题加一行状态就过了 88dp,默认会把封面顶到上沿。
+        verticalAlignment = Alignment.CenterVertically,
+        leadingContent = {
+            ListCover(
+                url = item.coverUrl,
+                durationText = item.durationText,
+                progressFraction = item.progressFraction,
+                width = PreviewCoverWidth,
+                cornerRadius = PreviewCoverCorner,
+                typeBadge = item.typeBadge,
+            )
+        },
+        supportingContent = item.meta?.let { meta ->
+            {
+                Text(
+                    meta,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        },
+    ) {
+        Text(item.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** 预览行的封面,同播放页队列条目:16:9 下约 54dp 高,和两行标题齐平。 */
+private val PreviewCoverWidth = 96.dp
+
+/** 同队列条目:列表项自己的圆角在 4dp 到 16dp 之间变,封面取中间一档。 */
+private val PreviewCoverCorner = 8.dp
+
+/**
+ * 缓存预览。与其余几节同一个形状:标题进缓存页,下面是最近缓存的几条。
+ *
+ * **一条都没有时整节不画**,和稍后再看同一条判据:没缓存过东西的人不需要先认识"离线缓存"
+ * 这个概念,才能看懂自己页面上多出来的一行字。
+ *
+ * 条数与已用空间写在标题行右端:缓存会攒到几十条,预览的三条看不出全貌,"存了多少、占了多少"
+ * 是这一节在概览页真正要回答的。它原先是一行 `ListItem` 入口外加一条通栏分割线,和上面几节
+ * 长得不一样,读起来像另一类东西。
  */
 @Composable
-private fun OfflineSection(items: List<OfflineItem>, onViewAll: () -> Unit) {
+private fun OfflineSection(
+    items: List<OfflineItem>,
+    usedBytes: Long,
+    onItemClick: (OfflineItem) -> Unit,
+    onOpen: () -> Unit,
+) {
     if (items.isEmpty()) return
-    // **这里要一条通栏分割线。** 别处不画是因为每一节都顶着自己的 SectionHeader,那行标题
-    // 已经说明"换了一节";而这一行没有标题,紧跟在收藏夹的几行下面就会被读成又一个收藏夹。
-    // divider 页给的正是这条判据:"To separate a different kind of content, use a full-width
-    // divider",以及通栏线用于 "separate larger sections of unrelated content"。
-    HorizontalDivider()
-    // **一行入口,不是预览列表**,和收藏夹同一个形状。缓存是会长的:攒到几十条之后,在这一页
-    // 铺前五条既看不出全貌,又把下面的收藏夹推到屏幕外。这一页是概览,"我缓存了多少"这一个
-    // 数字就够,要挑哪一条是缓存页自己的事。
-    ListItem(
-        headlineContent = {
+    // 最近加进来的在前。在途的也算:刚点了缓存的人回到这一页,要找的正是那几条。
+    val preview = items.sortedByDescending { it.createdAtMillis }.take(PreviewCount)
+    Column(modifier = Modifier.padding(bottom = Spacing.Comfortable)) {
+        SectionHeader(
+            title = stringResource(R.string.offline_title),
+            onTitleClick = onOpen,
+            modifier = Modifier.padding(horizontal = Spacing.Comfortable),
+        ) {
             Text(
-                text = stringResource(R.string.offline_title),
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        },
-        supportingContent = {
-            Text(
-                text = stringResource(R.string.offline_count, items.size),
-                style = MaterialTheme.typography.bodySmall,
+                text = stringResource(R.string.offline_count, items.size) + MetaSeparator + formatBytes(usedBytes),
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
             )
-        },
-        leadingContent = {
-            Icon(
-                Icons.Outlined.DownloadForOffline,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        },
-        trailingContent = {
-            Icon(
-                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        },
-        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onViewAll),
-    )
+        }
+        Column(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
+            preview.forEachIndexed { index, item ->
+                PreviewRow(item = item.toRowUi(), index = index, count = preview.size, onClick = { onItemClick(item) })
+            }
+        }
+    }
 }
 
 /**
- * 三个预览区共用的骨架:小节标题(+"查看全部")、loading/error/empty 三态、内容。
- * 没有"查看全部"按钮时(条数为 0)不画它——链接到一个空页面没有意义。
+ * 预览区共用的骨架:小节标题、loading/error/empty 三态、内容。
+ *
+ * **标题本身就是进完整页的入口**([SectionHeader] 的 `onTitleClick`,带一个右尖括号),
+ * 替掉了原先行尾那颗「查看全部」:那颗按钮和标题说的是同一个去处,却要人把视线从行首挪到行尾。
+ * 条数为 0 时标题不可点 —— 链接到一个空页面没有意义。
  */
 @Composable
 private fun <T> PreviewSection(
     title: String,
     state: ProfilePreviewState<T>,
     emptyText: String,
-    onViewAll: () -> Unit,
+    onOpen: () -> Unit,
     onRetry: () -> Unit,
     /**
      * 空的时候整节不画,而不是画一行"还没有"。给**用不到这个功能的人**用:没往稍后再看
@@ -592,7 +858,8 @@ private fun <T> PreviewSection(
      * 只是还不知道里面有什么。
      */
     hideWhenEmpty: Boolean = false,
-    itemRow: @Composable (T) -> Unit,
+    /** 一行。给出下标与条数,分段列表项按它们取首尾圆角。 */
+    itemRow: @Composable (item: T, index: Int, count: Int) -> Unit,
 ) {
     if (hideWhenEmpty && !state.loading && state.error == null && state.items.isEmpty()) return
     // **间距记在这一节的下面,不是上面。** 记在上面的话,排在最前的那一节会在它和上面那个
@@ -601,18 +868,51 @@ private fun <T> PreviewSection(
     Column(modifier = Modifier.padding(bottom = Spacing.Comfortable)) {
         SectionHeader(
             title = title,
+            onTitleClick = onOpen.takeIf { state.items.isNotEmpty() },
             modifier = Modifier.padding(horizontal = Spacing.Comfortable),
-        ) {
-            if (state.items.isNotEmpty()) {
-                TextButton(onClick = onViewAll) { Text(stringResource(R.string.profile_view_all)) }
+        )
+        SectionBody(state, onRetry, emptyText, skeleton = { PreviewRowsSkeleton() }) { items ->
+            Column(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
+                items.forEachIndexed { index, item -> itemRow(item, index, items.size) }
             }
         }
-        SectionBody(state, onRetry, emptyText, itemRow)
     }
 }
 
 /**
- * 一节的四态:转圈 / 出错 / 空 / 内容。**四态之间淡入淡出**,不是硬切。
+ * 预览区读取中的样子:[PreviewCount] 条和 [PreviewRow] 同形的分段行,封面、标题、状态各一块。
+ * 用同一个分段列表项去画,底色、圆角、内边距一分不差,内容到了只有占位块换成真的。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun PreviewRowsSkeleton() {
+    SkeletonPulse {
+        Column(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
+            repeat(PreviewCount) { index ->
+                SegmentedListItem(
+                    shapes = ListItemDefaults.segmentedShapes(index = index, count = PreviewCount),
+                    colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                    modifier = Modifier.padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
+                    verticalAlignment = Alignment.CenterVertically,
+                    leadingContent = {
+                        Box(
+                            Modifier
+                                .width(PreviewCoverWidth)
+                                .aspectRatio(CoverAspectRatio)
+                                .skeleton(RoundedCornerShape(PreviewCoverCorner)),
+                        )
+                    },
+                    supportingContent = { SkeletonLine(Modifier.fillMaxWidth(0.4f).padding(top = Spacing.Hair)) },
+                ) {
+                    SkeletonLine(Modifier.fillMaxWidth(0.85f))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 一节的四态:骨架 / 出错 / 空 / 内容。**四态之间淡入淡出**,不是硬切。
  *
  * 这一页进一次就重取一次四块(见 [ProfileViewModel.refresh]),所以这几态之间的切换是每次
  * 打开「我的」都会发生的事,而硬切的表现是同一块位置上的字凭空换掉一行 —— 读起来像刚才那行
@@ -623,15 +923,18 @@ private fun <T> PreviewSection(
  * **切换的键是"哪一态",文案带在键里。** 直接在分支里读外面的 `state.error` 不行:淡出还没
  * 走完时旧分支仍在组合,而那一刻 error 已经是 null 了。
  *
- * 手里已经有内容时重取不退回转圈:重进这一页就是最常见的重取时机,换成转圈的话每次进来都要
- * 先看着三节各空一下。等新的一份回来直接换掉即可。
+ * 手里已经有内容时重取不退回骨架:重进这一页就是最常见的重取时机,退回去的话每次进来都要
+ * 先看着几节各闪一下。等新的一份回来直接换掉即可。
  */
 @Composable
 private fun <T> SectionBody(
     state: ProfilePreviewState<T>,
     onRetry: () -> Unit,
     emptyText: String,
-    itemRow: @Composable (T) -> Unit,
+    /** 首载时的占位,和内容同形,见 ui/components/Skeleton.kt。 */
+    skeleton: @Composable () -> Unit,
+    /** 内容那一态怎么排:预览区是一列行,收藏夹是一行横滑的卡片。 */
+    content: @Composable (List<T>) -> Unit,
 ) {
     val phase: SectionPhase = when {
         state.loading && state.items.isEmpty() -> SectionPhase.Loading
@@ -645,12 +948,12 @@ private fun <T> SectionBody(
         label = "profile-section",
     ) { current ->
         when (current) {
-            SectionPhase.Loading -> InlineSectionProgress()
+            SectionPhase.Loading -> skeleton()
             is SectionPhase.Failed -> InlineSectionError(stringResource(current.message), onRetry)
             SectionPhase.Empty -> InlineSectionMessage(emptyText)
             // 内容那一支读的是最新的 items,不是 target 里的快照:淡入期间又回来一页的话,
             // 该显示的是新的那一份。
-            SectionPhase.Content -> Column { state.items.forEach { itemRow(it) } }
+            SectionPhase.Content -> content(state.items)
         }
     }
 }
@@ -666,12 +969,17 @@ private sealed interface SectionPhase {
     data object Content : SectionPhase
 }
 
-/** 收藏夹列表,不设条数上限(DESIGN:用户自己收的,条数本来就不多)。 */
+/**
+ * 收藏夹:一行横滑的封面卡片,照 PiliPlus「我的」页。竖排的话每个收藏夹占一整行,十来个夹子
+ * 就把这一页撑成一张长列表,而这一页是一屏看完的概览。
+ *
+ * 标题叫「收藏夹」,与它点进去那一页同名 —— 原先写「收藏」,读起来像"收藏过的视频"。
+ */
 @Composable
 private fun FavFoldersSection(
-    state: ProfilePreviewState<FavFolder>,
-    onOpenFolder: (FavFolder) -> Unit,
-    onViewAll: () -> Unit,
+    state: ProfilePreviewState<FavFolderDetail>,
+    onOpenFolder: (FavFolderDetail) -> Unit,
+    onOpen: () -> Unit,
     onRetry: () -> Unit,
 ) {
     // **间距记在这一节的下面,不是上面。** 记在上面的话,排在最前的那一节会在它和上面那个
@@ -679,57 +987,109 @@ private fun FavFoldersSection(
     // 落在页面底部,那里本来就有收尾的 Spacer。
     Column(modifier = Modifier.padding(bottom = Spacing.Comfortable)) {
         SectionHeader(
-            title = stringResource(R.string.tab_saved),
+            title = stringResource(R.string.fav_folders_title),
+            // **一个都没有时也可点**,与上面几节按 items 非空判不同:那一页挂着「新建收藏夹」,
+            // 而一个还没建过收藏夹的人,恰好最需要走进去。
+            onTitleClick = onOpen,
             modifier = Modifier.padding(horizontal = Spacing.Comfortable),
-        ) {
-            // **一条都没有时也要给**,与上面几节按 items 非空判不同:那一页除了列表还挂着
-            // 「新建收藏夹」,而一个还没建过收藏夹的人,恰好最需要走进去。
-            TextButton(onClick = onViewAll) { Text(stringResource(R.string.profile_view_all)) }
-        }
+        )
         // 同 PreviewSection 一份四态,见 [SectionBody]。
-        SectionBody(state, onRetry, stringResource(R.string.profile_favorites_empty)) { folder ->
-            FavFolderRow(folder, onClick = { onOpenFolder(folder) })
+        SectionBody(
+            state,
+            onRetry,
+            stringResource(R.string.profile_favorites_empty),
+            skeleton = { FolderCardsSkeleton() },
+        ) { folders ->
+            // **只有一个(多半就是默认收藏夹)时横着排**:封面在左、名字和条数在右,和上面几节的
+            // 预览行同一个样子。一张竖卡孤零零地站在左边,右边空着一大片。
+            val only = folders.singleOrNull()
+            if (only != null) {
+                Box(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
+                    SingleFolderRow(only, onClick = { onOpenFolder(only) })
+                }
+                return@SectionBody
+            }
+            // 左右留白放进 contentPadding 而不是外层 padding:滑动时卡片要能滑到屏幕边缘,
+            // 静止时第一张仍和上面的标题对齐。
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = Spacing.Comfortable),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+            ) {
+                items(folders, key = { it.id }) { folder ->
+                    FavFolderCard(folder, onClick = { onOpenFolder(folder) })
+                }
+            }
         }
     }
 }
 
+/** 只有一个收藏夹时的那一行。形状同 [PreviewRow]:单独一段的分段列表项,四角都是大圆角。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun FavFolderRow(folder: FavFolder, onClick: () -> Unit) {
-    ListItem(
-        headlineContent = {
-            Text(folder.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+private fun SingleFolderRow(folder: FavFolderDetail, onClick: () -> Unit) {
+    SegmentedListItem(
+        onClick = onClick,
+        shapes = ListItemDefaults.segmentedShapes(index = 0, count = 1),
+        colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        verticalAlignment = Alignment.CenterVertically,
+        leadingContent = {
+            FavFolderCover(
+                url = folder.coverUrl,
+                private = !folder.isPublic,
+                modifier = Modifier.width(PreviewCoverWidth),
+            )
         },
         supportingContent = {
             Text(
-                text = stringResource(R.string.fav_folder_count, folder.count),
-                style = MaterialTheme.typography.bodySmall,
+                favFolderMeta(folder),
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
             )
         },
-        leadingContent = {
-            Icon(Icons.Outlined.Star, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        },
-        trailingContent = {
-            Icon(
-                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        },
-        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
-    )
+    ) {
+        Text(folder.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
 }
 
-/** 这一段还在读。和列表尾部、助理过程用的是同一个 [InlineProgress],只是多一圈行内留白。 */
+/**
+ * 收藏夹读取中的样子:和 [FavFolderCard] 同尺寸的几张卡。收藏夹有几个事先不知道,按一屏
+ * 放得下的张数画,多的滑出视口外;真的只有一个时,内容换成横排那一行。
+ */
 @Composable
-private fun InlineSectionProgress() {
-    InlineProgress(
-        text = stringResource(R.string.settings_loading),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-    )
+private fun FolderCardsSkeleton() {
+    SkeletonPulse {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clipToBounds()
+                .padding(horizontal = Spacing.Comfortable),
+        ) {
+            repeat(FolderSkeletonCount) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    modifier = Modifier
+                        .width(Dimens.ListCoverWidth + Spacing.Tight * 2)
+                        .clip(MaterialTheme.shapes.large)
+                        .background(MaterialTheme.colorScheme.surfaceContainer)
+                        .padding(Spacing.Tight),
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(CoverAspectRatio)
+                            .skeleton(RoundedCornerShape(CoverCornerRadius)),
+                    )
+                    SkeletonLine(Modifier.fillMaxWidth(0.7f))
+                    SkeletonLine(Modifier.fillMaxWidth(0.4f))
+                }
+            }
+        }
+    }
 }
+
+private const val FolderSkeletonCount = 3
 
 @Composable
 private fun InlineSectionError(message: String, onRetry: () -> Unit) {
@@ -794,6 +1154,8 @@ private fun ProfileScreenPreview() {
                     level = 5,
                     isSeniorMember = false,
                     sign = "一句话签名,可能很长也可能没有",
+                    coins = 42.5,
+                    following = 128,
                 ),
                 history = ProfilePreviewState(
                     loading = false,
@@ -802,17 +1164,23 @@ private fun ProfileScreenPreview() {
                 toView = ProfilePreviewState(loading = false, items = emptyList()),
                 favFolders = ProfilePreviewState(
                     loading = false,
-                    items = listOf(FavFolder(id = 1, title = "默认收藏夹", containsThis = false, count = 42)),
+                    items = listOf(
+                        FavFolderDetail(id = 1, title = "默认收藏夹", intro = "", count = 42, attr = 0),
+                        FavFolderDetail(id = 2, title = "私密的收藏夹", intro = "", count = 7, attr = 3),
+                    ),
                 ),
             ),
             onVideoClick = {},
             onToViewItemClick = {},
+            onOfflineItemClick = {},
             onOpenHistory = {},
             onOpenToView = {},
             onOpenOffline = {},
             onOpenMessages = {},
             onOpenFavFolder = {},
             onOpenFavFolders = {},
+            onOpenFollowings = {},
+            onOpenCoinLog = {},
             onSettingsClick = {},
             onOpenSelf = {},
             onRetryAccount = {},
@@ -831,12 +1199,15 @@ private fun ProfileScreenErrorPreview() {
             state = ProfileUiState(accountLoading = false, accountError = R.string.error_network),
             onVideoClick = {},
             onToViewItemClick = {},
+            onOfflineItemClick = {},
             onOpenHistory = {},
             onOpenToView = {},
             onOpenOffline = {},
             onOpenMessages = {},
             onOpenFavFolder = {},
             onOpenFavFolders = {},
+            onOpenFollowings = {},
+            onOpenCoinLog = {},
             onSettingsClick = {},
             onOpenSelf = {},
             onRetryAccount = {},

@@ -82,35 +82,49 @@ fun FollowButton(
         }
     }
     if (confirmingUnfollow) {
-        AlertDialog(
-            onDismissRequest = { confirmingUnfollow = false },
-            // 不写说明。**标题已经说完了这件事**,再补一句"取消后要重新找到这个人"是在教用户
-            // 关注是怎么回事。PiliPlus 的取关面板同样只有选项没有说明
-            // (request_utils.dart 的 relationMod 那一段)。
-            title = {
-                Text(
-                    if (name.isBlank()) {
-                        stringResource(R.string.follow_unfollow_confirm_title)
-                    } else {
-                        stringResource(R.string.follow_unfollow_confirm_named, name)
-                    },
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmingUnfollow = false
-                    onClick()
-                }) { Text(stringResource(R.string.follow_unfollow_confirm_title)) }
-            },
-            // 「保留」而不是「取消」。两个按钮上都带着「取消」两个字的时候,读者得先分清哪个
-            // 取消的是关注、哪个取消的是这个框 —— 而这是个不可逆动作的最后一道闸。
-            dismissButton = {
-                TextButton(onClick = { confirmingUnfollow = false }) {
-                    Text(stringResource(R.string.follow_unfollow_keep))
-                }
-            },
+        UnfollowConfirmDialog(
+            name = name,
+            onConfirm = onClick,
+            onDismiss = { confirmingUnfollow = false },
         )
     }
+}
+
+/**
+ * 取关确认。[FollowButton] 与空间页的分体关注按钮共用,两处的字面必须一样。
+ *
+ * @param onConfirm 确认取关。框由这里先关掉,调用方不必再关一次。
+ */
+@Composable
+fun UnfollowConfirmDialog(name: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        // 不写说明。**标题已经说完了这件事**,再补一句"取消后要重新找到这个人"是在教用户
+        // 关注是怎么回事。PiliPlus 的取关面板同样只有选项没有说明
+        // (request_utils.dart 的 relationMod 那一段)。
+        title = {
+            Text(
+                if (name.isBlank()) {
+                    stringResource(R.string.follow_unfollow_confirm_title)
+                } else {
+                    stringResource(R.string.follow_unfollow_confirm_named, name)
+                },
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onDismiss()
+                onConfirm()
+            }) { Text(stringResource(R.string.follow_unfollow_confirm_title)) }
+        },
+        // 「保留」而不是「取消」。两个按钮上都带着「取消」两个字的时候,读者得先分清哪个
+        // 取消的是关注、哪个取消的是这个框 —— 而这是个不可逆动作的最后一道闸。
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.follow_unfollow_keep))
+            }
+        },
+    )
 }
 
 /**

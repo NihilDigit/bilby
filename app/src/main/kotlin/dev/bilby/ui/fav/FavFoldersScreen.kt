@@ -1,51 +1,39 @@
 package dev.bilby.ui.fav
 
-import androidx.compose.foundation.clickable
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.calculateEndPadding
-import androidx.compose.foundation.layout.calculateStartPadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.bilby.BiliLog
 import dev.bilby.R
 import dev.bilby.api.BiliResult
 import dev.bilby.data.FavFolderDetail
 import dev.bilby.data.FavRepository
 import dev.bilby.ui.AdaptiveContent
-import dev.bilby.ui.components.EmptyState
-import dev.bilby.ui.components.FirstScreenState
-import dev.bilby.ui.components.MetaSeparator
+import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.RefreshBox
-import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.errorTextRes
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -55,196 +43,122 @@ import kotlinx.coroutines.launch
 data class FavFoldersUiState(
     val folders: List<FavFolderDetail> = emptyList(),
     val loading: Boolean = true,
+    val appending: Boolean = false,
     val refreshing: Boolean = false,
-    val error: String? = null,
-    /** 非空时新建/编辑对话框开着,两者是同一个对话框,见 [FavFolderEditorState.mediaId]。 */
-    val editor: FavFolderEditorState? = null,
-    val deletion: FavFolderDeletion? = null,
+    val hasMore: Boolean = true,
+    /** 存资源 id,见 [dev.bilby.ui.errorTextRes]。 */
+    @StringRes val error: Int? = null,
 )
 
 /**
- * @param mediaId null 表示新建。新建与编辑在接口上是同一个形状(只差 endpoint 和这个字段),
- *   在界面上也就没有理由长成两个对话框。
- * @param isPublic **新建时是 null,不是 true**:公开性是接口必传字段,但替用户默认成公开是
- *   替他做了一个他自己该做的决定。没选之前保存按钮不可用。
- * @param isDefaultFolder 默认收藏夹的名称和简介都改不了,只有公开性能改。
- * @param loading 编辑时先取一次 folder/info(理由见 `FavRepository.folderInfo`),这期间字段还没到。
+ * 收藏夹列表。按页取 created/list(带封面,list-all 不带,见 notes/fav.md §1)。
+ *
+ * 新建、编辑、删除交给 [manager],内容页用的是同一个类。
  */
-data class FavFolderEditorState(
-    val mediaId: Long? = null,
-    val title: String = "",
-    val intro: String = "",
-    val isPublic: Boolean? = null,
-    val isDefaultFolder: Boolean = false,
-    val loading: Boolean = false,
-    val saving: Boolean = false,
-    val error: String? = null,
-) {
-    val canSave: Boolean get() = title.isNotBlank() && isPublic != null && !loading && !saving
-}
-
-data class FavFolderDeletion(
-    val folder: FavFolderDetail,
-    val deleting: Boolean = false,
-    val error: String? = null,
-)
-
 class FavFoldersViewModel(private val repository: FavRepository) : ViewModel() {
 
     private val _state = MutableStateFlow(FavFoldersUiState())
     val state: StateFlow<FavFoldersUiState> = _state.asStateFlow()
 
-    init {
-        load(refreshing = false)
-    }
+    val manager = FavFolderManager(
+        repository = repository,
+        scope = viewModelScope,
+        // 这里重拉一次不违反"乐观更新不重新拉取":那条说的是点赞/投币/收藏的计数,
+        // 本地算得出来才不该再问一遍。新建拿不到新收藏夹的 id,标题也可能被服务端
+        // 规整过,列表只能重来。
+        onSaved = { reload(indicator = true) },
+        onDeleted = { deleted -> _state.update { it.copy(folders = it.folders.filterNot { f -> f.id == deleted.id }) } },
+    )
 
-    fun refresh() = load(refreshing = true)
-
-    fun retry() = load(refreshing = false)
-
-    private fun load(refreshing: Boolean) {
-        _state.update { it.copy(loading = !refreshing, refreshing = refreshing, error = null) }
-        viewModelScope.launch {
-            when (val result = repository.folderDetails()) {
-                is BiliResult.Ok -> _state.update {
-                    it.copy(loading = false, refreshing = false, folders = result.value)
-                }
-
-                else -> {
-                    val reason = result.reason()
-                    BiliLog.w("取收藏夹列表失败: $reason")
-                    _state.update { it.copy(loading = false, refreshing = false, error = reason) }
-                }
-            }
-        }
-    }
-
-    fun startCreate() {
-        _state.update { it.copy(editor = FavFolderEditorState()) }
-    }
-
-    fun startEdit(folder: FavFolderDetail) {
-        _state.update {
-            it.copy(
-                editor = FavFolderEditorState(
-                    mediaId = folder.id,
-                    title = folder.title,
-                    isPublic = folder.isPublic,
-                    isDefaultFolder = folder.isDefault,
-                    loading = true,
-                ),
-            )
-        }
-        viewModelScope.launch {
-            when (val result = repository.folderInfo(folder.id)) {
-                is BiliResult.Ok -> updateEditor(folder.id) {
-                    it.copy(
-                        title = result.value.title,
-                        intro = result.value.intro,
-                        isPublic = result.value.isPublic,
-                        isDefaultFolder = result.value.isDefault,
-                        loading = false,
-                    )
-                }
-
-                else -> {
-                    val reason = result.reason()
-                    BiliLog.w("取收藏夹信息失败(media_id=${folder.id}): $reason")
-                    updateEditor(folder.id) { it.copy(loading = false, error = reason) }
-                }
-            }
-        }
-    }
-
-    fun changeTitle(value: String) = updateEditor { it.copy(title = value.take(TITLE_MAX_LENGTH)) }
-
-    fun changeIntro(value: String) = updateEditor { it.copy(intro = value.take(INTRO_MAX_LENGTH)) }
-
-    fun changePrivacy(isPublic: Boolean) = updateEditor { it.copy(isPublic = isPublic) }
-
-    fun dismissEditor() {
-        _state.update { it.copy(editor = null) }
-    }
-
-    fun save() {
-        val editor = _state.value.editor ?: return
-        val isPublic = editor.isPublic ?: return
-        if (!editor.canSave) return
-        updateEditor { it.copy(saving = true, error = null) }
-        viewModelScope.launch {
-            val title = editor.title.trim()
-            val result = if (editor.mediaId == null) {
-                repository.createFolder(title, editor.intro, isPublic)
-            } else {
-                repository.editFolder(editor.mediaId, title, editor.intro, isPublic)
-            }
-            if (result is BiliResult.Ok) {
-                _state.update { it.copy(editor = null) }
-                // 这里重拉一次不违反"乐观更新不重新拉取":那条说的是点赞/投币/收藏的计数,
-                // 本地算得出来才不该再问一遍。新建拿不到新收藏夹的 id,标题也可能被服务端
-                // 规整过,列表只能重来。
-                load(refreshing = true)
-            } else {
-                val reason = result.reason()
-                BiliLog.w("保存收藏夹失败(media_id=${editor.mediaId}): $reason")
-                updateEditor { it.copy(saving = false, error = reason) }
-            }
-        }
-    }
-
-    fun startDelete(folder: FavFolderDetail) {
-        _state.update { it.copy(deletion = FavFolderDeletion(folder)) }
-    }
-
-    fun dismissDelete() {
-        _state.update { it.copy(deletion = null) }
-    }
-
-    /** 失败时对话框留着并把原因写在里面:关掉再弹一句提示,用户得重新走一遍才能再试。 */
-    fun confirmDelete() {
-        val deletion = _state.value.deletion ?: return
-        if (deletion.deleting) return
-        _state.update { it.copy(deletion = deletion.copy(deleting = true, error = null)) }
-        viewModelScope.launch {
-            val result = repository.deleteFolders(listOf(deletion.folder.id))
-            if (result is BiliResult.Ok) {
-                _state.update {
-                    it.copy(deletion = null, folders = it.folders - deletion.folder)
-                }
-            } else {
-                val reason = result.reason()
-                BiliLog.w("删除收藏夹失败(media_id=${deletion.folder.id}): $reason")
-                _state.update {
-                    it.copy(deletion = it.deletion?.copy(deleting = false, error = reason))
-                }
-            }
-        }
-    }
-
-    private fun updateEditor(transform: (FavFolderEditorState) -> FavFolderEditorState) {
-        _state.update { it.copy(editor = it.editor?.let(transform)) }
-    }
+    private var page = 0
 
     /**
-     * folder/info 回来时对话框可能已经关掉、或者用户已经换去编辑另一个收藏夹,
-     * 那两种情况下这份结果都是过期的,不能往当前对话框上盖。
+     * reload 与翻页共用 [page] 这一个游标:reload 把它归零,一次还在飞的旧翻页落地必须当作
+     * 过期丢弃,理由同 `FavFolderViewModel`。
      */
-    private fun updateEditor(mediaId: Long, transform: (FavFolderEditorState) -> FavFolderEditorState) {
-        _state.update { state ->
-            val editor = state.editor
-            if (editor == null || editor.mediaId != mediaId) state else state.copy(editor = transform(editor))
-        }
+    private var generation = 0
+    private var job: Job? = null
+
+    /** 一次请求在飞。不拿 loading/appending 判:静默重取时两者都是 false,列表却还在要第一页。 */
+    private var fetching = false
+
+    private var entered = false
+
+    init {
+        reload(indicator = false)
     }
 
-    private companion object {
-        /** 官方端的输入上限,照抄 PiliPlus 的 fav_create 页。超出部分直接打不进去。 */
-        const val TITLE_MAX_LENGTH = 20
-        const val INTRO_MAX_LENGTH = 200
+    fun loadMore() {
+        if (fetching || !_state.value.hasMore) return
+        fetch(page + 1)
+    }
+
+    fun refresh() = reload(indicator = true)
+
+    fun retry() = if (_state.value.folders.isEmpty()) reload(indicator = false) else loadMore()
+
+    /**
+     * 每次回到这一页整份重取,理由同「我的」(`ProfileViewModel.refresh`):这一页显示的条数、
+     * 名字、封面在内容页、播放页的收藏面板和官方端都会变,逐一通知补不完。首次进入时
+     * init 已经取过,跳过这一次。重取期间旧列表原样留着,不转圈。
+     */
+    fun onEnter() {
+        if (entered) reload(indicator = false) else entered = true
+    }
+
+    private fun reload(indicator: Boolean) {
+        generation++
+        job?.cancel()
+        fetching = false
+        page = 0
+        _state.update {
+            it.copy(
+                refreshing = indicator,
+                loading = it.folders.isEmpty(),
+                appending = false,
+                hasMore = true,
+                error = null,
+            )
+        }
+        fetch(1)
+    }
+
+    private fun fetch(next: Int) {
+        val gen = generation
+        fetching = true
+        if (next > 1) _state.update { it.copy(appending = true) }
+        job = viewModelScope.launch {
+            val result = repository.folderPage(next)
+            if (gen != generation) return@launch
+            fetching = false
+            when (result) {
+                is BiliResult.Ok -> {
+                    page = next
+                    _state.update {
+                        val merged = if (next == 1) result.value.items else it.folders + result.value.items
+                        it.copy(
+                            // 翻页期间删掉一个夹子,后面整页前移一格,下一页的第一项就是上一页见过的。
+                            folders = merged.distinctBy { folder -> folder.id },
+                            hasMore = result.value.hasMore,
+                            loading = false,
+                            appending = false,
+                            refreshing = false,
+                            error = null,
+                        )
+                    }
+                }
+
+                else -> {
+                    val reason = result.errorTextRes("取收藏夹列表第 $next 页")
+                    _state.update { it.copy(loading = false, appending = false, refreshing = false, error = reason) }
+                }
+            }
+        }
     }
 }
 
 /**
- * 收藏夹列表。管理动作都在这一页:新建在右下角,改名/简介/公开性和删除在每一行的菜单里。
+ * 收藏夹列表。管理动作都在这一页:新建在顶栏,编辑和删除在每一行的菜单里。
  *
  * 点一行进的是这个收藏夹的内容(`FavFolderScreen`),取消收藏在那一页做 —— 那里才看得见
  * 是哪一条。
@@ -252,10 +166,12 @@ class FavFoldersViewModel(private val repository: FavRepository) : ViewModel() {
 @Composable
 fun FavFoldersScreen(
     state: FavFoldersUiState,
+    editor: FavFolderEditorState?,
+    deletion: FavFolderDeletion?,
     onOpenFolder: (FavFolderDetail) -> Unit,
-    onCreate: () -> Unit,
     onEdit: (FavFolderDetail) -> Unit,
     onDelete: (FavFolderDetail) -> Unit,
+    onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onRefresh: () -> Unit,
     editorActions: FavFolderEditorActions,
@@ -263,114 +179,54 @@ fun FavFoldersScreen(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
-    val direction = LocalLayoutDirection.current
-    // 列表底部要让开右下角那颗 FAB,否则最后一行被压住,而列表滚到底就再也让不开了。
-    val listPadding = PaddingValues(
-        start = contentPadding.calculateStartPadding(direction),
-        end = contentPadding.calculateEndPadding(direction),
-        top = contentPadding.calculateTopPadding(),
-        bottom = contentPadding.calculateBottomPadding() + FabClearance,
-    )
-
     Box(modifier = modifier.fillMaxSize()) {
         AdaptiveContent {
-            FirstScreenState(
-                loading = state.loading,
-                error = state.error,
-                isEmpty = state.folders.isEmpty(),
-                onRetry = onRetry,
+            RefreshBox(
+                refreshing = state.refreshing,
+                onRefresh = onRefresh,
+                modifier = Modifier.fillMaxSize(),
             ) {
-                RefreshBox(
-                    refreshing = state.refreshing,
-                    onRefresh = onRefresh,
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = listPadding) {
-                        if (state.folders.isEmpty()) {
-                            item(key = "empty") {
-                                EmptyState(
-                                    stringResource(R.string.fav_folders_empty),
-                                    modifier = Modifier.fillParentMaxSize(),
-                                )
-                            }
-                        }
-                        // 新建和删除都在这一页做,删掉一行时下面几行不该硬跳一格。
-                        items(state.folders, key = { it.id }) { folder ->
-                            FavFolderRow(
-                                folder = folder,
-                                onClick = { onOpenFolder(folder) },
+                PagedColumn(
+                    items = state.folders,
+                    // 新建和删除都在这一页做,删掉一行时下面几行不该硬跳一格。
+                    key = { it.id },
+                    loading = state.loading,
+                    appending = state.appending,
+                    hasMore = state.hasMore,
+                    error = state.error?.let { stringResource(it) },
+                    emptyText = stringResource(R.string.fav_folders_empty),
+                    onLoadMore = onLoadMore,
+                    onRetry = onRetry,
+                    contentPadding = contentPadding,
+                ) { folder ->
+                    FavFolderRow(
+                        folder = folder,
+                        onClick = { onOpenFolder(folder) },
+                        trailing = {
+                            FavFolderMenu(
+                                folderTitle = folder.title,
+                                // 默认收藏夹删不掉,所以这里根本不给删除项 —— 让它可点再报错,等于把
+                                // 一条服务端规则做成了一次失败。
+                                deletable = !folder.isDefault,
                                 onEdit = { onEdit(folder) },
                                 onDelete = { onDelete(folder) },
-                                modifier = Modifier.animateItem(),
                             )
-                        }
-                    }
+                        },
+                    )
                 }
             }
         }
-
-        FloatingActionButton(
-            onClick = onCreate,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(Spacing.Comfortable)
-                .padding(bottom = contentPadding.calculateBottomPadding()),
-        ) {
-            Icon(Icons.Outlined.Add, contentDescription = stringResource(R.string.fav_folder_create))
-        }
     }
 
-    state.editor?.let { FavFolderEditorDialog(it, editorActions) }
-    state.deletion?.let { FavFolderDeleteDialog(it, deletionActions) }
+    editor?.let { FavFolderEditorDialog(it, editorActions) }
+    deletion?.let { FavFolderDeleteDialog(it, deletionActions) }
 }
 
-/** FAB 的规格是 56dp,加上它上下两侧的外边距就是列表要让开的高度。 */
-private val FabClearance = 56.dp + Spacing.Comfortable * 2
-
-@Composable
-private fun FavFolderRow(
-    folder: FavFolderDetail,
-    onClick: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val visibility = stringResource(
-        if (folder.isPublic) R.string.fav_folder_public else R.string.fav_folder_private,
-    )
-    ListItem(
-        headlineContent = {
-            Text(
-                folder.title,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        },
-        supportingContent = {
-            Text(
-                text = stringResource(R.string.fav_folder_count, folder.count) + MetaSeparator + visibility,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        },
-        leadingContent = {
-            Icon(Icons.Outlined.Star, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        },
-        trailingContent = {
-            FavFolderMenu(
-                folderTitle = folder.title,
-                // 默认收藏夹删不掉,所以这里根本不给删除项 —— 让它可点再报错,等于把
-                // 一条服务端规则做成了一次失败。
-                deletable = !folder.isDefault,
-                onEdit = onEdit,
-                onDelete = onDelete,
-            )
-        },
-        modifier = modifier.clickable(role = Role.Button, onClick = onClick),
-    )
-}
-
+/**
+ * 一行的管理菜单。M3E vertical menu 的外形与带图标的项,同首页溢出菜单;项的形状按首末取
+ * (理由见 `FeedScreen` 的 `FeedEntryItem`),默认收藏夹只剩一项时取 standalone。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun FavFolderMenu(
     folderTitle: String,
@@ -387,21 +243,30 @@ private fun FavFolderMenu(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            shape = MenuDefaults.shape,
+            containerColor = MenuDefaults.containerColor,
+        ) {
             DropdownMenuItem(
-                text = { Text(stringResource(R.string.fav_folder_edit)) },
+                text = { Text(stringResource(R.string.fav_folder_edit_info)) },
                 onClick = {
                     expanded = false
                     onEdit()
                 },
+                leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                shape = if (deletable) MenuDefaults.leadingItemShape else MenuDefaults.standaloneItemShape,
             )
             if (deletable) {
                 DropdownMenuItem(
-                    text = { Text(stringResource(R.string.action_delete)) },
+                    text = { Text(stringResource(R.string.fav_folder_delete_title)) },
                     onClick = {
                         expanded = false
                         onDelete()
                     },
+                    leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null) },
+                    shape = MenuDefaults.trailingItemShape,
                 )
             }
         }

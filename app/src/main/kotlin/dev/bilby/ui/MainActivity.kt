@@ -72,6 +72,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.content.Context
+import dev.bilby.data.AppearancePrefs
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -97,10 +99,10 @@ import dev.bilby.ui.dynamic.DynamicDetailViewModel
 import dev.bilby.ui.dynamic.OtherDynamicsScreen
 import dev.bilby.ui.dynamic.OtherDynamicsViewModel
 import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.BvidCodec
+import dev.bilby.ui.comment.CommentThreadRoute
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.comment.CommentViewModel
-import androidx.compose.material.icons.outlined.DeleteSweep
-import dev.bilby.data.FavFolder
 import dev.bilby.data.FavFolderDetail
 import dev.bilby.data.PlayerPrefs
 import dev.bilby.data.FavRepository
@@ -110,8 +112,9 @@ import dev.bilby.ui.space.queueContext
 import dev.bilby.data.QueueSource
 import dev.bilby.offline.OfflineItem
 import dev.bilby.offline.OfflineStatus
-import dev.bilby.ui.fav.FavFolderDeletionActions
-import dev.bilby.ui.fav.FavFolderEditorActions
+import androidx.compose.material.icons.outlined.Add
+import dev.bilby.data.FavVideo
+import dev.bilby.ui.fav.FavFolderTopBar
 import dev.bilby.ui.fav.FavFolderScreen
 import dev.bilby.ui.fav.FavFolderViewModel
 import dev.bilby.ui.fav.FavFoldersScreen
@@ -121,6 +124,9 @@ import dev.bilby.ui.feed.FeedViewModel
 import dev.bilby.ui.follow.BlacklistScreen
 import dev.bilby.ui.follow.BlacklistViewModel
 import dev.bilby.ui.follow.FollowingsScreen
+import dev.bilby.ui.follow.FollowOrderOptions
+import dev.bilby.ui.follow.canSort
+import dev.bilby.ui.components.SortMenu
 import dev.bilby.ui.follow.FollowingsViewModel
 import dev.bilby.ui.history.HistoryScreen
 import dev.bilby.ui.history.HistoryViewModel
@@ -128,7 +134,10 @@ import dev.bilby.ui.login.TvLoginScreen
 import dev.bilby.ui.login.TvLoginViewModel
 import dev.bilby.ui.offline.OfflineScreen
 import dev.bilby.ui.offline.OfflineViewModel
+import dev.bilby.data.CoinLogRepository
+import dev.bilby.ui.profile.CoinLogRoute
 import dev.bilby.ui.profile.ProfileScreen
+import dev.bilby.ui.message.MessagePushesRoute
 import dev.bilby.ui.message.MessageScreen
 import dev.bilby.ui.message.MessageViewModel
 import dev.bilby.ui.message.WhisperScreen
@@ -136,12 +145,15 @@ import dev.bilby.ui.message.WhisperViewModel
 import dev.bilby.ui.profile.ProfileViewModel
 import dev.bilby.ui.search.SearchChatScreen
 import dev.bilby.ui.search.SearchChatViewModel
+import dev.bilby.ui.search.SearchResultActions
 import dev.bilby.ui.search.SearchResultScreen
 import dev.bilby.ui.search.SearchResultViewModel
 import dev.bilby.ui.settings.AboutSettingsPage
 import dev.bilby.ui.settings.AgentSettingsPage
 import dev.bilby.ui.settings.DanmakuSettingsPage
 import dev.bilby.ui.settings.OfflineSettingsPage
+import dev.bilby.ui.settings.AppearanceSettingsPage
+import android.app.Activity
 import dev.bilby.ui.settings.PlaybackSettingsPage
 import dev.bilby.data.model.ArticleRef
 import dev.bilby.data.model.FeedEntry
@@ -164,6 +176,17 @@ import dev.bilby.ui.theme.rememberReducedMotion
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.update.StartupUpdateDialog
 import dev.bilby.ui.update.StartupUpdateViewModel
+import dev.bilby.ui.toview.ToViewClear
+import dev.bilby.ui.toview.ToViewClearDialog
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material.icons.outlined.LinkOff
+import androidx.compose.material.icons.outlined.DoneAll
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import dev.bilby.ui.toview.ToViewScreen
 import dev.bilby.ui.toview.ToViewViewModel
 import androidx.core.content.ContextCompat
@@ -201,13 +224,26 @@ class MainActivity : ComponentActivity() {
      */
     private val incomingLink = MutableStateFlow<String?>(null)
 
+    /** Android 12 及以下没有系统的应用语言,由这里套上用户选的那一种,见 [AppLanguage]。 */
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(AppLanguage.wrap(newBase))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val container = (application as BilbyApplication).container
+        // 构造下载器:它在初始化时把上次进程被杀打断的条目接着下(见 OfflineDownloader 的 init)。
+        // 放在这里而不是 Application.onCreate:补报心跳的 Worker 会在后台拉起进程,那时接着下
+        // 就要从后台起前台服务,Android 12 起不允许。Activity 在前台,这一刻起得来。
+        container.offlineDownloader
         incomingLink.value = linkFrom(intent)
         setContent {
-            BilbyTheme {
+            // 读到之前用默认值(跟随系统、按壁纸取色):DataStore 头一次读在一两帧之内,选了别的
+            // 配色的人会看到一帧默认色。不为这一帧在主线程上同步读盘。
+            val appearance by container.settings.appearancePrefs
+                .collectAsStateWithLifecycle(initialValue = AppearancePrefs())
+            BilbyTheme(appearance) {
                 BilbyWindowChrome()
                 // 导航层的提示浮在整棵树上面。放在这里而不是某个页面的 Scaffold 里:说这句话的
                 // 是压栈动作,而压栈能从任何一页发起,各页面的 Scaffold 都会跟着页面一起换掉。
@@ -479,12 +515,14 @@ private fun BilbyApp(
                     RootTabs(
                         container = container,
                         onVideoClick = { push(Video(it)) },
-                        onToViewItemClick = { push(Video(it, context = QueueContext.ToView)) },
+                        onVideoInContext = { bvid, context -> push(Video(bvid, context = context)) },
                         onUserClick = { push(Space(it)) },
                         onLiveClick = { push(LiveRoom(it)) },
                         onSettingsClick = { push(Settings) },
                         onOpenFollowings = { push(Followings) },
+                        onOpenCoinLog = { push(CoinLog) },
                         onOpenOtherDynamics = { push(OtherDynamics) },
+                        onOpenPushes = { push(MessagePushes) },
                         onOpenArticle = { ref -> push(ArticlePage(ref.id, ref.isRead)) },
                         onOpenHistory = { push(History) },
                         onOpenToView = { push(ToViewList) },
@@ -553,6 +591,7 @@ private fun BilbyApp(
                         keyword = key.keyword,
                         onVideoClick = { push(Video(it)) },
                         onUserClick = { push(Space(it)) },
+                        onArticleClick = { cv -> push(ArticlePage(cv.toString(), isRead = true)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -562,9 +601,63 @@ private fun BilbyApp(
                     MessagesRoute(
                         container = container,
                         onOpenWhisper = { push(Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem)) },
+                        onOpenSpace = { push(Space(it)) },
                         // 通知里的 uri 是站内链接,认得出来就在应用内落地,认不出来
                         // (活动页、会员购这类)交给浏览器 —— 同专栏正文里的链接一条路。
                         onOpenUri = openLink,
+                        // 回复、@、被赞的评论带着评论定位,落到评论详情页;认不出定位的(被赞的是
+                        // 视频或动态)照网页地址走。native_uri 是 bilibili:// scheme,不交给浏览器。
+                        onOpenNotice = { notice ->
+                            val thread = BilbyLink.commentThreadOf(notice.nativeUri, notice.subjectId, notice.businessId)
+                            when {
+                                thread != null -> push(thread)
+                                notice.uri.isNotBlank() -> openLink(notice.uri)
+                            }
+                        },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
+            }
+            entry<CommentThread> { key ->
+                // 评论所在的内容:视频稿件 1、专栏 12、动态 17。其余类型(图文动态 11 的 oid 是
+                // 相簿 id,不是动态 id)认不出去处,顶栏不放入口。
+                val subject: NavKey? = when (key.type) {
+                    1 -> Video(BvidCodec.fromAid(key.oid))
+                    12 -> ArticlePage(key.oid.toString(), isRead = true)
+                    17 -> DynamicDetail(key.oid.toString())
+                    else -> null
+                }
+                CutoutSafe {
+                    CommentThreadRoute(
+                        repository = container.commentRepository,
+                        settings = container.settings,
+                        oid = key.oid,
+                        type = key.type,
+                        rootRpid = key.rootRpid,
+                        targetRpid = key.targetRpid,
+                        onOpenSubject = subject?.let { { push(it) } },
+                        onUserClick = { push(Space(it)) },
+                        onOpenLink = openLink,
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
+            }
+            entry<CoinLog> {
+                CutoutSafe {
+                    // 仓库无状态、只有一个接口,就地造一份,不进 AppContainer。
+                    CoinLogRoute(
+                        repository = remember { CoinLogRepository(container.biliClient) },
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
+            }
+            entry<MessagePushes> {
+                CutoutSafe {
+                    MessagePushesRoute(
+                        repository = container.messageRepository,
+                        onOpenWhisper = {
+                            push(Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem, upPushes = true))
+                        },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -576,7 +669,9 @@ private fun BilbyApp(
                         key = key,
                         onOpenSpace = { push(Space(key.talkerId)) },
                         onOpenVideo = { push(Video(it)) },
-                        onOpenArticle = { push(ArticlePage(it, isRead = false)) },
+                        // 私信里的专栏带的是 cv 号(推送的 rid、分享的 id),走旧版那套接口。
+                        onOpenArticle = { push(ArticlePage(it, isRead = true)) },
+                        onOpenLink = openLink,
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -592,6 +687,10 @@ private fun BilbyApp(
                             container.partRequest.request(item.bvid, item.cid)
                             push(Video(item.bvid, context = QueueContext.Offline))
                         },
+                        onListenAll = { item ->
+                            container.partRequest.request(item.bvid, item.cid)
+                            push(Video(item.bvid, listening = true, context = QueueContext.Offline))
+                        },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -600,7 +699,8 @@ private fun BilbyApp(
                 CutoutSafe {
                     ToViewListRoute(
                         container = container,
-                        onVideoClick = { push(Video(it, context = QueueContext.ToView)) },
+                        onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
+                        onListen = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -612,6 +712,7 @@ private fun BilbyApp(
                         mediaId = key.mediaId,
                         title = key.title,
                         onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
+                        onListen = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -765,18 +866,23 @@ private fun CutoutSafe(content: @Composable () -> Unit) {
 private fun RootTabs(
     container: AppContainer,
     onVideoClick: (String) -> Unit,
-    /** 「我的」页稍后再看预览里的一条:队列是稍后再看,不是这条视频的归属。 */
-    onToViewItemClick: (String) -> Unit,
+    /**
+     * 「我的」页稍后再看、缓存预览里的一条:队列是那一节对应的列表,不是这条视频的归属。
+     */
+    onVideoInContext: (String, QueueContext) -> Unit,
     onUserClick: (Long) -> Unit,
     onLiveClick: (Long) -> Unit,
     onSettingsClick: () -> Unit,
     onOpenFollowings: () -> Unit,
+    onOpenCoinLog: () -> Unit,
     onOpenOtherDynamics: () -> Unit,
+    /** 订阅页标题行的「推送」:UP 主推送来的那些私信会话,见 MessagePushesScreen。 */
+    onOpenPushes: () -> Unit,
     onOpenArticle: (ArticleRef) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
-    onOpenFavFolder: (FavFolder) -> Unit,
+    onOpenFavFolder: (FavFolderDetail) -> Unit,
     onOpenFavFolders: () -> Unit,
     onOpenMessages: () -> Unit,
 ) {
@@ -841,12 +947,14 @@ private fun RootTabs(
                 profileScrollToTop = profileScrollToTop,
                 container = container,
                 onVideoClick = onVideoClick,
-                onToViewItemClick = onToViewItemClick,
+                onVideoInContext = onVideoInContext,
                 onUserClick = onUserClick,
                 onLiveClick = onLiveClick,
                 onSettingsClick = onSettingsClick,
                 onOpenFollowings = onOpenFollowings,
+                onOpenCoinLog = onOpenCoinLog,
                 onOpenOtherDynamics = onOpenOtherDynamics,
+        onOpenPushes = onOpenPushes,
                 onOpenArticle = onOpenArticle,
                 onOpenHistory = onOpenHistory,
                 onOpenToView = onOpenToView,
@@ -884,12 +992,14 @@ private fun RootTabs(
                     profileScrollToTop = profileScrollToTop,
                     container = container,
                     onVideoClick = onVideoClick,
-                    onToViewItemClick = onToViewItemClick,
+                    onVideoInContext = onVideoInContext,
                     onUserClick = onUserClick,
                     onLiveClick = onLiveClick,
                     onSettingsClick = onSettingsClick,
                     onOpenFollowings = onOpenFollowings,
+                    onOpenCoinLog = onOpenCoinLog,
                     onOpenOtherDynamics = onOpenOtherDynamics,
+        onOpenPushes = onOpenPushes,
                     onOpenArticle = onOpenArticle,
                     onOpenHistory = onOpenHistory,
                     onOpenToView = onOpenToView,
@@ -930,17 +1040,20 @@ private fun RootTabsContent(
     profileScrollToTop: Int,
     container: AppContainer,
     onVideoClick: (String) -> Unit,
-    onToViewItemClick: (String) -> Unit,
+    onVideoInContext: (String, QueueContext) -> Unit,
     onUserClick: (Long) -> Unit,
     onLiveClick: (Long) -> Unit,
     onSettingsClick: () -> Unit,
     onOpenFollowings: () -> Unit,
+    onOpenCoinLog: () -> Unit,
     onOpenOtherDynamics: () -> Unit,
+    /** 订阅页标题行的「推送」:UP 主推送来的那些私信会话,见 MessagePushesScreen。 */
+    onOpenPushes: () -> Unit,
     onOpenArticle: (ArticleRef) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
-    onOpenFavFolder: (FavFolder) -> Unit,
+    onOpenFavFolder: (FavFolderDetail) -> Unit,
     onOpenFavFolders: () -> Unit,
     onOpenMessages: () -> Unit,
 ) {
@@ -983,16 +1096,17 @@ private fun RootTabsContent(
                     onLiveClick = onLiveClick,
                     onOpenFollowings = onOpenFollowings,
                     onOpenOtherDynamics = onOpenOtherDynamics,
+        onOpenPushes = onOpenPushes,
                     onOpenArticle = onOpenArticle,
                 )
 
-                RootTab.Search -> SearchPane(container, onVideoClick, onUserClick)
+                RootTab.Search -> SearchPane(container, onVideoClick, onUserClick, onOpenArticle)
 
                 RootTab.Profile -> ProfilePane(
                     container = container,
                     scrollToTop = profileScrollToTop,
                     onVideoClick = onVideoClick,
-                    onToViewItemClick = onToViewItemClick,
+                    onVideoInContext = onVideoInContext,
                     onUserClick = onUserClick,
                     onOpenHistory = onOpenHistory,
                     onOpenToView = onOpenToView,
@@ -1000,6 +1114,8 @@ private fun RootTabsContent(
                     onOpenFavFolder = onOpenFavFolder,
                     onOpenFavFolders = onOpenFavFolders,
                     onOpenMessages = onOpenMessages,
+                    onOpenFollowings = onOpenFollowings,
+                    onOpenCoinLog = onOpenCoinLog,
                     onSettingsClick = onSettingsClick,
                 )
             }
@@ -1032,6 +1148,8 @@ private fun FeedPane(
     onLiveClick: (Long) -> Unit,
     onOpenFollowings: () -> Unit,
     onOpenOtherDynamics: () -> Unit,
+    /** 订阅页标题行的「推送」:UP 主推送来的那些私信会话,见 MessagePushesScreen。 */
+    onOpenPushes: () -> Unit,
     onOpenArticle: (ArticleRef) -> Unit,
 ) {
     val vm: FeedViewModel = viewModel(
@@ -1066,6 +1184,7 @@ private fun FeedPane(
         onExcludeUp = vm::excludeUp,
         onOpenFollowings = onOpenFollowings,
         onOpenOtherDynamics = onOpenOtherDynamics,
+        onOpenPushes = onOpenPushes,
         onScrollPositionChanged = vm::onVisibleTopChanged,
         onLocated = vm::onLocated,
         onEnter = vm::onEnterScreen,
@@ -1081,6 +1200,7 @@ private fun SearchPane(
     container: AppContainer,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
+    onOpenArticle: (ArticleRef) -> Unit,
 ) {
     val vm: SearchChatViewModel = viewModel(
         key = "root-search",
@@ -1093,18 +1213,27 @@ private fun SearchPane(
     SearchChatScreen(
         state = state,
         searchHistory = history,
-        onHistoryClick = vm::fillFromHistory,
+        onHistoryClick = vm::searchFromHistory,
         onHistoryRemove = vm::removeSearchHistory,
+        onHistoryClear = vm::clearSearchHistory,
         onInputChange = vm::onInputChange,
         onModeChange = vm::onModeChange,
-        onOrderChange = vm::onOrderChanged,
         onSend = vm::send,
         onNewSession = vm::newSession,
         onVideoClick = onVideoClick,
-        onUserClick = onUserClick,
-        onLoadMore = vm::loadMore,
         onRetry = vm::retry,
-        onRefresh = vm::refresh,
+        resultActions = SearchResultActions(
+            onTabSelected = vm::onTabSelected,
+            onOrderChange = vm::onOrderChanged,
+            onDurationChange = vm::onDurationChanged,
+            onArticleOrderChange = vm::onArticleOrderChanged,
+            onVideoClick = onVideoClick,
+            onUserClick = onUserClick,
+            // 搜索结果里的专栏只有 cv 号,走 read 那一套(notes/space-and-search.md 2.12)。
+            onArticleClick = { cv -> onOpenArticle(ArticleRef(cv.toString(), isRead = true)) },
+            onLoadMore = vm::loadMore,
+            onRetry = vm::refresh,
+        ),
     )
 }
 
@@ -1114,6 +1243,7 @@ private fun SearchResultRoute(
     keyword: String,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
+    onArticleClick: (Long) -> Unit,
     onBack: () -> Unit,
 ) {
     // keyword 是这个目的地的身份,同一个词压两次由 pushUnique 挡住,不需要 switchTo。
@@ -1134,11 +1264,17 @@ private fun SearchResultRoute(
     ) { insets ->
         SearchResultScreen(
             state = state,
-            onOrderChange = vm::onOrderChanged,
-            onVideoClick = onVideoClick,
-            onUserClick = onUserClick,
-            onLoadMore = vm::loadMore,
-            onRetry = vm::retry,
+            actions = SearchResultActions(
+                onTabSelected = vm::onTabSelected,
+                onOrderChange = vm::onOrderChanged,
+                onDurationChange = vm::onDurationChanged,
+                onArticleOrderChange = vm::onArticleOrderChanged,
+                onVideoClick = onVideoClick,
+                onUserClick = onUserClick,
+                onArticleClick = onArticleClick,
+                onLoadMore = vm::loadMore,
+                onRetry = vm::retry,
+            ),
             modifier = Modifier.padding(insets),
         )
     }
@@ -1149,14 +1285,16 @@ private fun ProfilePane(
     container: AppContainer,
     scrollToTop: Int,
     onVideoClick: (String) -> Unit,
-    onToViewItemClick: (String) -> Unit,
+    onVideoInContext: (String, QueueContext) -> Unit,
     onUserClick: (Long) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
-    onOpenFavFolder: (FavFolder) -> Unit,
+    onOpenFavFolder: (FavFolderDetail) -> Unit,
     onOpenFavFolders: () -> Unit,
     onOpenMessages: () -> Unit,
+    onOpenFollowings: () -> Unit,
+    onOpenCoinLog: () -> Unit,
     onSettingsClick: () -> Unit,
 ) {
     val vm: ProfileViewModel = viewModel(
@@ -1164,12 +1302,12 @@ private fun ProfilePane(
         factory = viewModelFactory {
             initializer {
                 ProfileViewModel(
-                    container.settings,
                     container.accountRepository,
                     container.historyRepository,
                     container.toViewRepository,
                     container.favRepository,
                     container.offlineDownloader,
+                    container.offlineStore,
                 )
             }
         },
@@ -1189,13 +1327,21 @@ private fun ProfilePane(
         state = state,
         scrollToTop = scrollToTop,
         onVideoClick = onVideoClick,
-        onToViewItemClick = onToViewItemClick,
+        // 预览按列表页的默认排序(最近添加在前)取,队列跟着同一个方向。
+        onToViewItemClick = { onVideoInContext(it, QueueContext.ToView()) },
+        // 缓存一行是一个分 P,指名走 PartRequest,理由同缓存页(见 Offline 那个 entry)。
+        onOfflineItemClick = { item ->
+            container.partRequest.request(item.bvid, item.cid)
+            onVideoInContext(item.bvid, QueueContext.Offline)
+        },
         onOpenHistory = onOpenHistory,
         onOpenToView = onOpenToView,
         onOpenOffline = onOpenOffline,
         onOpenFavFolder = onOpenFavFolder,
         onOpenFavFolders = onOpenFavFolders,
         onOpenMessages = onOpenMessages,
+        onOpenFollowings = onOpenFollowings,
+        onOpenCoinLog = onOpenCoinLog,
         onSettingsClick = onSettingsClick,
         onOpenSelf = onUserClick,
         onRetryAccount = vm::retryAccount,
@@ -1242,6 +1388,19 @@ private fun SettingsPageRoute(
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     when (section) {
+        SettingsSection.Appearance -> AppearanceSettingsPage(
+            state = state,
+            // 每次进这一页现读:13+ 上它可能在系统设置里被改过,不在我们的状态里。
+            language = remember(context) { AppLanguage.current(context) },
+            onModeChange = vm::setThemeMode,
+            onPureBlackChange = vm::setPureBlack,
+            onPaletteChange = vm::setThemePalette,
+            onLanguageChange = { language ->
+                (context as? Activity)?.let { AppLanguage.apply(it, language) }
+            },
+            onBack = onBack,
+        )
+
         SettingsSection.Playback -> PlaybackSettingsPage(
             state = state,
             onWifiQualityChange = { vm.setDefaultQuality(it, metered = false) },
@@ -1249,6 +1408,9 @@ private fun SettingsPageRoute(
             onCodecChange = vm::setCodec,
             onFastForwardSpeedChange = vm::setFastForwardSpeed,
             onAutoNextChange = vm::setAutoNext,
+            onWifiAudioChange = { vm.setDefaultAudio(it, metered = false) },
+            onMeteredAudioChange = { vm.setDefaultAudio(it, metered = true) },
+            onPickUpdatesDefaultChange = vm::setPlayerPickUpdatesDefault,
             onBack = onBack,
         )
 
@@ -1258,6 +1420,7 @@ private fun SettingsPageRoute(
             onScrollShowAreaChange = vm::setDanmakuScrollShowArea,
             onDensityChange = vm::setDanmakuDensity,
             onFrameRateChange = vm::setDanmakuFrameRate,
+            onInPipChange = vm::setDanmakuInPip,
             onBack = onBack,
         )
 
@@ -1544,7 +1707,9 @@ private fun HistoryConfirmDialog(message: String, onConfirm: () -> Unit, onDismi
 private fun MessagesRoute(
     container: AppContainer,
     onOpenWhisper: (dev.bilby.data.WhisperSession) -> Unit,
+    onOpenSpace: (Long) -> Unit,
     onOpenUri: (String) -> Unit,
+    onOpenNotice: (dev.bilby.data.Notice) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: MessageViewModel = viewModel(
@@ -1557,7 +1722,9 @@ private fun MessagesRoute(
         onLoadMore = vm::loadMore,
         onRefresh = vm::refresh,
         onOpenWhisper = onOpenWhisper,
+        onOpenSpace = onOpenSpace,
         onOpenUri = onOpenUri,
+        onOpenNotice = onOpenNotice,
         onBack = onBack,
     )
 }
@@ -1570,6 +1737,7 @@ private fun WhisperRoute(
     onOpenSpace: () -> Unit,
     onOpenVideo: (String) -> Unit,
     onOpenArticle: (String) -> Unit,
+    onOpenLink: (String) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: WhisperViewModel = viewModel(
@@ -1591,10 +1759,13 @@ private fun WhisperRoute(
         state = state,
         onSend = vm::send,
         onRetry = vm::load,
+        onLoadOlder = vm::loadOlder,
         onOpenSpace = onOpenSpace,
         onOpenVideo = onOpenVideo,
         onOpenArticle = onOpenArticle,
+        onOpenLink = onOpenLink,
         onBack = onBack,
+        showsComposer = !key.upPushes,
     )
 }
 
@@ -1607,6 +1778,7 @@ private fun WhisperRoute(
 private fun OfflineRoute(
     container: AppContainer,
     onPlay: (OfflineItem) -> Unit,
+    onListenAll: (OfflineItem) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: OfflineViewModel = viewModel(
@@ -1703,6 +1875,7 @@ private fun OfflineRoute(
             onPlay = onPlay,
             onDelete = vm::delete,
             onRetry = vm::retry,
+            onListenAll = onListenAll,
             selectedIds = selectedIds,
             onToggleSelection = { item ->
                 val current = selectedIds.orEmpty()
@@ -1733,18 +1906,21 @@ private fun OfflineRoute(
     }
 }
 
+/** 稍后再看列表底部让出的高度:FAB 56dp 加上它离屏幕底边的 16dp,再留一点缝。 */
+private val ToViewFabClearance = 88.dp
+
 /**
- * 关注列表。二级页面,自带返回的顶栏 —— 它不是根 tab,不该借用 RootTabs 那一层的 Scaffold。
- */
-/**
- * 稍后再看的列表。"清空已看完"跟着它走,并且按 M3 的 top app bar anatomy 用图标按钮
- * (规范:headline 之后最多两个 icon button),而不是原来那个带文字的 TextButton ——
- * 文字按钮的宽度随文案变,切页时顶栏右侧会跳。
+ * 稍后再看的列表。两种清空分开放,按用得多少排:
+ * - **清空已看完是 FAB。** 稍后再看是一张要常常清的清单,看完一批清一批是这一页最常做的事,
+ *   它值得一个拇指够得着的位置。只在有已看完的条目时出现 —— 没有可清的时候一个按不动的
+ *   FAB 只是挡住最后一行。
+ * - **清空已失效在顶栏右上角**,一个图标。失效是偶尔才攒起来的,不该和上面那个抢位置。
  */
 @Composable
 private fun ToViewListRoute(
     container: AppContainer,
-    onVideoClick: (String) -> Unit,
+    onVideoClick: (String, QueueContext) -> Unit,
+    onListen: (String, QueueContext) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: ToViewViewModel = viewModel(
@@ -1752,7 +1928,7 @@ private fun ToViewListRoute(
     )
     val state by vm.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    var confirmingClearFinished by remember { mutableStateOf(false) }
+    var confirmingClear by remember { mutableStateOf<ToViewClear?>(null) }
 
     // 移出成功之后给一次撤销。稍后再看是远程列表,删掉就得回 B 站重新找一遍那条视频,
     // 而这个删除按钮紧挨着整行的可点区。
@@ -1767,6 +1943,14 @@ private fun ToViewListRoute(
         if (result == SnackbarResult.ActionPerformed) vm.undoDelete(removed) else vm.consumeRemoved()
     }
 
+    val notice = state.notice
+    val noticeText = notice?.let { stringResource(it.action, stringResource(it.reason)) }
+    LaunchedEffect(notice?.id) {
+        if (notice == null || noticeText == null) return@LaunchedEffect
+        snackbarHostState.showSnackbar(noticeText)
+        vm.dismissNotice(notice)
+    }
+
     // 见 [SearchResultRoute]。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
@@ -1778,48 +1962,64 @@ private fun ToViewListRoute(
                 scrollBehavior = scrollBehavior,
             ) {
                 IconButton(
-                    onClick = { confirmingClearFinished = true },
-                    enabled = !state.clearing && state.items.any { it.isFinished },
+                    onClick = { confirmingClear = ToViewClear.Invalid },
+                    enabled = !state.clearing && state.items.isNotEmpty(),
                 ) {
                     Icon(
-                        Icons.Outlined.DeleteSweep,
-                        contentDescription = stringResource(R.string.toview_clear_finished),
+                        Icons.Outlined.LinkOff,
+                        contentDescription = stringResource(R.string.toview_clear_invalid),
                     )
                 }
             }
         },
+        floatingActionButton = {
+            val finishedCount = state.items.count { it.isFinished }
+            AnimatedVisibility(
+                visible = finishedCount > 0 && !state.clearing,
+                enter = scaleIn() + fadeIn(),
+                exit = scaleOut() + fadeOut(),
+            ) {
+                ExtendedFloatingActionButton(
+                    onClick = { confirmingClear = ToViewClear.Finished },
+                    icon = { Icon(Icons.Outlined.DoneAll, contentDescription = null) },
+                    text = { Text(stringResource(R.string.toview_clear_finished)) },
+                )
+            }
+        },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { insets ->
-        Box(modifier = Modifier.padding(insets)) {
-            ToViewScreen(
-                state = state,
-                onDelete = { vm.delete(it) },
-                onItemClick = { onVideoClick(it.bvid) },
-                onRetry = vm::retry,
-                onRefresh = vm::refresh,
-            )
-        }
+        // insets 交给列表当 contentPadding,不在外面套 padding:列表要画到导航栏底下,
+        // 最后一行靠 contentPadding 让开,同其他列表页。底部再让出 FAB 的高度,最后一行的
+        // 移出按钮才不会压在 FAB 底下。
+        val layoutDirection = LocalLayoutDirection.current
+        ToViewScreen(
+            state = state,
+            onDelete = { vm.delete(it) },
+            onItemClick = { onVideoClick(it.bvid, QueueContext.ToView(state.asc)) },
+            onRetry = vm::retry,
+            onListenAll = { onListen(it.bvid, QueueContext.ToView(state.asc)) },
+            onAscChanged = vm::setAsc,
+            onRefresh = vm::refresh,
+            contentPadding = PaddingValues(
+                start = insets.calculateStartPadding(layoutDirection),
+                top = insets.calculateTopPadding(),
+                end = insets.calculateEndPadding(layoutDirection),
+                bottom = insets.calculateBottomPadding() + ToViewFabClearance,
+            ),
+        )
     }
 
     // 批量清空不给撤销:一次删掉的可能是几十条,撤销要逐条加回去,中途失败留下的是半截列表。
     // 所以这一条走确认,和缓存删除、拉黑那几处一个待遇。
-    if (confirmingClearFinished) {
-        val count = state.items.count { it.isFinished }
-        AlertDialog(
-            onDismissRequest = { confirmingClearFinished = false },
-            title = { Text(stringResource(R.string.toview_clear_finished)) },
-            text = { Text(stringResource(R.string.toview_clear_finished_confirm, count)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmingClearFinished = false
-                    vm.clearFinished()
-                }) { Text(stringResource(R.string.action_clear)) }
+    confirmingClear?.let { kind ->
+        ToViewClearDialog(
+            kind = kind,
+            finishedCount = state.items.count { it.isFinished },
+            onConfirm = {
+                confirmingClear = null
+                vm.clear(kind)
             },
-            dismissButton = {
-                TextButton(onClick = { confirmingClearFinished = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
+            onDismiss = { confirmingClear = null },
         )
     }
 }
@@ -1830,6 +2030,7 @@ private fun FavFolderRoute(
     mediaId: Long,
     title: String,
     onVideoClick: (String, QueueContext) -> Unit,
+    onListen: (String, QueueContext) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: FavFolderViewModel = viewModel(
@@ -1837,26 +2038,56 @@ private fun FavFolderRoute(
         factory = viewModelFactory { initializer { FavFolderViewModel(mediaId, container.favRepository) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    val editor by vm.manager.editor.collectAsStateWithLifecycle()
+    val deletion by vm.manager.deletion.collectAsStateWithLifecycle()
+    // 路由带来的标题只管第一帧;接口回来之后以它为准 —— 名字可能在这一页或别处改过。
+    val folderTitle = state.info?.title ?: title
+
+    // 这个收藏夹没了,这一页也就没有东西可看。
+    LaunchedEffect(state.deleted) { if (state.deleted) onBack() }
+
+    // 队列就是眼前这份:排序与生效中的搜索词一起带上,页号按这条在列表里的位置算。
+    val queueContext = { item: FavVideo ->
+        val index = state.items.indexOf(item).coerceAtLeast(0)
+        val page = index / FavRepository.Paging.PAGE_SIZE + 1
+        QueueContext.FavFolder(mediaId, folderTitle, page, state.order, state.appliedKeyword)
+    }
+
     // 见 [SearchResultRoute]。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-        topBar = { BilbyTopBar(title = title, onBack = onBack, scrollBehavior = scrollBehavior) },
+        topBar = {
+            FavFolderTopBar(
+                title = folderTitle,
+                folder = state.info,
+                keyword = state.keyword,
+                appliedKeyword = state.appliedKeyword,
+                cleaning = state.cleaning,
+                onKeywordChange = vm::onKeywordChange,
+                onSearch = vm::search,
+                onCloseSearch = vm::closeSearch,
+                onEdit = vm.manager::startEdit,
+                onCleanInvalid = vm::cleanInvalid,
+                onDelete = vm.manager::startDelete,
+                onBack = onBack,
+                scrollBehavior = scrollBehavior,
+            )
+        },
     ) { insets ->
         FavFolderScreen(
             state = state,
-            onItemClick = { item ->
-                val index = state.items.indexOf(item).coerceAtLeast(0)
-                val page = index / FavRepository.Paging.PAGE_SIZE + 1
-                onVideoClick(item.bvid, QueueContext.FavFolder(mediaId, title, page))
-            },
+            editor = editor,
+            deletion = deletion,
+            onItemClick = { item -> onVideoClick(item.bvid, queueContext(item)) },
+            onListen = { item -> onListen(item.bvid, queueContext(item)) },
+            onOrderChanged = vm::setOrder,
             onLoadMore = vm::loadMore,
             onRetry = vm::retry,
             onRefresh = vm::refresh,
-            onRemove = vm::remove,
-            onUndoRemove = vm::undoRemove,
-            onUndoExpired = vm::dismissUndo,
             onNoticeShown = vm::dismissNotice,
+            editorActions = vm.manager.editorActions,
+            deletionActions = vm.manager.deletionActions,
             contentPadding = insets,
         )
     }
@@ -1883,6 +2114,17 @@ private fun FollowingsRoute(
                 title = stringResource(R.string.followings_title),
                 onBack = onBack,
                 scrollBehavior = scrollBehavior,
+                actions = {
+                    // 排序放顶栏右端,省下列表上方单独一行。仍是 SortMenu 那颗写着当前档位的
+                    // 下拉,不换成一个图标:图标读不出现在按什么排。
+                    if (state.canSort) {
+                        SortMenu(
+                            options = FollowOrderOptions,
+                            selected = state.order,
+                            onSelect = vm::selectOrder,
+                        )
+                    }
+                },
             )
         },
     ) { insets ->
@@ -1892,7 +2134,6 @@ private fun FollowingsRoute(
             onLoadMore = vm::loadMore,
             onRetry = vm::retry,
             onSelectSource = vm::selectSource,
-            onSelectOrder = vm::selectOrder,
             onSearch = vm::search,
             onRefresh = vm::refresh,
             onOpenGroupManager = vm::openGroupManager,
@@ -1905,6 +2146,7 @@ private fun FollowingsRoute(
             onToggleGroup = vm::toggleGroup,
             onSaveGroups = vm::saveGroups,
             onBlock = vm::block,
+            onUnfollow = vm::unfollow,
             contentPadding = insets,
         )
     }
@@ -2064,7 +2306,9 @@ private fun DynamicDetailRoute(
         viewModel(
             key = "dyn-comment",
             factory = viewModelFactory {
-                initializer { CommentViewModel(container.commentRepository, oid, reference.commentType) }
+                initializer {
+                    CommentViewModel(container.commentRepository, oid, reference.commentType, myMid = container::myMid)
+                }
             },
         )
     } else {
@@ -2113,6 +2357,10 @@ private fun FavFoldersRoute(
         factory = viewModelFactory { initializer { FavFoldersViewModel(container.favRepository) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    val editor by vm.manager.editor.collectAsStateWithLifecycle()
+    val deletion by vm.manager.deletion.collectAsStateWithLifecycle()
+    // 从某个收藏夹返回时这一页重新进组合,那正是列表最可能过期的时候。判据见 onEnter。
+    LaunchedEffect(Unit) { vm.onEnter() }
     // 见 [SearchResultRoute]。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
@@ -2122,28 +2370,27 @@ private fun FavFoldersRoute(
                 title = stringResource(R.string.fav_folders_title),
                 onBack = onBack,
                 scrollBehavior = scrollBehavior,
-            )
+            ) {
+                // 新建是这一页的页级操作,放顶栏。它原先是右下角的 FAB:FAB 要让开列表最后一行,
+                // 而一个不常用的操作不值得常驻在内容上面。
+                IconButton(onClick = vm.manager::startCreate) {
+                    Icon(Icons.Outlined.Add, contentDescription = stringResource(R.string.fav_folder_create))
+                }
+            }
         },
     ) { insets ->
         FavFoldersScreen(
             state = state,
+            editor = editor,
+            deletion = deletion,
             onOpenFolder = onOpenFolder,
-            onCreate = vm::startCreate,
-            onEdit = vm::startEdit,
-            onDelete = vm::startDelete,
+            onEdit = vm.manager::startEdit,
+            onDelete = vm.manager::startDelete,
+            onLoadMore = vm::loadMore,
             onRetry = vm::retry,
             onRefresh = vm::refresh,
-            editorActions = FavFolderEditorActions(
-                onTitleChange = vm::changeTitle,
-                onIntroChange = vm::changeIntro,
-                onPrivacyChange = vm::changePrivacy,
-                onSave = vm::save,
-                onDismiss = vm::dismissEditor,
-            ),
-            deletionActions = FavFolderDeletionActions(
-                onConfirm = vm::confirmDelete,
-                onDismiss = vm::dismissDelete,
-            ),
+            editorActions = vm.manager.editorActions,
+            deletionActions = vm.manager.deletionActions,
             contentPadding = insets,
         )
     }
@@ -2388,7 +2635,9 @@ private fun VideoPane(
     val commentVm: CommentViewModel? = state.detail?.aid?.let { aid ->
         val commentViewModel: CommentViewModel = viewModel(
             key = "comment",
-            factory = viewModelFactory { initializer { CommentViewModel(container.commentRepository, aid) } },
+            factory = viewModelFactory {
+                initializer { CommentViewModel(container.commentRepository, aid, myMid = container::myMid) }
+            },
         )
         LaunchedEffect(aid) { commentViewModel.switchTo(aid) }
         commentViewModel
@@ -2419,7 +2668,7 @@ private fun VideoPane(
         onTriple = vm::triple,
         tripleOutcome = tripleOutcome,
         addedToView = addedToView,
-        onAddToView = vm::addToView,
+        onToggleToView = vm::toggleToView,
         onCoin = vm::coin,
         coinAttempt = coinAttempt,
         onCoinDialogClosed = vm::clearCoinAttempt,
