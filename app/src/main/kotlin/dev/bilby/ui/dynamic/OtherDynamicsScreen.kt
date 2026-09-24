@@ -21,7 +21,8 @@ import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
-import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.DynamicCardSkeleton
+import dev.bilby.ui.components.ListSkeleton
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.theme.Spacing
@@ -57,7 +58,8 @@ fun OtherDynamicsScreen(
         topBar = { BilbyTopBar(title = stringResource(R.string.dynamic_other_title), onBack = onBack) },
     ) { padding ->
         when {
-            state.loading && state.items.isEmpty() -> FullScreenLoading(Modifier.padding(padding))
+            state.loading && state.items.isEmpty() ->
+                ListSkeleton(Modifier.padding(padding), row = { DynamicCardSkeleton() })
             state.error != null && state.items.isEmpty() ->
                 FullScreenError(state.error, onRetry, Modifier.padding(padding))
 

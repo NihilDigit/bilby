@@ -20,6 +20,9 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Mail
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -32,6 +35,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
@@ -192,6 +197,8 @@ fun FeedScreen(
     onOpenFollowings: () -> Unit,
     /** 折起来的那一半:图文、转发、直播……(DESIGN 2.1)。 */
     onOpenOtherDynamics: () -> Unit = {},
+    /** UP 主推送来的私信,见 FeedHeader。 */
+    onOpenPushes: () -> Unit = {},
     onExcludeUp: (Long, String) -> Unit = { _, _ -> },
     onScrollPositionChanged: (String) -> Unit = {},
     /** 开屏定位已经做过(或确定做不成)。见 [FeedUiState.pendingLocate]。 */
@@ -243,7 +250,7 @@ fun FeedScreen(
         ) {
             FeedList(
                 state, onRefresh, onLoadMore, onItemClick, onUpClick, onLiveClick, onExcludeUp,
-                onAddToView, onOpenFollowings, onOpenOtherDynamics, onScrollPositionChanged, onLocated,
+                onAddToView, onOpenFollowings, onOpenOtherDynamics, onOpenPushes, onScrollPositionChanged, onLocated,
                 scrollToTop, Modifier, contentPadding,
             )
         }
@@ -268,6 +275,7 @@ private fun FeedList(
     onAddToView: (String) -> Unit,
     onOpenFollowings: () -> Unit,
     onOpenOtherDynamics: () -> Unit,
+    onOpenPushes: () -> Unit,
     onScrollPositionChanged: (String) -> Unit,
     onLocated: () -> Unit,
     scrollToTop: Int,
@@ -353,7 +361,7 @@ private fun FeedList(
         // 首页装不下的另一半(图文、纯文字、转发、直播)的入口挂在标题行右边。**专栏不在
         // 里面**:它是投稿,和视频一样排在首页的时间序里(见 DynamicRepository 的分流)。
         item(key = "header") {
-            FeedHeader(onOpenOtherDynamics = onOpenOtherDynamics)
+            FeedHeader(onOpenOtherDynamics = onOpenOtherDynamics, onOpenPushes = onOpenPushes)
         }
         // 窄屏时「最常访问」仍然跟着列表一起滚,不吸顶:吸顶会让它变成常驻的入口带,
         // 而这一页的主体是动态流。宽屏下它挪到旁边的次区去了,这里就不再出现。
@@ -459,11 +467,15 @@ private fun FeedList(
  * 静态入口变成催人回来的提醒。
  */
 @Composable
-private fun FeedHeader(onOpenOtherDynamics: () -> Unit) {
+private fun FeedHeader(onOpenOtherDynamics: () -> Unit, onOpenPushes: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = Spacing.Comfortable, end = Spacing.Tight, top = Spacing.Tight),
+            .padding(
+                start = Spacing.Comfortable,
+                end = Spacing.Comfortable - HeaderButtonEndInset,
+                top = Spacing.Tight,
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -471,7 +483,34 @@ private fun FeedHeader(onOpenOtherDynamics: () -> Unit) {
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.weight(1f),
         )
-        TextButton(onClick = onOpenOtherDynamics) {
+        // UP 主推送来的私信。**放这里,不放消息页**:推送里的视频就是这条时间线上的那些投稿,
+        // 它们在私信列表里只是把真人对话往下挤;挪到订阅页,和"我关注的人发了什么"放在一起。
+        // 同一条规矩:没有计数,没有红点。
+        TextButton(
+            onClick = onOpenPushes,
+            contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+        ) {
+            Icon(
+                Icons.Outlined.Mail,
+                contentDescription = null,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+            Text(
+                text = stringResource(R.string.feed_up_pushes_entry),
+                modifier = Modifier.padding(start = Spacing.Tight),
+            )
+        }
+        // 内边距写明而不取默认:箭头的右沿要落在 16dp 页边线上(见 [HeaderButtonEndInset]),
+        // 默认值跟着 alpha 版本变,对齐也就跟着变。
+        TextButton(
+            onClick = onOpenOtherDynamics,
+            contentPadding = PaddingValues(
+                start = Spacing.Cozy,
+                end = HeaderButtonEndInset,
+                top = Spacing.Tight,
+                bottom = Spacing.Tight,
+            ),
+        ) {
             Icon(
                 Icons.AutoMirrored.Filled.Article,
                 contentDescription = null,
@@ -595,6 +634,8 @@ private fun FeedEntryItem(
                                 onAddToView((item as FeedEntry.Video).bvid)
                             },
                             text = { Text(stringResource(R.string.video_action_toview_desc)) },
+                            // 与播放页动作栏那一格同一个图标,认得出是同一件事。
+                            leadingIcon = { Icon(Icons.Outlined.WatchLater, contentDescription = null) },
                             shape = MenuDefaults.leadingItemShape,
                         )
                     }
@@ -607,6 +648,7 @@ private fun FeedEntryItem(
                             onExcludeUp(item.upMid, item.upName)
                         },
                         text = { Text(stringResource(R.string.feed_exclude_up, item.upName)) },
+                        leadingIcon = { Icon(Icons.Outlined.VisibilityOff, contentDescription = null) },
                         shape = if (canAddToView) {
                             MenuDefaults.trailingItemShape
                         } else {
@@ -777,7 +819,11 @@ private fun FrequentUpsRow(
             // 但硬切在一个圆形上读起来像被右边那个入口盖住了。渐隐把切口变成"没画完",
             // 那正是它的意思。左边不淡:那儿是这一排的开头,不是被截断的地方。
             modifier = Modifier.weight(1f).fadingRightEdge(),
-            contentPadding = PaddingValues(horizontal = Spacing.Cozy),
+            contentPadding = PaddingValues(
+                // 排在最前的那一格决定起点:直播那一格更宽、头像叠着偏左,让出的量不一样。
+                start = Spacing.Comfortable - if (liveUps.isNotEmpty()) LiveNowSlotFaceInset else UpSlotFaceInset,
+                end = Spacing.Cozy,
+            ),
             horizontalArrangement = Arrangement.spacedBy(SlotGap),
         ) {
             // 正在直播的那一格排在最前面,是这一排的**前置项**而不是成员之一(见 LiveNowSlot)。
@@ -793,31 +839,50 @@ private fun FrequentUpsRow(
                 }
             }
         }
-        // **箭头不衬圆底。** 那个圆底原来是为了让入口读起来是这一排的一员 —— 当时它确实是,
-        // 排在 LazyRow 的最后一项。现在它钉在滚动区外面,是这一排旁边的一个控件,再顶着一张
-        // 和头像同形同大的圆,反倒像队尾站了个没有脸的人。
-        // **只有一个箭头,不写字。** 「关注列表」四个字说的是箭头本来就在说的事,而它顶在
-        // 一排人名中间,读起来像队尾还站着一个叫这个名字的人。名字留给读屏(contentDescription)。
+        // **一根带字的竖胶囊:› 加「全部」。** 先后试过两种:排尾一格的圆底箭头,读起来像队尾
+        // 站着一个没有脸的人;钉在外面、不衬底、不写字的光箭头,看不出它通向哪里。竖长条的
+        // 形状和一排圆头像明显不是同类,是这一排旁边的控件;写了字,去处一眼可读。
         //
-        // 高度和头像那一格的头像对齐(都是 48dp、都从行顶往下 4dp),所以下面少一行字也不会
-        // 让它浮在半空。
-        Box(
-            contentAlignment = Alignment.Center,
+        // 高度等于一格头像加名字(见 [AllFollowingsPillHeight]),上下与头像格对齐。右沿落在
+        // 16dp 页边线上,与标题行的入口、下面视频行的溢出按钮同一条竖线。
+        // 读屏念「关注列表」:「全部」两个字离开这一排就说不清是全部什么。
+        val followingsLabel = stringResource(R.string.feed_open_followings)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
             modifier = Modifier
-                .padding(vertical = Spacing.Hair)
-                .padding(end = SlotInset * 2)
+                .padding(end = Spacing.Comfortable, top = Spacing.Hair)
+                .size(width = AllFollowingsPillWidth, height = AllFollowingsPillHeight)
                 .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .clickable(role = Role.Button, onClick = onOpenFollowings)
-                .size(Dimens.AvatarStack),
+                .clearAndSetSemantics { contentDescription = followingsLabel }
+                .padding(vertical = Spacing.Tight),
         ) {
             Icon(
-                Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = stringResource(R.string.feed_open_followings),
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+            Text(
+                text = stringResource(R.string.feed_followings_all_short),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
             )
         }
     }
 }
+
+/** 「全部」竖胶囊的宽。比头像窄一截:它是控件,不该和一个人一样宽。 */
+private val AllFollowingsPillWidth = 40.dp
+
+/**
+ * 竖胶囊的高:一格头像(48)加名字上方的 4 与 labelSmall 的 16 行高,即 [UpSlot] 去掉上下
+ * 内边距的高度。写死而不是撑满这一排:这一排是 LazyRow,量不了固有高度。
+ */
+private val AllFollowingsPillHeight = 68.dp
 
 /**
  * 这一排里的一格:上面是 48dp 的圆,下面一行字,宽度固定,格与格之间才对得齐。
@@ -852,11 +917,20 @@ private fun UpSlot(
     }
 }
 
+/** 标题行入口按钮末端的内边距。行的右边距补足剩下的部分,箭头的右沿停在 16dp 页边线上。 */
+private val HeaderButtonEndInset = Spacing.Hair
+
 /** 比头像宽一点,名字多站得下一两个字。 */
 private val AvatarSlotWidth = 60.dp
 
 /** 每格自己的左右内边距。算箭头对齐时要用到,见「关注列表」那一格的注释。 */
 private val SlotInset = 2.dp
+
+/**
+ * 格子左沿到头像左沿的距离:格子自己的 [SlotInset],加上格子比头像宽出的一半。头像排的起点
+ * 用它倒推,让第一个**头像**(不是格子)的左沿落在 16dp 页边线上,和下面封面的左沿对齐。
+ */
+private val UpSlotFaceInset = SlotInset + (AvatarSlotWidth - Dimens.AvatarStack) / 2
 
 
 /**

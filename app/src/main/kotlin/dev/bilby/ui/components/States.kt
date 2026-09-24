@@ -44,13 +44,14 @@ import dev.bilby.ui.theme.Spacing
 
 /**
  * 加载 / 出错 / 空 / 到底 —— 四个列表页以前各写了一份,文案和间距都差一点。收敛到这里,
- * 顺带固定一条规矩:**首屏和翻页用不同的粗细。** 首屏转圈是"这一屏还没有内容",占整屏;
+ * 顺带固定一条规矩:**首屏和翻页用不同的粗细。** 首屏是"这一屏还没有内容",占整屏;
  * 翻页转圈是"下面还有",只占一行的高度。以前两处用的是同一个尺寸,翻页时那个大圈看起来
  * 像整页重载了。
  *
- * 全 app 的等待指示只有这四档,别处不要直接调 material3 的指示器:
+ * 全 app 的等待指示只有这几档,别处不要直接调 material3 的指示器:
  *
- * - 整屏首载 —— [FullScreenLoading]
+ * - 列表首屏、分节首载 —— 骨架屏(ui/components/Skeleton.kt),形状照内容画
+ * - 形状说不准的整屏首载(文章、动态详情、直播间) —— [FullScreenLoading]
  * - 行内一个转圈 —— [LoadingSpinner],跟一行说明时用 [InlineProgress]
  * - 列表尾部续页 —— [ListFooter]
  * - 下拉刷新 —— [RefreshBox]
@@ -102,8 +103,10 @@ private const val LoadingAppearDelayMillis = 200L
  * **切换的键是"哪一种态",不是错误文案本身**([Phase] 把文案带进 target,而不是在分支里
  * 读外面的 `error`):淡出还没走完时旧分支仍在组合,那一刻 `error` 已经是 null 了。
  *
- * @param isEmpty 列表当前有没有内容。**转圈和错误都只在首屏(列表为空)时占整屏**,列表已经
+ * @param isEmpty 列表当前有没有内容。**加载态和错误都只在首屏(列表为空)时占整屏**,列表已经
  *   有内容时翻页的转圈和失败归 [ListFooter] —— 已经读到的东西不该被一次翻页失败清掉。
+ * @param skeleton 首屏读取中画什么。默认一屏视频行的骨架([ListSkeleton]);"一个人一行"的列表
+ *   传 [PersonRowSkeleton]。
  */
 @Composable
 fun FirstScreenState(
@@ -112,6 +115,7 @@ fun FirstScreenState(
     isEmpty: Boolean,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    skeleton: @Composable () -> Unit = { ListSkeleton() },
     content: @Composable () -> Unit,
 ) {
     val phase = when {
@@ -126,7 +130,7 @@ fun FirstScreenState(
         label = "first-screen",
     ) { current ->
         when (current) {
-            Phase.Loading -> FullScreenLoading()
+            Phase.Loading -> skeleton()
             is Phase.Failed -> FullScreenError(current.message, onRetry)
             Phase.Content -> content()
         }
@@ -143,7 +147,8 @@ private sealed interface Phase {
 }
 
 /**
- * 首屏加载。整屏居中一个指示器,不放骨架屏 —— 骨架屏是在假装内容马上就到。
+ * 首屏加载。整屏居中一个指示器,给形状事先说不准的页面(一篇文章、一条动态、直播间);
+ * 列表的首屏用骨架屏,见 [FirstScreenState]。
  *
  * 不带尺寸:48dp 的默认值就是为整屏居中定的。
  *

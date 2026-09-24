@@ -48,19 +48,24 @@ class SearchChatViewModel(
     private val settings: SettingsStore,
 ) : ViewModel() {
 
-    /** 最近搜过的词,最多 [SettingsStore.SEARCH_HISTORY_LIMIT] 条,最近的在前。 */
+    /** 最近搜过的词,最近的在前。不设上限,见 [SettingsStore.searchHistory]。 */
     val searchHistory: StateFlow<List<String>> = settings.searchHistory
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     fun removeSearchHistory(query: String) = viewModelScope.launch { settings.removeSearchHistory(query) }
 
-    /** 点历史里的一条 = 把它填回输入框并直接搜。 */
+    fun clearSearchHistory() = viewModelScope.launch { settings.clearSearchHistory() }
+
     /**
-     * 点历史词条**只把它填回输入框,不直接搜**。历史里的词多半是"上次搜的那个,再改一点",
-     * 直接发出去的话想改就只能重打一遍。要搜就按发送,和手打没有区别。
+     * 点历史里的一条 = 把它填回输入框并直接搜。
+     *
+     * 原先只填不搜,理由是"历史里的词多半要再改一点,直接发出去想改就得重打"。搜索栏移到顶上
+     * 之后那条理由不成立了:搜完词仍然留在框里(见 [send]),要改就点回框里改,而大多数时候
+     * 点一个历史词就是想再看一遍那份结果 —— 多按一次发送是替少数情况让多数人付的代价。
      */
-    fun fillFromHistory(query: String) {
+    fun searchFromHistory(query: String) {
         _state.update { it.copy(input = query, mode = SearchMode.Normal) }
+        send()
     }
 
     /**
@@ -130,7 +135,7 @@ class SearchChatViewModel(
             SearchMode.Normal -> {
                 _state.update { it.copy(input = query) }
                 viewModelScope.launch { settings.addSearchHistory(query) }
-                normal.search(query, _state.value.normal.order)
+                normal.search(query)
             }
 
             // 助理这边**照旧清空**:它是一段对话,发出去的话已经作为一轮留在上面了,输入框里
@@ -154,6 +159,9 @@ class SearchChatViewModel(
     fun loadMore() = normal.loadMore()
 
     fun onOrderChanged(order: SearchOrder) = normal.onOrderChanged(order)
+    fun onDurationChanged(duration: SearchDuration) = normal.onDurationChanged(duration)
+    fun onArticleOrderChanged(order: SearchOrder) = normal.onArticleOrderChanged(order)
+    fun onTabSelected(tab: SearchTab) = normal.selectTab(tab)
 
     fun retry() {
         when (_state.value.mode) {

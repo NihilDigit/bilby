@@ -95,6 +95,11 @@ fun VideoCover(
     progressFraction: Float? = null,
     cornerRadius: Dp = CoverCornerRadius,
     aspectRatio: Float = CoverAspectRatio,
+    /**
+     * 左上角的类型角标("音频""剧集"),空串不画。和右下角的时长分开两个角:时长是每条都有的
+     * 读数,类型是少数条目才有的"这条不是视频",挤在同一个角里会被读成时长的一部分。
+     */
+    typeBadge: String = "",
 ) {
     Box(modifier = modifier.aspectRatio(aspectRatio).clip(RoundedCornerShape(cornerRadius))) {
         AsyncImage(
@@ -104,6 +109,15 @@ fun VideoCover(
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
         )
+
+        if (typeBadge.isNotEmpty()) {
+            MediaBadge(
+                text = typeBadge,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = BadgeInset, top = BadgeInset),
+            )
+        }
 
         if (durationText.isNotEmpty()) {
             // 有进度条时把角标抬高一点,否则两者压在同一条底边上,角标正好盖住进度条的末端,
@@ -204,10 +218,12 @@ fun ListCover(
     progressFraction: Float? = null,
     width: Dp = Dimens.ListCoverWidth,
     cornerRadius: Dp = CoverCornerRadius,
+    typeBadge: String = "",
 ) = VideoCover(
     url = url,
     durationText = durationText,
     progressFraction = progressFraction,
     cornerRadius = cornerRadius,
+    typeBadge = typeBadge,
     modifier = modifier.width(width),
 )

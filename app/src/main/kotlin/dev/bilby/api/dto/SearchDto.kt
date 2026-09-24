@@ -42,4 +42,30 @@ data class SearchUserItemDto(
     val usign: String = "",
     val fans: Long = 0,
     val upic: String = "",
+    /** 投稿数。 */
+    val videos: Long = 0,
+)
+
+/**
+ * `search_type=article` 分支。字段依据 PiliPlus `lib/models/search/result.dart` 的
+ * `SearchArticleItemModel`(notes/space-and-search.md 2.12)。**没有作者名**,只有 mid。
+ */
+@Serializable
+data class SearchArticleResultDto(
+    val numResults: Int = 0,
+    val result: List<SearchArticleItemDto> = emptyList(),
+)
+
+@Serializable
+data class SearchArticleItemDto(
+    /** cv 号。 */
+    val id: Long = 0,
+    /** 带 `<em>` 高亮与 HTML 实体,同视频标题。 */
+    val title: String = "",
+    val desc: String = "",
+    @SerialName("image_urls") val imageUrls: List<String> = emptyList(),
+    val view: Long = 0,
+    val reply: Long = 0,
+    @SerialName("pub_time") val pubTime: Long = 0,
+    @SerialName("category_name") val categoryName: String = "",
 )

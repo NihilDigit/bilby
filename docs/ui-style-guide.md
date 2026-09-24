@@ -365,7 +365,11 @@ navigation",并且明确写着
   真机上按搜索键没有任何反应。
 - 没有清空按钮,改一次搜索词要按十几下退格。
 
-**评论和私信的输入栏是例外,仍是 `OutlinedTextField`**(2026-09-13 核过):`SearchField` 是
+**私信的输入栏同一套语言,但不是同一个组件**(2026-09-25):填充 `surfaceContainerHigh` +
+`largeIncreased`、聚焦升一档色阶、无描边,发送键装在胶囊里、没字时不画,见
+`ui/message/WhisperScreen.kt` 的 `WhisperInput`。
+
+**评论的输入栏是例外,仍是 `OutlinedTextField`**(2026-09-13 核过):`SearchField` 是
 单行、回车即搜、带放大镜和清空的控件,评论要多行、回车是发送、不要放大镜,拿它去装两件事
 等于把一个组件做成两个。那两条输入栏补齐的是 `ImeAction.Send`、字数计数和就地失败提示,
 形状与发弹幕面板一致。
@@ -750,7 +754,6 @@ DESIGN 1.1 的四个机制在界面层的落点,逐条都是否决过的:
 - **下拉刷新只在助理模式下拒绝。** 该项曾整体否决,理由是"下拉刷新是变比率奖励的标准交互"。
   该理由对本项目不成立:变比率奖励要求每次操作都可能产生新结果,而此处刷新返回的只有关注
   UP 主在此期间的实际投稿。助理模式例外 —— 一次下拉对应一次真实的模型请求。
-- **没有骨架屏。** 它把等待渲染成「内容马上就到」。首屏就是一个转圈。
 - **空态不给"去逛逛"。** 空态只说事实。任何把人推回内容池的引导都是在造推送式入口。
   **空态和错误态各有一个图标**(`Inbox` / `ErrorOutline`,40dp,`onSurfaceVariant`),
   这不是插图:整屏只有一行灰字时,"这里本来就是空的"和"没读到"读起来一模一样,而这两种
@@ -900,9 +903,15 @@ token 名。这一节的每条判断都能在镜像的 `styles/motion/` 两页�
 intense sliding"。`rememberReducedMotion()` 读 `TRANSITION_ANIMATION_SCALE`,为 0 时转场退成
 纯淡入淡出。组件那侧不用管,Compose 的动画本来就跑在 `MotionDurationScale` 下。
 
-**故意不照做的一条:骨架屏。** transitions 页把 skeleton loader 列为六种模式之一并推荐用它
-稳定布局,而 DESIGN 4.2 明确否决——骨架屏是在假装内容马上就到,把等待包装成期待。首屏就是
-一个转圈。这是本项目对规范的有意偏离,不是遗漏。
+**骨架屏**(`ui/components/Skeleton.kt`)。transitions 页的 Stable layouts:「Use skeleton
+loaders so that UI elements are coherent and stable during a transition. Avoid content shifting
+positions or instantly popping in as it loads」。列表首屏、「我的」各节的首载都先按内容的形状
+画灰色占位,读到了淡入换掉,内容换上来时什么都不挪。
+- 占位与真实的行同尺寸同位置:视频行 `VideoRowSkeleton`、一人一行 `PersonRowSkeleton`、
+  动态卡片 `DynamicCardSkeleton`;`PagedColumn` 与 `FirstScreenState` 默认用视频行。
+- 脉动而不是扫光("a subtle pulsing animation"),一片骨架共用一个时钟(`SkeletonPulse`)。
+- 只管首载。翻页底部、下拉刷新仍是 loading indicator;形状事先说不准的整页(文章、动态详情、
+  直播间)仍是整屏一个 `FullScreenLoading`。
 
 ## 7. 响应式
 

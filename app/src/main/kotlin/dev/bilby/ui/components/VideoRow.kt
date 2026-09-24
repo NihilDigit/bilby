@@ -58,6 +58,8 @@ data class VideoRowUi(
     val danmakuText: String? = null,
     /** 计数之外的一行状态文案(稍后再看的"已看完""看到 12:30")。 */
     val meta: String? = null,
+    /** 封面左上角的类型角标,见 [VideoCover] 的 typeBadge。收藏夹里的音频、剧集条目用它。 */
+    val typeBadge: String = "",
     /** 看过的比例,0..1。null 表示没看过或算不出时长。 */
     val progressFraction: Float? = null,
     /**
@@ -120,6 +122,7 @@ fun VideoRow(
             url = item.coverUrl,
             durationText = item.durationText,
             progressFraction = item.progressFraction,
+            typeBadge = item.typeBadge,
         )
 
         Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
@@ -130,11 +133,7 @@ fun VideoRow(
                 // bodyLarge(16sp)。这一行是整条的标题,它下面几行是 labelSmall 和 bodySmall,
                 // 标题用 14sp 时与它们只差 2sp —— 一列列表扫下来认不出哪一行是主的。M3 给
                 // list item 的 headline 定的也是 bodyLarge。字号占掉的行宽从封面那边让出来,
-                // 见 Dimens.ListCoverWidth 那道算术。
-                //
-                // **标题只让出按钮那一格的一半,不让出整格**:让出 48dp 就是那道算术里的
-                // 11 个字掉到 8 个;一点不让的话,标题的右边界比图标的右边界还往外,
-                // 那一列没有任何东西与它对齐,看起来是浮着的。见 [TitleOverflowGutter]。
+                // 见 Dimens.ListCoverWidth 那道算术。标题不给溢出按钮让位,见 [TitleOverflowGutter]。
                 Text(
                     text = item.title,
                     modifier = Modifier.padding(end = if (overflow != null) TitleOverflowGutter else 0.dp),
@@ -188,8 +187,16 @@ fun VideoRow(
             // 第二行,文字只有两层时图标和标题末尾挤在一起,看着也像悬在半空。往下挪半个框
             // 减半行,图标落在元信息那一行上;多出来的那截触控区伸进行的下边距,被下一行
             // 盖住的部分归下一行,抢不走它的点击。
+            //
+            // **横向也往外挪一个图标内缩,伸进行的右边距。** 48dp 的格贴着文字列右沿时,图标
+            // 离屏幕右沿是 16 + 12 = 28dp,标题再让出一截又更远,左边封面却只离 16dp,整行
+            // 看起来右边空得多。挪出去之后图标框的右沿落在 16dp 页边线上,和左边对称。
             overflow?.let {
-                Box(modifier = Modifier.align(Alignment.BottomEnd).offset(y = OverflowDrop)) { it() }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .offset(x = OverflowIconInset, y = OverflowDrop),
+                ) { it() }
             }
         }
 
@@ -199,23 +206,28 @@ fun VideoRow(
 
 private const val DisabledContentAlpha = 0.38f
 
-/** 溢出按钮那一格:M3 的最小触控尺寸。标题以下的几行让出这么宽。 */
-private val OverflowReserve = 48.dp
+/** 溢出按钮那一格:M3 的最小触控尺寸。 */
+private val OverflowButtonSize = 48.dp
+
+/** 24dp 图标在 48dp 触控格里每边的内缩。按钮往右挪这么多,图标框右沿就在页边线上。 */
+private val OverflowIconInset = 12.dp
 
 /**
- * 标题让出的宽度:按钮那一格的一半。
- *
- * 让 12dp(图标在 48dp 触控格里的内缩)时标题的右边界正好压在图标的右边界上,量是对齐了,
- * 看起来却像贴着;24dp 之后两者之间有一格喘息,而标题仍有 164dp(16sp 下 10 个汉字),
- * 比让出整格宽 36dp。
+ * 标题以下的几行让出的宽度:按钮挪出去之后,文字列里被它占的只剩图标框加左边那截内缩。
  */
-private val TitleOverflowGutter = OverflowReserve / 2
+private val OverflowReserve = OverflowButtonSize - OverflowIconInset
+
+/**
+ * 标题让出的宽度:0。按钮挪到页边线之后,图标框右沿和标题右沿都在那条线上,标题和
+ * 左边的封面对称;图标只在最后一行,碰不到两行以内的标题。
+ */
+private val TitleOverflowGutter = 0.dp
 
 /** labelSmall 与 bodySmall 的行高,最后一行只会是这两种之一。 */
 private val LastLineHeight = 16.dp
 
 /** 溢出按钮往下挪多少,图标中线才对得上最后一行的中线。 */
-private val OverflowDrop = (OverflowReserve - LastLineHeight) / 2
+private val OverflowDrop = (OverflowButtonSize - LastLineHeight) / 2
 
 /** 元信息行里的头像。比行高略大一点,圆形在一行小字旁边看着才不显小。 */
 private val InlineAvatarSize = 18.dp

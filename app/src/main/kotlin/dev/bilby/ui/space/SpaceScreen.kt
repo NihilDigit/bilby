@@ -46,18 +46,30 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MenuDefaults
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.SplitButtonDefaults
+import androidx.compose.material3.SplitButtonLayout
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import dev.bilby.ui.components.UnfollowConfirmDialog
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import dev.bilby.ui.components.SortMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.PlainTooltip
-import androidx.compose.material3.TooltipBox
-import androidx.compose.material3.TooltipDefaults
-import androidx.compose.material3.rememberTooltipState
 import dev.bilby.BiliLog
 import dev.bilby.R
 import dev.bilby.ui.dynamic.DynamicAction
@@ -87,19 +99,17 @@ import dev.bilby.ui.follow.BlockConfirmDialog
 import dev.bilby.ui.follow.GroupPickerController
 import dev.bilby.ui.follow.GroupPickerSheet
 import dev.bilby.ui.follow.GroupPickerState
-import dev.bilby.ui.components.FollowButton
 import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.components.Avatar
-import dev.bilby.ui.components.BilbyFlexibleTopBar
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.DynamicCardSkeleton
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.SearchField
-import dev.bilby.ui.components.SortRow
 import dev.bilby.ui.components.SquareCover
 import dev.bilby.ui.components.collapsingHeader
 import dev.bilby.ui.components.rememberCollapsingHeaderState
@@ -717,38 +727,51 @@ fun SpaceScreen(
 ) {
     val context = LocalContext.current
 
-    // **名字归顶栏,不再固定写「个人空间」。** 那条旧判断("标题是路牌,名字归头部区")的前提是
-    // 顶栏只有 small 一档 —— 一个 64dp 高、字号 titleLarge 的槽位里,名字确实只能被截断。
-    // medium flexible 的展开态给它整行 `headlineMedium`,而这一页从头到尾讲的就是这个人;
-    // 头部区因此不再重复印名字,两处印一遍的问题也就不存在了。判据见 [BilbyFlexibleTopBar]。
+    // 页头的收起量。**在 Scaffold 外面声明**:页头自己(缩掉高度)、列表那一侧(把滚动喂给它)
+    // 和顶栏(收到底才显示名字)三处都要读。宽屏下页头不收起,那时它的 heightPx 恒为 0,
+    // 连接因此什么都不消费。
+    val headerScroll = rememberCollapsingHeaderState()
+    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+
+    // **名字归页头,顶栏展开时空着,页头收到底才接过名字。**
     //
-    // exitUntilCollapsed:往下滚时顶栏先收回 64dp,再轮到头部区(那一层的连接挂在 RefreshBox
-    // 里面,见下面)。两级收起在同一个手势里依次发生 —— onPreScroll 从外往里传,所以顶栏在前。
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    // 上一版把名字放在 medium flexible 顶栏里,整行 headlineMedium,页头因此不印名字。代价是
+    // 「返回/分享」「大号名字」「头像那一行」三层摞着,内容开始前先占掉三分之一屏,名字和头像
+    // 还隔着一行。名字回到头像右边之后,顶栏退回 small 一档,那一行只有返回和分享。
+    //
+    // 收到底才显示,不是一直显示:页头在的时候它就在名字正上方,两处印同一个名字。
+    // 宽屏下页头钉在旁边的次区里、从不收起,顶栏一直空着 —— 名字一直看得见。
+    val headerGone = !wide && headerScroll.collapsedFraction >= 1f
+    val barTitle = state.profile?.name?.takeIf { headerGone }.orEmpty()
+
+    // 顶栏的搜索态。**筛选生效期间顶栏一直是输入框**,不看这个开关:上一次把搜索放进顶栏时,
+    // 收起输入框而筛选还在,投稿就"莫名其妙变少了"。现在收起只有一条路 —— 关闭按钮,它同时
+    // 清掉关键词并重新拉取,于是"输入框不见了"和"没在筛"永远是同一件事。
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
+    val searching = searchOpen || state.archives.appliedKeyword.isNotBlank()
 
     Scaffold(
-        modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        modifier = modifier,
         topBar = {
-            BilbyFlexibleTopBar(
-                // 资料还没回来时退回路牌,不留空标题。
-                title = state.profile?.name?.takeIf { it.isNotBlank() }
-                    ?: stringResource(R.string.space_title),
-                onBack = onBack,
-                scrollBehavior = scrollBehavior,
-                actions = {
-                    // 分享这位 UP 的主页。放顶栏而不是头部区:头部区那一行是"对这个人的
-                    // 动作"(关注、听他的投稿),分享的是页面本身。
-                    //
-                    // **搜索图标没了。** 输入框现在常驻在投稿列表的表头里(见 [ArchivesTab]),
-                    // 而一个图标 + 一个展开态换来的只是省下一行、代价是"收起时到底还在不在筛"
-                    // 得靠一条注释解释清楚。表头会跟着列表滚走,那一行本来就不常占版面。
-                    IconButton(onClick = { ShareLink.space(context, mid, state.profile?.name.orEmpty()) }) {
-                        Icon(
-                            imageVector = Icons.Filled.Share,
-                            contentDescription = stringResource(R.string.action_share),
-                        )
-                    }
+            SpaceTopBar(
+                title = barTitle,
+                searching = searching,
+                keyword = state.archives.keyword,
+                onKeywordChanged = onArchiveKeywordChanged,
+                onSearch = onArchiveSearch,
+                onOpenSearch = {
+                    searchOpen = true
+                    // 搜的是投稿,人在动态或合集那一栏时先切过去,结果才看得见。
+                    onTabSelected(SpaceTab.Archives)
                 },
+                onCloseSearch = {
+                    searchOpen = false
+                    onArchiveKeywordChanged("")
+                    // 没真筛过(只敲了字没回车)就不必重拉,列表本来就是全部。
+                    if (state.archives.appliedKeyword.isNotEmpty()) onArchiveSearch()
+                },
+                onShare = { ShareLink.space(context, mid, state.profile?.name.orEmpty()) },
+                onBack = onBack,
             )
         },
     ) { insets ->
@@ -760,20 +783,13 @@ fun SpaceScreen(
             tab != SpaceTab.Collections || state.collectionsAvailable == true
         }
 
-        // 页头的收起量。**在这里声明而不是在窄屏那个分支里**:窄屏下它同时被两处用到 ——
-        // 页头自己(缩掉高度)和列表那一侧(把滚动喂给它),而后者在 tabsAndContent 里面。
-        // 宽屏下页头不收起,那时它的 heightPx 恒为 0,连接因此什么都不消费。
-        val headerScroll = rememberCollapsingHeaderState()
-
         val header: @Composable (Modifier) -> Unit = { paneModifier ->
             state.profile?.let {
                 SpaceHeader(
                     it,
-                    canListen = state.archives.items.isNotEmpty(),
                     onToggleFollow = onToggleFollow,
                     onSetBlocked = onSetBlocked,
                     onOpenGroupPicker = onOpenGroupPicker,
-                    onListenUp = onListenUp,
                     onLiveClick = onLiveClick,
                     modifier = paneModifier,
                 )
@@ -811,7 +827,12 @@ fun SpaceScreen(
             }
 
             if (collectionsKnown) {
-                PrimaryTabRow(selectedTabIndex = pagerState.currentPage.coerceIn(tabs.indices)) {
+                // 不要默认那条通栏分割线:指示条已经标出了这一行的下沿,再划一道是整页最硬的
+                // 一条线,横在页头和列表之间。
+                PrimaryTabRow(
+                    selectedTabIndex = pagerState.currentPage.coerceIn(tabs.indices),
+                    divider = {},
+                ) {
                     tabs.forEachIndexed { index, tab ->
                         Tab(
                             selected = pagerState.currentPage == index,
@@ -847,8 +868,7 @@ fun SpaceScreen(
                             SpaceTab.Archives -> ArchivesTab(
                                 state.archives,
                                 onOrderChanged = onArchiveOrderChanged,
-                                onKeywordChanged = onArchiveKeywordChanged,
-                                onSearch = onArchiveSearch,
+                                onListenUp = onListenUp,
                                 onLoadMore = onLoadMoreArchives,
                                 onVideoClick = onVideoClick,
                             )
@@ -873,7 +893,7 @@ fun SpaceScreen(
             }
         }
 
-        if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
+        if (wide) {
             /*
              * **宽屏把头部挪到旁边,而不是钉在上面。**
              *
@@ -940,12 +960,90 @@ fun SpaceScreen(
 }
 
 /**
- * 空间头部。参照 PiliPlus 的 `pages/member/widget/user_info_card.dart`:头像 + 一行数据 +
- * 签名,签名单独占整行宽度。
+ * 空间页顶栏:返回、搜索、分享;搜索态下标题位换成输入框。
  *
- * **名字不在这里,在顶栏上。** 这条和之前反了:旧结论是"顶栏标题是路牌,名字归头部",前提是
- * 顶栏只有 small 一档、名字在那里会被截断。换成 medium flexible 之后展开态有整行
- * `headlineMedium`,名字在那儿比在这儿显眼,而且滚起来收进小标题也一直在(见 [SpaceScreen])。
+ * **搜索回到顶栏。** 它曾经从这里挪进投稿列表的表头,常驻一个输入框;那一行加上排序、页头、
+ * 标签栏,列表要到半屏以下才开始。放回顶栏之后平时只是一个图标,而上一次放在这里时的毛病
+ * ("收起了却还在筛")由调用方的判据堵住:筛选生效期间这里一直是输入框,见 [SpaceScreen]。
+ *
+ * 搜索态不留分享:输入框要那一截宽度,而正在筛投稿的人此刻不是要分享主页。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SpaceTopBar(
+    title: String,
+    searching: Boolean,
+    keyword: String,
+    onKeywordChanged: (String) -> Unit,
+    onSearch: () -> Unit,
+    onOpenSearch: () -> Unit,
+    onCloseSearch: () -> Unit,
+    onShare: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val focusRequester = remember { FocusRequester() }
+    TopAppBar(
+        title = {
+            if (searching) {
+                SearchField(
+                    value = keyword,
+                    onValueChange = onKeywordChanged,
+                    placeholder = stringResource(R.string.space_search_hint),
+                    onSearch = onSearch,
+                    focusRequester = focusRequester,
+                )
+                // 点图标打开时直接进输入;筛选生效着、从别处回到这一页时不抢焦点 —— 那时人是
+                // 来看结果的,弹出键盘会盖住一半列表。
+                LaunchedEffect(Unit) {
+                    if (keyword.isEmpty()) focusRequester.requestFocus()
+                }
+            } else {
+                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        },
+        navigationIcon = {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.action_back),
+                )
+            }
+        },
+        actions = {
+            if (searching) {
+                IconButton(onClick = onCloseSearch) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = stringResource(R.string.space_search_close),
+                    )
+                }
+            } else {
+                IconButton(onClick = onOpenSearch) {
+                    Icon(
+                        Icons.Filled.Search,
+                        contentDescription = stringResource(R.string.space_search_hint),
+                    )
+                }
+                IconButton(onClick = onShare) {
+                    Icon(
+                        imageVector = Icons.Filled.Share,
+                        contentDescription = stringResource(R.string.action_share),
+                    )
+                }
+            }
+        },
+    )
+}
+
+/**
+ * 空间头部。参照 PiliPlus 的 `pages/member/widget/user_info_card.dart`:头像 + 名字与数据 +
+ * 关注,签名单独占整行宽度。
+ *
+ * **名字在头像右边。** 放在 medium flexible 顶栏里的那一版见 [SpaceScreen] 开头的说明。
+ *
+ * **没有单独的动作行。** 头像那一行原先右端挤着耳机、溢出菜单和关注三样,后来拆成单独一行,
+ * 又多占一行高度。现在各归其位:关注与它的附属动作(分组、取关、拉黑)合成一个分体按钮
+ * ([SpaceFollowControl]),听投稿去了投稿表头(它听的正是那份列表),搜索回到顶栏。
  *
  * **没有头图**。接口层的 `SpaceProfile` 目前不带 `top_photo`,补它要动 `api/dto`,
  * 不在这一轮的边界内 —— 见报告里的"需要接口层配合"。
@@ -953,11 +1051,9 @@ fun SpaceScreen(
 @Composable
 private fun SpaceHeader(
     profile: SpaceProfile,
-    canListen: Boolean,
     onToggleFollow: () -> Unit,
     onSetBlocked: (Boolean) -> Unit,
     onOpenGroupPicker: () -> Unit,
-    onListenUp: () -> Unit,
     onLiveClick: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -977,7 +1073,12 @@ private fun SpaceHeader(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
             ) {
-                // 名字在顶栏上(见 [SpaceScreen]),这里不再印第二遍。
+                Text(
+                    text = profile.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
@@ -992,14 +1093,12 @@ private fun SpaceHeader(
                     )
                 }
             }
-            SpaceHeaderActions(
+            SpaceFollowControl(
                 followState = profile.followState,
-                canListen = canListen,
                 name = profile.name,
                 onToggleFollow = onToggleFollow,
                 onSetBlocked = onSetBlocked,
                 onOpenGroupPicker = onOpenGroupPicker,
-                onListenUp = onListenUp,
             )
         }
         // 签名可能很长又基本没信息量,给两行封顶;放在下面一整行是因为它旁边没有头像时
@@ -1067,86 +1166,116 @@ private fun SpaceHeader(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * 关注,以及跟着关注走的那几件事:设置分组、取消关注、拉黑。M3 Expressive 的分体按钮。
+ *
+ * **已关注时整颗按钮都打开同一份菜单。** 关注之后这颗按钮能做的只剩这三件,原先点它直接弹
+ * 取关确认,分组和拉黑却藏在旁边一个 ⋮ 里 —— 同一个人身上的几件事分在两处。
+ *
+ * **没关注时左半是关注,右半 ▾ 打开只有「拉黑」的菜单。** 拉黑一个没关注的人正是最常见的
+ * 情形(骚扰、搬运),入口不能只在关注之后才出现;放在同一颗按钮的右半,它的位置就不随关注
+ * 状态变。
+ *
+ * 一屏只留一个 filled 的名额是关注的(风格指南 §2.4):没关注时 filled,关注之后 outlined ——
+ * 关系已经建立,再点能做的都是往回撤的事,不该抢眼。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun SpaceHeaderActions(
+private fun SpaceFollowControl(
     followState: FollowState,
-    canListen: Boolean,
     name: String,
     onToggleFollow: () -> Unit,
     onSetBlocked: (Boolean) -> Unit,
     onOpenGroupPicker: () -> Unit,
-    onListenUp: () -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var confirmingBlock by remember { mutableStateOf(false) }
+    var confirmingUnfollow by remember { mutableStateOf(false) }
 
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.End,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // 听这位 UP 的投稿:队列取自当前投稿列表,和播放页那份队列同源
-        // (DESIGN 2.4b:有限且用户显式选定的集合)。
-        //
-        // 一只耳机猜不出是"听这位 UP 主的投稿",所以挂一条 tooltip 把动作名说出来
-        // (M3 icon buttons 页对纯图标按钮给的就是这个办法)。不改成带文字的按钮是量出来的:
-        // 360dp 宽减去左右 16、头像 56、间距 12,再减去溢出菜单 48 和关注按钮约 76,
-        // 名字只剩 88dp;换成图标加三个字的按钮要 92dp,名字会掉到 44dp、两个字就截断。
-        TooltipBox(
-            positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-            tooltip = { PlainTooltip { Text(stringResource(R.string.space_listen_up)) } },
-            state = rememberTooltipState(),
-        ) {
-            IconButton(onClick = onListenUp, enabled = canListen) {
-                Icon(
-                    Icons.Filled.Headphones,
-                    contentDescription = stringResource(R.string.space_listen_up),
-                )
-            }
-        }
-        if (followState == FollowState.Blocked) {
-            // [FollowButton] 在这一档什么都不画,不补一个出口的话这一页就没有回头路 ——
-            // 拉黑之后唯一能解除的地方会变成设置里的黑名单列表。
+    when (followState) {
+        FollowState.Self -> return
+        // 拉黑之后关注无从谈起,这里只剩解除 —— 不补这个出口的话,能解除的地方只剩设置里的
+        // 黑名单列表。
+        FollowState.Blocked -> {
             TextButton(onClick = { onSetBlocked(false) }) {
                 Text(stringResource(R.string.blacklist_unblock))
             }
-        } else {
-            if (followState != FollowState.Self) {
-                // 拉黑收进溢出菜单,不在头部多摆一个按钮:一屏只留一个强调按钮
-                // (风格指南 §2.4),那个名额是关注的。
-                IconButton(onClick = { menuOpen = true }) {
-                    Icon(
-                        Icons.Outlined.MoreVert,
-                        contentDescription = stringResource(R.string.follow_row_actions, name),
-                    )
-                }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    // 只有关注了的人才谈得上分组:没关注的人不在任何一份关注名单里,写回去
-                    // 服务端也不认。
-                    if (followState.isFollowing) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.follow_set_groups)) },
-                            onClick = {
-                                menuOpen = false
-                                onOpenGroupPicker()
-                            },
-                        )
-                    }
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.blacklist_block)) },
-                        onClick = {
-                            menuOpen = false
-                            confirmingBlock = true
-                        },
-                    )
-                }
-            }
-            // 空间页整页都在讲这个人,关注是这一页最主要的动作,用 filled。
-            // 名字传给取关确认框:那个框上写着要取关谁,比只写"取消关注"少一次回想。
-            FollowButton(state = followState, onClick = onToggleFollow, name = name)
+            return
         }
+        else -> Unit
+    }
+
+    val following = followState.isFollowing
+    val label = stringResource(
+        when (followState) {
+            FollowState.Mutual -> R.string.follow_mutual
+            FollowState.Following -> R.string.follow_following
+            else -> R.string.follow_none
+        },
+    )
+    val onLeading = if (following) ({ menuOpen = true }) else onToggleFollow
+
+    Box {
+        SplitButtonLayout(
+            leadingButton = {
+                if (following) {
+                    SplitButtonDefaults.OutlinedLeadingButton(onClick = onLeading) { Text(label) }
+                } else {
+                    SplitButtonDefaults.LeadingButton(onClick = onLeading) { Text(label) }
+                }
+            },
+            trailingButton = {
+                val description = stringResource(R.string.follow_row_actions, name)
+                if (following) {
+                    SplitButtonDefaults.OutlinedTrailingButton(
+                        checked = menuOpen,
+                        onCheckedChange = { menuOpen = it },
+                        modifier = Modifier.semantics { contentDescription = description },
+                    ) { Icon(Icons.Filled.ArrowDropDown, contentDescription = null) }
+                } else {
+                    SplitButtonDefaults.TrailingButton(
+                        checked = menuOpen,
+                        onCheckedChange = { menuOpen = it },
+                        modifier = Modifier.semantics { contentDescription = description },
+                    ) { Icon(Icons.Filled.ArrowDropDown, contentDescription = null) }
+                }
+            },
+        )
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            // 只有关注了的人才谈得上分组与取关:没关注的人不在任何一份关注名单里。
+            if (following) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.follow_set_groups)) },
+                    onClick = {
+                        menuOpen = false
+                        onOpenGroupPicker()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.follow_unfollow_confirm_title)) },
+                    onClick = {
+                        menuOpen = false
+                        confirmingUnfollow = true
+                    },
+                )
+            }
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.blacklist_block)) },
+                onClick = {
+                    menuOpen = false
+                    confirmingBlock = true
+                },
+            )
+        }
+    }
+
+    // 名字传给取关确认框:那个框上写着要取关谁,比只写"取消关注"少一次回想。
+    if (confirmingUnfollow) {
+        UnfollowConfirmDialog(
+            name = name,
+            onConfirm = onToggleFollow,
+            onDismiss = { confirmingUnfollow = false },
+        )
     }
 
     if (confirmingBlock) {
@@ -1170,15 +1299,11 @@ private val ArchiveOrders = listOf(
 )
 
 /**
- * 投稿页。排序用 [SortRow](风格指南 §2.1),空间内搜索回车才发请求 —— 输入即搜索会让
- * 每敲一个字打一次接口。
+ * 投稿页。表头左边是「听投稿」,右边是排序下拉([SortMenu])。搜索在顶栏,
+ * 见 [SpaceTopBar]。
  *
- * **搜索框常驻,而且和排序一起排进列表的表头里。**
- *
- * 之前的做法是顶栏一个搜索图标,点开才展开输入框。那一版有两个毛病,都是"收起"带来的:
- * 收起时输入框不见了而筛选还在,于是"投稿莫名其妙变少了";为了不让它发生,收起那一下要判
- * 「输入框里有字吗」和「筛选真的生效过吗」两个条件,而这两个条件的差别得靠十行注释说清。
- * 常驻之后这些状态全不存在 —— 筛没筛,看一眼输入框就知道。
+ * **听投稿在这里,不在页头。** 它听的就是这份列表 —— 队列取自当前投稿,带着此刻的排序与
+ * 搜索词(DESIGN 2.4b:有限且用户显式选定的集合)。放在列表头上,"听的是哪些"不用解释。
  *
  * **表头进 `PagedColumn` 的 header 槽,不钉在列表上面。** 钉住的话它和上面的页头、tab 栏
  * 三层叠着占掉小半屏,而这一页要看的是列表;放进表头之后它跟着列表一起滚走,要用时往上一拉
@@ -1189,8 +1314,7 @@ private val ArchiveOrders = listOf(
 private fun ArchivesTab(
     state: SpaceArchiveTabState,
     onOrderChanged: (SpaceArchiveOrder) -> Unit,
-    onKeywordChanged: (String) -> Unit,
-    onSearch: () -> Unit,
+    onListenUp: () -> Unit,
     onLoadMore: () -> Unit,
     onVideoClick: (SpaceVideoItem) -> Unit,
     modifier: Modifier = Modifier,
@@ -1214,21 +1338,39 @@ private fun ArchivesTab(
         onVideoClick = onVideoClick,
         modifier = modifier,
         header = {
-            // 搜索框在排序之上:先定"在哪些投稿里找",再定"怎么排"。
-            Column(
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            // 排序原先独占一行、只有靠右的两个词,左边整片空着;听投稿补上了那一半。
+            // 排序只有两档、又不常换,收成一个下拉,当前是哪一档仍然写在按钮上。
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = Spacing.Tight, end = Spacing.Tight, top = Spacing.Hair),
             ) {
-                SearchField(
-                    value = state.keyword,
-                    onValueChange = onKeywordChanged,
-                    placeholder = stringResource(R.string.space_search_hint),
-                    onSearch = onSearch,
-                )
-                SortRow(
+                // **按文字基线对齐,不按盒子居中。** 两颗按钮的内边距与图标不一样(左边图标在字前、
+                // 右边在字后,右边还收窄了内边距),各自居中之后两行字的下沿差着一两 dp,并排时
+                // 一眼就看得出来。
+                // text button:这一行是列表的表头,不该比页头的关注按钮还重。列表空着(还没
+                // 加载或搜不到)时按下去没有东西可听,不给按。
+                TextButton(
+                    onClick = onListenUp,
+                    enabled = state.items.isNotEmpty(),
+                    modifier = Modifier.alignByBaseline(),
+                ) {
+                    Icon(
+                        Icons.Filled.Headphones,
+                        contentDescription = null,
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                    Text(
+                        stringResource(R.string.space_listen_up),
+                        modifier = Modifier.padding(start = Spacing.Tight),
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                SortMenu(
                     options = ArchiveOrders,
                     selected = state.order,
                     onSelect = onOrderChanged,
+                    modifier = Modifier.alignByBaseline(),
                 )
             }
         },
@@ -1302,6 +1444,7 @@ private fun DynamicListTab(
     PagedColumn(
         items = state.items,
         key = { it.key },
+        skeletonRow = { DynamicCardSkeleton() },
         loading = state.loading,
         appending = state.appending,
         hasMore = state.hasMore,

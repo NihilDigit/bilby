@@ -60,7 +60,7 @@ fun LiveNowSlot(
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .clickable(role = Role.Button, onClick = onClick)
-            .padding(vertical = 4.dp, horizontal = 2.dp)
+            .padding(vertical = 4.dp, horizontal = LiveSlotInset)
             .width(LiveSlotWidth),
     ) {
         StackedFaces(liveUps)
@@ -220,3 +220,11 @@ private val LivePulseSizeInList = 14.dp
 /** 比两张头像叠起来再宽一点,让"N 正在直播"那行字有地方站。 */
 /** 这一格**比头像格宽**:它装的是两张叠着的脸,不是一张。 */
 private val LiveSlotWidth = 72.dp
+
+private val LiveSlotInset = 2.dp
+
+/**
+ * 这一格左沿到前面那张大头像左沿的距离:格子的左右内边距,加上头像叠在格里居中让出的一半。
+ * 排在它引用的几个常量后面:顶层属性按文件顺序初始化,排在前面读到的是 0。
+ */
+internal val LiveNowSlotFaceInset = LiveSlotInset + (LiveSlotWidth - StackWidth) / 2

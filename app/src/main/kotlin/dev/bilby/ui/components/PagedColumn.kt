@@ -3,6 +3,7 @@ package dev.bilby.ui.components
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
@@ -17,7 +18,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 
 /**
- * 一页页往下翻的列表。**这个应用里的列表页全长这样**:首屏转圈 / 首屏失败 / 空态 /
+ * 一页页往下翻的列表。**这个应用里的列表页全长这样**:首屏骨架 / 首屏失败 / 空态 /
  * 条目 / 触底预取 / 底部的"翻页中·没有更多了·翻页失败重试"。
  *
  * 抽出来之前,这套骨架在历史、关注、收藏夹、空间的三个 tab 里各抄了一份,其中那段
@@ -48,6 +49,8 @@ fun <T> PagedColumn(
     contentPadding: PaddingValues = PaddingValues(),
     listState: LazyListState = rememberLazyListState(),
     header: (LazyListScope.() -> Unit)? = null,
+    /** 首屏读取中的一行占位,见 [FirstScreenState]。默认是视频行。 */
+    skeletonRow: @Composable () -> Unit = { VideoRowSkeleton() },
     itemContent: @Composable (T) -> Unit,
 ) {
     FirstScreenState(
@@ -56,6 +59,7 @@ fun <T> PagedColumn(
         isEmpty = items.isEmpty(),
         onRetry = onRetry,
         modifier = modifier,
+        skeleton = { ListSkeleton(Modifier.padding(contentPadding), row = skeletonRow) },
     ) {
         // 触底预取。**在 composition 之外用 snapshotFlow 观察**,不能在 composable body 里直接
         // 调 onLoadMore —— 那样每次重组都会再请求一次。

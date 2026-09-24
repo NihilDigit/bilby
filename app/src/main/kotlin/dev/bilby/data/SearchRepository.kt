@@ -4,6 +4,8 @@ import dev.bilby.BiliLog
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
+import dev.bilby.api.dto.SearchArticleItemDto
+import dev.bilby.api.dto.SearchArticleResultDto
 import dev.bilby.api.dto.SearchUserItemDto
 import dev.bilby.api.dto.SearchUserResultDto
 import dev.bilby.api.dto.SearchVideoItemDto
@@ -30,9 +32,25 @@ data class SearchUser(
     val avatarUrl: String,
     val fansCount: Long,
     val signature: String,
+    val videoCount: Long = 0,
+)
+
+/** 专栏搜索的一条。打开走 cv 号那一套(`ArticleRef(isRead = true)`)。 */
+data class SearchArticle(
+    val id: Long,
+    val title: String,
+    val summary: String,
+    val coverUrl: String,
+    val viewCount: Long,
+    val replyCount: Long,
+    val publishedAtEpochSeconds: Long,
+    val categoryName: String,
 )
 
 data class SearchVideoPage(val items: List<SearchVideo>, val hasMore: Boolean)
+
+/** 分类搜索的一页。[hasMore] 按服务端那一页的原始条数算,理由见 [SearchRepository.searchVideos]。 */
+data class SearchPage<T>(val items: List<T>, val hasMore: Boolean)
 
 /**
  * 搜索快路数据层(DESIGN 2.2:回车直搜,不经 LLM,结果页只有结果)。
@@ -87,6 +105,50 @@ class SearchRepository(private val client: BiliClient) {
             .map { dto -> dto.result.map { it.toSearchUser() } }
     }
 
+    /** 用户搜索,带翻页。搜索页的「用户」一栏用它;助理工具只要第一页,走 [searchUsers]。 */
+    suspend fun searchUserPage(keyword: String, page: Int): BiliResult<SearchPage<SearchUser>> {
+        val params = typeParams("bili_user", keyword, page)
+        return client.getData<SearchUserResultDto>(SEARCH_URL, params, signed = true).map { dto ->
+            val raw = dto.result.map { it.toSearchUser() }
+            // mid 为 0 的条目点不进空间,还会在 LazyColumn 的 key 上撞车,理由同视频的 bvid。
+            SearchPage(raw.filter { it.mid != 0L }, hasMore = (page - 1) * PAGE_SIZE + raw.size < dto.numResults)
+        }
+    }
+
+    /**
+     * 专栏搜索。`order` 与视频同一组取值(totalrank/pubdate/click,notes 2.4 的
+     * ArticleOrderType 前三项与视频的重合),所以搜索页两栏共用一个排序枚举。
+     */
+    suspend fun searchArticles(keyword: String, page: Int, order: String): BiliResult<SearchPage<SearchArticle>> {
+        val params = typeParams("article", keyword, page) + buildMap {
+            if (order.isNotEmpty()) put("order", order)
+        }
+        return client.getData<SearchArticleResultDto>(SEARCH_URL, params, signed = true).map { dto ->
+            val raw = dto.result.map { it.toSearchArticle() }
+            SearchPage(raw.filter { it.id != 0L }, hasMore = (page - 1) * PAGE_SIZE + raw.size < dto.numResults)
+        }
+    }
+
+    private fun typeParams(type: String, keyword: String, page: Int): Map<String, String> = mapOf(
+        "search_type" to type,
+        "keyword" to keyword,
+        "page" to page.toString(),
+        "page_size" to PAGE_SIZE.toString(),
+        "platform" to "pc",
+        "web_location" to "1430654",
+    )
+
+    private fun SearchArticleItemDto.toSearchArticle() = SearchArticle(
+        id = id,
+        title = title.stripKeywordHighlight(),
+        summary = desc.stripKeywordHighlight(),
+        coverUrl = imageUrls.firstOrNull().orEmpty().toHttpsUrl(),
+        viewCount = view,
+        replyCount = reply,
+        publishedAtEpochSeconds = pubTime,
+        categoryName = categoryName,
+    )
+
     private fun SearchVideoItemDto.toSearchVideo() = SearchVideo(
         bvid = bvid,
         title = title.stripKeywordHighlight(),
@@ -105,6 +167,7 @@ class SearchRepository(private val client: BiliClient) {
         avatarUrl = upic.toHttpsUrl(),
         fansCount = fans,
         signature = usign,
+        videoCount = videos,
     )
 
     private companion object {

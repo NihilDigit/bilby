@@ -1,8 +1,13 @@
 package dev.bilby.ui.search
 
+import androidx.annotation.StringRes
+import dev.bilby.R
 import dev.bilby.api.BiliResult
 import dev.bilby.api.CODE_NOT_LOGGED_IN
 import dev.bilby.api.CODE_RATE_LIMITED
+import dev.bilby.api.map
+import dev.bilby.data.SearchArticle
+import dev.bilby.data.SearchPage
 import dev.bilby.data.SearchRepository
 import dev.bilby.data.SearchUser
 import dev.bilby.data.SearchVideo
@@ -15,32 +20,58 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/** 结果分三栏。番剧、影视、直播不在其中:这个应用只放用户投稿(README 的边界)。 */
+enum class SearchTab(@StringRes val labelRes: Int) {
+    Video(R.string.search_tab_video),
+    User(R.string.search_tab_user),
+    Article(R.string.search_tab_article),
+}
+
+/** 视频时长筛选。传参用 [apiValue](notes/space-and-search.md 2.5,即枚举下标)。 */
+enum class SearchDuration(val apiValue: Int, @StringRes val labelRes: Int) {
+    All(0, R.string.search_duration_all),
+    UnderTen(1, R.string.search_duration_under_10),
+    TenToThirty(2, R.string.search_duration_10_30),
+    ThirtyToSixty(3, R.string.search_duration_30_60),
+    OverSixty(4, R.string.search_duration_over_60),
+}
+
+/** 一栏结果的翻页状态。三栏各一份,互不牵连:一栏失败或还在飞不挡另一栏。 */
+data class SearchListState<T>(
+    val items: List<T> = emptyList(),
+    val loading: Boolean = false,
+    val appending: Boolean = false,
+    val error: String? = null,
+    val hasMore: Boolean = true,
+    /** 当前关键词下这一栏发起过没有。切到一栏时据此决定要不要拉第一页。 */
+    val started: Boolean = false,
+)
+
 /**
  * 普通搜索的状态:**一次查询一份结果**,不留历史。它就是一个搜索页,上一次搜了什么
  * 和这一次无关。
  */
 data class NormalSearchState(
     val query: String = "",
+    val tab: SearchTab = SearchTab.Video,
     val order: SearchOrder = SearchOrder.Comprehensive,
-    val videos: List<SearchVideo> = emptyList(),
-    val users: List<SearchUser> = emptyList(),
-    // 视频和用户两路请求并行、互相独立(性能计划 7.1):慢的那路失败或还没回来
-    // 不能挡住已经到手的另一路,所以 loading/error 各记各的,不共用一份粗粒度状态。
-    val videoLoading: Boolean = false,
-    val videoError: String? = null,
-    val userLoading: Boolean = false,
-    val userError: String? = null,
-    val appending: Boolean = false,
-    val hasMore: Boolean = true,
+    val duration: SearchDuration = SearchDuration.All,
+    /** 专栏的排序。和视频分开记:两栏的「按热度」不是同一个东西,切栏不该带过去。 */
+    val articleOrder: SearchOrder = SearchOrder.Comprehensive,
+    val videos: SearchListState<SearchVideo> = SearchListState(),
+    val users: SearchListState<SearchUser> = SearchListState(),
+    val articles: SearchListState<SearchArticle> = SearchListState(),
 )
 
 /**
- * 普通搜索的一整套状态机:分页游标、跨页去重、generation 守卫、视频/用户两路并行。
+ * 普通搜索的一整套状态机。搜索 tab 与标签结果页(`SearchResultViewModel`)共用 —— 同一个
+ * 接口、同一份排序、同一种分页,差别只在宿主。
  *
- * 从 [SearchChatViewModel] 抽出来,因为标签结果页(`SearchResultViewModel`)要的是同一套
- * 行为 —— 同一个接口、同一份排序、同一种分页,差别只在宿主:一个长在搜索 tab 里,另一个
- * 是压栈的目的地。各写一份的话,这里每一条注释记下的坑(迟到响应写共享字段、分页游标
- * 归位时机、取消旧代不摘新代的 loading)都要靠人记得抄全。
+ * **三栏各一个 [Pager]**,翻页游标、跨页去重、generation 守卫都在那一处;三栏原先若各写一份,
+ * 每一条坑(迟到响应写共享字段、分页游标归位时机、取消旧代不摘新代的 loading)都要抄三遍。
+ *
+ * **只拉当前那一栏。** 其余两栏等划过去、点过去才拉第一页:多数搜索只看视频,另外两路
+ * 每次都陪着发是白打的请求。
  *
  * 生命周期跟着 [scope] 走,宿主用自己的 viewModelScope 传进来即可,不需要另行清理。
  */
@@ -51,165 +82,194 @@ class NormalSearchController(
     private val _state = MutableStateFlow(NormalSearchState())
     val state: StateFlow<NormalSearchState> = _state.asStateFlow()
 
-    /** 普通搜索当前翻到第几页。它只有一份结果,不需要按轮次记。 */
-    private var page = 1
+    private val videoPager = Pager(
+        scope = scope,
+        key = { it.bvid },
+        fetch = { query, page ->
+            val s = _state.value
+            searchRepository.searchVideos(
+                keyword = query,
+                page = page,
+                order = s.order.apiValue,
+                duration = s.duration.apiValue.takeIf { it != 0 },
+            ).map { SearchPage(it.items, it.hasMore) }
+        },
+        read = { it.videos },
+        write = { s, list -> s.copy(videos = list) },
+        state = _state,
+    )
 
-    /**
-     * 已经收下的 bvid。分页边界上同一条稿件会重出,而 UI 拿 bvid 当 LazyColumn 的
-     * key —— 重复即崩溃(「Key ... was already used」)。仓库那层只能管住单页内部,跨页
-     * 只有这里知道。
-     */
-    private val seenBvids = mutableSetOf<String>()
+    private val userPager = Pager(
+        scope = scope,
+        key = { it.mid },
+        fetch = { query, page -> searchRepository.searchUserPage(query, page) },
+        read = { it.users },
+        write = { s, list -> s.copy(users = list) },
+        state = _state,
+    )
 
-    /**
-     * 这条路自己的 generation(性能计划 7.2)。query、排序或翻页目标一变就加一,
-     * 旧一代的响应落地前都要先比对这个数,对不上就是迟到的,整条丢弃 —— 包括对
-     * [seenBvids]、[page] 这些跨请求共享状态的写入,不能等到 `_state.update` 才拦。
-     */
-    private var generation = 0
+    private val articlePager = Pager(
+        scope = scope,
+        key = { it.id },
+        fetch = { query, page -> searchRepository.searchArticles(query, page, _state.value.articleOrder.apiValue) },
+        read = { it.articles },
+        write = { s, list -> s.copy(articles = list) },
+        state = _state,
+    )
 
-    /** 当前这一代视频/用户请求所在的父 Job,下一代开始前先取消它,两路子请求跟着一起停。 */
-    private var searchJob: Job? = null
-
-    /**
-     * 换关键词、换排序、重试,对结果集都是同一件事:从第一页重来。三个入口原先各自 copy
-     * 一份状态,于是各漏各的 —— 换排序漏了 `appending`(切排序时正在续页的话,被取消的那一代
-     * 不会清它,续页就此卡住),重试漏了 `hasMore`(翻到底之后下拉刷新,页面回到第一页而
-     * `hasMore` 还是 false,再也翻不动)。分页状态只在这一处归位。
-     *
-     * @param keepVisibleResults 下拉刷新用。列表留在屏幕上直到新的第一页落地,否则一下拉就
-     *   整屏空白再重画,而刷新指示器本身(`videoLoading && videos.isNotEmpty()`)也会立刻熄灭。
-     */
-    fun search(query: String, order: SearchOrder, keepVisibleResults: Boolean = false) {
-        seenBvids.clear()
-        _state.update {
-            it.copy(
-                query = query,
-                order = order,
-                videos = if (keepVisibleResults) it.videos else emptyList(),
-                users = if (keepVisibleResults) it.users else emptyList(),
-                hasMore = true,
-                appending = false,
-                videoLoading = true,
-                userLoading = true,
-                videoError = null,
-                userError = null,
-            )
-        }
-        run(query, page = 1, order)
+    private fun pagerFor(tab: SearchTab): Pager<*> = when (tab) {
+        SearchTab.Video -> videoPager
+        SearchTab.User -> userPager
+        SearchTab.Article -> articlePager
     }
 
     /**
-     * 续页只在**首页已经落地**之后才成立。列表在首页返回之前就已经排好版(此刻只有排序行
-     * 和页脚两个 item),UI 那侧的预取条件因此立刻满足;放行的话 [run] 会先取消掉
-     * 正在飞的第一页,再按 [page] 发一个续页 —— 而那个 [page] 还停在上一次搜索翻到的位置,
-     * 于是同一个词每次落到一段任意偏移的结果上。
+     * 换关键词:三栏全部归零,当前栏拉第一页。
      *
-     * 首页出错时同样不续:往一个没建立起来的结果集后面追加没有意义,那一屏给的是重试。
+     * @param keepVisibleResults 下拉刷新用。列表留在屏幕上直到新的第一页落地,否则一下拉就
+     *   整屏空白再重画,而刷新指示器本身也会立刻熄灭。
      */
+    fun search(query: String, keepVisibleResults: Boolean = false) {
+        _state.update { it.copy(query = query) }
+        SearchTab.entries.forEach { pagerFor(it).reset(keepVisibleResults && it == _state.value.tab) }
+        pagerFor(_state.value.tab).start(query)
+    }
+
+    /** 切栏。这一栏在当前关键词下还没发起过就拉第一页;发起过的保留原样,切回来不重拉。 */
+    fun selectTab(tab: SearchTab) {
+        _state.update { it.copy(tab = tab) }
+        val query = _state.value.query
+        if (query.isEmpty()) return
+        val pager = pagerFor(tab)
+        if (!pager.started()) pager.start(query)
+    }
+
     fun loadMore() {
-        val current = _state.value
-        if (current.videoLoading || current.videoError != null) return
-        if (current.appending || !current.hasMore || current.query.isEmpty()) return
-        _state.update { it.copy(appending = true) }
-        run(current.query, page = page + 1, current.order)
+        val s = _state.value
+        if (s.query.isEmpty()) return
+        pagerFor(s.tab).loadMore(s.query)
     }
 
     /**
      * 切排序等于换了一份不同的结果集,不是往当前结果里插队:只换 order 参数继续 append
-     * 会把两种排序的结果拼在一条列表里。
-     *
-     * 还没搜过东西时只记下这一档,不发请求 —— 没有关键词可搜。
+     * 会把两种排序的结果拼在一条列表里。还没搜过东西时只记下这一档。
      */
     fun onOrderChanged(order: SearchOrder) {
-        val current = _state.value
-        if (current.order == order) return
-        if (current.query.isEmpty()) {
-            _state.update { it.copy(order = order) }
-            return
-        }
-        search(current.query, order)
+        if (_state.value.order == order) return
+        _state.update { it.copy(order = order) }
+        restart(videoPager)
     }
 
-    /** 重试和下拉刷新:同一个词从第一页重来,已有结果留在屏幕上等新页落地。 */
+    fun onDurationChanged(duration: SearchDuration) {
+        if (_state.value.duration == duration) return
+        _state.update { it.copy(duration = duration) }
+        restart(videoPager)
+    }
+
+    fun onArticleOrderChanged(order: SearchOrder) {
+        if (_state.value.articleOrder == order) return
+        _state.update { it.copy(articleOrder = order) }
+        restart(articlePager)
+    }
+
+    /** 重试和下拉刷新:当前栏从第一页重来,已有结果留在屏幕上等新页落地。 */
     fun retry() {
-        val current = _state.value
-        val query = current.query.ifEmpty { return }
-        search(query, current.order, keepVisibleResults = true)
+        val s = _state.value
+        if (s.query.isEmpty()) return
+        val pager = pagerFor(s.tab)
+        pager.reset(keepVisible = true)
+        pager.start(s.query)
+    }
+
+    private fun restart(pager: Pager<*>) {
+        val query = _state.value.query
+        pager.reset(keepVisible = false)
+        if (query.isNotEmpty()) pager.start(query)
+    }
+}
+
+/**
+ * 一栏结果的翻页器。
+ *
+ * - **generation**:query、排序或翻页目标一变就加一,旧一代的响应落地前先比对,对不上整条丢弃
+ *   —— 包括对 [seen]、[page] 这些跨请求共享状态的写入,不能等到 `_state.update` 才拦。
+ * - **分页游标在请求发出时归位**,不等响应回来:留到响应落地才写的话,首页在途期间 page 还是
+ *   上一次搜索的值,任何一次续页都会从一个与本次查询无关的偏移开始。
+ * - **跨页去重**:分页边界上同一条会重出,而 UI 拿它当 LazyColumn 的 key,重复即崩溃。
+ */
+private class Pager<T>(
+    private val scope: CoroutineScope,
+    private val key: (T) -> Any,
+    private val fetch: suspend (query: String, page: Int) -> BiliResult<SearchPage<T>>,
+    private val read: (NormalSearchState) -> SearchListState<T>,
+    private val write: (NormalSearchState, SearchListState<T>) -> NormalSearchState,
+    private val state: MutableStateFlow<NormalSearchState>,
+) {
+    private var page = 1
+    private val seen = mutableSetOf<Any>()
+    private var generation = 0
+    private var job: Job? = null
+
+    private fun update(block: (SearchListState<T>) -> SearchListState<T>) =
+        state.update { write(it, block(read(it))) }
+
+    fun started(): Boolean = read(state.value).started
+
+    /** 回到"这个关键词下还没发起过"。取消在飞的请求,让它们的响应作废。 */
+    fun reset(keepVisible: Boolean) {
+        generation++
+        job?.cancel()
+        page = 1
+        seen.clear()
+        update { if (keepVisible) it.copy(started = false, error = null) else SearchListState() }
+    }
+
+    fun start(query: String) {
+        update { it.copy(started = true, loading = true, appending = false, error = null, hasMore = true) }
+        run(query, page = 1)
     }
 
     /**
-     * 视频和用户两路请求独立发起(性能计划 7.1):视频先回先发布,用户回来了再并进去,
-     * 慢的或失败的那路不拖累已经能看的结果。分页(page > 1)时不重新拉用户 —— 用户结果
-     * 只在第一页有意义,原逻辑就是这样。
-     *
-     * 两路共用同一个父 Job:下一次 query/排序/翻页触发时,取消父 Job 就把两个子协程一起
-     * 停掉,不需要分别记两个 Job 引用。
+     * 续页只在**首页已经落地**之后才成立。列表在首页返回之前就已经排好版,UI 那侧的预取条件
+     * 因此立刻满足;放行的话会先取消正在飞的第一页,再从一个任意偏移续页。首页出错时同样不续。
      */
-    private fun run(query: String, page: Int, order: SearchOrder) {
+    fun loadMore(query: String) {
+        val current = read(state.value)
+        if (!current.started || current.loading || current.error != null) return
+        if (current.appending || !current.hasMore || current.items.isEmpty()) return
+        update { it.copy(appending = true) }
+        run(query, page = page + 1)
+    }
+
+    private fun run(query: String, page: Int) {
         val gen = ++generation
-        // 分页游标在**请求发出时**归位,不等响应回来。它是所有入口(回车、换排序、重试)共同的
-        // 收口处,写在这里比让三个调用方各自记得清一遍可靠。留到响应落地才写的那一版,意味着
-        // 首页在途期间 page 还是上一次搜索的值,任何一次续页都会从一个与本次查询无关的偏移开始。
         if (page == 1) this.page = 1
-        searchJob?.cancel()
-        searchJob = scope.launch {
-            launch { runVideos(gen, query, page, order) }
-            if (page == 1) launch { runUsers(gen, query) }
-        }
-    }
-
-    private suspend fun runVideos(gen: Int, query: String, page: Int, order: SearchOrder) {
-        try {
-            val result = searchRepository.searchVideos(keyword = query, page = page, order = order.apiValue)
-            // 迟到的响应连 seenBvids/page 这些跨请求共享的字段都不该碰,所以在提交
-            // 之前先拦一次,不能只靠 _state.update 里那道检查。
-            if (gen != generation) return
-            when (result) {
-                is BiliResult.Ok -> {
-                    this.page = page
-                    if (page == 1) seenBvids.clear()
-                    val fresh = result.value.items.filter { seenBvids.add(it.bvid) }
-                    _state.update {
-                        it.copy(
-                            videos = if (page == 1) fresh else it.videos + fresh,
-                            hasMore = result.value.hasMore,
-                            videoError = null,
-                        )
+        job?.cancel()
+        job = scope.launch {
+            try {
+                val result = fetch(query, page)
+                if (gen != generation) return@launch
+                when (result) {
+                    is BiliResult.Ok -> {
+                        this@Pager.page = page
+                        if (page == 1) seen.clear()
+                        val fresh = result.value.items.filter { seen.add(key(it)) }
+                        update {
+                            it.copy(
+                                items = if (page == 1) fresh else it.items + fresh,
+                                hasMore = result.value.hasMore,
+                                error = null,
+                            )
+                        }
                     }
+
+                    is BiliResult.ApiError -> update { it.copy(error = apiErrorText(result)) }
+                    is BiliResult.Failure -> update { it.copy(error = failureText(result.cause)) }
                 }
-
-                is BiliResult.ApiError -> _state.update { it.copy(videoError = apiErrorText(result)) }
-
-                is BiliResult.Failure -> _state.update { it.copy(videoError = failureText(result.cause)) }
+            } finally {
+                // 按当前 generation 释放:被取消的旧一代不该把新一代刚置上的 loading 又扒下来。
+                if (gen == generation) update { it.copy(loading = false, appending = false) }
             }
-        } finally {
-            // 按当前 generation 释放:被取消的旧一代不该把新一代刚置上的 loading 又扒下来。
-            if (gen == generation) {
-                _state.update { it.copy(videoLoading = false, appending = false) }
-            }
-        }
-    }
-
-    private suspend fun runUsers(gen: Int, query: String) {
-        try {
-            val result = searchRepository.searchUsers(query)
-            if (gen != generation) return
-            when (result) {
-                is BiliResult.Ok -> _state.update { it.copy(users = result.value, userError = null) }
-
-                // 带上"UP 主"三个字:这一行挨着视频结果显示,不说清是哪一路失败的话,
-                // 读起来像整页都出了问题。
-                is BiliResult.ApiError -> _state.update {
-                    it.copy(userError = "UP 主搜索失败:${apiErrorText(result)}")
-                }
-
-                is BiliResult.Failure -> _state.update {
-                    it.copy(userError = "UP 主搜索失败:${failureText(result.cause)}")
-                }
-            }
-        } finally {
-            if (gen == generation) _state.update { it.copy(userLoading = false) }
         }
     }
 }

@@ -32,8 +32,11 @@
     <string name="tab_toview">Watch later</string>
 
     <string name="follow_none">Follow</string>
+    <string name="profile_following">following</string>
+    <string name="profile_coins">coins</string>
     <string name="follow_following">Following</string>
     <string name="follow_mutual">Mutual</string>
+    <string name="follow_special_tag">Special</string>
     <string name="follow_unfollow_confirm_title">Unfollow</string>
 
     <string name="feed_empty">No new videos from the creators you follow</string>
@@ -47,7 +50,7 @@
     <string name="feed_article_badge">Article</string>
     <string name="feed_read_marker">New since your last visit</string>
 
-    <string name="search_empty">Search videos and creators</string>
+    <string name="search_empty">Search videos, creators and articles</string>
     <string name="search_history_title">Recent searches</string>
     <string name="search_history_remove">Remove this search</string>
     <string name="search_agent_empty">Describe what you want to watch</string>
@@ -61,6 +64,18 @@
     <string name="search_order_comprehensive">Relevance</string>
     <string name="search_order_click">Most played</string>
     <string name="search_order_pubdate">Newest</string>
+    <string name="search_order_read">Most read</string>
+    <string name="search_tab_video">Videos</string>
+    <string name="search_tab_user">Creators</string>
+    <string name="search_tab_article">Articles</string>
+    <string name="search_duration_all">Any length</string>
+    <string name="search_duration_under_10">Under 10 min</string>
+    <string name="search_duration_10_30">10–30 min</string>
+    <string name="search_duration_30_60">30–60 min</string>
+    <string name="search_duration_over_60">Over 60 min</string>
+    <string name="search_history_clear_title">Clear search history</string>
+    <string name="search_user_meta">%1$s followers  %2$s videos</string>
+    <string name="search_article_views">%1$s views</string>
 
     <string name="agent_title">Assistant</string>
     <string name="agent_process">Steps</string>
@@ -78,7 +93,19 @@
     <string name="toview_progress">Left off at %1$s</string>
     <string name="toview_remove">Remove from Watch later: %1$s</string>
     <string name="toview_removed">Removed from Watch later</string>
-    <string name="toview_clear_finished_confirm">Delete %1$d watched items?</string>
+    <string name="toview_clear_finished_confirm">Clear %1$d watched items?</string>
+    <string name="toview_clear_invalid">Clear unavailable</string>
+    <string name="toview_clear_invalid_confirm">Clear unavailable videos?</string>
+    <string name="toview_listen_all">Listen to all</string>
+    <string name="toview_order_recent">Recently added</string>
+    <string name="toview_order_earliest">Earliest added</string>
+    <string name="toview_refresh_failed">Could not refresh: %1$s</string>
+    <string name="toview_remove_failed">Could not remove: %1$s</string>
+    <string name="toview_undo_failed">Could not undo: %1$s</string>
+    <string name="toview_clear_failed">Could not clear: %1$s</string>
+    <string name="media_kind_audio">Audio</string>
+    <string name="media_kind_ogv">Series</string>
+    <string name="media_kind_course">Course</string>
 
     <string name="history_title">History</string>
     <string name="history_select_all">Select all</string>
@@ -130,11 +157,12 @@
     <string name="level_badge">Level %1$d</string>
     <string name="level_badge_senior">Level %1$d, senior member</string>
     <string name="space_no_sign">This person is lazy and left nothing behind</string>
-    <string name="space_listen_up">Listen to this creator\'s videos</string>
+    <string name="space_listen_up">Listen</string>
     <string name="space_order_pubdate">Newest</string>
     <string name="space_order_click">Most viewed</string>
     <string name="space_search_action">Search</string>
     <string name="space_search_hint">Search this profile</string>
+    <string name="space_search_close">Exit search</string>
     <string name="space_empty_archives">This creator hasn\'t posted any videos</string>
     <string name="space_empty_archives_search">No matching videos</string>
     <string name="space_empty_dynamics">This creator has no posts</string>
@@ -196,13 +224,17 @@
     <string name="offline_status_failed">Download failed</string>
     <string name="offline_with_danmaku">With danmaku</string>
     <string name="offline_empty">Nothing downloaded yet</string>
-    <string name="offline_used_space">%1$s used</string>
+    <string name="offline_section_in_flight">Downloading (%1$d)</string>
+    <string name="offline_section_completed">Downloaded</string>
+    <string name="offline_listen_all">Listen to all</string>
     <string name="offline_delete">Delete download: %1$s</string>
     <string name="offline_delete_confirm_title">Delete this download?</string>
     <string name="offline_delete_confirm_message">The file is removed from this device and caching again means downloading again.</string>
     <string name="offline_notification_channel">Downloads</string>
     <string name="offline_notification_title">Downloading videos</string>
     <string name="offline_notification_queued">%1$d queued</string>
+    <string name="offline_sheet_in_progress">Downloading</string>
+    <string name="offline_failure_disk_full">Not enough storage</string>
     <string name="size_mb">%1$.1f MB</string>
     <string name="size_gb">%1$.2f GB</string>
     <string name="speed_kb">%1$d KB/s</string>
@@ -225,7 +257,9 @@
     <string name="player_previous">Previous</string>
     <string name="player_next">Next</string>
     <string name="player_speed">Speed</string>
+    <string name="player_settings">Playback settings</string>
     <string name="player_quality">Quality</string>
+    <string name="player_audio_quality">Audio</string>
     <string name="player_progress">Playback progress</string>
     <string name="player_subtitle">Subtitles</string>
     <string name="player_subtitle_off">Subtitles off</string>
@@ -252,8 +286,11 @@
     <string name="sleep_timer_off">Sleep timer</string>
     <string name="sleep_timer_end_of_item">After this one</string>
     <string name="sleep_timer_stop_in">Stop in %1$d min</string>
-    <string name="sleep_timer_end_of_item_option">Stop after this video finishes</string>
+    <string name="sleep_timer_end_of_item_option">After this video</string>
     <string name="sleep_timer_cancel">Cancel timer</string>
+    <string name="sleep_timer_minutes">%1$d min</string>
+    <string name="sleep_timer_less">1 min less</string>
+    <string name="sleep_timer_more">1 min more</string>
 
     <string name="sponsor_sponsor">Sponsor</string>
     <string name="sponsor_selfpromo">Self-promotion</string>
@@ -289,6 +326,28 @@
     <string name="settings_loading">Loading…</string>
     <string name="settings_section_feed">Home feed</string>
     <string name="settings_section_offline">Downloads</string>
+    <string name="settings_section_appearance">Appearance</string>
+    <string name="settings_theme_mode">Theme</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_pure_black">Pure black</string>
+    <string name="settings_pure_black_subtitle">Black background in dark theme</string>
+    <string name="settings_theme_palette">Color</string>
+    <string name="settings_language">Language</string>
+    <string name="settings_language_system">System</string>
+    <string name="settings_language_zh_hans">简体中文</string>
+    <string name="settings_language_en">English</string>
+    <string name="theme_palette_dynamic">System</string>
+    <string name="theme_palette_default">Bilby</string>
+    <string name="theme_palette_kurenai">Kurenai</string>
+    <string name="theme_palette_yamabuki">Yamabuki</string>
+    <string name="theme_palette_wakatake">Wakatake</string>
+    <string name="theme_palette_asagi">Asagi</string>
+    <string name="theme_palette_kikyo">Kikyo</string>
+    <string name="theme_palette_kanzo">Kanzo</string>
+    <string name="theme_palette_moegi">Moegi</string>
+    <string name="theme_palette_botan">Botan</string>
     <string name="settings_offline_concurrency">Simultaneous downloads</string>
     <string name="settings_offline_concurrency_subtitle">A higher number caches a batch sooner, at the cost of more requests in flight and a greater chance of tripping risk control</string>
     <string name="settings_offline_concurrency_value">%1$d at a time</string>
@@ -342,6 +401,7 @@
 
     <string name="update_dialog_title">Version %1$s</string>
     <string name="update_dialog_no_notes">This release ships without notes.</string>
+    <string name="update_dialog_current">Current %1$s</string>
     <string name="update_download">Download</string>
     <string name="update_downloading">Downloading %1$d%%</string>
     <string name="update_install">Install</string>
@@ -351,6 +411,7 @@
     <string name="settings_llm_test_running">Sending…</string>
     <string name="settings_llm_test_ok">"OK  %1$d ms"</string>
     <string name="feed_open_followings">Following</string>
+    <string name="feed_followings_all_short">All</string>
     <string name="followings_title">Following</string>
     <string name="followings_empty">Not following anyone yet</string>
     <string name="followings_search_hint">Search your following list</string>
@@ -392,17 +453,23 @@
     <string name="fav_folder_delete_title">Delete folder</string>
     <string name="fav_folder_delete_message">%1$s and the %2$d videos in it will be removed.</string>
     <string name="fav_folder_delete_confirm">Delete folder</string>
-    <string name="fav_remove">Remove from favorites: %1$s</string>
-    <string name="fav_removed">Removed from favorites</string>
-    <string name="fav_undo">Undo</string>
-    <string name="fav_remove_failed">Couldn\'t remove: %1$s</string>
-    <string name="fav_undo_failed">Couldn\'t undo: %1$s</string>
     <string name="fav_invalid_video">Video unavailable</string>
-    <string name="tab_saved">Saved</string>
+    <string name="fav_folder_edit_info">Edit details</string>
+    <string name="fav_listen">Listen to folder</string>
+    <string name="fav_order_mtime">Recently saved</string>
+    <string name="fav_order_view">Most viewed</string>
+    <string name="fav_order_pubtime">Recently published</string>
+    <string name="fav_search">Search</string>
+    <string name="fav_search_hint">Search this folder</string>
+    <string name="fav_search_close">Close search</string>
+    <string name="fav_empty_search">No matches</string>
+    <string name="fav_clean_invalid">Remove unavailable</string>
+    <string name="fav_clean_invalid_confirm">Remove unavailable items?</string>
+    <string name="fav_clean_done">Unavailable items removed</string>
+    <string name="fav_clean_failed">Could not remove: %1$s</string>
 
     <string name="tab_profile">Me</string>
     <string name="profile_logout">Log out</string>
-    <string name="profile_view_all">View all</string>
     <string name="profile_favorites_empty">No favourite folders yet</string>
     <string name="coin_failed">Could not give coins: %1$s</string>
     <string name="player_brightness">Brightness %1$d%%</string>
@@ -420,9 +487,9 @@
     <string name="settings_auto_next_subtitle">When one item finishes, the next in the queue plays. Turn this off and playback stops at the end; switching by hand is unaffected</string>
 
     <!-- Live -->
-    <string name="live_loading">Connecting to the stream…</string>
     <string name="live_offline">This streamer is offline</string>
     <string name="live_refresh">Refresh</string>
+    <string name="live_started_at">Live since %1$s</string>
     <string name="live_audio_only_on">Audio only</string>
     <string name="live_audio_only_off">Show video</string>
     <string name="live_tab_chat">Chat</string>
@@ -461,6 +528,8 @@
     <string name="settings_fast_forward_speed_subtitle">Temporary speed while the picture is held; restored on release</string>
     <string name="player_seek_release_to_cancel">Release to cancel</string>
     <string name="action_share">Share</string>
+    <string name="player_pip">Picture-in-picture</string>
+    <string name="settings_danmaku_in_pip">Danmaku in picture-in-picture</string>
     <string name="sponsor_sponsor_desc">Paid promotion placed by a brand</string>
     <string name="sponsor_selfpromo_desc">Promotion of the uploader\'s own merchandise, community or channels</string>
     <string name="sponsor_interaction_desc">Requests to like, subscribe or donate</string>
@@ -482,6 +551,10 @@
     <string name="settings_default_quality_wifi">Default quality on Wi-Fi</string>
     <string name="settings_default_quality_metered">Default quality on metered networks</string>
     <string name="settings_default_quality_metered_subtitle">Follows the system\'s metered flag, so hotspots and metered Wi-Fi count too</string>
+    <string name="settings_default_audio_wifi">Default audio on Wi-Fi</string>
+    <string name="settings_default_audio_metered">Default audio on metered networks</string>
+    <string name="settings_pick_updates_default">Player choices become defaults</string>
+    <string name="settings_pick_updates_default_subtitle">When off, changing quality or audio in the player only applies to this playback</string>
     <string name="settings_pause_history">Pause watch history</string>
     <string name="settings_pause_history_subtitle">New videos stop being recorded. Existing history and playback progress are unaffected.</string>
     <string name="settings_pause_history_loading">Loading</string>
@@ -513,6 +586,7 @@
     <string name="dynamic_reserve_calendar_note">%1$s\n%2$s</string>
     <string name="dynamic_other_title">Following posts</string>
     <string name="dynamic_other_entry">Following posts</string>
+    <string name="feed_up_pushes_entry">Pushes</string>
     <string name="dynamic_other_empty">The people you follow have posted nothing but videos lately</string>
     <!-- Forwarded post: the name and body open the original. Screen-reader label only. -->
     <string name="dynamic_open_origin">Open the original post</string>
@@ -533,6 +607,32 @@
     <string name="whisper_send_failed">Failed to send: %1$s</string>
     <string name="whisper_unsupported">Unsupported message (type %1$d)</string>
     <string name="whisper_system_account">System</string>
+    <string name="message_action_reply">replied to my comment</string>
+    <string name="message_action_comment">commented on my %1$s</string>
+    <string name="message_action_mention">mentioned me in %1$s</string>
+    <string name="message_action_like">liked my %1$s</string>
+    <string name="message_business_fallback">post</string>
+    <string name="message_preview_image">[Image]</string>
+    <string name="message_preview_sticker">[Sticker]</string>
+    <string name="message_preview_withdrawn">[Unsent]</string>
+    <string name="message_preview_video">[Video] %1$s</string>
+    <string name="message_up_pushes">Uploads from creators</string>
+    <string name="coin_log_title">Coin history</string>
+    <string name="coin_log_empty">No coin history</string>
+    <string name="comment_thread_title">Comment</string>
+    <string name="comment_thread_open_subject">Open original</string>
+    <string name="comment_thread_target_missing">Comment not found; it may have been deleted</string>
+    <string name="message_empty_pushes">No uploads from creators</string>
+    <string name="whisper_system_live">Streamer assistant</string>
+    <string name="whisper_system_up">Creator assistant</string>
+    <string name="whisper_system_service">Customer service</string>
+    <string name="whisper_system_pay">Payment assistant</string>
+    <string name="whisper_withdrawn_self">You unsent a message</string>
+    <string name="whisper_withdrawn_other">A message was unsent</string>
+    <string name="whisper_notice_open">View details</string>
+    <string name="whisper_time_yesterday">Yesterday %1$s</string>
+    <string name="whisper_time_pattern_year">MMM d, HH:mm</string>
+    <string name="whisper_time_pattern_full">MMM d, yyyy, HH:mm</string>
 
     <!-- The three failure lines. Produced only by ui/ErrorText.kt; codes go to BiliLog. -->
     <string name="error_network">Network unavailable</string>

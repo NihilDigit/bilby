@@ -3,12 +3,14 @@ package dev.bilby.ui.dynamic
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
@@ -60,6 +62,7 @@ import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
@@ -96,7 +99,8 @@ sealed interface DynamicAction {
  *
  * @param nested 为真时是"被转发的那一条":不画自己的日期(外层已经有了),也不再往下嵌套。
  * @param showAuthor 画不画头像与名字。**空间页整页都是同一个人,要传 false** —— 每条重复
- *   印一遍他自己的头像,读起来像一页别人转他的动态。时间那一行照旧留着。
+ *   印一遍他自己的头像,读起来像一页别人转他的动态。时间挪到底栏左边(见 [DynamicFooter]),
+ *   顶上不留一行只写时间的空行;「置顶」仍在右上角。
  * @param onLike 为 null 时不画互动栏。**它不是"点了没反应"的兜底**:点赞要乐观更新加失败回滚,
  *   而那份状态在持有这一列动态的 ViewModel 里,拿不到它的调用方画出来的按钮按下去只能骗人。
  */
@@ -123,6 +127,7 @@ fun DynamicCardView(
         shape = if (nested) block.shape else MaterialTheme.shapes.largeIncreased,
         modifier = modifier.fillMaxWidth(),
     ) {
+        Box {
         Column(
             modifier = Modifier.padding(if (nested) Spacing.Tight else Spacing.Cozy),
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
@@ -145,29 +150,16 @@ fun DynamicCardView(
             }
 
             if (!nested) {
-                DynamicAuthorRow(card, onAction, showAuthor)
+                // 空间页(不画作者)这一行整个没有:时间挪到了底栏,见 [DynamicFooter]。
+                if (showAuthor) {
+                    DynamicAuthorRow(card, onAction)
+                } else if (card.tag != null) {
+                    // 不画作者行时正文从顶上开始,右上角的「置顶」会压在第一行字上:让出一小段,
+                    // 正文从角标底下开始。
+                    Spacer(modifier = Modifier.height(TagClearance))
+                }
             } else if (card.author.name.isNotBlank()) {
-                // 嵌套那一层只留一行名字:再摆一次头像会让转发卡片看起来像两条并排的动态。
-                // 名字这一行高度不够 48dp,所以热区往下补 —— 这一层里它上下都是留白,扩不挤走东西。
-                Text(
-                    text = card.author.name,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = if (openForwarded == null) {
-                        Modifier
-                    } else {
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(MaterialTheme.shapes.extraSmall)
-                            .clickable(
-                                role = Role.Button,
-                                onClickLabel = stringResource(R.string.dynamic_open_origin),
-                                onClick = openForwarded,
-                            )
-                            .heightIn(min = Dimens.MinTouchTarget)
-                            .wrapContentHeight()
-                    },
-                )
+                ForwardedAuthorRow(card, openForwarded)
             }
 
             DynamicText(card = card, onAction = onAction, onBodyClick = openForwarded)
@@ -213,22 +205,50 @@ fun DynamicCardView(
                 }
             }
 
-            // 被转发的那条不画互动栏:赞和评论都落在转发它的这一条上,里外各一份会让人不知道
-            // 自己点的是哪一条。
-            val interaction = card.interaction
-            if (!nested && interaction != null && onLike != null) {
-                DynamicActionBar(interaction, onLike, onAction, card.id)
+            // 被转发的那条不画底栏:赞和评论都落在转发它的这一条上,里外各一份会让人不知道
+            // 自己点的是哪一条;时间外层已经有了。
+            if (!nested) {
+                DynamicFooter(
+                    card = card,
+                    showTime = !showAuthor,
+                    onLike = onLike,
+                    onAction = onAction,
+                )
             }
+        }
+        // 「置顶」浮在卡片右上角,不进任何一行:它说的是这张卡片在这一列里的位置,不是作者行
+        // 或正文的一部分。空间页正是它最有用的地方 —— 整页按时间倒序,唯独第一条不是最新的,
+        // 没有标记就读成"这个人今天发了条三个月前的东西";它要在读正文之前被看到。
+        if (!nested) {
+            card.tag?.let { tag ->
+                DynamicTagChip(tag, Modifier.align(Alignment.TopEnd).padding(Spacing.Tight))
+            }
+        }
         }
     }
 }
 
+/** 不画作者行时,正文给右上角的「置顶」让出的高度:角标下沿减去卡片内边距,再减一格行距。 */
+private val TagClearance = 8.dp
+
+/** 画作者行时,名字那一列右边给角标让出的宽度,长名字不钻到角标底下。 */
+private val TagReserveWidth = 56.dp
+
 /**
- * 卡片底部的互动栏:点赞、评论。
+ * 卡片底栏:左边是时间(不画作者行时),右边是点赞、评论。
+ *
+ * **时间在这里,不单占顶上一行。** 空间页不画作者,作者行原先只剩一个「3天前」,一整行只为三个
+ * 字;而底栏右边本来就只有两颗小按钮,左边空着。画作者行的时候时间跟着名字走,这里不重复。
+ *
+ * **两颗按钮靠右、按内容宽,不各占半行。** 各占半行时两个图标隔着大半张卡片,读起来是两块
+ * 不相干的东西,而它们是同一组动作。
  *
  * **图标和计数横排,不是播放页那种图标在上、计数在下的两行**(风格指南 §2.3)。那一排是整页
  * 的主要动作,占满一行的宽度;这里只有两项,而它们下面还接着下一条动态 —— 竖排会让每张卡片
  * 都多出一截高度,一屏少放小半条内容。
+ *
+ * 计数为 0 时只画图标。原先赞写「赞」、评论写「评论」,一个位置上时而数字时而汉字,两颗按钮
+ * 并排时一个写 21 一个写「评论」,读不出是同一类东西。名字留给读屏。
  *
  * 未选中取 `onSurfaceVariant`。**以前取的是 `outline`,注释还引 §2.3b 当依据,而那一节的结论
  * 正好相反**:`outline` 在 M3 里是描边角色,只按约 3:1 校准,浅色主题下当小字不达 4.5:1
@@ -243,31 +263,55 @@ fun DynamicCardView(
  * **转发不做。** 它要一个写正文的输入面板,而这一次只谈赞和评论。
  */
 @Composable
-private fun DynamicActionBar(
+private fun DynamicFooter(
+    card: DynamicCard,
+    showTime: Boolean,
+    onLike: ((like: Boolean) -> Unit)?,
+    onAction: (DynamicAction) -> Unit,
+) {
+    val interaction = card.interaction?.takeIf { onLike != null }
+    if (!showTime && interaction == null) return
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = Dimens.MinTouchTarget),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(modifier = Modifier.weight(1f)) {
+            if (showTime) {
+                Text(
+                    text = formatRelativeTime(card.publishedAtEpochSeconds),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (interaction != null && onLike != null) {
+            DynamicActions(interaction, onLike, onAction, card.id)
+        }
+    }
+}
+
+@Composable
+private fun DynamicActions(
     interaction: DynamicInteraction,
     onLike: (like: Boolean) -> Unit,
     onAction: (DynamicAction) -> Unit,
     dynamicId: String,
 ) {
-    Row(modifier = Modifier.fillMaxWidth()) {
+    Row {
         ActionCell(
-            modifier = Modifier.weight(1f),
             selected = interaction.liked,
             icon = if (interaction.liked) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp,
             contentDescription = stringResource(
                 if (interaction.liked) R.string.dynamic_action_unlike else R.string.dynamic_action_like,
             ),
-            label = interaction.likeCount.takeIf { it > 0 }?.let { formatCount(it) }
-                ?: stringResource(R.string.dynamic_action_like),
+            label = interaction.likeCount.takeIf { it > 0 }?.let { formatCount(it) },
             onClick = { onLike(!interaction.liked) },
         )
         ActionCell(
-            modifier = Modifier.weight(1f),
             selected = false,
             icon = Icons.AutoMirrored.Outlined.Comment,
             contentDescription = stringResource(R.string.dynamic_action_comment),
-            label = interaction.commentCount.takeIf { it > 0 }?.let { formatCount(it) }
-                ?: stringResource(R.string.dynamic_action_comment),
+            label = interaction.commentCount.takeIf { it > 0 }?.let { formatCount(it) },
             // 专栏动态的评论区就是那篇文章的评论区(`comment_type == 12` 时 oid 是 cv 号),
             // 所以直接进文章页 —— 那里有正文,而动态这一页只有一段摘要。PiliPlus 同样不给这一种
             // 动态详情页(page_utils.dart:126、232)。
@@ -287,7 +331,8 @@ private fun ActionCell(
     selected: Boolean,
     icon: ImageVector,
     contentDescription: String,
-    label: String,
+    /** 计数。null 时只画图标,见 [DynamicFooter]。 */
+    label: String?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -300,7 +345,9 @@ private fun ActionCell(
         modifier = modifier
             .clip(MaterialTheme.shapes.small)
             .clickable(role = Role.Button, onClick = onClick)
-            .heightIn(min = Dimens.MinTouchTarget),
+            .heightIn(min = Dimens.MinTouchTarget)
+            .widthIn(min = Dimens.MinTouchTarget)
+            .padding(horizontal = Spacing.Tight),
         horizontalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -310,13 +357,15 @@ private fun ActionCell(
             tint = tint,
             modifier = Modifier.size(Dimens.IconInline),
         )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = tint,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        if (label != null) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = tint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -443,30 +492,14 @@ private fun DynamicText(
 }
 
 @Composable
-private fun DynamicAuthorRow(card: DynamicCard, onAction: (DynamicAction) -> Unit, showAuthor: Boolean) {
-    // **这一行只有时间,没有类型名。** 以前恒定印着"图文动态""专栏动态""文字动态""转发动态",
+private fun DynamicAuthorRow(card: DynamicCard, onAction: (DynamicAction) -> Unit) {
+    // **名字下面只有时间,没有类型名。** 以前恒定印着"图文动态""专栏动态""文字动态""转发动态",
     // 而那些字说的是接口怎么分类,不是读者要判断的东西:一条动态是图是字,看下面那块就知道了;
     // 转发也一样,它下面嵌着一整条别人的动态,那个套起来的框比"转发动态"四个字说得清楚。
     //
     // 时间走全应用同一份相对时间(见 formatRelativeTime)—— 这里以前是绝对日期,同一个 app 里
     // 首页写"4分钟前"、动态卡片写"2026-08-09",读起来像两处在说不同的东西。
     val meta = formatRelativeTime(card.publishedAtEpochSeconds)
-    if (!showAuthor) {
-        // 空间页这一支以前把 tag 一起丢了,而「置顶」正是在那一页最有用 —— 整页按时间倒序,
-        // 唯独第一条不是最新的,没有标记就读成"这个人今天发了条三个月前的东西"。
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        ) {
-            Text(
-                text = meta,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            card.tag?.let { DynamicTagChip(it) }
-        }
-        return
-    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
@@ -477,7 +510,11 @@ private fun DynamicAuthorRow(card: DynamicCard, onAction: (DynamicAction) -> Uni
             },
     ) {
         Avatar(url = card.author.faceUrl, size = Dimens.AvatarRow)
-        Column(modifier = Modifier.weight(1f)) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = if (card.tag != null) TagReserveWidth else 0.dp),
+        ) {
             Text(
                 text = card.author.name,
                 style = MaterialTheme.typography.bodyMedium,
@@ -490,9 +527,54 @@ private fun DynamicAuthorRow(card: DynamicCard, onAction: (DynamicAction) -> Uni
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        card.tag?.let { DynamicTagChip(it) }
     }
 }
+
+/**
+ * 被转发那条的来源:小头像 + 名字,一行。
+ *
+ * **不是外层那种两行的作者行**:再摆一次整套头像、名字、时间,转发卡片看起来像两条并排的
+ * 动态;而只有一行灰字的话,认人全靠读名字。一个 20dp 的头像介于两者之间。
+ *
+ * **不再撑到 48dp。** 原先为了触控下限把这一行撑高,名字和下面正文之间于是空出一大截,
+ * 整块转发内容像是从半空开始。点这一行去的地方([DynamicAction.OpenDynamic] 那一页)正文
+ * 也去得了,正文那一块的热区足够大,这一行不必独自扛触控下限。
+ */
+@Composable
+private fun ForwardedAuthorRow(card: DynamicCard, onOpen: (() -> Unit)?) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.extraSmall)
+            .then(
+                if (onOpen == null) {
+                    Modifier
+                } else {
+                    Modifier.clickable(
+                        role = Role.Button,
+                        onClickLabel = stringResource(R.string.dynamic_open_origin),
+                        onClick = onOpen,
+                    )
+                },
+            )
+            .padding(vertical = Spacing.Hair / 2),
+    ) {
+        if (card.author.faceUrl.isNotEmpty()) {
+            Avatar(url = card.author.faceUrl, size = ForwardedAvatarSize)
+        }
+        Text(
+            text = card.author.name,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+private val ForwardedAvatarSize = 20.dp
 
 /**
  * 服务端给的标记,实际见到的只有「置顶」。
@@ -509,16 +591,19 @@ private fun DynamicAuthorRow(card: DynamicCard, onAction: (DynamicAction) -> Uni
  * 而置顶不随时间变化,也不暗示这里有未读。判据与 `LevelBadge` 那条例外相同。
  */
 @Composable
-private fun DynamicTagChip(text: String) {
+private fun DynamicTagChip(text: String, modifier: Modifier = Modifier) {
+    // 比原来大一档(labelSmall → labelMedium,圆角 extraSmall → small):它浮在卡片角上,
+    // 不再夹在作者行里,太小就只是角上的一粒。
     Surface(
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        shape = MaterialTheme.shapes.extraSmall,
+        shape = MaterialTheme.shapes.small,
+        modifier = modifier,
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = Spacing.Hair),
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair / 2),
         )
     }
 }

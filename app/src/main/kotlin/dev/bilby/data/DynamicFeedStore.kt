@@ -103,10 +103,20 @@ class DynamicFeedStore(
     private var loadedPages = 0
 
     /**
-     * 一次只发一条请求。**抢不到就直接返回,不排队** —— 排队的那次醒来时看到的是已经变过的
-     * 列表和游标,它拿着旧参数继续做完,结果不是重复一页就是跳过一页。
+     * 一次只发一条请求。**抢不到就不排队** —— 排队的那次醒来时看到的是已经变过的列表和游标,
+     * 它拿着旧参数继续做完,结果不是重复一页就是跳过一页。
      */
     private val fetching = Mutex()
+
+    /**
+     * 锁被占着时来过一次追加。**记下来,锁放开后按那时的游标补一次**,不是直接丢掉。
+     *
+     * 直接丢掉的那一版丢的正是最要紧的一次:首屏把缓存整段换成新的第一页时列表会变短,
+     * 界面的触底预取立刻要下一页,而此刻换列表的那次请求还没放锁(它在锁里写缓存)。预取那一侧
+     * 按布局去重,列表不再变就不会再要第二次 —— 首页于是停在两三条,直到手动刷新。
+     * 这里记的只是"要追加",不带参数,所以不会有排队那种拿旧游标的问题。
+     */
+    private var appendPending = false
 
     private var started = false
 
@@ -140,7 +150,10 @@ class DynamicFeedStore(
     }
 
     private suspend fun fetch(half: DynamicFeedHalf, append: Boolean, spinner: Boolean) {
-        if (!fetching.tryLock()) return
+        if (!fetching.tryLock()) {
+            if (append) appendPending = true
+            return
+        }
         try {
             if (spinner) {
                 // 转哪一种圈由"这一半现在有没有东西"决定:空的是首屏加载(整页转圈),非空的是
@@ -160,6 +173,10 @@ class DynamicFeedStore(
             runFetch(half, append)
         } finally {
             fetching.unlock()
+        }
+        if (appendPending) {
+            appendPending = false
+            if (_status.value.hasMore && _status.value.error == null) fetch(half, append = true, spinner = true)
         }
     }
 
@@ -186,12 +203,15 @@ class DynamicFeedStore(
     }
 
     /**
-     * 首屏与追加取到这一半有东西为止,至多 [MAX_AUTO_PAGES] 页;**刷新把原先翻到的深度整个
-     * 重建一遍**,取 [loadedPages] 页。
+     * 首屏取到这一半够铺一屏([FIRST_SCREEN_ENTRIES] 条)、追加取到这一半有东西为止,都至多
+     * [MAX_AUTO_PAGES] 页;**刷新把原先翻到的深度整个重建一遍**,取 [loadedPages] 页。
      *
      * 判据是"要用它的这一半拿到了几条",不是"这一页解析出了几条" ——一页里两半各分到多少
-     * 差别很大,整页都是投稿视频是常态。另一半的收获照样进列表:同一次请求同时喂两个视图,
-     * 是这条流合并之后最实际的好处。
+     * 差别很大:整页都是投稿视频是常态,一页里只有两三条投稿、其余全是图文和转发也是常态。
+     * 另一半的收获照样进列表:同一次请求同时喂两个视图,是这条流合并之后最实际的好处。
+     *
+     * **首屏不能"有东西就停"。** 首屏是整段替换(冷启动时换掉的是缓存里的几十条),只拿到两三条
+     * 就停,列表就在人眼前缩成两三条,剩下的全靠触底预取去补。
      *
      * **刷新不能沿用那条"够了就停"的规则。** 沿用的话它取一页就停,而下面是整份替换,于是
      * 翻了十页再下拉,剩下的就是第一页——列表在用户眼皮底下缩回一屏,读到哪儿也一并丢了。
@@ -222,10 +242,11 @@ class DynamicFeedStore(
                     hasMore = result.value.hasMore && result.value.nextOffset != null
                     if (!hasMore) break
                     val gained = when (half) {
-                        DynamicFeedHalf.Home -> freshHome.isNotEmpty()
-                        DynamicFeedHalf.Other -> freshOther.isNotEmpty()
+                        DynamicFeedHalf.Home -> freshHome.size
+                        DynamicFeedHalf.Other -> freshOther.size
                     }
-                    if (!rebuilding && gained) break
+                    val enough = if (append) 1 else FIRST_SCREEN_ENTRIES
+                    if (!rebuilding && gained >= enough) break
                 }
 
                 is BiliResult.ApiError -> return setError("${result.message}(${result.code})")
@@ -254,6 +275,9 @@ class DynamicFeedStore(
 
     private companion object {
         const val MAX_AUTO_PAGES = 3
+
+        /** 首屏至少取到几条才停:一屏的列表行放得下的数,再多一点给预取留余地。 */
+        const val FIRST_SCREEN_ENTRIES = 10
 
         /**
          * 刷新最多重建这么多页。翻得比这更深的人再刷新会看到列表缩短一截——代价是一次刷新

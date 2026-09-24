@@ -46,8 +46,11 @@
 
     <!-- 关注按钮。三档字面在空间页和播放页共用 -->
     <string name="follow_none">关注</string>
+    <string name="profile_following">关注</string>
+    <string name="profile_coins">硬币</string>
     <string name="follow_following">已关注</string>
     <string name="follow_mutual">互相关注</string>
+    <string name="follow_special_tag">特别关注</string>
     <!-- 取关二次确认。关注是可逆的轻动作不用确认,取关会丢掉关系所以要——空间页和播放页共用。
          只有标题没有说明,理由见 FollowButton -->
     <string name="follow_unfollow_confirm_title">取消关注</string>
@@ -66,7 +69,7 @@
     <string name="feed_read_marker">以上是新内容</string>
 
     <!-- 搜索 -->
-    <string name="search_empty">搜索视频与 UP 主</string>
+    <string name="search_empty">搜索视频、UP 主与专栏</string>
     <string name="search_history_title">最近搜索</string>
     <string name="search_history_remove">删除这条搜索记录</string>
     <string name="search_agent_empty">描述想看的内容</string>
@@ -80,6 +83,18 @@
     <string name="search_order_comprehensive">综合</string>
     <string name="search_order_click">最多播放</string>
     <string name="search_order_pubdate">最新发布</string>
+    <string name="search_order_read">最多阅读</string>
+    <string name="search_tab_video">视频</string>
+    <string name="search_tab_user">用户</string>
+    <string name="search_tab_article">专栏</string>
+    <string name="search_duration_all">全部时长</string>
+    <string name="search_duration_under_10">10 分钟以内</string>
+    <string name="search_duration_10_30">10 至 30 分钟</string>
+    <string name="search_duration_30_60">30 至 60 分钟</string>
+    <string name="search_duration_over_60">60 分钟以上</string>
+    <string name="search_history_clear_title">清空搜索历史</string>
+    <string name="search_user_meta">%1$s 粉丝  %2$s 投稿</string>
+    <string name="search_article_views">%1$s 阅读</string>
 
     <!-- 助理:搜索页、播放页找相关、独立结果页共用 -->
     <string name="agent_title">助理</string>
@@ -102,7 +117,19 @@
     <string name="toview_progress">看到 %1$s</string>
     <string name="toview_remove">移出稍后再看:%1$s</string>
     <string name="toview_removed">已移出稍后再看</string>
-    <string name="toview_clear_finished_confirm">删除已看完的 %1$d 条?</string>
+    <string name="toview_clear_finished_confirm">清空已看完的 %1$d 条?</string>
+    <string name="toview_clear_invalid">清空已失效</string>
+    <string name="toview_clear_invalid_confirm">清空已失效的视频?</string>
+    <string name="toview_listen_all">听全部</string>
+    <string name="toview_order_recent">最近添加</string>
+    <string name="toview_order_earliest">最早添加</string>
+    <string name="toview_refresh_failed">刷新失败:%1$s</string>
+    <string name="toview_remove_failed">移出失败:%1$s</string>
+    <string name="toview_undo_failed">撤销失败:%1$s</string>
+    <string name="toview_clear_failed">清空失败:%1$s</string>
+    <string name="media_kind_audio">音频</string>
+    <string name="media_kind_ogv">剧集</string>
+    <string name="media_kind_course">课程</string>
 
     <!-- 历史记录 -->
     <string name="history_title">历史记录</string>
@@ -119,6 +146,10 @@
     <string name="settings_default_quality_wifi">WiFi 默认画质</string>
     <string name="settings_default_quality_metered">计费网络默认画质</string>
     <string name="settings_default_quality_metered_subtitle">按系统的流量计费标记判断,手机热点和按量计费的 WiFi 也算</string>
+    <string name="settings_default_audio_wifi">WiFi 默认音质</string>
+    <string name="settings_default_audio_metered">计费网络默认音质</string>
+    <string name="settings_pick_updates_default">播放页切换改为默认</string>
+    <string name="settings_pick_updates_default_subtitle">关闭时,播放页切换画质与音质只对本次播放生效</string>
     <string name="settings_pause_history">暂停记录观看历史</string>
     <string name="settings_pause_history_subtitle">暂停后不再记录新的观看历史,已有记录和播放进度不受影响</string>
     <string name="settings_pause_history_loading">正在读取</string>
@@ -172,11 +203,12 @@
     <string name="level_badge">等级 %1$d</string>
     <string name="level_badge_senior">等级 %1$d,硬核会员</string>
     <string name="space_no_sign">这个人很懒,什么都没写</string>
-    <string name="space_listen_up">听这位 UP 主的投稿</string>
+    <string name="space_listen_up">听投稿</string>
     <string name="space_order_pubdate">最新</string>
     <string name="space_order_click">最多播放</string>
     <string name="space_search_action">搜索</string>
     <string name="space_search_hint">在这个空间内搜索</string>
+    <string name="space_search_close">退出搜索</string>
     <string name="space_empty_archives">这位 UP 主还没有投稿</string>
     <string name="space_empty_archives_search">没有匹配的投稿</string>
     <string name="space_empty_dynamics">这位 UP 主还没有动态</string>
@@ -217,7 +249,7 @@
     <string name="video_triple_some">已%1$s</string>
     <string name="video_triple_none">三连没有成功</string>
     <string name="video_triple_separator">、</string>
-    <string name="video_parts">分 P</string>
+    <string name="video_parts">分集</string>
     <string name="video_episodes">选集</string>
     <string name="video_part_label">P%1$d %2$s</string>
     <string name="video_part_ordinal">P%1$d</string>
@@ -249,13 +281,17 @@
     <string name="offline_status_failed">缓存失败</string>
     <string name="offline_with_danmaku">含弹幕</string>
     <string name="offline_empty">还没有缓存过视频</string>
-    <string name="offline_used_space">已用 %1$s</string>
+    <string name="offline_section_in_flight">正在缓存(%1$d)</string>
+    <string name="offline_section_completed">已缓存</string>
+    <string name="offline_listen_all">听全部</string>
     <string name="offline_delete">删除缓存:%1$s</string>
     <string name="offline_delete_confirm_title">删除这条缓存?</string>
     <string name="offline_delete_confirm_message">文件将从本机移除,重新缓存需再次下载。</string>
     <string name="offline_notification_channel">离线缓存</string>
     <string name="offline_notification_title">正在缓存视频</string>
     <string name="offline_notification_queued">还有 %1$d 条</string>
+    <string name="offline_sheet_in_progress">缓存中</string>
+    <string name="offline_failure_disk_full">存储空间不足</string>
     <string name="size_mb">%1$.1f MB</string>
     <string name="size_gb">%1$.2f GB</string>
     <string name="speed_kb">%1$d KB/s</string>
@@ -282,7 +318,9 @@
     <string name="player_previous">上一条</string>
     <string name="player_next">下一条</string>
     <string name="player_speed">倍速</string>
+    <string name="player_settings">播放设置</string>
     <string name="player_quality">清晰度</string>
+    <string name="player_audio_quality">音质</string>
     <string name="player_progress">播放进度</string>
     <string name="player_subtitle">字幕</string>
     <string name="player_subtitle_off">关闭字幕</string>
@@ -327,8 +365,11 @@
     <string name="sleep_timer_off">定时关闭</string>
     <string name="sleep_timer_end_of_item">播完当前</string>
     <string name="sleep_timer_stop_in">%1$d 分钟后停止</string>
-    <string name="sleep_timer_end_of_item_option">播完当前视频再停</string>
+    <string name="sleep_timer_end_of_item_option">播完当前视频</string>
     <string name="sleep_timer_cancel">取消定时</string>
+    <string name="sleep_timer_minutes">%1$d 分钟</string>
+    <string name="sleep_timer_less">少 1 分钟</string>
+    <string name="sleep_timer_more">多 1 分钟</string>
 
     <!-- SponsorBlock。键名对应接口的 category,顺序即设置页里的显示顺序 -->
     <string name="sponsor_sponsor">赞助推广</string>
@@ -367,6 +408,28 @@
     <string name="settings_loading">读取中…</string>
     <string name="settings_section_feed">动态</string>
     <string name="settings_section_offline">缓存</string>
+    <string name="settings_section_appearance">外观</string>
+    <string name="settings_theme_mode">明暗</string>
+    <string name="settings_theme_system">跟随系统</string>
+    <string name="settings_theme_light">浅色</string>
+    <string name="settings_theme_dark">深色</string>
+    <string name="settings_pure_black">纯黑背景</string>
+    <string name="settings_pure_black_subtitle">深色时页面底色为纯黑</string>
+    <string name="settings_theme_palette">配色</string>
+    <string name="settings_language">语言</string>
+    <string name="settings_language_system">跟随系统</string>
+    <string name="settings_language_zh_hans">简体中文</string>
+    <string name="settings_language_en">English</string>
+    <string name="theme_palette_dynamic">系统</string>
+    <string name="theme_palette_default">Bilby</string>
+    <string name="theme_palette_kurenai">紅</string>
+    <string name="theme_palette_yamabuki">山吹</string>
+    <string name="theme_palette_wakatake">若竹</string>
+    <string name="theme_palette_asagi">浅葱</string>
+    <string name="theme_palette_kikyo">桔梗</string>
+    <string name="theme_palette_kanzo">萱草</string>
+    <string name="theme_palette_moegi">萌黄</string>
+    <string name="theme_palette_botan">牡丹</string>
     <string name="settings_offline_concurrency">同时下载</string>
     <string name="settings_offline_concurrency_subtitle">调大可加快批量缓存,代价是并发请求增多,更易触发风控</string>
     <string name="settings_offline_concurrency_value">%1$d 条</string>
@@ -419,6 +482,7 @@
     <!-- 开屏那一次更新提示 -->
     <string name="update_dialog_title">新版本 %1$s</string>
     <string name="update_dialog_no_notes">这一版没有附更新说明。</string>
+    <string name="update_dialog_current">当前 %1$s</string>
     <string name="update_download">下载</string>
     <string name="update_downloading">下载中 %1$d%%</string>
     <string name="update_install">安装</string>
@@ -431,6 +495,7 @@
     <string name="settings_llm_test_running">请求中…</string>
     <string name="settings_llm_test_ok">"正常  %1$d ms"</string>
     <string name="feed_open_followings">关注列表</string>
+    <string name="feed_followings_all_short">全部</string>
     <string name="followings_title">关注列表</string>
     <string name="followings_empty">还没有关注任何人</string>
     <string name="followings_search_hint">在关注里搜索</string>
@@ -472,23 +537,29 @@
     <string name="fav_folder_delete_title">删除收藏夹</string>
     <string name="fav_folder_delete_message">「%1$s」和它收着的 %2$d 个视频会一起移出。</string>
     <string name="fav_folder_delete_confirm">删除收藏夹</string>
-    <string name="fav_remove">取消收藏:%1$s</string>
-    <string name="fav_removed">已取消收藏</string>
-    <string name="fav_undo">撤销</string>
-    <string name="fav_remove_failed">没能取消收藏:%1$s</string>
-    <string name="fav_undo_failed">没能撤销:%1$s</string>
     <string name="fav_invalid_video">稿件已失效</string>
-    <string name="tab_saved">收藏</string>
+    <string name="fav_folder_edit_info">编辑信息</string>
+    <string name="fav_listen">听收藏夹</string>
+    <string name="fav_order_mtime">最近收藏</string>
+    <string name="fav_order_view">最多播放</string>
+    <string name="fav_order_pubtime">最近投稿</string>
+    <string name="fav_search">搜索</string>
+    <string name="fav_search_hint">在这个收藏夹内搜索</string>
+    <string name="fav_search_close">退出搜索</string>
+    <string name="fav_empty_search">没有搜到相关内容</string>
+    <string name="fav_clean_invalid">清除失效内容</string>
+    <string name="fav_clean_invalid_confirm">清除失效内容?</string>
+    <string name="fav_clean_done">已清除失效内容</string>
+    <string name="fav_clean_failed">清除失败:%1$s</string>
 
     <!-- 个人页 -->
     <string name="tab_profile">我的</string>
     <string name="profile_logout">登出</string>
-    <string name="profile_view_all">查看全部</string>
     <string name="profile_favorites_empty">还没有收藏夹</string>
     <!-- 直播 -->
-    <string name="live_loading">正在连接直播间…</string>
     <string name="live_offline">主播还没开播</string>
     <string name="live_refresh">刷新</string>
+    <string name="live_started_at">%1$s 开播</string>
     <string name="live_audio_only_on">只听声音</string>
     <string name="live_audio_only_off">恢复画面</string>
     <string name="live_tab_chat">聊天</string>
@@ -527,6 +598,8 @@
     <string name="settings_auto_next_subtitle">一条播完后接着放队列里的下一条。关闭后播完即停,手动切换不受影响</string>
     <string name="player_seek_release_to_cancel">松手取消进退</string>
     <string name="action_share">分享</string>
+    <string name="player_pip">小窗播放</string>
+    <string name="settings_danmaku_in_pip">小窗显示弹幕</string>
     <string name="sponsor_sponsor_desc">品牌方投放的口播或贴片</string>
     <string name="sponsor_selfpromo_desc">对自有周边、社群或其他频道的推广</string>
     <string name="sponsor_interaction_desc">请求点赞、投币、关注的提示</string>
@@ -571,6 +644,7 @@
     <string name="dynamic_reserve_calendar_note">%1$s\n%2$s</string>
     <string name="dynamic_other_title">关注动态</string>
     <string name="dynamic_other_entry">关注动态</string>
+    <string name="feed_up_pushes_entry">推送</string>
     <string name="dynamic_other_empty">关注的人最近没有发过视频以外的动态</string>
     <!-- 被转发的那条:名字与正文点下去退回原文那一页。只作读屏的 onClickLabel,界面上没有这行字。 -->
     <string name="dynamic_open_origin">查看原动态</string>
@@ -591,6 +665,39 @@
     <string name="whisper_send_failed">发送失败：%1$s</string>
     <string name="whisper_unsupported">暂不支持的消息（类型 %1$d）</string>
     <string name="whisper_system_account">系统消息</string>
+    <!-- 通知行里"谁做了什么"那一句。%1$s 是服务端给的对象类别(视频、评论、动态) -->
+    <string name="message_action_reply">回复了我的评论</string>
+    <string name="message_action_comment">评论了我的%1$s</string>
+    <string name="message_action_mention">在%1$s中@了我</string>
+    <string name="message_action_like">赞了我的%1$s</string>
+    <string name="message_business_fallback">内容</string>
+    <!-- 会话列表里最后一条不是文字时的摘要 -->
+    <string name="message_preview_image">[图片]</string>
+    <string name="message_preview_sticker">[表情]</string>
+    <string name="message_preview_withdrawn">[已撤回]</string>
+    <string name="message_preview_video">[视频] %1$s</string>
+    <!-- 最后一条是 UP 主投稿推送的会话收进这一栏 -->
+    <string name="message_up_pushes">UP 主推送</string>
+    <!-- 硬币记录 -->
+    <string name="coin_log_title">硬币记录</string>
+    <string name="coin_log_empty">没有硬币记录</string>
+    <!-- 评论详情页 -->
+    <string name="comment_thread_title">评论详情</string>
+    <string name="comment_thread_open_subject">查看原内容</string>
+    <string name="comment_thread_target_missing">未找到这条评论,可能已被删除</string>
+    <string name="message_empty_pushes">没有 UP 主推送</string>
+    <!-- 系统会话的名字。接口给了名字时用接口的,没给时用这几个 -->
+    <string name="whisper_system_live">主播小助手</string>
+    <string name="whisper_system_up">UP 主小助手</string>
+    <string name="whisper_system_service">客服消息</string>
+    <string name="whisper_system_pay">支付小助手</string>
+    <string name="whisper_withdrawn_self">你撤回了一条消息</string>
+    <string name="whisper_withdrawn_other">对方撤回了一条消息</string>
+    <string name="whisper_notice_open">查看详情</string>
+    <!-- 会话里的时间分隔。今天只写时刻,其余按下面两个格式 -->
+    <string name="whisper_time_yesterday">昨天 %1$s</string>
+    <string name="whisper_time_pattern_year">M月d日 HH:mm</string>
+    <string name="whisper_time_pattern_full">yyyy年M月d日 HH:mm</string>
 
     <!-- 失败的三句话。产出口只有 ui/ErrorText.kt,接口原文与错误码只进 BiliLog。 -->
     <string name="error_network">网络不可用</string>

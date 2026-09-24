@@ -27,44 +27,30 @@ class SearchResultViewModel(
     val state: StateFlow<NormalSearchState> = controller.state
 
     init {
-        controller.search(keyword, SearchOrder.Comprehensive)
+        controller.search(keyword)
     }
 
     fun loadMore() = controller.loadMore()
     fun onOrderChanged(order: SearchOrder) = controller.onOrderChanged(order)
+    fun onDurationChanged(duration: SearchDuration) = controller.onDurationChanged(duration)
+    fun onArticleOrderChanged(order: SearchOrder) = controller.onArticleOrderChanged(order)
+    fun onTabSelected(tab: SearchTab) = controller.selectTab(tab)
     fun retry() = controller.retry()
 }
 
 /**
- * 一个关键词的普通搜索结果,从播放页的标签点进来。列表本体与搜索 tab 的普通模式共用
- * [NormalResultList];这一页没有输入框 —— 要换词去搜索 tab,这里的词是点进来那枚标签,
+ * 一个关键词的普通搜索结果,从播放页的标签点进来。结果区与搜索 tab 的普通模式共用
+ * [SearchResults];这一页没有输入框 —— 要换词去搜索 tab,这里的词是点进来那枚标签,
  * 顶栏(路由那层的 BilbyTopBar)已经把它当标题写着。
  */
 @Composable
 fun SearchResultScreen(
     state: NormalSearchState,
-    onOrderChange: (SearchOrder) -> Unit,
-    onVideoClick: (String) -> Unit,
-    onUserClick: (Long) -> Unit,
-    onLoadMore: () -> Unit,
-    onRetry: () -> Unit,
+    actions: SearchResultActions,
     modifier: Modifier = Modifier,
 ) {
     // 宽屏不拉满,和搜索 tab 同一条理由:条目是"封面 + 两行文字",行长一超可读宽度就得转头扫。
     AdaptiveContent(modifier = modifier.fillMaxSize(), maxWidth = Breakpoints.ReadableWidth) {
-        RefreshBox(
-            refreshing = state.videoLoading && state.videos.isNotEmpty(),
-            onRefresh = onRetry,
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            NormalResultList(
-                state = state,
-                onOrderChange = onOrderChange,
-                onVideoClick = onVideoClick,
-                onUserClick = onUserClick,
-                onLoadMore = onLoadMore,
-                onRetry = onRetry,
-            )
-        }
+        SearchResults(state = state, actions = actions)
     }
 }

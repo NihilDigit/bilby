@@ -1,8 +1,14 @@
 package dev.bilby.ui.update
 
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.layout.Arrangement
+import dev.bilby.ui.components.MetaSeparator
+import dev.bilby.ui.offline.formatBytes
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.Column
@@ -126,7 +132,8 @@ class StartupUpdateViewModel(
 /**
  * 新版本提示。
  *
- * 按 M3 的 basic dialog 排:一个标题、一段正文、右下角两个文字按钮,confirm 在最右。
+ * 按 M3 的 basic dialog 排:标题(新版本号,下面一行当前版本与安装包大小)、一块带底色的
+ * 更新说明、右下角两个按钮,主动作是实心按钮、在最右。
  * **不加图标也不加插画** —— 规范给 hero icon 的位置是"内容本身需要一个视觉锚点"时用的,
  * 而这里的内容是一段版本说明,它自己就是锚点。
  *
@@ -136,6 +143,7 @@ class StartupUpdateViewModel(
  * 下载中不关弹窗,进度画在正文里:关掉之后它就成了一个没有任何反馈的后台任务,而用户刚刚
  * 按下的是"下载"。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun StartupUpdateDialog(
     state: StartupUpdateState,
@@ -160,32 +168,65 @@ fun StartupUpdateDialog(
         // 更新说明:按默认宽度排,每行只剩十来个字,一段话要折成七八行,读起来像一根柱子。
         properties = DialogProperties(usePlatformDefaultWidth = false),
         modifier = Modifier.fillMaxWidth(DialogWidthFraction),
-        title = { Text(stringResource(R.string.update_dialog_title, info.version)) },
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+                Text(stringResource(R.string.update_dialog_title, info.version))
+                // 从哪一版升上来、包有多大:下不下载在这两件事上定,尤其是流量下。
+                Text(
+                    text = stringResource(R.string.update_dialog_current, BuildConfig.VERSION_NAME) +
+                        (if (info.sizeBytes > 0) MetaSeparator + formatBytes(info.sizeBytes) else ""),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 // 更新说明可能很长(整篇 changelog),给它一个上限再滚,不然按钮会被顶出屏幕。
                 //
+                // **装在一块带底色的圆角区域里。** 它是这个对话框里唯一会滚的一块,光秃秃地排在
+                // 标题下面时,滚到一半看不出边在哪、按钮上面那条线是不是内容的末尾。
+                //
                 // **按 Markdown 渲染**,和助理回复共用同一份渲染器:release note 本来就是
                 // Markdown 写的,当纯文本画出来满屏是 `**`、`-` 和字面的 `&#13;`,而那正是
                 // 用户此刻唯一要读的东西。
-                Column(
-                    modifier = Modifier
-                        .heightIn(max = NotesMaxHeight)
-                        .verticalScroll(rememberScrollState()),
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    MarkdownText(
-                        text = info.notes.ifBlank { stringResource(R.string.update_dialog_no_notes) },
-                        stopAtHeadings = DownloadPageSections,
-                    )
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = NotesMaxHeight)
+                            .verticalScroll(rememberScrollState())
+                            .padding(Spacing.Cozy),
+                    ) {
+                        MarkdownText(
+                            text = info.notes.ifBlank { stringResource(R.string.update_dialog_no_notes) },
+                            stopAtHeadings = DownloadPageSections,
+                        )
+                    }
                 }
                 when (state) {
                     // 下载报得出百分比,归 progress indicator;转圈那一档只覆盖进度不可知的等待。
-                    is StartupUpdateState.Downloading -> LinearProgressIndicator(
-                        progress = { state.progress },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = Spacing.Cozy),
-                    )
+                    // 下面写已下多少、共多少:只有一根条的话,慢网下它几秒不动,看不出是卡了还是在走。
+                    is StartupUpdateState.Downloading -> Column(
+                        modifier = Modifier.padding(top = Spacing.Cozy),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                    ) {
+                        LinearWavyProgressIndicator(
+                            progress = { state.progress },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        if (info.sizeBytes > 0) {
+                            Text(
+                                text = formatBytes((info.sizeBytes * state.progress).toLong()) +
+                                    " / " + formatBytes(info.sizeBytes),
+                                style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                     is StartupUpdateState.Failed -> Text(
                         text = state.message,
                         style = MaterialTheme.typography.bodySmall,
@@ -196,19 +237,21 @@ fun StartupUpdateDialog(
                 }
             }
         },
+        // 主动作用实心按钮:这个对话框就是为这一下弹出来的,它和「忽略此版本」不是同一个分量,
+        // 两个并排的文字按钮看不出该按哪个。
         confirmButton = {
             when (state) {
-                is StartupUpdateState.Ready -> TextButton(onClick = { onInstall(state.apk) }) {
+                is StartupUpdateState.Ready -> Button(onClick = { onInstall(state.apk) }) {
                     Text(stringResource(R.string.update_install))
                 }
-                is StartupUpdateState.Downloading -> TextButton(onClick = {}, enabled = false) {
+                is StartupUpdateState.Downloading -> Button(onClick = {}, enabled = false) {
                     Text(stringResource(R.string.update_downloading, (state.progress * 100).toInt()))
                 }
                 // 失败之后 confirm 就是"再来一次":重下和第一次下没有区别,不必另给一个入口。
-                is StartupUpdateState.Failed -> TextButton(onClick = { onDownload(info) }) {
+                is StartupUpdateState.Failed -> Button(onClick = { onDownload(info) }) {
                     Text(stringResource(R.string.action_retry))
                 }
-                else -> TextButton(onClick = { onDownload(info) }) {
+                else -> Button(onClick = { onDownload(info) }) {
                     Text(stringResource(R.string.update_download))
                 }
             }
