@@ -20,6 +20,10 @@ import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.FastForward
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PlayCircleOutline
+import androidx.compose.material.icons.outlined.Palette
+import dev.bilby.data.AppearancePrefs
+import dev.bilby.ui.theme.ThemePalette
+import dev.bilby.ui.theme.dynamicColorAvailable
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
@@ -124,6 +128,14 @@ fun SettingsScreen(
             ) {
                 // 七个去处装成一组。行与行之间不画线,边界由这个容器的底色和圆角承担。
                 SettingsGroup {
+                    SettingRow(
+                        title = stringResource(R.string.settings_section_appearance),
+                        icon = Icons.Outlined.Palette,
+                        // 摘要给配色的名字:明暗在这一页上一眼看得出来,配色要进去才知道是哪一套。
+                        value = state.loaded.then { paletteLabel(state.appearance.palette) },
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.Appearance) },
+                    )
                     SettingRow(
                         title = stringResource(R.string.settings_section_player),
                         icon = Icons.Outlined.PlayCircleOutline,
@@ -767,3 +779,13 @@ private val HttpSchemes = setOf("http", "https")
  */
 @Composable
 private inline fun Boolean.then(text: @Composable () -> String): String? = if (this) text() else null
+
+/** 配色的名字。存的是 dynamic 但系统不支持时,实际用的是默认那一套,写它的名字。 */
+@Composable
+private fun paletteLabel(palette: String): String {
+    if (palette == AppearancePrefs.DYNAMIC && dynamicColorAvailable) {
+        return stringResource(R.string.theme_palette_dynamic)
+    }
+    val resolved = ThemePalette.entries.firstOrNull { it.name == palette } ?: ThemePalette.Default
+    return stringResource(resolved.label)
+}

@@ -2,7 +2,7 @@ package dev.bilby.ui
 
 import android.app.Activity
 import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
+import dev.bilby.ui.theme.LocalIsDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
@@ -19,7 +19,8 @@ import androidx.core.view.WindowCompat
 @Composable
 internal fun BilbyWindowChrome() {
     val activity = LocalContext.current as? Activity ?: return
-    val darkTheme = isSystemInDarkTheme()
+    // 跟应用自己的明暗,不跟系统:设置里可以把明暗定死(见 LocalIsDarkTheme)。
+    val darkTheme = LocalIsDarkTheme.current
 
     DisposableEffect(activity, darkTheme) {
         val window = activity.window

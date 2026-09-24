@@ -25,12 +25,14 @@
         android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:localeConfig="@xml/locales_config"
         android:supportsRtl="true"
         android:theme="@style/Theme.Bilby">
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"
+            android:supportsPictureInPicture="true"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.Bilby">
             <intent-filter>

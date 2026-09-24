@@ -35,6 +35,8 @@ import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockPrefs
 import dev.bilby.data.UpdateInfo
 import dev.bilby.player.videoQualityLabel
+import dev.bilby.player.audioQualityLabel
+import dev.bilby.player.DEFAULT_AUDIO_QUALITY_OPTIONS
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.player.formatSpeed
@@ -45,6 +47,37 @@ import dev.bilby.ui.video.CATEGORY_GROUPS
 import dev.bilby.ui.video.CATEGORY_LABELS
 import dev.nihildigit.danmaku.DanmakuDensity
 import dev.nihildigit.danmaku.DanmakuFrameRateCap
+import android.os.Build
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.annotation.StringRes
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.Icon
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.dp
+import dev.bilby.data.AppearancePrefs
+import dev.bilby.data.ThemeMode
+import dev.bilby.ui.AppLanguage
+import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.ThemePalette
+import dev.bilby.ui.theme.dynamicColorAvailable
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -57,6 +90,7 @@ import kotlin.math.roundToInt
  * 共用一个 NavKey,而不是八条路由:它们的差别只有"哪一页",没有各自的参数。
  */
 enum class SettingsSection {
+    Appearance,
     Playback,
     Danmaku,
     SponsorBlock,
@@ -127,6 +161,9 @@ fun PlaybackSettingsPage(
     onCodecChange: (CodecPreference) -> Unit,
     onFastForwardSpeedChange: (Float) -> Unit,
     onAutoNextChange: (Boolean) -> Unit,
+    onWifiAudioChange: (Int) -> Unit,
+    onMeteredAudioChange: (Int) -> Unit,
+    onPickUpdatesDefaultChange: (Boolean) -> Unit,
     onBack: () -> Unit,
 ) {
     SettingsSubPage(stringResource(R.string.settings_section_player), onBack, state.loaded) {
@@ -137,8 +174,8 @@ fun PlaybackSettingsPage(
             checked = state.autoNext,
             onCheckedChange = onAutoNextChange,
         )
-        // 两行是同一个值按网络分的两格,不是和播放页并列的第二个开关:在播放页切画质写的就是
-        // 当下所在的那一格(见 AudioPlaybackService.setQuality)。
+        // 两行是同一个值按网络分的两格。播放页里切画质默认只管那一次播放,下面那个开关打开
+        // 之后才写进当下所在的那一格(见 AudioPlaybackService.setQuality)。
         ChoiceRow(
             title = stringResource(R.string.settings_default_quality_wifi),
             options = SettingsStore.QUALITY_OPTIONS,
@@ -155,6 +192,27 @@ fun PlaybackSettingsPage(
             selected = state.defaultQualityMetered,
             label = { videoQualityLabel(it) },
             onChange = onMeteredQualityChange,
+        )
+        // 音质同一套:按网络分两格,档位是固定表(DEFAULT_AUDIO_QUALITY_OPTIONS)。
+        ChoiceRow(
+            title = stringResource(R.string.settings_default_audio_wifi),
+            options = DEFAULT_AUDIO_QUALITY_OPTIONS,
+            selected = state.defaultAudioWifi,
+            label = { audioQualityLabel(it) },
+            onChange = onWifiAudioChange,
+        )
+        ChoiceRow(
+            title = stringResource(R.string.settings_default_audio_metered),
+            options = DEFAULT_AUDIO_QUALITY_OPTIONS,
+            selected = state.defaultAudioMetered,
+            label = { audioQualityLabel(it) },
+            onChange = onMeteredAudioChange,
+        )
+        ToggleSettingRow(
+            title = stringResource(R.string.settings_pick_updates_default),
+            subtitle = stringResource(R.string.settings_pick_updates_default_subtitle),
+            checked = state.playerPickUpdatesDefault,
+            onCheckedChange = onPickUpdatesDefaultChange,
         )
         CodecSection(
             selected = state.codec,
@@ -181,6 +239,7 @@ fun DanmakuSettingsPage(
     onScrollShowAreaChange: (Float) -> Unit,
     onDensityChange: (DanmakuDensity) -> Unit,
     onFrameRateChange: (DanmakuFrameRateCap) -> Unit,
+    onInPipChange: (Boolean) -> Unit,
     onBack: () -> Unit,
 ) {
     SettingsSubPage(stringResource(R.string.settings_section_danmaku), onBack, state.loaded) {
@@ -228,6 +287,11 @@ fun DanmakuSettingsPage(
                 )
             },
             onChange = onFrameRateChange,
+        )
+        ToggleSettingRow(
+            title = stringResource(R.string.settings_danmaku_in_pip),
+            checked = state.danmaku.inPip,
+            onCheckedChange = onInPipChange,
         )
     }
 }
@@ -335,6 +399,174 @@ fun SponsorCategoriesPage(
         }
     }
 }
+
+/**
+ * 外观:明暗、纯黑、配色、语言。
+ *
+ * - **明暗**三档单选;**纯黑**是它下面的一个开关,只在会出现深色(深色或跟随系统)时可用。
+ * - **配色**是一片色板(5×2)而不是一行文字加对话框:这一项选的就是一个颜色,读名字挑颜色是在
+ *   绕路。第一格是按壁纸取色(系统不支持时不给这一格),其余是内置配色,名字在色板下面。
+ *   选中那一格画一圈外框加一个勾,不只靠颜色(风格指南 §2.6)。
+ * - **语言**三项单选,改完立即重建页面。
+ */
+@Composable
+fun AppearanceSettingsPage(
+    state: SettingsUiState,
+    language: AppLanguage,
+    onModeChange: (ThemeMode) -> Unit,
+    onPureBlackChange: (Boolean) -> Unit,
+    onPaletteChange: (String) -> Unit,
+    onLanguageChange: (AppLanguage) -> Unit,
+    onBack: () -> Unit,
+) {
+    val appearance = state.appearance
+    SettingsSubPage(stringResource(R.string.settings_section_appearance), onBack, state.loaded) {
+        ChoiceRow(
+            title = stringResource(R.string.settings_theme_mode),
+            options = ThemeMode.entries,
+            selected = appearance.mode,
+            label = { stringResource(it.label) },
+            onChange = onModeChange,
+        )
+        ToggleSettingRow(
+            title = stringResource(R.string.settings_pure_black),
+            subtitle = stringResource(R.string.settings_pure_black_subtitle),
+            checked = appearance.pureBlack,
+            onCheckedChange = onPureBlackChange,
+        )
+        PaletteRow(selected = appearance.palette, onSelect = onPaletteChange)
+        ChoiceRow(
+            title = stringResource(R.string.settings_language),
+            options = AppLanguage.entries,
+            selected = language,
+            label = { stringResource(it.label) },
+            onChange = onLanguageChange,
+        )
+    }
+}
+
+private val ThemeMode.label: Int
+    get() = when (this) {
+        ThemeMode.System -> R.string.settings_theme_system
+        ThemeMode.Light -> R.string.settings_theme_light
+        ThemeMode.Dark -> R.string.settings_theme_dark
+    }
+
+/**
+ * 配色那一块:标题,下面一片 5 列的色板。
+ *
+ * 每格是一个圆(种子色本身)加名字;按壁纸取色那一格画当前壁纸取出来的主色,名字叫「系统」。
+ * 圆里不画别的:颜色就是这一项的全部内容。
+ */
+@Composable
+private fun PaletteRow(selected: String, onSelect: (String) -> Unit) {
+    val context = LocalContext.current
+    Column(modifier = Modifier.padding(vertical = Spacing.Tight)) {
+        Text(
+            stringResource(R.string.settings_theme_palette),
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+        )
+        // **铺开成 5×2,不横滑。** 十格一屏放得下,横滑的话后几个色要拖一下才看得到,而这一项
+        // 选的就是颜色,挑之前得先一眼看全。
+        val wallpaperPrimary = remember(context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                dynamicLightColorScheme(context).primary
+            } else {
+                Color.Unspecified
+            }
+        }
+        val dynamicLabel = stringResource(R.string.theme_palette_dynamic)
+        val swatches: List<Swatch> = buildList {
+            if (dynamicColorAvailable) {
+                add(Swatch(AppearancePrefs.DYNAMIC, wallpaperPrimary, dynamicLabel))
+            }
+            ThemePalette.entries.forEach { add(Swatch(it.name, it.seed, "", it.label)) }
+        }
+        // 系统不支持壁纸取色时存着的 dynamic 实际落到默认那一套,选中标记也跟过去。
+        val effective = if (swatches.any { it.key == selected }) selected else ThemePalette.Default.name
+        Column(
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier
+                .padding(horizontal = Spacing.Tight)
+                .selectableGroup(),
+        ) {
+            swatches.chunked(PaletteColumns).forEach { row ->
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    row.forEach { swatch ->
+                        PaletteSwatch(
+                            color = swatch.color,
+                            label = swatch.labelRes?.let { stringResource(it) } ?: swatch.label,
+                            selected = swatch.key == effective,
+                            onClick = { onSelect(swatch.key) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    // 最后一行不满时留空位,不让剩下几格撑宽。
+                    repeat(PaletteColumns - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+    }
+}
+
+/** 色板的一格。[labelRes] 与 [label] 二选一:内置配色取资源,「系统」那格已经取好了字。 */
+private class Swatch(val key: String, val color: Color, val label: String, @StringRes val labelRes: Int? = null)
+
+private const val PaletteColumns = 5
+
+@Composable
+private fun PaletteSwatch(
+    color: Color,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+        modifier = modifier
+            .clip(MaterialTheme.shapes.medium)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .padding(Spacing.Hair),
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(SwatchSize)
+                .then(
+                    if (selected) {
+                        Modifier.border(SwatchRingWidth, MaterialTheme.colorScheme.primary, CircleShape)
+                    } else {
+                        Modifier
+                    },
+                )
+                .padding(SwatchRingGap)
+                .clip(CircleShape)
+                .background(color),
+        ) {
+            if (selected) {
+                Icon(
+                    Icons.Filled.Check,
+                    contentDescription = null,
+                    // 勾压在种子色上:浅色种子(山吹)上用深色,其余用白。
+                    tint = if (color.luminance() > CheckContrastLuminance) Color.Black else Color.White,
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+            }
+        }
+        // 五列时一格约 60dp 宽,罗马音最长的 Wakatake 在 labelMedium 下刚好放得下;字体放大时截断。
+        Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** 五列时一格约 60dp,圆取 44 留出选中外圈与左右的缝。 */
+private val SwatchSize = 44.dp
+private val SwatchRingWidth = 2.dp
+/** 选中外圈与色块之间的缝:外圈贴着色块的话,和种子色相近的外圈看不出来。 */
+private val SwatchRingGap = 4.dp
+private const val CheckContrastLuminance = 0.5f
 
 /** 缓存。只有并发度一项 —— 清晰度在缓存面板上选(那是"这一次下什么"),而这里是"怎么下"。 */
 @Composable

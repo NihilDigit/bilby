@@ -3,6 +3,8 @@ package dev.bilby.ui.settings
 import dev.bilby.BuildConfig
 import dev.bilby.api.BiliResult
 import dev.bilby.data.HistoryRepository
+import dev.bilby.data.AppearancePrefs
+import dev.bilby.data.ThemeMode
 import dev.bilby.data.UpdateCheck
 import dev.bilby.data.UpdateInfo
 import dev.bilby.data.UpdateRepository
@@ -62,6 +64,10 @@ data class SettingsUiState(
     /** 不计费网络(界面上叫 WiFi)下的默认画质。 */
     val defaultQualityWifi: Int = SettingsStore.DEFAULT_QUALITY,
     val defaultQualityMetered: Int = SettingsStore.DEFAULT_QUALITY_METERED,
+    val defaultAudioWifi: Int = SettingsStore.DEFAULT_AUDIO_QUALITY,
+    val defaultAudioMetered: Int = SettingsStore.DEFAULT_AUDIO_QUALITY_METERED,
+    /** 见 [dev.bilby.data.PlayerPrefs.playerPickUpdatesDefault]。 */
+    val playerPickUpdatesDefault: Boolean = false,
     val sponsorBlock: SponsorBlockPrefs = SponsorBlockPrefs(),
     /** 本机真有硬解器的编码,决定编解码那一节列出哪几项。 */
     val hardwareCodecIds: Set<Int> = emptySet(),
@@ -75,6 +81,7 @@ data class SettingsUiState(
     /** 直播间要不要去 danmakus.com 补本场早前的醒目留言。见 SettingsStore.danmakusArchiveEnabled。 */
     val danmakusArchive: Boolean = true,
     val offlineConcurrency: Int = SettingsStore.DEFAULT_OFFLINE_CONCURRENCY,
+    val appearance: AppearancePrefs = AppearancePrefs(),
     val update: UpdateState = UpdateState.Idle,
     /** 服务端的「暂停记录观看历史」。不是本机偏好,所以有读不到这一档,见 [HistoryPause]。 */
     val historyPause: HistoryPause = HistoryPause.Loading,
@@ -235,6 +242,9 @@ class SettingsViewModel(
                         codec = prefs.codec,
                         defaultQualityWifi = prefs.defaultQualityWifi,
                         defaultQualityMetered = prefs.defaultQualityMetered,
+                        defaultAudioWifi = prefs.defaultAudioWifi,
+                        defaultAudioMetered = prefs.defaultAudioMetered,
+                        playerPickUpdatesDefault = prefs.playerPickUpdatesDefault,
                         fastForwardSpeed = prefs.fastForwardSpeed,
                     )
                 }
@@ -248,6 +258,9 @@ class SettingsViewModel(
         }
         viewModelScope.launch {
             settings.playbackPrefs.collect { prefs -> _state.update { it.copy(autoNext = prefs.autoNext) } }
+        }
+        viewModelScope.launch {
+            settings.appearancePrefs.collect { prefs -> _state.update { it.copy(appearance = prefs) } }
         }
         viewModelScope.launch {
             settings.offlineConcurrency.collect { value ->
@@ -296,6 +309,18 @@ class SettingsViewModel(
      * 设置页改默认画质。两行各写各的那一格,和播放页切画质写的是同一批键 ——
      * 那边写的是当下所在网络的那一格,见 `AudioPlaybackService.setQuality`。
      */
+    fun setDefaultAudio(quality: Int, metered: Boolean) {
+        _state.update {
+            if (metered) it.copy(defaultAudioMetered = quality) else it.copy(defaultAudioWifi = quality)
+        }
+        persist { settings.saveDefaultAudio(quality, metered) }
+    }
+
+    fun setPlayerPickUpdatesDefault(enabled: Boolean) {
+        _state.update { it.copy(playerPickUpdatesDefault = enabled) }
+        persist { settings.savePlayerPickUpdatesDefault(enabled) }
+    }
+
     fun setDefaultQuality(quality: Int, metered: Boolean) {
         _state.update {
             if (metered) it.copy(defaultQualityMetered = quality) else it.copy(defaultQualityWifi = quality)
@@ -337,6 +362,21 @@ class SettingsViewModel(
         persist { settings.saveFastForwardSpeed(value) }
     }
 
+    fun setThemeMode(mode: ThemeMode) {
+        _state.update { it.copy(appearance = it.appearance.copy(mode = mode)) }
+        persist { settings.saveThemeMode(mode) }
+    }
+
+    fun setPureBlack(enabled: Boolean) {
+        _state.update { it.copy(appearance = it.appearance.copy(pureBlack = enabled)) }
+        persist { settings.savePureBlack(enabled) }
+    }
+
+    fun setThemePalette(palette: String) {
+        _state.update { it.copy(appearance = it.appearance.copy(palette = palette)) }
+        persist { settings.saveThemePalette(palette) }
+    }
+
     fun setOfflineConcurrency(value: Int) {
         _state.update { it.copy(offlineConcurrency = value) }
         persist { settings.saveOfflineConcurrency(value) }
@@ -368,6 +408,11 @@ class SettingsViewModel(
     fun setDanmakuFrameRate(value: DanmakuFrameRateCap) {
         _state.update { it.copy(danmaku = it.danmaku.copy(frameRateCap = value)) }
         persist { settings.saveDanmakuFrameRate(value) }
+    }
+
+    fun setDanmakuInPip(value: Boolean) {
+        _state.update { it.copy(danmaku = it.danmaku.copy(inPip = value)) }
+        persist { settings.saveDanmakuInPip(value) }
     }
 
 }
