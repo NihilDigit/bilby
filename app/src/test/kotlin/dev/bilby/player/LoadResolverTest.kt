@@ -73,8 +73,9 @@ class LoadResolverTest {
         assertEquals(LoadPlan.Online(5), resolver.resolve(BVID, requestedCid = 5))
     }
 
+    /** 缓存列表那条路径不能等网络:有网也直接放本地,详情和服务端记录一次都不问。 */
     @Test
-    fun `本地副本压过云端,而且一次网络都不打`() = runTest {
+    fun `从缓存列表进来时直接放本地副本,一次网络都不打`() = runTest {
         var asked = false
         val resolver = LoadResolver(
             localCopy = { _, _ -> cached(cid = 2, watchedMillis = 30_000) },
@@ -82,10 +83,51 @@ class LoadResolverTest {
             serverPart = { _, _ -> asked = true; 1 },
         )
 
-        val plan = resolver.resolve(BVID, requestedCid = 0)
+        val plan = resolver.resolve(BVID, requestedCid = 0, preferLocal = true)
 
         assertEquals(LoadPlan.LocalCopy(cached(cid = 2, watchedMillis = 30_000), 30_000), plan)
         assertEquals(false, asked)
+    }
+
+    /**
+     * 有网时放不放本地文件要等 playurl 回来比清晰度(见 [prefersLocalFiles]),解析这一层不能先
+     * 替它定成本地副本:定成本地的话 playurl 不取,画质菜单是空的。
+     */
+    @Test
+    fun `有网时即使盘上有副本也解析成在线`() = runTest {
+        val resolver = LoadResolver(
+            localCopy = { _, _ -> cached(cid = 2, watchedMillis = 30_000) },
+            parts = { VideoParts(1, listOf(1, 2)) },
+            serverPart = { _, _ -> 2 },
+        )
+
+        assertEquals(LoadPlan.Online(2), resolver.resolve(BVID, requestedCid = 0))
+    }
+
+    @Test
+    fun `没有网络时放本地副本,一次网络都不打`() = runTest {
+        var asked = false
+        val resolver = LoadResolver(
+            localCopy = { _, _ -> cached(cid = 2, watchedMillis = 30_000) },
+            parts = { asked = true; VideoParts(1, listOf(1, 2)) },
+            serverPart = { _, _ -> asked = true; 1 },
+            networkAvailable = { false },
+        )
+
+        assertEquals(LoadPlan.LocalCopy(cached(cid = 2, watchedMillis = 30_000), 30_000), resolver.resolve(BVID, 0))
+        assertEquals(false, asked)
+    }
+
+    /** 系统说有网而详情取不到(弱网、被限流):盘上有就放盘上的,不停在解析失败上。 */
+    @Test
+    fun `在线解析不出分 P 时退到本地副本`() = runTest {
+        val resolver = LoadResolver(
+            localCopy = { _, _ -> cached(cid = 2, watchedMillis = 30_000) },
+            parts = { null },
+            serverPart = { _, _ -> 0 },
+        )
+
+        assertEquals(LoadPlan.LocalCopy(cached(cid = 2, watchedMillis = 30_000), 30_000), resolver.resolve(BVID, 0))
     }
 
     /** 副本看完了就从头播,和网络流是同一条规则(见 [resumePositionMillis])。 */
@@ -95,6 +137,7 @@ class LoadResolverTest {
             localCopy = { _, _ -> cached(cid = 2, watchedMillis = 599_000) },
             parts = { null },
             serverPart = { _, _ -> 0 },
+            networkAvailable = { false },
         )
 
         val plan = resolver.resolve(BVID, requestedCid = 0)
@@ -114,11 +157,26 @@ class LoadResolverTest {
             localCopy = { _, preferred -> seen = preferred; null },
             parts = { VideoParts(1, listOf(1)) },
             serverPart = { _, _ -> 0 },
+            networkAvailable = { false },
         )
 
         resolver.resolve(BVID, requestedCid = 7)
 
         assertEquals(7L, seen)
+    }
+
+    @Test
+    fun `副本清晰度不低于在线这一档时换成本地文件`() {
+        assertEquals(true, prefersLocalFiles(localQuality = 80, onlineQuality = 80, pickedByUser = false))
+        assertEquals(true, prefersLocalFiles(localQuality = 112, onlineQuality = 80, pickedByUser = false))
+        assertEquals(false, prefersLocalFiles(localQuality = 64, onlineQuality = 80, pickedByUser = false))
+    }
+
+    /** 菜单里点了 480P 却放着 1080P 的副本,是菜单点了没用。 */
+    @Test
+    fun `用户点的那一档只在副本正好是那一档时换成本地`() {
+        assertEquals(true, prefersLocalFiles(localQuality = 32, onlineQuality = 32, pickedByUser = true))
+        assertEquals(false, prefersLocalFiles(localQuality = 80, onlineQuality = 32, pickedByUser = true))
     }
 
     private fun resolver(parts: VideoParts?, serverCid: Long) = LoadResolver(

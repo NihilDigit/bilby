@@ -13,6 +13,7 @@ navigation3 = "1.1.5"
 media3 = "1.10.1"
 room = "2.8.4"
 datastore = "1.2.1"
+work = "2.12.0"
 ktor = "3.5.2"
 serialization = "1.11.0"
 coil = "3.5.0"
@@ -67,6 +68,9 @@ androidx-media3-extractor = { module = "androidx.media3:media3-extractor", versi
 androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+# 断网期间没发出去的心跳,联网后补发(offline/HeartbeatFlushWorker.kt)。要能跨过进程死亡等到联网,
+# 这件事只有系统调度得了。
+androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }

@@ -71,6 +71,16 @@ data class OfflineTarget(
     val key: String get() = offlineId(item.bvid, cid)
 
     fun isCached(cached: CachedIndex): Boolean = (item.bvid to cid) in cached
+
+    fun isInProgress(cached: CachedIndex): Boolean = cached.isInProgress(item.bvid to cid)
+
+    fun isFailed(cached: CachedIndex): Boolean = cached.isFailed(item.bvid to cid)
+
+    /**
+     * 勾不勾得了。已缓存的不用再下;排队和下载中的再勾一次会被下载器的去重挡掉,勾上了什么都
+     * 不发生。失败的可以勾:重新勾选就是重试。
+     */
+    fun isSelectable(cached: CachedIndex): Boolean = !isCached(cached) && !isInProgress(cached)
 }
 
 /** 这一行落成一条下载请求。 */
@@ -116,13 +126,13 @@ fun OfflineCacheSheet(
 ) {
     val selected = remember(targets) {
         mutableStateMapOf<String, Boolean>().apply {
-            val initial = targets.firstOrNull { it.key == initialSelection && !it.isCached(cached) }
+            val initial = targets.firstOrNull { it.key == initialSelection && it.isSelectable(cached) }
             initial?.let { put(it.key, true) }
         }
     }
     var quality by rememberSaveable { mutableStateOf(defaultQuality) }
 
-    val selectable = targets.filterNot { it.isCached(cached) }
+    val selectable = targets.filter { it.isSelectable(cached) }
     val chosen = selectable.filter { selected[it.key] == true }
     val allChosen = selectable.isNotEmpty() && chosen.size == selectable.size
 
@@ -187,8 +197,16 @@ fun OfflineCacheSheet(
         }
         LazyColumn(modifier = Modifier.weight(1f, fill = false).heightIn(max = listMaxHeight)) {
             items(targets, key = { it.key }) { target ->
-                val isCached = target.isCached(cached)
+                val enabled = target.isSelectable(cached)
                 val checked = selected[target.key] == true
+                // 状态行只在有话说时出现。失败的那条也要说:它可勾,但人得知道这是在重下一条
+                // 失败过的,不是第一次缓存。
+                val status = when {
+                    target.isCached(cached) -> R.string.offline_already_cached
+                    target.isInProgress(cached) -> R.string.offline_sheet_in_progress
+                    target.isFailed(cached) -> R.string.offline_status_failed
+                    else -> null
+                }
                 ListItem(
                     headlineContent = {
                         // 分 P 行显示的是这一 P 的名字。整条视频的标题不再重复印在每一行上 ——
@@ -199,20 +217,20 @@ fun OfflineCacheSheet(
                             overflow = TextOverflow.Ellipsis,
                         )
                     },
-                    supportingContent = if (isCached) {
-                        { Text(stringResource(R.string.offline_already_cached)) }
+                    supportingContent = if (status != null) {
+                        { Text(stringResource(status)) }
                     } else {
                         null
                     },
                     leadingContent = {
-                        Checkbox(checked = checked || isCached, enabled = !isCached, onCheckedChange = null)
+                        Checkbox(checked = checked || !enabled, enabled = enabled, onCheckedChange = null)
                     },
                     // sheet 自己就是容器,行底色跟着它走 —— 画死 surface 会在容器里留下一条条
                     // 比容器亮的补丁(风格指南 §2.3c 的第二个坑)。
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     modifier = Modifier.fillMaxWidth().toggleable(
                         value = checked,
-                        enabled = !isCached,
+                        enabled = enabled,
                         role = Role.Checkbox,
                         onValueChange = { selected[target.key] = it },
                     ),

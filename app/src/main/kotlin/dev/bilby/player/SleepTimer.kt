@@ -27,7 +27,10 @@ sealed interface SleepTimerMode {
     /** 不定时。 */
     data object Off : SleepTimerMode
 
-    /** 固定时长后停。 */
+    /**
+     * 固定时长后停。[minutes] 是选的那一档,**加减过也不改**:面板上亮的是"你选了哪一档",
+     * 直到换一档或者定时结束。剩余时间看 [SleepTimerState.remainingMillis]。
+     */
     data class After(val minutes: Int) : SleepTimerMode
 
     /** 当前这条播完就停,不看时长。短视频想"听完这条就睡"走的是这一格。 */
@@ -60,6 +63,9 @@ class SleepTimer(
 
     private var countdown: Job? = null
 
+    /** 到点的时刻([SystemClock.elapsedRealtime] 时基)。字段而不是局部变量:[extend] 要能挪它。 */
+    private var deadline = 0L
+
     /** 设定定时。[SleepTimerMode.Off] 等价于 [cancel]。 */
     fun start(mode: SleepTimerMode) {
         countdown?.cancel()
@@ -68,7 +74,7 @@ class SleepTimer(
             SleepTimerMode.Off -> _state.value = SleepTimerState()
             SleepTimerMode.EndOfItem -> _state.value = SleepTimerState(SleepTimerMode.EndOfItem)
             is SleepTimerMode.After -> {
-                val deadline = SystemClock.elapsedRealtime() + mode.minutes * 60_000L
+                deadline = SystemClock.elapsedRealtime() + mode.minutes * 60_000L
                 _state.value = SleepTimerState(mode, mode.minutes * 60_000L)
                 countdown = scope.launch {
                     while (isActive) {
@@ -82,6 +88,19 @@ class SleepTimer(
                 }
             }
         }
+    }
+
+    /**
+     * 在正在走的倒计时上加减 [deltaMillis]。**挪的是到点时刻,不重开计时**:秒数原样保留。
+     * 减到不足 [MinRemainingMillis] 就停在那儿 —— 微调不该一不小心变成"现在就停"。
+     *
+     * 模式原样不动,选的那一档照旧亮着(见 [SleepTimerMode.After])。
+     */
+    fun extend(deltaMillis: Long) {
+        val mode = _state.value.mode as? SleepTimerMode.After ?: return
+        val now = SystemClock.elapsedRealtime()
+        deadline = (deadline + deltaMillis).coerceAtLeast(now + MinRemainingMillis)
+        _state.value = SleepTimerState(mode, deadline - now)
     }
 
     fun cancel() {
@@ -101,6 +120,11 @@ class SleepTimer(
         if (_state.value.mode != SleepTimerMode.EndOfItem) return false
         fire()
         return true
+    }
+
+    private companion object {
+        /** 微调往下减时剩余时间的下限。 */
+        const val MinRemainingMillis = 60_000L
     }
 
     private fun fire() {

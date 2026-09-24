@@ -72,10 +72,10 @@ class QueueSourceRepository(
         )
         is QueueContext.FavFolder -> openFeed(
             feed = PagedFeed(context.page, FavRepository.Paging.PAGE_SIZE) { page ->
-                when (val r = favRepository.folderContents(context.mediaId, page)) {
-                    // 失效稿件在收藏夹页照常列出(点不动),队列里放不了,不收。
+                when (val r = favRepository.folderContents(context.mediaId, page, context.order, context.keyword)) {
+                    // 失效稿件、音频与剧集在收藏夹页照常列出(点不动),队列里放不了,不收。
                     is BiliResult.Ok -> FeedPage(
-                        items = r.value.items.filterNot { it.invalid }.map {
+                        items = r.value.items.filter { it.playable }.map {
                             QueueItem(it.bvid, it.title, it.upName, it.coverUrl, it.durationSeconds)
                         },
                         hasMore = r.value.hasMore,
@@ -87,12 +87,13 @@ class QueueSourceRepository(
             label = context.title,
             source = null,
         )
-        QueueContext.ToView -> {
-            when (val r = toViewRepository.loadList()) {
+        is QueueContext.ToView -> {
+            when (val r = toViewRepository.loadList(context.asc)) {
+                // 番剧与课程不进队列,理由同收藏夹那一支。
                 is BiliResult.Ok -> openFeed(
                     feed = StaticFeed(
-                        r.value.items.map {
-                            QueueItem(it.bvid, it.title, it.upName, it.coverUrl, parseDurationText(it.durationText))
+                        r.value.items.filter { it.playable }.map {
+                            QueueItem(it.bvid, it.title, it.upName, it.coverUrl, it.durationSeconds)
                         },
                     ),
                     bvid = bvid,

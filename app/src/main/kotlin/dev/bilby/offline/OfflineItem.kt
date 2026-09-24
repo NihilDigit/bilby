@@ -53,6 +53,14 @@ data class OfflineItem(
      * 两行同名条目谁是谁,只有这个字段答得上来。
      */
     val partTitle: String = "",
+    /**
+     * 这一 P 在视频里的序号(详情 `pages[].page`,从 1 起),0 表示不知道(旧索引,或下载时
+     * 没拿到详情)。
+     *
+     * 离线切 P 靠它排顺序:那时详情取不到,而 cid 的大小和分 P 的先后没有约定,按 cid 排是在
+     * 猜。
+     */
+    val partIndex: Int = 0,
     val upName: String = "",
     val coverUrl: String = "",
     val durationSeconds: Long = 0,
@@ -125,28 +133,56 @@ data class OfflineItem(
 fun offlineId(bvid: String, cid: Long): String = "${bvid}_$cid"
 
 /**
- * 盘上已有(或正在下)的东西,供缓存面板把已缓存的条目标出来。
+ * 盘上各条缓存的状态,供缓存面板把已缓存、正在缓存的条目标出来。
  *
  * **两种问法都要答得上,因为面板上两种行并存:**
  * - 当前这条视频的分 P,cid 是已知的,按 (bvid, cid) 精确判 —— 缓存了 P1 不该让 P2 也显示成
  *   已缓存,那正是"选不了具体哪一 P"这个毛病的另一半。
  * - 队列里别的视频,cid 要联网拿详情才知道(队列项的 cid 可能是 0)。那时只能按 bvid 判:
  *   宁可把"缓存过这条视频的某一 P"说成已缓存,也好过因为 cid 对不上而显示成没缓存,让人再下一遍。
+ *
+ * **只有 [OfflineStatus.Completed] 算已缓存。** 这里曾经不看状态,于是失败的那条也显示成已缓存、
+ * 在面板上勾不了,想重下只能去缓存列表里找它的重试按钮。排队和下载中的那些另算一类:还没到盘上,
+ * 但再勾一次只会被下载器的去重挡掉,摆成可选是一个按了没反应的勾。
  */
 data class CachedIndex(
-    private val ids: Set<String> = emptySet(),
-    private val bvids: Set<String> = emptySet(),
+    private val statusById: Map<String, OfflineStatus> = emptyMap(),
+    /** 同一条视频各 P 里最靠前的那个状态,按 bvid 问时用。见 [statusRank]。 */
+    private val statusByBvid: Map<String, OfflineStatus> = emptyMap(),
 ) {
-    operator fun contains(target: Pair<String, Long>): Boolean {
+    /** 已经下完、能直接播。 */
+    operator fun contains(target: Pair<String, Long>): Boolean =
+        statusOf(target) == OfflineStatus.Completed
+
+    /** 排队中或正在下。 */
+    fun isInProgress(target: Pair<String, Long>): Boolean =
+        statusOf(target).let { it == OfflineStatus.Queued || it == OfflineStatus.Running }
+
+    /** 上次下失败了,可以重新勾选。 */
+    fun isFailed(target: Pair<String, Long>): Boolean = statusOf(target) == OfflineStatus.Failed
+
+    private fun statusOf(target: Pair<String, Long>): OfflineStatus? {
         val (bvid, cid) = target
-        return if (cid == 0L) bvid in bvids else offlineId(bvid, cid) in ids
+        return if (cid == 0L) statusByBvid[bvid] else statusById[offlineId(bvid, cid)]
     }
 
     companion object {
         fun of(items: List<OfflineItem>): CachedIndex = CachedIndex(
-            ids = items.map { offlineId(it.bvid, it.cid) }.toSet(),
-            bvids = items.map { it.bvid }.toSet(),
+            statusById = items.associate { offlineId(it.bvid, it.cid) to it.status },
+            statusByBvid = items.groupBy { it.bvid }
+                .mapValues { (_, parts) -> parts.minBy { statusRank(it.status) }.status },
         )
+
+        /**
+         * 按 bvid 合并时谁说了算。已缓存排第一,理由同类注释:宁可说成已缓存。进行中排在失败前面:
+         * 一 P 在下、另一 P 失败时,再勾一次落到的多半是在下的那一 P,被去重挡掉。
+         */
+        private fun statusRank(status: OfflineStatus): Int = when (status) {
+            OfflineStatus.Completed -> 0
+            OfflineStatus.Running -> 1
+            OfflineStatus.Queued -> 2
+            OfflineStatus.Failed -> 3
+        }
     }
 }
 
@@ -225,6 +261,9 @@ const val OFFLINE_INTERRUPTED = "上次没下完,点一下继续"
  *
  * 已完成和已失败的原样返回:前者不该被动,后者的原因(取流被拒、片源没了)比"上次被打断"
  * 更具体,盖掉是丢信息。
+ *
+ * 下载器启动时会把这些条目自动重新排队([OfflineDownloader] 的 init),这个失败态是排队
+ * 之前、以及排队没能发生时(进程在那之前又被杀)留在盘上的样子。
  */
 fun OfflineItem.recoveredFromInterruption(): OfflineItem =
     if (status == OfflineStatus.Running || status == OfflineStatus.Queued) {
@@ -255,6 +294,12 @@ enum class DownloadFailure {
 
     /** 这条流本身有问题(404、参数错),重试多少次都一样。 */
     Fatal,
+
+    /**
+     * 盘满了。**不当瞬时处理**:退避几秒不会腾出空间,而它和断网落到同一句"下载失败"上,用户
+     * 就不知道该去删东西。已下的字节留着,腾出空间后点重试接着下。
+     */
+    DiskFull,
 }
 
 /**

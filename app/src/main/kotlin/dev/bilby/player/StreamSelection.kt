@@ -30,6 +30,13 @@ data class SelectedStreams(
      * 值得在画质菜单上提示一句——用户看到"卡"和"烫"时应该能知道原因。
      */
     val hardwareDecoded: Boolean = true,
+    /** 实际选中的音质 id,0 表示没有分离音轨(durl 兜底)。播放面板的音质一行勾这个。 */
+    val audioId: Int = 0,
+    /**
+     * 这次下发了哪几种音轨,按音质从高到低:无损、杜比、再按码率。播放面板的音质一行列这些 ——
+     * 只列真有地址的,不像画质菜单那样列 accept_quality(那里面有没下发流的档)。
+     */
+    val audioOptions: List<Int> = emptyList(),
 )
 
 /** 服务端 codecid 取值,notes §3.1 / §4.1。 */
@@ -123,8 +130,35 @@ fun selectStreams(
         codec = codecLabel(video),
         qualityId = video.id,
         hardwareDecoded = hardwareCandidates.isNotEmpty(),
+        audioId = audio?.id ?: 0,
+        audioOptions = audioOptions(dash),
     )
 }
+
+/**
+ * 下发了的音轨,从高到低。顺序是显式的(无损、杜比、普通音轨按 id 降序),理由同 [selectAudio]:
+ * 音质 id 的大小不代表音质高低。
+ */
+private fun audioOptions(dash: DashDto): List<Int> {
+    val flac = dash.flac?.audio?.takeIf { it.baseUrl.isNotEmpty() }?.id
+    val dolby = dash.dolby?.audio.orEmpty().firstOrNull { it.baseUrl.isNotEmpty() }?.id
+    val normal = dash.audio.orEmpty().filter { it.baseUrl.isNotEmpty() }.map { it.id }.distinct().sortedDescending()
+    return listOfNotNull(flac, dolby) + normal
+}
+
+/** 音质的名字,表见 notes/playurl.md 音质那一节。 */
+fun audioQualityLabel(id: Int): String = when (id) {
+    AUDIO_QUALITY_BEST -> "最高"
+    30251 -> "Hi-Res 无损"
+    30250, 30255 -> "杜比全景声"
+    30280 -> "192K"
+    30232 -> "132K"
+    30216 -> "64K"
+    else -> "音质 $id"
+}
+
+/** 设置页默认音质的几档。无损和杜比只有"最高"能选到:不是每条视频都有,指名要它们没有意义。 */
+val DEFAULT_AUDIO_QUALITY_OPTIONS = listOf(AUDIO_QUALITY_BEST, 30280, 30232, 30216)
 
 /**
  * 音轨优先级 flac → dolby → 普通 audio,顺序抄自 PiliPlus(notes §3.1 的三路合并)。

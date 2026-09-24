@@ -1,5 +1,7 @@
 package dev.bilby.offline
 
+import android.system.ErrnoException
+import android.system.OsConstants
 import dev.bilby.BiliLog
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliResult
@@ -70,9 +72,10 @@ data class OfflineRequest(
  *
  * 代价是队列、断点、退避要自己写,换来的是过期能自愈、文件明文可查、播放路径不变。
  *
- * 一并放弃的还有它带的两样约束设施,当前行为里没有对应物:`Requirements`(只在 WiFi、
- * 只在充电时下)与 `Scheduler`(条件不满足时把任务挂起,满足了再把服务拉起来)。所以这里
- * 排到队就下,不看网络类型也不看电量。要不要有这两条是行为变更,另议。
+ * 一并放弃的还有它带的两样约束设施:`Requirements`(只在 WiFi、只在充电时下)与
+ * `Scheduler`(条件不满足时把任务挂起,满足了再把服务拉起来)。这里只补了其中"有网"这一条:
+ * 断网时正在下的那条挂起等网,不消耗重试次数(见 [downloadWithRefresh]);进程死后没下完的
+ * 那些在下次启动时自动重新排队(见 init)。网络类型与电量不看,要不要有是行为变更,另议。
  *
  * ## 并发度可调,默认 1
  *
@@ -92,6 +95,18 @@ class OfflineDownloader(
     private val danmakuRepository: DanmakuRepository,
     /** 用户设的并发度,见 [dev.bilby.data.SettingsStore.offlineConcurrency]。 */
     private val concurrency: Flow<Int>,
+    /**
+     * 用户设的编码偏好,取流时现读。和在线播放用同一份([dev.bilby.data.PlayerPrefs.codec]):
+     * 设成 AVC 的人多半是设备解不动 HEVC/AV1,缓存下来一份解不动的文件比在线时更糟 —— 离线时
+     * 连换一档的机会都没有。
+     */
+    private val preferredCodecs: suspend () -> List<Int>,
+    /** 此刻有没有网,见 [dev.bilby.player.hasInternetNetwork]。 */
+    private val hasNetwork: () -> Boolean,
+    /** 挂起到有网为止。 */
+    private val awaitNetwork: suspend () -> Unit,
+    /** 盘满时摆在条目上的那句话。走资源而不是常量,这一句要跟着界面语言。 */
+    private val diskFullReason: () -> String,
     /** 有活儿要干/干完了。宿主用它拉起或收掉前台服务,见 [OfflineDownloadService]。 */
     private val onBusyChanged: (Boolean) -> Unit = {},
 ) {
@@ -159,9 +174,17 @@ class OfflineDownloader(
             // 先扫无主文件再读列表。**顺序不能反** —— 扫的判据正是"列表里认不认得它",
             // 而这一刻还没有任何一条在下,不存在扫到一半正好在写的情形(见 sweepOrphans)。
             store.sweepOrphans()
-            _items.value = store.list().map { it.recoveredFromInterruption() }
+            val onDisk = store.list()
+            val interrupted = onDisk.filter {
+                it.status == OfflineStatus.Running || it.status == OfflineStatus.Queued
+            }
+            _items.value = onDisk.map { it.recoveredFromInterruption() }
             // 上一次进程没走完就被杀了的那些要落盘改状态,否则下次启动读回来的还是 Running。
             _items.value.filter { it.error == OFFLINE_INTERRUPTED }.forEach { store.write(it) }
+            // 然后接着下,不等人点(PiliPlus 同样把没下完的读回等待队列)。进程被杀不是用户的
+            // 决定,排进去的东西该下完。**只接被打断的,不碰真失败的**:那些的原因(取流被拒、
+            // 盘满)不会因为重启而消失,自动重来只是再失败一次。
+            enqueue(interrupted.map { it.toRequest() })
             backfillLegacyMetadata()
         }
 
@@ -225,7 +248,12 @@ class OfflineDownloader(
                 if (!inFlight.add(offlineId(request.bvid, request.cid))) return@forEach
                 // 上一次被取消的那条又被排进来了(重试,或者用户改了主意),撤掉那道墓碑。
                 cancelled.remove(offlineId(request.bvid, request.cid))
-                upsert(request.toQueuedItem())
+                // 盘上已有这一条(重试、启动时接着下)就在它身上改状态,不重建:重建会把创建时间
+                // 换成现在,每次启动自动续传都把这几条挪到列表最前面。
+                upsert(
+                    existing?.copy(status = OfflineStatus.Queued, error = null, speedBytesPerSecond = 0)
+                        ?: request.toQueuedItem(),
+                )
                 if (outstanding.getAndIncrement() == 0) onBusyChanged(true)
                 pending.send(request)
             }
@@ -259,22 +287,23 @@ class OfflineDownloader(
 
     /** 失败的那条重来。参数从索引里读回来,不用界面再攒一份。 */
     fun retry(item: OfflineItem) {
-        enqueue(
-            listOf(
-                OfflineRequest(
-                    bvid = item.bvid,
-                    cid = item.cid,
-                    title = item.title,
-                    upName = item.upName,
-                    coverUrl = item.coverUrl,
-                    durationSeconds = item.durationSeconds,
-                    qualityId = item.qualityId,
-                ),
-            ),
-        )
+        enqueue(listOf(item.toRequest()))
     }
 
+    private fun OfflineItem.toRequest() = OfflineRequest(
+        bvid = bvid,
+        cid = cid,
+        title = title,
+        upName = upName,
+        coverUrl = coverUrl,
+        durationSeconds = durationSeconds,
+        qualityId = qualityId,
+    )
+
     private suspend fun runOne(request: OfflineRequest) {
+        // 没网就先等网,别让下面每一步各自失败一遍:详情拉不到不算失败,于是断网时排进来的那条
+        // 会带着一份残缺的元信息(没有 aid、没有分 P 序号)一路下完。
+        if (!hasNetwork()) awaitNetwork()
         // **详情无条件拉一次**,不只在 cid 缺失时拉。队列项只带列表要显示的那几样,而离线播放页
         // 要的是一整份(aid 撑评论区、upMid 撑 UP 那一行、发布时间撑简介那行日期,见 OfflineItem)。
         // 拉不到不算失败:cid 已知时照样能下,只是这一条的元信息停在队列项给的那几样。
@@ -330,14 +359,22 @@ class OfflineDownloader(
             status = OfflineStatus.Running,
             expectedVideoBytes = prior?.expectedVideoBytes ?: 0,
             expectedAudioBytes = prior?.expectedAudioBytes ?: 0,
+            createdAtMillis = prior?.createdAtMillis?.takeIf { it > 0 } ?: System.currentTimeMillis(),
         )
         upsert(item)
 
-        var playInfo = fetchPlayUrl(resolved) ?: run { fail(item, "取流失败"); return }
+        var playInfo = fetchPlayUrlWhenOnline(resolved) ?: run { fail(item, "取流失败"); return }
+        // 本地进度与 base 用这一刻服务端记着的值起头。不起头的话,在线看到一半再缓存的视频第一次
+        // 离线打开从 0 播,而 base 是 0、云端不是 0,核对那一步还会弹一条"别处已看到"—— 那个
+        // "别处"其实就是本机。取值规则和核对时一样(见 AudioPlaybackService.reconcileCachedProgress):
+        // 记录属于别的 P 就当这一 P 没有记录。
+        val serverMillis = if (playInfo.lastPlayCid == cid) playInfo.lastPlayTimeMillis else 0L
         item = item.copy(
             qualityId = playInfo.streams.qualityId,
             qualityLabel = playInfo.streams.qualityLabel,
             codec = playInfo.streams.codec,
+            watchedPositionMillis = serverMillis,
+            serverProgressBaseMillis = serverMillis,
         )
         upsert(item)
 
@@ -347,7 +384,7 @@ class OfflineDownloader(
 
         // 音频先下:它只有视频的几十分之一,先落盘意味着"下到一半"的那份也已经能听。
         if (playInfo.streams.audioUrl != null) {
-            val audioOk = downloadWithRefresh(
+            val audioFailure = downloadWithRefresh(
                 request = resolved,
                 target = audioFile,
                 urlOf = { it.streams.audioUrl },
@@ -361,13 +398,13 @@ class OfflineDownloader(
                     }
                 },
             )
-            if (!audioOk) {
-                fail(item, "音频流下载失败")
+            if (audioFailure != null) {
+                fail(item, reasonFor(audioFailure, "音频流下载失败"))
                 return
             }
         }
 
-        val videoOk = downloadWithRefresh(
+        val videoFailure = downloadWithRefresh(
             request = resolved,
             target = videoFile,
             urlOf = { it.streams.videoUrl },
@@ -389,8 +426,8 @@ class OfflineDownloader(
                 publish(item)
             },
         )
-        if (!videoOk) {
-            fail(item, "视频流下载失败")
+        if (videoFailure != null) {
+            fail(item, reasonFor(videoFailure, "视频流下载失败"))
             return
         }
 
@@ -398,8 +435,13 @@ class OfflineDownloader(
         // 离线时没有弹幕的 B 站视频是另一个东西。所以它不再是缓存面板上的一个勾。
         val danmakuSaved = saveDanmaku(cid, item.durationSeconds)
 
+        // 进度从盘上重读:下载途中在线看这条视频,心跳会把进度写进同一份 meta.json,拿内存里
+        // 起头时那份覆盖回去就把它退回了下载开始那一刻。
+        val latest = store.read(resolved.bvid, cid)
         upsert(
             item.copy(
+                watchedPositionMillis = latest?.watchedPositionMillis ?: item.watchedPositionMillis,
+                serverProgressBaseMillis = latest?.serverProgressBaseMillis ?: item.serverProgressBaseMillis,
                 status = OfflineStatus.Completed,
                 hasDanmaku = danmakuSaved,
                 downloadedBytes = videoFile.length() + audioFile.length(),
@@ -423,6 +465,7 @@ class OfflineDownloader(
         return copy(
             title = detail.title.ifEmpty { title },
             partTitle = if (detail.pages.size > 1) part?.title.orEmpty() else "",
+            partIndex = part?.index ?: partIndex,
             upName = detail.up.name.ifEmpty { upName },
             coverUrl = detail.coverUrl.ifEmpty { coverUrl },
             durationSeconds = part?.durationSeconds?.takeIf { it > 0 }
@@ -451,6 +494,7 @@ class OfflineDownloader(
                 bvid = request.bvid,
                 cid = request.cid,
                 preferredQuality = request.qualityId,
+                preferredCodecs = preferredCodecs(),
             )
         ) {
             is BiliResult.Ok -> result.value
@@ -465,7 +509,24 @@ class OfflineDownloader(
         }
 
     /**
-     * 下一条流,**地址过期就换一个接着下**。
+     * 取流,没网就等网再取。**等网不算失败**:断网时排进来的那几条、下到一半断了网要换地址的
+     * 那一条,都该停在原地等,而不是落成一行红字要人回来一条条点重试。有网还取不到才是真失败。
+     */
+    private suspend fun fetchPlayUrlWhenOnline(request: OfflineRequest): PlayInfo? {
+        while (true) {
+            fetchPlayUrl(request)?.let { return it }
+            if (hasNetwork()) return null
+            BiliLog.d("缓存取流时没有网络,等网 bvid=${request.bvid} cid=${request.cid}")
+            awaitNetwork()
+        }
+    }
+
+    /** 失败摆在条目上的那句话。盘满单独一句:它要人去腾空间,和别的失败要做的事不一样。 */
+    private fun reasonFor(failure: DownloadFailure, generic: String): String =
+        if (failure == DownloadFailure.DiskFull) diskFullReason() else generic
+
+    /**
+     * 下一条流,**地址过期就换一个接着下**。成功返回 null,失败返回最后那次失败的类别。
      *
      * 这是整个下载器存在的理由(见类注释第 1 条):签名直链的有效期比一部长视频的下载时间短,
      * 而 `Range` 续传让"换地址"几乎零成本。[urlOf] 从新的 [PlayInfo] 里挑同一条流(视频或
@@ -484,34 +545,45 @@ class OfflineDownloader(
         /** 总长有了新说法就记下来(落盘)。传 0 表示作废 —— 推倒重来之后由新响应重新申报。 */
         onExpectedBytes: suspend (Long) -> Unit,
         onProgress: ProgressSink = { _, _, _ -> },
-    ): Boolean {
+    ): DownloadFailure? {
         var info = initial
         var attempt = 0
+        var lastFailure = DownloadFailure.Fatal
         while (attempt < MAX_ATTEMPTS) {
-            val url = urlOf(info) ?: return false
+            val url = urlOf(info) ?: return DownloadFailure.Fatal
             val lengthBefore = if (target.isFile) target.length() else 0L
-            when (downloadTo(url, target, expectedBytes(), onExpectedBytes, onProgress)) {
+            val failure = downloadTo(url, target, expectedBytes(), onExpectedBytes, onProgress) ?: return null
+            lastFailure = failure
+            when (failure) {
                 DownloadFailure.Expired -> {
                     BiliLog.w("缓存直链过期,重取 playurl bvid=${request.bvid} cid=${request.cid}")
-                    info = fetchPlayUrl(request) ?: return false
+                    info = fetchPlayUrlWhenOnline(request) ?: return DownloadFailure.Expired
                     onRefreshed(info)
                 }
-                DownloadFailure.Transient -> delay(RETRY_BASE_DELAY_MILLIS shl attempt)
+                DownloadFailure.Transient -> {
+                    // 断网造成的失败不计次数:退避几秒网也不会回来,三次一过这条就判死了,而人
+                    // 可能只是进了一趟电梯。等网回来接着下,这一轮当没发生过。
+                    if (!hasNetwork()) {
+                        BiliLog.d("缓存下载断网,等网续传 file=${target.name}")
+                        awaitNetwork()
+                        continue
+                    }
+                    delay(RETRY_BASE_DELAY_MILLIS shl attempt)
+                }
                 DownloadFailure.Mismatch -> {
                     // 细节在 downloadTo 里已经打过日志。已有的字节不可信,清掉;预期总长一并
                     // 作废,下一轮是全新下载,总长由新响应重新申报。
                     withContext(Dispatchers.IO) { RandomAccessFile(target, "rw").use { it.setLength(0) } }
                     onExpectedBytes(0)
                 }
-                DownloadFailure.Fatal -> return false
-                null -> return true
+                DownloadFailure.Fatal, DownloadFailure.DiskFull -> return failure
             }
             // 有进展就把计数清零(Media3 DownloadManager 的语义):按连续无进展计数,长视频
             // 下几个小时攒够三次瞬时失败并不难,而一条一直在动的下载不该被判死。
             val lengthAfter = if (target.isFile) target.length() else 0L
             attempt = if (lengthAfter > lengthBefore) 0 else attempt + 1
         }
-        return false
+        return lastFailure
     }
 
     /**
@@ -546,14 +618,35 @@ class OfflineDownloader(
                     // 200(或首次下载):从头写,总长以这次响应申报的为准。
                     val total = response.contentLength() ?: 0L
                     if (total > 0) onExpectedBytes(total)
+                    if (!hasRoomFor(target, total)) return@streamGet DownloadFailure.DiskFull
                     writeChannel(response.bodyAsChannel(), target, 0L, total, onProgress)
                     classifyDownloadedLength(target.length(), total)
                 }
             }
         }
     }.getOrElse { cause ->
+        if (cause.isDiskFull()) {
+            BiliLog.w("缓存写盘时空间不足 file=${target.name}", cause)
+            return@getOrElse DownloadFailure.DiskFull
+        }
         BiliLog.w("缓存流写盘失败 file=${target.name}", cause)
         DownloadFailure.Transient
+    }
+
+    /**
+     * 剩下的字节放得下吗。响应头到了、写第一个字节之前问一次:几百 MB 的文件写到一半才撞上
+     * ENOSPC,那一半是白下的,而 `usableSpace` 只是一次 statfs。
+     *
+     * 总长未知([remaining] 不是正数)时放行,真写满了由 [isDiskFull] 接住。
+     */
+    private fun hasRoomFor(target: File, remaining: Long): Boolean {
+        if (remaining <= 0) return true
+        val usable = (target.parentFile ?: target).usableSpace
+        // usableSpace 在拿不到时回 0,那不是"没有空间",而是"不知道"。
+        if (usable <= 0) return true
+        if (usable >= remaining) return true
+        BiliLog.w("缓存空间不足 需要=$remaining 可用=$usable file=${target.name}")
+        return false
     }
 
     /** 206 的追加路径,三道校验里的前两道在这里。[existing] 是发请求时的本地长度。 */
@@ -577,6 +670,7 @@ class OfflineDownloader(
             return DownloadFailure.Mismatch
         }
         if (total > 0) onExpectedBytes(total)
+        if (!hasRoomFor(target, total - existing)) return DownloadFailure.DiskFull
         writeChannel(response.bodyAsChannel(), target, existing, total, onProgress)
         return classifyDownloadedLength(target.length(), if (total > 0) total else expectedBytes)
     }
@@ -720,6 +814,17 @@ class OfflineDownloader(
 
 /** 下载进度上报:已下字节、总字节(未知为 0)、当前速度(字节/秒)。 */
 private typealias ProgressSink = (downloaded: Long, total: Long, speedBytesPerSecond: Long) -> Unit
+
+/**
+ * 这次写盘失败是不是因为盘满了。
+ *
+ * 平台的写调用把 ENOSPC 包成 `IOException`,原始的 `ErrnoException` 挂在 cause 上;中间隔着几层
+ * 包装不一定,所以顺着 cause 链找。消息里的 "ENOSPC" 是兜底:有的实现只留了文字。
+ */
+private fun Throwable.isDiskFull(): Boolean = generateSequence(this) { it.cause }.any { cause ->
+    (cause is ErrnoException && cause.errno == OsConstants.ENOSPC) ||
+        cause.message?.contains("ENOSPC") == true
+}
 
 private fun VideoStat.toOfflineStat() = OfflineStat(
     view = view,

@@ -38,10 +38,14 @@ import dev.bilby.data.db.BilbyDatabase
 import dev.bilby.data.db.FeedCacheRepository
 import dev.bilby.data.db.FeedReadPositionRepository
 import dev.bilby.live.LiveDanmakuClient
+import dev.bilby.offline.HeartbeatFlushWorker
 import dev.bilby.offline.OfflineDownloadService
 import dev.bilby.offline.OfflineDownloader
 import dev.bilby.offline.OfflineStore
+import dev.bilby.offline.PendingHeartbeatStore
 import dev.bilby.player.PartRequest
+import dev.bilby.player.awaitInternet
+import dev.bilby.player.hasInternetNetwork
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -84,6 +88,9 @@ class AppContainer(context: Context) {
     }
 
     val settings: SettingsStore by lazy { SettingsStore(appContext) }
+
+    /** 当前登录账号的 mid,来自登录凭据里的 DedeUserID;没登录时是 0。 */
+    suspend fun myMid(): Long = settings.credentials.first().dedeUserId.toLongOrNull() ?: 0L
 
     private val fingerprintStore: FingerprintStore by lazy { FingerprintStore(appContext) }
 
@@ -182,11 +189,15 @@ class AppContainer(context: Context) {
     val partRequest: PartRequest = PartRequest()
 
     /**
-     * 弹幕仓库认得离线缓存:缓存过的分段就地解析,不出网。这样 `VideoViewModel` 那侧的分段
-     * 调度一行都不用为离线改 —— 读本地和读网络在它眼里本来就该是同一件事的两种来源。
+     * 弹幕仓库认得离线缓存:有网读网络,拉不到时退回盘上那份;没网直接读盘,不先等网络超时。
+     * 规则在仓库里,见 [DanmakuRepository]。
      */
     val danmakuRepository: DanmakuRepository by lazy {
-        DanmakuRepository(biliClient) { cid, segmentIndex -> offlineStore.readDanmaku(cid, segmentIndex) }
+        DanmakuRepository(
+            client = biliClient,
+            local = { cid, segmentIndex -> offlineStore.readDanmaku(cid, segmentIndex) },
+            preferLocal = { !appContext.hasInternetNetwork() },
+        )
     }
 
     /**
@@ -201,6 +212,10 @@ class AppContainer(context: Context) {
             videoRepository = videoRepository,
             danmakuRepository = danmakuRepository,
             concurrency = settings.offlineConcurrency,
+            preferredCodecs = { settings.playerPrefs.first().codec.codecIds },
+            hasNetwork = { appContext.hasInternetNetwork() },
+            awaitNetwork = { appContext.awaitInternet() },
+            diskFullReason = { appContext.getString(R.string.offline_failure_disk_full) },
             onBusyChanged = { busy -> OfflineDownloadService.setRunning(appContext, busy) },
         )
     }
@@ -208,9 +223,18 @@ class AppContainer(context: Context) {
     /**
      * 心跳跑在应用级 scope 上,理由见 [HeartbeatReporter] 的 scope 参数:最要紧的那一次
      * 恰好发生在播放页销毁的瞬间。
+     *
+     * 待补发表放内部存储,不和缓存放在一起:缓存目录会被用户整条删掉,而这张表记的是观看,
+     * 不属于哪一份缓存(见 [PendingHeartbeatStore])。
      */
     val heartbeatReporter: HeartbeatReporter by lazy {
-        HeartbeatReporter(biliClient, CoroutineScope(SupervisorJob() + Dispatchers.IO))
+        HeartbeatReporter(
+            client = biliClient,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+            offlineStore = offlineStore,
+            pending = PendingHeartbeatStore(java.io.File(appContext.filesDir, "pending-heartbeats.json"), json),
+            scheduleFlush = { HeartbeatFlushWorker.enqueue(appContext) },
+        )
     }
 
     /** 第三方服务,不走 BiliClient(它带 B 站的 Cookie 与 Referer,发给别人既无必要也不合适)。 */

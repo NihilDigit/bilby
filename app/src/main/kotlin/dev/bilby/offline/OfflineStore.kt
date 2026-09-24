@@ -75,12 +75,25 @@ class OfflineStore(private val root: File, private val json: Json) {
             candidates.pickCompletedFor(bvid, preferredCid)
                 // 索引说下完了而文件没了(用户去文件管理器删过、或上次写盘被打断):照索引播的话
                 // 播放器会在打开文件时才失败,而那个错误离原因很远。
-                ?.takeIf { videoFile(it.bvid, it.cid).isFile }
+                ?.takeIf { hasMediaFiles(it) }
         }
 
     /** 已经下完的那一条,按精确的 (bvid, cid) 查。 */
     suspend fun completed(bvid: String, cid: Long): OfflineItem? =
-        read(bvid, cid)?.takeIf { it.status == OfflineStatus.Completed && videoFile(bvid, cid).isFile }
+        read(bvid, cid)?.takeIf { it.status == OfflineStatus.Completed && hasMediaFiles(it) }
+
+    /**
+     * 这一条该有的流都在盘上。
+     *
+     * 音频也要查:只查视频的话,音频文件没了的那份照样起播,放出来是一段没有声音的画面,而
+     * 播放器不认为那是错误。**有没有音频以 [OfflineItem.expectedAudioBytes] 为准**:它只在下过
+     * 音频流时才记下,为 0 的是没有音频流的稿件,或者服务端没给总长的旧条目 —— 后者分辨不出,
+     * 维持只查视频。
+     */
+    private fun hasMediaFiles(item: OfflineItem): Boolean {
+        if (!videoFile(item.bvid, item.cid).isFile) return false
+        return item.expectedAudioBytes <= 0 || audioFile(item.bvid, item.cid).isFile
+    }
 
     /**
      * 写索引。**先写临时文件再 rename**:直接往 meta.json 上写,进度更新时被杀掉就会留下
@@ -113,20 +126,33 @@ class OfflineStore(private val root: File, private val json: Json) {
      *
      * **不动 `serverProgressBaseMillis`** —— 那个字段回答的是"服务端那边现在是多少",而这一句
      * 发生时手上没有服务端的值(放本地副本本来就不问网络)。推进它的是心跳上报成功那一刻,见
-     * [recordServerBase]。两件事分开写,是因为把它们并成一个函数就得为"这次没有服务端值"传一个
+     * [recordReported]。两件事分开写,是因为把它们并成一个函数就得为"这次没有服务端值"传一个
      * 哨兵进去,而那个哨兵和"服务端真的是 0"长得一样。
      */
     suspend fun recordProgress(bvid: String, cid: Long, positionMillis: Long): Unit =
         updateEntry(bvid, cid) { it.copy(watchedPositionMillis = positionMillis) }
 
     /**
-     * 心跳报上去之后,服务端存的就是我们报的这个数。
+     * 服务端此刻存的是这个数。心跳成功走 [recordReported],这里只剩核对云端时的校准。
      *
      * 推进 base 等于宣告"到此为止两边是一致的",于是本地那份不再有话语权,直到下一次断网观看
      * 把它们重新拉开。判据见 [dev.bilby.player.mergeCachedProgress]。
      */
     suspend fun recordServerBase(bvid: String, cid: Long, baseMillis: Long): Unit =
         updateEntry(bvid, cid) { it.copy(serverProgressBaseMillis = baseMillis) }
+
+    /**
+     * 一次心跳落地了:服务端和本机此刻都停在 [reportedMillis]。
+     *
+     * 和 [recordServerBase] 分开,是因为那一个还有另一个调用方:核对云端时把 base 校准到问回来的
+     * 值,那一刻本地进度不该跟着动。这一个则两个字段一次写:只推 base 的话,在线看过的缓存条目
+     * 本地那份还停在下载那一刻,而 base 已经等于云端,下次断网打开时"云端没动过、本地说了算"
+     * 选中的正是那个旧位置。
+     */
+    suspend fun recordReported(bvid: String, cid: Long, reportedMillis: Long): Unit =
+        updateEntry(bvid, cid) {
+            it.copy(watchedPositionMillis = reportedMillis, serverProgressBaseMillis = reportedMillis)
+        }
 
     /**
      * 读一条、改一条、写回去。

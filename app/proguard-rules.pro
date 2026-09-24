@@ -10,6 +10,9 @@
 #                          多态、没有自定义 serializer、没有按名字查类,落在它的覆盖范围内。
 #   Room                   自带 -keep class * extends RoomDatabase { void <init>(); }
 #   OkHttp / Coil3 / Media3 均自带。
+#   WorkManager            默认 WorkerFactory 按类名反射构造 Worker(HeartbeatFlushWorker),
+#                          work-runtime 自带 keepnames 规则保住 ListenableWorker 子类及其
+#                          (Context, WorkerParameters) 构造函数。
 #   ZXing core             纯计算,不反射。
 #
 # 我们自己的代码里没有任何按名字取类或取成员的地方(Class.forName、getDeclaredX、

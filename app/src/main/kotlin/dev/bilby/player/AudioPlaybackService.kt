@@ -340,11 +340,34 @@ class AudioPlaybackService : MediaSessionService() {
     /** 位置刻度的循环。只在放着的时候跑,见 [emitPositionTick]。 */
     private var tickJob: Job? = null
 
-    /** 装的是本地副本还是网络流。写本地进度、按本地那份核对云端只在前者有意义。 */
+    /**
+     * 这次装载是不是没走网络的本地副本(没网,或在线失败退下来的)。写本地进度、起播后按本地
+     * 那份核对云端只在这种时候有意义。
+     *
+     * **有网时放本地文件不算**:那一次 playurl 照取、起播位置已经和云端合并过,除了字节从哪儿
+     * 读之外它就是一次在线装载(见 [resolveOnlineStream])。
+     */
     private var loadedLocalCopy = false
 
     private var playInfo: PlayInfo? = null
+
+    /** 当前这一条实际在放的那一档(选流的结果,不是请求的偏好)。换条清掉。 */
     private var currentQuality: Int = 0
+
+    /**
+     * 这次播放里用户在画质菜单里手动点的那一档,0 表示没点过。
+     *
+     * **范围是"这次播放",不是这一条,也不是全局。** 队列自动往下连播时沿用 —— 连着听一串
+     * 视频是同一段过程,每条都要重新切一次是折磨;换一份队列(从别处点开另一条视频)就清掉,
+     * 回到设置里的默认档。它**不写进设置**:在一条 1080P+ 的视频上切了一下,不该连带把以后
+     * 所有视频的默认档改掉,默认值只在设置页改。
+     *
+     * 非 0 时本地副本顶替在线流的判据收紧成"正好是那一档",见 [prefersLocalFiles]。
+     */
+    private var sessionQuality: Int = 0
+
+    /** 这次播放里手动选的音质,0 表示没选过。范围同 [sessionQuality]。 */
+    private var sessionAudio: Int = 0
 
     /** 见 [AudioPlaybackUiState.cloudResumeMillis]。装载任何新东西时清掉。 */
     private var cloudResumeMillis: Long? = null
@@ -395,6 +418,8 @@ class AudioPlaybackService : MediaSessionService() {
             // 问的是 `x/player/wbi/v2`:它和 playurl 都带着服务端记的那一对,但不返回流地址 ——
             // 为读一个数字去取一整份带时效的 CDN 地址再丢掉,是在风控额度上白花钱(notes §8.2.1)。
             serverPart = subtitleRepository::lastPlayedCid,
+            networkAvailable = { hasInternetNetwork() },
+            networkResponsive = { probeApi(container.biliClient) },
         )
 
         player = PlayerFactory.createPlayer(this, BilbyMediaSourceFactory(scope, ::resolveStream)).apply {
@@ -479,6 +504,10 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        // 本地副本的位置先落盘。这里曾经只有下面那句定格上报:断网时它报不出去,而本地进度只在
+        // 暂停、换条时写,服务就这样停掉的话,下次打开退回上一次暂停的地方。写盘跑在
+        // NonCancellable 上,不受下面 scope.cancel() 影响。
+        persistCachedProgress()
         // 定格补发这次观看的最终位置。**排在 scope.cancel() 前面不是为了赶上它** —— 心跳跑在
         // 应用级 scope 上(见 [HeartbeatReporter]),这里只是把"内容离开了"这件事说出来。
         closeProgressSession()
@@ -954,6 +983,9 @@ class AudioPlaybackService : MediaSessionService() {
         loadedLocalCopy = false
         playInfo = null
         currentQuality = 0
+        // 换了一份队列就是另一次播放,手动选的那一档到此为止。
+        sessionQuality = 0
+        sessionAudio = 0
         setCloudResume(null)
         publishState(loading = true)
         player.setMediaItems(items, startIndex, C.TIME_UNSET)
@@ -1037,61 +1069,97 @@ class AudioPlaybackService : MediaSessionService() {
         // 指名无人认领(见 [activateFrame])。读点收到入口之后这里只认条目。
         val requestedCid = mediaItem.cidHint
 
-        when (val plan = loadResolver.resolve(bvid, requestedCid)) {
-            is LoadPlan.LocalCopy -> {
-                val cached = plan.item
-                // 标题/UP/封面从索引里填。离线时这是元数据唯一的来源。
-                fillItemDisplay(bvid, cached.title, cached.upName, cached.coverUrl)
-                val audio = offlineStore.audioFile(cached.bvid, cached.cid).takeIf { it.isFile }
-                onResolved(
-                    LoadedItem(
-                        mediaId = cached.bvid,
-                        loadNonce = mediaItem.loadNonce,
-                        cid = cached.cid,
-                        startPositionMillis = positionOverrideMillis ?: plan.startPositionMillis,
-                        localCopy = true,
-                        // 画质菜单留空:本地只有下载时选的那一档,摆一个点了没用的菜单不如不摆。
-                        playInfo = null,
-                        quality = cached.qualityId,
-                    )
-                )
-                return PlayerFactory.createLocalMediaSource(
-                    offlineStore.videoFile(cached.bvid, cached.cid).path,
-                    audio?.path,
-                )
-            }
+        // 从缓存列表进来的直接放盘上那份,见 [LoadResolver]。判的是活帧的入口:队列补全、续取、
+        // 自动连播都不改它,于是缓存库队列里的每一条都走本地。
+        val preferLocal = liveFrame?.context == QueueContext.Offline
+        when (val plan = loadResolver.resolve(bvid, requestedCid, preferLocal)) {
+            is LoadPlan.LocalCopy -> return localCopySource(mediaItem, plan, positionOverrideMillis)
 
             LoadPlan.Unresolved -> {
                 BiliLog.w("解析不出要放哪一 P bvid=$bvid")
                 throw IOException(getString(R.string.playback_error_detail))
             }
 
-            is LoadPlan.Online -> return resolveOnlineStream(
-                bvid,
-                plan.cid,
-                positionOverrideMillis,
-                mediaItem.loadNonce,
+            is LoadPlan.Online -> return try {
+                resolveOnlineStream(
+                    bvid,
+                    plan.cid,
+                    positionOverrideMillis,
+                    mediaItem.loadNonce,
+                )
+            } catch (failure: IOException) {
+                // 在线取不到而盘上有这一 P:放盘上的,不停在错误面板上。没有就把原来的错误抛出去,
+                // 它比"本地也没有"更接近原因。
+                val fallback = loadResolver.localFallback(bvid, plan.cid) ?: throw failure
+                BiliLog.w("在线取流失败,退到本地副本 bvid=$bvid cid=${plan.cid}")
+                localCopySource(mediaItem, fallback, positionOverrideMillis)
+            }
+        }
+    }
+
+    /** [resolveStream] 的本地副本那一支。 */
+    private fun localCopySource(
+        mediaItem: MediaItem,
+        plan: LoadPlan.LocalCopy,
+        positionOverrideMillis: Long?,
+    ): MediaSource {
+        val cached = plan.item
+        // 标题/UP/封面从索引里填。离线时这是元数据唯一的来源。
+        fillItemDisplay(cached.bvid, cached.title, cached.upName, cached.coverUrl)
+        val audio = offlineStore.audioFile(cached.bvid, cached.cid).takeIf { it.isFile }
+        onResolved(
+            LoadedItem(
+                mediaId = cached.bvid,
+                loadNonce = mediaItem.loadNonce,
+                cid = cached.cid,
+                startPositionMillis = positionOverrideMillis ?: plan.startPositionMillis,
+                localCopy = true,
+                // 画质菜单留空:本地只有下载时选的那一档,摆一个点了没用的菜单不如不摆。
+                playInfo = null,
+                quality = cached.qualityId,
             )
+        )
+        return PlayerFactory.createLocalMediaSource(
+            offlineStore.videoFile(cached.bvid, cached.cid).path,
+            audio?.path,
+        )
+    }
+
+    /** 见 [loadedParts]。在线时详情多半还在缓存里(装载解析刚问过)。 */
+    private suspend fun partsOf(bvid: String, localOnly: Boolean): List<Long> {
+        if (localOnly) return cachedPartsOf(bvid)
+        return when (val detail = videoRepository.getVideoDetail(bvid)) {
+            is BiliResult.Ok -> detail.value.pages.map { it.cid }
+            else -> {
+                BiliLog.w("取不到分 P 清单,切换只在视频之间 bvid=$bvid")
+                emptyList()
+            }
         }
     }
 
     /**
-     * 见 [loadedParts]。在线时详情多半还在缓存里(装载解析刚问过)。离线取不到详情时给空,
-     * 于是只在视频之间切 —— 缓存索引里没有分 P 的序号,按 cid 排是在猜顺序。
+     * 放本地副本时的分 P 清单:盘上下完了的那几 P,按分 P 序号排。
+     *
+     * **从缓存索引出,不从详情出。** 放本地副本的人多半没网,分 P 清单曾经只从详情来,于是离线
+     * 时一个都拿不到,上一 P、下一 P 与自动连播全都只在视频之间走。序号在下载时记进了索引
+     * ([OfflineItem.partIndex]);旧索引没有序号,有网就按详情排,没网只能按 cid 排 ——
+     * 那是在猜,但猜错的只是先后,不猜就连切都切不了。
      */
-    private suspend fun partsOf(bvid: String, localOnly: Boolean): List<Long> {
-        val cids = when (val detail = videoRepository.getVideoDetail(bvid)) {
-            is BiliResult.Ok -> detail.value.pages.map { it.cid }
-            else -> {
-                BiliLog.w("取不到分 P 清单,切换只在视频之间 bvid=$bvid")
-                return emptyList()
+    private suspend fun cachedPartsOf(bvid: String): List<Long> {
+        val cached = offlineStore.list().filter { it.bvid == bvid && it.status == OfflineStatus.Completed }
+        if (cached.isEmpty()) return emptyList()
+        if (cached.all { it.partIndex > 0 }) return cached.sortedBy { it.partIndex }.map { it.cid }
+        if (hasInternetNetwork()) {
+            val detail = (videoRepository.getVideoDetail(bvid) as? BiliResult.Ok)?.value
+            if (detail != null) {
+                val cachedCids = cached.mapTo(HashSet()) { it.cid }
+                return detail.pages.map { it.cid }.filter { it in cachedCids }
             }
         }
-        if (!localOnly) return cids
-        val cached = offlineStore.list()
-            .filter { it.bvid == bvid && it.status == OfflineStatus.Completed }
-            .mapTo(HashSet()) { it.cid }
-        return cids.filter { it in cached }
+        BiliLog.w("旧缓存索引没有分 P 序号且取不到详情,按 cid 排 bvid=$bvid")
+        return cached
+            .sortedWith(compareBy<OfflineItem>({ if (it.partIndex > 0) it.partIndex else Int.MAX_VALUE }, { it.cid }))
+            .map { it.cid }
     }
 
     /**
@@ -1116,16 +1184,21 @@ class AudioPlaybackService : MediaSessionService() {
     ): MediaSource {
         fillDisplayFromDetail(bvid)
         val prefs = settings.playerPrefs.first()
-        // 当次播放里手动切过就用那一个;否则按此刻计不计费取对应的那一档。判据每次取流
-        // 现算,所以出门断了 WiFi 之后**下一条**自然就降下来了,当前这条不动。
+        // 依次:这一条正在放的那一档(换 P、重试时沿用)、这次播放里手动选的那一档、设置里按
+        // 此刻计不计费取的默认档。默认档每次取流现算,所以出门断了 WiFi 之后**下一条**自然就
+        // 降下来了,当前这条不动。
+        val metered = isOnMeteredNetwork()
         val quality = currentQuality.takeIf { it != 0 }
-            ?: prefs.defaultQualityOn(isOnMeteredNetwork())
+            ?: sessionQuality.takeIf { it != 0 }
+            ?: prefs.defaultQualityOn(metered)
+        val audio = sessionAudio.takeIf { it != 0 } ?: prefs.defaultAudioOn(metered)
         openChain?.mark("playurlStart")
         val result = videoRepository.getPlayUrl(
             bvid,
             cid,
             preferredQuality = quality,
             preferredCodecs = prefs.codec.codecIds,
+            preferredAudioQuality = audio,
         )
         val playUrl = when (result) {
             is BiliResult.Ok -> result.value
@@ -1139,6 +1212,30 @@ class AudioPlaybackService : MediaSessionService() {
             }
         }
         openChain?.mark("playurlEnd")
+        // 盘上这一 P 不输在线这一档,就只换媒体源(见 [prefersLocalFiles])。playurl 照取,
+        // 画质菜单、心跳、弹幕、字幕都和在线一样,变的只是字节从哪儿读。
+        val local = offlineStore.completed(bvid, cid)
+            ?.takeIf { prefersLocalFiles(it.qualityId, playUrl.streams.qualityId, sessionQuality != 0) }
+        if (local != null) {
+            onResolved(
+                LoadedItem(
+                    mediaId = bvid,
+                    loadNonce = loadNonce,
+                    cid = cid,
+                    startPositionMillis = positionOverrideMillis ?: localCopyResumeMillis(local, playUrl, cid),
+                    // 这一次是在线装载:云端核对走会话那条(见 [reconcileCloudProgress]),不走
+                    // 本地副本那条,起播位置已经在上面和云端合并过。
+                    localCopy = false,
+                    playInfo = playUrl,
+                    // 菜单上勾的是正在放的那一档,不是请求的那一档。
+                    quality = local.qualityId,
+                )
+            )
+            return PlayerFactory.createLocalMediaSource(
+                offlineStore.videoFile(local.bvid, local.cid).path,
+                offlineStore.audioFile(local.bvid, local.cid).takeIf { it.isFile }?.path,
+            )
+        }
         // **秒数一定属于问的这一 P。** playurl 的 `last_play_cid` 是填的,语义是"你问的这一 P
         // 有记录吗":对得上给记录,对不上给 0(实测,notes §8.2.1)。[dev.bilby.data.resumeAtMillisFor]
         // 就是照这条判的,所以解析出哪一 P 就拿哪一 P 的秒数,这里不需要再核一遍。
@@ -1150,13 +1247,31 @@ class AudioPlaybackService : MediaSessionService() {
                 startPositionMillis = positionOverrideMillis ?: playUrl.resumeAtMillisFor(cid),
                 localCopy = false,
                 playInfo = playUrl,
-                quality = quality,
+                // **实际选中的那一档,不是请求的那一档。** 请求的是偏好(比如 1080P60),这条
+                // 视频没有那一档时选流会落到它下面最近的一档;记偏好的话画质菜单里一格都对不上,
+                // 当前画质就不显示了。
+                quality = playUrl.streams.qualityId,
             )
         )
         return PlayerFactory.createMediaSource(
             playUrl.streams.videoUrl,
             playUrl.streams.audioUrl,
         )
+    }
+
+    /**
+     * 有网时放本地文件的起播位置。云端这一次是问到了的(playurl 带着),所以不像没网那条要等
+     * 起播之后再核对:当场按 [mergeCachedProgress] 合并。只认云端不行 —— 断网看过的那一段
+     * 可能还在待补发表里,云端还停在下载那一刻;只认本地也不行,别处看过的会被盖掉。
+     */
+    private fun localCopyResumeMillis(local: OfflineItem, playUrl: PlayInfo, cid: Long): Long {
+        val serverMillis = if (playUrl.lastPlayCid == cid) playUrl.lastPlayTimeMillis else 0L
+        val merged = mergeCachedProgress(
+            localMillis = local.watchedPositionMillis,
+            base = local.serverProgressBaseMillis,
+            serverMillis = serverMillis,
+        )
+        return resumePositionMillis(merged, playUrl.durationMillis.takeIf { it > 0 } ?: local.durationSeconds * 1000)
     }
 
     /**
@@ -1390,10 +1505,9 @@ class AudioPlaybackService : MediaSessionService() {
             return
         }
         progressSession = ProgressSession(aid, cid) { playedTimeSeconds, finished, onConfirmed ->
-            heartbeatReporter.report(aid, cid, playedTimeSeconds, finished) { reportedMillis ->
-                // 条目不在盘上时 recordServerBase 自己就什么都不做,这里不必先查一遍。
-                // 心跳成功是 serverBase 推进的唯一入口,见 [mergeCachedProgress]。
-                offlineStore.recordServerBase(bvid, cid, reportedMillis)
+            // 缓存条目的进度与 base 由上报方随结果一起记(成功推两者,没发出去只记本地),
+            // 见 [HeartbeatReporter.report]。这里只把确认送回会话。
+            heartbeatReporter.report(aid, cid, bvid, playedTimeSeconds, finished) {
                 // 回到会话所在的线程再动它的状态:这个回调跑在心跳自己的 IO scope 上。
                 withContext(Dispatchers.Main.immediate) { onConfirmed() }
             }
@@ -1574,17 +1688,39 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /**
-     * 切清晰度。在播放页改画质就是改默认画质,**改的是当前网络那一档**。
+     * 切清晰度。**默认只管这次播放**,范围见 [sessionQuality];设置里打开了
+     * [dev.bilby.data.PlayerPrefs.playerPickUpdatesDefault] 时顺带写进当前网络那一档的默认值。
      *
-     * 设置页那两行和这里不是"两处能改同一件事":它们是同一个值按计不计费分成的两格,播放页
-     * 这一下写进当下所在的那一格。在 WiFi 上调高不会连带把出门时用的那一档也调高。
-     *
-     * NonCancellable 落盘:切完清晰度就退出页面是常见操作,而 DataStore 的 edit 是挂起函数。
+     * 曾经无条件写默认值:在一条恰好有 1080P+ 的视频上切了一下,之后所有视频的默认档都跟着
+     * 变了,而用户以为自己只是在调这一条。
      */
     private fun setQuality(quality: Int) {
         currentQuality = quality
+        sessionQuality = quality
+        persistPickIfEnabled { metered -> settings.saveDefaultQuality(quality, metered) }
+        reloadAtCurrentPosition()
+    }
+
+    /** 切音质。范围与落盘规则同 [setQuality],见 [sessionAudio]。 */
+    private fun setAudioQuality(quality: Int) {
+        sessionAudio = quality
+        persistPickIfEnabled { metered -> settings.saveDefaultAudio(quality, metered) }
+        reloadAtCurrentPosition()
+    }
+
+    /**
+     * 开关打开时,把播放页里这一下选择写进设置里当下所在网络的那一格。NonCancellable:切完
+     * 就退出页面是常见操作,而 DataStore 的 edit 是挂起函数。
+     */
+    private fun persistPickIfEnabled(save: suspend (metered: Boolean) -> Unit) {
         val metered = isOnMeteredNetwork()
-        scope.launch(NonCancellable) { settings.saveDefaultQuality(quality, metered) }
+        scope.launch(NonCancellable) {
+            if (settings.playerPrefs.first().playerPickUpdatesDefault) save(metered)
+        }
+    }
+
+    /** 原地重新取流:同一条、同一 P、同一个位置,换的是画质或音质。 */
+    private fun reloadAtCurrentPosition() {
         val position = player.currentPosition.coerceAtLeast(0)
         reloadCurrent { item, nonce ->
             item.withLoadParams(
@@ -1906,11 +2042,12 @@ class AudioPlaybackService : MediaSessionService() {
             // 上一条的"还有下一 P"不能拦在这一条的末尾;这一条的清单落地后会再算一次。
             applyStopAtEndOfItem()
             // **同一条内容重来一遍不算换条。** 换 P、切清晰度、重试走的也是插入 + seek + 删除
-            // (见 [reloadCurrent]),下标同样变了,而这一层只看得见下标。当次手动选的那一档
-            // 因此不能一并清掉:清了的话切一次 P 画质就悄悄退回默认档;切清晰度更糟——刚设下
-            // 的那个值在这里被抹掉,取流只好回去读偏好,而偏好的落盘是异步的,那一趟读到的
-            // 往往还是上一档,表现为"选了 1080P 还是 720P,再选一次才生效"。
-            if (newPosition.mediaItem?.mediaId != oldPosition.mediaItem?.mediaId) currentQuality = 0
+            // (见 [reloadCurrent]),下标同样变了,而这一层只看得见下标。这一条实际在放的那一档
+            // 因此不能一并清掉:清了的话切一次 P 画质就悄悄退回偏好档。手动选的那一档
+            // ([sessionQuality])换条也不清,见它的说明。
+            if (newPosition.mediaItem?.mediaId != oldPosition.mediaItem?.mediaId) {
+                currentQuality = 0
+            }
             resolvingMediaId = newPosition.mediaItem?.mediaId
             publishState(loading = true)
             // 下一条多半在这之前几十秒就解析好了(见 [resolvedItems]),现在才轮到它落地。
@@ -2040,6 +2177,7 @@ class AudioPlaybackService : MediaSessionService() {
                         .add(SessionCommand(ACTION_OPEN_LIVE, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_PLAY_PART, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SET_QUALITY, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_SET_AUDIO_QUALITY, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_RETRY, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_PAGE_LEFT, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_FLUSH_PROGRESS, Bundle.EMPTY))
@@ -2065,6 +2203,7 @@ class AudioPlaybackService : MediaSessionService() {
                     args.getLong(EXTRA_POSITION_MILLIS),
                 )
                 ACTION_SET_QUALITY -> setQuality(args.getInt(EXTRA_QUALITY))
+                ACTION_SET_AUDIO_QUALITY -> setAudioQuality(args.getInt(EXTRA_QUALITY))
                 ACTION_RETRY -> retryNow()
                 // 暂停,但**不动 playIntent**(见 [ACTION_PAGE_LEFT])。顺手写一次本地进度:
                 // 离开页面是这次观看最可能的终点。
@@ -2079,13 +2218,20 @@ class AudioPlaybackService : MediaSessionService() {
                 // 分钟数是三态里唯一带参数的那个:大于 0 即定时,[SLEEP_END_OF_ITEM] 即播完这条,
                 // 其余(含缺省)即取消。用一个 Int 表达而不是再加一个布尔 extra —— 模式互斥之后
                 // 两个字段能拼出的组合比模式还多,又要在这里判一次哪个说了算。
-                ACTION_SLEEP_TIMER -> sleepTimer.start(
-                    when (val minutes = args.getInt(EXTRA_SLEEP_MINUTES, SLEEP_TIMER_OFF)) {
-                        SLEEP_END_OF_ITEM -> SleepTimerMode.EndOfItem
-                        in 1..Int.MAX_VALUE -> SleepTimerMode.After(minutes)
-                        else -> SleepTimerMode.Off
-                    },
-                )
+                //
+                // 带着 [EXTRA_SLEEP_DELTA_MINUTES] 时是在正在走的倒计时上加减,不是重设:重设会把
+                // 秒数抹成整分钟,23:41 加一分钟变成 25:00。
+                ACTION_SLEEP_TIMER -> if (args.containsKey(EXTRA_SLEEP_DELTA_MINUTES)) {
+                    sleepTimer.extend(args.getInt(EXTRA_SLEEP_DELTA_MINUTES) * 60_000L)
+                } else {
+                    sleepTimer.start(
+                        when (val minutes = args.getInt(EXTRA_SLEEP_MINUTES, SLEEP_TIMER_OFF)) {
+                            SLEEP_END_OF_ITEM -> SleepTimerMode.EndOfItem
+                            in 1..Int.MAX_VALUE -> SleepTimerMode.After(minutes)
+                            else -> SleepTimerMode.Off
+                        },
+                    )
+                }
 
                 else -> return super.onCustomCommand(session, controller, customCommand, args)
             }
@@ -2118,6 +2264,9 @@ class AudioPlaybackService : MediaSessionService() {
 
         /** 切清晰度。服务重取并停在原位置。 */
         const val ACTION_SET_QUALITY = "dev.bilby.SET_QUALITY"
+
+        /** 切音质,参数同样是 [EXTRA_QUALITY](音质 id)。 */
+        const val ACTION_SET_AUDIO_QUALITY = "dev.bilby.SET_AUDIO_QUALITY"
 
         /** 见 [retryNow]。 */
         const val ACTION_RETRY = "dev.bilby.RETRY"
@@ -2165,6 +2314,9 @@ class AudioPlaybackService : MediaSessionService() {
 
         /** 取消定时,也是 [EXTRA_SLEEP_MINUTES] 缺省时的取值。 */
         const val SLEEP_TIMER_OFF = -1
+
+        /** 在正在走的定时上加减几分钟,可为负。没在按时长计时时什么都不做。 */
+        const val EXTRA_SLEEP_DELTA_MINUTES = "deltaMinutes"
 
         const val EXTRA_BVID = "bvid"
 

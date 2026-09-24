@@ -41,11 +41,19 @@ sealed interface QueueContext {
         val page: Int,
     ) : QueueContext
 
+    /** 收藏夹内容,带着当时的排序与夹内搜索词,理由同 [UpArchive]。 */
     @Serializable
-    data class FavFolder(val mediaId: Long, val title: String, val page: Int) : QueueContext
+    data class FavFolder(
+        val mediaId: Long,
+        val title: String,
+        val page: Int,
+        val order: FavOrder = FavOrder.Mtime,
+        val keyword: String = "",
+    ) : QueueContext
 
+    /** @param asc 列表页当时的排序方向。队列按同一个方向排,下一条才是列表里的下一行。 */
     @Serializable
-    data object ToView : QueueContext
+    data class ToView(val asc: Boolean = false) : QueueContext
 
     /** 缓存列表。本地有完整副本的视频在离线时也退到这里,见 `AudioPlaybackService.openQueue`。 */
     @Serializable

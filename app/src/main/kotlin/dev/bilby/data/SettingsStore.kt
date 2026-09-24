@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dev.bilby.BuildConfig
 import dev.bilby.player.DEFAULT_PREFERRED_CODECS
+import dev.bilby.player.AUDIO_QUALITY_BEST
 import dev.bilby.player.VideoCodecId
 import dev.nihildigit.danmaku.DanmakuDensity
 import dev.nihildigit.danmaku.DanmakuFrameRateCap
@@ -91,8 +92,8 @@ class SettingsStore(context: Context) {
     }
 
     /**
-     * 播放器偏好。默认清晰度不在设置页里选,它由播放页那个画质菜单写进来 ——
-     * 在播放时改画质就是在改全局默认(DESIGN 2 节),设置页只放"设一次就不再想"的东西。
+     * 播放器偏好。默认画质、默认音质在设置页里设;播放页的菜单默认只改那一次播放,
+     * 见 [PlayerPrefs.playerPickUpdatesDefault]。
      */
     val playerPrefs: Flow<PlayerPrefs> = store.data.map { p ->
         PlayerPrefs(
@@ -101,8 +102,23 @@ class SettingsStore(context: Context) {
             // WiFi 上调的画质。换个新键会让所有人的偏好在升级那一刻悄悄回到 1080P。
             defaultQualityWifi = p[KEY_DEFAULT_QUALITY] ?: DEFAULT_QUALITY,
             defaultQualityMetered = p[KEY_DEFAULT_QUALITY_METERED] ?: DEFAULT_QUALITY_METERED,
+            defaultAudioWifi = p[KEY_DEFAULT_AUDIO] ?: DEFAULT_AUDIO_QUALITY,
+            defaultAudioMetered = p[KEY_DEFAULT_AUDIO_METERED] ?: DEFAULT_AUDIO_QUALITY_METERED,
+            playerPickUpdatesDefault = p[KEY_PLAYER_PICK_UPDATES_DEFAULT] ?: false,
             fastForwardSpeed = p[KEY_FAST_FORWARD_SPEED] ?: DEFAULT_FAST_FORWARD_SPEED,
         )
+    }
+
+    /** 默认音质,按网络计不计费分两档,同 [saveDefaultQuality]。 */
+    suspend fun saveDefaultAudio(quality: Int, metered: Boolean) {
+        store.edit { p ->
+            if (metered) p[KEY_DEFAULT_AUDIO_METERED] = quality else p[KEY_DEFAULT_AUDIO] = quality
+        }
+    }
+
+    /** 见 [PlayerPrefs.playerPickUpdatesDefault]。 */
+    suspend fun savePlayerPickUpdatesDefault(enabled: Boolean) {
+        store.edit { p -> p[KEY_PLAYER_PICK_UPDATES_DEFAULT] = enabled }
     }
 
     suspend fun saveCodecPreference(value: CodecPreference) {
@@ -114,8 +130,9 @@ class SettingsStore(context: Context) {
     }
 
     /**
-     * 存默认画质。**按当前网络计不计费分成两档** —— 在播放页切画质写的是当下这一档,
-     * 出门断了 WiFi 之后不该继续用刚才在家里挑的那一档(见 `AudioPlaybackService.setQuality`)。
+     * 存默认画质。**按网络计不计费分成两档**。播放页里切画质默认只管那一次播放
+     * (见 `AudioPlaybackService.sessionQuality`),打开 [PlayerPrefs.playerPickUpdatesDefault]
+     * 之后也写这里,写的是当下所在网络的那一格。
      */
     suspend fun saveDefaultQuality(quality: Int, metered: Boolean) {
         store.edit { p ->
@@ -133,6 +150,32 @@ class SettingsStore(context: Context) {
 
     suspend fun saveIgnoredUpdateVersion(version: String) {
         store.edit { p -> p[KEY_IGNORED_UPDATE] = version }
+    }
+
+    /**
+     * 外观:明暗、纯黑、配色来源。枚举按名字存,读不出(旧值、拼错)一律退回默认,
+     * 不让一条坏数据把整个主题读挂。语言不在这里,见 [dev.bilby.ui.AppLanguage]。
+     */
+    val appearancePrefs: Flow<AppearancePrefs> = store.data.map { p ->
+        AppearancePrefs(
+            mode = p[KEY_THEME_MODE]?.let { name -> ThemeMode.entries.firstOrNull { it.name == name } }
+                ?: ThemeMode.System,
+            pureBlack = p[KEY_PURE_BLACK] ?: false,
+            palette = p[KEY_THEME_PALETTE] ?: AppearancePrefs.DYNAMIC,
+        )
+    }
+
+    suspend fun saveThemeMode(mode: ThemeMode) {
+        store.edit { p -> p[KEY_THEME_MODE] = mode.name }
+    }
+
+    suspend fun savePureBlack(enabled: Boolean) {
+        store.edit { p -> p[KEY_PURE_BLACK] = enabled }
+    }
+
+    /** [AppearancePrefs.palette] 的取值:[AppearancePrefs.DYNAMIC] 或内置配色的名字。 */
+    suspend fun saveThemePalette(palette: String) {
+        store.edit { p -> p[KEY_THEME_PALETTE] = palette }
     }
 
     /**
@@ -192,7 +235,12 @@ class SettingsStore(context: Context) {
             scrollShowArea = (p[KEY_DANMAKU_SCROLL_SHOW_AREA] ?: DEFAULT_DANMAKU_SCROLL_SHOW_AREA).coerceIn(0.1f, 1f),
             density = danmakuDensityOf(p[KEY_DANMAKU_DENSITY]),
             frameRateCap = danmakuFrameRateOf(p[KEY_DANMAKU_FRAME_RATE]),
+            inPip = p[KEY_DANMAKU_IN_PIP] ?: true,
         )
+    }
+
+    suspend fun saveDanmakuInPip(enabled: Boolean) {
+        store.edit { p -> p[KEY_DANMAKU_IN_PIP] = enabled }
     }
 
     suspend fun saveDanmakuEnabled(enabled: Boolean) {
@@ -279,7 +327,11 @@ class SettingsStore(context: Context) {
     }
 
     /**
-     * 普通搜索的历史,最近的在前,至多 [SEARCH_HISTORY_LIMIT] 条。
+     * 普通搜索的历史,最近的在前。
+     *
+     * **不设条数上限。** 上限曾是 5,后来是 20:要找的那个词常常是一两周前搜过的,早被挤了
+     * 出去。每一条都是用户自己敲过的字,删掉哪些该由他决定(长按删一条、清空全部),而不是
+     * 替他按先来后到丢掉。一排 chip 可以换行,几十个词也只占几行。
      *
      * **只记普通搜索,不记助理。** 助理的上下文按 DESIGN 3.3 只含本次意图,把提问攒成一份
      * 可点的清单,等于给它做了一份会话历史 —— 那正是那条约束要避免的东西。
@@ -297,9 +349,13 @@ class SettingsStore(context: Context) {
         store.edit { p ->
             val previous = p[KEY_SEARCH_HISTORY].orEmpty().split('\n').filter { it.isNotEmpty() }
             // 搜过的词再搜一次是往上提,不是多一条。
-            val merged = (listOf(trimmed) + previous.filterNot { it == trimmed }).take(SEARCH_HISTORY_LIMIT)
+            val merged = listOf(trimmed) + previous.filterNot { it == trimmed }
             p[KEY_SEARCH_HISTORY] = merged.joinToString("\n")
         }
+    }
+
+    suspend fun clearSearchHistory() {
+        store.edit { p -> p.remove(KEY_SEARCH_HISTORY) }
     }
 
     suspend fun removeSearchHistory(query: String) {
@@ -312,10 +368,10 @@ class SettingsStore(context: Context) {
     }
 
     companion object {
-        /** 搜索历史保留几条。显示多少就存多少 —— 存了不显示的部分只是一份用不到的记录。 */
-        const val SEARCH_HISTORY_LIMIT = 5
-
         private val KEY_SEARCH_HISTORY = stringPreferencesKey("search_history")
+        private val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
+        private val KEY_PURE_BLACK = booleanPreferencesKey("theme_pure_black")
+        private val KEY_THEME_PALETTE = stringPreferencesKey("theme_palette")
         private val KEY_SESSDATA = stringPreferencesKey("sessdata")
         private val KEY_BILI_JCT = stringPreferencesKey("bili_jct")
         private val KEY_DEDE_USER_ID = stringPreferencesKey("dede_user_id")
@@ -351,6 +407,9 @@ class SettingsStore(context: Context) {
 
         private val KEY_PREFERRED_CODEC = stringPreferencesKey("player_preferred_codec")
         private val KEY_DEFAULT_QUALITY = intPreferencesKey("player_default_quality")
+        private val KEY_DEFAULT_AUDIO = intPreferencesKey("player_default_audio")
+        private val KEY_DEFAULT_AUDIO_METERED = intPreferencesKey("player_default_audio_metered")
+        private val KEY_PLAYER_PICK_UPDATES_DEFAULT = booleanPreferencesKey("player_pick_updates_default")
         private val KEY_DEFAULT_QUALITY_METERED = intPreferencesKey("player_default_quality_metered")
 
         /**
@@ -364,6 +423,12 @@ class SettingsStore(context: Context) {
 
         /** 计费网络的出厂值:720P。比 WiFi 低一截,但仍然是能好好看的画质。 */
         const val DEFAULT_QUALITY_METERED = 64
+
+        /** WiFi 的默认音质:最高(有无损放无损,其次杜比),和加这一项之前的行为一致。 */
+        const val DEFAULT_AUDIO_QUALITY = AUDIO_QUALITY_BEST
+
+        /** 计费网络的默认音质:132K。无损一分钟十几 MB,这一档存在的理由就是省流量。 */
+        const val DEFAULT_AUDIO_QUALITY_METERED = 30232
 
         /**
          * 设置页能选的档。**是一张固定表,不是某条视频的 accept_quality** —— 这里设的是
@@ -409,6 +474,7 @@ class SettingsStore(context: Context) {
         private val KEY_DANMAKU_SCROLL_SHOW_AREA = floatPreferencesKey("danmaku_scroll_show_area")
         private val KEY_DANMAKU_DENSITY = stringPreferencesKey("danmaku_density")
         private val KEY_DANMAKU_FRAME_RATE = stringPreferencesKey("danmaku_frame_rate")
+        private val KEY_DANMAKU_IN_PIP = booleanPreferencesKey("danmaku_in_pip")
         private val KEY_EXCLUDED_FEED_MIDS = stringSetPreferencesKey("excluded_feed_mids")
 
         private val KEY_DANMAKUS_ARCHIVE = booleanPreferencesKey("danmakus_archive_enabled")
@@ -502,9 +568,20 @@ data class PlayerPrefs(
     val defaultQualityWifi: Int = SettingsStore.DEFAULT_QUALITY,
     /** 计费网络下的默认画质。默认比 WiFi 低一截 —— 这一档存在的理由就是省流量。 */
     val defaultQualityMetered: Int = SettingsStore.DEFAULT_QUALITY_METERED,
+    /** 不计费网络下的默认音质,音质 id 或 [AUDIO_QUALITY_BEST]。 */
+    val defaultAudioWifi: Int = SettingsStore.DEFAULT_AUDIO_QUALITY,
+    val defaultAudioMetered: Int = SettingsStore.DEFAULT_AUDIO_QUALITY_METERED,
+    /**
+     * 播放页里切画质、音质时,顺带改掉设置里当前网络那一档的默认值。**默认关**:在一条恰好有
+     * 1080P+ 的视频上切了一下,不该连带改掉以后所有视频的默认档。PiliPlus 默认是开的,另有
+     * 一个「临时播放配置」开关关掉它;这里反过来,默认只管这一次。
+     */
+    val playerPickUpdatesDefault: Boolean = false,
     /** 长按画面时的临时倍速。松手恢复原速,不写回默认画质那种全局偏好。 */
     val fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
 ) {
+    fun defaultAudioOn(metered: Boolean): Int = if (metered) defaultAudioMetered else defaultAudioWifi
+
     /**
      * 这一次该用哪一档。**判据是计不计费而不是"是不是 WiFi"** —— 要省的是流量:手机热点和
      * 按量计费的 WiFi 都该走省的那一档,而它们在 `TRANSPORT_WIFI` 眼里都是 WiFi。
@@ -512,6 +589,29 @@ data class PlayerPrefs(
      */
     fun defaultQualityOn(metered: Boolean): Int =
         if (metered) defaultQualityMetered else defaultQualityWifi
+}
+
+/** 明暗。三档互斥;纯黑是深色之下的另一个开关,不是第四档,见 [AppearancePrefs.pureBlack]。 */
+enum class ThemeMode { System, Light, Dark }
+
+data class AppearancePrefs(
+    val mode: ThemeMode = ThemeMode.System,
+    /**
+     * 深色时页面底色压到纯黑。只作用于深色(包括跟随系统时的夜间),浅色下没有意义。
+     * 做成开关而不是第四档:它和"什么时候深色"是两件事,做成一档的话"跟随系统 + 纯黑"
+     * 就选不出来。
+     */
+    val pureBlack: Boolean = false,
+    /**
+     * 配色来源:[DYNAMIC] 是系统按壁纸取色(Android 12+),其余是内置配色的名字
+     * (`dev.bilby.ui.theme.ThemePalette`)。存名字而不是序号:以后增删内置色不会让已存的选择
+     * 指到别的颜色上。
+     */
+    val palette: String = DYNAMIC,
+) {
+    companion object {
+        const val DYNAMIC = "dynamic"
+    }
 }
 
 data class SponsorBlockPrefs(
@@ -534,6 +634,11 @@ data class DanmakuPrefs(
     val scrollShowArea: Float = SettingsStore.DEFAULT_DANMAKU_SCROLL_SHOW_AREA,
     val density: DanmakuDensity = DanmakuDensity.STANDARD,
     val frameRateCap: DanmakuFrameRateCap = DanmakuFrameRateCap.FPS_60,
+    /**
+     * 画中画小窗里画不画弹幕。**默认画**:小窗是边做别的事边看,弹幕正是那时候还想瞟一眼的
+     * 东西;嫌挡画面的人在这里关。只在 [enabled] 为真时才有意义,总开关关着小窗里也不画。
+     */
+    val inPip: Boolean = true,
 )
 
 data class LlmConfig(

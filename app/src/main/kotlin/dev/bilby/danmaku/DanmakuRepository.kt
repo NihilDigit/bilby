@@ -38,13 +38,19 @@ fun interface LocalDanmakuSource {
  *
  * 6 分钟一段,`segment_index` 从 1 开始(§1.3)。
  *
- * **本地缓存优先。** 这一段被离线缓存过就地解析,不出网。判断放在这里而不是调用方:
- * `VideoViewModel` 那侧的分段调度、重试、失败标志一行都不用为离线改,它本来也不该知道
- * 这条视频是不是缓存过的 —— 读本地和读网络在它眼里是同一件事的两种来源。
+ * **有网读网络,本地缓存只做退路。** 缓存的弹幕是下载那一刻的快照,有网却读它,之后发的
+ * 弹幕一条都看不到(docs/playback-refactor.md 决定 4)。
+ * - [preferLocal] 为 true 时直接读本地,不先出网等超时:没网,或这一 P 正按本地副本放
+ *   (从缓存列表进来),要立刻有弹幕。盘上没有这一段再出网。
+ * - 其余情况先出网;这一段拉不到(网络异常或被拒)时,本地有就用本地。
+ *
+ * 判断放在这里而不是调用方:`VideoViewModel` 那侧的分段调度、重试、失败标志一行都不用为离线
+ * 改,它本来也不该知道这条视频是不是缓存过的。
  */
 class DanmakuRepository(
     private val client: BiliClient,
     private val local: LocalDanmakuSource = LocalDanmakuSource.None,
+    private val preferLocal: (cid: Long) -> Boolean = { false },
 ) {
 
     /**
@@ -100,13 +106,25 @@ class DanmakuRepository(
             )
 
     private suspend fun loadSegment(cid: Long, segmentIndex: Int): BiliResult<DanmakuSegment> {
-        // 本地有就不出网。缓存过的视频在飞行模式下照样有弹幕,靠的就是这一句。
-        val bytes = local.read(cid, segmentIndex)
-            ?: when (val fetched = fetchSegmentBytes(cid, segmentIndex)) {
+        val bytes = if (preferLocal(cid)) {
+            local.read(cid, segmentIndex) ?: when (val fetched = fetchSegmentBytes(cid, segmentIndex)) {
                 is BiliResult.Ok -> fetched.value
                 is BiliResult.ApiError -> return fetched
                 is BiliResult.Failure -> return fetched
             }
+        } else {
+            // 网络异常在这里是抛出来的(rawGet 不包 runCatching),接住才轮得到本地那份。
+            val fetched = runCatching { fetchSegmentBytes(cid, segmentIndex) }
+                .getOrElse { BiliResult.Failure(it) }
+            when (fetched) {
+                is BiliResult.Ok -> fetched.value
+                is BiliResult.ApiError -> local.read(cid, segmentIndex) ?: return fetched
+                is BiliResult.Failure -> {
+                    BiliLog.w("拉弹幕分段失败 url=${SEG_URL.pathOnly()} cid=$cid segment=$segmentIndex", fetched.cause)
+                    local.read(cid, segmentIndex) ?: return fetched
+                }
+            }
+        }
         // 解析和映射一起进后台:分开的话主线程还是要遍历一遍解析结果。
         return withContext(Dispatchers.Default) {
             BiliResult.Ok(parseDmSegMobileReply(bytes).toMappedSegment())
