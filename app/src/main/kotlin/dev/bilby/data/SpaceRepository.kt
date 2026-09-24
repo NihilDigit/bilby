@@ -70,27 +70,23 @@ enum class SpaceArchiveOrder(val apiValue: String) {
 data class SpaceArchivePage(val total: Int, val items: List<SpaceVideoItem>)
 
 /**
- * 空间动态 tab 的一条。
+ * 空间动态 tab 的一条。**每条都是一张 [card]**,类型分发在 `DynamicCardMapper` 里做完,这里不再
+ * 按形态分一遍 —— 以前分过,于是空间页认得的类型比 PiliPlus 少一大半,直播、音频、番剧更新在
+ * 这一页悄悄消失。
  *
- * **只有两个分支,不是每种动态一个。** 类型分发本身在 `DynamicCardMapper` 里,产出的
- * [dev.bilby.data.model.DynamicCard] 已经把十几种形态收敛好了;这里再按形态分一遍,等于把
- * 同一套判断写两份 —— 以前正是这样,于是空间页认得的类型比 PiliPlus 少一大半,而且直播、
- * 音频、番剧更新在这一页悄悄消失。
- *
- * [Video] 仍然单独留着,因为它要喂给播放队列(`QueueSourceRepository`),而队列装的是
- * [SpaceVideoItem] —— 三个 tab 共用的那个视频行形状。
+ * UP 自己发的视频另外带出 [video],喂给播放队列(`QueueSourceRepository`)。它曾是与卡片二选一的
+ * 分支,于是以动态形式发的视频两头落空:当视频就不渲染,当卡片队列又认不出。
  */
-sealed interface SpaceDynamicItem {
-    val key: String
-
-    data class Video(val item: SpaceVideoItem) : SpaceDynamicItem {
-        override val key: String get() = item.bvid
-    }
-
-    /** 投稿视频之外的全部类型:图文、文字、转发、直播、专栏、番剧更新、音频、收藏夹、活动。 */
-    data class Card(val card: DynamicCard) : SpaceDynamicItem {
-        override val key: String get() = card.id
-    }
+data class SpaceDynamicItem(
+    val card: DynamicCard,
+    val video: SpaceVideoItem? = null,
+    /**
+     * 这条视频也在「投稿」栏里。动态栏据此去重。以动态形式发的视频不进投稿列表
+     * (notes/space-and-search.md 1.5),为 false,只有动态栏看得到它。
+     */
+    val listedInArchive: Boolean = false,
+) {
+    val key: String get() = card.id
 }
 
 data class SpaceDynamicPage(val items: List<SpaceDynamicItem>, val nextOffset: String?, val hasMore: Boolean)
@@ -278,8 +274,8 @@ class SpaceRepository(private val client: BiliClient) {
     /**
      * 空间动态(notes 1.5 节),需要 WBI。分页游标由服务端驱动:`loadNext == true` 时
      * 用返回的新 offset 再拉一页并拼接(notes 1.5 节,与 DynamicRepository 的 feed/all 不同)。
-     * **所有类型都保留**,分发照 PiliPlus(见 notes/dynamic-cards.md);只有投稿视频进播放
-     * 队列,其余以卡片形式显示。
+     * **所有类型都保留**,分发照 PiliPlus(见 notes/dynamic-cards.md);UP 自己发的视频额外
+     * 带出能进播放队列的视频行。
      */
     suspend fun loadDynamics(mid: Long, offset: String?): BiliResult<SpaceDynamicPage> {
         val params = buildMap {
@@ -353,7 +349,7 @@ class SpaceRepository(private val client: BiliClient) {
 
 /**
  * 一条动态映射成空间页认得的东西。**类型分发不在这里**,在 `DynamicCardMapper`
- * (对照表见 notes/dynamic-cards.md);这里只做一件事:把投稿视频挑出来换成
+ * (对照表见 notes/dynamic-cards.md);这里只做一件事:把 UP 自己发的视频挑出来换成
  * [SpaceVideoItem],好让它能进播放队列。
  *
  * 分成两步而不是让 mapper 直接产出 [SpaceVideoItem]:队列要的那个形状带发布时间,而发布时间
@@ -362,12 +358,13 @@ class SpaceRepository(private val client: BiliClient) {
  */
 internal fun DynamicItemDto.toSpaceDynamicItem(): SpaceDynamicItem? {
     val card = toDynamicCard() ?: return null
-    val video = card.content as? DynamicContent.Video ?: return SpaceDynamicItem.Card(card)
+    val video = card.content as? DynamicContent.Video
     // 转发来的视频不算这位 UP 的投稿。队列装的是他自己发的东西,混进转发的之后
-    // 「听这位 UP 的投稿」会放出别人的稿件。这一条照样显示,只是以卡片形式。
-    if (card.forwarded != null) return SpaceDynamicItem.Card(card)
-    return SpaceDynamicItem.Video(
-        SpaceVideoItem(
+    // 「听这位 UP 的投稿」会放出别人的稿件。
+    if (video == null || card.forwarded != null) return SpaceDynamicItem(card)
+    return SpaceDynamicItem(
+        card = card,
+        video = SpaceVideoItem(
             bvid = video.bvid,
             title = video.title,
             coverUrl = video.coverUrl,
@@ -376,8 +373,17 @@ internal fun DynamicItemDto.toSpaceDynamicItem(): SpaceDynamicItem? {
             playCountText = video.playCountText,
             danmakuCountText = video.danmakuCountText,
         ),
+        listedInArchive = type == "DYNAMIC_TYPE_UGC_SEASON" ||
+            modules?.moduleAuthor?.pubAction in ARCHIVE_PUB_ACTIONS,
     )
 }
+
+/**
+ * 视频动态里"也在投稿列表"的那几种作者动作。**列的是已知在投稿栏里的,不是已知不在的**:
+ * 将来冒出一种新文案时,按这个方向判错只是在两栏各出现一次,反过来判错则是动态视频又一次
+ * 两栏都看不到。合集更新不看文案,按类型算进来 —— 合集里的稿件一定在投稿列表里。
+ */
+private val ARCHIVE_PUB_ACTIONS = setOf("投稿了视频", "与他人联合创作")
 
 
 /**

@@ -41,7 +41,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -49,11 +48,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -72,10 +67,8 @@ import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -101,8 +94,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.graphics.vector.ImageVector
 import android.os.SystemClock
 import androidx.compose.ui.graphics.Color
@@ -139,7 +130,6 @@ import dev.bilby.ui.components.BilbyIcons
 import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.components.BadgedAvatar
 import dev.bilby.ui.components.ChoiceRow
-import dev.bilby.ui.components.CompactVideoRow
 import dev.bilby.ui.components.FollowButton
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.LevelBadge
@@ -150,11 +140,40 @@ import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.launch
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.material3.SegmentedListItem
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import dev.bilby.ui.components.PlayingIndicator
+import dev.bilby.ui.components.ListCover
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.ClipEntry
+import android.content.ClipData
+import kotlinx.coroutines.delay
+import dev.bilby.ui.components.NeedsCopyNotice
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.foundation.layout.fillMaxHeight
+import dev.bilby.ui.player.EpisodeList
+import dev.bilby.ui.components.BiliRichText
 
 /**
  * 「找相关」的状态。
  *
- * [started] 是这一页自己的事(用户点过没有,决定 sheet 的把手在不在),助理那一轮长什么样
+ * [started] 是这一页自己的事(用户点过没有,决定再点一次是重新检索还是只打开面板),助理那一轮长什么样
  * 全在 [turn] 里,和搜索页是同一份 [AgentTurnState]。这里原先把 steps/blocks/error 平铺开
  * 各存一份,那份 steps 还只是 `List<String>` —— 中间结果在播放页就是这样丢掉的。
  */
@@ -189,8 +208,7 @@ data class QueueUiState(
     val incomplete: Boolean = false,
 )
 
-/** 简介页的下标。它是不是当前页决定画面能不能被收起,见 VideoScreen 的 canCollapsePlayer。 */
-const val VideoTabIntro = 0
+private const val VideoTabIntro = 0
 
 const val VideoTabCount = 2
 
@@ -203,11 +221,7 @@ const val VideoTabCount = 2
  */
 @Composable
 fun VideoTabs(
-    /**
-     * 简介/评论分页。**由 VideoScreen 持有**,因为"画面能不能被收起"要看现在停在哪一页
-     * (见它那边的 canCollapsePlayer)。页数与下标因此也一起搬到 [VideoTabCount] /
-     * [VideoTabIntro]:创建 pager 的那一层要先知道有几页。
-     */
+    /** 简介/评论分页,由 VideoScreen 持有,页数见 [VideoTabCount]。 */
     pagerState: PagerState,
     detail: VideoDetail,
     onSelectEpisode: (EpisodeTarget) -> Unit,
@@ -217,7 +231,6 @@ fun VideoTabs(
     onLoadTags: () -> Unit,
     /** 点一枚标签 = 拿它的原文开一页普通搜索结果(Destinations.kt 的 SearchResult)。 */
     onTagClick: (String) -> Unit,
-    related: RelatedState,
     commentState: CommentUiState,
     onFindRelated: () -> Unit,
     /** 打开发弹幕的输入层。面板本身挂在页面那一层(见 VideoScreen),这里只是入口。 */
@@ -227,12 +240,12 @@ fun VideoTabs(
     onDanmakuEnabledChange: (Boolean) -> Unit,
     /** 打开缓存选择面板。面板本身长在播放队列那一节上,见 [QueueContent]。 */
     onCache: () -> Unit,
-    /** 投币那一行的顶边在窗口里的 y(px)。找相关 sheet 的高度锚在它上面,见 VideoScreen。 */
-    onActionsTop: (Int) -> Unit,
     followState: FollowState,
     onToggleFollow: () -> Unit,
     upCard: MemberCard?,
     queue: QueueUiState,
+    /** 播放器此刻在不在放。队列里正在播的那一条据此跳动或静止,见 [PlayingIndicator]。 */
+    playing: Boolean,
     onOpenQueueSource: (QueueSource) -> Unit,
     onToggleShuffle: () -> Unit,
     onRetryQueue: () -> Unit,
@@ -253,8 +266,6 @@ fun VideoTabs(
     onCoinDialogClosed: () -> Unit,
     onOpenFavPicker: () -> Unit,
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
-    onPlayEpisode: (bvid: String) -> Unit,
-    onRelatedVideoClick: (bvid: String) -> Unit,
     /** 评论正文里引的那条链接。站内解析归导航层,见 MainActivity 的 openLink。 */
     onOpenLink: (String) -> Unit,
     onCommentSort: (CommentSort) -> Unit,
@@ -361,10 +372,8 @@ fun VideoTabs(
                     videoTags = videoTags,
                     onLoadTags = onLoadTags,
                     onTagClick = onTagClick,
-                    related = related,
                     onFindRelated = onFindRelated,
                     onCache = onCache,
-                    onActionsTop = onActionsTop,
                     onUpClick = onUpClick,
                     staffFollowed = staffFollowed,
                     onFollowStaff = onFollowStaff,
@@ -372,6 +381,7 @@ fun VideoTabs(
                     onToggleFollow = onToggleFollow,
                     upCard = upCard,
                     queue = queue,
+                    playing = playing,
                     onOpenQueueSource = onOpenQueueSource,
                     onToggleShuffle = onToggleShuffle,
                     onRetryQueue = onRetryQueue,
@@ -387,8 +397,8 @@ fun VideoTabs(
                     onCoinDialogClosed = onCoinDialogClosed,
                     onOpenFavPicker = onOpenFavPicker,
                     onFavConfirm = onFavConfirm,
-                    onPlayEpisode = onPlayEpisode,
-                    onRelatedVideoClick = onRelatedVideoClick,
+                    onOpenLink = onOpenLink,
+                    onSeek = onSeekComment,
                 )
 
                 else -> CommentSection(
@@ -441,7 +451,7 @@ private fun DanmakuVisibilityButton(enabled: Boolean, onEnabledChange: (Boolean)
 }
 
 /**
- * 简介页:整体可滚动,内容比一屏长。找相关放在最后——它是关联入口,不是页面主角。
+ * 简介页:视频信息在上,播放队列接在下面,整页是一个列表。
  */
 @Composable
 private fun IntroTab(
@@ -450,14 +460,13 @@ private fun IntroTab(
     videoTags: List<VideoTag>,
     onLoadTags: () -> Unit,
     onTagClick: (String) -> Unit,
-    related: RelatedState,
     onFindRelated: () -> Unit,
     onCache: () -> Unit,
-    onActionsTop: (Int) -> Unit,
     followState: FollowState,
     onToggleFollow: () -> Unit,
     upCard: MemberCard?,
     queue: QueueUiState,
+    playing: Boolean,
     onOpenQueueSource: (QueueSource) -> Unit,
     onToggleShuffle: () -> Unit,
     onRetryQueue: () -> Unit,
@@ -476,175 +485,176 @@ private fun IntroTab(
     onCoinDialogClosed: () -> Unit,
     onOpenFavPicker: () -> Unit,
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
-    onPlayEpisode: (String) -> Unit,
-    onRelatedVideoClick: (String) -> Unit,
+    onOpenLink: (String) -> Unit,
+    /** 简介里的时间点点下去跳到哪。null 表示此刻跳不了,时间点画成普通文字。 */
+    onSeek: ((Long) -> Unit)?,
 ) {
     var infoExpanded by rememberSaveable { mutableStateOf(false) }
 
+    var fullQueueOpen by rememberSaveable { mutableStateOf(false) }
+    var partSheetOpen by rememberSaveable { mutableStateOf(false) }
+    val currentParts = queue.rows.firstOrNull { it.isCurrent }?.parts.orEmpty()
+
     /*
-     * **这一栏整体不滚动。** 上面那几块各占自己那点高度,剩下多少全归播放队列(weight),
-     * 队列在自己那块里滚。
+     * **页内只摊当前项前后几条,不续取。** 完整队列在 [FullQueueSheet] 里。
      *
-     * 原先是一个 `verticalScroll` 的 Column,队列则按"这份列表的顶边到窗口内容底边还剩多少"
-     * 反算自己该多高 —— 那串窗口坐标是这一页最难缠的一段:简介一展开、播放器一收起、
-     * 页面一滚动,顶边就变,队列跟着重新量高重组。现在高度由布局给,那段算法整个不存在了,
-     * 播放器的收起也不再牵动这一栏。
-     *
-     * 可用高度变了(播放器收起、简介展开)就重排一次,队列跟着变高变矮。**这一栏不吃用户的
-     * 滑动去收缩自己** —— 收播放器是队列那个列表的滚动带起来的,而不是这一栏在整体挪。
+     * 页内的队列曾经两头都跟着滚动续取。往上续取的那一头把这一页变成了陷阱:队列段上面还有
+     * 标题、UP 行和动作栏,每续一页它们就远一页,打开一部长合集的最后一集之后,不翻完整部合集
+     * 就回不到页顶。两头都能无限延伸的列表只能待在自己的视口里,那就是 sheet。
      */
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    //
+    // 窗口是当前项前后各 [InlineQueueRadius] 条。当前项在队列两头时窗口往里挪,始终凑满,
+    // 打开最后一集看到的是最后几集。
+    val shownRows = queue.rows.inlineWindow(queue.rows.currentIndex())
+
+    /*
+     * **整页一个列表,和评论页一样滚、一样收画面。**
+     *
+     * 这一栏曾经整体不滚,队列占满剩下的高度、在自己的视口里滚,好让当前项居中、前后各摊开
+     * 25 条。由那个前提派生出一串补丁:简介页不许收画面,简介正文被挤进面板,找相关的 sheet
+     * 要从这里回报投币行的窗口坐标,队列自带一份居中逻辑(docs/m3e-ux-plan.md 4.1)。
+     * 当前项改为排在队列段的第一条、此前的条目收成一行之后,队列不再需要自己的视口。
+     *
+     * 块与块之间的间距写在各自的 bottom padding 上,不用 `verticalArrangement`:队列那一段
+     * 的条与条之间是 2dp 的缝,一个统一的 spacedBy 给不出两种间距。
+     */
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
     ) {
-        TitleBlock(
-            detail = detail,
-            onOpenIntro = {
-                infoExpanded = true
-                // 标签到这一刻才拉,理由见 VideoViewModel.loadVideoTags。
-                onLoadTags()
-            },
-        )
+        item(key = "title") {
+            TitleBlock(
+                detail = detail,
+                tags = videoTags,
+                expanded = infoExpanded,
+                onToggle = {
+                    infoExpanded = !infoExpanded
+                    // 标签到这一刻才拉,理由见 VideoViewModel.loadVideoTags。
+                    if (infoExpanded) onLoadTags()
+                },
+                onTagClick = onTagClick,
+                onOpenLink = onOpenLink,
+                onMentionClick = onUpClick,
+                onSeek = onSeek,
+                modifier = Modifier.padding(bottom = IntroBlockGap),
+            )
+        }
 
-        UpRow(
-            mid = detail.up.mid,
-            faceUrl = detail.up.faceUrl,
-            name = detail.up.name,
-            upCard = upCard,
-            onUpClick = onUpClick,
-            staff = detail.staff,
-            staffFollowed = staffFollowed,
-            onFollowStaff = onFollowStaff,
-            followState = followState,
-            onToggleFollow = onToggleFollow,
-        )
+        item(key = "up") {
+            Box(modifier = Modifier.padding(bottom = IntroBlockGap)) {
+                UpRow(
+                    mid = detail.up.mid,
+                    faceUrl = detail.up.faceUrl,
+                    name = detail.up.name,
+                    upCard = upCard,
+                    onUpClick = onUpClick,
+                    staff = detail.staff,
+                    staffFollowed = staffFollowed,
+                    onFollowStaff = onFollowStaff,
+                    followState = followState,
+                    onToggleFollow = onToggleFollow,
+                )
+            }
+        }
 
-        ActionButtonsRow(
-            // 位置**只上报一次**(见 VideoScreen 那侧的取值):这一行跟着简介页滚动,
-            // 持续上报会让 sheet 的高度随手指变化,而 sheet 本来就不该动。
-            modifier = Modifier.onGloballyPositioned { onActionsTop(it.positionInWindow().y.toInt()) },
-            stat = detail.stat,
-            maxCoins = detail.maxCoins,
-            relation = relation,
-            favFolders = favFolders,
-            addedToView = addedToView,
-            onLike = onLike,
-            onTriple = onTriple,
-            onAddToView = onAddToView,
-            onCoin = onCoin,
-            coinAttempt = coinAttempt,
-            onCoinDialogClosed = onCoinDialogClosed,
-            onOpenFavPicker = onOpenFavPicker,
-            onFavConfirm = onFavConfirm,
-            onListen = onListen,
-        )
+        item(key = "actions") {
+            ActionButtonsRow(
+                modifier = Modifier.padding(bottom = BeforeSectionHeaderGap),
+                stat = detail.stat,
+                maxCoins = detail.maxCoins,
+                relation = relation,
+                favFolders = favFolders,
+                addedToView = addedToView,
+                onLike = onLike,
+                onTriple = onTriple,
+                onAddToView = onAddToView,
+                onCoin = onCoin,
+                coinAttempt = coinAttempt,
+                onCoinDialogClosed = onCoinDialogClosed,
+                onOpenFavPicker = onOpenFavPicker,
+                onFavConfirm = onFavConfirm,
+                onListen = onListen,
+            )
+        }
 
         // 分 P 来自切集清单里当前那一条,不再另从详情取一遍。清单已经把"这一刻能不能切 P"
         // 判过了(见 buildEpisodeRows):对不上身份时它是空的,这一排因此整个不出现。
-        val currentParts = queue.rows.firstOrNull { it.isCurrent }?.parts.orEmpty()
+        //
+        // 合集的分集不在这里另排一行 chip:它们就是下面的播放队列。
         if (currentParts.isNotEmpty()) {
-            PartRow(parts = currentParts, onSelect = onSelectEpisode)
+            partItems(
+                parts = currentParts,
+                playing = playing,
+                onOpenAll = { partSheetOpen = true },
+                onSelect = onSelectEpisode,
+            )
         }
 
-        // 合集的分集 chip 行不再单独显示:内容已经在下面的播放队列列表里,
-        // 重复一遍没有信息量(合集场景下队列来源就是这个合集,
-        // 见 QueueSourceRepository.fromSeason)。
-
-        /*
-         * **剩下这块空间永远归播放队列。**
-         *
-         * 这一栏的性质是"各组件按需吃满整屏,整栏不产生滚动条",队列在自己那块里滚。简介
-         * 原先内联展开,破坏的正是这条:标题不限行、简介整段、标签铺开,这一块自己就可能超过
-         * 一屏,而它上面没有任何可滚的容器。溢出之后 Column 给后面兄弟节点的 maxHeight 是 0,
-         * `UpRow` 里那枚等级徽章的 `height(11.dp)` 被夹成 0,`aspectRatio` 在高度约束不可满足时
-         * 退到按宽度算,于是横向铺满整行——"徽章忽然变得很大"和"简介滑不动"是同一次溢出。
-         *
-         * 修过一版是"展开时把这块的占用者从队列换成简介"。它不再溢出,但**控件和效果不挨着**:
-         * 三角在标题那一行,真正变的是隔着 UP 行和动作栏的这一块,点下去像别的地方变了。
-         *
-         * 现在简介走面板([IntroSheet]):从下方推上来盖住这一页,关掉回到原样。找相关用的是
-         * 同一种形状(见 VideoScreen),理由也一样 —— 它是对当前这条视频的一次追问,
-         * 不该把这一栏的结构顶掉。
-         */
-        QueueSection(
+        queueItems(
             queue = queue,
-            onSelectEpisode = onSelectEpisode,
+            playing = playing,
+            shownRows = shownRows,
+            onOpenFullQueue = { fullQueueOpen = true },
             onOpenQueueSource = onOpenQueueSource,
+            onSelectEpisode = onSelectEpisode,
             onToggleShuffle = onToggleShuffle,
             onFindRelated = onFindRelated,
             onCache = onCache,
             onRetryQueue = onRetryQueue,
-            modifier = Modifier.padding(top = Spacing.Hair).weight(1f),
         )
     }
 
-    if (infoExpanded) {
-        IntroSheet(
-            detail = detail,
-            tags = videoTags,
-            // **先关面板,再跳走。** `ModalBottomSheet` 自己注册了一个 BackHandler(预测式返回
-            // 要用),它在组合树里比导航那一层更靠后,于是先接住返回。留着面板跳到搜索页之后,
-            // 这一页仍在栈里、面板仍在组合中,搜索页的第一次返回被它吃掉 —— 表现是"返回键
-            // 没反应",而实际上是在关一个看不见的面板。`LiveNowSheet` 那处是同一条规矩。
-            onTagClick = { tag ->
-                infoExpanded = false
-                onTagClick(tag)
+    if (partSheetOpen && currentParts.isNotEmpty()) {
+        PartSheet(
+            parts = currentParts,
+            playing = playing,
+            onPick = { part ->
+                partSheetOpen = false
+                onSelectEpisode(EpisodeTarget.Part(part.cid))
             },
-            onDismiss = { infoExpanded = false },
+            onDismiss = { partSheetOpen = false },
+        )
+    }
+
+    if (fullQueueOpen) {
+        FullQueueSheet(
+            queue = queue,
+            onSelectEpisode = { target ->
+                fullQueueOpen = false
+                onSelectEpisode(target)
+            },
+            onDismiss = { fullQueueOpen = false },
         )
     }
 }
 
 /**
- * 简介面板:完整标题、bvid、简介正文、标签。
+ * 完整队列。页内那一段只摊当前项附近几条(见 [IntroTab]),这里是整份队列,当前项居中,
+ * 有自己的视口 —— 两头都能延伸的列表只能待在这种地方。列表本身是听视频与全屏共用的
+ * [EpisodeList]。
  *
- * **走面板而不是就地展开**,理由见 [IntroTab] 里那段说明 —— 简介长度没有上界,而那一栏
- * 的性质是"整栏不产生滚动条"。面板自成一层,想多长有多长,在自己内部滚。
- *
- * **完整标题在这里再给一次。** 上面那一行恒定两行截断,长标题正是最需要看全的那一种;
- * 而这一层盖住了页面,不重复给的话人得先关掉面板才能读标题。
+ * 不带标题:打开它的那一段上面就是来源名,再写一遍只是重复。目录入口也只在那一行上。
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun IntroSheet(
-    detail: VideoDetail,
-    tags: List<VideoTag>,
-    onTagClick: (String) -> Unit,
+private fun FullQueueSheet(
+    queue: QueueUiState,
+    onSelectEpisode: (EpisodeTarget) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Comfortable)
-                .padding(bottom = Spacing.Loose)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        ) {
-            Text(text = detail.title, style = MaterialTheme.typography.titleMedium)
-            Text(
-                text = detail.bvid,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (detail.description.isNotBlank()) {
-                Text(
-                    text = detail.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (tags.isNotEmpty()) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                ) {
-                    tags.forEach { tag -> TagToken(tag, onClick = { onTagClick(tag.name) }) }
-                }
-            }
-        }
+    // **不停在半开,内容高度自己定。** 列表把当前项居中时按的是自己的视口高度;sheet 半开时
+    // 视口的下半截还在屏幕外,居中的那一条正好落在看不见的地方。跳过半开、内容只要可用高度
+    // 的一部分,sheet 打开就停在这个高度,视口就是看得见的那一块。
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        EpisodeList(
+            rows = queue.rows,
+            onSelect = onSelectEpisode,
+            contentPadding = PaddingValues(bottom = Spacing.Loose),
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(FullQueueHeightFraction),
+        )
     }
 }
 
@@ -668,11 +678,12 @@ private fun UpRow(
 ) {
     // mid 必须进 key:它是列表第一项的身份,也是点击跳转的目标。漏了它,队列走到同一个 UP
     // 的另一条视频上时头像和名字都没变,participants 不重建,第一项还指着上一条的 mid。
+    //
+    // 接口的 staff 本身就含 UP 主,身份写着「UP主」(BV1xGZTB6EJD 的 staff[0])。这里曾经把 UP 主
+    // 另拼一份放在最前、身份留空,于是第一格只有名字一行,和后面几格上下对不齐。只在他不在
+    // staff 里时才补一格。
     val participants = remember(mid, faceUrl, name, staff) {
-        buildList {
-            add(VideoStaff(mid, "", name, faceUrl))
-            addAll(staff.filter { it.mid != mid })
-        }
+        if (staff.any { it.mid == mid }) staff else listOf(VideoStaff(mid, "", name, faceUrl)) + staff
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -688,7 +699,7 @@ private fun UpRow(
                     .clickable { onUpClick(mid) }
                     .heightIn(min = Dimens.MinTouchTarget),
             ) {
-                Avatar(url = faceUrl, size = Dimens.AvatarRow)
+                Avatar(url = faceUrl, size = UpAvatarSize)
                 // 名字和粉丝数上下两行。粉丝数是**决定要不要关注时看的那个数**,而关注按钮
                 // 就在这一行的另一端;原先它拉到了(`upCard.follower`)却没画出来,人得点进
                 // 空间页才看得到。等级徽章跟着名字走,它说的是同一个人的另一件事。
@@ -697,9 +708,10 @@ private fun UpRow(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
                     ) {
+                        // titleSmall 而不是正文字号:这一行是"谁发的",名字要和下面的粉丝数拉开层级。
                         Text(
                             text = name,
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.titleSmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
@@ -724,14 +736,19 @@ private fun UpRow(
                 }
             }
         } else {
+            // **每一格等宽。** 格宽曾随名字在一个区间里伸缩,名字长短不一时头像间距忽大忽小,
+            // 一排头像读不成一排。等宽之后长名字截断,完整名字在对方空间页里。
             LazyRow(
                 modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
             ) {
                 items(participants, key = { "${it.mid}-${it.name}" }) { participant ->
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clickable { onUpClick(participant.mid) },
+                        modifier = Modifier
+                            .width(StaffCellWidth)
+                            .clip(MaterialTheme.shapes.small)
+                            .clickable { onUpClick(participant.mid) },
                     ) {
                         // 关注加号贴在头像右下角。**关注态未知时(staffFollowed 还是 null)不显示**,
                         // 否则每次打开都会先闪一排加号再消失。
@@ -751,26 +768,24 @@ private fun UpRow(
                                 onClick = { onFollowStaff(participant.mid) },
                             ),
                         )
-                        // widthIn 而不是固定 width:固定 64dp 是照头像宽度定的,可它要装的是
-                        // 名字 —— "飓多多StormCrew" 这种在 64dp 里只剩四个字加省略号。给一个
-                        // 区间,短名字仍与头像对齐,长名字能多占一截。
                         Text(
                             participant.name,
                             style = MaterialTheme.typography.labelSmall,
+                            textAlign = TextAlign.Center,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.widthIn(min = StaffLabelMinWidth, max = StaffLabelMaxWidth),
+                            modifier = Modifier.fillMaxWidth(),
                         )
-                        participant.title.takeIf { it.isNotBlank() }?.let {
-                            Text(
-                                it,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(min = StaffLabelMinWidth, max = StaffLabelMaxWidth),
-                            )
-                        }
+                        // 身份为空也占着这一行:空串照样量出一行高,各格因此一样高。
+                        Text(
+                            participant.title,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                 }
             }
@@ -787,60 +802,83 @@ private fun UpRow(
 }
 
 /**
- * 标题 + 计数行 + 展开指示。**两态都只有这些**,展开后多出来的 bvid、简介、标签归
- * [IntroDetail],它接管的是这一栏底下那块空间。
+ * 标题、计数行和就地展开的简介。
  *
- * 标题与计数行合成一个可展开的块,是照 PiliPlus 的 `introduction/ugc/view.dart`(它的
- * `ExpandablePanel` 收起时只给标题两行,展开后才露出 bvid、简介和标签)。以前标题不限行数、
- * 简介另有一个展开开关,长标题会把 UP 主那一行和动作栏一起顶下去,而简介的展开箭头又落在
- * 半屏之外 —— 两个开关管的其实是同一件事:这条视频要看多细。
+ * 标题与计数行合成一个可展开的块,照 PiliPlus 的 `introduction/ugc/view.dart`(它的
+ * `ExpandablePanel` 收起时只给标题两行,展开后才露出 bvid、简介和标签)。两个开关管的本来就是
+ * 同一件事:这条视频要看多细。
  *
- * 展开指示不放标题末尾:标题会截断,截断处的箭头看起来像正文的一部分。
+ * **展开就地长出来。** 简介曾经走过面板,因为那时这一栏不滚动、没有地方容纳一段没有上界的
+ * 正文;这一栏是列表之后,正文长在标题下面,控件和效果挨着。
  *
- * **两态都留在计数行右端,不再跟着内容末端走。** 它以前展开后会移到简介末尾,理由是"收起"
- * 这个动作不该离它作用的那段文字隔着大半屏;而正文现在住在一块自己滚动的区域里,箭头跟过去
- * 就等于藏在滚动条底下——不滚到底根本看不见它,而收起是此刻唯一的出路。区域有界之后原来那条
- * 理由不再成立,固定位置反倒让两态之间只有箭头方向在变。
- *
- * 展开态的标题限行:标题最长八十字,`titleMedium` 下约四行,不封顶的话它自己也能吃掉半屏,
- * 而这里的整块高度是有界的。
+ * 展开指示放在计数行右端,不放标题末尾:标题会截断,截断处的箭头看起来像正文的一部分。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TitleBlock(
     detail: VideoDetail,
-    onOpenIntro: () -> Unit,
+    tags: List<VideoTag>,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onTagClick: (String) -> Unit,
+    onOpenLink: (String) -> Unit,
+    onMentionClick: (Long) -> Unit,
+    onSeek: ((Long) -> Unit)?,
+    modifier: Modifier = Modifier,
 ) {
+    val arrowRotation by animateFloatAsState(if (expanded) 180f else 0f, label = "introArrow")
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onOpenIntro),
+            .animateContentSize()
+            .clickable(onClick = onToggle),
         verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
-        // **标题恒定两行。** 点它开的是 [IntroSheet],完整标题在那里 —— 这一行不再跟着变,
-        // 上下两块的位置因此是稳的。原先点一下标题会从 2 行长到 4 行,把底下整栏推一截,
-        // 而人此刻眼睛盯着的是标题本身。
         Text(
             text = detail.title,
             style = MaterialTheme.typography.titleMedium,
-            maxLines = 2,
+            maxLines = if (expanded) Int.MAX_VALUE else 2,
             overflow = TextOverflow.Ellipsis,
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
             StatRow(
-                modifier = Modifier.weight(1f),
                 playText = formatCount(detail.stat.view),
                 danmakuText = formatCount(detail.stat.danmaku),
                 dateText = formatDate(detail.publishedAtEpochSeconds),
             )
-            // **不用上下箭头。** 那一对说的是"就地展开/收起",而这里点下去是从下方推上来
-            // 一层面板 —— 内容不在这一行底下长出来。指向右的那一枚是 Material 里"点进去
-            // 还有东西"的惯用记号,和这件事对得上。
+            // BV 号接在日期后面,和它同属"这条稿件是哪一条"的元信息;展开才显示。
+            if (expanded) {
+                BvidLabel(bvid = detail.bvid, modifier = Modifier.padding(start = Spacing.Tight))
+            }
+            Spacer(modifier = Modifier.weight(1f))
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                imageVector = Icons.Outlined.KeyboardArrowDown,
                 contentDescription = stringResource(R.string.video_intro_open),
                 tint = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.size(Dimens.IconInline),
+                modifier = Modifier
+                    .size(Dimens.IconInline)
+                    .rotate(arrowRotation),
             )
+        }
+        if (expanded) {
+            if (detail.description.isNotBlank()) {
+                // 与评论、专栏、动态共用一个渲染器:@ 进空间,链接按站内解析,时间点跳进度。
+                BiliRichText(
+                    spans = detail.descriptionSpans,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    onLinkClick = onOpenLink,
+                    onMentionClick = onMentionClick,
+                    onSeek = onSeek,
+                )
+            }
+            if (tags.isNotEmpty()) {
+                // 不另给行距:每枚标签的布局高度已被最小触控尺寸撑到 48dp,32dp 的标签上下
+                // 各多出 8dp,两行之间自然就是 16dp。见 [TagToken]。
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                    tags.forEach { tag -> TagToken(tag, onClick = { onTagClick(tag.name) }) }
+                }
+            }
         }
     }
 }
@@ -857,18 +895,58 @@ private fun TitleBlock(
  */
 @Composable
 private fun TagToken(tag: VideoTag, onClick: () -> Unit) {
+    // **32dp 高,照 M3 chip。** 可点的 Surface 会把布局高度撑到最小触控尺寸 48dp;标签曾经
+    // 只有 20dp 高,多出来的 28dp 全成了行与行之间的空白,换行后第二行离得很远。标签做到
+    // chip 的高度,撑出来的只剩上下各 8dp。
     Surface(
         onClick = onClick,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        shape = MaterialTheme.shapes.extraSmall,
+        shape = MaterialTheme.shapes.small,
     ) {
-        Text(
-            text = tag.displayText(),
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair / 2),
-        )
+        Box(
+            modifier = Modifier
+                .heightIn(min = TagHeight)
+                .padding(horizontal = Spacing.Cozy),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(text = tag.displayText(), style = MaterialTheme.typography.labelMedium)
+        }
     }
+}
+
+/**
+ * 可复制的 BV 号。点一下写进剪贴板。
+ *
+ * Android 13 起系统自己弹复制确认;更早的系统由应用反馈,这里让这段字原地换成「已复制」
+ * 一会儿([NeedsCopyNotice])。简介页附近没有 snackbar 宿主,为这一处挂一个不值得。
+ */
+@Composable
+private fun BvidLabel(bvid: String, modifier: Modifier = Modifier) {
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    val clipLabel = stringResource(R.string.video_bvid_clip_label)
+    var justCopied by remember { mutableStateOf(false) }
+    LaunchedEffect(justCopied) {
+        if (justCopied) {
+            delay(CopiedNoticeMillis)
+            justCopied = false
+        }
+    }
+    Text(
+        text = if (justCopied) stringResource(R.string.video_bvid_copied) else bvid,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier
+            .clip(MaterialTheme.shapes.extraSmall)
+            .clickable(onClickLabel = stringResource(R.string.video_bvid_copy)) {
+                scope.launch {
+                    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(clipLabel, bvid)))
+                    if (NeedsCopyNotice) justCopied = true
+                }
+            }
+            .padding(horizontal = Spacing.Hair / 2),
+    )
 }
 
 /**
@@ -883,7 +961,7 @@ private fun VideoTag.displayText(): String = when (type) {
 }
 
 /**
- * 点赞 / 投币 / 收藏 / 稍后再看。**图标在上、计数在下,四个等宽平分一行**,
+ * 点赞 / 投币 / 收藏 / 稍后再看 / 听视频。**图标在上、计数在下,五格等宽平分一行**,
  * 照 PiliPlus 的 `introduction/ugc/widgets/action_item.dart`(它是 48dp 高的 Row,
  * 每项 `Expanded`,图标 18dp、计数用 labelSmall,未选中取 `outline`、选中取 `primary`)。
  *
@@ -951,10 +1029,17 @@ private fun ActionButtonsRow(
         label = "tripleHoldProgress",
     )
 
-    Row(modifier = modifier.fillMaxWidth()) {
+    // **一排分段的格子**,和下面的队列同一种外形:格与格之间留缝,整排首尾大圆角、中间小圆角。
+    // 格子曾经没有底色,图标和计数在格内居中,最左最右两格离页边各空出半格,这一排看上去缩在
+    // 中间,和上下贴着页边距的标题、队列对不齐。有了底色,格子的外沿就是页边距。
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(ActionSegmentGap),
+    ) {
         // 长按三连挂在点赞上,这是 B 站的老手势;不另开一格,那一排已经有五个动作了。
         ActionItem(
             modifier = Modifier.weight(1f),
+            shape = horizontalSegmentShape(index = 0, count = ActionCount),
             selected = relation?.liked == true,
             enabled = relation != null,
             label = formatCount(stat.like),
@@ -973,23 +1058,28 @@ private fun ActionButtonsRow(
         // 所以它和点赞用同一种表达,区别只在点击后发生什么。
         ActionItem(
             modifier = Modifier.weight(1f),
+            shape = horizontalSegmentShape(index = 1, count = ActionCount),
             selected = (relation?.coined ?: 0) > 0,
             enabled = relation != null,
             label = formatCount(stat.coin),
             contentDescription = stringResource(R.string.video_action_coin),
             // 硬币这一格不走 Material 图标,自己画一个圆加一个 B,见 [CoinGlyph]。
-            glyph = { tint -> CoinGlyph(tint = tint, filled = (relation?.coined ?: 0) > 0) },
+            glyph = { tint, container ->
+                CoinGlyph(tint = tint, filled = (relation?.coined ?: 0) > 0, cutout = container)
+            },
             onClick = { showCoinDialog = true },
             holdProgress = holdProgress,
         )
         ActionItem(
             modifier = Modifier.weight(1f),
+            shape = horizontalSegmentShape(index = 2, count = ActionCount),
             selected = relation?.favored == true,
             enabled = relation != null,
             label = formatCount(stat.favorite),
             contentDescription = stringResource(R.string.video_action_favorite),
             selectedIcon = Icons.Filled.Star,
             icon = Icons.Outlined.StarBorder,
+            iconSize = ActionStarSize,
             onClick = {
                 awaitingFavFolders = true
                 onOpenFavPicker()
@@ -1000,6 +1090,7 @@ private fun ActionButtonsRow(
         // 那里是个列表,划掉一条是自然动作;在这里做 toggle 就得先拉整个列表才能知道当前状态。
         ActionItem(
             modifier = Modifier.weight(1f),
+            shape = horizontalSegmentShape(index = 3, count = ActionCount),
             selected = addedToView,
             enabled = true,
             label = stringResource(
@@ -1017,6 +1108,7 @@ private fun ActionButtonsRow(
         // 没有选中态:它不是开关,点下去就切到听视频那一屏了。
         ActionItem(
             modifier = Modifier.weight(1f),
+            shape = horizontalSegmentShape(index = 4, count = ActionCount),
             selected = false,
             enabled = true,
             label = stringResource(R.string.video_action_listen),
@@ -1077,11 +1169,18 @@ private fun ActionItem(
     label: String,
     contentDescription: String,
     onClick: () -> Unit,
+    /** 这一格在整排里的外形,见 [horizontalSegmentShape]。 */
+    shape: Shape,
     modifier: Modifier = Modifier,
     /** 未选中的字形。传 [glyph] 的那一格不用它。 */
     icon: ImageVector? = null,
     /** 选中的字形。同上。 */
     selectedIcon: ImageVector? = null,
+    /**
+     * 字形的尺寸。默认 [ActionIconSize];星形单独放大,它的字形四周留白多,同尺寸下看上去比
+     * 拇指、钟表小一圈。
+     */
+    iconSize: Dp = ActionIconSize,
     /**
      * 长按做的事。只有点赞那一格有(一键三连),别的格传 null —— 传了就意味着这一格能长按。
      */
@@ -1103,12 +1202,19 @@ private fun ActionItem(
      * 自己画这一格的字形,不走 [icon]/[selectedIcon]。硬币那一格用它 —— 圆里的 B 是一个
      * 真字,交给字体画比自己描点靠谱(见 [CoinGlyph])。
      */
-    glyph: (@Composable (tint: Color) -> Unit)? = null,
+    glyph: (@Composable (tint: Color, container: Color) -> Unit)? = null,
 ) {
+    // 底色与字色成对取:选中是 secondaryContainer / onSecondaryContainer,与队列的选中项同一组。
+    // 未选中的字色不再用 outline —— 它是给描边的,压在 surfaceContainer 上对比度不够。
+    val container = if (selected) {
+        MaterialTheme.colorScheme.secondaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceContainer
+    }
     val tint = when {
         !enabled -> MaterialTheme.colorScheme.outlineVariant
-        selected -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.outline
+        selected -> MaterialTheme.colorScheme.onSecondaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val holdable = enabled && onLongClick != null
     val currentOnHoldingChange by rememberUpdatedState(onHoldingChange)
@@ -1124,7 +1230,8 @@ private fun ActionItem(
     WithHoldTimeout(holdable) {
     Column(
         modifier = modifier
-            .clip(MaterialTheme.shapes.small)
+            .clip(shape)
+            .background(container)
             .then(
                 if (!holdable) {
                     Modifier
@@ -1157,7 +1264,7 @@ private fun ActionItem(
                 onLongClickLabel = longClickLabel,
             )
             .heightIn(min = Dimens.MinTouchTarget)
-            .padding(vertical = Spacing.Hair),
+            .padding(vertical = Spacing.Tight),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -1168,9 +1275,13 @@ private fun ActionItem(
             // 于是这个 Box 在环出现的那一刻从 20dp 长到 28dp,整排跟着抬一下 —— 一个为了
             // 说明"正在按住"的东西,自己先把界面顶动了。
             //
-            // `drawBehind` 只画不量:Box 始终是图标那么大,环从它的边界往外画。这一层没有
-            // 裁剪(外面那个 `clip` 在整格上,90×48 里放得下 28dp 的环),所以画得出来。
-            modifier = Modifier.drawBehind {
+            // `drawBehind` 只画不量:环从 Box 的边界往外画。这一层没有裁剪(外面那个 `clip`
+            // 在整格上,放得下这个环),所以画得出来。
+            //
+            // **Box 定高 [ActionIconBox],不随字形变。** 各格字形高矮不一(硬币是自己画的,
+            // 星形放大过),整组居中时下面那行字会跟着上下错开;框定高之后,五格的计数与文字
+            // 落在同一条线上。
+            modifier = Modifier.size(ActionIconBox).drawBehind {
                 if (holdProgress <= 0f) return@drawBehind
                 val inset = HoldRingInset.toPx()
                 drawArc(
@@ -1186,15 +1297,16 @@ private fun ActionItem(
         ) {
             val vector = if (selected) selectedIcon else icon
             when {
-                glyph != null -> glyph(tint)
+                glyph != null -> glyph(tint, container)
                 vector != null -> Icon(
                     imageVector = vector,
                     contentDescription = contentDescription,
                     tint = tint,
-                    modifier = Modifier.size(ActionIconSize),
+                    modifier = Modifier.size(iconSize),
                 )
             }
         }
+        Spacer(modifier = Modifier.height(ActionLabelGap))
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
@@ -1240,12 +1352,11 @@ private fun WithHoldTimeout(enabled: Boolean, content: @Composable () -> Unit) {
  * 这一个字是图标的一部分,不是可读的正文。
  *
  * 已投是实心圆挖出白字,未投是圈环加同色的字 —— 两个明显不同的字形,不只靠颜色区分
- * (风格指南 §2.6)。挖出来那个字取 `background`,也就是主题根部那层 `Surface` 真正画的底色
- * (见 `ui/theme/Theme.kt`)。
+ * (风格指南 §2.6)。挖出来那个字取 [cutout],也就是这一格的底色:格子有了自己的底色之后,
+ * 主题根部那层 `background` 已经不是这个字周围真正的颜色。
  */
 @Composable
-private fun CoinGlyph(tint: Color, filled: Boolean, modifier: Modifier = Modifier) {
-    val background = MaterialTheme.colorScheme.background
+private fun CoinGlyph(tint: Color, filled: Boolean, cutout: Color, modifier: Modifier = Modifier) {
     val density = LocalDensity.current
     val letterSize = remember(density) { with(density) { CoinLetterSize.toSp() } }
     Box(
@@ -1262,7 +1373,7 @@ private fun CoinGlyph(tint: Color, filled: Boolean, modifier: Modifier = Modifie
     ) {
         Text(
             text = "B",
-            color = if (filled) background else tint,
+            color = if (filled) cutout else tint,
             style = TextStyle(
                 fontSize = letterSize,
                 // 行高等于字号、并关掉字体自带的上下留白,字才落在圆心上 —— 默认那两样都会
@@ -1277,6 +1388,15 @@ private fun CoinGlyph(tint: Color, filled: Boolean, modifier: Modifier = Modifie
 }
 
 private val ActionIconSize = 20.dp
+
+/** 星形字形的尺寸,见 [ActionItem] 的 iconSize。 */
+private val ActionStarSize = 24.dp
+
+/** 字形所在那个定高的框,容得下放大后的星形。 */
+private val ActionIconBox = 24.dp
+
+/** 字形与下面那行计数之间的距离。 */
+private val ActionLabelGap = 4.dp
 
 /** 圈环的粗细,以及圆里那个 B 的字号。字占圆的六成左右,再大就贴边。 */
 private val CoinRingStroke = 1.6.dp
@@ -1454,260 +1574,293 @@ private fun FavPickerDialog(
 }
 
 /**
- * 分 P。这里是 chip 而不是 segmented button:条数随视频变(1 到几百都有)、要横滚、
- * 是"当前任务的分支路径"—— M3 给 chip 的定义。segmented button 是固定的几个视图切换。
+ * 分 P,作为简介列表里的一节:标题行加一排横滑的格子,多了在标题行给「全部」,开 [PartSheet]。
  *
- * **条数多时给一个全部分集的入口,开的是 modal bottom sheet,不是对话框。**
- * dialogs 页写着 "Most dialog content should avoid scrolling",而几百 P 的课程视频必然要滚;
- * bottom sheets 页则明说内容超过半屏时可以拉到全屏并在内部滚动。就地展开也不行 ——
- * 那会把简介区撑得很长,和"播放页正好占一屏"直接打架。
- *
- * 收起态保持横滚而不是截断:横滚里还能看出当前是第几 P、相邻切换最快,截断则可能把当前
- * 这一 P 藏在看不见的地方。
+ * 格子的外形和动作栏同一套(整排首尾大圆角、中间小圆角、格间留缝),选中态和队列条目同一组
+ * 颜色。做过一版竖排、和队列同一种列表,多 P 视频的简介页因此长出一大截;横排只占一行高。
+ * 横滑还保留了"相邻切换最快、看得出当前是第几 P"这两样,chip 时代留它的理由仍然成立。
  */
-@Composable
-private fun PartRow(
+private fun LazyListScope.partItems(
     parts: List<EpisodePart>,
+    playing: Boolean,
+    onOpenAll: () -> Unit,
     onSelect: (EpisodeTarget) -> Unit,
 ) {
-    var sheetOpen by rememberSaveable(parts.size) { mutableStateOf(false) }
-
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-        SectionHeader(stringResource(R.string.video_parts)) {
-            if (parts.size > PartRowExpandThreshold) {
-                TextButton(onClick = { sheetOpen = true }) {
-                    Text(stringResource(R.string.video_parts_expand, parts.size))
-                }
+    item(key = "parts-header") {
+        SectionHeader(title = stringResource(R.string.video_parts)) {
+            // 内边距与队列标题行的「顺序/随机」同一档,两节标题行右端的字才对得齐。
+            TextButton(onClick = onOpenAll, contentPadding = PaddingValues(horizontal = Spacing.Tight)) {
+                Text(stringResource(R.string.video_parts_expand, parts.size))
             }
         }
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
-            items(parts, key = { it.cid }) { part ->
-                FilterChip(
-                    selected = part.isCurrent,
+    }
+    item(key = "parts-row") {
+        // 停在当前 P 的前一格:左边露出一格,看得出前面还有。**跟着当前 P 滚,不只在首次组合时
+        // 定位**:这一行组合出来时播放器常常还没报出 cid,那一刻找不到当前 P;只定一次初始位置的
+        // 话它就永远停在开头。切 P 时同理要跟过去。
+        val rowState = rememberLazyListState()
+        val currentIndex = parts.indexOfFirst { it.isCurrent }
+        LaunchedEffect(currentIndex) {
+            if (currentIndex >= 0) rowState.animateScrollToItem((currentIndex - 1).coerceAtLeast(0))
+        }
+        LazyRow(
+            state = rowState,
+            horizontalArrangement = Arrangement.spacedBy(ActionSegmentGap),
+            modifier = Modifier.padding(bottom = BeforeSectionHeaderGap),
+        ) {
+            itemsIndexed(parts, key = { _, part -> part.cid }) { index, part ->
+                PartCard(
+                    part = part,
+                    playing = playing,
+                    shape = horizontalSegmentShape(index = index, count = parts.size),
                     onClick = { onSelect(EpisodeTarget.Part(part.cid)) },
-                    label = {
-                        Text(
-                            stringResource(R.string.video_part_label, part.ordinal, part.title),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            // 分 P 名常常把视频标题又抄一遍("1-四时小路只是在聊天+"),不封顶
-                            // 的话一个 chip 就吃掉大半屏:这条带子既看不出能横滚,又在简介页
-                            // 上半部分占走一大块可滑区域,而**能滚的横向条会完整吃掉左右拖动**
-                            // (实测:在它上面左右滑只滚 chip,不翻页)。封顶之后一屏能露出两个
-                            // 半,它读起来才是一条带子,也把抢走手势的面积压下来。
-                            //
-                            // 封顶不是截断成"P1 P2 P3":分 P 名在课程、纪录片这类视频里是真信息,
-                            // 而当前这一 P 有选中态,认得出自己在哪。
-                            modifier = Modifier.widthIn(max = PartChipMaxWidth),
-                        )
-                    },
                 )
             }
         }
     }
+}
 
-    if (sheetOpen) {
-        PartSheet(
-            parts = parts,
-            onPick = {
-                onSelect(EpisodeTarget.Part(it.cid))
-                sheetOpen = false
-            },
-            onDismiss = { sheetOpen = false },
-        )
+/** 横排里的一格:编号标记接两行标题,当前那格右下角浮一枚播放指示。 */
+@Composable
+private fun PartCard(part: EpisodePart, playing: Boolean, shape: Shape, onClick: () -> Unit) {
+    val selected = part.isCurrent
+    Surface(
+        onClick = onClick,
+        shape = shape,
+        color = if (selected) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainer
+        },
+        contentColor = if (selected) {
+            MaterialTheme.colorScheme.onSecondaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        },
+        modifier = Modifier.width(PartCardWidth).semantics { this.selected = selected },
+    ) {
+        Box(modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight)) {
+            // **编号嵌在标题第一行的行首**,标题紧跟在它后面,折行后第二行从格子左边缘开始。
+            // 编号单独占一行的那一版,两行标题上面还压着一行,格子高了一截,编号也比标题显眼。
+            //
+            // 占位宽度按这一格的编号现量:P1 和 P12 不一样宽,写死一个宽度要么留空要么挤字。
+            val tagText = stringResource(R.string.video_part_ordinal, part.ordinal)
+            val tagStyle = MaterialTheme.typography.labelSmall
+            val measurer = rememberTextMeasurer()
+            val density = LocalDensity.current
+            val placeholder = remember(tagText, tagStyle, density) {
+                val size = measurer.measure(tagText, tagStyle).size
+                with(density) {
+                    Placeholder(
+                        // 标记本身的宽,再加上它和标题之间的间距。间距算在占位里而不是追加一个空格:
+                        // 空格有多宽随字体走,算在这里是一个确定的数。
+                        width = (size.width.toDp() + PartTagPadding * 2 + PartTagGap).toSp(),
+                        height = (size.height.toDp() + PartTagPadding / 2).toSp(),
+                        placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter,
+                    )
+                }
+            }
+            // 两行都占着:标题只有一行的格子也和两行的一样高,整排是一条齐的带子。
+            //
+            // **播放指示浮在右下角,不占排版。** 放过一版为它在右侧让出一截,会把"01_Lec1a"这种
+            // 断不开的词整个挤到第二行,第一行只剩一枚标记。
+            Text(
+                text = buildAnnotatedString {
+                    appendInlineContent(PartTagId, tagText)
+                    append(part.title)
+                },
+                inlineContent = mapOf(
+                    PartTagId to InlineTextContent(placeholder) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                            PartOrdinalTag(ordinal = part.ordinal, selected = selected)
+                        }
+                    },
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                minLines = 2,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (selected) {
+                // 垫一块与格子同色的底:第二行文字若延伸到右下角,被它盖住而不是和竖条叠在一起。
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = MaterialTheme.shapes.extraSmall,
+                    modifier = Modifier.align(Alignment.BottomEnd),
+                ) {
+                    PlayingIndicator(
+                        active = playing,
+                        contentDescription = stringResource(
+                            if (playing) R.string.video_queue_now_playing else R.string.video_queue_paused,
+                        ),
+                        modifier = Modifier.padding(start = Spacing.Hair).size(Dimens.IconInline),
+                    )
+                }
+            }
+        }
     }
 }
 
 /**
- * 全部分集。**一行一条而不是铺一片 chip**:几百 P 的标题是"第 12 讲 · 线性方程组"这种,
+ * 页内队列摊出来的窗口:当前项前后各 [InlineQueueRadius] 条,当前项在两头时窗口往里挪,
+ * 始终凑满。[currentIndex] 为 -1(找不到当前项)时从头取。
+ */
+private fun <T> List<T>.inlineWindow(currentIndex: Int): List<T> {
+    val count = minOf(InlineQueueRadius * 2 + 1, size)
+    val from = (currentIndex.coerceAtLeast(0) - InlineQueueRadius).coerceIn(0, size - count)
+    return subList(from, from + count)
+}
+
+/**
+ * 分 P 的编号,做成一枚小标记,嵌在标题行首。编号是索引,不是这一格要读的内容;原先用 labelLarge 写成一行,
+ * 比下面的标题还重。当前那格用 primary 实底,和格子本身的 secondaryContainer 拉开一档。
+ */
+@Composable
+private fun PartOrdinalTag(ordinal: Int, selected: Boolean) {
+    Surface(
+        shape = MaterialTheme.shapes.extraSmall,
+        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHighest,
+        contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+    ) {
+        Text(
+            text = stringResource(R.string.video_part_ordinal, ordinal),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = PartTagPadding, vertical = PartTagPadding / 4),
+        )
+    }
+}
+
+/** 全部分集里的一条。左边是编号,其余和队列条目([QueueListItem])同一套外形与选中态。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun PartListItem(part: EpisodePart, playing: Boolean, index: Int, count: Int, onClick: () -> Unit) {
+    SegmentedListItem(
+        selected = part.isCurrent,
+        onClick = onClick,
+        shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
+        colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier.padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
+        verticalAlignment = Alignment.CenterVertically,
+        leadingContent = {
+            Text(
+                text = stringResource(R.string.video_part_ordinal, part.ordinal),
+                style = MaterialTheme.typography.labelLarge,
+            )
+        },
+        trailingContent = if (part.isCurrent) {
+            {
+                PlayingIndicator(
+                    active = playing,
+                    contentDescription = stringResource(
+                        if (playing) R.string.video_queue_now_playing else R.string.video_queue_paused,
+                    ),
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+            }
+        } else {
+            null
+        },
+    ) {
+        Text(text = part.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/**
+ * 全部分集。**一行一条而不是铺一片 chip**:几百 P 的标题是"第 12 讲 线性方程组"这种,
  * 挤成 chip 只剩截断后的两三个字,而用户要找的正是标题。
  *
- * 用 `ModalBottomSheet` 而不是页面自带的那个 `BottomSheetScaffold`(它归「找相关」):
- * 挑分集时人不在看画面,遮罩压暗反而帮着聚焦;而「找相关」是边看边问,所以那边才刻意
- * 避开遮罩。两者的取舍不同,不该共用一个 sheet 槽。
+ * 外形与打开方式照完整队列([FullQueueSheet]):不停在半开、高度自己定,打开时当前 P 上方
+ * 留两条,看得出前面还有什么。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PartSheet(
     parts: List<EpisodePart>,
+    playing: Boolean,
     onPick: (EpisodePart) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val listState = rememberLazyListState()
-    // 开的时候把当前这一 P 滚到可见:一百条里默认停在第一条,等于每次都要自己找。
-    LaunchedEffect(Unit) {
-        val current = parts.indexOfFirst { it.isCurrent }
-        if (current >= 0) listState.scrollToItem(current)
-    }
-
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        LazyColumn(state = listState) {
-            items(parts, key = { it.cid }) { part ->
-                val selected = part.isCurrent
-                ListItem(
-                    headlineContent = {
-                        Text(
-                            stringResource(R.string.video_part_label, part.ordinal, part.title),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    },
-                    // 当前这一条只换文字颜色,不加选中背景:sheet 里一整块染色比列表本身还重。
-                    colors = ListItemDefaults.colors(
-                        headlineColor = if (selected) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .selectable(
-                            selected = selected,
-                            role = Role.Button,
-                            onClick = { onPick(part) },
-                        ),
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = (parts.indexOfFirst { it.isCurrent } - InlineQueueRadius).coerceAtLeast(0),
+    )
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        LazyColumn(
+            state = listState,
+            contentPadding = PaddingValues(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Loose),
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(FullQueueHeightFraction),
+        ) {
+            itemsIndexed(parts, key = { _, part -> part.cid }) { index, part ->
+                PartListItem(
+                    part = part,
+                    playing = playing,
+                    index = index,
+                    count = parts.size,
+                    onClick = { onPick(part) },
                 )
             }
         }
     }
 }
 
-/** 十条以内横滚划得完,再多就该给展开。 */
-private const val PartRowExpandThreshold = 10
 
 
-/** 分 P chip 的宽度上限。见 [PartRow] 里那段说明:够窄到一屏能露出两个半,读起来才是一条带子。 */
-private val PartChipMaxWidth = 160.dp
 
 /**
- * 播放队列:合集分集 / 该 UP 的其他投稿(DESIGN 2.4b)。官方在简介下方放算法召回的相关
- * 推荐,这里放的是确定性的有限集合——合集本身有限,空间投稿也在数据层被截成前后各 25 条
- * (见 QueueSourceRepository),不是"从推荐池续接",不违反 1.3 的推荐禁令。
+ * 播放队列:合集分集 / 该 UP 的其他投稿(DESIGN 2.4b),作为简介列表里的一段条目。
+ * 官方在简介下方放算法召回的相关推荐,这里放的是确定性的有限集合,不是"从推荐池续接",
+ * 不违反 1.3 的推荐禁令。这个列表同时就是「听视频」要播的队列本身,点条目直接切歌。
  *
- * 这个列表同时就是「听视频」要播的队列本身,点条目直接切歌,不需要另外构造队列。
- * queue.rows 为空且不在加载中时不显示这一块。
+ * **只摊开当前项附近几条**,完整队列在面板里,由段尾的「查看全部」打开(见 [IntroTab])。队列曾以
+ * 当前项为中心一次摊开全部,那要求它有自己的视口;打开最新一条时,当前项排在几十条之后。
  *
- * **整块装在一层 [Surface] 容器里**,照 PiliPlus 的 `introduction/ugc/widgets/season.dart`
- * (它把合集面板包进 `Material(color: onInverseSurface, borderRadius: 6)`)。
- * 换掉的是"动作栏和队列之间只隔一点空白"——那样队列的标题行看起来像还属于上面那一坨,
- * 而它其实是另一件事。用容器而不是分割线:这里要表达的是"以下是一组被圈起来的条目",
- * 分割线只能说"上下不是一回事",说不出边界在哪里结束。
- *
- * 底色取 `surfaceContainer` 而不是 `surfaceVariant`(风格指南 §1.1)。不取更浅的
- * `surfaceContainerLow`:它在浅色主题下和页面的 `surface` 只差一点,真机上那圈边界几乎看不出来,
- * 等于白做了一个容器。圆角遵守 optical roundness:外 16dp − 内边距 8dp = 内层条目的 8dp
- * (`shapes.small`)。
+ * **条目是 M3 Expressive 的分段列表([SegmentedListItem]),标题行和「查看全部」在分段外面。**
+ * 这一段曾是手写的分段:标题行、加载状态、「查看全部」也各占一块,选中那条又在块里再画一块
+ * 底色,读起来是一堆块挤在一起。分段只装列表项;选中态由组件自己换成 secondaryContainer
+ * 并把四角收成 16dp(lists.md 的 Selected list items)。
  */
-@Composable
-private fun QueueSection(
+private fun LazyListScope.queueItems(
     queue: QueueUiState,
-    onSelectEpisode: (EpisodeTarget) -> Unit,
+    playing: Boolean,
+    /** 摊开的那部分,当前项前后各若干条。 */
+    shownRows: List<EpisodeRow>,
+    onOpenFullQueue: () -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
+    onSelectEpisode: (EpisodeTarget) -> Unit,
     onToggleShuffle: () -> Unit,
     onFindRelated: () -> Unit,
     onCache: () -> Unit,
     onRetryQueue: () -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     if (!queue.enriching && !queue.incomplete && queue.rows.isEmpty()) return
 
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = MaterialTheme.shapes.large,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        QueueContent(
+    item(key = "queue-header") {
+        QueueHeader(
             queue = queue,
-            onSelectEpisode = onSelectEpisode,
             onOpenQueueSource = onOpenQueueSource,
             onToggleShuffle = onToggleShuffle,
             onFindRelated = onFindRelated,
             onCache = onCache,
-            onRetryQueue = onRetryQueue,
         )
     }
-}
 
-@Composable
-private fun QueueContent(
-    queue: QueueUiState,
-    onSelectEpisode: (EpisodeTarget) -> Unit,
-    onOpenQueueSource: (QueueSource) -> Unit,
-    onToggleShuffle: () -> Unit,
-    onFindRelated: () -> Unit,
-    onCache: () -> Unit,
-    onRetryQueue: () -> Unit,
-) {
-    Column(
-        modifier = Modifier.padding(Spacing.Tight),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-    ) {
-        // 标题就是这份队列的来源。是合集/系列时它点得进目录 —— 队列只有当前视频前后一小段,
-        // "这个合集里还有什么"要去目录看。UP 投稿和 UP 动态那两种来源没有目录页,不给入口。
-        SectionHeader(
-            title = queue.sourceLabel,
-            // 标题左边和下面第一张封面对齐。队列行(CompactVideoRow)自己还有一层 Tight 内边距,
-            // 而标题直接贴着这一列的内边距,不补这一层的话标题会比整列封面靠左 8dp。
-            modifier = Modifier.padding(start = Spacing.Tight),
-            onTitleClick = queue.source?.let { source -> { onOpenQueueSource(source) } },
-        ) {
-            // 「找相关」长在这份列表上:这个位置在别的客户端是相关推荐,在这里是合集/UP 投稿,
-            // 把"要不要另找几个"做成这份列表的一个小动作,力度正好 —— 可用,但不劝你用。
-            //
-            // 用闪光而不是星形:星形在这个 app 里已经是收藏(动作栏那排),同一界面里两个星星
-            // 表示两件事,用户会以为点了是收藏。闪光是"AI 辅助动作"的通行符号。
-            IconButton(onClick = onFindRelated) {
-                Icon(
-                    Icons.Filled.AutoAwesome,
-                    contentDescription = stringResource(R.string.video_find_related),
-                    modifier = Modifier.size(Dimens.IconInline),
-                )
-            }
-            // **缓存的入口长在这里**,因为要选的东西就是这份列表:合集分集 / 这位 UP 的其他
-            // 投稿。摆进上面那排动作栏不行 —— 那四格的宽度是照 360dp 屏量出来的(风格指南
-            // §2.3),加第五格会把每格挤到 72dp,"赞 12.3万"那种标签就放不下了。
-            IconButton(onClick = onCache) {
-                Icon(
-                    Icons.Outlined.DownloadForOffline,
-                    contentDescription = stringResource(R.string.offline_cache_action),
-                    modifier = Modifier.size(Dimens.IconInline),
-                )
-            }
-            // 顺序/随机只有两态,是个开关而不是两个选项,所以用带图标的 text button
-            // 而不是 segmented button —— 后者会让人以为还有第三格。
-            //
-            // 文字写的是当前状态,图标必须跟着状态换:原先图标恒为 Shuffle 而文字写「顺序」,
-            // 两个通道给的是相反的信号。听视频页的同款按钮是同一套(ListenScreen)。
-            val orderLabel = stringResource(
-                if (queue.shuffled) R.string.queue_order_shuffle else R.string.queue_order_sequential,
-            )
-            TextButton(
-                onClick = onToggleShuffle,
-                contentPadding = PaddingValues(horizontal = Spacing.Tight),
-                modifier = Modifier.semantics { stateDescription = orderLabel },
-            ) {
-                Icon(
-                    if (queue.shuffled) Icons.Filled.Shuffle else Icons.AutoMirrored.Filled.PlaylistPlay,
-                    contentDescription = null,
-                    modifier = Modifier.size(Dimens.IconInline),
-                )
-                Text(text = orderLabel, modifier = Modifier.padding(start = Spacing.Hair))
-            }
-        }
-
-        if (queue.enriching) {
+    when {
+        queue.enriching -> item(key = "queue-status") {
             InlineProgress(
                 stringResource(R.string.video_queue_loading),
-                Modifier.padding(vertical = Spacing.Tight),
+                Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
             )
-        } else if (queue.incomplete) {
-            // 只有一条的队列自己解释不了自己:看不出是"这个 UP 只发过这一条"还是"来源没拉到"。
-            // 说出后者并给一次重试,重试走的是再发一遍 OPEN_VIDEO(见 VideoScreen)。
-            // 文案不染 error 色,重试用 text button —— 一次拉取失败不该被渲染成需要下决心的事
-            // (风格指南 §2.4)。
+        }
+
+        // 只有一条的队列自己解释不了自己:看不出是"这个 UP 只发过这一条"还是"来源没拉到"。
+        // 说出后者并给一次重试,重试走的是再发一遍 OPEN_VIDEO(见 VideoScreen)。
+        // 文案不染 error 色,重试用 text button —— 一次拉取失败不该被渲染成需要下决心的事
+        // (风格指南 §2.4)。
+        queue.incomplete -> item(key = "queue-status") {
             Row(
-                modifier = Modifier.padding(vertical = Spacing.Tight),
+                modifier = Modifier.padding(start = Spacing.Comfortable),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
             ) {
@@ -1715,6 +1868,7 @@ private fun QueueContent(
                     text = stringResource(R.string.video_queue_incomplete),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
                 TextButton(
                     onClick = onRetryQueue,
@@ -1723,46 +1877,157 @@ private fun QueueContent(
                     Text(stringResource(R.string.action_retry))
                 }
             }
+        }
+
+        else -> {
+            itemsIndexed(shownRows, key = { _, row -> row.bvid }) { index, row ->
+                QueueListItem(
+                    row = row,
+                    playing = playing,
+                    index = index,
+                    count = shownRows.size,
+                    onClick = { onSelectEpisode(EpisodeTarget.Video(row.bvid)) },
+                )
+            }
+            if (shownRows.size < queue.rows.size) {
+                item(key = "queue-show-all") {
+                    ShowAllRow(onClick = onOpenFullQueue)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 队列里的一条。
+ *
+ * 容器色是这里唯一改掉的默认值:分段列表项默认用 `surface`,是给放在带底色的分组背景上用的;
+ * 这一页本身就是 `surface`,照默认画,未选中的条目和页面分不开。
+ *
+ * 选中不只靠颜色(lists.md 的 Accessibility):正在播的那条尾部另有一个播放指示([PlayingIndicator]),
+ * 放着时跳动。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun QueueListItem(row: EpisodeRow, playing: Boolean, index: Int, count: Int, onClick: () -> Unit) {
+    SegmentedListItem(
+        selected = row.isCurrent,
+        onClick = onClick,
+        shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
+        colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier.padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
+        // 居中,不用默认值:默认在条目高过 88dp 时把首尾元素顶到上沿(lists.md 规格表),两行标题
+        // 加一行时长就过线,播放指示于是跑到右上角,而且只在那一条变成当前项时才露出来。
+        verticalAlignment = Alignment.CenterVertically,
+        // 时长压在封面右下角,不另占一行:标题两行加一行时长会把条目撑过 88dp,封面放大到和两行
+        // 标题一样高之后,整条的高度就只由这两样定。
+        leadingContent = {
+            ListCover(
+                url = row.coverUrl,
+                width = QueueCoverWidth,
+                cornerRadius = QueueCoverCorner,
+                durationText = if (row.durationSeconds > 0) formatDurationSeconds(row.durationSeconds) else "",
+            )
+        },
+        trailingContent = if (row.isCurrent) {
+            {
+                PlayingIndicator(
+                    active = playing,
+                    contentDescription = stringResource(
+                        if (playing) R.string.video_queue_now_playing else R.string.video_queue_paused,
+                    ),
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+            }
         } else {
-            val listState = rememberLazyListState()
+            null
+        },
+    ) {
+        Text(text = row.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
 
-            // **高度由上一层给,这里只管填满。** 简介那一栏把剩下的空间整块交给这一节
-            // (weight),所以这个 LazyColumn 拿到的约束本来就是有界的。
-            //
-            // 这里曾经有一段自己算高度的代码:量列表顶边到窗口内容底边的距离,再加回已经滚走
-            // 的那一段。它是为了让一个 LazyColumn 活在可滚动的 Column 里 —— 那种嵌套没有
-            // 有界高度可言,只能自己算一个。代价是这一页的高度成了窗口坐标的函数:简介一展开、
-            // 播放器一收起、页面一滚动,顶边就变,列表跟着重新量高重组。简介栏不再整体滚动
-            // 之后,这些全部消失。
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                items(queue.rows, key = { it.bvid }) { row ->
-                    CompactVideoRow(
-                        title = row.title,
-                        coverUrl = row.coverUrl,
-                        subtitle = if (row.durationSeconds > 0) formatDurationSeconds(row.durationSeconds) else null,
-                        selected = row.isCurrent,
-                        onClick = { onSelectEpisode(EpisodeTarget.Video(row.bvid)) },
-                    )
-                }
-            }
+/**
+ * 段尾那一行「查看全部」,在分段外面。**一整行宽的按钮**:页内只摊几条,
+ * 其余都在完整队列里,这个入口得一眼看得见。照 M3 carousel 页对"列表只露一部分"的建议,
+ * 给一个明确的 show all 去处。
+ */
+@Composable
+private fun ShowAllRow(onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().padding(top = Spacing.Hair),
+    ) {
+        Text(stringResource(R.string.video_queue_show_all))
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            modifier = Modifier.size(Dimens.IconInline),
+        )
+    }
+}
 
-            // 当前项居中:队列是"前后各 25 条",只滚到可见位置的话它会贴在顶或底,
-            // 看不出前后还有多少。
-            LaunchedEffect(queue.rows) {
-                val index = queue.rows.currentIndex()
-                if (index >= 0) {
-                    listState.scrollToItem(index)
-                    val info = listState.layoutInfo
-                    val row = info.visibleItemsInfo.firstOrNull { it.index == index }
-                    if (row != null) {
-                        listState.scrollToItem(index, -(info.viewportSize.height - row.size) / 2)
-                    }
-                }
-            }
+/**
+ * 队列的标题行:来源名,以及找相关、缓存、顺序三个动作。
+ *
+ * 标题就是这份队列的来源。是合集/系列时它点得进目录;UP 投稿和 UP 动态没有目录页,不给入口。
+ * 完整队列不从这里进,入口只有段尾的「查看全部」:两个入口通向同一处,人会去猜它们有什么不同。
+ */
+@Composable
+private fun QueueHeader(
+    queue: QueueUiState,
+    onOpenQueueSource: (QueueSource) -> Unit,
+    onToggleShuffle: () -> Unit,
+    onFindRelated: () -> Unit,
+    onCache: () -> Unit,
+) {
+    SectionHeader(
+        title = queue.sourceLabel,
+        // 不再缩进到封面那条线:标题、UP 行和这里的小节标题都是裸文字,一起贴页边距;缩进过一版,
+        // 整页的文字左右都显得窄。
+        onTitleClick = queue.source?.let { source -> { onOpenQueueSource(source) } },
+    ) {
+        // 「找相关」长在这份列表上:这个位置在别的客户端是相关推荐,在这里是合集/UP 投稿,
+        // 把"要不要另找几个"做成这份列表的一个小动作,力度正好 —— 可用,但不劝你用。
+        //
+        // 用闪光而不是星形:星形在这个 app 里已经是收藏(动作栏那排),同一界面里两个星星
+        // 表示两件事,用户会以为点了是收藏。闪光是"AI 辅助动作"的通行符号。
+        IconButton(onClick = onFindRelated) {
+            Icon(
+                Icons.Filled.AutoAwesome,
+                contentDescription = stringResource(R.string.video_find_related),
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+        }
+        // **缓存的入口长在这里**,因为要选的东西就是这份列表:合集分集 / 这位 UP 的其他
+        // 投稿。摆进上面那排动作栏不行 —— 那四格的宽度是照 360dp 屏量出来的(风格指南
+        // §2.3),加第五格会把每格挤到 72dp,"赞 12.3万"那种标签就放不下了。
+        IconButton(onClick = onCache) {
+            Icon(
+                Icons.Outlined.DownloadForOffline,
+                contentDescription = stringResource(R.string.offline_cache_action),
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+        }
+        // 顺序/随机只有两态,是个开关而不是两个选项,所以用带图标的 text button
+        // 而不是 segmented button —— 后者会让人以为还有第三格。
+        //
+        // 文字写的是当前状态,图标必须跟着状态换:原先图标恒为 Shuffle 而文字写「顺序」,
+        // 两个通道给的是相反的信号。听视频页的同款按钮是同一套(ListenScreen)。
+        val orderLabel = stringResource(
+            if (queue.shuffled) R.string.queue_order_shuffle else R.string.queue_order_sequential,
+        )
+        TextButton(
+            onClick = onToggleShuffle,
+            contentPadding = PaddingValues(horizontal = Spacing.Tight),
+            modifier = Modifier.semantics { stateDescription = orderLabel },
+        ) {
+            Icon(
+                if (queue.shuffled) Icons.Filled.Shuffle else Icons.AutoMirrored.Filled.PlaylistPlay,
+                contentDescription = null,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+            Text(text = orderLabel, modifier = Modifier.padding(start = Spacing.Hair))
         }
     }
 }
@@ -1774,9 +2039,72 @@ private fun formatDate(epochSeconds: Long): String =
         .atZone(java.time.ZoneId.systemDefault())
         .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"))
 
-/** 名字栏的宽度区间。下限对齐头像，上限防止一个长名字把整排撑开。 */
-private val StaffLabelMinWidth = 56.dp
-private val StaffLabelMaxWidth = 104.dp
+/** 联合投稿一排里每一格的宽度。约五个汉字的名字放得下,再长截断。 */
+private val StaffCellWidth = 72.dp
+
+/** 标签的高度,照 M3 chip。 */
+private val TagHeight = 32.dp
+
+/** BV 号复制后「已复制」停留多久。 */
+private const val CopiedNoticeMillis = 1500L
 
 /** 收藏夹对话框里列表的高度上限。再高会把确认/取消按钮顶出屏幕。 */
 private val FavPickerMaxHeight = 360.dp
+
+/**
+ * 简介页里标题、UP 行、动作栏、分 P 这几块之间的距离。块内的行距是 8dp,块间再宽一档,
+ * 几块才分得出组。
+ */
+private val IntroBlockGap = 12.dp
+
+/**
+ * 后面紧跟小节标题(分 P、队列)的块,下间距只留这么多。小节标题行被右边的按钮撑到 48dp 高,
+ * 文字居中,上下本来就各空出十几 dp;再叠一个 [IntroBlockGap],块与标题之间就空得比块与块之间
+ * 还大。
+ */
+private val BeforeSectionHeaderGap = 4.dp
+
+/** 单个 UP 那一行的头像。比联合投稿那一排大一档:这里只有一个人,名字也升到了 titleSmall。 */
+private val UpAvatarSize = 40.dp
+
+/** 分 P 横排里一格的宽度。两行 bodySmall 标题各放得下七八个字。 */
+private val PartCardWidth = 128.dp
+
+/** 分 P 编号标记的左右内边距。行内占位的宽度按它算,两处必须同一个数。 */
+private val PartTagPadding = 4.dp
+
+/** 编号标记与标题之间的距离。 */
+private val PartTagGap = 6.dp
+
+private const val PartTagId = "partTag"
+
+/** 队列条目封面的圆角。列表项自己的圆角在 4dp 到 16dp 之间变,封面取中间一档。 */
+private val QueueCoverCorner = 8.dp
+
+/** 动作栏有几格。 */
+private const val ActionCount = 5
+
+/** 横排分段(动作栏、分 P)格与格之间的缝,与队列分段(ListItemDefaults.SegmentedGap)同宽。 */
+private val ActionSegmentGap = 2.dp
+
+/**
+ * 横排分段(动作栏、分 P)第 [index] 格的外形:整排首尾那一侧 16dp,其余 4dp,和 M3 Expressive
+ * 分段列表同一套圆角(lists.md:外侧 16dp、内侧 4dp),只是横过来。
+ */
+private fun horizontalSegmentShape(index: Int, count: Int): Shape {
+    val start = if (index == 0) ActionOuterCorner else ActionInnerCorner
+    val end = if (index == count - 1) ActionOuterCorner else ActionInnerCorner
+    return RoundedCornerShape(topStart = start, bottomStart = start, topEnd = end, bottomEnd = end)
+}
+
+private val ActionOuterCorner = 16.dp
+private val ActionInnerCorner = 4.dp
+
+/** 队列条目的封面宽度。16:9 下约 54dp 高,和两行标题齐平。 */
+private val QueueCoverWidth = 96.dp
+
+/** 页内队列在当前项前后各摊几条。其余在完整队列里,由段尾的「查看全部」打开。 */
+private const val InlineQueueRadius = 2
+
+/** 完整队列面板占 sheet 可用高度的比例。上面还露着画面和标题,知道自己在哪一页。 */
+private const val FullQueueHeightFraction = 0.6f

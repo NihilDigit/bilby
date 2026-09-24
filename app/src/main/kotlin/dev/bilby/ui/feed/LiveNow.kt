@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.dp
 import dev.bilby.R
 import dev.bilby.data.LiveUpBrief
 import dev.bilby.ui.components.Avatar
-import dev.bilby.ui.components.LivePulse
+import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 
@@ -113,7 +113,8 @@ private fun StackedFaces(liveUps: List<LiveUpBrief>) {
         // 直接画在头像上,不衬一个圆底。衬底是给"图标"用的 —— 一个有轮廓的形状压在另一个
         // 形状上才需要底把它托起来;而这三根条本身就是稀疏的笔画,加个实心圆反倒把它围成了
         // 一枚按钮。
-        LivePulse(
+        PlayingIndicator(
+            active = true,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.align(Alignment.BottomEnd).size(PulseSize),
         )
@@ -175,7 +176,8 @@ fun LiveNowSheet(
                     },
                     leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarRow) },
                     trailingContent = {
-                        LivePulse(
+                        PlayingIndicator(
+                            active = true,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(LivePulseSizeInList),
                         )

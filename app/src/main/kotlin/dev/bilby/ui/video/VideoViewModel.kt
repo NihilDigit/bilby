@@ -36,6 +36,7 @@ import dev.bilby.data.FavFolder
 import dev.bilby.data.MemberCard
 import dev.bilby.data.VideoActionRepository
 import dev.bilby.data.VideoDetail
+import dev.bilby.data.parseDescriptionSpans
 import dev.bilby.data.TripleResult
 import dev.bilby.data.VideoRelation
 import dev.bilby.data.VideoRepository
@@ -865,6 +866,8 @@ class VideoViewModel(
                     cid = cached.cid,
                     title = cached.title,
                     description = cached.description,
+                    // 缓存索引只存了纯文本简介,@ 带不回来,只剩链接和时间点能点。
+                    descriptionSpans = parseDescriptionSpans(emptyList(), cached.description),
                     coverUrl = cached.coverUrl,
                     durationSeconds = cached.durationSeconds,
                     publishedAtEpochSeconds = cached.publishedAtEpochSeconds,

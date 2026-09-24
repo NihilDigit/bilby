@@ -25,8 +25,10 @@ data class VideoDetailDto(
     val tid: Int = 0,
     val tname: String = "",
     val title: String = "",
-    /** 简介纯文本。带话题跳转的富文本在 desc_v2 里,本期不做。 */
+    /** 简介纯文本。@ 在这里只是字面,点得开的版本在 [descV2]。 */
     val desc: String = "",
+    /** 简介的分段版本,@ 带着 mid。见 [DescSegmentDto]。 */
+    @SerialName("desc_v2") val descV2: List<DescSegmentDto> = emptyList(),
     /** 封面,可能是 http 或无协议,用前过 toHttpsUrl()。 */
     val pic: String = "",
     /** 秒级时间戳。 */
@@ -40,6 +42,19 @@ data class VideoDetailDto(
     /** 分 P 列表。单 P 视频服务端也会给一个元素,不是空数组。 */
     val pages: List<VideoPageDto> = emptyList(),
     @SerialName("ugc_season") val ugcSeason: UgcSeasonDto? = null,
+)
+
+/**
+ * 简介的一段(PiliPlus `models_new/video/video_detail/desc_v2.dart`)。
+ *
+ * type 1 是普通文本,type 2 是 @ 一个人:[rawText] 是名字本身、**不带 @**,[bizId] 是他的 mid。
+ * 普通文本会被切成很多小段,段界没有意义(实测 BV1q8Mq6dE7Q 一句「作词・作曲：」自成一段)。
+ */
+@Serializable
+data class DescSegmentDto(
+    @SerialName("raw_text") val rawText: String = "",
+    val type: Int = 0,
+    @SerialName("biz_id") val bizId: Long = 0,
 )
 
 @Serializable

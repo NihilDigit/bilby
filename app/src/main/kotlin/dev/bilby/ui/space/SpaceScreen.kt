@@ -92,7 +92,7 @@ import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BilbyFlexibleTopBar
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
-import dev.bilby.ui.components.LivePulse
+import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.PagedColumn
@@ -292,9 +292,9 @@ class SpaceViewModel(
         current.copy(
             dynamics = current.dynamics.copy(
                 items = current.dynamics.items.map { item ->
-                    val card = (item as? SpaceDynamicItem.Card)?.card
-                    val interaction = card?.interaction
-                    if (card == null || interaction == null || card.id != id || interaction.liked == like) {
+                    val card = item.card
+                    val interaction = card.interaction
+                    if (interaction == null || card.id != id || interaction.liked == like) {
                         item
                     } else {
                         item.copy(
@@ -523,12 +523,11 @@ class SpaceViewModel(
                     is BiliResult.Ok -> {
                         // **投稿视频不进这一栏。** 隔壁「投稿」栏装的就是它们,而且那边按发布时间
                         // 排得整整齐齐、还能搜。同一条稿件在两栏里各出现一次,翻动态时读到的
-                        // 一半内容是刚在上一栏看过的。
+                        // 一半内容是刚在上一栏看过的。以动态形式发的视频不在投稿栏,留在这里。
                         //
                         // 只在这里滤,不在 repository 里滤:建播放队列那条路
-                        // (QueueSourceRepository.fromUpDynamics)要的正是这些 Video ——
-                        // 以动态形式发的视频不进 arc/search,只有这条路找得到它们。
-                        val fresh = result.value.items.filterNot { it is SpaceDynamicItem.Video }
+                        // (QueueSourceRepository.fromUpDynamics)两种视频都要。
+                        val fresh = result.value.items.filterNot { it.listedInArchive }
                         state.copy(
                             refreshing = false,
                             dynamics = dynamics.copy(
@@ -1028,9 +1027,10 @@ private fun SpaceHeader(
                 ) {
                     // 与首页那一排、动态里的直播格同一个符号:「正在直播」在全应用只有这一种
                     // 长相,换个位置就换个说法的话,这四个字得重新认一遍。
-                    LivePulse(
+                    PlayingIndicator(
+                        active = true,
                         color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(Dimens.LivePulseInline),
+                        modifier = Modifier.size(Dimens.PlayingIndicatorInline),
                     )
                     Text(
                         text = stringResource(R.string.space_live_now),
@@ -1307,7 +1307,7 @@ private fun DynamicListTab(
 }
 
 /**
- * 一条动态。**投稿视频之外的全部类型走 [DynamicCardView]** —— 那一份是动态渲染的唯一实现,
+ * 一条动态。**全部类型走 [DynamicCardView]** —— 那一份是动态渲染的唯一实现,
  * 这一页与「其他动态」页共用。以前这里另写了一套只认五种形态的分支,于是同一位 UP 发的直播、
  * 音频、番剧更新在空间页悄悄消失,而在别处是有的。
  */
@@ -1317,28 +1317,21 @@ private fun DynamicRow(
     onAction: (DynamicAction) -> Unit,
     onLikeDynamic: (String, Boolean) -> Unit,
 ) {
-    when (dynamic) {
-        // 投稿视频在进 state 之前就被滤掉了(见 loadMoreDynamics),这一栏里不会有 ——
-        // 它们是隔壁「投稿」栏的内容。这个分支留着只因为 [SpaceDynamicItem] 还有这一支:
-        // 建播放队列那条路要认它。
-        is SpaceDynamicItem.Video -> Unit
-
-        // 一条动态一张卡片,与「其他动态」页同一份处理:条目之间不画分割线,边界由底色和圆角
-        // 画在卡片自己身上。动态内部本来就有带底色的块(转发、直播、预约),再叠一层横线之后
-        // 整页全是线,分不清哪条是条目边界。
-        //
-        // 整页都是同一个人,所以不重复印他的头像和名字 —— 与上面视频行留空 upName 同一个理由。
-        is SpaceDynamicItem.Card -> DynamicCardView(
-            card = dynamic.card,
-            onAction = onAction,
-            onLike = { like -> onLikeDynamic(dynamic.card.id, like) },
-            showAuthor = false,
-            // 底色、圆角、内边距归卡片自己;这里只给边距和条目间的 gap,与「关注动态」页
-            // 取同一组数,同一条动态在两页里才是同一个样子。
-            // 上下各 4 合成 8 的 gap,与「关注动态」页的 spacedBy(Tight) 相同。
-            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
-        )
-    }
+    // 一条动态一张卡片,与「其他动态」页同一份处理:条目之间不画分割线,边界由底色和圆角
+    // 画在卡片自己身上。动态内部本来就有带底色的块(转发、直播、预约),再叠一层横线之后
+    // 整页全是线,分不清哪条是条目边界。
+    //
+    // 整页都是同一个人,所以不重复印他的头像和名字 —— 与上面视频行留空 upName 同一个理由。
+    DynamicCardView(
+        card = dynamic.card,
+        onAction = onAction,
+        onLike = { like -> onLikeDynamic(dynamic.card.id, like) },
+        showAuthor = false,
+        // 底色、圆角、内边距归卡片自己;这里只给边距和条目间的 gap,与「关注动态」页
+        // 取同一组数,同一条动态在两页里才是同一个样子。
+        // 上下各 4 合成 8 的 gap,与「关注动态」页的 spacedBy(Tight) 相同。
+        modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
+    )
 }
 
 /**

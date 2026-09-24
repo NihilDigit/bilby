@@ -195,6 +195,9 @@
     <string name="video_tab_comment">评论</string>
     <string name="video_tab_comment_count">评论 %1$s</string>
     <string name="video_intro_open">简介</string>
+    <string name="video_bvid_copy">复制 BV 号</string>
+    <string name="video_bvid_copied">已复制</string>
+    <string name="video_bvid_clip_label">BV 号</string>
     <string name="video_resume">继续播放</string>
     <string name="video_replay">重新播放</string>
     <string name="video_cloud_resume">别处已看到 %1$s</string>
@@ -220,9 +223,14 @@
     <string name="video_parts">分 P</string>
     <string name="video_episodes">选集</string>
     <string name="video_part_label">P%1$d %2$s</string>
+    <string name="video_part_ordinal">P%1$d</string>
+    <string name="video_parts_expand">全部 %1$d 集</string>
     <string name="video_find_related">找相关</string>
     <string name="video_queue_loading">加载队列…</string>
     <string name="video_queue_incomplete">队列没建全,只有当前这条</string>
+    <string name="video_queue_show_all">查看全部</string>
+    <string name="video_queue_now_playing">正在播放</string>
+    <string name="video_queue_paused">已暂停</string>
 
     <!-- 离线缓存。入口在播放队列那一节的标题行,列表页在「我的」 -->
     <string name="offline_title">离线缓存</string>
@@ -538,7 +546,6 @@
     <string name="settings_sponsorblock_server_subtitle">第三方社区服务,可在服务不可用或域名变更时替换</string>
     <string name="settings_sponsorblock_section_server">服务器</string>
     <string name="dynamic_origin_gone">源动态已不可见</string>
-    <string name="video_parts_expand">全部 %1$d 集</string>
     <string name="settings_section_account">账号</string>
     <string name="feed_all_followings">全部关注</string>
     <string name="feed_live_now">%1$d 正在直播</string>

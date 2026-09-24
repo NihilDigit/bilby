@@ -27,12 +27,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.windowInsetsTopHeight
-import androidx.compose.material3.BottomSheetDefaults
-import androidx.compose.material3.BottomSheetScaffold
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LoadingIndicator
-import androidx.compose.material3.rememberBottomSheetScaffoldState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.material3.Icon
@@ -43,7 +41,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,10 +51,8 @@ import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
@@ -365,6 +360,7 @@ fun VideoScreen(
         currentBvid = audioState.queue?.current?.bvid,
         pageBvid = state.detail?.bvid,
         parts = state.detail?.pages.orEmpty(),
+        pageDurationSeconds = state.detail?.durationSeconds ?: 0L,
         currentCid = currentCid,
     )
 
@@ -682,10 +678,11 @@ fun VideoScreen(
         if (locked) locked = false else fullscreen = false
     }
 
-    // 找相关做成底部 sheet:它是对当前视频问的一句话,不是一个要离开播放页的去处。
-    // 用 BottomSheetScaffold 而不是 ModalBottomSheet —— 后者带遮罩会把视频压暗,而这个
-    // 功能的前提就是"我还在看这个视频";peek 高度天生就能表达「问过之后常驻的把手」。
-    val sheetState = rememberBottomSheetScaffoldState()
+    // 找相关开 modal sheet:它是对当前视频问的一句话,问完即走,不在页面上留东西。
+    // 这里曾是 BottomSheetScaffold 加一个问过之后常驻的把手,sheet 高度要从简介页回报的投币行
+    // 坐标反算;modal sheet 的高度规则归它自己,那条坐标回报随之不存在。
+    // 结果仍存在 ViewModel 里,关掉再开看到的是上一次的回答。
+    var relatedOpen by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val expandedLayout = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
 
@@ -695,9 +692,9 @@ fun VideoScreen(
      * 播放中必须钉着:一边看画面一边翻评论正是这一页的用法。暂停之后这个理由不成立 ——
      * 此刻屏幕上三分之一是一张不动的画,而人正在读下面的字。
      *
-     * **两个 tab 一视同仁。** 曾经只在评论那一边收、简介那边钉死,因为简介里的播放队列按
-     * 窗口坐标算高度,画面一收它就重新量高重组。队列改成由布局撑开之后那条限制没了,而
-     * "同一个手势在两个 tab 上做两件事"本身就是别扭的来源。
+     * **两个 tab 一视同仁。** 简介页曾经不许收:那时它整栏不滚、队列占满剩下的高度,收掉画面
+     * 换来的空间只会让队列忽然长一截。简介页改成一个列表之后,收画面就是"往下读",和评论页
+     * 是同一件事。
      *
      * 两栏布局不做:画面是左边那一整列,和右栏的滚动没有共同的方向可言。
      */
@@ -715,21 +712,7 @@ fun VideoScreen(
     }
     val tabPager = rememberPagerState(pageCount = { VideoTabCount })
     val playerPinned = playing || fullscreen || expandedLayout
-    /*
-     * **简介那一边只许把画面拉回来,不许把它收走。**
-     *
-     * 收起是在评论那边做的动作:人在读评论,画面是多余的。简介这一边的下半屏是播放队列,
-     * 它自己就要占满剩下的高度,再把画面收掉换来的空间没有去处 —— 换来的是队列忽然长一截,
-     * 而人并没有要求它长。
-     *
-     * 反过来要留着:从评论页收着画面翻回简介,得有办法把画面拿回来,否则这一页会一直停在
-     * "画面不见了"的状态。展开走 onPostScroll,不受这个开关管(见 CollapsingHeaderState),
-     * 所以这里只写"能不能收"就够,单向限制天然成立。
-     *
-     * 用 settledPage 而不是 currentPage:后者翻过中点就变,允许的方向会在手势中途翻转。
-     */
-    val canCollapsePlayer = !playerPinned && tabPager.settledPage != VideoTabIntro
-    val playerScroll = rememberCollapsingHeaderState { canCollapsePlayer }
+    val playerScroll = rememberCollapsingHeaderState { !playerPinned }
     // 画面收到底时留下一条快捷播放条的高度,那块位置由它占住(见 QuickPlayBar)。
     // 收不干净是有意的:收干净之后"把画面拿回来"就没有入口了,只能靠一路往回滚。
     with(LocalDensity.current) { playerScroll.minVisiblePx = QuickPlayBarHeight.toPx() }
@@ -740,470 +723,435 @@ fun VideoScreen(
         if (playerPinned) playerScroll.expand()
     }
 
-    // 把手只在问过之后存在,并活到离开播放页为止:它是**你自己那次提问的记忆**,
-    // 不是打开播放页就在那儿等着的入口。换个视频就是新的 VideoRoute,自动没有。
-    val peek = if (related.started) SheetHandleHeight else 0.dp
-
-    // sheet 展开到**刚好盖住投币那一行**为止:上面的画面、标题、UP 行都还看得见,
-    // 而「找相关」问的正是"这条视频"——把它盖掉就没有参照物了。
-    //
-    // 位置只认第一次量到的那个值。投币行跟着简介页一起滚,持续跟随的话用户滑一下简介、
-    // sheet 就跟着变高变矮;而这条锚线表达的是版面上的一个位置,不是那个按钮此刻在哪。
-    var actionsTop by remember { mutableIntStateOf(0) }
-    // 把手画在 sheet 内容**之上**,是 sheet 总高的一部分。不扣掉的话锚线会整体上移一个把手的
-    // 高度 —— 实测就是这样多盖住了 UP 那一行。它的高度不硬编码:BottomSheetDefaults.DragHandle
-    // 没有公开的尺寸常量,而猜一个数字会在 M3 改版时悄悄错位。
-    var handleHeight by remember { mutableIntStateOf(0) }
-    val windowHeight = LocalWindowInfo.current.containerSize.height
-    val sheetHeight = with(LocalDensity.current) {
-        (windowHeight - actionsTop - handleHeight).coerceAtLeast(0).toDp()
-    }.takeIf { actionsTop > 0 } ?: DefaultSheetHeight
-
-    BottomSheetScaffold(
-        scaffoldState = sheetState,
-        sheetPeekHeight = if (fullscreen) 0.dp else peek,
-        // M3 给标准 sheet 的容器色是 surface container low,而这一页的队列卡片用的是
-        // surface container —— 两者叠在一起几乎没有色差,边界就消失了。抬高一档并加重
-        // 投影:标准 sheet 没有遮罩,分隔完全靠容器色与阴影承担。
-        sheetContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        sheetShadowElevation = 12.dp,
-        sheetDragHandle = {
-            Box(modifier = Modifier.onGloballyPositioned { handleHeight = it.size.height }) {
-                BottomSheetDefaults.DragHandle()
-            }
-        },
-        sheetContent = {
+    if (relatedOpen && !fullscreen) {
+        ModalBottomSheet(onDismissRequest = { relatedOpen = false }) {
             RelatedSheet(
                 related = related,
-                height = sheetHeight,
-                onVideoClick = onRelatedVideoClick,
+                // 先关面板再跳走:ModalBottomSheet 自带的 BackHandler 排在导航那一层之后,
+                // 留着它跳到下一页,那一页的第一次返回会被这个看不见的面板吃掉。
+                // LiveNowSheet 是同一条规矩。
+                onVideoClick = { bvid ->
+                    relatedOpen = false
+                    onRelatedVideoClick(bvid)
+                },
                 onRetry = onFindRelated,
             )
-        },
-    ) { insets ->
-        /**
-         * **宽屏是 supporting pane:画面在左,简介与评论在右。**
-         *
-         * 规范给的正是这个例子(breakpoints 页 Expanded 一节配图):"The large, primary pane
-         * has the video, title, and actions. The secondary pane has queued videos.",主区约占
-         * 三分之二。同一页也允许视频类用单栏("a single-pane layout can work when displaying
-         * visually- or information-dense content, such as videos"),这里选双栏 —— 单栏在平板上
-         * 只剩画面加两条黑边,右边那块空间什么也没干。
-         *
-         * **横竖两种排布下,播放器都是同一个调用点。** 分成两个 `BilbyPlayer(...)` 会让切换
-         * 时 PlayerSurface 销毁重建、弹幕整池重编。全屏时也走同一个分支(右栏不组合、左栏
-         * 权重给满),所以最要紧的那次切换 —— 进出全屏 —— 不会重挂。
-         */
-        /*
-         * **系统栏:画面全出血,文字躲开。**
-         *
-         * 两栏下画面顶到屏幕上边缘,状态栏被收起来(它会横跨黑画面和浅色的简介栏,而图标明暗
-         * 只能整条设一次)。根容器一垫 inset,露出来的就是页面底色 —— 画面上方一道白带,
-         * 既没有沉浸又损失了高度。
-         *
-         * 单栏(竖屏)只填一条黑边,画面本身不钻到状态栏底下:返回和分享贴在画面上角,状态栏
-         * 会正好压住它们。图标仍然转白(见 `fullBleed`),因为它压着的是那条黑边。
-         *
-         * 文字那一栏自己躲。`windowInsetsPadding` 同时**消费**掉这份 inset,所以嵌在画面里的
-         * 控制条和返回按钮无条件调用同一个躲避也不会重复叠加。
-         */
-        val safeInsets = WindowInsets.barsAndCutout
-        val rootModifier = modifier
-            .fillMaxSize()
-            // 全屏不留任何 inset:系统栏是 FullscreenEffect 异步藏掉的,这中间有一两帧
-            // statusBars 还报着高度,带着它会让画面先被顶下去再弹回来。
-            .then(
-                when {
-                    fullscreen -> Modifier
-                    // 两栏:根一律不躲,交给下面两个 pane 各自处理 —— 连底部也不躲,
-                    // 躲了就在黑画面下面又垫出一条页面底色,和上面那条白带是同一个毛病。
-                    expandedLayout -> Modifier
-                    // 单栏:顶上归画面,底下的手势条要躲(简介和评论滚到底会压在上面)。
-                    else -> Modifier.padding(bottom = insets.calculateBottomPadding())
-                },
-            )
-
-        // 画面这一块。**整页只有这一处 `BilbyPlayer` 调用**:横排和竖排各写一份的话,转屏
-        // 会让 PlayerSurface 销毁重建、弹幕整池重编。这里用一个接 Modifier 的 lambda,
-        // 两种排布传不同的约束进去。
-        val playerPane: @Composable (Modifier) -> Unit = { paneModifier ->
-            Box(modifier = paneModifier.background(Color.Black)) {
-                // **判据是"服务装上东西了没有",不是"有没有 playInfo"。**
-                //
-                // playInfo 是取流的产物,而放本地缓存那条路径压根不取流 —— 服务在命中缓存时
-                // 故意把它置成 null(本地只有下载时选的那一档,画质菜单摆出来点了没用)。
-                // 照 playInfo 判的话,缓存的视频永远落到下面那个转圈分支:播放器其实早就
-                // READY 了(真机上量到 237ms),只是没有人把画面挂上去。
-                val loaded = matchesCurrentPage || audioState.playInfo != null
-                when {
-                    loaded && active != null -> BilbyPlayer(
-                        player = active,
-                        qualities = audioState.playInfo?.availableQualities.orEmpty(),
-                        currentQuality = audioState.currentQuality,
-                        onQualityChange = { setQuality(it) },
-                        fastForwardSpeed = fastForwardSpeed,
-                        isFullscreen = fullscreen,
-                        onFullscreenChange = { fullscreen = it },
-                        // 非全屏时画面一直顶到屏幕上边缘,状态栏压在它身上。
-                        fullBleed = true,
-                        // 但只有两栏要把状态栏收起来:那时它横跨黑画面和浅色的简介栏,
-                        // 而图标明暗只能整条设一次(见 PlayerShell)。
-                        hideStatusBar = expandedLayout,
-                        // 返回/分享画在壳外面(下面那个 if),渐变归壳画,才落得到弹幕下面。
-                        topScrim = !fullscreen,
-                        // 失败态有自己的重试指示(PlaybackFailure),这时壳里那个要让开,
-                        // 不然文字后面还有一朵在转。
-                        externalLoading = (audioState.loading || state.loading) && playbackError == null,
-                        title = state.detail?.title.orEmpty(),
-                seekBarSegments = sponsorSegments.toSeekBarSegments(),
-                        subtitleTracks = subtitleTracks,
-                        currentSubtitleLan = subtitleLan,
-                        onSubtitleTrackChange = onSelectSubtitle,
-                        subtitleCues = subtitleCues,
-                        danmakuPrefs = danmakuPrefs,
-                        onDanmakuEnabledChange = onDanmakuEnabledChange,
-                                locked = locked,
-                        onLockedChange = { locked = it },
-                        danmakuPool = danmakuPool,
-                        specialDanmakuPool = specialDanmakuPool,
-                        selfDanmaku = selfDanmaku,
-                        danmakuCid = currentCid,
-                        matchesCurrentPage = matchesCurrentPage,
-                        placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
-                        topBarActions = {
-                            // 没有可切的东西就不给入口:单条队列的单 P 视频点开只有它自己。
-                            if (episodeRows.hasSomethingToSwitch()) {
-                                IconButton(onClick = { episodePanelOpen = true }) {
-                                    Icon(
-                                        Icons.AutoMirrored.Filled.PlaylistPlay,
-                                        contentDescription = stringResource(R.string.video_episodes),
-                                        tint = FixedColors.OnMedia,
-                                    )
-                                }
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize(),
-                    )
-
-                    state.error != null -> PlaybackFailure(
-                        message = state.error,
-                        retrying = state.loading,
-                        onRetry = onRetry,
-                        modifier = Modifier.align(Alignment.Center),
-                    )
-
-                    // 和壳内缓冲用同一个指示器:这里盖的是"服务还没装上这一条"的窗口,
-                    // 壳内那个盖的是装上之后的取流与缓冲,两段接起来观感是同一次等待。
-                    // CircularProgressIndicator 不用:alpha 版画一圈背景轨道,黑底上是两层圆环。
-                    else -> LoadingIndicator(modifier = Modifier.align(Alignment.Center))
-                }
-
-                if (!fullscreen) {
-                    MediaBackButton(
-                        onBack = onBack,
-                        onShare = {
-                            ShareLink.video(context, bvid, state.detail?.title.orEmpty())
-                        },
-                        scrim = false,
-                    )
-                }
-
-                // 盖在画面上而不是排在下面:失败时画面本来就是黑的,而简介区在一屏之外,
-                // 提示放那儿等于没有。
-                // 取流/重试退避期间的指示器归 PlayerShell(externalLoading),这里只画失败态。
-                //
-                // **`state.error` 画过了就不再画这一条。** 这里原先写着"两者不会同时出现",
-                // 那句话不成立:详情取不到时取流同样会失败(一条不存在的 bvid 就两样都占),
-                // 于是两条提示叠在同一个居中位置,字压着字,下面共用一个重试按钮,谁都读不出来。
-                // 留下的是详情那一条 —— 它是根因,而取流失败只是它的后果。
-                val shownError = playbackError.takeIf { state.error == null }
-                if (shownError != null) {
-                    PlaybackFailure(
-                        message = shownError,
-                        // 两个 loading 都要看:重取那一步归本页(state.loading),重新装载
-                        // 那一步归服务(audioState.loading)。只看后者的话,重取在飞的那一两秒
-                        // 按钮会重新亮起来,能连按出好几次重取。
-                        retrying = state.loading || audioState.loading,
-                        onRetry = retryPlayback,
-                        modifier = Modifier.align(Alignment.Center),
-                    )
-                }
-
-                // 两条提示摞成一列而不是各自对齐:同时出现的机会很小(一条在起播那一刻,一条在
-                // 跳过赞助段的时候),但真撞上时叠在一起谁都读不出来。
-                //
-                // 跳过提示贴画面顶部:它说的是"刚跳过了一段",归画面。
-                //
-                // **「别处已看到」只有全屏时才在这一层。** 它是要按的,而这个 Box 只有画面那么
-                // 大 —— 竖排时它的"底部"就是进度条那一带,提示会浮在进度条上,两个可按的东西
-                // 叠在一起。竖排那一份挂在整页那一层(见下面 rootBox 里那处),锚在屏幕的下
-                // 四分之一,落在简介/评论上方,拇指够得着又不压任何控件。
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                    modifier = Modifier.align(Alignment.TopCenter).padding(Spacing.Comfortable),
-                ) {
-                    if (fullscreen) {
-                        CloudResumeHint(
-                            positionMillis = cloudResumeMillis,
-                            onJump = jumpToCloudResume,
-                            onDismiss = { dismissedResumeMillis = it },
-                        )
-                    }
-                    SkipToast(skippedCategory)
-                    // 三连的回执和跳过提示摞在同一列:两条都是"刚刚发生了一件事",
-                    // 各挑一个位置的话同时出现时会互相盖住。
-                    TripleToast(tripleOutcome)
-                }
-
-                // 切集面板。挂在画面这个 Box 里,所以它盖住的正好是画面,而不是整页 ——
-                // 全屏时两者相等,退出全屏时它已经被上面那个 LaunchedEffect 关掉了。
-                if (fullscreen) {
-                    EpisodePanel(
-                        visible = episodePanelOpen && !locked,
-                        rows = episodeRows,
-                        sourceLabel = shownQueue.sourceLabel,
-                        onSelect = onSelectEpisode,
-                        onDismiss = { episodePanelOpen = false },
-                    )
-                }
-            }
         }
+    }
 
-        // 简介与评论。竖排时在画面下面、拿剩下的高度;横排时是右边那个 secondary pane。
-        val tabsPane: @Composable (Modifier) -> Unit = { paneModifier ->
-            state.detail?.let { detail ->
-                AdaptiveContent(modifier = paneModifier, maxWidth = Breakpoints.ReadableWidth) {
-                    VideoTabs(
-                        pagerState = tabPager,
-                        detail = detail,
-                        onSelectEpisode = onSelectEpisode,
-                        videoTags = videoTags,
-                        onLoadTags = onLoadTags,
-                        onTagClick = onTagClick,
-                        related = related,
-                        commentState = commentState,
-                    // 点闪光:没问过就发起检索,问过就只是把 sheet 展开 —— 再点一次重跑
-                    // 会把已有结果冲掉,而用户此刻多半只是想再看一眼。
-                        onActionsTop = { top -> if (actionsTop == 0 && top > 0) actionsTop = top },
-                        onFindRelated = {
-                            if (!related.started) onFindRelated()
-                            scope.launch { sheetState.bottomSheetState.expand() }
-                        },
-                        onListen = { onListeningChange(true) },
-                        onSendDanmaku = openDanmakuInput,
-                        danmakuEnabled = danmakuPrefs.enabled,
-                        onDanmakuEnabledChange = onDanmakuEnabledChange,
-                        onCache = { cacheSheetOpen = true },
-                        // 全屏下这一栏根本不组合,所以不必先退出全屏 —— 能点到这个按钮
-                        // 就说明已经不在全屏了。
-                        followState = followState,
-                        onToggleFollow = onToggleFollow,
-                        upCard = upCard,
-                        queue = shownQueue,
-                        onOpenQueueSource = onOpenQueueSource,
-                        onToggleShuffle = toggleShuffle,
-                        onRetryQueue = retryQueue,
-                        onUpClick = onUpClick,
-                        staffFollowed = staffFollowed,
-                        onFollowStaff = onFollowStaff,
-                        relation = relation,
-                        favFolders = favFolders,
-                        addedToView = addedToView,
-                        onLike = onLike,
-                        onTriple = onTriple,
-                        onAddToView = onAddToView,
-                        onCoin = onCoin,
-                        coinAttempt = coinAttempt,
-                        onCoinDialogClosed = onCoinDialogClosed,
-                        onOpenFavPicker = onOpenFavPicker,
-                        onFavConfirm = onFavConfirm,
-                        onPlayEpisode = onPlayEpisode,
-                        onRelatedVideoClick = onRelatedVideoClick,
-                        onOpenLink = onOpenLink,
-                        onCommentSort = onCommentSort,
-                        onCommentRefresh = onCommentRefresh,
-                        // 画面收起着的时候下滑先把它拉回来,那一下不该被读成刷新。
-                        playerExpanded = playerScroll.offsetPx == 0f,
-                        onCommentLoadMore = onCommentLoadMore,
-                        onExpandReplies = onExpandReplies,
-                        onSendComment = onSendComment,
-                        onLikeComment = onLikeComment,
-                        onDeleteComment = onDeleteComment,
-                    // 只在播放器装的确实是本页这一条时才跳。队列自动连播走到下一条之后,
-                    // 这一页还停在原来那条的评论区(见页面顶部对 matchesCurrentPage 的说明),
-                    // 不对身份就会拿着 A 的评论里的时间戳去跳 B。
-                    //
-                    // **判据是队列指着谁,不是取流回来没有。** 用 matchesCurrentPage 的那一版
-                    // 在整个取流窗口里静默丢掉点击 —— 评论比流先到,那几百毫秒里点下去什么都
-                    // 不发生,而时间戳照样画成能点的样子,表现就是"空降坐标有时候点不动"。
-                    // 队列这一刻已经指向本页这条了,而播放器允许对还没拿到时间线的条目定位
-                    // (见 AudioPlaybackService.adoptResolved 的说明),所以这一跳落得下去。
-                    //
-                    // 跳不了的时候传 null,让时间戳退回普通文字:一个看起来能点、点了没反应的
-                    // 东西比一段普通文字更糟。
-                    //
-                    // 再夹一次时长:评论里的时间戳可能指向分 P 或者干脆写错,超出末尾的 seek
-                    // 会直接把这一条播完并翻到下一条。时长还不知道时不夹,播放器自己会截到窗口内。
-                    // 判据读 [audioState] 而不是叫 `playerHoldsThisPage()`:后者读的是
-                    // StateFlow 的 `.value`,在组合里不订阅,队列换过之后这一格不会重算。
-                        onSeekComment = active
-                            ?.takeIf { audioState.queue?.current?.bvid == bvid }
-                            ?.let { controller ->
-                            { millis: Long ->
-                                val end = controller.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
-                                controller.seekTo(millis.coerceIn(0L, end))
+    /**
+     * **宽屏是 supporting pane:画面在左,简介与评论在右。**
+     *
+     * 规范给的正是这个例子(breakpoints 页 Expanded 一节配图):"The large, primary pane
+     * has the video, title, and actions. The secondary pane has queued videos.",主区约占
+     * 三分之二。同一页也允许视频类用单栏("a single-pane layout can work when displaying
+     * visually- or information-dense content, such as videos"),这里选双栏 —— 单栏在平板上
+     * 只剩画面加两条黑边,右边那块空间什么也没干。
+     *
+     * **横竖两种排布下,播放器都是同一个调用点。** 分成两个 `BilbyPlayer(...)` 会让切换
+     * 时 PlayerSurface 销毁重建、弹幕整池重编。全屏时也走同一个分支(右栏不组合、左栏
+     * 权重给满),所以最要紧的那次切换 —— 进出全屏 —— 不会重挂。
+     */
+    /*
+     * **系统栏:画面全出血,文字躲开。**
+     *
+     * 两栏下画面顶到屏幕上边缘,状态栏被收起来(它会横跨黑画面和浅色的简介栏,而图标明暗
+     * 只能整条设一次)。根容器一垫 inset,露出来的就是页面底色 —— 画面上方一道白带,
+     * 既没有沉浸又损失了高度。
+     *
+     * 单栏(竖屏)只填一条黑边,画面本身不钻到状态栏底下:返回和分享贴在画面上角,状态栏
+     * 会正好压住它们。图标仍然转白(见 `fullBleed`),因为它压着的是那条黑边。
+     *
+     * 文字那一栏自己躲。`windowInsetsPadding` 同时**消费**掉这份 inset,所以嵌在画面里的
+     * 控制条和返回按钮无条件调用同一个躲避也不会重复叠加。
+     */
+    val safeInsets = WindowInsets.barsAndCutout
+    // 根自己铺页面底色。这一层曾经是 BottomSheetScaffold,底色是它给的;去掉之后切集那一下
+    // (换一条就是整页重建,详情还没回来)空着的地方露出窗口的黑底,整页黑一下。
+    //
+    // 根一律不垫 inset,由各块自己躲。全屏时系统栏是 FullscreenEffect 异步藏掉的,中间有一两帧
+    // statusBars 还报着高度,带着它会让画面先被顶下去再弹回来;两栏时躲了就在黑画面下面垫出
+    // 一条页面底色。单栏这里曾经垫过一段底部 padding,那是 BottomSheetScaffold 给的把手高度
+    // (它传给内容的只有 sheetPeekHeight,不含系统栏),把手没了它也就没了。
+    val rootModifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)
+
+    // 画面这一块。**整页只有这一处 `BilbyPlayer` 调用**:横排和竖排各写一份的话,转屏
+    // 会让 PlayerSurface 销毁重建、弹幕整池重编。这里用一个接 Modifier 的 lambda,
+    // 两种排布传不同的约束进去。
+    val playerPane: @Composable (Modifier) -> Unit = { paneModifier ->
+        Box(modifier = paneModifier.background(Color.Black)) {
+            // **判据是"服务装上东西了没有",不是"有没有 playInfo"。**
+            //
+            // playInfo 是取流的产物,而放本地缓存那条路径压根不取流 —— 服务在命中缓存时
+            // 故意把它置成 null(本地只有下载时选的那一档,画质菜单摆出来点了没用)。
+            // 照 playInfo 判的话,缓存的视频永远落到下面那个转圈分支:播放器其实早就
+            // READY 了(真机上量到 237ms),只是没有人把画面挂上去。
+            val loaded = matchesCurrentPage || audioState.playInfo != null
+            when {
+                loaded && active != null -> BilbyPlayer(
+                    player = active,
+                    qualities = audioState.playInfo?.availableQualities.orEmpty(),
+                    currentQuality = audioState.currentQuality,
+                    onQualityChange = { setQuality(it) },
+                    fastForwardSpeed = fastForwardSpeed,
+                    isFullscreen = fullscreen,
+                    onFullscreenChange = { fullscreen = it },
+                    // 非全屏时画面一直顶到屏幕上边缘,状态栏压在它身上。
+                    fullBleed = true,
+                    // 但只有两栏要把状态栏收起来:那时它横跨黑画面和浅色的简介栏,
+                    // 而图标明暗只能整条设一次(见 PlayerShell)。
+                    hideStatusBar = expandedLayout,
+                    // 返回/分享画在壳外面(下面那个 if),渐变归壳画,才落得到弹幕下面。
+                    topScrim = !fullscreen,
+                    // 失败态有自己的重试指示(PlaybackFailure),这时壳里那个要让开,
+                    // 不然文字后面还有一朵在转。
+                    externalLoading = (audioState.loading || state.loading) && playbackError == null,
+                    title = state.detail?.title.orEmpty(),
+            seekBarSegments = sponsorSegments.toSeekBarSegments(),
+                    subtitleTracks = subtitleTracks,
+                    currentSubtitleLan = subtitleLan,
+                    onSubtitleTrackChange = onSelectSubtitle,
+                    subtitleCues = subtitleCues,
+                    danmakuPrefs = danmakuPrefs,
+                    onDanmakuEnabledChange = onDanmakuEnabledChange,
+                            locked = locked,
+                    onLockedChange = { locked = it },
+                    danmakuPool = danmakuPool,
+                    specialDanmakuPool = specialDanmakuPool,
+                    selfDanmaku = selfDanmaku,
+                    danmakuCid = currentCid,
+                    matchesCurrentPage = matchesCurrentPage,
+                    placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
+                    topBarActions = {
+                        // 没有可切的东西就不给入口:单条队列的单 P 视频点开只有它自己。
+                        if (episodeRows.hasSomethingToSwitch()) {
+                            IconButton(onClick = { episodePanelOpen = true }) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.PlaylistPlay,
+                                    contentDescription = stringResource(R.string.video_episodes),
+                                    tint = FixedColors.OnMedia,
+                                )
                             }
-                        },
-                        onCommentUserClick = onUpClick,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
-            }
-        }
-
-        // 整页一层。**竖排时那条「别处已看到」挂在这里**,而不是挂在画面那个 Box 上:
-        // 它要按,而画面那个 Box 的下四分之一正是进度条。挂在整页这一层,它落在简介/评论
-        // 上方,离手近又不压任何控件;而且它是这一层的**兄弟节点而不是列表的孩子**,进出
-        // 不会让下面那一整栏重新布局。
-        // **发弹幕的输入层是整页的兄弟节点,不在 rootModifier 那个 Box 里面。** 那个 Box 单栏时
-        // 自己垫了一条手势条的高度(而且是普通 padding,不是消费掉的 inset),输入层套在里面的话
-        // 键盘弹起来时会在两者之间空出正好那么一条。
-        Box(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = rootModifier) {
-        if (expandedLayout) {
-            // 主区约三分之二,和规范给的比例一致。**全屏也走这个分支**,只是右栏不组合、
-            // 左栏权重给满 —— 这样进出全屏时布局树的形状不变,播放器不会重挂。
-            Row(modifier = Modifier.fillMaxSize()) {
-                // **左栏整列都是播放器**,画面按比例居中在里面,四周是它自己的黑底。
-                //
-                // 原先这里给的是 `fillMaxWidth().aspectRatio(16:9)`,于是画面只有左栏宽度的
-                // 九分之十六那么高,在更高的列里垂直居中——上下各露出一条页面底色。那条白带
-                // 才是"横屏不沉浸"的真身,和根容器的 inset 无关。
-                playerPane(Modifier.weight(if (fullscreen) 1f else 2f).fillMaxHeight())
-                // 文字这一栏躲开系统栏与刘海,**但不躲 start 那一侧**:它的左边挨着的是播放器,
-                // 不是屏幕边缘,垫了就在画面和简介之间劈出一道缝。
-                if (!fullscreen) {
-                    tabsPane(
-                        Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .windowInsetsPadding(
-                                safeInsets.only(WindowInsetsSides.End + WindowInsetsSides.Vertical),
-                            ),
-                    )
-                }
-            }
-        } else {
-            // 连接**始终挂着**,钉不钉由 playerScroll 自己判(建它时传进去的那个 lambda)。
-            // 曾经按 playerPinned 增删这个修饰符,而它会在左右翻页翻到一半时翻转 —— 修饰符链
-            // 一变,正在拖的那一下就被取消,表现是滑动卡在两页中间。
-            Column(modifier = Modifier.fillMaxSize().nestedScroll(playerScroll.connection)) {
-                // 状态栏那一条**填黑,但画面不钻进去**。
-                //
-                // 让画面整块顶到屏幕上边缘试过了:返回和分享按钮贴在画面左右上角,状态栏正好
-                // 压在它们身上,而那两个是这一页仅有的页级动作。现在画面从状态栏下沿开始,
-                // 上面那条黑边和画面的黑底连成一块 —— 拿到的是"没有一条突兀的浅色带",
-                // 而不是"多出一块可用面积";后者本来也没多少,一条状态栏而已。
-                if (!fullscreen) {
-                    Spacer(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .windowInsetsTopHeight(safeInsets)
-                            .background(Color.Black),
-                    )
-                }
-                // **画面和快捷播放条叠在同一块位置上。** 画面收起时留下的正是这条的高度
-                // (playerScroll.minVisiblePx),条画在这块残留区上,盖住画面还露着的那一小截。
-                // 不把条排在画面上面或下面:那样它要么在展开态凭空占一行,要么在收起态浮到
-                // 评论第一行上。见 QuickPlayBar。
-                Box {
-                playerPane(
-                    if (fullscreen) {
-                        Modifier.fillMaxSize()
-                    } else {
-                        // **消费掉系统栏那份 inset。** 上面那条黑边只是"取了 inset 的高度"
-                        // (`windowInsetsTopHeight` 不消费),不声明的话画面里的返回、分享和
-                        // 控制条会以为自己还贴着屏幕边缘,各自再躲一次 —— 表现是箭头往画面
-                        // 里缩了一条状态栏的高度。它上有黑边、下有简介栏,四周都不是屏幕边缘。
-                        // **两个修饰符都在 aspectRatio 外面。** aspectRatio 会把自己量出来的
-                        // 16:9 高度直接上报,套在它里面的话收起量根本传不到上一层;
-                        // clipToBounds 再包一层,把挪出可视区的那一截裁掉 —— 不裁的话画面会
-                        // 盖在上面那条状态栏黑边上。
-                        Modifier
-                            .clipToBounds()
-                            .collapsingHeader(playerScroll)
-                            .fillMaxWidth()
-                            .aspectRatio(16f / 9f)
-                            .consumeWindowInsets(safeInsets)
+                        }
                     },
+                    modifier = Modifier.fillMaxSize(),
                 )
-                if (!fullscreen) {
-                    QuickPlayBar(
-                        title = state.detail?.title.orEmpty(),
-                        // 播完停在末尾,此时"继续"没有可继续的地方,按下应是从头来过。
-                        finished = active?.playbackState == Player.STATE_ENDED,
-                        onBack = onBack,
-                        onExpand = { scope.launch { playerScroll.expand() } },
-                        onPlay = {
-                            // 播完之后先回到开头:直接 play() 在末尾上是没有反应的,
-                            // 这一条和播放器控制条里那颗按钮的判断相同(见 PlayerShell)。
-                            if (active?.playbackState == Player.STATE_ENDED) active.seekTo(0)
-                            active?.play()
-                            // 展开不用在这里做:放起来之后 playerPinned 变真,
-                            // 上面那个 LaunchedEffect(playerPinned) 会把画面收回来。
-                        },
-                        visibility = playerScroll.collapsedFraction,
-                        modifier = Modifier.align(Alignment.TopCenter),
+
+                state.error != null -> PlaybackFailure(
+                    message = state.error,
+                    retrying = state.loading,
+                    onRetry = onRetry,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+
+                // 和壳内缓冲用同一个指示器:这里盖的是"服务还没装上这一条"的窗口,
+                // 壳内那个盖的是装上之后的取流与缓冲,两段接起来观感是同一次等待。
+                // CircularProgressIndicator 不用:alpha 版画一圈背景轨道,黑底上是两层圆环。
+                else -> LoadingIndicator(modifier = Modifier.align(Alignment.Center))
+            }
+
+            if (!fullscreen) {
+                MediaBackButton(
+                    onBack = onBack,
+                    onShare = {
+                        ShareLink.video(context, bvid, state.detail?.title.orEmpty())
+                    },
+                    scrim = false,
+                )
+            }
+
+            // 盖在画面上而不是排在下面:失败时画面本来就是黑的,而简介区在一屏之外,
+            // 提示放那儿等于没有。
+            // 取流/重试退避期间的指示器归 PlayerShell(externalLoading),这里只画失败态。
+            //
+            // **`state.error` 画过了就不再画这一条。** 这里原先写着"两者不会同时出现",
+            // 那句话不成立:详情取不到时取流同样会失败(一条不存在的 bvid 就两样都占),
+            // 于是两条提示叠在同一个居中位置,字压着字,下面共用一个重试按钮,谁都读不出来。
+            // 留下的是详情那一条 —— 它是根因,而取流失败只是它的后果。
+            val shownError = playbackError.takeIf { state.error == null }
+            if (shownError != null) {
+                PlaybackFailure(
+                    message = shownError,
+                    // 两个 loading 都要看:重取那一步归本页(state.loading),重新装载
+                    // 那一步归服务(audioState.loading)。只看后者的话,重取在飞的那一两秒
+                    // 按钮会重新亮起来,能连按出好几次重取。
+                    retrying = state.loading || audioState.loading,
+                    onRetry = retryPlayback,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
+
+            // 两条提示摞成一列而不是各自对齐:同时出现的机会很小(一条在起播那一刻,一条在
+            // 跳过赞助段的时候),但真撞上时叠在一起谁都读不出来。
+            //
+            // 跳过提示贴画面顶部:它说的是"刚跳过了一段",归画面。
+            //
+            // **「别处已看到」只有全屏时才在这一层。** 它是要按的,而这个 Box 只有画面那么
+            // 大 —— 竖排时它的"底部"就是进度条那一带,提示会浮在进度条上,两个可按的东西
+            // 叠在一起。竖排那一份挂在整页那一层(见下面 rootBox 里那处),锚在屏幕的下
+            // 四分之一,落在简介/评论上方,拇指够得着又不压任何控件。
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                modifier = Modifier.align(Alignment.TopCenter).padding(Spacing.Comfortable),
+            ) {
+                if (fullscreen) {
+                    CloudResumeHint(
+                        positionMillis = cloudResumeMillis,
+                        onJump = jumpToCloudResume,
+                        onDismiss = { dismissedResumeMillis = it },
                     )
                 }
-                }
-                // 全屏时画面独占整屏,简介整块不参与布局。
-                //
-                // **weight(1f) 而不是 fillMaxWidth()。** AdaptiveContent 内部会 fillMaxSize,
-                // 不给权重的话它要的是整屏高度,加上上面 16:9 的画面就超出一屏 —— 表现是
-                // 播放页能往下微微滑动一点。给了权重,它拿到的就是"画面之外剩下的高度",
-                // 有没有分 P 都正好占满。
-                //
-                // 横向挖孔在这里躲:单栏也可能是横屏(600–840dp 的中等宽度),那时挖孔在侧边,
-                // 画面照旧铺过去,但下面的标题和评论不能被切。竖屏时它量到 0。
-                if (!fullscreen) {
-                    tabsPane(Modifier.weight(1f).windowInsetsPadding(WindowInsets.horizontalCutout))
-                }
+                SkipToast(skippedCategory)
+                // 三连的回执和跳过提示摞在同一列:两条都是"刚刚发生了一件事",
+                // 各挑一个位置的话同时出现时会互相盖住。
+                TripleToast(tripleOutcome)
+            }
+
+            // 切集面板。挂在画面这个 Box 里,所以它盖住的正好是画面,而不是整页 ——
+            // 全屏时两者相等,退出全屏时它已经被上面那个 LaunchedEffect 关掉了。
+            if (fullscreen) {
+                EpisodePanel(
+                    visible = episodePanelOpen && !locked,
+                    rows = episodeRows,
+                    sourceLabel = shownQueue.sourceLabel,
+                    onSelect = onSelectEpisode,
+                    onDismiss = { episodePanelOpen = false },
+                )
             }
         }
+    }
 
-        if (!fullscreen) {
-            CloudResumeHint(
-                positionMillis = cloudResumeMillis,
-                onJump = jumpToCloudResume,
-                onDismiss = { dismissedResumeMillis = it },
-                modifier = Modifier.align(ToastAnchorInDetail).padding(Spacing.Comfortable),
-            )
+    // 简介与评论。竖排时在画面下面、拿剩下的高度;横排时是右边那个 secondary pane。
+    val tabsPane: @Composable (Modifier) -> Unit = { paneModifier ->
+        state.detail?.let { detail ->
+            AdaptiveContent(modifier = paneModifier, maxWidth = Breakpoints.ReadableWidth) {
+                VideoTabs(
+                    pagerState = tabPager,
+                    detail = detail,
+                    onSelectEpisode = onSelectEpisode,
+                    videoTags = videoTags,
+                    onLoadTags = onLoadTags,
+                    onTagClick = onTagClick,
+                    commentState = commentState,
+                    // 点闪光:没问过就发起检索,问过就只是把 sheet 再打开 —— 再点一次重跑
+                    // 会把已有结果冲掉,而用户此刻多半只是想再看一眼。
+                    onFindRelated = {
+                        if (!related.started) onFindRelated()
+                        relatedOpen = true
+                    },
+                    onListen = { onListeningChange(true) },
+                    onSendDanmaku = openDanmakuInput,
+                    danmakuEnabled = danmakuPrefs.enabled,
+                    onDanmakuEnabledChange = onDanmakuEnabledChange,
+                    onCache = { cacheSheetOpen = true },
+                    // 全屏下这一栏根本不组合,所以不必先退出全屏 —— 能点到这个按钮
+                    // 就说明已经不在全屏了。
+                    followState = followState,
+                    onToggleFollow = onToggleFollow,
+                    upCard = upCard,
+                    queue = shownQueue,
+                    playing = playing,
+                    onOpenQueueSource = onOpenQueueSource,
+                    onToggleShuffle = toggleShuffle,
+                    onRetryQueue = retryQueue,
+                    onUpClick = onUpClick,
+                    staffFollowed = staffFollowed,
+                    onFollowStaff = onFollowStaff,
+                    relation = relation,
+                    favFolders = favFolders,
+                    addedToView = addedToView,
+                    onLike = onLike,
+                    onTriple = onTriple,
+                    onAddToView = onAddToView,
+                    onCoin = onCoin,
+                    coinAttempt = coinAttempt,
+                    onCoinDialogClosed = onCoinDialogClosed,
+                    onOpenFavPicker = onOpenFavPicker,
+                    onFavConfirm = onFavConfirm,
+                    onOpenLink = onOpenLink,
+                    onCommentSort = onCommentSort,
+                    onCommentRefresh = onCommentRefresh,
+                    // 画面收起着的时候下滑先把它拉回来,那一下不该被读成刷新。
+                    playerExpanded = playerScroll.offsetPx == 0f,
+                    onCommentLoadMore = onCommentLoadMore,
+                    onExpandReplies = onExpandReplies,
+                    onSendComment = onSendComment,
+                    onLikeComment = onLikeComment,
+                    onDeleteComment = onDeleteComment,
+                // 只在播放器装的确实是本页这一条时才跳。队列自动连播走到下一条之后,
+                // 这一页还停在原来那条的评论区(见页面顶部对 matchesCurrentPage 的说明),
+                // 不对身份就会拿着 A 的评论里的时间戳去跳 B。
+                //
+                // **判据是队列指着谁,不是取流回来没有。** 用 matchesCurrentPage 的那一版
+                // 在整个取流窗口里静默丢掉点击 —— 评论比流先到,那几百毫秒里点下去什么都
+                // 不发生,而时间戳照样画成能点的样子,表现就是"空降坐标有时候点不动"。
+                // 队列这一刻已经指向本页这条了,而播放器允许对还没拿到时间线的条目定位
+                // (见 AudioPlaybackService.adoptResolved 的说明),所以这一跳落得下去。
+                //
+                // 跳不了的时候传 null,让时间戳退回普通文字:一个看起来能点、点了没反应的
+                // 东西比一段普通文字更糟。
+                //
+                // 再夹一次时长:评论里的时间戳可能指向分 P 或者干脆写错,超出末尾的 seek
+                // 会直接把这一条播完并翻到下一条。时长还不知道时不夹,播放器自己会截到窗口内。
+                // 判据读 [audioState] 而不是叫 `playerHoldsThisPage()`:后者读的是
+                // StateFlow 的 `.value`,在组合里不订阅,队列换过之后这一格不会重算。
+                    onSeekComment = active
+                        ?.takeIf { audioState.queue?.current?.bvid == bvid }
+                        ?.let { controller ->
+                        { millis: Long ->
+                            val end = controller.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+                            controller.seekTo(millis.coerceIn(0L, end))
+                        }
+                    },
+                    onCommentUserClick = onUpClick,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
-        }
+    }
 
-        // 全屏下不给:那时这一行按钮根本不组合,而横屏起键盘会铺掉大半个画面——发弹幕要看着
-        // 画面发,盖掉画面就没有可发的对象了。想发先退出全屏。
-        if (danmakuInputOpen && !fullscreen) {
-            DanmakuInputLayer(
-                text = danmakuDraft,
-                onTextChange = { danmakuDraft = it },
-                state = danmakuSend,
-                onSend = {
-                    onSendDanmaku(
-                        danmakuDraft,
-                        // 页面这条视频的那一 P。发弹幕的 bvid 由 ViewModel 带,两者必须是
-                        // 同一条内容 —— 直接读 audioState 的话,换一集那一瞬发出去的是
-                        // 新 bvid 配上一条的 cid。
-                        currentCid,
-                        danmakuProgress,
-                    )
+    // 整页一层。**竖排时那条「别处已看到」挂在这里**,而不是挂在画面那个 Box 上:
+    // 它要按,而画面那个 Box 的下四分之一正是进度条。挂在整页这一层,它落在简介/评论
+    // 上方,离手近又不压任何控件;而且它是这一层的**兄弟节点而不是列表的孩子**,进出
+    // 不会让下面那一整栏重新布局。
+    // **发弹幕的输入层是整页的兄弟节点,不在 rootModifier 那个 Box 里面。** 那个 Box 单栏时
+    // 自己垫了一条手势条的高度(而且是普通 padding,不是消费掉的 inset),输入层套在里面的话
+    // 键盘弹起来时会在两者之间空出正好那么一条。
+    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = rootModifier) {
+    if (expandedLayout) {
+        // 主区约三分之二,和规范给的比例一致。**全屏也走这个分支**,只是右栏不组合、
+        // 左栏权重给满 —— 这样进出全屏时布局树的形状不变,播放器不会重挂。
+        Row(modifier = Modifier.fillMaxSize()) {
+            // **左栏整列都是播放器**,画面按比例居中在里面,四周是它自己的黑底。
+            //
+            // 原先这里给的是 `fillMaxWidth().aspectRatio(16:9)`,于是画面只有左栏宽度的
+            // 九分之十六那么高,在更高的列里垂直居中——上下各露出一条页面底色。那条白带
+            // 才是"横屏不沉浸"的真身,和根容器的 inset 无关。
+            playerPane(Modifier.weight(if (fullscreen) 1f else 2f).fillMaxHeight())
+            // 文字这一栏躲开系统栏与刘海,**但不躲 start 那一侧**:它的左边挨着的是播放器,
+            // 不是屏幕边缘,垫了就在画面和简介之间劈出一道缝。
+            if (!fullscreen) {
+                tabsPane(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .windowInsetsPadding(
+                            safeInsets.only(WindowInsetsSides.End + WindowInsetsSides.Vertical),
+                        ),
+                )
+            }
+        }
+    } else {
+        // 连接**始终挂着**,钉不钉由 playerScroll 自己判(建它时传进去的那个 lambda)。
+        // 曾经按 playerPinned 增删这个修饰符,而它会在左右翻页翻到一半时翻转 —— 修饰符链
+        // 一变,正在拖的那一下就被取消,表现是滑动卡在两页中间。
+        Column(modifier = Modifier.fillMaxSize().nestedScroll(playerScroll.connection)) {
+            // 状态栏那一条**填黑,但画面不钻进去**。
+            //
+            // 让画面整块顶到屏幕上边缘试过了:返回和分享按钮贴在画面左右上角,状态栏正好
+            // 压在它们身上,而那两个是这一页仅有的页级动作。现在画面从状态栏下沿开始,
+            // 上面那条黑边和画面的黑底连成一块 —— 拿到的是"没有一条突兀的浅色带",
+            // 而不是"多出一块可用面积";后者本来也没多少,一条状态栏而已。
+            if (!fullscreen) {
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .windowInsetsTopHeight(safeInsets)
+                        .background(Color.Black),
+                )
+            }
+            // **画面和快捷播放条叠在同一块位置上。** 画面收起时留下的正是这条的高度
+            // (playerScroll.minVisiblePx),条画在这块残留区上,盖住画面还露着的那一小截。
+            // 不把条排在画面上面或下面:那样它要么在展开态凭空占一行,要么在收起态浮到
+            // 评论第一行上。见 QuickPlayBar。
+            Box {
+            playerPane(
+                if (fullscreen) {
+                    Modifier.fillMaxSize()
+                } else {
+                    // **消费掉系统栏那份 inset。** 上面那条黑边只是"取了 inset 的高度"
+                    // (`windowInsetsTopHeight` 不消费),不声明的话画面里的返回、分享和
+                    // 控制条会以为自己还贴着屏幕边缘,各自再躲一次 —— 表现是箭头往画面
+                    // 里缩了一条状态栏的高度。它上有黑边、下有简介栏,四周都不是屏幕边缘。
+                    // **两个修饰符都在 aspectRatio 外面。** aspectRatio 会把自己量出来的
+                    // 16:9 高度直接上报,套在它里面的话收起量根本传不到上一层;
+                    // clipToBounds 再包一层,把挪出可视区的那一截裁掉 —— 不裁的话画面会
+                    // 盖在上面那条状态栏黑边上。
+                    Modifier
+                        .clipToBounds()
+                        .collapsingHeader(playerScroll)
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 9f)
+                        .consumeWindowInsets(safeInsets)
                 },
-                onDismiss = closeDanmakuInput,
             )
+            if (!fullscreen) {
+                QuickPlayBar(
+                    title = state.detail?.title.orEmpty(),
+                    // 播完停在末尾,此时"继续"没有可继续的地方,按下应是从头来过。
+                    finished = active?.playbackState == Player.STATE_ENDED,
+                    onBack = onBack,
+                    onExpand = { scope.launch { playerScroll.expand() } },
+                    onPlay = {
+                        // 播完之后先回到开头:直接 play() 在末尾上是没有反应的,
+                        // 这一条和播放器控制条里那颗按钮的判断相同(见 PlayerShell)。
+                        if (active?.playbackState == Player.STATE_ENDED) active.seekTo(0)
+                        active?.play()
+                        // 展开不用在这里做:放起来之后 playerPinned 变真,
+                        // 上面那个 LaunchedEffect(playerPinned) 会把画面收回来。
+                    },
+                    visibility = playerScroll.collapsedFraction,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
+            }
+            }
+            // 全屏时画面独占整屏,简介整块不参与布局。
+            //
+            // **weight(1f) 而不是 fillMaxWidth()。** AdaptiveContent 内部会 fillMaxSize,
+            // 不给权重的话它要的是整屏高度,加上上面 16:9 的画面就超出一屏 —— 表现是
+            // 播放页能往下微微滑动一点。给了权重,它拿到的就是"画面之外剩下的高度",
+            // 有没有分 P 都正好占满。
+            //
+            // 横向挖孔在这里躲:单栏也可能是横屏(600–840dp 的中等宽度),那时挖孔在侧边,
+            // 画面照旧铺过去,但下面的标题和评论不能被切。竖屏时它量到 0。
+            if (!fullscreen) {
+                tabsPane(Modifier.weight(1f).windowInsetsPadding(WindowInsets.horizontalCutout))
+            }
         }
-        }
+    }
+
+    if (!fullscreen) {
+        CloudResumeHint(
+            positionMillis = cloudResumeMillis,
+            onJump = jumpToCloudResume,
+            onDismiss = { dismissedResumeMillis = it },
+            modifier = Modifier.align(ToastAnchorInDetail).padding(Spacing.Comfortable),
+        )
+    }
+    }
+
+    // 全屏下不给:那时这一行按钮根本不组合,而横屏起键盘会铺掉大半个画面——发弹幕要看着
+    // 画面发,盖掉画面就没有可发的对象了。想发先退出全屏。
+    if (danmakuInputOpen && !fullscreen) {
+        DanmakuInputLayer(
+            text = danmakuDraft,
+            onTextChange = { danmakuDraft = it },
+            state = danmakuSend,
+            onSend = {
+                onSendDanmaku(
+                    danmakuDraft,
+                    // 页面这条视频的那一 P。发弹幕的 bvid 由 ViewModel 带,两者必须是
+                    // 同一条内容 —— 直接读 audioState 的话,换一集那一瞬发出去的是
+                    // 新 bvid 配上一条的 cid。
+                    currentCid,
+                    danmakuProgress,
+                )
+            },
+            onDismiss = closeDanmakuInput,
+        )
+    }
     }
 
     // Android 13 起通知要运行时授权,而 manifest 里那句 uses-permission 只是声明。

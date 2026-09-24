@@ -1,5 +1,6 @@
 package dev.bilby.data
 
+import dev.bilby.BiliLog
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
@@ -18,6 +19,7 @@ import dev.bilby.player.SelectedStreams
 import dev.bilby.player.resumePositionMillis
 import dev.bilby.player.selectStreams
 import dev.bilby.player.videoQualityLabel
+import dev.bilby.data.model.RichSpan
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
 
@@ -29,6 +31,8 @@ data class VideoDetail(
     val cid: Long,
     val title: String,
     val description: String,
+    /** 简介的富文本,@、链接、时间点能点。见 [parseDescriptionSpans]。 */
+    val descriptionSpans: List<RichSpan>,
     val coverUrl: String,
     val durationSeconds: Long,
     val publishedAtEpochSeconds: Long,
@@ -225,10 +229,30 @@ class VideoRepository(private val client: BiliClient) {
         return when (result) {
             is BiliResult.Ok -> {
                 val dto = result.value
+                // 请求 80 以上的档位时,服务端只回那一档;有的稿件那一档是空的 —— 报着
+                // quality=112、带着音轨,视频流却是零路,不会自己降档(notes/playurl.md)。
+                // 退回 80 再取一次:PiliPlus 起播从来只请求 80,拿整套低档位在本地挑,
+                // 80 是一定有流的那一档。只退一次,80 本身不再触发这一支。
+                if (dto.dash != null && dto.dash.video.isEmpty() && preferredQuality > STANDARD_QUALITY) {
+                    BiliLog.w(
+                        "playurl qn=$preferredQuality 下发了空视频流(quality=${dto.quality}),退回 " +
+                            "qn=$STANDARD_QUALITY 重取 bvid=$bvid cid=$cid",
+                    )
+                    return getPlayUrl(bvid, cid, STANDARD_QUALITY, preferredCodecs, preferredAudioQuality)
+                }
                 val streams = dto.dash
                     ?.let { selectStreams(it, preferredQuality, preferredCodecs, preferredAudioQuality) }
                     ?: dto.durlFallback()
                 if (streams == null) {
+                    // code 0 却没有流:把实际收到的形状记下来。这一支和"网络失败"在界面上同形,
+                    // 不记的话只剩一句"dash 与 durl 都为空",分不出是没下发还是下发了却没有地址。
+                    val dash = dto.dash
+                    BiliLog.w(
+                        "playurl 无可用流 bvid=$bvid cid=$cid quality=${dto.quality} " +
+                            "accept=${dto.acceptQuality} dash=${if (dash == null) "null" else "video=${dash.video.size}" +
+                            "(有地址 ${dash.video.count { it.baseUrl.isNotEmpty() }}) audio=${dash.audio?.size}"} " +
+                            "durl=${dto.durl?.size}",
+                    )
                     BiliResult.Failure(IllegalStateException("playurl 没有可用的流(dash 与 durl 都为空)"))
                 } else {
                     BiliResult.Ok(
@@ -293,6 +317,7 @@ class VideoRepository(private val client: BiliClient) {
         cid = cid,
         title = title,
         description = desc,
+        descriptionSpans = parseDescriptionSpans(descV2, desc),
         coverUrl = pic.toHttpsUrl(),
         durationSeconds = duration,
         publishedAtEpochSeconds = pubdate,
@@ -386,6 +411,9 @@ class VideoRepository(private val client: BiliClient) {
         const val CARD_URL = "${BiliConstants.WEB_HOST}/x/web-interface/card"
         const val TAG_URL = "${BiliConstants.WEB_HOST}/x/web-interface/view/detail/tag"
         const val PLAY_URL = "${BiliConstants.WEB_HOST}/x/player/wbi/playurl"
+
+        /** 1080P。PiliPlus 起播请求的档位,空视频流时退回这里(notes/playurl.md 3.5)。 */
+        const val STANDARD_QUALITY = 80
 
         // 这里**不放默认画质**。默认只有一处:`SettingsStore.DEFAULT_QUALITY`(WiFi)与
         // `DEFAULT_QUALITY_METERED`(计费网络)。[getPlayUrl] 的 preferredQuality 因此没有

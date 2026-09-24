@@ -120,13 +120,13 @@ object Dimens {
     val IconInline = 20.dp
 
     /**
-     * 「正在直播」那三根跳条([dev.bilby.ui.components.LivePulse])跟在文字旁边时的尺寸。
+     * 「在放」的符号([dev.bilby.ui.components.PlayingIndicator])跟在文字旁边时的尺寸。
      *
      * **它必须由调用方给,`Canvas` 没有固有尺寸** —— 不给就是 0×0,编译和预览都不报错,
-     * 真机上那个符号直接不存在。动态卡片的直播格踩过:代码里写着 `LivePulse(...)`,
+     * 真机上那个符号直接不存在。动态卡片的直播格踩过:代码里写着那个调用,
      * 而那一格从来没画出来过。
      */
-    val LivePulseInline = 14.dp
+    val PlayingIndicatorInline = 14.dp
 
     /** 独立图标按钮里的图标。 */
     val IconAction = 24.dp
@@ -141,16 +141,4 @@ object Dimens {
      * PiliPlus 的比例也是这样(`level_icon.dart` 默认 height=11,正文 13–14)。
      */
     val LevelBadgeHeight = 11.dp
-
-    /**
-     * 播放页里嵌着的队列列表高度。它嵌在可滚动的简介页里,必须有界高度;
-     * 定高同时让队列有个固定占位,不会因为条数不同把下面的内容顶来顶去。
-     */
-    val EmbeddedQueueHeight = 320.dp
-
-    /**
-     * 队列的高度下限。横屏或宽屏两栏时可用高度会小很多,队列按窗口高度的三分之一取,
-     * 但不能矮到只剩一条 —— 看不见"下一条是什么"的话,这个列表就没有存在的意义了。
-     */
-    val EmbeddedQueueMinHeight = 160.dp
 }

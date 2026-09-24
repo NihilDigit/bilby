@@ -89,6 +89,9 @@ data class EpisodeRow(
  *   下一条时页面要过一会儿才跟上去(见 `MainActivity` 的 `VideoRoute`),这段窗口里详情里的
  *   分 P 属于上一条视频。
  * @param parts 页面这份详情的分 P 清单。
+ * @param pageDurationSeconds 页面这份详情的时长。起播时装进队列的那一条是临时条目,时长是 0,
+ *   而补全队列时它原样留着不换(换了就是重新取流,见 AudioPlaybackService.fillQueueAround),
+ *   于是当前这条永远没有时长。对得上身份时拿详情里的补上。
  * @param currentCid 播放器此刻真正装着的那一 P,由调用方按 `loadKey` 对过身份。
  *
  * **对不上身份时这条轴整个不存在,而不是点了没反应。** 拿本页的 cid 去切另一条视频的分 P,
@@ -101,6 +104,7 @@ fun buildEpisodeRows(
     currentBvid: String?,
     pageBvid: String?,
     parts: List<VideoPart>,
+    pageDurationSeconds: Long,
     currentCid: Long,
 ): List<EpisodeRow> = queue.map { item ->
     val isCurrent = item.bvid == currentBvid
@@ -109,7 +113,8 @@ fun buildEpisodeRows(
         title = item.title,
         upName = item.upName,
         coverUrl = item.coverUrl,
-        durationSeconds = item.durationSeconds,
+        durationSeconds = item.durationSeconds.takeIf { it > 0 }
+            ?: if (item.bvid == pageBvid) pageDurationSeconds else 0L,
         isCurrent = isCurrent,
         parts = if (isCurrent && item.bvid == pageBvid && parts.size > 1) {
             parts.map { part ->

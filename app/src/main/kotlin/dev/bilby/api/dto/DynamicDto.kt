@@ -74,6 +74,11 @@ data class ModuleAuthorDto(
     /** 服务端已经格式化好的展示文案,如"3小时前"。取不到 pub_ts 时才用得上。 */
     @SerialName("pub_time") val pubTime: String = "",
     @SerialName("is_top") val isTop: Boolean = false,
+    /**
+     * 作者栏的动作文案,如"投稿了视频""发布了动态视频"。视频动态只能靠它分出是否也在投稿列表里
+     * (notes/space-and-search.md 1.5)。
+     */
+    @SerialName("pub_action") val pubAction: String = "",
 )
 
 @Serializable

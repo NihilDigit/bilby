@@ -95,5 +95,5 @@ private val MaxBodyHeight = 320.dp
  * **不能省成"一律不报"**:本项目 `minSdk = 29`,29–32 那一段真的在支持范围里,
  * 那些机器上不报就是按下之后什么都没发生。
  */
-private val NeedsCopyNotice: Boolean
+internal val NeedsCopyNotice: Boolean
     get() = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU

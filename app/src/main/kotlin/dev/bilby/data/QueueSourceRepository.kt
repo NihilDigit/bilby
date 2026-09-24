@@ -227,7 +227,7 @@ class QueueSourceRepository(
                     return null
                 }
             }
-            videos += page.items.filterIsInstance<SpaceDynamicItem.Video>().map { it.item }
+            videos += page.items.mapNotNull { it.video }
             offset = page.nextOffset
             // 找到了就停:动态按时间倒序,再往前只会更旧。游标没了也停 —— 拿着 null 再请求
             // 一次等于把第一页重新拉一遍,窗口里会出现两份同样的条目。
@@ -293,7 +293,7 @@ class QueueSourceRepository(
         title = title,
         upName = "",
         coverUrl = coverUrl,
-        durationSeconds = 0L, // durationText 是 "MM:SS" 格式字符串,这里不解析,播放端有需要再从详情补
+        durationSeconds = parseDurationText(durationText),
     )
 
     private companion object {
@@ -315,4 +315,14 @@ class QueueSourceRepository(
          */
         const val DYNAMIC_SCAN_PAGES = 4
     }
+}
+
+/**
+ * `"12:34"` / `"1:02:03"` 换成秒,认不出时给 0。投稿列表与空间动态给的时长是这种字符串
+ * (合集详情给的是数值秒,不走这里)。队列面板要显示时长,0 表示不显示。
+ */
+internal fun parseDurationText(text: String): Long {
+    val parts = text.trim().split(':').map { it.toLongOrNull() ?: return 0L }
+    if (parts.size !in 2..3) return 0L
+    return parts.fold(0L) { total, part -> total * 60 + part }
 }

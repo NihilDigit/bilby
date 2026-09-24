@@ -38,7 +38,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
-import dev.bilby.ui.components.LivePulse
 import dev.bilby.data.LiveUpBrief
 import dev.bilby.data.UpBrief
 import androidx.compose.foundation.lazy.items

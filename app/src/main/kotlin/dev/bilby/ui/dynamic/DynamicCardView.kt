@@ -52,7 +52,7 @@ import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.CoverCornerRadius
 import dev.bilby.ui.components.ImageViewer
 import dev.bilby.ui.components.ListCover
-import dev.bilby.ui.components.LivePulse
+import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
@@ -612,9 +612,10 @@ private fun LiveCard(content: DynamicContent.Live, onAction: (DynamicAction) -> 
         },
         leadingLabel = {
             if (content.live) {
-                LivePulse(
+                PlayingIndicator(
+                    active = true,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(Dimens.LivePulseInline),
+                    modifier = Modifier.size(Dimens.PlayingIndicatorInline),
                 )
             }
         },
