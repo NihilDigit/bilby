@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -110,6 +112,7 @@ data class SearchChatUiState(
  *
  * 结果页只有结果——无热搜、无"换一批"(DESIGN 2.2/3.4)。历史是自己敲过的字,不在此列。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SearchChatScreen(
     state: SearchChatUiState,
@@ -182,7 +185,9 @@ fun SearchChatScreen(
                             onVideoClick = onVideoClick,
                             onRetry = onRetry,
                         )
-                        if (!inputFocused) {
+                        // 认键盘,不认焦点:返回键收起键盘后焦点仍留在底部输入框里,按焦点判断的话
+                        // 按钮就再也不出来了。普通模式不同,那边焦点就是展开态,返回键会一并收掉。
+                        if (!WindowInsets.isImeVisible) {
                             ModeSwitchFab(
                                 current = SearchMode.Agent,
                                 onModeChange = onModeChange,
