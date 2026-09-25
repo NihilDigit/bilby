@@ -1,0 +1,1161 @@
+package dev.bilby.ui.video
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import dev.bilby.BiliLog
+import dev.bilby.agent.AgentTurnState
+import dev.bilby.agent.reduce
+import dev.bilby.agent.AgentIntent
+import dev.bilby.agent.AgentLoop
+import dev.bilby.api.BiliResult
+import dev.bilby.danmaku.DanmakuRepository
+import dev.bilby.data.DanmakuPrefs
+import dev.bilby.data.DanmakuPrefsEditor
+import dev.bilby.data.SettingsStore
+import dev.bilby.data.StoredDanmakuPrefsEditor
+import dev.bilby.data.SponsorBlockRepository
+import dev.bilby.data.FollowState
+import dev.bilby.data.RelationRepository
+import dev.bilby.data.SubtitleRepository
+import dev.bilby.data.ToViewRepository
+import dev.bilby.data.SponsorSegment
+import dev.bilby.player.SubtitleCue
+import dev.bilby.player.SubtitleTrack
+import dev.nihildigit.danmaku.Danmaku
+import dev.nihildigit.danmaku.DanmakuMode
+import dev.nihildigit.danmaku.SpecialDanmaku
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import dev.bilby.data.FavFolder
+import dev.bilby.data.MemberCard
+import dev.bilby.data.VideoActionRepository
+import dev.bilby.data.VideoDetail
+import dev.bilby.data.parseDescriptionSpans
+import dev.bilby.data.TripleResult
+import dev.bilby.data.VideoRelation
+import dev.bilby.data.VideoRepository
+import dev.bilby.data.VideoStat
+import dev.bilby.data.VideoTag
+import dev.bilby.data.VideoUp
+import dev.bilby.offline.CachedIndex
+import dev.bilby.offline.OfflineDownloader
+import dev.bilby.offline.OfflineStore
+import dev.bilby.player.PlaybackHost
+import dev.bilby.player.AudioPlaybackUiState
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+/**
+ * 播放页自己的东西:这条视频**是什么**。
+ *
+ * **播放状态不在这里。** 正在播哪一 P、画质清单、取流失败、队列——全都归
+ * [PlaybackHost.state]。播放器和队列只有一份,页面是壳(DESIGN 2.4b);
+ * 页面再存一份就等于承认有两个真相,而"页面说 A、播放器在放 E"正是那样来的。
+ */
+data class VideoUiState(
+    val detail: VideoDetail? = null,
+    val loading: Boolean = true,
+    val error: String? = null,
+)
+
+/**
+ * 一次投币的进展。[Succeeded] 单独建模而不是回到 [Idle]:面板要靠它区分"还没投"和
+ * "投完了可以关了",两者都是"此刻没有请求在飞"。
+ */
+sealed interface CoinAttempt {
+    data object Idle : CoinAttempt
+    data object Running : CoinAttempt
+    data object Succeeded : CoinAttempt
+    data class Failed(val message: String) : CoinAttempt
+}
+
+/**
+ * 一次三连的结果,给那条一次性提示用(见 `ui/video/TripleToast.kt`)。
+ *
+ * **成功也要报一句。** 三样里成了哪几样只有服务端知道 —— 硬币不够时收藏和点赞照常生效,
+ * 而界面上只有投币那一格没亮,人分不出是没投成还是自己看错了。
+ *
+ * [seq] 让同样的结果连着发生两次也能各弹一次提示:数据类相等的两个值在 `LaunchedEffect`
+ * 的 key 上是同一个,不带序号的话第二次长按什么都不会出现。
+ */
+data class TripleOutcome(val seq: Long, val result: TripleResult?, val error: String?)
+
+/**
+ * 发弹幕这一次的进展。与 [CoinAttempt] 同形,理由也一样:[Sent] 是"发出去了,面板可以关了",
+ * 和 [Idle] 的"此刻没有请求在飞"不是一回事。
+ */
+sealed interface DanmakuSend {
+    data object Idle : DanmakuSend
+    data object Sending : DanmakuSend
+    data object Sent : DanmakuSend
+    data class Failed(val message: String) : DanmakuSend
+}
+
+/** 弹幕只发白字,见 [dev.bilby.danmaku.DanmakuRepository.post]。 */
+private const val WHITE = 0xFFFFFF
+
+class VideoViewModel(
+    initialBvid: String,
+    private val repository: VideoRepository,
+    private val agentLoop: AgentLoop,
+    private val actionRepository: VideoActionRepository,
+    private val settings: SettingsStore,
+    private val sponsorBlockRepository: SponsorBlockRepository,
+    private val toViewRepository: ToViewRepository,
+    private val relationRepository: RelationRepository,
+    private val subtitleRepository: SubtitleRepository,
+    private val danmakuRepository: DanmakuRepository,
+    private val offlineDownloader: OfflineDownloader,
+    private val offlineStore: OfflineStore,
+    private val playback: PlaybackHost,
+) : ViewModel() {
+
+    /**
+     * 这一页当前在讲哪条视频。
+     *
+     * **一个播放页只有一个 ViewModel,换一集是 [switchTo],不是换一个实例。** 原先靠
+     * `viewModel(key = "video-$bvid")` 选实例:Compose 的 key 决定选哪个实例,它不负责删掉
+     * 旧 key 对应的那个。而切集不进 backstack(见 MainActivity 的 VideoRoute),NavEntry 的
+     * ViewModelStore 因此在整页出栈之前一直不清 —— 连播走一条就攒一个 VM,每个都还挂着
+     * 自己那份 `AudioPlaybackService.state` 的 collect,旧详情、旧字幕、旧弹幕都还在推。
+     * 表现是连播时能看到上一条的画面残留几帧,以及连续播放的内存单调增长。
+     */
+    var bvid: String = initialBvid
+        private set
+
+    /**
+     * 当前视频的代数,[switchTo] 时自增。
+     *
+     * **取消挡不住写操作的迟到回调。** 点赞、投币、收藏这些请求一旦发出,取消协程不会让服务端
+     * 收不到,只会让我们不知道结果;而它们的失败回滚写的是 `_relation`、`_favFolders` 这些
+     * 已经属于新视频的状态。所以写请求照跑到底,只是结果要先对代数才准回到页面上,见 [ifCurrent]。
+     */
+    private var generation = 0
+
+    /**
+     * 当前视频级协程的容器。详情、分 P、字幕、弹幕分段、找相关都挂在它下面,[switchTo] 时
+     * 整组取消。用 [SupervisorJob] 是因为这几条互不依赖 —— 字幕拉失败不该把弹幕一起带走。
+     *
+     * 挂在 `viewModelScope` 的 Job 下面,所以页面销毁时它跟着一起走,不需要另外记一笔。
+     */
+    private val videoJob = SupervisorJob(viewModelScope.coroutineContext[Job])
+    private val videoScope = CoroutineScope(viewModelScope.coroutineContext + videoJob)
+
+    /**
+     * 持久化的字幕语言读回来了。
+     *
+     * 字幕轨的观察必须等它:轨道清单可能在偏好读回来之前就到,那一次找轨会拿着空字符串去比,
+     * 永远命中"关"。原先靠 `init` 里的语句顺序保证,而 [switchTo] 之后"顺序"不再成立 ——
+     * 换一集会重启视频级协程,却不该、也不能再读一次偏好。改成显式的一次性信号。
+     */
+    private val subtitleLanLoaded = CompletableDeferred<Unit>()
+
+    /** UP 的关注态。视频详情里只有 mid 和名字,关系要另查(PiliPlus 播放页同样单独查)。 */
+    private val _followState = MutableStateFlow(FollowState.None)
+    val followState: StateFlow<FollowState> = _followState.asStateFlow()
+
+    /**
+     * 联合投稿里已经关注了的那些 mid。
+     *
+     * **null 表示还没查到,不是"一个都没关注"。** 两者必须分开:头像上的关注加号是"未关注
+     * 才显示",查到之前当成未关注的话,每次打开联合投稿视频都会先冒出一排加号再消失。
+     * PiliPlus 在同一处用一个 `status` 哨兵解决同一个问题。
+     */
+    private val _staffFollowed = MutableStateFlow<Set<Long>?>(null)
+    val staffFollowed: StateFlow<Set<Long>?> = _staffFollowed.asStateFlow()
+
+    /**
+     * 关注联合投稿里的某一位。**只关注,没有取关** —— 加号在关注之后就消失了,取关走那个人
+     * 的空间页。这一排是快捷入口,不是关系管理界面。
+     */
+    fun followStaff(mid: Long) {
+        if (mid == 0L || _staffFollowed.value?.contains(mid) == true) return
+        // 乐观更新:加号立刻消失,和播放页其它写操作同一套规矩。
+        _staffFollowed.update { (it ?: emptySet()) + mid }
+        val startGeneration = generation
+        viewModelScope.launch {
+            val result = relationRepository.follow(mid)
+            if (result !is BiliResult.Ok) {
+                BiliLog.w("关注联合投稿成员失败(mid=$mid): $result")
+                ifCurrent(startGeneration) { _staffFollowed.update { it?.minus(mid) } }
+            }
+        }
+    }
+
+    /**
+     * UP 的等级(+ 粉丝数,这一轮不显示)。同样是独立请求,独立失败——查不到就是 null,
+     * 徽章不画,不影响 UP 名和关注按钮(见 [load] 里怎么处理这次失败)。
+     */
+    private val _upCard = MutableStateFlow<MemberCard?>(null)
+    val upCard: StateFlow<MemberCard?> = _upCard.asStateFlow()
+
+    /**
+     * 关注/取关。与点赞投币同样是乐观更新、不重拉:等一个来回再变字会让人以为没点上。
+     *
+     * 互关状态下取关要退回"未关注"而不是"已关注" —— 对方关注你这件事不受你取关影响,
+     * 但从你这边看关系确实断了。
+     */
+    fun toggleFollow() {
+        val mid = _state.value.detail?.up?.mid ?: return
+        val current = _followState.value
+        if (current == FollowState.Self || current == FollowState.Blocked) return
+
+        val following = current.isFollowing
+        _followState.value = if (following) FollowState.None else FollowState.Following
+        val startGeneration = generation
+        viewModelScope.launch {
+            val result =
+                if (following) relationRepository.unfollow(mid) else relationRepository.follow(mid)
+            if (result !is BiliResult.Ok) {
+                BiliLog.w("${if (following) "取关" else "关注"}失败: $result")
+                ifCurrent(startGeneration) { _followState.value = current }
+            }
+        }
+    }
+
+    /**
+     * 这一页里是否已加入稍后再看。**进页面时一律当作不在**:没有便宜的办法知道当前视频在不在
+     * 列表里(要判断就得把整个列表拉下来),所以它只反映"在这一页点过什么"。
+     *
+     * 但点过之后是个 toggle:刚点进去又想撤回,是在这一页当场发生的事,让人跑去稍后再看页
+     * 找那一条是把一个手滑变成一趟差事。PiliPlus 同样是加/删两个接口来回切。
+     */
+    private val _addedToView = MutableStateFlow(false)
+    val addedToView: StateFlow<Boolean> = _addedToView.asStateFlow()
+
+    /** 进行中的那一次加/删。在飞时再点不发第二个请求,两个请求的到达顺序没法保证。 */
+    private var toViewInFlight = false
+
+    /**
+     * 加入或移出稍后再看。乐观更新:点了立刻切换,不等接口回来,也不回头拉列表确认 ——
+     * 和点赞/收藏的处理一致。失败则回滚并留日志。移出按 aid(接口只认 aid,见
+     * [ToViewRepository.delete]),详情还没到手时拿不到,这一下不动。
+     */
+    fun toggleToView() {
+        if (toViewInFlight) return
+        val adding = !_addedToView.value
+        val aid = _state.value.detail?.aid
+        if (!adding && aid == null) return
+        toViewInFlight = true
+        _addedToView.value = adding
+        val target = bvid
+        val startGeneration = generation
+        viewModelScope.launch {
+            val result = if (adding) toViewRepository.add(target) else toViewRepository.delete(aid!!)
+            val path = if (adding) "toview/add" else "toview/dels"
+            when (result) {
+                is BiliResult.Ok -> Unit
+                is BiliResult.ApiError -> {
+                    ifCurrent(startGeneration) { _addedToView.value = !adding }
+                    BiliLog.w("$path 失败(${result.code}): ${result.message}")
+                }
+                is BiliResult.Failure -> {
+                    ifCurrent(startGeneration) { _addedToView.value = !adding }
+                    BiliLog.w("$path 异常", result.cause)
+                }
+            }
+            toViewInFlight = false
+        }
+    }
+
+    /** 赞助/片头片尾片段,默认开启自动跳过。拉取失败就是空列表,不影响播放。 */
+    private val _sponsorSegments = MutableStateFlow<List<SponsorSegment>>(emptyList())
+    val sponsorSegments: StateFlow<List<SponsorSegment>> = _sponsorSegments.asStateFlow()
+
+    /**
+     * 关掉时直接不发请求,而不是拉回来再过滤:这是发给第三方服务端的查询,
+     * 用户关掉这个功能的意思里包含"别去问它"。
+     *
+     * 类别过滤发生在仓库合并重叠区间之后,所以极少数跨类别重叠的片段会按合并后那一段的
+     * 类别一起去留。重叠本来就是罕见的边界情况(仓库那边也是这么取舍的),
+     * 为它把过滤下沉到仓库、再让仓库认识用户偏好,不值当。
+     */
+    private suspend fun loadSponsorSegments(target: String, cid: Long) {
+        val prefs = settings.sponsorBlockPrefs.first()
+        if (!prefs.enabled) {
+            _sponsorSegments.value = emptyList()
+            return
+        }
+        _sponsorSegments.value = sponsorBlockRepository
+            .segments(target, cid, prefs.serverUrl)
+            .filter { it.category in prefs.categories }
+    }
+
+    /** 这条视频的标签。空列表兼指"还没拉"与"没有标签"——两者都不画,不需要分。 */
+    private val _videoTags = MutableStateFlow<List<VideoTag>>(emptyList())
+    val videoTags: StateFlow<List<VideoTag>> = _videoTags.asStateFlow()
+
+    /** 标签请求发起过没有,见 [loadVideoTags] 的幂等。 */
+    private var videoTagsRequested = false
+
+    /**
+     * 拉标签。第一次展开简介时由页面调用:标签只在展开态可见,随详情 eager 拉等于每次
+     * 打开视频都白背一次请求(理由展开写在 VideoRepository.getVideoTags)。幂等,展开收起
+     * 反复点不重发;失败把闸放回去,下一次展开还有机会重试。
+     */
+    fun loadVideoTags() {
+        if (videoTagsRequested) return
+        val detail = _state.value.detail ?: return
+        videoTagsRequested = true
+        val target = bvid
+        videoScope.launch {
+            when (val tags = repository.getVideoTags(target, detail.cid)) {
+                is BiliResult.Ok -> _videoTags.value = tags.value
+                // 具体的码和 message 已由 getData 打过,这里只留场景。
+                else -> {
+                    BiliLog.w("查视频标签失败 bvid=$target")
+                    videoTagsRequested = false
+                }
+            }
+        }
+    }
+
+    private val _relation = MutableStateFlow<VideoRelation?>(null)
+    val relation: StateFlow<VideoRelation?> = _relation.asStateFlow()
+
+    private val _favFolders = MutableStateFlow<List<FavFolder>>(emptyList())
+    val favFolders: StateFlow<List<FavFolder>> = _favFolders.asStateFlow()
+
+    private val _coinAttempt = MutableStateFlow<CoinAttempt>(CoinAttempt.Idle)
+
+    /**
+     * 投币这一次的进展。**结果要回到发起它的那个面板上**:投币不可逆,失败了用户得知道
+     * 币还在自己手里,而这个 app 没有 snackbar 之类的全局提示位。点赞和收藏靠回滚乐观更新
+     * 说话,投币没有乐观更新可回滚(见 [coin]),失败于是一点痕迹都不留。
+     */
+    val coinAttempt: StateFlow<CoinAttempt> = _coinAttempt.asStateFlow()
+
+    private val _tripleOutcome = MutableStateFlow<TripleOutcome?>(null)
+
+    /** 最近一次三连的结果。见 [TripleOutcome]、[triple]。 */
+    val tripleOutcome: StateFlow<TripleOutcome?> = _tripleOutcome.asStateFlow()
+
+    private var tripleSeq = 0L
+
+    private val _state = MutableStateFlow(VideoUiState())
+    val state: StateFlow<VideoUiState> = _state.asStateFlow()
+
+    private val _related = MutableStateFlow(RelatedState())
+    val related: StateFlow<RelatedState> = _related.asStateFlow()
+
+    /** 这条视频(当前 cid)有哪些字幕轨,换 P/换视频就重新拉。 */
+    private val _subtitleTracks = MutableStateFlow<List<SubtitleTrack>>(emptyList())
+    val subtitleTracks: StateFlow<List<SubtitleTrack>> = _subtitleTracks.asStateFlow()
+
+    /** 选中轨的语言代码,空字符串是关(默认)。看视频的控制条和听视频的文稿共用这一份状态。 */
+    private val _subtitleLan = MutableStateFlow("")
+    val subtitleLan: StateFlow<String> = _subtitleLan.asStateFlow()
+
+    private val _subtitleCues = MutableStateFlow<List<SubtitleCue>>(emptyList())
+    val subtitleCues: StateFlow<List<SubtitleCue>> = _subtitleCues.asStateFlow()
+
+    /**
+     * 弹幕设置整体透出,不拆成一条一条的 StateFlow。
+     *
+     * 拆开的话每加一个设置项就要在 VideoViewModel、VideoScreen、BilbyPlayer 三层各加一个平行
+     * 参数,而这份设置按计划还要长出字号、速度、模式过滤、描边——平行参数多到一定数量之后,
+     * "有没有漏传一个"就只能靠人眼比对。整体传一个对象,加设置项只动 [SettingsStore] 一处。
+     *
+     * **默认关**,持久化在 [SettingsStore];听视频页用不到——它没有画面。
+     */
+    private val _danmakuPrefs = MutableStateFlow(DanmakuPrefs())
+    val danmakuPrefs: StateFlow<DanmakuPrefs> = _danmakuPrefs.asStateFlow()
+
+    /**
+     * 已拉到的弹幕池,累计追加、不去重合并(那是以后的事)。时间轴的编译不在这里——
+     * 它需要 `measureWidth` 和画布像素宽度,两者都只在 Compose 层才有(见 BilbyPlayer.kt)。
+     */
+    private val _danmakuPool = MutableStateFlow<List<Danmaku>>(emptyList())
+    val danmakuPool: StateFlow<List<Danmaku>> = _danmakuPool.asStateFlow()
+
+    /**
+     * mode 7 高级弹幕,与上面那个池分开。
+     *
+     * **不是"另一种弹幕",是另一套排布规则**:位置由作者写死的绝对坐标决定,不选轨、不判碰撞、
+     * 不受显示区域约束,渲染也走独立的一层([dev.nihildigit.danmaku.SpecialDanmakuHost])。合进
+     * 同一个池只会让滚动弹幕那条链路上到处是"这条是不是 7"的分支。
+     */
+    private val _specialDanmakuPool = MutableStateFlow<List<SpecialDanmaku>>(emptyList())
+    val specialDanmakuPool: StateFlow<List<SpecialDanmaku>> = _specialDanmakuPool.asStateFlow()
+
+    /**
+     * 当前 cid 有分段没拉回来。**"这一段没人发弹幕"和"这一段没拉到"在画面上是同一个样子**
+     * (都是空白),给 UI 一个能把两者分开的信号,否则用户只能看着空屏猜是网络还是视频本身。
+     * 拉到任何一段就复位:后一次成功说明链路是通的。
+     */
+    private val _danmakuLoadFailed = MutableStateFlow(false)
+    val danmakuLoadFailed: StateFlow<Boolean> = _danmakuLoadFailed.asStateFlow()
+
+    /**
+     * 自己刚发出去的那条弹幕。
+     *
+     * **不并进 [_danmakuPool]。** 那个池是"服务端这一段有哪些弹幕",整段替换、随 cid 重建;
+     * 而这一条要的是"此刻立刻上屏",走的是引擎的 `appendNow`(直播那条到达流用的是同一个
+     * 入口)。塞进池里的话,下一次分段追加会把它一起重编,它的出现时间是发送时的播放进度,
+     * 重编之后就会在当前位置再飘一遍。
+     *
+     * 用 [MutableSharedFlow] 而不是 StateFlow:这是一个事件,不是状态 —— 状态会在转屏后
+     * 重放,表现为转一次屏自己的弹幕又飘一次。
+     */
+    private val _selfDanmaku = MutableSharedFlow<Danmaku>(extraBufferCapacity = 4)
+    val selfDanmaku: SharedFlow<Danmaku> = _selfDanmaku.asSharedFlow()
+
+    /** 发弹幕这一次的进展,面板靠它显示转圈与失败原因。 */
+    private val _danmakuSend = MutableStateFlow<DanmakuSend>(DanmakuSend.Idle)
+    val danmakuSend: StateFlow<DanmakuSend> = _danmakuSend.asStateFlow()
+
+    /**
+     * 发一条弹幕。[cid] 与 [progressMillis] 由页面给 —— 播放器装着哪一 P、放到了哪里,
+     * 权威在服务那侧,ViewModel 手上的详情只有默认的 P1。
+     *
+     * **失败不清空草稿**:面板留在原地,人改一个字就能再发一次。成功才清,由 [DanmakuSend.Sent]
+     * 通知页面关面板。
+     */
+    fun sendDanmaku(text: String, cid: Long, progressMillis: Long) {
+        val content = text.trim()
+        if (content.isEmpty() || cid == 0L) return
+        if (_danmakuSend.value is DanmakuSend.Sending) return
+        _danmakuSend.value = DanmakuSend.Sending
+        val bvid = this.bvid
+        val startGeneration = generation
+        viewModelScope.launch {
+            when (val result = danmakuRepository.post(cid, bvid, content, progressMillis)) {
+                is BiliResult.Ok -> ifCurrent(startGeneration) {
+                    _danmakuSend.value = DanmakuSend.Sent
+                    _selfDanmaku.tryEmit(
+                        Danmaku(
+                            id = result.value,
+                            // 上屏时间由引擎按当前时钟重打(appendNow 的语义),这里给的是
+                            // 发送时的进度,只为让这条弹幕在池里也说得出自己属于哪一刻。
+                            playTimeMillis = progressMillis,
+                            mode = DanmakuMode.SCROLL,
+                            color = WHITE,
+                            text = content,
+                            fontSize = null,
+                            isSelf = true,
+                        ),
+                    )
+                }
+
+                is BiliResult.ApiError -> ifCurrent(startGeneration) {
+                    _danmakuSend.value = DanmakuSend.Failed("${result.message}(${result.code})")
+                }
+
+                is BiliResult.Failure -> ifCurrent(startGeneration) {
+                    _danmakuSend.value = DanmakuSend.Failed(result.cause.message ?: "网络错误")
+                }
+            }
+        }
+    }
+
+    /** 面板关掉了,或者失败提示看过了。 */
+    fun clearDanmakuSend() {
+        _danmakuSend.value = DanmakuSend.Idle
+    }
+
+    /** 当前弹幕池所属的 cid,换 cid 时用来判断在飞的请求是否已经过期。 */
+    private var danmakuCid = 0L
+
+    /** 这一条 cid 已经请求过的分段号(1-based),防止播放进度在同一段内反复轮询时重复拉取。 */
+    private val requestedDanmakuSegments = mutableSetOf<Int>()
+
+    /** 这一条 cid 每个分段失败过几次,见 [fetchDanmakuSegment] 里为什么要记这个。 */
+    private val danmakuSegmentFailures = mutableMapOf<Int, Int>()
+
+    init {
+        // ViewModel 级:偏好跨视频有效,只读一次,[switchTo] 不重读。
+        viewModelScope.launch {
+            _subtitleLan.value = settings.subtitlePrefs.first().lan
+            subtitleLanLoaded.complete(Unit)
+        }
+        viewModelScope.launch {
+            settings.danmakuPrefs
+                .distinctUntilChanged()
+                .collect { prefs ->
+                    val changed = _danmakuPrefs.value.enabled != prefs.enabled
+                    _danmakuPrefs.value = prefs
+                    if (changed && prefs.enabled) fetchInitialDanmakuSegment(danmakuCid)
+                }
+        }
+        startVideoJobs()
+    }
+
+    /**
+     * 换一条视频(切集、自动连播、通知栏切歌)。
+     *
+     * **幂等**:目标就是当前这条时直接返回。调用方因此可以在每次重组时无脑喊一遍,不必自己
+     * 记住上一次是哪条 —— 那份"上一次"正是以前用 `viewModel(key = ...)` 时散在 Compose 层的
+     * 状态,而它管不了旧实例的死活。
+     */
+    fun switchTo(target: String) {
+        if (target == bvid) return
+        generation++
+        // **先取消,再换 bvid。** 反过来的话,旧协程在真正被取消之前的那一瞬读到的已经是新
+        // bvid,于是上一条视频的结果会被当作这一条的收下 —— 取消是有延迟的,顺序不是风格问题。
+        videoJob.cancelChildren()
+        bvid = target
+        resetForNewVideo()
+        startVideoJobs()
+    }
+
+    /** 详情首屏失败后的显式重试。相同 bvid 的 [switchTo] 是幂等的,不能拿它来重跑。 */
+    fun retry() {
+        generation++
+        videoJob.cancelChildren()
+        resetForNewVideo()
+        startVideoJobs()
+    }
+
+    /**
+     * 清掉一切属于上一条视频的状态。
+     *
+     * **只留两样**:[_subtitleLan] 是用户的选择,跨视频延续(新视频没有同语言的轨才关,见
+     * [loadSubtitleTracks]);[_danmakuPrefs] 来自持久化偏好,本来就不属于
+     * 任何一条视频。其余全部归零 —— 漏掉一个的表现就是切集后短暂显示上一条的标题、评论或字幕,
+     * 而它只在慢网络下才看得见。
+     */
+    private fun resetForNewVideo() {
+        _state.value = VideoUiState()
+        _related.value = RelatedState()
+        _followState.value = FollowState.None
+        _staffFollowed.value = null
+        _upCard.value = null
+        _relation.value = null
+        _videoTags.value = emptyList()
+        videoTagsRequested = false
+        _coinAttempt.value = CoinAttempt.Idle
+        _favFolders.value = emptyList()
+        _addedToView.value = false
+        _sponsorSegments.value = emptyList()
+        _subtitleTracks.value = emptyList()
+        _subtitleCues.value = emptyList()
+        _danmakuPool.value = emptyList()
+        _specialDanmakuPool.value = emptyList()
+        _danmakuLoadFailed.value = false
+        _danmakuSend.value = DanmakuSend.Idle
+        danmakuCid = 0L
+        requestedDanmakuSegments.clear()
+        danmakuSegmentFailures.clear()
+        lastDanmakuPositionMillis = 0L
+    }
+
+    /**
+     * 起当前视频级的那几条协程。
+     *
+     * 每条都先把 [bvid] 捕获成局部 `target` 再用,协程体里不读那个 var:取消有延迟,读 var
+     * 会让一条正在退出的旧协程拿到新 bvid 并自认是当前视频。
+     */
+    private fun startVideoJobs() {
+        val target = bvid
+        load(target)
+        observeCurrentPart(target)
+        observePlaybackPosition(target)
+        observeDanmakuCid(target)
+        observeSubtitleTracks(target)
+    }
+
+    /** 迟到的写结果只有在代数没变时才准落回页面,理由见 [generation]。 */
+    private inline fun ifCurrent(generationAtStart: Int, block: () -> Unit) {
+        if (generationAtStart == generation) block()
+    }
+
+    /**
+     * 弹幕开关。持久化用 NonCancellable,理由与 [selectSubtitle] 相同。
+     *
+     * 打开时补一次段 1 预取:换 cid 那一刻开关还是关的,[observeDanmakuCid] 跳过了预取,
+     * 不补的话要等下一次进度回调(播放中最长 5 秒)才有机会拉到东西——播放中途打开开关会
+     * 有一段空窗。**只在开着的时候才拉**是风控要求:弹幕默认关,不该让每一个不用这个功能
+     * 的用户在每次打开视频时都多背一次请求。
+     */
+    fun setDanmakuEnabled(enabled: Boolean) {
+        _danmakuPrefs.update { it.copy(enabled = enabled) }
+        viewModelScope.launch(NonCancellable) { settings.saveDanmakuEnabled(enabled) }
+        if (enabled) fetchInitialDanmakuSegment(danmakuCid)
+    }
+
+    /** 播放器面板里的弹幕设置。只有开关要多做一步(见 [setDanmakuEnabled]),其余直接落盘。 */
+    val danmakuEditor: DanmakuPrefsEditor =
+        object : DanmakuPrefsEditor by StoredDanmakuPrefsEditor(settings, viewModelScope) {
+            override fun setEnabled(enabled: Boolean) = setDanmakuEnabled(enabled)
+        }
+
+    /**
+     * 弹幕池随 cid 变,原因和字幕轨、SponsorBlock 片段一样:播放器全 app 共用,队列走到
+     * 别的视频上时不该把那一条的弹幕留在这一页。换 cid 清空已请求分段集合与弹幕池——
+     * 那是另一条视频的弹幕,不是"还没拉完"。
+     *
+     * **cid 变成 0 也要照清一遍,那一支不能跳过。** 0 的意思是"此刻哪一 P 还没有答案":
+     * 用户按下换 P 的那一刻服务的 playPart 就报 0,要等一趟取流
+     * 回来才报出新的那一 P。跳过这一支的话,上一 P 的弹幕会在新的一 P 装载期间接着飘,
+     * 而那几百毫秒里屏幕上的画面已经不是它们对应的内容了(owner 定:切 P 当场清空)。
+     * 清完不拉:[fetchDanmakuAround] 见 cid 为 0 直接返回,新的一 P 到位时自己会拉。
+     *
+     * 预取段 1 只在开关已经打开时才做,理由见 [setDanmakuEnabled]。
+     */
+    private fun observeDanmakuCid(target: String) = videoScope.launch {
+        playback.state
+            .map { it.cidOf(target) }
+            .distinctUntilChanged()
+            .collect { cid ->
+                danmakuCid = cid
+                requestedDanmakuSegments.clear()
+                danmakuSegmentFailures.clear()
+                _danmakuLoadFailed.value = false
+                _danmakuPool.value = emptyList()
+                _specialDanmakuPool.value = emptyList()
+                // 进度也要跟着归零:留着上一条的位置,中途开弹幕会照那个位置去拉段号。
+                lastDanmakuPositionMillis = 0L
+                if (_danmakuPrefs.value.enabled) fetchInitialDanmakuSegment(cid)
+            }
+    }
+
+    /**
+     * 拉当前进度所在的那一段,不必等下一次进度回调。
+     *
+     * **不能写死段 1**:换 cid 时进度确实是 0,但用户在第 20 分钟按下开关时,该拉的是第 4 段
+     * 而不是第 1 段 —— 拉错段的表现是"开了弹幕但一条都不来",而它和"这个视频没人发弹幕"
+     * 在画面上完全一样,查不出来。
+     */
+    private fun fetchInitialDanmakuSegment(cid: Long) {
+        fetchDanmakuAround(cid, lastDanmakuPositionMillis)
+    }
+
+    /** 播放进度驱动弹幕分段拉取。位置从哪来见 [observePlaybackPosition]。 */
+    private fun onDanmakuPlaybackPosition(positionMillis: Long) {
+        // 位置无条件记下来:开关中途被打开时要靠它知道该从哪一段拉起。
+        lastDanmakuPositionMillis = positionMillis
+        if (!_danmakuPrefs.value.enabled) return
+        fetchDanmakuAround(danmakuCid, positionMillis)
+    }
+
+    /** 最近一次进度回传。开关关着时也记,见 [onDanmakuPlaybackPosition]。 */
+    private var lastDanmakuPositionMillis = 0L
+
+    /**
+     * 拉这个进度所在的分段,快到边界时把下一段一起拉回来。
+     *
+     * **预取的理由是分段边界必然出现的空窗**:分段拉取是懒的,走到 6 分钟整点才发请求,
+     * 那一次请求往返期间屏上一条弹幕都没有,而这个破绽每 6 分钟准时来一次。提前量取
+     * [DANMAKU_PREFETCH_LEAD_MILLIS],比 [DANMAKU_POSITION_STEP_MILLIS] 宽出一个数量级,
+     * 不至于正好跨过边界那一拍才想起来预取。代价是每段多提前几十秒发一个请求,请求总数不变
+     * ——每个段号在一条 cid 上仍然只请求一次。
+     */
+    private fun fetchDanmakuAround(cid: Long, positionMillis: Long) {
+        if (cid == 0L) return
+        val segmentIndex = danmakuRepository.segmentIndexFor(positionMillis) + 1
+        fetchDanmakuSegment(cid, segmentIndex)
+        if (danmakuRepository.millisUntilNextSegment(positionMillis) <= DANMAKU_PREFETCH_LEAD_MILLIS) {
+            fetchDanmakuSegment(cid, segmentIndex + 1)
+        }
+    }
+
+    /**
+     * 段号在**请求发起前**就登记进 [requestedDanmakuSegments],否则同一段的进度回调会连着
+     * 发好几个重复请求。代价是失败的段号也会留在集合里:曾经因此 seek 回那一段永远没有弹幕,
+     * 而且除了一行日志之外没有任何迹象——空段和失败段在 `List<Danmaku>` 上同形,现在由
+     * [dev.bilby.api.BiliResult] 分开。
+     *
+     * 失败后把段号摘出来让它能重来,但**限次**:位置每 5 秒问一次,一段 6 分钟,不限次就是
+     * 对一个正在失败的接口每段重试 70 多回,这是风控最不该踩的形状。[DANMAKU_SEGMENT_RETRIES]
+     * 次之后放弃这一段,失败状态交给 [danmakuLoadFailed] 说明。
+     */
+    private fun fetchDanmakuSegment(cid: Long, segmentIndex: Int) {
+        if (!requestedDanmakuSegments.add(segmentIndex)) return
+        // videoScope:换视频时这些请求要整组取消。下面的 danmakuCid 判定挡的是**同一条视频内
+        // 换分 P**,取消挡不到它——那时 videoScope 不重建。两道判定各管一件事,都不能省。
+        videoScope.launch {
+            val result = danmakuRepository.getSegment(cid, segmentIndex)
+            // 拉取期间可能已经切到别的 cid(切分 P、队列走到下一条)——那份结果不属于当前
+            // 弹幕池。此时也不能再动 requestedDanmakuSegments:它已经被换 cid 清空并开始
+            // 记录新那一条的段号了,按旧 cid 的结果去删,删掉的是新视频刚登记的段号。
+            if (danmakuCid != cid) return@launch
+            when (result) {
+                is BiliResult.Ok -> {
+                    val segment = result.value
+                    if (segment.normal.isNotEmpty()) _danmakuPool.update { it + segment.normal }
+                    if (segment.special.isNotEmpty()) _specialDanmakuPool.update { it + segment.special }
+                    // 一次成功不代表全部拿到了:被彻底放弃的段仍然是缺的,标志要留着。
+                    _danmakuLoadFailed.value = danmakuSegmentFailures.values.any { it >= DANMAKU_SEGMENT_RETRIES }
+                }
+                else -> {
+                    val failures = (danmakuSegmentFailures[segmentIndex] ?: 0) + 1
+                    danmakuSegmentFailures[segmentIndex] = failures
+                    if (failures < DANMAKU_SEGMENT_RETRIES) {
+                        requestedDanmakuSegments.remove(segmentIndex)
+                    } else {
+                        BiliLog.w("弹幕分段放弃重试 cid=$cid segment=$segmentIndex 失败 $failures 次")
+                    }
+                    _danmakuLoadFailed.value = true
+                }
+            }
+        }
+    }
+
+    /** 撞 -412 时 [dev.bilby.data.SubtitleRepository] 会退避重试,见 [loadSubtitleTracks]。 */
+    private var subtitleTracksJob: Job? = null
+
+    /**
+     * 字幕轨随 cid 变,原因和 [observeCurrentPart] 一样:分 P 各有各的轨,播放器全 app
+     * 共用,队列走到别的视频上时不该把那一条的轨拉到这一页来。
+     */
+    private fun observeSubtitleTracks(target: String) = videoScope.launch {
+        // 等持久化的语言读回来再开始跟 cid 走,理由见 [subtitleLanLoaded]。
+        subtitleLanLoaded.await()
+        playback.state
+            .map { it.cidOf(target) }
+            .distinctUntilChanged()
+            .collect { cid ->
+                // 换 cid 就取消上一条还没跑完的加载——它可能正卡在限流退避的 delay 里。
+                // 不取消的话,这个 collect 会等旧的退避结束(最坏 2 分钟)才轮到处理新 cid,
+                // 表现为切视频之后字幕迟迟不出来,而退避本来只该拖慢它自己那一条。
+                //
+                // 这条 Job 挡的是**同一条视频内换分 P**;换视频由 videoScope 整组取消负责。
+                subtitleTracksJob?.cancel()
+                if (cid == 0L) {
+                    // 哪一 P 还没有答案(换 P 按下的那一刻,服务的 playPart 就报 0)。
+                    // 正在显示的那一句属于上一 P,清掉——和弹幕池同一条决策(owner 定:切 P 把
+                    // 过期内容当场清掉)。轨道清单留着不清:它只是字幕菜单的选项,新的一 P 到位
+                    // 时整份换掉,而清了会让菜单在这几百毫秒里空一下。
+                    _subtitleCues.value = emptyList()
+                    return@collect
+                }
+                subtitleTracksJob = videoScope.launch { loadSubtitleTracks(target, cid) }
+            }
+    }
+
+    private suspend fun loadSubtitleTracks(target: String, cid: Long) {
+        val tracks = subtitleRepository.getTracks(target, cid)
+        _subtitleTracks.value = tracks
+        // 换 P 或换视频之后继续用上次选的那条(按语言代码找);找不到就关掉,不自动挑一条——
+        // "默认关"是产品要求,不是"还没设置过"才关。
+        val track = tracks.firstOrNull { it.lan == _subtitleLan.value }
+        _subtitleCues.value = track?.let { subtitleRepository.getCues(it.subtitleUrl) }.orEmpty()
+    }
+
+    /** 用户在控制条的字幕菜单里选了一条轨(或选了"关")。[lan] 为空字符串表示关。 */
+    fun selectSubtitle(lan: String) {
+        _subtitleLan.value = lan
+        // NonCancellable:选完字幕紧接着退出页面是常见操作,而退出会取消 viewModelScope,
+        // DataStore 的 edit 又是挂起函数——不挡住取消的话这次选择会在写盘前被砍掉。
+        // 和风格指南里"设置的落盘一律 NonCancellable"是同一条规矩。
+        viewModelScope.launch(NonCancellable) { settings.saveSubtitleLan(lan) }
+        val track = _subtitleTracks.value.firstOrNull { it.lan == lan }
+        if (track == null) {
+            _subtitleCues.value = emptyList()
+            return
+        }
+        // videoScope:切走之后这一次拉取的结果不该再落到新视频的字幕上。落盘那一句在上面,
+        // 走的是 NonCancellable,不受这里的取消影响。
+        videoScope.launch { _subtitleCues.value = subtitleRepository.getCues(track.subtitleUrl) }
+    }
+
+    /**
+     * 已缓存(或正在缓存)的东西,缓存面板拿它把已有的那几条标出来。
+     *
+     * 两种粒度都要能答,理由见 [CachedIndex]:当前这条视频的分 P 有确切的 cid,按 (bvid, cid)
+     * 判;队列里别的视频的 cid 要联网才知道,只能按 bvid 判。真正的去重仍然是下载器的事
+     * (见 OfflineDownloader.enqueue),它拿得到补全后的 cid。
+     */
+    val cached: StateFlow<CachedIndex> = offlineDownloader.items
+        .map { CachedIndex.of(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CachedIndex())
+
+    /**
+     * 把选中的队列项排进缓存队列。
+     *
+     * **这里不落任何状态。** 下载器是应用级的(见 AppContainer),页面退出、切集、连播都不该
+     * 影响已经排进去的活儿 —— 那正是"缓存"这个功能的用途。
+     */
+    fun cacheSelection(targets: List<OfflineTarget>, qualityId: Int) {
+        offlineDownloader.enqueue(targets.map { it.toOfflineRequest(qualityId) })
+    }
+
+    /**
+     * 只在用户显式点击时才跑(DESIGN 2.3):它占的是官方"相关推荐"的位置,但不能有
+     * 相关推荐的行为 —— 自动加载就等于把永不实现清单里的东西装了回来。
+     */
+    fun findRelated() {
+        val detail = _state.value.detail ?: return
+        val target = bvid
+        _related.value = RelatedState(started = true, turn = AgentTurnState(running = true))
+        videoScope.launch {
+            agentLoop.run(AgentIntent.Related(target, detail.title, detail.up.name)).collect { event ->
+                // 折叠规则与搜索页是同一份(agent/AgentTurn.kt)。这里曾经另写一份,
+                // 而那份把 ToolFinished 整个吞了 —— 中间结果卡片在播放页从来没出现过。
+                _related.update { it.copy(turn = it.turn.reduce(event)) }
+            }
+            _related.update { it.copy(turn = it.turn.copy(running = false)) }
+        }
+    }
+
+    private fun load(target: String) = videoScope.launch {
+        // 缓存过的视频先拿缓存索引里那份把页面撑起来,网络那份回来再换掉。弱网下详情可能要
+        // 等到超时,而画面在放本地文件、早就 READY 了,标题简介不该跟着网络一起等。
+        // "先判断有没有网"挡不住这种情况:弱网时系统照样报有网。
+        fallBackToCache(target)
+        when (val detail = repository.getVideoDetail(target)) {
+            is BiliResult.Ok -> {
+                _state.update { it.copy(detail = detail.value, loading = false) }
+                launch {
+                    when (val follow = relationRepository.stateOf(detail.value.up.mid)) {
+                        is BiliResult.Ok -> _followState.value = follow.value
+                        else -> BiliLog.w("查关注状态失败: $follow")
+                    }
+                }
+                // 只有联合投稿才问这一条:单人稿的 staff 是空的,关注态由上面那次 stateOf 负责。
+                //
+                // **UP 主自己也要问。** 联合投稿那一排里他和其他人一样只有一个加号,如果靠
+                // followState 去判断,它初值是"未关注",他头上就会先冒一个加号再消失。
+                val staffMids = detail.value.staff
+                    .map { it.mid }
+                    .let { if (detail.value.staff.isEmpty()) it else it + detail.value.up.mid }
+                    .filter { it != 0L }
+                    .distinct()
+                if (staffMids.isNotEmpty()) {
+                    launch {
+                        when (val followed = relationRepository.followedAmong(staffMids)) {
+                            is BiliResult.Ok -> {
+                                // 只记数量,不记 mid:这一条是给冒烟用的,用来分辨"查通了但一个
+                                // 都没关注"和"根本没查通"——两者在界面上都是一个加号都不显示。
+                                BiliLog.d("联合投稿关注态: ${followed.value.size}/${staffMids.size}")
+                                _staffFollowed.value = followed.value
+                            }
+                            // 查不到就保持 null:宁可一个加号都不显示,也好过把已关注的人显示成未关注。
+                            else -> BiliLog.w("查联合投稿关注状态失败: $followed")
+                        }
+                    }
+                }
+                launch {
+                    when (val card = repository.getMemberCard(detail.value.up.mid)) {
+                        is BiliResult.Ok -> _upCard.value = card.value
+                        is BiliResult.ApiError -> BiliLog.w("查 UP 主等级失败(${card.code}): ${card.message}")
+                        is BiliResult.Failure -> BiliLog.w("查 UP 主等级异常", card.cause)
+                    }
+                }
+                when (val rel = actionRepository.getRelation(target)) {
+                    is BiliResult.Ok -> _relation.value = rel.value
+                    is BiliResult.ApiError -> BiliLog.w("查互动状态失败(${rel.code}): ${rel.message}")
+                    is BiliResult.Failure -> BiliLog.w("查互动状态异常: ${rel.cause}")
+                }
+            }
+
+            is BiliResult.ApiError -> fail(target, "${detail.message}(${detail.code})")
+            is BiliResult.Failure -> fail(target, detail.cause.message ?: "网络错误")
+        }
+    }
+
+    /**
+     * 拿缓存索引里那一份把页面撑起来:打开时先撑一次(网络那份回来再换掉,见 [load]),
+     * 详情拉不到时再撑一次。
+     *
+     * **这是缓存条目存那一整份元信息的用处**(见 [dev.bilby.offline.OfflineItem]):没有它,
+     * 离线打开一条已缓存的视频是"画面在放,而页面是一片错误提示" —— 播放走的是本地文件,
+     * 根本不需要详情,只有这一页在等网络。
+     *
+     * 补出来的这份**不含 staff、分 P 和合集**:那几样索引里没有,编一个空的出来正好等于
+     * "这条视频不是合集、没有分 P",而那是错的。少一块界面比多一块假的好。
+     *
+     * 评论区不受影响:它拿 [dev.bilby.data.VideoDetail.aid] 打接口,有网就开得出来,没网就
+     * 和别的网络内容一样失败 —— 评论本身不缓存(owner 定,它是随时在变的东西)。
+     */
+    private suspend fun fallBackToCache(target: String): Boolean {
+        val cached = offlineStore.completedFor(target) ?: return false
+        if (cached.aid == 0L) {
+            // 加这套元信息之前存的旧条目。补课在下载器启动时跑(backfillLegacyMetadata),
+            // 但那要有网 —— 拿一份 aid=0 的详情撑页面,评论区会去打 `oid=0`。
+            BiliLog.w("缓存索引没有元信息,不用它撑页面 bvid=$target")
+            return false
+        }
+        _state.update {
+            it.copy(
+                loading = false,
+                error = null,
+                detail = VideoDetail(
+                    bvid = cached.bvid,
+                    aid = cached.aid,
+                    cid = cached.cid,
+                    title = cached.title,
+                    description = cached.description,
+                    // 缓存索引只存了纯文本简介,@ 带不回来,只剩链接和时间点能点。
+                    descriptionSpans = parseDescriptionSpans(emptyList(), cached.description),
+                    coverUrl = cached.coverUrl,
+                    durationSeconds = cached.durationSeconds,
+                    publishedAtEpochSeconds = cached.publishedAtEpochSeconds,
+                    up = VideoUp(cached.upMid, cached.upName, cached.upFaceUrl),
+                    staff = emptyList(),
+                    stat = VideoStat(
+                        view = cached.stat.view,
+                        danmaku = cached.stat.danmaku,
+                        reply = cached.stat.reply,
+                        favorite = cached.stat.favorite,
+                        coin = cached.stat.coin,
+                        share = cached.stat.share,
+                        like = cached.stat.like,
+                    ),
+                    pages = emptyList(),
+                    // 缓存索引里没有 copyright,这里只能退回自制稿的 2 枚。给多了的代价是
+                    // 转载稿上多列一个选项、投出去被服务端拒(面板里会说明);给少了的代价是
+                    // 自制稿的第二枚永远投不出去。何况这条路径是"详情拉不到"的兜底,
+                    // 详情一到就会被真实值换掉。
+                    maxCoins = VideoActionRepository.MAX_COIN_PER_VIDEO,
+                    seasonTitle = "",
+                    seasonId = 0L,
+                    seasonMid = 0L,
+                    seasonEpisodes = emptyList(),
+                ),
+            )
+        }
+        return true
+    }
+
+    /**
+     * 片段随 cid 变,所以跟着服务那边正在播的分 P 重拉,而不是页面自己记一份 cid。
+     *
+     * 只认属于本页这条视频的 cid:播放器是全 app 共用的,队列走到别的视频上时不该把
+     * 那一条的片段拉到这一页来。
+     */
+    private fun observeCurrentPart(target: String) = videoScope.launch {
+        playback.state
+            .map { it.cidOf(target) }
+            .distinctUntilChanged()
+            .collect { cid -> if (cid != 0L) loadSponsorSegments(target, cid) }
+    }
+
+    /**
+     * 弹幕分段拉取跟着播放位置走。
+     *
+     * 位置来自服务发的刻度(见 [dev.bilby.player.PositionTick]),不是页面自己轮询播放器:
+     * 进度上报搬进服务之后,这一层已经没有别的理由再起一条轮询,而听视频形态下播放器画面
+     * 那个 composable 根本不组合,轮询也就停了。
+     *
+     * 刻度每半秒一条,这里按 [DANMAKU_POSITION_STEP_MILLIS] 收成一条:分段是 6 分钟一段,
+     * 半秒问一次除了把失败段的重试额度([DANMAKU_SEGMENT_RETRIES])在几秒内烧光之外没有任何
+     * 作用。seek 之后位置一步跨过阈值,所以拖动进度条仍然是当场拉。
+     *
+     * 只认播放器装着本页这一条的时候:播放器全 app 共用,队列翻到下一条时这条协程可能还活着。
+     */
+    private fun observePlaybackPosition(target: String) = videoScope.launch {
+        playback.positionTicks
+            .map {
+                if (playback.state.value.loadKey == target) it.positionMillis else -1L
+            }
+            .distinctUntilChangedBy { it / DANMAKU_POSITION_STEP_MILLIS }
+            .collect { positionMillis -> if (positionMillis >= 0) onDanmakuPlaybackPosition(positionMillis) }
+    }
+
+    fun toggleLike() {
+        val current = _relation.value ?: return
+        val aid = _state.value.detail?.aid ?: return
+        // 乐观更新:点赞是高频动作,等一个来回再变色会让人以为没点上。失败再翻回去。
+        _relation.value = current.copy(liked = !current.liked)
+        adjustStat { it.copy(like = it.like + if (current.liked) -1 else 1) }
+        val startGeneration = generation
+        viewModelScope.launch {
+            when (val result = actionRepository.like(aid, !current.liked)) {
+                is BiliResult.Ok -> Unit
+                is BiliResult.ApiError -> {
+                    BiliLog.w("点赞失败(${result.code}): ${result.message}")
+                    ifCurrent(startGeneration) { _relation.value = current }
+                }
+
+                is BiliResult.Failure -> {
+                    BiliLog.w("点赞异常: ${result.cause}")
+                    ifCurrent(startGeneration) { _relation.value = current }
+                }
+            }
+        }
+    }
+
+    /**
+     * 投币。**没有乐观更新**:币投不出去的情形一点不罕见(未登录、当天硬币不够、已经投满),
+     * 而先加后减的数字比慢半拍的数字更难读。计数等服务端认了再动。
+     */
+    fun coin(count: Int, alsoLike: Boolean) {
+        val current = _relation.value ?: return
+        val aid = _state.value.detail?.aid ?: return
+        val startGeneration = generation
+        _coinAttempt.value = CoinAttempt.Running
+        viewModelScope.launch {
+            when (val result = actionRepository.coin(aid, count, alsoLike)) {
+                is BiliResult.Ok -> ifCurrent(startGeneration) {
+                    _relation.value = current.copy(
+                        coined = current.coined + count,
+                        liked = current.liked || alsoLike,
+                    )
+                    adjustStat {
+                        it.copy(
+                            coin = it.coin + count,
+                            like = if (alsoLike && !current.liked) it.like + 1 else it.like,
+                        )
+                    }
+                    _coinAttempt.value = CoinAttempt.Succeeded
+                }
+
+                is BiliResult.ApiError -> {
+                    BiliLog.w("投币失败(${result.code}): ${result.message}")
+                    ifCurrent(startGeneration) {
+                        _coinAttempt.value = CoinAttempt.Failed("${result.message}(${result.code})")
+                    }
+                }
+
+                is BiliResult.Failure -> {
+                    BiliLog.w("投币异常: ${result.cause}")
+                    ifCurrent(startGeneration) {
+                        _coinAttempt.value = CoinAttempt.Failed(result.cause.message ?: "网络错误")
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 一键三连。长按点赞触发,见 `VideoTabs.ActionButtonsRow`。
+     *
+     * **没有乐观更新,状态一律照服务端的逐项回执落。** 三样里哪几样成得了取决于当天的硬币、
+     * 收藏夹和已有的赞,先亮再回滚会同时闪三处。这一点上它和投币是同一类动作,不和点赞同类。
+     *
+     * 计数按"这一下真的改了什么"补:已经赞过的再三连一次,`liked` 回 true 而赞数不该 +1。
+     */
+    fun triple() {
+        val current = _relation.value ?: return
+        val detail = _state.value.detail ?: return
+        val startGeneration = generation
+        viewModelScope.launch {
+            val outcome = when (val result = actionRepository.triple(detail.aid, detail.bvid)) {
+                is BiliResult.Ok -> {
+                    val value = result.value
+                    if (value.allFailed) {
+                        BiliLog.w("三连三样都没成 bvid=${detail.bvid}")
+                    }
+                    ifCurrent(startGeneration) {
+                        _relation.value = current.copy(
+                            liked = current.liked || value.liked,
+                            coined = current.coined + value.coins,
+                            favored = current.favored || value.favored,
+                        )
+                        adjustStat {
+                            it.copy(
+                                like = it.like + if (value.liked && !current.liked) 1 else 0,
+                                coin = it.coin + value.coins,
+                                favorite = it.favorite + if (value.favored && !current.favored) 1 else 0,
+                            )
+                        }
+                    }
+                    TripleOutcome(++tripleSeq, value, null)
+                }
+
+                is BiliResult.ApiError -> {
+                    BiliLog.w("三连失败(${result.code}): ${result.message}")
+                    TripleOutcome(++tripleSeq, null, "${result.message}(${result.code})")
+                }
+
+                is BiliResult.Failure -> {
+                    BiliLog.w("三连异常: ${result.cause}")
+                    TripleOutcome(++tripleSeq, null, result.cause.message ?: "网络错误")
+                }
+            }
+            ifCurrent(startGeneration) { _tripleOutcome.value = outcome }
+        }
+    }
+
+    /** 面板关掉了。下次打开要从干净的状态开始,不能还挂着上一次的报错。 */
+    fun clearCoinAttempt() {
+        _coinAttempt.value = CoinAttempt.Idle
+    }
+
+    fun openFavPicker() {
+        val aid = _state.value.detail?.aid ?: return
+        val startGeneration = generation
+        viewModelScope.launch {
+            val mid = settings.credentials.first().dedeUserId.toLongOrNull() ?: return@launch
+            when (val result = actionRepository.listFavFolders(mid, aid)) {
+                is BiliResult.Ok -> ifCurrent(startGeneration) { _favFolders.value = result.value }
+                is BiliResult.ApiError -> BiliLog.w("查收藏夹失败(${result.code}): ${result.message}")
+                is BiliResult.Failure -> BiliLog.w("查收藏夹异常: ${result.cause}")
+            }
+        }
+    }
+
+    fun confirmFavorite(addIds: List<Long>, delIds: List<Long>) {
+        val aid = _state.value.detail?.aid ?: return
+        val startGeneration = generation
+        viewModelScope.launch {
+            when (val result = actionRepository.favorite(aid, addIds, delIds)) {
+                is BiliResult.Ok -> ifCurrent(startGeneration) {
+                    _relation.update { it?.copy(favored = addIds.isNotEmpty()) }
+                    adjustStat { it.copy(favorite = it.favorite + addIds.size - delIds.size) }
+                    // 本地改勾选状态,不重拉。重拉会把服务端的实时计数盖回来,而热门视频的
+                    // 计数每秒都在变,表现就是刚 +1 的数字又跳一下 —— 乐观更新与重拉只能选一个。
+                    _favFolders.update { folders ->
+                        folders.map { folder ->
+                            when (folder.id) {
+                                in addIds -> folder.copy(containsThis = true, count = folder.count + 1)
+                                in delIds -> folder.copy(containsThis = false, count = folder.count - 1)
+                                else -> folder
+                            }
+                        }
+                    }
+                }
+
+                is BiliResult.ApiError -> BiliLog.w("收藏失败(${result.code}): ${result.message}")
+                is BiliResult.Failure -> BiliLog.w("收藏异常: ${result.cause}")
+            }
+        }
+    }
+
+    /**
+     * 计数来自视频详情的静态字段,不会因为你点赞而变。不跟着动的话,点了赞数字纹丝不动,
+     * 看起来就像没生效 —— 所以这里按动作乐观增减。
+     */
+    private fun adjustStat(transform: (VideoStat) -> VideoStat) {
+        _state.update { current ->
+            val detail = current.detail ?: return@update current
+            current.copy(detail = detail.copy(stat = transform(detail.stat)))
+        }
+    }
+
+    private suspend fun fail(target: String, message: String) {
+        BiliLog.w("播放页失败($target): $message")
+        if (fallBackToCache(target)) return
+        _state.update { it.copy(loading = false, error = message) }
+    }
+
+    private companion object {
+        /** 位置刻度收到多粗才去问一次分段,见 [observePlaybackPosition]。 */
+        const val DANMAKU_POSITION_STEP_MILLIS = 5_000L
+
+        /** 距离分段边界多久开始预取下一段,见 [fetchDanmakuAround]。 */
+        const val DANMAKU_PREFETCH_LEAD_MILLIS = 30_000L
+
+        /** 一个分段最多请求几次,见 [fetchDanmakuSegment]。 */
+        const val DANMAKU_SEGMENT_RETRIES = 3
+    }
+}
+
+/**
+ * 播放器此刻正装着 [target] 的哪一 P,不是它就是 0。
+ *
+ * **判据是 [AudioPlaybackUiState.loadKey],不是队列指着的那一条。** 队列在切过去的那一刻就
+ * 报新的一条了,而 cid 要等取流回来才跟上,两者在这段窗口里说的不是同一条内容。拿队列那一条
+ * 配这个 cid 得到的是一对不存在的组合:合集里换一集、连播走到下一条时,新那一页会立刻拿着
+ * 新 bvid 和上一条的 cid 去要弹幕、字幕和 SponsorBlock —— 拉回来的是上一条视频的内容,在新
+ * 视频上飘几百毫秒的旧弹幕,还白背了几次参数错配的请求。
+ */
+private fun AudioPlaybackUiState.cidOf(target: String): Long =
+    if (loadKey == target) currentCid else 0L

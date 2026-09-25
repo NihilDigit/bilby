@@ -116,7 +116,8 @@ compose-mp-animation = { module = "org.jetbrains.compose.animation:animation", v
 compose-mp-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", version.ref = "composeMultiplatform" }
 compose-mp-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "composeMultiplatformMaterial3" }
 compose-mp-material-icons-extended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "composeMultiplatformIcons" }
-compose-mp-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "composeMultiplatform" }
+compose-mp-ui-backhandler = { module = "org.jetbrains.compose.ui:ui-backhandler", version.ref = "composeMultiplatform" }
+compose-mp-resources ={ module = "org.jetbrains.compose.components:components-resources", version.ref = "composeMultiplatform" }
 navigation3-mp-ui = { module = "org.jetbrains.androidx.navigation3:navigation3-ui", version.ref = "navigation3Multiplatform" }
 lifecycle-mp-runtime-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycleMultiplatform" }
 lifecycle-mp-viewmodel-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycleMultiplatform" }

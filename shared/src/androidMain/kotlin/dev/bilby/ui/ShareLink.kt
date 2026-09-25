@@ -4,7 +4,8 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.net.toUri
 import dev.bilby.BiliLog
-import dev.bilby.R
+import dev.bilby.getStringBlocking
+import dev.bilby.resources.*
 
 /**
  * 把一条内容分享出去。**给的是标准的 web 地址,不是短链** —— 短链要请求一次 B 站的接口才
@@ -33,7 +34,7 @@ object ShareLink {
             // 有些接收方(邮件、笔记)会拿它当标题,只给正文的话那边是一封无主题的信。
             putExtra(Intent.EXTRA_SUBJECT, title.ifBlank { url })
         }
-        val chooser = Intent.createChooser(intent, context.getString(R.string.action_share))
+        val chooser = Intent.createChooser(intent, getStringBlocking(Res.string.action_share))
         runCatching { context.startActivity(chooser) }
             .onFailure { BiliLog.w("拉起分享失败", it) }
     }

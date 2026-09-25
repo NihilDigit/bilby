@@ -64,6 +64,16 @@ kotlin {
             api(libs.coil.compose)
             api(libs.coil.network.okhttp)
             api(libs.zxing.core)
+
+            api(libs.androidx.room.runtime)
+            api(libs.androidx.datastore.preferences.core)
+        }
+        getByName("desktopMain").dependencies {
+            // Android 用系统自带的 SQLite;桌面没有,Room 要一份打包进来的原生库。
+            implementation(libs.androidx.sqlite.bundled)
+            implementation(libs.kotlinx.coroutines.swing)
+            implementation(libs.compose.mp.ui.backhandler)
+            api(libs.mediamp.mpv)
         }
         androidMain.dependencies {
             // Android 目标上 Compose 各构件按 BOM 取,比 CMP 1.12.1 映射到的版本新
@@ -92,15 +102,29 @@ kotlin {
             api(libs.androidx.datastore.preferences)
             api(libs.androidx.work.runtime.ktx)
         }
-        getByName("androidHostTest").dependencies {
+        // 公共单测两个目标各跑一遍。两端都是 JVM,直接用 JUnit 4,不另套 kotlin.test。
+        commonTest.dependencies {
             implementation(libs.junit)
             implementation(libs.ktor.client.mock)
             implementation(libs.kotlinx.coroutines.test)
+        }
+        getByName("androidHostTest").dependencies {
             implementation(libs.robolectric)
         }
     }
 }
 
+// mediamp 0.5.0 把 ui-test-junit4 误放在运行时作用域,理由同 :desktop 里的同一条排除。
+configurations.configureEach {
+    exclude(group = "org.jetbrains.compose.ui", module = "ui-test-junit4")
+}
+
 dependencies {
     add("kspAndroid", libs.androidx.room.compiler)
+    add("kspDesktop", libs.androidx.room.compiler)
+}
+
+compose.resources {
+    packageOfResClass = "dev.bilby.resources"
+    generateResClass = always
 }

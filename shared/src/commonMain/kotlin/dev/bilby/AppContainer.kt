@@ -1,0 +1,261 @@
+package dev.bilby
+
+import dev.bilby.agent.AgentLoop
+import dev.bilby.agent.LlmClient
+import dev.bilby.agent.ToolRegistry
+import dev.bilby.agent.createBiliTools
+import dev.bilby.api.BiliClient
+import dev.bilby.api.DeviceFingerprint
+import dev.bilby.api.WbiSigner
+import dev.bilby.data.AccountRepository
+import dev.bilby.data.ArticleRepository
+import dev.bilby.data.DanmakusRepository
+import dev.bilby.data.DynamicFeedStore
+import dev.bilby.data.DynamicRepository
+import dev.bilby.data.FingerprintStore
+import dev.bilby.danmaku.DanmakuRepository
+import dev.bilby.data.CommentRepository
+import dev.bilby.data.FavRepository
+import dev.bilby.data.FollowRepository
+import dev.bilby.data.HeartbeatReporter
+import dev.bilby.data.HistoryRepository
+import dev.bilby.data.MessageRepository
+import dev.bilby.data.LiveRepository
+import dev.bilby.data.QueueSourceRepository
+import dev.bilby.data.UpdateRepository
+import dev.bilby.data.SearchRepository
+import dev.bilby.data.SettingsStore
+import dev.bilby.data.RelationRepository
+import dev.bilby.data.SpaceRepository
+import dev.bilby.data.SponsorBlockRepository
+import dev.bilby.data.SubtitleRepository
+import dev.bilby.data.ToViewRepository
+import dev.bilby.data.TvLoginRepository
+import dev.bilby.data.VideoActionRepository
+import dev.bilby.data.VideoRepository
+import dev.bilby.data.db.BilbyDatabase
+import dev.bilby.data.db.FeedCacheRepository
+import dev.bilby.data.db.FeedReadPositionRepository
+import dev.bilby.data.preferencesStore
+import dev.bilby.live.LiveDanmakuClient
+import dev.bilby.offline.OfflineDownloader
+import dev.bilby.offline.OfflineStore
+import dev.bilby.offline.PendingHeartbeatStore
+import dev.bilby.player.PartRequest
+import dev.bilby.player.awaitInternet
+import dev.bilby.resources.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.websocket.WebSockets
+import io.ktor.serialization.kotlinx.json.json
+import kotlinx.serialization.json.Json
+
+/** 持有 [AppContainer] 的平台入口。Android 上是 Application,服务与 Worker 经它取容器。 */
+interface AppContainerOwner {
+    val container: AppContainer
+}
+
+/**
+ * 手写 DI。单人单 module,依赖图小到一屏能看完,不预付框架成本;
+ * 膨胀到看不完时再换 Koin(DESIGN 4 节)。
+ */
+class AppContainer(val platform: Platform) {
+
+    val json = Json {
+        ignoreUnknownKeys = true
+        coerceInputValues = true
+        explicitNulls = false
+        // kotlinx 默认不序列化"值等于默认值"的字段。OpenAI 协议里 tools[].type="function"
+        // 和 stream=true 恰恰都是常量默认值,不开这个开关它们会整个消失,服务端回
+        // 400 missing field `type`。
+        encodeDefaults = true
+    }
+
+    val httpClient: HttpClient by lazy {
+        HttpClient(OkHttp) {
+            expectSuccess = false
+            install(ContentNegotiation) {
+                json(json)
+            }
+            // 直播弹幕长连接。装在这个共享 client 上而不是另起一个:直播那条链路要的超时、
+            // 代理、引擎设置跟其余请求没有区别,分开只会多一份要同步的配置。
+            install(WebSockets)
+        }
+    }
+
+    val settings: SettingsStore by lazy { SettingsStore(preferencesStore(platform.preferencesDir, "bilby")) }
+
+    /** 当前登录账号的 mid,来自登录凭据里的 DedeUserID;没登录时是 0。 */
+    suspend fun myMid(): Long = settings.credentials.first().dedeUserId.toLongOrNull() ?: 0L
+
+    private val fingerprintStore: FingerprintStore by lazy {
+        FingerprintStore(preferencesStore(platform.preferencesDir, "bilby_fingerprint"))
+    }
+
+    /** 设备指纹。缺了它写接口会被风控判成"账号异常",读接口则一切正常。 */
+    val deviceFingerprint: DeviceFingerprint by lazy {
+        DeviceFingerprint(fingerprintStore, httpClient, json)
+    }
+
+    // 签名器要发请求、客户端要签名,循环依赖靠 keyProvider 这个惰性 lambda 打断:
+    // 构造 WbiSigner 时不会调用它,真正取 key 时 biliClient 早已就绪。
+    val wbiSigner: WbiSigner by lazy { WbiSigner { biliClient.fetchWbiKeys() } }
+
+    val biliClient: BiliClient by lazy { BiliClient(httpClient, settings, wbiSigner, deviceFingerprint) }
+
+    /**
+     * **唯一**的登录方式:TV 扫码,一次扫码同时拿 Cookie 和 access_key。网页扫码只给 Cookie,
+     * 而写操作(点赞/投币)必须走 app 端接口、必须有 access_key(notes/auth-model.md §2.5)。
+     *
+     * 没有 cookie 刷新这一环:凭据过期就重新扫码,理由见 notes/auth-model.md §7。
+     */
+    val tvLoginRepository: TvLoginRepository by lazy { TvLoginRepository(biliClient, settings, deviceFingerprint) }
+
+
+    val dynamicRepository: DynamicRepository by lazy { DynamicRepository(biliClient) }
+
+    val database: BilbyDatabase by lazy { BilbyDatabase.create(platform.databaseBuilder()) }
+
+    val feedReadPositionRepository: FeedReadPositionRepository by lazy {
+        FeedReadPositionRepository(database.feedReadPositionDao())
+    }
+
+    val feedCacheRepository: FeedCacheRepository by lazy {
+        FeedCacheRepository(database.feedCacheItemDao())
+    }
+
+    /**
+     * 关注动态流。**挂在容器上而不是某个 ViewModel 上**:首页和"其他动态"是同一条流的两个
+     * 视图,而它们分属不同的导航目的地,ViewModel 的作用域套不住两边(见 DynamicFeedStore)。
+     */
+    val dynamicFeedStore: DynamicFeedStore by lazy {
+        DynamicFeedStore(dynamicRepository, feedCacheRepository, settings)
+    }
+
+    /** 第三方直播归档,只读、无鉴权,见它自己的说明。 */
+    val danmakusRepository: DanmakusRepository by lazy { DanmakusRepository(httpClient, json) }
+
+    val videoRepository: VideoRepository by lazy { VideoRepository(biliClient) }
+
+    val liveRepository: LiveRepository by lazy { LiveRepository(biliClient) }
+
+    val liveDanmakuClient: LiveDanmakuClient by lazy {
+        LiveDanmakuClient(httpClient, liveRepository, json)
+    }
+
+    val searchRepository: SearchRepository by lazy { SearchRepository(biliClient) }
+
+    val commentRepository: CommentRepository by lazy { CommentRepository(biliClient, settings) }
+
+    val spaceRepository: SpaceRepository by lazy { SpaceRepository(biliClient) }
+
+    val articleRepository: ArticleRepository by lazy { ArticleRepository(biliClient) }
+
+    val relationRepository: RelationRepository by lazy { RelationRepository(biliClient, settings) }
+
+    val toViewRepository: ToViewRepository by lazy { ToViewRepository(biliClient) }
+
+    val historyRepository: HistoryRepository by lazy { HistoryRepository(biliClient) }
+
+    /** 消息中心(回复/@/赞/通知)与私信。两组接口分属两个主机,见它自己的说明。 */
+    val messageRepository: MessageRepository by lazy { MessageRepository(biliClient) }
+
+    /** 个人页头部的账号身份(头像/名字/等级/签名),来自 `x/web-interface/nav` + `SpaceRepository`。 */
+    val accountRepository: AccountRepository by lazy { AccountRepository(biliClient, spaceRepository) }
+
+    val followRepository: FollowRepository by lazy { FollowRepository(biliClient, settings) }
+
+    val favRepository: FavRepository by lazy { FavRepository(biliClient, settings) }
+
+    val videoActionRepository: VideoActionRepository by lazy { VideoActionRepository(biliClient) }
+
+    val subtitleRepository: SubtitleRepository by lazy { SubtitleRepository(biliClient) }
+
+    val offlineStore: OfflineStore by lazy { OfflineStore(platform.offlineRoot, json) }
+
+    /**
+     * 缓存列表点某一行时留下的"要放这一 P",由播放服务在装载解析时取走一次。
+     * 放在这里是因为写它的是界面、读它的是服务,而两者之间只有这个容器。见 [PartRequest]。
+     */
+    val partRequest: PartRequest = PartRequest()
+
+    /**
+     * 弹幕仓库认得离线缓存:有网读网络,拉不到时退回盘上那份;没网直接读盘,不先等网络超时。
+     * 规则在仓库里,见 [DanmakuRepository]。
+     */
+    val danmakuRepository: DanmakuRepository by lazy {
+        DanmakuRepository(
+            client = biliClient,
+            local = { cid, segmentIndex -> offlineStore.readDanmaku(cid, segmentIndex) },
+            preferLocal = { !platform.network.hasInternet() },
+        )
+    }
+
+    /**
+     * 离线下载。**跑在应用级 scope 上** —— 下载不该因为用户离开播放页就停,那正是这个功能的
+     * 用途。进程被系统回收是另一回事,由平台顶着,见 [Platform.onOfflineDownloadsBusy]。
+     */
+    val offlineDownloader: OfflineDownloader by lazy {
+        OfflineDownloader(
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+            store = offlineStore,
+            client = biliClient,
+            videoRepository = videoRepository,
+            danmakuRepository = danmakuRepository,
+            concurrency = settings.offlineConcurrency,
+            preferredCodecs = { settings.playerPrefs.first().codec.codecIds },
+            hasNetwork = { platform.network.hasInternet() },
+            awaitNetwork = { platform.network.awaitInternet() },
+            diskFullReason = { getStringBlocking(Res.string.offline_failure_disk_full) },
+            onBusyChanged = platform::onOfflineDownloadsBusy,
+        )
+    }
+
+    /**
+     * 心跳跑在应用级 scope 上,理由见 [HeartbeatReporter] 的 scope 参数:最要紧的那一次
+     * 恰好发生在播放页销毁的瞬间。
+     *
+     * 待补发表放内部存储,不和缓存放在一起:缓存目录会被用户整条删掉,而这张表记的是观看,
+     * 不属于哪一份缓存(见 [PendingHeartbeatStore])。
+     */
+    val heartbeatReporter: HeartbeatReporter by lazy {
+        HeartbeatReporter(
+            client = biliClient,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+            offlineStore = offlineStore,
+            pending = PendingHeartbeatStore(java.io.File(platform.filesDir, "pending-heartbeats.json"), json),
+            scheduleFlush = platform::scheduleHeartbeatFlush,
+        )
+    }
+
+    /** 第三方服务,不走 BiliClient(它带 B 站的 Cookie 与 Referer,发给别人既无必要也不合适)。 */
+    val sponsorBlockRepository: SponsorBlockRepository by lazy { SponsorBlockRepository(httpClient, json) }
+
+    /** 手动更新只在设置页点一下时才用,懒到那一刻再建。 */
+    val updateRepository: UpdateRepository by lazy {
+        UpdateRepository(httpClient, json, platform::isInstallableUpdateAsset)
+    }
+
+    val queueSourceRepository: QueueSourceRepository by lazy {
+        QueueSourceRepository(spaceRepository, videoRepository, favRepository, toViewRepository, offlineStore)
+    }
+
+    val llmClient: LlmClient by lazy {
+        LlmClient(httpClient, json) { settings.llmConfig.first() }
+    }
+
+    private val toolRegistry: ToolRegistry by lazy {
+        ToolRegistry(
+            createBiliTools(searchRepository, videoRepository, spaceRepository, commentRepository, biliClient)
+        )
+    }
+
+    /** 无状态:每次调用都是新的一轮,不跨轮携带任何东西(DESIGN 3.1)。 */
+    val agentLoop: AgentLoop by lazy { AgentLoop(llmClient, toolRegistry, json) }
+
+}

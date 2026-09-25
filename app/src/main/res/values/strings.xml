@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 清单里的应用名。界面文案在 :shared 的 composeResources,清单引用不到那里。 -->
+    <string name="app_name" translatable="false">Bilby</string>
+</resources>

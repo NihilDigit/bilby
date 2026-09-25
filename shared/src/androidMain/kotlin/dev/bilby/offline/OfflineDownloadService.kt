@@ -13,7 +13,8 @@ import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import dev.bilby.AppContainerOwner
 import dev.bilby.BiliLog
-import dev.bilby.R
+import dev.bilby.getStringBlocking
+import dev.bilby.resources.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -149,7 +150,7 @@ class OfflineDownloadService : Service() {
         notificationManager().createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
-                getString(R.string.offline_notification_channel),
+                getStringBlocking(Res.string.offline_notification_channel),
                 // LOW:这条通知是"进程还活着"的凭证加一个进度读数,不是提醒,不该出声也不该
                 // 弹横幅。
                 NotificationManager.IMPORTANCE_LOW,
@@ -160,14 +161,14 @@ class OfflineDownloadService : Service() {
     private fun buildNotification(progress: NotificationProgress): Notification =
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle(getString(R.string.offline_notification_title))
+            .setContentTitle(getStringBlocking(Res.string.offline_notification_title))
             // 正在下哪一条摆在第二行。没有(刚起来、或队列刚好空了)时不画这一行,
             // 而不是留一句"准备中"——那句话什么都没说。
             .setContentText(progress.title.takeIf { it.isNotEmpty() })
             // 还排着几条放 subText(通知右上角那一小行)。只画百分比的话,勾了十条的人会在
             // 第一条走到 99% 时以为马上就完了。
             .setSubText(
-                progress.queued.takeIf { it > 0 }?.let { getString(R.string.offline_notification_queued, it) },
+                progress.queued.takeIf { it > 0 }?.let { getStringBlocking(Res.string.offline_notification_queued, it) },
             )
             .setOngoing(true)
             .setProgress(100, progress.percent.coerceAtLeast(0), progress.percent < 0)

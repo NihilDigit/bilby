@@ -23,7 +23,7 @@ class BilbyApplication : Application(), AppContainerOwner, SingletonImageLoader.
             llmBaseUrl = BuildConfig.LLM_BASE_URL,
             llmApiKey = BuildConfig.LLM_API_KEY,
         )
-        container = AppContainer(this)
+        container = AppContainer(AndroidPlatform(this))
     }
 
     /**

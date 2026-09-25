@@ -5,14 +5,10 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import androidx.core.content.getSystemService
-import dev.bilby.api.BiliClient
-import dev.bilby.api.BiliConstants
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
 
 /**
  * 此刻有没有一条能上网的网络。装载时决定放不放本地副本、下载时决定等网还是退避,都问它。
@@ -53,26 +49,9 @@ fun Context.internetAvailability(): Flow<Boolean> = callbackFlow {
     awaitClose { manager.unregisterNetworkCallback(callback) }
 }.distinctUntilChanged()
 
-/**
- * 问一次 API,[ApiProbeTimeoutMillis] 内回来了就算网络跟得上。装载前拿它和本地副本赛跑,
- * 见 LoadResolver 的 networkResponsive。
- *
- * 问的是 `x/web-interface/nav`(PiliPlus 的 userInfo):一个不带流地址的读接口,应用本来就
- * 频繁调它。只看回没回来,不看回的是什么 —— 未登录的 -101 也说明网络是通的。
- * 抛异常(断网、DNS 失败)同样算跟不上。
- */
-suspend fun probeApi(client: BiliClient): Boolean =
-    withTimeoutOrNull(ApiProbeTimeoutMillis) {
-        runCatching { client.rawGet("${BiliConstants.WEB_HOST}/x/web-interface/nav") }.isSuccess
-    } ?: false
-
-/**
- * 赛跑的时限。正常网络下 nav 一两百毫秒回来;超过这个数,后面补 cid、取 playurl、起播每一步
- * 都要等同样久,不如直接放盘上那份。
- */
-private const val ApiProbeTimeoutMillis = 400L
-
-/** 挂起到有网为止。已经有网时立即返回。 */
-suspend fun Context.awaitInternet() {
-    internetAvailability().first { it }
+/** 公共代码经 [NetworkStatus] 问网络,Android 上就是上面这几个函数。 */
+class AndroidNetworkStatus(private val context: Context) : NetworkStatus {
+    override fun hasInternet(): Boolean = context.hasInternetNetwork()
+    override fun internetAvailability(): Flow<Boolean> = context.internetAvailability()
+    override fun isMetered(): Boolean = context.isOnMeteredNetwork()
 }

@@ -50,9 +50,6 @@ private const val EXTRA_ITEM_ROOM_ID = "roomId"
 private const val EXTRA_ITEM_LIVE_QN = "liveQn"
 private const val EXTRA_ITEM_ONLY_AUDIO = "onlyAudio"
 
-/** 直播项的 mediaId。带前缀是为了和 bvid 分得开:两种条目住在同一份 playlist 里。 */
-fun liveMediaId(roomId: Long): String = "live:$roomId"
-
 /**
  * 这一次装载指名的分 P,0 表示"没指名,由解析层决定"(见 [LoadResolver])。
  *

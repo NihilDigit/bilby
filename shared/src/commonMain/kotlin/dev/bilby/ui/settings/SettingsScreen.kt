@@ -1,0 +1,741 @@
+package dev.bilby.ui.settings
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.DownloadForOffline
+import androidx.compose.material.icons.outlined.FastForward
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.PlayCircleOutline
+import androidx.compose.material.icons.outlined.Palette
+import dev.bilby.data.AppearancePrefs
+import dev.bilby.ui.theme.ThemePalette
+import dev.bilby.ui.theme.dynamicColorAvailable
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import dev.bilby.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.dp
+import dev.bilby.AppBuild
+import dev.bilby.data.UpdateInfo
+import java.io.File
+import java.net.URI
+import java.net.URISyntaxException
+import dev.bilby.resources.*
+import dev.bilby.data.CodecPreference
+import dev.bilby.data.LlmConfig
+import dev.bilby.data.SettingsStore
+import dev.bilby.player.videoQualityLabel
+import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.navigationBarsBottom
+import dev.bilby.ui.padScaffoldExceptBottom
+import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.theme.Breakpoints
+import dev.bilby.ui.theme.Spacing
+
+/**
+ * 设置首页。**只放入口,没有一项设置直接躺在这里**(登出除外,见下)。
+ *
+ * 重做之前这一页是一整条铺开的清单:七节、六十多行,其中三分之二是「几档选一」常驻画出来的
+ * 单选行。要改一项弹幕密度得滚过二十几行自己早就选定的画质和编解码。
+ *
+ * **每一行右侧给当前值。** 一层菜单换来的如果是每次都要点进去才知道现在设成了什么,那这层
+ * 菜单是净亏 —— 摘要是它成立的前提,不是装饰。
+ *
+ * **不再分宽屏双栏。** 那是为六十多行准备的;八行入口拆两栏只会让右边一栏空着。
+ *
+ * 范围仍然是定死的(DESIGN 2 节):设置只调整**怎么做**,不调整**做不做**。推荐流、相关
+ * 推荐一个开关都不给 —— 它们能被开关掉的那一刻,DESIGN 1.3 的结构约束就退化成了自制力工具。
+ */
+@Composable
+fun SettingsScreen(
+    state: SettingsUiState,
+    onOpenSection: (SettingsSection) -> Unit,
+    onLogout: () -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var confirmingLogout by rememberSaveable { mutableStateOf(false) }
+    val notConfigured = stringResource(Res.string.settings_not_configured)
+
+    // pinned 而不是 enterAlways:顶栏留着不动,内容滚起来之后只换一档容器色。这一页八行入口
+    // 刚够一屏,顶栏跟着一起走反而像页面自己跳了一下。
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    Scaffold(
+        modifier = modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
+        topBar = {
+            BilbyTopBar(
+                title = stringResource(Res.string.settings_title),
+                onBack = onBack,
+                scrollBehavior = scrollBehavior,
+            )
+        },
+    ) { insets ->
+        AdaptiveContent(
+            modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets),
+            maxWidth = Breakpoints.ReadableWidth,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = Spacing.Spacious + navigationBarsBottom()),
+            ) {
+                // 七个去处装成一组。行与行之间不画线,边界由这个容器的底色和圆角承担。
+                SettingsGroup {
+                    SettingRow(
+                        title = stringResource(Res.string.settings_section_appearance),
+                        icon = Icons.Outlined.Palette,
+                        // 摘要给配色的名字:明暗在这一页上一眼看得出来,配色要进去才知道是哪一套。
+                        value = state.loaded.then { paletteLabel(state.appearance.palette) },
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.Appearance) },
+                    )
+                    SettingRow(
+                        title = stringResource(Res.string.settings_section_player),
+                        icon = Icons.Outlined.PlayCircleOutline,
+                        // 摘要给 WiFi 那一档:它是绝大多数时候真正生效的那个值。
+                        value = state.loaded.then { videoQualityLabel(state.defaultQualityWifi) },
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.Playback) },
+                    )
+                    SettingRow(
+                        title = stringResource(Res.string.settings_section_sponsorblock),
+                        icon = Icons.Outlined.FastForward,
+                        value = state.loaded.then { onOffLabel(state.sponsorBlock.enabled) },
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.SponsorBlock) },
+                    )
+                    SettingRow(
+                        title = stringResource(Res.string.settings_section_offline),
+                        icon = Icons.Outlined.DownloadForOffline,
+                        value = state.loaded.then {
+                            stringResource(Res.string.settings_offline_concurrency_value, state.offlineConcurrency)
+                        },
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.Offline) },
+                    )
+                    SettingRow(
+                        title = stringResource(Res.string.settings_section_agent),
+                        icon = Icons.Outlined.AutoAwesome,
+                        value = state.llm?.let { llm ->
+                            if (llm.isConfigured) {
+                                stringResource(Res.string.settings_configured)
+                            } else {
+                                notConfigured
+                            }
+                        },
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.Agent) },
+                    )
+                    SettingRow(
+                        title = stringResource(Res.string.settings_section_privacy),
+                        icon = Icons.Outlined.Shield,
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.Privacy) },
+                    )
+                    SettingRow(
+                        title = stringResource(Res.string.settings_section_about),
+                        icon = Icons.Outlined.Info,
+                        value = AppBuild.versionName,
+                        target = RowTarget.Page,
+                        onClick = { onOpenSection(SettingsSection.About) },
+                    )
+                }
+                // **登出留在首页,不进任何子页。** 它是这一页唯一的破坏性动作,埋进二级菜单
+                // 反而更危险:找不到的时候人会挨个点进去翻。
+                SectionTitle(stringResource(Res.string.settings_section_account))
+                SettingsGroup {
+                    SettingRow(
+                        title = stringResource(Res.string.settings_logout),
+                        icon = Icons.AutoMirrored.Outlined.Logout,
+                        onClick = { confirmingLogout = true },
+                    )
+                }
+            }
+        }
+    }
+
+    if (confirmingLogout) {
+        AlertDialog(
+            onDismissRequest = { confirmingLogout = false },
+            title = { Text(stringResource(Res.string.settings_logout)) },
+            text = { Text(stringResource(Res.string.settings_logout_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmingLogout = false
+                    onLogout()
+                }) { Text(stringResource(Res.string.settings_logout)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingLogout = false }) {
+                    Text(stringResource(Res.string.action_cancel))
+                }
+            },
+        )
+    }
+}
+
+/**
+ * 一组设置行的容器。**标题留在外面,行在里面。**
+ *
+ * 依据是风格指南 §2.3c 引的 M3 lists 页:"Use gaps for **contained** lists…
+ * Limit dividers to uncontained or complex lists" —— M3 Expressive 的默认答案是 containment,
+ * 而这一页从前既没有容器也没有分割线,一节的边界只能靠一行标题上方那段留白猜。
+ *
+ * 底色取 `surfaceContainer` 不取 `surfaceContainerLow`:后者在浅色主题下和页面的 `surface`
+ * 只差一点,真机上那圈边界几乎看不出来,等于白做了一个容器(§2.3c 里同一条,踩过两次)。
+ *
+ * **里面的行底色必须透明**,由 [SettingRow] / [ToggleSettingRow] 自己声明 ——
+ * `ListItem` 默认画 `surface`,摆进这个容器里每一行都会变成一块比容器亮的补丁。
+ */
+@Composable
+internal fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
+    ) {
+        Column(content = content)
+    }
+}
+
+/**
+ * 组标签。比 [SectionTitle] 轻一档:它分的是同一节内部的几组,不是另起一节。
+ */
+@Composable
+internal fun GroupLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(
+            start = Spacing.Comfortable,
+            end = Spacing.Comfortable,
+            top = Spacing.Cozy,
+            bottom = Spacing.Hair,
+        ),
+    )
+}
+
+
+/**
+ * 编解码偏好。**只列本机真有硬解器的编码** —— 列一个选了也只能软解的选项,
+ * 等于让用户自己给自己挑一条掉帧的路。查询走 `player/DeviceCodecs`。
+ *
+ * 过滤完之后就是一个普通的「几档选一」,所以套 [ChoiceRow]。它当初单写一份是因为选项要过滤、
+ * 标签来自枚举自己,而这两件事在调用点做掉即可,不必让通用组件多两个参数。
+ */
+@Composable
+internal fun CodecSection(
+    selected: CodecPreference,
+    hardwareCodecIds: Set<Int>,
+    onChange: (CodecPreference) -> Unit,
+) {
+    ChoiceRow(
+        title = stringResource(Res.string.settings_codec),
+        // 说清生效时机:改完不重开当前视频,不为一个设置项打断正在看的东西。
+        subtitle = stringResource(Res.string.settings_codec_subtitle),
+        options = CodecPreference.entries.filter { option ->
+            option.requiredCodecId()?.let { it in hardwareCodecIds } ?: true
+        },
+        selected = selected,
+        label = { it.label },
+        onChange = onChange,
+    )
+}
+
+/**
+ * 「几档选一」:**一行显示当前值,点开才是那几档**。
+ *
+ * 原先每一档都常驻画一行单选。七处这样的设置加起来占了整页三分之二的高度,而其中六处是
+ * 设一次就再不动的东西 —— 用户为了翻到下一节,每次都要滚过二十几行自己早就选定的选项。
+ * 一屏铺开唯一的好处是"能同时看见所有档",而设置页要回答的问题是"现在是哪一档",
+ * 那个答案现在写在行尾。
+ *
+ * 对话框而不是下拉菜单:档位最多的那两项(默认画质)有七档,下拉菜单在小屏上会顶到边缘,
+ * 而对话框有标题、有自己的最大高度。
+ *
+ * **滚动要自己给。** `AlertDialog` 的 `text` 槽位不滚 —— 它只把内容约束在对话框的最大高度里,
+ * 超出的部分直接被裁掉。默认画质那七档在小屏横屏下就超了,末尾两档点不到,而且看不出还有。
+ * 这里以前的注释写着"对话框自带滚动",那是一句没核实的断言。
+ */
+@Composable
+internal fun <T> ChoiceRow(
+    title: String,
+    options: List<T>,
+    selected: T?,
+    label: @Composable (T) -> String,
+    onChange: (T) -> Unit,
+    subtitle: String? = null,
+) {
+    var open by remember { mutableStateOf(false) }
+    SettingRow(
+        title = title,
+        subtitle = subtitle,
+        value = selected?.let { label(it) },
+        onClick = { open = true },
+    )
+    if (!open) return
+    AlertDialog(
+        onDismissRequest = { open = false },
+        title = { Text(title) },
+        text = {
+            // selectableGroup:读屏把这几行念成一组单选,而不是几个互不相干的按钮。
+            Column(modifier = Modifier.selectableGroup().verticalScroll(rememberScrollState())) {
+                options.forEach { option ->
+                    ListItem(
+                        headlineContent = { Text(label(option)) },
+                        leadingContent = { RadioButton(selected = option == selected, onClick = null) },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(
+                                selected = option == selected,
+                                role = Role.RadioButton,
+                                onClick = {
+                                    open = false
+                                    onChange(option)
+                                },
+                            ),
+                    )
+                }
+            }
+        },
+        // 选中即生效即关闭,所以只留取消。多一个「确定」等于让人按两次才改得掉一项。
+        confirmButton = {
+            TextButton(onClick = { open = false }) { Text(stringResource(Res.string.action_cancel)) }
+        },
+    )
+}
+
+/**
+ * 分组标题。**分组之间不画分割线**,靠这行带 primary 色的标题加上它上方的留白分隔。
+ *
+ * M3 cards 页的 don't 是"Don't force content into cards when spacing, headlines, or dividers
+ * would create a simpler visual hierarchy",divider 页则要求 full-width divider 用得
+ * sparingly。这一页每组头上本来就有一个带色标题,再压一条线是同一件事说两遍。
+ */
+/**
+ * 手动更新那一行。**副标题就是状态本身**,不另开一块区域:检查、下载、可安装、失败
+ * 四种情况读起来都是"这一项现在怎么样了",挤进同一行反而比弹对话框更安静。
+ *
+ * 点击的语义随状态变:空闲/已是最新/失败时是"再查一次",查到新版是"下载",
+ * 下好了是"安装",下载中不响应。
+ */
+@Composable
+internal fun UpdateRow(
+    state: UpdateState,
+    onCheck: () -> Unit,
+    onDownload: (UpdateInfo) -> Unit,
+    onInstall: (File) -> Unit,
+) {
+    val subtitle = when (state) {
+        UpdateState.Idle -> stringResource(Res.string.settings_update_idle)
+        UpdateState.Checking -> stringResource(Res.string.settings_update_checking)
+        UpdateState.UpToDate -> stringResource(Res.string.settings_update_latest)
+        is UpdateState.Available ->
+            stringResource(Res.string.settings_update_available, state.info.version)
+        is UpdateState.Downloading ->
+            stringResource(Res.string.settings_update_downloading, (state.progress * 100).toInt())
+        is UpdateState.Ready ->
+            stringResource(Res.string.settings_update_ready, state.info.version)
+        is UpdateState.Failed ->
+            stringResource(Res.string.settings_update_failed, state.message)
+    }
+    val downloading = state as? UpdateState.Downloading
+    Column {
+        SettingRow(
+            title = stringResource(Res.string.settings_update),
+            subtitle = subtitle,
+            onClick = when (state) {
+                is UpdateState.Available -> ({ onDownload(state.info) })
+                is UpdateState.Ready -> ({ onInstall(state.apk) })
+                UpdateState.Checking, is UpdateState.Downloading -> null
+                else -> onCheck
+            },
+        )
+        // 下载是这一页唯一有真实百分比的等待,所以给 determinate 而不是转圈。副标题里
+        // 那个数字精确,但一串跳动的数字看不出走得快还是慢,而这正是等待时要判断的事。
+        if (downloading != null) {
+            LinearProgressIndicator(
+                progress = { downloading.progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            )
+        }
+    }
+}
+
+@Composable
+internal fun SectionTitle(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(
+            start = Spacing.Comfortable,
+            end = Spacing.Comfortable,
+            // 上下不对称:分组之间的断开全靠这段上留白,所以它比下方大一档。
+            top = Spacing.Loose,
+            bottom = Spacing.Tight,
+        ),
+    )
+}
+
+/**
+ * 点这一行之后人会到哪里。行尾图标据此分开:去下一页给箭头,离开应用给外链图标,
+ * 弹对话框和当场执行的不给。
+ *
+ * 从前所有可点行一律画箭头,于是"点进去还有一页"这个承诺被用在了三种不同的行为上 ——
+ * 而箭头在 M3 的 list 里说的就是这一件事,给多了它就不再说明任何事情。
+ */
+internal enum class RowTarget { Page, External, Here }
+
+/**
+ * @param value 这一项**当前是什么**,显示在行尾图标之前。设置首页那七个入口靠它做到"不点进去
+ *   也知道现在设成了什么" —— 一层菜单换来的如果是每次都得点进去看一眼,那这层菜单是净亏。
+ */
+@Composable
+internal fun SettingRow(
+    title: String,
+    subtitle: String? = null,
+    value: String? = null,
+    /**
+     * 行首图标。**只有设置首页那一层给**:那七行是七个去处,图标让它们在滚动中彼此可分。
+     * 子页里的每一行是一项设置而不是一个去处,逐行配图标只会让人以为它们还能再点进去。
+     */
+    icon: ImageVector? = null,
+    target: RowTarget = RowTarget.Here,
+    onClick: (() -> Unit)? = null,
+) {
+    val trailingIcon = when (target) {
+        RowTarget.Page -> Icons.AutoMirrored.Filled.KeyboardArrowRight
+        RowTarget.External -> Icons.AutoMirrored.Filled.OpenInNew
+        RowTarget.Here -> null
+    }
+    ListItem(
+        headlineContent = { Text(title, style = MaterialTheme.typography.bodyLarge) },
+        leadingContent = icon?.let {
+            {
+                Icon(
+                    imageVector = it,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        supportingContent = subtitle?.let {
+            {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        trailingContent = if (trailingIcon != null || value != null) {
+            {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (value != null) {
+                        Text(
+                            text = value,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (trailingIcon != null) {
+                        Icon(
+                            imageVector = trailingIcon,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        } else {
+            null
+        },
+        // 透明,底色归 [SettingsGroup]。`ListItem` 默认画 `surface`,摆进容器里每一行都会变成
+        // 一块比容器亮的补丁,几行排下来就是一条条横杠(风格指南 §2.3c 同一条)。
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(role = Role.Button, onClick = onClick)
+                } else {
+                    Modifier
+                },
+            )
+            .fillMaxWidth(),
+    )
+}
+
+/**
+ * 整行可切换。用 `Modifier.toggleable` + role 而不是给控件单独挂 onClick:
+ * 前者让整行成为一个语义节点(读屏念"开关,已开启,自动跳过"),后者只有那个小控件能点。
+ */
+@Composable
+internal fun ToggleSettingRow(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    subtitle: String? = null,
+    indent: Boolean = false,
+    useCheckbox: Boolean = false,
+) {
+    ListItem(
+        headlineContent = {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+        },
+        supportingContent = subtitle?.let {
+            {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        trailingContent = {
+            if (useCheckbox) {
+                Checkbox(checked = checked, onCheckedChange = null)
+            } else {
+                Switch(checked = checked, onCheckedChange = null)
+            }
+        },
+        // 透明,理由同 [SettingRow]。
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier
+            .fillMaxWidth()
+            // toggleable 在 padding **外面**:反过来的话内边距那一圈不在触摸区里,涟漪也只
+            // 盖住中间一块。ListItem 自带 16dp 横向内边距和 56dp 起的行高,所以这里只补
+            // 子项相对父项的那一档缩进,不再重复给一份左右边距。
+            .toggleable(
+                value = checked,
+                role = if (useCheckbox) Role.Checkbox else Role.Switch,
+                onValueChange = onCheckedChange,
+            )
+            .padding(start = if (indent) Spacing.Tight else 0.dp),
+    )
+}
+
+/**
+ * LLM 三项一起改。三个框在一个框里,是因为它们只有凑齐了才有意义 ——
+ * 单改一项存下去,中间那个状态是"配了地址没配 key",助理照样跑不起来。
+ */
+@Composable
+internal fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (LlmConfig) -> Unit) {
+    var baseUrl by rememberSaveable { mutableStateOf(initial.baseUrl) }
+    var apiKey by rememberSaveable { mutableStateOf(initial.apiKey) }
+    var model by rememberSaveable { mutableStateOf(initial.model) }
+    var keyVisible by remember { mutableStateOf(false) }
+    // 空着是合法的:那是"不配助理"。挡的只是填了、但填得不成形的那一种。
+    val baseUrlValid = baseUrl.isBlank() || isHttpUrl(baseUrl)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(Res.string.settings_llm_dialog)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Cozy)) {
+                OutlinedTextField(
+                    value = baseUrl,
+                    onValueChange = { baseUrl = it },
+                    label = { Text(stringResource(Res.string.settings_llm_base_url)) },
+                    isError = !baseUrlValid,
+                    supportingText = if (baseUrlValid) {
+                        null
+                    } else {
+                        ({ Text(stringResource(Res.string.settings_url_invalid)) })
+                    },
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = apiKey,
+                    onValueChange = { apiKey = it },
+                    label = { Text(stringResource(Res.string.settings_api_key)) },
+                    singleLine = true,
+                    // 默认遮蔽。给一个显形按钮是因为长串 key 手输时看不见就没法核对,
+                    // 但默认态必须是遮住的 —— 设置页经常是当着别人的面打开的。
+                    visualTransformation = if (keyVisible) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
+                    trailingIcon = {
+                        IconButton(onClick = { keyVisible = !keyVisible }) {
+                            Icon(
+                                imageVector = if (keyVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                contentDescription = stringResource(
+                                    if (keyVisible) {
+                                        Res.string.settings_key_hide
+                                    } else {
+                                        Res.string.settings_key_show
+                                    },
+                                ),
+                            )
+                        }
+                    },
+                )
+                OutlinedTextField(
+                    value = model,
+                    onValueChange = { model = it },
+                    label = { Text(stringResource(Res.string.settings_model)) },
+                    singleLine = true,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = baseUrlValid,
+                onClick = {
+                    onConfirm(
+                        LlmConfig(
+                            baseUrl = baseUrl.trim(),
+                            apiKey = apiKey.trim(),
+                            model = model.trim().ifBlank { SettingsStore.DEFAULT_LLM_MODEL },
+                        ),
+                    )
+                },
+            ) { Text(stringResource(Res.string.action_save)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(Res.string.action_cancel)) }
+        },
+    )
+}
+
+/**
+ * 改一个服务地址。
+ *
+ * **label 常驻,不靠 placeholder 说明填的是什么。** placeholder 一开始打字就没了,而这个框
+ * 里要填的是一串没有自明性的地址;对话框标题在小屏上又会被弹起的键盘顶出视野。
+ *
+ * 校验只挡形态不对的输入,保存按钮跟着一起禁掉 —— 存进去一个不成形的地址,症状要等到下一次
+ * 播放时才以"跳过没生效"的样子出现,那时没人会想到是这里。
+ */
+@Composable
+internal fun UrlFieldDialog(
+    title: String,
+    label: String,
+    initial: String,
+    placeholder: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var value by rememberSaveable { mutableStateOf(initial) }
+    val valid = isHttpUrl(value)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { value = it },
+                label = { Text(label) },
+                placeholder = { Text(placeholder) },
+                isError = !valid,
+                // 错误态配一句说明,不只是把框描红:M3 的 text fields 页把两者算一件事,
+                // 而一个只变红的框说不出它嫌哪里不对。没有错误时传 null,那一行不占高度。
+                supportingText = if (valid) {
+                    null
+                } else {
+                    ({ Text(stringResource(Res.string.settings_url_invalid)) })
+                },
+                singleLine = true,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(value.trim()) }, enabled = valid) {
+                Text(stringResource(Res.string.action_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(Res.string.action_cancel)) }
+        },
+    )
+}
+
+/**
+ * 地址形态是不是对的。只认 http/https 加一个非空主机名 —— 能不能连上要发出去才知道,
+ * 这里挡的是漏掉协议头、把一整段说明粘进来这类当场就看得出来的输入。
+ *
+ * 用 [URI] 而不是自己写正则:它按 RFC 3986 拆,而手写的正则每次都会漏掉端口、路径
+ * 或 IPv6 里的某一种写法。
+ */
+private fun isHttpUrl(value: String): Boolean {
+    val uri = try {
+        URI(value.trim())
+    } catch (malformed: URISyntaxException) {
+        return false
+    }
+    val scheme = uri.scheme?.lowercase() ?: return false
+    return scheme in HttpSchemes && !uri.host.isNullOrBlank()
+}
+
+private val HttpSchemes = setOf("http", "https")
+
+/**
+ * 值没到齐时不给摘要。**留空,不是给一个默认值** —— 首页每行右侧那串字是"现在是什么"的
+ * 回答,先答错再改口比不答更糟。见 [SettingsUiState.loaded]。
+ */
+@Composable
+private inline fun Boolean.then(text: @Composable () -> String): String? = if (this) text() else null
+
+/** 配色的名字。存的是 dynamic 但系统不支持时,实际用的是默认那一套,写它的名字。 */
+@Composable
+private fun paletteLabel(palette: String): String {
+    if (palette == AppearancePrefs.DYNAMIC && dynamicColorAvailable) {
+        return stringResource(Res.string.theme_palette_dynamic)
+    }
+    val resolved = ThemePalette.entries.firstOrNull { it.name == palette } ?: ThemePalette.Default
+    return stringResource(resolved.label)
+}

@@ -46,8 +46,9 @@
 
 ### 探针在哪、怎么用
 
-`app/src/test/kotlin/dev/bilby/ui/M3ApiProbe.kt`,用
-`./gradlew :app:compileDebugUnitTestKotlin` 单独编译。**升级依赖后重跑它。**
+`shared/src/androidHostTest/kotlin/dev/bilby/ui/M3ApiProbe.kt`,用
+`./gradlew :shared:compileAndroidHostTest` 单独编译。**升级依赖后重跑它。** 它只探 Android 端的
+alpha25;桌面端编译的是 CMP 1.12.1 对应的 alpha22,那一侧由 `:shared:compileKotlinDesktop` 把关。
 
 两条工作方式上的规矩,都是踩出来的:
 

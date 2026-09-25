@@ -129,6 +129,14 @@ session. Session connections must keep the full default `Player.Commands`: with
 black picture with nothing in the log. Leaving a page disconnects the controller and never
 releases the player.
 
+Common UI sees the player only as `PlaybackHost` (state, connect) and `PlayerHandle`
+(control), and sends service commands as `PlaybackCommand`. On Android these wrap the
+MediaController and its custom `SessionCommand`s (`AndroidPlaybackHost`); on desktop
+`DesktopPlaybackHost` owns the single mpv player and plays one item at a time — the queue is
+not implemented there yet. The desktop publishes `loadKey` before opening a stream, the
+opposite of Android: mpv's D3D11 output is created by the surface, and the page only mounts
+the surface once `loadKey` matches.
+
 Listening mode is a state inside the video page, structurally identical to fullscreen. The
 page stays composed, the same player keeps running, and progress stays where it is, so there
 is no lifecycle to manage. Three earlier attempts got this wrong by modelling it as a
@@ -152,6 +160,32 @@ does not deduplicate. Both entry decorators index by the key, so one key appeari
 means a shared ViewModel and a shared saveable slot, popping either clears the other's
 store, and composing both at once trips `SaveableStateHolder`'s `require`. Push through
 `pushUnique` in `ui/NavBackStackPolicy.kt` — never `backStack.add` directly.
+
+## Modules and platforms
+
+The app is Kotlin Multiplatform with two targets, Android and desktop JVM (Windows x64).
+
+- `:shared` holds all code and UI. `commonMain` is everything that is not a platform
+  framework; `androidMain` holds Media3, the playback service, WorkManager and window
+  handling; `desktopMain` holds the mpv player (mediamp) and the desktop platform objects.
+- `:app` is only the Android packaging entry: manifest, launcher resources, signing,
+  BuildConfig. `BilbyApplication` fills `AppBuild` from BuildConfig.
+- `:desktop` is only the desktop entry: the window and the MSI.
+
+Both targets run on the JVM, so KGP does not compile `commonMain` as metadata and common code
+may use JDK and plain Java libraries (`java.io.File`, OkHttp, zxing). Platform differences go
+behind `expect`/`actual` or behind `Platform` / `SystemActions` / `PlaybackHost`; common code
+never tests which platform it is on. A capability one platform lacks is a `supports*` flag
+that hides the entry, never a button that does nothing.
+
+UI strings live in `shared/src/commonMain/composeResources` and are read through
+`dev.bilby.stringResource` / `getString`, not the Compose resources functions of the same
+name: those only substitute `%1$s` and `%1$d`, and the English strings use `%1$.1f` and `%%`.
+
+Compose is on Compose Multiplatform 1.12.1, pinned by mediamp's Skiko (see
+`libs.versions.toml`). material3 therefore compiles against two versions: the BOM's
+1.5.0-alpha25 on Android and CMP's alpha22 on desktop. Code in `commonMain` must compile
+against both — build `:shared:compileKotlinDesktop` as well as Android.
 
 ## Toolchain
 
@@ -184,16 +218,18 @@ name. Code that adds name-based reflection must add its keep rule in the same ch
 ## Building and verifying
 
 ```
-./gradlew installDebug          # dev.bilby.debug
-./gradlew assembleRelease       # dev.bilby, runs R8
-./gradlew testDebugUnitTest
+./gradlew installDebug                                       # dev.bilby.debug
+./gradlew assembleRelease                                    # dev.bilby, runs R8
+./gradlew :shared:testAndroidHostTest :shared:desktopTest    # unit tests, both targets
+./gradlew :desktop:run                                       # desktop app
 ```
 
 Releases come from a `v` tag through `.github/workflows/release.yml` and nowhere else. The
 version is passed in as `-PbilbyVersion` and derived from the tag, so a local build reports
 `0.0.0-dev`. The signing key exists only as a repository secret; local release builds fall
-back to the debug key so R8 output can still be installed and checked. Unit test tasks exist
-for the debug variant only — `testReleaseUnitTest` does not exist and fails in CI.
+back to the debug key so R8 output can still be installed and checked. Unit tests live in
+`:shared`: platform-free ones in `commonTest` run on both targets, Media3 and Robolectric ones
+in `androidHostTest`. `:app` has no unit tests.
 
 **A workflow triggered by a `release` event runs the file as it exists at the tag**, not the
 one on the default branch. Fixing a release-time workflow therefore does nothing for the
