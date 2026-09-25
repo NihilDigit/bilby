@@ -17,7 +17,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
@@ -47,8 +47,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ShortNavigationBar
 import androidx.compose.material3.ShortNavigationBarItem
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.WideNavigationRail
+import androidx.compose.material3.WideNavigationRailItem
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.SnackbarHost
@@ -909,8 +910,9 @@ private fun RootTabs(
         }
     }
 
-    // IME 退让放在 Scaffold 这一层,让底栏跟着键盘一起上移。放在内层输入框上的话,
-    // 底栏仍会在键盘下方占着高度,表现为输入框与键盘之间空一条。
+    // 键盘弹起时盖住底栏,底栏不跟着上移:navigation-bar.md 的 Placement 一节列明底栏可以被
+    // 键盘临时遮住,示例正是搜索。跟着上移的话底栏夹在输入框和键盘之间,白占一条高度。
+    // IME 退让因此只加在内容区,见 [RootTabsContent]。
     //
     // **三个根 tab 没有顶栏。** 标题以前和底栏标签逐字重复——底栏已经有标签 + 选中指示器,
     // 顶栏再写一遍是纯占位;M3 对 top app bar 的定义是"显示信息与操作",标题和操作都没有时
@@ -925,7 +927,6 @@ private fun RootTabs(
     // 下面内容区那行 `.padding(top = insets.calculateTopPadding())` 不用改。
     if (windowSize == BilbyWindowSize.Compact) {
         Scaffold(
-            modifier = Modifier.imePadding(),
             bottomBar = {
                 // flexible 款(64dp)。baseline 的 NavigationBar 高 80dp,M3 Expressive 已标为
                 // "no longer recommended"(navigation-bar.md)。
@@ -935,7 +936,7 @@ private fun RootTabs(
                             selected = selected == tab,
                             onClick = { onTabClick(tab) },
                             icon = { RootTabIcon(tab, selected == tab) },
-                            label = { RootTabLabel(tab) },
+                            label = { RootTabLabel(tab, selected == tab) },
                         )
                     }
                 }
@@ -968,22 +969,24 @@ private fun RootTabs(
     } else {
         // medium 起用 rail 换掉底栏:导航贴在边缘,内容拿到完整的横向空间。三个根目的地
         // 不需要 drawer —— M3 的 navigation rail 页把 rail 作为 drawer 的优先替代。
-        Row(modifier = Modifier.fillMaxSize().imePadding()) {
-            NavigationRail(modifier = Modifier.fillMaxHeight()) {
-                // 目的地居中:M3 的 navigation rail 页对平板给的就是这个摆法,三格顶在
-                // 屏幕最上沿时握持的那只手要伸到最远处。material3 的 NavigationRail 没有
-                // 排布参数(查 1.5.0-alpha25 的 aar 核实过),内部是一列 spacedBy,
-                // 所以上下各垫一个 weight 把它们挤到中间。
-                Spacer(modifier = Modifier.weight(1f))
+        //
+        // collapsed 款(WideNavigationRail 的默认态)。baseline 的 NavigationRail 已被
+        // navigation-rail.md 标为 "no longer recommended"。目的地居中:同一页对平板给的就是
+        // 这个摆法,三格顶在屏幕最上沿时握持的那只手要伸到最远处。
+        Row(modifier = Modifier.fillMaxSize()) {
+            WideNavigationRail(
+                modifier = Modifier.fillMaxHeight(),
+                arrangement = Arrangement.Center,
+            ) {
                 RootTab.entries.forEach { tab ->
-                    NavigationRailItem(
+                    WideNavigationRailItem(
                         selected = selected == tab,
                         onClick = { onTabClick(tab) },
                         icon = { RootTabIcon(tab, selected == tab) },
-                        label = { RootTabLabel(tab) },
+                        label = { RootTabLabel(tab, selected == tab) },
+                        railExpanded = false,
                     )
                 }
-                Spacer(modifier = Modifier.weight(1f))
             }
             Scaffold(modifier = Modifier.weight(1f)) { insets ->
                 RootTabsContent(
@@ -1027,9 +1030,13 @@ private fun RootTabIcon(tab: RootTab, selected: Boolean) {
     )
 }
 
+/**
+ * 选中项的标签加粗。navigation-bar.md 的 Visual indicators 一节要求 "a bold label for
+ * selected destinations",而 ShortNavigationBarItem 的 token 只有一份标签字体,不分选中态。
+ */
 @Composable
-private fun RootTabLabel(tab: RootTab) {
-    Text(stringResource(tab.label))
+private fun RootTabLabel(tab: RootTab, selected: Boolean) {
+    Text(stringResource(tab.label), fontWeight = if (selected) FontWeight.Bold else null)
 }
 
 @Composable
@@ -1058,14 +1065,16 @@ private fun RootTabsContent(
     onOpenFavFolders: () -> Unit,
     onOpenMessages: () -> Unit,
 ) {
-    // 只 padding 不声明消费的话,子层的 imePadding() 会再多退让一个底栏高度。
+    // 只 padding 不声明消费的话,后面的 imePadding() 会再多退让一个底栏高度。消费之后它只让出
+    // 键盘高出底栏的那一截,内容正好停在键盘上沿,底栏留在键盘下面。
     val bottom = PaddingValues(bottom = insets.calculateBottomPadding())
     AdaptiveContent(
         modifier = Modifier
             .fillMaxSize()
             .padding(top = insets.calculateTopPadding())
             .padding(bottom)
-            .consumeWindowInsets(bottom),
+            .consumeWindowInsets(bottom)
+            .imePadding(),
         maxWidth = Breakpoints.ReadableWidth,
     ) {
         // **Top level**:点底栏或 rail 换根目的地。规范原文
