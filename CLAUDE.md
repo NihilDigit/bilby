@@ -222,7 +222,28 @@ name. Code that adds name-based reflection must add its keep rule in the same ch
 ./gradlew assembleRelease                                    # dev.bilby, runs R8
 ./gradlew :shared:testAndroidHostTest :shared:desktopTest    # unit tests, both targets
 ./gradlew :desktop:run                                       # desktop app
+./gradlew :desktop:packageReleaseMsi :desktop:packageReleaseUpdate  # MSI + update assets
+java -Xverify:all desktop/package/VerifyClasses.java desktop/build/compose/binaries/main-release/app/Bilby/app
 ```
+
+**Desktop packaging.** jlink and jpackage run on an Azul Zulu 25 toolchain, because Temurin 25
+ships without jmods; bytecode stays at 17. **The desktop build does not run ProGuard.** Its
+preverifier recomputed a wrong stack map for `PlayerShell` (a `long` local inferred as `top`),
+so the packaged app threw `VerifyError` on entering the player; 7.8.0 and 7.10.0 both did, and
+`:desktop:run` never goes through it. The last command above loads every packaged `dev.bilby`
+class so the JVM verifies it; the release workflow runs the same check.
+
+The MSI's `upgradeUuid` in `desktop/build.gradle.kts` is fixed forever: Windows Installer
+recognises an upgrade by it, and changing it makes the next MSI install alongside the old one.
+The same value reaches the app as `-Dbilby.upgrade-code`, which the in-app updater uses to ask
+Windows Installer whether this install directory belongs to our MSI.
+
+The desktop updater (`update/DesktopAppUpdater.kt`) needs three assets per release —
+`bilby-windows-x64-<ver>.msi`, `-app.zip` and `-files.json` — and treats a version as available
+only when all three exist. A patch update swaps the files marked `patch` in `files.json`;
+anything else that differs forces a full MSI reinstall, so keep large unchanging files (native
+libraries) out of the jars marked `patch`. Versions come from `-Dbilby.version`, never from
+`jpackage.app-version`: the latter is the MSI version, which is 1.0.0 for every local build.
 
 Releases come from a `v` tag through `.github/workflows/release.yml` and nowhere else. The
 version is passed in as `-PbilbyVersion` and derived from the tag, so a local build reports
@@ -255,12 +276,9 @@ of a batch is usually self-inflicted and self-repaired before anyone saw it; rep
 asks the reader to verify something they never had. The diff since the tag answers it — a
 problem inside a file that is new in this release was never shipped.
 
-`.github/workflows/apk-size-badge.yml` refreshes the size badge and runs on its own after a
-release is published; it can also be dispatched against any older tag. It writes
-`apk-size.json` **on the orphan `badges` branch**, which nothing else touches: the file has
-to live in the repository — shields.io rejects `github.com` as an endpoint host, so serving
-the JSON as a release asset returns `domain is blocked` — but it does not have to live on
-main, and it used to leave a commit there after every release.
+The README's SLSA badge is `slsa-l3.svg` **on the orphan `badges` branch**, which nothing else
+touches: an image the README links to has to live in the repository, but it does not have to
+live on main.
 
 **The device is the owner's, and driving it needs their say-so.** Reach for `adb` — install,
 launch, tap, screenshot — only after they have asked for it in this session. Otherwise hand

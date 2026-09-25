@@ -1,6 +1,9 @@
 # 打 tag 发版。构建只发生在这里 —— 本机不产出、也拿不到发布密钥,
 # 所以「这个 APK 是从这份源码编出来的」这句话有据可查。
 #
+# Windows 安装包由 job `desktop` 在 Windows runner 上构建,产物交给 job `release`,
+# 与 APK 一起进校验和、两份构建来源证明和同一个草稿 release。
+#
 # 两份构建来源证明:job `release` 里的 attest-build-provenance(GitHub 自己核,快),
 # 以及 job `provenance` 走 slsa-github-generator 出的 SLSA Build L3 证明。后者跑在
 # 隔离的可复用 workflow 里,拿不到这个仓库的构建脚本和签名密钥 —— 这正是 L2 与 L3
@@ -26,7 +29,74 @@ permissions:
   attestations: write
 
 jobs:
+  # Windows x64 的 MSI、免安装 zip 与应用内更新的两个附件。只产出,不发布:上传由 release
+  # 统一做,校验和与证明才能覆盖全部附件。代价是它失败时整个发版停下,而不是只发出 APK;
+  # 发的是草稿,重跑失败的 job 即可,不会出现缺了桌面包却已公开的 release。
+  desktop:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      # Zulu 而不是 Temurin:Temurin 25 的发行包不带 jmods,release 变体的 ProGuard 读不到
+      # java.lang.Object,jlink 也无从取模块。打包工具链在 desktop/build.gradle.kts 里按 Azul 25
+      # 取,Gradle 跑在这份 JDK 上,即可直接认出。
+      - uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: "25"
+
+      # 停在 v5 的理由见下面 release job 的同名步骤。
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Derive version from tag
+        id: version
+        shell: bash
+        run: echo "name=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # release job 在 Linux 上也跑这组测试;这里再跑一遍,是因为桌面端只发 Windows,
+      # 路径与原生库的问题只在这里暴露。
+      - name: Test
+        run: ./gradlew.bat :shared:desktopTest -PbilbyVersion=${{ steps.version.outputs.name }}
+
+      # WiX 由 Compose 插件自行下载,不必另装。清单与 app.zip 在同一次调用里生成,
+      # 与 MSI 取自同一份应用目录。MSI 未签名,安装时 SmartScreen 会提示。
+      - name: Build
+        run: ./gradlew.bat :desktop:packageReleaseMsi :desktop:packageReleaseUpdate -PbilbyVersion=${{ steps.version.outputs.name }}
+
+      # 打包出的类逐个让 JVM 校验一遍。打包流程改写过的字节码可能校验不过,而那只在装上之后
+      # 进到某一页才崩,gradle run 与单测都走不到(见 desktop/package/VerifyClasses.java)。
+      - name: Verify classes
+        run: java -Xverify:all desktop/package/VerifyClasses.java desktop/build/compose/binaries/main-release/app/Bilby/app
+
+      - name: Collect artifacts
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '${{ steps.version.outputs.name }}'
+          $binaries = 'desktop/build/compose/binaries/main-release'
+          $appDir = "$binaries/app/Bilby"
+          if (-not (Test-Path "$appDir/Bilby.exe")) { throw "缺少 $appDir/Bilby.exe" }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          # 免安装版:整个应用目录打包,解压即得 Bilby 目录。
+          Compress-Archive -Path $appDir -DestinationPath "dist/bilby-windows-x64-$version.zip"
+          # jpackage 按包名命名 MSI,改成与 APK 同一套规则,一眼看出平台与架构。
+          $msi = Get-ChildItem "$binaries/msi/*.msi" | Select-Object -First 1
+          if (-not $msi) { throw 'packageReleaseMsi 没有产出 MSI' }
+          Copy-Item $msi.FullName "dist/bilby-windows-x64-$version.msi"
+          # 应用内更新的 files.json 与 app.zip,名字由 packageReleaseUpdate 定好。
+          Copy-Item "$binaries/update/*" dist/
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
   release:
+    needs: [desktop]
     runs-on: ubuntu-latest
     outputs:
       # 交给下面那个隔离的 provenance job。传的是摘要不是文件:generator 不信任、
@@ -69,6 +139,12 @@ jobs:
           BILBY_KEY_PASSWORD: ${{ secrets.BILBY_KEY_PASSWORD }}
         run: ./gradlew assembleRelease -PbilbyVersion=${{ steps.version.outputs.name }}
 
+      # 桌面产物先落进 dist,下一步的校验和与证明摘要才会一并算上。
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-dist
+          path: dist
+
       # 装错架构会装不上,所以文件名必须一眼看出是哪个变体。
       - name: Collect artifacts
         id: collect
@@ -85,40 +161,57 @@ jobs:
           (cd dist && sha256sum * > SHA256SUMS.txt)
           ls -l dist
 
-          # SLSA generator 要的是 base64 过的 `sha256sum` 输出。只列 APK:
-          # 证明覆盖的是"用户会装进手机的那几个文件"。
-          echo "hashes=$(cd dist && sha256sum *.apk | base64 -w0)" >> "$GITHUB_OUTPUT"
+          # SLSA generator 要的是 base64 过的 `sha256sum` 输出。只列会被安装或执行的文件:
+          # APK、MSI、免安装 zip 与应用内更新解开的 app.zip。files.json 与 mapping 不在其列,
+          # 由 SHA256SUMS.txt 覆盖。
+          echo "hashes=$(cd dist && sha256sum *.apk *.msi *.zip | base64 -w0)" >> "$GITHUB_OUTPUT"
 
-      # 证明这些文件确实由这个 workflow、从这个 commit 构建。
+      # 证明这些文件确实由这个 workflow、从这个 commit 构建。桌面产物出自 desktop job,
+      # 同属这次 workflow run,证明里记录的来源相同。
       # 校验:gh attestation verify bilby-<版本>-<变体>.apk --repo <owner>/<repo>
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: dist/*.apk
+          subject-path: |
+            dist/*.apk
+            dist/*.msi
+            dist/*.zip
 
+      # 附件不分先后上传。桌面端的应用内更新以 files.json 为准判断新版是否可用,本该最后
+      # 上传;这里发的是草稿,公开之前 releases/latest 看不到它,公开时附件已经齐全。
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
           draft: true
           files: dist/*
+          # 「安装」「校验」两个标题逐字对应应用里的 DownloadPageSections(ui/update/StartupUpdate.kt):
+          # 更新弹窗读到这两个标题就截断,不画下载页的内容。改标题要两边一起改。
           body: |
             ## 安装
 
-            universal 为通用包;arm64-v8a、armeabi-v7a、x86_64 为对应架构的精简包,体积略小。四者为同一版本的不同打包,架构不匹配时无法安装。
+            | 附件 | 说明 |
+            |---|---|
+            | `universal.apk` | Android 通用安装包 |
+            | `arm64-v8a.apk` 等 | 按 CPU 架构拆分的 Android 安装包，体积较小 |
+            | `.msi` | Windows 安装包，安装至当前用户目录，支持应用内更新 |
+            | `.zip` | Windows 便携版 |
+            | `-files.json`、`-app.zip` | 供应用内更新使用 |
+
+            Windows 安装包未经代码签名，首次运行时 SmartScreen 会拦截，选择「更多信息」→「仍要运行」。
 
             ## 校验
 
-            APK 由 GitHub Actions 从本 tag 构建并签名。
+            附件均由 GitHub Actions 基于本 tag 构建，APK 经过签名。
 
-            - 校验和:`SHA256SUMS.txt`
-            - 构建来源:`gh attestation verify <文件> --repo ${{ github.repository }}`
-            - SLSA Build L3 证明:`multiple.intoto.jsonl`,用 [slsa-verifier](https://github.com/slsa-framework/slsa-verifier) 校验
+            - 校验和：`SHA256SUMS.txt`
+            - 构建来源：`gh attestation verify <文件> --repo ${{ github.repository }}`
+            - SLSA Build L3：`multiple.intoto.jsonl`
 
               ```
-              slsa-verifier verify-artifact <文件>                 --provenance-path multiple.intoto.jsonl                 --source-uri github.com/${{ github.repository }}
+              slsa-verifier verify-artifact <文件> --provenance-path multiple.intoto.jsonl --source-uri github.com/${{ github.repository }}
               ```
 
-            `mapping.txt` 用于还原崩溃堆栈。
+            - 混淆映射：`mapping.txt`，用于还原 Android 崩溃堆栈
 
   # SLSA Build Level 3。
   #

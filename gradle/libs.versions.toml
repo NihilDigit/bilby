@@ -40,10 +40,12 @@ lifecycleMultiplatform = "2.11.0"
 sqlite = "2.6.2"
 # 桌面播放后端。它的运行时包带打过 D3D11 render API 补丁的 libmpv,见 player-desktop/build.gradle.kts。
 mediamp = "0.5.0"
+# 桌面全屏要直接调 Win32(见 desktop 的 WindowsFullscreen)。跟 mediamp 传递带进来的版本一致。
+jna = "5.13.0"
 
 # 弹幕引擎,独立仓库。开发期走 composite build(settings.gradle.kts),这个版本号只在
 # 脱离 composite build 从仓库解析时才生效。
-tdanmaku = "0.2.0"
+tdanmaku = "0.2.1"
 
 [libraries]
 tdanmaku = { module = "dev.nihildigit:tdanmaku", version.ref = "tdanmaku" }
@@ -125,6 +127,7 @@ lifecycle-mp-viewmodel-navigation3 = { module = "org.jetbrains.androidx.lifecycl
 androidx-datastore-preferences-core = { module = "androidx.datastore:datastore-preferences-core", version.ref = "datastore" }
 androidx-sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version.ref = "sqlite" }
 kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "kotlinxCoroutines" }
+jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
 mediamp-mpv = { module = "org.openani.mediamp:mediamp-mpv", version.ref = "mediamp" }
 mediamp-mpv-runtime-windows-x64 = { module = "org.openani.mediamp:mediamp-mpv-runtime-windows-x64", version.ref = "mediamp" }
 

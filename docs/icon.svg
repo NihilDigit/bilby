@@ -7,6 +7,8 @@
     - 内容不套那一层 0.75 缩放。launcher 图标缩小是为了和同屏其他应用的图标对齐视觉重量,
       而这一张在 README 里单独出现,没有可对齐的对象,缩了只会显得小气。
     - 画布按 108 直接装内容,不留 launcher 那圈安全区。
+
+    桌面端的 icon.ico 与 app-icon.png 由这张渲染,改完按 desktop/package/windows/README.md 重新生成。
   -->
   <rect width="108" height="108" rx="24" fill="#4A5C92"/>
   <path fill="#FFFFFF" fill-rule="evenodd"
