@@ -1,111 +1,93 @@
 <p align="center"><img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/icon.png" alt="Bilby" width="96"></p>
 
-# Bilby
+<h1 align="center">Bilby</h1>
 
-[English](README.en.md)
+<p align="center"><b>简体中文</b> | <a href="README.en.md">English</a></p>
 
-[![APK](https://raw.githubusercontent.com/NihilDigit/bilby/badges/apk-size.svg)](https://github.com/NihilDigit/bilby/releases/latest) [![Android 10+](https://img.shields.io/badge/Android-10%2B-4A5C92?style=flat-square&logo=android&logoColor=white)](#安装) [![SLSA Build L3](https://raw.githubusercontent.com/NihilDigit/bilby/badges/slsa-l3.svg)](https://github.com/NihilDigit/bilby/attestations) [![GPL-3.0](https://img.shields.io/github/license/NihilDigit/bilby?style=flat-square&color=4A5C92&logo=gnu&logoColor=white)](LICENSE)
+<p align="center">
+<a href="#安装"><img alt="Android 10+" src="https://img.shields.io/badge/Android-10%2B-4A5C92?style=flat-square&logo=android&logoColor=white"></a>
+<a href="#安装"><img alt="Windows 10+ x64" src="https://img.shields.io/badge/Windows-10%2B%20x64-4A5C92?style=flat-square&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0yIDJoOS41djkuNUgyek0xMi41IDJIMjJ2OS41aC05LjV6TTIgMTIuNWg5LjVWMjJIMnpNMTIuNSAxMi41SDIyVjIyaC05LjV6Ii8+PC9zdmc+"></a>
+<a href="https://github.com/NihilDigit/bilby/attestations"><img alt="SLSA Build L3" src="https://raw.githubusercontent.com/NihilDigit/bilby/badges/slsa-l3.svg"></a>
+<a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/github/license/NihilDigit/bilby?style=flat-square&color=4A5C92&logo=gnu&logoColor=white"></a>
+<br>
+<img alt="Kotlin Multiplatform" src="https://img.shields.io/badge/Kotlin%20Multiplatform-4A5C92?style=flat-square&logo=kotlin&logoColor=white">
+<img alt="Compose Multiplatform" src="https://img.shields.io/badge/Compose%20Multiplatform-4A5C92?style=flat-square&logo=jetpackcompose&logoColor=white">
+<img alt="Material 3 Expressive" src="https://img.shields.io/badge/Material%203%20Expressive-4A5C92?style=flat-square&logo=materialdesign&logoColor=white">
+</p>
 
-![Kotlin](https://img.shields.io/badge/Kotlin-4A5C92?style=flat-square&logo=kotlin&logoColor=white) ![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-4A5C92?style=flat-square&logo=jetpackcompose&logoColor=white) ![Material 3 Expressive](https://img.shields.io/badge/Material%203%20Expressive-4A5C92?style=flat-square&logo=materialdesign&logoColor=white)
+Bilby 是一款面向 Android 与 Windows 的 bilibili 客户端。
 
-Bilby 是一款安卓原生 bilibili 客户端，提供无推荐流的订阅式设计、优化的听视频功能和 Agentic 搜索推荐能力。
+基于 Kotlin Multiplatform 构建，两端共用界面与业务代码，界面遵循 Material 3 Expressive 设计规范：
+- **Android**：原生高性能实现，界面基于 Jetpack Compose，播放基于 Media3。
+- **Windows**：基于 Compose Multiplatform 的 GPU 加速界面，视频画面直通显存，零拷贝合成。
 
-> **本项目仍在开发中。** 界面与接口层均在持续改动，不保证稳定性与兼容性。
+界面注重减少干扰，内容来自关注与主动检索。
 
-## 订阅式交互体验，远离推荐流打扰
+> 当前提供实验性的 Windows 支持。
+
+## 动态与播放
+
+首页展示已关注 UP 主的动态，不提供推荐流。播放页提供「找相关」操作，支持基于当前视频单次检索候选内容。
 
 <p align="center">
 <img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/feed.jpg" width="240" height="528" alt="首页：关注动态">
 <img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/video.jpg" width="240" height="528" alt="播放页与播放队列">
 <img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/in-video.jpg" width="240" height="528" alt="点按后 Agent 基于当前视频检索">
 </p>
-<p align="center">首页只收录关注的 UP 主；播放队列跟随打开视频的列表；如有需要，Agent 可以基于当前视频搜索相关内容</p>
 
-## 重新设计的原生听视频能力支持
+## 听视频
+
+在 Android 上与系统媒体控制自然衔接，支持息屏后台、锁屏与耳机线控。听视频随切随播，无需重新加载；字幕逐句跟随，点句即可跳转。
 
 <p align="center">
 <img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/listen.jpg" width="240" height="528" alt="听视频界面">
 <img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/lyrics.jpg" width="240" height="528" alt="逐句字幕">
 <img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/sleep-timer.jpg" width="240" height="528" alt="定时关闭">
 </p>
-<p align="center">与播放共用同一播放器，随时切换；支持息屏后台、锁屏与线控、定时关闭；字幕逐句跟随，点句跳转</p>
 
-## 用 Agent 搜索沙里淘金
+## Agent 检索
+
+支持接入 OpenAI 兼容端点。Agent 检索全站，结合简介与热评筛选候选。
 
 <p align="center">
 <img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-running.jpg" width="240" height="528" alt="Agent 检索过程">
 <img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-answer.jpg" width="240" height="528" alt="Agent 返回的候选视频">
 </p>
-<p align="center">检索全站，阅读简介与热评，返回候选并逐条说明理由</p>
 
-## 功能
+## 计划中
 
-已完成：
-
-- [x] 信息流：关注动态（可屏蔽 UP 主）、特别关注或最常访问的 UP 主（正在直播的可直接进直播间）、UP 主推送
-- [x] 关注列表：按分组筛选、按最常访问或最近关注排序、搜索；标注特别关注与互关，可直接取消关注
-- [x] 历史记录：断点续播；可删除单条、多选批量删除、清空已看完或全部；可暂停记录
-- [x] 稍后再看：可清空已失效或已看完的视频
-- [x] 动态：视频、转发、图文、文字、直播、专栏与预约，正文与配图原样展开，表情内联显示，预约可加入日历
-- [x] 专栏站内阅读：正文、配图、引用卡片、代码块与公式
-- [x] UP 主空间：投稿、动态、合集/系列，支持空间内搜索
-- [x] 播放：全屏、小窗、清晰度与音质、倍速（WSOLA）、双击快进退与暂停、长按快进、拖动进度、滑动调亮度音量、锁定；播放进度云端同步；默认画质与音质按 WiFi 与计费网络分设，播放器内切换默认只对本次生效
-- [x] 播放队列：跟随打开视频的列表（合集、投稿、收藏夹、稍后再看、缓存），包含分集；按页面分层保存，从播放页进入别处再返回，原队列仍在
-- [x] 听视频：与播放共用同一播放器，息屏后台，通知栏、锁屏与耳机线控可控，定时关闭可按分钟微调；队列可随机播放；字幕轨即逐句歌词，点句跳转
-- [x] 直播：进直播间观看，弹幕、清晰度、纯音频、全屏、小窗与醒目留言，可关注主播
-- [x] 离线缓存：从播放队列勾选、选清晰度、可全选，弹幕一并缓存；并发数可设，下载中显示速度；缓存列表在「我的」，长按可批量删除，播放不走网络，队列即整个缓存库；断网时播放页显示缓存的标题、简介与计数；离线观看的进度联网后补报；网络不佳时直接播放本地缓存
-- [x] 弹幕：滚动、顶部、底部三类，跟随播放时钟，透明度可调；播放页可发送，发出即上屏；直播间在聊天栏下方发送
-- [x] 字幕：多轨可选，普通播放时在画面底部，听视频时作为逐句文稿；支持 AI 字幕修复
-- [x] 评论：浏览、排序、展开楼中楼、发布与回复、点赞、删除，时间戳可点击跳转，配图可放大并左右翻页；从回复、@ 与赞的通知可打开原评论
-- [x] 互动：点赞、投币、收藏、关注、稍后再看；联合投稿逐个署名并可分别关注；动态可点赞并回复评论；可查看硬币记录
-- [x] 收藏夹管理：新建、改名、删除，可改简介与公开性；夹内取消收藏可撤销
-- [x] 关注分组与黑名单：分组可增删改，可给单个 UP 主设置；可拉黑与解除拉黑
-- [x] Agent：对话式全站搜索与播放页「找相关」，读简介与热评，候选逐条说明理由；支持多轮追问，执行轨迹可见，回复按 Markdown 渲染
-- [x] 消息：私信、回复我的、@我的、收到的赞、系统通知五格；私信收发文本，视频与专栏消息可打开；UP 主推送单独成页，附言与推送视频分开显示
-- [x] 分享与链接：接收站内链接与 b23.tv 短链，视频与直播间可分享
-- [x] SponsorBlock 片段默认跳过，可换服务器
-- [x] 界面：Material 3 Expressive，动效照规范重做；加载时显示页面轮廓；平板双栏布局；全面屏与挖孔适配
-- [x] 外观：跟随系统、浅色或深色，深色可用纯黑背景；配色可选系统动态取色或九种内置配色；界面语言可选简体中文或英文
-- [x] 应用内自更新
-- [x] 播放进度模型重做：正确处理分集、本地缓存、云端冲突
-- [x] 订阅动态流重做：投稿与专栏在同一条流里，取关与屏蔽即时生效，「上次看到这」按次进屏定位
-
-计划中：
-
-- [ ] 界面：继续打磨使用细节
-- [ ] 更好的 Adaptive Layout
-- [ ] 应用 KMP 化
+- [ ] 打磨界面细节，优化响应式布局
+- [ ] Windows 原生行为优化
+- [ ] Windows：高级弹幕渲染性能优化
 - [ ] 过滤低质量评论和动态
-- [ ] 性能优化
-- [ ] 整理抽象与数据流
-- [ ] 清理注释
-- [ ] CI 实机验证
-- [ ] Agent harness 优化
+- [ ] 架构整理、数据流精简与注释清理
+- [ ] CI 实机验证与 Agent 执行框架优化
 
 ## 安装
 
-需要 Android 10 或更高版本。
+前往 [Releases](https://github.com/NihilDigit/bilby/releases/latest) 下载构建产物。所有二进制均由 GitHub Actions 从仓库源码构建。
 
-到 [Releases](https://github.com/NihilDigit/bilby/releases/latest) 下载最新版本，二进制由 GitHub Actions 从本仓库源码构建。
-
-**Agent（可选）。** Agent 功能需要一个 OpenAI 兼容接口，在设置页的「助理」一节填入接口地址和 key 即可使用；不配置不影响其他功能。
+- **Android**：需要 Android 10 或更高版本。请根据设备架构选择对应 APK，无法确认时选 `universal`。
+- **Windows**：需要 64 位 Windows 10 或更高版本。
+  - `.msi`：安装至当前用户目录，不需要管理员权限，支持后续应用内更新。
+  - `.zip`：便携版，解压后运行 `Bilby.exe`。
+- **Agent 配置（可选）**：Agent 检索依赖兼容 OpenAI 协议的端点。在应用「设置」→「助理」中填入 API 地址与 Key 即可使用；不配置不影响其他功能。
 
 ## 贡献
 
-欢迎贡献。修复 bug、报告崩溃、补充文档等小规模更正，直接提交 issue 或 PR 即可。
+欢迎提交 Issue 与 PR。小的 Bug 修复、崩溃排查或文档补充可直接提交。
 
-新增功能或破坏性改动，建议先提交 RFC issue，说明需求、应用目前的处理方式与预期设计。事先提交 issue，可以避免因双方目标不一致而浪费时间和精力。
+若计划新增功能或进行架构调整，请先提交 RFC Issue，说明需求场景、现有处理方式与拟定方案，避免因目标不一致而产生无意义的返工。
 
-以下几类不在项目范围内，相应的 PR 通常不会被合并：
+以下内容不在项目范围内：
 
-- **任何形式的破解。** 不绕过大会员的画质与功能限制，不动计费与授权；观看与互动数据照常回传。
-- **番剧、影视、课堂等非 UGC 内容。** 应用只播用户投稿的视频，这类链接不会被解析。
-- **打扰用户或争夺其注意力的设计。** 推荐流、常驻在页面上的相关视频、「猜你喜欢」都在此列；应用只实现中立行为，内容由用户的操作决定。
+- **破解与特权**：不绕过会员画质或功能限制，不动计费与授权，数据正常回传。
+- **非 UGC 内容**：仅解析普通投稿视频，不处理番剧、影视及课程。
+- **抢夺注意力的内容**：不做推荐流与常驻相关推荐，应用仅执行中立操作。
 
-使用 LLM 辅助编码时，务必理解新增代码的业务逻辑并进行实机验证。
+如果使用 LLM 辅助编写代码，请务必理解新增代码的逻辑并在实机上验证。
 
-## 许可
+## 许可与致谢
 
-GPL-3.0-or-later，见 [LICENSE](LICENSE)。
-
-与 bilibili 交互所需的实现（WBI 签名、AppSign、设备指纹、TV 扫码登录、playurl 参数、数据上报与写操作）移植自 [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus)（GPL-3.0），感谢该项目的开发者。
+- 遵循 [GPL-3.0-or-later](LICENSE) 开源。
+- 客户端底层接口交互（WBI 签名、AppSign、设备指纹、TV 扫码登录、playurl 参数、数据上报与写操作）移植自 [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus)（GPL-3.0），感谢该项目的开发者。
