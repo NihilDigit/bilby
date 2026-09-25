@@ -2,10 +2,9 @@ package dev.bilby.ui.comment
 
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
@@ -51,7 +50,10 @@ import dev.bilby.ui.components.PersonRowSkeleton
 import dev.bilby.ui.components.SelectableTextDialog
 import dev.bilby.ui.components.WindowOverlay
 import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.errorTextRes
+import dev.bilby.ui.navigationBarsBottom
+import dev.bilby.ui.padScaffoldExceptBottom
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -168,7 +170,7 @@ private fun CommentThreadScreen(
             error = state.error?.let { stringResource(it) },
             isEmpty = root == null,
             onRetry = onRetry,
-            modifier = Modifier.padding(insets).consumeWindowInsets(insets),
+            modifier = Modifier.padScaffoldExceptBottom(insets),
             skeleton = { ListSkeleton(row = { PersonRowSkeleton(avatarSize = Dimens.AvatarRow) }) },
         ) {
             if (root != null) {
@@ -269,6 +271,7 @@ private fun ThreadContent(
             onRetry = onLoadMore,
             listState = listState,
             highlightRpid = highlight,
+            contentPadding = PaddingValues(bottom = Spacing.Tight + navigationBarsBottom()),
             modifier = Modifier.fillMaxSize(),
         )
     }

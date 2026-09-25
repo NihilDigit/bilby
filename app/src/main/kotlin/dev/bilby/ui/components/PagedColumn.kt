@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import dev.bilby.ui.navigationBarsBottom
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
@@ -46,7 +47,11 @@ fun <T> PagedColumn(
     modifier: Modifier = Modifier,
     /** 首屏失败时那个按钮做的事。默认与翻页重试同一个动作。 */
     onRetry: () -> Unit = onLoadMore,
-    contentPadding: PaddingValues = PaddingValues(),
+    /**
+     * 默认只让出手势条:列表铺到屏幕下沿,最后一项停在手势条上方。外层已经让过并消费掉时
+     * 量到 0。
+     */
+    contentPadding: PaddingValues = PaddingValues(bottom = navigationBarsBottom()),
     listState: LazyListState = rememberLazyListState(),
     header: (LazyListScope.() -> Unit)? = null,
     /** 首屏读取中的一行占位,见 [FirstScreenState]。默认是视频行。 */

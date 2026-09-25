@@ -29,6 +29,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.bilby.R
+import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.api.BiliResult
 import dev.bilby.data.CoinLogEntry
 import dev.bilby.data.CoinLogRepository
@@ -87,7 +88,7 @@ private fun CoinLogScreen(
         RefreshBox(
             refreshing = state.refreshing,
             onRefresh = onRefresh,
-            modifier = Modifier.fillMaxSize().padding(insets),
+            modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets),
         ) {
             PagedColumn(
                 items = state.items,

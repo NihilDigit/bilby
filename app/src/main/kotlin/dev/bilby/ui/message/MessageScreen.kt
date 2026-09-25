@@ -31,6 +31,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.R
+import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.data.Notice
 import dev.bilby.data.NoticeCursor
 import dev.bilby.data.NoticeKind
@@ -109,7 +110,7 @@ fun MessageScreen(
             )
         },
     ) { insets ->
-        Column(modifier = Modifier.fillMaxSize().padding(insets)) {
+        Column(modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets)) {
             // 五格在窄屏上放不下等宽固定标签("私信""回复我的""@我的""收到的赞""系统通知"),
             // 所以用可滚动的那一种:它按内容给宽度,装不下就横滚,而不是把每一格挤到三个字。
             //

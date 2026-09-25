@@ -72,6 +72,8 @@ import dev.bilby.data.LlmConfig
 import dev.bilby.data.SettingsStore
 import dev.bilby.player.videoQualityLabel
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.navigationBarsBottom
+import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
@@ -115,14 +117,14 @@ fun SettingsScreen(
         },
     ) { insets ->
         AdaptiveContent(
-            modifier = Modifier.fillMaxSize().padding(insets),
+            modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets),
             maxWidth = Breakpoints.ReadableWidth,
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(bottom = Spacing.Spacious),
+                    .padding(bottom = Spacing.Spacious + navigationBarsBottom()),
             ) {
                 // 七个去处装成一组。行与行之间不画线,边界由这个容器的底色和圆角承担。
                 SettingsGroup {

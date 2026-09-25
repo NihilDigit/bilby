@@ -30,6 +30,7 @@ import dev.bilby.R
 import dev.bilby.data.SearchArticle
 import dev.bilby.data.SearchUser
 import dev.bilby.data.SearchVideo
+import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PersonRowSkeleton
@@ -166,7 +167,7 @@ private fun ResultPage(tab: SearchTab, state: NormalSearchState, actions: Search
                     emptyText = stringResource(R.string.search_no_results),
                     onLoadMore = actions.onLoadMore,
                     onRetry = actions.onRetry,
-                    contentPadding = PaddingValues(bottom = ModeFabClearance),
+                    contentPadding = PaddingValues(bottom = ModeFabClearance + navigationBarsBottom()),
                 ) { user -> UserResultRow(user, onClick = { actions.onUserClick(user.mid) }) }
 
                 SearchTab.Article -> PagedColumn(
@@ -179,7 +180,7 @@ private fun ResultPage(tab: SearchTab, state: NormalSearchState, actions: Search
                     emptyText = stringResource(R.string.search_no_results),
                     onLoadMore = actions.onLoadMore,
                     onRetry = actions.onRetry,
-                    contentPadding = PaddingValues(bottom = ModeFabClearance),
+                    contentPadding = PaddingValues(bottom = ModeFabClearance + navigationBarsBottom()),
                 ) { article ->
                     VideoRow(item = article.toRowUi(), onClick = { actions.onArticleClick(article.id) })
                 }
@@ -206,7 +207,7 @@ private fun VideoResults(state: NormalSearchState, actions: SearchResultActions)
         onLoadMore = actions.onLoadMore,
         onRetry = actions.onRetry,
         // 底部让出切换助理的悬浮按钮(见 SearchChatScreen 的 ModeSwitchFab),最后一条才不被它盖住。
-        contentPadding = PaddingValues(bottom = ModeFabClearance),
+        contentPadding = PaddingValues(bottom = ModeFabClearance + navigationBarsBottom()),
     ) { video -> VideoRow(item = video.toRowUi(), onClick = { actions.onVideoClick(video.bvid) }) }
 }
 

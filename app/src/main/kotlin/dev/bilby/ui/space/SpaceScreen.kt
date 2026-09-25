@@ -76,6 +76,8 @@ import dev.bilby.ui.dynamic.DynamicAction
 import dev.bilby.ui.dynamic.DynamicCardView
 import dev.bilby.appendDistinctBy
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.navigationBarsBottom
+import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.ui.ShareLink
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.errorTextRes
@@ -905,13 +907,14 @@ fun SpaceScreen(
              * 次区自己能滚:签名可以很长,而它不该把关注按钮顶出屏幕。
              */
             Row(
-                modifier = Modifier.fillMaxSize().padding(insets),
+                modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets),
             ) {
                 header(
                     Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .verticalScroll(rememberScrollState()),
+                        .verticalScroll(rememberScrollState())
+                        .padding(bottom = navigationBarsBottom()),
                 )
                 Column(
                     modifier = Modifier
@@ -922,7 +925,7 @@ fun SpaceScreen(
             }
         } else {
             AdaptiveContent(
-                modifier = Modifier.fillMaxSize().padding(insets),
+                modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets),
                 maxWidth = Breakpoints.ReadableWidth,
             ) {
                 /*

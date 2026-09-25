@@ -1274,7 +1274,7 @@ private fun SearchResultRoute(
                 onLoadMore = vm::loadMore,
                 onRetry = vm::retry,
             ),
-            modifier = Modifier.padding(insets),
+            modifier = Modifier.padScaffoldExceptBottom(insets),
         )
     }
 }

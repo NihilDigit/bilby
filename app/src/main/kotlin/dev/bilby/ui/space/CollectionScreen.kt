@@ -9,6 +9,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.R
+import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.api.BiliResult
 import dev.bilby.data.SpaceRepository
 import dev.bilby.data.SpaceVideoItem
@@ -135,7 +136,7 @@ fun CollectionScreen(
         topBar = { BilbyTopBar(title = title, onBack = onBack) },
     ) { padding ->
         AdaptiveContent(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(padding),
             maxWidth = Breakpoints.ReadableWidth,
         ) {
             RefreshBox(

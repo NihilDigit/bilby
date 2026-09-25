@@ -29,6 +29,8 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import dev.bilby.BuildConfig
 import dev.bilby.R
+import dev.bilby.ui.navigationBarsBottom
+import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.data.CodecPreference
 import dev.bilby.data.LlmConfig
 import dev.bilby.data.SettingsStore
@@ -131,14 +133,14 @@ private fun SettingsSubPage(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
     ) { insets ->
         AdaptiveContent(
-            modifier = Modifier.fillMaxSize().padding(insets),
+            modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets),
             maxWidth = Breakpoints.ReadableWidth,
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(bottom = Spacing.Spacious),
+                    .padding(bottom = Spacing.Spacious + navigationBarsBottom()),
             ) {
                 if (ready) {
                     if (grouped) SettingsGroup { content() } else content()

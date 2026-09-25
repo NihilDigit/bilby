@@ -18,6 +18,8 @@ import androidx.compose.ui.res.stringResource
 import dev.bilby.R
 import dev.bilby.data.model.DynamicCard
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.navigationBarsBottom
+import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
@@ -63,7 +65,7 @@ fun OtherDynamicsScreen(
             state.error != null && state.items.isEmpty() ->
                 FullScreenError(state.error, onRetry, Modifier.padding(padding))
 
-            else -> AdaptiveContent(modifier = Modifier.padding(padding)) {
+            else -> AdaptiveContent(modifier = Modifier.padScaffoldExceptBottom(padding)) {
                 OtherDynamicsList(state, onRefresh, onLoadMore, onAction, onLike)
             }
         }
@@ -93,7 +95,12 @@ private fun OtherDynamicsList(
             state = listState,
             modifier = Modifier.fillMaxSize(),
             // 左右 16 与投稿列表(VideoRow 的 horizontal padding)对齐 —— 两页里同一条边。
-            contentPadding = PaddingValues(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+            contentPadding = PaddingValues(
+                start = Spacing.Comfortable,
+                end = Spacing.Comfortable,
+                top = Spacing.Cozy,
+                bottom = Spacing.Cozy + navigationBarsBottom(),
+            ),
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
             if (state.items.isEmpty()) {

@@ -54,6 +54,8 @@ import dev.bilby.data.model.ArticleBlock
 import dev.bilby.data.model.ArticleImage
 import dev.bilby.data.model.LinkCardKind
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.navigationBarsBottom
+import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.ShareLink
 import dev.bilby.ui.components.Avatar
@@ -120,7 +122,7 @@ fun ArticleScreen(
                 Modifier.padding(padding),
             )
 
-            else -> AdaptiveContent(modifier = Modifier.padding(padding)) {
+            else -> AdaptiveContent(modifier = Modifier.padScaffoldExceptBottom(padding)) {
                 ArticleBody(article, onLinkClick, onMentionClick)
             }
         }
@@ -142,7 +144,7 @@ private fun ArticleBody(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = Spacing.Spacious),
+        contentPadding = PaddingValues(bottom = Spacing.Spacious + navigationBarsBottom()),
         // 段间距比列表那档松一档:段落之间没有别的分隔物,靠的就是这道空白。12dp 在一页
         // 密排汉字里读不出"这里换了一段"。
         verticalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
