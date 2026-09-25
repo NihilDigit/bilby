@@ -58,12 +58,14 @@ jobs:
       # release job 在 Linux 上也跑这组测试;这里再跑一遍,是因为桌面端只发 Windows,
       # 路径与原生库的问题只在这里暴露。
       - name: Test
-        run: ./gradlew.bat :shared:desktopTest -PbilbyVersion=${{ steps.version.outputs.name }}
+        # 参数要加引号:这一步跑在 PowerShell 里,它把 -PbilbyVersion=0.15.0 在点号处拆成
+        # -PbilbyVersion=0 和 .15.0 两个参数,构建拿到的版本号是 0,MSI 拒收。
+        run: ./gradlew.bat :shared:desktopTest "-PbilbyVersion=${{ steps.version.outputs.name }}"
 
       # WiX 由 Compose 插件自行下载,不必另装。清单与 app.zip 在同一次调用里生成,
       # 与 MSI 取自同一份应用目录。MSI 未签名,安装时 SmartScreen 会提示。
       - name: Build
-        run: ./gradlew.bat :desktop:packageReleaseMsi :desktop:packageReleaseUpdate -PbilbyVersion=${{ steps.version.outputs.name }}
+        run: ./gradlew.bat :desktop:packageReleaseMsi :desktop:packageReleaseUpdate "-PbilbyVersion=${{ steps.version.outputs.name }}"
 
       # 打包出的类逐个让 JVM 校验一遍。打包流程改写过的字节码可能校验不过,而那只在装上之后
       # 进到某一页才崩,gradle run 与单测都走不到(见 desktop/package/VerifyClasses.java)。
