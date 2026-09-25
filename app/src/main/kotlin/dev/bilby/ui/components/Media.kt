@@ -1,5 +1,6 @@
 package dev.bilby.ui.components
 
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
@@ -37,10 +38,12 @@ import dev.bilby.ui.theme.Spacing
  * 这两件事以前散在七八个 AsyncImage 调用点上,漏一个就是一张裂图,收到这里来。
  */
 @Composable
-fun biliImageRequest(url: String) = ImageRequest.Builder(LocalContext.current)
+fun biliImageRequest(url: String) = biliImageRequestBuilder(LocalContext.current, url).build()
+
+/** 组合之外发请求用(比如画进弹幕的表情),要自己挂 target 时拿这个 builder。 */
+fun biliImageRequestBuilder(context: Context, url: String) = ImageRequest.Builder(context)
     .data(url.toHttpsUrl())
     .httpHeaders(NetworkHeaders.Builder().add("Referer", "https://www.bilibili.com").build())
-    .build()
 
 /**
  * 通用的 B 站图片。封面/头像之外的地方(评论配图、表情)用它 —— 形状和尺寸各处不同,

@@ -59,6 +59,8 @@ fun PlayerDanmakuLayer(
      * [DanmakuFeed.Stream] 的一个变体,而是单独一条。
      */
     selfDanmaku: Flow<Danmaku> = emptyFlow(),
+    /** 弹幕里的表情图从这里取,见 [Danmaku.images]。点播弹幕不带图。 */
+    imageSource: DanmakuImageSource = DanmakuImageSource.None,
     modifier: Modifier = Modifier,
 ) {
     val isLive = feed is DanmakuFeed.Stream
@@ -75,7 +77,7 @@ fun PlayerDanmakuLayer(
             scrollShowArea = prefs.scrollShowArea,
         )
     }
-    val controller = rememberDanmakuController(clock, options, contentKey = cid)
+    val controller = rememberDanmakuController(clock, options, contentKey = cid, imageSource = imageSource)
 
     controller.setSpecial(specialPool)
 

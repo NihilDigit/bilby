@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import dev.bilby.R
 import dev.bilby.live.LiveEmote
 import dev.bilby.live.LiveFanMedal
+import dev.bilby.live.findEmotes
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.inlineEmoteSize
@@ -467,33 +468,18 @@ private fun SenderRow(
 }
 
 /**
- * 把正文里的表情代号换成占位符。
- *
- * 键是服务端给的任意字符串(不是 `[xxx]` 那种固定形状),所以正则由这一批键现拼,拼之前要转义 ——
- * 键里出现 `[` 或 `+` 是会发生的,不转义就是一个语义完全不同的正则。**长的键排在前面**:
- * 短键是长键前缀时,先匹配短的会把长键切成两半。
+ * 把正文里的表情代号换成占位符,占位符的 id 就是代号本身,对上 `inlineEmotes` 的键。
  */
 private fun AnnotatedString.Builder.appendWithEmotes(
     text: String,
     emotes: Map<String, LiveEmote>,
 ) {
-    if (emotes.isEmpty()) {
-        append(text)
-        return
-    }
-    val pattern = emotes.keys
-        .sortedByDescending { it.length }
-        .joinToString("|") { Regex.escape(it) }
-    val regex = runCatching { Regex(pattern) }.getOrNull()
-    if (regex == null) {
-        append(text)
-        return
-    }
     var last = 0
-    for (match in regex.findAll(text)) {
-        append(text.substring(last, match.range.first))
-        appendInlineContent(match.value, match.value)
-        last = match.range.last + 1
+    for (match in findEmotes(text, emotes)) {
+        append(text.substring(last, match.start))
+        val code = text.substring(match.start, match.end)
+        appendInlineContent(code, code)
+        last = match.end
     }
     append(text.substring(last))
 }

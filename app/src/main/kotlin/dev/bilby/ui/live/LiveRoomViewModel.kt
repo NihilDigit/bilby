@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
 import dev.bilby.api.BiliResult
+import dev.bilby.api.toHttpsUrl
 import dev.bilby.ui.errorTextRes
 import dev.bilby.api.dto.LiveGuardItemDto
 import dev.bilby.danmaku.danmakuModeOrNull
@@ -18,7 +19,9 @@ import dev.bilby.live.LiveDanmakuClient
 import dev.bilby.live.LiveEmote
 import dev.bilby.live.LiveFanMedal
 import dev.bilby.live.LiveMessage
+import dev.bilby.live.findEmotes
 import dev.nihildigit.danmaku.Danmaku
+import dev.nihildigit.danmaku.DanmakuImage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
@@ -476,8 +479,28 @@ class LiveRoomViewModel(
                 color = message.colorRgb,
                 text = message.text,
                 isSelf = message.isSelf,
+                images = danmakuImages(message),
             ),
         )
+    }
+
+    /**
+     * 屏上弹幕里画成图的那几段,键是图的地址(见 `LiveEmoteImageSource`)。整条就是一张图时盖住
+     * 全文,那串文字是表情的代号,读者要看的是图,和聊天栏同一个处理。
+     */
+    private fun danmakuImages(message: LiveMessage.Danmaku): List<DanmakuImage> {
+        message.emote?.let { emote ->
+            if (message.text.isEmpty()) return emptyList()
+            return listOf(emote.toDanmakuImage(0, message.text.length, STICKER_HEIGHT_EM))
+        }
+        return findEmotes(message.text, message.inlineEmotes).map {
+            it.emote.toDanmakuImage(it.start, it.end, INLINE_EMOTE_HEIGHT_EM)
+        }
+    }
+
+    private fun LiveEmote.toDanmakuImage(start: Int, end: Int, heightEm: Float): DanmakuImage {
+        val aspect = if (widthPx > 0 && heightPx > 0) widthPx.toFloat() / heightPx else 1f
+        return DanmakuImage(start, end, key = url.toHttpsUrl(), widthEm = heightEm * aspect, heightEm = heightEm)
     }
 
     /**
@@ -812,5 +835,12 @@ class LiveRoomViewModel(
          * 容忍一次网络抖动;同一个人在一分钟内连开两次同档大航海不是会发生的事。
          */
         const val GUARD_MERGE_WINDOW_MILLIS = 60_000L
+
+        /**
+         * 屏上表情的高度,以弹幕字号为单位。弹幕轨道高是字号的 1.6 倍,整条大表情取 1.5 刚好填满
+         * 一条轨道而不压到邻轨;夹在正文里的小表情跟聊天栏一样略高于字。
+         */
+        const val STICKER_HEIGHT_EM = 1.5f
+        const val INLINE_EMOTE_HEIGHT_EM = 1.2f
     }
 }

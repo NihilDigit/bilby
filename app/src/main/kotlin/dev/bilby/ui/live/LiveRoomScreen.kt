@@ -201,6 +201,8 @@ fun LiveRoomScreen(
     val immersive = fullscreen || inPip
     val pipSupported = remember(context) { context.supportsPip() }
     val share = { ShareLink.liveRoom(context, roomId, state.title) }
+    // 跟着房间走:换一个实例会让屏上已录好的弹幕全部重录。
+    val emoteImages = remember(roomId) { LiveEmoteImageSource(context.applicationContext) }
 
     // 和普通视频页同一套返回语义:先解锁,再退出沉浸,最后才离开直播间。
     BackHandler(enabled = fullscreen) {
@@ -291,6 +293,7 @@ fun LiveRoomScreen(
                                 // 直播没有分 P,房间号就是"这池弹幕属于谁"。
                                 cid = state.anchorMid,
                                 fontSizeSp = DanmakuFontSizeSp.of(fullscreen, inPip),
+                                imageSource = emoteImages,
                             )
                         }
                     },
