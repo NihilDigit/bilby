@@ -95,6 +95,13 @@ import dev.bilby.data.DanmakuPrefsEditor
 import dev.bilby.data.QualityOption
 import androidx.compose.material3.IconToggleButton
 import dev.bilby.ui.components.BilbyIcons
+import dev.bilby.ui.components.touchOnlyPaging
+import dev.bilby.ui.components.LocalSidePane
+import dev.bilby.ui.components.MetaSeparator
+import dev.bilby.ui.components.SidePaneDismissLayer
+import dev.bilby.ui.components.SidePaneLayer
+import dev.bilby.ui.components.rememberSidePaneState
+import androidx.compose.runtime.CompositionLocalProvider
 import dev.bilby.ui.player.PlayerTooltip
 import dev.bilby.ui.video.LiveSettingsContent
 import dev.bilby.ui.video.PlayerSettingsButton
@@ -227,34 +234,10 @@ fun LiveRoomScreen(
     // 和播放页同一条规则(见 VideoScreen 里那段"状态栏那一条填黑"):不垫页面底色,改在画面
     // 上方补一条黑边;宽屏下状态栏整条收起来。下面的 Tab 自己躲左右和底部。
     val expandedLayout = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
-    Column(modifier = modifier.fillMaxSize()) {
-        if (!immersive && !expandedLayout) {
-            Spacer(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .windowInsetsTopHeight(WindowInsets.barsAndCutout)
-                    .background(Color.Black),
-            )
-        }
-        Box(
-            modifier = (
-                if (immersive) Modifier.fillMaxSize()
-                // widthIn 在 fillMaxWidth 之前,否则上限夹不动(见 AdaptiveContent 的说明)。
-                else Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .widthIn(max = Breakpoints.MediaWidth)
-                    .fillMaxWidth()
-                    .aspectRatio(16f / 9f)
-                    // **上面那条黑边只是取了 inset 的高度,没有消费它**
-                    // (`windowInsetsTopHeight` 不消费)。不声明的话画面里的返回和分享会以为
-                    // 自己还贴着屏幕上沿,各自再躲一次系统栏 —— 表现就是这两个按钮往画面里
-                    // 掉了一条状态栏的高度。播放页在同一处写着同一行,这边漏了。
-                    //
-                    // **只在画了那条黑边时消费。** 宽屏下画面是全出血的(没有黑边),状态栏
-                    // 真的压在按钮上,那时得让它们照旧躲。
-                    .then(if (expandedLayout) Modifier else Modifier.consumeWindowInsets(WindowInsets.barsAndCutout))
-                ).background(Color.Black),
-        ) {
+
+    // 画面这一块在两种排法里是同一份,只是外面的尺寸不同,见下面的 Row / Column。
+    val playerPane: @Composable (Modifier) -> Unit = { paneModifier ->
+        Box(modifier = paneModifier.background(Color.Black)) {
             if (player != null && state.isLive && state.streamUrl != null) {
                 PlayerShell(
                     player = player,
@@ -307,7 +290,7 @@ fun LiveRoomScreen(
                                 specialPool = emptyList(),
                                 // 直播没有分 P,房间号就是"这池弹幕属于谁"。
                                 cid = state.anchorMid,
-                                fontSizeSp = DanmakuFontSizeSp.of(fullscreen, inPip),
+                                fontSizeSp = DanmakuFontSizeSp.of(largePlayer = fullscreen || expandedLayout, pip = inPip),
                                 imageSource = emoteImages,
                             )
                         }
@@ -383,29 +366,92 @@ fun LiveRoomScreen(
                 MediaBackButton(onBack = onBack, scrim = false)
             }
         }
+    }
 
-        if (!immersive) {
-            AdaptiveContent(
-                // 上边没有 inset 要躲,那一侧是画面;左右和底下要躲。
-                modifier = Modifier
-                    .fillMaxSize()
-                    .windowInsetsPadding(
-                        WindowInsets.barsAndCutout
-                            .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom),
-                    ),
-                maxWidth = Breakpoints.ReadableWidth,
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    LiveAnchorRow(state = state, onUserClick = onUserClick, onToggleFollow = onToggleFollow)
-                    LiveRoomTabs(
-                        state = state,
-                        onLoadMoreGuards = onLoadMoreGuards,
-                        onSendDanmaku = onSendDanmaku,
-                        danmakuEnabled = danmakuPrefs.enabled,
-                        onDanmakuEnabledChange = danmakuEditor::setEnabled,
-                        onUserClick = onUserClick,
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                    )
+    // 主播、聊天、醒目留言、大航海。
+    val infoPane: @Composable (Modifier) -> Unit = { paneModifier ->
+        Column(modifier = paneModifier) {
+            LiveAnchorRow(state = state, onUserClick = onUserClick, onToggleFollow = onToggleFollow)
+            LiveRoomTabs(
+                state = state,
+                onLoadMoreGuards = onLoadMoreGuards,
+                onSendDanmaku = onSendDanmaku,
+                danmakuEnabled = danmakuPrefs.enabled,
+                onDanmakuEnabledChange = danmakuEditor::setEnabled,
+                onUserClick = onUserClick,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
+        }
+    }
+
+    if (expandedLayout) {
+        // 宽屏两栏,同播放页:左栏约三分之二整列是画面,画面按比例居中在自己的黑底里;右栏是聊天,
+        // 从上到下铺满,输入框一直在手边。**全屏也走这个分支**,只是右栏不组合、左栏权重给满 ——
+        // 布局树的形状不变,进出全屏时播放器不会重挂。
+        // 播放设置这类二级面板画在右栏里,不挡画面(见 [SidePaneState])。
+        val sidePane = rememberSidePaneState()
+        CompositionLocalProvider(LocalSidePane provides sidePane) {
+        Row(modifier = modifier.fillMaxSize()) {
+            Box(Modifier.weight(if (immersive) 1f else 2f).fillMaxHeight()) {
+                playerPane(Modifier.fillMaxSize())
+                SidePaneDismissLayer(sidePane)
+            }
+            if (!immersive) {
+                // 左边挨着的是画面,不是屏幕边缘,所以不躲 start 那一侧。底下要躲:输入框贴着底边。
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .windowInsetsPadding(
+                            WindowInsets.barsAndCutout
+                                .only(WindowInsetsSides.End + WindowInsetsSides.Vertical),
+                        ),
+                ) {
+                    infoPane(Modifier.fillMaxSize())
+                    SidePaneLayer(sidePane)
+                }
+            }
+        }
+        }
+    } else {
+        Column(modifier = modifier.fillMaxSize()) {
+            if (!immersive) {
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .windowInsetsTopHeight(WindowInsets.barsAndCutout)
+                        .background(Color.Black),
+                )
+            }
+            playerPane(
+                if (immersive) {
+                    Modifier.fillMaxSize()
+                } else {
+                    // widthIn 在 fillMaxWidth 之前,否则上限夹不动(见 AdaptiveContent 的说明)。
+                    Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .widthIn(max = Breakpoints.MediaWidth)
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 9f)
+                        // **上面那条黑边只是取了 inset 的高度,没有消费它**
+                        // (`windowInsetsTopHeight` 不消费)。不声明的话画面里的返回和分享会以为
+                        // 自己还贴着屏幕上沿,各自再躲一次系统栏 —— 表现就是这两个按钮往画面里
+                        // 掉了一条状态栏的高度。播放页在同一处写着同一行,这边漏了。
+                        .consumeWindowInsets(WindowInsets.barsAndCutout)
+                },
+            )
+            if (!immersive) {
+                AdaptiveContent(
+                    // 上边没有 inset 要躲,那一侧是画面;左右和底下要躲。
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(
+                            WindowInsets.barsAndCutout
+                                .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom),
+                        ),
+                    maxWidth = Breakpoints.ReadableWidth,
+                ) {
+                    infoPane(Modifier.fillMaxSize())
                 }
             }
         }
@@ -625,12 +671,29 @@ private fun LiveAnchorRow(state: LiveRoomUiState, onUserClick: (Long) -> Unit, o
     ) {
         Avatar(url = state.anchorFace, size = Dimens.AvatarRow)
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = state.anchorName,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            // 开播时刻跟在名字后面,整块只占两行:单独一行时它比名字和标题都短,却要多占一行高度。
+            // 名字过长时截断的是名字,时刻留着 —— 名字截掉一截还认得出是谁,时刻截掉就没了。
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = state.anchorName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                // 写绝对时刻而不是"已播 2 小时":后者要每分钟重算一遍,而人想知道的多半是
+                // "是不是刚开"或"从几点播到现在",一个时刻两件事都答得了。当天只写时刻,跨了天
+                // 带上日期 —— 通宵的直播跨过零点很常见,只写"23:10"会读成今晚。
+                state.liveStartedAt?.let { startedAt ->
+                    Text(
+                        text = MetaSeparator +
+                            stringResource(Res.string.live_started_at, formatTimeOfDay(startedAt * 1000)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            }
             if (state.title.isNotBlank()) {
                 Text(
                     text = state.title,
@@ -638,17 +701,6 @@ private fun LiveAnchorRow(state: LiveRoomUiState, onUserClick: (Long) -> Unit, o
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                )
-            }
-            // 开播时刻。写绝对时刻而不是"已播 2 小时":后者要每分钟重算一遍,而人想知道的多半
-            // 是"是不是刚开"或"从几点播到现在",一个时刻两件事都答得了。当天只写时刻,跨了天
-            // 带上日期 —— 通宵的直播跨过零点很常见,只写"23:10"会读成今晚。
-            state.liveStartedAt?.let { startedAt ->
-                Text(
-                    text = stringResource(Res.string.live_started_at, formatTimeOfDay(startedAt * 1000)),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
                 )
             }
         }
@@ -701,7 +753,7 @@ private fun LiveRoomTabs(
         }
         // weight 而不是 fillMaxSize:在 Column 里 fillMaxSize 会让 pager 从 tab 栏下面
         // 再要一整屏,底部被推出可视区。
-        HorizontalPager(state = pager, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
+        HorizontalPager(state = pager, modifier = Modifier.weight(1f).fillMaxWidth().touchOnlyPaging()) { page ->
             when (page) {
                 0 -> ChatPane(
                     state = state,

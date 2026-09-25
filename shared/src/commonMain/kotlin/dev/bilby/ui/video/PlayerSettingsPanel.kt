@@ -5,8 +5,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
-import dev.bilby.ui.components.rememberExpandedSheetState
+import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.player.PlayerIconButton
 import dev.bilby.ui.player.PlayerSidePanel
 import dev.bilby.ui.player.PlayerTooltip
@@ -176,8 +175,8 @@ internal fun LiveSettingsContent(
 internal enum class PlayerSettingsSection { Speed, Quality, Subtitle }
 
 /**
- * 设置面板的外壳,点播与直播共用。全屏从右边划出(横屏下底部 sheet 只剩一条缝),内嵌从底部
- * 弹出,内容是同一份。
+ * 设置面板的外壳,点播与直播共用。全屏从右边划出(横屏下底部 sheet 只剩一条缝),内嵌时
+ * 两栏画在右栏、单栏从底部弹出(见 [PaneSheet]),内容是同一份。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -202,7 +201,8 @@ internal fun BoxScope.PlayerSettingsHost(
             content()
         }
     } else if (open) {
-        ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberExpandedSheetState()) {
+        // 两栏时画在右栏,画面不挡,调画质、倍速时看得见效果。
+        PaneSheet(onDismissRequest = onDismiss, title = playerSettingsTitle(only)) {
             content()
             Spacer(modifier = Modifier.height(Spacing.Comfortable))
         }

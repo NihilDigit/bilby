@@ -1,6 +1,7 @@
 package dev.bilby.ui.video
 
 import dev.bilby.ui.components.LoadingSpinner
+import dev.bilby.ui.components.touchOnlyPaging
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.FilledIconButton
@@ -99,7 +100,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -159,7 +159,7 @@ import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.AvatarBadge
 import dev.bilby.ui.components.CoinGlyph
 import dev.bilby.ui.components.BilbyIcons
-import dev.bilby.ui.components.rememberExpandedSheetState
+import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.components.BadgedAvatar
 import dev.bilby.ui.components.ChoiceRow
@@ -402,7 +402,7 @@ fun VideoTabs(
         }
         // weight 而不是 fillMaxSize:在 Column 里 fillMaxSize 会让 pager 从 tab 栏下面再要
         // 一整屏的高度,底部那一截被推出可视区。
-        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
+        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth().touchOnlyPaging()) { page ->
             when (page) {
                 VideoTabIntro -> IntroTab(
                     detail = detail,
@@ -890,10 +890,7 @@ private fun FullQueueSheet(
     // **不停在半开,内容高度自己定。** 列表把当前项居中时按的是自己的视口高度;sheet 半开时
     // 视口的下半截还在屏幕外,居中的那一条正好落在看不见的地方。跳过半开、内容只要可用高度
     // 的一部分,sheet 打开就停在这个高度,视口就是看得见的那一块。
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberExpandedSheetState(),
-    ) {
+    PaneSheet(onDismissRequest = onDismiss) {
         EpisodeList(
             rows = queue.rows,
             onSelect = onSelectEpisode,
@@ -901,7 +898,7 @@ private fun FullQueueSheet(
             playing = playing,
             // 左右留页边距:分段列表项自己不带外边距,贴着 sheet 边缘时圆角看不出来。
             contentPadding = PaddingValues(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Loose),
-            modifier = Modifier.fillMaxWidth().fillMaxHeight(FullQueueHeightFraction),
+            modifier = Modifier.fillMaxWidth().bodyHeight(FullQueueHeightFraction),
         )
     }
 }
@@ -1989,14 +1986,11 @@ private fun PartSheet(
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = (parts.indexOfFirst { it.isCurrent } - InlineQueueRadius).coerceAtLeast(0),
     )
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberExpandedSheetState(),
-    ) {
+    PaneSheet(onDismissRequest = onDismiss) {
         LazyColumn(
             state = listState,
             contentPadding = PaddingValues(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Loose),
-            modifier = Modifier.fillMaxWidth().fillMaxHeight(FullQueueHeightFraction),
+            modifier = Modifier.fillMaxWidth().bodyHeight(FullQueueHeightFraction),
         ) {
             itemsIndexed(parts, key = { _, part -> part.cid }) { index, part ->
                 PartListItem(

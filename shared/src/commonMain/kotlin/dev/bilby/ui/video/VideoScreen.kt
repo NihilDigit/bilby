@@ -26,7 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.windowInsetsTopHeight
-import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LoadingIndicator
@@ -110,7 +110,12 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import dev.bilby.offline.CachedIndex
 import dev.bilby.offline.offlineId
+import dev.bilby.ui.components.LocalSidePane
+import dev.bilby.ui.components.PaneSheet
+import dev.bilby.ui.components.SidePaneDismissLayer
+import dev.bilby.ui.components.SidePaneLayer
 import dev.bilby.ui.components.collapsingHeader
+import dev.bilby.ui.components.rememberSidePaneState
 import dev.bilby.ui.components.rememberCollapsingHeaderState
 
 /**
@@ -682,19 +687,28 @@ fun VideoScreen(
         if (playerPinned) playerScroll.expand()
     }
 
+    // 两栏时二级面板画在右栏里(见 [SidePaneState])。单栏时右栏的面板层不组合,面板照旧是 sheet。
+    val sidePane = rememberSidePaneState()
+
     if (relatedOpen && !immersive) {
-        ModalBottomSheet(onDismissRequest = { relatedOpen = false }) {
-            RelatedSheet(
-                related = related,
-                // 先关面板再跳走:ModalBottomSheet 自带的 BackHandler 排在导航那一层之后,
-                // 留着它跳到下一页,那一页的第一次返回会被这个看不见的面板吃掉。
-                // LiveNowSheet 是同一条规矩。
-                onVideoClick = { bvid ->
-                    relatedOpen = false
-                    onRelatedVideoClick(bvid)
-                },
-                onRetry = onFindRelated,
-            )
+        CompositionLocalProvider(LocalSidePane provides sidePane) {
+            PaneSheet(
+                onDismissRequest = { relatedOpen = false },
+                // 标题行在 RelatedSheet 里,带着检索进度。
+                skipPartiallyExpanded = false,
+            ) {
+                RelatedSheet(
+                    related = related,
+                    // 先关面板再跳走:面板自己注册的 BackHandler 排在导航那一层之后,
+                    // 留着它跳到下一页,那一页的第一次返回会被这个看不见的面板吃掉。
+                    // LiveNowSheet 是同一条规矩。
+                    onVideoClick = { bvid ->
+                        relatedOpen = false
+                        onRelatedVideoClick(bvid)
+                    },
+                    onRetry = onFindRelated,
+                )
+            }
         }
     }
 
@@ -1028,13 +1042,17 @@ fun VideoScreen(
     if (expandedLayout) {
         // 主区约三分之二,和规范给的比例一致。**全屏也走这个分支**,只是右栏不组合、
         // 左栏权重给满 —— 这样进出全屏时布局树的形状不变,播放器不会重挂。
+        CompositionLocalProvider(LocalSidePane provides sidePane) {
         Row(modifier = Modifier.fillMaxSize()) {
             // **左栏整列都是播放器**,画面按比例居中在里面,四周是它自己的黑底。
             //
             // 原先这里给的是 `fillMaxWidth().aspectRatio(16:9)`,于是画面只有左栏宽度的
             // 九分之十六那么高,在更高的列里垂直居中——上下各露出一条页面底色。那条白带
             // 才是"横屏不沉浸"的真身,和根容器的 inset 无关。
-            playerPane(Modifier.weight(if (immersive) 1f else 2f).fillMaxHeight())
+            Box(Modifier.weight(if (immersive) 1f else 2f).fillMaxHeight()) {
+                playerPane(Modifier.fillMaxSize())
+                SidePaneDismissLayer(sidePane)
+            }
             // 文字这一栏躲开状态栏与刘海,**但不躲 start 那一侧**:它的左边挨着的是播放器,
             // 不是屏幕边缘,垫了就在画面和简介之间劈出一道缝。
             //
@@ -1042,15 +1060,19 @@ fun VideoScreen(
             // 评论区的 FAB 各自让(它们量的是 navigationBars)。这一栏替它们躲掉的话 inset 被
             // 消费成 0,列表在手势条上方就被切断,滑到底也碰不到屏幕下沿。
             if (!immersive) {
-                tabsPane(
+                Box(
                     Modifier
                         .weight(1f)
                         .fillMaxHeight()
                         .windowInsetsPadding(
                             safeInsets.only(WindowInsetsSides.End + WindowInsetsSides.Top),
                         ),
-                )
+                ) {
+                    tabsPane(Modifier.fillMaxSize())
+                    SidePaneLayer(sidePane)
+                }
             }
+        }
         }
     } else {
         // 连接**始终挂着**,钉不钉由 playerScroll 自己判(建它时传进去的那个 lambda)。
@@ -1186,6 +1208,7 @@ fun VideoScreen(
                 }
             }
         }
+        CompositionLocalProvider(LocalSidePane provides sidePane) {
         OfflineCacheSheet(
             targets = targets,
             cached = cached,
@@ -1213,6 +1236,7 @@ fun VideoScreen(
             },
             onDismiss = { cacheSheetOpen = false },
         )
+        }
     }
 }
 

@@ -1,8 +1,9 @@
 package dev.bilby.ui.comment
 
-import dev.bilby.ui.components.WindowOverlay
+import dev.bilby.ui.components.LocalPointerSource
+import dev.bilby.ui.components.PaneOverlay
 import dev.bilby.ui.components.ComposerPanel
-import dev.bilby.ui.components.rememberExpandedSheetState
+import dev.bilby.ui.components.PaneSheet
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
@@ -55,7 +56,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -171,8 +171,9 @@ fun CommentSection(
     // 那处注释。这里还多一层理由:评论区是播放页 tab 里的一块,它上面那半屏是播放器,
     // 把回执报到整页底部会盖在播放控件上。
     //
-    // 详情面板另有一份自己的([CommentThreadSheet]),不共用这个:`ModalBottomSheet` 自成一个
-    // window 画在活动窗口之上,这一份在它底下,从面板里复制会往一个看不见的地方报。
+    // 详情面板另有一份自己的([CommentThreadSheet]),不共用这个:单栏时它是 `ModalBottomSheet`,
+    // 自成一个 window 画在活动窗口之上,这一份在它底下,从面板里复制会往一个看不见的地方报;
+    // 两栏时它盖住整个评论区,这一份同样被盖在底下。
     val snackbarHostState = remember { SnackbarHostState() }
 
     /**
@@ -197,7 +198,7 @@ fun CommentSection(
     var sentTarget by rememberSaveable { mutableStateOf<Long?>(null) }
 
     // 面板正在读哪一楼。整个面板长在这个 composable 里,不进导航栈:它是评论区内部的一层,
-    // 页面本身没有换,返回键由 ModalBottomSheet 自己接管。
+    // 页面本身没有换,返回键由面板自己接管。
     var panelRoot by rememberSaveable { mutableStateOf<Long?>(null) }
     val panelComment = panelRoot?.let { id -> findRoot(state, id) }
 
@@ -287,7 +288,8 @@ fun CommentSection(
                 .pullToRefresh(
                     isRefreshing = state.refreshing,
                     state = pullState,
-                    enabled = refreshEnabled,
+                    // 鼠标不能拉,理由见 RefreshBox。
+                    enabled = refreshEnabled && LocalPointerSource.current.isTouchLike,
                     onRefresh = onRefresh,
                 ),
         ) {
@@ -389,10 +391,10 @@ fun CommentSection(
             )
         }
         // 挂到窗口最上面:遮罩要盖住画面和标签行,点哪里都算不写了。
-        if (panelComment == null) composer?.let { WindowOverlay(it) }
+        if (panelComment == null) composer?.let { PaneOverlay(onDismiss = { composing = null }, content = it) }
     }
 
-    // 详情面板挂在外面:ModalBottomSheet 自己就是一个 window。
+    // 详情面板挂在外面:单栏时它是 ModalBottomSheet,自己就是一个 window;两栏时它画在右栏的面板层。
     if (panelComment != null) {
         CommentThreadSheet(
             root = panelComment,
@@ -402,9 +404,10 @@ fun CommentSection(
             onLike = onLike,
             onCompose = { rpid -> composing = rpid },
             composer = composer,
+            onDismissComposer = { composing = null },
             onDelete = onDelete,
             onSeek = onSeek,
-            // **跳走之前先关面板。** `ModalBottomSheet` 自己注册了一个 BackHandler(预测式
+            // **跳走之前先关面板。** 面板自己注册了一个 BackHandler(预测式
             // 返回要用),它在组合树里比导航那一层更靠后,于是先接住返回。留着面板跳到空间页
             // 或浏览器落地页之后,这一页仍在栈里、面板仍在组合中,新页的第一次返回被它吃掉 ——
             // 表现是"返回键没反应",而实际上是在关一个看不见的面板。
@@ -691,7 +694,10 @@ private fun CommentTags(comment: CommentItem, pinned: Boolean, threadAuthorMid: 
 /** "3 小时前  IP属地:广东"。 */
 @Composable
 private fun commentMeta(comment: CommentItem): String =
-    listOf(formatRelativeTime(comment.ctimeEpochSeconds), comment.ipLocation)
+    listOf(
+        formatRelativeTime(comment.ctimeEpochSeconds),
+        comment.ipRegion.takeIf { it.isNotEmpty() }?.let { stringResource(Res.string.comment_ip_location, it) }.orEmpty(),
+    )
         .filter { it.isNotBlank() }
         .joinToString(MetaSeparator)
 
@@ -921,7 +927,11 @@ private fun SubReplies(
     actions: CommentRowActions,
     onOpenThread: () -> Unit,
 ) {
-    val complete = expanded?.takeIf { !it.hasMore && !it.loadingMore && it.items.isNotEmpty() }?.items
+    // 「拿全」只认小楼。详情面板和主列表共用同一份展开结果,面板一路翻到最后一页之后这一楼也是
+    // 「拿全」的 —— 不设上限的话,关掉面板时几百条回复就地摊在主列表里,正是上面说的那种情况。
+    val complete = expanded
+        ?.takeIf { !it.hasMore && !it.loadingMore && it.items.isNotEmpty() && it.items.size <= InlineThreadLimit }
+        ?.items
     val shown = complete ?: root.previewReplies
     val hasMore = complete == null && root.subReplyCount > root.previewReplies.size
     if (shown.isEmpty() && !hasMore) return
@@ -1055,6 +1065,12 @@ private fun ViewAllRow(text: String, onClick: () -> Unit) {
     }
 }
 
+/**
+ * 主列表里一楼最多就地摊开几条。服务端随主楼附带三条预览,再加上刚发的一两条回复;
+ * 比这多的楼只在详情面板里读。
+ */
+private const val InlineThreadLimit = 5
+
 /** 楼中楼正文在容器里的左缘:容器内边距 + 头像 + 头像与文字的间距。 */
 private val SubReplyTextInset = Spacing.Cozy + Dimens.AvatarNested + Spacing.Tight
 
@@ -1070,10 +1086,10 @@ private const val ThreadSheetHeightFraction = 0.9f
  *
  * 写回复和主列表是同一套:单击哪一条就回复哪一条,点主楼就是回复这一楼。**这里不放 FAB**:
  * 面板是来读和回这一组回复的,主楼就排在第一条,再挂一个"回复这一楼"的按钮是同一件事的
- * 第二个入口。编辑面板画在这张 sheet 里面(见 [ComposerPanel])。
+ * 第二个入口。单栏时编辑面板画在这张 sheet 里面(见 [ComposerPanel])。
  *
- * **不是一个导航目的地。** 它长在 [CommentSection] 里,页面没有换,返回键由 `ModalBottomSheet`
- * 自己注册的 BackHandler 接管。数据和主列表共用 `CommentViewModel.expandedReplies`,翻页仍然是
+ * **不是一个导航目的地。** 它长在 [CommentSection] 里,页面没有换,返回键由面板
+ * 自己注册的 BackHandler 接管([PaneSheet])。数据和主列表共用 `CommentViewModel.expandedReplies`,翻页仍然是
  * `expandReplies(rootId)`,没有第二份分页状态。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1088,6 +1104,8 @@ private fun CommentThreadSheet(
     onCompose: (Long) -> Unit,
     /** 正在写时的编辑面板,画在这张 sheet 里面(它自成一个窗口)。 */
     composer: (@Composable () -> Unit)?,
+    /** 关掉编辑面板。两栏时点左栏的画面要能关它(见 SidePaneDismissLayer)。 */
+    onDismissComposer: () -> Unit,
     onDelete: (Long) -> Unit,
     onSeek: ((Long) -> Unit)?,
     onUserClick: (Long) -> Unit,
@@ -1132,11 +1150,12 @@ private fun CommentThreadSheet(
     }
 
     // 跳过半开:一组回复就是要往下读的,停在半开只是多一次上拉。
-    ModalBottomSheet(
+    PaneSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberExpandedSheetState(),
+        title = stringResource(Res.string.comment_thread_title),
     ) {
-        Box(modifier = Modifier.fillMaxHeight(ThreadSheetHeightFraction)) {
+        val inPane = inPane
+        Box(modifier = Modifier.bodyHeight(ThreadSheetHeightFraction)) {
             CommentThreadList(
                 root = root,
                 replies = shown,
@@ -1151,7 +1170,8 @@ private fun CommentThreadSheet(
                 hostState = snackbarHostState,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
-            composer?.invoke()
+            // sheet 自成一个窗口,编辑面板只能画在它里面;画在右栏时同主列表,挂到右栏最上面。
+            if (inPane) composer?.let { PaneOverlay(onDismiss = onDismissComposer, content = it) } else composer?.invoke()
         }
         selectionTarget?.let { target ->
             SelectableTextDialog(
@@ -1363,7 +1383,7 @@ private fun previewComment(
     uname = uname,
     avatarUrl = "",
     isUploader = isUp,
-    ipLocation = "IP属地：广东",
+    ipRegion = "广东",
     level = level,
     isSeniorMember = false,
     ctimeEpochSeconds = Instant.now().epochSecond - 3600,

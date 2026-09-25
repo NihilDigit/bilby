@@ -54,6 +54,7 @@ import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.errorTextRes
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
+import dev.bilby.ui.readableWidth
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -170,7 +171,7 @@ private fun CommentThreadScreen(
             error = state.error?.let { stringResource(it) },
             isEmpty = root == null,
             onRetry = onRetry,
-            modifier = Modifier.padScaffoldExceptBottom(insets),
+            modifier = Modifier.padScaffoldExceptBottom(insets).readableWidth(),
             skeleton = { ListSkeleton(row = { PersonRowSkeleton(avatarSize = Dimens.AvatarRow) }) },
         ) {
             if (root != null) {

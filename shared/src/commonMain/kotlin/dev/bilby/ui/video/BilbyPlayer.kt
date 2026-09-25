@@ -64,6 +64,9 @@ import dev.bilby.player.SubtitleTrack
 import dev.bilby.player.cueAt
 import dev.bilby.ui.player.DanmakuFeed
 import dev.bilby.ui.player.DanmakuFontSizeSp
+import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.player.PlayerDanmakuLayer
 import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SeekBarSegment
@@ -192,6 +195,8 @@ fun BilbyPlayer(
     /** 窗口在画中画里。见 [PlayerShell] 的同名参数;弹幕画不画看 [DanmakuPrefs.inPip]。 */
     pip: Boolean = false,
 ) {
+    /** 两栏布局:内嵌画面占整窗高度,弹幕字号与全屏同档(见 [DanmakuFontSizeSp])。 */
+    val twoPane = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     /** 播放设置面板开着没有。见 [PlayerSettingsContent]。 */
     var settingsOpen by remember { mutableStateOf(false) }
     // 开的是哪一段。关面板时不清:退场动画里内容要保持原样,下次打开会重新赋值。
@@ -224,7 +229,7 @@ fun BilbyPlayer(
                     specialPool = specialDanmakuPool,
                     selfDanmaku = selfDanmaku,
                     cid = danmakuCid,
-                    fontSizeSp = DanmakuFontSizeSp.of(isFullscreen, pip),
+                    fontSizeSp = DanmakuFontSizeSp.of(largePlayer = isFullscreen || twoPane, pip = pip),
                 )
             }
 

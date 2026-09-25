@@ -3,7 +3,9 @@ package dev.bilby.ui
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +54,16 @@ fun BilbyWindowSize.isAtLeast(other: BilbyWindowSize): Boolean = ordinal >= othe
  * `[父宽, 父宽]` 这个区间里,夹完还是父宽。顺序反过来才对:先夹上限,再让内容填满被夹过的
  * 那份宽度。
  */
+/**
+ * [AdaptiveContent] 的修饰符写法,给本身就是一个 Column、不想再包一层 Box 的页面用。
+ * 先放开最小宽度并居中,再夹上限,最后填满被夹过的宽度 —— 顺序的理由同 [AdaptiveContent]。
+ */
+fun Modifier.readableWidth(maxWidth: Dp = Breakpoints.ReadableWidth): Modifier =
+    fillMaxWidth()
+        .wrapContentWidth(Alignment.CenterHorizontally)
+        .widthIn(max = maxWidth)
+        .fillMaxWidth()
+
 @Composable
 fun AdaptiveContent(
     modifier: Modifier = Modifier,

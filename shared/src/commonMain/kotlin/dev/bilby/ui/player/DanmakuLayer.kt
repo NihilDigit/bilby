@@ -5,6 +5,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextStyle
+import dev.bilby.ui.theme.CjkFontFamily
 import dev.bilby.BiliLog
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.elapsedRealtimeMillis
@@ -79,7 +81,13 @@ fun PlayerDanmakuLayer(
             scrollShowArea = prefs.scrollShowArea,
         )
     }
-    val controller = rememberDanmakuController(clock, options, contentKey = cid, imageSource = imageSource)
+    val controller = rememberDanmakuController(
+        clock,
+        options,
+        baseTextStyle = DanmakuTextStyle,
+        contentKey = cid,
+        imageSource = imageSource,
+    )
 
     controller.setSpecial(specialPool)
 
@@ -133,15 +141,26 @@ fun PlayerDanmakuLayer(
 }
 
 /**
- * 播放器形态对应的弹幕字号。全屏画面更大但观看距离没变,字可以略大,**不是必须大**。
- * 对齐 PiliPlus `danmaku_options.dart` 的默认档:15sp 基准,全屏 ×1.2 = 18sp。
+ * 弹幕的字体,同界面正文(见 [CjkFontFamily])。不给的话引擎用 `TextStyle.Default`,桌面上
+ * 汉字走 Skia 的回退,英文系统里同一行字粗细不一。是个顶层常量:它是控制器的 remember 键,
+ * 每次组合新建一个会让整池弹幕重编。
+ */
+private val DanmakuTextStyle = TextStyle(fontFamily = CjkFontFamily)
+
+/**
+ * 播放器形态对应的弹幕字号。大画面上观看距离没变,字可以略大,**不是必须大**。
+ * 对齐 PiliPlus `danmaku_options.dart` 的默认档:15sp 基准,大画面 ×1.2 = 18sp。
+ *
+ * **分档看画面有多大,不看是不是全屏。** 两栏布局里内嵌画面占整窗高度,和全屏差不多大,
+ * 按「非全屏」给小一档的话,同样大的画面上字忽大忽小。只有竖排单栏那块十几行高的画面用小档。
+ * 两栏与全屏同档还有一个好处:两栏里进出全屏,字号不变,弹幕引擎不必整池重编。
  *
  * **反过来"轨道数定死、拿画布高度反推字号"是错的**:内嵌播放器只有几百像素高,除以一个固定
- * 轨道数会算出偏大的字号 —— 那正是内嵌详情页字明显偏大过的原因。
+ * 轨道数会算出偏大的字号 —— 那正是内嵌详情页字明显偏大过的原因。所以只分两档。
  */
 object DanmakuFontSizeSp {
-    const val Embedded = 15f
-    const val Fullscreen = 18f
+    const val Compact = 15f
+    const val Large = 18f
 
     /**
      * 画中画小窗只有屏宽的三分之一上下,而 sp 不随窗口缩:按内嵌那一档画,一行弹幕就占掉小窗
@@ -149,10 +168,11 @@ object DanmakuFontSizeSp {
      */
     const val Pip = 11f
 
-    fun of(fullscreen: Boolean, pip: Boolean): Float = when {
+    /** @param largePlayer 全屏,或两栏布局里的内嵌画面。 */
+    fun of(largePlayer: Boolean, pip: Boolean): Float = when {
         pip -> Pip
-        fullscreen -> Fullscreen
-        else -> Embedded
+        largePlayer -> Large
+        else -> Compact
     }
 }
 

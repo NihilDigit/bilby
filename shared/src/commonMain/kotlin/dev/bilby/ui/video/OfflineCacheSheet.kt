@@ -17,7 +17,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import dev.bilby.ui.components.PaneSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -101,7 +101,7 @@ fun OfflineTarget.toOfflineRequest(qualityId: Int) = OfflineRequest(
  * 目录 —— 队列本来就是用户打开这条视频时选定的有限集合(DESIGN 2.4b),缓存只是把其中几条
  * 搬到本地,不引入任何新的内容来源。
  *
- * 用 `ModalBottomSheet` 而不是对话框,理由和全部分集那个 sheet 一样:条数从一条到几十条都有,
+ * 用面板([PaneSheet])而不是对话框,理由和全部分集那个 sheet 一样:条数从一条到几十条都有,
  * 必然要滚,而 dialogs 页写着 "Most dialog content should avoid scrolling"。
  *
  * 已经缓存过的条目**显示出来但不可选**:藏起来会让人以为队列少了一条,而"这条已经在本地了"
@@ -136,7 +136,7 @@ fun OfflineCacheSheet(
     val chosen = selectable.filter { selected[it.key] == true }
     val allChosen = selectable.isNotEmpty() && chosen.size == selectable.size
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    PaneSheet(onDismissRequest = onDismiss, skipPartiallyExpanded = false) {
         Column(
             modifier = Modifier.padding(horizontal = Spacing.Comfortable),
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
@@ -195,7 +195,9 @@ fun OfflineCacheSheet(
         val listMaxHeight = with(density) {
             (LocalWindowInfo.current.containerSize.height * SheetListHeightFraction).toDp()
         }
-        LazyColumn(modifier = Modifier.weight(1f, fill = false).heightIn(max = listMaxHeight)) {
+        // 右栏里高度是定的,列表占满标题与确认按钮之间的全部。
+        val listModifier = if (inPane) Modifier.weight(1f) else Modifier.weight(1f, fill = false).heightIn(max = listMaxHeight)
+        LazyColumn(modifier = listModifier) {
             items(targets, key = { it.key }) { target ->
                 val enabled = target.isSelectable(cached)
                 val checked = selected[target.key] == true

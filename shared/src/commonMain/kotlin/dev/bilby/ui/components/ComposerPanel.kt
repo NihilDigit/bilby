@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -65,9 +66,11 @@ import dev.bilby.ui.theme.Spacing
  * (`DanmakuInputLayer`)就是这个结构,当时在真机上验过。
  *
  * **遮罩铺满整个窗口,点面板以外的任何地方都是取消**:画面、标签行、弹幕胶囊都算。评论区只是
- * 播放页下半截的一块,所以主列表那一处经 [WindowOverlay] 挂到窗口最上面。楼中楼详情是一张
+ * 播放页下半截的一块,所以主列表那一处经 [WindowOverlay] 挂到窗口最上面。楼中楼详情在单栏时是一张
  * `ModalBottomSheet`,自成一个窗口,在那里回复时这一层画在那张 sheet 里面,画在外面会被它盖住;
- * 那张 sheet 本身就盖着下面的一切。
+ * 那张 sheet 本身就盖着下面的一切。两栏时两处都经 [PaneOverlay] 挂到右栏,只盖评论那一栏。
+ *
+ * 宽度封顶在底部面板的上限,居中:单栏而窗口很宽时,铺满的输入框一行上千 dp,读和写都费力。
  *
  * 顶上一行说写给谁,下面是填充胶囊的输入区,发送键在胶囊右下角,和私信、直播间的输入栏同一个
  * 样子([PillInputField])。原先照 PiliPlus 的 `pages/video/reply_new/view.dart`,输入区没有
@@ -136,6 +139,7 @@ fun ComposerPanel(
             shape = RoundedCornerShape(topStart = PanelCornerRadius, topEnd = PanelCornerRadius),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .widthIn(max = BottomSheetDefaults.SheetMaxWidth)
                 .fillMaxWidth()
                 .onConsumedWindowInsetsChanged { bottomInset.consumed = it },
         ) {

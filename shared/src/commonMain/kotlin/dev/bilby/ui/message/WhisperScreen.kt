@@ -85,6 +85,7 @@ import dev.bilby.resources.*
 import dev.bilby.data.WhisperContent
 import dev.bilby.data.model.plainText
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.readableWidth
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.BiliRichText
 import dev.bilby.ui.components.CoverAspectRatio
@@ -158,7 +159,8 @@ fun WhisperScreen(
                 .fillMaxSize()
                 .padding(insets)
                 .consumeWindowInsets(insets)
-                .imePadding(),
+                .imePadding()
+                .readableWidth(),
         ) {
             FirstScreenState(
                 loading = state.loading,
