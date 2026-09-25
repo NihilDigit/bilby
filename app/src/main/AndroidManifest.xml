@@ -43,7 +43,11 @@
             <!-- B 站链接。**只登记 UGC 会出现的那几个 host**,不登记整个 bilibili.com 的
                  所有路径:番剧/影视/课堂是 Non-Goal(版权),把它们的链接也抢过来只会得到
                  一个打不开的页面,而用户已经失去了选择用别的应用打开的机会。
-                 autoVerify 没开:那需要在服务端放 assetlinks.json,而域名不是我们的。 -->
+                 autoVerify 没开:那需要在服务端放 assetlinks.json,而域名不是我们的。
+
+                 分成两个 filter:同一个 filter 里的 <data> 会合并成 scheme × host × path 的
+                 笛卡尔积,写在某个 host 上的 pathPrefix 对所有 host 都生效。合在一起时直播间、
+                 空间页和 b23.tv 短链全部要求以 /video/ 开头,一条都匹配不上。 -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -54,9 +58,17 @@
                 <data android:host="bili2233.cn" />
                 <data android:host="live.bilibili.com" />
                 <data android:host="space.bilibili.com" />
-                <data android:host="www.bilibili.com" android:pathPrefix="/video/" />
-                <data android:host="m.bilibili.com" android:pathPrefix="/video/" />
-                <data android:host="bilibili.com" android:pathPrefix="/video/" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:scheme="http" />
+                <data android:host="www.bilibili.com" />
+                <data android:host="m.bilibili.com" />
+                <data android:host="bilibili.com" />
+                <data android:pathPrefix="/video/" />
             </intent-filter>
 
             <!-- 从别的应用分享过来的那段文字。B 站客户端复制的是
