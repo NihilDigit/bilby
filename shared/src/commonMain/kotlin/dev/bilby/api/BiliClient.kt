@@ -37,6 +37,9 @@ class BiliClient(
     private val fingerprint: DeviceFingerprint,
 ) {
 
+    /** 此刻有没有登录。个别接口的参数按登录态分,见 VideoRepository 的 playUrlParams。 */
+    suspend fun isLoggedIn(): Boolean = settings.credentials.first().isLoggedIn
+
     /**
      * @param referer 覆盖站内 Referer/Origin。空间那几个接口要指到 `space.bilibili.com/<mid>`
      *   而不是站点首页(PiliPlus member.dart:305-310/380-385 逐个接口都手写了这一组),

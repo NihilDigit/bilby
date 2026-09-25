@@ -108,7 +108,7 @@ data class PlayInfo(
     val lastPlayTimeMillis: Long,
     /** 上次播放到哪一 P;多 P 视频进入播放页时可用它替换默认 cid。0 表示服务端没给。 */
     val lastPlayCid: Long,
-    /** 画质菜单的数据源,来自 accept_quality/accept_description,不一定每档都真有流。 */
+    /** 画质菜单的数据源,来自 accept_quality,不一定每档都真有流。 */
     val availableQualities: List<QualityOption>,
     val durationMillis: Long,
 )
@@ -225,7 +225,11 @@ class VideoRepository(private val client: BiliClient) {
         preferredAudioQuality: Int = AUDIO_QUALITY_BEST,
     ): BiliResult<PlayInfo> {
         val result =
-            client.getData<PlayUrlDto>(PLAY_URL, playUrlParams(bvid, cid, preferredQuality), signed = true)
+            client.getData<PlayUrlDto>(
+                PLAY_URL,
+                playUrlParams(bvid, cid, preferredQuality, loggedIn = client.isLoggedIn()),
+                signed = true,
+            )
         return when (result) {
             is BiliResult.Ok -> {
                 val dto = result.value
@@ -286,11 +290,15 @@ class VideoRepository(private val client: BiliClient) {
      * 常量表,**每一位的含义(DASH/HDR/4K/杜比/8K/AV1 各占哪位)UNSURE**,笔记里明确拒绝
      * 凭记忆填。改这个值之前先查 bilibili-API-collect 的 videostream_url.md。
      *
-     * gaia_source / isGaiaAvoided / web_location / try_look / dm_* 都是风控相关的埋点参数,
+     * gaia_source / isGaiaAvoided / web_location / dm_* 都是风控相关的埋点参数,
      * PiliPlus 全带上了,**是否必需 UNSURE**(它没做过省略测试)。宁可多带:少带一个字段
      * 换来的 -403 很难和其他失败区分。
+     *
+     * **`try_look` 只在未登录时带**(PiliPlus `!isLogin && Pref.p1080`)。它是免登录试看
+     * 1080P 的开关,登录后带上会把账号当试看处理:大会员档位照样出现在 accept_quality 里、
+     * `quality` 也照报,视频流却只给到 80(notes/playurl.md §3.5)。
      */
-    private fun playUrlParams(bvid: String, cid: Long, qn: Int): Map<String, String> = mapOf(
+    private fun playUrlParams(bvid: String, cid: Long, qn: Int, loggedIn: Boolean): Map<String, String> = mapOf(
         "bvid" to bvid,
         "cid" to cid.toString(),
         "qn" to qn.toString(),
@@ -301,9 +309,7 @@ class VideoRepository(private val client: BiliClient) {
         "gaia_source" to "pre-load",
         "isGaiaAvoided" to "true",
         "web_location" to "1315873",
-        // 免登录也能拿 1080P 的开关。
-        "try_look" to "1",
-    ) + DmImgParams.next()
+    ) + (if (loggedIn) emptyMap() else mapOf("try_look" to "1")) + DmImgParams.next()
 
     private fun MemberCardResponseDto.toDomain() = MemberCard(
         level = card.levelInfo.currentLevel,
@@ -374,14 +380,9 @@ class VideoRepository(private val client: BiliClient) {
             )
         }
 
-    /**
-     * accept_quality 与 accept_description 是两个平行数组,靠下标对应。长度不一致时以
-     * accept_quality 为准,缺的用本地清晰度表补,不让菜单错位。
-     */
+    /** 档名取本地清晰度表,不取 accept_description,见 [videoQualityLabel]。 */
     private fun PlayUrlDto.qualityOptions(): List<QualityOption> =
-        acceptQuality.mapIndexed { i, q ->
-            QualityOption(q, acceptDescription.getOrNull(i) ?: videoQualityLabel(q))
-        }
+        acceptQuality.map { q -> QualityOption(q, videoQualityLabel(q)) }
 
     /**
      * dash 缺席时的老格式兜底(notes §3.2:FLV/MP4,PiliPlus 说"已被淘汰")。这类流音视频
