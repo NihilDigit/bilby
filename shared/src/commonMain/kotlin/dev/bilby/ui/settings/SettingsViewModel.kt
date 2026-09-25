@@ -1,15 +1,9 @@
 package dev.bilby.ui.settings
 
-import dev.bilby.AppBuild
 import dev.bilby.api.BiliResult
 import dev.bilby.data.HistoryRepository
 import dev.bilby.data.AppearancePrefs
 import dev.bilby.data.ThemeMode
-import dev.bilby.data.UpdateCheck
-import dev.bilby.data.UpdateInfo
-import dev.bilby.data.UpdateRepository
-import java.io.File
-import java.io.IOException
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.data.CodecPreference
@@ -27,20 +21,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-
-/**
- * 手动更新的状态机。**下载进度和结果都不落盘** —— 它描述的是这一次点击,
- * 下次进设置页应当是干净的 Idle。
- */
-sealed interface UpdateState {
-    data object Idle : UpdateState
-    data object Checking : UpdateState
-    data object UpToDate : UpdateState
-    data class Available(val info: UpdateInfo) : UpdateState
-    data class Downloading(val info: UpdateInfo, val progress: Float) : UpdateState
-    data class Ready(val info: UpdateInfo, val apk: File) : UpdateState
-    data class Failed(val message: String) : UpdateState
-}
 
 data class SettingsUiState(
     val llm: LlmConfig? = null,
@@ -75,7 +55,6 @@ data class SettingsUiState(
     val danmakusArchive: Boolean = true,
     val offlineConcurrency: Int = SettingsStore.DEFAULT_OFFLINE_CONCURRENCY,
     val appearance: AppearancePrefs = AppearancePrefs(),
-    val update: UpdateState = UpdateState.Idle,
     /** 服务端的「暂停记录观看历史」。不是本机偏好,所以有读不到这一档,见 [HistoryPause]。 */
     val historyPause: HistoryPause = HistoryPause.Loading,
 )
@@ -107,7 +86,6 @@ sealed interface HistoryPause {
 class SettingsViewModel(
     private val settings: SettingsStore,
     private val llmClient: LlmClient,
-    private val updateRepository: UpdateRepository,
     private val historyRepository: HistoryRepository,
 ) : ViewModel() {
 
@@ -118,11 +96,15 @@ class SettingsViewModel(
      */
     fun loadHistoryPause() {
         if (_state.value.historyPause is HistoryPause.Known) return
-        _state.update { it.copy(historyPause = HistoryPause.Loading) }
+        // 这个进程里读到过就先用那一份,开关直接画出来;下面照样再读一次核对。
+        val cached = historyRepository.lastKnownPaused
+        _state.update { it.copy(historyPause = cached?.let { HistoryPause.Known(it) } ?: HistoryPause.Loading) }
         viewModelScope.launch {
             val next = when (val result = historyRepository.isPaused()) {
                 is BiliResult.Ok -> HistoryPause.Known(result.value)
-                else -> HistoryPause.Unavailable
+                // 核对失败而手上已有一份读到过的值时,不把开关换成"读取失败":那份值是这个
+                // 进程里刚从服务端拿到的,比一句失败更有用。
+                else -> if (cached != null) return@launch else HistoryPause.Unavailable
             }
             _state.update { it.copy(historyPause = next) }
         }
@@ -138,55 +120,6 @@ class SettingsViewModel(
         viewModelScope.launch {
             if (historyRepository.setPaused(paused) !is BiliResult.Ok) {
                 _state.update { it.copy(historyPause = previous) }
-            }
-        }
-    }
-
-    /**
-     * 查更新。**这一条只由用户点击触发**,它的结果因此要一路显示到底(查到了、已是最新、
-     * 失败了都要说)。开屏那一次是另一条路,失败不打扰(见
-     * [dev.bilby.ui.update.StartupUpdateViewModel])。两条路都没有后台轮询。
-     */
-    fun checkUpdate() {
-        if (_state.value.update is UpdateState.Checking) return
-        _state.update { it.copy(update = UpdateState.Checking) }
-        viewModelScope.launch {
-            val result = when (val check = updateRepository.check(AppBuild.versionName)) {
-                is UpdateCheck.Available -> UpdateState.Available(check.info)
-                UpdateCheck.UpToDate -> UpdateState.UpToDate
-                is UpdateCheck.Failed -> UpdateState.Failed(check.message)
-            }
-            _state.update { it.copy(update = result) }
-        }
-    }
-
-    /**
-     * 下载到应用缓存目录。
-     *
-     * **只拼路径,不碰磁盘。** [viewModelScope] 跑在 `Main.immediate` 上,建目录和删残包
-     * 都是磁盘 IO;两件事都归 [UpdateRepository.download],它整段在 `Dispatchers.IO` 上。
-     */
-    fun downloadUpdate(info: UpdateInfo, dir: File) {
-        if (_state.value.update is UpdateState.Downloading) return
-        _state.update { it.copy(update = UpdateState.Downloading(info, 0f)) }
-        viewModelScope.launch {
-            val target = File(dir, info.assetName)
-            val result = updateRepository.download(info, target) { progress ->
-                _state.update { current ->
-                    if (current.update is UpdateState.Downloading) {
-                        current.copy(update = UpdateState.Downloading(info, progress))
-                    } else {
-                        current
-                    }
-                }
-            }
-            _state.update {
-                it.copy(
-                    update = result.fold(
-                        onSuccess = { apk -> UpdateState.Ready(info, apk) },
-                        onFailure = { error -> UpdateState.Failed(downloadFailureText(error)) },
-                    )
-                )
             }
         }
     }
@@ -378,16 +311,6 @@ class SettingsViewModel(
     }
 
 }
-
-/**
- * 下载失败在那一行副标题上说的话。
- *
- * 异常自己的 message 是给日志看的("Unexpected end of stream"),那一行只有一句话的位置,
- * 要回答的是"再点一次还是先换个网"。原文由 [UpdateRepository.download] 打进
- * [dev.bilby.BiliLog],这里不重复留一份 —— 这个类经手 LLM 的 key,全文不出现日志调用。
- */
-private fun downloadFailureText(cause: Throwable): String =
-    if (cause is IOException) "网络不通,检查网络后重试" else "下载没有完成,重试一次"
 
 /** 本机对某个编码有没有硬解。设置页只列真支持的,不列一个选了也白选的选项。 */
 fun CodecPreference.requiredCodecId(): Int? = when (this) {

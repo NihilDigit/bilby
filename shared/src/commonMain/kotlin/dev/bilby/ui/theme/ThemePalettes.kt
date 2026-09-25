@@ -15,7 +15,7 @@ import org.jetbrains.compose.resources.StringResource
  *
  * 选这八个:色相绕色环一圈拉开(红、橙、黄、黄绿、绿、青、紫、品红),和品牌色的蓝紫也不
  * 挨着 —— tonal spot 只保留种子的色相、把彩度压到一个固定档,两个色相相近的种子算出来几乎是
- * 同一套。加上「系统」和 Bilby 一共十格,设置页排成 5×2。
+ * 同一套。加上「系统」和 Bilby 一共十格,设置页按宽度折行排开。
  *
  * 每一套都是**离线算好的常量**,和 Color.kt 同一个做法、同一组参数:material-color-utilities
  * 0.3.0(npm)的 `SchemeTonalSpot`,对比度 0,即 2021 版规范。用这组参数重算默认种子,
@@ -24,7 +24,10 @@ import org.jetbrains.compose.resources.StringResource
  * 加一个种子就再跑一次生成器,把两套表贴进来。
  */
 enum class ThemePalette(
-    /** 种子色本身,设置页的色板上画这个。 */
+    /**
+     * 算出这一套表的种子色,重算时作为生成器的输入。设置页的色块画的不是它,是当前明暗下的
+     * `schemes` 里的 primary:同一个种子在浅色与深色下的主色差得很远,画种子会和实际观感对不上。
+     */
     val seed: Color,
     val label: StringResource,
 ) {

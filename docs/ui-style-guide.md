@@ -38,6 +38,7 @@
 | `ButtonGroup` + `toggleableItem`/`clickableItem` | 播放页动作栏 | 不存在,要退回手排 Row + 自己维护选中态配色和触摸目标 |
 | `LoadingIndicator` | `FullScreenLoading` / `LoadingSpinner`(§2.7d) | 不存在,退回 `CircularProgressIndicator` |
 | `PullToRefreshDefaults.LoadingIndicator` | `RefreshBox`(§2.7d) | 不存在,退回 `PullToRefreshDefaults.Indicator` 那个箭头圈 |
+| `SegmentedListItem` + `ListItemDefaults.segmentedShapes`/`segmentedColors`/`SegmentedGap` | 设置页(`ui/settings/SettingsRows.kt`,§2.8)、播放队列 | 不存在,退回 `Surface` 容器里摆透明 `ListItem`。桌面端 alpha22 只有带 `onClick`、`selected`、`checked` 的三个重载,缺无点击的那个,不可点的行因此走 `StaticSettingRow` |
 
 **全部需要 `@OptIn(ExperimentalMaterial3ExpressiveApi::class)`。** 只有这一个注解,
 `PullToRefreshDefaults.LoadingIndicator` 和它的两个配色 `loadingIndicatorColor` /
@@ -646,9 +647,27 @@ roundness)。最里面一档按公式该是 8 − 8 = 0,取 4 —— 直角套�
 
 另外四条这一页特有的:
 
-- **每一节装进一个容器**(`SettingsGroup`:`surfaceContainer` + `shapes.large`,节标题在
-  容器外,行自身透明)。裸列表落在 `surface` 上时分组只靠一行标题,而同仓库的播放队列与
-  动态卡片都是 contained,设置页不该是唯一一页没有边界的。
+- **每一组是一列分段**(`SettingsGroup`,`ui/settings/SettingsRows.kt`):每行一块
+  `SegmentedListItem`,底色 `surfaceContainer`,行间只留 `SegmentedGap`,首尾两行各带一侧
+  大圆角;组标题是 primary 的 `titleSmall`,在分段外面。裸列表落在 `surface` 上时分组只靠
+  一行标题,而同仓库的播放队列与动态卡片都是 contained,设置页不该是唯一一页没有边界的。
+  几条细则:
+  - 行的位置(第几行、共几行)由 `SettingsGroup` 数出来,调用方用 `row { position -> }`
+    登记,不手写下标。条件行(只在某平台出现、只在有数据时出现)手写下标时漏改一处,
+    组中间就会长出一块圆角。登记那一步不是 `@Composable`,条件里要读的 CompositionLocal
+    先在外面读成局部变量。
+  - 开关行整行可点,行尾的 `Switch` 只作指示。开关行的选中色与选中形状都取未选中的值:
+    `checked` 重载把开着当作选中,不改的话一组里开着的行换色换形。
+  - 每一行都有行首图标,调用方必须给(`icon` 是必填参数)。
+  - 当前值放在哪,按它的长短分。数量、倍速这类短读数放行尾(`valueAtEnd`):M3 列表把行尾
+    文字留给"价格、数量、日期"这类附加信息(lists.md 的 Trailing text),标题下面是说明文字的
+    位置,短读数压在一段说明上面时主次读反了。服务器地址、配色名这类较长的值写在标题下面
+    第二行,放行尾会把标题挤得只剩几个字。行尾没有值时放 `RowTarget`(去下一页给箭头,
+    离开应用给外链图标,弹框或当场执行的不给)。
+  - 选项少、要当场看到效果的(明暗模式)用相连的 `ToggleButton` 组直接放在行里;选项多的
+    仍然点开对话框选。
+  - 关于页不是一组行,是一张卡片(`shapes.large` + `surfaceContainer`):版本、许可证、
+    更新状态写在一处,检查更新是 `FilledTonalButton`,项目主页是 `OutlinedButton`。
 - **诊断信息显示真值,不显示配置值。** 解码器名(`c2.qti.avc.decoder`)和倍速算法都从
   `PlayerFactory.techInfo` 这个 StateFlow 读,它跟着流走 —— 只在进页面时取一次快照,
   回退发生后显示的就是错的。

@@ -1,22 +1,67 @@
 package dev.bilby.ui.settings
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.AltRoute
+import androidx.compose.material.icons.outlined.Api
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.Contrast
+import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.DownloadForOffline
+import androidx.compose.material.icons.outlined.FastForward
+import androidx.compose.material.icons.outlined.Flag
+import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.HistoryToggleOff
+import androidx.compose.material.icons.outlined.HourglassEmpty
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.MusicOff
+import androidx.compose.material.icons.outlined.NetworkCheck
+import androidx.compose.material.icons.outlined.Paid
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PersonOff
+import androidx.compose.material.icons.outlined.Preview
+import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.material.icons.outlined.SignalCellularAlt
+import androidx.compose.material.icons.outlined.SkipNext
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Start
+import androidx.compose.material.icons.outlined.ThumbUp
+import androidx.compose.material.icons.outlined.Wallpaper
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ButtonGroupDefaults
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -35,7 +80,12 @@ import dev.bilby.data.CodecPreference
 import dev.bilby.data.LlmConfig
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockPrefs
-import dev.bilby.data.UpdateInfo
+import dev.bilby.ui.update.UpdateDialog
+import dev.bilby.update.AppUpdateService
+import dev.bilby.update.AvailableUpdate
+import dev.bilby.update.UpdateStatus
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import dev.bilby.player.videoQualityLabel
 import dev.bilby.player.audioQualityLabel
 import dev.bilby.player.DEFAULT_AUDIO_QUALITY_OPTIONS
@@ -48,9 +98,9 @@ import dev.bilby.ui.video.CATEGORY_DESCRIPTIONS
 import dev.bilby.ui.video.CATEGORY_GROUPS
 import dev.bilby.ui.video.CATEGORY_LABELS
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.size
 import org.jetbrains.compose.resources.StringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,13 +111,15 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.bilby.data.AppearancePrefs
 import dev.bilby.data.ThemeMode
@@ -75,37 +127,38 @@ import dev.bilby.ui.AppLanguage
 import dev.bilby.ui.LocalSystemActions
 import dev.bilby.ui.theme.dynamicColorSchemes
 import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.LocalIsDarkTheme
+import dev.bilby.ui.theme.PaletteSchemes
 import dev.bilby.ui.theme.ThemePalette
 import dev.bilby.ui.theme.dynamicColorAvailable
-import java.io.File
 import kotlin.math.abs
 
 /**
  * 设置的二级页面。**每一页都是一整页,不是一个展开块**:展开块要么把首页撑回原来的长度,
  * 要么在滚动中途改变高度,而这两件事正是重做前的样子。
  *
- * 一页一个 [SettingsSection],由 `Destinations.kt` 的 `SettingsPage` 带过来 —— 八个页面
- * 共用一个 NavKey,而不是八条路由:它们的差别只有"哪一页",没有各自的参数。
+ * 一页一个 [SettingsSection],由 `Destinations.kt` 的 `SettingsPage` 带过来 —— 七个页面
+ * 共用一个 NavKey,而不是七条路由:它们的差别只有"哪一页",没有各自的参数。
  */
 enum class SettingsSection {
     Appearance,
     Playback,
-    SponsorBlock,
 
-    /** SponsorBlock 的九个分类。再降一层,理由见 [SponsorBlockSettingsPage]。 */
+    /** SponsorBlock 的九个分类。从播放页再降一层,理由见 [PlaybackSettingsPage]。 */
     SponsorCategories,
 
     /** 排除的 UP 主名单。从隐私页再降一层,理由见 [ExcludedFeedPage]。 */
     ExcludedFeed,
-    Offline,
     Agent,
     Privacy,
     About,
 }
 
 /**
- * 子页的外壳:顶栏、返回、可读宽度、滚动、装行的那个容器。抽出来是因为八页一模一样,
- * 而漏掉其中一样(比如某一页忘了限宽)在平板上一眼看得出来。
+ * 子页的外壳:顶栏、返回、可读宽度、滚动。抽出来是因为七页一模一样,而漏掉其中一样
+ * (比如某一页忘了限宽)在平板上一眼看得出来。
+ *
+ * 分组由各页自己套 [SettingsGroup]。一页只有一组时不给组标题,节名就是顶栏标题。
  */
 @Composable
 private fun SettingsSubPage(
@@ -116,15 +169,9 @@ private fun SettingsSubPage(
      * [SettingsUiState.loaded]。顶栏照画:标题和返回不依赖任何一项设置,先出来才不会闪。
      */
     ready: Boolean = true,
-    /**
-     * 内容自己分组时传 false。**一页只有一节的时候节名就是顶栏标题**,所以默认把整页内容
-     * 装进一个 [SettingsGroup];分类页那样内部还有 [GroupLabel] 分几组的,由它自己逐组套,
-     * 否则组标题会被关到容器里面,读起来像是这一组的第一行。
-     */
-    grouped: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    // pinned 而不是 enterAlways:顶栏留着不动,只在内容滚起来之后换一档容器色。八页的内容
+    // pinned 而不是 enterAlways:顶栏留着不动,只在内容滚起来之后换一档容器色。各页的内容
     // 都短,滚起来的那一下顶栏跟着一起走反而像页面跳了一下。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
@@ -141,15 +188,20 @@ private fun SettingsSubPage(
                     .verticalScroll(rememberScrollState())
                     .padding(bottom = Spacing.Spacious + navigationBarsBottom()),
             ) {
-                if (ready) {
-                    if (grouped) SettingsGroup { content() } else content()
-                }
+                if (ready) content()
             }
         }
     }
 }
 
-/** 播放。**弹幕不在这里** —— 它自成一页,否则这一页会像重做之前一样什么都往里塞。 */
+/**
+ * 播放:播放、画质与音质、跳过片段、离线缓存四组。**弹幕不在这里** —— 它在播放页的设置面板里,
+ * 否则这一页会像重做之前一样什么都往里塞。
+ *
+ * SponsorBlock 与缓存原先各占一页,一页只有一两行;两者都是"播放时怎么做",并进来各成一组。
+ * **SponsorBlock 的九个分类仍然再降一层**:它们占的高度比这一页其余部分加起来还多,而多数人
+ * 设一次就再也不动 —— 常驻在这里的结果是每次来改别的都要滚过它们。
+ */
 @Composable
 fun PlaybackSettingsPage(
     state: SettingsUiState,
@@ -161,123 +213,189 @@ fun PlaybackSettingsPage(
     onWifiAudioChange: (Int) -> Unit,
     onMeteredAudioChange: (Int) -> Unit,
     onPickUpdatesDefaultChange: (Boolean) -> Unit,
-    onBack: () -> Unit,
-) {
-    SettingsSubPage(stringResource(Res.string.settings_section_player), onBack, state.loaded) {
-        ToggleSettingRow(
-            title = stringResource(Res.string.settings_auto_next),
-            // 说明这一行为什么存在:队列不是用户建的,自动前进因此是一个没人点过头的默认。
-            subtitle = stringResource(Res.string.settings_auto_next_subtitle),
-            checked = state.autoNext,
-            onCheckedChange = onAutoNextChange,
-        )
-        // 两行是同一个值按网络分的两格。播放页里切画质默认只管那一次播放,下面那个开关打开
-        // 之后才写进当下所在的那一格(见 AudioPlaybackService.setQuality)。
-        ChoiceRow(
-            title = stringResource(Res.string.settings_default_quality_wifi),
-            options = SettingsStore.QUALITY_OPTIONS,
-            selected = state.defaultQualityWifi,
-            label = { videoQualityLabel(it) },
-            onChange = onWifiQualityChange,
-        )
-        ChoiceRow(
-            title = stringResource(Res.string.settings_default_quality_metered),
-            // 判据是系统的流量计费标记,不是"是不是 WiFi" —— 手机热点和按量计费的 WiFi 都算
-            // 计费网络,而这一点从标题上看不出来。
-            subtitle = stringResource(Res.string.settings_default_quality_metered_subtitle),
-            options = SettingsStore.QUALITY_OPTIONS,
-            selected = state.defaultQualityMetered,
-            label = { videoQualityLabel(it) },
-            onChange = onMeteredQualityChange,
-        )
-        // 音质同一套:按网络分两格,档位是固定表(DEFAULT_AUDIO_QUALITY_OPTIONS)。
-        ChoiceRow(
-            title = stringResource(Res.string.settings_default_audio_wifi),
-            options = DEFAULT_AUDIO_QUALITY_OPTIONS,
-            selected = state.defaultAudioWifi,
-            label = { audioQualityLabel(it) },
-            onChange = onWifiAudioChange,
-        )
-        ChoiceRow(
-            title = stringResource(Res.string.settings_default_audio_metered),
-            options = DEFAULT_AUDIO_QUALITY_OPTIONS,
-            selected = state.defaultAudioMetered,
-            label = { audioQualityLabel(it) },
-            onChange = onMeteredAudioChange,
-        )
-        ToggleSettingRow(
-            title = stringResource(Res.string.settings_pick_updates_default),
-            subtitle = stringResource(Res.string.settings_pick_updates_default_subtitle),
-            checked = state.playerPickUpdatesDefault,
-            onCheckedChange = onPickUpdatesDefaultChange,
-        )
-        CodecSection(
-            selected = state.codec,
-            hardwareCodecIds = state.hardwareCodecIds,
-            onChange = onCodecChange,
-        )
-        ChoiceRow(
-            title = stringResource(Res.string.settings_fast_forward_speed),
-            // 长按加速没有播放页入口 —— 它是"长按的时候有多快"这条规则本身,不是看的时候
-            // 顺手调的东西,所以按 §2.8 的判据("怎么做")放这里。
-            subtitle = stringResource(Res.string.settings_fast_forward_speed_subtitle),
-            options = SettingsStore.FAST_FORWARD_SPEEDS,
-            selected = SettingsStore.FAST_FORWARD_SPEEDS.minByOrNull { abs(it - state.fastForwardSpeed) },
-            label = { formatSpeed(it) },
-            onChange = onFastForwardSpeedChange,
-        )
-    }
-}
-
-/**
- * SponsorBlock。**九个分类再降一层**:它们占的高度比这一页其余部分加起来还多,而多数人
- * 设一次就再也不动 —— 常驻在这里的结果是每次来改服务器地址都要滚过它们。
- */
-@Composable
-fun SponsorBlockSettingsPage(
-    state: SettingsUiState,
-    onChange: (SponsorBlockPrefs) -> Unit,
-    onOpenCategories: () -> Unit,
+    onSponsorBlockChange: (SponsorBlockPrefs) -> Unit,
+    onOpenSponsorCategories: () -> Unit,
+    onOfflineConcurrencyChange: (Int) -> Unit,
     onBack: () -> Unit,
 ) {
     var editingServer by rememberSaveable { mutableStateOf(false) }
     val prefs = state.sponsorBlock
-    SettingsSubPage(stringResource(Res.string.settings_section_sponsorblock), onBack, state.loaded) {
-        ToggleSettingRow(
-            title = stringResource(Res.string.settings_sponsorblock_toggle),
-            subtitle = stringResource(Res.string.settings_sponsorblock_toggle_subtitle),
-            checked = prefs.enabled,
-            onCheckedChange = { onChange(prefs.copy(enabled = it)) },
-        )
-        // 关掉时这两行不适用,但**它们的出现和消失要看得见**:直接 `if` 掉的话页面在同一次
-        // 点击里换掉了两行的高度,读起来像整页跳了一下,而跳的原因(刚按下的那个开关)
-        // 已经滚出视线的可能也有。沿竖轴展开收起就把因果连起来了。
-        //
-        // spec 取 motionScheme 的 fast 档:这一块是组件显隐,不是转场(风格指南 §6 那张表),
-        // 而且它紧跟着一次点击,慢一档就成了"按下去要等一下"。
-        AnimatedVisibility(
-            visible = prefs.enabled,
-            enter = expandVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
-                fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()),
-            exit = shrinkVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
-                fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
-        ) {
-            Column {
-                SettingRow(
-                    title = stringResource(Res.string.settings_sponsorblock_categories),
-                    value = stringResource(
-                        Res.string.settings_sponsorblock_enabled_count,
-                        prefs.categories.count { it in CATEGORY_LABELS },
-                        CATEGORY_LABELS.size,
-                    ),
-                    target = RowTarget.Page,
-                    onClick = onOpenCategories,
+    // SponsorBlock 关掉时它下面两行不适用,但**它们的出现和消失要看得见**:直接 `if` 掉的话页面在同一次
+    // 点击里换掉了两行的高度,读起来像整页跳了一下,而跳的原因(刚按下的那个开关)
+    // 已经滚出视线的可能也有。沿竖轴展开收起就把因果连起来了。
+    //
+    // 两行各一个过渡状态:一个 MutableTransitionState 只能驱动一个 AnimatedVisibility。
+    val categoriesShown = remember { MutableTransitionState(prefs.enabled) }
+    val serverShown = remember { MutableTransitionState(prefs.enabled) }
+    categoriesShown.targetState = prefs.enabled
+    serverShown.targetState = prefs.enabled
+    // 两行算不算进这一组,看它们还在不在屏上,不看开关:收起动画走完之前开关那一行仍是
+    // 三行里的首行。按开关算的话,它的下沿在按下的那一刻就圆起来,底下两行却还在往回缩。
+    val extrasOnScreen = prefs.enabled || categoriesShown.currentState || serverShown.currentState
+    // spec 取 motionScheme 的 fast 档:这一块是组件显隐,不是转场(风格指南 §6 那张表),
+    // 而且它紧跟着一次点击,慢一档就成了"按下去要等一下"。
+    val enter = expandVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
+        fadeIn(MaterialTheme.motionScheme.fastEffectsSpec())
+    val exit = shrinkVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
+        fadeOut(MaterialTheme.motionScheme.fastEffectsSpec())
+    SettingsSubPage(stringResource(Res.string.settings_section_playback), onBack, state.loaded) {
+        SettingsGroup(title = stringResource(Res.string.settings_group_playback)) {
+            row { position ->
+                ToggleSettingRow(
+                    position = position,
+                    icon = Icons.Outlined.SkipNext,
+                    title = stringResource(Res.string.settings_auto_next),
+                    // 说明这一行为什么存在:队列不是用户建的,自动前进因此是一个没人点过头的默认。
+                    subtitle = stringResource(Res.string.settings_auto_next_subtitle),
+                    checked = state.autoNext,
+                    onCheckedChange = onAutoNextChange,
                 )
+            }
+            row { position ->
+                ChoiceRow(
+                    position = position,
+                    icon = Icons.Outlined.Speed,
+                    title = stringResource(Res.string.settings_fast_forward_speed),
+                    // 长按加速没有播放页入口 —— 它是"长按的时候有多快"这条规则本身,不是看的时候
+                    // 顺手调的东西,所以按 §2.8 的判据("怎么做")放这里。
+                    subtitle = stringResource(Res.string.settings_fast_forward_speed_subtitle),
+                    options = SettingsStore.FAST_FORWARD_SPEEDS,
+                    selected = SettingsStore.FAST_FORWARD_SPEEDS.minByOrNull { abs(it - state.fastForwardSpeed) },
+                    label = { formatSpeed(it) },
+                    onChange = onFastForwardSpeedChange,
+                    valueAtEnd = true,
+                )
+            }
+        }
+        // 四行默认值两两成对,差别在网络,所以图标标网络,画质还是音质由标题说。
+        SettingsGroup(title = stringResource(Res.string.settings_group_quality)) {
+            // 两行是同一个值按网络分的两格。播放页里切画质默认只管那一次播放,「播放页切换改为默认」
+            // 打开之后才写进当下所在的那一格(见 AudioPlaybackService.setQuality)。
+            row { position ->
+                ChoiceRow(
+                    position = position,
+                    icon = Icons.Outlined.Wifi,
+                    title = stringResource(Res.string.settings_default_quality_wifi),
+                    options = SettingsStore.QUALITY_OPTIONS,
+                    selected = state.defaultQualityWifi,
+                    label = { videoQualityLabel(it) },
+                    onChange = onWifiQualityChange,
+                )
+            }
+            row { position ->
+                ChoiceRow(
+                    position = position,
+                    icon = Icons.Outlined.SignalCellularAlt,
+                    title = stringResource(Res.string.settings_default_quality_metered),
+                    // 判据是系统的流量计费标记,不是"是不是 WiFi" —— 手机热点和按量计费的 WiFi 都算
+                    // 计费网络,而这一点从标题上看不出来。
+                    subtitle = stringResource(Res.string.settings_default_quality_metered_subtitle),
+                    options = SettingsStore.QUALITY_OPTIONS,
+                    selected = state.defaultQualityMetered,
+                    label = { videoQualityLabel(it) },
+                    onChange = onMeteredQualityChange,
+                )
+            }
+            // 音质同一套:按网络分两格,档位是固定表(DEFAULT_AUDIO_QUALITY_OPTIONS)。
+            row { position ->
+                ChoiceRow(
+                    position = position,
+                    icon = Icons.Outlined.Wifi,
+                    title = stringResource(Res.string.settings_default_audio_wifi),
+                    options = DEFAULT_AUDIO_QUALITY_OPTIONS,
+                    selected = state.defaultAudioWifi,
+                    label = { audioQualityLabel(it) },
+                    onChange = onWifiAudioChange,
+                )
+            }
+            row { position ->
+                ChoiceRow(
+                    position = position,
+                    icon = Icons.Outlined.SignalCellularAlt,
+                    title = stringResource(Res.string.settings_default_audio_metered),
+                    options = DEFAULT_AUDIO_QUALITY_OPTIONS,
+                    selected = state.defaultAudioMetered,
+                    label = { audioQualityLabel(it) },
+                    onChange = onMeteredAudioChange,
+                )
+            }
+            // 放这一组而不是「播放」组:它管的正是上面四行什么时候被播放页改写。
+            row { position ->
+                ToggleSettingRow(
+                    position = position,
+                    icon = Icons.Outlined.PushPin,
+                    title = stringResource(Res.string.settings_pick_updates_default),
+                    subtitle = stringResource(Res.string.settings_pick_updates_default_subtitle),
+                    checked = state.playerPickUpdatesDefault,
+                    onCheckedChange = onPickUpdatesDefaultChange,
+                )
+            }
+            row { position ->
+                CodecSection(
+                    position = position,
+                    selected = state.codec,
+                    hardwareCodecIds = state.hardwareCodecIds,
+                    onChange = onCodecChange,
+                )
+            }
+        }
+        SettingsGroup(title = stringResource(Res.string.settings_group_sponsorblock)) {
+            row { position ->
+                ToggleSettingRow(
+                    position = position,
+                    icon = Icons.Outlined.FastForward,
+                    title = stringResource(Res.string.settings_sponsorblock_toggle),
+                    subtitle = stringResource(Res.string.settings_sponsorblock_toggle_subtitle),
+                    checked = prefs.enabled,
+                    onCheckedChange = { onSponsorBlockChange(prefs.copy(enabled = it)) },
+                )
+            }
+            if (extrasOnScreen) {
+                row { position ->
+                    AnimatedVisibility(visibleState = categoriesShown, enter = enter, exit = exit) {
+                        SettingRow(
+                            position = position,
+                            icon = Icons.Outlined.Checklist,
+                            title = stringResource(Res.string.settings_sponsorblock_categories),
+                            value = stringResource(
+                                Res.string.settings_sponsorblock_enabled_count,
+                                prefs.categories.count { it in CATEGORY_LABELS },
+                                CATEGORY_LABELS.size,
+                            ),
+                            target = RowTarget.Page,
+                            onClick = onOpenSponsorCategories,
+                        )
+                    }
+                }
                 // 服务器地址和分类不是一类东西:那些是"跳什么",这个是"问谁"。
-                SettingRow(
-                    title = stringResource(Res.string.settings_sponsorblock_server),
-                    subtitle = "${prefs.serverUrl}\n${stringResource(Res.string.settings_sponsorblock_server_subtitle)}",
-                    onClick = { editingServer = true },
+                row { position ->
+                    AnimatedVisibility(visibleState = serverShown, enter = enter, exit = exit) {
+                        SettingRow(
+                            position = position,
+                            icon = Icons.Outlined.Dns,
+                            title = stringResource(Res.string.settings_sponsorblock_server),
+                            value = prefs.serverUrl,
+                            subtitle = stringResource(Res.string.settings_sponsorblock_server_subtitle),
+                            onClick = { editingServer = true },
+                        )
+                    }
+                }
+            }
+        }
+        // 缓存只有并发度一项 —— 清晰度在缓存面板上选(那是"这一次下什么"),而这里是"怎么下"。
+        SettingsGroup(title = stringResource(Res.string.settings_group_offline)) {
+            row { position ->
+                ChoiceRow(
+                    position = position,
+                    icon = Icons.Outlined.DownloadForOffline,
+                    title = stringResource(Res.string.settings_offline_concurrency),
+                    // 说清代价:调大不是白拿的,而"下载多了刷不动"是最容易被归到别处的那种症状。
+                    subtitle = stringResource(Res.string.settings_offline_concurrency_subtitle),
+                    options = SettingsStore.OFFLINE_CONCURRENCY_OPTIONS,
+                    selected = state.offlineConcurrency,
+                    label = { stringResource(Res.string.settings_offline_concurrency_value, it) },
+                    onChange = onOfflineConcurrencyChange,
+                    valueAtEnd = true,
                 )
             }
         }
@@ -291,7 +409,7 @@ fun SponsorBlockSettingsPage(
             onDismiss = { editingServer = false },
             onConfirm = {
                 editingServer = false
-                onChange(prefs.copy(serverUrl = it))
+                onSponsorBlockChange(prefs.copy(serverUrl = it))
             },
         )
     }
@@ -304,29 +422,26 @@ fun SponsorCategoriesPage(
     onBack: () -> Unit,
 ) {
     val prefs = state.sponsorBlock
-    // 这一页内部还分几组,组标题要留在容器外面,所以不用外壳那个默认的整页容器。
-    SettingsSubPage(
-        title = stringResource(Res.string.settings_sponsorblock_categories),
-        onBack = onBack,
-        ready = state.loaded,
-        grouped = false,
-    ) {
+    SettingsSubPage(stringResource(Res.string.settings_sponsorblock_categories), onBack, state.loaded) {
         CATEGORY_GROUPS.forEach { (groupTitle, categories) ->
-            GroupLabel(stringResource(groupTitle))
-            SettingsGroup {
+            SettingsGroup(title = stringResource(groupTitle)) {
                 categories.forEach { category ->
                     val label = CATEGORY_LABELS[category] ?: return@forEach
-                    ToggleSettingRow(
-                        title = stringResource(label),
-                        // 类别名解释不了自己,判断"要不要跳过它"靠的是这一行。
-                        subtitle = CATEGORY_DESCRIPTIONS[category]?.let { stringResource(it) },
-                        checked = category in prefs.categories,
-                        onCheckedChange = { checked ->
-                            val next = if (checked) prefs.categories + category else prefs.categories - category
-                            onChange(prefs.copy(categories = next))
-                        },
-                        useCheckbox = true,
-                    )
+                    row { position ->
+                        ToggleSettingRow(
+                            position = position,
+                            icon = CategoryIcons[category] ?: Icons.Outlined.FastForward,
+                            title = stringResource(label),
+                            // 类别名解释不了自己,判断"要不要跳过它"靠的是这一行。
+                            subtitle = CATEGORY_DESCRIPTIONS[category]?.let { stringResource(it) },
+                            checked = category in prefs.categories,
+                            onCheckedChange = { checked ->
+                                val next = if (checked) prefs.categories + category else prefs.categories - category
+                                onChange(prefs.copy(categories = next))
+                            },
+                            useCheckbox = true,
+                        )
+                    }
                 }
             }
         }
@@ -334,12 +449,30 @@ fun SponsorCategoriesPage(
 }
 
 /**
+ * 各分类的行首图标,键与 CATEGORY_LABELS 相同。放在这里而不放进 ui/video 那张表:图标只有
+ * 设置页用,跳过时的提示只写类别名。表里没有的分类退回快进图标,与「自动跳过」那一行同一个。
+ */
+private val CategoryIcons: Map<String, ImageVector> = mapOf(
+    "sponsor" to Icons.Outlined.Paid,
+    "selfpromo" to Icons.Outlined.Campaign,
+    "interaction" to Icons.Outlined.ThumbUp,
+    "intro" to Icons.Outlined.Start,
+    "outro" to Icons.Outlined.Flag,
+    "preview" to Icons.Outlined.Preview,
+    "padding" to Icons.Outlined.HourglassEmpty,
+    "filler" to Icons.Outlined.AltRoute,
+    "music_offtopic" to Icons.Outlined.MusicOff,
+)
+
+/**
  * 外观:明暗、纯黑、配色、语言。
  *
- * - **明暗**三档单选;**纯黑**是它下面的一个开关,只在会出现深色(深色或跟随系统)时可用。
- * - **配色**是一片色板(5×2)而不是一行文字加对话框:这一项选的就是一个颜色,读名字挑颜色是在
- *   绕路。第一格是按壁纸取色(系统不支持时不给这一格),其余是内置配色,名字在色板下面。
- *   选中那一格画一圈外框加一个勾,不只靠颜色(风格指南 §2.6)。
+ * - **明暗**三档是一组连体按钮,直接摆在行里:只有三档,点开对话框再选是多走一步,
+ *   而连体按钮组正是 M3 给"固定 2 到 5 项单选"的控件(风格指南 §2.1)。
+ *   **纯黑**是它下面的一个开关。
+ * - **配色**是一片色块而不是一行文字加对话框:这一项选的就是一个颜色,读名字挑颜色是在
+ *   绕路。第一格是按壁纸取色(系统不支持时不给这一格),其余是内置配色。选中那一格画一个勾,
+ *   不只靠颜色(风格指南 §2.6);选中的名字写在标题下面。
  * - **语言**三项单选,改完立即重建页面。
  */
 @Composable
@@ -353,29 +486,39 @@ fun AppearanceSettingsPage(
     onBack: () -> Unit,
 ) {
     val appearance = state.appearance
+    // 在登记行之前读出来:登记那一步不是 @Composable(见 SettingsRows)。
+    val supportsLanguageSwitch = LocalSystemActions.current.supportsLanguageSwitch
     SettingsSubPage(stringResource(Res.string.settings_section_appearance), onBack, state.loaded) {
-        ChoiceRow(
-            title = stringResource(Res.string.settings_theme_mode),
-            options = ThemeMode.entries,
-            selected = appearance.mode,
-            label = { stringResource(it.label) },
-            onChange = onModeChange,
-        )
-        ToggleSettingRow(
-            title = stringResource(Res.string.settings_pure_black),
-            subtitle = stringResource(Res.string.settings_pure_black_subtitle),
-            checked = appearance.pureBlack,
-            onCheckedChange = onPureBlackChange,
-        )
-        PaletteRow(selected = appearance.palette, onSelect = onPaletteChange)
-        if (LocalSystemActions.current.supportsLanguageSwitch) {
-            ChoiceRow(
-                title = stringResource(Res.string.settings_language),
-                options = AppLanguage.entries,
-                selected = language,
-                label = { stringResource(it.label) },
-                onChange = onLanguageChange,
-            )
+        SettingsGroup {
+            row { position ->
+                ThemeModeRow(position = position, selected = appearance.mode, onSelect = onModeChange)
+            }
+            row { position ->
+                ToggleSettingRow(
+                    position = position,
+                    icon = Icons.Outlined.Contrast,
+                    title = stringResource(Res.string.settings_pure_black),
+                    subtitle = stringResource(Res.string.settings_pure_black_subtitle),
+                    checked = appearance.pureBlack,
+                    onCheckedChange = onPureBlackChange,
+                )
+            }
+            row { position ->
+                PaletteRow(position = position, selected = appearance.palette, onSelect = onPaletteChange)
+            }
+            if (supportsLanguageSwitch) {
+                row { position ->
+                    ChoiceRow(
+                        position = position,
+                        icon = Icons.Outlined.Language,
+                        title = stringResource(Res.string.settings_language),
+                        options = AppLanguage.entries,
+                        selected = language,
+                        label = { stringResource(it.label) },
+                        onChange = onLanguageChange,
+                    )
+                }
+            }
         }
     }
 }
@@ -388,133 +531,149 @@ private val ThemeMode.label: StringResource
     }
 
 /**
- * 配色那一块:标题,下面一片 5 列的色板。
+ * 明暗三档,连体按钮组。写法与播放器设置面板的 ConnectedChoices 相同:各格等宽,
+ * 内边距收小,读屏按单选念。
  *
- * 每格是一个圆(种子色本身)加名字;按壁纸取色那一格画当前壁纸取出来的主色,名字叫「系统」。
- * 圆里不画别的:颜色就是这一项的全部内容。
+ * 用默认的实心配色,不换 tonal:风格指南 §2.1 嫌实心太响说的是压在几十条评论上的排序,
+ * 这里一页只有这一组,选中哪一档正需要一眼看出来。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun PaletteRow(selected: String, onSelect: (String) -> Unit) {
-    Column(modifier = Modifier.padding(vertical = Spacing.Tight)) {
-        Text(
-            stringResource(Res.string.settings_theme_palette),
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        )
-        // **铺开成 5×2,不横滑。** 十格一屏放得下,横滑的话后几个色要拖一下才看得到,而这一项
-        // 选的就是颜色,挑之前得先一眼看全。
-        val wallpaperPrimary = if (dynamicColorAvailable) dynamicColorSchemes().light.primary else Color.Unspecified
-        val dynamicLabel = stringResource(Res.string.theme_palette_dynamic)
-        val swatches: List<Swatch> = buildList {
-            if (dynamicColorAvailable) {
-                add(Swatch(AppearancePrefs.DYNAMIC, wallpaperPrimary, dynamicLabel))
-            }
-            ThemePalette.entries.forEach { add(Swatch(it.name, it.seed, "", it.label)) }
-        }
-        // 系统不支持壁纸取色时存着的 dynamic 实际落到默认那一套,选中标记也跟过去。
-        val effective = if (swatches.any { it.key == selected }) selected else ThemePalette.Default.name
-        Column(
-            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            modifier = Modifier
-                .padding(horizontal = Spacing.Tight)
-                .selectableGroup(),
+private fun ThemeModeRow(position: RowPosition, selected: ThemeMode, onSelect: (ThemeMode) -> Unit) {
+    val options = ThemeMode.entries
+    ControlSettingRow(
+        position = position,
+        icon = Icons.Outlined.DarkMode,
+        title = stringResource(Res.string.settings_theme_mode),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+            modifier = Modifier.fillMaxWidth().selectableGroup(),
         ) {
-            swatches.chunked(PaletteColumns).forEach { row ->
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    row.forEach { swatch ->
-                        PaletteSwatch(
-                            color = swatch.color,
-                            label = swatch.labelRes?.let { stringResource(it) } ?: swatch.label,
-                            selected = swatch.key == effective,
-                            onClick = { onSelect(swatch.key) },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    // 最后一行不满时留空位,不让剩下几格撑宽。
-                    repeat(PaletteColumns - row.size) { Spacer(Modifier.weight(1f)) }
+            options.forEachIndexed { index, option ->
+                ToggleButton(
+                    checked = option == selected,
+                    onCheckedChange = { onSelect(option) },
+                    shapes = when (index) {
+                        0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                        options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                        else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                    },
+                    // 默认左右各 16dp,窄屏上三格平分之后「跟随系统」放不下。
+                    contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                    modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
+                ) {
+                    Text(stringResource(option.label), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
     }
 }
 
-/** 色板的一格。[labelRes] 与 [label] 二选一:内置配色取资源,「系统」那格已经取好了字。 */
-private class Swatch(val key: String, val color: Color, val label: String, val labelRes: StringResource? = null)
-
-private const val PaletteColumns = 5
-
+/**
+ * 配色那一行:标题下写选中的名字,再下面一片圆形色块。
+ *
+ * 色块画的是这一套在当前明暗下的 primary,即选中后按钮与强调色的实际颜色,不是种子色:
+ * 种子色经 TonalSpot 调和后会变淡,按种子色画会与选完之后看到的对不上。按壁纸取色那一格
+ * 同理,画壁纸取出来的 primary,没选中时压一个壁纸图标,与内置配色分开。
+ *
+ * **折行,不横滑。** 十格在窄屏上折成两行放得下,横滑的话后几个色要拖一下才看得到,而这一项
+ * 选的就是颜色,挑之前得先一眼看全。
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun PaletteSwatch(
+private fun PaletteRow(position: RowPosition, selected: String, onSelect: (String) -> Unit) {
+    val dark = LocalIsDarkTheme.current
+    val dynamicLabel = stringResource(Res.string.theme_palette_dynamic)
+    val swatches: List<Swatch> = buildList {
+        if (dynamicColorAvailable) {
+            add(Swatch(AppearancePrefs.DYNAMIC, dynamicColorSchemes(), dynamicLabel, Icons.Outlined.Wallpaper))
+        }
+        ThemePalette.entries.forEach { add(Swatch(it.name, it.schemes, stringResource(it.label))) }
+    }
+    // 系统不支持壁纸取色时存着的 dynamic 实际落到默认那一套,选中标记也跟过去。
+    val effective = if (swatches.any { it.key == selected }) selected else ThemePalette.Default.name
+    ControlSettingRow(
+        position = position,
+        icon = Icons.Outlined.Palette,
+        title = stringResource(Res.string.settings_theme_palette),
+        value = paletteLabel(selected),
+    ) {
+        // **每行格数按行数平均分,不按"放得下几格"放满。** 放满时十格在手机上排成 6 + 4,第二行
+        // 缺一截,读起来像漏了两格。先算这个宽度下最少要几行,再把十格平均摊到这几行上(手机
+        // 5 + 5,宽屏一行 10);每行格数相同,两端对齐之后上下两行的色块也是对齐的。
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val fit = (maxWidth / SwatchTouchSize).toInt().coerceAtLeast(1)
+            val rows = (swatches.size + fit - 1) / fit
+            val perRow = (swatches.size + rows - 1) / rows
+        FlowRow(
+            maxItemsInEachRow = perRow,
+            horizontalArrangement = if (rows > 1) Arrangement.SpaceBetween else Arrangement.Start,
+            modifier = Modifier.fillMaxWidth().selectableGroup(),
+        ) {
+            swatches.forEach { swatch ->
+                val scheme = if (dark) swatch.schemes.dark else swatch.schemes.light
+                ColorSwatch(
+                    color = scheme.primary,
+                    onColor = scheme.onPrimary,
+                    label = swatch.label,
+                    selected = swatch.key == effective,
+                    idleIcon = swatch.idleIcon,
+                    onClick = { onSelect(swatch.key) },
+                )
+            }
+        }
+        }
+    }
+}
+
+/** 色板的一格。[idleIcon] 只有按壁纸取色那一格有。 */
+private class Swatch(
+    val key: String,
+    val schemes: PaletteSchemes,
+    val label: String,
+    val idleIcon: ImageVector? = null,
+)
+
+/** 一格色块。色块本身不写名字,读屏靠 contentDescription 念出来。 */
+@Composable
+private fun ColorSwatch(
     color: Color,
+    onColor: Color,
     label: String,
     selected: Boolean,
+    idleIcon: ImageVector?,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier,
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        modifier = modifier
-            .clip(MaterialTheme.shapes.medium)
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(SwatchTouchSize)
+            .clip(CircleShape)
             .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
-            .padding(Spacing.Hair),
+            .semantics { contentDescription = label },
     ) {
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
                 .size(SwatchSize)
-                .then(
-                    if (selected) {
-                        Modifier.border(SwatchRingWidth, MaterialTheme.colorScheme.primary, CircleShape)
-                    } else {
-                        Modifier
-                    },
-                )
-                .padding(SwatchRingGap)
                 .clip(CircleShape)
                 .background(color),
         ) {
-            if (selected) {
-                Icon(
-                    Icons.Filled.Check,
-                    contentDescription = null,
-                    // 勾压在种子色上:浅色种子(山吹)上用深色,其余用白。
-                    tint = if (color.luminance() > CheckContrastLuminance) Color.Black else Color.White,
-                    modifier = Modifier.size(Dimens.IconInline),
-                )
+            val icon = if (selected) Icons.Outlined.Check else idleIcon
+            // 勾取这一套的 onPrimary:它就是为压在 primary 上设计的,不必再按亮度猜黑白。
+            if (icon != null) {
+                Icon(icon, contentDescription = null, tint = onColor, modifier = Modifier.size(Dimens.IconInline))
             }
         }
-        // 五列时一格约 60dp 宽,罗马音最长的 Wakatake 在 labelMedium 下刚好放得下;字体放大时截断。
-        Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
-/** 五列时一格约 60dp,圆取 44 留出选中外圈与左右的缝。 */
-private val SwatchSize = 44.dp
-private val SwatchRingWidth = 2.dp
-/** 选中外圈与色块之间的缝:外圈贴着色块的话,和种子色相近的外圈看不出来。 */
-private val SwatchRingGap = 4.dp
-private const val CheckContrastLuminance = 0.5f
+/** 触摸目标取 48dp 下限(风格指南 §3)。 */
+private val SwatchTouchSize = 48.dp
 
-/** 缓存。只有并发度一项 —— 清晰度在缓存面板上选(那是"这一次下什么"),而这里是"怎么下"。 */
-@Composable
-fun OfflineSettingsPage(
-    state: SettingsUiState,
-    onConcurrencyChange: (Int) -> Unit,
-    onBack: () -> Unit,
-) {
-    SettingsSubPage(stringResource(Res.string.settings_section_offline), onBack, state.loaded) {
-        ChoiceRow(
-            title = stringResource(Res.string.settings_offline_concurrency),
-            // 说清代价:调大不是白拿的,而"下载多了刷不动"是最容易被归到别处的那种症状。
-            subtitle = stringResource(Res.string.settings_offline_concurrency_subtitle),
-            options = SettingsStore.OFFLINE_CONCURRENCY_OPTIONS,
-            selected = state.offlineConcurrency,
-            label = { stringResource(Res.string.settings_offline_concurrency_value, it) },
-            onChange = onConcurrencyChange,
-        )
-    }
-}
+/** 色块比触摸区小一圈,相邻两格之间才留得出缝。 */
+private val SwatchSize = 36.dp
 
 /**
  * 搜索助理。
@@ -532,33 +691,43 @@ fun AgentSettingsPage(
 ) {
     var editing by rememberSaveable { mutableStateOf(false) }
     SettingsSubPage(stringResource(Res.string.settings_section_agent), onBack, state.loaded) {
-        SettingRow(
-            title = stringResource(Res.string.settings_agent_config),
-            // 只说配没配,不显示遮蔽后的 key:遮蔽只挡眼睛,截图和录屏挡不住。
-            subtitle = state.llm?.let { llm ->
-                if (llm.baseUrl.isBlank() || llm.apiKey.isBlank()) {
-                    stringResource(Res.string.settings_not_configured)
-                } else {
-                    "${llm.baseUrl}\n${llm.model.ifBlank { SettingsStore.DEFAULT_LLM_MODEL }}"
-                }
-            } ?: stringResource(Res.string.settings_loading),
-            onClick = { editing = true },
-        )
-        // **这一行故意保留接口原话**,是全应用唯一的例外。别处收成三句
-        // (`ui/ErrorText.kt`)的理由是"用户拿错误码做不了任何事";这里反过来 ——
-        // 这条连的是用户自己填的 base URL 和 key,而这一行的用途就是告诉他填错在哪。
-        // 换成「请求被拒绝」之后 401、DNS 解析失败、模型名不存在读起来一模一样,
-        // 这个冒烟测试就没用了。
-        SettingRow(
-            title = stringResource(Res.string.settings_llm_test),
-            subtitle = when (val test = state.llmTest) {
-                LlmTest.Idle -> stringResource(Res.string.settings_llm_test_hint)
-                LlmTest.Running -> stringResource(Res.string.settings_llm_test_running)
-                is LlmTest.Ok -> stringResource(Res.string.settings_llm_test_ok, test.millis)
-                is LlmTest.Failed -> test.message
-            },
-            onClick = onSmokeTest,
-        )
+        SettingsGroup {
+            row { position ->
+                SettingRow(
+                    position = position,
+                    icon = Icons.Outlined.Api,
+                    title = stringResource(Res.string.settings_agent_config),
+                    // 只说配没配,不显示遮蔽后的 key:遮蔽只挡眼睛,截图和录屏挡不住。
+                    subtitle = state.llm?.let { llm ->
+                        if (llm.baseUrl.isBlank() || llm.apiKey.isBlank()) {
+                            stringResource(Res.string.settings_not_configured)
+                        } else {
+                            "${llm.baseUrl}\n${llm.model.ifBlank { SettingsStore.DEFAULT_LLM_MODEL }}"
+                        }
+                    } ?: stringResource(Res.string.settings_loading),
+                    onClick = { editing = true },
+                )
+            }
+            // **这一行故意保留接口原话**,是全应用唯一的例外。别处收成三句
+            // (`ui/ErrorText.kt`)的理由是"用户拿错误码做不了任何事";这里反过来 ——
+            // 这条连的是用户自己填的 base URL 和 key,而这一行的用途就是告诉他填错在哪。
+            // 换成「请求被拒绝」之后 401、DNS 解析失败、模型名不存在读起来一模一样,
+            // 这个冒烟测试就没用了。
+            row { position ->
+                SettingRow(
+                    position = position,
+                    icon = Icons.Outlined.NetworkCheck,
+                    title = stringResource(Res.string.settings_llm_test),
+                    subtitle = when (val test = state.llmTest) {
+                        LlmTest.Idle -> stringResource(Res.string.settings_llm_test_hint)
+                        LlmTest.Running -> stringResource(Res.string.settings_llm_test_running)
+                        is LlmTest.Ok -> stringResource(Res.string.settings_llm_test_ok, test.millis)
+                        is LlmTest.Failed -> test.message
+                    },
+                    onClick = onSmokeTest,
+                )
+            }
+        }
     }
     if (editing) {
         LlmDialog(
@@ -589,48 +758,75 @@ fun PrivacySettingsPage(
     onBack: () -> Unit,
 ) {
     SettingsSubPage(stringResource(Res.string.settings_section_privacy), onBack, state.loaded) {
-        // 和这一页其余开关不同,它读的是服务端的账号设置,所以读不到是一种真实状态。三档各画
-        // 各的,不把未知折成一个关着的开关 —— 那会让人以为"正在记录",而实际上谁也不知道。
-        when (val pause = state.historyPause) {
-            HistoryPause.Loading -> SettingRow(
-                title = stringResource(Res.string.settings_pause_history),
-                subtitle = stringResource(Res.string.settings_pause_history_loading),
-            )
+        SettingsGroup {
+            // 和这一页其余开关不同,它读的是服务端的账号设置,所以读不到是一种真实状态。三档各画
+            // 各的,不把未知折成一个关着的开关 —— 那会让人以为"正在记录",而实际上谁也不知道。
+            row { position ->
+                when (val pause = state.historyPause) {
+                    // 读取中与读到之后是同一个开关行,只有行尾在转圈与开关之间换,见 loading 参数。
+                    // 开关的位置不画成关:服务端的值还不知道,画一个关着的开关等于说"正在记录"。
+                    HistoryPause.Loading -> ToggleSettingRow(
+                        position = position,
+                        icon = Icons.Outlined.HistoryToggleOff,
+                        title = stringResource(Res.string.settings_pause_history),
+                        subtitle = stringResource(Res.string.settings_pause_history_subtitle),
+                        checked = false,
+                        onCheckedChange = {},
+                        loading = true,
+                    )
 
-            HistoryPause.Unavailable -> SettingRow(
-                title = stringResource(Res.string.settings_pause_history),
-                subtitle = stringResource(Res.string.settings_pause_history_failed),
-                onClick = onRetryHistoryPause,
-            )
+                    HistoryPause.Unavailable -> SettingRow(
+                        position = position,
+                        icon = Icons.Outlined.HistoryToggleOff,
+                        title = stringResource(Res.string.settings_pause_history),
+                        subtitle = stringResource(Res.string.settings_pause_history_failed),
+                        onClick = onRetryHistoryPause,
+                    )
 
-            is HistoryPause.Known -> ToggleSettingRow(
-                title = stringResource(Res.string.settings_pause_history),
-                subtitle = stringResource(Res.string.settings_pause_history_subtitle),
-                checked = pause.paused,
-                onCheckedChange = onHistoryPausedChange,
-            )
-        }
-        SettingRow(
-            title = stringResource(Res.string.blacklist_title),
-            target = RowTarget.Page,
-            onClick = onOpenBlacklist,
-        )
-        // 和上面几项一样是"谁能知道我在看什么":这一条要发给站外服务器,副标题把发的是什么
-        // 说清楚 —— 一个只写"补全醒目留言"的开关,读者无从判断该不该关。
-        ToggleSettingRow(
-            title = stringResource(Res.string.settings_danmakus_archive),
-            subtitle = stringResource(Res.string.settings_danmakus_archive_subtitle),
-            checked = state.danmakusArchive,
-            onCheckedChange = onDanmakusArchiveChange,
-        )
-        // 一个都没排除过的人不需要看见这个概念。
-        if (state.excludedFeedUps.isNotEmpty()) {
-            SettingRow(
-                title = stringResource(Res.string.settings_feed_excluded),
-                subtitle = stringResource(Res.string.settings_feed_excluded_count, state.excludedFeedUps.size),
-                target = RowTarget.Page,
-                onClick = onOpenExcludedFeed,
-            )
+                    is HistoryPause.Known -> ToggleSettingRow(
+                        position = position,
+                        icon = Icons.Outlined.HistoryToggleOff,
+                        title = stringResource(Res.string.settings_pause_history),
+                        subtitle = stringResource(Res.string.settings_pause_history_subtitle),
+                        checked = pause.paused,
+                        onCheckedChange = onHistoryPausedChange,
+                    )
+                }
+            }
+            row { position ->
+                SettingRow(
+                    position = position,
+                    icon = Icons.Outlined.Block,
+                    title = stringResource(Res.string.blacklist_title),
+                    target = RowTarget.Page,
+                    onClick = onOpenBlacklist,
+                )
+            }
+            // 和上面几项一样是"谁能知道我在看什么":这一条要发给站外服务器,副标题把发的是什么
+            // 说清楚 —— 一个只写"补全醒目留言"的开关,读者无从判断该不该关。
+            row { position ->
+                ToggleSettingRow(
+                    position = position,
+                    icon = Icons.Outlined.Forum,
+                    title = stringResource(Res.string.settings_danmakus_archive),
+                    subtitle = stringResource(Res.string.settings_danmakus_archive_subtitle),
+                    checked = state.danmakusArchive,
+                    onCheckedChange = onDanmakusArchiveChange,
+                )
+            }
+            // 一个都没排除过的人不需要看见这个概念。
+            if (state.excludedFeedUps.isNotEmpty()) {
+                row { position ->
+                    SettingRow(
+                        position = position,
+                        icon = Icons.Outlined.PersonOff,
+                        title = stringResource(Res.string.settings_feed_excluded),
+                        value = stringResource(Res.string.settings_feed_excluded_count, state.excludedFeedUps.size),
+                        target = RowTarget.Page,
+                        onClick = onOpenExcludedFeed,
+                    )
+                }
+            }
         }
     }
 }
@@ -651,22 +847,31 @@ fun ExcludedFeedPage(
 ) {
     var confirmingClearAll by rememberSaveable { mutableStateOf(false) }
     SettingsSubPage(stringResource(Res.string.settings_feed_excluded), onBack, state.loaded) {
-        state.excludedFeedUps.forEach { up ->
-            ListItem(
-                headlineContent = { Text(up.name, style = MaterialTheme.typography.bodyLarge) },
-                trailingContent = {
-                    TextButton(onClick = { onRestore(up.mid) }) {
-                        Text(stringResource(Res.string.settings_feed_excluded_restore))
-                    }
-                },
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-            )
-        }
-        if (state.excludedFeedUps.size > 1) {
-            SettingRow(
-                title = stringResource(Res.string.settings_feed_clear_excluded),
-                onClick = { confirmingClearAll = true },
-            )
+        SettingsGroup {
+            state.excludedFeedUps.forEach { up ->
+                row { position ->
+                    StaticSettingRow(
+                        position = position,
+                        icon = Icons.Outlined.Person,
+                        title = up.name,
+                        trailing = {
+                            TextButton(onClick = { onRestore(up.mid) }) {
+                                Text(stringResource(Res.string.settings_feed_excluded_restore))
+                            }
+                        },
+                    )
+                }
+            }
+            if (state.excludedFeedUps.size > 1) {
+                row { position ->
+                    SettingRow(
+                        position = position,
+                        icon = Icons.Outlined.Restore,
+                        title = stringResource(Res.string.settings_feed_clear_excluded),
+                        onClick = { confirmingClearAll = true },
+                    )
+                }
+            }
         }
     }
     // **一次点掉整份名单要确认。** 逐条恢复是可逆的(把人再排除一次就行),整份清空不是:
@@ -693,42 +898,124 @@ fun ExcludedFeedPage(
     }
 }
 
+/**
+ * @param updater 应用内更新,不做的平台为 null。状态归它,不归这一页:在这里开始的下载,
+ *   离开设置页再回来还是那一份,开屏弹窗读的也是它。
+ */
 @Composable
 fun AboutSettingsPage(
-    state: SettingsUiState,
+    updater: AppUpdateService?,
     onOpenGithub: () -> Unit,
-    onCheckUpdate: () -> Unit,
-    onDownloadUpdate: (UpdateInfo) -> Unit,
-    onInstallUpdate: (File) -> Unit,
     onBack: () -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
+    var dialogUpdate by remember { mutableStateOf<AvailableUpdate?>(null) }
     SettingsSubPage(stringResource(Res.string.settings_section_about), onBack) {
-        SettingRow(
-            title = stringResource(Res.string.settings_version),
-            subtitle = "${AppBuild.versionName}(${AppBuild.applicationId})",
+        AboutCard(
+            update = updater?.status,
+            // 用户点的这一次,失败要说出来,不走静默。
+            onCheckUpdate = { updater?.let { scope.launch { it.check() } } },
+            onOpenUpdate = { dialogUpdate = it },
+            onOpenGithub = onOpenGithub,
         )
-        SettingRow(
-            title = stringResource(Res.string.settings_license),
-            subtitle = "GPL-3.0-or-later",
-        )
-        // 这一行走出应用去浏览器,所以给外链图标而不是箭头:箭头说的是"应用里还有一页"。
-        SettingRow(
-            title = stringResource(Res.string.settings_github),
-            target = RowTarget.External,
-            onClick = onOpenGithub,
-        )
-        if (LocalSystemActions.current.supportsSelfUpdate) {
-            UpdateRow(
-                state = state.update,
-                onCheck = onCheckUpdate,
-                onDownload = onDownloadUpdate,
-                onInstall = onInstallUpdate,
-            )
+    }
+    val shown = dialogUpdate
+    if (updater != null && shown != null) {
+        UpdateDialog(updater = updater, update = shown, onDismiss = { dialogUpdate = null })
+    }
+}
+
+/**
+ * 关于:一张卡片,版本、许可证、更新状态与两个动作放在一起。
+ *
+ * 原先是四行列表:版本和许可证各占一整行却不可点,更新的状态又要另读一行副标题。
+ * 这一页没有要逐项调的东西,只有"这是哪个版本、有没有新的、源码在哪",一张卡片答完。
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AboutCard(
+    /** 不支持应用内更新的平台为 null,不给状态行,也不给更新按钮。 */
+    update: UpdateStatus?,
+    onCheckUpdate: () -> Unit,
+    onOpenUpdate: (AvailableUpdate) -> Unit,
+    onOpenGithub: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = colors.surfaceContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Comfortable)
+            .padding(top = Spacing.Tight),
+    ) {
+        Column(modifier = Modifier.padding(Spacing.Comfortable)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(AboutBadgeSize)
+                        .clip(CircleShape)
+                        .background(colors.primaryContainer),
+                ) {
+                    Icon(Icons.Outlined.Info, contentDescription = null, tint = colors.onPrimaryContainer)
+                }
+                Spacer(modifier = Modifier.width(Spacing.Comfortable))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(AppName, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = "${stringResource(Res.string.settings_version)} " +
+                            "${AppBuild.versionName}(${AppBuild.applicationId})",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant,
+                    )
+                    Text(
+                        text = "${stringResource(Res.string.settings_license)} GPL-3.0-or-later",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant,
+                    )
+                    if (update != null) UpdateStatusLine(update)
+                }
+            }
+            Spacer(modifier = Modifier.height(Spacing.Cozy))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                if (update != null) {
+                    UpdateRow(
+                        status = update,
+                        onCheck = onCheckUpdate,
+                        onOpen = onOpenUpdate,
+                    )
+                }
+                // 这个按钮走出应用去浏览器,所以文字后面跟外链图标:与设置行的 RowTarget.External
+                // 同一个约定,箭头说的是"应用里还有一页"。
+                OutlinedButton(onClick = onOpenGithub) {
+                    Icon(
+                        imageVector = Icons.Outlined.Code,
+                        contentDescription = null,
+                        modifier = Modifier.size(ButtonDefaults.IconSize),
+                    )
+                    Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
+                    Text(stringResource(Res.string.settings_github))
+                    Spacer(modifier = Modifier.width(Spacing.Hair))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
+                        contentDescription = null,
+                        modifier = Modifier.size(ExternalMarkSize),
+                    )
+                }
+            }
         }
     }
 }
 
-/** 首页那一行的摘要用得上:开着还是关着。 */
-@Composable
-internal fun onOffLabel(on: Boolean): String =
-    stringResource(if (on) Res.string.settings_on else Res.string.settings_off)
+/** 品牌名,不随界面语言翻译。 */
+private const val AppName = "Bilby"
+
+/** 卡片左上那个圆。装下一个 24dp 图标,四周留出一圈底色。 */
+private val AboutBadgeSize = 48.dp
+
+/** 外链标记比按钮前置图标小一档,读作附注,不与前面的 Code 图标抢。 */
+private val ExternalMarkSize = 16.dp

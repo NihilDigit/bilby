@@ -94,7 +94,16 @@ class HistoryRepository(private val client: BiliClient) {
     suspend fun isPaused(): BiliResult<Boolean> = client.getData<Boolean>(
         "${BiliConstants.WEB_HOST}/x/v2/history/shadow",
         mapOf("jsonp" to "jsonp"),
-    )
+    ).also { if (it is BiliResult.Ok) lastKnownPaused = it.value }
+
+    /**
+     * 这个进程里最近一次读到或写成功的值,没有时为 null。设置首页与隐私页各有一个 ViewModel,
+     * 首页先读一次,隐私页打开时直接拿这份先画出开关,不经过"读取中";它照样再读一次,值变了
+     * 再更新。只在内存里:这是服务端的账号设置,别处改过之后,一份存盘的旧值会长期说错。
+     */
+    @Volatile
+    var lastKnownPaused: Boolean? = null
+        private set
 
     /**
      * 暂停或恢复记录观看历史,`paused = true` 是暂停(notes §3.6)。
@@ -111,7 +120,7 @@ class HistoryRepository(private val client: BiliClient) {
     suspend fun setPaused(paused: Boolean): BiliResult<Unit> = client.postAction(
         "${BiliConstants.WEB_HOST}/x/v2/history/shadow/set",
         mapOf("switch" to paused.toString(), "jsonp" to "jsonp"),
-    )
+    ).also { if (it is BiliResult.Ok) lastKnownPaused = paused }
 
     private companion object {
         const val PAGE_SIZE = 20
