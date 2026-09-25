@@ -57,8 +57,6 @@ sealed interface LiveFeedItem {
         val colorRgb: Int,
         val isSelf: Boolean,
         val medal: LiveFanMedal?,
-        val emote: LiveEmote?,
-        val inlineEmotes: Map<String, LiveEmote>,
         val replyName: String?,
     ) : LiveFeedItem
 
@@ -463,8 +461,6 @@ class LiveRoomViewModel(
                 colorRgb = message.colorRgb,
                 isSelf = message.isSelf,
                 medal = message.medal,
-                emote = message.emote,
-                inlineEmotes = message.inlineEmotes,
                 replyName = message.replyName,
             ),
         )
@@ -838,9 +834,9 @@ class LiveRoomViewModel(
 
         /**
          * 屏上表情的高度,以弹幕字号为单位。弹幕轨道高是字号的 1.6 倍,整条大表情取 1.5 刚好填满
-         * 一条轨道而不压到邻轨;夹在正文里的小表情跟聊天栏一样略高于字。
+         * 一条轨道而不压到邻轨;夹在正文里的小表情略高于字。
          */
         const val STICKER_HEIGHT_EM = 1.5f
-        const val INLINE_EMOTE_HEIGHT_EM = 1.2f
+        const val INLINE_EMOTE_HEIGHT_EM = 1.3f
     }
 }

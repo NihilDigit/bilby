@@ -52,12 +52,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.bilby.R
-import dev.bilby.live.LiveEmote
 import dev.bilby.live.LiveFanMedal
-import dev.bilby.live.findEmotes
 import dev.bilby.ui.components.Avatar
-import dev.bilby.ui.components.BiliAsyncImage
-import dev.bilby.ui.components.inlineEmoteSize
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
@@ -111,31 +107,9 @@ private fun DanmakuRow(item: LiveFeedItem.Danmaku, onUserClick: (Long) -> Unit, 
     }
     val bodyColor = MaterialTheme.colorScheme.onSurface
 
-    // 整条弹幕就是一张图时,正文位置画那张图,不再画一遍文字 —— 那串文字是表情的代号
-    // (`[dog]` 一类),读者要看的是图。
+    // 表情一律按代号(`[dog]` 一类)显示成文字,不画图:图在画面上的弹幕里已经画过一遍,聊天栏
+    // 再画一遍是同一份内容占两处,而整条大表情在这里比一行字高出一截。
     val medalInline = rememberMedalInline(item.medal)
-    val single = item.emote
-    if (single != null) {
-        Row(
-            modifier = modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        ) {
-            Text(
-                text = medalAndName(item.medal, item.name, item.mid, nameColor) { openUser(it) },
-                style = style,
-                inlineContent = medalInline,
-            )
-            BiliAsyncImage(
-                url = single.url,
-                contentDescription = item.text,
-                modifier = emoteSizeModifier(single),
-            )
-        }
-        return
-    }
-
-    val emoteSize = inlineEmoteSize(style)
     val text = remember(item, nameColor, bodyColor) {
         buildAnnotatedString {
             appendMedal(item.medal)
@@ -145,17 +119,10 @@ private fun DanmakuRow(item: LiveFeedItem.Danmaku, onUserClick: (Long) -> Unit, 
             item.replyName?.let {
                 withStyle(SpanStyle(color = nameColor)) { append("@$it ") }
             }
-            withStyle(SpanStyle(color = bodyColor)) { appendWithEmotes(item.text, item.inlineEmotes) }
+            withStyle(SpanStyle(color = bodyColor)) { append(item.text) }
         }
     }
-    val inline = item.inlineEmotes.mapValues { (_, emote) ->
-        InlineTextContent(
-            Placeholder(emoteSize, emoteSize, PlaceholderVerticalAlign.TextCenter),
-        ) {
-            BiliAsyncImage(url = emote.url, contentDescription = null, modifier = Modifier.fillMaxSize())
-        }
-    } + medalInline
-    Text(text = text, style = style, inlineContent = inline, modifier = modifier.fillMaxWidth())
+    Text(text = text, style = style, inlineContent = medalInline, modifier = modifier.fillMaxWidth())
 }
 
 /**
@@ -405,19 +372,6 @@ private fun rememberMedalInline(medal: LiveFanMedal?): Map<String, InlineTextCon
     return mapOf(MedalInlineTag to content)
 }
 
-/** 只有勋章和昵称的那一小段,给整条弹幕就是一张图的情形用。 */
-private fun medalAndName(
-    medal: LiveFanMedal?,
-    name: String,
-    mid: Long,
-    nameColor: Color,
-    onUserClick: (Long) -> Unit,
-) = buildAnnotatedString {
-    appendMedal(medal)
-    appendName(name, mid, nameColor, onUserClick)
-    withStyle(SpanStyle(color = nameColor)) { append("：") }
-}
-
 /**
  * 昵称那一段,可点,进这个人的空间。
  *
@@ -465,32 +419,6 @@ private fun SenderRow(
             overflow = TextOverflow.Ellipsis,
         )
     }
-}
-
-/**
- * 把正文里的表情代号换成占位符,占位符的 id 就是代号本身,对上 `inlineEmotes` 的键。
- */
-private fun AnnotatedString.Builder.appendWithEmotes(
-    text: String,
-    emotes: Map<String, LiveEmote>,
-) {
-    var last = 0
-    for (match in findEmotes(text, emotes)) {
-        append(text.substring(last, match.start))
-        val code = text.substring(match.start, match.end)
-        appendInlineContent(code, code)
-        last = match.end
-    }
-    append(text.substring(last))
-}
-
-/**
- * 表情图的尺寸。服务端给的是**像素**,按当前密度折成 dp —— PiliPlus 那边同样是除以
- * `devicePixelRatio`。房间表情与充电表情的宽高不可靠,解析时已经换成了固定边长。
- */
-@Composable
-private fun emoteSizeModifier(emote: LiveEmote): Modifier = with(LocalDensity.current) {
-    Modifier.size(width = emote.widthPx.toDp(), height = emote.heightPx.toDp())
 }
 
 /** 档位色竖条的宽度。 */
