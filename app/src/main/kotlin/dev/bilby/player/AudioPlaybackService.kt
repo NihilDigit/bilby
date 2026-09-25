@@ -2424,10 +2424,12 @@ class AudioPlaybackService : MediaSessionService() {
          * 着新参数从哪个输出位置起算,见 `DefaultAudioSink.applyMediaPositionParameters`)。
          * 两者在变速的那一小段里说的不是同一件事,而弹幕位置是位置的直接函数,差多少就跳多少。
          *
-         * `ExoPlayer.getCurrentPosition()` 每次调用现算,本身就是逐帧连续的,所以要位置的人
-         * 直接问它就没有第二个估计器,也就没有可分歧的东西。**这和 `MediaController` 的那个
-         * 同名方法不是一回事** —— 那一侧是跨进程的外推,锚点是它的私有状态(见
-         * [dev.bilby.player.PositionTick]);这一侧就是播放器本人。
+         * 这里问的是播放器本人,没有第二个估计器。**这和 `MediaController` 的那个同名方法不是
+         * 一回事** —— 那一侧是跨进程的外推,锚点是它的私有状态(见
+         * [dev.bilby.player.PositionTick])。但它**不是逐帧连续的**:非 offload 时返回播放线程
+         * 每轮 `doSomeWork` 写一次的 `PlaybackInfo.positionUs`,播放中每 10ms 一格,不外推
+         * (media3 1.10.1,`ExoPlayerImpl.getCurrentPositionUsInternal`)。按帧取位置的消费方
+         * 要自己平滑。
          *
          * **只能在主线程调**:ExoPlayer 认自己的 application looper,而服务与界面同进程、
          * 都在主线程上。控制动作仍旧全走 MediaController,这里出去的只有状态。

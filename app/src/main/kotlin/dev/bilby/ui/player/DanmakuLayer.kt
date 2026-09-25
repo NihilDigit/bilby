@@ -15,8 +15,10 @@ import dev.bilby.player.PositionTick
 import dev.nihildigit.danmaku.Danmaku
 import dev.nihildigit.danmaku.DanmakuClock
 import dev.nihildigit.danmaku.DanmakuController
+import dev.nihildigit.danmaku.DanmakuImageSource
 import dev.nihildigit.danmaku.DanmakuLayer
 import dev.nihildigit.danmaku.DanmakuOptions
+import dev.nihildigit.danmaku.SmoothedDanmakuClock
 import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.nihildigit.danmaku.rememberDanmakuController
 import kotlinx.coroutines.delay
@@ -61,7 +63,8 @@ fun PlayerDanmakuLayer(
 ) {
     val isLive = feed is DanmakuFeed.Stream
     val clock = remember(player, isLive) {
-        if (isLive) LiveDanmakuClock() else PlayerDanmakuClock()
+        // 直播时钟是单调墙钟,本来就连续;点播读的是播放器每 10ms 一格的位置,要抹平。
+        if (isLive) LiveDanmakuClock() else SmoothedDanmakuClock(PlayerDanmakuClock())
     }
     val options = remember(prefs, fontSizeSp) {
         DanmakuOptions(
@@ -183,10 +186,10 @@ private class PlayerDanmakuClock : DanmakuClock {
      * `DefaultAudioSink.applyMediaPositionParameters`)。外推于是跑到真实位置前面,等下一条
      * 刻度落地再被拽回来 —— 按下和松开各跳一次,方向相反。
      *
-     * 那个差是外推这件事本身带来的,不是刻度不够密:请求倍速和实际倍速在过渡期里本来就不是
-     * 同一个数,改用"实测速率"只会把跳变翻个方向。**所以不外推**:服务与界面同进程,
-     * `ExoPlayer.getCurrentPosition()` 每次调用现算、本身就连续,直接问它就没有第二个估计器,
-     * 也就没有可分歧的东西([AudioPlaybackService.currentPositionMillis])。
+     * 那个差来自拿请求倍速去外推:请求倍速和实际倍速在过渡期里本来就不是同一个数。**所以这里
+     * 不外推**:服务与界面同进程,直接问播放器([AudioPlaybackService.currentPositionMillis])。
+     * 这个读数每 10ms 才更新一格,逐帧的平滑在外面那层 [SmoothedDanmakuClock] 里做,它的速率
+     * 是从读数本身估出来的。
      *
      * **这不是"改用 MediaController 的 getCurrentPosition"** —— 那一侧才是要避开的东西:
      * 它在自己进程里按"锚点 + 经过时间 × 倍速"外推,锚点是它的私有状态,变速时同样对不齐,
