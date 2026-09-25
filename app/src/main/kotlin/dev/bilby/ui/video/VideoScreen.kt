@@ -1109,15 +1109,19 @@ fun VideoScreen(
             // 九分之十六那么高,在更高的列里垂直居中——上下各露出一条页面底色。那条白带
             // 才是"横屏不沉浸"的真身,和根容器的 inset 无关。
             playerPane(Modifier.weight(if (immersive) 1f else 2f).fillMaxHeight())
-            // 文字这一栏躲开系统栏与刘海,**但不躲 start 那一侧**:它的左边挨着的是播放器,
+            // 文字这一栏躲开状态栏与刘海,**但不躲 start 那一侧**:它的左边挨着的是播放器,
             // 不是屏幕边缘,垫了就在画面和简介之间劈出一道缝。
+            //
+            // **也不躲底部,同竖排。** 列表铺到屏幕底边,手势条的高度由列表自己的底部留白和
+            // 评论区的 FAB 各自让(它们量的是 navigationBars)。这一栏替它们躲掉的话 inset 被
+            // 消费成 0,列表在手势条上方就被切断,滑到底也碰不到屏幕下沿。
             if (!immersive) {
                 tabsPane(
                     Modifier
                         .weight(1f)
                         .fillMaxHeight()
                         .windowInsetsPadding(
-                            safeInsets.only(WindowInsetsSides.End + WindowInsetsSides.Vertical),
+                            safeInsets.only(WindowInsetsSides.End + WindowInsetsSides.Top),
                         ),
                 )
             }
