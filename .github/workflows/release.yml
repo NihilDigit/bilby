@@ -1,8 +1,8 @@
 # 打 tag 发版。构建只发生在这里 —— 本机不产出、也拿不到发布密钥,
 # 所以「这个 APK 是从这份源码编出来的」这句话有据可查。
 #
-# Windows 安装包由 job `desktop` 在 Windows runner 上构建,产物交给 job `release`,
-# 与 APK 一起进校验和、两份构建来源证明和同一个草稿 release。
+# APK 由 job `android`、Windows 安装包由 job `desktop` 在 Windows runner 上并行构建,
+# 产物都交给 job `release`,一起进校验和、两份构建来源证明和同一个草稿 release。
 #
 # 两份构建来源证明:job `release` 里的 attest-build-provenance(GitHub 自己核,快),
 # 以及 job `provenance` 走 slsa-github-generator 出的 SLSA Build L3 证明。后者跑在
@@ -97,14 +97,10 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  release:
-    needs: [desktop]
+  # 与 desktop 并行:两边互不依赖,汇总、证明与发布交给后面的 release。签名密钥只进这个 job,
+  # 负责汇总发布的 release 不碰它。
+  android:
     runs-on: ubuntu-latest
-    outputs:
-      # 交给下面那个隔离的 provenance job。传的是摘要清单的句柄不是产物:generator 不信任、
-      # 也不需要拿到产物本身。
-      subjects-as-file: ${{ steps.subjects.outputs.handle }}
-
     steps:
       - uses: actions/checkout@v7
 
@@ -141,15 +137,8 @@ jobs:
           BILBY_KEY_PASSWORD: ${{ secrets.BILBY_KEY_PASSWORD }}
         run: ./gradlew assembleRelease -PbilbyVersion=${{ steps.version.outputs.name }}
 
-      # 桌面产物先落进 dist,下一步的校验和与证明摘要才会一并算上。
-      - uses: actions/download-artifact@v8
-        with:
-          name: desktop-dist
-          path: dist
-
       # 装错架构会装不上,所以文件名必须一眼看出是哪个变体。
       - name: Collect artifacts
-        id: collect
         run: |
           mkdir -p dist
           version="${{ steps.version.outputs.name }}"
@@ -160,6 +149,31 @@ jobs:
           # R8 的 mapping 一起发:release 崩溃栈是混淆过的,没有它谁也读不了用户贴的日志。
           cp app/build/outputs/mapping/release/mapping.txt "dist/bilby-$version-mapping.txt"
 
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: [android, desktop]
+    runs-on: ubuntu-latest
+    outputs:
+      # 交给下面那个隔离的 provenance job。传的是摘要清单的句柄不是产物:generator 不信任、
+      # 也不需要拿到产物本身。
+      subjects-as-file: ${{ steps.subjects.outputs.handle }}
+
+    steps:
+      # 两个平台的产物落进同一个 dist,下一步的校验和与证明摘要才会一并算上。
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: "*-dist"
+          path: dist
+          merge-multiple: true
+
+      - name: Collect artifacts
+        run: |
           (cd dist && sha256sum * > SHA256SUMS.txt)
           ls -l dist
 
