@@ -24,6 +24,16 @@ junit = "4.13.2"
 robolectric = "4.16"
 kotlinxCoroutines = "1.11.0"
 
+# 桌面端(:player-desktop)。停在 1.12.1:它与 mediamp 0.5.0 编译时同为 skiko 0.150.1。
+# 1.13.0-alpha01 的 skiko 0.152 删掉了 ContextHandler,DirectContext 改挂在
+# Direct3DRedrawer.context 上,mediamp 反射取 contextHandler 失败,画面全黑。
+# 1.12.1 配 material3 1.5.0-alpha22,比 Android 端 BOM 的 alpha25 旧。按 app 字节码逐条核对,
+# 差距只有两处:alpha22 没有不带 onClick 的 SegmentedListItem 重载(ProfileScreen 预览行),
+# MediumFlexibleTopAppBar 在 alpha22 仍需 ExperimentalMaterial3ExpressiveApi。
+composeMultiplatform = "1.12.1"
+# 桌面播放后端。它的运行时包带打过 D3D11 render API 补丁的 libmpv,见 player-desktop/build.gradle.kts。
+mediamp = "0.5.0"
+
 # 弹幕引擎,独立仓库。开发期走 composite build(settings.gradle.kts),这个版本号只在
 # 脱离 composite build 从仓库解析时才生效。
 tdanmaku = "0.2.0"
@@ -92,6 +102,13 @@ coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version
 # 只用来把登录二维码的 url 编码成矩阵,不引 zxing-android-embedded(那是扫码用的)
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 
+compose-mp-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "composeMultiplatform" }
+compose-mp-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "composeMultiplatform" }
+compose-mp-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "composeMultiplatform" }
+kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "kotlinxCoroutines" }
+mediamp-mpv = { module = "org.openani.mediamp:mediamp-mpv", version.ref = "mediamp" }
+mediamp-mpv-runtime-windows-x64 = { module = "org.openani.mediamp:mediamp-mpv-runtime-windows-x64", version.ref = "mediamp" }
+
 junit = { module = "junit:junit", version.ref = "junit" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 
@@ -101,3 +118,4 @@ android-library = { id = "com.android.library", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }
