@@ -45,8 +45,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.ShortNavigationBar
+import androidx.compose.material3.ShortNavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
@@ -927,9 +927,11 @@ private fun RootTabs(
         Scaffold(
             modifier = Modifier.imePadding(),
             bottomBar = {
-                NavigationBar {
+                // flexible 款(64dp)。baseline 的 NavigationBar 高 80dp,M3 Expressive 已标为
+                // "no longer recommended"(navigation-bar.md)。
+                ShortNavigationBar {
                     RootTab.entries.forEach { tab ->
-                        NavigationBarItem(
+                        ShortNavigationBarItem(
                             selected = selected == tab,
                             onClick = { onTabClick(tab) },
                             icon = { RootTabIcon(tab, selected == tab) },
