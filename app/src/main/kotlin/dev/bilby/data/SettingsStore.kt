@@ -495,7 +495,7 @@ class SettingsStore(context: Context) {
             DanmakuDensity.entries.firstOrNull { it.name == name } ?: DanmakuDensity.STANDARD
 
         private fun danmakuFrameRateOf(name: String?): DanmakuFrameRateCap =
-            DanmakuFrameRateCap.entries.firstOrNull { it.name == name } ?: DanmakuFrameRateCap.FPS_60
+            DanmakuFrameRateCap.entries.firstOrNull { it.name == name } ?: DanmakuFrameRateCap.DISPLAY
 
         const val DEFAULT_SB_SERVER = "https://www.bsbsb.top"
 
@@ -633,7 +633,7 @@ data class DanmakuPrefs(
     val opacity: Float = 1f,
     val scrollShowArea: Float = SettingsStore.DEFAULT_DANMAKU_SCROLL_SHOW_AREA,
     val density: DanmakuDensity = DanmakuDensity.STANDARD,
-    val frameRateCap: DanmakuFrameRateCap = DanmakuFrameRateCap.FPS_60,
+    val frameRateCap: DanmakuFrameRateCap = DanmakuFrameRateCap.DISPLAY,
     /**
      * 画中画小窗里画不画弹幕。**默认画**:小窗是边做别的事边看,弹幕正是那时候还想瞟一眼的
      * 东西;嫌挡画面的人在这里关。只在 [enabled] 为真时才有意义,总开关关着小窗里也不画。

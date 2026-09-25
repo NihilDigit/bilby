@@ -449,7 +449,7 @@
     <string name="settings_danmaku_show_area_value">%1$d%%</string>
     <string name="settings_danmaku_density">同屏密度</string>
     <string name="settings_danmaku_density_standard">标准</string>
-    <string name="settings_danmaku_density_unlimited">不限（仍受设备性能限制）</string>
+    <string name="settings_danmaku_density_unlimited">不限</string>
     <string name="settings_danmaku_frame_rate">弹幕帧率</string>
     <string name="settings_danmaku_frame_rate_subtitle">只是弹幕层的绘制上限，与视频解码帧率无关</string>
     <string name="settings_danmaku_frame_rate_30">30 fps</string>

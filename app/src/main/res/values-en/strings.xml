@@ -367,7 +367,7 @@
     <string name="settings_danmaku_show_area_value">%1$d%%</string>
     <string name="settings_danmaku_density">On-screen density</string>
     <string name="settings_danmaku_density_standard">Standard</string>
-    <string name="settings_danmaku_density_unlimited">Unlimited (still bound by device performance)</string>
+    <string name="settings_danmaku_density_unlimited">Unlimited</string>
     <string name="settings_danmaku_frame_rate">Danmaku frame rate</string>
     <string name="settings_danmaku_frame_rate_subtitle">Caps the danmaku layer only; unrelated to video decode frame rate</string>
     <string name="settings_danmaku_frame_rate_30">30 fps</string>
