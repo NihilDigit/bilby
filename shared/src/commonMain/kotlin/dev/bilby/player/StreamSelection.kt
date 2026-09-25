@@ -2,6 +2,10 @@ package dev.bilby.player
 
 import dev.bilby.api.dto.DashDto
 import dev.bilby.api.dto.DashStreamDto
+import dev.bilby.getStringBlocking
+import dev.bilby.resources.Res
+import dev.bilby.resources.video_quality_dolby_vision
+import dev.bilby.resources.video_quality_unknown
 
 /**
  * 从 playurl 的 dash 节点里挑出一条视频流和一条音频流。纯函数、不碰 Android、不碰网络,
@@ -208,15 +212,21 @@ private fun codecLabel(stream: DashStreamDto): String = when {
     stream.codecid == VideoCodecId.HEVC ||
         stream.codecs.startsWith("hev1") || stream.codecs.startsWith("hvc1") -> "HEVC"
     stream.codecid == VideoCodecId.AV1 || stream.codecs.startsWith("av01") -> "AV1"
-    stream.codecs.startsWith("dvh1") -> "杜比视界"
+    stream.codecs.startsWith("dvh1") -> getStringBlocking(Res.string.video_quality_dolby_vision)
     else -> stream.codecs
 }
 
-/** 清晰度 id → 简称,表原样抄自 PiliPlus(notes §4.2)。 */
+/**
+ * 清晰度 id → 简称,表抄自 PiliPlus(notes §4.2)。
+ *
+ * 画质菜单也用这张表,不用接口给的 accept_description:那是中文的「高清 1080P」,英文界面里
+ * 原样露出来。表里多数档名中英通用,只有杜比视界和认不出的档走文案表。取文案不挂在组合上,
+ * 数据层建画质清单时也要调它;读的是打包进应用的资源,很快。
+ */
 fun videoQualityLabel(id: Int): String = when (id) {
     129 -> "HDR Vivid"
     127 -> "8K"
-    126 -> "杜比视界"
+    126 -> getStringBlocking(Res.string.video_quality_dolby_vision)
     125 -> "HDR"
     120 -> "4K"
     116 -> "1080P60"
@@ -228,7 +238,7 @@ fun videoQualityLabel(id: Int): String = when (id) {
     16 -> "360P"
     6 -> "240P"
     // 表是抄的,服务端将来加新档这里会认不出来,如实显示 id,不按数字猜一个分辨率名字。
-    else -> "画质 $id"
+    else -> getStringBlocking(Res.string.video_quality_unknown, id)
 }
 
 /**

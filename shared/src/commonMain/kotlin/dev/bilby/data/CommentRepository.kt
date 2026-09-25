@@ -46,7 +46,8 @@ data class CommentItem(
     val uname: String,
     val avatarUrl: String,
     val isUploader: Boolean,
-    val ipLocation: String,
+    /** IP 属地的地区名,「广东」这样,不带前缀;没有时为空。 */
+    val ipRegion: String,
     val level: Int,
     val isSeniorMember: Boolean,
     val ctimeEpochSeconds: Long,
@@ -299,7 +300,9 @@ class CommentRepository(
             isUploader = uploaderMid != 0L && myMid == uploaderMid,
             // reply_control 和 content 是兄弟字段,层级已用真实响应确认(见 CommentDto.kt);
             // 能不能拿到 location 这个 key 取决于登录态,未登录抓包里 11 分钟内的新评论也没有它。
-            ipLocation = replyControl?.location.orEmpty(),
+            // 接口给的是整句「IP属地：广东」,只留地区名,前缀由界面文案给,英文界面才不露中文。
+            ipRegion = replyControl?.location.orEmpty()
+                .removePrefix("IP属地：").removePrefix("IP属地:").trim(),
             level = member.levelInfo.currentLevel,
             isSeniorMember = member.isSeniorMember != 0,
             ctimeEpochSeconds = ctime,

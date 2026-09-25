@@ -39,6 +39,7 @@
 
     <!-- 底部导航 -->
     <string name="tab_feed">订阅</string>
+    <string name="feed_title">订阅</string>
     <string name="tab_search">搜索</string>
     <string name="tab_toview">稍后再看</string>
 
@@ -150,7 +151,6 @@
     <string name="settings_pick_updates_default_subtitle">关闭时,播放页切换画质与音质只对本次播放生效</string>
     <string name="settings_pause_history">暂停记录观看历史</string>
     <string name="settings_pause_history_subtitle">暂停后不再记录新的观看历史,已有记录和播放进度不受影响</string>
-    <string name="settings_pause_history_loading">正在读取</string>
     <string name="settings_pause_history_failed">读取失败,点击重试</string>
     <string name="history_finished">已看完</string>
     <string name="history_progress">看到 %1$s</string>
@@ -405,7 +405,6 @@
     <string name="settings_configured">已配置</string>
     <string name="settings_loading">读取中…</string>
     <string name="settings_section_feed">动态</string>
-    <string name="settings_section_offline">缓存</string>
     <string name="settings_section_appearance">外观</string>
     <string name="settings_theme_mode">明暗</string>
     <string name="settings_theme_system">跟随系统</string>
@@ -437,7 +436,11 @@
     <string name="settings_feed_clear_excluded">全部恢复</string>
     <string name="settings_feed_excluded_count">%1$d 位</string>
     <string name="settings_feed_excluded_restore">恢复</string>
-    <string name="settings_section_player">播放器</string>
+    <string name="settings_section_playback">播放</string>
+    <string name="settings_group_playback">播放</string>
+    <string name="settings_group_quality">画质与音质</string>
+    <string name="settings_group_sponsorblock">跳过片段</string>
+    <string name="settings_group_offline">离线缓存</string>
     <string name="settings_codec">编解码偏好</string>
     <string name="settings_codec_subtitle">改动对下一个视频生效</string>
     <string name="settings_danmaku_opacity">弹幕透明度</string>
@@ -460,20 +463,20 @@
     <string name="settings_url_invalid">地址需以 http:// 或 https:// 开头</string>
     <string name="settings_section_about">关于</string>
     <string name="settings_section_privacy">隐私与屏蔽</string>
-    <string name="settings_section_sponsorblock">SponsorBlock</string>
     <string name="settings_sponsorblock_categories">跳过哪些段落</string>
     <string name="settings_agent_config">服务端配置</string>
-    <string name="settings_on">已开启</string>
-    <string name="settings_off">已关闭</string>
+    <!-- 设置首页摘要。播放一行只在自动跳过开启时附上这一句,见 SettingsScreen 的 playbackSummary。 -->
+    <string name="settings_playback_summary">画质、跳过片段与离线缓存</string>
+    <string name="settings_privacy_summary">观看历史与黑名单</string>
     <string name="settings_version">版本</string>
     <!-- 手动更新。副标题即状态,见 SettingsScreen 的 UpdateRow。 -->
     <string name="settings_update">检查更新</string>
     <string name="settings_update_idle">从 GitHub Releases 获取</string>
     <string name="settings_update_checking">检查中…</string>
     <string name="settings_update_latest">已是最新版本</string>
-    <string name="settings_update_available">发现 %1$s,点击下载</string>
+    <string name="settings_update_available">发现新版本 %1$s</string>
     <string name="settings_update_downloading">下载中 %1$d%%</string>
-    <string name="settings_update_ready">%1$s 已下载,点击安装</string>
+    <string name="settings_update_ready">%1$s 已下载</string>
     <string name="settings_update_failed">检查失败:%1$s</string>
 
     <!-- 开屏那一次更新提示 -->
@@ -484,6 +487,19 @@
     <string name="update_downloading">下载中 %1$d%%</string>
     <string name="update_install">安装</string>
     <string name="update_ignore_version">忽略此版本</string>
+    <string name="update_download_and_install">下载并安装</string>
+    <string name="update_restart">重启并更新</string>
+    <string name="update_installing">等待安装</string>
+    <string name="update_open_page">前往下载页</string>
+    <string name="update_view_in_browser">在浏览器中查看</string>
+    <string name="update_failed_network">网络不通,检查网络后重试</string>
+    <string name="update_failed_check">检查更新未完成,稍后重试</string>
+    <string name="update_failed_download">下载未完成,稍后重试</string>
+    <string name="update_failed_checksum">安装包校验未通过,请从下载页获取</string>
+    <string name="update_failed_launch">无法启动安装</string>
+    <string name="update_install_cancelled">已取消安装</string>
+    <string name="update_install_failed">安装未完成</string>
+    <string name="update_previous_failed">上次更新未完成,当前版本未受影响</string>
 
     <string name="settings_license">许可证</string>
     <string name="settings_github">项目 GitHub</string>
@@ -589,6 +605,9 @@
     <string name="live_quality_ultra">超清</string>
     <string name="live_quality_high">高清</string>
     <string name="live_quality_smooth">流畅</string>
+    <string name="video_quality_dolby_vision">杜比视界</string>
+    <string name="video_quality_unknown">画质 %1$d</string>
+    <string name="comment_ip_location">IP属地：%1$s</string>
     <string name="settings_fast_forward_speed">长按加速</string>
     <string name="settings_fast_forward_speed_subtitle">长按画面期间的临时倍速,松手后恢复</string>
     <string name="settings_auto_next">自动播放下一条</string>
