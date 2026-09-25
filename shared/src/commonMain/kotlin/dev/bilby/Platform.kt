@@ -4,6 +4,7 @@ import androidx.room.RoomDatabase
 import dev.bilby.data.db.BilbyDatabase
 import dev.bilby.player.NetworkStatus
 import dev.bilby.player.PlaybackHost
+import dev.bilby.update.AppUpdateService
 import java.io.File
 
 /**
@@ -39,6 +40,9 @@ interface Platform {
     /** 断网时没发出去的心跳,联网后补发。Android 交给 WorkManager,能跨过进程死亡。 */
     fun scheduleHeartbeatFlush()
 
-    /** 发布页上的某个附件是不是本机能装的安装包,见 [dev.bilby.data.UpdateRepository]。 */
-    fun isInstallableUpdateAsset(assetName: String): Boolean
+    /**
+     * 应用内更新。null 表示这个平台不做,设置页不出现检查更新,开屏也不查。
+     * 挑哪个附件、怎么安装归各平台,见 [dev.bilby.update.GithubUpdateService]。
+     */
+    val updater: AppUpdateService?
 }

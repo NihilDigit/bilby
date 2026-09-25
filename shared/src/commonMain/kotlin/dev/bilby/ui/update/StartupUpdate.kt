@@ -1,180 +1,116 @@
 package dev.bilby.ui.update
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.foundation.layout.Arrangement
-import dev.bilby.ui.components.MetaSeparator
-import dev.bilby.ui.offline.formatBytes
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import dev.bilby.stringResource
-import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
-import dev.bilby.BiliLog
+import androidx.compose.ui.window.DialogProperties
 import dev.bilby.AppBuild
 import dev.bilby.data.SettingsStore
-import dev.bilby.data.UpdateCheck
-import dev.bilby.data.UpdateInfo
-import dev.bilby.data.UpdateRepository
 import dev.bilby.resources.*
+import dev.bilby.stringResource
+import dev.bilby.ui.LocalSystemActions
 import dev.bilby.ui.components.MarkdownText
+import dev.bilby.ui.components.MetaSeparator
+import dev.bilby.ui.offline.formatBytes
 import dev.bilby.ui.theme.Spacing
-import java.io.File
+import dev.bilby.update.AppUpdateService
+import dev.bilby.update.AvailableUpdate
+import dev.bilby.update.UpdateFailure
+import dev.bilby.update.UpdateStatus
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * 开屏那一次更新检查的状态。
+ * 开屏那一次更新检查。挂在应用根部、登录之后,一次进程一次(见
+ * [AppUpdateService.checkOnStartup])。
  *
- * [Idle] 覆盖了"还没查""查完了没有新版""用户压掉了"三种情况 —— 它们在界面上是同一件事:
- * 什么都不显示。分开建模只会得到三个必须一起处理的空状态。
+ * **失败什么都不弹。** 主动去设置页点「检查更新」的人在等一个答复,开屏这一次没人在等 ——
+ * 弹一句「检查更新失败」只是在通知用户一件他没问过的事情失败了。日志照记。
  */
-sealed interface StartupUpdateState {
-    data object Idle : StartupUpdateState
-    data class Available(val info: UpdateInfo) : StartupUpdateState
-    data class Downloading(val info: UpdateInfo, val progress: Float) : StartupUpdateState
-    data class Ready(val info: UpdateInfo, val apk: File) : StartupUpdateState
-    data class Failed(val info: UpdateInfo, val message: String) : StartupUpdateState
+@Composable
+fun StartupUpdatePrompt(updater: AppUpdateService, settings: SettingsStore) {
+    LaunchedEffect(updater) {
+        // 压过的那一版不再提。判据是版本号相等,不是「压过没有」,见 SettingsStore。
+        updater.checkOnStartup { version -> settings.ignoredUpdateVersion.first() == version }
+    }
+    val update = updater.startupUpdate ?: return
+    val scope = rememberCoroutineScope()
+    UpdateDialog(
+        updater = updater,
+        update = update,
+        onDismiss = updater::dismissStartupUpdate,
+        // 落盘走 NonCancellable:紧接着就要关弹窗,写没写完不该看界面的脸色。
+        onIgnore = {
+            updater.dismissStartupUpdate()
+            scope.launch(NonCancellable) { settings.saveIgnoredUpdateVersion(update.version) }
+        },
+    )
 }
 
 /**
- * 开屏检查一次有没有新版本。
+ * 新版本提示。开屏与设置页共用这一个。
  *
- * **一次进程一次,不是一次开屏一次。** 检查在 `init` 里做,而这个 ViewModel 挂在 Activity 的
- * store 上 —— 转屏、切深色、从后台回来都不会再查。查更新是网络请求,而它对用户的价值一天里
- * 只兑现一次。
+ * 按 M3 的 basic dialog 排:标题(新版本号,下面一行当前版本与下载大小)、一块带底色的
+ * 更新说明、右下角两个按钮,主动作是实心按钮、在最右。**不加图标也不加插画** —— 这里的
+ * 内容是一段版本说明,它自己就是视觉锚点。
  *
- * **失败什么都不弹。** 主动去设置页点"检查更新"的人在等一个答复,开屏这一次没人在等 ——
- * 弹一句"检查更新失败"只是在通知用户一件他没问过的事情失败了。日志照记。
- */
-class StartupUpdateViewModel(
-    private val updateRepository: UpdateRepository,
-    private val settings: SettingsStore,
-    private val downloadDir: File,
-) : ViewModel() {
-
-    private val _state = MutableStateFlow<StartupUpdateState>(StartupUpdateState.Idle)
-    val state: StateFlow<StartupUpdateState> = _state.asStateFlow()
-
-    init {
-        // **debug 构建不查。** 本地跑出来的版本号是 0.0.0-dev,比任何已发布的 tag 都小,于是
-        // 每次冷启动都会弹一个"有新版本"——而那个"新版本"正是开发者手上这份代码的上一版。
-        // 它挡在首页前面,还得点一次才能开始干活。
-        if (!AppBuild.debug) {
-            viewModelScope.launch {
-                when (val check = updateRepository.check(AppBuild.versionName)) {
-                    is UpdateCheck.Available -> {
-                        // 压过的那一版不再提。判据是版本号相等,不是"压过没有",见 SettingsStore。
-                        if (settings.ignoredUpdateVersion.first() != check.info.version) {
-                            _state.value = StartupUpdateState.Available(check.info)
-                        }
-                    }
-                    UpdateCheck.UpToDate -> Unit
-                    is UpdateCheck.Failed -> BiliLog.w("开屏检查更新失败: ${check.message}")
-                }
-            }
-        }
-    }
-
-    fun download(info: UpdateInfo) {
-        if (_state.value is StartupUpdateState.Downloading) return
-        _state.value = StartupUpdateState.Downloading(info, 0f)
-        viewModelScope.launch {
-            // 只拼路径,不碰磁盘:建目录和删残包由 [UpdateRepository.download] 在 IO 线程上做。
-            val target = File(downloadDir, info.assetName)
-            val result = updateRepository.download(info, target) { progress ->
-                _state.update { current ->
-                    if (current is StartupUpdateState.Downloading) {
-                        StartupUpdateState.Downloading(info, progress)
-                    } else {
-                        current
-                    }
-                }
-            }
-            _state.value = result.fold(
-                onSuccess = { apk -> StartupUpdateState.Ready(info, apk) },
-                onFailure = { error -> StartupUpdateState.Failed(info, error.message ?: "下载失败") },
-            )
-        }
-    }
-
-    /** 这一版不再提。落盘走 [NonCancellable]:紧接着就要关弹窗,写没写完不该看 UI 的脸色。 */
-    fun ignore(info: UpdateInfo) {
-        _state.value = StartupUpdateState.Idle
-        viewModelScope.launch(NonCancellable) { settings.saveIgnoredUpdateVersion(info.version) }
-    }
-
-    /** 这次先不弹了,但不写盘 —— 下次冷启动还会问。 */
-    fun dismiss() {
-        _state.value = StartupUpdateState.Idle
-    }
-}
-
-/**
- * 新版本提示。
- *
- * 按 M3 的 basic dialog 排:标题(新版本号,下面一行当前版本与安装包大小)、一块带底色的
- * 更新说明、右下角两个按钮,主动作是实心按钮、在最右。
- * **不加图标也不加插画** —— 规范给 hero icon 的位置是"内容本身需要一个视觉锚点"时用的,
- * 而这里的内容是一段版本说明,它自己就是锚点。
- *
- * 「忽略此版本」放在 dismiss 那一侧而不是做成第三个按钮:M3 的对话框只给两个动作位,第三个
- * 按钮会挤成两行,而"这次先不看"本来就有出口 —— 点外面。
+ * dismiss 那一侧开屏时是「忽略此版本」,从设置页打开时是「在浏览器中查看」:主动来查的人
+ * 不需要被问要不要跳过。M3 的对话框只给两个动作位,「这次先不看」本来就有出口 —— 点外面。
  *
  * 下载中不关弹窗,进度画在正文里:关掉之后它就成了一个没有任何反馈的后台任务,而用户刚刚
- * 按下的是"下载"。
+ * 按下的是「下载」。
+ *
+ * @param onIgnore 非 null 即开屏弹出的那一版。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun StartupUpdateDialog(
-    state: StartupUpdateState,
-    onDownload: (UpdateInfo) -> Unit,
-    onInstall: (File) -> Unit,
-    onIgnore: (UpdateInfo) -> Unit,
+fun UpdateDialog(
+    updater: AppUpdateService,
+    update: AvailableUpdate,
     onDismiss: () -> Unit,
+    onIgnore: (() -> Unit)? = null,
 ) {
-    val info = when (state) {
-        StartupUpdateState.Idle -> return
-        is StartupUpdateState.Available -> state.info
-        is StartupUpdateState.Downloading -> state.info
-        is StartupUpdateState.Ready -> state.info
-        is StartupUpdateState.Failed -> state.info
-    }
-    val downloading = state is StartupUpdateState.Downloading
+    val system = LocalSystemActions.current
+    val scope = rememberCoroutineScope()
+    // 状态属于别的版本(比如已经又查了一次)时,按这一版可下载处理。
+    val status = updater.status.takeIf { it.concerns(update) } ?: UpdateStatus.Available(update)
+    val busy = status is UpdateStatus.Downloading || status is UpdateStatus.Installing
+    val openPage = { system.openInBrowser(update.pageUrl) }
+    val install = { scope.launch { updater.downloadAndInstall(update) } }
 
     AlertDialog(
         // 下载中点外面不关:那一下会让正在进行的下载失去唯一的进度显示。
-        onDismissRequest = { if (!downloading) onDismiss() },
-        // **撑开到接近整屏宽。** 平台默认宽度是给"一句话加两个按钮"定的,而这里装的是一整篇
-        // 更新说明:按默认宽度排,每行只剩十来个字,一段话要折成七八行,读起来像一根柱子。
+        onDismissRequest = { if (!busy) onDismiss() },
+        // **撑开到接近整屏宽。** 平台默认宽度是给「一句话加两个按钮」定的,而这里装的是一整篇
+        // 更新说明:按默认宽度排,每行只剩十来个字。宽窗口里封顶,一行太长同样难读。
         properties = DialogProperties(usePlatformDefaultWidth = false),
-        modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+        modifier = Modifier.fillMaxWidth(DialogWidthFraction).widthIn(max = DialogMaxWidth),
         title = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-                Text(stringResource(Res.string.update_dialog_title, info.version))
-                // 从哪一版升上来、包有多大:下不下载在这两件事上定,尤其是流量下。
+                Text(stringResource(Res.string.update_dialog_title, update.version))
+                // 从哪一版升上来、要下多少:下不下载在这两件事上定,尤其是流量下。
                 Text(
                     text = stringResource(Res.string.update_dialog_current, AppBuild.versionName) +
-                        (if (info.sizeBytes > 0) MetaSeparator + formatBytes(info.sizeBytes) else ""),
+                        (if (update.downloadSize > 0) MetaSeparator + formatBytes(update.downloadSize) else ""),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -183,13 +119,9 @@ fun StartupUpdateDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 // 更新说明可能很长(整篇 changelog),给它一个上限再滚,不然按钮会被顶出屏幕。
-                //
-                // **装在一块带底色的圆角区域里。** 它是这个对话框里唯一会滚的一块,光秃秃地排在
-                // 标题下面时,滚到一半看不出边在哪、按钮上面那条线是不是内容的末尾。
-                //
-                // **按 Markdown 渲染**,和助理回复共用同一份渲染器:release note 本来就是
-                // Markdown 写的,当纯文本画出来满屏是 `**`、`-` 和字面的 `&#13;`,而那正是
-                // 用户此刻唯一要读的东西。
+                // 装在一块带底色的圆角区域里:它是这个对话框里唯一会滚的一块,光秃秃地排在
+                // 标题下面时,滚到一半看不出边在哪。按 Markdown 渲染:release note 本来就是
+                // Markdown 写的,当纯文本画出来满屏是 `**` 和 `-`。
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerHighest,
                     shape = MaterialTheme.shapes.medium,
@@ -202,33 +134,32 @@ fun StartupUpdateDialog(
                             .padding(Spacing.Cozy),
                     ) {
                         MarkdownText(
-                            text = info.notes.ifBlank { stringResource(Res.string.update_dialog_no_notes) },
+                            text = update.notes.ifBlank { stringResource(Res.string.update_dialog_no_notes) },
                             stopAtHeadings = DownloadPageSections,
                         )
                     }
                 }
-                when (state) {
-                    // 下载报得出百分比,归 progress indicator;转圈那一档只覆盖进度不可知的等待。
+                when (status) {
                     // 下面写已下多少、共多少:只有一根条的话,慢网下它几秒不动,看不出是卡了还是在走。
-                    is StartupUpdateState.Downloading -> Column(
+                    is UpdateStatus.Downloading -> Column(
                         modifier = Modifier.padding(top = Spacing.Cozy),
                         verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
                     ) {
                         LinearWavyProgressIndicator(
-                            progress = { state.progress },
+                            progress = { status.progress },
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        if (info.sizeBytes > 0) {
+                        if (update.downloadSize > 0) {
                             Text(
-                                text = formatBytes((info.sizeBytes * state.progress).toLong()) +
-                                    " / " + formatBytes(info.sizeBytes),
+                                text = formatBytes((update.downloadSize * status.progress).toLong()) +
+                                    " / " + formatBytes(update.downloadSize),
                                 style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
-                    is StartupUpdateState.Failed -> Text(
-                        text = state.message,
+                    is UpdateStatus.Failed -> Text(
+                        text = stringResource(status.reason.message),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(top = Spacing.Cozy),
@@ -237,37 +168,62 @@ fun StartupUpdateDialog(
                 }
             }
         },
-        // 主动作用实心按钮:这个对话框就是为这一下弹出来的,它和「忽略此版本」不是同一个分量,
-        // 两个并排的文字按钮看不出该按哪个。
+        // 主动作用实心按钮:这个对话框就是为这一下弹出来的,它和 dismiss 那一侧不是同一个分量。
         confirmButton = {
-            when (state) {
-                is StartupUpdateState.Ready -> Button(onClick = { onInstall(state.apk) }) {
-                    Text(stringResource(Res.string.update_install))
+            when {
+                // debug 包、便携版:装不了,只能去下载页。
+                !update.canInstallInApp -> Button(onClick = openPage) {
+                    Text(stringResource(Res.string.update_open_page))
                 }
-                is StartupUpdateState.Downloading -> Button(onClick = {}, enabled = false) {
-                    Text(stringResource(Res.string.update_downloading, (state.progress * 100).toInt()))
+                status is UpdateStatus.Downloading -> Button(onClick = {}, enabled = false) {
+                    Text(stringResource(Res.string.update_downloading, (status.progress * 100).toInt()))
                 }
-                // 失败之后 confirm 就是"再来一次":重下和第一次下没有区别,不必另给一个入口。
-                is StartupUpdateState.Failed -> Button(onClick = { onDownload(info) }) {
+                status is UpdateStatus.ReadyToRestart -> Button(onClick = { scope.launch { updater.restartToInstall(update) } }) {
+                    Text(stringResource(Res.string.update_restart))
+                }
+                status is UpdateStatus.Installing -> Button(onClick = {}, enabled = false) {
+                    Text(stringResource(Res.string.update_installing))
+                }
+                // 校验不符,重试多半还是同一个结果,该去下载页。
+                status is UpdateStatus.Failed && status.reason == UpdateFailure.Checksum -> Button(onClick = openPage) {
+                    Text(stringResource(Res.string.update_open_page))
+                }
+                // 失败之后 confirm 就是「再来一次」:重下和第一次下没有区别,不必另给一个入口。
+                status is UpdateStatus.Failed -> Button(onClick = { install() }) {
                     Text(stringResource(Res.string.action_retry))
                 }
-                else -> Button(onClick = { onDownload(info) }) {
-                    Text(stringResource(Res.string.update_download))
+                else -> Button(onClick = { install() }) {
+                    Text(stringResource(Res.string.update_download_and_install))
                 }
             }
         },
         dismissButton = {
-            if (!downloading) {
-                TextButton(onClick = { onIgnore(info) }) {
-                    Text(stringResource(Res.string.update_ignore_version))
+            if (!busy) {
+                if (onIgnore != null) {
+                    TextButton(onClick = onIgnore) { Text(stringResource(Res.string.update_ignore_version)) }
+                } else if (update.canInstallInApp) {
+                    TextButton(onClick = openPage) { Text(stringResource(Res.string.update_view_in_browser)) }
                 }
             }
         },
     )
 }
 
+/** 这个状态说的是不是 [update] 这一版。 */
+private fun UpdateStatus.concerns(update: AvailableUpdate): Boolean = when (this) {
+    is UpdateStatus.Available -> this.update.version == update.version
+    is UpdateStatus.Downloading -> this.update.version == update.version
+    is UpdateStatus.ReadyToRestart -> this.update.version == update.version
+    is UpdateStatus.Installing -> this.update.version == update.version
+    is UpdateStatus.Failed -> this.update?.version == update.version
+    else -> false
+}
+
 /** 更新说明最多占这么高,再长就在里面滚。再高按钮会被顶出屏幕。 */
 private val NotesMaxHeight = 380.dp
+
+/** 宽窗口里对话框的上限,同 Piko:再宽一行字就太长。 */
+private val DialogMaxWidth = 560.dp
 
 /**
  * release 正文里属于下载页的几节,应用内不画(见 [MarkdownText] 的 stopAtHeadings)。

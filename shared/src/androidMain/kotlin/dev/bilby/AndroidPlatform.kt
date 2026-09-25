@@ -1,7 +1,6 @@
 package dev.bilby
 
 import android.content.Context
-import android.os.Build
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import dev.bilby.data.db.BilbyDatabase
@@ -11,6 +10,8 @@ import dev.bilby.player.AndroidNetworkStatus
 import dev.bilby.player.AndroidPlaybackHost
 import dev.bilby.player.NetworkStatus
 import dev.bilby.player.PlaybackHost
+import dev.bilby.update.AndroidAppUpdater
+import dev.bilby.update.AppUpdateService
 import java.io.File
 
 class AndroidPlatform(context: Context) : Platform {
@@ -40,10 +41,5 @@ class AndroidPlatform(context: Context) : Platform {
 
     override fun scheduleHeartbeatFlush() = HeartbeatFlushWorker.enqueue(appContext)
 
-    /**
-     * **必须挑对架构**:release 是分 ABI 出包的(bilby-<版本>-<abi>.apk),装错架构的包会直接
-     * 安装失败,而失败信息只说"解析包出现问题",无从归因。SUPPORTED_ABIS 按优先级排序。
-     */
-    override fun isInstallableUpdateAsset(assetName: String): Boolean =
-        assetName.endsWith(".apk") && Build.SUPPORTED_ABIS.any { abi -> assetName.contains("-$abi.") }
+    override val updater: AppUpdateService = AndroidAppUpdater(appContext)
 }

@@ -7,6 +7,7 @@ import dev.bilby.data.db.BilbyDatabase
 import dev.bilby.player.DesktopPlaybackHost
 import dev.bilby.player.NetworkStatus
 import dev.bilby.player.PlaybackHost
+import dev.bilby.update.AppUpdateService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -21,8 +22,13 @@ import java.io.File
  * 桌面上的 [Platform]。数据放在用户目录下的一个文件夹里,Windows 上是 `%APPDATA%\Bilby`。
  *
  * @param container 播放服务要从容器取仓库,而容器由这个平台对象构造,只能延后求值。
+ * @param updater 应用内更新。实现在 :desktop 里:它要读安装包启动器写的属性、在退出时拉起
+ *   更新脚本,这些都是打包入口的事。
  */
-class DesktopPlatform(container: () -> AppContainer) : Platform {
+class DesktopPlatform(
+    container: () -> AppContainer,
+    override val updater: AppUpdateService?,
+) : Platform {
 
     private val dataDir: File = (System.getenv("APPDATA")?.let(::File) ?: File(System.getProperty("user.home")))
         .resolve(if (System.getenv("APPDATA") != null) "Bilby" else ".bilby")
@@ -67,9 +73,6 @@ class DesktopPlatform(container: () -> AppContainer) : Platform {
             }
         }
     }
-
-    /** 桌面还没有发布安装包,不做应用内更新。 */
-    override fun isInstallableUpdateAsset(assetName: String): Boolean = false
 
     private companion object {
         const val HEARTBEAT_RETRY_MILLIS = 60_000L

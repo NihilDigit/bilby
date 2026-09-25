@@ -92,19 +92,10 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- 安装器是另一个进程,递 file:// 会触发 FileUriExposedException(N 起)。
-             唯一的合法通路是 content:// + 临时读权限,而那需要一个 FileProvider。
-             authority 带上 applicationId,好让 debug 与 release 能同时装在一台机器上 ——
-             两个 APK 声明同一个 authority 的话,后装的那个会直接安装失败。 -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.fileprovider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_paths" />
-        </provider>
+        <!-- 应用内更新的安装结果回调,见 AndroidAppUpdater。PendingIntent 显式指向它,不导出。 -->
+        <receiver
+            android:name="dev.bilby.update.UpdateInstallReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

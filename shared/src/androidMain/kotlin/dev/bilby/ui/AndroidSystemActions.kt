@@ -1,8 +1,6 @@
 package dev.bilby.ui
 
 import android.app.Activity
-import dev.bilby.ui.settings.UpdateInstaller
-import java.io.File
 
 /** Android 上的 [SystemActions]。持有 Activity:切语言要重建它,拉起分享面板要一个前台界面。 */
 class AndroidSystemActions(private val activity: Activity) : SystemActions {
@@ -15,10 +13,6 @@ class AndroidSystemActions(private val activity: Activity) : SystemActions {
 
     override fun addCalendarEvent(title: String, startEpochSeconds: Long, description: String) =
         CalendarEvent.insert(activity, title, startEpochSeconds, description)
-
-    override val supportsSelfUpdate: Boolean get() = true
-    override val updateDownloadDir: File get() = UpdateInstaller.downloadDir(activity)
-    override fun installUpdate(file: File) = UpdateInstaller.install(activity, file)
 
     override val supportsLanguageSwitch: Boolean get() = true
     override fun currentLanguage(): AppLanguage = AppLanguageStore.current(activity)

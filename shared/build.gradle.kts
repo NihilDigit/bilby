@@ -74,6 +74,8 @@ kotlin {
             implementation(libs.kotlinx.coroutines.swing)
             implementation(libs.compose.mp.ui.backhandler)
             api(libs.mediamp.mpv)
+            // 应用内更新查 MSI 的安装登记(update/WindowsInstaller.kt)。
+            implementation(libs.jna.platform)
         }
         androidMain.dependencies {
             // Android 目标上 Compose 各构件按 BOM 取,比 CMP 1.12.1 映射到的版本新
