@@ -196,6 +196,8 @@ fun BilbyPlayer(
 ) {
     /** 播放设置面板开着没有。见 [PlayerSettingsContent]。 */
     var settingsOpen by remember { mutableStateOf(false) }
+    // 开的是哪一段。关面板时不清:退场动画里内容要保持原样,下次打开会重新赋值。
+    var settingsOnly by remember { mutableStateOf<PlayerSettingsSection?>(null) }
     PlayerShell(
         player = player,
         attached = matchesCurrentPage,
@@ -282,7 +284,8 @@ fun BilbyPlayer(
                 onSeekStart = { onSeekStart() },
                 onSeekTo = { onSeekTo(it) },
                 onSeekFinished = { onSeekFinished() },
-                onOpenSettings = {
+                onOpenSettings = { section ->
+                    settingsOnly = section
                     settingsOpen = true
                     // 面板开着时控件不自动收:面板关了人还要回到控制条上。
                     setMenuOpen(true)
@@ -315,28 +318,10 @@ fun BilbyPlayer(
                     onAudioChange = onAudioChange,
                     danmakuPrefs = danmakuPrefs,
                     danmakuEditor = danmakuEditor,
+                    only = settingsOnly,
                 )
             }
-            // 全屏从右边划出(横屏下底部 sheet 只剩一条缝),内嵌从底部弹出。内容是同一份。
-            if (isFullscreen) {
-                PlayerSidePanel(visible = settingsOpen, onDismiss = close) {
-                    Text(
-                        stringResource(R.string.player_settings),
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(
-                            start = Spacing.Comfortable,
-                            end = Spacing.Comfortable,
-                            top = Spacing.Comfortable,
-                        ),
-                    )
-                    settings()
-                }
-            } else if (settingsOpen) {
-                ModalBottomSheet(onDismissRequest = close, sheetState = rememberExpandedSheetState()) {
-                    settings()
-                    Spacer(modifier = Modifier.height(Spacing.Comfortable))
-                }
-            }
+            PlayerSettingsHost(isFullscreen, settingsOpen, settingsOnly, onDismiss = close, content = settings)
         },
     )
 
@@ -371,7 +356,8 @@ private fun PlayerControlBar(
     onSeekStart: () -> Unit,
     onSeekTo: (Long) -> Unit,
     onSeekFinished: () -> Unit,
-    onOpenSettings: () -> Unit,
+    /** 打开设置面板;带上一段就只开那一段,null 开整块。 */
+    onOpenSettings: (PlayerSettingsSection?) -> Unit,
     onFullscreenToggle: () -> Unit,
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
@@ -430,10 +416,7 @@ private fun PlayerControlBar(
                 TimeLabel(duration, secondary = true, modifier = Modifier.padding(end = Spacing.Hair))
                 // 全屏没有标签行,弹幕开关只能在这里;内嵌时它在标签行那枚胶囊里。
                 if (isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-                val settingsLabel = stringResource(R.string.player_settings)
-                PlayerTooltip(settingsLabel) {
-                    PlayerIconButton(onClick = onOpenSettings, icon = Icons.Filled.Tune, contentDescription = settingsLabel)
-                }
+                PlayerSettingsButton { onOpenSettings(null) }
                 FullscreenButton(isFullscreen, onFullscreenToggle)
             }
         } else {
@@ -455,12 +438,15 @@ private fun PlayerControlBar(
                     }
                     SettingChips(
                         speed = speed,
-                        qualityLabel = qualities.firstOrNull { it.quality == currentQuality }?.label,
+                        // 只有一档时没什么可换,chip 不画(面板里那一段同样不画)。
+                        qualityLabel = qualities.takeIf { it.size > 1 }
+                            ?.firstOrNull { it.quality == currentQuality }?.label,
                         subtitleLabel = subtitleTracks.firstOrNull { it.lan == currentSubtitleLan }?.displayName,
                         hasSubtitles = subtitleTracks.isNotEmpty(),
-                        onOpenSettings = onOpenSettings,
+                        onOpenSection = onOpenSettings,
                     )
                     DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+                    PlayerSettingsButton { onOpenSettings(null) }
                     FullscreenButton(isFullscreen, onFullscreenToggle)
                 }
             }
@@ -491,8 +477,8 @@ private fun TimeLabel(
 }
 
 /**
- * 宽排法里那几枚写着当前档位的 chip。**点哪一枚都是打开同一块设置面板**,不是各开一个菜单:
- * 三者本来就是同一组设置,面板里三段都在,各开一个菜单只会让人记住三个位置。
+ * 宽排法里那几枚写着当前档位的 chip,用来快速换档。**每一枚只打开设置面板里自己那一段**,
+ * 整块面板从旁边的 ⚙ 进(见 [PlayerSettingsSection])。
  * 没有字幕轨时那一枚不画,字幕关着时只画图标(写「关闭」读起来像按下去会关掉)。
  */
 @Composable
@@ -501,13 +487,13 @@ private fun SettingChips(
     qualityLabel: String?,
     subtitleLabel: String?,
     hasSubtitles: Boolean,
-    onOpenSettings: () -> Unit,
+    onOpenSection: (PlayerSettingsSection) -> Unit,
 ) {
     val speedDescription = stringResource(R.string.player_speed)
     PlayerTooltip(speedDescription) {
         ControlButton(
             expanded = false,
-            onClick = onOpenSettings,
+            onClick = { onOpenSection(PlayerSettingsSection.Speed) },
             label = formatSpeed(speed),
             icon = { tint -> Icon(Icons.Filled.Speed, speedDescription, tint = tint, modifier = Modifier.size(ChipIconSize)) },
         )
@@ -517,7 +503,7 @@ private fun SettingChips(
         PlayerTooltip(description) {
             ControlButton(
                 expanded = false,
-                onClick = onOpenSettings,
+                onClick = { onOpenSection(PlayerSettingsSection.Quality) },
                 label = qualityLabel,
                 icon = { tint -> Icon(Icons.Filled.HighQuality, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
             )
@@ -528,7 +514,7 @@ private fun SettingChips(
         PlayerTooltip(description) {
             ControlButton(
                 expanded = false,
-                onClick = onOpenSettings,
+                onClick = { onOpenSection(PlayerSettingsSection.Subtitle) },
                 label = subtitleLabel,
                 icon = { tint -> Icon(Icons.Filled.Subtitles, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
             )

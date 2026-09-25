@@ -92,11 +92,14 @@ import androidx.media3.common.Player
 import dev.bilby.R
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material3.ModalBottomSheet
-import dev.bilby.ui.components.rememberExpandedSheetState
-import dev.bilby.ui.player.PlayerSidePanel
-import dev.bilby.ui.video.DanmakuSettingsContent
+import dev.bilby.data.QualityOption
+import androidx.compose.material3.IconToggleButton
+import dev.bilby.ui.components.BilbyIcons
+import dev.bilby.ui.player.PlayerTooltip
+import dev.bilby.ui.video.LiveSettingsContent
+import dev.bilby.ui.video.PlayerSettingsButton
+import dev.bilby.ui.video.PlayerSettingsHost
+import dev.bilby.ui.video.PlayerSettingsSection
 import dev.bilby.live.LiveMessage
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.BilbyWindowSize
@@ -203,6 +206,9 @@ fun LiveRoomScreen(
     var fullscreen by remember { mutableStateOf(false) }
     var locked by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var settingsOnly by remember { mutableStateOf<PlayerSettingsSection?>(null) }
+    // 服务端给的是从低到高,面板里反过来:上手就该看见最好的那档。
+    val qualityOptions = state.qualities.sortedDescending().map { QualityOption(it, stringResource(qualityLabel(it))) }
     val context = LocalContext.current
     // 画中画借全屏的布局,不借全屏的行为(转屏、藏系统栏、返回键),理由同播放页。
     val inPip = rememberIsInPipMode()
@@ -314,23 +320,19 @@ fun LiveRoomScreen(
                                 danmakuEditor.setEnabled(it)
                                 keepControlsAwake()
                             },
-                            onOpenSettings = {
+                            onOpenSettings = { section ->
+                                settingsOnly = section
                                 settingsOpen = true
                                 // 面板开着时控件不自动收,同播放页。
                                 setMenuOpen(true)
                             },
-                            qualities = state.qualities,
-                            currentQn = state.currentQn,
-                            onQualityChange = {
-                                onQualityChange(it)
-                                keepControlsAwake()
-                            },
+                            qualityLabel = qualityOptions.takeIf { it.size > 1 }
+                                ?.firstOrNull { it.quality == state.currentQn }?.label,
                             onlyAudio = onlyAudio,
                             onOnlyAudioChange = {
                                 onOnlyAudioChange(it)
                                 keepControlsAwake()
                             },
-                            onMenuOpenChange = { setMenuOpen(it) },
                             reloading = reloadingStream,
                             onReload = {
                                 onReloadStream()
@@ -339,31 +341,24 @@ fun LiveRoomScreen(
                             onFullscreenToggle = { toggleFullscreen() },
                         )
                     },
-                    // 外壳与播放页的播放设置面板相同:全屏从右边划出,内嵌从底部弹出。直播这块
-                    // 只有弹幕设置,清晰度和仅声音仍在控制条上。
+                    // 外壳与内容的排法同播放页,见 PlayerSettingsHost。
                     panel = {
                         val close = {
                             settingsOpen = false
                             setMenuOpen(false)
                         }
-                        if (isFullscreen) {
-                            PlayerSidePanel(visible = settingsOpen, onDismiss = close) {
-                                Text(
-                                    stringResource(R.string.player_danmaku),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    modifier = Modifier.padding(
-                                        start = Spacing.Comfortable,
-                                        end = Spacing.Comfortable,
-                                        top = Spacing.Comfortable,
-                                    ),
-                                )
-                                DanmakuSettingsContent(danmakuPrefs, danmakuEditor)
-                            }
-                        } else if (settingsOpen) {
-                            ModalBottomSheet(onDismissRequest = close, sheetState = rememberExpandedSheetState()) {
-                                DanmakuSettingsContent(danmakuPrefs, danmakuEditor)
-                                Spacer(modifier = Modifier.height(Spacing.Comfortable))
-                            }
+                        PlayerSettingsHost(isFullscreen, settingsOpen, settingsOnly, onDismiss = close) {
+                            LiveSettingsContent(
+                                qualities = qualityOptions,
+                                currentQuality = state.currentQn,
+                                onQualityChange = {
+                                    onQualityChange(it)
+                                    keepControlsAwake()
+                                },
+                                danmakuPrefs = danmakuPrefs,
+                                danmakuEditor = danmakuEditor,
+                                only = settingsOnly,
+                            )
                         }
                     },
                 )
@@ -405,6 +400,8 @@ fun LiveRoomScreen(
                         state = state,
                         onLoadMoreGuards = onLoadMoreGuards,
                         onSendDanmaku = onSendDanmaku,
+                        danmakuEnabled = danmakuPrefs.enabled,
+                        onDanmakuEnabledChange = danmakuEditor::setEnabled,
                         onUserClick = onUserClick,
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                     )
@@ -505,14 +502,12 @@ private fun LiveControlBar(
     watched: String,
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
-    /** 打开弹幕设置面板。 */
-    onOpenSettings: () -> Unit,
-    qualities: List<Int>,
-    currentQn: Int,
-    onQualityChange: (Int) -> Unit,
+    /** 打开设置面板;带上一段就只开那一段,null 开整块。 */
+    onOpenSettings: (PlayerSettingsSection?) -> Unit,
+    /** 当前画质的档名。只有一档时为 null,全屏也不画那枚 chip。 */
+    qualityLabel: String?,
     onlyAudio: Boolean,
     onOnlyAudioChange: (Boolean) -> Unit,
-    onMenuOpenChange: (Boolean) -> Unit,
     /** 正在重新取流。此刻按钮换成转圈并且按不动,免得连按叠出几次请求。 */
     reloading: Boolean,
     onReload: () -> Unit,
@@ -544,23 +539,24 @@ private fun LiveControlBar(
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f).padding(start = Spacing.Tight),
         )
-        DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-        LiveAudioOnlyButton(onlyAudio, onOnlyAudioChange, isFullscreen)
-        if (qualities.size > 1) {
-            LiveQualityButton(
-                qualities = qualities,
-                currentQn = currentQn,
-                isFullscreen = isFullscreen,
-                onSelect = onQualityChange,
-                onMenuOpenChange = onMenuOpenChange,
-            )
+        // 排法同播放页:内嵌只有 ⚙ 和全屏键,弹幕开关在底部发言栏的左端;全屏时发言栏不在,
+        // 弹幕开关和快速换画质的 chip 上到这里。
+        if (isFullscreen && qualityLabel != null) {
+            val description = stringResource(R.string.player_quality)
+            PlayerTooltip(description) {
+                ControlButton(
+                    expanded = false,
+                    onClick = { onOpenSettings(PlayerSettingsSection.Quality) },
+                    label = qualityLabel,
+                    icon = { tint ->
+                        Icon(Icons.Filled.HighQuality, description, tint = tint, modifier = Modifier.size(18.dp))
+                    },
+                )
+            }
         }
-        // 与播放页同一枚图标、同一个位置(全屏键左边)。
-        PlayerIconButton(
-            onClick = onOpenSettings,
-            icon = Icons.Filled.Tune,
-            contentDescription = stringResource(R.string.player_settings),
-        )
+        LiveAudioOnlyButton(onlyAudio, onOnlyAudioChange, isFullscreen)
+        if (isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+        PlayerSettingsButton { onOpenSettings(null) }
         PlayerIconButton(
             onClick = onFullscreenToggle,
             icon = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
@@ -673,6 +669,8 @@ private fun LiveRoomTabs(
     state: LiveRoomUiState,
     onLoadMoreGuards: () -> Unit,
     onSendDanmaku: (String) -> Unit,
+    danmakuEnabled: Boolean,
+    onDanmakuEnabledChange: (Boolean) -> Unit,
     onUserClick: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -742,6 +740,8 @@ private fun LiveRoomTabs(
             // 未开播时不给输入:此刻画面是一张封面,服务端也会拒。
             enabled = state.isLive,
             onSend = onSendDanmaku,
+            danmakuEnabled = danmakuEnabled,
+            onDanmakuEnabledChange = onDanmakuEnabledChange,
         )
     }
 }
@@ -1267,6 +1267,9 @@ private fun LiveDanmakuInput(
     error: String?,
     enabled: Boolean,
     onSend: (String) -> Unit,
+    /** 胶囊左端的弹幕开关,同视频页标签栏那一枚。全屏时这一栏不在,开关在控制条上。 */
+    danmakuEnabled: Boolean,
+    onDanmakuEnabledChange: (Boolean) -> Unit,
 ) {
     var text by rememberSaveable { mutableStateOf("") }
     val send = {
@@ -1299,6 +1302,20 @@ private fun LiveDanmakuInput(
             onSend = send,
             enabled = enabled,
             maxLines = 1,
+            leading = {
+                // 开与关换的是字形,不只是颜色,同视频页那枚。
+                IconToggleButton(checked = danmakuEnabled, onCheckedChange = onDanmakuEnabledChange) {
+                    Icon(
+                        imageVector = if (danmakuEnabled) BilbyIcons.Danmaku else BilbyIcons.DanmakuOff,
+                        contentDescription = stringResource(R.string.danmaku_show),
+                        tint = if (danmakuEnabled) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            },
         )
     }
 }
@@ -1397,73 +1414,6 @@ private val SuperChatChipAvatar = Dimens.AvatarRow
 private const val HighlightMillis = 1_500L
 
 private val HighlightBorderWidth = 2.dp
-
-/**
- * 清晰度。档名只在全屏显示 —— 内嵌时控制条窄,一个图标就够,而档名("原画""蓝光")截断之后
- * 反而分不出档。
- */
-@Composable
-private fun LiveQualityButton(
-    qualities: List<Int>,
-    currentQn: Int,
-    isFullscreen: Boolean,
-    onSelect: (Int) -> Unit,
-    onMenuOpenChange: (Boolean) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        ControlButton(
-            expanded = expanded,
-            onClick = {
-                expanded = true
-                onMenuOpenChange(true)
-            },
-            label = if (isFullscreen) stringResource(qualityLabel(currentQn)) else null,
-            icon = { tint ->
-                Icon(
-                    Icons.Filled.HighQuality,
-                    contentDescription = stringResource(R.string.player_quality),
-                    tint = tint,
-                    modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp),
-                )
-            },
-        )
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = {
-                expanded = false
-                onMenuOpenChange(false)
-            },
-        ) {
-            // 服务端给的顺序是从低到高,菜单里反过来:清晰度菜单上手就该看见最好的那档。
-            qualities.sortedDescending().forEach { qn ->
-                val current = qn == currentQn
-                DropdownMenuItem(
-                    text = { Text(stringResource(qualityLabel(qn))) },
-                    onClick = {
-                        expanded = false
-                        onMenuOpenChange(false)
-                        onSelect(qn)
-                    },
-                    // 勾 + 语义两路都给:图标那一路读屏念不出来(勾没有可见文字,
-                    // 描述交给 selected),只给语义则看得见的人分辨不出选中的是哪一档。
-                    trailingIcon = if (current) {
-                        {
-                            Icon(
-                                Icons.Filled.Check,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    } else {
-                        null
-                    },
-                    modifier = Modifier.semantics { selected = current },
-                )
-            }
-        }
-    }
-}
 
 /** 档位号到档名。取值见 PiliPlus `api.dart` 对 `getRoomPlayInfo` 的注释。 */
 private fun qualityLabel(qn: Int): Int = when (qn) {

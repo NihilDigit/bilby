@@ -1,7 +1,17 @@
 package dev.bilby.ui.video
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import dev.bilby.ui.components.rememberExpandedSheetState
+import dev.bilby.ui.player.PlayerIconButton
+import dev.bilby.ui.player.PlayerSidePanel
+import dev.bilby.ui.player.PlayerTooltip
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -47,7 +57,8 @@ internal val SpeedOptions = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
 /**
  * 播放设置:倍速、清晰度、音质、字幕、弹幕,竖排。内嵌时装在底部 sheet 里,全屏时装在右侧
- * 面板里(见 BilbyPlayer),内容是同一份。
+ * 面板里(见 BilbyPlayer),内容是同一份。全屏控制条上的 chip 打开同一块面板里的一段,
+ * 见 [PlayerSettingsSection]。
  *
  * **三个下拉菜单合成一块面板。** 原先三个图标各挂一个 DropdownMenu,那是表单式控件:浮在
  * 全屏画面上一块白底长列表,横屏时十来档清晰度纵向拉出去半屏;而三者本来就是"这个播放器
@@ -75,32 +86,41 @@ internal fun PlayerSettingsContent(
     onAudioChange: (Int) -> Unit = {},
     danmakuPrefs: DanmakuPrefs = DanmakuPrefs(),
     danmakuEditor: DanmakuPrefsEditor? = null,
+    /** 只画这一段(全屏控制条上的 chip 打开的)。null 画整块。 */
+    only: PlayerSettingsSection? = null,
 ) {
+    val titled = only == null
+    // 只开一段时一行一项:这时面板里只有这一组,竖着排一眼扫完,不必横着挤。
+    val columns = if (only == null) GridColumns else 1
     PanelColumn(modifier) {
-        SectionTitle(stringResource(R.string.player_speed))
-        // **只写数字,不带「x」。** 段标题已经写着「倍速」,每格再挂一个 x 是六遍同一个单位,
-        // 还正好是「0.75x」放不下、被切掉的那一截。
-        ConnectedChoices(
-            options = SpeedOptions,
-            selected = { it == speed },
-            onSelect = onSpeedChange,
-            label = ::formatSpeedNumber,
-        )
+        if (only == null || only == PlayerSettingsSection.Speed) {
+            if (titled) SectionTitle(stringResource(R.string.player_speed))
+            // **只写数字,不带「x」。** 段标题已经写着「倍速」,每格再挂一个 x 是六遍同一个单位,
+            // 还正好是「0.75x」放不下、被切掉的那一截。
+            if (only == null) {
+                ConnectedChoices(
+                    options = SpeedOptions,
+                    selected = { it == speed },
+                    onSelect = onSpeedChange,
+                    label = ::formatSpeedNumber,
+                )
+            } else {
+                ChoiceGrid(
+                    options = SpeedOptions,
+                    selected = { it == speed },
+                    onSelect = onSpeedChange,
+                    label = ::formatSpeedNumber,
+                    columns = 1,
+                )
+            }
+        }
 
-        // 没有可选的就整段不画:一段只有一个选项的单选是纯噪声。
-        if (qualities.size > 1) {
-            SectionTitle(stringResource(R.string.player_quality))
-            ChoiceGrid(
-                options = qualities,
-                selected = { it.quality == currentQuality },
-                onSelect = { onQualityChange(it.quality) },
-                // 不截断:两档截断之后可能一模一样("1080P 高码率" 与 "1080P60")。
-                label = { it.label },
-            )
+        if (only == null || only == PlayerSettingsSection.Quality) {
+            QualitySection(qualities, currentQuality, onQualityChange, titled)
         }
 
         // 音质:列这次真下发了的几条音轨(见 SelectedStreams.audioOptions),规则同画质那一段。
-        if (audioOptions.size > 1) {
+        if (only == null && audioOptions.size > 1) {
             SectionTitle(stringResource(R.string.player_audio_quality))
             ChoiceGrid(
                 options = audioOptions,
@@ -110,8 +130,8 @@ internal fun PlayerSettingsContent(
             )
         }
 
-        if (subtitleTracks.isNotEmpty()) {
-            SectionTitle(stringResource(R.string.player_subtitle))
+        if ((only == null || only == PlayerSettingsSection.Subtitle) && subtitleTracks.isNotEmpty()) {
+            if (titled) SectionTitle(stringResource(R.string.player_subtitle))
             val offLabel = stringResource(R.string.player_subtitle_off)
             // null 是"关闭"那一格。
             val options: List<SubtitleTrack?> = listOf(null) + subtitleTracks
@@ -120,21 +140,116 @@ internal fun PlayerSettingsContent(
                 selected = { (it?.lan ?: "") == currentSubtitleLan },
                 onSelect = { onSubtitleTrackChange(it?.lan ?: "") },
                 label = { it?.displayName ?: offLabel },
+                columns = columns,
             )
         }
 
-        if (danmakuEditor != null) DanmakuSettingsSection(danmakuPrefs, danmakuEditor)
+        if (only == null && danmakuEditor != null) DanmakuSettingsSection(danmakuPrefs, danmakuEditor)
     }
 }
 
-/** 只有弹幕设置的一块面板。直播间用:那边的清晰度和仅声音仍在控制条上。 */
+/** 直播间的设置面板:画质、弹幕。"只听声音"不在这里,它在控制条上。 */
 @Composable
-internal fun DanmakuSettingsContent(
-    prefs: DanmakuPrefs,
-    editor: DanmakuPrefsEditor,
+internal fun LiveSettingsContent(
+    qualities: List<QualityOption>,
+    currentQuality: Int,
+    onQualityChange: (Int) -> Unit,
+    danmakuPrefs: DanmakuPrefs,
+    danmakuEditor: DanmakuPrefsEditor,
     modifier: Modifier = Modifier,
+    only: PlayerSettingsSection? = null,
 ) {
-    PanelColumn(modifier) { DanmakuSettingsSection(prefs, editor) }
+    PanelColumn(modifier) {
+        if (only == null || only == PlayerSettingsSection.Quality) {
+            QualitySection(qualities, currentQuality, onQualityChange, titled = only == null)
+        }
+        if (only == null) DanmakuSettingsSection(danmakuPrefs, danmakuEditor)
+    }
+}
+
+/**
+ * 面板里能被单独打开的几段,对应全屏控制条上那几枚 chip。整块面板从 ⚙ 打开。
+ *
+ * chip 只开自己那一段,不开整块:几枚 chip 看起来各管一项,点开却是同一块长面板,读不出
+ * 它们之间有什么区别。
+ */
+internal enum class PlayerSettingsSection { Speed, Quality, Subtitle }
+
+/**
+ * 设置面板的外壳,点播与直播共用。全屏从右边划出(横屏下底部 sheet 只剩一条缝),内嵌从底部
+ * 弹出,内容是同一份。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun BoxScope.PlayerSettingsHost(
+    isFullscreen: Boolean,
+    open: Boolean,
+    only: PlayerSettingsSection?,
+    onDismiss: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    if (isFullscreen) {
+        PlayerSidePanel(visible = open, onDismiss = onDismiss, narrow = only != null) {
+            Text(
+                playerSettingsTitle(only),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(
+                    start = Spacing.Comfortable,
+                    end = Spacing.Comfortable,
+                    top = Spacing.Comfortable,
+                ),
+            )
+            content()
+        }
+    } else if (open) {
+        ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberExpandedSheetState()) {
+            content()
+            Spacer(modifier = Modifier.height(Spacing.Comfortable))
+        }
+    }
+}
+
+/** 打开整块设置面板的 ⚙。点播与直播、内嵌与全屏都是这一枚,位置都在全屏键左边。 */
+@Composable
+internal fun PlayerSettingsButton(onClick: () -> Unit) {
+    val label = stringResource(R.string.player_settings)
+    PlayerTooltip(label) {
+        PlayerIconButton(onClick = onClick, icon = Icons.Filled.Tune, contentDescription = label)
+    }
+}
+
+/** 面板的标题:整块叫"播放设置",只开一段时用那一段的名字。 */
+@Composable
+private fun playerSettingsTitle(only: PlayerSettingsSection?): String = stringResource(
+    when (only) {
+        null -> R.string.player_settings
+        PlayerSettingsSection.Speed -> R.string.player_speed
+        PlayerSettingsSection.Quality -> R.string.player_quality
+        PlayerSettingsSection.Subtitle -> R.string.player_subtitle
+    },
+)
+
+/**
+ * 画质。没有可选的就整段不画:一段只有一个选项的单选是纯噪声。[titled] 为假时是 chip 单独打开的
+ * 这一段,不画段标题(面板标题就是它),一行一项。
+ */
+@Composable
+private fun QualitySection(
+    qualities: List<QualityOption>,
+    currentQuality: Int,
+    onQualityChange: (Int) -> Unit,
+    titled: Boolean,
+) {
+    if (qualities.size <= 1) return
+    if (titled) SectionTitle(stringResource(R.string.player_quality))
+    ChoiceGrid(
+        options = qualities,
+        selected = { it.quality == currentQuality },
+        onSelect = { onQualityChange(it.quality) },
+        // 不截断:两档截断之后可能一模一样("1080P 高码率" 与 "1080P60")。
+        label = { it.label },
+        columns = if (titled) GridColumns else 1,
+    )
 }
 
 @Composable
@@ -289,9 +404,9 @@ private fun formatSpeedNumber(speed: Float): String =
     if (speed % 1f == 0f) speed.toInt().toString() else speed.toString()
 
 /**
- * 两列等宽的单选网格。**等宽而不是按字长排开**:档名长短差得多("360P" 与 "1080P 高码率"),
- * 各按字长排成一片时每行断在不同位置,选中那一格的位置也跟着乱跳。两列等宽之后一眼扫得出
- * 一共几档、选的是第几档;奇数个时最后一行留空位,不让最后一格独自撑满一整行。
+ * 等宽的单选网格,整块面板里两列,单开一段时一列。**等宽而不是按字长排开**:档名长短差得多
+ * ("360P" 与 "1080P 高码率"),各按字长排成一片时每行断在不同位置,选中那一格的位置也跟着乱跳。
+ * 等宽之后一眼扫得出一共几档、选的是第几档;奇数个时最后一行留空位,不让最后一格独自撑满一整行。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -300,9 +415,10 @@ private fun <T> ChoiceGrid(
     selected: (T) -> Boolean,
     onSelect: (T) -> Unit,
     label: (T) -> String,
+    columns: Int = GridColumns,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
-        options.chunked(GridColumns).forEach { row ->
+        options.chunked(columns).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
                 row.forEach { option ->
                     ToggleButton(
@@ -313,7 +429,7 @@ private fun <T> ChoiceGrid(
                         Text(label(option), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                repeat(GridColumns - row.size) { Spacer(modifier = Modifier.weight(1f)) }
+                repeat(columns - row.size) { Spacer(modifier = Modifier.weight(1f)) }
             }
         }
     }

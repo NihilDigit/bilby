@@ -45,6 +45,8 @@ import dev.bilby.ui.theme.FixedColors
 fun BoxScope.PlayerSidePanel(
     visible: Boolean,
     onDismiss: () -> Unit,
+    /** 只放一列短选项时(控制条上 chip 单开的一段)用窄款,少挡画面。 */
+    narrow: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     // 遮罩。压暗是为了让面板这一侧读得出来是上层,同时接住面板之外的那一下点击 ——
@@ -70,7 +72,11 @@ fun BoxScope.PlayerSidePanel(
     val windowWidth = with(LocalDensity.current) {
         LocalWindowInfo.current.containerSize.width.toDp()
     }
-    val panelWidth = (windowWidth * PanelWidthFraction).coerceIn(PanelMinWidth, PanelMaxWidth)
+    val panelWidth = if (narrow) {
+        NarrowPanelWidth
+    } else {
+        (windowWidth * PanelWidthFraction).coerceIn(PanelMinWidth, PanelMaxWidth)
+    }
 
     AnimatedVisibility(
         visible = visible,
@@ -108,3 +114,6 @@ private val PanelMinWidth = 280.dp
 
 /** 上限。再宽内容本身也用不上,只是把画面挡得更多。 */
 private val PanelMaxWidth = 400.dp
+
+/** 窄款。一列档名("高清 1080P+"这类)加两侧内边距,放得下就够。 */
+private val NarrowPanelWidth = 240.dp

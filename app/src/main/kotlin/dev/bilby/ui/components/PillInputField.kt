@@ -69,6 +69,11 @@ fun PillInputField(
     imeSend: Boolean = true,
     /** 挂在输入框本身上的修饰:焦点请求、读屏标签这类只对输入框有意义的东西。 */
     fieldModifier: Modifier = Modifier,
+    /**
+     * 胶囊左端的一格,和发送键同高(直播间的弹幕开关)。给了它,左侧就不再留文字的内边距,
+     * 由这一格自己占位。
+     */
+    leading: (@Composable () -> Unit)? = null,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
@@ -87,8 +92,14 @@ fun PillInputField(
             .fillMaxWidth()
             .heightIn(min = MinHeight)
             .background(fieldColor, MaterialTheme.shapes.largeIncreased)
-            .padding(start = Spacing.Comfortable, end = Spacing.Hair, top = Spacing.Hair, bottom = Spacing.Hair),
+            .padding(
+                start = if (leading != null) Spacing.Hair else Spacing.Comfortable,
+                end = Spacing.Hair,
+                top = Spacing.Hair,
+                bottom = Spacing.Hair,
+            ),
     ) {
+        leading?.invoke()
         Box(
             contentAlignment = if (minLines > 1) Alignment.TopStart else Alignment.CenterStart,
             modifier = Modifier
