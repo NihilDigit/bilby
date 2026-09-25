@@ -44,10 +44,10 @@ jobs:
       # 停在 v5 的理由见 release.yml。
       - uses: gradle/actions/setup-gradle@v5
 
-      # 单测只有 debug 变体有:AGP 按 testBuildType(默认 debug)生成任务,
-      # testReleaseUnitTest 不存在,写上去会报 "Task not found"。
+      # 单测都在 :shared。Android 目标的宿主测试(含 Robolectric)与桌面 JVM 测试各跑一遍,
+      # 公共代码的用例两边都会执行。:app 只是打包入口,没有单测。
       - name: Test
-        run: ./gradlew testDebugUnitTest
+        run: ./gradlew :shared:testAndroidHostTest :shared:desktopTest
 
       # 失败时要能看到是哪个用例、断言差在哪,光看日志行不够。
       - name: Upload test report
@@ -56,5 +56,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: test-report
-          path: app/build/reports/tests/testDebugUnitTest
+          path: shared/build/reports/tests
           retention-days: 7

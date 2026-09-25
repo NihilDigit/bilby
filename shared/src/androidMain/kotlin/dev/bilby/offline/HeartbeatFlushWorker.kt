@@ -8,7 +8,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import dev.bilby.BilbyApplication
+import dev.bilby.AppContainerOwner
 import dev.bilby.BiliLog
 
 /**
@@ -18,7 +18,7 @@ import dev.bilby.BiliLog
  * 交给 WorkManager 而不是自己监听网络:补发要能等到进程死过一回之后。断网看完缓存、划掉 app,
  * 第二天联网时 app 未必被打开,而 WorkManager 的任务存在它自己的库里,满足联网条件时由系统拉起。
  *
- * 用默认的两参构造、自己去 [BilbyApplication] 取容器,而不是注册自定义 WorkerFactory:后者要
+ * 用默认的两参构造、自己去 [AppContainerOwner] 取容器,而不是注册自定义 WorkerFactory:后者要
  * 关掉 WorkManager 的自动初始化、改 manifest,只为了把一个本来就是单例的依赖递进来。
  * 默认工厂按类名反射构造,keep 规则由 work-runtime 自带的 consumer rules 提供。
  */
@@ -28,7 +28,7 @@ class HeartbeatFlushWorker(
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        val reporter = (applicationContext as BilbyApplication).container.heartbeatReporter
+        val reporter = (applicationContext as AppContainerOwner).container.heartbeatReporter
         return if (reporter.flushPending()) {
             Result.success()
         } else {

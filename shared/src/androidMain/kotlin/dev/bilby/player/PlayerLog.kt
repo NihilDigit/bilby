@@ -1,7 +1,7 @@
 package dev.bilby.player
 
 import android.util.Log
-import dev.bilby.BuildConfig
+import dev.bilby.AppBuild
 
 /**
  * 播放器的诊断日志。
@@ -16,9 +16,9 @@ import dev.bilby.BuildConfig
 internal object PlayerLog {
     private const val TAG = "Bilby"
 
-    val isDebug: Boolean get() = BuildConfig.DEBUG
+    val isDebug: Boolean get() = AppBuild.debug
 
     fun d(message: String) {
-        if (BuildConfig.DEBUG) Log.d(TAG, message)
+        if (AppBuild.debug) Log.d(TAG, message)
     }
 }

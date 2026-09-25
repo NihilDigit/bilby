@@ -57,6 +57,11 @@ import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 
+/** 持有 [AppContainer] 的平台入口。Android 上是 Application,服务与 Worker 经它取容器。 */
+interface AppContainerOwner {
+    val container: AppContainer
+}
+
 /**
  * 手写 DI。单人单 module,依赖图小到一屏能看完,不预付框架成本;
  * 膨胀到看不完时再换 Koin(DESIGN 4 节)。

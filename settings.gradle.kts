@@ -22,6 +22,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "Bilby"
 include(":app")
+include(":shared")
 include(":player-desktop")
 
 // 弹幕引擎(https://github.com/NihilDigit/tdanmaku)已发布到 Maven Central,按坐标解析,

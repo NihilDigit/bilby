@@ -22,7 +22,7 @@ import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
-import dev.bilby.BilbyApplication
+import dev.bilby.AppContainerOwner
 import dev.bilby.BiliLog
 import dev.bilby.BvidCodec
 import dev.bilby.PerfTrace
@@ -399,7 +399,7 @@ class AudioPlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         runningService = this
-        val container = (application as BilbyApplication).container
+        val container = (application as AppContainerOwner).container
         videoRepository = container.videoRepository
         subtitleRepository = container.subtitleRepository
         liveRepository = container.liveRepository

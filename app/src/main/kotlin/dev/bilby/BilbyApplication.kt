@@ -7,14 +7,22 @@ import coil3.SingletonImageLoader
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.crossfade
 import coil3.util.DebugLogger
+import dev.bilby.app.BuildConfig
 
-class BilbyApplication : Application(), SingletonImageLoader.Factory {
+class BilbyApplication : Application(), AppContainerOwner, SingletonImageLoader.Factory {
 
-    lateinit var container: AppContainer
+    override lateinit var container: AppContainer
         private set
 
     override fun onCreate() {
         super.onCreate()
+        AppBuild.init(
+            debug = BuildConfig.DEBUG,
+            versionName = BuildConfig.VERSION_NAME,
+            applicationId = BuildConfig.APPLICATION_ID,
+            llmBaseUrl = BuildConfig.LLM_BASE_URL,
+            llmApiKey = BuildConfig.LLM_API_KEY,
+        )
         container = AppContainer(this)
     }
 

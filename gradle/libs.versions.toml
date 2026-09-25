@@ -31,6 +31,13 @@ kotlinxCoroutines = "1.11.0"
 # 差距只有两处:alpha22 没有不带 onClick 的 SegmentedListItem 重载(ProfileScreen 预览行),
 # MediumFlexibleTopAppBar 在 alpha22 仍需 ExperimentalMaterial3ExpressiveApi。
 composeMultiplatform = "1.12.1"
+# 与 composeMultiplatform 配套的几条 JetBrains 多平台线。Android 目标上它们各自重定向到
+# androidx 的同名构件,实际版本由 :app 的 BOM 与上面的 androidx 版本抬高。
+composeMultiplatformMaterial3 = "1.12.0-alpha03"
+composeMultiplatformIcons = "1.7.3"
+navigation3Multiplatform = "1.1.2"
+lifecycleMultiplatform = "2.11.0"
+sqlite = "2.6.2"
 # 桌面播放后端。它的运行时包带打过 D3D11 render API 补丁的 libmpv,见 player-desktop/build.gradle.kts。
 mediamp = "0.5.0"
 
@@ -105,6 +112,17 @@ zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 compose-mp-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "composeMultiplatform" }
 compose-mp-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "composeMultiplatform" }
 compose-mp-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "composeMultiplatform" }
+compose-mp-animation = { module = "org.jetbrains.compose.animation:animation", version.ref = "composeMultiplatform" }
+compose-mp-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", version.ref = "composeMultiplatform" }
+compose-mp-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "composeMultiplatformMaterial3" }
+compose-mp-material-icons-extended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "composeMultiplatformIcons" }
+compose-mp-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "composeMultiplatform" }
+navigation3-mp-ui = { module = "org.jetbrains.androidx.navigation3:navigation3-ui", version.ref = "navigation3Multiplatform" }
+lifecycle-mp-runtime-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycleMultiplatform" }
+lifecycle-mp-viewmodel-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycleMultiplatform" }
+lifecycle-mp-viewmodel-navigation3 = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-navigation3", version.ref = "lifecycleMultiplatform" }
+androidx-datastore-preferences-core = { module = "androidx.datastore:datastore-preferences-core", version.ref = "datastore" }
+androidx-sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version.ref = "sqlite" }
 kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "kotlinxCoroutines" }
 mediamp-mpv = { module = "org.openani.mediamp:mediamp-mpv", version.ref = "mediamp" }
 mediamp-mpv-runtime-windows-x64 = { module = "org.openani.mediamp:mediamp-mpv-runtime-windows-x64", version.ref = "mediamp" }
@@ -115,6 +133,8 @@ robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectr
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
+android-kmp-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+room = { id = "androidx.room", version.ref = "room" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

@@ -85,7 +85,7 @@ import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import dev.bilby.AppContainer
-import dev.bilby.BilbyApplication
+import dev.bilby.AppContainerOwner
 import dev.bilby.BiliLog
 import dev.bilby.R
 import dev.bilby.agent.AgentIntent
@@ -232,7 +232,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        val container = (application as BilbyApplication).container
+        val container = (application as AppContainerOwner).container
         // 构造下载器:它在初始化时把上次进程被杀打断的条目接着下(见 OfflineDownloader 的 init)。
         // 放在这里而不是 Application.onCreate:补报心跳的 Worker 会在后台拉起进程,那时接着下
         // 就要从后台起前台服务,Android 12 起不允许。Activity 在前台,这一刻起得来。

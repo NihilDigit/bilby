@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
-import dev.bilby.BuildConfig
+import dev.bilby.AppBuild
 import dev.bilby.R
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.UpdateCheck
@@ -79,9 +79,9 @@ class StartupUpdateViewModel(
         // **debug 构建不查。** 本地跑出来的版本号是 0.0.0-dev,比任何已发布的 tag 都小,于是
         // 每次冷启动都会弹一个"有新版本"——而那个"新版本"正是开发者手上这份代码的上一版。
         // 它挡在首页前面,还得点一次才能开始干活。
-        if (!BuildConfig.DEBUG) {
+        if (!AppBuild.debug) {
             viewModelScope.launch {
-                when (val check = updateRepository.check(BuildConfig.VERSION_NAME)) {
+                when (val check = updateRepository.check(AppBuild.versionName)) {
                     is UpdateCheck.Available -> {
                         // 压过的那一版不再提。判据是版本号相等,不是"压过没有",见 SettingsStore。
                         if (settings.ignoredUpdateVersion.first() != check.info.version) {
@@ -173,7 +173,7 @@ fun StartupUpdateDialog(
                 Text(stringResource(R.string.update_dialog_title, info.version))
                 // 从哪一版升上来、包有多大:下不下载在这两件事上定,尤其是流量下。
                 Text(
-                    text = stringResource(R.string.update_dialog_current, BuildConfig.VERSION_NAME) +
+                    text = stringResource(R.string.update_dialog_current, AppBuild.versionName) +
                         (if (info.sizeBytes > 0) MetaSeparator + formatBytes(info.sizeBytes) else ""),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

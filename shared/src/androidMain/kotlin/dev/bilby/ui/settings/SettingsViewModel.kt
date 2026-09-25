@@ -1,6 +1,6 @@
 package dev.bilby.ui.settings
 
-import dev.bilby.BuildConfig
+import dev.bilby.AppBuild
 import dev.bilby.api.BiliResult
 import dev.bilby.data.HistoryRepository
 import dev.bilby.data.AppearancePrefs
@@ -153,7 +153,7 @@ class SettingsViewModel(
         if (_state.value.update is UpdateState.Checking) return
         _state.update { it.copy(update = UpdateState.Checking) }
         viewModelScope.launch {
-            val result = when (val check = updateRepository.check(BuildConfig.VERSION_NAME)) {
+            val result = when (val check = updateRepository.check(AppBuild.versionName)) {
                 is UpdateCheck.Available -> UpdateState.Available(check.info)
                 UpdateCheck.UpToDate -> UpdateState.UpToDate
                 is UpdateCheck.Failed -> UpdateState.Failed(check.message)

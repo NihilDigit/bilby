@@ -20,7 +20,7 @@ package dev.bilby
 object PerfTrace {
 
     /** 默认跟随构建类型。release 上采样时由调试入口临时置 true。 */
-    var enabled: Boolean = BuildConfig.DEBUG
+    var enabled: Boolean = AppBuild.debug
 
     /**
      * 一条链路。不是线程安全的:每条链路都由单一所有者驱动(起播链路归 service,弹幕链路归

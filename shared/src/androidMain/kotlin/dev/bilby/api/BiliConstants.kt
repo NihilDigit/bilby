@@ -1,6 +1,6 @@
 package dev.bilby.api
 
-import dev.bilby.BuildConfig
+import dev.bilby.AppBuild
 
 /**
  * 请求约定。web 接口用桌面浏览器 UA([USER_AGENT])加站内 Referer;app 端接口报 B 站官方
@@ -50,7 +50,7 @@ object BiliConstants {
      * 但它推不出"所以别的接口也会拒绝浏览器 UA" —— 实际结果是 `x/web-interface/card`
      * 当场 -352、搜索直接没结果。一个接口的实证只覆盖那一个接口(CLAUDE.md:风控是按动作算的)。
      */
-    val NON_BROWSER_USER_AGENT = "Bilby/${BuildConfig.VERSION_NAME} (+https://github.com/NihilDigit/bilby)"
+    val NON_BROWSER_USER_AGENT get() = "Bilby/${AppBuild.versionName} (+https://github.com/NihilDigit/bilby)"
     /** app 路线用的 UA,原样抄自 PiliPlus 的 Constants.userAgent(android_hd)。 */
     const val APP_USER_AGENT =
         "Mozilla/5.0 BiliDroid/2.0.1 (bbcallen@gmail.com) os/android model/android_hd " +

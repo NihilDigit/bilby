@@ -11,7 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
-import dev.bilby.BilbyApplication
+import dev.bilby.AppContainerOwner
 import dev.bilby.BiliLog
 import dev.bilby.R
 import kotlinx.coroutines.CoroutineScope
@@ -43,7 +43,7 @@ class OfflineDownloadService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        val downloader = (application as BilbyApplication).container.offlineDownloader
+        val downloader = (application as AppContainerOwner).container.offlineDownloader
         scope.launch {
             downloader.items
                 .map { it.toNotificationProgress() }

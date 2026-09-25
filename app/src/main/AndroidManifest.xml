@@ -20,7 +20,7 @@
          onBackPressed 通路,NavDisplay 的 predictivePopTransitionSpec 拿不到手势进度,
          返回动画只能在松手之后整段播完,手势期间屏幕上什么都不动。 -->
     <application
-        android:name=".BilbyApplication"
+        android:name="dev.bilby.BilbyApplication"
         android:allowBackup="false"
         android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
@@ -29,7 +29,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Bilby">
         <activity
-            android:name=".ui.MainActivity"
+            android:name="dev.bilby.ui.MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode"
             android:supportsPictureInPicture="true"
@@ -80,7 +80,7 @@
             </intent-filter>
         </activity>
         <service
-            android:name=".player.AudioPlaybackService"
+            android:name="dev.bilby.player.AudioPlaybackService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
@@ -88,7 +88,7 @@
             </intent-filter>
         </service>
         <service
-            android:name=".offline.OfflineDownloadService"
+            android:name="dev.bilby.offline.OfflineDownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 

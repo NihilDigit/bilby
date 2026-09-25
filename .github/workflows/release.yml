@@ -57,10 +57,9 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.BILBY_KEYSTORE_BASE64 }}
         run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/bilby.jks"
 
-      # 单测只有 debug 变体有:AGP 按 testBuildType(默认 debug)生成任务,
-      # 写成 testReleaseUnitTest 会在 CI 上报 "Task not found"。
+      # 单测都在 :shared,见 ci.yml 的同名步骤。
       - name: Test
-        run: ./gradlew testDebugUnitTest -PbilbyVersion=${{ steps.version.outputs.name }}
+        run: ./gradlew :shared:testAndroidHostTest :shared:desktopTest -PbilbyVersion=${{ steps.version.outputs.name }}
 
       - name: Build
         env:

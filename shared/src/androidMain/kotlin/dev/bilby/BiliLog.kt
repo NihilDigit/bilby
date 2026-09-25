@@ -50,6 +50,6 @@ object BiliLog {
 
     /** 过程信息,只在 debug 打:它的量足以淹没上面那些真正要看的行。 */
     fun d(message: String) {
-        if (BuildConfig.DEBUG) Log.d(TAG, message)
+        if (AppBuild.debug) Log.d(TAG, message)
     }
 }

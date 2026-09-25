@@ -29,12 +29,11 @@ val releaseVersionCode: Int = releaseVersionName
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.ksp)
 }
 
 android {
-    namespace = "dev.bilby"
+    // dev.bilby 归 :shared(R 类在那边),这里只生成 BuildConfig
+    namespace = "dev.bilby.app"
     compileSdk = 37
 
     defaultConfig {
@@ -105,68 +104,11 @@ android {
         compose = true
         buildConfig = true
     }
-
-    testOptions {
-        unitTests {
-            // JVM 单测里 android.util.Log 的方法默认抛异常。本项目的纪律是每一处被吞掉的
-            // 失败都要记日志(见 CLAUDE.md),于是任何走到日志的分支在单测里都会炸——
-            // 炸的不是被测逻辑,是日志本身。让这些方法返回默认值,测的才是逻辑。
-            isReturnDefaultValues = true
-            // Robolectric 只服务 player/LazyMediaSourceTest:Media3 的 MediaSource 在准备和
-            // 释放的每一步上都要一个 Looper。其余单测仍是纯 JVM 的,不受影响。
-            isIncludeAndroidResources = true
-        }
-    }
 }
 
+// 这个模块只是 Android 的打包入口:清单、启动图标、签名与 BuildConfig。代码与界面在 :shared。
 dependencies {
-    // 坐标是外部依赖的写法,但开发期由 settings.gradle.kts 的 includeBuild 替换成隔壁仓库的
-    // 源码构建,这里的版本号在替换生效时不参与解析。见那边的注释。
-    implementation(libs.tdanmaku)
-
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.activity.compose)
-    implementation(libs.androidx.lifecycle.runtime.compose)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
-
+    implementation(project(":shared"))
     implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.ui.graphics)
-    implementation(libs.androidx.compose.ui.tooling.preview)
-    implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material.icons.extended)
     debugImplementation(libs.androidx.compose.ui.tooling)
-
-    implementation(libs.androidx.navigation3.runtime)
-    implementation(libs.androidx.navigation3.ui)
-    implementation(libs.androidx.lifecycle.viewmodel.navigation3)
-
-    implementation(libs.androidx.media3.exoplayer)
-    implementation(libs.androidx.media3.exoplayer.dash)
-    implementation(libs.androidx.media3.exoplayer.hls)
-    implementation(libs.androidx.media3.ui.compose)
-    implementation(libs.androidx.media3.session)
-    implementation(libs.androidx.media3.extractor)
-
-    implementation(libs.androidx.room.runtime)
-    ksp(libs.androidx.room.compiler)
-    implementation(libs.androidx.datastore.preferences)
-    implementation(libs.androidx.work.runtime.ktx)
-
-    implementation(libs.ktor.client.core)
-    implementation(libs.ktor.client.okhttp)
-    implementation(libs.ktor.client.content.negotiation)
-    implementation(libs.ktor.serialization.kotlinx.json)
-    implementation(libs.ktor.client.logging)
-    implementation(libs.ktor.client.websockets)
-    implementation(libs.kotlinx.serialization.json)
-
-    implementation(libs.coil.compose)
-    implementation(libs.coil.network.okhttp)
-    implementation(libs.zxing.core)
-
-    testImplementation(libs.junit)
-    testImplementation(libs.ktor.client.mock)
-    testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.robolectric)
 }

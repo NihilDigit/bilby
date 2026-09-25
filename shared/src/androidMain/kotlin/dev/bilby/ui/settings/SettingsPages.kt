@@ -27,7 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
-import dev.bilby.BuildConfig
+import dev.bilby.AppBuild
 import dev.bilby.R
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
@@ -711,7 +711,7 @@ fun AboutSettingsPage(
     SettingsSubPage(stringResource(R.string.settings_section_about), onBack) {
         SettingRow(
             title = stringResource(R.string.settings_version),
-            subtitle = "${BuildConfig.VERSION_NAME}(${BuildConfig.APPLICATION_ID})",
+            subtitle = "${AppBuild.versionName}(${AppBuild.applicationId})",
         )
         SettingRow(
             title = stringResource(R.string.settings_license),

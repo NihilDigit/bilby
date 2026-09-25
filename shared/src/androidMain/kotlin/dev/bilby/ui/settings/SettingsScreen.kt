@@ -61,7 +61,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import dev.bilby.BuildConfig
+import dev.bilby.AppBuild
 import dev.bilby.data.UpdateInfo
 import java.io.File
 import java.net.URI
@@ -182,7 +182,7 @@ fun SettingsScreen(
                     SettingRow(
                         title = stringResource(R.string.settings_section_about),
                         icon = Icons.Outlined.Info,
-                        value = BuildConfig.VERSION_NAME,
+                        value = AppBuild.versionName,
                         target = RowTarget.Page,
                         onClick = { onOpenSection(SettingsSection.About) },
                     )

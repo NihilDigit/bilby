@@ -10,7 +10,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import dev.bilby.BuildConfig
+import dev.bilby.AppBuild
 import dev.bilby.player.DEFAULT_PREFERRED_CODECS
 import dev.bilby.player.AUDIO_QUALITY_BEST
 import dev.bilby.player.VideoCodecId
@@ -77,8 +77,8 @@ class SettingsStore(context: Context) {
     /** 未配置时回落到 BuildConfig(debug 版从 local.properties 注入),省去每次装机重输。 */
     val llmConfig: Flow<LlmConfig> = store.data.map { p ->
         LlmConfig(
-            baseUrl = p[KEY_LLM_BASE_URL] ?: BuildConfig.LLM_BASE_URL.ifEmpty { DEFAULT_LLM_BASE_URL },
-            apiKey = p[KEY_LLM_API_KEY] ?: BuildConfig.LLM_API_KEY,
+            baseUrl = p[KEY_LLM_BASE_URL] ?: AppBuild.llmBaseUrl.ifEmpty { DEFAULT_LLM_BASE_URL },
+            apiKey = p[KEY_LLM_API_KEY] ?: AppBuild.llmApiKey,
             model = p[KEY_LLM_MODEL] ?: DEFAULT_LLM_MODEL,
         )
     }
