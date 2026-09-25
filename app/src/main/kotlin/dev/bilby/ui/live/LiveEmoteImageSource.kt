@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import coil3.imageLoader
+import coil3.request.allowHardware
 import coil3.toBitmap
 import dev.bilby.BiliLog
 import dev.bilby.ui.components.biliImageRequestBuilder
@@ -39,6 +40,8 @@ class LiveEmoteImageSource(private val context: Context) : DanmakuImageSource {
         loading += url
         val request = biliImageRequestBuilder(context, url)
             .size(DECODE_SIZE_PX)
+            // 弹幕库在 CPU 上把图画进自己的位图图集,硬件位图画不进软件画布。
+            .allowHardware(false)
             .target(
                 onSuccess = { image ->
                     loading -= url
