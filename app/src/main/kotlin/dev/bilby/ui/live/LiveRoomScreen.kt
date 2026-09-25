@@ -91,6 +91,12 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.media3.common.Player
 import dev.bilby.R
 import dev.bilby.data.DanmakuPrefs
+import dev.bilby.data.DanmakuPrefsEditor
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.ModalBottomSheet
+import dev.bilby.ui.components.rememberExpandedSheetState
+import dev.bilby.ui.player.PlayerSidePanel
+import dev.bilby.ui.video.DanmakuSettingsContent
 import dev.bilby.live.LiveMessage
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.BilbyWindowSize
@@ -153,6 +159,7 @@ import androidx.compose.ui.unit.dp
  * 消息流里混着弹幕、醒目留言、上舰和系统提示,各类的样子归 [LiveFeedRow]。**礼物、进场、
  * 进场特效、红包天选、全站广播都不显示**,那是产品决定,理由见 `docs/live-room-redesign.md` §4。
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun LiveRoomScreen(
     state: LiveRoomUiState,
@@ -160,7 +167,7 @@ fun LiveRoomScreen(
     player: Player?,
     attached: Boolean,
     danmakuPrefs: DanmakuPrefs,
-    onDanmakuEnabledChange: (Boolean) -> Unit,
+    danmakuEditor: DanmakuPrefsEditor,
     onQualityChange: (Int) -> Unit,
     /**
      * 这个直播间只要声音。**页内的临时状态**:关掉直播间就没了,不跨房间,也不写进设置。
@@ -195,6 +202,7 @@ fun LiveRoomScreen(
 ) {
     var fullscreen by remember { mutableStateOf(false) }
     var locked by remember { mutableStateOf(false) }
+    var settingsOpen by remember { mutableStateOf(false) }
     val context = LocalContext.current
     // 画中画借全屏的布局,不借全屏的行为(转屏、藏系统栏、返回键),理由同播放页。
     val inPip = rememberIsInPipMode()
@@ -303,8 +311,13 @@ fun LiveRoomScreen(
                             watched = state.watched,
                             danmakuEnabled = danmakuPrefs.enabled,
                             onDanmakuEnabledChange = {
-                                onDanmakuEnabledChange(it)
+                                danmakuEditor.setEnabled(it)
                                 keepControlsAwake()
+                            },
+                            onOpenSettings = {
+                                settingsOpen = true
+                                // 面板开着时控件不自动收,同播放页。
+                                setMenuOpen(true)
                             },
                             qualities = state.qualities,
                             currentQn = state.currentQn,
@@ -325,6 +338,33 @@ fun LiveRoomScreen(
                             },
                             onFullscreenToggle = { toggleFullscreen() },
                         )
+                    },
+                    // 外壳与播放页的播放设置面板相同:全屏从右边划出,内嵌从底部弹出。直播这块
+                    // 只有弹幕设置,清晰度和仅声音仍在控制条上。
+                    panel = {
+                        val close = {
+                            settingsOpen = false
+                            setMenuOpen(false)
+                        }
+                        if (isFullscreen) {
+                            PlayerSidePanel(visible = settingsOpen, onDismiss = close) {
+                                Text(
+                                    stringResource(R.string.player_danmaku),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.padding(
+                                        start = Spacing.Comfortable,
+                                        end = Spacing.Comfortable,
+                                        top = Spacing.Comfortable,
+                                    ),
+                                )
+                                DanmakuSettingsContent(danmakuPrefs, danmakuEditor)
+                            }
+                        } else if (settingsOpen) {
+                            ModalBottomSheet(onDismissRequest = close, sheetState = rememberExpandedSheetState()) {
+                                DanmakuSettingsContent(danmakuPrefs, danmakuEditor)
+                                Spacer(modifier = Modifier.height(Spacing.Comfortable))
+                            }
+                        }
                     },
                 )
                 // 断流之后画面停在最后一帧,除了这一块以外页面上没有任何东西说明发生了什么,
@@ -465,6 +505,8 @@ private fun LiveControlBar(
     watched: String,
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
+    /** 打开弹幕设置面板。 */
+    onOpenSettings: () -> Unit,
     qualities: List<Int>,
     currentQn: Int,
     onQualityChange: (Int) -> Unit,
@@ -513,6 +555,12 @@ private fun LiveControlBar(
                 onMenuOpenChange = onMenuOpenChange,
             )
         }
+        // 与播放页同一枚图标、同一个位置(全屏键左边)。
+        PlayerIconButton(
+            onClick = onOpenSettings,
+            icon = Icons.Filled.Tune,
+            contentDescription = stringResource(R.string.player_settings),
+        )
         PlayerIconButton(
             onClick = onFullscreenToggle,
             icon = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,

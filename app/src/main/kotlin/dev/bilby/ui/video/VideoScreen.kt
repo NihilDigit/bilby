@@ -96,6 +96,7 @@ import dev.bilby.player.SleepTimerMode
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
 import dev.bilby.data.DanmakuPrefs
+import dev.bilby.data.DanmakuPrefsEditor
 import dev.nihildigit.danmaku.Danmaku
 import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.bilby.ui.comment.CommentUiState
@@ -212,8 +213,7 @@ fun VideoScreen(
     onSelectSubtitle: (String) -> Unit = {},
     /** 弹幕总开关,默认关。只在看视频时有意义——听视频没有画面挂弹幕层。 */
     danmakuPrefs: DanmakuPrefs = DanmakuPrefs(),
-    onDanmakuEnabledChange: (Boolean) -> Unit = {},
-    /** 弹幕整体不透明度,由设置页 Slider 持久化。 */
+    danmakuEditor: DanmakuPrefsEditor? = null,
     /** 已拉到的弹幕池,时间轴的编译在 BilbyPlayer 里做(需要 Compose 层的测量与画布宽度)。 */
     danmakuPool: List<Danmaku> = emptyList(),
     specialDanmakuPool: List<SpecialDanmaku> = emptyList(),
@@ -852,7 +852,7 @@ fun VideoScreen(
                     onSubtitleTrackChange = onSelectSubtitle,
                     subtitleCues = subtitleCues,
                     danmakuPrefs = danmakuPrefs,
-                    onDanmakuEnabledChange = onDanmakuEnabledChange,
+                    danmakuEditor = danmakuEditor,
                             locked = locked,
                     onLockedChange = { locked = it },
                     danmakuPool = danmakuPool,
@@ -1022,7 +1022,7 @@ fun VideoScreen(
                         },
                     ),
                     danmakuEnabled = danmakuPrefs.enabled,
-                    onDanmakuEnabledChange = onDanmakuEnabledChange,
+                    onDanmakuEnabledChange = { danmakuEditor?.setEnabled(it) },
                     onCache = { cacheSheetOpen = true },
                     // 全屏下这一栏根本不组合,所以不必先退出全屏 —— 能点到这个按钮
                     // 就说明已经不在全屏了。

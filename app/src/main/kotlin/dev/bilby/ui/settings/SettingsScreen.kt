@@ -42,7 +42,6 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
@@ -69,7 +68,6 @@ import java.net.URI
 import java.net.URISyntaxException
 import dev.bilby.R
 import dev.bilby.data.CodecPreference
-import dev.bilby.ui.components.BilbyIcons
 import dev.bilby.data.LlmConfig
 import dev.bilby.data.SettingsStore
 import dev.bilby.player.videoQualityLabel
@@ -143,12 +141,6 @@ fun SettingsScreen(
                         value = state.loaded.then { videoQualityLabel(state.defaultQualityWifi) },
                         target = RowTarget.Page,
                         onClick = { onOpenSection(SettingsSection.Playback) },
-                    )
-                    SettingRow(
-                        title = stringResource(R.string.settings_section_danmaku),
-                        icon = BilbyIcons.DanmakuCount,
-                        target = RowTarget.Page,
-                        onClick = { onOpenSection(SettingsSection.Danmaku) },
                     )
                     SettingRow(
                         title = stringResource(R.string.settings_section_sponsorblock),
@@ -271,44 +263,6 @@ internal fun GroupLabel(text: String) {
     )
 }
 
-/**
- * 拖动中只改本地状态,**松手才回调 [onChange]**。
- *
- * `onValueChange` 是逐帧回调的,直接接到持久化上等于把一次拖动变成十几次 DataStore 写;
- * 而 `danmakuPrefs` 每写一次,所有还活着的播放页 ViewModel 都会被唤醒收一遍。
- */
-@Composable
-internal fun SliderSettingRow(
-    title: String,
-    value: Float,
-    valueLabel: @Composable (Float) -> String,
-    onChange: (Float) -> Unit,
-) {
-    var dragging by remember { mutableStateOf<Float?>(null) }
-    val shown = dragging ?: value
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-            Text(
-                valueLabel(shown),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Slider(
-            value = shown,
-            onValueChange = { dragging = it },
-            onValueChangeFinished = {
-                dragging?.let(onChange)
-                dragging = null
-            },
-            valueRange = 0.1f..1f,
-            steps = 8,
-        )
-    }
-}
 
 /**
  * 编解码偏好。**只列本机真有硬解器的编码** —— 列一个选了也只能软解的选项,
@@ -399,12 +353,6 @@ internal fun <T> ChoiceRow(
         },
     )
 }
-
-/**
- * 滚动弹幕显示区域的四档。存的是连续的 Float(公共 API 不写死成枚举,见 [DanmakuViewport]),
- * 界面上只给这四档,选中判定按最近档取——将来加档或换成连续滑杆都不必改存储格式。
- */
-internal val SCROLL_SHOW_AREA_STEPS = listOf(0.25f, 0.5f, 0.75f, 1f)
 
 /**
  * 分组标题。**分组之间不画分割线**,靠这行带 primary 色的标题加上它上方的留白分隔。

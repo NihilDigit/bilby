@@ -10,7 +10,9 @@ import dev.bilby.agent.AgentLoop
 import dev.bilby.api.BiliResult
 import dev.bilby.danmaku.DanmakuRepository
 import dev.bilby.data.DanmakuPrefs
+import dev.bilby.data.DanmakuPrefsEditor
 import dev.bilby.data.SettingsStore
+import dev.bilby.data.StoredDanmakuPrefsEditor
 import dev.bilby.data.SponsorBlockRepository
 import dev.bilby.data.FollowState
 import dev.bilby.data.RelationRepository
@@ -585,6 +587,12 @@ class VideoViewModel(
         viewModelScope.launch(NonCancellable) { settings.saveDanmakuEnabled(enabled) }
         if (enabled) fetchInitialDanmakuSegment(danmakuCid)
     }
+
+    /** 播放器面板里的弹幕设置。只有开关要多做一步(见 [setDanmakuEnabled]),其余直接落盘。 */
+    val danmakuEditor: DanmakuPrefsEditor =
+        object : DanmakuPrefsEditor by StoredDanmakuPrefsEditor(settings, viewModelScope) {
+            override fun setEnabled(enabled: Boolean) = setDanmakuEnabled(enabled)
+        }
 
     /**
      * 弹幕池随 cid 变,原因和字幕轨、SponsorBlock 片段一样:播放器全 app 共用,队列走到

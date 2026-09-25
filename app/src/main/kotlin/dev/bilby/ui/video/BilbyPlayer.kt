@@ -73,6 +73,7 @@ import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.data.DanmakuPrefs
+import dev.bilby.data.DanmakuPrefsEditor
 import dev.nihildigit.danmaku.Danmaku
 import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.nihildigit.danmaku.DanmakuHost
@@ -142,7 +143,8 @@ fun BilbyPlayer(
      * 底沿(理由见 [DanmakuViewport])。
      */
     danmakuPrefs: DanmakuPrefs = DanmakuPrefs(),
-    onDanmakuEnabledChange: (Boolean) -> Unit = {},
+    /** 控制条上的弹幕开关与设置面板里的弹幕各项都经它改。为 null 时面板里没有弹幕那一段。 */
+    danmakuEditor: DanmakuPrefsEditor? = null,
     /** 长按画面的临时倍速,来自设置页。 */
     fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
     /**
@@ -288,7 +290,7 @@ fun BilbyPlayer(
                 onFullscreenToggle = { toggleFullscreen() },
                 danmakuEnabled = danmakuPrefs.enabled,
                 onDanmakuEnabledChange = {
-                    onDanmakuEnabledChange(it)
+                    danmakuEditor?.setEnabled(it)
                     keepControlsAwake()
                 },
             )
@@ -311,6 +313,8 @@ fun BilbyPlayer(
                     audioOptions = audioOptions,
                     currentAudio = currentAudio,
                     onAudioChange = onAudioChange,
+                    danmakuPrefs = danmakuPrefs,
+                    danmakuEditor = danmakuEditor,
                 )
             }
             // 全屏从右边划出(横屏下底部 sheet 只剩一条缝),内嵌从底部弹出。内容是同一份。

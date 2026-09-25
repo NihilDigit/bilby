@@ -461,7 +461,6 @@
     <string name="settings_sponsorblock_server_dialog">SponsorBlock 服务器</string>
     <string name="settings_url_invalid">地址需以 http:// 或 https:// 开头</string>
     <string name="settings_section_about">关于</string>
-    <string name="settings_section_danmaku">弹幕</string>
     <string name="settings_section_privacy">隐私与屏蔽</string>
     <string name="settings_section_sponsorblock">SponsorBlock</string>
     <string name="settings_sponsorblock_categories">跳过哪些段落</string>

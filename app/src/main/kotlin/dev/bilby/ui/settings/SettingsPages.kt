@@ -45,8 +45,6 @@ import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.video.CATEGORY_DESCRIPTIONS
 import dev.bilby.ui.video.CATEGORY_GROUPS
 import dev.bilby.ui.video.CATEGORY_LABELS
-import dev.nihildigit.danmaku.DanmakuDensity
-import dev.nihildigit.danmaku.DanmakuFrameRateCap
 import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -80,7 +78,6 @@ import dev.bilby.ui.theme.ThemePalette
 import dev.bilby.ui.theme.dynamicColorAvailable
 import java.io.File
 import kotlin.math.abs
-import kotlin.math.roundToInt
 
 /**
  * 设置的二级页面。**每一页都是一整页,不是一个展开块**:展开块要么把首页撑回原来的长度,
@@ -92,7 +89,6 @@ import kotlin.math.roundToInt
 enum class SettingsSection {
     Appearance,
     Playback,
-    Danmaku,
     SponsorBlock,
 
     /** SponsorBlock 的九个分类。再降一层,理由见 [SponsorBlockSettingsPage]。 */
@@ -228,70 +224,6 @@ fun PlaybackSettingsPage(
             selected = SettingsStore.FAST_FORWARD_SPEEDS.minByOrNull { abs(it - state.fastForwardSpeed) },
             label = { formatSpeed(it) },
             onChange = onFastForwardSpeedChange,
-        )
-    }
-}
-
-@Composable
-fun DanmakuSettingsPage(
-    state: SettingsUiState,
-    onOpacityChange: (Float) -> Unit,
-    onScrollShowAreaChange: (Float) -> Unit,
-    onDensityChange: (DanmakuDensity) -> Unit,
-    onFrameRateChange: (DanmakuFrameRateCap) -> Unit,
-    onInPipChange: (Boolean) -> Unit,
-    onBack: () -> Unit,
-) {
-    SettingsSubPage(stringResource(R.string.settings_section_danmaku), onBack, state.loaded) {
-        SliderSettingRow(
-            title = stringResource(R.string.settings_danmaku_opacity),
-            value = state.danmaku.opacity,
-            valueLabel = { stringResource(R.string.settings_danmaku_opacity_value, (it * 100).roundToInt()) },
-            onChange = onOpacityChange,
-        )
-        ChoiceRow(
-            title = stringResource(R.string.settings_danmaku_show_area),
-            // 说清它不管底部弹幕:调到 25% 之后底部那几条纹丝不动,不写清楚会被当成没生效。
-            subtitle = stringResource(R.string.settings_danmaku_show_area_subtitle),
-            options = SCROLL_SHOW_AREA_STEPS,
-            selected = SCROLL_SHOW_AREA_STEPS.minByOrNull { abs(it - state.danmaku.scrollShowArea) },
-            label = { stringResource(R.string.settings_danmaku_show_area_value, (it * 100).roundToInt()) },
-            onChange = onScrollShowAreaChange,
-        )
-        ChoiceRow(
-            title = stringResource(R.string.settings_danmaku_density),
-            options = DanmakuDensity.entries,
-            selected = state.danmaku.density,
-            label = {
-                stringResource(
-                    when (it) {
-                        DanmakuDensity.STANDARD -> R.string.settings_danmaku_density_standard
-                        DanmakuDensity.UNLIMITED -> R.string.settings_danmaku_density_unlimited
-                    },
-                )
-            },
-            onChange = onDensityChange,
-        )
-        ChoiceRow(
-            title = stringResource(R.string.settings_danmaku_frame_rate),
-            subtitle = stringResource(R.string.settings_danmaku_frame_rate_subtitle),
-            options = DanmakuFrameRateCap.entries,
-            selected = state.danmaku.frameRateCap,
-            label = {
-                stringResource(
-                    when (it) {
-                        DanmakuFrameRateCap.FPS_30 -> R.string.settings_danmaku_frame_rate_30
-                        DanmakuFrameRateCap.FPS_60 -> R.string.settings_danmaku_frame_rate_60
-                        DanmakuFrameRateCap.DISPLAY -> R.string.settings_danmaku_frame_rate_display
-                    },
-                )
-            },
-            onChange = onFrameRateChange,
-        )
-        ToggleSettingRow(
-            title = stringResource(R.string.settings_danmaku_in_pip),
-            checked = state.danmaku.inPip,
-            onCheckedChange = onInPipChange,
         )
     }
 }

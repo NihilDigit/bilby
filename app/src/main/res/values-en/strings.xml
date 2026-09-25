@@ -379,7 +379,6 @@
     <string name="settings_sponsorblock_server_dialog">SponsorBlock server</string>
     <string name="settings_url_invalid">The URL must start with http:// or https://</string>
     <string name="settings_section_about">About</string>
-    <string name="settings_section_danmaku">Danmaku</string>
     <string name="settings_section_privacy">Privacy and blocking</string>
     <string name="settings_section_sponsorblock">SponsorBlock</string>
     <string name="settings_sponsorblock_categories">Segments to skip</string>

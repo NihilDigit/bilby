@@ -150,7 +150,6 @@ import dev.bilby.ui.search.SearchResultScreen
 import dev.bilby.ui.search.SearchResultViewModel
 import dev.bilby.ui.settings.AboutSettingsPage
 import dev.bilby.ui.settings.AgentSettingsPage
-import dev.bilby.ui.settings.DanmakuSettingsPage
 import dev.bilby.ui.settings.OfflineSettingsPage
 import dev.bilby.ui.settings.AppearanceSettingsPage
 import android.app.Activity
@@ -1411,16 +1410,6 @@ private fun SettingsPageRoute(
             onWifiAudioChange = { vm.setDefaultAudio(it, metered = false) },
             onMeteredAudioChange = { vm.setDefaultAudio(it, metered = true) },
             onPickUpdatesDefaultChange = vm::setPlayerPickUpdatesDefault,
-            onBack = onBack,
-        )
-
-        SettingsSection.Danmaku -> DanmakuSettingsPage(
-            state = state,
-            onOpacityChange = vm::setDanmakuOpacity,
-            onScrollShowAreaChange = vm::setDanmakuScrollShowArea,
-            onDensityChange = vm::setDanmakuDensity,
-            onFrameRateChange = vm::setDanmakuFrameRate,
-            onInPipChange = vm::setDanmakuInPip,
             onBack = onBack,
         )
 
@@ -2694,7 +2683,7 @@ private fun VideoPane(
         staffFollowed = staffFollowed,
         onFollowStaff = vm::followStaff,
         danmakuPrefs = danmakuPrefs,
-        onDanmakuEnabledChange = vm::setDanmakuEnabled,
+        danmakuEditor = vm.danmakuEditor,
         danmakuPool = danmakuPool,
         specialDanmakuPool = specialDanmakuPool,
         selfDanmaku = vm.selfDanmaku,
