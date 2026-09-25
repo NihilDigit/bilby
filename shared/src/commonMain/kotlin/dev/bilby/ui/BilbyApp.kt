@@ -1,6 +1,10 @@
 package dev.bilby.ui
 
 import dev.bilby.ui.components.OverlayHost
+import dev.bilby.ui.components.LocalPointerSource
+import dev.bilby.ui.components.PointerSource
+import dev.bilby.ui.components.trackPointerSource
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -140,9 +144,10 @@ import dev.bilby.ui.search.SearchChatViewModel
 import dev.bilby.ui.search.SearchResultActions
 import dev.bilby.ui.search.SearchResultScreen
 import dev.bilby.ui.search.SearchResultViewModel
+import dev.bilby.ui.search.SearchTab
+import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.settings.AboutSettingsPage
 import dev.bilby.ui.settings.AgentSettingsPage
-import dev.bilby.ui.settings.OfflineSettingsPage
 import dev.bilby.ui.settings.AppearanceSettingsPage
 import dev.bilby.ui.settings.PlaybackSettingsPage
 import dev.bilby.data.model.ArticleRef
@@ -151,7 +156,6 @@ import dev.bilby.ui.settings.ExcludedFeedPage
 import dev.bilby.ui.settings.PrivacySettingsPage
 import dev.bilby.ui.settings.SettingsScreen
 import dev.bilby.ui.settings.SettingsSection
-import dev.bilby.ui.settings.SponsorBlockSettingsPage
 import dev.bilby.ui.settings.SponsorCategoriesPage
 import dev.bilby.ui.settings.SettingsViewModel
 import dev.bilby.data.SpaceCollectionItem
@@ -163,8 +167,7 @@ import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Motion
 import dev.bilby.ui.theme.rememberReducedMotion
 import dev.bilby.ui.theme.BilbyTheme
-import dev.bilby.ui.update.StartupUpdateDialog
-import dev.bilby.ui.update.StartupUpdateViewModel
+import dev.bilby.ui.update.StartupUpdatePrompt
 import dev.bilby.ui.toview.ToViewClear
 import dev.bilby.ui.toview.ToViewClearDialog
 import androidx.compose.animation.AnimatedVisibility
@@ -211,10 +214,13 @@ fun BilbyRoot(
         // 导航层的提示浮在整棵树上面。放在这里而不是某个页面的 Scaffold 里:说这句话的
         // 是压栈动作,而压栈能从任何一页发起,各页面的 Scaffold 都会跟着页面一起换掉。
         val snackbarHostState = remember { SnackbarHostState() }
-        Box(modifier = Modifier.fillMaxSize()) {
+        val pointerSource = remember { PointerSource() }
+        Box(modifier = Modifier.fillMaxSize().trackPointerSource(pointerSource)) {
             // 页面深处的组件可以把一层画到整个窗口最上面,见 OverlayHost。
             OverlayHost {
-                BilbyApp(container, incomingLink, snackbarHostState)
+                CompositionLocalProvider(LocalPointerSource provides pointerSource) {
+                    BilbyApp(container, incomingLink, snackbarHostState)
+                }
             }
             SnackbarHost(
                 hostState = snackbarHostState,
@@ -229,28 +235,9 @@ fun BilbyRoot(
 
 @Composable
 private fun StartupUpdateHost(container: AppContainer) {
-    val system = LocalSystemActions.current
-    // 装不了更新的平台上不检查:查到了也只能摆一个按不下去的按钮。
-    if (!system.supportsSelfUpdate) return
-    val vm: StartupUpdateViewModel = viewModel(
-        factory = viewModelFactory {
-            initializer {
-                StartupUpdateViewModel(
-                    updateRepository = container.updateRepository,
-                    settings = container.settings,
-                    downloadDir = system.updateDownloadDir,
-                )
-            }
-        },
-    )
-    val state by vm.state.collectAsStateWithLifecycle()
-    StartupUpdateDialog(
-        state = state,
-        onDownload = vm::download,
-        onInstall = { apk -> system.installUpdate(apk) },
-        onIgnore = vm::ignore,
-        onDismiss = vm::dismiss,
-    )
+    // 不做应用内更新的平台上不检查:查到了也只能摆一个按不下去的按钮。
+    val updater = container.platform.updater ?: return
+    StartupUpdatePrompt(updater, container.settings)
 }
 
 @Composable
@@ -1215,7 +1202,17 @@ private fun SearchResultRoute(
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-        topBar = { BilbyTopBar(title = keyword, onBack = onBack, scrollBehavior = scrollBehavior) },
+        topBar = {
+            BilbyTopBar(title = keyword, onBack = onBack, scrollBehavior = scrollBehavior) {
+                // 与列表里的下拉同一个判据,按当前那一栏取,见 SearchResults 里的 RefreshBox。
+                val list = when (state.tab) {
+                    SearchTab.Video -> state.videos
+                    SearchTab.User -> state.users
+                    SearchTab.Article -> state.articles
+                }
+                RefreshAction(refreshing = list.loading && list.items.isNotEmpty(), onRefresh = vm::retry)
+            }
+        },
     ) { insets ->
         SearchResultScreen(
             state = state,
@@ -1319,6 +1316,9 @@ private fun SettingsRoute(
     val vm = rememberSettingsViewModel(container)
     val state by vm.state.collectAsStateWithLifecycle()
     val playback = LocalPlaybackHost.current
+    // 首页先把「暂停记录」读回来:它是服务端的值,隐私页打开时若还在读,开关要晚一拍才出现。
+    // 读到的值记在 HistoryRepository 里,隐私页的 ViewModel 另起一个也拿得到。
+    LaunchedEffect(Unit) { vm.loadHistoryPause() }
     SettingsScreen(
         state = state,
         onOpenSection = onOpenSection,
@@ -1329,7 +1329,7 @@ private fun SettingsRoute(
     )
 }
 
-/** 设置的二级页面。八页共用一条路由,分支在这里,理由见 `SettingsPage` 的说明。 */
+/** 设置的二级页面。七页共用一条路由,分支在这里,理由见 `SettingsPage` 的说明。 */
 @Composable
 private fun SettingsPageRoute(
     container: AppContainer,
@@ -1363,25 +1363,15 @@ private fun SettingsPageRoute(
             onWifiAudioChange = { vm.setDefaultAudio(it, metered = false) },
             onMeteredAudioChange = { vm.setDefaultAudio(it, metered = true) },
             onPickUpdatesDefaultChange = vm::setPlayerPickUpdatesDefault,
-            onBack = onBack,
-        )
-
-        SettingsSection.SponsorBlock -> SponsorBlockSettingsPage(
-            state = state,
-            onChange = vm::updateSponsorBlock,
-            onOpenCategories = { onOpenSection(SettingsSection.SponsorCategories) },
+            onSponsorBlockChange = vm::updateSponsorBlock,
+            onOpenSponsorCategories = { onOpenSection(SettingsSection.SponsorCategories) },
+            onOfflineConcurrencyChange = vm::setOfflineConcurrency,
             onBack = onBack,
         )
 
         SettingsSection.SponsorCategories -> SponsorCategoriesPage(
             state = state,
             onChange = vm::updateSponsorBlock,
-            onBack = onBack,
-        )
-
-        SettingsSection.Offline -> OfflineSettingsPage(
-            state = state,
-            onConcurrencyChange = vm::setOfflineConcurrency,
             onBack = onBack,
         )
 
@@ -1414,11 +1404,8 @@ private fun SettingsPageRoute(
         )
 
         SettingsSection.About -> AboutSettingsPage(
-            state = state,
+            updater = container.platform.updater,
             onOpenGithub = { system.openInBrowser(PROJECT_GITHUB_URL) },
-            onCheckUpdate = vm::checkUpdate,
-            onDownloadUpdate = { vm.downloadUpdate(it, system.updateDownloadDir) },
-            onInstallUpdate = system::installUpdate,
             onBack = onBack,
         )
     }
@@ -1431,7 +1418,6 @@ private fun rememberSettingsViewModel(container: AppContainer): SettingsViewMode
             SettingsViewModel(
                 container.settings,
                 container.llmClient,
-                container.updateRepository,
                 container.historyRepository,
             )
         }
@@ -1505,6 +1491,7 @@ private fun HistoryRoute(
                         onBack = onBack,
                         scrollBehavior = scrollBehavior,
                         actions = {
+                            RefreshAction(state.refreshing, vm::refresh)
                             IconButton(
                                 onClick = { selectedIds = emptySet() },
                                 enabled = state.items.isNotEmpty() && !state.mutating,
@@ -1901,6 +1888,7 @@ private fun ToViewListRoute(
                 onBack = onBack,
                 scrollBehavior = scrollBehavior,
             ) {
+                RefreshAction(refreshing = state.loading && state.items.isNotEmpty(), onRefresh = vm::refresh)
                 IconButton(
                     onClick = { confirmingClear = ToViewClear.Invalid },
                     enabled = !state.clearing && state.items.isNotEmpty(),
@@ -2004,6 +1992,8 @@ private fun FavFolderRoute(
                 keyword = state.keyword,
                 appliedKeyword = state.appliedKeyword,
                 cleaning = state.cleaning,
+                refreshing = state.refreshing,
+                onRefresh = vm::refresh,
                 onKeywordChange = vm::onKeywordChange,
                 onSearch = vm::search,
                 onCloseSearch = vm::closeSearch,
@@ -2055,6 +2045,7 @@ private fun FollowingsRoute(
                 onBack = onBack,
                 scrollBehavior = scrollBehavior,
                 actions = {
+                    RefreshAction(state.refreshing, vm::refresh)
                     // 排序放顶栏右端,省下列表上方单独一行。仍是 SortMenu 那颗写着当前档位的
                     // 下拉,不换成一个图标:图标读不出现在按什么排。
                     if (state.canSort) {
@@ -2313,6 +2304,7 @@ private fun FavFoldersRoute(
             ) {
                 // 新建是这一页的页级操作,放顶栏。它原先是右下角的 FAB:FAB 要让开列表最后一行,
                 // 而一个不常用的操作不值得常驻在内容上面。
+                RefreshAction(state.refreshing, vm::refresh)
                 IconButton(onClick = vm.manager::startCreate) {
                     Icon(Icons.Outlined.Add, contentDescription = stringResource(Res.string.fav_folder_create))
                 }

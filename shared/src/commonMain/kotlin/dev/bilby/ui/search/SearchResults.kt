@@ -32,6 +32,7 @@ import dev.bilby.data.SearchUser
 import dev.bilby.data.SearchVideo
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.touchOnlyPaging
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PersonRowSkeleton
 import dev.bilby.ui.components.RefreshBox
@@ -113,7 +114,7 @@ internal fun SearchResults(
                 )
             }
         }
-        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
+        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).touchOnlyPaging()) { page ->
             ResultPage(tabs[page], state, actions)
         }
     }

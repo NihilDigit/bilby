@@ -16,6 +16,7 @@ import dev.bilby.data.SpaceVideoItem
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.appendDistinctBy
 import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.theme.Breakpoints
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -133,7 +134,11 @@ fun CollectionScreen(
 ) {
     Scaffold(
         modifier = modifier,
-        topBar = { BilbyTopBar(title = title, onBack = onBack) },
+        topBar = {
+            BilbyTopBar(title = title, onBack = onBack) {
+                RefreshAction(refreshing = state.refreshing, onRefresh = onRefresh)
+            }
+        },
     ) { padding ->
         AdaptiveContent(
             modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(padding),

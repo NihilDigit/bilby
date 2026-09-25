@@ -63,7 +63,22 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
 import dev.bilby.player.PlayerHandle
+import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.player.PlayerListener
 import dev.bilby.player.PlayerPhase
 import dev.bilby.player.VideoDimensions
@@ -324,6 +339,11 @@ fun PlayerShell(
     var menuOpen by remember { mutableStateOf(false) }
     // 每次操作控件都让自动隐藏重新计时,靠这个计数把 LaunchedEffect 重启。
     var interactionNonce by remember { mutableIntStateOf(0) }
+    // 光标停在控件上(顶栏、控制条、中央键、锁)时不自动隐藏。只看移动的话,光标停在进度条上
+    // 不动,3 秒后控制条就在光标底下收走了。几块控件共用一个 source:hoverable 在控件退场
+    // 被移除时会补发 Exit,悬停状态不会卡在 true。
+    val controlsHover = remember { MutableInteractionSource() }
+    val hoveringControls by controlsHover.collectIsHoveredAsState()
 
     // 手势的反馈只有画面正中那个浮层,而横屏时手指往往正压在它上面。触感补的是"这一下认了"
     // 这件事:长按真的进了加速、锁真的合上了、拖到取消区了。
@@ -372,6 +392,34 @@ fun PlayerShell(
         seekNudgeMillis = null
     }
 
+    /**
+     * 鼠标还是手指,决定点按手势按哪套约定解释,见 [PointerSource]。**鼠标**:单击播放/暂停,
+     * 双击全屏,移动鼠标唤出控件 —— 桌面播放器的通行约定,鼠标没有"点一下看看控件"的必要,
+     * 光标一动控件就出来了。**手指**:单击切换控件,双击按落点进退或暂停,和原来一样。
+     */
+    val pointerSource = LocalPointerSource.current
+
+    /** 滚轮与方向键调音量时,音量浮层停留多久;每调一下重新计时。 */
+    var levelHintNonce by remember { mutableIntStateOf(0) }
+    LaunchedEffect(levelHintNonce) {
+        if (levelHintNonce == 0) return@LaunchedEffect
+        delay(HINT_VISIBLE_MILLIS)
+        // 这段时间里开始了拖拽的话,浮层归拖拽管,不在这里收。
+        if (dragPosition == null && (gesture as? PlayerGesture.Adjust)?.kind == VerticalAdjust.Volume) gesture = null
+    }
+
+    /** 音量加减一档:滚轮一格、方向键一下都是这一步,浮层用纵划那一个。 */
+    val nudgeVolume: (Float) -> Unit = nudge@{ step ->
+        val control = volume ?: return@nudge
+        val value = (control.current() + step).coerceIn(0f, 1f)
+        control.set(value)
+        adjustValue = value
+        gesture = PlayerGesture.Adjust(VerticalAdjust.Volume, value)
+        levelHintNonce++
+    }
+
+    val focusRequester = remember { FocusRequester() }
+
     /** 定下这一次拖拽在做什么。返回 null 表示这次不做事(这一档手势被关掉)。 */
     val startGesture: (Boolean, Long) -> PlayerGesture? = start@{ horizontal, playerPosition ->
         if (horizontal) {
@@ -417,9 +465,9 @@ fun PlayerShell(
     }
     // 进画中画那一刻把控件收起;出来之后照常点一下再唤出。
     LaunchedEffect(pip) { if (pip) controlsVisible = false }
-    LaunchedEffect(controlsVisible, isPlaying, dragPosition, menuOpen, interactionNonce) {
+    LaunchedEffect(controlsVisible, isPlaying, dragPosition, menuOpen, hoveringControls, interactionNonce) {
         // 暂停时控件常驻:此时用户多半正要点什么,把它藏掉只会逼人再点一次。
-        if (controlsVisible && isPlaying && dragPosition == null && !menuOpen) {
+        if (controlsVisible && isPlaying && dragPosition == null && !menuOpen && !hoveringControls) {
             delay(hideDelayMillis)
             controlsVisible = false
         }
@@ -480,7 +528,36 @@ fun PlayerShell(
     // 壳里的一切(控件、菜单、手势提示,以及调用方塞进来的 overlay 与控制条)都按深色主题取色,
     // 见 [PlayerTheme]。
     PlayerTheme {
-    Box(modifier = modifier.background(Color.Black)) {
+    Box(
+        modifier = modifier
+            .background(Color.Black)
+            // 鼠标:在播放器范围内移动就唤出控件并重新计时,按下时把键盘焦点拿到播放器上(快捷键
+            // 要它)。挂在最外层、在 Initial 阶段只看不吃:挂在画面那一层的话,光标停在控制条上
+            // 时移动事件被控制条接走,控件会在光标底下收起。焦点只在按下时拿,不在移动时拿:
+            // 光标路过就抢焦点,别处输入框里正在打的字会落到播放器上。
+            //
+            // 光标离开播放器就立即收起,不等计时:两栏布局里光标移去右栏读评论时,控件没有理由
+            // 在画面上再挂 3 秒。暂停时照旧常驻,理由同自动隐藏。菜单开着时不收:菜单是弹出层,
+            // 光标移进菜单对这个 Box 来说也是一次离开。
+            .pointerInput(locked) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (locked || event.changes.firstOrNull()?.type != PointerType.Mouse) continue
+                        when (event.type) {
+                            PointerEventType.Move -> {
+                                controlsVisible = true
+                                interactionNonce++
+                            }
+                            PointerEventType.Exit -> {
+                                if (isPlaying && !menuOpen && dragPosition == null) controlsVisible = false
+                            }
+                            PointerEventType.Press -> focusRequester.requestFocus()
+                        }
+                    }
+                }
+            },
+    ) {
         val scope = PlayerShellScope(
             box = this,
             isPlaying = isPlaying,
@@ -554,6 +631,48 @@ fun PlayerShell(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                // 键盘:空格播放/暂停,←→ 进退(与双击同一个步长),↑↓ 音量,F 全屏。Esc 退全屏走
+                // 返回那条路(见 FullscreenEffect 旁的 BackHandler),不在这里接。
+                .onKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown || locked) return@onKeyEvent false
+                    when (event.key) {
+                        Key.Spacebar -> {
+                            togglePlayPause()
+                            playToggleFlash++
+                        }
+                        Key.DirectionLeft, Key.DirectionRight -> {
+                            if (!gestures.seek) return@onKeyEvent false
+                            val delta = if (event.key == Key.DirectionLeft) -DOUBLE_TAP_SEEK_MILLIS else DOUBLE_TAP_SEEK_MILLIS
+                            nudgeSeek(player, delta)
+                            seekNudgeMillis = accumulateNudge(seekNudgeMillis, delta)
+                        }
+                        Key.DirectionUp -> nudgeVolume(VOLUME_STEP)
+                        Key.DirectionDown -> nudgeVolume(-VOLUME_STEP)
+                        Key.F -> onFullscreenChange(!isFullscreen)
+                        else -> return@onKeyEvent false
+                    }
+                    true
+                }
+                .focusRequester(focusRequester)
+                .focusable()
+                // 全屏时滚轮调音量。只在全屏接管:内嵌时画面在可滚动的页面顶上,滚轮是用来翻页、
+                // 收起画面的。
+                .pointerInput(locked, isFullscreen) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.type != PointerEventType.Scroll || !isFullscreen || locked) continue
+                            val change = event.changes.firstOrNull() ?: continue
+                            val dy = change.scrollDelta.y
+                            if (dy != 0f) {
+                                nudgeVolume(if (dy < 0f) VOLUME_STEP else -VOLUME_STEP)
+                                change.consume()
+                            }
+                        }
+                    }
+                }
+                // 用鼠标看、控件收起且在播放时,光标跟着藏起来,不留一个箭头钉在画面上。
+                .playerCursor(hidden = !pointerSource.isTouchLike && !controlsVisible && isPlaying)
                 .pointerInput(player, locked, gestures) {
                     if (locked) {
                         // 锁上时只留"点一下把解锁按钮唤出来",其余手势一概不接。
@@ -562,7 +681,12 @@ fun PlayerShell(
                     }
                     detectTapGestures(
                         onTap = {
-                            controlsVisible = !controlsVisible
+                            if (pointerSource.isTouchLike) {
+                                controlsVisible = !controlsVisible
+                            } else {
+                                togglePlayPause()
+                                playToggleFlash++
+                            }
                             interactionNonce++
                         },
                         // 双击按落点分四段:两侧各四分之一是 ±10 秒,中间仍是播放/暂停,
@@ -571,7 +695,11 @@ fun PlayerShell(
                         // 中间保留下来是因为双击暂停本来就在,直接换掉等于拿走一个已有的常用
                         // 操作;而三分法是 YouTube 立起来的惯例,两侧那两块也正是横屏握持时
                         // 拇指自然落到的位置。关掉 seek 的场景(直播)下四段退化成整屏播放/暂停。
-                        onDoubleTap = { offset ->
+                        onDoubleTap = double@{ offset ->
+                            if (!pointerSource.isTouchLike) {
+                                onFullscreenChange(!isFullscreen)
+                                return@double
+                            }
                             val quarter = size.width / 4f
                             when {
                                 gestures.seek && offset.x < quarter ->
@@ -813,7 +941,7 @@ fun PlayerShell(
             visible = isFullscreen && controlsVisible && !locked,
             enter = slideInVertically(spatialOffsetSpec) { -it / 2 } + fadeIn(effectsSpec),
             exit = slideOutVertically(spatialOffsetSpec) { -it / 2 } + fadeOut(effectsSpec),
-            modifier = Modifier.align(Alignment.TopCenter),
+            modifier = Modifier.align(Alignment.TopCenter).hoverable(controlsHover),
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -857,7 +985,8 @@ fun PlayerShell(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .windowInsetsPadding(WindowInsets.barsAndCutout)
-                .padding(Spacing.Tight),
+                .padding(Spacing.Tight)
+                .hoverable(controlsHover),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) { embeddedTopActions() }
         }
@@ -878,7 +1007,8 @@ fun PlayerShell(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
                 .windowInsetsPadding(WindowInsets.barsAndCutout)
-                .padding(end = Spacing.Cozy),
+                .padding(end = Spacing.Cozy)
+                .hoverable(controlsHover),
         ) {
             val lockDescription =
                 stringResource(if (locked) Res.string.player_unlock else Res.string.player_lock)
@@ -913,7 +1043,7 @@ fun PlayerShell(
             visible = !pip && hud == null && ((controlsVisible && !locked) || loadingVisible || flashVisible),
             enter = scaleIn(scaleSpec, initialScale = CenterButtonEnterScale) + fadeIn(effectsSpec),
             exit = scaleOut(scaleSpec, targetScale = CenterButtonEnterScale) + fadeOut(effectsSpec),
-            modifier = Modifier.align(Alignment.Center),
+            modifier = Modifier.align(Alignment.Center).hoverable(controlsHover),
         ) {
             CenterPlayButton(
                 isPlaying = playWhenReady,
@@ -930,7 +1060,7 @@ fun PlayerShell(
             visible = controlsVisible && !locked,
             enter = slideInVertically(spatialOffsetSpec) { it / 2 } + fadeIn(effectsSpec),
             exit = slideOutVertically(spatialOffsetSpec) { it / 2 } + fadeOut(effectsSpec),
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier.align(Alignment.BottomCenter).hoverable(controlsHover),
         ) {
             scope.controlBar()
         }
@@ -995,6 +1125,9 @@ private val PlayerMotion = MotionScheme.standard()
 /** 中央播放键进出时从多大缩放起。0.6 而不是 0:从无到有的缩放太猛,读起来像弹出一个对话框。 */
 private const val CenterButtonEnterScale = 0.6f
 private const val DOUBLE_TAP_SEEK_MILLIS = 10_000L
+
+/** 滚轮一格、方向键一下的音量步长。 */
+private const val VOLUME_STEP = 0.05f
 private const val HINT_VISIBLE_MILLIS = 700L
 
 /** 控件在屏上、或者正在拖:这个读数是用户此刻盯着的东西。见取值处的说明。 */

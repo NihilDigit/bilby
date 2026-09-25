@@ -26,6 +26,7 @@ import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.DynamicCardSkeleton
 import dev.bilby.ui.components.ListSkeleton
 import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -57,7 +58,11 @@ fun OtherDynamicsScreen(
 ) {
     Scaffold(
         modifier = modifier,
-        topBar = { BilbyTopBar(title = stringResource(Res.string.dynamic_other_title), onBack = onBack) },
+        topBar = {
+            BilbyTopBar(title = stringResource(Res.string.dynamic_other_title), onBack = onBack) {
+                RefreshAction(refreshing = state.refreshing, onRefresh = onRefresh)
+            }
+        },
     ) { padding ->
         when {
             state.loading && state.items.isEmpty() ->

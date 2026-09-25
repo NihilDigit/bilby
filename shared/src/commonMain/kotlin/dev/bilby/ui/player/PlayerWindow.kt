@@ -1,6 +1,10 @@
 package dev.bilby.ui.player
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+
+/** 画面上的光标藏不藏。只有桌面有光标;Android 上鼠标光标由系统管,原样返回。 */
+internal expect fun Modifier.playerCursor(hidden: Boolean): Modifier
 
 /** 挂着画面且在播放时不让屏幕息。桌面上由系统电源策略管,不做处理。 */
 @Composable

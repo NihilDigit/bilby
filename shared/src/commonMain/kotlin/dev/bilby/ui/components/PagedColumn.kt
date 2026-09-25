@@ -1,6 +1,7 @@
 package dev.bilby.ui.components
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -78,37 +79,40 @@ fun <T> PagedColumn(
                 .collect { if (hasMore && !appending) onLoadMore() }
         }
 
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = contentPadding,
-        ) {
-            header?.invoke(this)
+        Box(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = contentPadding,
+            ) {
+                header?.invoke(this)
 
-            if (items.isEmpty()) {
-                // 空态占满列表视口,不是只占一个条目的高度 —— 一行灰字挂在顶上读起来像加载没完。
-                item(key = "empty") { EmptyState(emptyText, Modifier.fillParentMaxSize()) }
-            }
+                if (items.isEmpty()) {
+                    // 空态占满列表视口,不是只占一个条目的高度 —— 一行灰字挂在顶上读起来像加载没完。
+                    item(key = "empty") { EmptyState(emptyText, Modifier.fillParentMaxSize()) }
+                }
 
-            // **`animateItem` 在这里给一次,所有翻页列表就都有了。** 条目的增删在这些页面是
-            // 常事(历史删一批、关注切分组、收藏夹取消收藏),硬切会让下面几十行瞬移一格。
-            // 它靠 [key] 认条目,所以调用方那个 key 必须是真的稳定标识,不能是下标。
-            //
-            // 包一层 Box 而不是把 modifier 递给 itemContent:递出去等于要求每个调用方都把它
-            // 接到自己那一行的根上,漏一个就是这一页没有动效,而漏没漏要逐页读才看得出来。
-            items(items, key = key) { item ->
-                Box(modifier = Modifier.animateItem()) { itemContent(item) }
-            }
+                // **`animateItem` 在这里给一次,所有翻页列表就都有了。** 条目的增删在这些页面是
+                // 常事(历史删一批、关注切分组、收藏夹取消收藏),硬切会让下面几十行瞬移一格。
+                // 它靠 [key] 认条目,所以调用方那个 key 必须是真的稳定标识,不能是下标。
+                //
+                // 包一层 Box 而不是把 modifier 递给 itemContent:递出去等于要求每个调用方都把它
+                // 接到自己那一行的根上,漏一个就是这一页没有动效,而漏没漏要逐页读才看得出来。
+                items(items, key = key) { item ->
+                    Box(modifier = Modifier.animateItem()) { itemContent(item) }
+                }
 
-            item(key = "footer") {
-                ListFooter(
-                    appending = appending,
-                    hasMore = hasMore,
-                    hasItems = items.isNotEmpty(),
-                    error = error,
-                    onRetry = onLoadMore,
-                )
+                item(key = "footer") {
+                    ListFooter(
+                        appending = appending,
+                        hasMore = hasMore,
+                        hasItems = items.isNotEmpty(),
+                        error = error,
+                        onRetry = onLoadMore,
+                    )
+                }
             }
+            ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
         }
     }
 }

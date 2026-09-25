@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.data.FavFolderDetail
 import dev.bilby.resources.*
 import dev.bilby.stringResource
+import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.SearchField
 
 /**
@@ -57,6 +58,8 @@ fun FavFolderTopBar(
     keyword: String,
     appliedKeyword: String,
     cleaning: Boolean,
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
     onKeywordChange: (String) -> Unit,
     onSearch: () -> Unit,
     onCloseSearch: () -> Unit,
@@ -98,6 +101,7 @@ fun FavFolderTopBar(
             }
         },
         actions = {
+            RefreshAction(refreshing, onRefresh)
             if (searching) {
                 IconButton(
                     onClick = {

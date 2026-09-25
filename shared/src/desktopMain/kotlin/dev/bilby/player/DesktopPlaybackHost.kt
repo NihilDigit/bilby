@@ -61,7 +61,18 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         data class Live(val command: PlaybackCommand.OpenLive) : Loaded
     }
 
-    override fun currentPositionMillis(): Long? = player?.takeIf { loaded != null }?.positionMillis
+    // 弹幕时钟逐帧调这里,所以读不经 JNI 的那一份,见 DesktopPlayer.positionMillis。
+    override fun currentPositionMillis(): Long? = player?.takeIf { loaded != null }?.observedPositionMillis
+
+    /**
+     * 播放器自己的音量,0..1。桌面没有应用能直接调的系统媒体音量,调的是 mpv 的软件增益;
+     * 上限取 100,不用 mpv 允许的放大区间,放大会削波。
+     */
+    var volume: Float
+        get() = ((player?.mpv?.getPropertyDouble("volume") ?: 100.0) / 100.0).toFloat().coerceIn(0f, 1f)
+        set(value) {
+            player?.mpv?.setPropertyDouble("volume", value.coerceIn(0f, 1f) * 100.0)
+        }
 
     // 桌面窗口最小化不暂停,没有"后台"这回事,这两个开关无事可做。
     override fun setBackgroundPlaybackAllowed(allowed: Boolean) = Unit

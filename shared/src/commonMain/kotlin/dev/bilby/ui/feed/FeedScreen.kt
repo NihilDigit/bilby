@@ -44,6 +44,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.ListScrollbar
+import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.data.LiveUpBrief
 import dev.bilby.data.UpBrief
@@ -361,7 +363,12 @@ private fun FeedList(
         // 首页装不下的另一半(图文、纯文字、转发、直播)的入口挂在标题行右边。**专栏不在
         // 里面**:它是投稿,和视频一样排在首页的时间序里(见 DynamicRepository 的分流)。
         item(key = "header") {
-            FeedHeader(onOpenOtherDynamics = onOpenOtherDynamics, onOpenPushes = onOpenPushes)
+            FeedHeader(
+                refreshing = state.refreshing,
+                onRefresh = onRefresh,
+                onOpenOtherDynamics = onOpenOtherDynamics,
+                onOpenPushes = onOpenPushes,
+            )
         }
         // 窄屏时「最常访问」仍然跟着列表一起滚,不吸顶:吸顶会让它变成常驻的入口带,
         // 而这一页的主体是动态流。宽屏下它挪到旁边的次区去了,这里就不再出现。
@@ -402,6 +409,7 @@ private fun FeedList(
                 )
             }
             }
+            ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
         }
     }
 
@@ -467,7 +475,12 @@ private fun FeedList(
  * 静态入口变成催人回来的提醒。
  */
 @Composable
-private fun FeedHeader(onOpenOtherDynamics: () -> Unit, onOpenPushes: () -> Unit) {
+private fun FeedHeader(
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
+    onOpenOtherDynamics: () -> Unit,
+    onOpenPushes: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -479,10 +492,11 @@ private fun FeedHeader(onOpenOtherDynamics: () -> Unit, onOpenPushes: () -> Unit
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = stringResource(Res.string.tab_feed),
+            text = stringResource(Res.string.feed_title),
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.weight(1f),
         )
+        RefreshAction(refreshing, onRefresh)
         // UP 主推送来的私信。**放这里,不放消息页**:推送里的视频就是这条时间线上的那些投稿,
         // 它们在私信列表里只是把真人对话往下挤;挪到订阅页,和"我关注的人发了什么"放在一起。
         // 同一条规矩:没有计数,没有红点。

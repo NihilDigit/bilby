@@ -62,6 +62,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import dev.bilby.ui.components.UnfollowConfirmDialog
+import dev.bilby.ui.components.touchOnlyPaging
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -109,6 +110,7 @@ import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.DynamicCardSkeleton
+import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SquareCover
@@ -758,6 +760,8 @@ fun SpaceScreen(
                 title = barTitle,
                 searching = searching,
                 keyword = state.archives.keyword,
+                refreshing = state.refreshing,
+                onRefresh = onRefresh,
                 onKeywordChanged = onArchiveKeywordChanged,
                 onSearch = onArchiveSearch,
                 onOpenSearch = {
@@ -863,7 +867,7 @@ fun SpaceScreen(
                     // 挂在刷新框里面之后顺序对了:先把页头顶回来,它满了才轮到刷新。
                     else -> HorizontalPager(
                         state = pagerState,
-                        modifier = Modifier.fillMaxSize().nestedScroll(headerScroll.connection),
+                        modifier = Modifier.fillMaxSize().nestedScroll(headerScroll.connection).touchOnlyPaging(),
                     ) { page ->
                         when (tabs.getOrNull(page)) {
                             SpaceTab.Archives -> ArchivesTab(
@@ -976,6 +980,8 @@ private fun SpaceTopBar(
     title: String,
     searching: Boolean,
     keyword: String,
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
     onKeywordChanged: (String) -> Unit,
     onSearch: () -> Unit,
     onOpenSearch: () -> Unit,
@@ -1012,6 +1018,7 @@ private fun SpaceTopBar(
             }
         },
         actions = {
+            RefreshAction(refreshing = refreshing, onRefresh = onRefresh)
             if (searching) {
                 IconButton(onClick = onCloseSearch) {
                     Icon(

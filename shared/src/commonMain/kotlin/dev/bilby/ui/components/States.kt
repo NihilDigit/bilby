@@ -11,10 +11,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.LoadingIndicatorDefaults
 import androidx.compose.material3.MaterialTheme
@@ -22,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.pullToRefresh
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -173,6 +176,11 @@ fun FullScreenLoading(modifier: Modifier = Modifier) {
  *
  * 用 contained 那一档(默认色就是 primaryContainer / onPrimaryContainer):指示器压在列表
  * 内容上,没有容器托底时深浅两套主题里都可能撞上正文。
+ *
+ * **只有手指能拉**,见 [PointerSource]。最近一次输入是鼠标时刷新手势整个关掉,不是把下拉量
+ * 吃掉:关掉之后到顶多出来的那一截照常往外传,外层可收起的页头照样能被滚轮展开。
+ * 用手写的 `pullToRefresh` 而不是 [PullToRefreshBox],是因为后者在桌面端编译的 material3
+ * alpha22 里不给 enabled 开关。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -183,20 +191,40 @@ fun RefreshBox(
     content: @Composable BoxScope.() -> Unit,
 ) {
     val state = rememberPullToRefreshState()
-    PullToRefreshBox(
-        isRefreshing = refreshing,
-        onRefresh = onRefresh,
-        modifier = modifier,
-        state = state,
-        indicator = {
-            PullToRefreshDefaults.LoadingIndicator(
-                state = state,
-                isRefreshing = refreshing,
-                modifier = Modifier.align(Alignment.TopCenter),
-            )
-        },
-        content = content,
-    )
+    Box(
+        modifier.pullToRefresh(
+            state = state,
+            isRefreshing = refreshing,
+            enabled = LocalPointerSource.current.isTouchLike,
+            onRefresh = onRefresh,
+        ),
+    ) {
+        content()
+        PullToRefreshDefaults.LoadingIndicator(
+            state = state,
+            isRefreshing = refreshing,
+            modifier = Modifier.align(Alignment.TopCenter),
+        )
+    }
+}
+
+/**
+ * 顶栏上的刷新按钮,给用鼠标的人:鼠标没法下拉,[RefreshBox] 在最近一次输入是鼠标时关掉了
+ * 下拉手势,刷新入口就挪到这里。**用手指时不出现**:那时下拉就是刷新入口,顶栏再摆一个是
+ * 同一件事的两个入口。判据跟 [RefreshBox] 是同一个([PointerSource]),两者此消彼长。
+ *
+ * 刷新中转圈而不是禁用:按下之后看得出它在做事,也不会连点出第二次请求。
+ */
+@Composable
+fun RefreshAction(refreshing: Boolean, onRefresh: () -> Unit) {
+    if (LocalPointerSource.current.isTouchLike) return
+    if (refreshing) {
+        Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) { LoadingSpinner() }
+    } else {
+        IconButton(onClick = onRefresh) {
+            Icon(Icons.Filled.Refresh, contentDescription = stringResource(Res.string.action_refresh))
+        }
+    }
 }
 
 /**

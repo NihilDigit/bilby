@@ -28,12 +28,14 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.bilby.resources.*
 import dev.bilby.stringResource
+import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.api.BiliResult
 import dev.bilby.data.CoinLogEntry
 import dev.bilby.data.CoinLogRepository
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.SkeletonLine
 import dev.bilby.ui.components.skeleton
@@ -82,30 +84,34 @@ private fun CoinLogScreen(
                 title = stringResource(Res.string.coin_log_title),
                 onBack = onBack,
                 scrollBehavior = scrollBehavior,
-            )
+            ) {
+                RefreshAction(refreshing = state.refreshing, onRefresh = onRefresh)
+            }
         },
     ) { insets ->
-        RefreshBox(
-            refreshing = state.refreshing,
-            onRefresh = onRefresh,
-            modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets),
-        ) {
-            PagedColumn(
-                items = state.items,
-                // 接口不给 id,而同一秒里两条原因、数额都相同的记录是可能的,只能按位置作键。
-                key = { entry -> entry.position },
-                skeletonRow = { CoinLogRowSkeleton() },
-                loading = state.loading,
-                appending = false,
-                // 接口一次给全(见 CoinLogRepository),没有下一页。
-                hasMore = false,
-                error = state.error?.let { stringResource(it) },
-                emptyText = stringResource(Res.string.coin_log_empty),
-                onLoadMore = {},
-                onRetry = onRetry,
+        AdaptiveContent(modifier = Modifier.padScaffoldExceptBottom(insets)) {
+            RefreshBox(
+                refreshing = state.refreshing,
+                onRefresh = onRefresh,
                 modifier = Modifier.fillMaxSize(),
-            ) { entry ->
-                CoinLogRow(entry)
+            ) {
+                PagedColumn(
+                    items = state.items,
+                    // 接口不给 id,而同一秒里两条原因、数额都相同的记录是可能的,只能按位置作键。
+                    key = { entry -> entry.position },
+                    skeletonRow = { CoinLogRowSkeleton() },
+                    loading = state.loading,
+                    appending = false,
+                    // 接口一次给全(见 CoinLogRepository),没有下一页。
+                    hasMore = false,
+                    error = state.error?.let { stringResource(it) },
+                    emptyText = stringResource(Res.string.coin_log_empty),
+                    onLoadMore = {},
+                    onRetry = onRetry,
+                    modifier = Modifier.fillMaxSize(),
+                ) { entry ->
+                    CoinLogRow(entry)
+                }
             }
         }
     }

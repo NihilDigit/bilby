@@ -32,11 +32,21 @@ class DesktopPlayer(parentCoroutineContext: CoroutineContext) : AutoCloseable {
     }
 
     /**
-     * 当前播放位置,每次调用现问 mpv,不经过 mediamp 的状态流。那条流由 `time-pos` 属性事件
-     * 驱动,更新间隔不固定;弹幕的横坐标是位置的直接函数,要的是逐帧连续的读数。
+     * 当前播放位置,每次调用现问 mpv。只给偶尔一次的精确读数用(拖动起点、换画质时的续播点)。
+     *
+     * **不能逐帧调。** 读属性要拿 mpv 的核心锁,mpv 正在解码或渲染时就得等;弹幕时钟曾经每帧
+     * 调它,UI 线程每帧卡在这把锁上,弹幕一开帧率从一百七十掉到十几,而 JFR 里 JVM 几乎空闲
+     * (线程停在 native 调用里,不在执行采样里)。逐帧的读数用 [observedPositionMillis]。
      */
     val positionMillis: Long
         get() = (mpv.getPropertyDouble("time-pos") * 1000).toLong().coerceAtLeast(0L)
+
+    /**
+     * mediamp 由 `time-pos` 属性事件更新的位置,读它不经过 JNI。事件间隔不固定,逐帧的连续
+     * 由弹幕那层的 SmoothedDanmakuClock 从读数本身估出速率来补。
+     */
+    val observedPositionMillis: Long
+        get() = mediamp.currentPositionMillis.value.coerceAtLeast(0L)
 
     val speed: Float get() = mpv.getPropertyDouble("speed").toFloat()
 

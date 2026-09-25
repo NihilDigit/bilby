@@ -1,10 +1,23 @@
 package dev.bilby.ui.player
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import dev.bilby.player.DesktopPlaybackHost
+import dev.bilby.ui.LocalPlaybackHost
 
 @Composable
 internal actual fun rememberWindowBrightness(): LevelControl? = null
 
-/** Windows 的系统音量要走 Core Audio,尚未接入。 */
+/** 调的是播放器自己的音量,见 [DesktopPlaybackHost.volume]。 */
 @Composable
-internal actual fun rememberMediaVolume(): LevelControl? = null
+internal actual fun rememberMediaVolume(): LevelControl? {
+    val host = LocalPlaybackHost.current as? DesktopPlaybackHost ?: return null
+    return remember(host) {
+        object : LevelControl {
+            override fun current(): Float = host.volume
+            override fun set(fraction: Float) {
+                host.volume = fraction
+            }
+        }
+    }
+}

@@ -16,6 +16,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.bilby.resources.*
 import dev.bilby.stringResource
+import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.api.BiliResult
 import dev.bilby.data.MessageRepository
@@ -23,6 +24,7 @@ import dev.bilby.data.WhisperSession
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PersonRowSkeleton
+import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.errorTextRes
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,28 +75,32 @@ private fun MessagePushesScreen(
                 title = stringResource(Res.string.message_up_pushes),
                 onBack = onBack,
                 scrollBehavior = scrollBehavior,
-            )
+            ) {
+                RefreshAction(refreshing = state.refreshing, onRefresh = onRefresh)
+            }
         },
     ) { insets ->
-        RefreshBox(
-            refreshing = state.refreshing,
-            onRefresh = onRefresh,
-            modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets),
-        ) {
-            PagedColumn(
-                items = state.items,
-                key = { it.talkerId },
-                skeletonRow = { PersonRowSkeleton() },
-                loading = state.showsSkeleton,
-                appending = state.appending,
-                hasMore = state.hasMore,
-                error = state.error?.let { stringResource(it) },
-                emptyText = stringResource(Res.string.message_empty_pushes),
-                onLoadMore = onLoadMore,
-                onRetry = onRefresh,
+        AdaptiveContent(modifier = Modifier.padScaffoldExceptBottom(insets)) {
+            RefreshBox(
+                refreshing = state.refreshing,
+                onRefresh = onRefresh,
                 modifier = Modifier.fillMaxSize(),
-            ) { session ->
-                ConversationRow(session, onClick = { onOpenWhisper(session) })
+            ) {
+                PagedColumn(
+                    items = state.items,
+                    key = { it.talkerId },
+                    skeletonRow = { PersonRowSkeleton() },
+                    loading = state.showsSkeleton,
+                    appending = state.appending,
+                    hasMore = state.hasMore,
+                    error = state.error?.let { stringResource(it) },
+                    emptyText = stringResource(Res.string.message_empty_pushes),
+                    onLoadMore = onLoadMore,
+                    onRetry = onRefresh,
+                    modifier = Modifier.fillMaxSize(),
+                ) { session ->
+                    ConversationRow(session, onClick = { onOpenWhisper(session) })
+                }
             }
         }
     }
