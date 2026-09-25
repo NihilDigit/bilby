@@ -18,17 +18,18 @@ suggestions.
 ## A subscription-style experience, away from the recommendation feed
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/feed.png" width="240" height="528" alt="Home: following feed">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/video.png" width="240" height="528" alt="Playback and queue">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/in-video.png" width="240" height="528" alt="On tap, the agent searches based on the current video">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/feed.jpg" width="240" height="528" alt="Home: following feed">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/video.jpg" width="240" height="528" alt="Playback and queue">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/in-video.jpg" width="240" height="528" alt="On tap, the agent searches based on the current video">
 </p>
 <p align="center">The home feed carries only uploaders you follow; the queue follows the list the video was opened from; when needed, the agent can search for related content based on the video you are watching</p>
 
 ## Redesigned, native listening support
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/listen.png" width="240" height="528" alt="Listening interface">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/lyrics.png" width="240" height="528" alt="Line-by-line subtitles">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/listen.jpg" width="240" height="528" alt="Listening interface">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/lyrics.jpg" width="240" height="528" alt="Line-by-line subtitles">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/sleep-timer.jpg" width="240" height="528" alt="Sleep timer">
 </p>
 <p align="center">Shares the player with normal playback, supports screen-off background play, lock-screen
 and headset controls, and a sleep timer; subtitles follow line by line, tap a line to seek</p>
@@ -36,19 +37,10 @@ and headset controls, and a sleep timer; subtitles follow line by line, tap a li
 ## Pan for gold with agent search
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-running.png" width="240" height="528" alt="Assistant search in progress">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-answer.png" width="240" height="528" alt="Assistant candidates with reasons">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-running.jpg" width="240" height="528" alt="Assistant search in progress">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-answer.jpg" width="240" height="528" alt="Assistant candidates with reasons">
 </p>
 <p align="center">Searches, reads descriptions and top comments, and returns candidates each with its reason</p>
-
-## Panes by window width
-
-<p align="center">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/tablet-feed.png" width="380" height="238" alt="Feed on a tablet: timeline on the left, most-visited on the right">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/tablet-video.png" width="380" height="238" alt="Playback on a tablet: picture on the left, description and comments on the right">
-</p>
-<p align="center">The feed moves most-visited into a supporting pane; playback puts the picture on the left and
-the description and comments on the right. Phone layouts are unaffected.</p>
 
 ## Features
 

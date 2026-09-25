@@ -15,35 +15,28 @@ Bilby 是一款安卓原生 bilibili 客户端，提供无推荐流的订阅式�
 ## 订阅式交互体验，远离推荐流打扰
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/feed.png" width="240" height="528" alt="首页：关注动态">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/video.png" width="240" height="528" alt="播放页与播放队列">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/in-video.png" width="240" height="528" alt="点按后 Agent 基于当前视频检索">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/feed.jpg" width="240" height="528" alt="首页：关注动态">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/video.jpg" width="240" height="528" alt="播放页与播放队列">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/in-video.jpg" width="240" height="528" alt="点按后 Agent 基于当前视频检索">
 </p>
 <p align="center">首页只收录关注的 UP 主；播放队列跟随打开视频的列表；如有需要，Agent 可以基于当前视频搜索相关内容</p>
 
 ## 重新设计的原生听视频能力支持
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/listen.png" width="240" height="528" alt="听视频界面">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/lyrics.png" width="240" height="528" alt="逐句字幕">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/listen.jpg" width="240" height="528" alt="听视频界面">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/lyrics.jpg" width="240" height="528" alt="逐句字幕">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/sleep-timer.jpg" width="240" height="528" alt="定时关闭">
 </p>
 <p align="center">与播放共用同一播放器，随时切换；支持息屏后台、锁屏与线控、定时关闭；字幕逐句跟随，点句跳转</p>
 
 ## 用 Agent 搜索沙里淘金
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-running.png" width="240" height="528" alt="Agent 检索过程">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-answer.png" width="240" height="528" alt="Agent 返回的候选视频">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-running.jpg" width="240" height="528" alt="Agent 检索过程">
+<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-answer.jpg" width="240" height="528" alt="Agent 返回的候选视频">
 </p>
 <p align="center">检索全站，阅读简介与热评，返回候选并逐条说明理由</p>
-
-## 按窗口宽度分栏
-
-<p align="center">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/tablet-feed.png" width="380" height="238" alt="平板上的动态页：左侧时间线，右侧最常访问">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/tablet-video.png" width="380" height="238" alt="平板上的播放页：左侧画面，右侧简介与评论">
-</p>
-<p align="center">动态页把「最常访问」挪到次栏，播放页左侧画面、右侧简介与评论；手机布局不受影响</p>
 
 ## 功能
 
