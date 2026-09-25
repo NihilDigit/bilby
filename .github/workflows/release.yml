@@ -101,9 +101,9 @@ jobs:
     needs: [desktop]
     runs-on: ubuntu-latest
     outputs:
-      # 交给下面那个隔离的 provenance job。传的是摘要不是文件:generator 不信任、
+      # 交给下面那个隔离的 provenance job。传的是摘要清单的句柄不是产物:generator 不信任、
       # 也不需要拿到产物本身。
-      hashes: ${{ steps.collect.outputs.hashes }}
+      subjects-as-file: ${{ steps.subjects.outputs.handle }}
 
     steps:
       - uses: actions/checkout@v7
@@ -166,7 +166,19 @@ jobs:
           # SLSA generator 要的是 base64 过的 `sha256sum` 输出。只列会被安装或执行的文件:
           # APK、MSI、免安装 zip 与应用内更新解开的 app.zip。files.json 与 mapping 不在其列,
           # 由 SHA256SUMS.txt 覆盖。
-          echo "hashes=$(cd dist && sha256sum *.apk *.msi *.zip | base64 -w0)" >> "$GITHUB_OUTPUT"
+          #
+          # **写进文件,不走 job 输出。** 这一长串 base64 里偶然含有某个较短 secret 的值时,
+          # Actions 会以"可能含 secret"为由丢掉整条输出,generator 收到空值而失败 —— v0.15.0
+          # 加了桌面附件之后就撞上了。文件放在 dist 外面,免得被当成附件发出去。
+          (cd dist && sha256sum *.apk *.msi *.zip | base64 -w0) > slsa-subjects.b64
+
+      # 把上面那个文件交给 provenance job,job 输出里只传一个句柄(见 generator 文档的
+      # base64-subjects-as-file)。
+      - name: Share SLSA subjects
+        id: subjects
+        uses: slsa-framework/slsa-github-generator/actions/generator/generic/create-base64-subjects-from-file@v2.1.0
+        with:
+          path: slsa-subjects.b64
 
       # 证明这些文件确实由这个 workflow、从这个 commit 构建。桌面产物出自 desktop job,
       # 同属这次 workflow run,证明里记录的来源相同。
@@ -239,7 +251,7 @@ jobs:
     # 本仓库自己引的 action 都已在 Node 24 一代。
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
-      base64-subjects: ${{ needs.release.outputs.hashes }}
+      base64-subjects-as-file: ${{ needs.release.outputs.subjects-as-file }}
       # **不让 generator 自己上传。** 它按 tag 查 release,而 GitHub 的按-tag 接口看不到
       # 草稿;上面那个 job 发的正是草稿,于是它查不到、转而**新建并公开发布**一个同名
       # release,里面只有一份 .intoto.jsonl,正文空白。v0.7.0 上真的发生过:发布页上
