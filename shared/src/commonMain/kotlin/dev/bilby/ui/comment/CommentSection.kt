@@ -1,20 +1,16 @@
 package dev.bilby.ui.comment
 
 import dev.bilby.ui.components.LocalPointerSource
-import dev.bilby.ui.components.PaneOverlay
-import dev.bilby.ui.components.ComposerPanel
 import dev.bilby.ui.components.PaneSheet
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.ui.unit.Dp
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material3.Button
-import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -24,14 +20,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -112,15 +106,12 @@ import java.time.Instant
  * 可嵌进播放页的评论区(DESIGN 2.3)。不是整页:自带 LazyColumn 提供滚动,但不假设自己
  * 独占屏幕,调用方通过 [modifier] 给出高度约束。
  *
- * **写评论从两处进:右下角的 FAB 评论这条视频,单击一条评论回复这个人。** 写在一张 sheet 里
- * ([ComposerPanel]),不是屏幕底部常驻的一条输入栏。常驻那一条试过三版(描边框、圆角
- * 填充框、docked toolbar),三版的共同问题是:它一直占着屏幕底部一条,而绝大多数时候人是在读;
- * 要回复谁还得先让它拿到焦点、再想办法让它放掉焦点。PiliPlus 的做法相同:评论区一个常驻的
- * FAB,写评论是一个从底部升起的面板(`pages/video/reply/view.dart` 的 `fab`、
- * `common/reply_controller.dart` 的 `onReply`)。M3 的 FAB 页把它定为"the primary action on a
- * screen",并且 "FABs remain in place on scroll",所以它不随滚动藏起来。
+ * **写评论在列表底部常驻的输入栏里**([CommentInputBar]),与私信、直播间的输入栏同一个样子。
+ * 之前是右下角一个 FAB 加一层从底部升起的编辑面板(照 PiliPlus),理由是常驻栏一直占着底部一条;
+ * 宽屏上那一条几乎没有代价,三处输入栏形状不一反而要人分别去认,手机上多占的一行与直播间相同。
  *
- * **单击一条评论就是回复它**,主楼、楼中楼、详情面板里的每一条都是;长按是选中正文。
+ * **单击一条评论就是回复它**,主楼、楼中楼、详情面板里的每一条都是:输入栏上方出现「回复 @某某」,
+ * 焦点进框;✕ 回到评论这条视频。长按是选中正文。
  *
  * **楼中楼一律完整显示**。回复比主楼自带的那几条多的楼,末尾一行「查看全部 N 条回复」打开
  * 详情面板([CommentThreadSheet]),那里是读一整组回复的唯一地方。
@@ -177,27 +168,36 @@ fun CommentSection(
      */
     var selectionTarget by remember { mutableStateOf<String?>(null) }
 
-    /**
-     * 正在写给谁。null 是没在写;[CommentToVideo] 是评论这条视频;其余是被回复那条的 rpid。
-     * 编辑面板只有这一张,主列表和详情面板都往这里写。
-     */
-    var composing by rememberSaveable { mutableStateOf<Long?>(null) }
+    /** 主列表那条输入栏写给谁。[CommentToVideo] 是评论这条视频,其余是被回复那条的 rpid。 */
+    var replyTarget by rememberSaveable { mutableStateOf(CommentToVideo) }
 
     /**
-     * 草稿**按回复对象各存一份**,照 PiliPlus 的 `savedReplies[key]`。写了一半关掉面板去看别的,
-     * 回来点同一个人,字还在;点另一个人则是另一份,不会把写给甲的半句话带到乙那里。
+     * 草稿**按回复对象各存一份**,照 PiliPlus 的 `savedReplies[key]`。写了一半去回复别人,
+     * 再点回同一个人,字还在;点另一个人则是另一份,不会把写给甲的半句话带到乙那里。
+     * 主列表与详情面板共用这一张表。
      */
     val drafts = rememberSaveable(saver = DraftsSaver) { mutableStateMapOf<Long, String>() }
 
     /** 最近一次按下发送时写给的是谁。成功回执回来时按它清掉那一份草稿。 */
     var sentTarget by rememberSaveable { mutableStateOf<Long?>(null) }
 
+    /** 最近一次是从详情面板那条栏发的。失败原因只报在发出它的那一栏上。 */
+    var sentFromPanel by rememberSaveable { mutableStateOf(false) }
+
     // 面板正在读哪一楼。整个面板长在这个 composable 里,不进导航栈:它是评论区内部的一层,
     // 页面本身没有换,返回键由面板自己接管。
     var panelRoot by rememberSaveable { mutableStateOf<Long?>(null) }
     val panelComment = panelRoot?.let { id -> findRoot(state, id) }
 
-    // **草稿只在发出去之后才清。** 失败时草稿留在框里,原因就在编辑面板上一行。
+    /** 详情面板那条栏写给谁。null 是回复这一楼本身。换一楼时回到 null。 */
+    var panelReplyTarget by rememberSaveable { mutableStateOf<Long?>(null) }
+    LaunchedEffect(panelRoot) { panelReplyTarget = null }
+
+    val mainFocus = remember { FocusRequester() }
+    val panelFocus = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+
+    // **草稿只在发出去之后才清。** 失败时草稿留在框里,原因就在输入栏上一行。
     //
     // 成功与失败在 ViewModel 的协程里分道,界面读不到那个分支,只能读它报的成功计数
     // ([CommentUiState.sentCount])。**判据是"这个数变大了",不是"和记着的那个不一样"。**
@@ -210,9 +210,14 @@ fun CommentSection(
             return@LaunchedEffect
         }
         seenSentCount = state.sentCount
-        sentTarget?.let { drafts.remove(it) }
+        sentTarget?.let { target ->
+            drafts.remove(target)
+            // 发出去之后那一栏回到默认对象,收起键盘让人看见刚发的那条。
+            if (replyTarget == target) replyTarget = CommentToVideo
+            if (panelReplyTarget == target) panelReplyTarget = null
+        }
         sentTarget = null
-        composing = null
+        focusManager.clearFocus()
     }
 
     // 面板开着的时候主楼被刷掉了(下拉刷新之后它不在第一页了),把面板一起关掉:
@@ -229,7 +234,10 @@ fun CommentSection(
 
     val rowActions = CommentRowActions(
         myMid = state.myMid,
-        onReply = { comment -> composing = comment.rpid },
+        onReply = { comment ->
+            replyTarget = comment.rpid
+            mainFocus.requestFocus()
+        },
         onLike = onLike,
         onDelete = onDelete,
         onSeek = onSeek,
@@ -238,34 +246,9 @@ fun CommentSection(
         onSelectText = { selectionTarget = it },
     )
 
-    /**
-     * 写评论的面板,画在此刻最上面那个窗口里:楼中楼详情开着时画在那张 sheet 里面(它自成一个
-     * 窗口,画在外面会被盖住),否则画在评论区上面。见 [ComposerPanel]。
-     */
-    val composer: (@Composable () -> Unit)? = composing?.let { target ->
-        {
-            val draft = drafts[target].orEmpty()
-            val replyName = if (target == CommentToVideo) null else findUname(state, target)
-            ComposerPanel(
-                title = replyName?.let { stringResource(Res.string.comment_replying_to, it) }
-                    ?: stringResource(Res.string.comment_write),
-                text = draft,
-                onTextChange = { drafts[target] = it },
-                placeholder = stringResource(Res.string.comment_input_hint),
-                sending = state.sending,
-                error = state.sendError?.let { stringResource(Res.string.comment_send_failed, it) },
-                counter = commentDraftCounter(draft.length),
-                onSend = {
-                    sentTarget = target
-                    onSend(drafts[target].orEmpty(), target.takeIf { it != CommentToVideo })
-                },
-                // 关掉不丢草稿:它还在 [drafts] 里,下次写给同一个人时原样回来。
-                onDismiss = { composing = null },
-            )
-        }
-    }
+    val sendError = state.sendError?.let { stringResource(Res.string.comment_send_failed, it) }
 
-    Box(modifier = modifier) {
+    Column(modifier = modifier) {
         // **[refreshEnabled] 为假时整个手势不接管。** 嵌套滚动从内往外传,而播放器那个收起
         // 页头的连接挂在这一整块的祖先上(见 VideoScreen),这里的刷新框离列表更近:不设这道
         // 闸的话,列表到顶后剩下的下滑量会先被刷新吃掉,播放器再也展不开 —— 空间页正是这么
@@ -273,7 +256,8 @@ fun CommentSection(
         val pullState = rememberPullToRefreshState()
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .weight(1f)
+                .fillMaxWidth()
                 .pullToRefresh(
                     isRefreshing = state.refreshing,
                     state = pullState,
@@ -285,11 +269,10 @@ fun CommentSection(
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
-                // 底部留出 FAB 与导航栏:列表铺到屏幕底边(手势条下面照样是列表),最后一条
-                // 能滚到 FAB 上面。
                 // 顶上不再留白:第一项是排序栏,它为了 48dp 的触摸区自己已经在字的上方空出十几 dp,
                 // 再加这里的 8dp 和播放页标签行的下边距,标签与"最热"之间空出一整行。
-                contentPadding = PaddingValues(bottom = fabClearance()),
+                // 底部不让导航栏:下面是输入栏,由它去让。
+                contentPadding = PaddingValues(bottom = Spacing.Tight),
             ) {
                 header?.let { item(key = "header") { it() } }
                 item(key = "sort-bar") { SortBar(state.sort, onSort) }
@@ -364,14 +347,9 @@ fun CommentSection(
             // 只在 Android 12L 及以下会出现,见 SelectableTextDialog。
             SnackbarHost(
                 hostState = snackbarHostState,
-                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
+                modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
-        WriteFab(
-            contentDescription = stringResource(Res.string.comment_write),
-            onClick = { composing = CommentToVideo },
-            modifier = Modifier.align(Alignment.BottomEnd),
-        )
         selectionTarget?.let { target ->
             SelectableTextDialog(
                 text = target,
@@ -379,8 +357,25 @@ fun CommentSection(
                 onDismiss = { selectionTarget = null },
             )
         }
-        // 挂到窗口最上面:遮罩要盖住画面和标签行,点哪里都算不写了。
-        if (panelComment == null) composer?.let { PaneOverlay(onDismiss = { composing = null }, content = it) }
+        val draft = drafts[replyTarget].orEmpty()
+        val replyName = if (replyTarget == CommentToVideo) null else findUname(state, replyTarget)
+        CommentInputBar(
+            draft = draft,
+            onDraftChange = { drafts[replyTarget] = it },
+            replyingTo = replyName,
+            onCancelReply = { replyTarget = CommentToVideo },
+            placeholder = stringResource(Res.string.comment_input_hint),
+            label = replyName?.let { stringResource(Res.string.comment_replying_to, it) }
+                ?: stringResource(Res.string.comment_write),
+            sending = state.sending && !sentFromPanel,
+            error = sendError?.takeIf { !sentFromPanel },
+            onSend = {
+                sentTarget = replyTarget
+                sentFromPanel = false
+                onSend(draft, replyTarget.takeIf { it != CommentToVideo })
+            },
+            focusRequester = mainFocus,
+        )
     }
 
     // 详情面板挂在外面:单栏时它是 ModalBottomSheet,自己就是一个 window;两栏时它画在右栏的面板层。
@@ -391,9 +386,34 @@ fun CommentSection(
             myMid = state.myMid,
             onLoadMore = { onExpandReplies(panelComment.rpid) },
             onLike = onLike,
-            onCompose = { rpid -> composing = rpid },
-            composer = composer,
-            onDismissComposer = { composing = null },
+            onCompose = { rpid ->
+                // 点的是这一楼本身就是默认对象,不另起那一行「回复 @」。
+                panelReplyTarget = rpid.takeIf { it != panelComment.rpid }
+                panelFocus.requestFocus()
+            },
+            inputBar = {
+                val target = panelReplyTarget ?: panelComment.rpid
+                val draft = drafts[target].orEmpty()
+                val replyName = panelReplyTarget?.let { findUname(state, it) }
+                val rootLabel = stringResource(Res.string.comment_replying_to, panelComment.uname)
+                CommentInputBar(
+                    draft = draft,
+                    onDraftChange = { drafts[target] = it },
+                    replyingTo = replyName,
+                    onCancelReply = { panelReplyTarget = null },
+                    // 默认就是回复这一楼,占位直接写明是谁,不再画那一行。
+                    placeholder = rootLabel,
+                    label = replyName?.let { stringResource(Res.string.comment_replying_to, it) } ?: rootLabel,
+                    sending = state.sending && sentFromPanel,
+                    error = sendError?.takeIf { sentFromPanel },
+                    onSend = {
+                        sentTarget = target
+                        sentFromPanel = true
+                        onSend(draft, target)
+                    },
+                    focusRequester = panelFocus,
+                )
+            },
             onDelete = onDelete,
             onSeek = onSeek,
             // **跳走之前先关面板。** 面板自己注册了一个 BackHandler(预测式
@@ -414,7 +434,7 @@ fun CommentSection(
 
 }
 
-/** [composing] 里表示"评论这条视频"的那个值。rpid 从 1 起,0 不会和哪条评论撞上。 */
+/** [replyTarget] 里表示"评论这条视频"的那个值。rpid 从 1 起,0 不会和哪条评论撞上。 */
 private const val CommentToVideo = 0L
 
 /** 草稿表过 Bundle:摊成 [key, 正文, key, 正文…]。 */
@@ -426,30 +446,6 @@ internal val DraftsSaver = listSaver<SnapshotStateMap<Long, String>, String>(
         }
     },
 )
-
-/**
- * 写评论的 FAB。贴右下角,躲开导航栏;外边距 16dp 是 M3 FAB 的默认位置。
- * 图标用铅笔(写),不用回复箭头:点它是写一条新评论,不是回复谁。
- */
-@Composable
-private fun WriteFab(contentDescription: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    FloatingActionButton(
-        onClick = onClick,
-        modifier = modifier
-            .navigationBarsPadding()
-            .padding(Spacing.Comfortable),
-    ) {
-        Icon(Icons.Outlined.Edit, contentDescription = contentDescription)
-    }
-}
-
-/** 列表底部要留的高度:FAB 56dp 加上下两份 16dp 外边距,再加导航栏。 */
-@Composable
-private fun fabClearance(): Dp =
-    FabSize + Spacing.Comfortable * 2 +
-        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-
-private val FabSize = 56.dp
 
 /**
  * 一条评论能做的几件事。主列表、楼中楼、详情面板三处共用同一份,不在每一层把七个回调
@@ -1073,9 +1069,8 @@ private const val ThreadSheetHeightFraction = 0.9f
  * 一条长主楼能占掉面板的三分之一,回复只剩下半截;而人打开面板是来读回复的,主楼读过了。
  * 回复和主楼同一个排法(36dp 头像、同样的底行):在这里回复是主角,不再是缩在容器里的附属。
  *
- * 写回复和主列表是同一套:单击哪一条就回复哪一条,点主楼就是回复这一楼。**这里不放 FAB**:
- * 面板是来读和回这一组回复的,主楼就排在第一条,再挂一个"回复这一楼"的按钮是同一件事的
- * 第二个入口。单栏时编辑面板画在这张 sheet 里面(见 [ComposerPanel])。
+ * 写回复和主列表是同一套:底部一条常驻输入栏([inputBar]),默认回复这一楼,单击哪一条就回复
+ * 哪一条。栏画在面板自己里面:单栏时这张 sheet 自成一个窗口,画在外面会被它盖住。
  *
  * **不是一个导航目的地。** 它长在 [CommentSection] 里,页面没有换,返回键由面板
  * 自己注册的 BackHandler 接管([PaneSheet])。数据和主列表共用 `CommentViewModel.expandedReplies`,翻页仍然是
@@ -1091,10 +1086,8 @@ private fun CommentThreadSheet(
     onLike: (Long) -> Unit,
     /** 写一条回复给这个 rpid。回复这一楼本身传的是主楼的 rpid。 */
     onCompose: (Long) -> Unit,
-    /** 正在写时的编辑面板,画在这张 sheet 里面(它自成一个窗口)。 */
-    composer: (@Composable () -> Unit)?,
-    /** 关掉编辑面板。两栏时点左栏的画面要能关它(见 SidePaneDismissLayer)。 */
-    onDismissComposer: () -> Unit,
+    /** 面板底部的输入栏,草稿与发送状态归 [CommentSection]。 */
+    inputBar: @Composable () -> Unit,
     onDelete: (Long) -> Unit,
     onSeek: ((Long) -> Unit)?,
     onUserClick: (Long) -> Unit,
@@ -1139,24 +1132,26 @@ private fun CommentThreadSheet(
         onDismissRequest = onDismiss,
         title = stringResource(Res.string.comment_thread_title),
     ) {
-        val inPane = inPane
-        Box(modifier = Modifier.bodyHeight(ThreadSheetHeightFraction)) {
-            CommentThreadList(
-                root = root,
-                replies = shown,
-                loadingMore = loadingMore,
-                failed = expanded?.error != null,
-                actions = actions,
-                onRetry = onLoadMore,
-                listState = listState,
-                modifier = Modifier.fillMaxSize(),
-            )
-            SnackbarHost(
-                hostState = snackbarHostState,
-                modifier = Modifier.align(Alignment.BottomCenter),
-            )
-            // sheet 自成一个窗口,编辑面板只能画在它里面;画在右栏时同主列表,挂到右栏最上面。
-            if (inPane) composer?.let { PaneOverlay(onDismiss = onDismissComposer, content = it) } else composer?.invoke()
+        // 列表与输入栏一起装在面板主体的高度里:栏放在外面的话,sheet 里那九成高的列表再加一条栏,
+        // 会顶出屏幕。
+        Column(modifier = Modifier.bodyHeight(ThreadSheetHeightFraction)) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                CommentThreadList(
+                    root = root,
+                    replies = shown,
+                    loadingMore = loadingMore,
+                    failed = expanded?.error != null,
+                    actions = actions,
+                    onRetry = onLoadMore,
+                    listState = listState,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
+            }
+            inputBar()
         }
         selectionTarget?.let { target ->
             SelectableTextDialog(

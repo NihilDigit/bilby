@@ -38,8 +38,7 @@ import dev.bilby.stringResource
 import dev.bilby.ui.theme.Spacing
 
 /**
- * 填充式胶囊输入框,发送键装在里面。私信、直播间发弹幕、写评论的面板([ComposerPanel])
- * 共用这一份。
+ * 填充式胶囊输入框,发送键装在里面。私信、直播间发弹幕、评论区的输入栏共用这一份。
  *
  * **不用 `OutlinedTextField`。** 页面底部常驻一条输入栏时,一圈描边加 56dp 的表单字段比它上面
  * 的内容还重,外面再套一层底条,底部就横着两层框。填充胶囊和搜索框(SearchField)是同一套语言
@@ -63,7 +62,7 @@ fun PillInputField(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     maxLines: Int = DefaultMaxLines,
-    /** 起步就占几行。评论是一段话,起步四行(见 ComposerPanel);大于 1 时占位贴顶,不居中。 */
+    /** 起步就占几行。大于 1 时占位贴顶,不居中。 */
     minLines: Int = 1,
     /** 回车发送还是换行。多行的段落输入(评论)回车是换行,发送只走发送键。 */
     imeSend: Boolean = true,

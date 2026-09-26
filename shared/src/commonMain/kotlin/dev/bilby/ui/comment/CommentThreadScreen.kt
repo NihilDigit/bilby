@@ -41,18 +41,18 @@ import dev.bilby.data.CommentItem
 import dev.bilby.data.CommentRepository
 import dev.bilby.data.SettingsStore
 import dev.bilby.ui.components.BilbyTopBar
-import dev.bilby.ui.components.ComposerPanel
 import dev.bilby.ui.components.FirstScreenState
 import dev.bilby.ui.components.ListSkeleton
 import dev.bilby.ui.components.PersonRowSkeleton
 import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.components.SelectableTextDialog
-import dev.bilby.ui.components.WindowOverlay
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.errorTextRes
-import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
+import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import dev.bilby.ui.readableWidth
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -66,8 +66,8 @@ import kotlinx.coroutines.launch
  * 评论详情页。从消息中心和带评论定位的链接进来,"追回原评论":看到有人回了一句,点进来要看
  * 的是那一句在整楼里的上下文,不是那条视频的整个评论区。
  *
- * 列表与播放页里的楼中楼面板共用 [CommentThreadList]。写回复同样是单击哪一条就回复哪一条,
- * 没有 FAB,理由同那张面板。
+ * 列表与播放页里的楼中楼面板共用 [CommentThreadList],底部同样一条常驻输入栏([CommentInputBar]):
+ * 默认回复这一楼,单击哪一条就回复哪一条。
  *
  * @param onOpenSubject 打开评论所在的视频、动态或专栏。认不出所在内容时为 null,顶栏不放这个入口。
  */
@@ -119,17 +119,23 @@ private fun CommentThreadScreen(
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     var selectionTarget by remember { mutableStateOf<String?>(null) }
-    var composing by rememberSaveable { mutableStateOf<Long?>(null) }
+    /** 输入栏写给谁。null 是回复这一楼本身。 */
+    var replyTarget by rememberSaveable { mutableStateOf<Long?>(null) }
     val drafts = rememberSaveable(saver = DraftsSaver) { mutableStateMapOf<Long, String>() }
     var sentTarget by rememberSaveable { mutableStateOf<Long?>(null) }
+    val inputFocus = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
 
     // 草稿只在发出去之后才清,判据同 CommentSection:成功计数变大了。
     var seenSentCount by rememberSaveable { mutableIntStateOf(state.sentCount) }
     LaunchedEffect(state.sentCount) {
         if (state.sentCount > seenSentCount) {
-            sentTarget?.let { drafts.remove(it) }
+            sentTarget?.let { target ->
+                drafts.remove(target)
+                if (replyTarget == target) replyTarget = null
+            }
             sentTarget = null
-            composing = null
+            focusManager.clearFocus()
         }
         seenSentCount = state.sentCount
     }
@@ -162,53 +168,59 @@ private fun CommentThreadScreen(
         snackbarHost = { SnackbarHost(snackbarHostState, Modifier.navigationBarsPadding()) },
     ) { insets ->
         val root = state.root
-        FirstScreenState(
-            loading = state.loading,
-            error = state.error?.let { stringResource(it) },
-            isEmpty = root == null,
-            onRetry = onRetry,
-            modifier = Modifier.padScaffoldExceptBottom(insets).readableWidth(),
-            skeleton = { ListSkeleton(row = { PersonRowSkeleton(avatarSize = Dimens.AvatarRow) }) },
-        ) {
+        Column(modifier = Modifier.padScaffoldExceptBottom(insets).readableWidth()) {
+            FirstScreenState(
+                loading = state.loading,
+                error = state.error?.let { stringResource(it) },
+                isEmpty = root == null,
+                onRetry = onRetry,
+                modifier = Modifier.weight(1f),
+                skeleton = { ListSkeleton(row = { PersonRowSkeleton(avatarSize = Dimens.AvatarRow) }) },
+            ) {
+                if (root != null) {
+                    ThreadContent(
+                        state = state,
+                        root = root,
+                        onLoadMore = onLoadMore,
+                        actions = CommentRowActions(
+                            myMid = state.myMid,
+                            onReply = { comment ->
+                                // 点的是这一楼本身就是默认对象,不另起那一行「回复 @」。
+                                replyTarget = comment.rpid.takeIf { it != root.rpid }
+                                inputFocus.requestFocus()
+                            },
+                            onLike = onLike,
+                            onDelete = onDelete,
+                            onSeek = null,
+                            onUserClick = onUserClick,
+                            onOpenLink = onOpenLink,
+                            onSelectText = { selectionTarget = it },
+                        ),
+                    )
+                }
+            }
+            // 楼没读出来之前没有可回复的对象,不给栏。
             if (root != null) {
-                ThreadContent(
-                    state = state,
-                    root = root,
-                    onLoadMore = onLoadMore,
-                    actions = CommentRowActions(
-                        myMid = state.myMid,
-                        onReply = { comment -> composing = comment.rpid },
-                        onLike = onLike,
-                        onDelete = onDelete,
-                        onSeek = null,
-                        onUserClick = onUserClick,
-                        onOpenLink = onOpenLink,
-                        onSelectText = { selectionTarget = it },
-                    ),
+                val target = replyTarget ?: root.rpid
+                val draft = drafts[target].orEmpty()
+                val replyName = replyTarget?.let { state.find(it)?.uname }
+                val rootLabel = stringResource(Res.string.comment_replying_to, root.uname)
+                CommentInputBar(
+                    draft = draft,
+                    onDraftChange = { drafts[target] = it },
+                    replyingTo = replyName,
+                    onCancelReply = { replyTarget = null },
+                    placeholder = rootLabel,
+                    label = replyName?.let { stringResource(Res.string.comment_replying_to, it) } ?: rootLabel,
+                    sending = state.sending,
+                    error = state.sendError?.let { stringResource(Res.string.comment_send_failed, it) },
+                    onSend = {
+                        sentTarget = target
+                        onSend(draft, target)
+                    },
+                    focusRequester = inputFocus,
                 )
             }
-        }
-    }
-
-    composing?.let { target ->
-        WindowOverlay {
-            val draft = drafts[target].orEmpty()
-            val name = state.find(target)?.uname
-            ComposerPanel(
-                title = name?.let { stringResource(Res.string.comment_replying_to, it) }
-                    ?: stringResource(Res.string.comment_write),
-                text = draft,
-                onTextChange = { drafts[target] = it },
-                placeholder = stringResource(Res.string.comment_input_hint),
-                sending = state.sending,
-                error = state.sendError?.let { stringResource(Res.string.comment_send_failed, it) },
-                counter = commentDraftCounter(draft.length),
-                onSend = {
-                    sentTarget = target
-                    onSend(drafts[target].orEmpty(), target)
-                },
-                onDismiss = { composing = null },
-            )
         }
     }
     selectionTarget?.let { target ->
@@ -264,7 +276,8 @@ private fun ThreadContent(
             onRetry = onLoadMore,
             listState = listState,
             highlightRpid = highlight,
-            contentPadding = PaddingValues(bottom = Spacing.Tight + navigationBarsBottom()),
+            // 导航栏由下面的输入栏让。
+            contentPadding = PaddingValues(bottom = Spacing.Tight),
             modifier = Modifier.fillMaxSize(),
         )
     }

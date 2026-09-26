@@ -77,20 +77,14 @@ import dev.bilby.ui.theme.Spacing
 @Stable
 class SidePaneState internal constructor() {
     internal var panel: PanePanel? by mutableStateOf(null)
-    /** 面板之上的一层,写评论的编辑面板挂在这里(见 [PaneOverlay])。 */
-    internal var overlay: PaneOverlaySlot? by mutableStateOf(null)
     internal var hosted: Boolean by mutableStateOf(false)
 
-    internal val isOpen: Boolean get() = overlay != null || panel != null
+    internal val isOpen: Boolean get() = panel != null
 
-    /** 关掉最上面那一层:先编辑面板,再二级面板。 */
     internal fun dismissTop() {
-        overlay?.let { it.onDismiss(); return }
         panel?.onDismiss?.invoke()
     }
 }
-
-internal class PaneOverlaySlot(val onDismiss: () -> Unit, val content: @Composable () -> Unit)
 
 internal class PanePanel(val title: String?, val onDismiss: () -> Unit, val content: @Composable ColumnScope.() -> Unit)
 
@@ -121,9 +115,6 @@ fun BoxScope.SidePaneLayer(state: SidePaneState) {
     ) {
         shown?.let { panel -> PanePanelSurface(panel) }
     }
-    state.overlay?.let { overlay ->
-        Box(modifier = Modifier.matchParentSize()) { overlay.content() }
-    }
 }
 
 /**
@@ -148,28 +139,6 @@ fun BoxScope.SidePaneDismissLayer(state: SidePaneState) {
                 }
             },
     )
-}
-
-/**
- * 把 [content] 挂到右栏最上面;不在两栏布局里时挂到窗口最上面([WindowOverlay])。
- *
- * 写评论的编辑面板走这里。两栏时它的遮罩只盖右栏,左栏的画面不压暗,点左栏是 [onDismiss]
- * (见 [SidePaneDismissLayer]);盖满整个窗口的话,一条上千 dp 宽的输入框横跨画面和评论两栏。
- */
-@Composable
-fun PaneOverlay(onDismiss: () -> Unit, content: @Composable () -> Unit) {
-    val pane = LocalSidePane.current
-    if (pane == null || !pane.hosted) {
-        WindowOverlay(content)
-        return
-    }
-    val latest by rememberUpdatedState(content)
-    val latestDismiss by rememberUpdatedState(onDismiss)
-    DisposableEffect(pane) {
-        val slot = PaneOverlaySlot(onDismiss = { latestDismiss() }, content = { latest() })
-        pane.overlay = slot
-        onDispose { if (pane.overlay === slot) pane.overlay = null }
-    }
 }
 
 @Composable
@@ -268,8 +237,7 @@ fun PaneSheet(
         }
     } else if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
         ModalSideSheet(onDismissRequest) {
-            // 不是右栏(inPane = false):面板里的编辑面板照 sheet 的规矩画在面板自己里面,
-            // 它和 sheet 一样自成一个窗口,挂到主窗口那一层反而会被它盖住。高度却是整栏。
+            // 不是右栏(inPane = false),高度却是整栏。
             PaneSheetScopeImpl(this, inPane = false, fillsHeight = true).content()
         }
     } else {
@@ -298,8 +266,7 @@ fun PaneSheet(
  * 规格取 side-sheets.md 的 modal 款:容器 surfaceContainerLow,圆角 16dp(Differences from M2
  * 一节),最宽 400dp,四周离窗口边缘 16dp(Margins (when detached)),关闭按钮常驻。
  *
- * 自成一个窗口(Dialog),与 ModalBottomSheet 同:面板里再打开的编辑面板照 sheet 的路子画在
- * 面板里面。遮罩用平台对话框自带的那一层。
+ * 自成一个窗口(Dialog),与 ModalBottomSheet 同。遮罩用平台对话框自带的那一层。
  *
  * 人关掉它(点遮罩、关闭按钮、Esc 或返回)时先划出去再通知调用方;调用方自己撤掉它时
  * (点了名单里的一项)直接消失,与底部 sheet 一致。
