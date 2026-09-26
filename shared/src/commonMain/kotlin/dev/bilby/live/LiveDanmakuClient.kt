@@ -8,6 +8,7 @@ import io.ktor.client.plugins.websocket.wss
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readBytes
 import io.ktor.websocket.send
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.currentCoroutineContext
@@ -230,8 +231,12 @@ class LiveDanmakuClient(
     fun messages(roomId: Long, selfMid: Long): Flow<LiveMessage> = channelFlow {
         var backoffMillis = INITIAL_BACKOFF_MILLIS
         while (currentCoroutineContext().isActive) {
+            // 离开直播间时的取消也会落进 runCatching,那不是中断,照常抛出去,不记这一行。
             val connected = runCatching { connectOnce(roomId, selfMid, channel) }
-                .onFailure { BiliLog.w("直播弹幕连接中断 room=$roomId", it) }
+                .onFailure {
+                    if (it is CancellationException) throw it
+                    BiliLog.w("直播弹幕连接中断 room=$roomId", it)
+                }
                 .getOrDefault(false)
             if (!currentCoroutineContext().isActive) return@channelFlow
             // 连上过就把退避清零:一次长连接正常跑了很久之后掉线,跟"根本连不上"是两回事。
