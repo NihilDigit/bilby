@@ -4,9 +4,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
+import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.ui.theme.Breakpoints
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -66,8 +72,22 @@ fun OtherDynamicsScreen(
             state.error != null && state.items.isEmpty() ->
                 FullScreenError(state.error, onRetry, Modifier.padding(padding))
 
-            else -> AdaptiveContent(modifier = Modifier.padScaffoldExceptBottom(padding)) {
-                OtherDynamicsList(state, onRefresh, onLoadMore, onAction, onLike)
+            // 宽屏是瀑布流,不再限宽,理由同 AdaptiveListContent;一条动态从一行字到半屏九宫格
+            // 都有,按行排的网格会在矮的那条下面空出一大截。代价是读序只大致从上往下,
+            // 不再逐条顺下去。
+            else -> if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
+                OtherDynamicsList(
+                    state, onRefresh, onLoadMore, onAction, onLike,
+                    columns = StaggeredGridCells.Adaptive(Breakpoints.DynamicColumnMinWidth),
+                    modifier = Modifier.padScaffoldExceptBottom(padding),
+                )
+            } else {
+                AdaptiveContent(modifier = Modifier.padScaffoldExceptBottom(padding)) {
+                    OtherDynamicsList(
+                        state, onRefresh, onLoadMore, onAction, onLike,
+                        columns = StaggeredGridCells.Fixed(1),
+                    )
+                }
             }
         }
     }
@@ -80,8 +100,10 @@ private fun OtherDynamicsList(
     onLoadMore: () -> Unit,
     onAction: (DynamicAction) -> Unit,
     onLike: (id: String, like: Boolean) -> Unit,
+    columns: StaggeredGridCells,
+    modifier: Modifier = Modifier,
 ) {
-    val listState = rememberLazyListState()
+    val listState = rememberLazyStaggeredGridState()
 
     PrefetchNearEnd(
         listState,
@@ -89,8 +111,10 @@ private fun OtherDynamicsList(
         onLoadMore = onLoadMore,
     )
 
-    RefreshBox(refreshing = state.refreshing, onRefresh = onRefresh) {
-        LazyColumn(
+    RefreshBox(refreshing = state.refreshing, onRefresh = onRefresh, modifier = modifier) {
+        // 窄屏是一列的瀑布流,与原来的单列同形;两种宽度共用一个列表,预取只认一套状态。
+        LazyVerticalStaggeredGrid(
+            columns = columns,
             state = listState,
             modifier = Modifier.fillMaxSize(),
             // 左右 16 与投稿列表(VideoRow 的 horizontal padding)对齐 —— 两页里同一条边。
@@ -100,10 +124,13 @@ private fun OtherDynamicsList(
                 top = Spacing.Cozy,
                 bottom = Spacing.Cozy + navigationBarsBottom(),
             ),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            verticalItemSpacing = Spacing.Tight,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
             if (state.items.isEmpty()) {
-                item(key = "empty") { EmptyState(stringResource(Res.string.dynamic_other_empty)) }
+                item(key = "empty", span = StaggeredGridItemSpan.FullLine) {
+                    EmptyState(stringResource(Res.string.dynamic_other_empty))
+                }
             }
             // 一条动态一张卡片,条目之间不画线。这些条目高矮不一(一行字到九宫格图都有),
             // 早先靠整宽分割线断开,而一条动态内部本来就有好几块带底色的内容(转发块、直播卡、
@@ -118,7 +145,7 @@ private fun OtherDynamicsList(
                     onLike = { like -> onLike(card.id, like) },
                 )
             }
-            item(key = "footer") {
+            item(key = "footer", span = StaggeredGridItemSpan.FullLine) {
                 ListFooter(
                     appending = state.appending,
                     hasMore = state.hasMore,
