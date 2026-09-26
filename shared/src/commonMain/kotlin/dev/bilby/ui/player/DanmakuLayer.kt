@@ -5,7 +5,11 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.TextStyle
+import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.theme.CjkFontFamily
 import dev.bilby.BiliLog
 import dev.bilby.data.DanmakuPrefs
@@ -152,8 +156,12 @@ private val DanmakuTextStyle = TextStyle(fontFamily = CjkFontFamily)
  * 对齐 PiliPlus `danmaku_options.dart` 的默认档:15sp 基准,大画面 ×1.2 = 18sp。
  *
  * **分档看画面有多大,不看是不是全屏。** 两栏布局里内嵌画面占整窗高度,和全屏差不多大,
- * 按「非全屏」给小一档的话,同样大的画面上字忽大忽小。只有竖排单栏那块十几行高的画面用小档。
- * 两栏与全屏同档还有一个好处:两栏里进出全屏,字号不变,弹幕引擎不必整池重编。
+ * 按「非全屏」给小一档的话,同样大的画面上字忽大忽小。横着的窗口不到两栏宽时(手机横屏、拉窄
+ * 的桌面窗口)画面按宽度排,高度同样顶满窗口,也归大档(见 [rememberLargePlayer])。只有竖排
+ * 单栏那块十几行高的画面用小档。大画面各形态同档还有一个好处:进出全屏字号不变,弹幕引擎不必
+ * 整池重编。
+ *
+ * 用户设的倍数([dev.bilby.data.DanmakuPrefs.fontScale])乘在档上,档与档之间的大小关系不变。
  *
  * **反过来"轨道数定死、拿画布高度反推字号"是错的**:内嵌播放器只有几百像素高,除以一个固定
  * 轨道数会算出偏大的字号 —— 那正是内嵌详情页字明显偏大过的原因。所以只分两档。
@@ -168,12 +176,23 @@ object DanmakuFontSizeSp {
      */
     const val Pip = 11f
 
-    /** @param largePlayer 全屏,或两栏布局里的内嵌画面。 */
-    fun of(largePlayer: Boolean, pip: Boolean): Float = when {
+    /**
+     * @param largePlayer 画面撑满窗口高度,见 [rememberLargePlayer]。
+     * @param scale 用户设的倍数。
+     */
+    fun of(largePlayer: Boolean, pip: Boolean, scale: Float): Float = scale * when {
         pip -> Pip
         largePlayer -> Large
         else -> Compact
     }
+}
+
+/** 画面有没有撑满窗口的高度:全屏、两栏布局,或者窗口是横着的。 */
+@Composable
+fun rememberLargePlayer(isFullscreen: Boolean): Boolean {
+    val twoPane = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    val window = LocalWindowInfo.current.containerSize
+    return isFullscreen || twoPane || window.width > window.height
 }
 
 /**

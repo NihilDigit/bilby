@@ -19,6 +19,7 @@ interface DanmakuPrefsEditor {
     fun setDensity(value: DanmakuDensity)
     fun setFrameRate(value: DanmakuFrameRateCap)
     fun setInPip(value: Boolean)
+    fun setFontScale(value: Float)
 }
 
 /**
@@ -37,6 +38,7 @@ class StoredDanmakuPrefsEditor(
     override fun setDensity(value: DanmakuDensity) = persist { settings.saveDanmakuDensity(value) }
     override fun setFrameRate(value: DanmakuFrameRateCap) = persist { settings.saveDanmakuFrameRate(value) }
     override fun setInPip(value: Boolean) = persist { settings.saveDanmakuInPip(value) }
+    override fun setFontScale(value: Float) = persist { settings.saveDanmakuFontScale(value) }
 
     private fun persist(write: suspend () -> Unit) {
         scope.launch { write() }

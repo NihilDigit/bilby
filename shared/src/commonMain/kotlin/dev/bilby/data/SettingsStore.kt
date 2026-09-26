@@ -258,6 +258,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
             density = danmakuDensityOf(p[KEY_DANMAKU_DENSITY]),
             frameRateCap = danmakuFrameRateOf(p[KEY_DANMAKU_FRAME_RATE]),
             inPip = p[KEY_DANMAKU_IN_PIP] ?: true,
+            fontScale = (p[KEY_DANMAKU_FONT_SCALE] ?: 1f).coerceIn(DANMAKU_FONT_SCALE_MIN, DANMAKU_FONT_SCALE_MAX),
         )
     }
 
@@ -281,6 +282,10 @@ class SettingsStore(private val store: DataStore<Preferences>) {
      */
     suspend fun saveDanmakuScrollShowArea(fraction: Float) {
         store.edit { p -> p[KEY_DANMAKU_SCROLL_SHOW_AREA] = fraction.coerceIn(0.1f, 1f) }
+    }
+
+    suspend fun saveDanmakuFontScale(scale: Float) {
+        store.edit { p -> p[KEY_DANMAKU_FONT_SCALE] = scale.coerceIn(DANMAKU_FONT_SCALE_MIN, DANMAKU_FONT_SCALE_MAX) }
     }
 
     suspend fun saveDanmakuDensity(density: DanmakuDensity) {
@@ -497,6 +502,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_DANMAKU_DENSITY = stringPreferencesKey("danmaku_density")
         private val KEY_DANMAKU_FRAME_RATE = stringPreferencesKey("danmaku_frame_rate")
         private val KEY_DANMAKU_IN_PIP = booleanPreferencesKey("danmaku_in_pip")
+        private val KEY_DANMAKU_FONT_SCALE = floatPreferencesKey("danmaku_font_scale")
         private val KEY_EXCLUDED_FEED_MIDS = stringSetPreferencesKey("excluded_feed_mids")
 
         private val KEY_DANMAKUS_ARCHIVE = booleanPreferencesKey("danmakus_archive_enabled")
@@ -511,6 +517,8 @@ class SettingsStore(private val store: DataStore<Preferences>) {
          * 弹幕糊住的带。界面上给 25/50/75/100 四档,存的是比例本身,加减档位不会让旧值错位。
          */
         const val DEFAULT_DANMAKU_SCROLL_SHOW_AREA = 0.75f
+        const val DANMAKU_FONT_SCALE_MIN = 0.5f
+        const val DANMAKU_FONT_SCALE_MAX = 2f
 
         /** 认不出来的值(降级、手改、将来删档)一律回到默认档,不抛异常。 */
         private fun danmakuDensityOf(name: String?): DanmakuDensity =
@@ -571,6 +579,7 @@ data class SideSheetPrefs(val open: Boolean, val widthDp: Float?)
 /** 哪一页的侧栏。[key] 进偏好的键名,改了等于把所有人的设置清掉。 */
 enum class SidePanelId(val key: String) {
     SpaceDynamics("space_dynamics"),
+    SearchAgent("search_agent"),
 }
 
 /**
@@ -669,6 +678,11 @@ data class DanmakuPrefs(
      * 东西;嫌挡画面的人在这里关。只在 [enabled] 为真时才有意义,总开关关着小窗里也不画。
      */
     val inPip: Boolean = true,
+    /**
+     * 字号倍数,乘在按播放器形态分好的那一档上(见 DanmakuFontSizeSp)。只存一个倍数,不分全屏
+     * 与内嵌各存一份:形态之间的大小关系由分档给,人要调的只是"整体大一点还是小一点"。
+     */
+    val fontScale: Float = 1f,
 )
 
 data class LlmConfig(

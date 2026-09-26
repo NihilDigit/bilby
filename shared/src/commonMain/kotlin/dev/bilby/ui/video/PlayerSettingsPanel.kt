@@ -42,6 +42,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
+import dev.bilby.data.SettingsStore
 import dev.bilby.data.QualityOption
 import dev.bilby.player.SubtitleTrack
 import dev.bilby.player.audioQualityLabel
@@ -308,6 +309,25 @@ private fun DanmakuSettingsSection(prefs: DanmakuPrefs, editor: DanmakuPrefsEdit
         steps = OpacitySteps,
     )
 
+    // 字号倍数,同透明度一样松手才落盘。倍数乘在按播放器形态分好的档上,全屏与内嵌之间的
+    // 大小关系不变(见 DanmakuFontSizeSp)。
+    var fontScale by remember(prefs.fontScale) { mutableFloatStateOf(prefs.fontScale) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SectionTitle(stringResource(Res.string.settings_danmaku_font_scale), Modifier.weight(1f))
+        Text(
+            stringResource(Res.string.settings_danmaku_opacity_value, (fontScale * 100).roundToInt()),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Slider(
+        value = fontScale,
+        onValueChange = { fontScale = it },
+        onValueChangeFinished = { editor.setFontScale(fontScale) },
+        valueRange = FontScaleRange,
+        steps = FontScaleSteps,
+    )
+
     SectionTitle(stringResource(Res.string.settings_danmaku_show_area))
     SectionNote(stringResource(Res.string.settings_danmaku_show_area_subtitle))
     val areaLabels = DanmakuShowAreaSteps.associateWith {
@@ -416,6 +436,10 @@ private val DanmakuShowAreaSteps = listOf(0.25f, 0.5f, 0.75f, 1f)
 /** 与 `SettingsStore.saveDanmakuOpacity` 的取值范围一致。 */
 private val OpacityRange = 0.1f..1f
 private const val OpacitySteps = 8
+
+/** 50% 到 200%,10% 一档:两端之间 14 个刻度。 */
+private val FontScaleRange = SettingsStore.DANMAKU_FONT_SCALE_MIN..SettingsStore.DANMAKU_FONT_SCALE_MAX
+private const val FontScaleSteps = 14
 
 /** 倍速的数字部分:"0.75"、"1"、"2",不带单位,见倍速那一段。 */
 private fun formatSpeedNumber(speed: Float): String =
