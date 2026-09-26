@@ -28,6 +28,16 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.Dp
 import dev.bilby.ui.components.VideoCover
+import dev.bilby.ui.components.FullScreenLoading
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlin.math.abs
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -79,7 +89,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.LevelBadge
-import dev.bilby.ui.components.SectionHeader
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.components.SkeletonLine
 import dev.bilby.ui.components.SkeletonPulse
@@ -271,12 +280,15 @@ class ProfileViewModel(
  * 取 3 不取 5:两节预览加上收藏夹要一起放进一屏,5 条时光历史记录就吃掉整屏,
  * 底下两节要滚很久才见得到,那就不再是概览了。缓存那一节同一个数,它在本地排序截取。
  *
- * 宽屏每节是一排卡片,条数是这一排放得下几张(见 [Shelf]),仍是一行、不翻页。
+ * 宽屏每节是一排卡片,最多 [ShelfMaxCount] 张,放不下的横滚进来(见 [Shelf])。
  */
 private const val PreviewCount = 3
 
-/** 历史记录与稍后再看留几条,够宽屏最宽的一排;窄屏从里面取前 [PreviewCount] 条。 */
-private const val ShelfMaxCount = 16
+/**
+ * 宽屏一排最多几张。一屏宽能站五到七张,再多三四张横滚就到头:仍是概览,看全的进完整页。
+ * 窄屏从同一份里取前 [PreviewCount] 条。
+ */
+private const val ShelfMaxCount = 10
 
 /**
  * 「我的」:账号卡 + 历史记录、稍后再看、收藏夹、缓存四节概览。每一节的标题就是进完整页的
@@ -331,12 +343,22 @@ fun ProfileScreen(
     // 只有一个),左栏三条行、右栏一张卡,右边和底下都空着;窗口再宽,每节也还是那三条。
     // 一节一排,宽度直接换成条数。
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    // **宽屏放得下就不滚:各节平分账号卡以下的高度,卡片按分到的高度收窄**(见 [Shelf])。
+    // 卡片高度原本只跟着宽度走,页面总高随窗口宽高比浮动,常见窗口下正好高出一截、只能滚
+    // 一点点。窗口矮到连最小的卡片都放不下时退回整页滚动,不把卡片压扁或裁掉。
+    // 节数同各节自己的显隐判据:稍后再看确实为空时不画(PreviewSection 的 hideWhenEmpty),
+    // 缓存没有条目时不画。
+    val toView = state.toView
+    val toViewHidden = !toView.loading && toView.error == null && toView.items.isEmpty()
+    val shelfCount = 2 + (if (toViewHidden) 0 else 1) + (if (state.offline.isEmpty()) 0 else 1)
+    BoxWithConstraints(modifier = modifier.fillMaxSize().padding(contentPadding)) {
+    val fit = wide && maxHeight >= WideAccountHeaderHeight + ShelfSectionMinHeight * shelfCount
     Column(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
-            .padding(contentPadding)
-            .verticalScroll(scrollState),
+            .then(if (fit) Modifier else Modifier.verticalScroll(scrollState)),
     ) {
+            val sectionModifier = if (fit) Modifier.weight(1f) else Modifier
             // 窄屏限宽:卡片横跨整屏时,名字在最左、两个图标在最右,中间是一大片空。宽屏把三连
             // 挪进名字那一行,卡片和下面的货架同宽。
             if (wide) {
@@ -364,14 +386,28 @@ fun ProfileScreen(
                 }
             }
 
-            HistorySection(state.history, wide, onVideoClick, onOpenHistory, onRetryHistory)
-            ToViewSection(state.toView, wide, onToViewItemClick, onOpenToView, onRetryToView)
-            FavFoldersSection(state.favFolders, wide, onOpenFavFolder, onOpenFavFolders, onRetryFavFolders)
-            OfflineSection(state.offline, state.offlineUsedBytes, wide, onOfflineItemClick, onOpenOffline)
+            HistorySection(state.history, wide, onVideoClick, onOpenHistory, onRetryHistory, sectionModifier)
+            ToViewSection(state.toView, wide, onToViewItemClick, onOpenToView, onRetryToView, sectionModifier)
+            FavFoldersSection(state.favFolders, wide, onOpenFavFolder, onOpenFavFolders, onRetryFavFolders, sectionModifier)
+            OfflineSection(state.offline, state.offlineUsedBytes, wide, onOfflineItemClick, onOpenOffline, sectionModifier)
 
-            Spacer(Modifier.height(Spacing.Comfortable))
+            // 宽屏不要这段收尾:最后一节自带下边距,再加一段只会让页面刚好高出一屏。
+            if (!wide) Spacer(Modifier.height(Spacing.Comfortable))
+    }
     }
 }
+
+/**
+ * 宽屏账号卡那一行的高度:外边距 8 两侧、内边距 8 两侧,加 56dp 头像。算"放不放得下"用,
+ * 只在判断里出现;卡片本身按内容量高度。
+ */
+private val WideAccountHeaderHeight = Spacing.Tight * 4 + Dimens.AvatarHeader
+
+/**
+ * 一节在宽屏最矮的高度:标题行、最窄的卡片、节下边距。低于它整页改为滚动。
+ * 写成 getter:同一文件的顶层 val 按书写顺序初始化,[ShelfCardMinHeight] 在后面。
+ */
+private val ShelfSectionMinHeight get() = Dimens.MinTouchTarget + ShelfCardMinHeight + Spacing.Comfortable
 
 /**
  * 这一页最上面的账号卡:头像、名字加等级、个性签名,下面是关注、硬币、私信三连。整张卡点下去进自己的
@@ -727,8 +763,10 @@ private fun HistorySection(
     onVideoClick: (String) -> Unit,
     onOpen: () -> Unit,
     onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     PreviewSection(
+        modifier = modifier,
         title = stringResource(Res.string.history_title),
         state = state,
         emptyText = stringResource(Res.string.history_empty),
@@ -751,8 +789,10 @@ private fun ToViewSection(
     onVideoClick: (String) -> Unit,
     onOpen: () -> Unit,
     onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     PreviewSection(
+        modifier = modifier,
         title = stringResource(Res.string.tab_toview),
         state = state,
         emptyText = stringResource(Res.string.toview_empty),
@@ -859,26 +899,17 @@ private fun OfflineSection(
     wide: Boolean,
     onItemClick: (OfflineItem) -> Unit,
     onOpen: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     if (items.isEmpty()) return
     // 最近加进来的在前。在途的也算:刚点了缓存的人回到这一页,要找的正是那几条。
     val recent = items.sortedByDescending { it.createdAtMillis }
     val preview = recent.take(PreviewCount)
-    Column(modifier = Modifier.padding(bottom = Spacing.Comfortable)) {
-        SectionHeader(
-            title = stringResource(Res.string.offline_title),
-            onTitleClick = onOpen,
-            modifier = Modifier.padding(horizontal = Spacing.Comfortable),
-        ) {
-            Text(
-                text = stringResource(Res.string.offline_count, items.size) + MetaSeparator + formatBytes(usedBytes),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-        }
+    val summary = stringResource(Res.string.offline_count, items.size) + MetaSeparator + formatBytes(usedBytes)
+    Column(modifier = modifier.padding(bottom = Spacing.Comfortable)) {
+        ShelfTitle(stringResource(Res.string.offline_title), meta = summary, onSeeAll = onOpen, compact = !wide)
         if (wide) {
-            Shelf(recent) { item, modifier ->
+            Shelf(recent.take(ShelfMaxCount)) { item, modifier ->
                 ShelfVideoCard(item = item.toRowUi(), onClick = { onItemClick(item) }, modifier = modifier)
             }
             return@Column
@@ -894,9 +925,8 @@ private fun OfflineSection(
 /**
  * 预览区共用的骨架:小节标题、loading/error/empty 三态、内容。
  *
- * **标题本身就是进完整页的入口**([SectionHeader] 的 `onTitleClick`,带一个右尖括号),
- * 替掉了原先行尾那颗「查看全部」:那颗按钮和标题说的是同一个去处,却要人把视线从行首挪到行尾。
- * 条数为 0 时标题不可点 —— 链接到一个空页面没有意义。
+ * 进完整页的入口是标题行右端的「展示全部 →」(见 [ShelfTitle])。它曾经是"标题本身可点、后面
+ * 跟一个 ›",看不出能点。条数为 0 时不给入口 —— 链接到一个空页面没有意义。
  */
 @Composable
 private fun <T> PreviewSection(
@@ -917,6 +947,8 @@ private fun <T> PreviewSection(
     /** 宽屏:排成一排 [shelfCard],不是一列 [itemRow]。 */
     wide: Boolean,
     shelfCard: @Composable (item: T, modifier: Modifier) -> Unit,
+    /** 宽屏放得下时是 weight,各节平分高度,见 ProfileScreen。 */
+    modifier: Modifier = Modifier,
     /** 一行。给出下标与条数,分段列表项按它们取首尾圆角。 */
     itemRow: @Composable (item: T, index: Int, count: Int) -> Unit,
 ) {
@@ -924,17 +956,13 @@ private fun <T> PreviewSection(
     // **间距记在这一节的下面,不是上面。** 记在上面的话,排在最前的那一节会在它和上面那个
     // 入口之间多出一段谁也没要的留白;而节与节之间的距离两种写法是一样的。末尾多出的一段
     // 落在页面底部,那里本来就有收尾的 Spacer。
-    Column(modifier = Modifier.padding(bottom = Spacing.Comfortable)) {
-        SectionHeader(
-            title = title,
-            onTitleClick = onOpen.takeIf { state.items.isNotEmpty() },
-            modifier = Modifier.padding(horizontal = Spacing.Comfortable),
-        )
+    Column(modifier = modifier.padding(bottom = Spacing.Comfortable)) {
+        ShelfTitle(title, onSeeAll = onOpen.takeIf { state.items.isNotEmpty() }, compact = !wide)
         SectionBody(
             state,
             onRetry,
             emptyText,
-            skeleton = { if (wide) ShelfSkeleton() else PreviewRowsSkeleton() },
+            skeleton = { if (wide) ShelfLoading() else PreviewRowsSkeleton() },
         ) { items ->
             if (wide) {
                 Shelf(items, shelfCard)
@@ -949,25 +977,140 @@ private fun <T> PreviewSection(
 }
 
 /**
- * 宽屏的一节:一排等宽的卡片,放得下几张就显示几条。**不横滑、不折行**:这一页是概览,
- * 要看全的点标题进完整页;一排能滑的话,它就成了概览页里另一条看不到头的列表。
+ * 一节的标题行:标题在左,「展示全部 →」在同一行右端。
  *
- * 条数不够一排时卡片不拉宽,右边空着:同一页几排的卡片一样大,上下对得齐。
+ * **照 M3 carousel 的无障碍要求**(m3 components/carousel.md,Accessibility requirements on
+ * scrolling pages):竖向滚动页上的一排横滚卡片,必须有不横滚也能看全的入口,带标题的放在
+ * "directly next to the header or in the same row"。同一节写明 "Don't cover the carousel
+ * with buttons or other UI" —— 试过把按钮浮在那一排右端、卡片从底下淡出,正是这一条。
+ *
+ * 规范图示是标题后紧跟一个箭头图标按钮;试下来一个图标在一行大字旁边太容易被略过,改成带字的
+ * 按钮,放在同一行的右端(规范允许的另一种位置)。
+ *
+ * 更早是 titleSmall 加一个 ›、整行可点:放在宽屏上像一行注脚,在手机上看不出能点。
+ *
+ * [onSeeAll] 为 null 时不画按钮:条数为 0 时链接到一个空页面没有意义。[meta](缓存的条数与
+ * 占用)跟在标题后面。
+ *
+ * @param compact 窄屏用 titleMedium。titleLarge 在手机上和账号卡里的名字一样大,每节标题都在喊。
  */
 @Composable
-private fun <T> Shelf(items: List<T>, card: @Composable (item: T, modifier: Modifier) -> Unit) {
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable)) {
-        val columns = shelfColumns(maxWidth)
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(ShelfGap),
-            modifier = Modifier.height(IntrinsicSize.Max),
-        ) {
-            val shown = items.take(columns)
-            shown.forEach { card(it, Modifier.weight(1f).fillMaxHeight()) }
-            repeat(columns - shown.size) { Spacer(Modifier.weight(1f)) }
+private fun ShelfTitle(
+    title: String,
+    meta: String? = null,
+    onSeeAll: (() -> Unit)? = null,
+    compact: Boolean = false,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        // 上下不另加内边距:按钮自带 48dp 触控高度,节与节之间的距离由上一节的下边距给,
+        // 再加一层就让整页在常见窗口高度下多出一截,只能滚一点点。
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = Dimens.MinTouchTarget)
+            .padding(horizontal = Spacing.Comfortable),
+    ) {
+        Text(
+            text = title,
+            style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
+            maxLines = 1,
+            modifier = Modifier.alignByBaseline(),
+        )
+        meta?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                modifier = Modifier.alignByBaseline(),
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        if (onSeeAll != null) {
+            // 右端:宽屏上它对着这一排卡片的尾巴,读作"这一排还有";tonal 带字,读得出是按钮。
+            // 字加箭头试过的两种弱形态:标题后一个无底色的细线箭头,像装饰;标题后一个 tonal
+            // 小圆,仍要人猜它是什么。
+            FilledTonalButton(onClick = onSeeAll, contentPadding = ButtonDefaults.ButtonWithIconContentPadding) {
+                Text(stringResource(Res.string.profile_see_all), maxLines = 1)
+                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = null,
+                    modifier = Modifier.size(ButtonDefaults.IconSize),
+                )
+            }
         }
     }
 }
+
+/**
+ * 宽屏的一节:一排等宽的卡片,最多 [ShelfMaxCount] 张,放不下的横滚进来。
+ *
+ * 卡宽按"这一排正好站满几张"算,滚到哪里都是整张对齐页边,不在右沿切出半张。
+ *
+ * **高度也约束卡宽。** 宽屏放得下时各节平分窗口高度(见 [ProfileScreen]),这一排拿到的高度
+ * 定出卡片最高多少,反推封面最宽多少;宽度给的卡比这个宽,就多站一张、每张窄一点。整页滚动时
+ * 高度无界,只按宽度算。
+ *
+ * **鼠标滚轮在这一排上是横滚**(见 [verticalWheelScrollsRow]):横着排的东西只接 Shift+滚轮,
+ * 用户得先知道这个组合键。滚到头之后滚轮交还给页面,照常往下滚。
+ *
+ * 进完整页的入口在标题行(见 [ShelfTitle]),不压在这一排上。
+ */
+@Composable
+private fun <T> Shelf(items: List<T>, card: @Composable (item: T, modifier: Modifier) -> Unit) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val available = maxWidth - Spacing.Comfortable * 2
+        val widestByHeight = if (constraints.hasBoundedHeight) {
+            ((maxHeight - ShelfCardChrome) * CoverAspectRatio + ShelfCardPadding * 2).coerceAtLeast(ShelfCardFloorWidth)
+        } else {
+            Dp.Infinity
+        }
+        val columns = maxOf(
+            shelfColumns(available),
+            ((available + ShelfGap) / (widestByHeight + ShelfGap)).let { kotlin.math.ceil(it).toInt() },
+        )
+        val cardWidth = (available - ShelfGap * (columns - 1)) / columns
+        val rowState = rememberLazyListState()
+        LazyRow(
+            state = rowState,
+            contentPadding = PaddingValues(horizontal = Spacing.Comfortable),
+            horizontalArrangement = Arrangement.spacedBy(ShelfGap),
+            modifier = Modifier.verticalWheelScrollsRow(rowState),
+        ) {
+            items(items) { card(it, Modifier.width(cardWidth)) }
+        }
+    }
+}
+
+/**
+ * 竖向滚轮转成这一排的横滚。在 Initial 阶段截下:LazyRow 自己的滚动只认横向分量,竖向的会
+ * 一路冒到外面的页面上去。
+ *
+ * 这一排还滚得动时消费掉;滚到头(或本来就放得下)不消费,页面照常往下滚。增量直接派发,
+ * 不做动画:连续几格滚轮各起一段动画时,后一段会打断前一段,走过的距离比滚的格数少。
+ */
+private fun Modifier.verticalWheelScrollsRow(state: LazyListState): Modifier = pointerInput(state) {
+    val stepPx = WheelStep.toPx()
+    awaitPointerEventScope {
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            if (event.type != PointerEventType.Scroll) continue
+            val change = event.changes.firstOrNull() ?: continue
+            val delta = change.scrollDelta
+            if (abs(delta.y) <= abs(delta.x)) continue
+            val px = delta.y * stepPx
+            val canMove = if (px > 0) state.canScrollForward else state.canScrollBackward
+            if (!canMove) continue
+            change.consume()
+            state.dispatchRawDelta(px)
+        }
+    }
+}
+
+/** 一格滚轮横移多少,约半张卡。 */
+private val WheelStep = 96.dp
 
 private fun shelfColumns(width: Dp): Int =
     ((width + ShelfGap) / (ShelfCardMinWidth + ShelfGap)).toInt().coerceAtLeast(1)
@@ -975,6 +1118,22 @@ private fun shelfColumns(width: Dp): Int =
 /** 货架上一张卡的最窄宽度。封面 16:10 约 115dp 高,两行标题 bodyMedium 一行约 11 个字。 */
 private val ShelfCardMinWidth = 200.dp
 private val ShelfGap = Spacing.Cozy
+
+/** 卡片的内边距,见 [ShelfVideoCard] 与 FavFolderCard。 */
+private val ShelfCardPadding = Spacing.Tight
+
+/**
+ * 卡片除封面以外的高度:上下内边距,两行 bodyMedium 标题(行高 20),一行 labelSmall 状态
+ * (行高 16),两道 4dp 行距。用它从一排的高度反推封面能多高。字号放大时实际更高,那时
+ * 这一排的卡会比算出来的高一点,整页仍在滚动与否的判断里留了余量。
+ */
+private val ShelfCardChrome = ShelfCardPadding * 2 + 20.dp * 2 + 16.dp + Spacing.Hair * 2
+
+/** 高度吃紧时卡片最窄收到多少。再窄两行标题只剩七八个字,认不出是哪一条。 */
+private val ShelfCardFloorWidth = 160.dp
+
+/** 最窄那张卡的高度,判断"放不放得下"用。 */
+private val ShelfCardMinHeight = (ShelfCardFloorWidth - ShelfCardPadding * 2) / CoverAspectRatio + ShelfCardChrome
 
 /**
  * 货架里的一条视频:封面在上,标题两行、状态一行在下。外形同 [FavFolderCard](底色、圆角、
@@ -1027,36 +1186,17 @@ private fun ShelfVideoCard(
 /** 同 VideoRow 里失效稿件的透明度。 */
 private const val DisabledShelfAlpha = 0.38f
 
-/** 货架读取中的样子:一排和卡片同形的占位,张数按这一排放得下的算。 */
+/**
+ * 货架读取中:一个加载指示器,不画骨架。一排同形占位铺满一千多 dp,张数又常和真的条数对不上
+ * (收藏夹多半只有一个),读起来比等着更乱。高度约一排卡片,内容到了页面不至于大跳。
+ */
 @Composable
-private fun ShelfSkeleton() {
-    SkeletonPulse {
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable)) {
-            val columns = shelfColumns(maxWidth)
-            Row(horizontalArrangement = Arrangement.spacedBy(ShelfGap)) {
-                repeat(columns) {
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(MaterialTheme.shapes.large)
-                            .background(MaterialTheme.colorScheme.surfaceContainer)
-                            .padding(Spacing.Tight),
-                    ) {
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .aspectRatio(CoverAspectRatio)
-                                .skeleton(RoundedCornerShape(CoverCornerRadius)),
-                        )
-                        SkeletonLine(Modifier.fillMaxWidth(0.85f))
-                        SkeletonLine(Modifier.fillMaxWidth(0.4f))
-                    }
-                }
-            }
-        }
-    }
+private fun ShelfLoading() {
+    // heightIn 而不是 height:各节平分高度时这一节可能比 200 矮,指示器跟着缩在里面。
+    FullScreenLoading(Modifier.fillMaxWidth().heightIn(max = ShelfLoadingHeight))
 }
+
+private val ShelfLoadingHeight = 200.dp
 
 /**
  * 预览区读取中的样子:[PreviewCount] 条和 [PreviewRow] 同形的分段行,封面、标题、状态各一块。
@@ -1169,28 +1309,25 @@ private fun FavFoldersSection(
     onOpenFolder: (FavFolderDetail) -> Unit,
     onOpen: () -> Unit,
     onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     // **间距记在这一节的下面,不是上面。** 记在上面的话,排在最前的那一节会在它和上面那个
     // 入口之间多出一段谁也没要的留白;而节与节之间的距离两种写法是一样的。末尾多出的一段
     // 落在页面底部,那里本来就有收尾的 Spacer。
-    Column(modifier = Modifier.padding(bottom = Spacing.Comfortable)) {
-        SectionHeader(
-            title = stringResource(Res.string.fav_folders_title),
-            // **一个都没有时也可点**,与上面几节按 items 非空判不同:那一页挂着「新建收藏夹」,
-            // 而一个还没建过收藏夹的人,恰好最需要走进去。
-            onTitleClick = onOpen,
-            modifier = Modifier.padding(horizontal = Spacing.Comfortable),
-        )
+    Column(modifier = modifier.padding(bottom = Spacing.Comfortable)) {
+        // **一个都没有时也可点**,与上面几节按 items 非空判不同:那一页挂着「新建收藏夹」,
+        // 而一个还没建过收藏夹的人,恰好最需要走进去。
+        ShelfTitle(stringResource(Res.string.fav_folders_title), onSeeAll = onOpen, compact = !wide)
         // 同 PreviewSection 一份四态,见 [SectionBody]。
         SectionBody(
             state,
             onRetry,
             stringResource(Res.string.profile_favorites_empty),
-            skeleton = { if (wide) ShelfSkeleton() else FolderCardsSkeleton() },
+            skeleton = { if (wide) ShelfLoading() else FolderCardsSkeleton() },
         ) { folders ->
             // 宽屏同其余几节一排卡片;只有一个时也是一张卡,和上面几排的卡一样大,不另起横排。
             if (wide) {
-                Shelf(folders) { folder, modifier ->
+                Shelf(folders.take(ShelfMaxCount)) { folder, modifier ->
                     FavFolderCard(folder, onClick = { onOpenFolder(folder) }, modifier = modifier)
                 }
                 return@SectionBody

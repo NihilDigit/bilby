@@ -35,6 +35,7 @@
 
     <string name="follow_none">Follow</string>
     <string name="profile_following">following</string>
+    <string name="profile_see_all">Show all</string>
     <string name="profile_coins">coins</string>
     <string name="follow_following">Following</string>
     <string name="follow_mutual">Mutual</string>
@@ -434,7 +435,6 @@
     <string name="settings_llm_test_running">Sending…</string>
     <string name="settings_llm_test_ok">"OK  %1$d ms"</string>
     <string name="feed_open_followings">Following</string>
-    <string name="feed_followings_all_short">All</string>
     <string name="followings_title">Following</string>
     <string name="followings_empty">Not following anyone yet</string>
     <string name="followings_search_hint">Search your following list</string>
