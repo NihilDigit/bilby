@@ -497,6 +497,7 @@
     <string name="playback_error_network">Network error, could not get the stream</string>
     <string name="playback_error_detail">Could not read the video details</string>
     <string name="playback_error_decode">Playback failed (%1$d)</string>
+    <string name="playback_error_open">Can\'t open this video</string>
     <string name="playback_error_live_stream">Could not get the live stream</string>
     <string name="playback_error_live_ended">The stream has ended</string>
     <string name="settings_auto_next">Play the next item automatically</string>

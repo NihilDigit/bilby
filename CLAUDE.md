@@ -132,8 +132,9 @@ releases the player.
 Common UI sees the player only as `PlaybackHost` (state, connect) and `PlayerHandle`
 (control), and sends service commands as `PlaybackCommand`. On Android these wrap the
 MediaController and its custom `SessionCommand`s (`AndroidPlaybackHost`); on desktop
-`DesktopPlaybackHost` owns the single mpv player and plays one item at a time — the queue is
-not implemented there yet. The desktop publishes `loadKey` before opening a stream, the
+`DesktopPlaybackHost` owns the single mpv player. mpv holds one item at a time, so the queue
+lives in a state machine beside it (`player/DesktopQueue.kt`) that follows the Android rules;
+see `docs/playback-refactor.md`. The desktop publishes `loadKey` before opening a stream, the
 opposite of Android: mpv's D3D11 output is created by the surface, and the page only mounts
 the surface once `loadKey` matches.
 
@@ -143,8 +144,9 @@ is no lifecycle to manage. Three earlier attempts got this wrong by modelling it
 navigation destination, adding a `listening` flag on the service, and adding a
 "popped versus covered" judgement at the nav layer.
 
-The queue is the ExoPlayer playlist, and there is no second copy of it. Items carry the bvid
-as their `mediaId`; the cid is load state on the service, never written back into the item.
+On Android the queue is the ExoPlayer playlist, and there is no second copy of it. Items
+carry the bvid as their `mediaId`; the cid is load state on the service, never written back
+into the item.
 Streams are fetched by `player/LazyMediaSource` at the moment the player reaches an entry,
 because playurl hands out time-limited CDN links — a link fetched when the queue was built
 has expired by the time a later entry is reached. A resolution failure has to reach

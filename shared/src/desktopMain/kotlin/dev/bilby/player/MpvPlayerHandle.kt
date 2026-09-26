@@ -13,6 +13,9 @@ import org.openani.mediamp.PlayerState
  * 桌面上的 [PlayerHandle]:同一个 mpv 播放器的外壳。状态读 mediamp 的流,mediamp 覆盖不到的
  * (倍速、缓冲位置、关视频轨)直接问 mpv。
  *
+ * 播放/暂停、随机与队列内的跳转交给 [DesktopPlaybackHost]:队列与"用户想不想听"都归它,
+ * 与 Android 上这些标准命令落到服务那边是同一个意思。
+ *
  * 事件由 mediamp 的状态流与事件流派发,倍速没有流,和 Android 端一样在变了之后报一次。
  */
 class MpvPlayerHandle internal constructor(
@@ -26,7 +29,7 @@ class MpvPlayerHandle internal constructor(
     private var dispatchJob: Job? = null
 
     override val isPlaying: Boolean get() = mediamp.state.value.isPlaying
-    override val playWhenReady: Boolean get() = mediamp.state.value.playWhenReady
+    override val playWhenReady: Boolean get() = host.playWhenReady
     override val playbackState: Int get() = mediamp.state.value.phase()
     override val currentPosition: Long get() = player.positionMillis
 
@@ -41,23 +44,24 @@ class MpvPlayerHandle internal constructor(
     override val videoSize: VideoDimensions
         get() = mediamp.mediaProperties.value.let { VideoDimensions(it?.videoWidth ?: 0, it?.videoHeight ?: 0) }
 
-    // 桌面没有队列,随机无从生效;记下来只为读回去一致。
-    override var shuffleModeEnabled: Boolean = false
+    override var shuffleModeEnabled: Boolean
+        get() = host.shuffled
+        set(value) {
+            host.shuffled = value
+        }
 
-    override fun play() = mediamp.play()
-    override fun pause() = mediamp.pause()
+    override fun play() = host.play()
+    override fun pause() = host.pause()
 
     override fun seekTo(positionMillis: Long) {
         mediamp.seekTo(positionMillis)
         host.onSeeked(positionMillis)
     }
 
-    override fun seekTo(index: Int, positionMillis: Long) {
-        if (index == 0) seekTo(positionMillis)
-    }
+    override fun seekTo(index: Int, positionMillis: Long) = host.seekToQueueIndex(index, positionMillis)
 
-    override fun seekToNext() = Unit
-    override fun seekToPrevious() = Unit
+    override fun seekToNext() = host.seekToNext()
+    override fun seekToPrevious() = host.seekToPrevious()
 
     override fun setPlaybackSpeed(speed: Float) {
         player.mpv.setPropertyDouble("speed", speed.toDouble())
