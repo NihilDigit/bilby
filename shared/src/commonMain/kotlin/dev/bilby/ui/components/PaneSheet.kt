@@ -58,6 +58,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.NonSkippableComposable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.neverEqualPolicy
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import dev.bilby.ui.theme.Spacing
@@ -235,6 +238,7 @@ private class PaneSheetScopeImpl(
  * sheet 与侧边面板旁边还露着页面,打开它的那一行就是上下文,不另加标题。
  */
 @OptIn(ExperimentalMaterial3Api::class)
+@NonSkippableComposable
 @Composable
 fun PaneSheet(
     onDismissRequest: () -> Unit,
@@ -245,12 +249,18 @@ fun PaneSheet(
 ) {
     val pane = LocalSidePane.current
     if (pane != null && pane.hosted) {
-        val latestContent by rememberUpdatedState(content)
+        // **右栏里的面板不在调用方的组合位置上**,调用方重组不会顺带重画它,只能靠这份状态
+        // 通知。曾经用 rememberUpdatedState,楼中楼面板一直转圈,而同一份回复早已摊进主列表:
+        // 它只在拿到另一个 lambda 实例时才通知,PaneSheet 又会在参数全等时被整个跳过,
+        // 捕获的值变了也传不过去。所以这里不跳过,且每次都写、每次都算变化。
+        val contentState = remember { mutableStateOf(content, neverEqualPolicy()) }
+        SideEffect { contentState.value = content }
         val latestDismiss by rememberUpdatedState(onDismissRequest)
         // 返回键先关面板。面板画在右栏里,不像 ModalBottomSheet 自带返回处理。
         BackHandler { latestDismiss() }
         DisposableEffect(pane, title) {
             val panel = PanePanel(title, { latestDismiss() }) {
+                val latestContent = contentState.value
                 PaneSheetScopeImpl(this, inPane = true).latestContent()
             }
             pane.panel = panel

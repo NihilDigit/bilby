@@ -3,6 +3,7 @@ package dev.bilby.ui.comment
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.api.BiliResult
+import dev.bilby.BiliLog
 import dev.bilby.appendDistinctBy
 import dev.bilby.data.CommentCursor
 import dev.bilby.data.CommentItem
@@ -538,6 +539,8 @@ class CommentViewModel(
 
     /** 展开失败报在这一楼自己身上,见 [ExpandedReplies.error]。 */
     private fun setExpandError(rootId: Long, message: String) {
+        // 这一楼的失败只画在它自己身上,不经过整页的错误,所以日志要在这里留。
+        BiliLog.w("展开楼中楼失败 x/v2/reply/reply root=$rootId: $message")
         _state.update { current ->
             val entry = current.expandedReplies[rootId] ?: return@update current
             current.copy(expandedReplies = current.expandedReplies + (rootId to entry.copy(error = message)))
