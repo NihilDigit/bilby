@@ -122,32 +122,6 @@ private fun StackedFaces(liveUps: List<LiveUpBrief>) {
 }
 
 /**
- * 宽屏次区里的那一行。和 [LiveNowSlot] 是同一件事的两种形状:横排那格是方格(头像在上、
- * 字在下),这一栏是 `ListItem`(头像在左、字在右),两边各按所在容器的形状走。
- *
- * 头像仍用同一组叠放,不退化成一个图标 —— 「有谁在播」这件事里,那两张脸就是内容本身。
- */
-@Composable
-fun LiveNowListRow(
-    liveUps: List<LiveUpBrief>,
-    count: Int,
-    onClick: () -> Unit,
-) {
-    if (liveUps.isEmpty()) return
-    ListItem(
-        headlineContent = {
-            Text(
-                text = stringResource(Res.string.feed_live_now, count.coerceAtLeast(liveUps.size)),
-                color = MaterialTheme.colorScheme.primary,
-            )
-        },
-        leadingContent = { StackedFaces(liveUps) },
-        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
-    )
-}
-
-/**
  * 正在直播的列表。用 sheet 不用整页:它是一份此刻有效、看一眼就走的短名单,推一整页进
  * backstack 之后回来还得按一次返回。
  *

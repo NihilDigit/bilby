@@ -1,6 +1,8 @@
 package dev.bilby.ui.components
 
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 
@@ -10,3 +12,9 @@ import androidx.compose.ui.Modifier
  */
 @Composable
 expect fun ListScrollbar(state: LazyListState, modifier: Modifier = Modifier)
+
+@Composable
+expect fun ListScrollbar(state: LazyGridState, modifier: Modifier = Modifier)
+
+@Composable
+expect fun ListScrollbar(state: LazyStaggeredGridState, modifier: Modifier = Modifier)

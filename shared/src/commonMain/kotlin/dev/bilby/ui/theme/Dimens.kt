@@ -58,6 +58,12 @@ object Breakpoints {
     val MediaWidth = 720.dp
 
     /**
+     * 宽屏网格里一格视频行的最大宽度,照 PiliPlus `Grid.videoCardHDelegate` 的
+     * `smallCardWidth * 2`。行是定宽封面加文字,再宽只是标题行变长;超过它就多分一列。
+     */
+    val VideoRowMaxWidth = 480.dp
+
+    /**
      * 播放控制条给得起档名(倍速倍数、画质档名、字幕轨名)的最小宽度。低于这一档只留图标。
      *
      * **分不分行不看这个数**,那由控制条把自己这一行量一遍决定(见

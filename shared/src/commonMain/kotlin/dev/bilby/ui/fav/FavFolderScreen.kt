@@ -330,15 +330,13 @@ fun FavFolderScreen(
                     contentPadding = contentPadding,
                     header = {
                         // 页头跟着列表一起滚走,理由同空间页投稿栏的表头。
-                        item(key = "header") {
-                            FolderHeader(
-                                info = state.info,
-                                order = state.order,
-                                canListen = firstPlayable != null,
-                                onListen = { firstPlayable?.let(onListen) },
-                                onOrderChanged = onOrderChanged,
-                            )
-                        }
+                        FolderHeader(
+                            info = state.info,
+                            order = state.order,
+                            canListen = firstPlayable != null,
+                            onListen = { firstPlayable?.let(onListen) },
+                            onOrderChanged = onOrderChanged,
+                        )
                     },
                 ) { item ->
                     VideoRow(

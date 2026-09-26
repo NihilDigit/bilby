@@ -392,14 +392,12 @@ fun FollowingsScreen(
                 onRetry = onRetry,
                 contentPadding = contentPadding,
                 header = {
-                    item(key = "controls") {
-                        FollowingsControls(
-                            state,
-                            onSelectSource,
-                            onSearch,
-                            onOpenGroupManager,
-                        )
-                    }
+                    FollowingsControls(
+                        state,
+                        onSelectSource,
+                        onSearch,
+                        onOpenGroupManager,
+                    )
                 },
             ) { up ->
                 FollowingRow(

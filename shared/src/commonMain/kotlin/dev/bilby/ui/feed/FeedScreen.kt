@@ -2,11 +2,9 @@ package dev.bilby.ui.feed
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Icon
@@ -50,7 +48,13 @@ import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.data.LiveUpBrief
 import dev.bilby.data.UpBrief
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import dev.bilby.ui.maxWidthGridCells
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -62,9 +66,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.ui.semantics.Role
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.isAtLeast
@@ -88,8 +89,7 @@ import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
 import java.time.Instant
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.map
+import dev.bilby.ui.components.PrefetchNearEnd
 import kotlinx.coroutines.flow.mapNotNull
 
 data class FeedUiState(
@@ -169,8 +169,6 @@ internal fun List<FeedEntry>.indexOfReadMarker(lastReadEntryId: String?): Int? =
     lastReadEntryId
         ?.let { entryId -> indexOfFirst { it.id == entryId } }
         ?.takeIf { it > 0 }
-
-private const val PrefetchThreshold = 5
 
 /**
  * 动态流。列表本身刻意不做特殊设计(DESIGN 2.1):没有红点、没有未读计数。
@@ -284,7 +282,7 @@ private fun FeedList(
     modifier: Modifier,
     contentPadding: PaddingValues,
 ) {
-    val listState = rememberLazyListState()
+    val listState = rememberLazyGridState()
     // 只认"进这次组合之后又变了"。计数器由 MainActivity 持有,切走再切回来时它带着上一次的
     // 值,而 LaunchedEffect 进组合就跑一次 —— 光判非零的话,每次回到动态页都会补滚一下,
     // 把下面那套「上次看到哪」的定位覆盖掉。
@@ -297,27 +295,20 @@ private fun FeedList(
     }
     val markerIndex = state.items.indexOfReadMarker(state.readMarkerEntryId)
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
-    // 那一排头像排在动态流前面,分隔线/条目在 LazyColumn 里的绝对下标要把它加回来。
-    // **宽屏下它不在这个列表里**(挪到了旁边的次区),这时不能加,否则开屏定位会差一格。
+    // 那一排头像排在动态流前面,分隔线/条目在网格里的绝对下标要把它加回来。
     // 「最常访问」那一格在没人可显示时整格不画,正在直播的那一格自己也可以撑起它 ——
     // 判据必须和下面渲染时用的是同一个,差一格就是开屏定位落错一条。
     val hasUpsRow = state.topUps.isNotEmpty() || state.liveUps.isNotEmpty()
-    // 标题行**两种宽度下都在列表里**,所以恒占一格。它不像「最常访问」那样会被挪到旁边:
-    // 那一排是一组人,占得住次区一整栏;这一行只有一个标题和一个入口。
-    val baseOffset = (if (!wide && hasUpsRow) 1 else 0) + 1
+    // 标题行恒占一格。
+    val baseOffset = (if (hasUpsRow) 1 else 0) + 1
 
     var liveSheetOpen by rememberSaveable { mutableStateOf(false) }
 
-    // 触底预取:在 composition 外用 snapshotFlow 观察滚动位置,避免在 composable 里直接调用副作用。
-    LaunchedEffect(listState, state.hasMore, state.appending) {
-        snapshotFlow { listState.layoutInfo }
-            .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-            .distinctUntilChanged()
-            .filter { (lastVisible, total) -> lastVisible != null && lastVisible >= total - 1 - PrefetchThreshold }
-            .collect {
-                if (state.hasMore && !state.appending) onLoadMore()
-            }
-    }
+    PrefetchNearEnd(
+        listState,
+        canLoad = state.hasMore && !state.appending && state.error == null,
+        onLoadMore = onLoadMore,
+    )
 
     // **开屏只定位这一次**,之后不管列表怎么变(翻页、排除 UP 主)都不再自动跳 —— 用户一旦
     // 开始自己滚,视图跳动比找不到分隔线更打扰人。
@@ -336,7 +327,7 @@ private fun FeedList(
     }
 
     // 顶部可见条目上报给 ViewModel 去抖落盘。用 layoutInfo 里第一个「是投稿条目」的 key,
-    // 不用 firstVisibleItemIndex 反查 —— 分隔线、顶部 UP 排都会占用 LazyColumn 的下标,
+    // 不用 firstVisibleItemIndex 反查 —— 分隔线、顶部 UP 排都会占用网格的下标,
     // 换算回 state.items 的下标要跟着这两样是否存在反复调整,直接认 key 更不容易算错。
     val idSet = remember(state.items) { state.items.mapTo(HashSet()) { it.id } }
     LaunchedEffect(listState, idSet) {
@@ -346,23 +337,26 @@ private fun FeedList(
             .collect { onScrollPositionChanged(it) }
     }
 
-    // 宽屏只收窄行长,不拆栏。列表行是"封面 + 三行文字"的定宽版式,铺到 1400dp 之后封面
-    // 还是 128dp,右边多出来的全是空白;而拆成两栏会让"下一条是什么"变成两条线索,
-    // 这一页的读法本来就是一条时间线往下走。
+    // **宽屏是网格,按行从左往右读。** 列表行是"封面 + 三行文字"的定宽版式,单列铺到
+    // 1400dp 之后封面还是 128dp,右边多出来的全是空白,一屏只站得下七八条。按行读的网格
+    // 在 B 站网页版和 PiliPlus 的宽屏上都是这条时间线的读法,时间序不因分列而打乱。
+    // 窄屏是固定一列,与原来的单列列表同形;两种宽度共用一个网格,开屏定位、触底预取、
+    // 位置上报都只认一套下标。
     val feedList: @Composable (Modifier) -> Unit = { listModifier ->
         RefreshBox(
             refreshing = state.refreshing,
             onRefresh = onRefresh,
             modifier = listModifier,
         ) {
-            LazyColumn(
+            LazyVerticalGrid(
+                columns = if (wide) maxWidthGridCells(Breakpoints.VideoRowMaxWidth) else GridCells.Fixed(1),
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = contentPadding,
             ) {
         // 首页装不下的另一半(图文、纯文字、转发、直播)的入口挂在标题行右边。**专栏不在
         // 里面**:它是投稿,和视频一样排在首页的时间序里(见 DynamicRepository 的分流)。
-        item(key = "header") {
+        item(key = "header", span = FullLine) {
             FeedHeader(
                 refreshing = state.refreshing,
                 onRefresh = onRefresh,
@@ -370,10 +364,14 @@ private fun FeedList(
                 onOpenPushes = onOpenPushes,
             )
         }
-        // 窄屏时「最常访问」仍然跟着列表一起滚,不吸顶:吸顶会让它变成常驻的入口带,
-        // 而这一页的主体是动态流。宽屏下它挪到旁边的次区去了,这里就不再出现。
-        if (!wide && hasUpsRow) {
-            item(key = "frequent-ups") {
+        // 「最常访问」跟着列表一起滚,不吸顶:吸顶会让它变成常驻的入口带,而这一页的主体是
+        // 动态流。
+        //
+        // **宽屏也是这一排,不挪到侧栏。** 侧栏试过一轮:十来个人长期占住一整栏,下面空着,
+        // 为了让它能关又要加开关、加设置、把标题行钉住。放在网格上方,这一排在宽屏上横铺
+        // 一千多 dp,二十个人一行站得下、不用横滚,网格也拿到整个宽度。
+        if (hasUpsRow) {
+            item(key = "frequent-ups", span = FullLine) {
                 FrequentUpsRow(
                     ups = state.topUps,
                     liveUps = state.liveUps,
@@ -386,22 +384,23 @@ private fun FeedList(
             }
         }
         if (state.items.isEmpty()) {
-            item(key = "empty") { EmptyState(stringResource(Res.string.feed_empty)) }
+            item(key = "empty", span = FullLine) { EmptyState(stringResource(Res.string.feed_empty)) }
         }
         val beforeMarker = if (markerIndex != null) state.items.subList(0, markerIndex) else state.items
         val fromMarker = if (markerIndex != null) state.items.subList(markerIndex, state.items.size) else emptyList()
         // animateItem:「不再显示这个 UP」当场生效,那一刻被摘掉的可能是连着好几条,
         // 下面几十行硬切着往上跳一格;条目认的是 FeedEntry.id,翻页追加也走同一条动效。
-        items(beforeMarker, key = { it.id }) { item ->
+        gridItems(beforeMarker, key = { it.id }) { item ->
             FeedEntryItem(item, onItemClick, onExcludeUp, onAddToView, Modifier.animateItem())
         }
         if (markerIndex != null) {
-            item(key = "read-marker") { ReadMarkerDivider(Modifier.animateItem()) }
+            // 横跨整行:分隔线前那一行没排满也照样断开,新旧两段不共用一行。
+            item(key = "read-marker", span = FullLine) { ReadMarkerDivider(Modifier.animateItem()) }
         }
-        items(fromMarker, key = { it.id }) { item ->
+        gridItems(fromMarker, key = { it.id }) { item ->
             FeedEntryItem(item, onItemClick, onExcludeUp, onAddToView, Modifier.animateItem())
         }
-            item(key = "footer") {
+            item(key = "footer", span = FullLine) {
                 ListFooter(
                     appending = state.appending,
                     hasMore = state.hasMore,
@@ -414,29 +413,7 @@ private fun FeedList(
     }
 
     if (wide) {
-        /*
-         * **宽屏把「最常访问」挪到旁边。**
-         *
-         * 它本来就不是这条时间线的一部分 —— 它是"去谁那儿看看"的导航,混在流里当第一条,
-         * 读起来像"今天的第一条动态是一排头像"。canonical-examples 对 supporting pane 的
-         * 说法正好:主区放主内容,次区放支持性内容。
-         *
-         * 顺带解决另一件事:这一页的行是"定宽封面 + 三行文字",宽屏下右边那片空白本来
-         * 什么也没干,现在装的是原本要占掉列表一屏高度的那排头像。
-         */
-        Row(modifier = modifier.fillMaxSize()) {
-            feedList(Modifier.weight(2f).fillMaxHeight())
-            FrequentUpsPane(
-                ups = state.topUps,
-                liveUps = state.liveUps,
-                liveCount = state.liveCount,
-                special = state.topUpsAreSpecial,
-                onUpClick = onUpClick,
-                onOpenLiveNow = { liveSheetOpen = true },
-                onOpenFollowings = onOpenFollowings,
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-            )
-        }
+        feedList(modifier.fillMaxSize())
     } else {
         AdaptiveContent(modifier = modifier, maxWidth = Breakpoints.ReadableWidth) {
             feedList(Modifier.fillMaxSize())
@@ -538,61 +515,6 @@ private fun FeedHeader(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,
                 modifier = Modifier.size(Dimens.IconInline),
-            )
-        }
-    }
-}
-
-/**
- * 宽屏的次区:竖着排的「最常访问」,末尾是关注列表入口。
- *
- * 竖排而不是把那条横滚原样搬过来:次区窄而高,横滚在这个形状里既浪费高度、又要求用户在
- * 一个不该有滚动的地方滚动。
- */
-@Composable
-private fun FrequentUpsPane(
-    ups: List<UpBrief>,
-    liveUps: List<LiveUpBrief>,
-    liveCount: Int,
-    special: Boolean,
-    onUpClick: (Long) -> Unit,
-    onOpenLiveNow: () -> Unit,
-    onOpenFollowings: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    LazyColumn(modifier = modifier) {
-        // 竖排里它同样排在最前面,并且和这一栏其余的行同形(ListItem + leading 头像)——
-        // 横排那一格是给方格排布的,原样搬进来会是一块比周围矮一截、字也小一号的补丁。
-        if (liveUps.isNotEmpty()) {
-            item(key = "live-now") {
-                LiveNowListRow(liveUps = liveUps, count = liveCount, onClick = onOpenLiveNow)
-            }
-        }
-        items(ups, key = { it.mid }) { up ->
-            ListItem(
-                headlineContent = {
-                    Text(up.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                },
-                leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarStack) },
-                modifier = Modifier
-                    .animateItem()
-                    .fillMaxWidth()
-                    .clickable(role = Role.Button) { onUpClick(up.mid) },
-            )
-        }
-        item(key = "all-followings") {
-            ListItem(
-                headlineContent = { Text(stringResource(Res.string.feed_all_followings)) },
-                leadingContent = {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(role = Role.Button, onClick = onOpenFollowings),
             )
         }
     }
@@ -930,6 +852,9 @@ private fun UpSlot(
         )
     }
 }
+
+/** 网格里横跨整行的那几格:标题行、分隔线、页脚。 */
+private val FullLine: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
 
 /** 标题行入口按钮末端的内边距。行的右边距补足剩下的部分,箭头的右沿停在 16dp 页边线上。 */
 private val HeaderButtonEndInset = Spacing.Hair

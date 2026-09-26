@@ -6,13 +6,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import dev.bilby.ui.theme.Breakpoints
+import kotlin.math.ceil
 
 /** M3 的五档窗口断点,按可用窗口宽度而不是设备型号判断。 */
 enum class BilbyWindowSize {
@@ -44,6 +47,31 @@ private fun bilbyWindowSize(width: Dp): BilbyWindowSize = when {
 }
 
 fun BilbyWindowSize.isAtLeast(other: BilbyWindowSize): Boolean = ordinal >= other.ordinal
+
+/**
+ * 每列不超过 [maxCellWidth],列数取满足这一点的最小值,余宽均分。
+ *
+ * `GridCells.Adaptive` 反过来规定的是最小列宽,列数向下取整,于是一格可以宽到接近两倍 ——
+ * 横排视频行宽到那个程度,右半格只剩一行拉长的标题。这里向上取整,照 PiliPlus 的
+ * `SliverGridDelegateWithMaxCrossAxisExtent`。
+ */
+fun maxWidthGridCells(maxCellWidth: Dp): GridCells = MaxWidthGridCells(maxCellWidth)
+
+private class MaxWidthGridCells(private val maxCellWidth: Dp) : GridCells {
+    override fun Density.calculateCrossAxisCellSizes(availableSize: Int, spacing: Int): List<Int> {
+        val stride = maxCellWidth.roundToPx() + spacing
+        // 每列连同它右边那道间距占一个 stride,末列没有间距,所以可用宽度补上一道再除。
+        val count = ceil((availableSize + spacing).toFloat() / stride).toInt().coerceAtLeast(1)
+        val usable = (availableSize - spacing * (count - 1)).coerceAtLeast(0)
+        val base = usable / count
+        val remainder = usable % count
+        return List(count) { index -> base + if (index < remainder) 1 else 0 }
+    }
+
+    override fun equals(other: Any?): Boolean = other is MaxWidthGridCells && other.maxCellWidth == maxCellWidth
+
+    override fun hashCode(): Int = maxCellWidth.hashCode()
+}
 
 /**
  * 在宽屏上限制内容行长,compact 下仍是全宽。具体页面自己决定一栏、两栏还是沉浸式播放器,

@@ -252,16 +252,14 @@ fun ToViewScreen(
                 header = {
                     // 容量与表头跟着列表一起滚走,不钉在顶上:钉住的两行加上顶栏占掉小半屏,
                     // 而这一页要看的是列表。判据同空间页投稿栏的表头。
-                    item(key = "header") {
-                        Column {
-                            CapacityMeter(state.count, state.capacity)
-                            ListHeader(
-                                asc = state.asc,
-                                canListen = firstPlayable != null,
-                                onListenAll = { firstPlayable?.let(onListenAll) },
-                                onAscChanged = onAscChanged,
-                            )
-                        }
+                    Column {
+                        CapacityMeter(state.count, state.capacity)
+                        ListHeader(
+                            asc = state.asc,
+                            canListen = firstPlayable != null,
+                            onListenAll = { firstPlayable?.let(onListenAll) },
+                            onAscChanged = onAscChanged,
+                        )
                     }
                 },
             ) { item ->

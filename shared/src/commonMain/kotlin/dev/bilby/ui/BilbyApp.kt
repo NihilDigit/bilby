@@ -1000,14 +1000,13 @@ private fun RootTabsContent(
     // 只 padding 不声明消费的话,后面的 imePadding() 会再多退让一个底栏高度。消费之后它只让出
     // 键盘高出底栏的那一截,内容正好停在键盘上沿,底栏留在键盘下面。
     val bottom = PaddingValues(bottom = insets.calculateBottomPadding())
-    AdaptiveContent(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .padding(top = insets.calculateTopPadding())
             .padding(bottom)
             .consumeWindowInsets(bottom)
             .imePadding(),
-        maxWidth = Breakpoints.ReadableWidth,
     ) {
         // **Top level**:点底栏或 rail 换根目的地。规范原文
         // "The exiting screen quickly fades out **and then** the entering screen fades in. Since the
@@ -1029,6 +1028,8 @@ private fun RootTabsContent(
             },
             label = "rootTab",
         ) { tab ->
+            // 限宽下放到各个 tab:订阅页宽屏是网格,要拿到 rail 右边的全部宽度,行长由格宽
+            // 管;另外两页仍是单栏,照旧限宽。
             when (tab) {
                 RootTab.Feed -> FeedPane(
                     container = container,
@@ -1042,24 +1043,28 @@ private fun RootTabsContent(
                     onOpenArticle = onOpenArticle,
                 )
 
-                RootTab.Search -> SearchPane(container, onVideoClick, onUserClick, onOpenArticle)
+                RootTab.Search -> AdaptiveContent(maxWidth = Breakpoints.ReadableWidth) {
+                    SearchPane(container, onVideoClick, onUserClick, onOpenArticle)
+                }
 
-                RootTab.Profile -> ProfilePane(
-                    container = container,
-                    scrollToTop = profileScrollToTop,
-                    onVideoClick = onVideoClick,
-                    onVideoInContext = onVideoInContext,
-                    onUserClick = onUserClick,
-                    onOpenHistory = onOpenHistory,
-                    onOpenToView = onOpenToView,
-                    onOpenOffline = onOpenOffline,
-                    onOpenFavFolder = onOpenFavFolder,
-                    onOpenFavFolders = onOpenFavFolders,
-                    onOpenMessages = onOpenMessages,
-                    onOpenFollowings = onOpenFollowings,
-                    onOpenCoinLog = onOpenCoinLog,
-                    onSettingsClick = onSettingsClick,
-                )
+                RootTab.Profile -> AdaptiveContent(maxWidth = Breakpoints.ReadableWidth) {
+                    ProfilePane(
+                        container = container,
+                        scrollToTop = profileScrollToTop,
+                        onVideoClick = onVideoClick,
+                        onVideoInContext = onVideoInContext,
+                        onUserClick = onUserClick,
+                        onOpenHistory = onOpenHistory,
+                        onOpenToView = onOpenToView,
+                        onOpenOffline = onOpenOffline,
+                        onOpenFavFolder = onOpenFavFolder,
+                        onOpenFavFolders = onOpenFavFolders,
+                        onOpenMessages = onOpenMessages,
+                        onOpenFollowings = onOpenFollowings,
+                        onOpenCoinLog = onOpenCoinLog,
+                        onSettingsClick = onSettingsClick,
+                    )
+                }
             }
         }
     }
