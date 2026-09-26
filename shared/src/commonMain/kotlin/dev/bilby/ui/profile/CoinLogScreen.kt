@@ -28,7 +28,8 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.bilby.resources.*
 import dev.bilby.stringResource
-import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.AdaptiveListContent
+import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.api.BiliResult
 import dev.bilby.data.CoinLogEntry
@@ -89,13 +90,16 @@ private fun CoinLogScreen(
             }
         },
     ) { insets ->
-        AdaptiveContent(modifier = Modifier.padScaffoldExceptBottom(insets)) {
+        // 宽屏同其他列表页:一格最宽一行视频行那么宽,按行从左往右读,时间序不因分列而打乱。
+        // 一行只有原因、时间、增减,单列铺满一千多 dp 时原因和数字之间隔着半屏。
+        AdaptiveListContent(modifier = Modifier.padScaffoldExceptBottom(insets)) { columns ->
             RefreshBox(
                 refreshing = state.refreshing,
                 onRefresh = onRefresh,
                 modifier = Modifier.fillMaxSize(),
             ) {
                 PagedColumn(
+                    layout = PagedLayout.Grid(columns),
                     items = state.items,
                     // 接口不给 id,而同一秒里两条原因、数额都相同的记录是可能的,只能按位置作键。
                     key = { entry -> entry.position },
