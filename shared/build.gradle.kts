@@ -117,6 +117,11 @@ kotlin {
         getByName("androidHostTest").dependencies {
             implementation(libs.robolectric)
         }
+        // 差分更新的测试要真的解 zstd。发行包里那一份只捆 Windows 的原生库,CI 的单测跑在 Linux 上,
+        // 初始化即失败;测试另取捆全平台原生库的那一份,类与版本相同。
+        getByName("desktopTest").dependencies {
+            runtimeOnly(libs.zstd.jni)
+        }
     }
 }
 
