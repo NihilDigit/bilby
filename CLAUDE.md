@@ -1,6 +1,8 @@
-# Bilby
+# CLAUDE.md
 
-Android client for bilibili, single account, open source.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+Bilby is a client for bilibili on Android and Windows desktop, single account, open source.
 
 **Three boundaries, stated in `README.md`'s contributing section, which is authoritative on
 them.** Restated here so they can be applied without a second file open:
@@ -146,12 +148,11 @@ navigation destination, adding a `listening` flag on the service, and adding a
 
 On Android the queue is the ExoPlayer playlist, and there is no second copy of it. Items
 carry the bvid as their `mediaId`; the cid is load state on the service, never written back
-into the item.
-Streams are fetched by `player/LazyMediaSource` at the moment the player reaches an entry,
-because playurl hands out time-limited CDN links — a link fetched when the queue was built
-has expired by the time a later entry is reached. A resolution failure has to reach
-`maybeThrowSourceInfoRefreshError`; swallowing one leaves the player buffering forever with
-an empty log.
+into the item. Streams are fetched by `player/LazyMediaSource` at the moment the player
+reaches an entry, because playurl hands out time-limited CDN links — a link fetched when the
+queue was built has expired by the time a later entry is reached. A resolution failure has to
+reach `maybeThrowSourceInfoRefreshError`; swallowing one leaves the player buffering forever
+with an empty log.
 
 Multi-part videos and collections are different things. Shuffle changes play order only; the
 displayed list keeps its order and the highlight scrolls, so the queue panel's position
@@ -162,6 +163,24 @@ does not deduplicate. Both entry decorators index by the key, so one key appeari
 means a shared ViewModel and a shared saveable slot, popping either clears the other's
 store, and composing both at once trips `SaveableStateHolder`'s `require`. Push through
 `pushUnique` in `ui/NavBackStackPolicy.kt` — never `backStack.add` directly.
+
+## Wide windows
+
+Width decides layout, never the platform: `rememberBilbyWindowSize()` reads the window, and
+the same breakpoints apply to a phone in landscape, a tablet and a desktop window.
+
+- **Every sheet goes through `components/PaneSheet`.** Inside the video page's two-pane
+  layout it draws in the right column; with no column to host it and the window at least
+  expanded (840dp) it is a modal side sheet from the end edge; otherwise a bottom sheet.
+  Calling `ModalBottomSheet` directly skips the first two.
+- **Paged lists go through `components/PagedColumn`**, and `PagedLayout` picks one column,
+  a grid (`maxWidthGridCells`: columns capped in width, count rounded up) or a staggered
+  grid. Header, empty state, footer and prefetch come with it.
+- **`components/PrefetchNearEnd` is the only near-end prefetch.** It stops while the last
+  load has an error; only the retry loads again. Seven hand-copied versions without that
+  check sent 25 requests in three seconds into a -412.
+- **Persistent, resizable side panels use `components/SidePanelLayout`** (the space page's
+  dynamics). Open state and width live in settings under a `SidePanelId`.
 
 ## Modules and platforms
 
@@ -222,7 +241,9 @@ name. Code that adds name-based reflection must add its keep rule in the same ch
 ```
 ./gradlew installDebug                                       # dev.bilby.debug
 ./gradlew assembleRelease                                    # dev.bilby, runs R8
+./gradlew :shared:compileKotlinDesktop :shared:compileAndroidMain  # quick compile, both targets
 ./gradlew :shared:testAndroidHostTest :shared:desktopTest    # unit tests, both targets
+./gradlew :shared:desktopTest --tests "dev.bilby.data.QueueFeedTest"  # one test class
 ./gradlew :desktop:run                                       # desktop app
 ./gradlew :desktop:packageReleaseMsi :desktop:packageReleaseUpdate  # MSI + update assets
 java -Xverify:all desktop/package/VerifyClasses.java desktop/build/compose/binaries/main-release/app/Bilby/app
