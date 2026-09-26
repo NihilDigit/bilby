@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.PrimaryScrollableTabRow
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
@@ -72,7 +74,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun MessageScreen(
     state: MessageUiState,
-    /** 宽窗口右栏正开着的那段对话,私信列表里高亮它,见 ListDetailScene。 */
+    /** 宽窗口右栏正开着的那段对话,私信列表里高亮它。分栏见 BilbyApp 的 listDetailStrategy。 */
     selectedTalker: Long?,
     onSelectTab: (MessageTab) -> Unit,
     /** 续页与刷新都指名是哪一格,理由见 [MessageViewModel.refresh]。 */
@@ -129,19 +131,31 @@ fun MessageScreen(
         },
     ) { insets ->
         Column(modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets).readableWidth()) {
-            // 五格在窄屏上放不下等宽固定标签("私信""回复我的""@我的""收到的赞""系统通知"),
-            // 所以用可滚动的那一种:它按内容给宽度,装不下就横滚,而不是把每一格挤到三个字。
+            // **五格等宽固定,不横滚。** 原先是全名("回复我的""收到的赞"…)加可滚动标签栏,
+            // 手机和宽窗口的左栏都装不下,最后一两格要横着滚才看得见,鼠标上还得按住 Shift。
+            // 标签缩成一两个字之后一格 72dp 就够。
+            //
+            // 用 Tab 的 content 重载:text 重载每边留 16dp,一格 72dp 时只剩 40dp 给字,英文的
+            // Mentions 放不下。
             //
             // **指示条认 `pager.currentPage`,不认 `state.tab`。** 上面那个效应只在 settledPage
             // 上回写 tab(路过的一页不该触发加载),于是指示条整段拖动都停在原处,翻页判定过了
             // 才突然跳一格。播放页那条指示条同一条判据,见 `video/VideoTabs.kt`。
-            PrimaryScrollableTabRow(selectedTabIndex = pager.currentPage, edgePadding = Spacing.Cozy) {
+            PrimaryTabRow(selectedTabIndex = pager.currentPage) {
                 tabs.forEachIndexed { index, tab ->
                     Tab(
                         selected = pager.currentPage == index,
                         onClick = { scope.launch { pager.animateScrollToPage(index) } },
-                        text = { Text(stringResource(tab.labelRes()), maxLines = 1, softWrap = false) },
-                    )
+                        modifier = Modifier.height(TabHeight),
+                    ) {
+                        Text(
+                            stringResource(tab.labelRes()),
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = Spacing.Hair),
+                        )
+                    }
                 }
             }
             HorizontalPager(state = pager, modifier = Modifier.weight(1f).fillMaxWidth().touchOnlyPaging()) { page ->
@@ -165,6 +179,9 @@ fun MessageScreen(
         }
     }
 }
+
+/** 只有文字的标签高度,同 M3 tabs 规格(与 text 重载一致)。 */
+private val TabHeight = 48.dp
 
 private fun MessageTab.labelRes(): StringResource = when (this) {
     MessageTab.Whispers -> Res.string.message_tab_whisper
