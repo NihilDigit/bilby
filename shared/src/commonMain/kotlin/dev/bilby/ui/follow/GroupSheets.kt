@@ -21,7 +21,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import dev.bilby.ui.components.PaneSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -85,7 +85,7 @@ fun GroupPickerSheet(
     onSave: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    PaneSheet(onDismissRequest = onDismiss, skipPartiallyExpanded = false) {
         SheetTitle(stringResource(Res.string.follow_group_picker_title, state.up.name))
         when {
             state.loading -> InlineProgress(
@@ -152,7 +152,7 @@ fun GroupManagerSheet(
     var renaming by remember { mutableStateOf<FollowGroup?>(null) }
     var deleting by remember { mutableStateOf<FollowGroup?>(null) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    PaneSheet(onDismissRequest = onDismiss, skipPartiallyExpanded = false) {
         SheetTitle(stringResource(Res.string.follow_groups_title))
         if (error != null) SheetMessage(error)
         LazyColumn(modifier = Modifier.weight(1f, fill = false)) {

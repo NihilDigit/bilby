@@ -47,7 +47,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import dev.bilby.ui.components.PaneSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -92,7 +92,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.semantics.role
-import dev.bilby.ui.components.rememberExpandedSheetState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
@@ -1063,10 +1062,7 @@ private fun PlaybackControls(
         // 倍速面板和视频播放器那块是同一份内容:倍速与音质两段。听视频没有画面,清晰度不给;
         // 字幕在顶栏的歌词按钮上。
         if (speedSheetOpen) {
-            ModalBottomSheet(
-                onDismissRequest = { speedSheetOpen = false },
-                sheetState = rememberExpandedSheetState(),
-            ) {
+            PaneSheet(onDismissRequest = { speedSheetOpen = false }) {
                 PlayerSettingsContent(
                     speed = speed,
                     onSpeedChange = onSpeedChange,
@@ -1278,7 +1274,7 @@ private fun SleepTimerDialog(
         onSet(it)
         onDismiss()
     }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberExpandedSheetState()) {
+    PaneSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()

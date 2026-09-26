@@ -45,6 +45,21 @@ import dev.bilby.resources.Res
 import dev.bilby.resources.action_back
 import dev.bilby.stringResource
 import dev.bilby.ui.BackHandler
+import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.barsAndCutout
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.resources.action_close
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import dev.bilby.ui.theme.Spacing
 
 /**
@@ -199,17 +214,25 @@ interface PaneSheetScope : ColumnScope {
     fun Modifier.bodyHeight(sheetFraction: Float): Modifier
 }
 
-private class PaneSheetScopeImpl(column: ColumnScope, override val inPane: Boolean) :
-    PaneSheetScope, ColumnScope by column {
+/**
+ * @param fillsHeight 容器本身就是整栏高(右栏、宽屏侧边面板),主体取剩下的全部高度;
+ *   为 false 时是底部 sheet,主体按窗口高度的比例定。
+ */
+private class PaneSheetScopeImpl(
+    column: ColumnScope,
+    override val inPane: Boolean,
+    private val fillsHeight: Boolean = inPane,
+) : PaneSheetScope, ColumnScope by column {
     override fun Modifier.bodyHeight(sheetFraction: Float): Modifier =
-        if (inPane) weight(1f) else fillMaxHeight(sheetFraction)
+        if (fillsHeight) weight(1f) else fillMaxHeight(sheetFraction)
 }
 
 /**
- * 二级面板。两栏布局里画在右栏(见 [SidePaneState]),单栏时是只有展开一档的底部 sheet。
+ * 二级面板。两栏布局里画在右栏(见 [SidePaneState]);没有右栏可挂时,宽屏是从右边缘划进来的
+ * 侧边面板([ModalSideSheet]),窄屏是只有展开一档的底部 sheet。
  *
  * [title] 只在右栏里显示,和返回箭头排在一行:面板盖住了整栏,不说一句就不知道这是哪里。
- * sheet 上方还露着页面,打开它的那一行就是上下文,不另加标题。
+ * sheet 与侧边面板旁边还露着页面,打开它的那一行就是上下文,不另加标题。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -233,6 +256,12 @@ fun PaneSheet(
             pane.panel = panel
             onDispose { if (pane.panel === panel) pane.panel = null }
         }
+    } else if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
+        ModalSideSheet(onDismissRequest) {
+            // 不是右栏(inPane = false):面板里的编辑面板照 sheet 的规矩画在面板自己里面,
+            // 它和 sheet 一样自成一个窗口,挂到主窗口那一层反而会被它盖住。高度却是整栏。
+            PaneSheetScopeImpl(this, inPane = false, fillsHeight = true).content()
+        }
     } else {
         // 用鼠标时一律不停半开。sheet 把滚动当成拖它自己:半开时往下滚先被 sheet 拿去往上挪,
         // 而滚轮没有松手那一下,sheet 不会吸附到哪一档,表现是列表滚不动。
@@ -249,3 +278,72 @@ fun PaneSheet(
         }
     }
 }
+
+/**
+ * 宽屏的模态侧边面板,底部 sheet 在大窗口里的替身。bottom-sheets.md 的 Adaptive design 一节原话:
+ * "On larger expanded breakpoints, like desktop, a bottom sheet can be swapped for a side sheet
+ * that shows similar content." 底部 sheet 在宽窗口里只能居中升起一块最宽 640dp 的板子,横在
+ * 页面正中,离打开它的那一行隔着半个屏幕。
+ *
+ * 规格取 side-sheets.md 的 modal 款:容器 surfaceContainerLow,圆角 16dp(Differences from M2
+ * 一节),最宽 400dp,四周离窗口边缘 16dp(Margins (when detached)),关闭按钮常驻。
+ *
+ * 自成一个窗口(Dialog),与 ModalBottomSheet 同:面板里再打开的编辑面板照 sheet 的路子画在
+ * 面板里面。遮罩用平台对话框自带的那一层。
+ *
+ * 人关掉它(点遮罩、关闭按钮、Esc 或返回)时先划出去再通知调用方;调用方自己撤掉它时
+ * (点了名单里的一项)直接消失,与底部 sheet 一致。
+ */
+@Composable
+private fun ModalSideSheet(onDismissRequest: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    val visibility = remember { MutableTransitionState(false).apply { targetState = true } }
+    val latestDismiss by rememberUpdatedState(onDismissRequest)
+    val dismiss = { visibility.targetState = false }
+    // 划出去的动画走完才真正关:此刻才通知调用方把它移出组合。
+    LaunchedEffect(visibility.isIdle, visibility.currentState) {
+        if (visibility.isIdle && !visibility.currentState && !visibility.targetState) latestDismiss()
+    }
+    Dialog(onDismissRequest = dismiss, properties = fullScreenDialogProperties()) {
+        DialogIntoDisplayCutout()
+        Box(modifier = Modifier.fillMaxSize()) {
+            // 点在面板外面就是关掉。不画按下的波纹:这一整片是遮罩,不是一个按钮。
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(interactionSource = null, indication = null, onClick = dismiss),
+            )
+            AnimatedVisibility(
+                visibleState = visibility,
+                enter = slideInHorizontally(MaterialTheme.motionScheme.defaultSpatialSpec()) { it } + fadeIn(),
+                exit = slideOutHorizontally(MaterialTheme.motionScheme.fastSpatialSpec()) { it } + fadeOut(),
+                modifier = Modifier.align(Alignment.CenterEnd),
+            ) {
+                Surface(
+                    shape = MaterialTheme.shapes.large,
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier
+                        .windowInsetsPadding(WindowInsets.barsAndCutout)
+                        .padding(Spacing.Comfortable)
+                        .width(ModalSideSheetWidth)
+                        .fillMaxHeight(),
+                ) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                            IconButton(onClick = dismiss) {
+                                Icon(
+                                    Icons.Filled.Close,
+                                    contentDescription = stringResource(Res.string.action_close),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        content()
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** modal side sheet 的最大宽度(side-sheets.md 的 measurements 表)。 */
+private val ModalSideSheetWidth = 400.dp
