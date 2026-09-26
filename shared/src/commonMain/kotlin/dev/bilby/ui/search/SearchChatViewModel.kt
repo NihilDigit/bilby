@@ -9,7 +9,17 @@ import dev.bilby.agent.ChatMessage
 import dev.bilby.agent.TraceItem
 import dev.bilby.agent.reduce
 import dev.bilby.data.SearchRepository
+import dev.bilby.BiliLog
 import dev.bilby.data.SettingsStore
+import dev.bilby.data.SidePanelId
+import dev.bilby.ui.BilbyLink
+import androidx.navigation3.runtime.NavKey
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.receiveAsFlow
+import dev.bilby.data.SideSheetPrefs
+import kotlinx.coroutines.flow.map
 import dev.bilby.resources.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -22,17 +32,23 @@ import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.StringResource
 
 /**
- * 搜索排序。快路默认综合;这几个取值来自 B 站 search/type 的 order 参数。
+ * 搜索排序。快路默认综合;这几个取值来自 B 站 search/type 的 order 参数(notes 2.4)。视频与专栏
+ * 各取其中一部分,见 SearchResults 的 VideoOrders / ArticleOrders。
  */
 enum class SearchOrder(val apiValue: String, val labelRes: StringResource) {
     Comprehensive("totalrank", Res.string.search_order_comprehensive),
     Play("click", Res.string.search_order_click),
     NewPublished("pubdate", Res.string.search_order_pubdate),
+    Danmaku("dm", Res.string.search_order_danmaku),
+    Favorite("stow", Res.string.search_order_favorite),
+    Comments("scores", Res.string.search_order_comments),
+    /** 只有专栏有。 */
+    Likes("attention", Res.string.search_order_likes),
 }
 
 /**
- * 两条路共用一个界面(DESIGN 2.2 的"一个框,两条路"):快路直接打 B 站搜索接口瞬时返回,
- * 慢路起 agent 循环。区别只在这里的分派,UI 侧是同一串轮次。
+ * 一个框,两条路(DESIGN 2.2):回车走快路,直接打 B 站搜索接口;「问助理」拿同一个词起
+ * agent 循环。助理另有自己的输入框接追问([SearchChatUiState.agentInput]),宽屏上两边同时在屏。
  *
  * **轮次只留在内存里,落库的只有普通搜索的关键词。** 这里原先写着"DESIGN 2.2 明确不做搜索
  * 历史",那是读错了:2.2 禁的是「相关推荐」和「热搜词」,而 DESIGN 的技术选型表里本来就列着
@@ -46,7 +62,14 @@ class SearchChatViewModel(
     private val searchRepository: SearchRepository,
     private val agentLoop: AgentLoop,
     private val settings: SettingsStore,
+    /** 展开 b23.tv 短链,即 `BiliClient.resolveRedirect`。 */
+    private val resolveShortLink: suspend (String) -> String,
 ) : ViewModel() {
+
+    private val _open = Channel<NavKey>(Channel.BUFFERED)
+
+    /** 搜索框里是编号或链接时要直接打开的页面,见 [directDestination]。界面收到后压栈。 */
+    val open: Flow<NavKey> = _open.receiveAsFlow()
 
     /** 最近搜过的词,最近的在前。不设上限,见 [SettingsStore.searchHistory]。 */
     val searchHistory: StateFlow<List<String>> = settings.searchHistory
@@ -65,8 +88,21 @@ class SearchChatViewModel(
      */
     fun searchFromHistory(query: String) {
         _state.update { it.copy(input = query, mode = SearchMode.Normal) }
-        send()
+        search()
     }
+
+    /** 模型配好了没有。没配时「问助理」和宽屏的助理侧栏都不出现。 */
+    val agentAvailable: StateFlow<Boolean> = settings.llmConfig
+        .map { it.isConfigured }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** 宽屏助理侧栏的开关与宽度;null 是还没读出来。 */
+    val agentPanel: StateFlow<SideSheetPrefs?> = settings.sidePanel(SidePanelId.SearchAgent)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun setAgentPanelOpen(open: Boolean) = viewModelScope.launch { settings.saveSidePanelOpen(SidePanelId.SearchAgent, open) }
+
+    fun setAgentPanelWidth(widthDp: Float) = viewModelScope.launch { settings.saveSidePanelWidth(SidePanelId.SearchAgent, widthDp) }
 
     /**
      * 会话内多轮共享的上下文(DESIGN 3.1 修订)。**只含本会话的对话与工具返回**,
@@ -113,47 +149,111 @@ class SearchChatViewModel(
 
     private var nextTurnId = 1L
 
-    fun onInputChange(value: String) = _state.update { it.copy(input = value) }
+    private var suggestJob: Job? = null
 
     /**
-     * 两种模式各有各的状态,切换只是换显示哪一份,**都不清空**。会话要重开有右上角的
-     * 显式入口;切一下模式就丢掉一整段对话,没人会预期。
+     * 改字时顺带取补全词。防抖 200ms,照 PiliPlus `pages/search/controller.dart`:每敲一个字
+     * 都发一次,打一个词就是五六个请求,前面几个的结果还没画出来就作废了。补全只在输入框里
+     * 有字时有意义,清空就一并清掉。
      */
-    fun onModeChange(mode: SearchMode) = _state.update { it.copy(mode = mode) }
+    fun onInputChange(value: String) {
+        _state.update { it.copy(input = value) }
+        suggestJob?.cancel()
+        val term = value.trim()
+        if (term.isEmpty()) {
+            _state.update { it.copy(suggestions = emptyList()) }
+            return
+        }
+        suggestJob = viewModelScope.launch {
+            delay(SUGGEST_DEBOUNCE_MS)
+            val suggestions = searchRepository.suggest(term)
+            // 迟到的结果对不上现在的输入就丢掉,不把上一个词的补全挂在这一个词下面。
+            _state.update { if (it.input.trim() == term) it.copy(suggestions = suggestions) else it }
+        }
+    }
 
-    fun send() {
+    /** 点一条补全词:填进框里并直接搜,同点历史。 */
+    fun searchSuggestion(term: String) {
+        _state.update { it.copy(input = term, mode = SearchMode.Normal) }
+        search()
+    }
+
+    fun onAgentInputChange(value: String) = _state.update { it.copy(agentInput = value) }
+
+    /** 窄屏回到普通搜索。助理那段对话留着,再问一次还接得上。 */
+    fun leaveAgent() = _state.update { it.copy(mode = SearchMode.Normal) }
+
+    /**
+     * 普通搜索是一次查询一份结果,不累积轮次:它就是一个搜索页。留着上一次的结果只会让人往上翻,
+     * 而翻上去的东西和这次要找的无关。排序沿用上一次选的那档 —— 新起一份 NormalSearchState()
+     * 会把它悄悄弹回综合。
+     *
+     * **查询词留在输入框里**,只把两端空白去掉。普通搜索的结果页没有别处显示当前查到的是什么,
+     * 清空之后这一屏就没有任何东西说明这些结果从何而来,改一个字也得重打。
+     */
+    fun search() {
         val query = _state.value.input.trim()
         if (query.isEmpty()) return
-        when (_state.value.mode) {
-            // 普通搜索是一次查询一份结果,不累积轮次:它就是一个搜索页。留着上一次的结果
-            // 只会让人往上翻,而翻上去的东西和这次要找的无关。排序沿用上一次选的那档 ——
-            // 新起一份 NormalSearchState() 会把它悄悄弹回综合。
-            // **查询词留在输入框里**,只把两端空白去掉。普通搜索的结果页没有别处显示当前查到的
-            // 是什么,清空之后这一屏就没有任何东西说明这些结果从何而来,改一个字也得重打。
-            // 留下之后 [SearchField] 尾部那个清除按钮才会出现 —— 它一直都在,只是从来没有过
-            // 非空的输入可显示。
-            SearchMode.Normal -> {
-                _state.update { it.copy(input = query) }
-                viewModelScope.launch { settings.addSearchHistory(query) }
-                normal.search(query)
-            }
+        suggestJob?.cancel()
+        _state.update { it.copy(input = query, suggestions = emptyList()) }
 
-            // 助理这边**照旧清空**:它是一段对话,发出去的话已经作为一轮留在上面了,输入框里
-            // 再留一份就是同一句话印两遍,而下一句要问什么和上一句无关。
-            SearchMode.Agent -> {
-                val turnId = nextTurnId++
-                _state.update { state ->
-                    state.copy(
-                        input = "",
-                        agent = state.agent.copy(
-                            turns = state.agent.turns +
-                                SearchTurn(turnId, query, AgentTurnState(running = true)),
-                        ),
-                    )
-                }
-                runAgent(turnId, query)
-            }
+        // 编号与链接直接打开,不记进历史:一条粘贴进来的链接再点一次的机会几乎没有,
+        // 留在历史里只会把自己敲过的词挤开。
+        directDestination(query)?.let { destination ->
+            _open.trySend(destination)
+            return
         }
+        val link = BilbyLink.extractUrl(query)
+        if (link != null && BilbyLink.isShortLink(link)) {
+            viewModelScope.launch {
+                val destination = runCatching { resolveShortLink(link) }
+                    .onFailure { BiliLog.w("搜索框里的短链展开失败", it) }
+                    .getOrNull()
+                    ?.let(BilbyLink::destinationOf)
+                // 展开失败或指向站内没有的页面(番剧之类)时照常搜,至少给一页结果。
+                if (destination != null) _open.send(destination) else runSearch(query)
+            }
+            return
+        }
+        runSearch(query)
+    }
+
+    private fun runSearch(query: String) {
+        viewModelScope.launch { settings.addSearchHistory(query) }
+        normal.search(query)
+    }
+
+    /**
+     * 「问助理」:拿搜索框里的词起助理,搜索框不动。窄屏同时切进助理那一屏;框是空的就只切过去,
+     * 让人在助理自己的输入框里问。宽屏的侧栏由界面打开,这里不管。
+     */
+    fun askAgent() {
+        val query = _state.value.input.trim()
+        _state.update { it.copy(mode = SearchMode.Agent) }
+        if (query.isNotEmpty()) startAgentTurn(query)
+    }
+
+    /**
+     * 助理自己的输入框发出的追问。发完**清空**:它是一段对话,发出去的话已经作为一轮留在上面了,
+     * 输入框里再留一份就是同一句话印两遍。
+     */
+    fun sendToAgent() {
+        val query = _state.value.agentInput.trim()
+        if (query.isEmpty()) return
+        _state.update { it.copy(agentInput = "") }
+        startAgentTurn(query)
+    }
+
+    private fun startAgentTurn(query: String) {
+        val turnId = nextTurnId++
+        _state.update { state ->
+            state.copy(
+                agent = state.agent.copy(
+                    turns = state.agent.turns + SearchTurn(turnId, query, AgentTurnState(running = true)),
+                ),
+            )
+        }
+        runAgent(turnId, query)
     }
 
     fun loadMore() = normal.loadMore()
@@ -161,22 +261,20 @@ class SearchChatViewModel(
     fun onOrderChanged(order: SearchOrder) = normal.onOrderChanged(order)
     fun onDurationChanged(duration: SearchDuration) = normal.onDurationChanged(duration)
     fun onArticleOrderChanged(order: SearchOrder) = normal.onArticleOrderChanged(order)
+    fun onPubTimeChanged(pubTime: SearchPubTime) = normal.onPubTimeChanged(pubTime)
+    fun onZoneChanged(zone: SearchZone) = normal.onZoneChanged(zone)
+    fun onUserOrderChanged(order: SearchUserOrder) = normal.onUserOrderChanged(order)
     fun onTabSelected(tab: SearchTab) = normal.selectTab(tab)
 
-    fun retry() {
-        when (_state.value.mode) {
-            SearchMode.Normal -> normal.retry()
+    /** 普通搜索的重试与下拉刷新:当前栏从第一页重来。 */
+    fun refresh() = normal.retry()
 
-            SearchMode.Agent -> {
-                val turn = _state.value.agent.turns.lastOrNull() ?: return
-                updateAgent(turn.id) { AgentTurnState(running = true) }
-                runAgent(turn.id, turn.query)
-            }
-        }
+    /** 助理最后一轮重跑。宽屏上两边同时在屏,重试不能再按模式分派。 */
+    fun retryAgent() {
+        val turn = _state.value.agent.turns.lastOrNull() ?: return
+        updateAgent(turn.id) { AgentTurnState(running = true) }
+        runAgent(turn.id, turn.query)
     }
-
-    /** 重新执行当前搜索/当前助理轮次，供下拉刷新和再次进入搜索页使用。 */
-    fun refresh() = retry()
 
     /**
      * 会话只活在内存里,随 ViewModel 生灭,不落库。
@@ -226,5 +324,8 @@ class SearchChatViewModel(
         }
     }
 
+    private companion object {
+        const val SUGGEST_DEBOUNCE_MS = 200L
+    }
 }
 

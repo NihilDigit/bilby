@@ -57,6 +57,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -153,6 +154,7 @@ import dev.bilby.ui.message.WhisperViewModel
 import dev.bilby.ui.profile.ProfileViewModel
 import dev.bilby.ui.search.SearchChatScreen
 import dev.bilby.ui.search.SearchChatViewModel
+import dev.bilby.ui.search.AgentActions
 import dev.bilby.ui.search.SearchResultActions
 import dev.bilby.ui.search.SearchResultScreen
 import dev.bilby.ui.search.SearchResultViewModel
@@ -175,7 +177,6 @@ import dev.bilby.ui.space.CollectionScreen
 import dev.bilby.ui.space.CollectionViewModel
 import dev.bilby.ui.space.SpaceScreen
 import dev.bilby.ui.space.SpaceViewModel
-import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Motion
 import dev.bilby.ui.theme.rememberReducedMotion
 import dev.bilby.ui.theme.BilbyTheme
@@ -556,6 +557,7 @@ private fun BilbyApp(
                         },
                         onOpenFavFolders = { push(FavFolders) },
                         onOpenMessages = { push(Messages) },
+                        onOpen = { push(it) },
                     )
                 }
             }
@@ -945,6 +947,8 @@ private fun RootTabs(
     onOpenFavFolder: (FavFolderDetail) -> Unit,
     onOpenFavFolders: () -> Unit,
     onOpenMessages: () -> Unit,
+    /** 搜索框里的编号或链接直接打开的那一页,可以是任何一种目的地。 */
+    onOpen: (NavKey) -> Unit,
 ) {
     var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
     val windowSize = rememberBilbyWindowSize()
@@ -1024,6 +1028,7 @@ private fun RootTabs(
                 onOpenFavFolder = onOpenFavFolder,
                 onOpenFavFolders = onOpenFavFolders,
                 onOpenMessages = onOpenMessages,
+                onOpen = onOpen,
             )
         }
     } else {
@@ -1071,6 +1076,7 @@ private fun RootTabs(
                     onOpenFavFolder = onOpenFavFolder,
                     onOpenFavFolders = onOpenFavFolders,
                     onOpenMessages = onOpenMessages,
+                    onOpen = onOpen,
                 )
             }
         }
@@ -1124,6 +1130,7 @@ private fun RootTabsContent(
     onOpenFavFolder: (FavFolderDetail) -> Unit,
     onOpenFavFolders: () -> Unit,
     onOpenMessages: () -> Unit,
+    onOpen: (NavKey) -> Unit,
 ) {
     // 只 padding 不声明消费的话,后面的 imePadding() 会再多退让一个底栏高度。消费之后它只让出
     // 键盘高出底栏的那一截,内容正好停在键盘上沿,底栏留在键盘下面。
@@ -1171,9 +1178,8 @@ private fun RootTabsContent(
                     onOpenArticle = onOpenArticle,
                 )
 
-                RootTab.Search -> AdaptiveContent(maxWidth = Breakpoints.ReadableWidth) {
-                    SearchPane(container, onVideoClick, onUserClick, onOpenArticle)
-                }
+                // 不限宽:宽屏结果是格子、助理是侧栏,搜索框自己限宽(见 SearchChatScreen)。
+                RootTab.Search -> SearchPane(container, onVideoClick, onUserClick, onOpenArticle, onOpen)
 
                 // 不限宽:宽屏每节是一排卡片,宽度换成条数(见 ProfileScreen);窄屏账号卡自己限宽。
                 RootTab.Profile -> ProfilePane(
@@ -1276,32 +1282,57 @@ private fun SearchPane(
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onOpenArticle: (ArticleRef) -> Unit,
+    onOpen: (NavKey) -> Unit,
 ) {
     val vm: SearchChatViewModel = viewModel(
         key = "root-search",
         factory = viewModelFactory {
-            initializer { SearchChatViewModel(container.searchRepository, container.agentLoop, container.settings) }
+            initializer {
+                SearchChatViewModel(
+                    container.searchRepository,
+                    container.agentLoop,
+                    container.settings,
+                    resolveShortLink = container.biliClient::resolveRedirect,
+                )
+            }
         },
     )
+    val currentOnOpen by rememberUpdatedState(onOpen)
+    LaunchedEffect(vm) { vm.open.collect { currentOnOpen(it) } }
     val state by vm.state.collectAsStateWithLifecycle()
     val history by vm.searchHistory.collectAsStateWithLifecycle()
+    val agentAvailable by vm.agentAvailable.collectAsStateWithLifecycle()
+    val agentPanel by vm.agentPanel.collectAsStateWithLifecycle()
     SearchChatScreen(
         state = state,
         searchHistory = history,
         onHistoryClick = vm::searchFromHistory,
         onHistoryRemove = vm::removeSearchHistory,
         onHistoryClear = vm::clearSearchHistory,
+        onSuggestionClick = vm::searchSuggestion,
         onInputChange = vm::onInputChange,
-        onModeChange = vm::onModeChange,
-        onSend = vm::send,
-        onNewSession = vm::newSession,
-        onVideoClick = onVideoClick,
-        onRetry = vm::retry,
+        onSearch = vm::search,
+        onAskAgent = vm::askAgent,
+        onLeaveAgent = vm::leaveAgent,
+        agentAvailable = agentAvailable,
+        agentPanel = agentPanel,
+        onAgentPanelOpenChange = { vm.setAgentPanelOpen(it) },
+        onAgentPanelWidthChange = { vm.setAgentPanelWidth(it) },
+        agentActions = AgentActions(
+            onInputChange = vm::onAgentInputChange,
+            onSend = vm::sendToAgent,
+            onNewSession = vm::newSession,
+            onRetry = vm::retryAgent,
+            onVideoClick = onVideoClick,
+        ),
         resultActions = SearchResultActions(
             onTabSelected = vm::onTabSelected,
             onOrderChange = vm::onOrderChanged,
             onDurationChange = vm::onDurationChanged,
+            onPubTimeChange = vm::onPubTimeChanged,
+            onZoneChange = vm::onZoneChanged,
             onArticleOrderChange = vm::onArticleOrderChanged,
+            onUserOrderChange = vm::onUserOrderChanged,
             onVideoClick = onVideoClick,
             onUserClick = onUserClick,
             // 搜索结果里的专栏只有 cv 号,走 read 那一套(notes/space-and-search.md 2.12)。
@@ -1353,7 +1384,10 @@ private fun SearchResultRoute(
                 onTabSelected = vm::onTabSelected,
                 onOrderChange = vm::onOrderChanged,
                 onDurationChange = vm::onDurationChanged,
+                onPubTimeChange = vm::onPubTimeChanged,
+                onZoneChange = vm::onZoneChanged,
                 onArticleOrderChange = vm::onArticleOrderChanged,
+                onUserOrderChange = vm::onUserOrderChanged,
                 onVideoClick = onVideoClick,
                 onUserClick = onUserClick,
                 onArticleClick = onArticleClick,

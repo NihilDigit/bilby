@@ -5,6 +5,9 @@ import org.jetbrains.compose.resources.StringResource
 import dev.bilby.api.BiliResult
 import dev.bilby.api.CODE_NOT_LOGGED_IN
 import dev.bilby.api.CODE_RATE_LIMITED
+import dev.bilby.api.CODE_RISK_CHALLENGE
+import java.time.LocalDate
+import java.time.ZoneId
 import dev.bilby.api.map
 import dev.bilby.data.SearchArticle
 import dev.bilby.data.SearchPage
@@ -36,6 +39,60 @@ enum class SearchDuration(val apiValue: Int, val labelRes: StringResource) {
     OverSixty(4, Res.string.search_duration_over_60),
 }
 
+/**
+ * 视频的发布时间窗。窗口按本地日历日算,止于今天 23:59:59,照 PiliPlus 的
+ * `search_panel/video/controller.dart`:「最近一天」是今天一整天,「最近一周」含今天共七天。
+ */
+enum class SearchPubTime(private val daysBack: Int?, val labelRes: StringResource) {
+    All(null, Res.string.search_pubtime_all),
+    Day(0, Res.string.search_pubtime_day),
+    Week(6, Res.string.search_pubtime_week),
+    HalfYear(179, Res.string.search_pubtime_half_year),
+    ;
+
+    /** 秒级时间戳的闭区间;[All] 不限,为 null。发请求时才算,跨过午夜的翻页也不会用旧窗口。 */
+    fun window(zone: ZoneId = ZoneId.systemDefault()): LongRange? {
+        val days = daysBack ?: return null
+        val today = LocalDate.now(zone)
+        val begin = today.minusDays(days.toLong()).atStartOfDay(zone).toEpochSecond()
+        val end = today.plusDays(1).atStartOfDay(zone).toEpochSecond() - 1
+        return begin..end
+    }
+}
+
+/**
+ * 视频分区(`tids`,notes 2.6)。**只列投稿分区**:番剧、国创、电影、电视、纪录片是版权方的
+ * 内容,这个应用不放(README 的边界),筛进去只会得到一页打不开的条目。
+ */
+enum class SearchZone(val tids: Int?, val labelRes: StringResource) {
+    All(null, Res.string.search_zone_all),
+    Douga(1, Res.string.search_zone_douga),
+    Music(3, Res.string.search_zone_music),
+    Dance(129, Res.string.search_zone_dance),
+    Game(4, Res.string.search_zone_game),
+    Knowledge(36, Res.string.search_zone_knowledge),
+    Tech(188, Res.string.search_zone_tech),
+    Sports(234, Res.string.search_zone_sports),
+    Car(223, Res.string.search_zone_car),
+    Life(160, Res.string.search_zone_life),
+    Food(221, Res.string.search_zone_food),
+    Animal(217, Res.string.search_zone_animal),
+    Kichiku(119, Res.string.search_zone_kichiku),
+    Fashion(115, Res.string.search_zone_fashion),
+    Info(202, Res.string.search_zone_info),
+    Ent(5, Res.string.search_zone_ent),
+    Cinephile(181, Res.string.search_zone_cinephile),
+}
+
+/** 用户栏的排序,notes 2.4 的 UserOrderType 原样。 */
+enum class SearchUserOrder(val apiValue: String, val ascending: Boolean, val labelRes: StringResource) {
+    Default("", false, Res.string.search_user_order_default),
+    FansDesc("fans", false, Res.string.search_user_order_fans_desc),
+    FansAsc("fans", true, Res.string.search_user_order_fans_asc),
+    LevelDesc("level", false, Res.string.search_user_order_level_desc),
+    LevelAsc("level", true, Res.string.search_user_order_level_asc),
+}
+
 /** 一栏结果的翻页状态。三栏各一份,互不牵连:一栏失败或还在飞不挡另一栏。 */
 data class SearchListState<T>(
     val items: List<T> = emptyList(),
@@ -56,8 +113,11 @@ data class NormalSearchState(
     val tab: SearchTab = SearchTab.Video,
     val order: SearchOrder = SearchOrder.Comprehensive,
     val duration: SearchDuration = SearchDuration.All,
+    val pubTime: SearchPubTime = SearchPubTime.All,
+    val zone: SearchZone = SearchZone.All,
     /** 专栏的排序。和视频分开记:两栏的「按热度」不是同一个东西,切栏不该带过去。 */
     val articleOrder: SearchOrder = SearchOrder.Comprehensive,
+    val userOrder: SearchUserOrder = SearchUserOrder.Default,
     val videos: SearchListState<SearchVideo> = SearchListState(),
     val users: SearchListState<SearchUser> = SearchListState(),
     val articles: SearchListState<SearchArticle> = SearchListState(),
@@ -92,6 +152,8 @@ class NormalSearchController(
                 page = page,
                 order = s.order.apiValue,
                 duration = s.duration.apiValue.takeIf { it != 0 },
+                tids = s.zone.tids,
+                pubTime = s.pubTime.window(),
             ).map { SearchPage(it.items, it.hasMore) }
         },
         read = { it.videos },
@@ -102,7 +164,10 @@ class NormalSearchController(
     private val userPager = Pager(
         scope = scope,
         key = { it.mid },
-        fetch = { query, page -> searchRepository.searchUserPage(query, page) },
+        fetch = { query, page ->
+            val order = _state.value.userOrder
+            searchRepository.searchUserPage(query, page, order.apiValue, order.ascending)
+        },
         read = { it.users },
         write = { s, list -> s.copy(users = list) },
         state = _state,
@@ -166,10 +231,28 @@ class NormalSearchController(
         restart(videoPager)
     }
 
+    fun onPubTimeChanged(pubTime: SearchPubTime) {
+        if (_state.value.pubTime == pubTime) return
+        _state.update { it.copy(pubTime = pubTime) }
+        restart(videoPager)
+    }
+
+    fun onZoneChanged(zone: SearchZone) {
+        if (_state.value.zone == zone) return
+        _state.update { it.copy(zone = zone) }
+        restart(videoPager)
+    }
+
     fun onArticleOrderChanged(order: SearchOrder) {
         if (_state.value.articleOrder == order) return
         _state.update { it.copy(articleOrder = order) }
         restart(articlePager)
+    }
+
+    fun onUserOrderChanged(order: SearchUserOrder) {
+        if (_state.value.userOrder == order) return
+        _state.update { it.copy(userOrder = order) }
+        restart(userPager)
     }
 
     /** 重试和下拉刷新:当前栏从第一页重来,已有结果留在屏幕上等新页落地。 */
@@ -285,6 +368,8 @@ private class Pager<T>(
 private fun apiErrorText(error: BiliResult.ApiError): String = when (error.code) {
     CODE_NOT_LOGGED_IN -> "登录已过期,重新登录后再搜"
     CODE_RATE_LIMITED -> "请求太频繁,过一会儿再试"
+    // 验证码这一步还没有做(要一个 WebView 跑极验),只能说清是什么拦住了。
+    CODE_RISK_CHALLENGE -> "B 站要求验证身份,稍后再试"
     else -> "服务暂时不可用,稍后重试"
 }
 

@@ -2,6 +2,29 @@ package dev.bilby.ui.search
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.PrimaryScrollableTabRow
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import dev.bilby.ui.components.verticalWheelScrollsRow
+import dev.bilby.ui.components.menuSelectedMark
+import dev.bilby.ui.components.selectedSemantics
+import org.jetbrains.compose.resources.StringResource
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -38,7 +61,6 @@ import dev.bilby.ui.components.PagedLayout
 import androidx.compose.foundation.lazy.grid.GridCells
 import dev.bilby.ui.components.PersonRowSkeleton
 import dev.bilby.ui.components.RefreshBox
-import dev.bilby.ui.components.SortMenu
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.components.formatCount
@@ -50,7 +72,10 @@ class SearchResultActions(
     val onTabSelected: (SearchTab) -> Unit,
     val onOrderChange: (SearchOrder) -> Unit,
     val onDurationChange: (SearchDuration) -> Unit,
+    val onPubTimeChange: (SearchPubTime) -> Unit,
+    val onZoneChange: (SearchZone) -> Unit,
     val onArticleOrderChange: (SearchOrder) -> Unit,
+    val onUserOrderChange: (SearchUserOrder) -> Unit,
     val onVideoClick: (bvid: String) -> Unit,
     val onUserClick: (mid: Long) -> Unit,
     /** cv 号。 */
@@ -59,17 +84,29 @@ class SearchResultActions(
     val onRetry: () -> Unit,
 )
 
-/** 综合 / 最多播放 / 最新发布,顺序和取值都照 B 站搜索页本身。 */
-private val VideoOrders = SearchOrder.entries.map { it to it.labelRes }
+/** 视频的六档,顺序照 B 站搜索页本身(notes 2.4 的 ArchiveFilterType)。 */
+private val VideoOrders = listOf(
+    SearchOrder.Comprehensive,
+    SearchOrder.Play,
+    SearchOrder.NewPublished,
+    SearchOrder.Danmaku,
+    SearchOrder.Favorite,
+    SearchOrder.Comments,
+).map { it to it.labelRes }
 
-/** 专栏的三档。取值与视频相同(notes 2.4),只是「click」在这里是阅读数。 */
+/** 专栏的五档(notes 2.4 的 ArticleOrderType)。「click」在这里是阅读数。 */
 private val ArticleOrders = listOf(
     SearchOrder.Comprehensive to Res.string.search_order_comprehensive,
     SearchOrder.Play to Res.string.search_order_read,
     SearchOrder.NewPublished to Res.string.search_order_pubdate,
+    SearchOrder.Likes to Res.string.search_order_likes,
+    SearchOrder.Comments to Res.string.search_order_comments,
 )
 
 private val Durations = SearchDuration.entries.map { it to it.labelRes }
+private val PubTimes = SearchPubTime.entries.map { it to it.labelRes }
+private val Zones = SearchZone.entries.map { it to it.labelRes }
+private val UserOrders = SearchUserOrder.entries.map { it to it.labelRes }
 
 /**
  * 一个关键词的结果:视频 / 用户 / 专栏三栏,各自翻页。搜索 tab 的普通模式和标签结果页共用 ——
@@ -86,6 +123,8 @@ internal fun SearchResults(
     actions: SearchResultActions,
     modifier: Modifier = Modifier,
     columns: GridCells = GridCells.Fixed(1),
+    /** 列表底部额外留出的高度,给浮在结果上的按钮。 */
+    bottomPadding: Dp = 0.dp,
 ) {
     val tabs = SearchTab.entries
     val pagerState = rememberPagerState(initialPage = state.tab.ordinal) { tabs.size }
@@ -106,19 +145,142 @@ internal fun SearchResults(
         if (pagerState.currentPage != state.tab.ordinal) pagerState.animateScrollToPage(state.tab.ordinal)
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
-        // 不要默认那条通栏分割线,理由同空间页的标签栏。
-        PrimaryTabRow(selectedTabIndex = pagerState.currentPage, divider = {}) {
-            tabs.forEachIndexed { index, tab ->
-                Tab(
-                    selected = pagerState.currentPage == index,
-                    onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
-                    text = { Text(stringResource(tab.labelRes)) },
-                )
+    val selectTab: (Int) -> Unit = { index -> scope.launch { pagerState.animateScrollToPage(index) } }
+    val currentPageTab = tabs[pagerState.currentPage]
+
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        // 够宽时栏名和筛选并成一行:栏名按字宽靠左,筛选在右端,和视频页宽屏的简介/评论同一种
+        // 标签栏。窄了就是通栏标签,筛选下到每一页顶上。按这一块的实际宽度判,不按窗口:宽屏
+        // 上助理侧栏打开时主区可以只剩四百多 dp。
+        val joined = maxWidth >= JoinedHeaderMinWidth
+        Column(modifier = Modifier.fillMaxSize()) {
+            if (joined) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PrimaryScrollableTabRow(
+                        selectedTabIndex = pagerState.currentPage,
+                        edgePadding = 0.dp,
+                        divider = {},
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        tabs.forEachIndexed { index, tab ->
+                            Tab(
+                                selected = pagerState.currentPage == index,
+                                onClick = { selectTab(index) },
+                                text = { Text(stringResource(tab.labelRes)) },
+                            )
+                        }
+                    }
+                    FilterChips(
+                        tab = currentPageTab,
+                        state = state,
+                        actions = actions,
+                        modifier = Modifier.padding(end = Spacing.Comfortable),
+                    )
+                }
+            } else {
+                // 不要默认那条通栏分割线,理由同空间页的标签栏。
+                PrimaryTabRow(selectedTabIndex = pagerState.currentPage, divider = {}) {
+                    tabs.forEachIndexed { index, tab ->
+                        Tab(
+                            selected = pagerState.currentPage == index,
+                            onClick = { selectTab(index) },
+                            text = { Text(stringResource(tab.labelRes)) },
+                        )
+                    }
+                }
+            }
+            HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).touchOnlyPaging()) { page ->
+                ResultPage(tabs[page], state, actions, PagedLayout.Grid(columns), showFilters = !joined, bottomPadding)
             }
         }
-        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).touchOnlyPaging()) { page ->
-            ResultPage(tabs[page], state, actions, PagedLayout.Grid(columns))
+    }
+}
+
+/** 栏名与筛选并成一行所需的宽度:三个标签的最小宽加上视频栏的四枚筛选 chip。 */
+private val JoinedHeaderMinWidth = 760.dp
+
+/**
+ * 一栏的筛选,每一项是一枚带下拉的 filter chip,chip 上写着当前选的那一档。
+ *
+ * **不再是右端两个文字下拉。** 那两个只有字和一个小三角,读起来像标签不像控件;chip 有容器,
+ * 一看就能点,而且偏离默认值时换成选中态,扫一眼就知道这份结果被筛过。排序不铺成一排
+ * 单选 chip:六档加上另外三枚,手机上一屏看不全。
+ *
+ * 视频栏四枚在窄屏排不下一行,整行横滑;鼠标滚轮也能横滚,见 [verticalWheelScrollsRow]。
+ */
+@Composable
+private fun FilterChips(
+    tab: SearchTab,
+    state: NormalSearchState,
+    actions: SearchResultActions,
+    modifier: Modifier = Modifier,
+    contentPadding: Dp = 0.dp,
+) {
+    val scroll = rememberScrollState()
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        modifier = modifier
+            .verticalWheelScrollsRow(scroll)
+            .horizontalScroll(scroll)
+            .padding(horizontal = contentPadding),
+    ) {
+        when (tab) {
+            SearchTab.Video -> {
+                MenuChip(VideoOrders, state.order, SearchOrder.Comprehensive, actions.onOrderChange)
+                MenuChip(Durations, state.duration, SearchDuration.All, actions.onDurationChange)
+                MenuChip(PubTimes, state.pubTime, SearchPubTime.All, actions.onPubTimeChange)
+                MenuChip(Zones, state.zone, SearchZone.All, actions.onZoneChange)
+            }
+
+            SearchTab.Article ->
+                MenuChip(ArticleOrders, state.articleOrder, SearchOrder.Comprehensive, actions.onArticleOrderChange)
+
+            SearchTab.User ->
+                MenuChip(UserOrders, state.userOrder, SearchUserOrder.Default, actions.onUserOrderChange)
+        }
+    }
+}
+
+@Composable
+private fun <T> MenuChip(
+    options: List<Pair<T, StringResource>>,
+    selected: T,
+    default: T,
+    onSelect: (T) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    val selectedLabel = options.firstOrNull { it.first == selected }?.second ?: return
+    Box {
+        FilterChip(
+            selected = selected != default,
+            onClick = { open = true },
+            label = { Text(stringResource(selectedLabel)) },
+            trailingIcon = {
+                Icon(
+                    Icons.Filled.ArrowDropDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(FilterChipDefaults.IconSize),
+                )
+            },
+        )
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            shape = MenuDefaults.shape,
+            containerColor = MenuDefaults.containerColor,
+        ) {
+            options.forEach { (value, label) ->
+                val isSelected = value == selected
+                DropdownMenuItem(
+                    text = { Text(stringResource(label)) },
+                    onClick = {
+                        open = false
+                        onSelect(value)
+                    },
+                    trailingIcon = if (isSelected) menuSelectedMark else null,
+                    modifier = Modifier.selectedSemantics(isSelected),
+                )
+            }
         }
     }
 }
@@ -130,27 +292,20 @@ private fun ResultPage(
     state: NormalSearchState,
     actions: SearchResultActions,
     layout: PagedLayout,
+    showFilters: Boolean,
+    bottomPadding: Dp,
 ) {
+    val listPadding = PaddingValues(bottom = bottomPadding + navigationBarsBottom())
     Column(modifier = Modifier.fillMaxSize()) {
-        // 筛选靠右,和其余列表上方的排序同一个位置、同一个组件(SortMenu)。用户那一栏没有
-        // 可选的排序,整行不画。
-        when (tab) {
-            SearchTab.Video -> Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Tight),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                SortMenu(Durations, state.duration, actions.onDurationChange)
-                SortMenu(VideoOrders, state.order, actions.onOrderChange)
-            }
-
-            SearchTab.Article -> Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Tight),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                SortMenu(ArticleOrders, state.articleOrder, actions.onArticleOrderChange)
-            }
-
-            SearchTab.User -> Unit
+        if (showFilters) {
+            // 边距放在滚动的内容里,不放在外面:放外面的话横滑时 chip 在 16dp 处被截断。
+            FilterChips(
+                tab = tab,
+                state = state,
+                actions = actions,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = Spacing.Comfortable,
+            )
         }
 
         val list = when (tab) {
@@ -164,7 +319,7 @@ private fun ResultPage(
             modifier = Modifier.weight(1f),
         ) {
             when (tab) {
-                SearchTab.Video -> VideoResults(state, actions, layout)
+                SearchTab.Video -> VideoResults(state, actions, layout, listPadding)
                 SearchTab.User -> PagedColumn(
                     layout = layout,
                     items = state.users.items,
@@ -177,7 +332,7 @@ private fun ResultPage(
                     emptyText = stringResource(Res.string.search_no_results),
                     onLoadMore = actions.onLoadMore,
                     onRetry = actions.onRetry,
-                    contentPadding = PaddingValues(bottom = ModeFabClearance + navigationBarsBottom()),
+                    contentPadding = listPadding,
                 ) { user -> UserResultRow(user, onClick = { actions.onUserClick(user.mid) }) }
 
                 SearchTab.Article -> PagedColumn(
@@ -191,7 +346,7 @@ private fun ResultPage(
                     emptyText = stringResource(Res.string.search_no_results),
                     onLoadMore = actions.onLoadMore,
                     onRetry = actions.onRetry,
-                    contentPadding = PaddingValues(bottom = ModeFabClearance + navigationBarsBottom()),
+                    contentPadding = listPadding,
                 ) { article ->
                     VideoRow(item = article.toRowUi(), onClick = { actions.onArticleClick(article.id) })
                 }
@@ -205,7 +360,12 @@ private fun ResultPage(
  * 列表头上,每次搜什么都先看到几张不相干的脸。
  */
 @Composable
-private fun VideoResults(state: NormalSearchState, actions: SearchResultActions, layout: PagedLayout) {
+private fun VideoResults(
+    state: NormalSearchState,
+    actions: SearchResultActions,
+    layout: PagedLayout,
+    contentPadding: PaddingValues,
+) {
     val videos = state.videos
     PagedColumn(
         layout = layout,
@@ -218,8 +378,7 @@ private fun VideoResults(state: NormalSearchState, actions: SearchResultActions,
         emptyText = stringResource(Res.string.search_no_results),
         onLoadMore = actions.onLoadMore,
         onRetry = actions.onRetry,
-        // 底部让出切换助理的悬浮按钮(见 SearchChatScreen 的 ModeSwitchFab),最后一条才不被它盖住。
-        contentPadding = PaddingValues(bottom = ModeFabClearance + navigationBarsBottom()),
+        contentPadding = contentPadding,
     ) { video -> VideoRow(item = video.toRowUi(), onClick = { actions.onVideoClick(video.bvid) }) }
 }
 
@@ -266,6 +425,7 @@ private fun SearchVideo.toRowUi() = VideoRowUi(
     dateText = formatDate(publishedAtEpochSeconds),
     playText = formatCount(playCount),
     danmakuText = formatCount(danmakuCount),
+    titleHighlights = titleHighlights,
 )
 
 /**
@@ -281,6 +441,7 @@ private fun SearchArticle.toRowUi() = VideoRowUi(
     dateText = formatDate(publishedAtEpochSeconds),
     meta = stringResource(Res.string.search_article_views, formatCount(viewCount)),
     note = summary.takeIf { it.isNotBlank() },
+    titleHighlights = titleHighlights,
 )
 
 private val DateFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd")

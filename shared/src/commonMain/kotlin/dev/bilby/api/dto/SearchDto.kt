@@ -8,11 +8,20 @@ import kotlinx.serialization.Serializable
  * 字段路径依据 notes/space-and-search.md 2.2、2.7 节,JSON 是拍平结构,不像
  * PiliPlus 的 model 那样嵌套 owner/stat——这里按接口原样声明,嵌套在 Repository 里做。
  */
+/**
+ * 分类搜索三个分支共有的一格。触发风控时接口照样回 code 0,`data` 里没有结果,只有这张
+ * 验证凭据(notes/space-and-search.md 2.2)。不认它的话,风控读起来就是「没有结果」。
+ */
+interface SearchChallengeCarrier {
+    val vVoucher: String?
+}
+
 @Serializable
 data class SearchVideoResultDto(
     val numResults: Int = 0,
     val result: List<SearchVideoItemDto> = emptyList(),
-)
+    @SerialName("v_voucher") override val vVoucher: String? = null,
+) : SearchChallengeCarrier
 
 @Serializable
 data class SearchVideoItemDto(
@@ -33,7 +42,8 @@ data class SearchVideoItemDto(
 data class SearchUserResultDto(
     val numResults: Int = 0,
     val result: List<SearchUserItemDto> = emptyList(),
-)
+    @SerialName("v_voucher") override val vVoucher: String? = null,
+) : SearchChallengeCarrier
 
 @Serializable
 data class SearchUserItemDto(
@@ -54,6 +64,16 @@ data class SearchUserItemDto(
 data class SearchArticleResultDto(
     val numResults: Int = 0,
     val result: List<SearchArticleItemDto> = emptyList(),
+    @SerialName("v_voucher") override val vVoucher: String? = null,
+) : SearchChallengeCarrier
+
+/**
+ * `GET /x/web-interface/suggest` 的 data(notes/space-and-search.md 2.9)。`result` 没有补全词时
+ * 形状不定,按 JsonElement 收,在 Repository 里取 `tag`。
+ */
+@Serializable
+data class SearchSuggestDto(
+    val result: kotlinx.serialization.json.JsonElement? = null,
 )
 
 @Serializable

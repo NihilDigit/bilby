@@ -24,6 +24,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -71,6 +74,8 @@ data class VideoRowUi(
     val note: String? = null,
     /** note 是否用强调色。理由用 primary(它是这条为什么在这),状态文案用次级色。 */
     val accentNote: Boolean = false,
+    /** 标题里要标出的几段(搜索结果里命中的词),以 primary 色画。 */
+    val titleHighlights: List<IntRange> = emptyList(),
 )
 
 /**
@@ -140,7 +145,7 @@ fun VideoRow(
                 // list item 的 headline 定的也是 bodyLarge。字号占掉的行宽从封面那边让出来,
                 // 见 Dimens.ListCoverWidth 那道算术。标题不给溢出按钮让位,见 [TitleOverflowGutter]。
                 Text(
-                    text = item.title,
+                    text = highlightedTitle(item.title, item.titleHighlights),
                     modifier = Modifier.padding(end = if (overflow != null) TitleOverflowGutter else 0.dp),
                     style = MaterialTheme.typography.bodyLarge,
                     maxLines = 2,
@@ -217,6 +222,17 @@ fun VideoRow(
 fun listCoverWidthFor(rowWidth: Dp): Dp =
     (rowWidth - Spacing.Comfortable * 2 - Spacing.Cozy - Dimens.ListTextMaxWidth)
         .coerceIn(Dimens.ListCoverWidth, Dimens.ListCoverMaxWidth)
+
+@Composable
+private fun highlightedTitle(title: String, highlights: List<IntRange>): AnnotatedString {
+    val color = MaterialTheme.colorScheme.primary
+    return buildAnnotatedString {
+        append(title)
+        highlights.forEach { range ->
+            if (range.last < title.length) addStyle(SpanStyle(color = color), range.first, range.last + 1)
+        }
+    }
+}
 
 private const val DisabledContentAlpha = 0.38f
 

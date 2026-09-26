@@ -53,3 +53,9 @@ const val CODE_NOT_LOGGED_IN = -101
 
 /** 风控拦截。命中后按 DESIGN 5 节的礼仪退避 60s 再续。 */
 const val CODE_RATE_LIMITED = -412
+
+/**
+ * 风控要求先过一次验证码。B 站自己对这种情况回 -352;搜索接口不回错误码,而是在 code 0 的
+ * data 里放一张 `v_voucher`,由 `SearchRepository` 折算成这一个码,界面只认一种。
+ */
+const val CODE_RISK_CHALLENGE = -352

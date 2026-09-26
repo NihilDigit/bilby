@@ -1,40 +1,54 @@
 package dev.bilby.ui.search
 
 import dev.bilby.ui.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import dev.bilby.data.SearchSuggestion
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.foundation.layout.WindowInsets
-import dev.bilby.ui.imeVisible
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
+import dev.bilby.ui.components.PillInputField
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -46,12 +60,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,7 +83,11 @@ import dev.bilby.agent.AgentAnswer
 import dev.bilby.agent.AnswerSource
 import dev.bilby.agent.citation
 import dev.bilby.agent.StepKind
-import dev.bilby.ui.AdaptiveContent
+import dev.bilby.data.SideSheetPrefs
+import dev.bilby.ui.AdaptiveListContent
+import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.components.AgentTurnView
 import dev.bilby.ui.components.AgentQuestionBubble
 import dev.bilby.agent.TraceItem
@@ -72,12 +95,13 @@ import dev.bilby.data.SearchVideo
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.KeepScrolledToBottom
 import dev.bilby.ui.components.SearchField
+import dev.bilby.ui.components.SidePanelLayout
+import dev.bilby.ui.components.SidePanelToggle
 import dev.bilby.ui.components.rememberBottomFollow
 import dev.bilby.ui.theme.BilbyTheme
-import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
+import kotlin.math.roundToInt
 
-// label 曾经存在但没有任何界面显示它,随抽取一并去掉。
 enum class SearchMode { Normal, Agent }
 
 /** 助理的一轮对话。普通搜索没有"轮"这个概念,见 [NormalSearchState]。 */
@@ -94,237 +118,557 @@ data class AgentSearchState(val turns: List<SearchTurn> = emptyList())
  * 切换模式只是换显示哪一份,两份都留着。
  */
 data class SearchChatUiState(
+    /** 窄屏显示哪一种。宽屏两种同时在屏,不看它。 */
     val mode: SearchMode = SearchMode.Normal,
+    /** 搜索框。搜完词留在框里,见 SearchChatViewModel.search。 */
     val input: String = "",
+    /** 助理的追问框。和搜索框分开:宽屏两个框同时在屏,各写各的。 */
+    val agentInput: String = "",
+    /** 搜索框当前内容的补全词,见 SearchChatViewModel.onInputChange。 */
+    val suggestions: List<SearchSuggestion> = emptyList(),
     val normal: NormalSearchState = NormalSearchState(),
     val agent: AgentSearchState = AgentSearchState(),
 )
 
+/** 助理那一侧的全部动作。 */
+class AgentActions(
+    val onInputChange: (String) -> Unit,
+    val onSend: () -> Unit,
+    val onNewSession: () -> Unit,
+    val onRetry: () -> Unit,
+    val onVideoClick: (bvid: String) -> Unit,
+)
+
 /**
- * 搜索 tab。两种模式长两样,因为它们本来就不同构:
+ * 搜索 tab:一个搜索框,回车是 B 站原始结果;助理在旁边另起一块。
  *
- * - **普通搜索是一个搜索页**:搜索栏在顶上,下面是结果(或历史)。M3 search 页给搜索栏定的
- *   位置就在顶部,点开铺满成搜索视图、回车收起。
- * - **助理是一段对话**:输入在下,一轮轮结果在上,像 Claude App 但内容是视频列表。
+ * - **普通搜索是一个搜索页**:搜索栏在顶上,下面是结果(或历史)。
+ * - **助理是一段对话**:输入在下,一轮轮结果在上。它是进阶工具,不是每个人都用:模型没配时
+ *   它的入口一概不出现。
  *
- * 两种模式原先共用底部同一个输入框,理由是"切模式时框从底跳到顶,闪得扎眼"。代价是普通搜索
- * 也被塞进了对话的形状:搜索词在屏幕最下面,结果从最上面开始,人要上下来回看。切模式是一次
- * 明确的页面切换(模式标签就写在框里),框换个位置正说明换了一种东西。
- *
- * 两种模式之间用右下角的悬浮按钮来回切([ModeSwitchFab]);"新会话"只在助理模式下出现,
- * 在输入框左边 —— 普通搜索压根没有"会话"这个概念,那不是藏起来了。
+ * **宽屏两者并排**:结果在主区,助理是右侧可关、可拖宽的侧栏,自带输入框,和空间页的动态
+ * 同一个组件([SidePanelLayout]),搜索框旁不另设按钮。**窄屏**一次只放得下一种,右下角的
+ * 「问助理」拿框里的词切进助理那一屏,左上的返回回到结果。
  *
  * 结果页只有结果——无热搜、无"换一批"(DESIGN 2.2/3.4)。历史是自己敲过的字,不在此列。
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SearchChatScreen(
     state: SearchChatUiState,
     onInputChange: (String) -> Unit,
-    onModeChange: (SearchMode) -> Unit,
-    onSend: () -> Unit,
-    onNewSession: () -> Unit,
-    onVideoClick: (bvid: String) -> Unit,
-    onRetry: () -> Unit,
+    onSearch: () -> Unit,
+    onAskAgent: () -> Unit,
+    onLeaveAgent: () -> Unit,
+    agentActions: AgentActions,
     /** 普通搜索结果区的动作(三栏、筛选、翻页)。 */
     resultActions: SearchResultActions,
-    /** 最近搜过的词,最近的在前。只在普通搜索里露面,时机见 [NormalBody]。 */
+    /** 模型配好了没有。没配时助理的入口一概不出现。 */
+    agentAvailable: Boolean = false,
+    /** 宽屏助理侧栏的开关与宽度;null 是还没读出来。 */
+    agentPanel: SideSheetPrefs? = null,
+    onAgentPanelOpenChange: (Boolean) -> Unit = {},
+    onAgentPanelWidthChange: (Float) -> Unit = {},
+    /** 最近搜过的词,最近的在前。 */
     searchHistory: List<String> = emptyList(),
     onHistoryClick: (String) -> Unit = {},
     onHistoryRemove: (String) -> Unit = {},
     onHistoryClear: () -> Unit = {},
+    onSuggestionClick: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    var inputFocused by remember { mutableStateOf(false) }
+    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     val focusManager = LocalFocusManager.current
-    // **发送要收焦点。** 历史面板盖在结果上的判据之一就是"光标在输入框里"(见 NormalBody),
-    // 而发送不动焦点,于是搜完之后这一屏还停在历史上。点历史同理:它直接搜,也要收。
-    val send: () -> Unit = {
+    // **发送要收焦点。** 历史盖在结果上的判据之一就是"光标在输入框里"(见 NormalSearch),
+    // 而发送不动焦点,于是搜完之后这一屏还停在历史上。点历史、问助理同理。
+    val search: () -> Unit = {
         focusManager.clearFocus()
-        onSend()
+        onSearch()
+    }
+    val askAgent: () -> Unit = {
+        focusManager.clearFocus()
+        onAskAgent()
+    }
+    val normalSearch: @Composable (panelToggle: (@Composable () -> Unit)?) -> Unit = { panelToggle ->
+        NormalSearch(
+            state = state.normal,
+            input = state.input,
+            onInputChange = onInputChange,
+            onSearch = search,
+            onAskAgent = askAgent.takeIf { agentAvailable },
+            wide = wide,
+            panelToggle = panelToggle,
+            actions = resultActions,
+            history = searchHistory,
+            onHistoryClick = { query ->
+                focusManager.clearFocus()
+                onHistoryClick(query)
+            },
+            onHistoryRemove = onHistoryRemove,
+            onHistoryClear = onHistoryClear,
+            suggestions = state.suggestions,
+            onSuggestionClick = { term ->
+                focusManager.clearFocus()
+                onSuggestionClick(term)
+            },
+        )
     }
 
-    // 宽屏下这一栏不拉满:结果是"封面 + 两行文字"的条目,助理那边整段都是正文,行长一超过
-    // 可读宽度就得靠转头扫。输入框在同一个容器里,跟着一起收。
-    AdaptiveContent(modifier = modifier.fillMaxSize(), maxWidth = Breakpoints.ReadableWidth) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            when (state.mode) {
-                SearchMode.Normal -> {
-                    NormalSearchBar(
-                        input = state.input,
-                        onInputChange = onInputChange,
-                        onSend = send,
-                        focused = inputFocused,
-                        onFocusChange = { inputFocused = it },
-                        onCollapse = { focusManager.clearFocus() },
-                    )
-                    Box(modifier = Modifier.weight(1f)) {
-                        NormalBody(
-                            state = state.normal,
-                            actions = resultActions,
-                            history = searchHistory,
-                            onHistoryClick = { query ->
-                                focusManager.clearFocus()
-                                onHistoryClick(query)
-                            },
-                            onHistoryRemove = onHistoryRemove,
-                            onHistoryClear = onHistoryClear,
-                            inputFocused = inputFocused,
-                        )
-                        // 正在打字(展开态)时不露:那时键盘占着下半屏,按钮会浮在历史上挡字。
-                        if (!inputFocused) {
-                            ModeSwitchFab(
-                                current = SearchMode.Normal,
-                                onModeChange = onModeChange,
-                                modifier = Modifier.align(Alignment.BottomEnd),
+    if (wide) {
+        SidePanelLayout(
+            prefs = agentPanel,
+            available = agentAvailable,
+            title = stringResource(Res.string.search_mode_agent),
+            closeDescription = stringResource(Res.string.search_agent_panel_close),
+            onOpenChange = onAgentPanelOpenChange,
+            onWidthChange = onAgentPanelWidthChange,
+            defaultWidth = AgentPanelDefaultWidth,
+            minWidth = AgentPanelMinWidth,
+            // 侧栏卡片与搜索栏同一条上沿。
+            modifier = modifier.fillMaxSize().padding(top = Spacing.Tight),
+            main = {
+                normalSearch(
+                    agentPanel?.takeIf { agentAvailable }?.let { prefs ->
+                        {
+                            SidePanelToggle(
+                                open = prefs.open,
+                                onOpenChange = onAgentPanelOpenChange,
+                                description = stringResource(Res.string.search_agent_panel_toggle),
                             )
                         }
-                    }
-                }
-
-                SearchMode.Agent -> {
-                    Box(modifier = Modifier.weight(1f)) {
-                        AgentPane(
-                            state = state.agent,
-                            onVideoClick = onVideoClick,
-                            onRetry = onRetry,
-                        )
-                        // 认键盘,不认焦点:返回键收起键盘后焦点仍留在底部输入框里,按焦点判断的话
-                        // 按钮就再也不出来了。普通模式不同,那边焦点就是展开态,返回键会一并收掉。
-                        if (!WindowInsets.imeVisible) {
-                            ModeSwitchFab(
-                                current = SearchMode.Agent,
-                                onModeChange = onModeChange,
-                                modifier = Modifier.align(Alignment.BottomEnd),
-                            )
-                        }
-                    }
-                    InputBar(
-                        input = state.input,
-                        onInputChange = onInputChange,
-                        onSend = send,
-                        // 开新会话是清空助理上下文的唯一入口(DESIGN 3.1:会话必须由用户显式开启)。
-                        onNewSession = onNewSession,
-                        onFocusChange = { inputFocused = it },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
+                    },
+                )
+            },
+            panel = { AgentConversation(state.agent, state.agentInput, agentActions) },
+        )
+    } else if (state.mode == SearchMode.Agent && agentAvailable) {
+        BackHandler { onLeaveAgent() }
+        Column(modifier = modifier.fillMaxSize()) {
+            AgentTopBar(onBack = onLeaveAgent)
+            AgentConversation(state.agent, state.agentInput, agentActions, modifier = Modifier.weight(1f))
         }
+    } else {
+        Box(modifier = modifier.fillMaxSize()) { normalSearch(null) }
     }
 }
 
-/**
- * 普通搜索的顶部搜索栏。**聚焦时就是展开态**:左边换成返回箭头,下面整块换成历史(见
- * [NormalBody]);回车或点历史收起。M3 的 search bar 展开成 search view 就是这两态,这里
- * 不用组件本身,因为它的展开态自己要铺满窗口,而这一页下面还有底栏。
- */
+/** 侧栏默认宽度:答案是整段正文,比空间页的动态要宽一些才读得顺。 */
+private val AgentPanelDefaultWidth = 420.dp
+
+private val AgentPanelMinWidth = 320.dp
+
+/** 宽屏搜索栏的最大宽度。再宽,左端的放大镜和右端的清除键就隔得太远,一眼看不全。 */
+private val SearchBarMaxWidth = 720.dp
+
+/** 搜索栏行尾那颗侧栏开关的宽度(M3 图标按钮的触控格)。 */
+private val PanelToggleWidth = 48.dp
+
+/** 窄屏助理那一屏的顶栏:返回和栏名。返回回到搜索结果,助理的对话留着。 */
 @Composable
-private fun NormalSearchBar(
-    input: String,
-    onInputChange: (String) -> Unit,
-    onSend: () -> Unit,
-    focused: Boolean,
-    onFocusChange: (Boolean) -> Unit,
-    onCollapse: () -> Unit,
-) {
+private fun AgentTopBar(onBack: () -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = if (focused) Spacing.Hair else Spacing.Comfortable, end = Spacing.Comfortable)
-            .padding(vertical = Spacing.Tight),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Hair, vertical = Spacing.Tight),
     ) {
-        // 展开态的出口。系统返回同样能收起(见 NormalBody 里的 BackHandler)。
-        if (focused) {
-            IconButton(onClick = onCollapse) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(Res.string.action_back),
-                )
-            }
+        IconButton(onClick = onBack) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.action_back))
         }
-        SearchField(
-            value = input,
-            onValueChange = onInputChange,
-            // 占位文案同时是这个框的无障碍标签,所以不能空着。
-            placeholder = stringResource(Res.string.search_empty),
-            // 回车即搜。DESIGN 2.2 的快路原话是"输入直接回车 = 原始 B 站搜索"。
-            onSearch = onSend,
-            onFocusChange = onFocusChange,
-            modifier = Modifier.weight(1f),
+        Text(
+            stringResource(Res.string.search_mode_agent),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(start = Spacing.Hair),
         )
     }
 }
 
 /**
- * 切到另一种搜索的悬浮按钮:普通搜索里是「助理」,助理里是「搜索」。
+ * 普通搜索:搜索栏,下面是历史或结果。
  *
- * **从输入框尾部的下拉挪到这里。** 那个下拉是"这个框现在归谁答"的状态,可两种模式早已不是
- * 同一个框(普通在顶、助理在底),下拉挂在哪个框上都只说了一半。一颗浮在内容右下角的按钮
- * 说的是"去另一种",位置在两种模式里一样。
+ * **聚焦时就是 M3 search 的展开态**,建议(这里是历史)的摆法按窗口分:窄屏整块换成历史
+ * (full-screen 布局),宽屏从搜索栏下方垂下一张卡,底下的结果盖一层 scrim(docked 布局)。
+ * search.md 原话是紧凑窗口用前者,中等以上换后者。
  *
- * 只有图标:闪光(去助理)和放大镜(回搜索)是这两件事各自的通行符号,带字的 extended FAB
- * 横在结果列表右下角挡掉的宽度多出一倍。名字给读屏(contentDescription)。
+ * 窄屏的搜索栏随列表上滑收起、下滑露出(search.md Scroll 一节的第一种),结果多占一截屏。
+ * 宽屏不收:竖向不缺那 64dp,而侧栏开关长在这一行上。
  */
 @Composable
-private fun ModeSwitchFab(
-    current: SearchMode,
-    onModeChange: (SearchMode) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val target = if (current == SearchMode.Normal) SearchMode.Agent else SearchMode.Normal
-    FloatingActionButton(
-        onClick = { onModeChange(target) },
-        modifier = modifier.padding(Spacing.Comfortable),
-    ) {
-        Icon(
-            if (target == SearchMode.Agent) Icons.Outlined.AutoAwesome else Icons.Outlined.Search,
-            contentDescription = stringResource(
-                if (target == SearchMode.Agent) Res.string.search_mode_agent else Res.string.search_mode_normal,
-            ),
-        )
-    }
-}
-
-/** 列表底部为悬浮按钮留出的高度:56dp 的按钮加上下各 16dp 的边距。 */
-internal val ModeFabClearance = 88.dp
-
-/**
- * 普通搜索的正文:历史,或者结果。
- *
- * 历史在两种时候露面:**还没搜过**,以及**光标回到搜索栏**。后者是搜完之后再拿到历史的唯一
- * 途径,而"再搜一次刚才那个"这个念头恰恰常发生在看完一轮结果、手已经点回搜索栏的时候。
- * 绑在焦点上而不是一直挂着:结果还在读的时候摆一片旧关键词,才是在把人从当前结果引开。
- */
-@Composable
-private fun NormalBody(
+private fun NormalSearch(
     state: NormalSearchState,
+    input: String,
+    onInputChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    onAskAgent: (() -> Unit)?,
+    wide: Boolean,
+    panelToggle: (@Composable () -> Unit)?,
     actions: SearchResultActions,
     history: List<String>,
     onHistoryClick: (String) -> Unit,
     onHistoryRemove: (String) -> Unit,
     onHistoryClear: () -> Unit,
-    inputFocused: Boolean,
+    suggestions: List<SearchSuggestion>,
+    onSuggestionClick: (String) -> Unit,
 ) {
+    var focused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     // 展开态(搜索栏有焦点)时,返回先收起,不直接离开这一页。
-    BackHandler(enabled = inputFocused) { focusManager.clearFocus() }
+    BackHandler(enabled = focused) { focusManager.clearFocus() }
 
-    when {
-        history.isNotEmpty() && (inputFocused || state.query.isEmpty()) ->
-            SearchHistoryPanel(history, onHistoryClick, onHistoryRemove, onHistoryClear)
+    // 宽屏的助理是常驻侧栏,不要这个按钮(见 [AskAgentFab])。
+    val askAgentFab = onAskAgent.takeIf { !wide }
+    val fab = askAgentFab != null
 
-        state.query.isEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            EmptyState(
-                message = stringResource(Res.string.search_empty),
-                // 普通搜索的空态给放大镜,和助理那一屏的图标分开。
-                icon = Icons.Outlined.Search,
-            )
-        }
+    val collapsing = remember { CollapsingBar() }
+    // 打字时和换了一次查询时栏一定在:前者正对着它,后者要看得见查的是什么。
+    LaunchedEffect(focused, state.query) { collapsing.offsetPx = 0f }
 
-        else -> SearchResults(state = state, actions = actions)
+    val bar: @Composable ((@Composable (Modifier) -> Unit)?) -> Unit = { dropdown ->
+        SearchBarRow(
+            input = input,
+            onInputChange = onInputChange,
+            onSearch = onSearch,
+            focused = focused,
+            onFocusChange = { focused = it },
+            onCollapse = { focusManager.clearFocus() },
+            // 宽屏不给返回箭头:docked 布局点 scrim 就收起,箭头在桌面上是多余的一格。
+            showBack = !wide,
+            wide = wide,
+            trailing = panelToggle,
+            dropdown = dropdown,
+        )
     }
+    val historyPanel: @Composable (Modifier) -> Unit = { panelModifier ->
+        SearchHistoryPanel(history, onHistoryClick, onHistoryRemove, onHistoryClear, panelModifier)
+    }
+    // 聚焦时盖在结果上的那一块:正在打字而且有补全就是补全,否则是历史。
+    val typing = focused && input.isNotBlank() && suggestions.isNotEmpty()
+    val focusPanel: (@Composable (Modifier) -> Unit)? = when {
+        typing -> { panelModifier -> SuggestionPanel(suggestions, onSuggestionClick, panelModifier) }
+        history.isNotEmpty() -> historyPanel
+        else -> null
+    }
+    val scrollingPanel: @Composable (@Composable (Modifier) -> Unit) -> Unit = { panel ->
+        if (wide) {
+            // 和搜索框同一条中线、同样宽,一眼对得上是这个框的历史与补全。照搜索栏那一行的
+            // 结构排([SearchBarRow]):行尾让出侧栏开关那一格,框在剩下那段里居中。按整个主区
+            // 居中的话,框和下面的历史各自对着不同的中线,左沿错开一截,历史看着像被收窄了。
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(start = Spacing.Comfortable, end = if (panelToggle != null) Spacing.Hair else Spacing.Comfortable),
+            ) {
+                Box(modifier = Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
+                    panel(Modifier.widthIn(max = SearchBarMaxWidth).fillMaxSize().verticalScroll(rememberScrollState()))
+                }
+                if (panelToggle != null) Spacer(Modifier.width(PanelToggleWidth))
+            }
+        } else {
+            panel(Modifier.fillMaxSize().verticalScroll(rememberScrollState()))
+        }
+    }
+    val body: @Composable () -> Unit = {
+        when {
+            // 窄屏展开态:整块换成补全或历史(full-screen 布局)。
+            !wide && focused && focusPanel != null -> scrollingPanel(focusPanel)
+
+            // 还没搜过时历史就是正文。
+            state.query.isEmpty() && history.isNotEmpty() -> scrollingPanel(historyPanel)
+
+            state.query.isEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                EmptyState(
+                    message = stringResource(Res.string.search_empty),
+                    icon = Icons.Outlined.Search,
+                )
+            }
+
+            else -> Column(modifier = Modifier.fillMaxSize()) {
+                uidCandidate(state.query)?.let { mid ->
+                    OpenUidRow(mid = mid, onClick = { actions.onUserClick(mid) })
+                }
+                AdaptiveListContent(modifier = Modifier.weight(1f)) { columns ->
+                    SearchResults(
+                        state = state,
+                        actions = actions,
+                        columns = columns,
+                        // 最后一条不被悬浮按钮盖住。
+                        bottomPadding = if (fab) AskAgentFabClearance else 0.dp,
+                    )
+                }
+            }
+        }
+    }
+    // 宽屏展开态的卡片。历史已经是正文(还没搜过)时不再垂一份一样的下来。
+    val dockedPanel = focusPanel.takeIf { focused && (typing || state.query.isNotEmpty()) }
+
+    if (wide) {
+        // 搜索栏叠在最上层:展开时它向下长成一张卡,压在结果与 scrim 之上。
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Spacer(Modifier.height(WideBarHeight))
+                Box(modifier = Modifier.weight(1f)) { body() }
+            }
+            if (dockedPanel != null) DockedScrim(onDismiss = { focusManager.clearFocus() })
+            bar(dockedPanel)
+        }
+    } else {
+        Column(modifier = Modifier.fillMaxSize().nestedScroll(collapsing.connection)) {
+            Box(modifier = collapsing.modifier) { bar(null) }
+            Box(modifier = Modifier.weight(1f)) {
+                body()
+                // 打字时不露:那时键盘占着下半屏,按钮会浮在历史上挡字。
+                if (!focused) {
+                    askAgentFab?.let {
+                        AskAgentFab(
+                            onClick = it,
+                            expanded = collapsing.offsetPx == 0f,
+                            modifier = Modifier.align(Alignment.BottomEnd),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 搜索栏那一行:搜索框,宽屏行尾再挂侧栏开关。 */
+@Composable
+private fun SearchBarRow(
+    input: String,
+    onInputChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    focused: Boolean,
+    onFocusChange: (Boolean) -> Unit,
+    onCollapse: () -> Unit,
+    showBack: Boolean,
+    wide: Boolean,
+    trailing: (@Composable () -> Unit)?,
+    /** 宽屏展开态接在框下面的那一截(补全或历史),见 [DockedSurface]。 */
+    dropdown: (@Composable (Modifier) -> Unit)? = null,
+) {
+    val back = showBack && focused
+    Row(
+        verticalAlignment = Alignment.Top,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = if (back) Spacing.Hair else Spacing.Comfortable, end = if (trailing != null) Spacing.Hair else Spacing.Comfortable)
+            // 宽屏的上边距由外层给(见 SearchChatScreen),框与侧栏卡片同一条上沿。
+            .padding(top = if (wide) 0.dp else Spacing.Tight, bottom = Spacing.Tight),
+    ) {
+        if (back) {
+            IconButton(onClick = onCollapse) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.action_back))
+            }
+        }
+        // 宽屏框居中、限宽;侧栏开关在行尾,不算进居中的那一段。
+        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+            DockedSurface(
+                dropdown = dropdown,
+                modifier = if (wide) Modifier.widthIn(max = SearchBarMaxWidth) else Modifier,
+            ) {
+                SearchField(
+                    value = input,
+                    onValueChange = onInputChange,
+                    // 占位文案同时是这个框的无障碍标签,所以不能空着。
+                    placeholder = stringResource(Res.string.search_empty),
+                    // 回车即搜。DESIGN 2.2 的快路原话是"输入直接回车 = 原始 B 站搜索"。
+                    onSearch = onSearch,
+                    onFocusChange = onFocusChange,
+                )
+            }
+        }
+        trailing?.invoke()
+    }
+}
+
+/**
+ * 宽屏展开态:搜索框向下长成一张卡,补全或历史接在框下面(search.md 的 docked 布局)。
+ *
+ * **卡片一直在,收起时是透明的、没有下半截。** 展开时才包一层的话,框在组合树里换了位置,
+ * 会被当成另一个输入框重建,焦点随之丢掉,卡片又立刻收起。
+ *
+ * 框和列表是同一张卡,不是框下面另挂一张:分开的两块中线各自对齐各自的容器,行尾有侧栏
+ * 开关时就错开了。
+ */
+@Composable
+private fun DockedSurface(
+    dropdown: (@Composable (Modifier) -> Unit)?,
+    modifier: Modifier = Modifier,
+    field: @Composable () -> Unit,
+) {
+    val expanded = dropdown != null
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = if (expanded) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent,
+        modifier = modifier,
+    ) {
+        Column {
+            field()
+            // 框与下面的列表之间不画线:展开时框有焦点,底色是 surfaceContainerHighest,比卡片
+            // 高一档,色阶差已经把两块分开。
+            if (dropdown != null) {
+                dropdown(Modifier.heightIn(max = DockedPanelMaxHeight).verticalScroll(rememberScrollState()))
+            }
+        }
+    }
+}
+
+/**
+ * 窄屏的「问助理」:拿框里的词起助理,框是空的就只切过去。
+ *
+ * 宽屏没有它:助理是常驻的侧栏,自己带输入框,和空间页的动态侧栏一样不需要另一个入口。
+ * 窄屏一次只放得下一种,才要一个去助理那一屏的按钮。带字的 extended FAB,列表往下读时
+ * 随搜索栏一起收成图标:助理是进阶功能,没用过的人认不出那个闪光符号,静止时要读得出来。
+ */
+@Composable
+private fun AskAgentFab(onClick: () -> Unit, expanded: Boolean, modifier: Modifier = Modifier) {
+    ExtendedFloatingActionButton(
+        onClick = onClick,
+        expanded = expanded,
+        icon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
+        text = { Text(stringResource(Res.string.search_ask_agent)) },
+        modifier = modifier.padding(Spacing.Comfortable),
+    )
+}
+
+/** 列表底部为悬浮按钮留出的高度:56dp 的按钮加上下各 16dp 的边距。 */
+private val AskAgentFabClearance = 88.dp
+
+/**
+ * 补全词,一行一条。点一条直接搜它(同点历史)。命中输入的那几段标成 primary,读得出补的是
+ * 哪一截。
+ *
+ * **不是热搜。** 这里列的每一条都从用户正在敲的字延伸出来,换一个字就换一批;热搜是不管你
+ * 敲了什么都推给你的那一份,不做(DESIGN 2.2)。
+ */
+@Composable
+private fun SuggestionPanel(
+    suggestions: List<SearchSuggestion>,
+    onClick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val title = stringResource(Res.string.search_suggestions)
+    val highlight = MaterialTheme.colorScheme.primary
+    Column(
+        modifier = modifier
+            .padding(vertical = Spacing.Tight)
+            // 列表一换,读屏要念出来(search.md Accessibility 的 Autosuggest 一节)。
+            .semantics { paneTitle = title; liveRegion = LiveRegionMode.Polite },
+    ) {
+        suggestions.forEach { suggestion ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = SuggestionRowHeight)
+                    .clickable(role = Role.Button) { onClick(suggestion.term) }
+                    .padding(horizontal = Spacing.Comfortable),
+            ) {
+                Icon(
+                    Icons.Outlined.Search,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = buildAnnotatedString {
+                        append(suggestion.text)
+                        suggestion.highlights.forEach { range ->
+                            if (range.last < suggestion.text.length) {
+                                addStyle(SpanStyle(color = highlight), range.first, range.last + 1)
+                            }
+                        }
+                    },
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** M3 单行 list item 的高度。 */
+private val SuggestionRowHeight = 56.dp
+
+/**
+ * 查询是一串纯数字时,结果顶上的一行:把它当 UID 打开那个人的空间。
+ *
+ * 不直接跳:一串数字也可能就是要搜的东西(番号、年份、型号),替人猜会把这些搜索都劫走。
+ */
+@Composable
+private fun OpenUidRow(mid: Long, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight)
+            .fillMaxWidth(),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+            modifier = Modifier.heightIn(min = SuggestionRowHeight).padding(horizontal = Spacing.Comfortable),
+        ) {
+            Icon(Icons.Outlined.AccountCircle, contentDescription = null)
+            Text(
+                stringResource(Res.string.search_open_uid, mid.toString()),
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
+        }
+    }
+}
+
+/** 宽屏展开态盖在结果上的 scrim,点它收起。卡片画在它上面一层,点卡片不会落到这里。 */
+@Composable
+private fun DockedScrim(onDismiss: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.scrim.copy(alpha = ScrimAlpha))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onDismiss,
+            ),
+    )
+}
+
+/** 宽屏搜索栏那一行的高度:框 48dp 加下边距。结果区从这条线往下排,展开的卡片压在结果上。 */
+private val WideBarHeight = 48.dp + Spacing.Tight
+
+private const val ScrimAlpha = 0.32f
+
+private val DockedPanelMaxHeight = 400.dp
+
+/**
+ * 随列表收起的搜索栏。列表往下读时栏先让出位置再滚列表,往回拉时栏先回来(M3 的
+ * enter-always)。**位移由栏自己吃掉**,不交给列表:栏收的同时列表区跟着变高,列表再滚
+ * 同样的距离,内容就以两倍速度往上跑。
+ */
+private class CollapsingBar {
+    /** 栏的完整高度,测量时写入。只在滚动回调里读,不必是快照状态。 */
+    private var heightPx = 0f
+    var offsetPx by mutableFloatStateOf(0f)
+
+    val connection = object : NestedScrollConnection {
+        override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+            val before = offsetPx
+            offsetPx = (offsetPx + available.y).coerceIn(-heightPx, 0f)
+            return Offset(0f, offsetPx - before)
+        }
+    }
+
+    val modifier = Modifier
+        .clipToBounds()
+        .layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            heightPx = placeable.height.toFloat()
+            val offset = offsetPx.roundToInt()
+            layout(placeable.width, (placeable.height + offset).coerceAtLeast(0)) {
+                placeable.place(0, offset)
+            }
+        }
 }
 
 /**
@@ -347,14 +691,10 @@ private fun SearchHistoryPanel(
     onClick: (String) -> Unit,
     onRemove: (String) -> Unit,
     onClear: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var confirmingClear by remember { mutableStateOf(false) }
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-    ) {
+    Column(modifier = modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 stringResource(Res.string.search_history_title),
@@ -369,6 +709,7 @@ private fun SearchHistoryPanel(
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier.padding(bottom = Spacing.Tight),
         ) {
             history.forEach { query ->
                 HistoryChip(query = query, onClick = { onClick(query) }, onRemove = { onRemove(query) })
@@ -405,7 +746,7 @@ private fun HistoryChip(query: String, onClick: () -> Unit, onRemove: () -> Unit
     Box {
         Surface(
             shape = MaterialTheme.shapes.small,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
             modifier = Modifier
                 // 视觉 32dp,触控撑到 48dp(风格指南 §3)。
                 .minimumInteractiveComponentSize()
@@ -443,7 +784,30 @@ private fun HistoryChip(query: String, onClick: () -> Unit, onRemove: () -> Unit
 /** M3 chip 的容器高度。 */
 private val HistoryChipHeight = 32.dp
 
-/** 助理:一段可以追问下去的对话,跟随最新一轮。 */
+/** 助理:上面是对话,下面是追问框。窄屏的助理一屏和宽屏的侧栏是同一块。 */
+@Composable
+private fun AgentConversation(
+    state: AgentSearchState,
+    input: String,
+    actions: AgentActions,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxSize()) {
+        Box(modifier = Modifier.weight(1f)) {
+            AgentPane(state = state, onVideoClick = actions.onVideoClick, onRetry = actions.onRetry)
+        }
+        InputBar(
+            input = input,
+            onInputChange = actions.onInputChange,
+            onSend = actions.onSend,
+            // 开新会话是清空助理上下文的唯一入口(DESIGN 3.1:会话必须由用户显式开启)。
+            onNewSession = actions.onNewSession,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/** 助理的对话,跟随最新一轮。 */
 @Composable
 private fun AgentPane(
     state: AgentSearchState,
@@ -477,8 +841,7 @@ private fun AgentPane(
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().nestedScroll(follow.connection),
-        // 底部让出切回搜索的悬浮按钮,答案的最后一行才不被它盖住。
-        contentPadding = PaddingValues(top = Spacing.Cozy, bottom = ModeFabClearance),
+        contentPadding = PaddingValues(vertical = Spacing.Cozy),
         verticalArrangement = Arrangement.spacedBy(Spacing.Loose),
     ) {
         items(state.turns, key = { it.id }) { turn ->
@@ -505,8 +868,12 @@ private fun TurnRow(
 // ---- 输入框 ----
 
 /**
- * 助理模式的输入区,固定在底部。底色用 surfaceContainer 而不是 tonalElevation:M3 的做法是靠
- * surface container 这一族的色阶差表达层次,阴影和 tonal elevation 留给真正浮起来的东西。
+ * 助理的追问框,固定在底部。和私信的输入栏同一个胶囊([PillInputField]):发送键装在框里、
+ * 有字才出现,新会话在框的左端。
+ *
+ * 上一版是一条 surfaceContainer 底条,里面左右各一颗按钮、中间一个搜索框:底条一层、框一层,
+ * 底部横着两层容器,灰掉的发送键还常驻在右边;而且它长得像搜索框,读不出这是在和谁说话。
+ * 这是一段对话,输入栏就该和私信一个样子。
  */
 @Composable
 private fun InputBar(
@@ -514,56 +881,27 @@ private fun InputBar(
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onNewSession: () -> Unit,
-    onFocusChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(Spacing.Tight),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                // 新会话:把助理上下文清掉的**动作**。普通搜索没有会话,这个按钮只长在这里。
-                IconButton(onClick = onNewSession) {
-                    Icon(
-                        Icons.Filled.Add,
-                        contentDescription = stringResource(Res.string.search_new_session),
-                    )
-                }
-                SearchField(
-                    value = input,
-                    onValueChange = onInputChange,
-                    // 占位文案同时是这个框的无障碍标签,所以不能空着 —— 读屏对着一个裸输入框
-                    // 只会念"编辑框"。它确实和空态那句重复,但只在还没问过的那一屏重复:
-                    // 助理模式发完就清空输入框,那之后整屏没有任何东西说明这里该填什么。
-                    placeholder = stringResource(Res.string.search_agent_empty),
-                    // 回车即发送,和按右边的发送键一样。
-                    onSearch = onSend,
-                    onFocusChange = onFocusChange,
-                    releaseFocusWithKeyboard = true,
-                    modifier = Modifier.weight(1f),
-                )
-                // 发送是这一屏的主行动,用实心图标按钮 —— M3 说要提升某个动作的可见度就换成
-                // filled/tonal,并且一屏只留一个。
-                FilledIconButton(onClick = onSend, enabled = input.isNotBlank()) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = stringResource(Res.string.action_send),
-                    )
-                }
+    PillInputField(
+        value = input,
+        onValueChange = onInputChange,
+        // 占位文案同时是这个框的无障碍标签,所以不能空着。它确实和空态那句重复,但只在还没问过的
+        // 那一屏重复:发完就清空输入框,那之后整屏没有任何东西说明这里该填什么。
+        placeholder = stringResource(Res.string.search_agent_empty),
+        canSend = input.isNotBlank(),
+        // 发出去就是新的一轮,上一轮还在跑会被取消(见 SearchChatViewModel.runAgent),不必锁住框。
+        sending = false,
+        onSend = onSend,
+        // 新会话:把助理上下文清掉的**动作**。普通搜索没有会话,这个按钮只长在这里。
+        leading = {
+            IconButton(onClick = onNewSession) {
+                Icon(Icons.Filled.Add, contentDescription = stringResource(Res.string.search_new_session))
             }
-        }
-    }
+        },
+        modifier = modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+    )
 }
-
-
-/**
- * 搜索接口返回原始整数计数,这里自己做展示折算。分档除数取自资源:
- * 中文按万/亿分档,英文按 K/M,只翻译单位后缀会让英文差一个量级。
- */
 
 // ---- Preview ----
 
@@ -593,6 +931,7 @@ private fun SearchChatScreenNormalPreview() {
         SearchChatScreen(
             state = SearchChatUiState(
                 mode = SearchMode.Normal,
+                input = "宝可梦",
                 normal = NormalSearchState(
                     query = "宝可梦",
                     videos = SearchListState(
@@ -604,8 +943,9 @@ private fun SearchChatScreenNormalPreview() {
                     ),
                 ),
             ),
-            onInputChange = {}, onModeChange = {}, onSend = {}, onNewSession = {},
-            onVideoClick = {}, onRetry = {}, resultActions = PreviewResultActions,
+            onInputChange = {}, onSearch = {}, onAskAgent = {}, onLeaveAgent = {},
+            agentActions = PreviewAgentActions, resultActions = PreviewResultActions,
+            agentAvailable = true,
         )
     }
 }
@@ -641,13 +981,19 @@ private fun SearchChatScreenAgentAnswerPreview() {
                     ),
                 ),
             ),
-            onInputChange = {}, onModeChange = {}, onSend = {}, onNewSession = {},
-            onVideoClick = {}, onRetry = {}, resultActions = PreviewResultActions,
+            onInputChange = {}, onSearch = {}, onAskAgent = {}, onLeaveAgent = {},
+            agentActions = PreviewAgentActions, resultActions = PreviewResultActions,
+            agentAvailable = true,
         )
     }
 }
 
+private val PreviewAgentActions = AgentActions(
+    onInputChange = {}, onSend = {}, onNewSession = {}, onRetry = {}, onVideoClick = {},
+)
+
 private val PreviewResultActions = SearchResultActions(
-    onTabSelected = {}, onOrderChange = {}, onDurationChange = {}, onArticleOrderChange = {},
+    onTabSelected = {}, onOrderChange = {}, onDurationChange = {}, onPubTimeChange = {}, onZoneChange = {},
+    onArticleOrderChange = {}, onUserOrderChange = {},
     onVideoClick = {}, onUserClick = {}, onArticleClick = {}, onLoadMore = {}, onRetry = {},
 )

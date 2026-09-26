@@ -33,6 +33,9 @@ class SearchResultViewModel(
     fun onOrderChanged(order: SearchOrder) = controller.onOrderChanged(order)
     fun onDurationChanged(duration: SearchDuration) = controller.onDurationChanged(duration)
     fun onArticleOrderChanged(order: SearchOrder) = controller.onArticleOrderChanged(order)
+    fun onPubTimeChanged(pubTime: SearchPubTime) = controller.onPubTimeChanged(pubTime)
+    fun onZoneChanged(zone: SearchZone) = controller.onZoneChanged(zone)
+    fun onUserOrderChanged(order: SearchUserOrder) = controller.onUserOrderChanged(order)
     fun onTabSelected(tab: SearchTab) = controller.selectTab(tab)
     fun retry() = controller.retry()
 }
