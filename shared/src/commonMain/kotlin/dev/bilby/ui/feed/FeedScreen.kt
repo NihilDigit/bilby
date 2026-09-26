@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
@@ -85,6 +86,16 @@ import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.fadingRightEdge
 import dev.bilby.ui.components.VideoRow
+import dev.bilby.ui.components.ContextMenuBox
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
+import androidx.compose.material.icons.outlined.PeopleAlt
+import androidx.compose.foundation.layout.ColumnScope
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.theme.BilbyTheme
 import java.time.Instant
@@ -342,6 +353,9 @@ private fun FeedList(
     // 在 B 站网页版和 PiliPlus 的宽屏上都是这条时间线的读法,时间序不因分列而打乱。
     // 窄屏是固定一列,与原来的单列列表同形;两种宽度共用一个网格,开屏定位、触底预取、
     // 位置上报都只认一套下标。
+    val density = LocalDensity.current
+    var actionsWidth by remember { mutableStateOf(0.dp) }
+    var upsRowFits by remember { mutableStateOf(false) }
     val feedList: @Composable (Modifier) -> Unit = { listModifier ->
         RefreshBox(
             refreshing = state.refreshing,
@@ -356,13 +370,22 @@ private fun FeedList(
             ) {
         // 首页装不下的另一半(图文、纯文字、转发、直播)的入口挂在标题行右边。**专栏不在
         // 里面**:它是投稿,和视频一样排在首页的时间序里(见 DynamicRepository 的分流)。
-        item(key = "header", span = FullLine) {
-            FeedHeader(
+        // 宽屏一排放得下时,刷新与两个入口挪进头像那一排的右端:标题行只剩页名,头像排右边也
+        // 不再空着半屏。放不下(窄屏,或关注的人多)就维持原样:入口在标题行,「关注列表」钉住。
+        // 入口的宽度量一次记下,无论它此刻画在哪一行,判断都用同一个值,不会来回跳。
+        val actionsInUpsRow = wide && hasUpsRow && upsRowFits
+        val headerActions: @Composable () -> Unit = {
+            FeedHeaderActions(
                 refreshing = state.refreshing,
                 onRefresh = onRefresh,
                 onOpenOtherDynamics = onOpenOtherDynamics,
                 onOpenPushes = onOpenPushes,
+                tonal = wide,
+                modifier = Modifier.onSizeChanged { actionsWidth = with(density) { it.width.toDp() } },
             )
+        }
+        item(key = "header", span = FullLine) {
+            FeedHeader(actions = headerActions.takeUnless { actionsInUpsRow })
         }
         // 「最常访问」跟着列表一起滚,不吸顶:吸顶会让它变成常驻的入口带,而这一页的主体是
         // 动态流。
@@ -380,6 +403,9 @@ private fun FeedList(
                     onUpClick = onUpClick,
                     onOpenLiveNow = { liveSheetOpen = true },
                     onOpenFollowings = onOpenFollowings,
+                    trailing = headerActions.takeIf { actionsInUpsRow },
+                    trailingWidth = actionsWidth.takeIf { wide },
+                    onFitChange = { upsRowFits = it },
                 )
             }
         }
@@ -391,14 +417,14 @@ private fun FeedList(
         // animateItem:「不再显示这个 UP」当场生效,那一刻被摘掉的可能是连着好几条,
         // 下面几十行硬切着往上跳一格;条目认的是 FeedEntry.id,翻页追加也走同一条动效。
         gridItems(beforeMarker, key = { it.id }) { item ->
-            FeedEntryItem(item, onItemClick, onExcludeUp, onAddToView, Modifier.animateItem())
+            FeedEntryItem(item, onItemClick, onExcludeUp, onAddToView, wide, Modifier.animateItem())
         }
         if (markerIndex != null) {
             // 横跨整行:分隔线前那一行没排满也照样断开,新旧两段不共用一行。
             item(key = "read-marker", span = FullLine) { ReadMarkerDivider(Modifier.animateItem()) }
         }
         gridItems(fromMarker, key = { it.id }) { item ->
-            FeedEntryItem(item, onItemClick, onExcludeUp, onAddToView, Modifier.animateItem())
+            FeedEntryItem(item, onItemClick, onExcludeUp, onAddToView, wide, Modifier.animateItem())
         }
             item(key = "footer", span = FullLine) {
                 ListFooter(
@@ -453,14 +479,16 @@ private fun FeedList(
  */
 @Composable
 private fun FeedHeader(
-    refreshing: Boolean,
-    onRefresh: () -> Unit,
-    onOpenOtherDynamics: () -> Unit,
-    onOpenPushes: () -> Unit,
+    /**
+     * 刷新与两个入口([FeedHeaderActions])。null 时它们在头像那一排的右端(宽屏),
+     * 这一行只剩页名。
+     */
+    actions: (@Composable () -> Unit)?,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = Dimens.MinTouchTarget)
             .padding(
                 start = Spacing.Comfortable,
                 end = Spacing.Comfortable - HeaderButtonEndInset,
@@ -473,13 +501,41 @@ private fun FeedHeader(
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.weight(1f),
         )
+        actions?.invoke()
+    }
+}
+
+/** 刷新、UP 主推送、关注动态。右沿的 › 落在 16dp 页边线上,见 [HeaderButtonEndInset]。 */
+@Composable
+private fun FeedHeaderActions(
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
+    onOpenOtherDynamics: () -> Unit,
+    onOpenPushes: () -> Unit,
+    /**
+     * 宽屏:两个入口用 tonal 按钮。文字按钮在手机那一行里刚好;放进一千多 dp 宽、旁边一排
+     * 48dp 头像的行里,没有底色的两行小字像链接,压不住那一排头像的分量。
+     */
+    tonal: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(if (tonal) Spacing.Tight else 0.dp),
+        modifier = modifier,
+    ) {
         RefreshAction(refreshing, onRefresh)
         // UP 主推送来的私信。**放这里,不放消息页**:推送里的视频就是这条时间线上的那些投稿,
         // 它们在私信列表里只是把真人对话往下挤;挪到订阅页,和"我关注的人发了什么"放在一起。
         // 同一条规矩:没有计数,没有红点。
-        TextButton(
+        HeaderEntryButton(
+            tonal = tonal,
             onClick = onOpenPushes,
-            contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+            contentPadding = if (tonal) {
+                ButtonDefaults.ButtonWithIconContentPadding
+            } else {
+                PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Tight)
+            },
         ) {
             Icon(
                 Icons.Outlined.Mail,
@@ -492,15 +548,16 @@ private fun FeedHeader(
             )
         }
         // 内边距写明而不取默认:箭头的右沿要落在 16dp 页边线上(见 [HeaderButtonEndInset]),
-        // 默认值跟着 alpha 版本变,对齐也就跟着变。
-        TextButton(
+        // 默认值跟着 alpha 版本变,对齐也就跟着变。tonal 时按钮自带底色,右沿就是底色的边,
+        // 箭头照常留内边距。
+        HeaderEntryButton(
+            tonal = tonal,
             onClick = onOpenOtherDynamics,
-            contentPadding = PaddingValues(
-                start = Spacing.Cozy,
-                end = HeaderButtonEndInset,
-                top = Spacing.Tight,
-                bottom = Spacing.Tight,
-            ),
+            contentPadding = if (tonal) {
+                ButtonDefaults.ButtonWithIconContentPadding
+            } else {
+                PaddingValues(start = Spacing.Cozy, end = HeaderButtonEndInset, top = Spacing.Tight, bottom = Spacing.Tight)
+            },
         ) {
             Icon(
                 Icons.AutoMirrored.Filled.Article,
@@ -520,6 +577,21 @@ private fun FeedHeader(
     }
 }
 
+/** 标题行的入口按钮:窄屏是文字按钮,宽屏是 tonal,见 [FeedHeaderActions] 的 tonal。 */
+@Composable
+private fun HeaderEntryButton(
+    tonal: Boolean,
+    onClick: () -> Unit,
+    contentPadding: PaddingValues,
+    content: @Composable RowScope.() -> Unit,
+) {
+    if (tonal) {
+        FilledTonalButton(onClick = onClick, contentPadding = contentPadding, content = content)
+    } else {
+        TextButton(onClick = onClick, contentPadding = contentPadding, content = content)
+    }
+}
+
 /** 单条投稿行,含「不再显示」的菜单。从 [FeedList] 拆出来是因为分隔线要把 items(...) 切成两段,两段用的是同一份行 UI。 */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -528,11 +600,28 @@ private fun FeedEntryItem(
     onItemClick: (FeedEntry) -> Unit,
     onExcludeUp: (Long, String) -> Unit,
     onAddToView: (String) -> Unit,
+    /** 宽屏网格:不画 ⋮,同一份菜单由右键或长按在按下处弹出,见 [ContextMenuBox]。 */
+    wide: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    // **菜单只有行尾这一个入口,长按已经去掉。** 长按此前是并行的第二个入口,理由是"已经会用
+    val menu: @Composable ColumnScope.(close: () -> Unit) -> Unit = { close ->
+        FeedEntryMenuItems(item, close, onExcludeUp, onAddToView)
+    }
+    if (wide) {
+        ContextMenuBox(
+            onClick = null,
+            menuLabel = stringResource(Res.string.feed_item_actions),
+            modifier = modifier,
+            menu = menu,
+        ) { openMenu ->
+            VideoRow(item = item.toRowUi(), onClick = { onItemClick(item) }, onLongClick = openMenu)
+        }
+        return
+    }
+    // **窄屏菜单只有行尾这一个入口,不接长按。** 长按此前是并行的第二个入口,理由是"已经会用
     // 的人不必改习惯";但长按没有任何视觉提示,而 M3 手势那一页给长按定的语义是"选中项",
-    // 留着它等于让同一个操作有一个说不通的别名。
+    // 留着它等于让同一个操作有一个说不通的别名。宽屏不同:那里的主要手势是右键,长按只是
+    // 没有鼠标的平板上的同一个动作。
     var menuOpen by remember { mutableStateOf(false) }
     VideoRow(
         item = item.toRowUi(),
@@ -550,50 +639,59 @@ private fun FeedEntryItem(
                 }
                 // M3E 的 vertical menu:容器圆角、standard 配色(surfaceContainerLow),菜单项
                 // 自己也有形状 —— 基线菜单的项是一条通栏矩形,按下去的状态层跟着是方的。
-                //
-                // **形状按项数取。** 只有一项时它既是首项也是末项(standalone);两项时上下
-                // 各取 leading / trailing,中间那条边是直的 —— 两项都用 standalone 的话,
-                // 两块圆角贴在一起会在中缝挤出一道空隙。专栏没有"稍后再看",所以这个菜单
-                // 真的会在一项和两项之间变。
-                val canAddToView = item is FeedEntry.Video
                 DropdownMenu(
                     expanded = menuOpen,
                     onDismissRequest = { menuOpen = false },
                     shape = MenuDefaults.shape,
                     containerColor = MenuDefaults.containerColor,
                 ) {
-                    if (canAddToView) {
-                        // 只进不出,和播放页那一格同一套规矩(见 [FeedViewModel.addToView])。
-                        DropdownMenuItem(
-                            onClick = {
-                                menuOpen = false
-                                onAddToView((item as FeedEntry.Video).bvid)
-                            },
-                            text = { Text(stringResource(Res.string.video_action_toview_desc)) },
-                            // 与播放页动作栏那一格同一个图标,认得出是同一件事。
-                            leadingIcon = { Icon(Icons.Outlined.WatchLater, contentDescription = null) },
-                            shape = MenuDefaults.leadingItemShape,
-                        )
-                    }
-                    // **当场生效,撤销在 snackbar 上**(见 [ExcludeUndo])。从前这里还隔着一个
-                    // 确认对话框,理由是撤销无处可落;设置里那份名单可以逐个恢复之后,那个理由
-                    // 不成立了,而一个撤得回来的操作不值得一次拦截。
-                    DropdownMenuItem(
-                        onClick = {
-                            menuOpen = false
-                            onExcludeUp(item.upMid, item.upName)
-                        },
-                        text = { Text(stringResource(Res.string.feed_exclude_up, item.upName)) },
-                        leadingIcon = { Icon(Icons.Outlined.VisibilityOff, contentDescription = null) },
-                        shape = if (canAddToView) {
-                            MenuDefaults.trailingItemShape
-                        } else {
-                            MenuDefaults.standaloneItemShape
-                        },
-                    )
+                    menu { menuOpen = false }
                 }
             }
         },
+    )
+}
+
+/**
+ * 一条投稿的菜单项,⋮ 与右键共用。
+ *
+ * **形状按项数取。** 只有一项时它既是首项也是末项(standalone);两项时上下各取 leading /
+ * trailing,中间那条边是直的 —— 两项都用 standalone 的话,两块圆角贴在一起会在中缝挤出一道
+ * 空隙。专栏没有"稍后再看",所以这个菜单真的会在一项和两项之间变。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun FeedEntryMenuItems(
+    item: FeedEntry,
+    close: () -> Unit,
+    onExcludeUp: (Long, String) -> Unit,
+    onAddToView: (String) -> Unit,
+) {
+    val canAddToView = item is FeedEntry.Video
+    if (canAddToView) {
+        // 只进不出,和播放页那一格同一套规矩(见 [FeedViewModel.addToView])。
+        DropdownMenuItem(
+            onClick = {
+                close()
+                onAddToView((item as FeedEntry.Video).bvid)
+            },
+            text = { Text(stringResource(Res.string.video_action_toview_desc)) },
+            // 与播放页动作栏那一格同一个图标,认得出是同一件事。
+            leadingIcon = { Icon(Icons.Outlined.WatchLater, contentDescription = null) },
+            shape = MenuDefaults.leadingItemShape,
+        )
+    }
+    // **当场生效,撤销在 snackbar 上**(见 [ExcludeUndo])。从前这里还隔着一个确认对话框,
+    // 理由是撤销无处可落;设置里那份名单可以逐个恢复之后,那个理由不成立了,而一个撤得回来的
+    // 操作不值得一次拦截。
+    DropdownMenuItem(
+        onClick = {
+            close()
+            onExcludeUp(item.upMid, item.upName)
+        },
+        text = { Text(stringResource(Res.string.feed_exclude_up, item.upName)) },
+        leadingIcon = { Icon(Icons.Outlined.VisibilityOff, contentDescription = null) },
+        shape = if (canAddToView) MenuDefaults.trailingItemShape else MenuDefaults.standaloneItemShape,
     )
 }
 
@@ -728,6 +826,12 @@ private fun FrequentUpsRow(
     onUpClick: (Long) -> Unit,
     onOpenLiveNow: () -> Unit,
     onOpenFollowings: () -> Unit,
+    /** 宽屏整排放得下时画在右端的入口(刷新、推送、关注动态)。null 时不画。 */
+    trailing: (@Composable () -> Unit)?,
+    /** [trailing] 的宽度;null 表示不考虑并成一行(窄屏),只用钉住的排法。 */
+    trailingWidth: Dp?,
+    /** 这一排是否放得下并成一行。标题行据此决定入口画在哪。 */
+    onFitChange: (Boolean) -> Unit,
 ) {
     // **不给这一排小标题,也不给分割线,和列表之间只隔一段留白。**
     //
@@ -746,6 +850,23 @@ private fun FrequentUpsRow(
     // 余量,而且看得见的人变少了 —— 那段余量不是省下来的空间,是浪费掉的。
     //
     // 钉住入口之后两头都成立:名单要多长有多长,入口的位置不随屏宽和关注人数变。
+    //
+    // **宽屏整排放得下时另一种排法**:「关注列表」跟在最后一个人后面,标题行的刷新与两个入口
+    // 挪到这一排右端([trailing])。钉在右端是为横滚准备的;不滚的时候它和头像之间隔着半屏空白,
+    // 读不出是一组。放不下就回到钉住的排法,和窄屏一样。
+    val shownUps = ups.take(FrequentUpLimit)
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+    val startPadding = Spacing.Comfortable - if (liveUps.isNotEmpty()) LiveNowSlotFaceInset else UpSlotFaceInset
+    val slotCount = shownUps.size + 1
+    val contentWidth = startPadding +
+        (if (liveUps.isNotEmpty()) LiveNowSlotOuterWidth + SlotGap else 0.dp) +
+        UpSlotOuterWidth * slotCount + SlotGap * (slotCount - 1)
+    val fits = trailingWidth != null &&
+        contentWidth + Spacing.Loose + trailingWidth + Spacing.Comfortable <= maxWidth
+    LaunchedEffect(fits) { onFitChange(fits) }
+    val followingsSlot: @Composable (Modifier) -> Unit = { slotModifier ->
+        FollowingsSlot(onOpenFollowings, slotModifier)
+    }
     Row(
         modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Cozy),
         verticalAlignment = Alignment.Top,
@@ -754,10 +875,10 @@ private fun FrequentUpsRow(
             // 右边沿淡出。滚动到边界的那个头像会被切一半 —— 切口本身是"还有更多"的信号,
             // 但硬切在一个圆形上读起来像被右边那个入口盖住了。渐隐把切口变成"没画完",
             // 那正是它的意思。左边不淡:那儿是这一排的开头,不是被截断的地方。
-            modifier = Modifier.weight(1f).fadingRightEdge(),
+            modifier = Modifier.weight(1f).then(if (fits) Modifier else Modifier.fadingRightEdge()),
             contentPadding = PaddingValues(
                 // 排在最前的那一格决定起点:直播那一格更宽、头像叠着偏左,让出的量不一样。
-                start = Spacing.Comfortable - if (liveUps.isNotEmpty()) LiveNowSlotFaceInset else UpSlotFaceInset,
+                start = startPadding,
                 end = Spacing.Cozy,
             ),
             horizontalArrangement = Arrangement.spacedBy(SlotGap),
@@ -769,56 +890,59 @@ private fun FrequentUpsRow(
                     LiveNowSlot(liveUps = liveUps, count = liveCount, onClick = onOpenLiveNow)
                 }
             }
-            items(ups.take(FrequentUpLimit), key = { it.mid }) { up ->
+            items(shownUps, key = { it.mid }) { up ->
                 UpSlot(label = up.name, onClick = { onUpClick(up.mid) }) {
                     Avatar(url = up.faceUrl, size = Dimens.AvatarStack)
                 }
             }
+            if (fits) item(key = "followings") { followingsSlot(Modifier) }
         }
-        // **一根带字的竖胶囊:› 加「全部」。** 先后试过两种:排尾一格的圆底箭头,读起来像队尾
-        // 站着一个没有脸的人;钉在外面、不衬底、不写字的光箭头,看不出它通向哪里。竖长条的
-        // 形状和一排圆头像明显不是同类,是这一排旁边的控件;写了字,去处一眼可读。
-        //
-        // 高度等于一格头像加名字(见 [AllFollowingsPillHeight]),上下与头像格对齐。右沿落在
-        // 16dp 页边线上,与标题行的入口、下面视频行的溢出按钮同一条竖线。
-        // 读屏念「关注列表」:「全部」两个字离开这一排就说不清是全部什么。
-        val followingsLabel = stringResource(Res.string.feed_open_followings)
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+        if (fits && trailing != null) {
+            // 入口对着头像的中线,右沿的 › 仍在 16dp 页边线上(同标题行,见 HeaderButtonEndInset)。
+            Box(
+                modifier = Modifier.padding(
+                    end = Spacing.Comfortable - HeaderButtonEndInset,
+                    top = Spacing.Hair + (Dimens.AvatarStack - Dimens.MinTouchTarget) / 2,
+                ),
+            ) { trailing() }
+        } else {
+            // 右沿落在 16dp 页边线上,与标题行的入口、下面视频行的溢出按钮同一条竖线。
+            followingsSlot(Modifier.padding(end = Spacing.Comfortable - UpSlotFaceInset))
+        }
+    }
+    }
+}
+
+/**
+ * 「关注列表」那一格,和头像格同形:圆里一个人群图标,下面一行字。
+ *
+ * 先后试过:排尾一格的圆底箭头,读起来像队尾站着一个没有脸的人;不衬底、不写字的光箭头,看不出
+ * 通向哪里;写「全部」的竖胶囊,「全部」离开这一排说不清是全部什么,字又小;横排的 tonal 胶囊
+ * 或文字按钮,手机上占掉三分之一排,头像只剩四个,和上面标题行的文字按钮叠着又是两套入口的
+ * 样子。同形的一格只占一个人的宽度;圆里是一群人、下面写明去处,不会被读成一个人。
+ */
+@Composable
+private fun FollowingsSlot(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    UpSlot(
+        label = stringResource(Res.string.feed_open_followings),
+        onClick = onClick,
+        modifier = modifier,
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
             modifier = Modifier
-                .padding(end = Spacing.Comfortable, top = Spacing.Hair)
-                .size(width = AllFollowingsPillWidth, height = AllFollowingsPillHeight)
+                .size(Dimens.AvatarStack)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .clickable(role = Role.Button, onClick = onOpenFollowings)
-                .clearAndSetSemantics { contentDescription = followingsLabel }
-                .padding(vertical = Spacing.Tight),
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             Icon(
-                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                Icons.Outlined.PeopleAlt,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(Dimens.IconInline),
-            )
-            Text(
-                text = stringResource(Res.string.feed_followings_all_short),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
             )
         }
     }
 }
-
-/** 「全部」竖胶囊的宽。比头像窄一截:它是控件,不该和一个人一样宽。 */
-private val AllFollowingsPillWidth = 40.dp
-
-/**
- * 竖胶囊的高:一格头像(48)加名字上方的 4 与 labelSmall 的 16 行高,即 [UpSlot] 去掉上下
- * 内边距的高度。写死而不是撑满这一排:这一排是 LazyRow,量不了固有高度。
- */
-private val AllFollowingsPillHeight = 68.dp
 
 /**
  * 这一排里的一格:上面是 48dp 的圆,下面一行字,宽度固定,格与格之间才对得齐。
@@ -861,6 +985,9 @@ private val HeaderButtonEndInset = Spacing.Hair
 
 /** 比头像宽一点,名字多站得下一两个字。 */
 private val AvatarSlotWidth = 60.dp
+
+/** 一格连内边距的总宽,算这一排放不放得下用。 */
+private val UpSlotOuterWidth get() = AvatarSlotWidth + SlotInset * 2
 
 /** 每格自己的左右内边距。算箭头对齐时要用到,见「关注列表」那一格的注释。 */
 private val SlotInset = 2.dp

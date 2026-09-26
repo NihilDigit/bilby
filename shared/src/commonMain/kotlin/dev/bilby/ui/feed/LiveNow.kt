@@ -202,3 +202,6 @@ private val LiveSlotInset = 2.dp
  * 排在它引用的几个常量后面:顶层属性按文件顺序初始化,排在前面读到的是 0。
  */
 internal val LiveNowSlotFaceInset = LiveSlotInset + (LiveSlotWidth - StackWidth) / 2
+
+/** 这一格连内边距的总宽。动态页算那一排放不放得下时用。 */
+internal val LiveNowSlotOuterWidth = LiveSlotWidth + LiveSlotInset * 2
