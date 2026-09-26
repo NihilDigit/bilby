@@ -21,10 +21,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -47,6 +45,7 @@ import dev.bilby.ui.components.ComposerPanel
 import dev.bilby.ui.components.FirstScreenState
 import dev.bilby.ui.components.ListSkeleton
 import dev.bilby.ui.components.PersonRowSkeleton
+import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.components.SelectableTextDialog
 import dev.bilby.ui.components.WindowOverlay
 import dev.bilby.ui.theme.Dimens
@@ -59,10 +58,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -252,15 +248,11 @@ private fun ThreadContent(
         highlight = null
     }
 
-    // 触底预取,写法同楼中楼面板。
-    val currentLoadMore by rememberUpdatedState(onLoadMore)
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.layoutInfo }
-            .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-            .distinctUntilChanged()
-            .filter { (last, total) -> last != null && last >= total - 1 - ThreadPrefetch }
-            .collect { currentLoadMore() }
-    }
+    PrefetchNearEnd(
+        listState,
+        canLoad = state.hasMore && !state.loadingMore && !state.moreFailed,
+        onLoadMore = onLoadMore,
+    )
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         CommentThreadList(
@@ -283,8 +275,6 @@ private const val ThreadHeaderRows = 2
 
 /** 高亮停多久再淡出。够找到它,又不至于一直占着那一条。 */
 private const val HighlightHoldMillis = 1500L
-
-private const val ThreadPrefetch = 5
 
 data class CommentThreadUiState(
     val root: CommentItem? = null,

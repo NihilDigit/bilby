@@ -72,7 +72,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.snapshotFlow
+import dev.bilby.ui.components.PrefetchNearEnd
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.layout
@@ -107,11 +107,6 @@ import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import java.time.Instant
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.map
-
-private const val PrefetchThreshold = 5
 
 /**
  * 可嵌进播放页的评论区(DESIGN 2.3)。不是整页:自带 LazyColumn 提供滚动,但不假设自己
@@ -226,17 +221,11 @@ fun CommentSection(
         if (panelRoot != null && panelComment == null) panelRoot = null
     }
 
-    // 触底预取,写法照抄 FeedScreen:在 composition 外用 snapshotFlow 观察滚动位置,
-    // 不能在 composable body 里直接调用 onLoadMore(那样每次重组都会触发一次)。
-    LaunchedEffect(listState, state.hasMore, state.appending) {
-        snapshotFlow { listState.layoutInfo }
-            .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-            .distinctUntilChanged()
-            .filter { (lastVisible, total) -> lastVisible != null && lastVisible >= total - 1 - PrefetchThreshold }
-            .collect {
-                if (state.hasMore && !state.appending) onLoadMore()
-            }
-    }
+    PrefetchNearEnd(
+        listState,
+        canLoad = state.hasMore && !state.appending && state.error == null,
+        onLoadMore = onLoadMore,
+    )
 
     val rowActions = CommentRowActions(
         myMid = state.myMid,
@@ -1138,16 +1127,12 @@ private fun CommentThreadSheet(
     val hasMore = expanded?.hasMore == true
     val loadingMore = expanded?.loadingMore != false // 结果还没建起来的那一瞬也算在读
 
-    // 触底预取,和主列表同一套写法。面板里手动点"加载更多"翻一百条太费事。
-    LaunchedEffect(listState, hasMore, loadingMore) {
-        snapshotFlow { listState.layoutInfo }
-            .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-            .distinctUntilChanged()
-            .filter { (lastVisible, total) -> lastVisible != null && lastVisible >= total - 1 - PrefetchThreshold }
-            .collect {
-                if (hasMore && !loadingMore) onLoadMore()
-            }
-    }
+    // 触底预取,和主列表同一个组件。面板里手动点"加载更多"翻一百条太费事。
+    PrefetchNearEnd(
+        listState,
+        canLoad = hasMore && !loadingMore && expanded?.error == null,
+        onLoadMore = onLoadMore,
+    )
 
     // 跳过半开:一组回复就是要往下读的,停在半开只是多一次上拉。
     PaneSheet(

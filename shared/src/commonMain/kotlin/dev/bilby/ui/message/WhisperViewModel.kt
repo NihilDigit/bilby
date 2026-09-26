@@ -32,6 +32,11 @@ data class WhisperUiState(
     /** 比屏上最早那条更早的还有没有。往上翻到顶时据此决定要不要再取一段。 */
     val hasOlder: Boolean = false,
     val loadingOlder: Boolean = false,
+    /**
+     * 取更早那一段失败的那一句。非空时不再自动往上取,顶端改成一行重试:否则顶端那个转圈行
+     * 一出一没,布局一变就又触发一次,失败了再来(见 PrefetchNearEnd)。
+     */
+    val olderError: StringResource? = null,
     val sending: Boolean = false,
     val sendError: SendError? = null,
     /**
@@ -117,7 +122,7 @@ class WhisperViewModel(
         val current = _state.value
         val before = oldestSeqno ?: return
         if (current.loading || current.loadingOlder || !current.hasOlder) return
-        _state.update { it.copy(loadingOlder = true) }
+        _state.update { it.copy(loadingOlder = true, olderError = null) }
         viewModelScope.launch {
             when (val result = repository.messages(talkerId, beforeSeqno = before)) {
                 is BiliResult.Ok -> {
@@ -132,8 +137,8 @@ class WhisperViewModel(
                 }
 
                 else -> {
-                    result.errorTextRes("私信更早的消息 $talkerId")
-                    _state.update { it.copy(loadingOlder = false) }
+                    val error = result.errorTextRes("私信更早的消息 $talkerId")
+                    _state.update { it.copy(loadingOlder = false, olderError = error) }
                 }
             }
         }

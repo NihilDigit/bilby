@@ -61,10 +61,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -93,14 +91,14 @@ import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FirstScreenState
 import dev.bilby.ui.components.ImageViewer
 import dev.bilby.ui.components.LoadingSpinner
+import dev.bilby.ui.components.InlineError
+import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.components.SelectableTextDialog
 import dev.bilby.ui.components.ListCover
 import dev.bilby.ui.components.PillInputField
 import dev.bilby.formatDurationSeconds
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
 
 /**
  * 一个私信会话。
@@ -229,14 +227,12 @@ private fun MessageList(state: WhisperUiState, onLoadOlder: () -> Unit, actions:
         buildChatRows(state.messages, state.selfMid).asReversed()
     }
 
-    // 翻到顶(反向布局里是列表尾部)时取更早的一段。在组合之外观察,理由同 PagedColumn 的触底预取。
-    val currentOnLoadOlder by rememberUpdatedState(onLoadOlder)
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.layoutInfo.let { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount } }
-            .distinctUntilChanged()
-            .filter { (last, total) -> last != null && last >= total - 1 - OlderPrefetchRows }
-            .collect { currentOnLoadOlder() }
-    }
+    // 翻到顶(反向布局里是列表尾部)时取更早的一段。
+    PrefetchNearEnd(
+        listState,
+        canLoad = state.hasOlder && !state.loadingOlder && state.olderError == null,
+        onLoadMore = onLoadOlder,
+    )
 
     // 最新一条变了(刚发出去的那条补取回来了,或者对方回了):人停在底部附近才跟过去,
     // 往上翻着读旧消息时不把他拽回来。
@@ -268,6 +264,11 @@ private fun MessageList(state: WhisperUiState, onLoadOlder: () -> Unit, actions:
                 Box(modifier = Modifier.fillMaxWidth().padding(Spacing.Tight), contentAlignment = Alignment.Center) {
                     LoadingSpinner()
                 }
+            }
+        }
+        state.olderError?.let { error ->
+            item(key = "older-error", contentType = "older-error") {
+                InlineError(message = stringResource(error), onRetry = onLoadOlder)
             }
         }
     }
@@ -744,8 +745,6 @@ private val StickerMaxSide = 120.dp
 private const val MinImageRatio = 0.5f
 private const val MaxImageRatio = 2f
 
-/** 离顶还剩几行就去取更早的一段。 */
-private const val OlderPrefetchRows = 5
 
 /** 新消息到来时,离底部几行以内算"停在底部",跟过去。时间分隔也占行,所以不是 0。 */
 private const val FollowSlackRows = 3

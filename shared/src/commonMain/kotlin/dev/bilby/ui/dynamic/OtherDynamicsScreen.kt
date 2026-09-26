@@ -11,8 +11,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.snapshotFlow
+import dev.bilby.ui.components.PrefetchNearEnd
 import androidx.compose.ui.Modifier
 import dev.bilby.data.model.DynamicCard
 import dev.bilby.resources.*
@@ -29,9 +28,6 @@ import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.theme.Spacing
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.map
 
 /**
  * 其他动态:图文、转发、直播、专栏、剧集更新(DESIGN 2.1 的"图文/转发折叠为一个不显眼的
@@ -87,13 +83,11 @@ private fun OtherDynamicsList(
 ) {
     val listState = rememberLazyListState()
 
-    LaunchedEffect(listState, state.hasMore, state.appending) {
-        snapshotFlow { listState.layoutInfo }
-            .map { it.visibleItemsInfo.lastOrNull()?.index to it.totalItemsCount }
-            .distinctUntilChanged()
-            .filter { (lastVisible, total) -> lastVisible != null && lastVisible >= total - 1 - PrefetchThreshold }
-            .collect { if (state.hasMore && !state.appending) onLoadMore() }
-    }
+    PrefetchNearEnd(
+        listState,
+        canLoad = state.hasMore && !state.appending && state.error == null,
+        onLoadMore = onLoadMore,
+    )
 
     RefreshBox(refreshing = state.refreshing, onRefresh = onRefresh) {
         LazyColumn(
@@ -134,5 +128,3 @@ private fun OtherDynamicsList(
         }
     }
 }
-
-private const val PrefetchThreshold = 5
