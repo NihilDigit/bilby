@@ -69,6 +69,7 @@ import dev.bilby.player.SubtitleTrack
 import dev.bilby.player.cueAt
 import dev.bilby.ui.player.DanmakuFeed
 import dev.bilby.ui.player.DanmakuFontSizeSp
+import dev.bilby.ui.player.rememberLargePlayer
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
@@ -202,7 +203,7 @@ fun BilbyPlayer(
     /** 宽排法控制条里的弹幕输入框。null 即不给(没登录、或这一形态不在这里发)。 */
     controlBarDanmaku: ControlBarDanmaku? = null,
 ) {
-    /** 两栏布局:内嵌画面占整窗高度,弹幕字号与全屏同档(见 [DanmakuFontSizeSp])。 */
+    /** 两栏布局:内嵌画面占整窗高度,控制条按全屏的尺寸排。 */
     val twoPane = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     /** 播放设置面板开着没有。见 [PlayerSettingsContent]。 */
     var settingsOpen by remember { mutableStateOf(false) }
@@ -236,7 +237,11 @@ fun BilbyPlayer(
                     specialPool = specialDanmakuPool,
                     selfDanmaku = selfDanmaku,
                     cid = danmakuCid,
-                    fontSizeSp = DanmakuFontSizeSp.of(largePlayer = isFullscreen || twoPane, pip = pip),
+                    fontSizeSp = DanmakuFontSizeSp.of(
+                        largePlayer = rememberLargePlayer(isFullscreen),
+                        pip = pip,
+                        scale = danmakuPrefs.fontScale,
+                    ),
                 )
             }
 
@@ -313,6 +318,7 @@ fun BilbyPlayer(
                     danmakuEditor?.setEnabled(it)
                     keepControlsAwake()
                 },
+                pip = pip,
             )
         },
         panel = {
@@ -387,6 +393,11 @@ private fun PlayerControlBar(
     onFullscreenToggle: () -> Unit,
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
+    /**
+     * 小窗:只留读数和进度条。弹幕、设置、全屏都藏起来 —— 几百 dp 宽的小窗排不下一整排,
+     * 小窗里要做的也只是看到哪了、拖一下;要调什么回到窗口里调。
+     */
+    pip: Boolean = false,
 ) {
     val safeInsets = WindowInsets.barsAndCutout
     val container = Modifier
@@ -434,9 +445,15 @@ private fun PlayerControlBar(
     }
 
     BoxWithConstraints(modifier = container) {
-        val wide = largePlayer && maxWidth >= Breakpoints.StackedControlBar
+        val wide = largePlayer && !pip && maxWidth >= Breakpoints.StackedControlBar
         val roomy = maxWidth >= InlineDanmakuBarMinWidth
-        if (!wide) {
+        if (pip) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TimeLabel(position, modifier = Modifier.padding(start = Spacing.Tight))
+                seekBar(Modifier.weight(1f))
+                TimeLabel(duration, secondary = true, modifier = Modifier.padding(end = Spacing.Tight))
+            }
+        } else if (!wide) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TimeLabel(position, modifier = Modifier.padding(start = Spacing.Tight))
                 seekBar(Modifier.weight(1f))

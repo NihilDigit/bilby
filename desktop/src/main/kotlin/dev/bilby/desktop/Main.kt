@@ -24,6 +24,7 @@ import dev.bilby.ui.DesktopSystemActions
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.LocalSystemActions
 import dev.bilby.ui.player.LocalWindowFullscreen
+import dev.bilby.ui.player.LocalDesktopPip
 import dev.bilby.update.DesktopAppUpdater
 import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.compose.ui.graphics.painter.BitmapPainter
@@ -62,9 +63,11 @@ fun main() {
     application {
         val windowState = remember { bounds.initialState() }
         var fullscreen: WindowsFullscreen? = null
+        var pip: WindowsPip? = null
         val quit = {
-            // 全屏时的尺寸是整块屏幕,记下来下次就开成一个没有边框位置的大窗口。
-            if (fullscreen?.isFullscreen != true) bounds.save(windowState)
+            // 全屏时的尺寸是整块屏幕,记下来下次就开成一个没有边框位置的大窗口;小窗同理,
+            // 下次会开成右下角一小块。
+            if (fullscreen?.isFullscreen != true && pip?.active != true) bounds.save(windowState)
             // 关窗口就是结束这次观看:补上最后一条心跳再退出。
             platform.playback.stop()
             exitApplication()
@@ -78,16 +81,26 @@ fun main() {
             icon = appIcon,
             state = windowState,
         ) {
+            val normalMinimumSize = remember { Dimension(WindowBounds.MinWidthDp, WindowBounds.MinHeightDp) }
             LaunchedEffect(window) {
-                window.minimumSize = Dimension(WindowBounds.MinWidthDp, WindowBounds.MinHeightDp)
+                window.minimumSize = normalMinimumSize
             }
             val windowsFullscreen = remember(window) { WindowsFullscreen(window).also { fullscreen = it } }
+            val windowsPip = remember(window) {
+                WindowsPip(
+                    window = window,
+                    fullscreen = windowsFullscreen,
+                    isMaximized = { windowState.placement == WindowPlacement.Maximized },
+                    normalMinimumSize = normalMinimumSize,
+                ).also { pip = it }
+            }
             val systemActions = remember { DesktopSystemActions(languageStore) }
             // 桌面没有外部链接唤起,这条流只是 BilbyRoot 的入参,始终为空。
             val incomingLink = remember { MutableStateFlow<String?>(null) }
             CompositionLocalProvider(
                 LocalSystemActions provides systemActions,
                 LocalPlaybackHost provides platform.playback,
+                LocalDesktopPip provides windowsPip,
                 // 最大化着进去的,出来还是最大化,见 WindowsFullscreen。
                 LocalWindowFullscreen provides { on ->
                     if (on) {

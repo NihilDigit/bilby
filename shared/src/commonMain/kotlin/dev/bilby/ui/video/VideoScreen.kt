@@ -705,8 +705,15 @@ fun VideoScreen(
                 onDismissRequest = { relatedOpen = false },
                 // 标题行在 RelatedSheet 里,带着检索进度。
                 skipPartiallyExpanded = false,
+                // 找相关是边看画面边读、还能追问的:点画面暂停时它不该跟着收起。
+                persistent = true,
             ) {
                 RelatedSheet(
+                    onClose = if (inPane) {
+                        { relatedOpen = false }
+                    } else {
+                        null
+                    },
                     related = related,
                     // 先关面板再跳走:面板自己注册的 BackHandler 排在导航那一层之后,
                     // 留着它跳到下一页,那一页的第一次返回会被这个看不见的面板吃掉。

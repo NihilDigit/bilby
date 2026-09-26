@@ -63,13 +63,15 @@ internal class WindowsFullscreen(private val window: ComposeWindow) {
     private fun hwnd() = HWND(Pointer(window.windowHandle))
 
     private companion object {
-        // WinUser 里没有这几个扩展样式的常量。
-        const val WS_EX_DLGMODALFRAME = 0x00000001
-        const val WS_EX_WINDOWEDGE = 0x00000100
-        const val WS_EX_CLIENTEDGE = 0x00000200
-        const val WS_EX_STATICEDGE = 0x00020000
-        const val EdgeStyles = WS_EX_DLGMODALFRAME or WS_EX_WINDOWEDGE or WS_EX_CLIENTEDGE or WS_EX_STATICEDGE
-
         const val RepositionFlags = WinUser.SWP_NOZORDER or WinUser.SWP_NOACTIVATE or WinUser.SWP_FRAMECHANGED
     }
 }
+
+// WinUser 里没有这几个扩展样式的常量。
+private const val WS_EX_DLGMODALFRAME = 0x00000001
+private const val WS_EX_WINDOWEDGE = 0x00000100
+private const val WS_EX_CLIENTEDGE = 0x00000200
+private const val WS_EX_STATICEDGE = 0x00020000
+
+/** 窗口四周那一圈边的扩展样式。去掉之后窗口矩形就是画面,无边框全屏与小窗都用。 */
+internal const val EdgeStyles = WS_EX_DLGMODALFRAME or WS_EX_WINDOWEDGE or WS_EX_CLIENTEDGE or WS_EX_STATICEDGE

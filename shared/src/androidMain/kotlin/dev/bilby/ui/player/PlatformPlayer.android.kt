@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.util.Rational
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -70,6 +71,13 @@ actual fun rememberPictureInPicture(): PictureInPicture {
 actual fun VideoSurface(player: PlayerHandle, modifier: Modifier) {
     PlayerSurface(player = (player as MediaControllerHandle).controller, modifier = modifier)
 }
+
+/** 系统的小窗自带播放与回到应用的按钮,触摸也不交给应用。 */
+@Composable
+actual fun rememberPipWindow(): PipWindow? = null
+
+@Composable
+internal actual fun BoxScope.PipResizeHandles(window: PipWindow) = Unit
 
 @Composable
 actual fun rememberIsInPipMode(): Boolean {

@@ -147,6 +147,7 @@ import dev.bilby.ui.player.DanmakuButton
 import dev.bilby.ui.player.MediaBackButton
 import dev.bilby.ui.player.DanmakuFeed
 import dev.bilby.ui.player.DanmakuFontSizeSp
+import dev.bilby.ui.player.rememberLargePlayer
 import dev.bilby.ui.player.PlaybackFailure
 import dev.bilby.ui.player.PlayerDanmakuLayer
 import dev.bilby.ui.player.PlayerGestureOptions
@@ -313,7 +314,11 @@ fun LiveRoomScreen(
                                 specialPool = emptyList(),
                                 // 直播没有分 P,房间号就是"这池弹幕属于谁"。
                                 cid = state.anchorMid,
-                                fontSizeSp = DanmakuFontSizeSp.of(largePlayer = fullscreen || expandedLayout, pip = inPip),
+                                fontSizeSp = DanmakuFontSizeSp.of(
+                                    largePlayer = rememberLargePlayer(fullscreen),
+                                    pip = inPip,
+                                    scale = danmakuPrefs.fontScale,
+                                ),
                                 imageSource = emoteImages,
                             )
                         }
@@ -361,6 +366,7 @@ fun LiveRoomScreen(
                                 keepControlsAwake()
                             },
                             onFullscreenToggle = { toggleFullscreen() },
+                            pip = inPip,
                         )
                     },
                     // 外壳与内容的排法同播放页,见 PlayerSettingsHost。
@@ -610,6 +616,8 @@ private fun LiveControlBar(
     reloading: Boolean,
     onReload: () -> Unit,
     onFullscreenToggle: () -> Unit,
+    /** 小窗:只留刷新与人数。弹幕、画质、纯音频、设置、全屏都藏起来,理由同播放页的控制条。 */
+    pip: Boolean = false,
 ) {
     // 播放键不在这里:画面正中那颗(PlayerShell 的 CenterPlayButton)是视频和直播共用的。
     Row(
@@ -636,9 +644,10 @@ private fun LiveControlBar(
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier
-                .then(if (danmakuField == null) Modifier.weight(1f) else Modifier)
+                .then(if (danmakuField == null || pip) Modifier.weight(1f) else Modifier)
                 .padding(start = Spacing.Tight),
         )
+        if (pip) return@Row
         if (danmakuField != null) {
             ControlBarDanmakuField(
                 draft = danmakuField.draft,
@@ -800,7 +809,7 @@ private fun LiveRoomTabs(
     /** 从上面那一栏点过来要看的那一条。用完由那一屏清掉,否则回头再切过去又会滚一次。 */
     var pendingSuperChat by remember { mutableStateOf<Long?>(null) }
     Column(modifier = modifier) {
-        SecondaryTabRow(selectedTabIndex = pager.currentPage) {
+        SecondaryTabRow(selectedTabIndex = pager.currentPage, divider = {}) {
             // 点标签要真的翻页。原来两个 onClick 都是空的,只有左右滑动能换页 ——
             // 一个看得见、按得动、什么都不发生的标签,比没有标签更糟。
             //

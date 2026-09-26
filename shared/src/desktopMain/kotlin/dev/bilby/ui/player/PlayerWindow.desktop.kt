@@ -16,6 +16,20 @@ import java.awt.image.BufferedImage
  */
 val LocalWindowFullscreen = staticCompositionLocalOf<(Boolean) -> Unit> { {} }
 
+/**
+ * 桌面的画中画:主窗口本身缩成一块置顶的小画面。实现在桌面入口(WindowsPip),它持有窗口;
+ * 组合树里没有窗口的地方(预览)为 null,画中画的入口不出现。
+ */
+interface DesktopPip : PipWindow {
+    /** 在不在画中画里。快照状态,进出时重组。 */
+    val active: Boolean
+
+    /** [aspect] 是画面的宽高比,未知时按 16:9。 */
+    fun enter(aspect: Float?)
+}
+
+val LocalDesktopPip = staticCompositionLocalOf<DesktopPip?> { null }
+
 /** 一个 1×1 的全透明光标。AWT 没有"无光标"这个常量,只能自己造一个看不见的。 */
 private val BlankCursor = PointerIcon(
     Toolkit.getDefaultToolkit().createCustomCursor(

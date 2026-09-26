@@ -34,6 +34,9 @@ import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.BrightnessLow
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.OpenInFull
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.Icon
@@ -235,12 +238,20 @@ fun PlayerShell(
      */
     panel: @Composable PlayerShellScope.() -> Unit = {},
     /**
-     * 窗口此刻在画中画里。**只剩画面和 overlay**:控件收起、中央播放键不画。overlay 照画,
-     * 小窗里弹幕画不画由调用方按设置决定(见 BilbyPlayer)。小窗上的触摸不会交给应用,点它
-     * 出来的是系统那一层(播放、暂停由 MediaSession 自动给),所以不必另外关手势。
+     * 窗口此刻在画中画里。全屏顶栏、锁、内嵌右上角都不画;overlay 照画,小窗里弹幕画不画由
+     * 调用方按设置决定(见 BilbyPlayer),控制条由调用方换成精简的一行。
+     *
+     * 两个平台不一样的只有"触摸归谁"。Android 的小窗触摸不交给应用,点它出来的是系统那一层
+     * (播放、暂停由 MediaSession 给),控件整个收起就行。桌面的小窗是自己缩出来的窗口
+     * ([rememberPipWindow] 非 null):中央播放键、加载、控件显隐与平时同一套,右上角换成
+     * 置顶、回到窗口、关闭;双击回到窗口,拖动挪窗口。
      */
     pip: Boolean = false,
 ) {
+    val pipWindow = rememberPipWindow().takeIf { pip }
+    // 在小窗里离开了这一页(键盘返回、队列播完退页)时,窗口不能留在右下角那一小块里。
+    // 正常出小窗时 key 变成 null,这里对旧的那个再调一次 exit,它已经不在小窗里,什么也不做。
+    DisposableEffect(pipWindow) { onDispose { pipWindow?.exit() } }
     // 组件动效走 spring,不走转场那套 tween。easing-and-duration 页的注:"In the expressive
     // update, components and motion now use the motion physics system, which uses springs.
     // Products should migrate to the new system." 位移用 spatial,透明度用 effects ——
@@ -676,7 +687,7 @@ fun PlayerShell(
                 }
                 // 用鼠标看、控件收起且在播放时,光标跟着藏起来,不留一个箭头钉在画面上。
                 .playerCursor(hidden = !pointerSource.isTouchLike && !controlsVisible && isPlaying)
-                .pointerInput(player, locked, gestures) {
+                .pointerInput(player, locked, gestures, pipWindow) {
                     if (locked) {
                         // 锁上时只留"点一下把解锁按钮唤出来",其余手势一概不接。
                         detectTapGestures(onTap = { controlsVisible = !controlsVisible })
@@ -699,6 +710,11 @@ fun PlayerShell(
                         // 操作;而三分法是 YouTube 立起来的惯例,两侧那两块也正是横屏握持时
                         // 拇指自然落到的位置。关掉 seek 的场景(直播)下四段退化成整屏播放/暂停。
                         onDoubleTap = double@{ offset ->
+                            // 窗口里双击进全屏,小窗里双击回窗口:同一个手势,放大一档。
+                            if (pipWindow != null) {
+                                pipWindow.exit()
+                                return@double
+                            }
                             if (!pointerSource.isTouchLike) {
                                 onFullscreenChange(!isFullscreen)
                                 return@double
@@ -741,8 +757,16 @@ fun PlayerShell(
                 }
                 // 拖拽单独一个 pointerInput:和上面的点按检测并列而不是塞进同一个块。
                 // 两者天然互斥 —— 位移超过 touch slop 之后点按检测就不会触发了。
-                .pointerInput(player, locked, duration, gestures) {
+                .pointerInput(player, locked, duration, gestures, pipWindow) {
                     if (locked) return@pointerInput
+                    // 小窗没有标题栏,拖画面就是拖窗口;小窗里也用不着横划 seek,底下有进度条。
+                    if (pipWindow != null) {
+                        detectDragGestures(onDragStart = { pipWindow.startMove() }) { change, _ ->
+                            change.consume()
+                            pipWindow.move()
+                        }
+                        return@pointerInput
+                    }
                     val width = size.width.toFloat().coerceAtLeast(1f)
                     val height = size.height.toFloat().coerceAtLeast(1f)
                     var accumulated = Offset.Zero
@@ -940,8 +964,9 @@ fun PlayerShell(
         // **滑半个栏高加淡入,不是展开。** 展开(expandVertically)是把整块裁着长出来,渐变底和
         // 按钮一起被切着露出,读起来像一块幕布在拉;整栏滑进来又动得太多,一轻触就是半屏在动。
         // 滑一半、透明度补上另一半,方向还在,幅度小了。
+        // 小窗里页面的全屏状态可能还是 true(全屏里进的小窗),顶栏、锁、内嵌右上角都另看 pip。
         AnimatedVisibility(
-            visible = isFullscreen && controlsVisible && !locked,
+            visible = isFullscreen && !pip && controlsVisible && !locked,
             enter = slideInVertically(spatialOffsetSpec) { -it / 2 } + fadeIn(effectsSpec),
             exit = slideOutVertically(spatialOffsetSpec) { -it / 2 } + fadeOut(effectsSpec),
             modifier = Modifier.align(Alignment.TopCenter).hoverable(controlsHover),
@@ -982,7 +1007,7 @@ fun PlayerShell(
         // 内嵌时的右上角。和全屏顶栏同一套进出,只是没有那条渐变底:内嵌态的渐变是上面那条
         // [topScrim],画在弹幕之下,同样跟控件走。
         AnimatedVisibility(
-            visible = !isFullscreen && controlsVisible && !locked,
+            visible = !isFullscreen && !pip && controlsVisible && !locked,
             enter = slideInVertically(spatialOffsetSpec) { -it / 2 } + fadeIn(effectsSpec),
             exit = slideOutVertically(spatialOffsetSpec) { -it / 2 } + fadeOut(effectsSpec),
             modifier = Modifier
@@ -992,6 +1017,44 @@ fun PlayerShell(
                 .hoverable(controlsHover),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) { embeddedTopActions() }
+        }
+
+        // 桌面小窗的右上角:置顶、回到窗口、关闭。位置同内嵌时的分享,进出也同一套。
+        // 关闭是回到窗口并暂停:小窗关掉了声音还在放,人找不到它在哪。
+        if (pipWindow != null) {
+            AnimatedVisibility(
+                visible = controlsVisible,
+                enter = slideInVertically(spatialOffsetSpec) { -it / 2 } + fadeIn(effectsSpec),
+                exit = slideOutVertically(spatialOffsetSpec) { -it / 2 } + fadeOut(effectsSpec),
+                modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.Hair).hoverable(controlsHover),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val pinLabel = stringResource(Res.string.player_pip_pin)
+                    PlayerTooltip(pinLabel) {
+                        PlayerIconButton(
+                            onClick = { pipWindow.setPinned(!pipWindow.pinned) },
+                            icon = Icons.Filled.PushPin,
+                            contentDescription = pinLabel,
+                            selected = pipWindow.pinned,
+                        )
+                    }
+                    val exitLabel = stringResource(Res.string.player_pip_exit)
+                    PlayerTooltip(exitLabel) {
+                        PlayerIconButton(onClick = pipWindow::exit, icon = Icons.Filled.OpenInFull, contentDescription = exitLabel)
+                    }
+                    val closeLabel = stringResource(Res.string.player_pip_close)
+                    PlayerTooltip(closeLabel) {
+                        PlayerIconButton(
+                            onClick = {
+                                player.pause()
+                                pipWindow.exit()
+                            },
+                            icon = Icons.Filled.Close,
+                            contentDescription = closeLabel,
+                        )
+                    }
+                }
+            }
         }
 
         // 锁按钮:锁上后它是唯一还能点的东西。只在全屏显示。
@@ -1004,7 +1067,7 @@ fun PlayerShell(
         // 锁按钮浮在画面中间,不贴任何一条边,所以它走的是 enter/exit 里"在主界面语境中
         // 出现的组件"那一支:缩放加淡入,没有方向可言。
         AnimatedVisibility(
-            visible = isFullscreen && controlsVisible,
+            visible = isFullscreen && !pip && controlsVisible,
             enter = scaleIn(scaleSpec) + fadeIn(effectsSpec),
             exit = scaleOut(scaleSpec) + fadeOut(effectsSpec),
             modifier = Modifier
@@ -1043,7 +1106,9 @@ fun PlayerShell(
         // **手势读数在屏时让开。** 两者都在正中,播放键画在读数之后,控件还没收起时开始横划,
         // 暂停那个方块就压在进退读数上。手势进行中没有人要去点播放键,松手后读数淡出、它再回来。
         AnimatedVisibility(
-            visible = !pip && hud == null && ((controlsVisible && !locked) || loadingVisible || flashVisible),
+            // Android 小窗里不画:那里的播放键是系统给的。桌面小窗照画,和平时同一颗。
+            visible = (!pip || pipWindow != null) && hud == null &&
+                ((controlsVisible && !locked) || loadingVisible || flashVisible),
             enter = scaleIn(scaleSpec, initialScale = CenterButtonEnterScale) + fadeIn(effectsSpec),
             exit = scaleOut(scaleSpec, targetScale = CenterButtonEnterScale) + fadeOut(effectsSpec),
             modifier = Modifier.align(Alignment.Center).hoverable(controlsHover),
@@ -1051,7 +1116,7 @@ fun PlayerShell(
             CenterPlayButton(
                 isPlaying = playWhenReady,
                 loading = loadingVisible,
-                large = isFullscreen,
+                large = isFullscreen && !pip,
                 onClick = {
                     togglePlayPause()
                 },
@@ -1069,6 +1134,9 @@ fun PlayerShell(
         }
 
         scope.panel()
+
+        // 桌面小窗没有系统边框,四边四角的拖动区盖在最上层,见 [PipResizeHandles]。
+        if (pipWindow != null) PipResizeHandles(pipWindow)
     }
     }
 }
