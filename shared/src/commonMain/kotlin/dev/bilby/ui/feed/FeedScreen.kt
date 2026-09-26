@@ -66,7 +66,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Surface
 import androidx.compose.ui.semantics.Role
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.isAtLeast
@@ -97,6 +97,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.material.icons.outlined.PeopleAlt
 import androidx.compose.foundation.layout.ColumnScope
 import dev.bilby.ui.components.VideoRowUi
+import dev.bilby.ui.components.chargingBadgeText
 import dev.bilby.ui.theme.BilbyTheme
 import java.time.Instant
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -699,23 +700,26 @@ private fun FeedEntryMenuItems(
  * 「以上是新内容」分隔线。DESIGN 2.1 只要求记住位置、不要红点/未读计数(4.2 节的永不实现
  * 清单),这条线本身不随时间变化去提醒用户回来看,进屏时算一次就不再动 —— 不落在那条禁令上。
  *
- * full-width divider:两侧内容(还没读过的新投稿 / 上次已经看到过的旧内容)在时间序流里
- * 是两段不相关的东西,符合 ui-style-guide §2.3c 里 full-width divider 的判据。
+ * 一枚居中的 tonal 胶囊,不是线:它独占一整行,新旧两段照样在这里断开;两根细线夹一行小字
+ * 的画法在一列带封面的行里太轻,扫过去认不出是分界(风格指南 §2.3c:不用分割线)。
  */
 @Composable
 private fun ReadMarkerDivider(modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    Box(
+        modifier = modifier.fillMaxWidth().padding(vertical = Spacing.Cozy),
+        contentAlignment = Alignment.Center,
     ) {
-        HorizontalDivider(modifier = Modifier.weight(1f))
-        Text(
-            text = stringResource(Res.string.feed_read_marker),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        HorizontalDivider(modifier = Modifier.weight(1f))
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ) {
+            Text(
+                text = stringResource(Res.string.feed_read_marker),
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            )
+        }
     }
 }
 
@@ -740,6 +744,7 @@ private fun FeedEntry.toRowUi(): VideoRowUi = when (this) {
         upName = upName,
         dateText = formatRelativeTime(publishedAtEpochSeconds),
         upFaceUrl = upFaceUrl,
+        typeBadge = chargingBadgeText(chargingOnly),
     )
 
     is FeedEntry.Article -> VideoRowUi(

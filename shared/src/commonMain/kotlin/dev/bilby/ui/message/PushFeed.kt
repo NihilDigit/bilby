@@ -158,23 +158,20 @@ private fun PushRow(item: PushItem, onClick: () -> Unit, onOpenLink: (String) ->
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // UP 主附的那句话是引用,用一个有底色的块认,不用左侧竖条(风格指南 §2.3c)。
             if (push.note.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.padding(top = Spacing.Hair).height(IntrinsicSize.Min),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                Surface(
+                    shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    modifier = Modifier.padding(top = Spacing.Hair),
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .width(QuoteBarWidth)
-                            .fillMaxHeight()
-                            .background(MaterialTheme.colorScheme.outlineVariant, CircleShape),
-                    )
                     BiliRichText(
                         spans = push.note,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         onLinkClick = onOpenLink,
                         onMentionClick = {},
+                        modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
                     )
                 }
             }
@@ -182,8 +179,6 @@ private fun PushRow(item: PushItem, onClick: () -> Unit, onOpenLink: (String) ->
     }
     }
 }
-
-private val QuoteBarWidth = 3.dp
 
 @Composable
 private fun PushGrid(

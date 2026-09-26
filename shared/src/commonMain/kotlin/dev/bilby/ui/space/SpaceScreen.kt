@@ -117,7 +117,7 @@ import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
-import androidx.compose.material3.HorizontalDivider
+import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.components.DynamicCardSkeleton
 import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
@@ -127,6 +127,7 @@ import dev.bilby.ui.components.collapsingHeader
 import dev.bilby.ui.components.rememberCollapsingHeaderState
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
+import dev.bilby.ui.components.chargingBadgeText
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.theme.Breakpoints
@@ -1666,9 +1667,13 @@ private fun DynamicListTab(
     /** 点开这位 UP 自己发的那条视频([SpaceDynamicItem.video])。 */
     onOpenOwnVideo: (SpaceDynamicItem) -> Unit,
     /**
-     * 宽屏:整片动态区是一张卡(调用方用 [panelCard] 画),条目平铺在里面、用分割线隔开,
-     * 按宽度排成瀑布流。投稿与合集是平铺的行,动态若一条一张卡,同一页里两种东西两种画法;
-     * 整块成卡之后,"这一块是动态"由区域说明,条目本身和投稿一样平。
+     * 宽屏:动态在侧栏里(侧栏本身是一张 [panelCard]),按宽度排成瀑布流,每条仍是自己的一张卡,
+     * 条目之间只留 gap。
+     *
+     * 上一版条目平铺、用分割线隔开,理由是投稿与合集是平铺的行,两种画法并排不统一。但一条动态
+     * 内部本来就有好几块带底色的内容(转发块、直播卡、预约块),再叠一层横线之后分不清哪条是
+     * 分界、哪条是内部结构,「其他动态」页拿掉分割线也是这个原因。侧栏是 surfaceContainerLow,
+     * 卡片是 surfaceContainer,里面的块是 surfaceContainerHigh,一层比一层高一档。
      */
     flat: Boolean,
     modifier: Modifier = Modifier,
@@ -1691,6 +1696,12 @@ private fun DynamicListTab(
         } else {
             PagedLayout.SingleColumn
         },
+        // 侧栏里每条动态自己是一张卡,卡片与侧栏边缘隔开一个 gap,和卡片之间的 gap 一样宽。
+        contentPadding = if (flat) {
+            PaddingValues(start = Spacing.Tight, end = Spacing.Tight, bottom = Spacing.Tight + navigationBarsBottom())
+        } else {
+            PaddingValues(bottom = navigationBarsBottom())
+        },
     ) { dynamic ->
         // 点开的是这位 UP 自己发的视频时,队列取这份动态列表(见 QueueContext.UpDynamics);
         // 转发里别人的视频、直播、专栏照常走通用那条路。
@@ -1703,19 +1714,12 @@ private fun DynamicListTab(
             }
         }
         if (flat) {
-            Column {
-                DynamicCardView(
-                    card = dynamic.card,
-                    onAction = itemAction,
-                    onLike = { like -> onLikeDynamic(dynamic.card.id, like) },
-                    showAuthor = false,
-                    contained = false,
-                )
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant,
-                    modifier = Modifier.padding(horizontal = Spacing.Cozy),
-                )
-            }
+            DynamicCardView(
+                card = dynamic.card,
+                onAction = itemAction,
+                onLike = { like -> onLikeDynamic(dynamic.card.id, like) },
+                showAuthor = false,
+            )
         } else {
             DynamicRow(dynamic = dynamic, onAction = itemAction, onLikeDynamic = onLikeDynamic)
         }
@@ -1796,6 +1800,7 @@ internal fun VideoListTab(
                 dateText = formatDate(item.publishedAtEpochSeconds),
                 playText = item.playCountText,
                 danmakuText = item.danmakuCountText,
+                typeBadge = chargingBadgeText(item.chargingOnly),
             ),
             onClick = { onVideoClick(item) },
         )

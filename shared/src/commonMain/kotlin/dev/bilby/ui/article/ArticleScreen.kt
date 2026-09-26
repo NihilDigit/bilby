@@ -1,6 +1,5 @@
 package dev.bilby.ui.article
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -11,8 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -23,7 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.OpenInBrowser
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -239,24 +236,20 @@ private fun ArticleBlockView(
     val body = MaterialTheme.typography.bodyLarge.copy(lineHeight = BodyLineHeight)
     when (block) {
         is ArticleBlock.Paragraph -> if (block.quote) {
-            // 引用块靠左侧那道竖条认,不靠缩进:中文段落本来就没有首行缩进的排法,只缩进
-            // 一档在一屏全是文字的页面里几乎看不出来。
-            // 竖条要和右边那段文字一样高。Row 里拿不到兄弟的高度,所以整行按内容的最小固有
-            // 高度定,竖条再 fillMaxHeight 撑上去。
-            Row(modifier = horizontal.height(IntrinsicSize.Min)) {
-                Box(
-                    Modifier
-                        .width(QuoteBarWidth)
-                        .fillMaxHeight()
-                        .background(MaterialTheme.colorScheme.outlineVariant),
-                )
+            // 引用块靠容器认,不靠缩进,也不靠左侧竖条:中文段落本来就没有首行缩进的排法,只缩进
+            // 一档几乎看不出来;竖条是一根线,风格指南 §2.3c 不再用线分区。
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = horizontal.fillMaxWidth(),
+            ) {
                 BiliRichText(
                     spans = block.spans,
                     style = body,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     onLinkClick = onLinkClick,
                     onMentionClick = onMentionClick,
-                    modifier = Modifier.padding(start = Spacing.Cozy),
+                    modifier = Modifier.padding(Spacing.Cozy),
                 )
             }
         } else {
@@ -287,7 +280,8 @@ private fun ArticleBlockView(
                 modifier = Modifier.fillMaxWidth(),
             )
         } else {
-            HorizontalDivider(modifier = horizontal)
+            // 作者排的「这里断开」照样断开,只是不画成线:一段比段间距大得多的空白。
+            Spacer(Modifier.height(ArticleBreakHeight))
         }
 
         is ArticleBlock.BulletList -> Column(
@@ -427,7 +421,8 @@ private fun LinkCardKind.label() = when (this) {
     LinkCardKind.Gone -> Res.string.article_card_gone
 }
 
-private val QuoteBarWidth = 4.dp
+/** 作者排的分隔符。块间距之外再空这么高,约两行正文。 */
+private val ArticleBreakHeight = 32.dp
 
 /**
  * 正文行高。16sp 的 1.75 倍,与评论区那条同一个来源(PiliPlus 的 `height: 1.75`,

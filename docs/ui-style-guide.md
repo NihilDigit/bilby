@@ -312,7 +312,23 @@ filled/tonal,不要放多个"。本项目的分配:
   所以给它一个真正的按钮,不是一行看起来像链接的字。
 - 重试、取消、清空这类:一律 `TextButton`。**一次失败不该被渲染成一个需要下决心的按钮。**
 
-### 2.3c 分区:contained list 还是分割线
+### 2.3c 分区:contained list,不用分割线
+
+**全项目不画分割线**(2026-09-27)。`HorizontalDivider`、`VerticalDivider`、标签栏默认的那条
+通栏线(`divider = {}` 关掉)、引用块左侧的竖条,都不用。分区靠三样东西,按顺序取:
+
+1. **留白**。重复版式的条目(评论、队列、视频行)之间只留 gap,每条开头的头像或封面本身就
+   标出了"换了一条"。
+2. **容器**。要把一块内容和四周分开时,给它一个 surface container 色阶的底色和圆角:队列、
+   动态卡片、引用块、搜索展开后的卡片都是这样。嵌套时每进一层高一档色阶
+   (如空间页侧栏 `surfaceContainerLow` → 动态卡片 `surfaceContainer` → 转发块 `surfaceContainerHigh`)。
+3. **按需出现的底色**。固定的标题行与下面滚动的内容之间,内容没滚时不需要边界;滚上去之后
+   标题行换高一档的底色(M3 顶栏的 on-scroll 做法,见找相关 Sheet)。
+
+一处要强调的分界(首页的「以上是新内容」)用一枚 tonal 胶囊独占一行,不用线夹字。专栏作者
+排的分隔符画成一段空白。
+
+以下是这条规则的来历。
 
 播放页简介里三块内容依次是 动作栏 → 播放队列 → 找相关。两种分法都用上了,**判据直接来自
 M3 的 lists 与 divider 两页,不是自己拟的**:
@@ -337,11 +353,9 @@ navigation",并且明确写着
 队列不是一个可以点进去的主题卡片,它就是一组条目。所以实现用 `Surface`,**不要换成 `Card`** ——
 换过去会带上 elevated/filled/outlined 三种变体的语义和整块可点的预期,都不是我们要的。
 
-**「找相关」保留 `HorizontalDivider`**,依据是 divider 页对 full-width 的两条定义:
-"separate larger sections of **unrelated** content",以及 "separate **interactive** areas from
-**non-interactive** areas"。找相关是一句说明加一个按钮,和上面那组条目既不同类也不同交互性质,
-正好落在这两条上。同一页只有这一条 full-width divider,也满足文档那句
-"Use full-width dividers **sparingly**"。
+分割线曾经留过几处(找相关的标题下、首页新旧分界、空间页宽屏动态之间、评论主楼之间),
+依据是 divider 页对 full-width 与 inset 的定义。它们都已换掉:一屏里只要有两三根细线,
+读起来就像表格;而那几处要表达的分界,用上面三样都说得清。
 
 三条附带的坑:
 
@@ -489,10 +503,10 @@ UP 名 —— 而全应用原先没有一页有 `headline` 字号的锚点,层�
 - **楼中楼是一个容器装一组。** 每条各套一个 `Surface` 的话,三条回复就是三块圆角色块摞着,
   比主楼还抢眼。
 
-主楼之间画 **inset 分割线**(左端对齐正文、即头像后缘)。依据是 M3 divider 页:inset 用于
-"分隔一个区块内部的相关内容"并要求对齐头像这类锚定元素,评论列表正是那一页举的"一列邮件"
-的例子;full-width 留给不相关的大段内容。这也是 §2.3c 那条"contained 用 gap、uncontained
-用线"的另一半 —— 评论主列表是 uncontained 的。
+主楼之间**只留白,不画线**(§2.3c)。上一版画的是 inset 分割线,真机上一屏七八根细线把列表
+切成一格一格;M3 divider 页另有一句 "List items with repetitive formats may not require an inset
+divider, in which using only the margin between items is acceptable",评论正是重复版式,每条
+开头的头像已经标出了换了一个人。条间距由 `CommentRow` 的上下内边距给。
 
 **所有 B 站图片必须走 `components/Media.kt`**(`BiliAsyncImage` / `ListCover` / `Avatar`)。
 评论区的配图和表情曾经直接写 `AsyncImage(model = url)`,**漏了 Referer,图床防盗链一律 403**,

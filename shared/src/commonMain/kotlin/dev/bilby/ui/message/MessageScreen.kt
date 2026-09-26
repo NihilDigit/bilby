@@ -141,7 +141,7 @@ fun MessageScreen(
             // **指示条认 `pager.currentPage`,不认 `state.tab`。** 上面那个效应只在 settledPage
             // 上回写 tab(路过的一页不该触发加载),于是指示条整段拖动都停在原处,翻页判定过了
             // 才突然跳一格。播放页那条指示条同一条判据,见 `video/VideoTabs.kt`。
-            PrimaryTabRow(selectedTabIndex = pager.currentPage) {
+            PrimaryTabRow(selectedTabIndex = pager.currentPage, divider = {}) {
                 tabs.forEachIndexed { index, tab ->
                     Tab(
                         selected = pager.currentPage == index,
