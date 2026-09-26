@@ -239,7 +239,14 @@ data object CoinLog : Destination
  * @param targetRpid 要定位的那一条;就是根评论本身时等于 [rootRpid]。
  */
 @Serializable
-data class CommentThread(val oid: Long, val type: Int, val rootRpid: Long, val targetRpid: Long) : Destination
+data class CommentThread(
+    val oid: Long,
+    val type: Int,
+    val rootRpid: Long,
+    val targetRpid: Long,
+    /** 从消息页的通知列表打开:宽窗口下排在列表右栏,见 [Whisper.inListPane]。 */
+    val inListPane: Boolean = false,
+) : Destination
 
 /**
  * 一个私信会话。
@@ -260,4 +267,12 @@ data class Whisper(
      * 从别处进同一个会话也是聊天,都能回话。
      */
     val upPushes: Boolean = false,
+    /**
+     * 从会话列表打开(消息页、推送页):宽窗口下排在列表右栏。
+     *
+     * **记在 key 上,不按栈上的位置判。** 分栏策略(material3 adaptive 的 ListDetailSceneStrategy)
+     * 只看栈顶往下连续带分栏标记的条目,不问详情下面是不是列表;从空间页进私信也带详情标记的话,
+     * 就成了左栏空着、右栏一段对话。标记因此只给从列表打开的这一种。
+     */
+    val inListPane: Boolean = false,
 ) : Destination

@@ -48,6 +48,7 @@ kotlin {
             api(libs.compose.mp.resources)
 
             api(libs.navigation3.mp.ui)
+            api(libs.adaptive.mp.navigation3)
             api(libs.lifecycle.mp.runtime.compose)
             api(libs.lifecycle.mp.viewmodel.compose)
             api(libs.lifecycle.mp.viewmodel.navigation3)
@@ -86,6 +87,7 @@ kotlin {
             api(libs.androidx.compose.material.icons.extended)
             api(libs.androidx.navigation3.runtime)
             api(libs.androidx.navigation3.ui)
+            api(libs.androidx.adaptive.navigation3)
             api(libs.androidx.lifecycle.viewmodel.navigation3)
 
             api(libs.androidx.core.ktx)

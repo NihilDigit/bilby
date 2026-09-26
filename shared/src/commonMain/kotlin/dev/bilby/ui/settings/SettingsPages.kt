@@ -163,7 +163,8 @@ enum class SettingsSection {
 @Composable
 private fun SettingsSubPage(
     title: String,
-    onBack: () -> Unit,
+    /** null 时不画返回:两栏的右栏里,这一页不是"进来的",返回在左栏的顶栏上。 */
+    onBack: (() -> Unit)?,
     /**
      * 值到齐了没有。**没到齐就一行都不画**,不是画一个默认值等着改 —— 见
      * [SettingsUiState.loaded]。顶栏照画:标题和返回不依赖任何一项设置,先出来才不会闪。
@@ -216,7 +217,7 @@ fun PlaybackSettingsPage(
     onSponsorBlockChange: (SponsorBlockPrefs) -> Unit,
     onOpenSponsorCategories: () -> Unit,
     onOfflineConcurrencyChange: (Int) -> Unit,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
 ) {
     var editingServer by rememberSaveable { mutableStateOf(false) }
     val prefs = state.sponsorBlock
@@ -419,7 +420,7 @@ fun PlaybackSettingsPage(
 fun SponsorCategoriesPage(
     state: SettingsUiState,
     onChange: (SponsorBlockPrefs) -> Unit,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
 ) {
     val prefs = state.sponsorBlock
     SettingsSubPage(stringResource(Res.string.settings_sponsorblock_categories), onBack, state.loaded) {
@@ -483,7 +484,7 @@ fun AppearanceSettingsPage(
     onPureBlackChange: (Boolean) -> Unit,
     onPaletteChange: (String) -> Unit,
     onLanguageChange: (AppLanguage) -> Unit,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
 ) {
     val appearance = state.appearance
     // 在登记行之前读出来:登记那一步不是 @Composable(见 SettingsRows)。
@@ -687,7 +688,7 @@ fun AgentSettingsPage(
     state: SettingsUiState,
     onLlmChange: (LlmConfig) -> Unit,
     onSmokeTest: () -> Unit,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
 ) {
     var editing by rememberSaveable { mutableStateOf(false) }
     SettingsSubPage(stringResource(Res.string.settings_section_agent), onBack, state.loaded) {
@@ -755,7 +756,7 @@ fun PrivacySettingsPage(
     onOpenBlacklist: () -> Unit,
     onOpenExcludedFeed: () -> Unit,
     onDanmakusArchiveChange: (Boolean) -> Unit,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
 ) {
     SettingsSubPage(stringResource(Res.string.settings_section_privacy), onBack, state.loaded) {
         SettingsGroup {
@@ -843,7 +844,7 @@ fun ExcludedFeedPage(
     state: SettingsUiState,
     onRestore: (Long) -> Unit,
     onClearAll: () -> Unit,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
 ) {
     var confirmingClearAll by rememberSaveable { mutableStateOf(false) }
     SettingsSubPage(stringResource(Res.string.settings_feed_excluded), onBack, state.loaded) {
@@ -906,7 +907,7 @@ fun ExcludedFeedPage(
 fun AboutSettingsPage(
     updater: AppUpdateService?,
     onOpenGithub: () -> Unit,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
 ) {
     val scope = rememberCoroutineScope()
     var dialogUpdate by remember { mutableStateOf<AvailableUpdate?>(null) }

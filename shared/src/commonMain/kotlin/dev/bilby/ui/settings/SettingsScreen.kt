@@ -86,7 +86,8 @@ import dev.bilby.ui.theme.Spacing
  * **五个去处。** 缓存和 SponsorBlock 原先各占一页,一页只有一两行,点进去看到的几乎是空页;
  * 两者都是"播放时怎么做",并进播放页各成一组。
  *
- * **不再分宽屏双栏。** 那是为六十多行准备的;五行入口拆两栏只会让右边一栏空着。
+ * **宽屏是左右两栏**(BilbyApp 的 listDetailStrategy):这一页在左,点开的那一页在右。早先的双栏
+ * 是把六十多行设置本身拆成两列,右边常常空着;现在分的是入口与内容,和私信同一种排法。
  *
  * 范围仍然是定死的(DESIGN 2 节):设置只调整**怎么做**,不调整**做不做**。推荐流、相关
  * 推荐一个开关都不给 —— 它们能被开关掉的那一刻,DESIGN 1.3 的结构约束就退化成了自制力工具。
@@ -98,9 +99,13 @@ fun SettingsScreen(
     onLogout: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 两栏时正开在右栏的那一页;不在两栏里时为 null。子页(跳过片段的分类)算在它的上一级。 */
+    twoPane: Boolean = false,
+    openSection: SettingsSection? = null,
 ) {
     var confirmingLogout by rememberSaveable { mutableStateOf(false) }
     val notConfigured = stringResource(Res.string.settings_not_configured)
+    val selected: (SettingsSection) -> Boolean? = { section -> if (twoPane) section == openSection else null }
 
     // pinned 而不是 enterAlways:顶栏留着不动,内容滚起来之后只换一档容器色。这一页的入口
     // 不满一屏,顶栏跟着一起走反而像页面自己跳了一下。
@@ -136,6 +141,7 @@ fun SettingsScreen(
                             value = state.loaded.then { paletteLabel(state.appearance.palette) },
                             target = RowTarget.Page,
                             onClick = { onOpenSection(SettingsSection.Appearance) },
+                            selected = selected(SettingsSection.Appearance),
                         )
                     }
                     row { position ->
@@ -148,6 +154,7 @@ fun SettingsScreen(
                             value = stringResource(Res.string.settings_playback_summary),
                             target = RowTarget.Page,
                             onClick = { onOpenSection(SettingsSection.Playback) },
+                            selected = selected(SettingsSection.Playback),
                         )
                     }
                     row { position ->
@@ -164,6 +171,7 @@ fun SettingsScreen(
                             },
                             target = RowTarget.Page,
                             onClick = { onOpenSection(SettingsSection.Agent) },
+                            selected = selected(SettingsSection.Agent),
                         )
                     }
                     row { position ->
@@ -176,6 +184,7 @@ fun SettingsScreen(
                             value = stringResource(Res.string.settings_privacy_summary),
                             target = RowTarget.Page,
                             onClick = { onOpenSection(SettingsSection.Privacy) },
+                            selected = selected(SettingsSection.Privacy),
                         )
                     }
                     row { position ->
@@ -186,6 +195,7 @@ fun SettingsScreen(
                             value = AppBuild.versionName,
                             target = RowTarget.Page,
                             onClick = { onOpenSection(SettingsSection.About) },
+                            selected = selected(SettingsSection.About),
                         )
                     }
                 }

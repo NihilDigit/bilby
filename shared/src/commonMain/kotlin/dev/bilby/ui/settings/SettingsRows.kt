@@ -133,6 +133,15 @@ private fun settingsRowColors(): ListItemColors =
         selectedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
     )
 
+/** 两栏里正开在右栏的那一行。secondaryContainer 同导航选中指示,见 [SettingRow] 的 selected。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun selectedRowColors(): ListItemColors =
+    ListItemDefaults.segmentedColors(
+        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+        selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+    )
+
 /**
  * 点这一行之后人会到哪里。行尾图标据此分开:去下一页给箭头,离开应用给外链图标,
  * 弹对话框和当场执行的不给。
@@ -167,9 +176,16 @@ internal fun SettingRow(
      * 位置。短读数压在一段说明上面时,它短、说明长,主次读反了。
      */
     valueAtEnd: Boolean = false,
+    /**
+     * 两栏里的左栏行:这一行的页面是否正开在右栏。null 表示不在两栏里。
+     *
+     * 在两栏里时 [RowTarget.Page] 不画箭头:页面开在旁边,不是"进下一页";哪一页开着由选中底色
+     * 说,同私信列表里正开着的那个会话。
+     */
+    selected: Boolean? = null,
 ) {
     val trailingIcon = when (target) {
-        RowTarget.Page -> Icons.AutoMirrored.Filled.KeyboardArrowRight
+        RowTarget.Page -> Icons.AutoMirrored.Filled.KeyboardArrowRight.takeIf { selected == null }
         RowTarget.External -> Icons.AutoMirrored.Filled.OpenInNew
         RowTarget.Here -> null
     }
@@ -187,7 +203,7 @@ internal fun SettingRow(
     SegmentedListItem(
         onClick = onClick,
         shapes = ListItemDefaults.segmentedShapes(index = position.index, count = position.count),
-        colors = settingsRowColors(),
+        colors = if (selected == true) selectedRowColors() else settingsRowColors(),
         // onClick 重载不报 role,补上 Button,与改版前 clickable(role = Button) 一致。
         modifier = Modifier.semantics { role = Role.Button },
         leadingContent = { Icon(imageVector = icon, contentDescription = null) },

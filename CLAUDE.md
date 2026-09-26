@@ -184,10 +184,12 @@ the same breakpoints apply to a phone in landscape, a tablet and a desktop windo
 - **List pages wrap themselves in `AdaptiveListContent`**: from expanded they drop the
   readable-width cap and take a grid of cells capped at `VideoRowMaxWidth`. `AdaptiveContent`'s
   cap is for reading pages only (article, dynamic detail, comment thread, search assistant).
-- **List and detail side by side is a scene, not page state.** `ui/ListDetailScene.kt` pairs
-  an entry tagged `listPane` with the `detailPane` entry directly above it on the back stack
-  (messages and UP pushes with a whisper). NavDisplay remembers scenes by strategy and back
-  stack, so a list pane's `showsDetail` must be read where the strategy is remembered, as a key.
+- **List and detail side by side is a scene, not page state.** material3 adaptive's
+  `ListDetailSceneStrategy` (set up in `BilbyApp`) joins the entries at the top of the back stack
+  tagged `listPane` / `detailPane` with the same scene key: messages and UP pushes with a whisper
+  or comment thread, settings with its pages. It does not check that a detail sits on its list,
+  so a detail is tagged only when opened from the list (`inListPane` on the key); a whisper
+  opened from a space page would otherwise get an empty left pane.
 
 ## Modules and platforms
 

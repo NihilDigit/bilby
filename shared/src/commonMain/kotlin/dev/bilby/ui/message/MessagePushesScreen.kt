@@ -47,10 +47,10 @@ import kotlinx.coroutines.launch
 @Composable
 fun MessagePushesRoute(
     repository: MessageRepository,
-    /** 宽窗口右栏正开着的那段对话,列表里高亮它,见 ListDetailScene。 */
+    /** 宽窗口右栏正开着的那段对话,列表里高亮它。分栏见 BilbyApp 的 listDetailStrategy。 */
     selectedTalker: Long?,
     /**
-     * 右栏此刻并排显示着(见 ListDetailScene)。这时第一页一到就把第一个会话开在右栏:推送会话
+     * 右栏此刻并排显示着。这时第一页一到就把第一个会话开在右栏:推送会话
      * 读的是"最近推了什么",人进来要看的多半就是最上面那一条,而右栏空着只是一块骨架。
      * 窄窗口不开,开了就是一进页面整页被对话盖住。
      */

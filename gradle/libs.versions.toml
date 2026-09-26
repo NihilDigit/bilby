@@ -36,6 +36,9 @@ composeMultiplatform = "1.12.1"
 composeMultiplatformMaterial3 = "1.12.0-alpha03"
 composeMultiplatformIcons = "1.7.3"
 navigation3Multiplatform = "1.1.2"
+# 列表与详情并排(ListDetailSceneStrategy)。rc01 编译于 navigation3-ui 1.1.0、Compose 1.10.0,
+# 不依赖 material3,不会顶掉上面钉住的版本。
+composeMultiplatformAdaptive = "1.3.0-rc01"
 lifecycleMultiplatform = "2.11.0"
 sqlite = "2.6.2"
 # 桌面播放后端。它的运行时包带打过 D3D11 render API 补丁的 libmpv,见 player-desktop/build.gradle.kts。
@@ -73,6 +76,7 @@ androidx-compose-foundation = { module = "androidx.compose.foundation:foundation
 androidx-navigation3-runtime = { module = "androidx.navigation3:navigation3-runtime", version.ref = "navigation3" }
 androidx-navigation3-ui = { module = "androidx.navigation3:navigation3-ui", version.ref = "navigation3" }
 androidx-lifecycle-viewmodel-navigation3 = { module = "androidx.lifecycle:lifecycle-viewmodel-navigation3", version.ref = "lifecycle" }
+androidx-adaptive-navigation3 = { module = "androidx.compose.material3.adaptive:adaptive-navigation3" }
 
 androidx-media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
 androidx-media3-exoplayer-dash = { module = "androidx.media3:media3-exoplayer-dash", version.ref = "media3" }
@@ -121,6 +125,7 @@ compose-mp-material-icons-extended = { module = "org.jetbrains.compose.material:
 compose-mp-ui-backhandler = { module = "org.jetbrains.compose.ui:ui-backhandler", version.ref = "composeMultiplatform" }
 compose-mp-resources ={ module = "org.jetbrains.compose.components:components-resources", version.ref = "composeMultiplatform" }
 navigation3-mp-ui = { module = "org.jetbrains.androidx.navigation3:navigation3-ui", version.ref = "navigation3Multiplatform" }
+adaptive-mp-navigation3 = { module = "org.jetbrains.compose.material3.adaptive:adaptive-navigation3", version.ref = "composeMultiplatformAdaptive" }
 lifecycle-mp-runtime-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycleMultiplatform" }
 lifecycle-mp-viewmodel-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycleMultiplatform" }
 lifecycle-mp-viewmodel-navigation3 = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-navigation3", version.ref = "lifecycleMultiplatform" }

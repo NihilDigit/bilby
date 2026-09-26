@@ -80,6 +80,11 @@ import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDe
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.layout.PaneScaffoldDirective
+import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
+import androidx.compose.material3.adaptive.navigation3.ListDetailSceneStrategy
+import androidx.compose.material3.adaptive.navigation3.rememberListDetailSceneStrategy
 import dev.bilby.AppContainer
 import dev.bilby.AppContainerOwner
 import dev.bilby.BiliLog
@@ -141,7 +146,6 @@ import dev.bilby.ui.profile.CoinLogRoute
 import dev.bilby.ui.profile.ProfileScreen
 import dev.bilby.ui.message.MessagePushesRoute
 import dev.bilby.ui.message.MessageScreen
-import dev.bilby.ui.message.MessageTab
 import dev.bilby.ui.message.MessageViewModel
 import dev.bilby.ui.message.WhisperScreen
 import dev.bilby.ui.message.PushFeedScreen
@@ -257,6 +261,7 @@ private fun StartupUpdateHost(container: AppContainer) {
     StartupUpdatePrompt(updater, container.settings, container.persistScope)
 }
 
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 private fun BilbyApp(
     container: AppContainer,
@@ -384,25 +389,75 @@ private fun BilbyApp(
     val videoFrames = backStack.mapNotNullTo(HashSet()) { (it as? Video)?.frame }
     LaunchedEffect(videoFrames) { playback.retainFrames(videoFrames) }
 
-    // 私信的列表加详情,见 ListDetailScene。「消息」页停在哪一格决定它要不要分栏;这个值读在这里、
-    // 当作 remember 的键,变了就换一个策略实例,NavDisplay 才会重算场景(理由见 ListPane)。
-    val messagesOnWhispers = remember { mutableStateOf(true) }
+    // 列表与详情并排:material3 adaptive 的 ListDetailSceneStrategy。条目用 listPane / detailPane
+    // 标记,栈顶往下连续带标记的几条拼成一个 ListDetailPaneScaffold。
+    //
+    // 分几栏不用它默认的 calculatePaneScaffoldDirective:那一套按 WindowSizeClass 算,与全应用
+    // 按 rememberBilbyWindowSize 取的断点各算各的;栏间 24dp 的空隙也不要,两栏各是一整页,
+    // 自带顶栏和底色。
+    //
+    // 返回用 PopLatest,一次出一条。默认的 PopUntilScaffoldValueChange 在两栏时出栈不改变
+    // 分栏形态,会把整组一次退光,设置里从二级子页返回就退出了设置。
     val pushesAwaitingFirst = remember { mutableStateOf(false) }
     val listDetailWide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
-    val listDetailStrategy = remember(listDetailWide, messagesOnWhispers.value) {
-        ListDetailSceneStrategy(listDetailWide)
+    val listDetailDirective = remember(listDetailWide) {
+        PaneScaffoldDirective(
+            maxHorizontalPartitions = if (listDetailWide) 2 else 1,
+            horizontalPartitionSpacerSize = 0.dp,
+            maxVerticalPartitions = 1,
+            verticalPartitionSpacerSize = 0.dp,
+            defaultPanePreferredWidth = ListPaneWidth,
+            excludedBounds = emptyList(),
+        )
     }
-    // 对话占着右栏时点列表里另一个会话,是换掉这一栏,不是再压一层:否则返回要一层层退回去,
-    // 而屏上始终只看得到一段对话。窄窗口下对话盖住列表,点不到别的会话,走不到这一支。
-    val openWhisper: (Whisper) -> Unit = { key ->
-        if (backStack.lastOrNull() is Whisper) backStack.removeLastOrNull()
+    val listDetailStrategy = rememberListDetailSceneStrategy<NavKey>(
+        backNavigationBehavior = BackNavigationBehavior.PopLatest,
+        directive = listDetailDirective,
+    )
+    // 详情占着右栏时点列表里另一条,是换掉这一栏,不是再压一层:否则返回要一层层退回去,
+    // 而屏上始终只看得到一条。窄窗口下详情盖住列表,点不到别的,走不到这一支。
+    val openBesideList: (NavKey) -> Unit = { key ->
+        val last = backStack.lastOrNull()
+        if ((last is Whisper && last.inListPane) || (last is CommentThread && last.inListPane)) {
+            backStack.removeLastOrNull()
+        }
         push(key)
     }
-    val selectedTalker = (backStack.lastOrNull() as? Whisper)?.talkerId
+    val selectedTalker = (backStack.lastOrNull() as? Whisper)?.takeIf { it.inListPane }?.talkerId
+
+    // 设置的两栏:宽窗口下右栏总开着一页。进设置时连同第一页一起压;从窄拖宽、右栏空着时由
+    // 占位补上第一页(见 Settings 那个 entry)。于是右栏的顶层页出栈时设置要整个一起出栈,
+    // 不然右栏空了又被补上,返回键退不出设置。
+    val openSettings: () -> Unit = {
+        push(Settings)
+        if (listDetailWide) push(SettingsPage(SettingsSection.Appearance))
+    }
+    // 左栏点一项是换掉右栏,理由同 openWhisper;连同压在上面的二级子页一起换掉。
+    val openSettingsSection: (SettingsSection) -> Unit = { section ->
+        if (listDetailWide) {
+            while (backStack.lastOrNull() is SettingsPage) backStack.removeLastOrNull()
+        }
+        push(SettingsPage(section))
+    }
+    val closeSettings: () -> Unit = {
+        while (backStack.size > 1 && backStack.lastOrNull() !is Settings) backStack.removeLastOrNull()
+        backStack.removeLastOrNull()
+    }
+    val popBack: () -> Unit = {
+        val popped = backStack.removeLastOrNull()
+        if (listDetailWide && popped is SettingsPage && backStack.lastOrNull() is Settings) {
+            backStack.removeLastOrNull()
+        }
+    }
+    // 右栏开着的是哪一页:紧挨着设置首页的那一条。二级子页算在它下面。
+    val openSettingsRoot = backStack.indexOfLast { it is Settings }
+        .takeIf { it >= 0 }
+        ?.let { backStack.getOrNull(it + 1) as? SettingsPage }
+        ?.section
 
     NavDisplay(
         backStack = backStack,
-        onBack = { backStack.removeLastOrNull() },
+        onBack = popBack,
         sceneStrategies = listOf(listDetailStrategy),
         // **每个 NavEntry 一个 ViewModelStore。** 默认的 entryDecorators 只有
         // SaveableStateHolder 一个(反编译 navigation3-ui 1.1.5 核实过),于是 `viewModel()`
@@ -487,7 +542,7 @@ private fun BilbyApp(
                         onVideoInContext = { bvid, context -> push(Video(bvid, context = context)) },
                         onUserClick = { push(Space(it)) },
                         onLiveClick = { push(LiveRoom(it)) },
-                        onSettingsClick = { push(Settings) },
+                        onSettingsClick = openSettings,
                         onOpenFollowings = { push(Followings) },
                         onOpenCoinLog = { push(CoinLog) },
                         onOpenOtherDynamics = { push(OtherDynamics) },
@@ -504,23 +559,36 @@ private fun BilbyApp(
                     )
                 }
             }
-            entry<Settings> {
+            entry<Settings>(
+                metadata = ListDetailSceneStrategy.listPane(
+                    sceneKey = SettingsScene,
+                    detailPlaceholder = {
+                        LaunchedEffect(Unit) { push(SettingsPage(SettingsSection.Appearance)) }
+                    },
+                ),
+            ) {
                 CutoutSafe {
                     SettingsRoute(
                         container = container,
-                        onOpenSection = { push(SettingsPage(it)) },
-                        onBack = { backStack.removeLastOrNull() },
+                        onOpenSection = openSettingsSection,
+                        onBack = closeSettings,
+                        twoPane = listDetailWide,
+                        openSection = openSettingsRoot,
                     )
                 }
             }
-            entry<SettingsPage> { key ->
+            // 二级子页也是详情:分栏只取最上面那条详情画进右栏,压在一级页上的子页因此仍在右栏。
+            entry<SettingsPage>(metadata = ListDetailSceneStrategy.detailPane(SettingsScene)) { key ->
+                // 右栏的顶层页不画返回:它不是"进来的",退出设置在左栏的顶栏上。二级子页照常返回上一级。
+                val paneRoot = listDetailWide &&
+                    backStack.getOrNull(backStack.indexOf(key) - 1) is Settings
                 CutoutSafe {
                     SettingsPageRoute(
                         container = container,
                         section = key.section,
                         onOpenSection = { push(SettingsPage(it)) },
                         onOpenBlacklist = { push(Blacklist) },
-                        onBack = { backStack.removeLastOrNull() },
+                        onBack = if (paneRoot) null else popBack,
                     )
                 }
             }
@@ -565,18 +633,21 @@ private fun BilbyApp(
                     )
                 }
             }
+            // 五格都分栏:私信开在右栏,回复、@、赞点开的评论详情也开在右栏。
             entry<Messages>(
                 metadata = ListDetailSceneStrategy.listPane(
+                    sceneKey = MessagesScene,
                     // 右栏空着时说一句它是干什么的:这里没有在加载什么,画骨架就是在假装加载。
-                    ListPane(showsDetail = { messagesOnWhispers.value }, placeholder = { MessageDetailPlaceholder() }),
+                    detailPlaceholder = { MessageDetailPlaceholder() },
                 ),
             ) {
                 CutoutSafe {
                     MessagesRoute(
                         container = container,
                         selectedTalker = selectedTalker,
-                        onWhisperTabShown = { messagesOnWhispers.value = it },
-                        onOpenWhisper = { openWhisper(Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem)) },
+                        onOpenWhisper = {
+                            openBesideList(Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem, inListPane = true))
+                        },
                         onOpenSpace = { push(Space(it)) },
                         // 通知里的 uri 是站内链接,认得出来就在应用内落地,认不出来
                         // (活动页、会员购这类)交给浏览器 —— 同专栏正文里的链接一条路。
@@ -586,7 +657,7 @@ private fun BilbyApp(
                         onOpenNotice = { notice ->
                             val thread = BilbyLink.commentThreadOf(notice.nativeUri, notice.subjectId, notice.businessId)
                             when {
-                                thread != null -> push(thread)
+                                thread != null -> openBesideList(thread.copy(inListPane = true))
                                 notice.uri.isNotBlank() -> openLink(notice.uri)
                             }
                         },
@@ -594,7 +665,7 @@ private fun BilbyApp(
                     )
                 }
             }
-            entry<CommentThread> { key ->
+            entry<CommentThread>(metadata = { key -> listDetailMetadata(key.inListPane, MessagesScene) }) { key ->
                 // 评论所在的内容:视频稿件 1、专栏 12、动态 17。其余类型(图文动态 11 的 oid 是
                 // 相簿 id,不是动态 id)认不出去处,顶栏不放入口。
                 val subject: NavKey? = when (key.type) {
@@ -631,12 +702,10 @@ private fun BilbyApp(
                 // 还在等自动打开的第一个会话时转圈(见 MessagePushesRoute.autoOpenFirst);打开过又关掉、
                 // 或者根本没有推送会话时,同消息页那一句,否则就是一直转下去。
                 metadata = ListDetailSceneStrategy.listPane(
-                    ListPane(
-                        showsDetail = { true },
-                        placeholder = {
-                            if (pushesAwaitingFirst.value) FullScreenLoading() else MessageDetailPlaceholder()
-                        },
-                    ),
+                    sceneKey = MessagesScene,
+                    detailPlaceholder = {
+                        if (pushesAwaitingFirst.value) FullScreenLoading() else MessageDetailPlaceholder()
+                    },
                 ),
             ) {
                 CutoutSafe {
@@ -646,13 +715,15 @@ private fun BilbyApp(
                         autoOpenFirst = listDetailWide,
                         onAwaitingFirstChange = { pushesAwaitingFirst.value = it },
                         onOpenWhisper = {
-                            openWhisper(Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem, upPushes = true))
+                            openBesideList(
+                                Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem, upPushes = true, inListPane = true),
+                            )
                         },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
             }
-            entry<Whisper>(metadata = ListDetailSceneStrategy.detailPane()) { key ->
+            entry<Whisper>(metadata = { key -> listDetailMetadata(key.inListPane, MessagesScene) }) { key ->
                 CutoutSafe {
                     WhisperRoute(
                         container = container,
@@ -662,9 +733,8 @@ private fun BilbyApp(
                         // 私信里的专栏带的是 cv 号(推送的 rid、分享的 id),走旧版那套接口。
                         onOpenArticle = { push(ArticlePage(it, isRead = true)) },
                         onOpenLink = openLink,
-                        // 压一层,不是换掉:返回回到推送视图。宽窗口下这一页前面不是列表,
-                        // 不分栏,整页是聊天(见 ListDetailScene 只认紧挨着的上一条)。
-                        onOpenFullChat = { push(key.copy(upPushes = false)) },
+                        // 压一层,不是换掉:返回回到推送视图。不带分栏标记,宽窗口下整页是聊天。
+                        onOpenFullChat = { push(key.copy(upPushes = false, inListPane = false)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -1375,6 +1445,8 @@ private fun SettingsRoute(
     container: AppContainer,
     onOpenSection: (SettingsSection) -> Unit,
     onBack: () -> Unit,
+    twoPane: Boolean,
+    openSection: SettingsSection?,
 ) {
     val vm = rememberSettingsViewModel(container)
     val state by vm.state.collectAsStateWithLifecycle()
@@ -1389,6 +1461,8 @@ private fun SettingsRoute(
         // 看起来像"没登出但停了"。
         onLogout = { vm.logout { playback.stop() } },
         onBack = onBack,
+        twoPane = twoPane,
+        openSection = openSection,
     )
 }
 
@@ -1399,7 +1473,7 @@ private fun SettingsPageRoute(
     section: SettingsSection,
     onOpenSection: (SettingsSection) -> Unit,
     onOpenBlacklist: () -> Unit,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
 ) {
     val vm = rememberSettingsViewModel(container)
     val state by vm.state.collectAsStateWithLifecycle()
@@ -1699,8 +1773,6 @@ private fun MessagesRoute(
     container: AppContainer,
     /** 右栏正开着的那段对话,列表里高亮它。没有右栏或没开着时为 null。 */
     selectedTalker: Long?,
-    /** 停在私信那一格没有。只有那一格分栏,见 ListDetailScene。 */
-    onWhisperTabShown: (Boolean) -> Unit,
     onOpenWhisper: (dev.bilby.data.WhisperSession) -> Unit,
     onOpenSpace: (Long) -> Unit,
     onOpenUri: (String) -> Unit,
@@ -1711,8 +1783,6 @@ private fun MessagesRoute(
         factory = viewModelFactory { initializer { MessageViewModel(container.messageRepository) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
-    val onWhispers = state.tab == MessageTab.Whispers
-    LaunchedEffect(onWhispers) { onWhisperTabShown(onWhispers) }
     MessageScreen(
         state = state,
         selectedTalker = selectedTalker,
@@ -1727,7 +1797,25 @@ private fun MessagesRoute(
     )
 }
 
-/** 私信右栏没有对话时的那一句,消息页与推送页共用。 */
+/**
+ * 分栏的场景键。消息页、推送页与它们打开的私信、评论详情同属一组:推送页也可能压在消息页上,
+ * 同组时右栏跟着栈顶那个列表走。
+ */
+private const val MessagesScene = "messages"
+private const val SettingsScene = "settings"
+
+/**
+ * 左栏定宽:一行只有头像、名字和一行摘要,再宽也只是摘要长一点;右栏才要宽度。
+ * 设置首页五行入口,同一个宽度够用。
+ */
+private val ListPaneWidth = 380.dp
+
+/** 只有从列表打开的详情带分栏标记,理由见 [Whisper.inListPane]。 */
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
+private fun listDetailMetadata(inListPane: Boolean, sceneKey: Any): Map<String, Any> =
+    if (inListPane) ListDetailSceneStrategy.detailPane(sceneKey) else emptyMap()
+
+/** 右栏没有打开任何一条时的那一句,消息页与推送页共用。 */
 @Composable
 private fun MessageDetailPlaceholder() {
     EmptyState(
