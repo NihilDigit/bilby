@@ -72,9 +72,8 @@ private fun searchVideosTool(searchRepository: SearchRepository) = object : Tool
         """,
     )
 
-    // 过程里的每一行都是助理在讲自己刚做了什么,所以一律"动词了什么",不是"名词:参数"。
-    // 这一栏是这个应用里唯一允许带点人称口吻的地方(见 label 在 BiliTool 上的说明)。
-    override fun label(arguments: JsonObject) = "搜了「${arguments.stringArg("kw").orEmpty()}」"
+    override val kind = StepKind.SearchVideos
+    override fun subject(arguments: JsonObject, names: NameBook) = arguments.stringArg("kw").orEmpty()
 
     override suspend fun execute(arguments: JsonObject): ToolResult = runCatching {
         val kw = arguments.stringArg("kw").orEmpty()
@@ -91,6 +90,7 @@ private fun searchVideosTool(searchRepository: SearchRepository) = object : Tool
                         forModel = items.joinToString("\n") { it.toLine() },
                         forUi = items.map { it.toTraceItem() },
                         bvids = items.mapTo(mutableSetOf()) { it.bvid },
+                        upNames = items.associate { it.upMid to it.upName },
                     )
                 }
             }
@@ -114,7 +114,8 @@ private fun searchUsersTool(searchRepository: SearchRepository) = object : Tool 
         """{"type": "object", "properties": {"kw": {"type": "string", "description": "搜索关键词(用户昵称)"}}, "required": ["kw"]}""",
     )
 
-    override fun label(arguments: JsonObject) = "找了叫「${arguments.stringArg("kw").orEmpty()}」的 UP 主"
+    override val kind = StepKind.SearchUsers
+    override fun subject(arguments: JsonObject, names: NameBook) = arguments.stringArg("kw").orEmpty()
 
     override suspend fun execute(arguments: JsonObject): ToolResult = runCatching {
         val kw = arguments.stringArg("kw").orEmpty()
@@ -128,6 +129,7 @@ private fun searchUsersTool(searchRepository: SearchRepository) = object : Tool 
                         forModel = users.joinToString("\n") {
                             "mid=${it.mid} | ${it.name} | 粉丝${it.fansCount.formatCount()} | ${it.signature.truncate(100)}"
                         },
+                        upNames = users.associate { it.mid to it.name },
                     )
                 }
             }
@@ -146,7 +148,8 @@ private fun getVideoTool(videoRepository: VideoRepository) = object : Tool {
         """{"type": "object", "properties": {"bvid": {"type": "string", "description": "视频BV号"}}, "required": ["bvid"]}""",
     )
 
-    override fun label(arguments: JsonObject) = "看了 ${arguments.stringArg("bvid").orEmpty()} 的详情"
+    override val kind = StepKind.Video
+    override fun subject(arguments: JsonObject, names: NameBook) = names.video(arguments.stringArg("bvid").orEmpty())
 
     override suspend fun execute(arguments: JsonObject): ToolResult = runCatching {
         val bvid = arguments.stringArg("bvid").orEmpty()
@@ -172,7 +175,13 @@ private fun getVideoTool(videoRepository: VideoRepository) = object : Tool {
                         traceItems += TraceItem(ep.bvid, ep.title, ep.coverUrl, d.up.name)
                     }
                 }
-                ToolResult(forModel = lines.joinToString("\n"), forUi = traceItems, bvids = bvids)
+                ToolResult(
+                    forModel = lines.joinToString("\n"),
+                    forUi = traceItems,
+                    bvids = bvids,
+                    upNames = mapOf(d.up.mid to d.up.name),
+                    collectionNames = if (d.seasonId != 0L) mapOf(d.seasonId to d.seasonTitle) else emptyMap(),
+                )
             }
             else -> result.toFailureResult()
         }
@@ -189,7 +198,8 @@ private fun getUpTool(spaceRepository: SpaceRepository) = object : Tool {
         """{"type": "object", "properties": {"mid": {"type": "integer", "description": "UP主的用户id(mid)"}}, "required": ["mid"]}""",
     )
 
-    override fun label(arguments: JsonObject) = "进了 ${arguments.longArg("mid") ?: 0} 的空间"
+    override val kind = StepKind.Up
+    override fun subject(arguments: JsonObject, names: NameBook) = names.up(arguments.longArg("mid") ?: 0L)
 
     override suspend fun execute(arguments: JsonObject): ToolResult = runCatching {
         val mid = arguments.longArg("mid") ?: 0L
@@ -198,6 +208,7 @@ private fun getUpTool(spaceRepository: SpaceRepository) = object : Tool {
                 val p = result.value
                 ToolResult(
                     forModel = "mid=${p.mid} | ${p.name} | Lv${p.level} | 粉丝${p.follower.formatCount()} | 签名:${p.sign.truncate(100)}",
+                    upNames = mapOf(p.mid to p.name),
                 )
             }
             else -> result.toFailureResult()
@@ -225,7 +236,16 @@ private fun getUpVideosTool(spaceRepository: SpaceRepository) = object : Tool {
         """,
     )
 
-    override fun label(arguments: JsonObject) = "翻了 ${arguments.longArg("mid") ?: 0} 的投稿"
+    override val kind = StepKind.UpVideos
+
+    // 「某 UP 的投稿」,按播放量排时补一句,空间内搜索时带上那个词:同一个人的投稿翻了两次,
+    // 两行得分得开。
+    override fun subject(arguments: JsonObject, names: NameBook): String = buildString {
+        append(names.up(arguments.longArg("mid") ?: 0L))
+        append(" 的投稿")
+        arguments.stringArg("kw")?.takeIf { it.isNotBlank() }?.let { append("「$it」") }
+        if (arguments.stringArg("order") == "click") append("(按播放量)")
+    }
 
     override suspend fun execute(arguments: JsonObject): ToolResult = runCatching {
         val mid = arguments.longArg("mid") ?: 0L
@@ -273,7 +293,8 @@ private fun getCollectionTool(spaceRepository: SpaceRepository) = object : Tool 
         """,
     )
 
-    override fun label(arguments: JsonObject) = "看了合集 ${arguments.longArg("sid") ?: 0} 的目录"
+    override val kind = StepKind.Collection
+    override fun subject(arguments: JsonObject, names: NameBook) = "合集" + names.collection(arguments.longArg("sid") ?: 0L)
 
     override suspend fun execute(arguments: JsonObject): ToolResult = runCatching {
         val sid = arguments.longArg("sid") ?: 0L
@@ -319,7 +340,13 @@ private fun getHotCommentsTool(videoRepository: VideoRepository, commentReposito
         """,
     )
 
-    override fun label(arguments: JsonObject) = "读了 ${arguments.stringArg("bvid").orEmpty()} 的热评"
+    override val kind = StepKind.Comments
+    override fun subject(arguments: JsonObject, names: NameBook) = names.video(arguments.stringArg("bvid").orEmpty())
+
+    // 常见的是一轮并发读三四个候选的热评:合成一行,写第一个加总数。
+    override fun step(subjects: List<String>) =
+        if (subjects.size <= 1) "${subjects.firstOrNull().orEmpty()}的热评"
+        else "${subjects.first()} 等 ${subjects.size} 个视频的热评"
 
     override suspend fun execute(arguments: JsonObject): ToolResult = runCatching {
         val bvid = arguments.stringArg("bvid").orEmpty()
@@ -361,7 +388,12 @@ private fun getNativeRelatedTool(client: BiliClient) = object : Tool {
         """{"type": "object", "properties": {"bvid": {"type": "string", "description": "视频BV号"}}, "required": ["bvid"]}""",
     )
 
-    override fun label(arguments: JsonObject) = "瞟了一眼 ${arguments.stringArg("bvid").orEmpty()} 的相关推荐"
+    override val kind = StepKind.Related
+    override fun subject(arguments: JsonObject, names: NameBook) = names.video(arguments.stringArg("bvid").orEmpty())
+
+    override fun step(subjects: List<String>) =
+        if (subjects.size <= 1) "${subjects.firstOrNull().orEmpty()}的相关推荐"
+        else "${subjects.first()} 等 ${subjects.size} 个视频的相关推荐"
 
     override suspend fun execute(arguments: JsonObject): ToolResult = runCatching {
         val bvid = arguments.stringArg("bvid").orEmpty()

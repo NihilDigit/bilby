@@ -84,9 +84,10 @@ mark* in a dropdown is a different thing and stays.
 
 **Interface copy is written, never spoken.** No `刷视频`, no `删掉`, no `再下一次`. The
 register that makes an irreversible action sound casual is the register that gets it
-misread. Two carve-outs: the assistant's process rows, where `瞟了一眼` is exactly right
-because those lines are the assistant reporting on itself (see `Tool.label`); and
-confirmations, which state the action and stop. `取消关注` is the whole dialog — spelling
+misread. The assistant's process rows are no exception: they name the object only (a query,
+a title, an uploader) and leave the action to the leading icon (see `StepKind` in
+`agent/Tool.kt`); the `搜了` / `瞟了一眼` voice they used to have read as chatter.
+Confirmations state the action and stop. `取消关注` is the whole dialog — spelling
 out that unfollowing means finding the person again tells the reader something they already
 know, and a dialog that explains itself gets dismissed without being read.
 

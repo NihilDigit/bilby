@@ -96,6 +96,10 @@ data class ToolResult(
     val forUi: List<TraceItem> = emptyList(),
     /** 本次返回中出现过的所有 bvid,喂给溯源校验的白名单。 */
     val bvids: Set<String> = emptySet(),
+    /** 本次返回里认出的 UP 名(mid → 名字)。过程里把编号换成名字用,见 [NameBook]。 */
+    val upNames: Map<Long, String> = emptyMap(),
+    /** 本次返回里认出的合集标题(合集 id → 标题),同上。 */
+    val collectionNames: Map<Long, String> = emptyMap(),
 )
 
 /** 过程直播里可点的中间结果:助理翻到一半,用户看中了可以直接点走。 */

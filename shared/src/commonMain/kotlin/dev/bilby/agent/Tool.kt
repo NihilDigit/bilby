@@ -2,6 +2,34 @@ package dev.bilby.agent
 
 import kotlinx.serialization.json.JsonObject
 
+/**
+ * 过程里的一步是哪一类动作。**动作由行首图标表达,文字只写对象**(见 [Tool.subject]):
+ * 「搜了」「读了」「瞟了一眼」这类助理自述的口吻试过,读起来像助理在旁边说话,而这一栏要的是
+ * 扫一眼就知道它查过什么。
+ */
+enum class StepKind { SearchVideos, SearchUsers, Up, UpVideos, Video, Comments, Collection, Related, Other }
+
+/**
+ * 过程直播里用到的名字:视频标题、UP 名、合集标题。**只来自本轮之前的工具返回**,查不到就退回
+ * 编号 —— 为了一个名字多打一次接口不值,而模型点名的对象多半就是它刚在结果里看到的。
+ */
+class NameBook(
+    private val titles: Map<String, String>,
+    private val upNames: Map<Long, String>,
+    private val collections: Map<Long, String>,
+) {
+    fun video(bvid: String): String = titles[bvid]?.let { "《${it.shorten()}》" } ?: bvid
+    fun up(mid: Long): String = upNames[mid] ?: mid.toString()
+    fun collection(sid: Long): String = collections[sid]?.let { "《${it.shorten()}》" } ?: sid.toString()
+
+    /** 标题太长会把一行挤成两行,过程里认出是哪一条就够。 */
+    private fun String.shorten(): String = if (length <= TitleLimit) this else take(TitleLimit) + "…"
+
+    private companion object {
+        const val TitleLimit = 18
+    }
+}
+
 interface Tool {
     val name: String
     val description: String
@@ -9,17 +37,28 @@ interface Tool {
     /** JSON Schema。手写字符串即可,不引 schema 生成库(DESIGN 3.4)。 */
     val parameters: JsonObject
 
+    /** 过程里这一步用哪个图标。 */
+    val kind: StepKind get() = StepKind.Other
+
     suspend fun execute(arguments: JsonObject): ToolResult
 
     /**
-     * 过程直播里显示给人看的一句话,如「搜了 X」「瞟了一眼 Y 的相关推荐」。
-     *
-     * **写成助理刚做完这件事的口吻**:动词过去式、带一点人称,「瞟了一眼」这样的词在这里是
-     * 对的。这一栏和别处的规矩相反 —— 它讲的是助理自己刚才干了什么,拟人正是它要传达的东西。
-     * 应用其余的文案(缓存删除、取关这类确认)仍然一律书面:那些地方讲的是用户要做的事,
-     * 而一个不可逆的动作配一句俏皮话,读起来像没当回事。
+     * 这一次调用的对象:搜的词、视频标题、UP 名。**不写动词**,动作归图标([kind])。
      */
-    fun label(arguments: JsonObject): String = name
+    fun subject(arguments: JsonObject, names: NameBook): String = name
+
+    /**
+     * 同一轮里对这个工具的几次调用合成一步时写什么。模型一次并发读三个视频的热评,过程里是
+     * 一步「《A》等 3 个视频的热评」,不是三行几乎一样的字。
+     */
+    fun step(subjects: List<String>): String = joinSubjects(subjects)
+}
+
+/** 一个对象原样;两三个用顿号连起来;再多写前一个加总数。 */
+fun joinSubjects(subjects: List<String>, unit: String = "项"): String = when {
+    subjects.size <= 1 -> subjects.firstOrNull().orEmpty()
+    subjects.size <= 3 -> subjects.joinToString("、")
+    else -> "${subjects.first()} 等 ${subjects.size} $unit"
 }
 
 class ToolRegistry(tools: List<Tool>) {
