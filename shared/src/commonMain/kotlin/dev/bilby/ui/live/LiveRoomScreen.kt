@@ -66,6 +66,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -236,7 +237,7 @@ fun LiveRoomScreen(
     val expandedLayout = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
 
     // 画面这一块在两种排法里是同一份,只是外面的尺寸不同,见下面的 Row / Column。
-    val playerPane: @Composable (Modifier) -> Unit = { paneModifier ->
+    val playerPaneContent: @Composable (Modifier) -> Unit = { paneModifier ->
         Box(modifier = paneModifier.background(Color.Black)) {
             if (player != null && state.isLive && state.streamUrl != null) {
                 PlayerShell(
@@ -367,6 +368,10 @@ fun LiveRoomScreen(
             }
         }
     }
+    // Row 与 Column 两支各调一次就是两个位置,竖屏进全屏跨过 Expanded 时画面会整块重建,
+    // 新壳头一帧不知道比例、铺满拉伸。理由同播放页的 playerPane。
+    val latestPlayerPane by rememberUpdatedState(playerPaneContent)
+    val playerPane = remember { movableContentOf { paneModifier: Modifier -> latestPlayerPane(paneModifier) } }
 
     // 主播、聊天、醒目留言、大航海。
     val infoPane: @Composable (Modifier) -> Unit = { paneModifier ->

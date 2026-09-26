@@ -41,8 +41,10 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -721,8 +723,8 @@ fun VideoScreen(
      * visually- or information-dense content, such as videos"),这里选双栏 —— 单栏在平板上
      * 只剩画面加两条黑边,右边那块空间什么也没干。
      *
-     * **横竖两种排布下,播放器都是同一个调用点。** 分成两个 `BilbyPlayer(...)` 会让切换
-     * 时 PlayerSurface 销毁重建、弹幕整池重编。全屏时也走同一个分支(右栏不组合、左栏
+     * **横竖两种排布下,播放器都是同一块 movable content。** 否则切换时 PlayerSurface
+     * 销毁重建、弹幕整池重编(见 playerPane)。全屏时也走同一个分支(右栏不组合、左栏
      * 权重给满),所以最要紧的那次切换 —— 进出全屏 —— 不会重挂。
      */
     /*
@@ -748,10 +750,9 @@ fun VideoScreen(
     // (它传给内容的只有 sheetPeekHeight,不含系统栏),把手没了它也就没了。
     val rootModifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)
 
-    // 画面这一块。**整页只有这一处 `BilbyPlayer` 调用**:横排和竖排各写一份的话,转屏
-    // 会让 PlayerSurface 销毁重建、弹幕整池重编。这里用一个接 Modifier 的 lambda,
-    // 两种排布传不同的约束进去。
-    val playerPane: @Composable (Modifier) -> Unit = { paneModifier ->
+    // 画面这一块。**整页只有这一处 `BilbyPlayer` 调用**,两种排布传不同的约束进去;要它跨排布
+    // 不重挂,靠的是下面的 movableContentOf,见 [playerPane]。
+    val playerPaneContent: @Composable (Modifier) -> Unit = { paneModifier ->
         Box(modifier = paneModifier.background(Color.Black)) {
             // **判据是"服务装上东西了没有",不是"有没有 playInfo"。**
             //
@@ -923,6 +924,12 @@ fun VideoScreen(
             }
         }
     }
+    // **同一个 lambda 在 if 的两支里各调一次,在 Compose 看来是两个不同的位置。** 窗口宽度
+    // 跨过 Expanded 时(手机竖屏进全屏转成横屏就会跨过)Row 那支和 Column 那支互换,画面整块
+    // 销毁重建:比例状态丢掉,新壳头一帧按未知比例铺满,画面被拉伸一下;弹幕整池重编。
+    // movableContentOf 让这一块随排布搬家,remember 的状态跟着走。
+    val latestPlayerPane by rememberUpdatedState(playerPaneContent)
+    val playerPane = remember { movableContentOf { paneModifier: Modifier -> latestPlayerPane(paneModifier) } }
 
     // 简介与评论。竖排时在画面下面、拿剩下的高度;横排时是右边那个 secondary pane。
     val tabsPane: @Composable (Modifier) -> Unit = { paneModifier ->

@@ -259,7 +259,10 @@ fun PlayerShell(
     // 16:9 在 9:16 的流上不是差一点:`aspectRatio(16f / 9f)` 正好铺满 16:9 的容器,画面被横着
     // 拉开,看不出这是个"还没量到"的状态。不知道就不摆比例 —— 那时还没有帧,看到的是黑底;
     // 量到之后按真实比例收进去,多出来的地方留黑边。
-    var videoAspect by remember { mutableStateOf<Float?>(null) }
+    //
+    // 初值当场读,不等下面的 DisposableEffect:effect 里写的状态要到下一帧才重组,流已经在播时
+    // (页面重建、从听视频切回来)头一帧就按未知比例铺满,画面被拉伸一下。
+    var videoAspect by remember { mutableStateOf(player.videoSize.displayAspectOr(null)) }
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
     /**
      * "要不要放",不是"此刻在不在出声"。中央播放键的形态看它:缓冲中、取流中 [isPlaying] 都是
