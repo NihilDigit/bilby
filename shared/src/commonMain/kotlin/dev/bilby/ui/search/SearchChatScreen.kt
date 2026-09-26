@@ -566,6 +566,7 @@ private fun InputBar(
                     // 回车即发送,和按右边的发送键一样。
                     onSearch = onSend,
                     onFocusChange = onFocusChange,
+                    releaseFocusWithKeyboard = true,
                     modifier = Modifier.weight(1f),
                 )
                 // 发送是这一屏的主行动,用实心图标按钮 —— M3 说要提升某个动作的可见度就换成

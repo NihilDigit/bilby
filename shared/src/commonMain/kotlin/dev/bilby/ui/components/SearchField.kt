@@ -78,12 +78,18 @@ fun SearchField(
     trailing: @Composable (RowScope.() -> Unit)? = null,
     /** 输入框拿到/失去焦点。搜索页靠它决定要不要把历史顶上来。 */
     onFocusChange: (Boolean) -> Unit = {},
+    /**
+     * 键盘收起时一并放掉焦点,见 [ReleaseFocusWhenKeyboardHides]。贴底常驻的输入栏(助理)要;
+     * 顶栏里的搜索框不要:普通搜索的焦点就是展开态,由它自己的返回与收起键管。
+     */
+    releaseFocusWithKeyboard: Boolean = false,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     // 焦点态。**必须是同一个 interactionSource 既交给 BasicTextField 又在这里读**:
     // 光标在框里而容器没反应,是这个组件没有描边、没有 label 之后唯一缺的那点反馈。
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
+    if (releaseFocusWithKeyboard) ReleaseFocusWhenKeyboardHides(focused)
     // 层次靠 surfaceContainer 的色阶差,不靠描边和阴影(风格指南 §1.1),所以聚焦也只升一档
     // 色阶,不长出一圈 primary 描边 —— 那是 OutlinedTextField 的表达方式,这个框整套语言
     // 都不用描边。

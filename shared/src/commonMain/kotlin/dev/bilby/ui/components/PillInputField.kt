@@ -74,9 +74,12 @@ fun PillInputField(
      * 由这一格自己占位。
      */
     leading: (@Composable () -> Unit)? = null,
+    /** 发送键外侧、胶囊最右端的一格。参数是输入框此刻是否聚焦(直播间写的时候在这里放退出键)。 */
+    trailing: (@Composable (focused: Boolean) -> Unit)? = null,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
+    ReleaseFocusWhenKeyboardHides(focused)
     val fieldColor by animateColorAsState(
         targetValue = if (focused) {
             MaterialTheme.colorScheme.surfaceContainerHighest
@@ -152,6 +155,7 @@ fun PillInputField(
                 }
             }
         }
+        trailing?.invoke(focused)
     }
 }
 

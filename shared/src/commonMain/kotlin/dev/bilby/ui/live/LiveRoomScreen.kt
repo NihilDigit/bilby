@@ -45,6 +45,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Headset
@@ -1326,6 +1328,7 @@ private fun LiveDanmakuInput(
     onDanmakuEnabledChange: (Boolean) -> Unit,
 ) {
     var text by rememberSaveable { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
     val send = {
         onSend(text)
         text = ""
@@ -1368,6 +1371,19 @@ private fun LiveDanmakuInput(
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
                     )
+                }
+            },
+            // 写的时候最右端给退出键,同视频页的弹幕胶囊:输入栏常驻在页面底部,收键盘之外没有
+            // 别的出口,桌面上连这一条都没有。草稿留在框里。
+            trailing = { focused ->
+                if (focused) {
+                    IconButton(onClick = { focusManager.clearFocus() }) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = stringResource(Res.string.action_cancel),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             },
         )

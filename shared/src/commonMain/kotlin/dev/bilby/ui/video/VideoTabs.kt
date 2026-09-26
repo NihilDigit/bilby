@@ -58,6 +58,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -488,7 +489,8 @@ class DanmakuInput(
  * **触摸区 48dp,画出来的胶囊 40dp**:和左边那组连接按钮同高(它们也是视觉 40、触摸 48),
  * 涟漪只画在胶囊里,不溢出到上下那两截透明的触摸区上。
  *
- * 写的时候开关退场:它和"正在写的这条"无关,留着只是挤掉输入的宽度。
+ * 写的时候开关退场:它和"正在写的这条"无关,留着只是挤掉输入的宽度。退出键在最右端
+ * ([CapsuleCloseButton])。
  *
  * **长度上限 100 字**(服务端的,PiliPlus `danmaku.dart:12` 注明),超出的按键在这里拦住;
  * 过了 [CounterFrom] 在尾部显示计数,不然第 100 个字之后按键静默失效,看起来是键盘坏了。
@@ -609,6 +611,12 @@ private fun DanmakuCapsule(
                         }
                     }
                 }
+                CapsuleCloseButton(
+                    onClick = {
+                        keyboard?.hide()
+                        input.onClose()
+                    },
+                )
             } else {
                 val sendSource = remember { MutableInteractionSource() }
                 Box(
@@ -661,6 +669,35 @@ private fun DanmakuToggle(enabled: Boolean, onEnabledChange: (Boolean) -> Unit) 
             imageVector = if (enabled) BilbyIcons.Danmaku else BilbyIcons.DanmakuOff,
             contentDescription = stringResource(Res.string.danmaku_show),
             tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(Dimens.IconAction),
+        )
+    }
+}
+
+/**
+ * 写弹幕时胶囊右端的退出键,在发送键外侧。胶囊写的时候盖满整个标签行,返回键与收键盘之外
+ * 没有别的出口,桌面上连这两条都没有。
+ */
+@Composable
+private fun CapsuleCloseButton(onClick: () -> Unit) {
+    val source = remember { MutableInteractionSource() }
+    Box(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(Dimens.MinTouchTarget)
+            .clickable(
+                interactionSource = source,
+                indication = null,
+                role = Role.Button,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        CapsuleRipple(source, RoundedCornerShape(topEndPercent = 50, bottomEndPercent = 50))
+        Icon(
+            imageVector = Icons.Filled.Close,
+            contentDescription = stringResource(Res.string.action_cancel),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(Dimens.IconAction),
         )
     }
