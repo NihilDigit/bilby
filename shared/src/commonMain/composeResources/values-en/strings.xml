@@ -663,6 +663,7 @@
     <string name="error_network">Network unavailable</string>
     <string name="error_login_expired">Sign-in expired</string>
     <string name="error_refused">Request refused</string>
+    <string name="error_rate_limited">Too many requests. Try again later</string>
 
     <!-- Unfollow confirmation -->
     <string name="follow_unfollow_confirm_named">Unfollow %1$s?</string>

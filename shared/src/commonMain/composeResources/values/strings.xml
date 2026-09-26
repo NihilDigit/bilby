@@ -726,6 +726,7 @@
     <string name="error_network">网络不可用</string>
     <string name="error_login_expired">登录已过期</string>
     <string name="error_refused">请求被拒绝</string>
+    <string name="error_rate_limited">请求过于频繁,请稍后再试</string>
 
     <!-- 取关确认 -->
     <string name="follow_unfollow_confirm_named">取消关注 %1$s？</string>

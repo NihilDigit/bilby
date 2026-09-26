@@ -5,15 +5,16 @@ import dev.bilby.resources.*
 import org.jetbrains.compose.resources.StringResource
 import dev.bilby.api.BiliResult
 import dev.bilby.api.CODE_NOT_LOGGED_IN
+import dev.bilby.api.CODE_RATE_LIMITED
 import java.io.IOException
 
 /**
- * 失败在屏幕上说哪一句。**全应用只有三句**,这里是唯一的产出口。
+ * 失败在屏幕上说哪一句。**全应用只有四句**,这里是唯一的产出口。
  *
  * 原先七处各自写 `"$message($code)"`,于是屏幕上出现的是「请求错误(-352)」这种话:接口的
  * message 是写给调用方看的,错误码更是,而读到它的人拿它做不了任何事。这一屏要回答的是
- * **现在该做什么**,而答案只有三种 —— 等网、重新登录、以及没别的可做。分档因此就是三档,
- * 再细的区分(哪个接口、哪个业务码)进 [BiliLog],不进界面。
+ * **现在该做什么**,而答案只有四种 —— 等网、重新登录、过一会儿再试、以及没别的可做。
+ * 分档因此就是四档,再细的区分(哪个接口、哪个业务码)进 [BiliLog],不进界面。
  *
  * 已经这么做过两处([dev.bilby.ui.search.NormalSearchController]、
  * [dev.bilby.ui.login.TvLoginScreen] 各写了一份自己的映射),这一份是把那条判断提出来共用。
@@ -30,9 +31,15 @@ fun BiliResult<*>.errorTextRes(where: String): StringResource = when (this) {
 
     is BiliResult.ApiError -> {
         BiliLog.w("$where 失败($code): $message")
-        // 凭据过期是唯一一档用户能自己解决的业务失败:access_key 与 cookie 都不能续期,
-        // 过期就得重新扫码(notes/auth-model.md 末节)。别的业务码对用户是同一件事。
-        if (code == CODE_NOT_LOGGED_IN) Res.string.error_login_expired else Res.string.error_refused
+        when (code) {
+            // 凭据过期:access_key 与 cookie 都不能续期,过期就得重新扫码(notes/auth-model.md 末节)。
+            CODE_NOT_LOGGED_IN -> Res.string.error_login_expired
+            // 风控:短时间内请求太多。等一会儿就会放开,用户能做的正是这件事;说成"被拒绝"
+            // 读起来像这个人或这条内容有问题。
+            CODE_RATE_LIMITED -> Res.string.error_rate_limited
+            // 别的业务码对用户是同一件事。
+            else -> Res.string.error_refused
+        }
     }
 
     is BiliResult.Failure -> {
