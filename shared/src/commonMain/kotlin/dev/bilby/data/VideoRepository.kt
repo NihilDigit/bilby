@@ -60,6 +60,11 @@ data class VideoDetail(
     val seasonMid: Long,
     /** 合集分集,已跨 section 摊平。不属于合集时为空。 */
     val seasonEpisodes: List<SeasonEpisode>,
+    /**
+     * 以动态形式发的视频。它不在投稿列表里,队列要到这位 UP 的动态里去找
+     * (见 QueueSourceRepository.affiliation)。缓存里旧的详情没有这个字段,读出来是 false。
+     */
+    val isStory: Boolean = false,
 )
 
 data class VideoUp(val mid: Long, val name: String, val faceUrl: String)
@@ -358,6 +363,7 @@ class VideoRepository(private val client: BiliClient) {
         seasonId = ugcSeason?.id ?: 0L,
         seasonMid = ugcSeason?.mid ?: 0L,
         seasonEpisodes = ugcSeason?.flattenEpisodes().orEmpty(),
+        isStory = isStory,
     )
 
     /**

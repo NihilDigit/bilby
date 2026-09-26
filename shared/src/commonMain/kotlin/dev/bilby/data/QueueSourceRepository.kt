@@ -49,6 +49,14 @@ class QueueSourceRepository(
 
     suspend fun open(context: QueueContext, bvid: String): OpenedQueue? = when (context) {
         QueueContext.Affiliation -> affiliation(bvid)
+        // 从点开时那一页找起。那一页就在眼前,多给一页余量:点开之后 UP 又发了动态,
+        // 这条就挪到了下一页。
+        is QueueContext.UpDynamics -> openFeed(
+            feed = dynamicVideoFeed(context.mid, context.pageOffset, maxPages = 2),
+            bvid = bvid,
+            label = UP_DYNAMICS_LABEL,
+            source = null,
+        )
         is QueueContext.Collection -> openFeed(
             feed = collectionFeed(context.mid, context.id, context.isSeason, context.page),
             bvid = bvid,
@@ -157,7 +165,11 @@ class QueueSourceRepository(
      * **系列排在投稿邻居之前。** 系列是 UP 归拢出来的一份目录,投稿邻居只是按发布时间排在它
      * 旁边的那些,两者都含有这条视频时该赢的是前者。
      *
-     * 三条都不成立(动态视频不进投稿列表,直播回放又没被归进前几个系列)就返回 null,调用方
+     * **动态视频不找投稿邻居,找这位 UP 的动态**:它不在投稿列表里,按 aid 定位只会得到 -1200
+     * (notes/space-and-search.md 1.4.3)。它和直播回放是同一类问题 —— 不在投稿列表里的视频,
+     * 到它真正所在的那份列表里去找:回放在系列里,动态视频在动态里。
+     *
+     * 都不成立(直播回放又没被归进前几个系列、动态视频不在最近几页动态里)就返回 null,调用方
      * 留在单条队列。这是"这条视频没有可确定的所属集合"的诚实结果。
      */
     private suspend fun affiliation(bvid: String): OpenedQueue? {
@@ -172,6 +184,16 @@ class QueueSourceRepository(
         fromSeries(bvid, detail)?.let { return it }
         val mid = detail.up.mid
         if (mid == 0L) return null
+        if (detail.isStory) {
+            return openFeed(
+                // 从最新一页找起,只翻前几页:这条接口最容易被风控,从别处点进来的动态视频
+                // 多半也是新发的。
+                feed = dynamicVideoFeed(mid, startOffset = null, maxPages = STORY_SCAN_PAGES),
+                bvid = bvid,
+                label = UP_DYNAMICS_LABEL,
+                source = null,
+            ) ?: null.also { BiliLog.w("队列:动态视频 bvid=$bvid 不在 UP 最近 $STORY_SCAN_PAGES 页动态里") }
+        }
         return openFeed(
             feed = ArchiveCursorFeed { aid, newer, includeCursor ->
                 when (val r = spaceRepository.loadArchiveCursor(mid, aid, newer, includeCursor)) {
@@ -261,6 +283,19 @@ class QueueSourceRepository(
         return null
     }
 
+    /** 空间动态里 UP 自己发的视频(见 [SpaceDynamicItem.video]),转发与图文不进队列。 */
+    private fun dynamicVideoFeed(mid: Long, startOffset: String?, maxPages: Int) =
+        DynamicVideoFeed(startOffset, maxPages) { offset ->
+            when (val r = spaceRepository.loadDynamics(mid, offset)) {
+                is BiliResult.Ok -> DynamicVideoPage(
+                    items = r.value.items.mapNotNull { it.video?.toQueueItem() },
+                    nextOffset = r.value.nextOffset,
+                    hasMore = r.value.hasMore,
+                )
+                else -> null.also { BiliLog.w("队列:拉取 UP 动态失败 mid=$mid") }
+            }
+        }
+
     private fun SpaceVideoItem.toQueueItem() = QueueItem(
         bvid = bvid,
         title = title,
@@ -275,6 +310,11 @@ class QueueSourceRepository(
 
         /** 扫系列总共最多发几次请求(每次 30 条)。够翻完一个几百条的直播回放系列的前段。 */
         const val SERIES_REQUEST_BUDGET = 8
+
+        /** 从别处点开动态视频时,最多翻这位 UP 的前几页动态去找它。 */
+        const val STORY_SCAN_PAGES = 3
+
+        const val UP_DYNAMICS_LABEL = "UP 主动态"
     }
 }
 

@@ -41,6 +41,16 @@ sealed interface QueueContext {
         val page: Int,
     ) : QueueContext
 
+    /**
+     * 空间页的动态栏。**只有从那里点开 UP 自己发的视频才用它**;动态视频不在投稿列表里
+     * (notes/space-and-search.md 1.4.3),按投稿建队列找不到它。
+     *
+     * @param pageOffset 这条动态所在那一页的游标,第一页为 null。动态的游标是服务端给的不透明串,
+     *   没有页号可记,记下取那一页时用的游标,服务从这一页找起。
+     */
+    @Serializable
+    data class UpDynamics(val mid: Long, val pageOffset: String?) : QueueContext
+
     /** 收藏夹内容,带着当时的排序与夹内搜索词,理由同 [UpArchive]。 */
     @Serializable
     data class FavFolder(

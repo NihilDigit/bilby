@@ -597,8 +597,8 @@ class SpaceViewModel(
                         // 排得整整齐齐、还能搜。同一条稿件在两栏里各出现一次,翻动态时读到的
                         // 一半内容是刚在上一栏看过的。以动态形式发的视频不在投稿栏,留在这里。
                         //
-                        // 只在这里滤,不在 repository 里滤:建播放队列那条路
-                        // (QueueSourceRepository.fromUpDynamics)两种视频都要。
+                        // 只在这里滤,不在 repository 里滤:按动态建播放队列那条路
+                        // (QueueSourceRepository 的 dynamicVideoFeed)两种视频都要。
                         val fresh = result.value.items.filterNot { it.listedInArchive }
                         val hasMore = result.value.hasMore && result.value.nextOffset != null
                         state.copy(
@@ -772,6 +772,8 @@ fun SpaceScreen(
     onVideoClick: (SpaceVideoItem) -> Unit,
     /** 动态卡片被点开时去哪儿。由 MainActivity 接到 backstack 上,这一页不认识导航。 */
     onDynamicAction: (DynamicAction) -> Unit,
+    /** 动态栏里点开这位 UP 自己发的视频,队列取动态列表。见 [DynamicListTab]。 */
+    onDynamicVideoClick: (SpaceDynamicItem) -> Unit,
     onLikeDynamic: (String, Boolean) -> Unit,
     onLiveClick: (Long) -> Unit,
     onToggleFollow: () -> Unit,
@@ -908,6 +910,7 @@ fun SpaceScreen(
                 onLoadMore = onLoadMoreDynamics,
                 onAction = onDynamicAction,
                 onLikeDynamic = onLikeDynamic,
+                onOpenOwnVideo = onDynamicVideoClick,
                 flat = wide,
                 modifier = listModifier,
             )
@@ -1660,6 +1663,8 @@ private fun DynamicListTab(
     onLoadMore: () -> Unit,
     onAction: (DynamicAction) -> Unit,
     onLikeDynamic: (String, Boolean) -> Unit,
+    /** 点开这位 UP 自己发的那条视频([SpaceDynamicItem.video])。 */
+    onOpenOwnVideo: (SpaceDynamicItem) -> Unit,
     /**
      * 宽屏:整片动态区是一张卡(调用方用 [panelCard] 画),条目平铺在里面、用分割线隔开,
      * 按宽度排成瀑布流。投稿与合集是平铺的行,动态若一条一张卡,同一页里两种东西两种画法;
@@ -1687,11 +1692,21 @@ private fun DynamicListTab(
             PagedLayout.SingleColumn
         },
     ) { dynamic ->
+        // 点开的是这位 UP 自己发的视频时,队列取这份动态列表(见 QueueContext.UpDynamics);
+        // 转发里别人的视频、直播、专栏照常走通用那条路。
+        val itemAction: (DynamicAction) -> Unit = { action ->
+            val ownVideo = dynamic.video
+            if (action is DynamicAction.OpenVideo && ownVideo != null && action.bvid == ownVideo.bvid) {
+                onOpenOwnVideo(dynamic)
+            } else {
+                onAction(action)
+            }
+        }
         if (flat) {
             Column {
                 DynamicCardView(
                     card = dynamic.card,
-                    onAction = onAction,
+                    onAction = itemAction,
                     onLike = { like -> onLikeDynamic(dynamic.card.id, like) },
                     showAuthor = false,
                     contained = false,
@@ -1702,7 +1717,7 @@ private fun DynamicListTab(
                 )
             }
         } else {
-            DynamicRow(dynamic = dynamic, onAction = onAction, onLikeDynamic = onLikeDynamic)
+            DynamicRow(dynamic = dynamic, onAction = itemAction, onLikeDynamic = onLikeDynamic)
         }
     }
 }

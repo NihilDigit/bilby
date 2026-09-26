@@ -42,6 +42,8 @@ data class VideoDetailDto(
     /** 分 P 列表。单 P 视频服务端也会给一个元素,不是空数组。 */
     val pages: List<VideoPageDto> = emptyList(),
     @SerialName("ugc_season") val ugcSeason: UgcSeasonDto? = null,
+    /** 以动态形式发的视频(「发布了动态视频」)。它不在投稿列表里,见 notes/space-and-search.md 1.4.3。 */
+    @SerialName("is_story") val isStory: Boolean = false,
 )
 
 /**

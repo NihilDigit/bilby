@@ -164,6 +164,71 @@ class ArchiveCursorFeed(
     )
 }
 
+/** 动态接口的一页里带视频的那些条目。[nextOffset] 为 null 或 [hasMore] 为 false 即到底。 */
+data class DynamicVideoPage(val items: List<QueueItem>, val nextOffset: String?, val hasMore: Boolean)
+
+/**
+ * UP 空间动态里的视频,沿动态的游标往后翻(notes/space-and-search.md 的「用户动态」一节)。
+ *
+ * 为动态视频而设:它不在投稿列表里,只在动态里(1.4.3 的三类视频表)。队列里是这一页起所有
+ * 带视频的动态,动态视频与普通投稿都在,按动态的时间顺序 —— 这就是空间页动态栏里的那份顺序。
+ *
+ * **只能往后翻。** 游标只朝更旧的方向走,没有"往前一页"。从最新一页找起时前面本来就没有东西;
+ * 从中间某页找起时,比它新的那些进不了队列。
+ *
+ * **找与续都有页数上限 [maxPages]。** 这个接口最容易被风控(-412),为一条视频从头翻到底不值,
+ * 超出上限还没找到就放弃,留在单条队列。整页都是转发、图文时一条视频也没有,续取时跳过这种页,
+ * 同样受上限约束。未登录时接口只给第一页(notes 同一节),那时自然在第一页就到底。
+ */
+class DynamicVideoFeed(
+    private val startOffset: String?,
+    private val maxPages: Int,
+    private val load: suspend (offset: String?) -> DynamicVideoPage?,
+) : QueueFeed {
+    private var nextOffset: String? = null
+    private var more = false
+
+    /** 同一条视频可能出现在相邻两页(翻页期间 UP 又发了动态),队列里同一个 bvid 只能有一条。 */
+    private val seen = HashSet<String>()
+
+    override val hasBefore: Boolean get() = false
+    override val hasAfter: Boolean get() = more
+
+    override suspend fun open(bvid: String): List<QueueItem>? {
+        var offset = startOffset
+        val read = mutableListOf<QueueItem>()
+        repeat(maxPages) {
+            val page = load(offset) ?: return null
+            read += page.items.fresh()
+            advance(page)
+            if (read.any { it.bvid == bvid }) return fillWindow(this, read, bvid)
+            if (!more) return null
+            offset = nextOffset
+        }
+        return null
+    }
+
+    override suspend fun loadBefore(): List<QueueItem> = emptyList()
+
+    override suspend fun loadAfter(): List<QueueItem>? {
+        repeat(maxPages) {
+            if (!more) return emptyList()
+            val page = load(nextOffset) ?: return null
+            advance(page)
+            val items = page.items.fresh()
+            if (items.isNotEmpty()) return items
+        }
+        return emptyList()
+    }
+
+    private fun advance(page: DynamicVideoPage) {
+        nextOffset = page.nextOffset
+        more = page.hasMore && page.nextOffset != null
+    }
+
+    private fun List<QueueItem>.fresh(): List<QueueItem> = filter { seen.add(it.bvid) }
+}
+
 /**
  * 从已读的一段出发,往两头补到 [bvid] 前后各 [QUEUE_WINDOW] 条。某一头请求失败就停在那一头,
  * 不影响另一头 —— 少几条邻居不是打不开这条视频的理由。

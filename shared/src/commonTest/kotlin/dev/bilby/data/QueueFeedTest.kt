@@ -130,4 +130,51 @@ class QueueFeedTest {
 
         assertNull(feed.open(BvidCodec.fromAid(100)))
     }
+
+    /** 动态按游标翻页:游标就是页号的字符串,[pages] 里一个元素是一页里带视频的那些。 */
+    private fun dynamicPages(
+        pages: List<List<Int>>,
+        requested: MutableList<String?> = mutableListOf(),
+    ): suspend (String?) -> DynamicVideoPage? = { offset ->
+        requested += offset
+        val index = offset?.toInt() ?: 0
+        val hasMore = index + 1 < pages.size
+        DynamicVideoPage(pages[index].map(::item), nextOffset = if (hasMore) "${index + 1}" else null, hasMore = hasMore)
+    }
+
+    @Test
+    fun `动态视频超出页数上限就放弃,不继续往下翻`() = runTest {
+        val requested = mutableListOf<String?>()
+        val feed = DynamicVideoFeed(startOffset = null, maxPages = 3, load = dynamicPages(
+            pages = listOf(listOf(1), listOf(2), listOf(3), listOf(4)),
+            requested = requested,
+        ))
+
+        assertNull(feed.open("v4"))
+        assertEquals("只翻前 3 页", 3, requested.size)
+    }
+
+    @Test
+    fun `续取跳过一条视频都没有的页`() = runTest {
+        // 第 2 页整页是转发与图文,续取时不能把它当成到底。
+        val feed = DynamicVideoFeed(startOffset = null, maxPages = 3, load = dynamicPages(
+            pages = listOf(listOf(1), emptyList(), listOf(2)),
+        ))
+
+        val items = feed.open("v1")!!
+
+        assertEquals(listOf("v1", "v2"), items.map { it.bvid })
+    }
+
+    @Test
+    fun `相邻两页里重复出现的视频在队列里只有一条`() = runTest {
+        // 翻页期间 UP 又发了动态,上一页末尾那条被挤到下一页开头。
+        val feed = DynamicVideoFeed(startOffset = null, maxPages = 3, load = dynamicPages(
+            pages = listOf(listOf(1, 2), listOf(2, 3)),
+        ))
+
+        val items = feed.open("v1")!!
+
+        assertEquals(listOf("v1", "v2", "v3"), items.map { it.bvid })
+    }
 }

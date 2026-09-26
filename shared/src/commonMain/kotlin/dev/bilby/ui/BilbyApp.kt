@@ -2143,6 +2143,9 @@ private fun SpaceRoute(
             onVideoClick(item.bvid, state.archives.queueContext(mid, page = index / SpaceRepository.ARCHIVE_PAGE_SIZE + 1))
         },
         onDynamicAction = onDynamicAction,
+        onDynamicVideoClick = { item ->
+            item.video?.let { video -> onVideoClick(video.bvid, QueueContext.UpDynamics(mid, item.pageOffset)) }
+        },
         onLikeDynamic = vm::likeDynamic,
         onLiveClick = onLiveClick,
         onToggleFollow = vm::toggleFollow,

@@ -109,6 +109,11 @@ data class SpaceDynamicItem(
      * (notes/space-and-search.md 1.5),为 false,只有动态栏看得到它。
      */
     val listedInArchive: Boolean = false,
+    /**
+     * 取到这一条的那一页用的游标,第一页为 null。从动态栏点开 [video] 时,队列从这一页找起
+     * (见 [QueueContext.UpDynamics])。
+     */
+    val pageOffset: String? = null,
 ) {
     val key: String get() = card.id
 }
@@ -378,7 +383,7 @@ class SpaceRepository(private val client: BiliClient) {
             referer = spaceReferer(mid, dynamic = true),
         )
         return result.map { dto ->
-            val items = dto.items.mapNotNull { it.toSpaceDynamicItem() }
+            val items = dto.items.mapNotNull { it.toSpaceDynamicItem()?.copy(pageOffset = offset?.ifEmpty { null }) }
             SpaceDynamicPage(items, dto.offset.ifEmpty { null }, dto.hasMore)
         }
     }
