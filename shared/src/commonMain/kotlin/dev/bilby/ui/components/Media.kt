@@ -29,6 +29,9 @@ import coil3.network.NetworkHeaders
 import coil3.network.httpHeaders
 import coil3.request.ImageRequest
 import dev.bilby.api.toHttpsUrl
+import dev.bilby.resources.Res
+import dev.bilby.resources.video_badge_charging
+import dev.bilby.stringResource
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
@@ -158,6 +161,16 @@ fun VideoCover(
         }
     }
 }
+
+/**
+ * 充电专属稿件的 typeBadge 文案,不是则为空串。数据层只给布尔值,文案在这里取一次。
+ *
+ * 沿用 [MediaBadge] 的黑底白字,不照 PiliPlus 换成 error 色:角标压在任意封面上,可读性由
+ * 固定遮罩保证;error 在本项目只表示出错,而这条稿件本身没有问题,只是需要充电才能看。
+ */
+@Composable
+fun chargingBadgeText(chargingOnly: Boolean): String =
+    if (chargingOnly) stringResource(Res.string.video_badge_charging) else ""
 
 /** 角标离封面边的距离。PiliPlus 的 `PBadge` 取 6,贴到 4 会像是没对齐。 */
 private val BadgeInset = 6.dp

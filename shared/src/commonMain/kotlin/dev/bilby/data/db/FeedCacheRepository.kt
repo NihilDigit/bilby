@@ -49,6 +49,7 @@ private fun FeedCacheItemEntity.toFeedEntry(): FeedEntry = when (kind) {
         publishedAtEpochSeconds = publishedAtEpochSeconds,
         playCount = playCount,
         danmakuCount = danmakuCount,
+        chargingOnly = chargingOnly,
     )
 }
 
@@ -66,6 +67,7 @@ private fun FeedEntry.toEntity(sortIndex: Long): FeedCacheItemEntity = when (thi
         durationText = durationText,
         playCount = playCount,
         danmakuCount = danmakuCount,
+        chargingOnly = chargingOnly,
     )
 
     is FeedEntry.Article -> FeedCacheItemEntity(

@@ -2,6 +2,7 @@ package dev.bilby.api.dto
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 /**
  * 稍后再看 `x/v2/history/toview/web` 的响应体,依据 notes/comment-toview-history.md
@@ -32,7 +33,16 @@ data class ToViewItemDto(
     @SerialName("pgc_label") val pgcLabel: String = "",
     /** 付费课程。同上。 */
     @SerialName("is_pugv") val isPugv: Boolean = false,
+    /** 非空且带 level 即充电专属(notes/comment-toview-history.md 2.3 节)。 */
+    @SerialName("charging_pay") val chargingPay: ChargingPayDto? = null,
 )
+
+/**
+ * 只看 level 在不在,不读它的值:PiliPlus 的判据就是 `level != null`,值的类型与含义
+ * 未经核实,所以按 [JsonElement] 收,免得类型猜错让整页解析失败。
+ */
+@Serializable
+data class ChargingPayDto(val level: JsonElement? = null)
 
 @Serializable
 data class ToViewOwnerDto(val mid: Long = 0L, val name: String = "")

@@ -60,6 +60,7 @@ import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
+import dev.bilby.ui.components.chargingBadgeText
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -627,6 +628,7 @@ private fun DynamicContentView(
                 durationText = content.durationText,
                 playText = content.playCountText,
                 danmakuText = content.danmakuCountText,
+                typeBadge = chargingBadgeText(content.chargingOnly),
             ),
             onClick = { onAction(DynamicAction.OpenVideo(content.bvid)) },
         )

@@ -51,10 +51,11 @@ data class FeedCacheItemEntity(
     val upMid: Long,
     val upFaceUrl: String = "",
     val publishedAtEpochSeconds: Long,
-    /** 以下三列只有 [kind] 为 [KIND_VIDEO] 时有意义。 */
+    /** 以下四列只有 [kind] 为 [KIND_VIDEO] 时有意义。 */
     val durationText: String = "",
     val playCount: String = "",
     val danmakuCount: String = "",
+    val chargingOnly: Boolean = false,
     /** 以下三列只有 [kind] 为 [KIND_ARTICLE] 时有意义。 */
     val summary: String = "",
     val articleId: String = "",

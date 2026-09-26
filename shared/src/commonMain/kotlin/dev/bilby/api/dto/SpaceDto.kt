@@ -76,6 +76,8 @@ data class VListItemDto(
     val mid: Long = 0L,
     val play: Long = 0L,
     @SerialName("video_review") val videoReview: Long = 0L,
+    /** 充电专属(notes/space-and-search.md 1.3 节)。 */
+    @SerialName("is_charging_arc") val isChargingArc: Boolean = false,
 )
 
 /** `x/polymer/web-space/seasons_series_list`,不需要 WBI。合集/系列共用一个列表接口。 */

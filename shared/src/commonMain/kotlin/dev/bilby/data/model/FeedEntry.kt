@@ -32,6 +32,7 @@ sealed interface FeedEntry {
         override val publishedAtEpochSeconds: Long,
         val playCount: String,
         val danmakuCount: String,
+        val chargingOnly: Boolean = false,
     ) : FeedEntry {
         override val id: String get() = bvid
     }

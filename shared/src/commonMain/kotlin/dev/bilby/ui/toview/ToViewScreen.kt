@@ -38,6 +38,7 @@ import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.SortMenu
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
+import dev.bilby.ui.components.chargingBadgeText
 import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.errorTextRes
 import dev.bilby.ui.formatRelativeTime
@@ -379,6 +380,7 @@ internal fun ToViewItem.toRowUi() = VideoRowUi(
         progressSeconds > 0 -> stringResource(Res.string.toview_progress, formatDurationSeconds(progressSeconds))
         else -> null
     },
+    typeBadge = chargingBadgeText(chargingOnly),
     progressFraction = when {
         isFinished -> 1f
         durationSeconds > 0 && progressSeconds > 0 -> progressSeconds.toFloat() / durationSeconds

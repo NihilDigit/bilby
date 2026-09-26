@@ -93,6 +93,7 @@ sealed interface DynamicContent {
         val playCountText: String,
         val danmakuCountText: String,
         val badge: String = "",
+        val chargingOnly: Boolean = false,
     ) : DynamicContent
 
     /**

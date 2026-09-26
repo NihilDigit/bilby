@@ -309,8 +309,16 @@ private fun dev.bilby.api.dto.ArchiveDto?.toVideo(): DynamicContent? {
         playCountText = archive.stat?.play.orEmpty(),
         danmakuCountText = archive.stat?.danmaku.orEmpty(),
         badge = archive.badge?.text?.takeIf { it != DEFAULT_BADGE }.orEmpty(),
+        chargingOnly = archive.isChargingOnly,
     )
 }
+
+/**
+ * 动态的视频卡片没有充电专属的布尔字段,只有角标文案,判据只能是文案全等
+ * (notes/dynamic-feed.md 第 5 节)。首页动态流与空间动态共用这一处。
+ */
+internal val dev.bilby.api.dto.ArchiveDto.isChargingOnly: Boolean
+    get() = badge?.text == CHARGING_BADGE
 
 private fun dev.bilby.api.dto.ArchiveDto?.toSeason(): DynamicContent? {
     val archive = this ?: return null
@@ -433,6 +441,9 @@ private val READ_PATH = Regex("""/read/(?:cv)?(\d+)""")
 
 /** PiliPlus 把"投稿视频"这个角标文案当作没有角标(result.dart:1101)。 */
 private const val DEFAULT_BADGE = "投稿视频"
+
+/** PiliPlus 按这个文案给视频卡片换 error 色角标(video_panel.dart:68)。 */
+private const val CHARGING_BADGE = "充电专属"
 
 private const val LIVE_STATE_ON = 1
 

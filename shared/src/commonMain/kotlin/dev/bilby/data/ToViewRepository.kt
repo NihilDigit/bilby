@@ -26,6 +26,7 @@ data class ToViewItem(
     val kind: ToViewKind,
     /** 剧集的类别名(「番剧」「电影」),只有 [ToViewKind.Pgc] 可能带。 */
     val pgcLabel: String = "",
+    val chargingOnly: Boolean = false,
 ) {
     val isFinished: Boolean get() = progressSeconds == -1L
 
@@ -106,6 +107,7 @@ class ToViewRepository(private val client: BiliClient) {
             else -> ToViewKind.Video
         },
         pgcLabel = pgcLabel,
+        chargingOnly = chargingPay?.level != null,
     )
 
     companion object {

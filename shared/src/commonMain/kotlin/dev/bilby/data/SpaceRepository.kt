@@ -37,6 +37,8 @@ data class SpaceVideoItem(
     val publishedAtEpochSeconds: Long,
     val playCountText: String,
     val danmakuCountText: String,
+    /** 充电专属。合集/系列目录的接口没有已知字段,那里恒为 false。 */
+    val chargingOnly: Boolean = false,
 )
 
 data class SpaceProfile(
@@ -407,6 +409,7 @@ class SpaceRepository(private val client: BiliClient) {
         publishedAtEpochSeconds = created,
         playCountText = play.formatCount(),
         danmakuCountText = videoReview.formatCount(),
+        chargingOnly = isChargingArc,
     )
 
     private fun SeasonArchiveDto.toVideoItem() = SpaceVideoItem(
@@ -459,6 +462,7 @@ internal fun DynamicItemDto.toSpaceDynamicItem(): SpaceDynamicItem? {
             publishedAtEpochSeconds = card.publishedAtEpochSeconds,
             playCountText = video.playCountText,
             danmakuCountText = video.danmakuCountText,
+            chargingOnly = video.chargingOnly,
         ),
         listedInArchive = type == "DYNAMIC_TYPE_UGC_SEASON" ||
             modules?.moduleAuthor?.pubAction in ARCHIVE_PUB_ACTIONS,

@@ -48,7 +48,7 @@ interface FeedCacheItemDao {
         FeedReadPositionEntity::class,
         FeedCacheItemEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false,
 )
 @ConstructedBy(BilbyDatabaseConstructor::class)

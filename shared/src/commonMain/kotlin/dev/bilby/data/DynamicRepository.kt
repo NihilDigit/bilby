@@ -152,6 +152,7 @@ class DynamicRepository(private val client: BiliClient) {
             publishedAtEpochSeconds = author.pubTs,
             playCount = archive.stat?.play ?: "",
             danmakuCount = archive.stat?.danmaku ?: "",
+            chargingOnly = archive.isChargingOnly,
         )
     }
 
