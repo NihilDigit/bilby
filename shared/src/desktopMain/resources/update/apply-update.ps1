@@ -3,6 +3,7 @@
 #   patch: copy staged files over the install dir. Every file is copied next to its target
 #          first, then swapped in by rename; the replaced files are kept until all swaps
 #          succeed, so a failure rolls back to the old image instead of a half-updated one.
+#          Jars under app\ that the new version no longer has are then removed.
 #   msi:   msiexec /i. The MSI's own upgrade (remove then install) needs the app closed.
 # Kept ASCII-only: Windows PowerShell 5.1 reads a script without BOM in the ANSI code page.
 param(
@@ -71,6 +72,33 @@ function Install-Patch {
         throw
     }
     foreach ($target in $replaced) { Remove-Item -LiteralPath "$target.old" -Force -ErrorAction SilentlyContinue }
+    Remove-StaleJars $entries
+}
+
+# Every jar under app\ is part of a patch (UpdateArtifactsTask.isPatch), so the staged jars are
+# the new version's complete set. A jar it no longer has (the module jar renamed by its content
+# hash, a dependency upgraded or dropped) is off its class path and not in the MSI's file table
+# either, so nothing else ever removes it: each patch would leave another ~10 MB behind, and
+# uninstalling would leave them too. Runs only after every swap succeeded.
+function Remove-StaleJars($entries) {
+    $appDir = Join-Path $InstallDir 'app'
+    $keep = @{}
+    foreach ($entry in $entries) {
+        if ([System.IO.Path]::GetExtension($entry.Target) -eq '.jar') { $keep[$entry.Target.ToLowerInvariant()] = $true }
+    }
+    # A patch without any jar would mark every installed jar stale; that is not a patch this
+    # script expects, so leave the directory alone.
+    if ($keep.Count -eq 0) { return }
+    # Compare the extension exactly: -Filter '*.jar' goes through the Win32 wildcard, which also
+    # matches names whose 8.3 short name ends in .JAR.
+    $installed = @(Get-ChildItem -LiteralPath $appDir -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -eq '.jar' })
+    foreach ($jar in $installed) {
+        if (-not $keep.ContainsKey($jar.FullName.ToLowerInvariant())) {
+            Remove-Item -LiteralPath $jar.FullName -Force -ErrorAction SilentlyContinue
+            Write-Log "removed stale $($jar.FullName)"
+        }
+    }
 }
 
 function Install-Msi {

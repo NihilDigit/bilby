@@ -79,6 +79,73 @@ class UpdateManifestTest {
         assertEquals(1_700_000_000_000L, jar.lastModified())
     }
 
+    private fun fixture(name: String): ByteArray =
+        checkNotNull(javaClass.getResourceAsStream("/update/$name")) { name }.use { it.readBytes() }
+
+    private val deltaTarget = fixture("delta-target.bin")
+
+    private val deltaManifest = UpdateManifest(
+        version = "0.0.2",
+        files = listOf(
+            ManifestFile(
+                path = "app/shared-desktop-bb.jar",
+                size = deltaTarget.size.toLong(),
+                sha256 = MessageDigest.getInstance("SHA-256").digest(deltaTarget).toHex(),
+                mtime = 1_700_000_000_000L,
+                patch = true,
+            ),
+        ),
+    )
+
+    private fun deltaZip(base: String? = null): File = root.resolve("delta.zip").apply {
+        ZipOutputStream(outputStream()).use { out ->
+            out.putNextEntry(ZipEntry("app/shared-desktop-bb.jar.zst"))
+            out.write(fixture("delta-target.bin.zst"))
+            out.closeEntry()
+            if (base != null) {
+                out.putNextEntry(ZipEntry("app/shared-desktop-bb.jar.base"))
+                out.write(base.toByteArray())
+                out.closeEntry()
+            }
+        }
+    }
+
+    // 夹具由 zstd CLI 的 --patch-from 生成,参数与 delta-updates.sh 相同;验证的是 CLI 压出的
+    // 差分 zstd-jni 能否还原。
+    @Test
+    fun deltaFromCliRestoresAgainstInstalledBase() {
+        install.resolve("app").mkdirs()
+        install.resolve("app/shared-desktop-bb.jar").writeBytes(fixture("delta-base.bin"))
+        val staged = root.resolve("staged")
+        applyDelta(deltaZip(), deltaManifest, install, staged)
+        val jar = staged.resolve("app/shared-desktop-bb.jar")
+        assertTrue(jar.readBytes().contentEquals(deltaTarget))
+        assertEquals(1_700_000_000_000L, jar.lastModified())
+    }
+
+    // shared-desktop 的 jar 每次构建换名,字典是 .base 指向的旧文件,不是新路径上的(本机没有)。
+    @Test
+    fun renamedJarRestoresAgainstNamedBase() {
+        install.resolve("app").mkdirs()
+        install.resolve("app/shared-desktop-aa.jar").writeBytes(fixture("delta-base.bin"))
+        val staged = root.resolve("staged")
+        applyDelta(deltaZip(base = "app/shared-desktop-aa.jar"), deltaManifest, install, staged)
+        assertTrue(staged.resolve("app/shared-desktop-bb.jar").readBytes().contentEquals(deltaTarget))
+    }
+
+    // 调用方据这个异常退回完整补丁包,换成别的异常就成了更新失败。
+    @Test
+    fun deltaAgainstWrongBaseFailsAsChecksumMismatch() {
+        install.resolve("app").mkdirs()
+        install.resolve("app/shared-desktop-bb.jar").writeBytes(deltaTarget)
+        assertThrows(ChecksumMismatchException::class.java) {
+            applyDelta(deltaZip(), deltaManifest, install, root.resolve("a"))
+        }
+        assertThrows(ChecksumMismatchException::class.java) {
+            applyDelta(deltaZip(base = "app/shared-desktop-gone.jar"), deltaManifest, install, root.resolve("b"))
+        }
+    }
+
     @Test
     fun extractRejectsIncompleteOrForeignArchives() {
         // 缺一个、内容不符、带越界路径,三种都不能留下半替换的暂存目录。
