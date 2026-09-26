@@ -2,20 +2,26 @@ package dev.bilby.ui.video
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.Alignment
+import dev.bilby.ui.theme.Dimens
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -23,7 +29,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalFocusManager
@@ -32,7 +37,7 @@ import dev.bilby.stringResource
 import dev.bilby.ui.components.AgentQuestionBubble
 import dev.bilby.ui.components.AgentTurnView
 import dev.bilby.ui.components.KeepScrolledToBottom
-import dev.bilby.ui.components.SearchField
+import dev.bilby.ui.components.PillInputField
 import dev.bilby.ui.components.rememberBottomFollow
 import dev.bilby.ui.theme.Spacing
 
@@ -53,6 +58,8 @@ fun RelatedSheet(
     onAsk: (String) -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 标题行右端的关闭。右栏里给;底部 sheet 有把手和下拉,不给。 */
+    onClose: (() -> Unit)? = null,
 ) {
     val first = related.turns.firstOrNull()?.result
     val videoCount = first?.answer?.sources?.size ?: 0
@@ -66,20 +73,47 @@ fun RelatedSheet(
         if (related.turns.size == 1 && !related.running && follow.following) scrollState.animateScrollTo(0)
     }
 
+    // 标题行和内容之间不画线。内容没滚动时两者本来连着读;滚上去之后标题行换高一档的底色,
+    // 压在它下面走的内容才需要一条边界(M3 顶栏的 on-scroll 做法)。
+    val scrolled by remember { derivedStateOf { scrollState.value > 0 } }
+    val headerColor by animateColorAsState(
+        targetValue = if (scrolled) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent,
+        animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
+        label = "related-header",
+    )
+
     Column(modifier = modifier.fillMaxWidth().fillMaxHeight()) {
-        // 这一行不跟着滚:它是这块内容的名字,报着第一轮在找还是找到了几条。
-        Text(
-            text = when {
-                first == null -> stringResource(Res.string.related_title)
-                first.running -> stringResource(Res.string.related_title_running)
-                first.error != null -> stringResource(Res.string.related_title_error)
-                videoCount > 0 -> stringResource(Res.string.related_title_count, videoCount)
-                else -> stringResource(Res.string.related_title)
-            },
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-        )
-        HorizontalDivider()
+        // 这一行不跟着滚:它是这块内容的名字,报着第一轮在找还是找到了几条。右栏里右端是关闭,
+        // 位置同侧栏(SidePanelLayout)的关闭:右栏里的找相关常驻,点画面不收起,关它只走这里。
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(headerColor)
+                .heightIn(min = Dimens.MinTouchTarget + Spacing.Tight)
+                .padding(start = Spacing.Comfortable, end = if (onClose != null) Spacing.Hair else Spacing.Comfortable),
+        ) {
+            Text(
+                text = when {
+                    first == null -> stringResource(Res.string.related_title)
+                    first.running -> stringResource(Res.string.related_title_running)
+                    first.error != null -> stringResource(Res.string.related_title_error)
+                    videoCount > 0 -> stringResource(Res.string.related_title_count, videoCount)
+                    else -> stringResource(Res.string.related_title)
+                },
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            onClose?.let { close ->
+                IconButton(onClick = close) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = stringResource(Res.string.action_close),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
 
         Column(
             modifier = Modifier
@@ -109,8 +143,8 @@ fun RelatedSheet(
 }
 
 /**
- * 追问的输入栏,贴在面板底部。样式同搜索页助理的输入栏:surfaceContainer 底色,右边一个实心的
- * 发送键。上一轮还在跑时发送键禁用,不排队:同一段会话里两个循环并行会拼出一段谁也没说过的对话。
+ * 追问的输入栏,贴在面板底部。上一轮还在跑时不能发,不排队:同一段会话里两个循环并行会拼出
+ * 一段谁也没说过的对话。
  */
 @Composable
 private fun FollowUpBar(running: Boolean, onAsk: (String) -> Unit) {
@@ -123,23 +157,14 @@ private fun FollowUpBar(running: Boolean, onAsk: (String) -> Unit) {
             focusManager.clearFocus()
         }
     }
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().imePadding()) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            modifier = Modifier.padding(Spacing.Tight),
-        ) {
-            SearchField(
-                value = text,
-                onValueChange = { text = it },
-                placeholder = stringResource(Res.string.related_follow_up),
-                onSearch = send,
-                releaseFocusWithKeyboard = true,
-                modifier = Modifier.weight(1f),
-            )
-            FilledIconButton(onClick = send, enabled = text.isNotBlank() && !running) {
-                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(Res.string.action_send))
-            }
-        }
-    }
+    // 和私信、搜索页助理同一个胶囊。在跑的时候发送键那一格是转圈:这一轮还没答完。
+    PillInputField(
+        value = text,
+        onValueChange = { text = it },
+        placeholder = stringResource(Res.string.related_follow_up),
+        canSend = text.isNotBlank() && !running,
+        sending = running,
+        onSend = send,
+        modifier = Modifier.imePadding().padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+    )
 }

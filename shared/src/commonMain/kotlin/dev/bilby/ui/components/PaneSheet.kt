@@ -86,7 +86,13 @@ class SidePaneState internal constructor() {
     }
 }
 
-internal class PanePanel(val title: String?, val onDismiss: () -> Unit, val content: @Composable ColumnScope.() -> Unit)
+internal class PanePanel(
+    val title: String?,
+    val onDismiss: () -> Unit,
+    /** 常驻面板,见 [PaneSheet] 的同名参数。 */
+    val persistent: Boolean,
+    val content: @Composable ColumnScope.() -> Unit,
+)
 
 val LocalSidePane = staticCompositionLocalOf<SidePaneState?> { null }
 
@@ -125,7 +131,8 @@ fun BoxScope.SidePaneLayer(state: SidePaneState) {
  */
 @Composable
 fun BoxScope.SidePaneDismissLayer(state: SidePaneState) {
-    if (!state.isOpen) return
+    // 常驻面板不装这一层:它和画面是一起看的,点画面就是在操作画面。
+    if (!state.isOpen || state.panel?.persistent == true) return
     Box(
         modifier = Modifier
             .matchParentSize()
@@ -146,7 +153,9 @@ private fun PanePanelSurface(panel: PanePanel) {
     // 不压暗底下的简介与评论:面板盖满这一栏,底下本来就看不见;左栏的画面也不该变暗。
     Surface(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // 常驻面板的标题行归内容自己画(标题带着内容的状态,关闭在右端);这里再画一行
+            // 返回箭头,就是两行标题摞在一起。
+            if (!panel.persistent) Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = panel.onDismiss) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.action_back))
                 }
@@ -214,6 +223,12 @@ fun PaneSheet(
     title: String? = null,
     /** sheet 形态下跳过半开(见 [rememberExpandedSheetState])。右栏里没有半开。 */
     skipPartiallyExpanded: Boolean = true,
+    /**
+     * 右栏里常驻:点左栏不收起,也不画返回箭头那一行,标题与关闭按钮由内容自己画。给和画面
+     * 一起看的面板用(找相关),不给看一眼就走的面板(播放设置、评论详情)——那些点回画面就
+     * 收起正好。sheet 与侧边面板两种形态不受影响。
+     */
+    persistent: Boolean = false,
     content: @Composable PaneSheetScope.() -> Unit,
 ) {
     val pane = LocalSidePane.current
@@ -227,8 +242,8 @@ fun PaneSheet(
         val latestDismiss by rememberUpdatedState(onDismissRequest)
         // 返回键先关面板。面板画在右栏里,不像 ModalBottomSheet 自带返回处理。
         BackHandler { latestDismiss() }
-        DisposableEffect(pane, title) {
-            val panel = PanePanel(title, { latestDismiss() }) {
+        DisposableEffect(pane, title, persistent) {
+            val panel = PanePanel(title, { latestDismiss() }, persistent) {
                 val latestContent = contentState.value
                 PaneSheetScopeImpl(this, inPane = true).latestContent()
             }
