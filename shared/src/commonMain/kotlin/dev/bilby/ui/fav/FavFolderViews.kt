@@ -2,6 +2,7 @@ package dev.bilby.ui.fav
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -101,12 +102,14 @@ fun FavFolderRow(
     folder: FavFolderDetail,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 宽屏的右键菜单挂在长按上,见 `ContextMenuBox`。 */
+    onLongClick: (() -> Unit)? = null,
     trailing: (@Composable RowScope.() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(role = Role.Button, onClick = onClick)
+            .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
         horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
         verticalAlignment = Alignment.CenterVertically,

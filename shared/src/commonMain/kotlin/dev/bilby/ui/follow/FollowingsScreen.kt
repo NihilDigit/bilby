@@ -11,6 +11,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -886,7 +888,8 @@ private fun FollowingRow(up: UpBrief, actions: FollowRowActions, menuInRow: Bool
     }
 }
 
-/** 行尾那颗 ⋮ 和它的菜单。 */
+/** 行尾那颗 ⋮ 和它的菜单。外形同右键弹出的那份(M3E vertical menu),见 ContextMenuBox。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun RowMenuButton(up: UpBrief, menu: @Composable ColumnScope.(close: () -> Unit) -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -899,7 +902,12 @@ private fun RowMenuButton(up: UpBrief, menu: @Composable ColumnScope.(close: () 
                 contentDescription = stringResource(Res.string.follow_row_actions, up.name),
             )
         }
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+        DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+            shape = MenuDefaults.shape,
+            containerColor = MenuDefaults.containerColor,
+        ) {
             menu { menuOpen = false }
         }
     }

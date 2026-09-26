@@ -1,6 +1,11 @@
 package dev.bilby.ui.fav
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ColumnScope
+import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.components.ContextMenuBox
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.rememberBilbyWindowSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
@@ -179,6 +184,7 @@ fun FavFoldersScreen(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
+    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     Box(modifier = modifier.fillMaxSize()) {
         AdaptiveContent {
             RefreshBox(
@@ -199,20 +205,32 @@ fun FavFoldersScreen(
                     onRetry = onRetry,
                     contentPadding = contentPadding,
                 ) { folder ->
-                    FavFolderRow(
-                        folder = folder,
-                        onClick = { onOpenFolder(folder) },
-                        trailing = {
-                            FavFolderMenu(
-                                folderTitle = folder.title,
-                                // 默认收藏夹删不掉,所以这里根本不给删除项 —— 让它可点再报错,等于把
-                                // 一条服务端规则做成了一次失败。
-                                deletable = !folder.isDefault,
-                                onEdit = { onEdit(folder) },
-                                onDelete = { onDelete(folder) },
-                            )
-                        },
-                    )
+                    val menu: @Composable ColumnScope.(close: () -> Unit) -> Unit = { close ->
+                        FavFolderMenuItems(
+                            // 默认收藏夹删不掉,所以这里根本不给删除项 —— 让它可点再报错,等于把
+                            // 一条服务端规则做成了一次失败。
+                            deletable = !folder.isDefault,
+                            close = close,
+                            onEdit = { onEdit(folder) },
+                            onDelete = { onDelete(folder) },
+                        )
+                    }
+                    // 宽屏不画 ⋮,右键或长按弹同一份菜单,理由见 ContextMenuBox。
+                    if (wide) {
+                        ContextMenuBox(
+                            onClick = null,
+                            menuLabel = stringResource(Res.string.fav_folder_actions, folder.title),
+                            menu = menu,
+                        ) { openMenu ->
+                            FavFolderRow(folder = folder, onClick = { onOpenFolder(folder) }, onLongClick = openMenu)
+                        }
+                    } else {
+                        FavFolderRow(
+                            folder = folder,
+                            onClick = { onOpenFolder(folder) },
+                            trailing = { FavFolderMenu(folder.title, menu) },
+                        )
+                    }
                 }
             }
         }
@@ -228,12 +246,7 @@ fun FavFoldersScreen(
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun FavFolderMenu(
-    folderTitle: String,
-    deletable: Boolean,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-) {
+private fun FavFolderMenu(folderTitle: String, menu: @Composable ColumnScope.(close: () -> Unit) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
@@ -249,26 +262,33 @@ private fun FavFolderMenu(
             shape = MenuDefaults.shape,
             containerColor = MenuDefaults.containerColor,
         ) {
-            DropdownMenuItem(
-                text = { Text(stringResource(Res.string.fav_folder_edit_info)) },
-                onClick = {
-                    expanded = false
-                    onEdit()
-                },
-                leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
-                shape = if (deletable) MenuDefaults.leadingItemShape else MenuDefaults.standaloneItemShape,
-            )
-            if (deletable) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(Res.string.fav_folder_delete_title)) },
-                    onClick = {
-                        expanded = false
-                        onDelete()
-                    },
-                    leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null) },
-                    shape = MenuDefaults.trailingItemShape,
-                )
-            }
+            menu { expanded = false }
         }
+    }
+}
+
+/** 编辑、删除两项,⋮ 与右键共用。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun FavFolderMenuItems(deletable: Boolean, close: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(stringResource(Res.string.fav_folder_edit_info)) },
+        onClick = {
+            close()
+            onEdit()
+        },
+        leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+        shape = if (deletable) MenuDefaults.leadingItemShape else MenuDefaults.standaloneItemShape,
+    )
+    if (deletable) {
+        DropdownMenuItem(
+            text = { Text(stringResource(Res.string.fav_folder_delete_title)) },
+            onClick = {
+                close()
+                onDelete()
+            },
+            leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null) },
+            shape = MenuDefaults.trailingItemShape,
+        )
     }
 }
