@@ -131,6 +131,8 @@
     <string name="comment_open_space">Space of %1$s</string>
     <string name="comment_tag_pinned">Pinned</string>
     <string name="comment_picture">Comment image</string>
+    <string name="image_viewer_previous">Previous image</string>
+    <string name="image_viewer_next">Next image</string>
     <string name="comment_like">Like</string>
     <string name="comment_unlike">Unlike</string>
     <string name="comment_reply">Reply</string>

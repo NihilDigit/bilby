@@ -164,6 +164,8 @@
     <string name="comment_open_space">%1$s 的个人空间</string>
     <string name="comment_tag_pinned">置顶</string>
     <string name="comment_picture">评论配图</string>
+    <string name="image_viewer_previous">上一张</string>
+    <string name="image_viewer_next">下一张</string>
     <string name="comment_like">点赞</string>
     <string name="comment_unlike">取消点赞</string>
     <string name="comment_reply">回复</string>
