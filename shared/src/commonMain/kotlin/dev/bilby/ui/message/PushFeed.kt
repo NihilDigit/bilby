@@ -5,7 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.components.listCoverWidthFor
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
@@ -102,10 +102,7 @@ internal fun PushFeedScreen(
                 (message.content as? WhisperContent.VideoPush)?.let { PushItem(it, message.seqno, message.timeSeconds) }
             }.asReversed()
         }
-        AdaptiveListContent(
-            modifier = Modifier.padScaffoldExceptBottom(insets),
-            maxCellWidth = PushCellMaxWidth,
-        ) { columns ->
+        AdaptiveListContent(modifier = Modifier.padScaffoldExceptBottom(insets)) { columns ->
             FirstScreenState(
                 loading = state.loading,
                 error = state.error?.let { stringResource(it) },
@@ -138,9 +135,7 @@ private class PushItem(val push: WhisperContent.VideoPush, val seqno: Long, val 
 private fun PushRow(item: PushItem, onClick: () -> Unit, onOpenLink: (String) -> Unit) {
     val push = item.push
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-    // 封面跟着这一格的宽度放大,同对话里的卡片(见 WhisperScreen 的 ChatSizes):一格五六百 dp
-    // 宽时还是 128dp 的封面,右边一大片字,封面反倒成了角落里的缩略图。下限是视频行的原值,手机上不变。
-    val coverWidth = (maxWidth * 0.38f).coerceIn(Dimens.ListCoverWidth, PushCoverMaxWidth)
+    val coverWidth = listCoverWidthFor(maxWidth)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -189,12 +184,6 @@ private fun PushRow(item: PushItem, onClick: () -> Unit, onOpenLink: (String) ->
 }
 
 private val QuoteBarWidth = 3.dp
-
-/** 推送一格最宽多少。比视频行的 480 宽一档:封面要跟着放大,标题和附言又不截断,需要这一截宽度。 */
-private val PushCellMaxWidth = 640.dp
-
-/** 封面放大的上限,右栏两列时大约落在这里。 */
-private val PushCoverMaxWidth = 240.dp
 
 @Composable
 private fun PushGrid(

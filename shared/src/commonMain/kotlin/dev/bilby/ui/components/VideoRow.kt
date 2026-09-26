@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
@@ -24,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -96,8 +98,10 @@ fun VideoRow(
      */
     overflow: (@Composable () -> Unit)? = null,
 ) {
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+    val coverWidth = listCoverWidthFor(maxWidth)
     Row(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(
                 enabled = enabled,
@@ -123,6 +127,7 @@ fun VideoRow(
             durationText = item.durationText,
             progressFraction = item.progressFraction,
             typeBadge = item.typeBadge,
+            width = coverWidth,
         )
 
         Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
@@ -202,7 +207,16 @@ fun VideoRow(
 
         trailing?.invoke(this)
     }
+    }
 }
+
+/**
+ * 列表行里的封面宽度,按这一行的宽度取:文字列到 [Dimens.ListTextMaxWidth] 为止,余下给封面。
+ * 行的左右边距与封面和文字的间距同 [VideoRow];推送行等照这个版式画的行也用它,才和视频行一样大。
+ */
+fun listCoverWidthFor(rowWidth: Dp): Dp =
+    (rowWidth - Spacing.Comfortable * 2 - Spacing.Cozy - Dimens.ListTextMaxWidth)
+        .coerceIn(Dimens.ListCoverWidth, Dimens.ListCoverMaxWidth)
 
 private const val DisabledContentAlpha = 0.38f
 

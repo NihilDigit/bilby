@@ -100,6 +100,21 @@ object Dimens {
      */
     val ListCoverWidth = 128.dp
 
+    /**
+     * 行宽出来以后封面放大的上限,16:10 下高 110dp。宽屏网格一格 480dp 时恰好到这里。
+     *
+     * 封面随行宽放大,由 [ListTextMaxWidth] 决定从哪里开始:128 的算术只约束文字那一列,
+     * 文字列够宽之后再给它的宽度只是标题行右边的空白,封面却还是 80dp 高的缩略图。
+     */
+    val ListCoverMaxWidth = 176.dp
+
+    /**
+     * 列表行文字列的宽度上限,约 16 个汉字。行宽超过「这一列 + 128 封面 + 边距」(432dp)的
+     * 部分都给封面,直到 [ListCoverMaxWidth]。起点取 432 是为了落在大屏手机竖屏(412 到 430)之上:
+     * 手机上行还是原样。
+     */
+    val ListTextMaxWidth = 260.dp
+
     /** 队列、助理过程这类次级列表里的小封面。 */
     val CompactCoverWidth = 72.dp
 
