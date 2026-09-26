@@ -354,6 +354,7 @@ fun ListFooter(
     error: String? = null,
     onRetry: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    showEndMarker: Boolean = true,
 ) {
     if (!hasItems && error == null) return
     if (error != null) {
@@ -366,7 +367,7 @@ fun ListFooter(
     ) {
         when {
             appending -> LoadingSpinner()
-            !hasMore -> Text(
+            !hasMore && showEndMarker -> Text(
                 text = stringResource(Res.string.list_no_more),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

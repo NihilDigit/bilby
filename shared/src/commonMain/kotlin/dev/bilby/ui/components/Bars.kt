@@ -25,6 +25,8 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -50,6 +52,8 @@ import dev.bilby.ui.theme.Spacing
  *   fill),顶栏和内容之间才有边界可言。默认 null:调用方还得把同一个 behavior 的
  *   `nestedScrollConnection` 挂到自己那层 `Scaffold` 上,这里给不了,所以只有接好了的页面
  *   才传,没传的照旧是一条不变色的顶栏。
+ * @param center 叠在整条顶栏正中的内容(宽屏的搜索框)。TopAppBar 没有这个槽位:标题槽跟在
+ *   返回键后面,actions 贴右,两者都居不了中。调用方负责只在宽度够时传,窄屏上它会压住标题。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,7 +62,27 @@ fun BilbyTopBar(
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
     scrollBehavior: TopAppBarScrollBehavior? = null,
+    center: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
+) {
+    Box(modifier = modifier) {
+        SmallTopBar(title, onBack, scrollBehavior, actions)
+        if (center != null) {
+            Box(
+                modifier = Modifier.matchParentSize().windowInsetsPadding(TopAppBarDefaults.windowInsets),
+                contentAlignment = Alignment.Center,
+            ) { center() }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SmallTopBar(
+    title: String,
+    onBack: (() -> Unit)?,
+    scrollBehavior: TopAppBarScrollBehavior?,
+    actions: @Composable RowScope.() -> Unit,
 ) {
     TopAppBar(
         title = {
@@ -78,7 +102,6 @@ fun BilbyTopBar(
         actions = actions,
         colors = TopAppBarDefaults.topAppBarColors(),
         scrollBehavior = scrollBehavior,
-        modifier = modifier,
     )
 }
 

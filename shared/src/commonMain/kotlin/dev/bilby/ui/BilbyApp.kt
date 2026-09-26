@@ -120,6 +120,10 @@ import dev.bilby.ui.feed.FeedViewModel
 import dev.bilby.ui.follow.BlacklistScreen
 import dev.bilby.ui.follow.BlacklistViewModel
 import dev.bilby.ui.follow.FollowingsScreen
+import dev.bilby.ui.follow.FollowingsSearchField
+import dev.bilby.ui.follow.FollowingsSearchFieldMaxWidth
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import dev.bilby.ui.follow.FollowOrderOptions
 import dev.bilby.ui.follow.canSort
 import dev.bilby.ui.components.SortMenu
@@ -2056,6 +2060,9 @@ private fun FollowingsRoute(
     val state by vm.state.collectAsStateWithLifecycle()
     // 见 [SearchResultRoute]。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    // 宽屏时刷新与排序进名单上方的筛选行(见 WideFilterRow),搜索框换到顶栏正中:
+    // 放在筛选行里,48dp 的输入框和 32dp 的芯片挤在一条线上,高低不齐。
+    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
@@ -2063,7 +2070,23 @@ private fun FollowingsRoute(
                 title = stringResource(Res.string.followings_title),
                 onBack = onBack,
                 scrollBehavior = scrollBehavior,
+                center = if (wide) {
+                    {
+                        // 外层定一半宽,里面再封顶。反过来写 fillMaxWidth(0.5f).widthIn(max) 封不住,
+                        // 理由见 AdaptiveContent。
+                        Box(modifier = Modifier.fillMaxWidth(0.5f), contentAlignment = Alignment.Center) {
+                            FollowingsSearchField(
+                                query = state.query,
+                                onSearch = vm::search,
+                                modifier = Modifier.widthIn(max = FollowingsSearchFieldMaxWidth).fillMaxWidth(),
+                            )
+                        }
+                    }
+                } else {
+                    null
+                },
                 actions = {
+                    if (wide) return@BilbyTopBar
                     RefreshAction(state.refreshing, vm::refresh)
                     // 排序放顶栏右端,省下列表上方单独一行。仍是 SortMenu 那颗写着当前档位的
                     // 下拉,不换成一个图标:图标读不出现在按什么排。
@@ -2097,6 +2120,9 @@ private fun FollowingsRoute(
             onSaveGroups = vm::saveGroups,
             onBlock = vm::block,
             onUnfollow = vm::unfollow,
+            onSelectOrder = vm::selectOrder,
+            onEnsureSpecial = vm::ensureSpecial,
+            onLoadMoreSpecial = vm::loadMoreSpecial,
             contentPadding = insets,
         )
     }

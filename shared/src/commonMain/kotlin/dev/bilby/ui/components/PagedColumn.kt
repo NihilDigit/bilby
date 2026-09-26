@@ -80,6 +80,8 @@ fun <T> PagedColumn(
     contentPadding: PaddingValues = PaddingValues(bottom = navigationBarsBottom()),
     layout: PagedLayout = PagedLayout.SingleColumn,
     header: (@Composable () -> Unit)? = null,
+    /** 翻到底时写不写「没有更多了」。短名单一眼看得到头,写了反倒像还藏着什么。 */
+    showEndMarker: Boolean = true,
     /** 首屏读取中的一行占位,见 [FirstScreenState]。默认是视频行。 */
     skeletonRow: @Composable () -> Unit = { VideoRowSkeleton() },
     itemContent: @Composable (T) -> Unit,
@@ -101,6 +103,7 @@ fun <T> PagedColumn(
                 hasItems = items.isNotEmpty(),
                 error = error,
                 onRetry = onLoadMore,
+                showEndMarker = showEndMarker,
             )
         }
         // **`animateItem` 在条目外面给一次,所有翻页列表就都有了。** 条目的增删在这些页面是
