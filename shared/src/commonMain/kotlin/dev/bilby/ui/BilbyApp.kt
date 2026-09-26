@@ -1105,24 +1105,23 @@ private fun RootTabsContent(
                     SearchPane(container, onVideoClick, onUserClick, onOpenArticle)
                 }
 
-                RootTab.Profile -> AdaptiveContent(maxWidth = Breakpoints.ReadableWidth) {
-                    ProfilePane(
-                        container = container,
-                        scrollToTop = profileScrollToTop,
-                        onVideoClick = onVideoClick,
-                        onVideoInContext = onVideoInContext,
-                        onUserClick = onUserClick,
-                        onOpenHistory = onOpenHistory,
-                        onOpenToView = onOpenToView,
-                        onOpenOffline = onOpenOffline,
-                        onOpenFavFolder = onOpenFavFolder,
-                        onOpenFavFolders = onOpenFavFolders,
-                        onOpenMessages = onOpenMessages,
-                        onOpenFollowings = onOpenFollowings,
-                        onOpenCoinLog = onOpenCoinLog,
-                        onSettingsClick = onSettingsClick,
-                    )
-                }
+                // 不限宽:宽屏每节是一排卡片,宽度换成条数(见 ProfileScreen);窄屏账号卡自己限宽。
+                RootTab.Profile -> ProfilePane(
+                    container = container,
+                    scrollToTop = profileScrollToTop,
+                    onVideoClick = onVideoClick,
+                    onVideoInContext = onVideoInContext,
+                    onUserClick = onUserClick,
+                    onOpenHistory = onOpenHistory,
+                    onOpenToView = onOpenToView,
+                    onOpenOffline = onOpenOffline,
+                    onOpenFavFolder = onOpenFavFolder,
+                    onOpenFavFolders = onOpenFavFolders,
+                    onOpenMessages = onOpenMessages,
+                    onOpenFollowings = onOpenFollowings,
+                    onOpenCoinLog = onOpenCoinLog,
+                    onSettingsClick = onSettingsClick,
+                )
             }
         }
     }

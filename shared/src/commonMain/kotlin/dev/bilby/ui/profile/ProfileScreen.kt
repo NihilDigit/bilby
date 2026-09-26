@@ -24,6 +24,10 @@ import androidx.compose.material.icons.outlined.Mail
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Surface
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.unit.Dp
+import dev.bilby.ui.components.VideoCover
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -215,7 +219,7 @@ class ProfileViewModel(
                     it.copy(
                         history = it.history.copy(
                             loading = false,
-                            items = result.value.items.take(PreviewCount),
+                            items = result.value.items.take(ShelfMaxCount),
                         ),
                     )
                 }
@@ -232,7 +236,7 @@ class ProfileViewModel(
         viewModelScope.launch {
             when (val result = toViewRepository.loadList()) {
                 is BiliResult.Ok -> _state.update {
-                    it.copy(toView = it.toView.copy(loading = false, items = result.value.items.take(PreviewCount)))
+                    it.copy(toView = it.toView.copy(loading = false, items = result.value.items.take(ShelfMaxCount)))
                 }
 
                 else -> _state.update {
@@ -266,8 +270,13 @@ class ProfileViewModel(
  *
  * 取 3 不取 5:两节预览加上收藏夹要一起放进一屏,5 条时光历史记录就吃掉整屏,
  * 底下两节要滚很久才见得到,那就不再是概览了。缓存那一节同一个数,它在本地排序截取。
+ *
+ * 宽屏每节是一排卡片,条数是这一排放得下几张(见 [Shelf]),仍是一行、不翻页。
  */
 private const val PreviewCount = 3
+
+/** 历史记录与稍后再看留几条,够宽屏最宽的一排;窄屏从里面取前 [PreviewCount] 条。 */
+private const val ShelfMaxCount = 16
 
 /**
  * 「我的」:账号卡 + 历史记录、稍后再看、收藏夹、缓存四节概览。每一节的标题就是进完整页的
@@ -317,14 +326,20 @@ fun ProfileScreen(
     }
     // **没有顶栏。** 名字、设置、消息都收进最上面那张账号卡([AccountCard]):顶栏里只剩一个
     // 名字和一个齿轮时,名字、等级、签名、消息入口分在顶栏、卡片、分割线下三处,读起来是散的。
+    //
+    // **宽屏每节是一排卡片(货架),不再分左右两栏。** 两栏试过:四节的长短差得多(收藏夹常常
+    // 只有一个),左栏三条行、右栏一张卡,右边和底下都空着;窗口再宽,每节也还是那三条。
+    // 一节一排,宽度直接换成条数。
+    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     Column(
         modifier = modifier
             .fillMaxSize()
             .padding(contentPadding)
             .verticalScroll(scrollState),
     ) {
-            // 宽屏限宽:卡片横跨整屏时,名字在最左、两个图标在最右,中间是一大片空。
-            AdaptiveContent(maxWidth = Breakpoints.ReadableWidth) {
+            // 窄屏限宽:卡片横跨整屏时,名字在最左、两个图标在最右,中间是一大片空。宽屏把三连
+            // 挪进名字那一行,卡片和下面的货架同宽。
+            if (wide) {
                 AccountCard(
                     state = state,
                     onOpenSelf = onOpenSelf,
@@ -333,34 +348,26 @@ fun ProfileScreen(
                     onOpenCoinLog = onOpenCoinLog,
                     onSettingsClick = onSettingsClick,
                     onRetry = onRetryAccount,
+                    wide = true,
                 )
+            } else {
+                AdaptiveContent(maxWidth = Breakpoints.ReadableWidth) {
+                    AccountCard(
+                        state = state,
+                        onOpenSelf = onOpenSelf,
+                        onOpenMessages = onOpenMessages,
+                        onOpenFollowings = onOpenFollowings,
+                        onOpenCoinLog = onOpenCoinLog,
+                        onSettingsClick = onSettingsClick,
+                        onRetry = onRetryAccount,
+                    )
+                }
             }
 
-            if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
-                // Expanded 之后把三个低密度预览区分成两个可扫读的 pane：历史和稍后再看是
-                // 同一类视频清单，收藏夹是另一类用户整理内容。Medium 仍保持单列，避免在
-                // 信息密度已经很高的概览页过早拆栏。
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Loose),
-                    verticalAlignment = Alignment.Top,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        HistorySection(state.history, onVideoClick, onOpenHistory, onRetryHistory)
-                        ToViewSection(state.toView, onToViewItemClick, onOpenToView, onRetryToView)
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        // 缓存跟着收藏走:两者都是"我自己存下来的东西",而上面两块是"我看过/打算看的"。
-                        FavFoldersSection(state.favFolders, onOpenFavFolder, onOpenFavFolders, onRetryFavFolders)
-                        OfflineSection(state.offline, state.offlineUsedBytes, onOfflineItemClick, onOpenOffline)
-                    }
-                }
-            } else {
-                HistorySection(state.history, onVideoClick, onOpenHistory, onRetryHistory)
-                ToViewSection(state.toView, onToViewItemClick, onOpenToView, onRetryToView)
-                FavFoldersSection(state.favFolders, onOpenFavFolder, onOpenFavFolders, onRetryFavFolders)
-                OfflineSection(state.offline, state.offlineUsedBytes, onOfflineItemClick, onOpenOffline)
-            }
+            HistorySection(state.history, wide, onVideoClick, onOpenHistory, onRetryHistory)
+            ToViewSection(state.toView, wide, onToViewItemClick, onOpenToView, onRetryToView)
+            FavFoldersSection(state.favFolders, wide, onOpenFavFolder, onOpenFavFolders, onRetryFavFolders)
+            OfflineSection(state.offline, state.offlineUsedBytes, wide, onOfflineItemClick, onOpenOffline)
 
             Spacer(Modifier.height(Spacing.Comfortable))
     }
@@ -373,9 +380,8 @@ fun ProfileScreen(
  * - **一张卡装下"我"的全部**,取代原先的顶栏(名字、齿轮)+ 头像行 + 分割线 + 分割线下的消息
  *   入口。同一个人的几样东西分在四处,中间还隔一道线,读不出是一组。底色取 surfaceContainer,
  *   卡与下面各节的边界由底色和圆角承担,不再要那道线。
- * - **名字和等级一行**:等级是名字的附注,单独占一行时它读起来像一条标题。
- * - **设置在右上角,和名字一行**。放在签名旁边会把签名挤窄,名字那一行本来就有空。
- *   签名因此能伸到和下面三连同一条右边界。
+ * - **头像、名字、等级、签名同空间页页头**:字号、间距、等级单独一行都照那边。
+ * - **设置在这一行右端,垂直居中**,位置同空间页的关注按钮。
  * - **关注、硬币、私信三格相连**,形状沿用视频动作栏的分段。私信不带未读计数、不带红点
  *   (DESIGN 1.3)。每一格和设置都是独立的点击目标,不触发整卡的"进空间"。
  * - **签名为空时那一行不画**,不给"这个人很懒"一类的占位:签名本来就可能没填。
@@ -392,15 +398,24 @@ private fun AccountCard(
     onOpenCoinLog: () -> Unit,
     onSettingsClick: () -> Unit,
     onRetry: () -> Unit,
+    /**
+     * 宽屏:三连挪到名字那一行的右端,设置之前。卡片和下面的货架同宽,三连留在底下单占一行
+     * 的话会横跨一千多 dp,每一格都成了一长条。
+     */
+    wide: Boolean = false,
 ) {
     val account = state.account
+    // 宽屏不画底色:卡片和货架同宽时,一块底色横跨整个窗口,读起来是一条横幅,比下面的内容还重。
+    // 去掉底色后它是页头那一行,三连自己的底色已经够把它们圈成一组。内外边距各 8,点按的涟漪
+    // 仍有一圈余量,头像左沿落在 16 的页边线上,和货架第一张卡对齐。
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = if (wide) Color.Transparent else MaterialTheme.colorScheme.surfaceContainer,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         shape = MaterialTheme.shapes.extraLarge,
         modifier = Modifier
             .fillMaxWidth()
             // 上边距和左右一样是 16:没有顶栏之后卡片就是页面的第一样东西,贴着状态栏像被裁了一截。
-            .padding(Spacing.Comfortable),
+            .padding(if (wide) Spacing.Tight else Spacing.Comfortable),
     ) {
         Column(
             verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
@@ -416,9 +431,13 @@ private fun AccountCard(
                 )
                 // 左边 16:头像的左沿和下面预览区封面的左沿对齐(同是 16 + 16,见 PreviewRow)。
                 // 右边只留 4:两个图标按钮自带 48dp 触控格,图标本身离卡边已经有 16。
-                .padding(start = Spacing.Comfortable, top = Spacing.Comfortable, bottom = Spacing.Comfortable, end = Spacing.Hair),
+                .padding(
+                    start = if (wide) Spacing.Tight else Spacing.Comfortable,
+                    top = if (wide) Spacing.Tight else Spacing.Comfortable,
+                    bottom = if (wide) Spacing.Tight else Spacing.Comfortable,
+                    end = Spacing.Hair,
+                ),
         ) {
-        // 设置在右上角,和名字同一行;签名因此能一直延伸到右边的页边线,和左边一样宽。
         val settingsButton: @Composable () -> Unit = {
             IconButton(onClick = onSettingsClick) {
                 Icon(
@@ -428,53 +447,53 @@ private fun AccountCard(
                 )
             }
         }
+        // 头像、名字、等级、签名的尺寸与排法同空间页页头(SpaceScreen 的 ProfileHeader):自己的
+        // 这一块和点进去的空间页是同一个人的同一张名片,换一页就换一套字号读起来像两个东西。
+        // 空间页右端是关注按钮,这里是设置,同样垂直居中。
         Row(
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
             modifier = Modifier.heightIn(min = AccountAvatarSize),
         ) {
             if (account != null) {
                 Avatar(url = account.faceUrl, size = AccountAvatarSize)
-                Column(modifier = Modifier.weight(1f)) {
-                    // 名字、等级、一个 ›:› 是"整张卡点得进去"的唯一视觉提示,跟在名字后面而不是
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                ) {
+                    // 名字后面一个 ›:它是"整张卡点得进去"的唯一视觉提示,跟在名字后面而不是
                     // 卡片右端 —— 右端是设置,它去别处,摆在它旁边会读成第二个按钮。
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                text = account.name,
-                                style = MaterialTheme.typography.titleLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false),
-                            )
-                            LevelBadge(
-                                level = account.level,
-                                senior = account.isSeniorMember,
-                                height = Dimens.LevelBadgeHeight,
-                            )
-                            Icon(
-                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(Dimens.IconInline),
-                            )
-                        }
-                        settingsButton()
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                    ) {
+                        Text(
+                            text = account.name,
+                            style = MaterialTheme.typography.titleLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        Icon(
+                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(Dimens.IconInline),
+                        )
                     }
+                    // 等级单独一行,同空间页;那里跟着粉丝数,这里不放(见 [AccountActions])。
+                    LevelBadge(
+                        level = account.level,
+                        senior = account.isSeniorMember,
+                        height = Dimens.LevelBadgeHeight,
+                    )
                     if (account.sign.isNotBlank()) {
-                        // 右边补 12:卡片右内边距只有 4(留给设置的触控格),补齐之后签名的右沿和
-                        // 设置图标的右沿都在离卡边 16 的那条线上,和左边对称。
                         Text(
                             text = account.sign,
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(end = Spacing.Cozy),
                         )
                     }
                 }
@@ -495,7 +514,7 @@ private fun AccountCard(
                     } else {
                         // 头像、名字、签名各一块,位置和尺寸同真实内容:账号到了只是颜色在变。
                         SkeletonPulse {
-                            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy)) {
                                 Box(Modifier.size(AccountAvatarSize).skeleton(CircleShape))
                                 Column(
                                     modifier = Modifier.weight(1f).padding(top = Spacing.Tight),
@@ -508,17 +527,28 @@ private fun AccountCard(
                         }
                     }
                 }
-                settingsButton()
             }
+            if (wide) {
+                AccountActions(
+                    account = account,
+                    onOpenFollowings = onOpenFollowings,
+                    onOpenCoinLog = onOpenCoinLog,
+                    onOpenMessages = onOpenMessages,
+                    modifier = Modifier.width(WideAccountActionsWidth),
+                )
+            }
+            settingsButton()
         }
         // 关注、硬币、消息三连,横跨整张卡。右边补 12,理由同签名那一行。
-        AccountActions(
-            account = account,
-            onOpenFollowings = onOpenFollowings,
-            onOpenCoinLog = onOpenCoinLog,
-            onOpenMessages = onOpenMessages,
-            modifier = Modifier.padding(end = Spacing.Cozy),
-        )
+        if (!wide) {
+            AccountActions(
+                account = account,
+                onOpenFollowings = onOpenFollowings,
+                onOpenCoinLog = onOpenCoinLog,
+                onOpenMessages = onOpenMessages,
+                modifier = Modifier.padding(end = Spacing.Cozy),
+            )
+        }
         }
     }
 }
@@ -677,11 +707,14 @@ private fun formatSegmentValue(value: Double): String = when {
     else -> "%.1f".format(value)
 }
 
-/** 账号卡的头像。72 试过,整张卡显得太满;64 仍比列表里的头像大一档。 */
-private val AccountAvatarSize = 64.dp
+/** 账号卡的头像,同空间页页头:同一个人的头像在两页里一样大。64 比全应用最大的一档还大,显得突兀。 */
+private val AccountAvatarSize = Dimens.AvatarHeader
 
-/** 消息与设置两个图标。比默认的 24 大一号,和 72dp 的头像、放大了的名字相称;触控格仍是 48。 */
+/** 消息与设置两个图标。比默认的 24 大一号,和页头的头像、放大了的名字相称;触控格仍是 48。 */
 private val AccountActionIconSize = 28.dp
+
+/** 宽屏账号卡里三连的宽度,约窄屏上那一排的宽度:每一格的字形、数、名字排得开,不多出空白。 */
+private val WideAccountActionsWidth = 420.dp
 
 /** 名字那一行的骨架高度,对应 titleLarge 的字形高。 */
 private val AccountNameSkeletonHeight = 18.dp
@@ -690,6 +723,7 @@ private val AccountNameSkeletonHeight = 18.dp
 @Composable
 private fun HistorySection(
     state: ProfilePreviewState<HistoryItem>,
+    wide: Boolean,
     onVideoClick: (String) -> Unit,
     onOpen: () -> Unit,
     onRetry: () -> Unit,
@@ -700,6 +734,10 @@ private fun HistorySection(
         emptyText = stringResource(Res.string.history_empty),
         onOpen = onOpen,
         onRetry = onRetry,
+        wide = wide,
+        shelfCard = { item, modifier ->
+            ShelfVideoCard(item = item.toRowUi(), onClick = { onVideoClick(item.bvid) }, modifier = modifier)
+        },
     ) { item, index, count ->
         PreviewRow(item = item.toRowUi(), index = index, count = count, onClick = { onVideoClick(item.bvid) })
     }
@@ -709,6 +747,7 @@ private fun HistorySection(
 @Composable
 private fun ToViewSection(
     state: ProfilePreviewState<ToViewItem>,
+    wide: Boolean,
     onVideoClick: (String) -> Unit,
     onOpen: () -> Unit,
     onRetry: () -> Unit,
@@ -720,6 +759,15 @@ private fun ToViewSection(
         onOpen = onOpen,
         onRetry = onRetry,
         hideWhenEmpty = true,
+        wide = wide,
+        shelfCard = { item, modifier ->
+            ShelfVideoCard(
+                item = item.toRowUi(),
+                enabled = item.playable,
+                onClick = { if (item.playable) onVideoClick(item.bvid) },
+                modifier = modifier,
+            )
+        },
     ) { item, index, count ->
         // 剧集与课程在这里同样打不开,判据同稍后再看页。
         PreviewRow(
@@ -808,12 +856,14 @@ private val PreviewCoverCorner = 8.dp
 private fun OfflineSection(
     items: List<OfflineItem>,
     usedBytes: Long,
+    wide: Boolean,
     onItemClick: (OfflineItem) -> Unit,
     onOpen: () -> Unit,
 ) {
     if (items.isEmpty()) return
     // 最近加进来的在前。在途的也算:刚点了缓存的人回到这一页,要找的正是那几条。
-    val preview = items.sortedByDescending { it.createdAtMillis }.take(PreviewCount)
+    val recent = items.sortedByDescending { it.createdAtMillis }
+    val preview = recent.take(PreviewCount)
     Column(modifier = Modifier.padding(bottom = Spacing.Comfortable)) {
         SectionHeader(
             title = stringResource(Res.string.offline_title),
@@ -826,6 +876,12 @@ private fun OfflineSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
             )
+        }
+        if (wide) {
+            Shelf(recent) { item, modifier ->
+                ShelfVideoCard(item = item.toRowUi(), onClick = { onItemClick(item) }, modifier = modifier)
+            }
+            return@Column
         }
         Column(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
             preview.forEachIndexed { index, item ->
@@ -858,6 +914,9 @@ private fun <T> PreviewSection(
      * 只是还不知道里面有什么。
      */
     hideWhenEmpty: Boolean = false,
+    /** 宽屏:排成一排 [shelfCard],不是一列 [itemRow]。 */
+    wide: Boolean,
+    shelfCard: @Composable (item: T, modifier: Modifier) -> Unit,
     /** 一行。给出下标与条数,分段列表项按它们取首尾圆角。 */
     itemRow: @Composable (item: T, index: Int, count: Int) -> Unit,
 ) {
@@ -871,9 +930,129 @@ private fun <T> PreviewSection(
             onTitleClick = onOpen.takeIf { state.items.isNotEmpty() },
             modifier = Modifier.padding(horizontal = Spacing.Comfortable),
         )
-        SectionBody(state, onRetry, emptyText, skeleton = { PreviewRowsSkeleton() }) { items ->
+        SectionBody(
+            state,
+            onRetry,
+            emptyText,
+            skeleton = { if (wide) ShelfSkeleton() else PreviewRowsSkeleton() },
+        ) { items ->
+            if (wide) {
+                Shelf(items, shelfCard)
+                return@SectionBody
+            }
+            val preview = items.take(PreviewCount)
             Column(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
-                items.forEachIndexed { index, item -> itemRow(item, index, items.size) }
+                preview.forEachIndexed { index, item -> itemRow(item, index, preview.size) }
+            }
+        }
+    }
+}
+
+/**
+ * 宽屏的一节:一排等宽的卡片,放得下几张就显示几条。**不横滑、不折行**:这一页是概览,
+ * 要看全的点标题进完整页;一排能滑的话,它就成了概览页里另一条看不到头的列表。
+ *
+ * 条数不够一排时卡片不拉宽,右边空着:同一页几排的卡片一样大,上下对得齐。
+ */
+@Composable
+private fun <T> Shelf(items: List<T>, card: @Composable (item: T, modifier: Modifier) -> Unit) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable)) {
+        val columns = shelfColumns(maxWidth)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(ShelfGap),
+            modifier = Modifier.height(IntrinsicSize.Max),
+        ) {
+            val shown = items.take(columns)
+            shown.forEach { card(it, Modifier.weight(1f).fillMaxHeight()) }
+            repeat(columns - shown.size) { Spacer(Modifier.weight(1f)) }
+        }
+    }
+}
+
+private fun shelfColumns(width: Dp): Int =
+    ((width + ShelfGap) / (ShelfCardMinWidth + ShelfGap)).toInt().coerceAtLeast(1)
+
+/** 货架上一张卡的最窄宽度。封面 16:10 约 115dp 高,两行标题 bodyMedium 一行约 11 个字。 */
+private val ShelfCardMinWidth = 200.dp
+private val ShelfGap = Spacing.Cozy
+
+/**
+ * 货架里的一条视频:封面在上,标题两行、状态一行在下。外形同 [FavFolderCard](底色、圆角、
+ * 8dp 内边距),收藏夹那一排和视频那几排是同一种卡。
+ *
+ * 标题固定占两行:一行就写完的标题也留出第二行,同一排的状态行才在一条线上。
+ */
+@Composable
+private fun ShelfVideoCard(
+    item: VideoRowUi,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    Column(
+        modifier = modifier
+            .clip(MaterialTheme.shapes.large)
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .alpha(if (enabled) 1f else DisabledShelfAlpha)
+            .padding(Spacing.Tight),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+    ) {
+        VideoCover(
+            url = item.coverUrl,
+            durationText = item.durationText,
+            progressFraction = item.progressFraction,
+            typeBadge = item.typeBadge,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = item.title,
+            style = MaterialTheme.typography.bodyMedium,
+            minLines = 2,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        item.meta?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** 同 VideoRow 里失效稿件的透明度。 */
+private const val DisabledShelfAlpha = 0.38f
+
+/** 货架读取中的样子:一排和卡片同形的占位,张数按这一排放得下的算。 */
+@Composable
+private fun ShelfSkeleton() {
+    SkeletonPulse {
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable)) {
+            val columns = shelfColumns(maxWidth)
+            Row(horizontalArrangement = Arrangement.spacedBy(ShelfGap)) {
+                repeat(columns) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(MaterialTheme.shapes.large)
+                            .background(MaterialTheme.colorScheme.surfaceContainer)
+                            .padding(Spacing.Tight),
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(CoverAspectRatio)
+                                .skeleton(RoundedCornerShape(CoverCornerRadius)),
+                        )
+                        SkeletonLine(Modifier.fillMaxWidth(0.85f))
+                        SkeletonLine(Modifier.fillMaxWidth(0.4f))
+                    }
+                }
             }
         }
     }
@@ -986,6 +1165,7 @@ private sealed interface SectionPhase {
 @Composable
 private fun FavFoldersSection(
     state: ProfilePreviewState<FavFolderDetail>,
+    wide: Boolean,
     onOpenFolder: (FavFolderDetail) -> Unit,
     onOpen: () -> Unit,
     onRetry: () -> Unit,
@@ -1006,8 +1186,15 @@ private fun FavFoldersSection(
             state,
             onRetry,
             stringResource(Res.string.profile_favorites_empty),
-            skeleton = { FolderCardsSkeleton() },
+            skeleton = { if (wide) ShelfSkeleton() else FolderCardsSkeleton() },
         ) { folders ->
+            // 宽屏同其余几节一排卡片;只有一个时也是一张卡,和上面几排的卡一样大,不另起横排。
+            if (wide) {
+                Shelf(folders) { folder, modifier ->
+                    FavFolderCard(folder, onClick = { onOpenFolder(folder) }, modifier = modifier)
+                }
+                return@SectionBody
+            }
             // **只有一个(多半就是默认收藏夹)时横着排**:封面在左、名字和条数在右,和上面几节的
             // 预览行同一个样子。一张竖卡孤零零地站在左边,右边空着一大片。
             val only = folders.singleOrNull()
