@@ -205,16 +205,21 @@ import dev.bilby.ui.player.EpisodeList
 import dev.bilby.ui.components.BiliRichText
 
 /**
- * 「找相关」的状态。
+ * 「找相关」的状态:一段以这条视频为上下文的助理会话。第一轮是找相关本身,之后是用户的追问
+ * (「评论区怎么评价」「有没有更入门的」)。
  *
- * [started] 是这一页自己的事(用户点过没有,决定再点一次是重新检索还是只打开面板),助理那一轮长什么样
- * 全在 [turn] 里,和搜索页是同一份 [AgentTurnState]。这里原先把 steps/blocks/error 平铺开
- * 各存一份,那份 steps 还只是 `List<String>` —— 中间结果在播放页就是这样丢掉的。
+ * [started] 是这一页自己的事(用户点过没有,决定再点一次是重新检索还是只打开面板)。每一轮长什么样
+ * 全在 [RelatedTurn.result] 里,和搜索页是同一份 [AgentTurnState]。
  */
 data class RelatedState(
     val started: Boolean = false,
-    val turn: AgentTurnState = AgentTurnState(),
-)
+    val turns: List<RelatedTurn> = emptyList(),
+) {
+    val running: Boolean get() = turns.lastOrNull()?.result?.running == true
+}
+
+/** @param question 用户的追问;第一轮(找相关本身)没有提问,为 null。 */
+data class RelatedTurn(val id: Long, val question: String?, val result: AgentTurnState)
 
 /**
  * 播放队列(DESIGN 2.4b):合集分集或该 UP 的其他投稿,同时也是「听视频」要播的队列本身。

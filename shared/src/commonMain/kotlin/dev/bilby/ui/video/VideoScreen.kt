@@ -156,6 +156,10 @@ fun VideoScreen(
     commentState: CommentUiState,
     sponsorSegments: List<SponsorSegment>,
     onFindRelated: () -> Unit,
+    /** 找相关之后的追问,见 VideoViewModel.askRelated。 */
+    onAskRelated: (String) -> Unit,
+    /** 重跑出错的那一轮找相关或追问。 */
+    onRetryRelated: () -> Unit,
     /** 盘上已有的东西。缓存面板拿它把已有的那几条标出来并禁选。 */
     cached: CachedIndex = CachedIndex(),
     /** 缓存面板按下确认。清晰度与"要不要弹幕"都在面板里选,这里只负责把结果交出去。 */
@@ -711,7 +715,8 @@ fun VideoScreen(
                         relatedOpen = false
                         onRelatedVideoClick(bvid)
                     },
-                    onRetry = onFindRelated,
+                    onAsk = onAskRelated,
+                    onRetry = onRetryRelated,
                 )
             }
         }

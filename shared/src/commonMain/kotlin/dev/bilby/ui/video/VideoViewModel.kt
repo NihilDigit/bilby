@@ -7,6 +7,8 @@ import dev.bilby.agent.AgentTurnState
 import dev.bilby.agent.reduce
 import dev.bilby.agent.AgentIntent
 import dev.bilby.agent.AgentLoop
+import dev.bilby.agent.ChatMessage
+import dev.bilby.agent.TraceItem
 import dev.bilby.api.BiliResult
 import dev.bilby.ui.errorTextRes
 import org.jetbrains.compose.resources.StringResource
@@ -536,6 +538,7 @@ class VideoViewModel(
     private fun resetForNewVideo() {
         _state.value = VideoUiState()
         _related.value = RelatedState()
+        resetRelatedSession()
         _followState.value = FollowState.None
         _staffFollowed.value = null
         _upCard.value = null
@@ -791,18 +794,85 @@ class VideoViewModel(
     /**
      * 只在用户显式点击时才跑(DESIGN 2.3):它占的是官方"相关推荐"的位置,但不能有
      * 相关推荐的行为 —— 自动加载就等于把永不实现清单里的东西装了回来。
+     *
+     * 每次点都开一段新会话:之前的追问一并丢掉。
      */
     fun findRelated() {
         val detail = _state.value.detail ?: return
-        val target = bvid
-        _related.value = RelatedState(started = true, turn = AgentTurnState(running = true))
-        videoScope.launch {
-            agentLoop.run(AgentIntent.Related(target, detail.title, detail.up.name)).collect { event ->
-                // 折叠规则与搜索页是同一份(agent/AgentTurn.kt)。这里曾经另写一份,
-                // 而那份把 ToolFinished 整个吞了 —— 中间结果卡片在播放页从来没出现过。
-                _related.update { it.copy(turn = it.turn.reduce(event)) }
+        resetRelatedSession()
+        _related.value = RelatedState(started = true)
+        startRelatedTurn(question = null, intent = AgentIntent.Related(bvid, detail.title, detail.up.name))
+    }
+
+    /**
+     * 找相关之后的追问。上下文是这一段会话(第一轮里已经写着正在看哪条视频),所以追问里的
+     * 「这个」「她」模型知道指什么。会话内多轮见 DESIGN 3.1,照旧不含任何观看历史。
+     */
+    fun askRelated(question: String) {
+        val text = question.trim()
+        if (text.isEmpty() || !_related.value.started) return
+        startRelatedTurn(question = text, intent = AgentIntent.Query(text))
+    }
+
+    /** 重跑出错的那一轮:最后一轮原地重来,不另起一轮。 */
+    fun retryRelated() {
+        val last = _related.value.turns.lastOrNull() ?: return findRelated()
+        val question = last.question ?: return findRelated()
+        runRelatedTurn(last.id, AgentIntent.Query(question))
+    }
+
+    // 会话内多轮共享的上下文,同搜索页 SearchChatViewModel 的那三样。换视频时清掉。
+    private var relatedHistory: List<ChatMessage> = emptyList()
+    private var relatedSeen: Set<String> = emptySet()
+    private var relatedTraces: Map<String, TraceItem> = emptyMap()
+    private var relatedJob: Job? = null
+    private var nextRelatedTurnId = 1L
+
+    private fun resetRelatedSession() {
+        relatedJob?.cancel()
+        relatedJob = null
+        relatedHistory = emptyList()
+        relatedSeen = emptySet()
+        relatedTraces = emptyMap()
+    }
+
+    private fun startRelatedTurn(question: String?, intent: AgentIntent) {
+        val id = nextRelatedTurnId++
+        _related.update { it.copy(turns = it.turns + RelatedTurn(id, question, AgentTurnState(running = true))) }
+        runRelatedTurn(id, intent)
+    }
+
+    private fun runRelatedTurn(turnId: Long, intent: AgentIntent) {
+        // 上一轮还在跑就先停掉:同一段会话里两个循环并行会交替往 history 上追加。
+        relatedJob?.cancel()
+        updateRelatedTurn(turnId) { AgentTurnState(running = true) }
+        relatedJob = videoScope.launch {
+            try {
+                agentLoop.run(
+                    intent = intent,
+                    history = relatedHistory,
+                    priorBvids = relatedSeen,
+                    priorTraces = relatedTraces,
+                    onTurnComplete = { newMessages, seen, traces ->
+                        relatedHistory = relatedHistory + newMessages
+                        relatedSeen = seen
+                        relatedTraces = traces
+                    },
+                ).collect { event ->
+                    // 折叠规则与搜索页是同一份(agent/AgentTurn.kt)。这里曾经另写一份,
+                    // 而那份把 ToolFinished 整个吞了 —— 中间结果卡片在播放页从来没出现过。
+                    updateRelatedTurn(turnId) { it.reduce(event) }
+                }
+            } finally {
+                // 收在 finally 里,理由同 SearchChatViewModel.runAgent:被取消的那一轮也要停下转圈。
+                updateRelatedTurn(turnId) { it.copy(running = false) }
             }
-            _related.update { it.copy(turn = it.turn.copy(running = false)) }
+        }
+    }
+
+    private inline fun updateRelatedTurn(turnId: Long, crossinline block: (AgentTurnState) -> AgentTurnState) {
+        _related.update { state ->
+            state.copy(turns = state.turns.map { if (it.id == turnId) it.copy(result = block(it.result)) else it })
         }
     }
 

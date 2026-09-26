@@ -2799,6 +2799,8 @@ private fun VideoPane(
         commentState = commentState,
         sponsorSegments = sponsorSegments,
         onFindRelated = vm::findRelated,
+        onAskRelated = vm::askRelated,
+        onRetryRelated = vm::retryRelated,
         cached = cached,
         onCacheSelection = vm::cacheSelection,
         onUpClick = onUpClick,
