@@ -5,18 +5,17 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.grid.GridCells
+import dev.bilby.ui.maxWidthGridCells
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
@@ -37,6 +36,11 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.bilby.ui.components.PaneTitle
+import dev.bilby.ui.components.SidePanelLayout
+import dev.bilby.ui.components.SidePanelToggle
+import dev.bilby.ui.components.panelCard
+import dev.bilby.ui.components.EmptyState
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.compose.material.icons.Icons
@@ -76,13 +80,15 @@ import dev.bilby.ui.dynamic.DynamicAction
 import dev.bilby.ui.dynamic.DynamicCardView
 import dev.bilby.appendDistinctBy
 import dev.bilby.ui.AdaptiveContent
-import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.ui.LocalSystemActions
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.errorTextRes
 import dev.bilby.api.BiliResult
 import dev.bilby.data.FollowGroup
+import dev.bilby.data.SettingsStore
+import dev.bilby.data.SideSheetPrefs
+import dev.bilby.data.SidePanelId
 import dev.bilby.data.FollowRepository
 import dev.bilby.data.FollowState
 import dev.bilby.data.UpBrief
@@ -109,6 +115,9 @@ import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.PagedLayout
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.material3.HorizontalDivider
 import dev.bilby.ui.components.DynamicCardSkeleton
 import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
@@ -147,7 +156,13 @@ data class SpaceUiState(
     val error: StringResource? = null,
     val profile: SpaceProfile? = null,
     val activeTab: SpaceTab = SpaceTab.Archives,
-    /** null = 尚未取合集列表；false = 已确认该 UP 没有合集/系列。 */
+    /**
+     * 这个人有没有这一类内容。null = 第一页还没回来;false = 已确认没有,那一栏(或宽屏的动态
+     * 侧栏)不出现。三栏同一个规矩:不假设每个 UP 都投过稿、发过动态、建过合集。取失败按"有"算,
+     * 理由见 [SpaceViewModel.loadMoreCollections] 失败那一支。
+     */
+    val archivesAvailable: Boolean? = null,
+    val dynamicsAvailable: Boolean? = null,
     val collectionsAvailable: Boolean? = null,
     val refreshing: Boolean = false,
     val archives: SpaceArchiveTabState = SpaceArchiveTabState(),
@@ -157,6 +172,12 @@ data class SpaceUiState(
     val groups: List<FollowGroup> = emptyList(),
     /** 非空时正在给这个人设置分组。 */
     val picker: GroupPickerState? = null,
+    /**
+     * 宽屏右侧的动态侧栏,见 [SettingsStore.sidePanel]。null 是设置还没读出来:
+     * 这时不画侧栏,读出来之后直接摆到位,不播进场动画 —— 否则关掉过它的人每次进页面都会
+     * 看到它先弹出来再收回去。
+     */
+    val dynamicsSheet: SideSheetPrefs? = null,
 )
 
 data class SpaceArchiveTabState(
@@ -228,6 +249,7 @@ class SpaceViewModel(
     private val relationRepository: RelationRepository,
     private val dynamicRepository: DynamicRepository,
     followRepository: FollowRepository,
+    private val settings: SettingsStore,
 ) : ViewModel() {
 
     /** 分组面板与关注列表页共用同一份实现,覆盖式写回的那些坑都在里面。 */
@@ -343,7 +365,10 @@ class SpaceViewModel(
 
     init {
         loadProfile()
+        // 三栏的第一页一进来就取:哪一栏没有内容,要在栏目画出来之前知道(见 SpaceUiState 的
+        // archivesAvailable)。动态以前等切过去才取,这里提前,只是把那一次请求挪到了进页面时。
         loadMoreArchives()
+        loadMoreDynamics()
         loadMoreCollections()
         // 分组名单和面板归 controller,这一页的 UI 状态只是把它们抄进来。
         viewModelScope.launch {
@@ -352,6 +377,18 @@ class SpaceViewModel(
         viewModelScope.launch {
             groupPicker.picker.collect { picker -> _state.update { it.copy(picker = picker) } }
         }
+        viewModelScope.launch {
+            settings.sidePanel(SidePanelId.SpaceDynamics).collect { prefs -> _state.update { it.copy(dynamicsSheet = prefs) } }
+        }
+    }
+
+    fun setDynamicsSheetOpen(open: Boolean) {
+        viewModelScope.launch { settings.saveSidePanelOpen(SidePanelId.SpaceDynamics, open) }
+    }
+
+    /** 拖动松手时才存,拖动过程中的宽度留在界面里,不每帧写一次盘。 */
+    fun setDynamicsSheetWidth(widthDp: Float) {
+        viewModelScope.launch { settings.saveSidePanelWidth(SidePanelId.SpaceDynamics, widthDp) }
     }
 
     fun retry() {
@@ -363,12 +400,19 @@ class SpaceViewModel(
         }
     }
 
-    fun refresh() {
+    /**
+     * 刷新页头和此刻看得见的几栏。窄屏只看得见 [SpaceUiState.activeTab] 那一栏;宽屏动态与
+     * 投稿(或合集)并排,两栏都要刷,只刷一栏的话另一栏停在旧内容上,看不出刷没刷。
+     */
+    fun refresh(visibleTabs: Set<SpaceTab>) {
         _state.update { it.copy(refreshing = true) }
         loadProfile()
-        val current = _state.value
-        when {
-            current.activeTab == SpaceTab.Archives -> {
+        visibleTabs.forEach(::refreshTab)
+    }
+
+    private fun refreshTab(tab: SpaceTab) {
+        when (tab) {
+            SpaceTab.Archives -> {
                 archivesGeneration++
                 _state.update {
                     it.copy(archives = it.archives.copy(
@@ -378,7 +422,7 @@ class SpaceViewModel(
                 }
                 loadMoreArchives(replace = true)
             }
-            current.activeTab == SpaceTab.Dynamics -> {
+            SpaceTab.Dynamics -> {
                 dynamicsGeneration++
                 _state.update {
                     it.copy(dynamics = it.dynamics.copy(
@@ -388,7 +432,7 @@ class SpaceViewModel(
                 }
                 loadMoreDynamics(replace = true)
             }
-            else -> {
+            SpaceTab.Collections -> {
                 collectionsGeneration++
                 _state.update {
                     it.copy(collections = it.collections.copy(
@@ -493,6 +537,12 @@ class SpaceViewModel(
                         }
                         state.copy(
                             refreshing = false,
+                            // 只认不带搜索词的第一页:搜不到东西不等于没投过稿,那时栏目不能消失。
+                            archivesAvailable = if (requested.page == 1 && requested.keyword.isBlank()) {
+                                result.value.total > 0 || merged.isNotEmpty()
+                            } else {
+                                state.archivesAvailable
+                            },
                             archives = archives.copy(
                                 items = merged,
                                 // 从请求本身推进,不从状态推进:同一页被请求两次(刷新撞上在飞的
@@ -508,6 +558,7 @@ class SpaceViewModel(
 
                     else -> state.copy(
                         refreshing = false,
+                        archivesAvailable = state.archivesAvailable ?: true,
                         archives = archives.copy(
                             loading = false,
                             appending = false,
@@ -549,8 +600,16 @@ class SpaceViewModel(
                         // 只在这里滤,不在 repository 里滤:建播放队列那条路
                         // (QueueSourceRepository.fromUpDynamics)两种视频都要。
                         val fresh = result.value.items.filterNot { it.listedInArchive }
+                        val hasMore = result.value.hasMore && result.value.nextOffset != null
                         state.copy(
                             refreshing = false,
+                            // 第一页滤完是空的、又还有下一页时判不出来(见本函数开头的说明),
+                            // 按"有"算:多一栏点进去是空的,好过少一栏。
+                            dynamicsAvailable = if (requestedOffset == null) {
+                                fresh.isNotEmpty() || hasMore
+                            } else {
+                                state.dynamicsAvailable
+                            },
                             dynamics = dynamics.copy(
                                 items = if (replace) {
                                     fresh.distinctBy { it.key }
@@ -560,13 +619,14 @@ class SpaceViewModel(
                                 nextOffset = result.value.nextOffset,
                                 loading = false,
                                 appending = false,
-                                hasMore = result.value.hasMore && result.value.nextOffset != null,
+                                hasMore = hasMore,
                             ),
                         )
                     }
 
                     else -> state.copy(
                         refreshing = false,
+                        dynamicsAvailable = state.dynamicsAvailable ?: true,
                         dynamics = dynamics.copy(
                             loading = false,
                             appending = false,
@@ -725,16 +785,43 @@ fun SpaceScreen(
     onRetry: () -> Unit,
     /** 分享要给出 `space.bilibili.com/<mid>`,而 mid 不在 [state] 里。 */
     mid: Long,
-    onRefresh: () -> Unit = {},
+    /** 收到的是此刻看得见的几栏,见 [SpaceViewModel.refresh]。 */
+    onRefresh: (Set<SpaceTab>) -> Unit = {},
+    onDynamicsSheetOpenChange: (Boolean) -> Unit = {},
+    /** 拖动松手时的侧栏宽度,单位 dp。 */
+    onDynamicsSheetWidthChange: (Float) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val system = LocalSystemActions.current
 
     // 页头的收起量。**在 Scaffold 外面声明**:页头自己(缩掉高度)、列表那一侧(把滚动喂给它)
-    // 和顶栏(收到底才显示名字)三处都要读。宽屏下页头不收起,那时它的 heightPx 恒为 0,
-    // 连接因此什么都不消费。
+    // 和顶栏(收到底才显示名字)三处都要读。
     val headerScroll = rememberCollapsingHeaderState()
-    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    val windowSize = rememberBilbyWindowSize()
+    val wide = windowSize.isAtLeast(BilbyWindowSize.Expanded)
+
+    // **栏目等三类内容的第一页都回来才画。** 先画三个再抽掉一个的话,栏目宽度会重新分配、
+    // 下面整块内容跟着上跳,而这一切发生在用户已经开始看页面之后。三个请求是并发的,
+    // 等的是其中最慢的那个。
+    val sectionsKnown = state.archivesAvailable != null &&
+        state.dynamicsAvailable != null &&
+        state.collectionsAvailable != null
+    val allTabs = SpaceTab.entries.filter { tab ->
+        when (tab) {
+            SpaceTab.Archives -> state.archivesAvailable == true
+            SpaceTab.Dynamics -> state.dynamicsAvailable == true
+            SpaceTab.Collections -> state.collectionsAvailable == true
+        }
+    }
+    // 宽屏时动态不是标签,是右侧可关的侧栏(见 [DynamicsSideSheet]),主区只剩投稿与合集。
+    // 侧栏最宽 400dp,expanded 下限 840dp 时主区还剩 440dp,排得下一列视频行。
+    // 主区没有别的内容时,动态回到主区当唯一一栏,不留一片空主区配一条侧栏。
+    val sheetAvailable = wide && SpaceTab.Dynamics in allTabs && allTabs.size > 1
+    val mainTabs = if (sheetAvailable) allTabs - SpaceTab.Dynamics else allTabs
+    val sheetOpen = sheetAvailable && state.dynamicsSheet?.open == true
+    // activeTab 若不在主区里(从窄屏拉宽过来时停在动态上),按主区第一栏算,pager 同步时会写回去。
+    val mainTab = state.activeTab.takeIf { it in mainTabs } ?: mainTabs.firstOrNull()
+    val visibleTabs = setOfNotNull(mainTab, SpaceTab.Dynamics.takeIf { sheetOpen })
 
     // **名字归页头,顶栏展开时空着,页头收到底才接过名字。**
     //
@@ -743,8 +830,7 @@ fun SpaceScreen(
     // 还隔着一行。名字回到头像右边之后,顶栏退回 small 一档,那一行只有返回和分享。
     //
     // 收到底才显示,不是一直显示:页头在的时候它就在名字正上方,两处印同一个名字。
-    // 宽屏下页头钉在旁边的次区里、从不收起,顶栏一直空着 —— 名字一直看得见。
-    val headerGone = !wide && headerScroll.collapsedFraction >= 1f
+    val headerGone = headerScroll.collapsedFraction >= 1f
     val barTitle = state.profile?.name?.takeIf { headerGone }.orEmpty()
 
     // 顶栏的搜索态。**筛选生效期间顶栏一直是输入框**,不看这个开关:上一次把搜索放进顶栏时,
@@ -761,7 +847,7 @@ fun SpaceScreen(
                 searching = searching,
                 keyword = state.archives.keyword,
                 refreshing = state.refreshing,
-                onRefresh = onRefresh,
+                onRefresh = { onRefresh(visibleTabs) },
                 onKeywordChanged = onArchiveKeywordChanged,
                 onSearch = onArchiveSearch,
                 onOpenSearch = {
@@ -777,21 +863,20 @@ fun SpaceScreen(
                 },
                 onShare = { system.shareSpace(mid, state.profile?.name.orEmpty()) },
                 onBack = onBack,
+                // 设置没读出来之前不给开关,免得按下去的是一个还不知道当前值的状态。
+                dynamicsSheetOpen = state.dynamicsSheet?.open?.takeIf { sheetAvailable },
+                onDynamicsSheetOpenChange = onDynamicsSheetOpenChange,
+                // 搜的是投稿;没投过稿的人没有东西可搜。
+                canSearch = SpaceTab.Archives in allTabs,
             )
         },
     ) { insets ->
-        // **tab 栏等合集探测回来才画。** 先画三个再抽掉一个的话,栏目宽度会重新分配、
-        // 下面整块内容跟着上跳,而这一切发生在用户已经开始看页面之后。合集探测和投稿
-        // 第一页是并发的,等的是两者里慢的那个,通常不额外多花时间。
-        val collectionsKnown = state.collectionsAvailable != null
-        val tabs = SpaceTab.entries.filter { tab ->
-            tab != SpaceTab.Collections || state.collectionsAvailable == true
-        }
 
         val header: @Composable (Modifier) -> Unit = { paneModifier ->
             state.profile?.let {
                 SpaceHeader(
                     it,
+                    signBesideAvatar = wide,
                     onToggleFollow = onToggleFollow,
                     onSetBlocked = onSetBlocked,
                     onOpenGroupPicker = onOpenGroupPicker,
@@ -801,7 +886,35 @@ fun SpaceScreen(
             }
         }
 
-        val tabsAndContent: @Composable ColumnScope.() -> Unit = {
+        // 投稿与合集在宽屏上是网格,规则同订阅页;动态是正文,仍是一列(见 [DynamicRow])。
+        val listColumns = if (wide) maxWidthGridCells(Breakpoints.VideoRowMaxWidth) else GridCells.Fixed(1)
+
+        // 首屏的三种状态,单栏与双栏共用。
+        val profileGate: @Composable (@Composable () -> Unit) -> Unit = { content ->
+            when {
+                state.loading && state.profile == null -> FullScreenLoading()
+                state.error != null && state.profile == null ->
+                    FullScreenError(stringResource(state.error), onRetry)
+                // tab 栏还没画出来,内容先不画:否则内容会先顶在页头下面,等 tab 栏出现
+                // 再被推下去一截。
+                !sectionsKnown -> FullScreenLoading()
+                else -> content()
+            }
+        }
+
+        val dynamicsList: @Composable (Modifier) -> Unit = { listModifier ->
+            DynamicListTab(
+                state = state.dynamics,
+                onLoadMore = onLoadMoreDynamics,
+                onAction = onDynamicAction,
+                onLikeDynamic = onLikeDynamic,
+                flat = wide,
+                modifier = listModifier,
+            )
+        }
+
+        // 带标签的那一块。单栏时是全部三栏;双栏时动态单独成列,这里只剩投稿与合集。
+        val tabbedPane: @Composable ColumnScope.(List<SpaceTab>) -> Unit = { tabs ->
             // 三个标签用 pager 承载,和播放页的简介/评论一样可以左右划。tabs 页把"内容区能横滑
             // 翻页"写成 tabs 的常规用法,而这一页原先只有点标签一条路 —— 三栏讲的是同一个人的
             // 三种内容,横向切换本来就是它们之间最短的距离。
@@ -831,13 +944,8 @@ fun SpaceScreen(
                 if (target >= 0 && target != pagerState.currentPage) pagerState.animateScrollToPage(target)
             }
 
-            if (collectionsKnown) {
-                // 不要默认那条通栏分割线:指示条已经标出了这一行的下沿,再划一道是整页最硬的
-                // 一条线,横在页头和列表之间。
-                PrimaryTabRow(
-                    selectedTabIndex = pagerState.currentPage.coerceIn(tabs.indices),
-                    divider = {},
-                ) {
+            if (sectionsKnown && tabs.isNotEmpty()) {
+                val tabItems: @Composable () -> Unit = {
                     tabs.forEachIndexed { index, tab ->
                         Tab(
                             selected = pagerState.currentPage == index,
@@ -846,26 +954,60 @@ fun SpaceScreen(
                         )
                     }
                 }
+                val selectedIndex = pagerState.currentPage.coerceIn(tabs.indices)
+                // 不要默认那条通栏分割线:指示条已经标出了这一行的下沿,再划一道是整页最硬的
+                // 一条线,横在页头和列表之间。
+                //
+                // 宽屏靠左、按字宽排:等分的话三个两字标签摊在上千 dp 上,彼此隔着三四百 dp,
+                // 读起来不像同一组。scrollable 款正是按内容定宽的那一种,三个标签不会真的滚。
+                if (wide) {
+                    // **宽屏时标签与听投稿、排序合成一行**:标签靠左只占几个字宽,右边本来空着,
+                    // 表头再单占一行是白白多出一行高度。代价是这两颗按钮不再随列表滚走。
+                    // 只剩一栏时不画成标签 —— 一个孤零零的选中标签读起来像另外几个没加载出来;
+                    // 写成栏名。窄屏同理。
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(end = Spacing.Tight),
+                    ) {
+                        if (tabs.size > 1) {
+                            PrimaryScrollableTabRow(
+                                selectedTabIndex = selectedIndex,
+                                edgePadding = 0.dp,
+                                divider = {},
+                                tabs = tabItems,
+                                modifier = Modifier.weight(1f),
+                            )
+                        } else {
+                            PaneTitle(stringResource(tabs.first().label), Modifier.weight(1f))
+                        }
+                        if (tabs.getOrNull(pagerState.currentPage) == SpaceTab.Archives) {
+                            ArchiveListenButton(state.archives, onListenUp)
+                            ArchiveSortMenu(state.archives, onArchiveOrderChanged)
+                        }
+                    }
+                } else if (tabs.size == 1) {
+                    PaneTitle(stringResource(tabs.first().label))
+                } else {
+                    PrimaryTabRow(
+                        selectedTabIndex = selectedIndex,
+                        divider = {},
+                        tabs = tabItems,
+                    )
+                }
             }
             RefreshBox(
                 refreshing = state.refreshing,
-                onRefresh = onRefresh,
+                onRefresh = { onRefresh(visibleTabs) },
                 modifier = Modifier.weight(1f),
             ) {
-                when {
-                    state.loading && state.profile == null -> FullScreenLoading()
-                    state.error != null && state.profile == null ->
-                        FullScreenError(stringResource(state.error), onRetry)
-                    // tab 栏还没画出来,内容先不画:否则内容会先顶在页头下面,等 tab 栏出现
-                    // 再被推下去一截。
-                    !collectionsKnown -> FullScreenLoading()
-                    // **页头的连接挂在这里,不是挂在外层那个 Column 上。**
-                    //
-                    // 嵌套滚动从内往外传:列表 → 这里 → RefreshBox → 外层。挂在外层时
-                    // 页头排在下拉刷新之后,列表到顶后剩下的下滑量先被刷新吃掉,页头再也拿不到
-                    // —— 表现是收起之后展不开,而且"想把页头拉回来"这个动作变成了刷新。
-                    // 挂在刷新框里面之后顺序对了:先把页头顶回来,它满了才轮到刷新。
-                    else -> HorizontalPager(
+                // **页头的连接挂在这里,不是挂在外层那个 Column 上。**
+                //
+                // 嵌套滚动从内往外传:列表 → 这里 → RefreshBox → 外层。挂在外层时
+                // 页头排在下拉刷新之后,列表到顶后剩下的下滑量先被刷新吃掉,页头再也拿不到
+                // —— 表现是收起之后展不开,而且"想把页头拉回来"这个动作变成了刷新。
+                // 挂在刷新框里面之后顺序对了:先把页头顶回来,它满了才轮到刷新。
+                profileGate {
+                    HorizontalPager(
                         state = pagerState,
                         modifier = Modifier.fillMaxSize().nestedScroll(headerScroll.connection).touchOnlyPaging(),
                     ) { page ->
@@ -876,19 +1018,26 @@ fun SpaceScreen(
                                 onListenUp = onListenUp,
                                 onLoadMore = onLoadMoreArchives,
                                 onVideoClick = onVideoClick,
+                                columns = listColumns,
+                                showControls = !wide,
                             )
 
-                            SpaceTab.Dynamics -> DynamicListTab(
-                                state = state.dynamics,
-                                onLoadMore = onLoadMoreDynamics,
-                                onAction = onDynamicAction,
-                                onLikeDynamic = onLikeDynamic,
+                            // 宽屏上动态在主区时(没有投稿也没有合集),同样整块成卡,四周留出页边。
+                            SpaceTab.Dynamics -> dynamicsList(
+                                if (wide) {
+                                    Modifier
+                                        .padding(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Comfortable)
+                                        .panelCard()
+                                } else {
+                                    Modifier
+                                },
                             )
 
                             SpaceTab.Collections -> CollectionsTab(
                                 state.collections,
                                 onLoadMoreCollections,
                                 onCollectionClick,
+                                columns = listColumns,
                             )
 
                             null -> Unit
@@ -898,56 +1047,63 @@ fun SpaceScreen(
             }
         }
 
+        /*
+         * **头部跟着滚动退出屏幕,tab 栏留在原位。**
+         *
+         * 依据是 transitions 页 enter/exit 那一节:"Components can enter and exit from
+         * beyond the screen bounds based on a scroll gesture. This allows for more
+         * screen space to browse."(它给的例子正是顶栏和导航栏随滚动进出)。
+         *
+         * tab 栏不跟着走:tabs 页说 "Tabs control the UI region displayed below them",
+         * 滚起来之后还要知道自己在哪一栏、还要能换栏,它是这块区域的控制器而不是内容。
+         *
+         * 收起靠**缩掉它占的高度**而不是盖住它:后者会让 tab 栏悬在一段空白上,
+         * 而且列表顶部会被一块看不见的东西挡住。
+         *
+         * 宽屏也是这个排法,页头不限宽。页头放进侧栏试过两轮:按三分之一分时整栏只有顶上
+         * 一张名片,定宽 320dp 之后仍是一整条竖着的空白;而横在顶上的页头滚一下就收走。
+         */
+        val mainColumn: @Composable ColumnScope.() -> Unit = {
+            header(Modifier.collapsingHeader(headerScroll))
+            // 三类内容都确认没有:页头下面一句话,不画任何栏目。取失败不会走到这里(失败按
+            // "有"算),所以这句话只在服务端明确说没有时出现。
+            if (sectionsKnown && allTabs.isEmpty() && state.profile != null) {
+                EmptyState(stringResource(Res.string.space_empty_all), Modifier.weight(1f))
+            } else {
+                tabbedPane(mainTabs)
+            }
+        }
         if (wide) {
             /*
-             * **宽屏把头部挪到旁边,而不是钉在上面。**
+             * **投稿与合集是主区,动态是右侧可关的侧栏。** 并排的两栏试过一轮:一边卡片、一边
+             * 网格,看上去是两页拼在一起。侧栏把主次说清楚 —— 这一页主要看他做了什么,他说了
+             * 什么是旁边的补充,不想看可以关掉。
              *
-             * 这一页有两种内容:"这个人是谁"和"他发了什么"。canonical-examples 页对
-             * supporting pane 的定义正好是这个分工 —— 主区放主内容并占约三分之二,次区放
-             * 支持性内容。头部横钉在顶上时它两头都不讨好:横向被拉成一条稀疏的长行,
-             * 纵向又从列表里永久扣掉一块高度,而列表才是这一页要看的东西。
-             *
-             * 次区自己能滚:签名可以很长,而它不该把关注按钮顶出屏幕。
+             * 侧栏从顶栏下面通到底,不在页头下面:页头说的是主区这个人是谁,收起时只有主区
+             * 跟着动;侧栏自己滚,和主区互不牵连(side-sheets.md Behavior 一节)。主区不限宽,
+             * 投稿是网格,行长由格宽管。
              */
-            Row(
+            SidePanelLayout(
+                prefs = state.dynamicsSheet,
+                // 三栏的探测回来之前不组合侧栏:没发过动态的人不会看到它弹一下又收走。
+                ready = sectionsKnown,
+                available = sheetAvailable,
+                title = stringResource(SpaceTab.Dynamics.label),
+                closeDescription = stringResource(Res.string.space_dynamics_sheet_close),
+                onOpenChange = onDynamicsSheetOpenChange,
+                onWidthChange = onDynamicsSheetWidthChange,
+                defaultWidth = DynamicsPanelDefaultWidth,
+                minWidth = DynamicsPanelMinWidth,
                 modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets),
-            ) {
-                header(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .verticalScroll(rememberScrollState())
-                        .padding(bottom = navigationBarsBottom()),
-                )
-                Column(
-                    modifier = Modifier
-                        .weight(2f)
-                        .fillMaxHeight(),
-                    content = tabsAndContent,
-                )
-            }
+                main = { Column(modifier = Modifier.fillMaxSize(), content = mainColumn) },
+                panel = { profileGate { dynamicsList(Modifier.fillMaxSize()) } },
+            )
         } else {
             AdaptiveContent(
                 modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets),
                 maxWidth = Breakpoints.ReadableWidth,
             ) {
-                /*
-                 * **头部跟着滚动退出屏幕,tab 栏留在原位。**
-                 *
-                 * 依据是 transitions 页 enter/exit 那一节:"Components can enter and exit from
-                 * beyond the screen bounds based on a scroll gesture. This allows for more
-                 * screen space to browse."(它给的例子正是顶栏和导航栏随滚动进出)。
-                 *
-                 * tab 栏不跟着走:tabs 页说 "Tabs control the UI region displayed below them",
-                 * 滚起来之后还要知道自己在哪一栏、还要能换栏,它是这块区域的控制器而不是内容。
-                 *
-                 * 收起靠**缩掉它占的高度**而不是盖住它:后者会让 tab 栏悬在一段空白上,
-                 * 而且列表顶部会被一块看不见的东西挡住。
-                 */
-                Column(modifier = Modifier.fillMaxSize()) {
-                    header(Modifier.collapsingHeader(headerScroll))
-                    tabsAndContent()
-                }
+                Column(modifier = Modifier.fillMaxSize(), content = mainColumn)
             }
         }
     }
@@ -988,6 +1144,11 @@ private fun SpaceTopBar(
     onCloseSearch: () -> Unit,
     onShare: () -> Unit,
     onBack: () -> Unit,
+    /** 动态侧栏的开关状态;null 时不给开关(窄屏,或设置还没读出来)。 */
+    dynamicsSheetOpen: Boolean?,
+    onDynamicsSheetOpenChange: (Boolean) -> Unit,
+    /** 有没有投稿可搜。确认没有投稿时不给搜索图标。 */
+    canSearch: Boolean,
 ) {
     val focusRequester = remember { FocusRequester() }
     TopAppBar(
@@ -1027,11 +1188,13 @@ private fun SpaceTopBar(
                     )
                 }
             } else {
-                IconButton(onClick = onOpenSearch) {
-                    Icon(
-                        Icons.Filled.Search,
-                        contentDescription = stringResource(Res.string.space_search_hint),
-                    )
+                if (canSearch) {
+                    IconButton(onClick = onOpenSearch) {
+                        Icon(
+                            Icons.Filled.Search,
+                            contentDescription = stringResource(Res.string.space_search_hint),
+                        )
+                    }
                 }
                 IconButton(onClick = onShare) {
                     Icon(
@@ -1039,6 +1202,15 @@ private fun SpaceTopBar(
                         contentDescription = stringResource(Res.string.action_share),
                     )
                 }
+            }
+            // 侧栏关掉之后回来的唯一入口。放在最右,正对着侧栏所在的那一侧;搜索态也留着,
+            // 它和搜什么无关。
+            if (dynamicsSheetOpen != null) {
+                SidePanelToggle(
+                    open = dynamicsSheetOpen,
+                    onOpenChange = onDynamicsSheetOpenChange,
+                    description = stringResource(Res.string.space_dynamics_sheet_toggle),
+                )
             }
         },
     )
@@ -1060,12 +1232,34 @@ private fun SpaceTopBar(
 @Composable
 private fun SpaceHeader(
     profile: SpaceProfile,
+    /**
+     * 签名放进名字那一列(宽屏)。宽屏上头像右边有的是地方,签名单占一行只会让页头多出一行、
+     * 而且左沿退回到头像下面,和名字不在一条线上。
+     */
+    signBesideAvatar: Boolean,
     onToggleFollow: () -> Unit,
     onSetBlocked: (Boolean) -> Unit,
     onOpenGroupPicker: () -> Unit,
     onLiveClick: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // **没填签名就不画。** 原先兜一句「这个人很懒,什么都没写」—— 那是 B 站网页端的
+    // 占位文案,而它说的是一件我们并不知道的事(没填签名不等于懒),还替这个人下了判断。
+    // 空着的那一行也不是"数据还没到",没有需要说明的东西。「我的」页(`AccountHeader`)
+    // 一直是这个做法,两页现在对上了。
+    //
+    // 签名可能很长又基本没信息量,给两行封顶。
+    val sign: @Composable () -> Unit = {
+        if (profile.sign.isNotBlank()) {
+            Text(
+                text = profile.sign,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -1101,6 +1295,7 @@ private fun SpaceHeader(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                if (signBesideAvatar) sign()
             }
             SpaceFollowControl(
                 followState = profile.followState,
@@ -1110,22 +1305,8 @@ private fun SpaceHeader(
                 onOpenGroupPicker = onOpenGroupPicker,
             )
         }
-        // 签名可能很长又基本没信息量,给两行封顶;放在下面一整行是因为它旁边没有头像时
-        // 能多放十来个字,而挤在头像右边只剩半行。
-        //
-        // **没填签名就整行不画。** 原先兜一句「这个人很懒,什么都没写」—— 那是 B 站网页端的
-        // 占位文案,而它说的是一件我们并不知道的事(没填签名不等于懒),还替这个人下了判断。
-        // 空着的那一行也不是"数据还没到",没有需要说明的东西。「我的」页(`AccountHeader`)
-        // 一直是这个做法,两页现在对上了。
-        if (profile.sign.isNotBlank()) {
-            Text(
-                text = profile.sign,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        // 窄屏放在下面一整行:它旁边没有头像时能多放十来个字,挤在头像右边只剩半行。
+        if (!signBesideAvatar) sign()
 
         // 正在直播时才出现,而且只出现在这里 —— 直播间的唯一入口是"我点了这个人",
         // 不是一个可以浏览的列表(DESIGN 1.1)。
@@ -1326,9 +1507,13 @@ private fun ArchivesTab(
     onListenUp: () -> Unit,
     onLoadMore: () -> Unit,
     onVideoClick: (SpaceVideoItem) -> Unit,
+    columns: GridCells,
+    /** 听投稿与排序是否画在列表表头。双栏时它们在栏顶,这里不再画。 */
+    showControls: Boolean,
     modifier: Modifier = Modifier,
 ) {
     VideoListTab(
+        columns = columns,
         items = state.items,
         appending = state.appending,
         hasMore = state.hasMore,
@@ -1346,43 +1531,62 @@ private fun ArchivesTab(
         onLoadMore = onLoadMore,
         onVideoClick = onVideoClick,
         modifier = modifier,
-        header = {
-            // 排序原先独占一行、只有靠右的两个词,左边整片空着;听投稿补上了那一半。
-            // 排序只有两档、又不常换,收成一个下拉,当前是哪一档仍然写在按钮上。
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = Spacing.Tight, end = Spacing.Tight, top = Spacing.Hair),
-            ) {
-                // **按文字基线对齐,不按盒子居中。** 两颗按钮的内边距与图标不一样(左边图标在字前、
-                // 右边在字后,右边还收窄了内边距),各自居中之后两行字的下沿差着一两 dp,并排时
-                // 一眼就看得出来。
-                // text button:这一行是列表的表头,不该比页头的关注按钮还重。列表空着(还没
-                // 加载或搜不到)时按下去没有东西可听,不给按。
-                TextButton(
-                    onClick = onListenUp,
-                    enabled = state.items.isNotEmpty(),
-                    modifier = Modifier.alignByBaseline(),
+        // 双栏时这一行挪到栏顶,与动态栏的栏名同一行高(见 [SpaceScreen] 的双栏分支)。
+        header = if (!showControls) null else {
+            {
+                // 排序原先独占一行、只有靠右的两个词,左边整片空着;听投稿补上了那一半。
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = Spacing.Tight, end = Spacing.Tight, top = Spacing.Hair),
                 ) {
-                    Icon(
-                        Icons.Filled.Headphones,
-                        contentDescription = null,
-                        modifier = Modifier.size(Dimens.IconInline),
-                    )
-                    Text(
-                        stringResource(Res.string.space_listen_up),
-                        modifier = Modifier.padding(start = Spacing.Tight),
-                    )
+                    ArchiveListenButton(state, onListenUp, Modifier.alignByBaseline())
+                    Spacer(modifier = Modifier.weight(1f))
+                    ArchiveSortMenu(state, onOrderChanged, Modifier.alignByBaseline())
                 }
-                Spacer(modifier = Modifier.weight(1f))
-                SortMenu(
-                    options = ArchiveOrders,
-                    selected = state.order,
-                    onSelect = onOrderChanged,
-                    modifier = Modifier.alignByBaseline(),
-                )
             }
         },
+    )
+}
+
+/**
+ * text button:这一行是列表的表头,不该比页头的关注按钮还重。列表空着(还没加载或搜不到)时
+ * 按下去没有东西可听,不给按。
+ *
+ * 与 [ArchiveSortMenu] 并排时**按文字基线对齐,不按盒子居中**:两颗按钮的内边距与图标不一样
+ * (左边图标在字前、右边在字后,右边还收窄了内边距),各自居中之后两行字的下沿差着一两 dp。
+ */
+@Composable
+private fun ArchiveListenButton(state: SpaceArchiveTabState, onListenUp: () -> Unit, modifier: Modifier = Modifier) {
+    TextButton(
+        onClick = onListenUp,
+        enabled = state.items.isNotEmpty(),
+        modifier = modifier,
+    ) {
+        Icon(
+            Icons.Filled.Headphones,
+            contentDescription = null,
+            modifier = Modifier.size(Dimens.IconInline),
+        )
+        Text(
+            stringResource(Res.string.space_listen_up),
+            modifier = Modifier.padding(start = Spacing.Tight),
+        )
+    }
+}
+
+/** 排序只有两档、又不常换,收成一个下拉,当前是哪一档仍然写在按钮上。 */
+@Composable
+private fun ArchiveSortMenu(
+    state: SpaceArchiveTabState,
+    onOrderChanged: (SpaceArchiveOrder) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    SortMenu(
+        options = ArchiveOrders,
+        selected = state.order,
+        onSelect = onOrderChanged,
+        modifier = modifier,
     )
 }
 
@@ -1391,11 +1595,13 @@ private fun CollectionsTab(
     state: SpaceCollectionsTabState,
     onLoadMore: () -> Unit,
     onCollectionClick: (SpaceCollectionItem) -> Unit,
+    columns: GridCells,
     modifier: Modifier = Modifier,
 ) {
     PagedColumn(
         items = state.items,
         key = { "${it.isSeason}-${it.id}" },
+        layout = PagedLayout.Grid(columns),
         loading = state.loading,
         appending = state.appending,
         hasMore = state.hasMore,
@@ -1442,12 +1648,24 @@ private fun CollectionRow(item: SpaceCollectionItem, onClick: () -> Unit, modifi
 
 private val CollectionCoverSize = 72.dp
 
+/** 动态侧栏从没拖过时的宽度:standard side sheet 的规格上限(side-sheets.md 的 measurements 表),正好一列动态。 */
+private val DynamicsPanelDefaultWidth = 400.dp
+
+/** 拖窄的下限。再窄三张配图各不到 90dp,正文一行不到二十个字。 */
+private val DynamicsPanelMinWidth = 320.dp
+
 @Composable
 private fun DynamicListTab(
     state: SpaceListTabState,
     onLoadMore: () -> Unit,
     onAction: (DynamicAction) -> Unit,
     onLikeDynamic: (String, Boolean) -> Unit,
+    /**
+     * 宽屏:整片动态区是一张卡(调用方用 [panelCard] 画),条目平铺在里面、用分割线隔开,
+     * 按宽度排成瀑布流。投稿与合集是平铺的行,动态若一条一张卡,同一页里两种东西两种画法;
+     * 整块成卡之后,"这一块是动态"由区域说明,条目本身和投稿一样平。
+     */
+    flat: Boolean,
     modifier: Modifier = Modifier,
 ) {
     PagedColumn(
@@ -1461,10 +1679,40 @@ private fun DynamicListTab(
         emptyText = stringResource(Res.string.space_empty_dynamics),
         onLoadMore = onLoadMore,
         modifier = modifier,
+        // 瀑布流:一条三行的和一条半屏的并排时,按网格排会在矮的那条下面空出一大截。
+        // 列数按宽度来,侧栏默认宽度下是一列,拖宽或占满主区时自然变成两列、三列。
+        layout = if (flat) {
+            PagedLayout.Staggered(StaggeredGridCells.Adaptive(DynamicColumnMinWidth), Spacing.Tight)
+        } else {
+            PagedLayout.SingleColumn
+        },
     ) { dynamic ->
-        DynamicRow(dynamic = dynamic, onAction = onAction, onLikeDynamic = onLikeDynamic)
+        if (flat) {
+            Column {
+                DynamicCardView(
+                    card = dynamic.card,
+                    onAction = onAction,
+                    onLike = { like -> onLikeDynamic(dynamic.card.id, like) },
+                    showAuthor = false,
+                    contained = false,
+                )
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    modifier = Modifier.padding(horizontal = Spacing.Cozy),
+                )
+            }
+        } else {
+            DynamicRow(dynamic = dynamic, onAction = onAction, onLikeDynamic = onLikeDynamic)
+        }
     }
 }
+
+/**
+ * 瀑布流一列的最窄宽度。按下限而不是上限定列数:动态的配图方格要 490dp 才铺得满
+ * (见 DynamicCardView 的 GridImageMaxSide),一列压到三百来 dp,配图和正文都挤。
+ * 侧栏默认 400dp 正好一列,拖过 800 变两列。
+ */
+private val DynamicColumnMinWidth = 400.dp
 
 /**
  * 一条动态。**全部类型走 [DynamicCardView]** —— 那一份是动态渲染的唯一实现,
@@ -1515,12 +1763,9 @@ internal fun VideoListTab(
     onVideoClick: (SpaceVideoItem) -> Unit,
     modifier: Modifier = Modifier,
     header: (@Composable () -> Unit)? = null,
+    /** 宽屏的空间投稿是网格;合集目录页仍是一列。 */
+    columns: GridCells = GridCells.Fixed(1),
 ) {
-    // 类型写出来,不靠 let 往里推:`header` 要变成 `LazyListScope.() -> Unit`,而 lambda 的
-    // 接收者靠期望类型才定得下来。
-    val headerItem: (LazyListScope.() -> Unit)? = header?.let { block ->
-        { item(key = "header") { block() } }
-    }
     PagedColumn(
         items = items,
         key = { it.bvid },
@@ -1531,7 +1776,8 @@ internal fun VideoListTab(
         emptyText = emptyText,
         onLoadMore = onLoadMore,
         modifier = modifier,
-        header = headerItem,
+        layout = PagedLayout.Grid(columns),
+        header = header,
     ) { item ->
         // 整页都是同一个 UP,不重复印 UP 名(upName 留空)。
         VideoRow(

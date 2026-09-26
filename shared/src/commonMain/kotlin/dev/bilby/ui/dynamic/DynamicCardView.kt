@@ -3,7 +3,10 @@ package dev.bilby.ui.dynamic
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.unit.min
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -102,6 +105,8 @@ sealed interface DynamicAction {
  *   顶上不留一行只写时间的空行;「置顶」仍在右上角。
  * @param onLike 为 null 时不画互动栏。**它不是"点了没反应"的兜底**:点赞要乐观更新加失败回滚,
  *   而那份状态在持有这一列动态的 ViewModel 里,拿不到它的调用方画出来的按钮按下去只能骗人。
+ * @param contained 为 false 时不画这一条自己的底色和圆角,由外面那一整块区域当卡片(宽屏空间页
+ *   的动态区)。里面嵌套的块照旧有底色,它们本来就比外层高一档。
  */
 @Composable
 fun DynamicCardView(
@@ -111,15 +116,16 @@ fun DynamicCardView(
     nested: Boolean = false,
     showAuthor: Boolean = true,
     onLike: ((like: Boolean) -> Unit)? = null,
+    contained: Boolean = true,
 ) {
     val block = blockStyle(nested)
     Surface(
         // 一条动态是一张 contained 卡片,**卡片自己带容器,不由调用方套一层**:关注动态页和
         // 空间页各套过一份,底色、圆角、边距三处都对不齐,同一条动态在两页里不是一个样子。
-        color = if (nested) {
-            MaterialTheme.colorScheme.surfaceContainerHigh
-        } else {
-            MaterialTheme.colorScheme.surfaceContainer
+        color = when {
+            nested -> MaterialTheme.colorScheme.surfaceContainerHigh
+            contained -> MaterialTheme.colorScheme.surfaceContainer
+            else -> Color.Transparent
         },
         // 20dp 不是随手挑的:内边距 12 时 20 − 12 = 8,正好落在 shapes.small 上,
         // 里面那些块的圆角因此有据可依(风格指南 §1.4 的 optical roundness)。
@@ -955,51 +961,63 @@ private fun DynamicImageGrid(images: List<ArticleImage>) {
             onDismiss = { viewerIndex = null },
         )
     }
-    // 单张按原图比例整宽铺开,不占九宫格里的一格 —— 一张图配一段话是最常见的一种图文动态,
-    // 按三列排会把它缩到三分之一宽,内容基本看不清。多张才成"一组图",那时才是方格。
-    if (images.size == 1) {
-        val image = images.first()
-        val ratio = when {
-            image.isLongImage || image.width <= 0 || image.height <= 0 -> 16f / 10f
-            else -> image.width.toFloat() / image.height
+    // **配图有尺寸上限,不跟卡片一起变宽**,照网页端空间页的做法。卡片在宽屏上有上千 dp,
+    // 按宽度等分的话三张图各有三百多 dp 见方,一条动态占满一屏;看清细节是看图器的事,
+    // 列表里的图只需认得出是什么。上限都选在手机宽度用不满的位置,窄屏排法基本不变。
+    BoxWithConstraints {
+        // 单张按原图比例铺开,不占九宫格里的一格 —— 一张图配一段话是最常见的一种图文动态,
+        // 按三列排会把它缩到三分之一宽,内容基本看不清。多张才成"一组图",那时才是方格。
+        if (images.size == 1) {
+            val image = images.first()
+            val ratio = when {
+                image.isLongImage || image.width <= 0 || image.height <= 0 -> 16f / 10f
+                else -> image.width.toFloat() / image.height
+            }
+            // 长边不超过上限:横图受宽度约束,竖图受高度约束,换算回宽度统一给出。
+            val width = min(maxWidth, min(SingleImageMaxSide, SingleImageMaxSide * ratio))
+            BiliAsyncImage(
+                url = image.url,
+                contentDescription = null,
+                modifier = Modifier
+                    .width(width)
+                    .clip(RoundedCornerShape(CoverCornerRadius))
+                    .aspectRatio(ratio)
+                    .clickable(role = Role.Button) { viewerIndex = 0 },
+            )
+            return@BoxWithConstraints
         }
-        BiliAsyncImage(
-            url = image.url,
-            contentDescription = null,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(CoverCornerRadius))
-                .aspectRatio(ratio)
-                .clickable(role = Role.Button) { viewerIndex = 0 },
-        )
-        return
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-        // **下标按行号算,不用 `images.indexOf(image)` 反查。** 同一条动态里重复配同一张图时
-        // (九宫格拼图、同一张表情图铺几格)`indexOf` 把每一格都指回第一次出现的那个下标,
-        // 点第三张打开的是第一张。评论区的 `PictureGrid` 是同一处坑。
-        images.chunked(columns).forEachIndexed { rowIndex, row ->
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                row.forEachIndexed { columnIndex, image ->
-                    val index = rowIndex * columns + columnIndex
-                    BiliAsyncImage(
-                        url = image.url,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .weight(1f)
-                            .aspectRatio(1f)
-                            .clip(RoundedCornerShape(CoverCornerRadius))
-                            .clickable(role = Role.Button) { viewerIndex = index },
-                    )
+        val cellSize = min((maxWidth - Spacing.Hair * (columns - 1)) / columns, GridImageMaxSide)
+        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+            // **下标按行号算,不用 `images.indexOf(image)` 反查。** 同一条动态里重复配同一张图时
+            // (九宫格拼图、同一张表情图铺几格)`indexOf` 把每一格都指回第一次出现的那个下标,
+            // 点第三张打开的是第一张。评论区的 `PictureGrid` 是同一处坑。
+            images.chunked(columns).forEachIndexed { rowIndex, row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+                    row.forEachIndexed { columnIndex, image ->
+                        val index = rowIndex * columns + columnIndex
+                        BiliAsyncImage(
+                            url = image.url,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(cellSize)
+                                .clip(RoundedCornerShape(CoverCornerRadius))
+                                .clickable(role = Role.Button) { viewerIndex = index },
+                        )
+                    }
                 }
-                repeat(columns - row.size) { Box(Modifier.weight(1f)) }
             }
         }
     }
 }
+
+/**
+ * 多图方格一格的边长上限。手机上两列时一格约 162dp,取 160 让窄屏几乎不受影响;
+ * 宽屏上三格并排约 490dp,与网页端空间页的九宫格同一个量级。
+ */
+private val GridImageMaxSide = 160.dp
+
+/** 单张配图长边的上限。手机上横图用不满这个宽度;竖图在这里被截住,不再一张占满一屏。 */
+private val SingleImageMaxSide = 360.dp
 
 /**
  * 动态正文的行高。**按这段文字有多长定,不按字号定**(风格指南 §2.7b 的同一条判据):

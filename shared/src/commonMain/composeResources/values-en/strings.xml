@@ -165,10 +165,13 @@
     <string name="space_search_action">Search</string>
     <string name="space_search_hint">Search this profile</string>
     <string name="space_search_close">Exit search</string>
-    <string name="space_empty_archives">This creator hasn\'t posted any videos</string>
+    <string name="space_dynamics_sheet_toggle">Posts panel</string>
+    <string name="space_dynamics_sheet_close">Close posts panel</string>
+    <string name="space_empty_archives">This user hasn\'t posted any videos</string>
     <string name="space_empty_archives_search">No matching videos</string>
-    <string name="space_empty_dynamics">This creator has no posts</string>
-    <string name="space_empty_collections">This creator has no collections</string>
+    <string name="space_empty_dynamics">This user has no posts</string>
+    <string name="space_empty_collections">This user has no collections</string>
+    <string name="space_empty_all">This user has nothing public</string>
     <string name="space_empty_collection_detail">This collection is empty</string>
     <string name="space_collection_season">Collection</string>
     <string name="space_collection_series">Series</string>

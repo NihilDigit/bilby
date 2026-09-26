@@ -2109,6 +2109,7 @@ private fun SpaceRoute(
                     container.relationRepository,
                     container.dynamicRepository,
                     container.followRepository,
+                    container.settings,
                 )
             }
         },
@@ -2147,6 +2148,8 @@ private fun SpaceRoute(
         onRetry = vm::retry,
         mid = mid,
         onRefresh = vm::refresh,
+        onDynamicsSheetOpenChange = vm::setDynamicsSheetOpen,
+        onDynamicsSheetWidthChange = vm::setDynamicsSheetWidth,
     )
 }
 

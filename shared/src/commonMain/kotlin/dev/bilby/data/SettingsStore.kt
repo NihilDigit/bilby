@@ -67,6 +67,31 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         }
     }
 
+    /**
+     * 宽屏右侧的侧栏:开着没有(默认开)、拖到多宽。每个页面一份,同一个页面的所有实例共用
+     * (所有 UP 的空间页是同一份):关掉它、拖窄它的人多半一直想要这样,每进一次再弄一次是折腾。
+     * 两项都是用户亲手调的,不是从行为里猜的。宽度记住是 M3 的 persistent pane resizing
+     * (scaffold.md)。
+     */
+    fun sidePanel(panel: SidePanelId): Flow<SideSheetPrefs> = store.data.map { p ->
+        SideSheetPrefs(
+            open = p[sidePanelOpenKey(panel)] ?: true,
+            widthDp = p[sidePanelWidthKey(panel)],
+        )
+    }
+
+    suspend fun saveSidePanelOpen(panel: SidePanelId, open: Boolean) {
+        store.edit { p -> p[sidePanelOpenKey(panel)] = open }
+    }
+
+    suspend fun saveSidePanelWidth(panel: SidePanelId, widthDp: Float) {
+        store.edit { p -> p[sidePanelWidthKey(panel)] = widthDp }
+    }
+
+    private fun sidePanelOpenKey(panel: SidePanelId) = booleanPreferencesKey("side_panel_${panel.key}_open")
+
+    private fun sidePanelWidthKey(panel: SidePanelId) = floatPreferencesKey("side_panel_${panel.key}_width_dp")
+
     suspend fun clearCredentials() {
         store.edit { p -> ALL_CREDENTIAL_KEYS.forEach(p::remove) }
     }
@@ -539,6 +564,14 @@ data class Credentials(
  * 是听感偏好。
  */
 data class PlaybackPrefs(val autoNext: Boolean = true, val shuffled: Boolean = false)
+
+/** 可拖宽的侧栏。[widthDp] 为 null 是从没拖过,宽度由界面取默认值。 */
+data class SideSheetPrefs(val open: Boolean, val widthDp: Float?)
+
+/** 哪一页的侧栏。[key] 进偏好的键名,改了等于把所有人的设置清掉。 */
+enum class SidePanelId(val key: String) {
+    SpaceDynamics("space_dynamics"),
+}
 
 /**
  * 编解码偏好。选的是"取流时优先要哪一条",不是"用什么解码器" ——

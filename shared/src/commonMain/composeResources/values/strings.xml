@@ -207,10 +207,13 @@
     <string name="space_search_action">搜索</string>
     <string name="space_search_hint">在这个空间内搜索</string>
     <string name="space_search_close">退出搜索</string>
-    <string name="space_empty_archives">这位 UP 主还没有投稿</string>
+    <string name="space_dynamics_sheet_toggle">动态侧栏</string>
+    <string name="space_dynamics_sheet_close">关闭动态侧栏</string>
+    <string name="space_empty_archives">这位用户还没有投稿</string>
     <string name="space_empty_archives_search">没有匹配的投稿</string>
-    <string name="space_empty_dynamics">这位 UP 主还没有动态</string>
-    <string name="space_empty_collections">这位 UP 主没有合集</string>
+    <string name="space_empty_dynamics">这位用户还没有动态</string>
+    <string name="space_empty_collections">这位用户没有合集</string>
+    <string name="space_empty_all">这位用户没有公开的内容</string>
     <string name="space_empty_collection_detail">这个合集是空的</string>
     <string name="space_collection_season">合集</string>
     <string name="space_collection_series">系列</string>
