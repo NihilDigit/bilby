@@ -57,6 +57,22 @@ val bundledAppResources by tasks.registering(Sync::class) {
 }
 tasks.matching { it.name == "prepareAppResources" }.configureEach { dependsOn(bundledAppResources) }
 
+// 热重载的运行任务(hotRun、hotDev)不走 prepareAppResources,也不设资源目录的系统属性,
+// Main 的 useBundledMpvRuntime 找不到 DLL,播放器建不起来。补上这两样,指向同一份解好的 DLL。
+//
+// 去掉 NoDefaultCurrentDirectoryInExePath:应用里的重编译器在仓库根执行 `cmd /c gradlew.bat`,
+// 这个变量设着时 cmd 不在当前目录找可执行文件,改了代码不会重载,日志里只有一句
+// "'gradlew.bat' is not recognized"。它不是系统默认值,是启动 Gradle 的那个环境带进来的
+// (Claude Code 在 Windows 上给子进程设它),一路传给了应用。
+tasks.withType<JavaExec>().matching { it.name.startsWith("hot") }.configureEach {
+    dependsOn(bundledAppResources)
+    environment.remove("NoDefaultCurrentDirectoryInExePath")
+    systemProperty(
+        "compose.application.resources.dir",
+        layout.buildDirectory.dir("appResources/common").get().asFile.absolutePath,
+    )
+}
+
 // jlink 与 jpackage 默认用运行 Gradle 的那个 JDK,本机是 JBR 21。改用 Azul 的 25:
 // Temurin 25 的发行包不带 jmods,jlink 无从取模块。
 // 用 Provider 绑定而不写 application.javaHome:后者是 String,配置期就要解析,而只跑单测的
