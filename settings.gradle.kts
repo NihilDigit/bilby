@@ -12,9 +12,8 @@ pluginManagement {
     }
 }
 
-// 构建要的 JDK 由 Gradle 按 toolchain 声明自己下载,本机和 CI 都不必预装:打包要 Azul 25
-// (Temurin 25 不带 jmods,见 desktop/build.gradle.kts),热重载要 JetBrains Runtime 25
-// (只有它支持增删方法、字段的类重定义)。
+// 构建要的 JDK 由 Gradle 按 toolchain 声明自己下载,本机和 CI 都不必预装:桌面端的编译、运行与
+// 打包都要 Azul 25(Temurin 25 不带 jmods,见 desktop/build.gradle.kts)。
 plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }

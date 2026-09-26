@@ -218,6 +218,11 @@ Compose is on Compose Multiplatform 1.12.1, pinned by mediamp's Skiko (see
 1.5.0-alpha25 on Android and CMP's alpha22 on desktop. Code in `commonMain` must compile
 against both — build `:shared:compileKotlinDesktop` as well as Android.
 
+The Compose **Gradle plugin** is pinned separately, at 1.13.0-alpha01, for the release AOT
+cache DSL; it only packages. Because the `compose.desktop.*` dependency accessors follow the
+plugin's version, desktop runtime artifacts are written by coordinate in the catalog, and the
+plugin's library-version compatibility check is switched off.
+
 ## Toolchain
 
 AGP 9 has built-in Kotlin support, and applying `org.jetbrains.kotlin.android` is a hard
@@ -259,12 +264,25 @@ name. Code that adds name-based reflection must add its keep rule in the same ch
 java -Xverify:all desktop/package/VerifyClasses.java desktop/build/compose/binaries/main-release/app/Bilby/app
 ```
 
-**Desktop packaging.** jlink and jpackage run on an Azul Zulu 25 toolchain, because Temurin 25
-ships without jmods; bytecode stays at 17. **The desktop build does not run ProGuard.** Its
-preverifier recomputed a wrong stack map for `PlayerShell` (a `long` local inferred as `top`),
-so the packaged app threw `VerifyError` on entering the player; 7.8.0 and 7.10.0 both did, and
-`:desktop:run` never goes through it. The last command above loads every packaged `dev.bilby`
+**Desktop packaging.** The desktop runs on Azul Zulu 25 everywhere: jlink, jpackage, ProGuard,
+`:desktop:run` and the `:desktop` Kotlin compile (Temurin 25 ships without jmods; JBR would
+add fonts Compose never uses and a faster-moving runtime that defeats patch updates). Bytecode
+stays at 17. There is no hot reload: it needs JBR's class redefinition.
+
+ProGuard shrinks the dependencies only — no optimisation, no obfuscation, one output jar per
+input — and Bilby's own jars are then copied back over its output. **Its preverifier writes a
+wrong stack map for `PlayerShell`** (a `long` local that one path leaves unset is recorded as
+`long`, not `top`), so the packaged app threw `VerifyError` on entering the player; 7.8.0 and
+7.10.0 both do it with or without optimisation, and `-dontpreverify` strips every stack map.
+`:desktop:run` never goes through any of this. The last command above loads every packaged
 class so the JVM verifies it; the release workflow runs the same check.
+
+The release build carries a JDK 25 AOT cache (`app.aot`), produced by a ~12 s training run that
+`AotTraining.kt` ends. The cache is keyed on each jar's size and modification time, and the MSI
+rounds file times to even seconds, so jar times are rounded before training. AOT adapter and
+stub caching are off: machine code generated on an AVX-512 CI runner crashes CPUs without it.
+The window title bar is drawn by the app (`WindowsCaption.kt` subclasses the window procedure
+through FFM, which is why the `:desktop` compile needs JDK 22+).
 
 The MSI's `upgradeUuid` in `desktop/build.gradle.kts` is fixed forever: Windows Installer
 recognises an upgrade by it, and changing it makes the next MSI install alongside the old one.
@@ -273,9 +291,14 @@ Windows Installer whether this install directory belongs to our MSI.
 
 The desktop updater (`update/DesktopAppUpdater.kt`) needs three assets per release —
 `bilby-windows-x64-<ver>.msi`, `-app.zip` and `-files.json` — and treats a version as available
-only when all three exist. A patch update swaps the files marked `patch` in `files.json`;
-anything else that differs forces a full MSI reinstall, so keep large unchanging files (native
-libraries) out of the jars marked `patch`. Versions come from `-Dbilby.version`, never from
+only when all three exist. A patch update swaps the files marked `patch` in `files.json` —
+every jar under `app/`, `app.aot`, the cfg, the launcher and `.jpackage.xml`, which must change
+together for the AOT cache to stay valid — and removes jars the new version no longer has;
+anything else that differs (the runtime, the mpv DLLs) forces a full MSI reinstall. An
+optional fourth asset, `-from-<old version>.zip`, holds zstd deltas against a published
+version (`.github/scripts/delta-updates.sh`, run by the release job); a renamed jar names its
+dictionary in a `.base` entry, and a delta that does not reproduce the manifest's checksums
+falls back to `app.zip`. Versions come from `-Dbilby.version`, never from
 `jpackage.app-version`: the latter is the MSI version, which is 1.0.0 for every local build.
 
 Releases come from a `v` tag through `.github/workflows/release.yml` and nowhere else. The

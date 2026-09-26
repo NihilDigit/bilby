@@ -8,11 +8,12 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
 /**
- * 逐个加载发行包里 Bilby 自己的类,让 JVM 校验字节码,有 VerifyError 就以非零退出。
+ * 逐个加载发行包里的类,让 JVM 校验字节码,有 VerifyError 就以非零退出。
  *
  * 为的是只在打包版才出现的崩溃:字节码经打包流程改写后可能校验不过(ProGuard 曾把
  * PlayerShell 的栈帧算错),而 gradle run 不经过打包,开发时发现不了,装上之后一进那一页
- * 才崩。只查 dev.bilby 下的类:依赖是原样拷进来的,不经改写。
+ * 才崩。依赖也查:Bilby 自己的 jar 裁剪后换回了原件,依赖却是 ProGuard 重算过栈帧的。
+ * 全部一万多个类几秒钟查完。
  *
  * 用法(单文件源码直接运行): java -Xverify:all desktop/package/VerifyClasses.java <应用目录>/app
  */
@@ -30,7 +31,7 @@ public class VerifyClasses {
             try (JarFile jar = new JarFile(new File(url.toURI()))) {
                 for (Enumeration<JarEntry> e = jar.entries(); e.hasMoreElements(); ) {
                     String name = e.nextElement().getName();
-                    if (!name.startsWith("dev/bilby/") || !name.endsWith(".class")) continue;
+                    if (!name.endsWith(".class") || name.endsWith("module-info.class") || name.startsWith("META-INF/")) continue;
                     checked++;
                     String className = name.substring(0, name.length() - ".class".length()).replace('/', '.');
                     try {

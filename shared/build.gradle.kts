@@ -77,6 +77,8 @@ kotlin {
             api(libs.mediamp.mpv)
             // 应用内更新查 MSI 的安装登记(update/WindowsInstaller.kt)。
             implementation(libs.jna.platform)
+            // 应用内差分更新的解码器。只出 x64,取只捆 Windows x64 原生库的那一份。
+            implementation("${libs.zstd.jni.get()}:win_amd64")
         }
         androidMain.dependencies {
             // Android 目标上 Compose 各构件按 BOM 取,比 CMP 1.12.1 映射到的版本新
@@ -126,6 +128,12 @@ configurations.configureEach {
 dependencies {
     add("kspAndroid", libs.androidx.room.compiler)
     add("kspDesktop", libs.androidx.room.compiler)
+}
+
+// 这项检查拿界面库的版本对照打包插件的版本。两者有意不同(插件 1.13 alpha 只为 AOT 缓存,
+// 界面库停在 1.12.1,见 libs.versions.toml),每次构建都报一遍只会淹没真正的警告。
+compose.dependencyCompatibility {
+    enabled = false
 }
 
 compose.resources {

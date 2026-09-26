@@ -31,6 +31,11 @@ kotlinxCoroutines = "1.11.0"
 # 差距只有两处:alpha22 没有不带 onClick 的 SegmentedListItem 重载(ProfileScreen 预览行),
 # MediumFlexibleTopAppBar 在 alpha22 仍需 ExperimentalMaterial3ExpressiveApi。
 composeMultiplatform = "1.12.1"
+# 打包插件单独用 1.13 的 alpha:release 的 AOT 缓存(buildTypes.release.aot)从这一版才有。
+# 插件只管打包、资源生成与 DSL,界面库的版本由上面的 composeMultiplatform 定;两版插件的资源
+# 生成代码逐字节相同。compose.desktop.currentOs 一类访问器跟插件版本走,所以桌面运行库在
+# 下面按坐标写,不用它们。
+composeGradlePlugin = "1.13.0-alpha01"
 # 与 composeMultiplatform 配套的几条 JetBrains 多平台线。Android 目标上它们各自重定向到
 # androidx 的同名构件,实际版本由 :app 的 BOM 与上面的 androidx 版本抬高。
 composeMultiplatformMaterial3 = "1.12.0-alpha03"
@@ -45,6 +50,8 @@ sqlite = "2.6.2"
 mediamp = "0.5.0"
 # 桌面全屏要直接调 Win32(见 desktop 的 WindowsFullscreen)。跟 mediamp 传递带进来的版本一致。
 jna = "5.13.0"
+# 应用内差分更新的解码器(update/UpdateManifest.kt 的 applyDelta)。
+zstdJni = "1.5.7-20"
 
 # 弹幕引擎,独立仓库。开发期走 composite build(settings.gradle.kts),这个版本号只在
 # 脱离 composite build 从仓库解析时才生效。
@@ -135,6 +142,11 @@ kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-
 jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
 mediamp-mpv = { module = "org.openani.mediamp:mediamp-mpv", version.ref = "mediamp" }
 mediamp-mpv-runtime-windows-x64 = { module = "org.openani.mediamp:mediamp-mpv-runtime-windows-x64", version.ref = "mediamp" }
+# 等同 compose.desktop.windows_x64,但版本跟界面库走,不跟打包插件走(见 composeGradlePlugin)。
+compose-mp-desktop-windows-x64 = { module = "org.jetbrains.compose.desktop:desktop-jvm-windows-x64", version.ref = "composeMultiplatform" }
+# 不带 classifier 的 jar 捆了二十个平台的原生库,按平台的只捆一个,类是同一套。
+# classifier 在引用处给出(win_amd64),版本目录写不了它。
+zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstdJni" }
 
 junit = { module = "junit:junit", version.ref = "junit" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
@@ -147,4 +159,4 @@ room = { id = "androidx.room", version.ref = "room" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
-compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }
+compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "composeGradlePlugin" }
