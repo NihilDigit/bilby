@@ -8,6 +8,8 @@ import dev.bilby.api.BiliResult
 import dev.bilby.data.PlayInfo
 import dev.bilby.data.resumeAtMillisFor
 import dev.bilby.elapsedRealtimeMillis
+import dev.bilby.getString
+import dev.bilby.resources.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -171,7 +173,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             val app = container()
             val detail = when (val result = app.videoRepository.getVideoDetail(bvid)) {
                 is BiliResult.Ok -> result.value
-                else -> return@launch fail("详情", result)
+                else -> return@launch fail("详情", result, getString(Res.string.playback_error_detail))
             }
             val requested = cid.takeIf { it != 0L } ?: app.partRequest.consume(bvid).takeIf { it != 0L }
             val prefs = app.settings.playerPrefs.first()
@@ -229,8 +231,12 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         audio: Int,
     ): PlayInfo? = when (val result = app.videoRepository.getPlayUrl(bvid, cid, quality, codecs, audio)) {
         is BiliResult.Ok -> result.value
-        else -> {
-            fail("取流", result)
+        is BiliResult.ApiError -> {
+            fail("取流", result, getString(Res.string.playback_error_stream, result.message))
+            null
+        }
+        is BiliResult.Failure -> {
+            fail("取流", result, getString(Res.string.playback_error_network))
             null
         }
     }
@@ -257,7 +263,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         loadJob = scope.launch {
             val playback = container().liveRepository.loadPlayback(command.roomId, command.qn, command.onlyAudio)
             val url = (playback as? BiliResult.Ok)?.value?.stream?.url
-                ?: return@launch fail("直播取流", playback)
+                ?: return@launch fail("直播取流", playback, getString(Res.string.playback_error_live_stream))
             // 先报 loadKey 再打开,理由见 openVideo。
             loaded = Loaded.Live(command)
             _state.update { it.copy(loadKey = item.bvid, currentCid = 0, playInfo = null) }
@@ -267,14 +273,18 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         }
     }
 
-    private fun fail(step: String, result: BiliResult<*>) {
-        val message = when (result) {
+    /**
+     * [shown] 是画面上那句,原始的错误码与异常只进日志:异常的 message 是系统原文,英文、带主机名,
+     * 断网时画面上就是一句 `Unable to resolve host`。文案与 Android 服务同一套。
+     */
+    private fun fail(step: String, result: BiliResult<*>, shown: String) {
+        val detail = when (result) {
             is BiliResult.ApiError -> "${result.code} ${result.message}"
             is BiliResult.Failure -> result.cause.message ?: result.cause.javaClass.simpleName
             is BiliResult.Ok -> "没有可放的流"
         }
-        BiliLog.w("桌面播放$step 失败:$message")
-        _state.update { it.copy(loading = false, error = message) }
+        BiliLog.w("桌面播放$step 失败:$detail")
+        _state.update { it.copy(loading = false, error = shown) }
     }
 
     /**

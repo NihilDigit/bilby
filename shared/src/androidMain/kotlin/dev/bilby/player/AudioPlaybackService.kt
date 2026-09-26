@@ -60,12 +60,36 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.IOException
+import java.net.SocketException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+
+/**
+ * 取流路上的失败,message 是写给用户看的整句。
+ *
+ * [AudioPlaybackService.PlayerListener.onPlayerError] 只把这一种的 message 原样亮出来。取流路上
+ * 还会漏出别的异常(OkHttp 直接抛的 `UnknownHostException`、数据源的 `HttpDataSourceException`),
+ * 它们的 message 是系统原文:英文、带主机名。原先那里取的是任意 cause 的 message,断网时画面上
+ * 就是一句 `Unable to resolve host "api.bilibili.com"`。
+ */
+internal open class StreamFailure(message: String) : IOException(message)
 
 /**
  * 直播已经下播了。**和"暂时取不到流"是两回事**:后者退避重试还有意义,这一种等多久都不会好,
  * 所以它一路抛到 [AudioPlaybackService.PlayerListener.onPlayerError] 只为了在那里停下来。
  */
-internal class LiveEndedException(message: String) : IOException(message)
+internal class LiveEndedException(message: String) : StreamFailure(message)
+
+/**
+ * 这次失败是不是网络不通。错误码只覆盖数据源那一段(CDN 拉流),取流路上 OkHttp 直接抛出的
+ * 异常到这里是 `ERROR_CODE_IO_UNSPECIFIED`,只能看 cause 的类型。
+ */
+private fun PlaybackException.isNetworkFailure(): Boolean =
+    errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+        errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+        generateSequence(cause) { it.cause }.any {
+            it is UnknownHostException || it is SocketException || it is SocketTimeoutException
+        }
 
 /**
  * 播放器与播放队列的唯一持有者(DESIGN 2.4b)。
@@ -956,7 +980,7 @@ class AudioPlaybackService : MediaSessionService() {
 
             LoadPlan.Unresolved -> {
                 BiliLog.w("解析不出要放哪一 P bvid=$bvid")
-                throw IOException(getString(Res.string.playback_error_detail))
+                throw StreamFailure(getString(Res.string.playback_error_detail))
             }
 
             is LoadPlan.Online -> return try {
@@ -1083,11 +1107,11 @@ class AudioPlaybackService : MediaSessionService() {
             is BiliResult.Ok -> result.value
             is BiliResult.ApiError -> {
                 BiliLog.w("取流失败 bvid=$bvid code=${result.code} ${result.message}")
-                throw IOException(getString(Res.string.playback_error_stream, result.message))
+                throw StreamFailure(getString(Res.string.playback_error_stream, result.message))
             }
             is BiliResult.Failure -> {
                 BiliLog.w("取流失败 bvid=$bvid", result.cause)
-                throw IOException(getString(Res.string.playback_error_network))
+                throw StreamFailure(getString(Res.string.playback_error_network))
             }
         }
         openChain?.mark("playurlEnd")
@@ -1173,11 +1197,11 @@ class AudioPlaybackService : MediaSessionService() {
             is BiliResult.Ok -> Unit
             is BiliResult.ApiError -> {
                 BiliLog.w("直播取流失败 roomId=$roomId code=${playback.code} ${playback.message}")
-                throw IOException(getString(Res.string.playback_error_live_stream))
+                throw StreamFailure(getString(Res.string.playback_error_live_stream))
             }
             is BiliResult.Failure -> {
                 BiliLog.w("直播取流失败 roomId=$roomId", playback.cause)
-                throw IOException(getString(Res.string.playback_error_live_stream))
+                throw StreamFailure(getString(Res.string.playback_error_live_stream))
             }
         }
         val url = playback.value.stream?.url?.takeIf { playback.value.isLive }
@@ -1958,10 +1982,16 @@ class AudioPlaybackService : MediaSessionService() {
                 stopPlayback()
                 return
             }
-            // 取流失败现在也走这条路(见 [resolveStream]),而它带着一句写给用户看的原因。
-            // 拿不到就退回按错误码报 —— 解码器初始化失败一类本来就没有更好的说法。
-            val reason = error.cause?.message?.takeIf { it.isNotBlank() }
-                ?: getStringBlocking(Res.string.playback_error_decode, error.errorCode)
+            // 取流失败现在也走这条路(见 [resolveStream]),写给用户看的原因只认 [StreamFailure]。
+            // 别的网络失败报成同一句网络错误;剩下的按错误码报 —— 解码器初始化失败一类本来就
+            // 没有更好的说法。
+            val causes = generateSequence(error.cause) { it.cause }
+            val reason = causes.filterIsInstance<StreamFailure>().firstOrNull()?.message
+                ?: if (error.isNetworkFailure()) {
+                    getStringBlocking(Res.string.playback_error_network)
+                } else {
+                    getStringBlocking(Res.string.playback_error_decode, error.errorCode)
+                }
             retryAfterFailure(reason, playWhenReady = true)
         }
     }

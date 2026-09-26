@@ -838,7 +838,7 @@ fun VideoScreen(
                 )
 
                 state.error != null -> PlaybackFailure(
-                    message = state.error,
+                    message = stringResource(state.error),
                     retrying = state.loading,
                     onRetry = onRetry,
                     modifier = Modifier.align(Alignment.Center),

@@ -8,6 +8,8 @@ import dev.bilby.agent.reduce
 import dev.bilby.agent.AgentIntent
 import dev.bilby.agent.AgentLoop
 import dev.bilby.api.BiliResult
+import dev.bilby.ui.errorTextRes
+import org.jetbrains.compose.resources.StringResource
 import dev.bilby.danmaku.DanmakuRepository
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
@@ -71,7 +73,8 @@ import kotlinx.coroutines.launch
 data class VideoUiState(
     val detail: VideoDetail? = null,
     val loading: Boolean = true,
-    val error: String? = null,
+    /** 资源 id 而不是拼好的串,见 [errorTextRes]。 */
+    val error: StringResource? = null,
 )
 
 /**
@@ -855,8 +858,7 @@ class VideoViewModel(
                 }
             }
 
-            is BiliResult.ApiError -> fail(target, "${detail.message}(${detail.code})")
-            is BiliResult.Failure -> fail(target, detail.cause.message ?: "网络错误")
+            is BiliResult.ApiError, is BiliResult.Failure -> fail(target, detail.errorTextRes("播放页取详情 $target"))
         }
     }
 
@@ -1130,10 +1132,10 @@ class VideoViewModel(
         }
     }
 
-    private suspend fun fail(target: String, message: String) {
-        BiliLog.w("播放页失败($target): $message")
+    /** 原文与错误码已由 [errorTextRes] 记进日志,state 里只放那三句之一。 */
+    private suspend fun fail(target: String, error: StringResource) {
         if (fallBackToCache(target)) return
-        _state.update { it.copy(loading = false, error = message) }
+        _state.update { it.copy(loading = false, error = error) }
     }
 
     private companion object {
