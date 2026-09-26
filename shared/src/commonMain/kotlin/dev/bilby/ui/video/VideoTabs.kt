@@ -269,6 +269,11 @@ fun VideoTabs(
     onFindRelated: () -> Unit,
     /** 写弹幕,见 [DanmakuInput]。 */
     danmakuInput: DanmakuInput,
+    /**
+     * 标签行右边画不画弹幕胶囊。双栏时开关与输入框都在画面的控制条上(见 ControlBarDanmakuField),
+     * 这里再放一份就是同一件事的两个入口。
+     */
+    showDanmakuCapsule: Boolean,
     /** 弹幕显示开关。全屏时这一行不组合,那时的开关在播放控制条上。 */
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
@@ -343,8 +348,9 @@ fun VideoTabs(
          * 配色和简介页的动作栏同一套:未选中 `surfaceContainer`,选中 `secondaryContainer`。组件
          * 默认的选中是 primary 实心,一行两组都顶着 primary 色块比下面的内容还重(风格指南 §2.1)。
          *
-         * 内容区仍然能左右滑着翻页,左边那组跟着 pager 的页码走。全屏没有这一行,弹幕开关回到
-         * 控制条上(见 BilbyPlayer.SecondaryControls),发弹幕全屏不给。
+         * 内容区仍然能左右滑着翻页,左边那组跟着 pager 的页码走。全屏没有这一行,双栏时这一行
+         * 不画胶囊:两者的控制条都是宽排法,弹幕开关与输入框就在画面上(见 BilbyPlayer 的
+         * PlayerControlBar)。
          */
         val toggleColors = ToggleButtonDefaults.toggleButtonColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -359,13 +365,19 @@ fun VideoTabs(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // 写弹幕时视图切换退场,胶囊铺满整行:这时要的是输入的宽度,切页可以等写完。
+            // 没有胶囊时(双栏)这一组铺满整行,右边不空出一大截;两段各占一半,同 M3 的 tabs。
+            val fillRow = !showDanmakuCapsule
             AnimatedVisibility(
                 visible = !danmakuInput.open,
                 enter = expandHorizontally(expandFrom = Alignment.Start) + fadeIn(),
                 exit = shrinkHorizontally(shrinkTowards = Alignment.Start) + fadeOut(),
+                modifier = if (fillRow) Modifier.weight(1f) else Modifier,
             ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-            Row(horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+                modifier = if (fillRow) Modifier.fillMaxWidth() else Modifier,
+            ) {
                 titles.forEachIndexed { index, title ->
                     ToggleButton(
                         checked = pagerState.currentPage == index,
@@ -376,24 +388,28 @@ fun VideoTabs(
                             else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
                         },
                         colors = toggleColors,
-                        modifier = Modifier.semantics { role = Role.Tab },
+                        modifier = Modifier
+                            .then(if (fillRow) Modifier.weight(1f) else Modifier)
+                            .semantics { role = Role.Tab },
                     ) {
                         Text(text = title, maxLines = 1, softWrap = false)
                     }
                 }
             }
-            Spacer(modifier = Modifier.width(Spacing.Tight))
+            if (!fillRow) Spacer(modifier = Modifier.width(Spacing.Tight))
             }
             }
-            DanmakuCapsule(
-                enabled = danmakuEnabled,
-                onEnabledChange = onDanmakuEnabledChange,
-                input = danmakuInput,
-                modifier = Modifier.weight(1f),
-            )
+            if (showDanmakuCapsule) {
+                DanmakuCapsule(
+                    enabled = danmakuEnabled,
+                    onEnabledChange = onDanmakuEnabledChange,
+                    input = danmakuInput,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
         // 发送失败的原因就在胶囊底下一行,草稿留在胶囊里,改一个字再按发送就是重试。
-        (danmakuInput.send as? DanmakuSend.Failed)?.takeIf { danmakuInput.open }?.let { failed ->
+        (danmakuInput.send as? DanmakuSend.Failed)?.takeIf { danmakuInput.open && showDanmakuCapsule }?.let { failed ->
             Text(
                 text = stringResource(Res.string.danmaku_send_failed, failed.message),
                 style = MaterialTheme.typography.bodySmall,
@@ -704,7 +720,7 @@ private fun CapsuleCloseButton(onClick: () -> Unit) {
 }
 
 /** 服务端对弹幕正文的长度上限(PiliPlus `danmaku.dart:12` 注明的 100 字符)。 */
-private const val DanmakuMaxLength = 100
+internal const val DanmakuMaxLength = 100
 
 /** 到这个长度才显示计数。写一句话的人不需要被提醒还剩多少。 */
 private const val CounterFrom = 80

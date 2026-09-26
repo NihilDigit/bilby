@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.ExperimentalMaterial3Api
 import dev.bilby.ui.components.PaneSheet
+import dev.bilby.ui.components.BilbyIcons
 import dev.bilby.ui.player.PlayerIconButton
 import dev.bilby.ui.player.PlayerSidePanel
 import dev.bilby.ui.player.PlayerTooltip
@@ -119,13 +120,14 @@ internal fun PlayerSettingsContent(
         }
 
         // 音质:列这次真下发了的几条音轨(见 SelectedStreams.audioOptions),规则同画质那一段。
-        if (only == null && audioOptions.size > 1) {
-            SectionTitle(stringResource(Res.string.player_audio_quality))
+        if ((only == null || only == PlayerSettingsSection.Audio) && audioOptions.size > 1) {
+            if (titled) SectionTitle(stringResource(Res.string.player_audio_quality))
             ChoiceGrid(
                 options = audioOptions,
                 selected = { it == currentAudio },
                 onSelect = onAudioChange,
                 label = { audioQualityLabel(it) },
+                columns = columns,
             )
         }
 
@@ -143,7 +145,9 @@ internal fun PlayerSettingsContent(
             )
         }
 
-        if (only == null && danmakuEditor != null) DanmakuSettingsSection(danmakuPrefs, danmakuEditor)
+        if ((only == null || only == PlayerSettingsSection.Danmaku) && danmakuEditor != null) {
+            DanmakuSettingsSection(danmakuPrefs, danmakuEditor)
+        }
     }
 }
 
@@ -162,17 +166,18 @@ internal fun LiveSettingsContent(
         if (only == null || only == PlayerSettingsSection.Quality) {
             QualitySection(qualities, currentQuality, onQualityChange, titled = only == null)
         }
-        if (only == null) DanmakuSettingsSection(danmakuPrefs, danmakuEditor)
+        if (only == null || only == PlayerSettingsSection.Danmaku) DanmakuSettingsSection(danmakuPrefs, danmakuEditor)
     }
 }
 
 /**
- * 面板里能被单独打开的几段,对应全屏控制条上那几枚 chip。整块面板从 ⚙ 打开。
+ * 面板里能被单独打开的几段,对应宽排法控制条上那几枚 chip 与弹幕设置键。整块面板只从
+ * 窄排法的 ⚙ 打开:宽排法里每一段都有自己的入口,整块面板只是把它们再摆一遍。
  *
  * chip 只开自己那一段,不开整块:几枚 chip 看起来各管一项,点开却是同一块长面板,读不出
  * 它们之间有什么区别。
  */
-internal enum class PlayerSettingsSection { Speed, Quality, Subtitle }
+internal enum class PlayerSettingsSection { Speed, Quality, Audio, Subtitle, Danmaku }
 
 /**
  * 设置面板的外壳,点播与直播共用。全屏从右边划出(横屏下底部 sheet 只剩一条缝),内嵌时
@@ -188,7 +193,9 @@ internal fun BoxScope.PlayerSettingsHost(
     content: @Composable () -> Unit,
 ) {
     if (isFullscreen) {
-        PlayerSidePanel(visible = open, onDismiss = onDismiss, narrow = only != null) {
+        // 窄的那一档给 chip 开的单选段;弹幕那一段是几根滑块,窄了读数和标题挤在一起。
+        val narrow = only != null && only != PlayerSettingsSection.Danmaku
+        PlayerSidePanel(visible = open, onDismiss = onDismiss, narrow = narrow) {
             Text(
                 playerSettingsTitle(only),
                 style = MaterialTheme.typography.titleMedium,
@@ -209,12 +216,21 @@ internal fun BoxScope.PlayerSettingsHost(
     }
 }
 
-/** 打开整块设置面板的 ⚙。点播与直播、内嵌与全屏都是这一枚,位置都在全屏键左边。 */
+/** 窄排法里打开整块设置面板的 ⚙。点播与直播都是这一枚,位置在全屏键左边。 */
 @Composable
 internal fun PlayerSettingsButton(onClick: () -> Unit) {
     val label = stringResource(Res.string.player_settings)
     PlayerTooltip(label) {
         PlayerIconButton(onClick = onClick, icon = Icons.Filled.Tune, contentDescription = label)
+    }
+}
+
+/** 宽排法里只开弹幕那一段的键,紧挨弹幕开关。字形与开关同一个小电视,见 [BilbyIcons.DanmakuSettings]。 */
+@Composable
+internal fun DanmakuSettingsButton(onClick: () -> Unit) {
+    val label = stringResource(Res.string.player_danmaku_settings)
+    PlayerTooltip(label) {
+        PlayerIconButton(onClick = onClick, icon = BilbyIcons.DanmakuSettings, contentDescription = label)
     }
 }
 
@@ -225,7 +241,9 @@ private fun playerSettingsTitle(only: PlayerSettingsSection?): String = stringRe
         null -> Res.string.player_settings
         PlayerSettingsSection.Speed -> Res.string.player_speed
         PlayerSettingsSection.Quality -> Res.string.player_quality
+        PlayerSettingsSection.Audio -> Res.string.player_audio_quality
         PlayerSettingsSection.Subtitle -> Res.string.player_subtitle
+        PlayerSettingsSection.Danmaku -> Res.string.player_danmaku_settings
     },
 )
 

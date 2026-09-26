@@ -67,6 +67,7 @@ import dev.bilby.resources.*
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.player.EpisodeTarget
 import dev.bilby.ui.player.PlayerIconButton
+import dev.bilby.ui.player.ControlBarDanmaku
 import dev.bilby.ui.player.CenterPlayButton
 import dev.bilby.ui.theme.PlayerTheme
 import dev.bilby.ui.player.QueueEdges
@@ -469,7 +470,9 @@ fun VideoScreen(
     LaunchedEffect(danmakuSend) {
         if (danmakuSend is DanmakuSend.Sent) {
             danmakuDraft = ""
-            closeDanmakuInput()
+            // 控制条里的输入框发送后会放掉焦点,也经 closeDanmakuInput 退出;这里先退的话那一下
+            // 就落在 else 上,只收掉发送状态。
+            if (danmakuInputOpen) closeDanmakuInput() else onDanmakuSendConsumed()
         }
     }
 
@@ -807,7 +810,36 @@ fun VideoScreen(
                     danmakuCid = currentCid,
                     matchesCurrentPage = matchesCurrentPage,
                     placeholderCoverUrl = state.detail?.coverUrl.orEmpty(),
+                    // 全屏与双栏的控制条是宽排法,弹幕直接在那一行里写;这时标签行上不再有胶囊。
+                    controlBarDanmaku = if (fullscreen || expandedLayout) {
+                        ControlBarDanmaku(
+                            draft = danmakuDraft,
+                            onDraftChange = { danmakuDraft = it },
+                            maxLength = DanmakuMaxLength,
+                            sending = danmakuSend is DanmakuSend.Sending,
+                            error = (danmakuSend as? DanmakuSend.Failed)?.let {
+                                stringResource(Res.string.danmaku_send_failed, it.message)
+                            },
+                            // 时间点取开始写的那一刻,同胶囊:画面停在那一帧,人是对着它写的。
+                            onSend = { onSendDanmaku(danmakuDraft, currentCid, danmakuProgress) },
+                            // 开始写就暂停、写完续播,和胶囊走同一对出入口(见 openDanmakuInput)。
+                            onComposingChange = { composing ->
+                                if (composing) openDanmakuInput() else if (danmakuInputOpen) closeDanmakuInput()
+                            },
+                        )
+                    } else {
+                        null
+                    },
                     topBarActions = {
+                        // 画中画也在全屏顶栏上:它只从按钮进(见 PictureInPicture),全屏时
+                        // 没有这一颗就得先退出全屏。
+                        if (pip.supported) {
+                            PlayerIconButton(
+                                onClick = { pip.enter(active.videoAspect()) },
+                                icon = Icons.Filled.PictureInPictureAlt,
+                                contentDescription = stringResource(Res.string.player_pip),
+                            )
+                        }
                         // 没有可切的东西就不给入口:单条队列的单 P 视频点开只有它自己。
                         if (episodeRows.hasSomethingToSwitch()) {
                             PlayerIconButton(
@@ -971,6 +1003,7 @@ fun VideoScreen(
                             )
                         },
                     ),
+                    showDanmakuCapsule = !expandedLayout,
                     danmakuEnabled = danmakuPrefs.enabled,
                     onDanmakuEnabledChange = { danmakuEditor?.setEnabled(it) },
                     onCache = { cacheSheetOpen = true },

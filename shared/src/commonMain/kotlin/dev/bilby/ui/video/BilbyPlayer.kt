@@ -21,6 +21,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Edit
+import dev.bilby.ui.player.ControlBarDanmaku
+import dev.bilby.ui.player.ControlBarDanmakuField
+import dev.bilby.player.audioQualityLabel
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.Icon
@@ -194,6 +199,8 @@ fun BilbyPlayer(
     embeddedTopActions: @Composable RowScope.() -> Unit = {},
     /** 窗口在画中画里。见 [PlayerShell] 的同名参数;弹幕画不画看 [DanmakuPrefs.inPip]。 */
     pip: Boolean = false,
+    /** 宽排法控制条里的弹幕输入框。null 即不给(没登录、或这一形态不在这里发)。 */
+    controlBarDanmaku: ControlBarDanmaku? = null,
 ) {
     /** 两栏布局:内嵌画面占整窗高度,弹幕字号与全屏同档(见 [DanmakuFontSizeSp])。 */
     val twoPane = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
@@ -283,7 +290,14 @@ fun BilbyPlayer(
                 currentQuality = currentQuality,
                 subtitleTracks = subtitleTracks,
                 currentSubtitleLan = currentSubtitleLan,
+                audioOptions = audioOptions,
+                currentAudio = currentAudio,
                 isFullscreen = isFullscreen,
+                largePlayer = isFullscreen || twoPane,
+                hasDanmakuSettings = danmakuEditor != null,
+                danmakuField = controlBarDanmaku,
+                // 写弹幕时控制条不自动收起,同设置面板开着时。
+                onDanmakuFieldFocusChange = { setMenuOpen(it) },
                 onSeekStart = { onSeekStart() },
                 onSeekTo = { onSeekTo(it) },
                 onSeekFinished = { onSeekFinished() },
@@ -333,13 +347,14 @@ fun BilbyPlayer(
 /**
  * 底部控制条。播放键不在这里,在画面正中(见 PlayerShell 的 CenterPlayButton)。
  *
- * 两种排法,**按宽度分,不按是不是全屏分**:
+ * 两种排法,按画面大小分:
  *
- * - **窄**(内嵌,以及竖屏视频的全屏):一行 ——「时间 进度条 时长 [弹幕] ⚙ ⛶」。倍速、清晰度、
- *   字幕收进 ⚙ 打开的播放设置面板。内嵌画面只有两百来 dp 高,两行控制条加上顶上的返回键,
- *   中间就放不下播放键了。
- * - **宽**(横屏全屏):进度条独占一行,下面一行是读数和几枚写着当前档位的 chip
- *   (「1.5x」「1080P」),点任何一枚都打开同一块设置面板。
+ * - **窄**(单栏内嵌,以及竖屏视频的全屏):一行 ——「时间 进度条 时长 [弹幕] ⚙ ⛶」。倍速、
+ *   清晰度、字幕收进 ⚙ 打开的整块设置面板。内嵌画面只有两百来 dp 高,两行控制条加上顶上的
+ *   返回键,中间就放不下播放键了。
+ * - **宽**(全屏,或双栏里的内嵌画面,且宽度够):进度条独占一行,下面一行是读数和几枚写着
+ *   当前档位的 chip(「1.5x」「1080P」),每一枚只开自己那一段;弹幕开关旁边的 ⚙ 只开弹幕那一段。
+ *   不只看宽度:单栏横屏的内嵌画面也有四五百 dp 宽,高度却放不下两行。
  *
  * 原先是一行按钮加一套"量一遍装不装得下、装不下就给不给档名、再装不下就分两行"的估算,
  * 窄屏上是六七个一样大的白色线框挤在右下角。现在窄的时候档位全在面板里,估算就不需要了。
@@ -355,7 +370,15 @@ private fun PlayerControlBar(
     currentQuality: Int,
     subtitleTracks: List<SubtitleTrack>,
     currentSubtitleLan: String,
+    audioOptions: List<Int>,
+    currentAudio: Int,
     isFullscreen: Boolean,
+    /** 全屏,或双栏里那块占满整列高度的内嵌画面。只有这时才考虑宽排法。 */
+    largePlayer: Boolean,
+    /** 有没有弹幕设置可调。没有时宽排法不画那枚弹幕设置键。 */
+    hasDanmakuSettings: Boolean,
+    danmakuField: ControlBarDanmaku?,
+    onDanmakuFieldFocusChange: (Boolean) -> Unit,
     onSeekStart: () -> Unit,
     onSeekTo: (Long) -> Unit,
     onSeekFinished: () -> Unit,
@@ -411,7 +434,8 @@ private fun PlayerControlBar(
     }
 
     BoxWithConstraints(modifier = container) {
-        val wide = isFullscreen && maxWidth >= Breakpoints.StackedControlBar
+        val wide = largePlayer && maxWidth >= Breakpoints.StackedControlBar
+        val roomy = maxWidth >= InlineDanmakuBarMinWidth
         if (!wide) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TimeLabel(position, modifier = Modifier.padding(start = Spacing.Tight))
@@ -431,25 +455,57 @@ private fun PlayerControlBar(
                 verticalArrangement = Arrangement.spacedBy(-ControlRowOverlap),
             ) {
                 seekBar(Modifier.fillMaxWidth().zIndex(1f))
+                // 弹幕输入框在读数与 chip 之间,同网页端。这一行放不下它和整排 chip 时,它收成一枚
+                // 「发弹幕」键,点开之后 chip 让位、输入框铺开,同窄屏胶囊写弹幕时视图切换退场。
+                var composing by remember { mutableStateOf(false) }
+                val showField = danmakuField != null && (roomy || composing)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Row(
                         verticalAlignment = Alignment.Bottom,
-                        modifier = Modifier.weight(1f).padding(start = Spacing.Tight),
+                        modifier = Modifier.padding(start = Spacing.Tight),
                     ) {
                         TimeLabel(position, large = true)
                         TimeLabel(duration, large = true, secondary = true, prefix = " / ")
                     }
-                    SettingChips(
-                        speed = speed,
-                        // 只有一档时没什么可换,chip 不画(面板里那一段同样不画)。
-                        qualityLabel = qualities.takeIf { it.size > 1 }
-                            ?.firstOrNull { it.quality == currentQuality }?.label,
-                        subtitleLabel = subtitleTracks.firstOrNull { it.lan == currentSubtitleLan }?.displayName,
-                        hasSubtitles = subtitleTracks.isNotEmpty(),
-                        onOpenSection = onOpenSettings,
-                    )
+                    if (showField) {
+                        ControlBarDanmakuField(
+                            draft = danmakuField.draft,
+                            onDraftChange = danmakuField.onDraftChange,
+                            maxLength = danmakuField.maxLength,
+                            sending = danmakuField.sending,
+                            error = danmakuField.error,
+                            onSend = danmakuField.onSend,
+                            onFocusChange = { focused ->
+                                onDanmakuFieldFocusChange(focused)
+                                danmakuField.onComposingChange(focused)
+                                if (!focused) composing = false
+                            },
+                            autoFocus = !roomy,
+                            modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
+                    if (roomy || !composing) {
+                        SettingChips(
+                            speed = speed,
+                            // 只有一档时没什么可换,chip 不画(面板里那一段同样不画)。
+                            qualityLabel = qualities.takeIf { it.size > 1 }
+                                ?.firstOrNull { it.quality == currentQuality }?.label,
+                            audioLabel = currentAudio.takeIf { audioOptions.size > 1 }?.let { audioQualityLabel(it) },
+                            subtitleLabel = subtitleTracks.firstOrNull { it.lan == currentSubtitleLan }?.displayName,
+                            hasSubtitles = subtitleTracks.isNotEmpty(),
+                            onOpenSection = onOpenSettings,
+                        )
+                    }
+                    if (danmakuField != null && !showField) {
+                        val label = stringResource(Res.string.danmaku_send)
+                        PlayerTooltip(label) {
+                            PlayerIconButton(onClick = { composing = true }, icon = Icons.Filled.Edit, contentDescription = label)
+                        }
+                    }
                     DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-                    PlayerSettingsButton { onOpenSettings(null) }
+                    if (hasDanmakuSettings) DanmakuSettingsButton { onOpenSettings(PlayerSettingsSection.Danmaku) }
                     FullscreenButton(isFullscreen, onFullscreenToggle)
                 }
             }
@@ -480,14 +536,16 @@ private fun TimeLabel(
 }
 
 /**
- * 宽排法里那几枚写着当前档位的 chip,用来快速换档。**每一枚只打开设置面板里自己那一段**,
- * 整块面板从旁边的 ⚙ 进(见 [PlayerSettingsSection])。
+ * 宽排法里那几枚写着当前档位的 chip,用来快速换档。**每一枚只打开设置面板里自己那一段**
+ * (见 [PlayerSettingsSection])。
  * 没有字幕轨时那一枚不画,字幕关着时只画图标(写「关闭」读起来像按下去会关掉)。
+ * 音质只有一条音轨时不画,同清晰度。
  */
 @Composable
 private fun SettingChips(
     speed: Float,
     qualityLabel: String?,
+    audioLabel: String?,
     subtitleLabel: String?,
     hasSubtitles: Boolean,
     onOpenSection: (PlayerSettingsSection) -> Unit,
@@ -512,6 +570,17 @@ private fun SettingChips(
             )
         }
     }
+    if (audioLabel != null) {
+        val description = stringResource(Res.string.player_audio_quality)
+        PlayerTooltip(description) {
+            ControlButton(
+                expanded = false,
+                onClick = { onOpenSection(PlayerSettingsSection.Audio) },
+                label = audioLabel,
+                icon = { tint -> Icon(Icons.Filled.GraphicEq, description, tint = tint, modifier = Modifier.size(ChipIconSize)) },
+            )
+        }
+    }
     if (hasSubtitles) {
         val description = stringResource(Res.string.player_subtitle)
         PlayerTooltip(description) {
@@ -526,6 +595,12 @@ private fun SettingChips(
 }
 
 private val ChipIconSize = 18.dp
+
+/**
+ * 宽排法那一行常驻弹幕输入框所需的宽度:读数、四枚带档名的 chip、三颗图标键之外,输入框还剩
+ * 两百来 dp。双栏最窄时左栏只有五百多 dp,够不着这一档,输入框收成一枚键。
+ */
+private val InlineDanmakuBarMinWidth = 720.dp
 
 @Composable
 private fun FullscreenButton(isFullscreen: Boolean, onClick: () -> Unit) {

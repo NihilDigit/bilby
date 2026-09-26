@@ -108,6 +108,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import dev.bilby.ui.player.PlayerTooltip
 import dev.bilby.ui.video.LiveSettingsContent
 import dev.bilby.ui.video.PlayerSettingsButton
+import dev.bilby.ui.video.DanmakuSettingsButton
+import dev.bilby.ui.player.ControlBarDanmaku
+import dev.bilby.ui.player.ControlBarDanmakuField
 import dev.bilby.ui.video.PlayerSettingsHost
 import dev.bilby.ui.video.PlayerSettingsSection
 import dev.bilby.live.LiveMessage
@@ -238,6 +241,13 @@ fun LiveRoomScreen(
     // 上方补一条黑边;宽屏下状态栏整条收起来。下面的 Tab 自己躲左右和底部。
     val expandedLayout = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
 
+    // 弹幕草稿归页面:底部发言栏与全屏控制条里的输入框是同一句话的两个位置,进出全屏不丢。
+    var danmakuDraft by rememberSaveable { mutableStateOf("") }
+    val sendDanmakuDraft: () -> Unit = {
+        onSendDanmaku(danmakuDraft)
+        danmakuDraft = ""
+    }
+
     // 画面这一块在两种排法里是同一份,只是外面的尺寸不同,见下面的 Row / Column。
     val playerPaneContent: @Composable (Modifier) -> Unit = { paneModifier ->
         Box(modifier = paneModifier.background(Color.Black)) {
@@ -267,6 +277,16 @@ fun LiveRoomScreen(
                     gestures = PlayerGestureOptions(seek = false, fastForward = false),
                     // 分享与高能榜人数跟控件一起显隐,同播放页:常驻的话它们一直压在画面右上角。
                     pip = inPip,
+                    // 全屏顶栏同样给画中画,理由同播放页:它只从按钮进。
+                    topBarActions = {
+                        if (pip.supported) {
+                            PlayerIconButton(
+                                onClick = { pip.enter(player.videoAspect()) },
+                                icon = Icons.Filled.PictureInPictureAlt,
+                                contentDescription = stringResource(Res.string.player_pip),
+                            )
+                        }
+                    },
                     embeddedTopActions = {
                         OnlineRankLabel(state.onlineRank)
                         // 画中画在分享左边,同播放页。
@@ -301,6 +321,21 @@ fun LiveRoomScreen(
                     controlBar = {
                         LiveControlBar(
                             isFullscreen = isFullscreen,
+                            largePlayer = isFullscreen || expandedLayout,
+                            danmakuField = if (isFullscreen) {
+                                ControlBarDanmaku(
+                                    draft = danmakuDraft,
+                                    onDraftChange = { danmakuDraft = it },
+                                    maxLength = LiveDanmakuMaxLength,
+                                    sending = state.sendingDanmaku,
+                                    error = state.sendError?.let { stringResource(Res.string.danmaku_send_failed, it) },
+                                    onSend = sendDanmakuDraft,
+                                )
+                            } else {
+                                null
+                            },
+                            // 写弹幕时控制条不自动收起,同设置面板开着时。
+                            onDanmakuFieldFocusChange = { setMenuOpen(it) },
                             watched = state.watched,
                             danmakuEnabled = danmakuPrefs.enabled,
                             onDanmakuEnabledChange = {
@@ -382,7 +417,11 @@ fun LiveRoomScreen(
             LiveRoomTabs(
                 state = state,
                 onLoadMoreGuards = onLoadMoreGuards,
-                onSendDanmaku = onSendDanmaku,
+                danmakuDraft = danmakuDraft,
+                onDanmakuDraftChange = { danmakuDraft = it },
+                onSendDanmaku = sendDanmakuDraft,
+                // 双栏时开关在画面的控制条上,发言栏左端不再放一枚。
+                showDanmakuToggle = !expandedLayout,
                 danmakuEnabled = danmakuPrefs.enabled,
                 onDanmakuEnabledChange = danmakuEditor::setEnabled,
                 onUserClick = onUserClick,
@@ -552,6 +591,11 @@ private fun LiveOffline(
 @Composable
 private fun LiveControlBar(
     isFullscreen: Boolean,
+    /** 全屏,或双栏里的大画面。这时 chip、弹幕开关与只管弹幕的 ⚙ 都上到控制条,同播放页。 */
+    largePlayer: Boolean,
+    /** 全屏时这一行里的弹幕输入框;双栏时输入框在右栏聊天底下,这里是 null。 */
+    danmakuField: ControlBarDanmaku?,
+    onDanmakuFieldFocusChange: (Boolean) -> Unit,
     /** 「N 人看过」整句,服务端拼好的。空串就不画这一格,见 LiveRoomUiState.watched。 */
     watched: String,
     danmakuEnabled: Boolean,
@@ -591,11 +635,25 @@ private fun LiveControlBar(
             text = watched,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f).padding(start = Spacing.Tight),
+            modifier = Modifier
+                .then(if (danmakuField == null) Modifier.weight(1f) else Modifier)
+                .padding(start = Spacing.Tight),
         )
-        // 排法同播放页:内嵌只有 ⚙ 和全屏键,弹幕开关在底部发言栏的左端;全屏时发言栏不在,
-        // 弹幕开关和快速换画质的 chip 上到这里。
-        if (isFullscreen && qualityLabel != null) {
+        if (danmakuField != null) {
+            ControlBarDanmakuField(
+                draft = danmakuField.draft,
+                onDraftChange = danmakuField.onDraftChange,
+                maxLength = danmakuField.maxLength,
+                sending = danmakuField.sending,
+                error = danmakuField.error,
+                onSend = danmakuField.onSend,
+                onFocusChange = onDanmakuFieldFocusChange,
+                modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
+            )
+        }
+        // 排法同播放页:单栏内嵌只有 ⚙ 和全屏键,弹幕开关在底部发言栏的左端;大画面时弹幕开关、
+        // 快速换画质的 chip 和只管弹幕的 ⚙ 上到这里。
+        if (largePlayer && qualityLabel != null) {
             val description = stringResource(Res.string.player_quality)
             PlayerTooltip(description) {
                 ControlButton(
@@ -609,8 +667,12 @@ private fun LiveControlBar(
             }
         }
         LiveAudioOnlyButton(onlyAudio, onOnlyAudioChange, isFullscreen)
-        if (isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-        PlayerSettingsButton { onOpenSettings(null) }
+        if (largePlayer) {
+            DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+            DanmakuSettingsButton { onOpenSettings(PlayerSettingsSection.Danmaku) }
+        } else {
+            PlayerSettingsButton { onOpenSettings(null) }
+        }
         PlayerIconButton(
             onClick = onFullscreenToggle,
             icon = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
@@ -724,7 +786,10 @@ private fun LiveAnchorRow(state: LiveRoomUiState, onUserClick: (Long) -> Unit, o
 private fun LiveRoomTabs(
     state: LiveRoomUiState,
     onLoadMoreGuards: () -> Unit,
-    onSendDanmaku: (String) -> Unit,
+    danmakuDraft: String,
+    onDanmakuDraftChange: (String) -> Unit,
+    onSendDanmaku: () -> Unit,
+    showDanmakuToggle: Boolean,
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
     onUserClick: (Long) -> Unit,
@@ -791,11 +856,14 @@ private fun LiveRoomTabs(
         // 简介和评论,没有它的位置;直播间本来就有一条聊天栏,输入栏接在它下面读起来就是
         // "在这儿说话",和评论区是同一个形状。直播也没什么好暂停的。
         LiveDanmakuInput(
+            text = danmakuDraft,
+            onTextChange = onDanmakuDraftChange,
             sending = state.sendingDanmaku,
             error = state.sendError,
             // 未开播时不给输入:此刻画面是一张封面,服务端也会拒。
             enabled = state.isLive,
             onSend = onSendDanmaku,
+            showDanmakuToggle = showDanmakuToggle,
             danmakuEnabled = danmakuEnabled,
             onDanmakuEnabledChange = onDanmakuEnabledChange,
         )
@@ -1319,20 +1387,22 @@ private fun ChatPane(
  */
 @Composable
 private fun LiveDanmakuInput(
+    text: String,
+    onTextChange: (String) -> Unit,
     sending: Boolean,
     error: String?,
     enabled: Boolean,
-    onSend: (String) -> Unit,
-    /** 胶囊左端的弹幕开关,同视频页标签栏那一枚。全屏时这一栏不在,开关在控制条上。 */
+    onSend: () -> Unit,
+    /**
+     * 左端画不画弹幕开关,同视频页标签栏那一枚。全屏时这一栏不在,双栏时开关在画面的控制条上,
+     * 两种情况都不画。
+     */
+    showDanmakuToggle: Boolean,
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
 ) {
-    var text by rememberSaveable { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
-    val send = {
-        onSend(text)
-        text = ""
-    }
+    val send = onSend
     Column(
         modifier = Modifier
             .imePadding()
@@ -1352,26 +1422,30 @@ private fun LiveDanmakuInput(
         }
         PillInputField(
             value = text,
-            onValueChange = { if (it.length <= LiveDanmakuMaxLength) text = it },
+            onValueChange = { if (it.length <= LiveDanmakuMaxLength) onTextChange(it) },
             placeholder = stringResource(Res.string.danmaku_input_hint),
             canSend = enabled && !sending && text.isNotBlank(),
             sending = sending,
             onSend = send,
             enabled = enabled,
             maxLines = 1,
-            leading = {
-                // 开与关换的是字形,不只是颜色,同视频页那枚。
-                IconToggleButton(checked = danmakuEnabled, onCheckedChange = onDanmakuEnabledChange) {
-                    Icon(
-                        imageVector = if (danmakuEnabled) BilbyIcons.Danmaku else BilbyIcons.DanmakuOff,
-                        contentDescription = stringResource(Res.string.danmaku_show),
-                        tint = if (danmakuEnabled) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
+            leading = if (showDanmakuToggle) {
+                {
+                    // 开与关换的是字形,不只是颜色,同视频页那枚。
+                    IconToggleButton(checked = danmakuEnabled, onCheckedChange = onDanmakuEnabledChange) {
+                        Icon(
+                            imageVector = if (danmakuEnabled) BilbyIcons.Danmaku else BilbyIcons.DanmakuOff,
+                            contentDescription = stringResource(Res.string.danmaku_show),
+                            tint = if (danmakuEnabled) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
                 }
+            } else {
+                null
             },
             // 写的时候最右端给退出键,同视频页的弹幕胶囊:输入栏常驻在页面底部,收键盘之外没有
             // 别的出口,桌面上连这一条都没有。草稿留在框里。

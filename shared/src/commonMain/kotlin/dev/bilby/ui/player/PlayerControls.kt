@@ -512,7 +512,7 @@ internal fun ControlButton(
 }
 
 /** 控制条 chip 的容器高度,M3E XS 按钮那一档。 */
-private val ControlChipHeight = 32.dp
+internal val ControlChipHeight = 32.dp
 
 /**
  * 画面正中的播放键,**三种形态由同一块容器连续变过去**:
