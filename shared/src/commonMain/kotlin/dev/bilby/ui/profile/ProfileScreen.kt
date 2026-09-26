@@ -34,10 +34,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.pointerInput
-import kotlin.math.abs
+import dev.bilby.ui.components.verticalWheelScrollsRow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -414,8 +411,8 @@ private val ShelfSectionMinHeight get() = Dimens.MinTouchTarget + ShelfCardMinHe
  * 空间 —— 这一页看得到的是"我攒了什么",而"我发了什么"在空间页。
  *
  * - **一张卡装下"我"的全部**,取代原先的顶栏(名字、齿轮)+ 头像行 + 分割线 + 分割线下的消息
- *   入口。同一个人的几样东西分在四处,中间还隔一道线,读不出是一组。底色取 surfaceContainer,
- *   卡与下面各节的边界由底色和圆角承担,不再要那道线。
+ *   入口。同一个人的几样东西分在四处,中间还隔一道线,读不出是一组。它是页头,不画底色,
+ *   和下面各节之间靠留白分开(风格指南 §2.3c)。
  * - **头像、名字、等级、签名同空间页页头**:字号、间距、等级单独一行都照那边。
  * - **设置在这一行右端,垂直居中**,位置同空间页的关注按钮。
  * - **关注、硬币、私信三格相连**,形状沿用视频动作栏的分段。私信不带未读计数、不带红点
@@ -441,17 +438,18 @@ private fun AccountCard(
     wide: Boolean = false,
 ) {
     val account = state.account
-    // 宽屏不画底色:卡片和货架同宽时,一块底色横跨整个窗口,读起来是一条横幅,比下面的内容还重。
-    // 去掉底色后它是页头那一行,三连自己的底色已经够把它们圈成一组。内外边距各 8,点按的涟漪
-    // 仍有一圈余量,头像左沿落在 16 的页边线上,和货架第一张卡对齐。
+    // 不画底色,窄屏宽屏都一样。宽屏上一块底色横跨整个窗口,读起来是一条横幅;窄屏上它是页面
+    // 第一张卡,下面各节又是一块块带底色的行,整页层层叠叠。去掉底色后它是页头,和空间页的
+    // 页头同一种读法,三连自己的底色已经够把它们圈成一组。
+    // 内外边距各 8:点按的涟漪仍有一圈余量,头像左沿落在 16 的页边线上,和下面各节对齐;
+    // 上沿同样是 16,贴着状态栏会像被裁了一截。
     Surface(
-        color = if (wide) Color.Transparent else MaterialTheme.colorScheme.surfaceContainer,
+        color = Color.Transparent,
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = MaterialTheme.shapes.extraLarge,
         modifier = Modifier
             .fillMaxWidth()
-            // 上边距和左右一样是 16:没有顶栏之后卡片就是页面的第一样东西,贴着状态栏像被裁了一截。
-            .padding(if (wide) Spacing.Tight else Spacing.Comfortable),
+            .padding(Spacing.Tight),
     ) {
         Column(
             verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
@@ -465,14 +463,8 @@ private fun AccountCard(
                         Modifier
                     },
                 )
-                // 左边 16:头像的左沿和下面预览区封面的左沿对齐(同是 16 + 16,见 PreviewRow)。
-                // 右边只留 4:两个图标按钮自带 48dp 触控格,图标本身离卡边已经有 16。
-                .padding(
-                    start = if (wide) Spacing.Tight else Spacing.Comfortable,
-                    top = if (wide) Spacing.Tight else Spacing.Comfortable,
-                    bottom = if (wide) Spacing.Tight else Spacing.Comfortable,
-                    end = Spacing.Hair,
-                ),
+                // 右边只留 4:设置按钮自带 48dp 触控格,图标本身离页边已经有 24。
+                .padding(start = Spacing.Tight, top = Spacing.Tight, bottom = Spacing.Tight, end = Spacing.Hair),
         ) {
         val settingsButton: @Composable () -> Unit = {
             IconButton(onClick = onSettingsClick) {
@@ -575,14 +567,15 @@ private fun AccountCard(
             }
             settingsButton()
         }
-        // 关注、硬币、消息三连,横跨整张卡。右边补 12,理由同签名那一行。
+        // 关注、硬币、消息三连,横跨整行。右边再补 4,右沿和左沿一样落在 16 的页边线上
+        // (外边距 8 + 内边距 4 + 4)。
         if (!wide) {
             AccountActions(
                 account = account,
                 onOpenFollowings = onOpenFollowings,
                 onOpenCoinLog = onOpenCoinLog,
                 onOpenMessages = onOpenMessages,
-                modifier = Modifier.padding(end = Spacing.Cozy),
+                modifier = Modifier.padding(end = Spacing.Hair),
             )
         }
         }
@@ -1011,22 +1004,28 @@ private fun ShelfTitle(
             .heightIn(min = Dimens.MinTouchTarget)
             .padding(horizontal = Spacing.Comfortable),
     ) {
-        Text(
-            text = title,
-            style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
-            maxLines = 1,
-            modifier = Modifier.alignByBaseline(),
-        )
-        meta?.let {
+        // 标题与 meta 的基线对齐只在内层做:外层 Row 里一旦有子项按基线对齐,这组子项就被
+        // 摆到基线所在的行顶,只有其余子项居中,标题便比右边的按钮高出一截。
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+            modifier = Modifier.weight(1f),
+        ) {
             Text(
-                text = it,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = title,
+                style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
                 maxLines = 1,
                 modifier = Modifier.alignByBaseline(),
             )
+            meta?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    modifier = Modifier.alignByBaseline(),
+                )
+            }
         }
-        Spacer(Modifier.weight(1f))
         if (onSeeAll != null) {
             // 右端:宽屏上它对着这一排卡片的尾巴,读作"这一排还有";tonal 带字,读得出是按钮。
             // 字加箭头试过的两种弱形态:标题后一个无底色的细线箭头,像装饰;标题后一个 tonal
@@ -1083,34 +1082,6 @@ private fun <T> Shelf(items: List<T>, card: @Composable (item: T, modifier: Modi
         }
     }
 }
-
-/**
- * 竖向滚轮转成这一排的横滚。在 Initial 阶段截下:LazyRow 自己的滚动只认横向分量,竖向的会
- * 一路冒到外面的页面上去。
- *
- * 这一排还滚得动时消费掉;滚到头(或本来就放得下)不消费,页面照常往下滚。增量直接派发,
- * 不做动画:连续几格滚轮各起一段动画时,后一段会打断前一段,走过的距离比滚的格数少。
- */
-private fun Modifier.verticalWheelScrollsRow(state: LazyListState): Modifier = pointerInput(state) {
-    val stepPx = WheelStep.toPx()
-    awaitPointerEventScope {
-        while (true) {
-            val event = awaitPointerEvent(PointerEventPass.Initial)
-            if (event.type != PointerEventType.Scroll) continue
-            val change = event.changes.firstOrNull() ?: continue
-            val delta = change.scrollDelta
-            if (abs(delta.y) <= abs(delta.x)) continue
-            val px = delta.y * stepPx
-            val canMove = if (px > 0) state.canScrollForward else state.canScrollBackward
-            if (!canMove) continue
-            change.consume()
-            state.dispatchRawDelta(px)
-        }
-    }
-}
-
-/** 一格滚轮横移多少,约半张卡。 */
-private val WheelStep = 96.dp
 
 private fun shelfColumns(width: Dp): Int =
     ((width + ShelfGap) / (ShelfCardMinWidth + ShelfGap)).toInt().coerceAtLeast(1)
