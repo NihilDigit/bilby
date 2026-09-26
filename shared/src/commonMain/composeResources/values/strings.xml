@@ -620,6 +620,7 @@
     <string name="settings_auto_next_subtitle">一条播完后接着放队列里的下一条。关闭后播完即停,手动切换不受影响</string>
     <string name="player_seek_release_to_cancel">松手取消进退</string>
     <string name="action_share">分享</string>
+    <string name="share_link_copied">已复制链接</string>
     <string name="player_pip">小窗播放</string>
     <string name="settings_danmaku_in_pip">小窗显示弹幕</string>
     <string name="sponsor_sponsor_desc">品牌方投放的口播或贴片</string>

@@ -215,10 +215,22 @@ fun BilbyRoot(
         // 是压栈动作,而压栈能从任何一页发起,各页面的 Scaffold 都会跟着页面一起换掉。
         val snackbarHostState = remember { SnackbarHostState() }
         val pointerSource = remember { PointerSource() }
+        // 分享在桌面上是复制链接,按下去界面上看不出变化;报一句,见 SystemActions.shareCopiesLink。
+        val scope = rememberCoroutineScope()
+        val copiedText = stringResource(Res.string.share_link_copied)
+        val baseActions = LocalSystemActions.current
+        val systemActions = remember(baseActions, copiedText) {
+            baseActions.withShareNotice {
+                scope.launch { snackbarHostState.showSnackbar(copiedText, withDismissAction = true) }
+            }
+        }
         Box(modifier = Modifier.fillMaxSize().trackPointerSource(pointerSource)) {
             // 页面深处的组件可以把一层画到整个窗口最上面,见 OverlayHost。
             OverlayHost {
-                CompositionLocalProvider(LocalPointerSource provides pointerSource) {
+                CompositionLocalProvider(
+                    LocalPointerSource provides pointerSource,
+                    LocalSystemActions provides systemActions,
+                ) {
                     BilbyApp(container, incomingLink, snackbarHostState)
                 }
             }

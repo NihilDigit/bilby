@@ -16,6 +16,7 @@ class DesktopSystemActions(private val languageStore: DesktopLanguageStore) : Sy
     override fun shareVideo(bvid: String, title: String) = copy(title, "https://www.bilibili.com/video/$bvid")
     override fun shareLiveRoom(roomId: Long, title: String) = copy(title, "https://live.bilibili.com/$roomId")
     override fun shareSpace(mid: Long, name: String) = copy(name, "https://space.bilibili.com/$mid")
+    override val shareCopiesLink: Boolean get() = true
 
     override fun openInBrowser(url: String) {
         runCatching { Desktop.getDesktop().browse(URI(url)) }
