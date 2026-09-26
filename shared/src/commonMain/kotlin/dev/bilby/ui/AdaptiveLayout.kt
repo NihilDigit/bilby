@@ -92,6 +92,26 @@ fun Modifier.readableWidth(maxWidth: Dp = Breakpoints.ReadableWidth): Modifier =
         .widthIn(max = maxWidth)
         .fillMaxWidth()
 
+/**
+ * 列表页的宽度策略,订阅页与 UP 空间的做法收成一处。expanded 起不再限宽,交给 [content] 一份
+ * 每格不超过 [maxCellWidth] 的网格列数,窗口多宽就排几列;更窄时同 [AdaptiveContent],限宽一列。
+ *
+ * 单列时整列限宽是为了行长;多列时每格已经限了宽,外层再限一次只会把列数压死在两列,
+ * 两边仍是大片留白。
+ */
+@Composable
+fun AdaptiveListContent(
+    modifier: Modifier = Modifier,
+    maxCellWidth: Dp = Breakpoints.VideoRowMaxWidth,
+    content: @Composable BoxScope.(columns: GridCells) -> Unit,
+) {
+    if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
+        Box(modifier = modifier.fillMaxSize()) { content(maxWidthGridCells(maxCellWidth)) }
+    } else {
+        AdaptiveContent(modifier = modifier) { content(GridCells.Fixed(1)) }
+    }
+}
+
 @Composable
 fun AdaptiveContent(
     modifier: Modifier = Modifier,

@@ -1685,9 +1685,9 @@ private fun DynamicListTab(
         onLoadMore = onLoadMore,
         modifier = modifier,
         // 瀑布流:一条三行的和一条半屏的并排时,按网格排会在矮的那条下面空出一大截。
-        // 列数按宽度来,侧栏默认宽度下是一列,拖宽或占满主区时自然变成两列、三列。
+        // 列数按宽度来,侧栏默认宽度 400dp 下是一列,拖过 800 或占满主区时自然变成两列、三列。
         layout = if (flat) {
-            PagedLayout.Staggered(StaggeredGridCells.Adaptive(DynamicColumnMinWidth), Spacing.Tight)
+            PagedLayout.Staggered(StaggeredGridCells.Adaptive(Breakpoints.DynamicColumnMinWidth), Spacing.Tight)
         } else {
             PagedLayout.SingleColumn
         },
@@ -1722,12 +1722,6 @@ private fun DynamicListTab(
     }
 }
 
-/**
- * 瀑布流一列的最窄宽度。按下限而不是上限定列数:动态的配图方格要 490dp 才铺得满
- * (见 DynamicCardView 的 GridImageMaxSide),一列压到三百来 dp,配图和正文都挤。
- * 侧栏默认 400dp 正好一列,拖过 800 变两列。
- */
-private val DynamicColumnMinWidth = 400.dp
 
 /**
  * 一条动态。**全部类型走 [DynamicCardView]** —— 那一份是动态渲染的唯一实现,
@@ -1778,7 +1772,6 @@ internal fun VideoListTab(
     onVideoClick: (SpaceVideoItem) -> Unit,
     modifier: Modifier = Modifier,
     header: (@Composable () -> Unit)? = null,
-    /** 宽屏的空间投稿是网格;合集目录页仍是一列。 */
     columns: GridCells = GridCells.Fixed(1),
 ) {
     PagedColumn(

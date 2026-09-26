@@ -29,11 +29,12 @@ import dev.bilby.BiliLog
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.appendDistinctBy
-import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.AdaptiveListContent
 import dev.bilby.api.BiliResult
 import dev.bilby.data.HistoryItem
 import dev.bilby.data.HistoryRepository
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
@@ -261,13 +262,14 @@ fun HistoryScreen(
         )
     }
 
-    AdaptiveContent(modifier = modifier) {
+    AdaptiveListContent(modifier = modifier) { columns ->
         RefreshBox(
             refreshing = state.refreshing,
             onRefresh = onRefresh,
             modifier = Modifier.fillMaxSize(),
         ) {
             PagedColumn(
+                layout = PagedLayout.Grid(columns),
                 items = state.items,
                 key = { it.oid },
                 loading = state.loading,

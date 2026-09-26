@@ -951,10 +951,18 @@ positions or instantly popping in as it loads」。列表首屏、「我的」�
 |---|---|---|
 | compact | — | **一切照旧**,不因响应式改动任何东西 |
 | medium | 600dp | 底栏换 `NavigationRail`,内容开始收窄 |
-| expanded | 840dp | 设置页与个人页拆双栏,播放画面收到 `MediaWidth` |
+| expanded | 840dp | 列表页改网格,个人页拆双栏,播放画面收到 `MediaWidth` |
 
 **`AdaptiveContent` 只做一件事:把多出来的宽度转成两边留白。** 一栏、两栏还是沉浸式播放器
-由页面自己决定。
+由页面自己决定。它只留给正文类页面(专栏、动态详情、评论楼、搜索助手),行长是那里的问题。
+
+**列表页用 `AdaptiveListContent`。** expanded 起不限宽,每格不超过 `VideoRowMaxWidth`,
+窗口多宽排几列;更窄时同 `AdaptiveContent`。订阅页与空间页的网格是同一个做法,只是自己
+写了判断。单列限宽的理由在多列时不成立:每格已经限了宽,外层再限一次只会把列数压死在两列。
+
+**动态列表在宽屏是瀑布流**(空间页动态侧栏、「关注动态」页),每列不窄于
+`DynamicColumnMinWidth`。动态高矮差得太多,按行排的网格会在矮的那条下面空一大截;代价是
+读序只大致从上往下。
 
 **踩过一次的顺序问题:`fillMaxWidth().widthIn(max = …)` 的上限完全不生效。**
 `fillMaxWidth` 先把子约束定成 `min = max = 父宽`,而 `widthIn` 是

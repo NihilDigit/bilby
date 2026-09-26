@@ -16,10 +16,11 @@ import dev.bilby.resources.*
 import dev.bilby.api.BiliResult
 import dev.bilby.data.BlockedUser
 import dev.bilby.data.RelationRepository
-import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.AdaptiveListContent
 import dev.bilby.appendDistinctBy
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.ListItemPersonSkeleton
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.Dimens
@@ -119,8 +120,9 @@ fun BlacklistScreen(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
-    AdaptiveContent(modifier = modifier) {
+    AdaptiveListContent(modifier = modifier) { columns ->
         PagedColumn(
+            layout = PagedLayout.Grid(columns),
             items = state.users,
             key = { it.mid },
             skeletonRow = { ListItemPersonSkeleton() },

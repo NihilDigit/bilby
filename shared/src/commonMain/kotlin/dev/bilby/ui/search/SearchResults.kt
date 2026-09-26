@@ -34,6 +34,8 @@ import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.touchOnlyPaging
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.PagedLayout
+import androidx.compose.foundation.lazy.grid.GridCells
 import dev.bilby.ui.components.PersonRowSkeleton
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.SortMenu
@@ -83,6 +85,7 @@ internal fun SearchResults(
     state: NormalSearchState,
     actions: SearchResultActions,
     modifier: Modifier = Modifier,
+    columns: GridCells = GridCells.Fixed(1),
 ) {
     val tabs = SearchTab.entries
     val pagerState = rememberPagerState(initialPage = state.tab.ordinal) { tabs.size }
@@ -115,14 +118,19 @@ internal fun SearchResults(
             }
         }
         HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).touchOnlyPaging()) { page ->
-            ResultPage(tabs[page], state, actions)
+            ResultPage(tabs[page], state, actions, PagedLayout.Grid(columns))
         }
     }
 }
 
 /** 一栏:可选的筛选行,下面是可下拉刷新的列表。 */
 @Composable
-private fun ResultPage(tab: SearchTab, state: NormalSearchState, actions: SearchResultActions) {
+private fun ResultPage(
+    tab: SearchTab,
+    state: NormalSearchState,
+    actions: SearchResultActions,
+    layout: PagedLayout,
+) {
     Column(modifier = Modifier.fillMaxSize()) {
         // 筛选靠右,和其余列表上方的排序同一个位置、同一个组件(SortMenu)。用户那一栏没有
         // 可选的排序,整行不画。
@@ -156,8 +164,9 @@ private fun ResultPage(tab: SearchTab, state: NormalSearchState, actions: Search
             modifier = Modifier.weight(1f),
         ) {
             when (tab) {
-                SearchTab.Video -> VideoResults(state, actions)
+                SearchTab.Video -> VideoResults(state, actions, layout)
                 SearchTab.User -> PagedColumn(
+                    layout = layout,
                     items = state.users.items,
                     key = { it.mid },
                     skeletonRow = { PersonRowSkeleton() },
@@ -172,6 +181,7 @@ private fun ResultPage(tab: SearchTab, state: NormalSearchState, actions: Search
                 ) { user -> UserResultRow(user, onClick = { actions.onUserClick(user.mid) }) }
 
                 SearchTab.Article -> PagedColumn(
+                    layout = layout,
                     items = state.articles.items,
                     key = { it.id },
                     loading = state.articles.loading && state.articles.items.isEmpty(),
@@ -195,9 +205,10 @@ private fun ResultPage(tab: SearchTab, state: NormalSearchState, actions: Search
  * 列表头上,每次搜什么都先看到几张不相干的脸。
  */
 @Composable
-private fun VideoResults(state: NormalSearchState, actions: SearchResultActions) {
+private fun VideoResults(state: NormalSearchState, actions: SearchResultActions, layout: PagedLayout) {
     val videos = state.videos
     PagedColumn(
+        layout = layout,
         items = videos.items,
         key = { it.bvid },
         loading = videos.loading && videos.items.isEmpty(),

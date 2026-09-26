@@ -60,8 +60,16 @@ object Breakpoints {
     /**
      * 宽屏网格里一格视频行的最大宽度,照 PiliPlus `Grid.videoCardHDelegate` 的
      * `smallCardWidth * 2`。行是定宽封面加文字,再宽只是标题行变长;超过它就多分一列。
+     * 用户行(头像加两行文字)沿用同一个值,PiliPlus 的 `follow_type` 页也是这样。
      */
     val VideoRowMaxWidth = 480.dp
+
+    /**
+     * 动态瀑布流一列的最窄宽度。按下限而不是上限定列数:动态的配图方格要 490dp 才铺得满
+     * (见 DynamicCardView 的 GridImageMaxSide),一列压到三百来 dp,配图和正文都挤。
+     * 空间页的动态侧栏与「关注动态」页共用,同一条动态在两页里才是同一个宽度。
+     */
+    val DynamicColumnMinWidth = 400.dp
 
     /**
      * 播放控制条给得起档名(倍速倍数、画质档名、字幕轨名)的最小宽度。低于这一档只留图标。

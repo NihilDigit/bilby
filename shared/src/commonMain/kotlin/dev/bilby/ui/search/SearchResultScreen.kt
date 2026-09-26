@@ -6,9 +6,8 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.data.SearchRepository
-import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.AdaptiveListContent
 import dev.bilby.ui.components.RefreshBox
-import dev.bilby.ui.theme.Breakpoints
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -49,8 +48,7 @@ fun SearchResultScreen(
     actions: SearchResultActions,
     modifier: Modifier = Modifier,
 ) {
-    // 宽屏不拉满,和搜索 tab 同一条理由:条目是"封面 + 两行文字",行长一超可读宽度就得转头扫。
-    AdaptiveContent(modifier = modifier.fillMaxSize(), maxWidth = Breakpoints.ReadableWidth) {
-        SearchResults(state = state, actions = actions)
+    AdaptiveListContent(modifier = modifier.fillMaxSize()) { columns ->
+        SearchResults(state = state, actions = actions, columns = columns)
     }
 }

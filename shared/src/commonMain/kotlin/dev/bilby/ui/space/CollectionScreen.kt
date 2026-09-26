@@ -13,12 +13,11 @@ import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.api.BiliResult
 import dev.bilby.data.SpaceRepository
 import dev.bilby.data.SpaceVideoItem
-import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.AdaptiveListContent
 import dev.bilby.appendDistinctBy
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
-import dev.bilby.ui.theme.Breakpoints
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -140,10 +139,9 @@ fun CollectionScreen(
             }
         },
     ) { padding ->
-        AdaptiveContent(
+        AdaptiveListContent(
             modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(padding),
-            maxWidth = Breakpoints.ReadableWidth,
-        ) {
+        ) { columns ->
             RefreshBox(
                 refreshing = state.refreshing,
                 onRefresh = onRefresh,
@@ -159,6 +157,7 @@ fun CollectionScreen(
                     onLoadMore = onLoadMore,
                     onVideoClick = onVideoClick,
                     modifier = Modifier.fillMaxSize(),
+                    columns = columns,
                 )
             }
         }

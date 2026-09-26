@@ -31,8 +31,9 @@ import dev.bilby.data.ToViewItem
 import dev.bilby.data.ToViewKind
 import dev.bilby.data.ToViewRepository
 import dev.bilby.formatDurationSeconds
-import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.AdaptiveListContent
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.SortMenu
 import dev.bilby.ui.components.VideoRow
@@ -230,13 +231,14 @@ fun ToViewScreen(
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     val firstPlayable = state.items.firstOrNull { it.playable }
-    AdaptiveContent(modifier = modifier) {
+    AdaptiveListContent(modifier = modifier) { columns ->
         RefreshBox(
             refreshing = state.loading && state.items.isNotEmpty(),
             onRefresh = onRefresh,
             modifier = Modifier.fillMaxSize(),
         ) {
             PagedColumn(
+                layout = PagedLayout.Grid(columns),
                 items = state.items,
                 // 这一页的条目会被单条移出(下面那个 Close 按钮),动画认 aid。
                 key = { it.aid },

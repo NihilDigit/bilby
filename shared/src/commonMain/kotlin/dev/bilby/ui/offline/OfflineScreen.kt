@@ -10,9 +10,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -43,7 +44,7 @@ import dev.bilby.offline.OfflineStatus
 import dev.bilby.offline.OfflineStore
 import dev.bilby.player.isWatchedToEnd
 import dev.bilby.resources.*
-import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.AdaptiveListContent
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SectionHeader
@@ -134,13 +135,13 @@ fun OfflineScreen(
 ) {
     var pendingDelete by remember { mutableStateOf<OfflineItem?>(null) }
 
-    AdaptiveContent(modifier = modifier) {
+    AdaptiveListContent(modifier = modifier) { columns ->
         if (items.isEmpty()) {
             EmptyState(
                 message = stringResource(Res.string.offline_empty),
                 modifier = Modifier.fillMaxSize().padding(contentPadding),
             )
-            return@AdaptiveContent
+            return@AdaptiveListContent
         }
 
         val (completed, inFlight) = items.partition { it.status == OfflineStatus.Completed }
@@ -157,9 +158,9 @@ fun OfflineScreen(
             },
         )
 
-        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = contentPadding) {
+        LazyVerticalGrid(columns = columns, modifier = Modifier.fillMaxSize(), contentPadding = contentPadding) {
             if (inFlight.isNotEmpty()) {
-                item(key = "header-in-flight") {
+                item(key = "header-in-flight", span = { GridItemSpan(maxLineSpan) }) {
                     SectionHeader(
                         title = stringResource(Res.string.offline_section_in_flight, inFlight.size),
                         modifier = Modifier.padding(horizontal = Spacing.Comfortable).animateItem(),
@@ -168,7 +169,7 @@ fun OfflineScreen(
                 offlineRows(inFlight, rowScope)
             }
             if (completed.isNotEmpty()) {
-                item(key = "header-completed") {
+                item(key = "header-completed", span = { GridItemSpan(maxLineSpan) }) {
                     SectionHeader(
                         title = stringResource(Res.string.offline_section_completed),
                         // 标题行右端的 TextButton 自带内边距,这一侧的页边距让它来补。
@@ -235,7 +236,7 @@ private class OfflineRowScope(
     val onDeleteRequest: (OfflineItem) -> Unit,
 )
 
-private fun LazyListScope.offlineRows(rows: List<OfflineItem>, scope: OfflineRowScope) {
+private fun LazyGridScope.offlineRows(rows: List<OfflineItem>, scope: OfflineRowScope) {
     items(rows, key = { it.id }) { item ->
         OfflineRow(item, scope, Modifier.animateItem())
     }
