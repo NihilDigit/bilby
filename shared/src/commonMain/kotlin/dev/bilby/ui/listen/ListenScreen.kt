@@ -151,6 +151,11 @@ import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SubtitleTrackMenu
 import dev.bilby.ui.components.VideoCover
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.ui.components.panelCard
+import androidx.compose.foundation.layout.fillMaxHeight
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
@@ -205,6 +210,9 @@ private const val LeadInKey = "lyrics_lead_in"
  * 它能拉。删掉那行标签腾出来的高度正好给这件事。
  */
 private val QueueHandleHeight = 132.dp
+
+/** 宽屏右栏的宽度:队列条目的封面加两行标题排得开,同空间页动态侧栏的默认宽。 */
+private val QueuePaneWidth = 400.dp
 
 /**
  * 歌词页单独的位置轮询间隔。整页其余部分(进度条、控制行)用的是 500ms
@@ -554,44 +562,24 @@ fun ListenScreen(
             return@Scaffold
         }
 
-        val sheetState = rememberBottomSheetScaffoldState()
-        // BottomSheetScaffold 不管返回键(ModalBottomSheet 才管),不拦的话展开队列之后一按
-        // 返回,落到的是外面那句"退出听视频"。看 targetValue 而不是 currentValue:拉到一半
-        // 松手、正往上弹的那一刻按返回,也该是收回。
-        val sheetScope = rememberCoroutineScope()
-        BackHandler(enabled = sheetState.bottomSheetState.targetValue == SheetValue.Expanded) {
-            sheetScope.launch { sheetState.bottomSheetState.partialExpand() }
+        // 队列没建过时不给——一个空把手拉起来什么都没有,是纯噪声。建过之后常显,不需要再点
+        // 一行入口才能看到它。建队列中与建失败也露出来:标题那一行正是说明这两件事的地方。
+        val hasQueue = queue.rows.isNotEmpty() || queue.enriching || queue.incomplete
+        val queueContent: @Composable (fillHeight: Boolean) -> Unit = { fillHeight ->
+            QueueSheetContent(
+                queue = queue,
+                playing = playing,
+                onToggleShuffle = onToggleShuffle,
+                onSelectEpisode = onSelectEpisode,
+                onRetryQueue = onRetryQueue,
+                onOpenQueueSource = onOpenQueueSource,
+                fillHeight = fillHeight,
+            )
         }
 
-        // 队列没建过时收起到 0——一个空把手拉起来什么都没有,是纯噪声。建过之后把手常显,
-        // 不需要再点一行入口才能看到它。建队列中与建失败也露出来:把手那一行正是说明这两件事
-        // 的地方。
-        val hasQueue = queue.rows.isNotEmpty() || queue.enriching || queue.incomplete
-        val peek = if (hasQueue) QueueHandleHeight else 0.dp
-
-        BottomSheetScaffold(
-            scaffoldState = sheetState,
-            modifier = Modifier.fillMaxSize().padding(insets),
-            sheetPeekHeight = peek,
-            sheetContent = {
-                AdaptiveContent(modifier = Modifier.fillMaxWidth(), maxWidth = Breakpoints.MediaWidth) {
-                    QueueSheetContent(
-                        queue = queue,
-                        playing = playing,
-                        onToggleShuffle = onToggleShuffle,
-                        onSelectEpisode = onSelectEpisode,
-                        onRetryQueue = onRetryQueue,
-                        onOpenQueueSource = onOpenQueueSource,
-                    )
-                }
-            },
-        ) { sheetInsets ->
-            AdaptiveContent(modifier = Modifier.fillMaxSize(), maxWidth = Breakpoints.MediaWidth) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(bottom = sheetInsets.calculateBottomPadding()),
-                ) {
+        // 正在放的那一列:唱片或歌词、读数、进度条、控制行。窄屏和宽屏是同一份,只是外面不同。
+        val nowPlaying: @Composable (Modifier) -> Unit = { columnModifier ->
+                Column(modifier = columnModifier) {
                 // 唱片(或歌词)吃掉除控制区之外的全部空间;没有字幕时这里就是空间的唯一主角,
                 // 不用再另外做"整体居中"的特判——weight(1f) 本身就把它撑满了。
                 // 唱片与歌词是**同一块区域的两页**,左右滑动切换。
@@ -726,6 +714,52 @@ fun ListenScreen(
                     FailureRow(message = message, retrying = state.loading, onRetry = onRetry)
                 }
 
+                }
+        }
+
+        if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
+            // **宽屏两栏:左边正在放,右边队列常驻。** 底部 Sheet 在宽屏上是一条横贯窗口的把手,
+            // 拉起来盖住唱片的下半截;而右边本来空着两大片。队列放进右栏之后不用拉,看着唱片
+            // 就能点下一条。右栏和空间页、搜索页的侧栏是同一种卡([panelCard]),不可关:
+            // 它不是补充内容,是这一页的另一半。
+            Row(modifier = Modifier.fillMaxSize().padding(insets)) {
+                AdaptiveContent(modifier = Modifier.weight(1f).fillMaxHeight(), maxWidth = Breakpoints.MediaWidth) {
+                    nowPlaying(Modifier.fillMaxSize().padding(bottom = Spacing.Comfortable))
+                }
+                if (hasQueue) {
+                    Box(
+                        modifier = Modifier
+                            .width(QueuePaneWidth)
+                            .fillMaxHeight()
+                            .padding(end = Spacing.Comfortable, bottom = Spacing.Comfortable)
+                            .panelCard()
+                            .padding(top = Spacing.Tight),
+                    ) {
+                        queueContent(true)
+                    }
+                }
+            }
+        } else {
+            val sheetState = rememberBottomSheetScaffoldState()
+            // BottomSheetScaffold 不管返回键(ModalBottomSheet 才管),不拦的话展开队列之后一按
+            // 返回,落到的是外面那句"退出听视频"。看 targetValue 而不是 currentValue:拉到一半
+            // 松手、正往上弹的那一刻按返回,也该是收回。
+            val sheetScope = rememberCoroutineScope()
+            BackHandler(enabled = sheetState.bottomSheetState.targetValue == SheetValue.Expanded) {
+                sheetScope.launch { sheetState.bottomSheetState.partialExpand() }
+            }
+            BottomSheetScaffold(
+                scaffoldState = sheetState,
+                modifier = Modifier.fillMaxSize().padding(insets),
+                sheetPeekHeight = if (hasQueue) QueueHandleHeight else 0.dp,
+                sheetContent = {
+                    AdaptiveContent(modifier = Modifier.fillMaxWidth(), maxWidth = Breakpoints.MediaWidth) {
+                        queueContent(false)
+                    }
+                },
+            ) { sheetInsets ->
+                AdaptiveContent(modifier = Modifier.fillMaxSize(), maxWidth = Breakpoints.MediaWidth) {
+                    nowPlaying(Modifier.fillMaxSize().padding(bottom = sheetInsets.calculateBottomPadding()))
                 }
             }
         }
@@ -1174,9 +1208,11 @@ private fun QueueSheetContent(
     onSelectEpisode: (EpisodeTarget) -> Unit,
     onRetryQueue: () -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
+    /** 宽屏右栏:撑满栏高,列表在栏里自己滚。Sheet 里由 Sheet 定高,不撑。 */
+    fillHeight: Boolean = false,
 ) {
     val shuffled = queue.shuffled
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = if (fillHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
         // 标题是这份队列的来源,和详情页那一段的标题行是同一个组件、同一个判据:合集/系列点得进
         // 目录,UP 投稿之类没有目录页的不给入口。来源名还没有时退回「播放队列」。
         //
@@ -1244,7 +1280,7 @@ private fun QueueSheetContent(
                     horizontal = Spacing.Comfortable,
                     vertical = Spacing.Tight,
                 ),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().then(if (fillHeight) Modifier.weight(1f) else Modifier),
             )
         }
     }
