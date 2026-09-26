@@ -178,7 +178,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.ui.draw.rotate
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.PlaceholderVerticalAlign
@@ -1095,6 +1095,8 @@ private fun UpRow(
  * 正文;这一栏是列表之后,正文长在标题下面,控件和效果挨着。
  *
  * 展开指示放在计数行右端,不放标题末尾:标题会截断,截断处的箭头看起来像正文的一部分。
+ * **展开之后它挪到整块的最下面**:收起的入口该在读完的地方,简介一长,停在上面的箭头得
+ * 往回找。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -1109,7 +1111,14 @@ private fun TitleBlock(
     onSeek: ((Long) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
-    val arrowRotation by animateFloatAsState(if (expanded) 180f else 0f, label = "introArrow")
+    val arrow: @Composable () -> Unit = {
+        Icon(
+            imageVector = if (expanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
+            contentDescription = stringResource(Res.string.video_intro_open),
+            tint = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.size(Dimens.IconInline),
+        )
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -1140,14 +1149,7 @@ private fun TitleBlock(
                 modifier = Modifier.padding(start = Spacing.Tight),
             )
             Spacer(modifier = Modifier.weight(1f))
-            Icon(
-                imageVector = Icons.Outlined.KeyboardArrowDown,
-                contentDescription = stringResource(Res.string.video_intro_open),
-                tint = MaterialTheme.colorScheme.outline,
-                modifier = Modifier
-                    .size(Dimens.IconInline)
-                    .rotate(arrowRotation),
-            )
+            if (!expanded) arrow()
         }
         if (expanded) {
             if (detail.description.isNotBlank()) {
@@ -1168,6 +1170,7 @@ private fun TitleBlock(
                     tags.forEach { tag -> TagToken(tag, onClick = { onTagClick(tag.name) }) }
                 }
             }
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) { arrow() }
         }
     }
 }
