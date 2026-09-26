@@ -31,8 +31,8 @@ import kotlin.math.roundToInt
  *
  * **系统边框(WS_THICKFRAME)不留。** 只去标题栏、留边框的话,Windows 10 起顶上会画出一条白边
  * (那是边框的上沿),左右两圈边框又让客户区比例偏离画面,画面两侧出黑条。要留系统边框就得
- * 接管 WM_NCCALCSIZE,等于在 JVM 里挂一个窗口过程回调,和 Skiko 争同一个窗口的消息;自己画
- * 拖边还能锁定比例,系统边框做不到。
+ * 在 WM_NCCALCSIZE 里把四边都收进客户区,而标题栏的窗口过程([WindowsCaption])只收顶边,
+ * 并且见到 WS_CAPTION 被去掉就整个让开;自己画拖边还能锁定比例,系统边框做不到。
  *
  * @param isMaximized 进小窗那一刻窗口是不是最大化的,退出时还原成最大化。
  * @param normalMinimumSize 平时的最小尺寸。小窗要比它小得多,进出时切换。

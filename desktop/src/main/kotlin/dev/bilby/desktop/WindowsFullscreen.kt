@@ -1,5 +1,8 @@
 package dev.bilby.desktop
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.awt.ComposeWindow
 import com.sun.jna.Pointer
 import com.sun.jna.platform.win32.User32
@@ -22,7 +25,9 @@ internal class WindowsFullscreen(private val window: ComposeWindow) {
     /** 进全屏之前的样式与位置,退出时原样放回。非 null 即处于全屏。 */
     private var saved: Saved? = null
 
-    val isFullscreen: Boolean get() = saved != null
+    /** 快照状态:自绘标题栏据此在全屏时撤下,见 [WindowFrame]。 */
+    var isFullscreen by mutableStateOf(false)
+        private set
 
     private class Saved(val style: Int, val exStyle: Int, val rect: RECT, val maximized: Boolean)
 
@@ -45,11 +50,13 @@ internal class WindowsFullscreen(private val window: ComposeWindow) {
         monitor.rcMonitor.run {
             user32.SetWindowPos(hwnd, null, left, top, right - left, bottom - top, RepositionFlags)
         }
+        isFullscreen = true
     }
 
     fun exit() {
         val state = saved ?: return
         saved = null
+        isFullscreen = false
         val hwnd = hwnd()
         val user32 = User32.INSTANCE
         user32.SetWindowLong(hwnd, WinUser.GWL_STYLE, state.style)

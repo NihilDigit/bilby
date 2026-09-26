@@ -3,6 +3,7 @@ package dev.bilby.desktop
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -19,12 +20,14 @@ import coil3.request.crossfade
 import dev.bilby.AppBuild
 import dev.bilby.AppContainer
 import dev.bilby.DesktopPlatform
+import dev.bilby.data.AppearancePrefs
 import dev.bilby.ui.BilbyRoot
 import dev.bilby.ui.DesktopSystemActions
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.LocalSystemActions
 import dev.bilby.ui.player.LocalWindowFullscreen
 import dev.bilby.ui.player.LocalDesktopPip
+import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.update.DesktopAppUpdater
 import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.compose.ui.graphics.painter.BitmapPainter
@@ -37,6 +40,7 @@ import kotlin.system.exitProcess
 import java.io.File
 
 fun main() {
+    exitAfterAotTraining()
     AppBuild.init(
         debug = System.getProperty("bilby.debug").toBoolean(),
         versionName = System.getProperty("bilby.version") ?: "0.0.0-dev",
@@ -94,9 +98,12 @@ fun main() {
                     normalMinimumSize = normalMinimumSize,
                 ).also { pip = it }
             }
+            PixelAlignedContentEffect(window)
             val systemActions = remember { DesktopSystemActions(languageStore) }
             // 桌面没有外部链接唤起,这条流只是 BilbyRoot 的入参,始终为空。
             val incomingLink = remember { MutableStateFlow<String?>(null) }
+            // 标题栏在 BilbyRoot 之外,主题要在这里再套一层。初值同 BilbyRoot 里那一层,两层读同一份设置。
+            val appearance by container.settings.appearancePrefs.collectAsState(initial = AppearancePrefs())
             CompositionLocalProvider(
                 LocalSystemActions provides systemActions,
                 LocalPlaybackHost provides platform.playback,
@@ -110,19 +117,28 @@ fun main() {
                     }
                 },
             ) {
-                // 换语言:整棵界面拆掉一帧再建回来,等价于 Android 上换语言时 Activity 重建。
-                // 已经组合出来的文案不会因为默认 Locale 变了而自己重取,只有重新组合才会。
-                // 包在 SaveableStateProvider 里,拆掉时存下 rememberSaveable(返回栈、滚动位置),
-                // 建回来时原样恢复,人还停在设置页。
-                val saveableHolder = rememberSaveableStateHolder()
-                val language = languageStore.language
-                var composedLanguage by remember { mutableStateOf(language) }
-                if (composedLanguage == language) {
-                    saveableHolder.SaveableStateProvider("root") {
-                        BilbyRoot(container, incomingLink)
+                BilbyTheme(appearance) {
+                    WindowFrame(
+                        title = "Bilby",
+                        icon = appIcon,
+                        // 全屏与小窗里整个窗口都是画面。
+                        showTitleBar = !windowsFullscreen.isFullscreen && !windowsPip.active,
+                    ) {
+                        // 换语言:整棵界面拆掉一帧再建回来,等价于 Android 上换语言时 Activity 重建。
+                        // 已经组合出来的文案不会因为默认 Locale 变了而自己重取,只有重新组合才会。
+                        // 包在 SaveableStateProvider 里,拆掉时存下 rememberSaveable(返回栈、滚动位置),
+                        // 建回来时原样恢复,人还停在设置页。
+                        val saveableHolder = rememberSaveableStateHolder()
+                        val language = languageStore.language
+                        var composedLanguage by remember { mutableStateOf(language) }
+                        if (composedLanguage == language) {
+                            saveableHolder.SaveableStateProvider("root") {
+                                BilbyRoot(container, incomingLink)
+                            }
+                        } else {
+                            SideEffect { composedLanguage = language }
+                        }
                     }
-                } else {
-                    SideEffect { composedLanguage = language }
                 }
             }
         }
