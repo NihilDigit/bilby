@@ -19,7 +19,6 @@ import dev.bilby.resources.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -288,7 +287,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             if (queue.shuffled == value) return
             queue.shuffled = value
             // 开关本身归队列,这里只把它记成下次新建队列的初值。
-            scope.launch(NonCancellable) {
+            container().persistScope.launch {
                 val settings = container().settings
                 settings.savePlaybackPrefs(settings.playbackPrefs.first().copy(shuffled = value))
             }
@@ -798,7 +797,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     private fun persistPickIfEnabled(save: suspend (SettingsStore, metered: Boolean) -> Unit) {
         val app = container()
         val metered = app.platform.network.isMetered()
-        scope.launch(NonCancellable) {
+        app.persistScope.launch {
             if (app.settings.playerPrefs.first().playerPickUpdatesDefault) save(app.settings, metered)
         }
     }

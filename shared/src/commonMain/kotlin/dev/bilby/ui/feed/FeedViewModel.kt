@@ -10,7 +10,7 @@ import dev.bilby.data.FollowRepository
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.ToViewRepository
 import dev.bilby.data.db.FeedReadPositionRepository
-import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,6 +27,7 @@ class FeedViewModel(
     private val settings: SettingsStore,
     private val readPositionRepository: FeedReadPositionRepository,
     private val toViewRepository: ToViewRepository,
+    private val persistScope: CoroutineScope,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(FeedUiState(loading = true))
@@ -112,14 +113,13 @@ class FeedViewModel(
 
     /**
      * 去抖窗口还没到、页面就被关掉:上面那个 collect 协程跟着 viewModelScope 一起被取消,
-     * 排在队里的这次落盘不会发生。这里补一次,NonCancellable 是因为此时 viewModelScope
-     * 的 Job 已经在取消过程中,普通 launch 排的挂起点会在 upsert 写完前就被打断
-     * ——同样的写法见 SettingsViewModel 的落盘。
+     * 排在队里的这次落盘不会发生。这里补一次,走 [persistScope] 是因为此时 viewModelScope
+     * 已经取消,在它上面 launch 的协程一启动就被取消,upsert 根本不会开始。
      */
     override fun onCleared() {
         super.onCleared()
         val id = pendingReadId ?: return
-        viewModelScope.launch(NonCancellable) { readPositionRepository.save(id) }
+        persistScope.launch { readPositionRepository.save(id) }
     }
 
     /**

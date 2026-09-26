@@ -35,7 +35,7 @@ import dev.bilby.update.AppUpdateService
 import dev.bilby.update.AvailableUpdate
 import dev.bilby.update.UpdateFailure
 import dev.bilby.update.UpdateStatus
-import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -47,21 +47,20 @@ import kotlinx.coroutines.launch
  * 弹一句「检查更新失败」只是在通知用户一件他没问过的事情失败了。日志照记。
  */
 @Composable
-fun StartupUpdatePrompt(updater: AppUpdateService, settings: SettingsStore) {
+fun StartupUpdatePrompt(updater: AppUpdateService, settings: SettingsStore, persistScope: CoroutineScope) {
     LaunchedEffect(updater) {
         // 压过的那一版不再提。判据是版本号相等,不是「压过没有」,见 SettingsStore。
         updater.checkOnStartup { version -> settings.ignoredUpdateVersion.first() == version }
     }
     val update = updater.startupUpdate ?: return
-    val scope = rememberCoroutineScope()
     UpdateDialog(
         updater = updater,
         update = update,
         onDismiss = updater::dismissStartupUpdate,
-        // 落盘走 NonCancellable:紧接着就要关弹窗,写没写完不该看界面的脸色。
+        // 落盘走 persistScope:弹窗一关,这个函数就提前返回、离开组合,它的 scope 随之取消。
         onIgnore = {
             updater.dismissStartupUpdate()
-            scope.launch(NonCancellable) { settings.saveIgnoredUpdateVersion(update.version) }
+            persistScope.launch { settings.saveIgnoredUpdateVersion(update.version) }
         },
     )
 }

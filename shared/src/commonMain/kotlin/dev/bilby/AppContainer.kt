@@ -196,6 +196,17 @@ class AppContainer(val platform: Platform) {
     }
 
     /**
+     * 调用方随即可能离开的落盘:设置页改完就返回、弹窗点完就关、ViewModel 在 onCleared 里
+     * 补最后一次。页面自己的 scope 此时正在取消,DataStore 的 edit 是挂起函数,取消先到就是
+     * 改动丢失。原先各处写 `launch(NonCancellable)`,它把 NonCancellable 当成父 Job,
+     * 效果相同但已弃用;这里把「这次写入不归页面管」改成显式的归属。
+     *
+     * 用 Main.immediate 而不是 IO:连续拖动滑杆会连发几次写入,主线程按调用顺序排队,
+     * IO 的多线程会让较早的一次后写完,盖掉最终值。
+     */
+    val persistScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /**
      * 离线下载。**跑在应用级 scope 上** —— 下载不该因为用户离开播放页就停,那正是这个功能的
      * 用途。进程被系统回收是另一回事,由平台顶着,见 [Platform.onOfflineDownloadsBusy]。
      */

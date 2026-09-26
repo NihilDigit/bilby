@@ -681,7 +681,7 @@ roundness)。最里面一档按公式该是 8 − 8 = 0,取 4 —— 直角套�
 按钮(长串 key 手输时看不见没法核对),但默认态必须是遮住的。`SettingsViewModel` 全文
 没有一处 `BiliLog`,新增分支时也不要加。
 
-**设置的落盘一律 `viewModelScope.launch(NonCancellable)`。** 这一页的每一次改动都可能紧跟着
+**设置的落盘一律 `AppContainer.persistScope.launch`。** 这一页的每一次改动都可能紧跟着
 一次返回,而返回会清掉 ViewModel、连带取消 `viewModelScope`;DataStore 的 `edit` 是挂起函数,
 取消在它完成之前到达就是**改动被丢掉**。真机上复现过:勾一个类别立刻返回,再进来还是原样。
 同一条适用于播放页的"顺序/随机"和画质落盘。

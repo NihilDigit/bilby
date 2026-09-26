@@ -29,7 +29,6 @@ import dev.nihildigit.danmaku.SpecialDanmaku
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -127,6 +126,7 @@ class VideoViewModel(
     private val offlineDownloader: OfflineDownloader,
     private val offlineStore: OfflineStore,
     private val playback: PlaybackHost,
+    private val persistScope: CoroutineScope,
 ) : ViewModel() {
 
     /**
@@ -579,7 +579,7 @@ class VideoViewModel(
     }
 
     /**
-     * 弹幕开关。持久化用 NonCancellable,理由与 [selectSubtitle] 相同。
+     * 弹幕开关。持久化走 [persistScope],理由与 [selectSubtitle] 相同。
      *
      * 打开时补一次段 1 预取:换 cid 那一刻开关还是关的,[observeDanmakuCid] 跳过了预取,
      * 不补的话要等下一次进度回调(播放中最长 5 秒)才有机会拉到东西——播放中途打开开关会
@@ -588,13 +588,13 @@ class VideoViewModel(
      */
     fun setDanmakuEnabled(enabled: Boolean) {
         _danmakuPrefs.update { it.copy(enabled = enabled) }
-        viewModelScope.launch(NonCancellable) { settings.saveDanmakuEnabled(enabled) }
+        persistScope.launch { settings.saveDanmakuEnabled(enabled) }
         if (enabled) fetchInitialDanmakuSegment(danmakuCid)
     }
 
     /** 播放器面板里的弹幕设置。只有开关要多做一步(见 [setDanmakuEnabled]),其余直接落盘。 */
     val danmakuEditor: DanmakuPrefsEditor =
-        object : DanmakuPrefsEditor by StoredDanmakuPrefsEditor(settings, viewModelScope) {
+        object : DanmakuPrefsEditor by StoredDanmakuPrefsEditor(settings, persistScope) {
             override fun setEnabled(enabled: Boolean) = setDanmakuEnabled(enabled)
         }
 
@@ -754,17 +754,16 @@ class VideoViewModel(
     /** 用户在控制条的字幕菜单里选了一条轨(或选了"关")。[lan] 为空字符串表示关。 */
     fun selectSubtitle(lan: String) {
         _subtitleLan.value = lan
-        // NonCancellable:选完字幕紧接着退出页面是常见操作,而退出会取消 viewModelScope,
-        // DataStore 的 edit 又是挂起函数——不挡住取消的话这次选择会在写盘前被砍掉。
-        // 和风格指南里"设置的落盘一律 NonCancellable"是同一条规矩。
-        viewModelScope.launch(NonCancellable) { settings.saveSubtitleLan(lan) }
+        // persistScope:选完字幕紧接着退出页面是常见操作,而退出会取消 viewModelScope,
+        // DataStore 的 edit 又是挂起函数,不脱离页面的话这次选择会在写盘前被砍掉。
+        persistScope.launch { settings.saveSubtitleLan(lan) }
         val track = _subtitleTracks.value.firstOrNull { it.lan == lan }
         if (track == null) {
             _subtitleCues.value = emptyList()
             return
         }
         // videoScope:切走之后这一次拉取的结果不该再落到新视频的字幕上。落盘那一句在上面,
-        // 走的是 NonCancellable,不受这里的取消影响。
+        // 走的是 persistScope,不受这里的取消影响。
         videoScope.launch { _subtitleCues.value = subtitleRepository.getCues(track.subtitleUrl) }
     }
 

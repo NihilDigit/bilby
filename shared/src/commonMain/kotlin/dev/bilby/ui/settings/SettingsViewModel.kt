@@ -14,7 +14,7 @@ import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockPrefs
 import dev.bilby.player.hardwareDecodableCodecIds
 import dev.bilby.player.VideoCodecId
-import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -87,6 +87,7 @@ class SettingsViewModel(
     private val settings: SettingsStore,
     private val llmClient: LlmClient,
     private val historyRepository: HistoryRepository,
+    private val persistScope: CoroutineScope,
 ) : ViewModel() {
 
     /**
@@ -215,12 +216,12 @@ class SettingsViewModel(
     }
 
     /**
-     * 落盘一律用 [NonCancellable]。设置页的每一次改动都可能紧跟着一次返回,而返回会清掉
+     * 落盘一律走 [persistScope]。设置页的每一次改动都可能紧跟着一次返回,而返回会清掉
      * 这个 ViewModel、连带取消 `viewModelScope` —— DataStore 的 `edit` 是挂起函数,
      * 取消在它完成之前到达就是**改动被丢掉**。真机上复现过:勾一个类别立刻返回,再进来还是原样。
      */
     private fun persist(block: suspend () -> Unit) {
-        viewModelScope.launch(NonCancellable) { block() }
+        persistScope.launch { block() }
     }
 
     fun saveLlm(config: LlmConfig) {
@@ -269,7 +270,7 @@ class SettingsViewModel(
     }
 
     /**
-     * 登出。清凭据必须扛得住页面随时被销毁,所以走 [persist] 那条 `NonCancellable`;
+     * 登出。清凭据必须扛得住页面随时被销毁,所以走 [persist];
      * 停播放服务要 Context,由调用方在 [onDone] 里做 —— 顺序是先清凭据后停服务,
      * 反过来的话中间那一瞬服务已停而凭据还在,看起来像"没登出但停了"。
      */

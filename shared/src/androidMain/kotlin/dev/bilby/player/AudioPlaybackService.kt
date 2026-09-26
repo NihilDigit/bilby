@@ -49,7 +49,6 @@ import dev.bilby.offline.OfflineStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -137,6 +136,9 @@ class AudioPlaybackService : MediaSessionService() {
     /** 只为了在取流之前问一句"这一条缓存过没有",见 [resolveStream]。 */
     private lateinit var offlineStore: OfflineStore
     private lateinit var settings: SettingsStore
+
+    /** 不随服务的 [scope] 取消的落盘,见 [dev.bilby.AppContainer.persistScope]。 */
+    private lateinit var persistScope: CoroutineScope
 
     /** 缓存列表点某一行时留下的指名,见 [PartRequest]。 */
     private lateinit var partRequest: PartRequest
@@ -309,6 +311,7 @@ class AudioPlaybackService : MediaSessionService() {
         queueSourceRepository = container.queueSourceRepository
         offlineStore = container.offlineStore
         settings = container.settings
+        persistScope = container.persistScope
         partRequest = container.partRequest
         heartbeatReporter = container.heartbeatReporter
         loadResolver = LoadResolver(
@@ -409,7 +412,7 @@ class AudioPlaybackService : MediaSessionService() {
     override fun onDestroy() {
         // 本地副本的位置先落盘。这里曾经只有下面那句定格上报:断网时它报不出去,而本地进度只在
         // 暂停、换条时写,服务就这样停掉的话,下次打开退回上一次暂停的地方。写盘跑在
-        // NonCancellable 上,不受下面 scope.cancel() 影响。
+        // persistScope 上,不受下面 scope.cancel() 影响。
         persistCachedProgress()
         // 定格补发这次观看的最终位置。**排在 scope.cancel() 前面不是为了赶上它** —— 心跳跑在
         // 应用级 scope 上(见 [HeartbeatReporter]),这里只是把"内容离开了"这件事说出来。
@@ -1550,7 +1553,7 @@ class AudioPlaybackService : MediaSessionService() {
      * 只在放本地副本时有意义:装在线流时服务端那份才是真相,本地不掺和(见
      * [dev.bilby.data.resumeAtMillisFor])。[loadedLocalCopy] 正是"此刻放的是本地副本"。
      *
-     * `NonCancellable`:调用点都在"正要停下来"的时刻(暂停、播完、换一条),而那些时刻紧挨着
+     * 走 [persistScope]:调用点都在"正要停下来"的时刻(暂停、播完、换一条),而那些时刻紧挨着
      * scope 被取消 —— 写盘是这次观看留下的唯一痕迹,不能跟着一起没。
      */
     private fun persistCachedProgress(positionMillis: Long = player.currentPosition) {
@@ -1558,7 +1561,7 @@ class AudioPlaybackService : MediaSessionService() {
         val cid = loadedCid
         val position = positionMillis.coerceAtLeast(0)
         if (position <= 0) return
-        scope.launch(NonCancellable) { offlineStore.recordProgress(bvid, cid, position) }
+        persistScope.launch { offlineStore.recordProgress(bvid, cid, position) }
     }
 
     /** 换分 P。**分 P 是这条视频内部的结构,不是队列里的另一条**(CLAUDE.md),所以不动队列位置。 */
@@ -1612,12 +1615,12 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /**
-     * 开关打开时,把播放页里这一下选择写进设置里当下所在网络的那一格。NonCancellable:切完
+     * 开关打开时,把播放页里这一下选择写进设置里当下所在网络的那一格。走 [persistScope]:切完
      * 就退出页面是常见操作,而 DataStore 的 edit 是挂起函数。
      */
     private fun persistPickIfEnabled(save: suspend (metered: Boolean) -> Unit) {
         val metered = isOnMeteredNetwork()
-        scope.launch(NonCancellable) {
+        persistScope.launch {
             if (settings.playerPrefs.first().playerPickUpdatesDefault) save(metered)
         }
     }
@@ -1709,7 +1712,7 @@ class AudioPlaybackService : MediaSessionService() {
      * 队列的初值 —— 通知栏、车机和 app 内的按钮走的都是标准命令,不再各有一条路。
      */
     private fun persistShuffled(shuffled: Boolean) {
-        scope.launch(NonCancellable) {
+        persistScope.launch {
             val prefs = settings.playbackPrefs.first()
             settings.savePlaybackPrefs(prefs.copy(shuffled = shuffled))
         }

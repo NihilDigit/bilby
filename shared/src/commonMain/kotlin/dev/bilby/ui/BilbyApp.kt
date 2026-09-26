@@ -249,7 +249,7 @@ fun BilbyRoot(
 private fun StartupUpdateHost(container: AppContainer) {
     // 不做应用内更新的平台上不检查:查到了也只能摆一个按不下去的按钮。
     val updater = container.platform.updater ?: return
-    StartupUpdatePrompt(updater, container.settings)
+    StartupUpdatePrompt(updater, container.settings, container.persistScope)
 }
 
 @Composable
@@ -1121,6 +1121,7 @@ private fun FeedPane(
                     container.settings,
                     container.feedReadPositionRepository,
                     container.toViewRepository,
+                    container.persistScope,
                 )
             }
         },
@@ -1436,6 +1437,7 @@ private fun rememberSettingsViewModel(container: AppContainer): SettingsViewMode
                 container.settings,
                 container.llmClient,
                 container.historyRepository,
+                container.persistScope,
             )
         }
     },
@@ -2548,6 +2550,7 @@ private fun VideoPane(
                     container.offlineDownloader,
                     container.offlineStore,
                     container.platform.playback,
+                    container.persistScope,
                 )
             }
         },

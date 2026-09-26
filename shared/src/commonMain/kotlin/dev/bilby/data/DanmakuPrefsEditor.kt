@@ -3,7 +3,6 @@ package dev.bilby.data
 import dev.nihildigit.danmaku.DanmakuDensity
 import dev.nihildigit.danmaku.DanmakuFrameRateCap
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 
 /**
@@ -25,7 +24,8 @@ interface DanmakuPrefsEditor {
 /**
  * 直接写进 [SettingsStore]。新值经 [SettingsStore.danmakuPrefs] 流回来,不另外维护一份本地状态。
  *
- * 写入走 [NonCancellable]:调完就退出页面时,作用域随页面取消,这一次写入不能跟着丢。
+ * [scope] 须是 [dev.bilby.AppContainer.persistScope]:调完就退出页面时,页面的作用域随之取消,
+ * 这一次写入不能跟着丢。
  */
 class StoredDanmakuPrefsEditor(
     private val settings: SettingsStore,
@@ -39,6 +39,6 @@ class StoredDanmakuPrefsEditor(
     override fun setInPip(value: Boolean) = persist { settings.saveDanmakuInPip(value) }
 
     private fun persist(write: suspend () -> Unit) {
-        scope.launch(NonCancellable) { write() }
+        scope.launch { write() }
     }
 }

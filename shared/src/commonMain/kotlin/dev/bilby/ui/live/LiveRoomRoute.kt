@@ -6,7 +6,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -36,7 +35,6 @@ fun LiveRoomRoute(
     modifier: Modifier = Modifier,
 ) {
     val playback = LocalPlaybackHost.current
-    val scope = rememberCoroutineScope()
     val vm: LiveRoomViewModel = viewModel(
         key = "live-$roomId",
         factory = viewModelFactory {
@@ -58,7 +56,7 @@ fun LiveRoomRoute(
         initialValue = dev.bilby.data.DanmakuPrefs(),
     )
     // 弹幕设置是全局的,不是这个房间的状态:在直播间改了,回到视频页也是改过的。
-    val danmakuEditor = remember(scope) { StoredDanmakuPrefsEditor(container.settings, scope) }
+    val danmakuEditor = remember { StoredDanmakuPrefsEditor(container.settings, container.persistScope) }
 
     /**
      * 这个直播间只要声音。
