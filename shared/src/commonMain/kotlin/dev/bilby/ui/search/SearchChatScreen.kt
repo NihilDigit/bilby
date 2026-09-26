@@ -60,9 +60,13 @@ import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.agent.AgentStep
 import dev.bilby.agent.AgentTurnState
-import dev.bilby.agent.AnswerBlock
+import dev.bilby.agent.AgentAnswer
+import dev.bilby.agent.AnswerSource
+import dev.bilby.agent.citation
+import dev.bilby.agent.StepKind
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.AgentTurnView
+import dev.bilby.ui.components.AgentQuestionBubble
 import dev.bilby.agent.TraceItem
 import dev.bilby.data.SearchVideo
 import dev.bilby.ui.components.EmptyState
@@ -490,40 +494,13 @@ private fun TurnRow(
     onRetry: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.Cozy)) {
-        UserBubble(
+        AgentQuestionBubble(
             text = turn.query,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Comfortable),
+            modifier = Modifier.padding(horizontal = Spacing.Comfortable),
         )
         AgentTurnView(turn = turn.result, onVideoClick = onVideoClick, onRetry = onRetry)
     }
 }
-
-@Composable
-private fun UserBubble(text: String, modifier: Modifier = Modifier) {
-    Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        Surface(
-            color = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            shape = MaterialTheme.shapes.large,
-            // **上限按可用宽度的比例算,不写死 280dp。** 那个数是按 360dp 宽的手机定的,平板上
-            // 一句长问句会在整屏宽度的中间断成好几行,右边留着一大片空;而窄屏上它比屏幕还宽,
-            // 等于没有上限。留出的那两成是"这一侧是我说的话"这个形状本身 —— 气泡铺满整行就
-            // 和下面助理的正文分不开了。
-            modifier = Modifier.fillMaxWidth(BubbleWidthFraction).wrapContentWidth(Alignment.End),
-        ) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
-            )
-        }
-    }
-}
-
-/** 用户气泡最宽占多少。留出的两成让"谁在说话"从形状上就读得出来。 */
-private const val BubbleWidthFraction = 0.8f
 
 // ---- 输入框 ----
 
@@ -648,15 +625,16 @@ private fun SearchChatScreenAgentAnswerPreview() {
                             result = AgentTurnState(
                                 steps = listOf(
                                     AgentStep(
-                                        label = "搜索:搞笑动画",
+                                        id = 0,
+                                        kind = StepKind.SearchVideos,
+                                        text = "搞笑动画",
                                         items = listOf(previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")),
                                         finished = true,
                                     ),
                                 ),
-                                blocks = listOf(
-                                    AnswerBlock.Text("时长短、**弹幕密度高**,评论区反馈「摸鱼时长刚好一集」:"),
-                                    AnswerBlock.Video("BV1aa", previewTrace("BV1aa", "笑到打鸣的搞笑动画合集")),
-                                    AnswerBlock.Text("再往后是同一个 UP 的旧作,节奏一致。"),
+                                answer = AgentAnswer(
+                                    text = "时长短、**弹幕密度高**,评论区反馈「摸鱼时长刚好一集」${citation(1)}。",
+                                    sources = listOf(AnswerSource("BV1aa", previewTrace("BV1aa", "笑到打鸣的搞笑动画合集"))),
                                 ),
                             ),
                         ),

@@ -82,11 +82,20 @@
 
     <string name="agent_title">Assistant</string>
     <string name="agent_process">Steps</string>
-    <string name="agent_process_collapsed">"Steps  %1$s"</string>
+    <string name="agent_process_summary">Steps  %1$d</string>
+    <string name="agent_sources">Videos mentioned</string>
+    <string name="agent_step_search_videos">Video search</string>
+    <string name="agent_step_search_users">Creator search</string>
+    <string name="agent_step_up">Creator page</string>
+    <string name="agent_step_up_videos">Creator uploads</string>
+    <string name="agent_step_video">Video details</string>
+    <string name="agent_step_comments">Top comments</string>
+    <string name="agent_step_collection">Collection</string>
+    <string name="agent_step_related">Related videos</string>
     <string name="agent_process_expand">Show steps</string>
     <string name="agent_process_collapse">Hide steps</string>
-    <string name="agent_running">Still digging…</string>
-    <string name="agent_no_result">Nothing that fits</string>
+    <string name="agent_running">Searching…</string>
+    <string name="agent_no_result">No results</string>
 
     <string name="toview_empty">Watch later is empty</string>
     <string name="toview_clear_finished">Clear watched</string>
@@ -179,7 +188,7 @@
     <string name="space_empty_collection_detail">This collection is empty</string>
     <string name="space_collection_season">Collection</string>
     <string name="space_collection_series">Series</string>
-    <string name="space_collection_meta">"%1$s  %2$d videos"</string>
+    <string name="space_collection_meta">%1$s  %2$d videos</string>
 
     <string name="video_tab_intro">About</string>
     <string name="video_follow_staff">Follow %1$s</string>
@@ -206,7 +215,7 @@
     <string name="video_triple_all">Liked, coined and favorited</string>
     <string name="video_triple_some">Done: %1$s</string>
     <string name="video_triple_none">Nothing went through</string>
-    <string name="video_triple_separator">", "</string>
+    <string name="video_triple_separator">, </string>
     <string name="video_parts">Parts</string>
     <string name="video_episodes">Episodes</string>
     <string name="video_part_label">P%1$d %2$s</string>
@@ -257,9 +266,10 @@
     <string name="fav_dialog_title">Add to</string>
 
     <string name="related_title">Related</string>
-    <string name="related_title_running">"Related  still digging"</string>
-    <string name="related_title_error">"Related  failed"</string>
-    <string name="related_title_count">"Related  %1$d"</string>
+    <string name="related_follow_up">Ask a follow-up</string>
+    <string name="related_title_running">Related  searching</string>
+    <string name="related_title_error">Related  failed</string>
+    <string name="related_title_count">Related  %1$d</string>
 
     <string name="player_play">Play</string>
     <string name="player_pause">Pause</string>
@@ -433,7 +443,7 @@
     <string name="settings_llm_test">Test</string>
     <string name="settings_llm_test_hint">Tap to send one request</string>
     <string name="settings_llm_test_running">Sending…</string>
-    <string name="settings_llm_test_ok">"OK  %1$d ms"</string>
+    <string name="settings_llm_test_ok">OK  %1$d ms</string>
     <string name="feed_open_followings">Following</string>
     <string name="followings_title">Following</string>
     <string name="followings_empty">Not following anyone yet</string>

@@ -37,7 +37,7 @@ import dev.bilby.ui.theme.Spacing
  * 封面宽度、行距、截断行数各差一点点,滑过去能看出接缝。合并成这一个。
  *
  * 参数是扁平的展示字段而不是某个 data 层模型:五个调用方的模型各不相同
- * (FeedEntry / SearchVideo / SpaceVideoItem / ToViewItem / AnswerItem),
+ * (FeedEntry / SearchVideo / SpaceVideoItem / ToViewItem / AnswerSource),
  * 让 UI 组件认识其中任何一个都会把 data 层的形状焊进视图层。
  */
 @Immutable

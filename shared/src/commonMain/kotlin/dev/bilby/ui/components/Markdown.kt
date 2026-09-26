@@ -19,6 +19,12 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.style.BaselineShift
+import androidx.compose.ui.text.withLink
+import dev.bilby.agent.CitationClose
+import dev.bilby.agent.CitationOpen
 import dev.bilby.ui.theme.Spacing
 
 /** 正文行高。24 与评论正文同一档,理由见 [MarkdownText] 的 `style` 参数。 */
@@ -31,10 +37,8 @@ private val BodyLineHeight = 24.sp
  * 不支持:表格、代码块、链接、图片、引用块 —— system prompt 里同样这么写,两边必须一致,
  * 否则模型写出来的东西会原样露出记号。
  *
- * 不引渲染器的理由不是体积,是**块边界已经被占用了**:答案先按 `[[bvid]]` 切成
- * [dev.bilby.agent.AnswerBlock],视频卡片就落在切口上,到这里每段文字都已经是残缺的片段
- * (可能从半句话开始)。全量解析器要求输入是完整文档,拿片段喂它,列表和段落的归属得
- * 另找一套规则重新对齐,省不下来。
+ * 另认一种助理专用的行内记号:角标([dev.bilby.agent.citation]),画成可点的上标 `[1]`,
+ * 点了交给 [onCitationClick]。
  *
  * 用 `*` 表示斜体,**不认 `_`**:这个 app 的正文里 `page_size`、`web_location` 这类下划线
  * 标识符出现得比斜体多,认 `_` 的代价是把它们拦腰斜掉。
@@ -59,9 +63,13 @@ fun MarkdownText(
      * 是这块界面只该画它的一部分,而"哪一部分"按解析出来的标题分节,不按字符位置。
      */
     stopAtHeadings: Set<String> = emptySet(),
+    /** 点了第几个角标(从 1 起)。null 时角标照样画,只是不可点。 */
+    onCitationClick: ((Int) -> Unit)? = null,
 ) {
     val blocks = remember(text, stopAtHeadings) { parseMarkdown(text).upTo(stopAtHeadings) }
     val codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest
+    val citationColor = MaterialTheme.colorScheme.primary
+    fun List<MdSpan>.toAnnotated() = toAnnotated(codeBackground, citationColor, onCitationClick)
     // 块间距 8dp。**行高抬到 24 之后 4dp 不够了**:行内间距(24 − 14 ≈ 10dp 分摊到上下)已经
     // 超过块间距,于是同一段里的换行看起来比段与段之间还开,一段答案读不出分了几段。
     Column(
@@ -71,14 +79,14 @@ fun MarkdownText(
         blocks.forEach { block ->
             when (block) {
                 is MdBlock.Paragraph -> Text(
-                    text = block.spans.toAnnotated(codeBackground),
+                    text = block.spans.toAnnotated(),
                     style = style,
                 )
 
                 // 助理答案里的 `#` 只是分节,不是页面标题 —— 按标题层级去渲染会让一段回答
                 // 看起来像一篇文档。三级都收在正文量级里,只拉开字重。
                 is MdBlock.Heading -> Text(
-                    text = block.spans.toAnnotated(codeBackground),
+                    text = block.spans.toAnnotated(),
                     style = when (block.level) {
                         1 -> MaterialTheme.typography.titleSmall
                         2 -> MaterialTheme.typography.labelLarge
@@ -92,7 +100,7 @@ fun MarkdownText(
                 is MdBlock.ListItem -> Row(modifier = Modifier.padding(start = Spacing.Tight)) {
                     Text(text = block.marker, style = style)
                     Text(
-                        text = block.spans.toAnnotated(codeBackground),
+                        text = block.spans.toAnnotated(),
                         style = style,
                         modifier = Modifier.padding(start = Spacing.Hair),
                     )
@@ -102,11 +110,33 @@ fun MarkdownText(
     }
 }
 
-private fun List<MdSpan>.toAnnotated(codeBackground: Color): AnnotatedString = buildAnnotatedString {
+private fun List<MdSpan>.toAnnotated(
+    codeBackground: Color,
+    citationColor: Color,
+    onCitationClick: ((Int) -> Unit)?,
+): AnnotatedString = buildAnnotatedString {
     // 上一段落的末字要带进下一段。**记号切开的是样式,不是句子**:"这样**加粗**,那样"里那个
     // 逗号是新一段的第一个字符,单看这一段它前面什么都没有,而它在读者眼里紧跟着一个汉字。
     var tail: Char? = null
     this@toAnnotated.forEach { span ->
+        val cite = span.cite
+        if (cite != null) {
+            // 上标加主色,和正文分得开;点它就是点那个出处。
+            val style = SpanStyle(
+                color = citationColor,
+                fontSize = CitationFontSize,
+                fontWeight = FontWeight.Medium,
+                baselineShift = BaselineShift.Superscript,
+            )
+            if (onCitationClick != null) {
+                withLink(LinkAnnotation.Clickable("cite-$cite") { onCitationClick(cite) }) {
+                    withStyle(style) { append("[$cite]") }
+                }
+            } else {
+                withStyle(style) { append("[$cite]") }
+            }
+            return@forEach
+        }
         // 行内代码原样照抄:`page_size,` 里那个逗号是代码的一部分,换成全角就不是同一串字了。
         val text = if (span.code) span.text else normalizeCjkPunctuation(span.text, tail)
         withStyle(
@@ -187,7 +217,12 @@ internal data class MdSpan(
     val bold: Boolean = false,
     val italic: Boolean = false,
     val code: Boolean = false,
+    /** 角标的编号。非 null 时这一段是一个角标,[text] 不用。 */
+    val cite: Int? = null,
 )
+
+/** 角标的字号,约正文的四分之三:上标本来就要小一号,否则会把行距顶开。 */
+private val CitationFontSize = 0.75.em
 
 internal sealed interface MdBlock {
     val spans: List<MdSpan>
@@ -262,6 +297,17 @@ private fun parseInline(text: String, bold: Boolean = false, italic: Boolean = f
 
     var i = 0
     while (i < text.length) {
+        // 角标先于其余记号判:它的编号里没有 markdown 记号,整段收下即可。
+        if (text[i] == CitationOpen) {
+            val close = text.indexOf(CitationClose, i + 1)
+            val number = if (close > i) text.substring(i + 1, close).toIntOrNull() else null
+            if (number != null) {
+                flush()
+                out += MdSpan("", bold, italic, cite = number)
+                i = close + 1
+                continue
+            }
+        }
         val code = if (text[i] == '`') text.indexOf('`', i + 1) else -1
         // `***两者***` 要先于 `**` 判:按 `**` 切的话内层只剩一个落单的 `*`,配不上对,
         // 于是它会作为普通字符印在正文里。

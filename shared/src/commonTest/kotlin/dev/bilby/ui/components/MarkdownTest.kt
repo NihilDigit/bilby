@@ -23,6 +23,15 @@ class MarkdownTest {
     }
 
     @Test
+    fun `角标在强调里也认得出,记号字符不留在正文里`() {
+        // 角标的定界符是私用区字符,认不出来的话它们会作为方块印在界面上。
+        assertEquals(
+            listOf(MdSpan("讲得最清楚", bold = true), MdSpan("", bold = true, cite = 2), MdSpan("。")),
+            parseMarkdown("**讲得最清楚${dev.bilby.agent.citation(2)}**。").single().spans,
+        )
+    }
+
+    @Test
     fun `下划线不是斜体记号`() {
         // page_size 这类标识符在这个 app 的语境里比斜体常见得多。
         assertEquals(

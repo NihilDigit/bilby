@@ -1,39 +1,57 @@
 package dev.bilby.agent
 
-/** UI 实时渲染的过程直播:搜了 X → 读了 Y 的热评 → 进了 Z 的空间。 */
+/** UI 实时渲染的过程直播:搜索 X → Y 的热评 → Z 的投稿。 */
 sealed interface AgentEvent {
     data class Thinking(val text: String) : AgentEvent
 
-    data class ToolStarted(val label: String) : AgentEvent
-
-    /** 中间结果可点:助理翻到一半用户看中了可以直接点走(DESIGN 3.4)。 */
-    data class ToolFinished(val label: String, val items: List<TraceItem>) : AgentEvent
+    /**
+     * 一步开始。一步是同一轮里对同一个工具的全部调用,见 [Tool.step]。
+     *
+     * @param stepId 本轮内唯一,结束事件按它回填。原先按文字回填,文字在结束时会变(名字查到了),
+     *   而并发的两步文字又可能相同。
+     */
+    data class ToolStarted(val stepId: Int, val kind: StepKind, val text: String) : AgentEvent
 
     /**
-     * 答案是**一段可以夹着视频卡片的正文**,不是"一段总结 + 一串卡片"。
-     *
-     * 模型交回的是散文,视频写成 `[[BV1xx]]` 的行内引用;这里把它切成块,引用处就地换成
-     * 卡片。这样"为什么值得看"由引用前后的句子承担,不再需要每张卡片自带一句独立说明——
-     * 那种说明没有上下文可依附,才逼出了"不许写检索理由""不超过 60 字"这类限制。
-     *
-     * 纯文本回答是合法的:用户问"这几个评价如何"时,答案本来就不该是一串视频。
+     * 一步结束。[text] 可能与开始时不同:执行时认出了合集标题这类名字。
+     * [items] 是可点的中间结果:助理翻到一半用户看中了可以直接点走(DESIGN 3.4)。
      */
-    data class Answer(val blocks: List<AnswerBlock>) : AgentEvent {
-        /** 会话持久化只需要提到过哪些视频,不需要正文的结构。 */
-        val bvids: List<String> get() = blocks.filterIsInstance<AnswerBlock.Video>().map { it.bvid }
+    data class ToolFinished(
+        val stepId: Int,
+        val kind: StepKind,
+        val text: String,
+        val items: List<TraceItem>,
+    ) : AgentEvent
+
+    data class Answer(val answer: AgentAnswer) : AgentEvent {
+        val bvids: List<String> get() = answer.sources.map { it.bvid }
     }
 
     data class Failed(val message: String) : AgentEvent
 }
 
-sealed interface AnswerBlock {
-    data class Text(val text: String) : AnswerBlock
+/**
+ * 一轮的答案:**一段回答,加上它提到的视频**,两者分开摆。
+ *
+ * 用户主要拿助理问问题,视频是依据和下一步去看的地方,不是答案本身。原先卡片就地插在句子里
+ * (模型写 `[[bvid]]`,卡片落在那个位置),一句话被一张卡劈成两半,而模型为了凑卡片会把
+ * 回答写成一串推荐 —— 开放问题尤其答不好。
+ *
+ * [text] 是 markdown,引用处是一个角标记号([citation]),编号从 1 起,对应 [sources] 的
+ * 位置。纯文字的回答是合法的,那时 [sources] 为空。
+ */
+data class AgentAnswer(val text: String, val sources: List<AnswerSource>)
 
-    /** 引用位置就地插的卡片。文案不在这里,在它前后的 [Text] 里。 */
-    data class Video(val bvid: String, val trace: TraceItem?) : AnswerBlock
-}
+data class AnswerSource(val bvid: String, val trace: TraceItem?)
 
-data class AnswerItem(val bvid: String, val reason: String, val trace: TraceItem?)
+/**
+ * 正文里一个角标的写法:私用区的两个字符夹着编号。**不用 `[1]` 这种可读的写法**,模型自己
+ * 写的正文里也会出现方括号和数字,渲染时分不清哪个是引用。
+ */
+fun citation(number: Int): String = "$CitationOpen$number$CitationClose"
+
+const val CitationOpen = ''
+const val CitationClose = ''
 
 /**
  * 本次意图。**只含本次意图**,永不含观看画像(DESIGN 1.1 的隐式反馈回路那一栏)——

@@ -58,6 +58,12 @@ class AgentLoop(
     ): Flow<AgentEvent> = flow {
         val seenBvids = priorBvids.toMutableSet()
         val traceByBvid = priorTraces.toMutableMap()
+        // 过程里的名字(见 [NameBook])。视频标题取自 traceByBvid,UP 名与合集标题只在本轮攒:
+        // 它们只服务于过程的文字,不值得跟着会话落库。
+        val upNames = mutableMapOf<Long, String>()
+        val collectionNames = mutableMapOf<Long, String>()
+        fun nameBook() = NameBook(traceByBvid.mapValues { it.value.title }, upNames, collectionNames)
+        var nextStepId = 0
         // **每一轮都自己把 system 拼上,不指望 history 里存着一份。** 回传给调用方的是
         // `drop(newFrom)`,起点在本轮的用户输入上,system 从来就没进过 history —— 只在
         // 首轮插一次的写法于是让第二轮起完全没有 system 消息,[[bvid]] 的引用格式和溯源
@@ -106,13 +112,14 @@ class AgentLoop(
             // 也堵不住它:tool_choice:"required" 直接被拒,返回 400
             // "Thinking mode does not support this tool_choice"。
             if (calls.isEmpty()) {
-                val blocks = toBlocks(text, seenBvids, traceByBvid)
-                if (blocks.isNotEmpty()) {
-                    emit(AgentEvent.Answer(blocks))
+                val answer = toAnswer(text, seenBvids, traceByBvid)
+                // 纯文字的回答是合法的(问的是问题,不是找视频),所以只要正文不空就算交卷。
+                if (answer.text.isNotBlank() || answer.sources.isNotEmpty()) {
+                    emit(AgentEvent.Answer(answer))
                     return@flow
                 }
-                // 正文里一条能用的引用都没有,才是真的没结果。finish_reason 是这里唯一能分辨
-                // "模型说完了"和"被截断/流没收全"的东西,不留下就无从归因。
+                // 回话是空的才是真的没结果。finish_reason 是这里唯一能分辨"模型说完了"和
+                // "被截断/流没收全"的东西,不留下就无从归因。
                 val finish = deltas.filterIsInstance<LlmDelta.Done>().lastOrNull()?.finishReason
                 BiliLog.w(
                     "助理没交卷也没可用引用: finish_reason=$finish 正文${text.length}字 " +
@@ -156,9 +163,14 @@ class AgentLoop(
                     .getOrElse { buildJsonObject { } }
                 Triple(call, tool, arguments)
             }
-            prepared.forEach { (_, tool, arguments) ->
-                if (tool != null) emit(AgentEvent.ToolStarted(tool.label(arguments)))
-            }
+            // 同一轮里对同一个工具的调用合成过程里的一步(见 [Tool.step]),按第一次出现的顺序排。
+            val steps = prepared.indices
+                .filter { prepared[it].second != null }
+                .groupBy { prepared[it].second!!.name }
+                .values
+                .map { indices -> ProcessStep(nextStepId++, prepared[indices.first()].second!!, indices) }
+            fun ProcessStep.text() = tool.step(indices.map { tool.subject(prepared[it].third, nameBook()) })
+            steps.forEach { emit(AgentEvent.ToolStarted(it.id, it.tool.kind, it.text())) }
 
             val results = coroutineScope {
                 prepared.map { (_, tool, arguments) ->
@@ -172,16 +184,12 @@ class AgentLoop(
                 }.awaitAll()
             }
 
-            prepared.forEachIndexed { index, (call, tool, arguments) ->
+            prepared.forEachIndexed { index, (call, _, _) ->
                 val result = results[index]
                 seenBvids += result.bvids
                 result.forUi.forEach { traceByBvid[it.bvid] = it }
-                // 按 bvid 去重:同一个工具返回里重复出现同一条是常事(搜索结果里的重复投稿、
-                // 合集列表里的同一集),而 UI 拿它当 LazyRow 的 key,重复会直接崩。
-                // 去重放在产出侧一处,不放在每个消费方 —— 漏一处就是一次崩溃。
-                if (tool != null) {
-                    emit(AgentEvent.ToolFinished(tool.label(arguments), result.forUi.distinctBy { it.bvid }))
-                }
+                upNames += result.upNames
+                collectionNames += result.collectionNames
 
                 messages += ChatMessage(
                     role = ChatMessage.ROLE_TOOL,
@@ -189,6 +197,14 @@ class AgentLoop(
                     name = call.function.name,
                     content = result.forModel,
                 )
+            }
+            // 结束时文字重算一次:这一轮刚认出的名字(合集标题、UP 名)能用上了。
+            // 中间结果按 bvid 去重:同一个工具返回里重复出现同一条是常事(搜索结果里的重复投稿、
+            // 合集列表里的同一集),几次调用合成一步时更是如此,而 UI 拿它当 LazyRow 的 key,
+            // 重复会直接崩。去重放在产出侧一处,不放在每个消费方 —— 漏一处就是一次崩溃。
+            steps.forEach { processStep ->
+                val items = processStep.indices.flatMap { results[it].forUi }.distinctBy { it.bvid }
+                emit(AgentEvent.ToolFinished(processStep.id, processStep.tool.kind, processStep.text(), items))
             }
             step++
         }
@@ -228,59 +244,44 @@ class AgentLoop(
 
 
     /**
-     * 把带 `[[bvid]]` 引用的散文切成块。三条硬规矩全部落在这里,**丢引用不丢文字** ——
-     * 引用被丢掉时只是少一张卡片,前后的句子照常显示,读起来不会断。
+     * 把带 `[[bvid]]` 引用的回答整理成 [AgentAnswer]:引用换成角标,被引用的视频按第一次出现的
+     * 顺序编号、列进出处。三条硬规矩全部落在这里,**丢引用不丢文字**:引用被丢掉时连标记一起
+     * 抹掉,前后的句子照常显示。
      *
      *   - 规矩 2:不在工具返回过的集合里的 bvid 丢掉(模型编不出视频)。
-     *   - 规矩 3:卡片数量由代码定,超出上限的引用丢掉。
-     *   - 同一个 bvid 只出卡片一次:模型回指前文时(「刚才那条 [[BV1xx]]」)不该再来一张。
+     *   - 规矩 3:出处条数由代码定,超出上限的引用丢掉。
+     *   - 同一个 bvid 只列一次:模型回指前文时(「刚才那条 [[BV1xx]]」)用同一个编号。
      */
-    private fun toBlocks(
+    private fun toAnswer(
         answer: String,
         seenBvids: Set<String>,
         traceByBvid: Map<String, TraceItem>,
-    ): List<AnswerBlock> {
-        val blocks = mutableListOf<AnswerBlock>()
-        val used = mutableSetOf<String>()
-
-        // 文字先攒在缓冲里,只有真的要插卡片时才切块。被丢掉的引用**连同标记一起**从正文里
-        // 抹掉,而它两侧的句子仍属于同一段 —— 否则一个被丢的引用会把一句话劈成两块。
-        val text = StringBuilder()
-        var cursor = 0
-
-        fun flushText() {
-            text.toString().trim().takeIf { it.isNotEmpty() }?.let { blocks += AnswerBlock.Text(it) }
-            text.clear()
-        }
-
-        for (match in VIDEO_REF.findAll(answer)) {
+    ): AgentAnswer {
+        val sources = mutableListOf<AnswerSource>()
+        val numberOf = mutableMapOf<String, Int>()
+        val text = VIDEO_REF.replace(answer) { match ->
             val bvid = match.groupValues[1]
-            text.append(answer, cursor, match.range.first)
-            cursor = match.range.last + 1
-
-            val keep = when {
+            val number = numberOf[bvid] ?: when {
                 bvid !in seenBvids -> {
                     BiliLog.w("助理引用了工具没返回过的视频,已丢弃:$bvid")
-                    false
+                    null
                 }
-                bvid in used -> false
-                used.size >= MAX_RESULTS -> {
+                sources.size >= MAX_RESULTS -> {
                     BiliLog.w("助理引用的视频超过 $MAX_RESULTS 条,多余的已丢弃:$bvid")
-                    false
+                    null
                 }
-                else -> true
+                else -> {
+                    sources += AnswerSource(bvid, traceByBvid[bvid])
+                    sources.size.also { numberOf[bvid] = it }
+                }
             }
-            if (!keep) continue
-
-            flushText()
-            blocks += AnswerBlock.Video(bvid, traceByBvid[bvid])
-            used += bvid
+            if (number == null) "" else citation(number)
         }
-        text.append(answer, cursor, answer.length)
-        flushText()
-
-        return blocks
+        return AgentAnswer(text.trim(), sources)
     }
+
+    /** 过程里的一步:同一轮里对 [tool] 的几次调用,[indices] 是它们在这一轮调用里的下标。 */
+    private class ProcessStep(val id: Int, val tool: Tool, val indices: List<Int>)
 
     private fun AgentIntent.toPrompt(): String = when (this) {
         is AgentIntent.Query -> "用户想找:$text"
@@ -295,15 +296,14 @@ class AgentLoop(
         const val MAX_RESULTS = 5
 
         /**
-         * `[[BV1xx4y1x7xx]]` 形式的行内引用。bvid 的字符集是 base58,这里不收窄,交给白名单校验。
+         * `[[BV1xx4y1x7xx]]` 形式的引用。bvid 的字符集是 base58,这里不收窄,交给白名单校验。
          *
-         * **紧贴引用的强调记号连同引用一起吃掉。** 模型很爱写 `**[[BV1xx]]**`,而切块发生在
-         * markdown 解析之前:开头那个 `**` 会落在前一个文字块的末尾、结尾那个落在后一个块的
-         * 开头,两边各剩半个记号,配不上对就原样印在正文里(真机上就是这样露出来的)。
+         * **紧贴引用的强调记号连同引用一起吃掉。** 模型很爱写 `**[[BV1xx]]**`,引用换成角标
+         * 之后那两个 `**` 就包着一个角标;被丢掉的引用则只剩 `****`,配不上对就原样印在正文里
+         * (真机上就是这样露出来的)。角标本身已经醒目,加粗对它没有意义。
          *
-         * 不要求两侧对称:紧贴引用的记号,配对对象要么是这个引用本身(卡片已经够突出,加粗
-         * 对它没有意义),要么已经跨到别的块去了(跨块的强调本来也渲染不出来)。两种情况丢掉
-         * 都比留一个裸 `**` 好。
+         * 这是兜底,不是主路:引用怎么写(紧贴句末、前面不留空格、最多几个)在 [SYSTEM_PROMPT]
+         * 里写明,模型照着写就不需要这里再清洗。
          */
         val VIDEO_REF = Regex("""\*{0,3}\[\[(BV[0-9A-Za-z]+)]]\*{0,3}""")
 
@@ -312,31 +312,40 @@ class AgentLoop(
          * 这里写再多"不要让用户上瘾"也不构成任何保证。
          */
         const val SYSTEM_PROMPT = """
-你是一个 B 站内容检索助手。给定用户的意图和你用工具查到的候选,挑出真正相关的几条。
+你是一个 B 站内容助手。回答用户的问题;B 站视频是你回答的依据,也是用户接下来可以去看的地方。
 
-要求:
-- 用工具去查,不要凭记忆回答。热评往往能反映内容质量,值得翻。
-- 去重,不凑数。宁可少给几条,也不要塞进不相关的。
-- 只能提到你在工具返回里真实见过的视频。
-- 查完就直接回答。不要再调工具,回答本身就是终点。
+做法:
+- 用工具去查,不要凭记忆回答。热评往往能反映内容质量和观众的真实评价,值得翻。
+- 只能引用你在工具返回里真实见过的视频。
+- 查完就直接回答,回答本身就是终点。
 
-**回答写一段自然的话,把视频用 `[[bvid]]` 写在句子里。** 引用会被渲染成一张可点的
-视频卡片,所以不要重复卡片上已有的信息(标题、UP主、播放量、时长),把力气花在
-卡片上没有的东西:它讲了什么、适合什么情况看、热评里提到的具体评价。
+先判断用户要什么:
+- 输入是一个问题,就回答这个问题。
+- 输入只是一个词或短语(一个名字、一个梗、一个话题),理解为「想看关于它的内容」:按它在 B 站
+  最常见的含义去找,回答里说明这是什么、相关内容大致有哪几类、各自值得看的是哪些。不要把它当成
+  「找一个叫这个名字的账号」,除非输入明确是在找人。
+- 有歧义时按最常见的那种理解回答,最后用一句话提其他可能的含义。
 
-例:
-「想从零开始的话,[[BV1xx4y1x7xx]] 把推导过程完整走了一遍,没有跳步;
-评论里不少人提到第 12 分钟那段例子是关键。已经有基础可以直接跳到
-[[BV1yy4y1y7yy]],它默认你知道前置概念,节奏快很多。」
+回答怎么写:
+- 先回答问题本身。用户问「是什么」「为什么」「哪个好」,就把答案写出来;用户要找视频,
+  用一两句话说明找到的是什么、各自适合什么需求。
+- 引用视频写成 `[[bvid]]`,放在它所支持的那句话的末尾、句末标点之前,**前面不留空格**
+  (写「……讲得最清楚[[bvid]]。」)。它会显示成一个可点的上标角标,视频本身另外列在回答下面。
+  不要把视频当句子成分写进话里(不要写「推荐 [[bvid]],它讲了……」),也不要重复标题、
+  UP 主、播放量、时长。
+- 全文最多引用 $MAX_RESULTS 个不同的视频,超出的不会显示。同一个视频再次提到时照写同一个
+  `[[bvid]]`,不占名额。一句话只标一个最相关的出处,不要一连标好几个。
+- 书面语,简洁。不寒暄,不写「看你想要哪种」「可以点进去看看」这类话,不用网络口语。
+- 宁可少引,不凑数。问题本身用不着视频时,一个都不引也是对的。
 
-用户问的是问题(比如「这几个的评价怎么样」)时,不引用任何视频、直接把答案写成
-一段话也是对的 —— 强行凑几个视频出来只会让回答变差。
-
-`[[bvid]]` 不要加粗、不要包在任何记号里 —— 它会变成一张卡片,记号对它没有意义。
+例(用户问「线性代数怎么入门」):
+「入门的关键是先建立几何直观,再学计算。系统性的课程里,有一套从向量的几何意义讲起、
+不跳推导的系列最常被推荐 [[BV1xx4y1x7xx]];评论普遍认为第 3 集讲行列式的部分最有帮助。
+已有基础、只想补计算的,可以直接看习题讲解 [[BV1yy4y1y7yy]]。」
 
 排版只认这几种记号:`**加粗**`、`*斜体*`、`` `行内代码` ``、`- ` 无序列表、
 `1. ` 有序列表、`#` 到 `###` 的小标题。表格、代码块、链接、图片一律不要用,
-它们不会被渲染,记号会原样印在答案里。
+它们不会被渲染,记号会原样印在答案里。`[[bvid]]` 不要包在任何记号里。
 """
     }
 }

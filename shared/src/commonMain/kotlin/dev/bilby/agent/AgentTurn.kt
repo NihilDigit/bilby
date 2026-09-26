@@ -7,7 +7,10 @@ package dev.bilby.agent
  * 所以它属于这一步本身,不是等答案出来之后才有的东西。
  */
 data class AgentStep(
-    val label: String,
+    val id: Int,
+    val kind: StepKind,
+    /** 这一步的对象,不带动词;动作由 [kind] 的图标表达。 */
+    val text: String,
     val items: List<TraceItem> = emptyList(),
     val finished: Boolean = false,
 )
@@ -23,7 +26,7 @@ data class AgentStep(
  */
 data class AgentTurnState(
     val steps: List<AgentStep> = emptyList(),
-    val blocks: List<AnswerBlock> = emptyList(),
+    val answer: AgentAnswer? = null,
     val running: Boolean = false,
     val error: String? = null,
 )
@@ -31,23 +34,22 @@ data class AgentTurnState(
 /**
  * 事件流到状态的唯一一处折叠。
  *
- * 同一次工具调用的开始与结束是两个事件,按 label 回填**最后一个未完成**的那一项,否则每步
- * 会显示两遍;并发调用里同名的两步(同时搜两个词标签一样)也靠这条规则各归各位。
+ * 一步的开始与结束是两个事件,结束按 stepId 回填那一步,否则每步会显示两遍。
  */
 fun AgentTurnState.reduce(event: AgentEvent): AgentTurnState = when (event) {
     // 模型的自然语言不进 UI:过程直播要显示"做了什么",不是"想了什么"。
     is AgentEvent.Thinking -> this
 
-    is AgentEvent.ToolStarted -> copy(steps = steps + AgentStep(event.label))
+    is AgentEvent.ToolStarted -> copy(steps = steps + AgentStep(event.stepId, event.kind, event.text))
 
     is AgentEvent.ToolFinished -> copy(
         steps = steps.toMutableList().also { list ->
-            val index = list.indexOfLast { it.label == event.label && !it.finished }
-            if (index >= 0) list[index] = list[index].copy(items = event.items, finished = true)
-            else list += AgentStep(event.label, event.items, finished = true)
+            val finished = AgentStep(event.stepId, event.kind, event.text, event.items, finished = true)
+            val index = list.indexOfFirst { it.id == event.stepId }
+            if (index >= 0) list[index] = finished else list += finished
         },
     )
 
-    is AgentEvent.Answer -> copy(blocks = event.blocks, running = false)
+    is AgentEvent.Answer -> copy(answer = event.answer, running = false)
     is AgentEvent.Failed -> copy(error = event.message, running = false)
 }

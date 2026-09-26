@@ -99,14 +99,24 @@
     <!-- 助理:搜索页、播放页找相关、独立结果页共用 -->
     <string name="agent_title">助理</string>
     <string name="agent_process">过程</string>
-    <!-- 元信息各段之间用两个空格,不是 ·(见 VideoRow)。XML 会把连续空白压成一个,
-         所以整串加引号保住那两个空格。 -->
-    <string name="agent_process_collapsed">"过程  %1$s"</string>
+    <!-- 元信息各段之间用两个空格,不是 ·(见 VideoRow)。Compose 资源原样保留连续空格,
+         **不要加引号**:它不像 Android 的 aapt 那样把引号当定界符去掉,引号会印在界面上。 -->
+    <string name="agent_process_summary">过程  %1$d 步</string>
+    <!-- 回答下面那一列视频的标题。它们是正文里角标指向的出处。 -->
+    <string name="agent_sources">提到的视频</string>
     <string name="agent_process_expand">展开过程</string>
     <string name="agent_process_collapse">收起过程</string>
-    <!-- 助理讲自己,可以有人称口吻(见 Tool.label)。这三条都是它在说话,不是在指示用户。 -->
-    <string name="agent_running">还在翻…</string>
-    <string name="agent_no_result">没找到合适的</string>
+    <!-- 过程里每一步行首图标的读屏名。文字只写对象,动作只在图标上(见 Tool.kt 的 StepKind)。 -->
+    <string name="agent_step_search_videos">搜索视频</string>
+    <string name="agent_step_search_users">搜索 UP 主</string>
+    <string name="agent_step_up">UP 主空间</string>
+    <string name="agent_step_up_videos">UP 主投稿</string>
+    <string name="agent_step_video">视频详情</string>
+    <string name="agent_step_comments">热评</string>
+    <string name="agent_step_collection">合集目录</string>
+    <string name="agent_step_related">相关推荐</string>
+    <string name="agent_running">检索中…</string>
+    <string name="agent_no_result">未找到结果</string>
 
     <!-- 稍后再看 -->
     <string name="toview_empty">稍后再看是空的</string>
@@ -221,7 +231,7 @@
     <string name="space_empty_collection_detail">这个合集是空的</string>
     <string name="space_collection_season">合集</string>
     <string name="space_collection_series">系列</string>
-    <string name="space_collection_meta">"%1$s  共 %2$d 个视频"</string>
+    <string name="space_collection_meta">%1$s  共 %2$d 个视频</string>
 
     <!-- 播放页 -->
     <string name="video_tab_intro">简介</string>
@@ -313,9 +323,11 @@
 
     <!-- 找相关的 sheet。把手上一行既是标题也是状态 -->
     <string name="related_title">相关</string>
-    <string name="related_title_running">"相关  还在翻"</string>
-    <string name="related_title_error">"相关  失败"</string>
-    <string name="related_title_count">"相关  %1$d 条"</string>
+    <!-- 找相关之后的追问输入框。占位文案同时是这个框的读屏名。 -->
+    <string name="related_follow_up">继续提问</string>
+    <string name="related_title_running">相关  检索中</string>
+    <string name="related_title_error">相关  失败</string>
+    <string name="related_title_count">相关  %1$d 条</string>
 
     <!-- 播放器控件。听视频页和播放页共用同一组 -->
     <string name="player_play">播放</string>
@@ -515,7 +527,7 @@
     <string name="settings_llm_test">测试</string>
     <string name="settings_llm_test_hint">点击发送一次请求</string>
     <string name="settings_llm_test_running">请求中…</string>
-    <string name="settings_llm_test_ok">"正常  %1$d ms"</string>
+    <string name="settings_llm_test_ok">正常  %1$d ms</string>
     <string name="feed_open_followings">关注列表</string>
     <string name="followings_title">关注列表</string>
     <string name="followings_empty">还没有关注任何人</string>

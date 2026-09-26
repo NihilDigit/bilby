@@ -61,8 +61,9 @@ class AgentLoopTest {
     }
 
     @Test
-    fun `被丢弃的引用连标记一起抹掉,且不把句子劈成两段`() = runTest {
-        // 丢引用不能丢文字:卡片没了句子还得读得通,而且标记本身绝不能漏到界面上。
+    fun `被丢弃的引用连标记一起抹掉,留下的按出现顺序编号`() = runTest {
+        // 丢引用不能丢文字:句子还得读得通,而且 [[bvid]] 标记本身绝不能漏到界面上。
+        // 编号跳过被丢的那个:第一个留下的是 1,不是 2。
         val cites = FakeStreamer { messages ->
             if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")
             else answer("前半句 [[BV1fake0000x]] 后半句,真的这条 [[BV1real0000x]] 收尾")
@@ -71,41 +72,30 @@ class AgentLoopTest {
             .run(AgentIntent.Query("随便"))
             .toList()
 
-        val blocks = events.filterIsInstance<AgentEvent.Answer>().single().blocks
-        assertEquals(
-            listOf<AnswerBlock>(
-                AnswerBlock.Text("前半句  后半句,真的这条"),
-                AnswerBlock.Video("BV1real0000x", null),
-                AnswerBlock.Text("收尾"),
-            ),
-            blocks,
-        )
+        val answer = events.filterIsInstance<AgentEvent.Answer>().single().answer
+        assertEquals("前半句  后半句,真的这条 ${citation(1)} 收尾", answer.text)
+        assertEquals(listOf("BV1real0000x"), answer.sources.map { it.bvid })
     }
 
     @Test
     fun `包着引用的强调记号跟引用一起消失`() = runTest {
-        // 真机上抓到的:模型写 `**[[BV]]**`,而切块在 markdown 解析之前,两个 `**` 被切进
-        // 前后两个不同的文字块,各剩半个配不上对,于是裸星号印在了答案里。
+        // 真机上抓到的:模型写 `**[[BV]]**`。引用被丢掉时只剩 `****`,配不上对,裸星号印在答案里。
         val emphasised = FakeStreamer { messages ->
             if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")
-            else answer("最值得看的是 **[[BV1real0000x]]** 这条")
+            else answer("最值得看的是 **[[BV1real0000x]]** 这条,**[[BV1fake0000x]]** 不算")
         }
         val events = AgentLoop(emphasised, ToolRegistry(listOf(FakeTool("search_videos", setOf("BV1real0000x")))), json)
             .run(AgentIntent.Query("随便"))
             .toList()
 
         assertEquals(
-            listOf<AnswerBlock>(
-                AnswerBlock.Text("最值得看的是"),
-                AnswerBlock.Video("BV1real0000x", null),
-                AnswerBlock.Text("这条"),
-            ),
-            events.filterIsInstance<AgentEvent.Answer>().single().blocks,
+            "最值得看的是 ${citation(1)} 这条, 不算",
+            events.filterIsInstance<AgentEvent.Answer>().single().answer.text,
         )
     }
 
     @Test
-    fun `同一个视频被反复提到也只出一张卡片`() = runTest {
+    fun `同一个视频被反复提到用同一个编号,只列一次`() = runTest {
         val repeats = FakeStreamer { messages ->
             if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")
             else answer("先看 [[BV1]],刚才说的 [[BV1]] 值得重看")
@@ -114,8 +104,23 @@ class AgentLoopTest {
             .run(AgentIntent.Query("随便"))
             .toList()
 
-        val blocks = events.filterIsInstance<AgentEvent.Answer>().single().blocks
-        assertEquals(1, blocks.filterIsInstance<AnswerBlock.Video>().size)
+        val answer = events.filterIsInstance<AgentEvent.Answer>().single().answer
+        assertEquals(1, answer.sources.size)
+        assertEquals("先看 ${citation(1)},刚才说的 ${citation(1)} 值得重看", answer.text)
+    }
+
+    @Test
+    fun `没有引用的纯文字回答也算交卷`() = runTest {
+        // 用户问的是问题时,答案本来就可以不带视频。原先没有卡片就判"没有给出结果"。
+        val explains = FakeStreamer { messages ->
+            if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")
+            else answer("这是 CS 圈的一句口号。")
+        }
+        val events = AgentLoop(explains, ToolRegistry(listOf(FakeTool("search_videos", setOf("BV1")))), json)
+            .run(AgentIntent.Query("随便"))
+            .toList()
+
+        assertEquals("这是 CS 圈的一句口号。", events.filterIsInstance<AgentEvent.Answer>().single().answer.text)
     }
 
     @Test

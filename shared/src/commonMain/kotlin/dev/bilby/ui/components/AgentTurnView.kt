@@ -7,6 +7,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.material3.Surface
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -38,7 +40,19 @@ import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.agent.AgentStep
 import dev.bilby.agent.AgentTurnState
+import dev.bilby.agent.StepKind
 import dev.bilby.agent.TraceItem
+import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Explore
+import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PersonSearch
+import androidx.compose.material.icons.outlined.PlayCircleOutline
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.ui.graphics.vector.ImageVector
+import org.jetbrains.compose.resources.StringResource
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 
@@ -50,7 +64,7 @@ import dev.bilby.ui.theme.Spacing
  * 播放页少了中间结果卡片和完成标记,而这件事从任何一份代码里都看不出来。
  *
  * 过程直播是信任的来源,也是等待体验本身(DESIGN 3.4):中间结果可点,助理翻到一半用户
- * 看中了可以直接点走。答案一出现过程自动折叠,但随时能点回来。
+ * 看中了可以直接点走。答案一出现过程自动折叠,但随时能点回来。答案本身见 [AgentAnswerView]。
  */
 @Composable
 fun AgentTurnView(
@@ -60,7 +74,7 @@ fun AgentTurnView(
     modifier: Modifier = Modifier,
 ) {
     var processExpanded by remember { mutableStateOf(true) }
-    val hasAnswer = turn.blocks.isNotEmpty()
+    val hasAnswer = turn.answer != null
     LaunchedEffect(hasAnswer) {
         if (hasAnswer) processExpanded = false
     }
@@ -69,7 +83,7 @@ fun AgentTurnView(
         if (turn.steps.isNotEmpty()) {
             ProcessHeader(
                 expanded = processExpanded,
-                collapsedSummary = turn.steps.lastOrNull()?.label.orEmpty(),
+                stepCount = turn.steps.size,
                 onToggle = { processExpanded = !processExpanded },
             )
             // 答案一到就自动折叠,折叠是这一块自己发生的事,不是换页:沿竖轴展开收起,
@@ -88,12 +102,13 @@ fun AgentTurnView(
             }
         }
 
-        // 正文与视频卡片是同一段话,不分成"总结"加"为你找到"两块。
-        AnswerBlocks(
-            blocks = turn.blocks,
-            onVideoClick = onVideoClick,
-            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-        )
+        turn.answer?.let { answer ->
+            AgentAnswerView(
+                answer = answer,
+                onVideoClick = onVideoClick,
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+            )
+        }
 
         when {
             // 出错这一格用行内样式,不用 FullScreenError:两个容器都不是"一屏",一个是对话流里
@@ -120,10 +135,41 @@ fun AgentTurnView(
     }
 }
 
+/** 用户问的那一句,靠右的气泡。搜索页的助理和找相关的追问共用。 */
+@Composable
+fun AgentQuestionBubble(text: String, modifier: Modifier = Modifier) {
+    Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        Surface(
+            color = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            shape = MaterialTheme.shapes.large,
+            // **上限按可用宽度的比例算,不写死 280dp。** 那个数是按 360dp 宽的手机定的,平板上
+            // 一句长问句会在整屏宽度的中间断成好几行,右边留着一大片空;而窄屏上它比屏幕还宽,
+            // 等于没有上限。留出的那两成是"这一侧是我说的话"这个形状本身 —— 气泡铺满整行就
+            // 和下面助理的正文分不开了。
+            modifier = Modifier.fillMaxWidth(BubbleWidthFraction).wrapContentWidth(Alignment.End),
+        ) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+            )
+        }
+    }
+}
+
+/** 用户气泡最宽占多少。留出的两成让"谁在说话"从形状上就读得出来。 */
+private const val BubbleWidthFraction = 0.8f
+
+/**
+ * 过程那一行。折叠时写一共几步:原先写最后一步的文字,答案出来之后那一步多半是一次热评,
+ * 读不出这一轮查了多少。试过同时写"见过几个候选",那个数把每次搜索的整页结果都算进去,
+ * 动辄三百多,说明不了什么。
+ */
 @Composable
 private fun ProcessHeader(
     expanded: Boolean,
-    collapsedSummary: String,
+    stepCount: Int,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -141,7 +187,7 @@ private fun ProcessHeader(
             text = if (expanded) {
                 stringResource(Res.string.agent_process)
             } else {
-                stringResource(Res.string.agent_process_collapsed, collapsedSummary)
+                stringResource(Res.string.agent_process_summary, stepCount)
             },
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -165,22 +211,28 @@ private fun StepRow(step: AgentStep, onVideoClick: (String) -> Unit, modifier: M
         modifier = modifier.fillMaxWidth().padding(vertical = Spacing.Hair),
         verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
-        if (step.finished) {
-            Row(
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
+        // 行首是动作类型的图标,文字只写对象(见 StepKind);还在跑的那一步图标换成转圈。
+        Row(
+            modifier = Modifier.padding(horizontal = Spacing.Comfortable),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            if (step.finished) {
                 Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                    imageVector = step.kind.icon(),
+                    contentDescription = stringResource(step.kind.labelRes()),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(Dimens.IconInline),
                 )
-                Text(text = step.label, style = MaterialTheme.typography.bodyMedium)
+            } else {
+                LoadingSpinner()
             }
-        } else {
-            InlineProgress(step.label, Modifier.padding(horizontal = Spacing.Comfortable))
+            Text(
+                text = step.text,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
 
         if (step.items.isNotEmpty()) {
@@ -195,6 +247,32 @@ private fun StepRow(step: AgentStep, onVideoClick: (String) -> Unit, modifier: M
             }
         }
     }
+}
+
+/** 每类动作一个图标。选的都是全应用里同一件事已经在用的那个:放大镜是搜索,人像是 UP 主。 */
+private fun StepKind.icon(): ImageVector = when (this) {
+    StepKind.SearchVideos -> Icons.Outlined.Search
+    StepKind.SearchUsers -> Icons.Outlined.PersonSearch
+    StepKind.Up -> Icons.Outlined.Person
+    StepKind.UpVideos -> Icons.Outlined.VideoLibrary
+    StepKind.Video -> Icons.Outlined.PlayCircleOutline
+    StepKind.Comments -> Icons.Outlined.ChatBubbleOutline
+    StepKind.Collection -> Icons.AutoMirrored.Outlined.PlaylistPlay
+    StepKind.Related -> Icons.Outlined.Explore
+    StepKind.Other -> Icons.Outlined.MoreHoriz
+}
+
+/** 图标给读屏的名字:文字只有对象,动作只在图标上,读屏也得知道是哪一类。 */
+private fun StepKind.labelRes(): StringResource = when (this) {
+    StepKind.SearchVideos -> Res.string.agent_step_search_videos
+    StepKind.SearchUsers -> Res.string.agent_step_search_users
+    StepKind.Up -> Res.string.agent_step_up
+    StepKind.UpVideos -> Res.string.agent_step_up_videos
+    StepKind.Video -> Res.string.agent_step_video
+    StepKind.Comments -> Res.string.agent_step_comments
+    StepKind.Collection -> Res.string.agent_step_collection
+    StepKind.Related -> Res.string.agent_step_related
+    StepKind.Other -> Res.string.agent_process
 }
 
 @Composable
