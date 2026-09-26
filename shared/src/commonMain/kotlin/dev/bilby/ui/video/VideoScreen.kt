@@ -764,6 +764,11 @@ fun VideoScreen(
             val loaded = matchesCurrentPage || audioState.playInfo != null
             val shellShown = loaded && active != null
             val share = { system.shareVideo(bvid, state.detail?.title.orEmpty()) }
+            // **`state.error` 画过了就不再画这一条。** 这里原先写着"两者不会同时出现",
+            // 那句话不成立:详情取不到时取流同样会失败(一条不存在的 bvid 就两样都占),
+            // 于是两条提示叠在同一个居中位置,字压着字,下面共用一个重试按钮,谁都读不出来。
+            // 留下的是详情那一条 —— 它是根因,而取流失败只是它的后果。
+            val shownError = playbackError.takeIf { state.error == null }
             when {
                 shellShown -> BilbyPlayer(
                     player = active,
@@ -843,7 +848,10 @@ fun VideoScreen(
                 // 的窗口,壳内那颗盖的是装上之后的取流与缓冲,两段接起来观感是同一次等待。
                 // 这里原先是一个不带底色的 LoadingIndicator,壳接上来那一刻它换成一颗带底色的键,
                 // 看上去是指示器闪了一下、换了个样子。
-                else -> PlayerTheme {
+                //
+                // 取流已经失败时不画:壳还没挂上的这段窗口里下面那条失败提示同样居中,两者叠在
+                // 一起,加载键压着提示文字,读起来既像在等又像失败了。
+                shownError == null -> PlayerTheme {
                     Box(modifier = Modifier.align(Alignment.Center)) {
                         CenterPlayButton(isPlaying = true, loading = true, large = fullscreen, onClick = {})
                     }
@@ -863,12 +871,7 @@ fun VideoScreen(
             // 盖在画面上而不是排在下面:失败时画面本来就是黑的,而简介区在一屏之外,
             // 提示放那儿等于没有。
             // 取流/重试退避期间的指示器归 PlayerShell(externalLoading),这里只画失败态。
-            //
-            // **`state.error` 画过了就不再画这一条。** 这里原先写着"两者不会同时出现",
-            // 那句话不成立:详情取不到时取流同样会失败(一条不存在的 bvid 就两样都占),
-            // 于是两条提示叠在同一个居中位置,字压着字,下面共用一个重试按钮,谁都读不出来。
-            // 留下的是详情那一条 —— 它是根因,而取流失败只是它的后果。
-            val shownError = playbackError.takeIf { state.error == null }
+            // 哪一条失败算数见上面的 shownError。
             if (shownError != null) {
                 PlaybackFailure(
                     message = shownError,
