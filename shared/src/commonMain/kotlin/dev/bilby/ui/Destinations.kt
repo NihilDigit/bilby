@@ -255,8 +255,9 @@ data class Whisper(
     /** 对面是系统通知号,没有空间可去。判据见 `WhisperSession.isSystem`。 */
     val isSystem: Boolean,
     /**
-     * 从「UP 主推送」进来:会话里几乎只有投稿推送,不画输入栏。判据与推送页收起会话的那条相同
-     * (`WhisperSession.lastIsUpPush`),从别处进同一个会话仍然能回话。
+     * 从「UP 主推送」进来:会话里几乎只有投稿推送,画成推送列表而不是聊天(见 PushFeedScreen)。
+     * 判据与推送页收起会话的那条相同(`WhisperSession.lastIsUpPush`);那一页顶栏进完整对话,
+     * 从别处进同一个会话也是聊天,都能回话。
      */
     val upPushes: Boolean = false,
 ) : Destination

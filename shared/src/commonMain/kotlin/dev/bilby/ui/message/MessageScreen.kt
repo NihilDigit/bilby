@@ -1,7 +1,9 @@
 package dev.bilby.ui.message
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -70,6 +72,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun MessageScreen(
     state: MessageUiState,
+    /** 宽窗口右栏正开着的那段对话,私信列表里高亮它,见 ListDetailScene。 */
+    selectedTalker: Long?,
     onSelectTab: (MessageTab) -> Unit,
     /** 续页与刷新都指名是哪一格,理由见 [MessageViewModel.refresh]。 */
     onLoadMore: (MessageTab) -> Unit,
@@ -145,7 +149,7 @@ fun MessageScreen(
                 val loadMore = { onLoadMore(tab) }
                 val refresh = { onRefresh(tab) }
                 when (tab) {
-                    MessageTab.Whispers -> WhisperList(state.whispers, loadMore, refresh, onOpenWhisper)
+                    MessageTab.Whispers -> WhisperList(state.whispers, selectedTalker, loadMore, refresh, onOpenWhisper)
                     MessageTab.Replies ->
                         NoticeList(state.replies, Res.string.message_empty_reply, loadMore, refresh, onOpenSpace, onOpenNotice)
 
@@ -173,6 +177,7 @@ private fun MessageTab.labelRes(): StringResource = when (this) {
 @Composable
 private fun WhisperList(
     state: MessageListState<WhisperSession, Long>,
+    selectedTalker: Long?,
     onLoadMore: () -> Unit,
     onRefresh: () -> Unit,
     onOpen: (WhisperSession) -> Unit,
@@ -201,7 +206,7 @@ private fun WhisperList(
             onRetry = onRefresh,
             modifier = Modifier.fillMaxSize(),
         ) { session ->
-            ConversationRow(session, onClick = { onOpen(session) })
+            ConversationRow(session, selected = session.talkerId == selectedTalker, onClick = { onOpen(session) })
         }
     }
 }
@@ -221,8 +226,14 @@ internal val MessageListState<*, *>.showsSkeleton: Boolean get() = loading || (!
  * 标记的用处都只是催人回来,那是 DESIGN 1.3 点名不做的。
  */
 @Composable
-internal fun ConversationRow(session: WhisperSession, onClick: () -> Unit) {
+internal fun ConversationRow(
+    session: WhisperSession,
+    onClick: () -> Unit,
+    /** 这一段对话正开在右栏。整行染色,同历史页的多选:人从左往右扫,不找行尾的记号。 */
+    selected: Boolean = false,
+) {
     SessionRowLayout(
+        selected = selected,
         // 系统会话也画接口给的那张图(account_info 的 pic_url),与普通会话同一个样子。
         leading = { Avatar(url = session.faceUrl, size = Dimens.AvatarStack) },
         // 接口给了名字(account_info 或用户卡片)就用接口的;系统会话没给时按种类给一个,
@@ -244,10 +255,12 @@ private fun SessionRowLayout(
     time: String,
     preview: String,
     onClick: () -> Unit,
+    selected: Boolean,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
         horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),

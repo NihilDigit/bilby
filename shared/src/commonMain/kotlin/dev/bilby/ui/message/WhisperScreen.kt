@@ -5,10 +5,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -79,14 +80,16 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import dev.bilby.resources.*
 import dev.bilby.data.WhisperContent
 import dev.bilby.data.model.plainText
 import dev.bilby.ui.components.Avatar
-import dev.bilby.ui.readableWidth
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.BiliRichText
-import dev.bilby.ui.components.CoverAspectRatio
+import dev.bilby.ui.components.VideoCover
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FirstScreenState
 import dev.bilby.ui.components.ImageViewer
@@ -94,7 +97,6 @@ import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.InlineError
 import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.components.SelectableTextDialog
-import dev.bilby.ui.components.ListCover
 import dev.bilby.ui.components.PillInputField
 import dev.bilby.formatDurationSeconds
 import dev.bilby.ui.theme.Dimens
@@ -124,8 +126,6 @@ fun WhisperScreen(
     onOpenLink: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
-    /** 从「UP 主推送」进来时为 false,见 `Whisper.upPushes`。 */
-    showsComposer: Boolean = true,
 ) {
     val snackbar = remember { SnackbarHostState() }
     var viewingImage by remember { mutableStateOf<String?>(null) }
@@ -152,13 +152,15 @@ fun WhisperScreen(
         // **先把 Scaffold 已经让出的那份 inset 记为已消费**,再 imePadding:键盘的高度里含着
         // 导航栏那一截,而 padding(insets) 已经让过它一次,不记账的话键盘弹起时输入栏上方
         // 会多出一条导航栏高的空白。
+        //
+        // 对话区铺满,不收窄:收窄之后两边各空出一大片,读起来是一块浮在页面中间的窗口。
+        // 行长由每个气泡自己封顶(见 MessageLine)。
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(insets)
                 .consumeWindowInsets(insets)
-                .imePadding()
-                .readableWidth(),
+                .imePadding(),
         ) {
             FirstScreenState(
                 loading = state.loading,
@@ -184,14 +186,12 @@ fun WhisperScreen(
                     )
                 }
             }
-            if (showsComposer) {
-                WhisperInput(
-                    sending = state.sending,
-                    error = state.sendError,
-                    sentCount = state.sentCount,
-                    onSend = onSend,
-                )
-            }
+            WhisperInput(
+                sending = state.sending,
+                error = state.sendError,
+                sentCount = state.sentCount,
+                onSend = onSend,
+            )
         }
     }
     viewingImage?.let { url ->
@@ -245,6 +245,8 @@ private fun MessageList(state: WhisperUiState, onLoadOlder: () -> Unit, actions:
         seenNewest = newest
     }
 
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    CompositionLocalProvider(LocalChatSizes provides ChatSizes.of(maxWidth)) {
     LazyColumn(
         state = listState,
         reverseLayout = true,
@@ -255,8 +257,17 @@ private fun MessageList(state: WhisperUiState, onLoadOlder: () -> Unit, actions:
             when (row) {
                 is ChatRow.Time -> TimeSeparator(row.epochSeconds)
                 is ChatRow.Caption -> CaptionLine(row)
-                is ChatRow.Pushed -> PushedVideoCard(row.push, row.timeSeconds, onClick ={ actions.onOpenVideo(row.push.bvid) })
-                is ChatRow.Bubble -> ChatBubble(row, actions)
+                is ChatRow.Pushed -> MessageLine(mine = false, avatarUrl = state.faceUrl, showsAvatar = true) {
+                    PushedVideoCard(row, onClick = { actions.onOpenVideo(row.push.bvid) })
+                }
+                is ChatRow.Bubble -> MessageLine(
+                    mine = row.mine,
+                    avatarUrl = state.faceUrl,
+                    showsAvatar = !row.joinsPrevious,
+                    topGap = if (row.joinsPrevious) GroupedGap else Spacing.Tight,
+                ) {
+                    ChatBubble(row, actions)
+                }
             }
         }
         if (state.loadingOlder) {
@@ -272,19 +283,90 @@ private fun MessageList(state: WhisperUiState, onLoadOlder: () -> Unit, actions:
             }
         }
     }
+    }
+    }
 }
 
+/**
+ * 对话里各种内容的尺寸,**按对话区的宽度取比例,再夹在上下限之间**,不按窗口:同一个窗口宽度下
+ * 对话可能占满整窗,也可能只是右栏,按对话区算两种情况都和它所在的那块地方成比例。
+ *
+ * 下限就是原先写死的手机值,手机上每一项都落在下限上,和改之前一样。卡片宽度仍然对整段对话
+ * 统一:卡片跟着标题长短变宽窄的话,一串推送读起来参差不齐。
+ */
+private class ChatSizes(
+    val bubbleMax: Dp,
+    val cardWidth: Dp,
+    val imageMaxSide: Dp,
+    val stickerMaxSide: Dp,
+) {
+    companion object {
+        fun of(areaWidth: Dp) = ChatSizes(
+            bubbleMax = (areaWidth * 0.6f).coerceIn(280.dp, 560.dp),
+            cardWidth = (areaWidth * 0.4f).coerceIn(240.dp, 400.dp),
+            imageMaxSide = (areaWidth * 0.28f).coerceIn(200.dp, 300.dp),
+            stickerMaxSide = (areaWidth * 0.15f).coerceIn(120.dp, 160.dp),
+        )
+    }
+}
+
+private val LocalChatSizes = staticCompositionLocalOf { ChatSizes.of(0.dp) }
+
+/**
+ * 时间分隔:居中一枚带底色的小胶囊。只是一行灰字的话,落在大片空白里扫不到,而往回翻聊天记录时
+ * 找的正是它。
+ */
 @Composable
 private fun TimeSeparator(epochSeconds: Long) {
-    Text(
-        text = formatChatTime(epochSeconds),
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        textAlign = TextAlign.Center,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = Spacing.Comfortable, bottom = Spacing.Hair),
-    )
+    Box(
+        modifier = Modifier.fillMaxWidth().padding(top = Spacing.Comfortable, bottom = Spacing.Hair),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = CircleShape) {
+            Text(
+                text = formatChatTime(epochSeconds),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair / 2),
+            )
+        }
+    }
+}
+
+/**
+ * 一条消息所在的那一行:对方的在左、带头像,自己的在右、不带。
+ *
+ * **头像只画在一组的第一条旁边**,同组其余几条让出同样的宽度对齐,同常见的聊天软件:每条都画
+ * 就是一列重复的脸。自己的不画:一对一的对话里自己是谁不言自明,那一侧省下的宽度归气泡。
+ *
+ * 气泡最宽 [ChatSizes.bubbleMax],并且在对侧至少让出 [OppositeGap]:铺满整行时左右两方的边界就消失了,
+ * 而"谁说的"全靠这条边界。
+ */
+@Composable
+private fun MessageLine(
+    mine: Boolean,
+    avatarUrl: String,
+    showsAvatar: Boolean,
+    topGap: Dp = Spacing.Tight,
+    content: @Composable () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = topGap),
+        horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+    ) {
+        if (mine) Spacer(Modifier.width(OppositeGap))
+        if (!mine) {
+            Box(modifier = Modifier.width(Dimens.AvatarRow)) {
+                if (showsAvatar) Avatar(url = avatarUrl, size = Dimens.AvatarRow)
+            }
+            Spacer(Modifier.width(Spacing.Tight))
+        }
+        Box(
+            modifier = Modifier.weight(1f, fill = false).widthIn(max = LocalChatSizes.current.bubbleMax),
+            contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart,
+        ) { content() }
+        if (!mine) Spacer(Modifier.width(OppositeGap))
+    }
 }
 
 /** 撤回与系统提示:居中一行小字,不属于任何一方。 */
@@ -311,61 +393,35 @@ private fun CaptionLine(row: ChatRow.Caption) {
 }
 
 /**
- * UP 主的投稿推送:占满一行的卡片,不是左侧气泡(理由见 [WhisperContent.VideoPush])。
+ * UP 主的投稿推送,在完整对话里画成对方发来的一张卡片:挂在头像旁边,附言气泡接在下面同一组里
+ * (见 [buildChatRows]),读起来是"UP 发了个视频,又说了一句"。原先是占满一行、谁都不属于的
+ * 横卡,在宽窗口里拉到九百多 dp,右边一大片空白。
  *
- * **横排,封面在左**,与视频列表的行同一个读法。原先是居中一张竖卡,推送会话里几乎全是这种
- * 卡片,一列居中的大封面读起来既不像聊天也不像列表。
- *
- * 容器与动态卡片同一档(风格指南 §2.7c:surfaceContainer、20dp 圆角、12dp 内边距),封面圆角
- * 按 optical roundness 取 20 − 12 = 8。时长未知(`times` 为 0)时不画角标,不照 PiliPlus
- * 写一个 `--:--`。
- *
- * 推送时间压在右栏底边,与视频行的元信息同一个位置,代替卡片上方那行时间分隔。
+ * 样子同其他分享卡片([CardBody]):封面在上、标题在下,底色与圆角同对方的气泡。推送时间写在
+ * 标题下面,代替卡片上方那行时间分隔(推送之间通常隔得远,每张卡上都会顶一行时间)。
  */
 @Composable
-private fun PushedVideoCard(push: WhisperContent.VideoPush, timeSeconds: Long, onClick: () -> Unit) {
+private fun PushedVideoCard(row: ChatRow.Pushed, onClick: () -> Unit) {
+    val shape = bubbleShape(mine = false, joinsPrevious = false, joinsNext = row.hasNote)
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = MaterialTheme.shapes.largeIncreased,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = shape,
         onClick = onClick,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = Spacing.Tight),
     ) {
-        Row(
-            modifier = Modifier.padding(Spacing.Cozy).height(IntrinsicSize.Min),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-        ) {
-            ListCover(
-                url = push.coverUrl,
-                durationText = if (push.durationSeconds > 0) formatDurationSeconds(push.durationSeconds) else "",
-                cornerRadius = PushedCoverCorner,
-            )
-            Column(
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                Text(
-                    text = push.title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.weight(1f))
-                Text(
-                    text = formatChatTime(timeSeconds),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        CardBody(
+            coverUrl = row.push.coverUrl,
+            title = row.push.title,
+            subtitle = formatChatTime(row.timeSeconds),
+            secondary = MaterialTheme.colorScheme.onSurfaceVariant,
+            durationText = if (row.push.durationSeconds > 0) formatDurationSeconds(row.push.durationSeconds) else "",
+        )
     }
 }
 
 /**
- * 一条消息。**自己发的靠右、对方靠左**,这是聊天界面唯一不需要解释的约定。
+ * 一条消息的气泡。左右、头像与宽度归 [MessageLine]。
  *
- * - 气泡宽度封顶:铺满整行时左右两方的边界就消失了,而"谁说的"全靠这条边界。
  * - 自己的用 primaryContainer,对方的用 surfaceContainerHigh。对方那一侧原先是
  *   surfaceContainer,浅色主题下和页面底色只差一点,气泡的边在真机上几乎看不出来
  *   (同风格指南 §2.3c 对 surfaceContainerLow 的那条)。
@@ -381,16 +437,11 @@ private fun ChatBubble(row: ChatRow.Bubble, actions: BubbleActions) {
     val mine = row.mine
     val content = row.message.content
     val shape = bubbleShape(mine, row.joinsPrevious, row.joinsNext)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = if (row.joinsPrevious) GroupedGap else Spacing.Tight),
-        horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
-    ) {
+    Box {
         // 图片不套气泡:图自己就是那块形状,外面再垫一层底色只是多一圈边。
         if (content is WhisperContent.Image) {
             ChatImage(content, shape, onClick = { actions.onViewImage(content.url) })
-            return@Row
+            return@Box
         }
         val secondary = if (mine) {
             MaterialTheme.colorScheme.onPrimaryContainer
@@ -429,7 +480,7 @@ private fun ChatBubble(row: ChatRow.Bubble, actions: BubbleActions) {
             contentColor = if (mine) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
             shape = shape,
             // 先裁再点:涟漪与长按反馈落在气泡的形状里。
-            modifier = Modifier.widthIn(max = BubbleMaxWidth).clip(shape).then(tap),
+            modifier = Modifier.clip(shape).then(tap),
         ) {
             when (content) {
                 is WhisperContent.Text -> BiliRichText(
@@ -503,7 +554,8 @@ private fun ChatImage(image: WhisperContent.Image, shape: Shape, onClick: () -> 
     } else {
         1f
     }
-    val maxSide = if (image.sticker) StickerMaxSide else ImageMaxSide
+    val sizes = LocalChatSizes.current
+    val maxSide = if (image.sticker) sizes.stickerMaxSide else sizes.imageMaxSide
     BiliAsyncImage(
         url = image.url,
         contentDescription = null,
@@ -523,16 +575,25 @@ private fun ChatImage(image: WhisperContent.Image, shape: Shape, onClick: () -> 
  *
  * 原先封面在左、标题在右,气泡最宽 280dp,封面只剩 96dp 宽,标题挤在剩下的一百多 dp 里
  * 通常只露出半句。封面比例同列表的 16:10(风格指南 §1.3b),原先写的 16:9 会把上下各裁掉
- * 一条。宽度固定为 [CardWidth]:卡片跟着标题长短变宽窄的话,一串推送读起来参差不齐。
+ * 一条。宽度固定为 [ChatSizes.cardWidth]:卡片跟着标题长短变宽窄的话,一串推送读起来参差不齐。
  */
 @Composable
-private fun CardBody(coverUrl: String?, title: String, subtitle: String?, secondary: Color) {
-    Column(modifier = Modifier.width(CardWidth)) {
+private fun CardBody(
+    coverUrl: String?,
+    title: String,
+    subtitle: String?,
+    secondary: Color,
+    /** 视频的时长角标,空串不画。时长未知时不照 PiliPlus 写一个 `--:--`。 */
+    durationText: String = "",
+) {
+    Column(modifier = Modifier.width(LocalChatSizes.current.cardWidth)) {
         if (!coverUrl.isNullOrBlank()) {
-            BiliAsyncImage(
+            // 圆角归外面的气泡裁:封面贴着气泡的上沿,两层各自一套圆角会在角上叠出一道缝。
+            VideoCover(
                 url = coverUrl,
-                contentDescription = null,
-                modifier = Modifier.fillMaxWidth().aspectRatio(CoverAspectRatio),
+                durationText = durationText,
+                cornerRadius = 0.dp,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
         Column(
@@ -590,8 +651,15 @@ private fun NoticeBody(content: WhisperContent.Notice, secondary: Color, onOpenL
  * 承担的正是识别,而名字可能是"哔哩哔哩客服"这种一眼扫过去分不清的。
  */
 @Composable
-private fun WhisperTopBar(name: String, faceUrl: String, onOpenSpace: (() -> Unit)?, onBack: () -> Unit) {
+internal fun WhisperTopBar(
+    name: String,
+    faceUrl: String,
+    onOpenSpace: (() -> Unit)?,
+    onBack: () -> Unit,
+    actions: @Composable RowScope.() -> Unit = {},
+) {
     TopAppBar(
+        actions = actions,
         title = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -718,15 +786,8 @@ private const val SoftLimit = 500
 /** 到这个长度才把计数器画出来。 */
 private const val CounterFrom = 400
 
-/** 卡片气泡的固定宽度,见 [CardBody]。封面 16:10 下高 150dp,一屏放得下两张。 */
-private val CardWidth = 240.dp
-
-
-/** 卡片 20dp 圆角减 12dp 内边距。 */
-private val PushedCoverCorner = 8.dp
-
-/** 气泡不铺满整行:左右两方的边界全靠这段留白。 */
-private val BubbleMaxWidth = 280.dp
+/** 气泡在对侧至少让出的宽度:左右两方的边界全靠这段留白。 */
+private val OppositeGap = 64.dp
 
 /**
  * 气泡四角的圆角。取 largeIncreased 那一档的 20dp,与动态卡片同(风格指南 §2.7c):
@@ -739,9 +800,6 @@ private val BubbleJoint = 4.dp
 
 /** 同组气泡之间的间距。组与组之间是 Spacing.Tight,差出来的那一截就是分组。 */
 private val GroupedGap = 2.dp
-
-private val ImageMaxSide = 200.dp
-private val StickerMaxSide = 120.dp
 private const val MinImageRatio = 0.5f
 private const val MaxImageRatio = 2f
 

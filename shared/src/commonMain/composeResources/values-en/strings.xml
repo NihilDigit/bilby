@@ -143,6 +143,7 @@
     <string name="comment_replies_failed">Replies failed to load</string>
     <string name="comment_no_more_replies">No more replies</string>
     <string name="comment_replying_to">Replying to @%1$s</string>
+    <string name="comment_reply_cancel">Stop replying</string>
     <string name="comment_input_hint">Say something nice</string>
     <string name="comment_write">Write a comment</string>
     <string name="comment_copied">Copied</string>
@@ -267,6 +268,7 @@
     <string name="player_settings">Playback settings</string>
     <string name="player_quality">Quality</string>
     <string name="player_audio_quality">Audio</string>
+    <string name="player_danmaku_settings">Danmaku settings</string>
     <string name="player_progress">Playback progress</string>
     <string name="player_subtitle">Subtitles</string>
     <string name="player_subtitle_off">Subtitles off</string>
@@ -622,6 +624,11 @@
     <string name="message_tab_like">Likes</string>
     <string name="message_tab_notice">Notices</string>
     <string name="message_empty_whisper">No chats yet</string>
+    <string name="message_detail_placeholder">Conversations you open appear here</string>
+    <string name="whisper_open_full_chat">Full conversation</string>
+    <string name="push_feed_empty">No uploads pushed yet</string>
+    <string name="push_feed_month">MMMM</string>
+    <string name="push_feed_month_year">MMMM yyyy</string>
     <string name="message_empty_reply">No replies yet</string>
     <string name="message_empty_at">No mentions yet</string>
     <string name="message_empty_like">No likes yet</string>

@@ -32,6 +32,9 @@ internal sealed interface ChatRow {
      */
     data class Pushed(val push: WhisperContent.VideoPush, val seqno: Long, val timeSeconds: Long) : ChatRow {
         override val key: Any get() = seqno
+
+        /** 下面接着一个附言气泡。卡片那一角收小,两者读成同一组。 */
+        val hasNote: Boolean get() = push.note.isNotEmpty()
     }
 
     /**
@@ -77,13 +80,13 @@ internal fun buildChatRows(messages: List<WhisperMessage>, selfMid: Long): List<
         rows += when {
             content is WhisperContent.VideoPush -> {
                 rows += ChatRow.Pushed(content, message.seqno, message.timeSeconds)
-                // 附言是 UP 主说的话,画成对方的一个气泡,接在卡片下面;塞在卡片里时它和标题
-                // 挤在封面右边,写满两行就把卡片撑得比封面高一截。
+                // 附言是 UP 主说的话,画成对方的一个气泡,接在卡片下面、与卡片同一组(不再画一次
+                // 头像);塞进卡片里的话,它和标题挤在一起,读不出哪句是标题哪句是 UP 说的。
                 if (content.note.isEmpty()) return@forEachIndexed
                 ChatRow.Bubble(
                     message = message.copy(content = WhisperContent.Text(content.note)),
                     mine = mine,
-                    joinsPrevious = false,
+                    joinsPrevious = true,
                     joinsNext = false,
                     key = "note-${message.seqno}",
                 )

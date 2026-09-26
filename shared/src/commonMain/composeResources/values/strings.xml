@@ -176,6 +176,7 @@
     <string name="comment_replies_failed">回复没加载出来</string>
     <string name="comment_no_more_replies">没有更多回复</string>
     <string name="comment_replying_to">回复 @%1$s</string>
+    <string name="comment_reply_cancel">取消回复</string>
     <string name="comment_input_hint">发条友善的评论</string>
     <string name="comment_write">发表评论</string>
     <!-- 长按复制。第一条是读屏念出来的动作名(触摸那一侧没有可见文字),第二条是复制之后的
@@ -324,6 +325,7 @@
     <string name="player_settings">播放设置</string>
     <string name="player_quality">清晰度</string>
     <string name="player_audio_quality">音质</string>
+    <string name="player_danmaku_settings">弹幕设置</string>
     <string name="player_progress">播放进度</string>
     <string name="player_subtitle">字幕</string>
     <string name="player_subtitle_off">关闭字幕</string>
@@ -678,6 +680,11 @@
     <string name="message_tab_like">收到的赞</string>
     <string name="message_tab_notice">系统通知</string>
     <string name="message_empty_whisper">还没有私信</string>
+    <string name="message_detail_placeholder">打开的会话显示在这里</string>
+    <string name="whisper_open_full_chat">查看完整对话</string>
+    <string name="push_feed_empty">还没有推送</string>
+    <string name="push_feed_month">M月</string>
+    <string name="push_feed_month_year">yyyy年M月</string>
     <string name="message_empty_reply">还没有人回复你</string>
     <string name="message_empty_at">还没有人@你</string>
     <string name="message_empty_like">还没有收到赞</string>

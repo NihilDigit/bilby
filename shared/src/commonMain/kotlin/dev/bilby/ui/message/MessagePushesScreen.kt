@@ -5,7 +5,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.lifecycle.ViewModel
@@ -43,6 +47,16 @@ import kotlinx.coroutines.launch
 @Composable
 fun MessagePushesRoute(
     repository: MessageRepository,
+    /** 宽窗口右栏正开着的那段对话,列表里高亮它,见 ListDetailScene。 */
+    selectedTalker: Long?,
+    /**
+     * 右栏此刻并排显示着(见 ListDetailScene)。这时第一页一到就把第一个会话开在右栏:推送会话
+     * 读的是"最近推了什么",人进来要看的多半就是最上面那一条,而右栏空着只是一块骨架。
+     * 窄窗口不开,开了就是一进页面整页被对话盖住。
+     */
+    autoOpenFirst: Boolean,
+    /** 此刻还在等第一个会话自动打开没有。右栏空着时据此转圈还是说一句,见 BilbyApp。 */
+    onAwaitingFirstChange: (Boolean) -> Unit,
     onOpenWhisper: (WhisperSession) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -50,8 +64,23 @@ fun MessagePushesRoute(
         factory = viewModelFactory { initializer { MessagePushesViewModel(repository) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    // 每次进这一页只替人选一次:关掉右栏回到骨架是人的选择,不该又被选回去。存进 saveable,
+    // 转屏和从对话里点进别处再回来都不重来。
+    var autoOpened by rememberSaveable { mutableStateOf(false) }
+    val first = state.items.firstOrNull()
+    LaunchedEffect(autoOpenFirst, first) {
+        if (autoOpenFirst && !autoOpened && first != null && selectedTalker == null) {
+            autoOpened = true
+            onOpenWhisper(first)
+        }
+    }
+    // 读完了却一个推送会话都没有、或者读失败了,就不再等:不然右栏会一直转下去。
+    val awaitingFirst = autoOpenFirst && !autoOpened && state.error == null &&
+        !(state.loaded && state.items.isEmpty())
+    LaunchedEffect(awaitingFirst) { onAwaitingFirstChange(awaitingFirst) }
     MessagePushesScreen(
         state = state,
+        selectedTalker = selectedTalker,
         onLoadMore = vm::loadMore,
         onRefresh = vm::refresh,
         onOpenWhisper = onOpenWhisper,
@@ -62,6 +91,7 @@ fun MessagePushesRoute(
 @Composable
 private fun MessagePushesScreen(
     state: MessageListState<WhisperSession, Long>,
+    selectedTalker: Long?,
     onLoadMore: () -> Unit,
     onRefresh: () -> Unit,
     onOpenWhisper: (WhisperSession) -> Unit,
@@ -99,7 +129,11 @@ private fun MessagePushesScreen(
                     onRetry = onRefresh,
                     modifier = Modifier.fillMaxSize(),
                 ) { session ->
-                    ConversationRow(session, onClick = { onOpenWhisper(session) })
+                    ConversationRow(
+                        session,
+                        selected = session.talkerId == selectedTalker,
+                        onClick = { onOpenWhisper(session) },
+                    )
                 }
             }
         }

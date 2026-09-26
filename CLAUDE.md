@@ -181,6 +181,13 @@ the same breakpoints apply to a phone in landscape, a tablet and a desktop windo
   check sent 25 requests in three seconds into a -412.
 - **Persistent, resizable side panels use `components/SidePanelLayout`** (the space page's
   dynamics). Open state and width live in settings under a `SidePanelId`.
+- **List pages wrap themselves in `AdaptiveListContent`**: from expanded they drop the
+  readable-width cap and take a grid of cells capped at `VideoRowMaxWidth`. `AdaptiveContent`'s
+  cap is for reading pages only (article, dynamic detail, comment thread, search assistant).
+- **List and detail side by side is a scene, not page state.** `ui/ListDetailScene.kt` pairs
+  an entry tagged `listPane` with the `detailPane` entry directly above it on the back stack
+  (messages and UP pushes with a whisper). NavDisplay remembers scenes by strategy and back
+  stack, so a list pane's `showsDetail` must be read where the strategy is remembered, as a key.
 
 ## Modules and platforms
 

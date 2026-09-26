@@ -1,6 +1,5 @@
 package dev.bilby.ui
 
-import dev.bilby.ui.components.OverlayHost
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.PointerSource
 import dev.bilby.ui.components.trackPointerSource
@@ -29,6 +28,9 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Subscriptions
 import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.Forum
+import dev.bilby.ui.components.EmptyState
+import dev.bilby.ui.components.FullScreenLoading
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Person
@@ -139,8 +141,10 @@ import dev.bilby.ui.profile.CoinLogRoute
 import dev.bilby.ui.profile.ProfileScreen
 import dev.bilby.ui.message.MessagePushesRoute
 import dev.bilby.ui.message.MessageScreen
+import dev.bilby.ui.message.MessageTab
 import dev.bilby.ui.message.MessageViewModel
 import dev.bilby.ui.message.WhisperScreen
+import dev.bilby.ui.message.PushFeedScreen
 import dev.bilby.ui.message.WhisperViewModel
 import dev.bilby.ui.profile.ProfileViewModel
 import dev.bilby.ui.search.SearchChatScreen
@@ -229,14 +233,11 @@ fun BilbyRoot(
             }
         }
         Box(modifier = Modifier.fillMaxSize().trackPointerSource(pointerSource)) {
-            // 页面深处的组件可以把一层画到整个窗口最上面,见 OverlayHost。
-            OverlayHost {
-                CompositionLocalProvider(
-                    LocalPointerSource provides pointerSource,
-                    LocalSystemActions provides systemActions,
-                ) {
-                    BilbyApp(container, incomingLink, snackbarHostState)
-                }
+            CompositionLocalProvider(
+                LocalPointerSource provides pointerSource,
+                LocalSystemActions provides systemActions,
+            ) {
+                BilbyApp(container, incomingLink, snackbarHostState)
             }
             SnackbarHost(
                 hostState = snackbarHostState,
@@ -383,9 +384,26 @@ private fun BilbyApp(
     val videoFrames = backStack.mapNotNullTo(HashSet()) { (it as? Video)?.frame }
     LaunchedEffect(videoFrames) { playback.retainFrames(videoFrames) }
 
+    // 私信的列表加详情,见 ListDetailScene。「消息」页停在哪一格决定它要不要分栏;这个值读在这里、
+    // 当作 remember 的键,变了就换一个策略实例,NavDisplay 才会重算场景(理由见 ListPane)。
+    val messagesOnWhispers = remember { mutableStateOf(true) }
+    val pushesAwaitingFirst = remember { mutableStateOf(false) }
+    val listDetailWide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    val listDetailStrategy = remember(listDetailWide, messagesOnWhispers.value) {
+        ListDetailSceneStrategy(listDetailWide)
+    }
+    // 对话占着右栏时点列表里另一个会话,是换掉这一栏,不是再压一层:否则返回要一层层退回去,
+    // 而屏上始终只看得到一段对话。窄窗口下对话盖住列表,点不到别的会话,走不到这一支。
+    val openWhisper: (Whisper) -> Unit = { key ->
+        if (backStack.lastOrNull() is Whisper) backStack.removeLastOrNull()
+        push(key)
+    }
+    val selectedTalker = (backStack.lastOrNull() as? Whisper)?.talkerId
+
     NavDisplay(
         backStack = backStack,
         onBack = { backStack.removeLastOrNull() },
+        sceneStrategies = listOf(listDetailStrategy),
         // **每个 NavEntry 一个 ViewModelStore。** 默认的 entryDecorators 只有
         // SaveableStateHolder 一个(反编译 navigation3-ui 1.1.5 核实过),于是 `viewModel()`
         // 落到 Activity 的 store 上,所有页面的 ViewModel 都活到 Activity 销毁为止 ——
@@ -547,11 +565,18 @@ private fun BilbyApp(
                     )
                 }
             }
-            entry<Messages> {
+            entry<Messages>(
+                metadata = ListDetailSceneStrategy.listPane(
+                    // 右栏空着时说一句它是干什么的:这里没有在加载什么,画骨架就是在假装加载。
+                    ListPane(showsDetail = { messagesOnWhispers.value }, placeholder = { MessageDetailPlaceholder() }),
+                ),
+            ) {
                 CutoutSafe {
                     MessagesRoute(
                         container = container,
-                        onOpenWhisper = { push(Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem)) },
+                        selectedTalker = selectedTalker,
+                        onWhisperTabShown = { messagesOnWhispers.value = it },
+                        onOpenWhisper = { openWhisper(Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem)) },
                         onOpenSpace = { push(Space(it)) },
                         // 通知里的 uri 是站内链接,认得出来就在应用内落地,认不出来
                         // (活动页、会员购这类)交给浏览器 —— 同专栏正文里的链接一条路。
@@ -602,18 +627,32 @@ private fun BilbyApp(
                     )
                 }
             }
-            entry<MessagePushes> {
+            entry<MessagePushes>(
+                // 还在等自动打开的第一个会话时转圈(见 MessagePushesRoute.autoOpenFirst);打开过又关掉、
+                // 或者根本没有推送会话时,同消息页那一句,否则就是一直转下去。
+                metadata = ListDetailSceneStrategy.listPane(
+                    ListPane(
+                        showsDetail = { true },
+                        placeholder = {
+                            if (pushesAwaitingFirst.value) FullScreenLoading() else MessageDetailPlaceholder()
+                        },
+                    ),
+                ),
+            ) {
                 CutoutSafe {
                     MessagePushesRoute(
                         repository = container.messageRepository,
+                        selectedTalker = selectedTalker,
+                        autoOpenFirst = listDetailWide,
+                        onAwaitingFirstChange = { pushesAwaitingFirst.value = it },
                         onOpenWhisper = {
-                            push(Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem, upPushes = true))
+                            openWhisper(Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem, upPushes = true))
                         },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
             }
-            entry<Whisper> { key ->
+            entry<Whisper>(metadata = ListDetailSceneStrategy.detailPane()) { key ->
                 CutoutSafe {
                     WhisperRoute(
                         container = container,
@@ -623,6 +662,9 @@ private fun BilbyApp(
                         // 私信里的专栏带的是 cv 号(推送的 rid、分享的 id),走旧版那套接口。
                         onOpenArticle = { push(ArticlePage(it, isRead = true)) },
                         onOpenLink = openLink,
+                        // 压一层,不是换掉:返回回到推送视图。宽窗口下这一页前面不是列表,
+                        // 不分栏,整页是聊天(见 ListDetailScene 只认紧挨着的上一条)。
+                        onOpenFullChat = { push(key.copy(upPushes = false)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -1656,6 +1698,10 @@ private fun HistoryConfirmDialog(message: String, onConfirm: () -> Unit, onDismi
 @Composable
 private fun MessagesRoute(
     container: AppContainer,
+    /** 右栏正开着的那段对话,列表里高亮它。没有右栏或没开着时为 null。 */
+    selectedTalker: Long?,
+    /** 停在私信那一格没有。只有那一格分栏,见 ListDetailScene。 */
+    onWhisperTabShown: (Boolean) -> Unit,
     onOpenWhisper: (dev.bilby.data.WhisperSession) -> Unit,
     onOpenSpace: (Long) -> Unit,
     onOpenUri: (String) -> Unit,
@@ -1666,8 +1712,11 @@ private fun MessagesRoute(
         factory = viewModelFactory { initializer { MessageViewModel(container.messageRepository) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    val onWhispers = state.tab == MessageTab.Whispers
+    LaunchedEffect(onWhispers) { onWhisperTabShown(onWhispers) }
     MessageScreen(
         state = state,
+        selectedTalker = selectedTalker,
         onSelectTab = vm::selectTab,
         onLoadMore = vm::loadMore,
         onRefresh = vm::refresh,
@@ -1676,6 +1725,16 @@ private fun MessagesRoute(
         onOpenUri = onOpenUri,
         onOpenNotice = onOpenNotice,
         onBack = onBack,
+    )
+}
+
+/** 私信右栏没有对话时的那一句,消息页与推送页共用。 */
+@Composable
+private fun MessageDetailPlaceholder() {
+    EmptyState(
+        stringResource(Res.string.message_detail_placeholder),
+        modifier = Modifier.fillMaxSize(),
+        icon = Icons.Outlined.Forum,
     )
 }
 
@@ -1688,6 +1747,8 @@ private fun WhisperRoute(
     onOpenVideo: (String) -> Unit,
     onOpenArticle: (String) -> Unit,
     onOpenLink: (String) -> Unit,
+    /** 推送视图顶栏那一颗:进同一个会话的完整聊天。 */
+    onOpenFullChat: () -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: WhisperViewModel = viewModel(
@@ -1705,6 +1766,19 @@ private fun WhisperRoute(
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    if (key.upPushes) {
+        PushFeedScreen(
+            state = state,
+            onRetry = vm::load,
+            onLoadOlder = vm::loadOlder,
+            onOpenSpace = onOpenSpace,
+            onOpenVideo = onOpenVideo,
+            onOpenLink = onOpenLink,
+            onOpenFullChat = onOpenFullChat,
+            onBack = onBack,
+        )
+        return
+    }
     WhisperScreen(
         state = state,
         onSend = vm::send,
@@ -1715,7 +1789,6 @@ private fun WhisperRoute(
         onOpenArticle = onOpenArticle,
         onOpenLink = onOpenLink,
         onBack = onBack,
-        showsComposer = !key.upPushes,
     )
 }
 
