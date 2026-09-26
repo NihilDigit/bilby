@@ -33,6 +33,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.ToggleButton
+import androidx.compose.material3.PrimaryScrollableTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -352,32 +354,53 @@ fun VideoTabs(
          * 不画胶囊:两者的控制条都是宽排法,弹幕开关与输入框就在画面上(见 BilbyPlayer 的
          * PlayerControlBar)。
          */
+        /*
+         * **双栏时是 tabs。** 上面不用 tabs 的理由是右边那枚胶囊;双栏没有胶囊,这一行就是右栏
+         * 最上面一整条。用 primary:它顶着的是右栏的上沿,是这一栏的内容分区,不是播放器下面
+         * 再分一层。
+         *
+         * **按字宽靠左,不等分。** 右栏六七百 dp,两格等分时各占三百多,两个词各自悬在一大片
+         * 中间。可滚动的那一种按内容给宽度;只有两格,滚不起来。edgePadding 取 0:标签自带 16dp
+         * 内边距,字的左沿正好落在下面内容的页边线上。
+         *
+         * **不画底下那条通栏分割线。** 它标的是"铺满全宽的标签栏"的下沿;标签靠左之后线还画到头,
+         * 读起来是一条和标签无关的横杠。和窄屏那一行一样,与下面的内容只靠留白分开。
+         */
+        if (!showDanmakuCapsule) {
+            PrimaryScrollableTabRow(
+                selectedTabIndex = pagerState.currentPage,
+                edgePadding = 0.dp,
+                divider = {},
+            ) {
+                titles.forEachIndexed { index, title ->
+                    Tab(
+                        selected = pagerState.currentPage == index,
+                        onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
+                        text = { Text(text = title, maxLines = 1, softWrap = false) },
+                    )
+                }
+            }
+        }
         val toggleColors = ToggleButtonDefaults.toggleButtonColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
             contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
             checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
             checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
         )
-        Row(
+        if (showDanmakuCapsule) Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // 写弹幕时视图切换退场,胶囊铺满整行:这时要的是输入的宽度,切页可以等写完。
-            // 没有胶囊时(双栏)这一组铺满整行,右边不空出一大截;两段各占一半,同 M3 的 tabs。
-            val fillRow = !showDanmakuCapsule
             AnimatedVisibility(
                 visible = !danmakuInput.open,
                 enter = expandHorizontally(expandFrom = Alignment.Start) + fadeIn(),
                 exit = shrinkHorizontally(shrinkTowards = Alignment.Start) + fadeOut(),
-                modifier = if (fillRow) Modifier.weight(1f) else Modifier,
             ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
-                modifier = if (fillRow) Modifier.fillMaxWidth() else Modifier,
-            ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
                 titles.forEachIndexed { index, title ->
                     ToggleButton(
                         checked = pagerState.currentPage == index,
@@ -388,25 +411,21 @@ fun VideoTabs(
                             else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
                         },
                         colors = toggleColors,
-                        modifier = Modifier
-                            .then(if (fillRow) Modifier.weight(1f) else Modifier)
-                            .semantics { role = Role.Tab },
+                        modifier = Modifier.semantics { role = Role.Tab },
                     ) {
                         Text(text = title, maxLines = 1, softWrap = false)
                     }
                 }
             }
-            if (!fillRow) Spacer(modifier = Modifier.width(Spacing.Tight))
+            Spacer(modifier = Modifier.width(Spacing.Tight))
             }
             }
-            if (showDanmakuCapsule) {
-                DanmakuCapsule(
-                    enabled = danmakuEnabled,
-                    onEnabledChange = onDanmakuEnabledChange,
-                    input = danmakuInput,
-                    modifier = Modifier.weight(1f),
-                )
-            }
+            DanmakuCapsule(
+                enabled = danmakuEnabled,
+                onEnabledChange = onDanmakuEnabledChange,
+                input = danmakuInput,
+                modifier = Modifier.weight(1f),
+            )
         }
         // 发送失败的原因就在胶囊底下一行,草稿留在胶囊里,改一个字再按发送就是重试。
         (danmakuInput.send as? DanmakuSend.Failed)?.takeIf { danmakuInput.open && showDanmakuCapsule }?.let { failed ->
