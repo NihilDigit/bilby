@@ -50,6 +50,7 @@ fun main() {
     lateinit var container: AppContainer
     val updater = DesktopAppUpdater.create()
     val platform = DesktopPlatform(container = { container }, updater = updater)
+    if (!SingleInstance.claim(platform.filesDir)) exitProcess(0)
     container = AppContainer(platform)
 
     // Coil 3 不会自动接上网络加载器,不注册的话 http(s) 图片静默不加载,同 Android 的 BilbyApplication。
