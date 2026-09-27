@@ -104,9 +104,16 @@ class DesktopAppUpdater private constructor(
         }
     }
 
+    // 桌面端的 Installing 是退出前的最后几秒:这时再查,状态会回到 Available,下载按钮又能点了。
+    // Android 不能照此处理:系统安装器被划掉时可能不回调,Installing 会一直停着。
+    override suspend fun check(silent: Boolean) {
+        if (status is UpdateStatus.Installing) return
+        super.check(silent)
+    }
+
     override suspend fun downloadAndInstall(update: AvailableUpdate) {
         val own = update.own()
-        if (!own.canInstallInApp) return
+        if (!own.canInstallInApp || isStagingOrLaunched()) return
         status = UpdateStatus.Downloading(update, 0f)
         status = try {
             withContext(Dispatchers.IO) { stage(own) }
@@ -184,6 +191,8 @@ class DesktopAppUpdater private constructor(
         val own = update.own()
         val installation = installation ?: return
         if (status !is UpdateStatus.ReadyToRestart) return
+        // 挂起之前就改状态:连点两下时,第二下看到的已不是 ReadyToRestart,不会再起一个脚本。
+        status = UpdateStatus.Installing(update)
         val started = runCatching {
             withContext(Dispatchers.IO) { launchApplyScript(own, installation) }
         }.onFailure { BiliLog.w("启动更新脚本失败", it) }
@@ -191,8 +200,17 @@ class DesktopAppUpdater private constructor(
             status = UpdateStatus.Failed(UpdateFailure.Launch, update)
             return
         }
-        status = UpdateStatus.Installing(update)
         mutableExitRequests.tryEmit(Unit)
+    }
+
+    /**
+     * 暂存目录正被下载写入,或已交给更新脚本。此时再下载会先清空暂存目录,脚本拿到的就是
+     * 重下到一半的文件。检查与改状态之间没有挂起点,两次点击在主线程上排队,后一次必然看到
+     * 前一次改过的状态。
+     */
+    private fun isStagingOrLaunched(): Boolean = when (status) {
+        is UpdateStatus.Downloading, is UpdateStatus.ReadyToRestart, is UpdateStatus.Installing -> true
+        else -> false
     }
 
     private fun launchApplyScript(update: DesktopUpdate, installation: Installation) {
@@ -205,6 +223,8 @@ class DesktopAppUpdater private constructor(
             is DesktopUpdatePlan.Installer -> "msi" to staging.resolve(plan.msi.name)
             is DesktopUpdatePlan.Manual -> error("便携版不能整包更新")
         }
+        val checksums = staging.resolve(CHECKSUMS_FILE)
+        checksums.writeText(stagedChecksums(update.plan).joinToString("") { (sha256, path) -> "$sha256  $path\n" })
         // JDK 在 Windows 上以 CREATE_NO_WINDOW 创建子进程,控制台程序不会闪出窗口;
         // 子进程不随父进程退出,脚本在本进程退出后接着跑。
         ProcessBuilder(
@@ -216,6 +236,7 @@ class DesktopAppUpdater private constructor(
             "-Source", source.absolutePath,
             "-Executable", installation.exe.name,
             "-LogFile", staging.resolve("update.log").absolutePath,
+            "-Checksums", checksums.absolutePath,
         )
             .directory(staging)
             // 脚本自己的日志之外,PowerShell 的解析错误之类只会出现在标准输出里。
@@ -223,6 +244,19 @@ class DesktopAppUpdater private constructor(
             .redirectOutput(staging.resolve("powershell.log"))
             .start()
     }
+
+    /**
+     * 脚本安装前逐个复核的摘要,路径相对暂存目录。下载时已校验过一遍,这里再交给脚本,是因为
+     * 从校验完到本进程退出之间,暂存目录仍可能被改写:0.15.1 就把重下到一半的 MSI 交给了 msiexec。
+     */
+    private fun stagedChecksums(plan: DesktopUpdatePlan): List<Pair<String, String>> = when (plan) {
+        is DesktopUpdatePlan.Patch -> plan.manifest.patchChecksums()
+        is DesktopUpdatePlan.Delta -> plan.fallback.manifest.patchChecksums()
+        is DesktopUpdatePlan.Installer -> listOf(checkNotNull(plan.msi.sha256) to plan.msi.name)
+        is DesktopUpdatePlan.Manual -> error("便携版不能整包更新")
+    }
+
+    private fun UpdateManifest.patchChecksums() = files.filter { it.patch }.map { it.sha256 to "$PATCH_DIR/${it.path}" }
 
     private fun stagingDir(update: DesktopUpdate) = stagingRoot.resolve(update.version)
 
@@ -242,6 +276,7 @@ class DesktopAppUpdater private constructor(
 
     companion object {
         private const val PATCH_DIR = "files"
+        private const val CHECKSUMS_FILE = "staged.sha256"
 
         /** 换掉 Release 接口地址,用于在本机对着假的 Release 走一遍更新。 */
         private const val API_OVERRIDE_PROPERTY = "bilby.update.api"
