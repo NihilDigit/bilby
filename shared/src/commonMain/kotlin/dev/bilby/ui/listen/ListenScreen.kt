@@ -35,6 +35,9 @@ import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.automirrored.outlined.Comment
+import androidx.compose.runtime.saveable.rememberSaveable
+import dev.bilby.resources.video_tab_comment
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
@@ -167,6 +170,9 @@ import kotlinx.coroutines.launch
 
 /** 倍速折算的除数下限。倍速滑到极小值时不让剩余时长炸成天文数字。 */
 private const val MinSpeedForEstimate = 0.1f
+
+/** 评论面板占屏高的比例,同评论区的楼中楼面板:露出上面一截,看得出还在听视频这一屏。 */
+private const val CommentsSheetHeightFraction = 0.9f
 
 /**
  * 唱片占「剩余空间」的比例(取宽高中较小的一边)。留一点边距而不是顶满,
@@ -421,9 +427,12 @@ fun ListenScreen(
     onSelectSubtitle: (String) -> Unit = {},
     /** 选中轨的正文,按 fromMillis 升序;没选字幕时是空列表。有正文才能翻进歌词页。 */
     subtitleCues: List<SubtitleCue> = emptyList(),
+    /** 这条视频的评论区,和简介/评论的评论页是同一份(见 VideoScreen 的 commentsPane)。 */
+    comments: (@Composable (Modifier) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var position by remember { mutableLongStateOf(0L) }
+    var commentsOpen by rememberSaveable { mutableStateOf(false) }
     var bufferedPosition by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var dragPosition by remember { mutableStateOf<Long?>(null) }
@@ -518,7 +527,16 @@ fun ListenScreen(
         // 并贴顶对齐(见 [LyricsHeader])之后,两种顶栏里它的位置分毫不差。
         topBar = {
             val item = state.queue?.current
-            val subtitleButton: @Composable () -> Unit = {
+            val barActions: @Composable () -> Unit = {
+                if (comments != null) {
+                    IconButton(onClick = { commentsOpen = true }) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.Comment,
+                            contentDescription = stringResource(Res.string.video_tab_comment),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 SubtitleBarButton(
                     tracks = subtitleTracks,
                     currentLan = subtitleLan,
@@ -527,9 +545,9 @@ fun ListenScreen(
                 )
             }
             if (showLyrics && item != null) {
-                LyricsHeader(item = item, onBack = onBack, trailing = subtitleButton)
+                LyricsHeader(item = item, onBack = onBack, trailing = barActions)
             } else {
-                BilbyTopBar(title = "", onBack = onBack, actions = { subtitleButton() })
+                BilbyTopBar(title = "", onBack = onBack, actions = { barActions() })
             }
         },
     ) { insets ->
@@ -762,6 +780,15 @@ fun ListenScreen(
                     nowPlaying(Modifier.fillMaxSize().padding(bottom = sheetInsets.calculateBottomPadding()))
                 }
             }
+        }
+    }
+
+    if (commentsOpen && comments != null) {
+        PaneSheet(
+            onDismissRequest = { commentsOpen = false },
+            title = stringResource(Res.string.video_tab_comment),
+        ) {
+            comments(Modifier.fillMaxWidth().bodyHeight(CommentsSheetHeightFraction))
         }
     }
 

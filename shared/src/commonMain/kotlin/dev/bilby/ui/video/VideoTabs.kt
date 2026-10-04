@@ -145,7 +145,6 @@ import dev.bilby.ui.player.QueueRowItem
 import dev.bilby.ui.player.currentIndex
 import dev.bilby.formatDurationSeconds
 import dev.bilby.agent.AgentTurnState
-import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
 import dev.bilby.data.MemberCard
@@ -156,8 +155,6 @@ import dev.bilby.data.VideoStat
 import dev.bilby.data.VideoStaff
 import dev.bilby.data.VideoTag
 import dev.bilby.player.QueueItem
-import dev.bilby.ui.comment.CommentSection
-import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.AvatarBadge
 import dev.bilby.ui.components.CoinGlyph
@@ -272,7 +269,10 @@ fun VideoTabs(
     onLoadTags: () -> Unit,
     /** 点一枚标签 = 拿它的原文开一页普通搜索结果(Destinations.kt 的 SearchResult)。 */
     onTagClick: (String) -> Unit,
-    commentState: CommentUiState,
+    /** 服务端给的评论总数,标签上用。 */
+    commentTotal: Int,
+    /** 评论页的内容。由 VideoScreen 搭好,听视频那一屏用的是同一份,见那里的 commentsPane。 */
+    comments: @Composable (Modifier) -> Unit,
     onFindRelated: () -> Unit,
     /** 写弹幕,见 [DanmakuInput]。 */
     danmakuInput: DanmakuInput,
@@ -314,24 +314,13 @@ fun VideoTabs(
     onFavConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
     /** 评论正文里引的那条链接。站内解析归导航层,见 MainActivity 的 openLink。 */
     onOpenLink: (String) -> Unit,
-    onCommentSort: (CommentSort) -> Unit,
-    onCommentRefresh: () -> Unit,
-    /** 播放器是不是完全展开着。评论区的下拉刷新只在这时接管手势。 */
-    playerExpanded: Boolean,
-    onCommentLoadMore: () -> Unit,
-    onExpandReplies: (Long) -> Unit,
-    onSendComment: (String, Long?) -> Unit,
-    onLikeComment: (Long) -> Unit,
-    onDeleteComment: (Long) -> Unit,
-    /** 点了评论里的时间戳。null 表示此刻跳不了,时间戳会画成普通文字。 */
-    onSeekComment: ((Long) -> Unit)? = null,
-    /** 评论正文里的 @ 点开是那个人的空间,和上面 UP 那一行同一个去处。 */
-    onCommentUserClick: (Long) -> Unit = {},
+    /** 点了简介里的时间戳。null 表示此刻跳不了,时间戳会画成普通文字。 */
+    onSeek: ((Long) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     // 评论数用服务端给的总数,不是已渲染条数 —— 后者会随翻页一路变大,像个假计数器。
-    val commentLabel = if (commentState.total > 0) {
-        stringResource(Res.string.video_tab_comment_count, formatCount(commentState.total.toLong()))
+    val commentLabel = if (commentTotal > 0) {
+        stringResource(Res.string.video_tab_comment_count, formatCount(commentTotal.toLong()))
     } else {
         stringResource(Res.string.video_tab_comment)
     }
@@ -477,25 +466,10 @@ fun VideoTabs(
                     onOpenFavPicker = onOpenFavPicker,
                     onFavConfirm = onFavConfirm,
                     onOpenLink = onOpenLink,
-                    onSeek = onSeekComment,
+                    onSeek = onSeek,
                 )
 
-                else -> CommentSection(
-                    onOpenLink = onOpenLink,
-                    state = commentState,
-                    onSort = onCommentSort,
-                    onRefresh = onCommentRefresh,
-                    // 播放器收起着的时候下滑的意思是"把它拉回来",不是刷新(见 CommentSection)。
-                    refreshEnabled = playerExpanded,
-                    onLoadMore = onCommentLoadMore,
-                    onExpandReplies = onExpandReplies,
-                    onSend = onSendComment,
-                    onLike = onLikeComment,
-                    onDelete = onDeleteComment,
-                    onSeek = onSeekComment,
-                    onUserClick = onCommentUserClick,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                else -> comments(Modifier.fillMaxSize())
             }
         }
     }

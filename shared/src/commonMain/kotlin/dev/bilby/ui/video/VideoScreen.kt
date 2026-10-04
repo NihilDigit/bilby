@@ -46,6 +46,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
@@ -93,6 +94,7 @@ import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
 import dev.nihildigit.danmaku.Danmaku
 import dev.nihildigit.danmaku.SpecialDanmaku
+import dev.bilby.ui.comment.CommentSection
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.listen.ListenScreen
 import dev.bilby.ui.AdaptiveContent
@@ -559,6 +561,68 @@ fun VideoScreen(
         playback.setBackgroundPlaybackAllowed(listening)
     }
 
+    // 只在播放器装的确实是本页这一条时才跳。队列自动连播走到下一条之后,
+    // 这一页还停在原来那条的评论区(见页面顶部对 matchesCurrentPage 的说明),
+    // 不对身份就会拿着 A 的评论里的时间戳去跳 B。
+    //
+    // **判据是队列指着谁,不是取流回来没有。** 用 matchesCurrentPage 的那一版
+    // 在整个取流窗口里静默丢掉点击 —— 评论比流先到,那几百毫秒里点下去什么都
+    // 不发生,而时间戳照样画成能点的样子,表现就是"空降坐标有时候点不动"。
+    // 队列这一刻已经指向本页这条了,而播放器允许对还没拿到时间线的条目定位
+    // (见 AudioPlaybackService.adoptResolved 的说明),所以这一跳落得下去。
+    //
+    // 跳不了的时候传 null,让时间戳退回普通文字:一个看起来能点、点了没反应的
+    // 东西比一段普通文字更糟。
+    //
+    // 再夹一次时长:评论里的时间戳可能指向分 P 或者干脆写错,超出末尾的 seek
+    // 会直接把这一条播完并翻到下一条。时长还不知道时不夹,播放器自己会截到窗口内。
+    // 判据读 [audioState] 而不是叫 `playerHoldsThisPage()`:后者读的是
+    // StateFlow 的 `.value`,在组合里不订阅,队列换过之后这一格不会重算。
+    val seekToTimestamp: ((Long) -> Unit)? = active
+        ?.takeIf { audioState.queue?.current?.bvid == bvid }
+        ?.let { controller ->
+            { millis: Long ->
+                val end = controller.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+                controller.seekTo(millis.coerceIn(0L, end))
+            }
+        }
+
+    /**
+     * 简介/评论两栏与评论区各自的可保存状态(滚动位置、草稿、开着的楼中楼)。
+     *
+     * 两者都会整块离开组合:全屏与画中画时简介/评论不组合,听视频时整页换成另一屏。离开时
+     * 这里把状态存下,回来时还原。同一帧里换位置(窗口跨过 Expanded,Row 与 Column 两支互换)
+     * 它接不住:新位置在组合时就读存档,旧位置要到应用变更时才写,那一种靠 movableContentOf。
+     */
+    val paneStates = rememberSaveableStateHolder()
+
+    /**
+     * 评论区。**简介/评论的评论页与听视频的评论面板是同一份**,存档键相同,在哪一处看到的都是
+     * 上一次读到的地方。两处不会同时组合(听视频时简介/评论不在),SaveableStateHolder 的
+     * "同一个键不能同时出现两次"守得住。
+     *
+     * @param refreshEnabled 播放器收起着的时候下滑的意思是"把它拉回来",不是刷新(见 CommentSection)。
+     */
+    val commentsPane: @Composable (Modifier, Boolean) -> Unit = { paneModifier, refreshEnabled ->
+        paneStates.SaveableStateProvider(CommentsStateKey) {
+            CommentSection(
+                state = commentState,
+                onSort = onCommentSort,
+                onRefresh = onCommentRefresh,
+                refreshEnabled = refreshEnabled,
+                onLoadMore = onCommentLoadMore,
+                onExpandReplies = onExpandReplies,
+                onSend = onSendComment,
+                onLike = onLikeComment,
+                onDelete = onDeleteComment,
+                onSeek = seekToTimestamp,
+                onUserClick = onUpClick,
+                onOpenLink = onOpenLink,
+                modifier = paneModifier,
+            )
+        }
+    }
+
     // TODO(动效):听视频与全屏在 M3 里都属于 container transform 的 "within a screen"
     // 子类——同一个容器改形态,播放器是 persistent element。现在三种形态是三段各自 return
     // 的独立子树,没有共同的布局树,`Modifier.animateBounds` 无从下手(它要求同一个
@@ -608,6 +672,7 @@ fun VideoScreen(
             subtitleLan = subtitleLan,
             onSelectSubtitle = onSelectSubtitle,
             subtitleCues = subtitleCues,
+            comments = { paneModifier -> commentsPane(paneModifier, true) },
             // 听视频这一屏是普通页面(封面 + 控件),不是全出血的媒体,所以要像导航层那样
             // 躲开横向挖孔 —— 播放页整个目的地被排除在 `CutoutSafe` 之外,这里没人替它做。
             modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.horizontalCutout),
@@ -966,7 +1031,7 @@ fun VideoScreen(
     val playerPane = remember { movableContentOf { paneModifier: Modifier -> latestPlayerPane(paneModifier) } }
 
     // 简介与评论。竖排时在画面下面、拿剩下的高度;横排时是右边那个 secondary pane。
-    val tabsPane: @Composable (Modifier) -> Unit = { paneModifier ->
+    val tabsPaneContent: @Composable (Modifier) -> Unit = { paneModifier ->
         state.detail?.let { detail ->
             AdaptiveContent(modifier = paneModifier, maxWidth = Breakpoints.ReadableWidth) {
                 VideoTabs(
@@ -976,7 +1041,11 @@ fun VideoScreen(
                     videoTags = videoTags,
                     onLoadTags = onLoadTags,
                     onTagClick = onTagClick,
-                    commentState = commentState,
+                    commentTotal = commentState.total,
+                    comments = { paneModifier ->
+                        // 画面收起着的时候下滑先把它拉回来,那一下不该被读成刷新。
+                        commentsPane(paneModifier, playerScroll.offsetPx == 0f)
+                    },
                     // 点闪光:没问过就发起检索,问过就只是把 sheet 再打开 —— 再点一次重跑
                     // 会把已有结果冲掉,而用户此刻多半只是想再看一眼。
                     onFindRelated = {
@@ -1031,44 +1100,18 @@ fun VideoScreen(
                     onOpenFavPicker = onOpenFavPicker,
                     onFavConfirm = onFavConfirm,
                     onOpenLink = onOpenLink,
-                    onCommentSort = onCommentSort,
-                    onCommentRefresh = onCommentRefresh,
-                    // 画面收起着的时候下滑先把它拉回来,那一下不该被读成刷新。
-                    playerExpanded = playerScroll.offsetPx == 0f,
-                    onCommentLoadMore = onCommentLoadMore,
-                    onExpandReplies = onExpandReplies,
-                    onSendComment = onSendComment,
-                    onLikeComment = onLikeComment,
-                    onDeleteComment = onDeleteComment,
-                // 只在播放器装的确实是本页这一条时才跳。队列自动连播走到下一条之后,
-                // 这一页还停在原来那条的评论区(见页面顶部对 matchesCurrentPage 的说明),
-                // 不对身份就会拿着 A 的评论里的时间戳去跳 B。
-                //
-                // **判据是队列指着谁,不是取流回来没有。** 用 matchesCurrentPage 的那一版
-                // 在整个取流窗口里静默丢掉点击 —— 评论比流先到,那几百毫秒里点下去什么都
-                // 不发生,而时间戳照样画成能点的样子,表现就是"空降坐标有时候点不动"。
-                // 队列这一刻已经指向本页这条了,而播放器允许对还没拿到时间线的条目定位
-                // (见 AudioPlaybackService.adoptResolved 的说明),所以这一跳落得下去。
-                //
-                // 跳不了的时候传 null,让时间戳退回普通文字:一个看起来能点、点了没反应的
-                // 东西比一段普通文字更糟。
-                //
-                // 再夹一次时长:评论里的时间戳可能指向分 P 或者干脆写错,超出末尾的 seek
-                // 会直接把这一条播完并翻到下一条。时长还不知道时不夹,播放器自己会截到窗口内。
-                // 判据读 [audioState] 而不是叫 `playerHoldsThisPage()`:后者读的是
-                // StateFlow 的 `.value`,在组合里不订阅,队列换过之后这一格不会重算。
-                    onSeekComment = active
-                        ?.takeIf { audioState.queue?.current?.bvid == bvid }
-                        ?.let { controller ->
-                        { millis: Long ->
-                            val end = controller.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
-                            controller.seekTo(millis.coerceIn(0L, end))
-                        }
-                    },
-                    onCommentUserClick = onUpClick,
+                    onSeek = seekToTimestamp,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
+        }
+    }
+    // 理由同上面的 playerPane:跨过 Expanded 时这一块随排布搬家,简介与评论读到的位置跟着走。
+    // 全屏时它整块离开组合,那一段由 [paneStates] 存下。
+    val latestTabsPane by rememberUpdatedState(tabsPaneContent)
+    val tabsPane = remember {
+        movableContentOf { paneModifier: Modifier ->
+            paneStates.SaveableStateProvider(TabsStateKey) { latestTabsPane(paneModifier) }
         }
     }
 
@@ -1291,5 +1334,9 @@ fun VideoScreen(
  * 压到底部手势条。
  */
 private val ToastAnchorInDetail = BiasAlignment(horizontalBias = 0f, verticalBias = 0.8f)
+
+/** [VideoScreen] 里 paneStates 的两个存档键。 */
+private const val TabsStateKey = "tabs"
+private const val CommentsStateKey = "comments"
 
 

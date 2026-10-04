@@ -189,6 +189,17 @@ fun CommentSection(
     var panelRoot by rememberSaveable { mutableStateOf<Long?>(null) }
     val panelComment = panelRoot?.let { id -> findRoot(state, id) }
 
+    /**
+     * 面板读到了哪里。**留在面板外面**:面板一关就离开组合,建在里面的话再打开同一楼又回到顶上。
+     * 只记最近读的那一楼,换一楼从头读。
+     */
+    var threadScrollRoot by rememberSaveable { mutableStateOf<Long?>(null) }
+    val threadListState = rememberSaveable(threadScrollRoot, saver = LazyListState.Saver) { LazyListState() }
+    val openThread: (Long) -> Unit = { rpid ->
+        threadScrollRoot = rpid
+        panelRoot = rpid
+    }
+
     /** 详情面板那条栏写给谁。null 是回复这一楼本身。换一楼时回到 null。 */
     var panelReplyTarget by rememberSaveable { mutableStateOf<Long?>(null) }
     LaunchedEffect(panelRoot) { panelReplyTarget = null }
@@ -294,7 +305,7 @@ fun CommentSection(
                                 root = top,
                                 expanded = state.expandedReplies[top.rpid],
                                 actions = rowActions,
-                                onOpenThread = { panelRoot = top.rpid },
+                                onOpenThread = { openThread(top.rpid) },
                             )
                         }
                     }
@@ -315,7 +326,7 @@ fun CommentSection(
                             root = comment,
                             expanded = state.expandedReplies[comment.rpid],
                             actions = rowActions,
-                            onOpenThread = { panelRoot = comment.rpid },
+                            onOpenThread = { openThread(comment.rpid) },
                         )
                     }
                 }
@@ -383,6 +394,7 @@ fun CommentSection(
         CommentThreadSheet(
             root = panelComment,
             expanded = state.expandedReplies[panelComment.rpid],
+            listState = threadListState,
             myMid = state.myMid,
             onLoadMore = { onExpandReplies(panelComment.rpid) },
             onLike = onLike,
@@ -1081,6 +1093,7 @@ private const val ThreadSheetHeightFraction = 0.9f
 private fun CommentThreadSheet(
     root: CommentItem,
     expanded: ExpandedReplies?,
+    listState: LazyListState,
     myMid: Long?,
     onLoadMore: () -> Unit,
     onLike: (Long) -> Unit,
@@ -1115,7 +1128,6 @@ private fun CommentThreadSheet(
         onSelectText = { selectionTarget = it },
     )
 
-    val listState = rememberLazyListState()
     val shown = expanded?.items?.takeIf { it.isNotEmpty() } ?: root.previewReplies
     val hasMore = expanded?.hasMore == true
     val loadingMore = expanded?.loadingMore != false // 结果还没建起来的那一瞬也算在读
