@@ -273,9 +273,7 @@ fun VideoScreen(
                 // 表现为"进播放页不自动播放"。这与进度串味是同一个毛病——页面对着共享播放器
                 // 发命令,却没问播放器还是不是自己的。
                 //
-                // **发 [PlaybackCommand.PageLeft] 而不是 pause()。** 后者和用户按下暂停键是同一条路,
-                // 服务分不出"他不想听了"和"他去看 UP 主页了" —— 于是回到这一页只能一律停着。
-                // 谁按的这个信息只有发命令的这一方有,所以由这一方说清楚。
+                // 回到这一页时停着,不续播,见 AudioPlaybackService.resumeFrame。
                 if (playerHoldsThisPage()) {
                     // 先补一条进度再暂停。离开播放页多半就是这次观看的终点,而常规心跳带着
                     // 5 秒节流、暂停本身又不发——"暂停,然后退出页面"这条路上,云端会停在最多
@@ -283,7 +281,7 @@ fun VideoScreen(
                     // [dev.bilby.player.ProgressSession.flush]):听视频、切后台、进程被杀
                     // 这三种页面根本不在场,那些仍然靠会话自己的周期心跳。
                     connected.send(PlaybackCommand.FlushProgress)
-                    connected.send(PlaybackCommand.PageLeft)
+                    connected.pause()
                 }
             }
             // **不 release 播放器**:它归服务所有,不归这个页面。页面离开只断开连接——
@@ -348,7 +346,7 @@ fun VideoScreen(
 
     /**
      * 这条弹幕属于哪一刻。**在打开输入层那一刻取值,之后不再动** —— 弹幕是发给人按下"发弹幕"
-     * 时看到的那一帧的。取完就暂停,所以进度也不会再走。
+     * 时看到的那一帧的。写的时候画面照常走,发出去的仍是这一刻。
      */
     var danmakuProgress by remember { mutableLongStateOf(0L) }
 
@@ -378,7 +376,7 @@ fun VideoScreen(
      *
      * - 新压的一页:服务按帧的入口上下文建队列,从 [bvid] 起播。
      * - 返回到这一页:服务换回它离开时的队列、当前条与位置。
-     * - 这一页本来就是活帧(转屏、从 UP 主页回来、重连控制器):只续播。
+     * - 这一页本来就是活帧(从 UP 主页回来、重连控制器):只核对云端进度,不续播。
      *
      * 原先发的是带 bvid 的打开命令,随控制器重连重发,而页面手上的 bvid 可能已经过期 ——
      * 离开期间队列往前走了,回来就被拽回旧的那条。
@@ -441,33 +439,22 @@ fun VideoScreen(
     )
 
     /**
-     * 打开/关闭发弹幕的输入层。**暂停与恢复复用服务已有的那一对命令,不新造一套。**
-     *
-     * 打开发 [AudioPlaybackService.ACTION_PAGE_LEFT]:它的语义正是"暂停,但不动 playIntent"
-     * ——也就是"这次停下不是用户的意思"。关闭再报一次帧([activate]),落在服务的活帧分支上,
-     * 那里那句 `if (playIntent && !playWhenReady)` 就是恢复。
-     *
-     * 于是**打开面板期间用户从通知栏按了暂停**这种情况自动是对的:那一下走 `QueuePlayer.pause()`
-     * 把 playIntent 清了,关面板时不会自作主张再放起来。页面自己记一个"打开前在不在播"的
-     * 快照做不到这一点,它只知道打开那一刻的事。
-     *
-     * 两边都先问[playerHoldsThisPage]:播放器装的不是这一页的队列时(直播盖在上面),报帧
-     * 就是把播放器换回这一页——用户并没有要求。
+     * 打开发弹幕的输入层。**不暂停**:暂停就得在关闭时决定要不要接着放,而"打开前在不在播"
+     * 的快照看不到输入期间从通知栏按下的暂停,靠服务猜用户本意的那一版已经删掉了
+     * (见 AudioPlaybackService.resumeFrame)。
      */
     val openDanmakuInput: () -> Unit = {
         danmakuProgress = active?.currentPosition?.coerceAtLeast(0L) ?: 0L
-        if (playerHoldsThisPage()) send(PlaybackCommand.PageLeft)
         danmakuInputOpen = true
     }
 
     /**
      * 输入层的唯一出口。各条路径(发送成功、点空白、系统返回、按了发送键、胶囊右端的退出键)都走这里,
-     * 分开写必然漏掉一条 —— 漏掉的那条表现为"退出输入之后视频不再自己接着放"。
+     * 分开写必然漏掉一条 —— 漏掉的那条表现为输入层关了、发送状态还挂着。
      */
     val closeDanmakuInput: () -> Unit = {
         danmakuInputOpen = false
         onDanmakuSendConsumed()
-        if (playerHoldsThisPage()) activate()
     }
 
     // 发出去了就关面板并清草稿。**清草稿只在这里**:失败时留着,人改一个字就能再发一次。
@@ -832,9 +819,9 @@ fun VideoScreen(
                             error = (danmakuSend as? DanmakuSend.Failed)?.let {
                                 stringResource(Res.string.danmaku_send_failed, it.message)
                             },
-                            // 时间点取开始写的那一刻,同胶囊:画面停在那一帧,人是对着它写的。
+                            // 时间点取开始写的那一刻,同胶囊。
                             onSend = { onSendDanmaku(danmakuDraft, currentCid, danmakuProgress) },
-                            // 开始写就暂停、写完续播,和胶囊走同一对出入口(见 openDanmakuInput)。
+                            // 开始写与写完,和胶囊走同一对出入口(见 openDanmakuInput)。
                             onComposingChange = { composing ->
                                 if (composing) openDanmakuInput() else if (danmakuInputOpen) closeDanmakuInput()
                             },

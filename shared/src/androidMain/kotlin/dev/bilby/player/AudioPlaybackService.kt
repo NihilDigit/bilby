@@ -288,19 +288,6 @@ class AudioPlaybackService : MediaSessionService() {
      */
     private var autoNextEnabled = true
 
-    /**
-     * 用户还想让它响着。**这个 bit 归服务所有,页面不碰。**
-     *
-     * 播放器暂停的原因不止一种,而只有一种是"我不想听了":暂停按钮(界面、通知栏、耳机线控)、
-     * 睡眠定时器到点、队列走完。离开播放页去 UP 空间、切后台、来电避让都会让播放器停下来,但
-     * 它们表达的不是这个意思,回来时该接着播。
-     *
-     * 判据放在这里而不是导航层,是因为导航层回答不了。它只知道页面被压住还是被弹掉,而这两者
-     * 与用户想不想听没有对应关系 —— 之前三次尝试都栽在这个判断上(CLAUDE.md)。页面重新组合时
-     * 只问一句"播放器装的还是这一条吗、这个 bit 还立着吗",两个问题都不需要知道自己是怎么来的。
-     */
-    private var playIntent = false
-
     override fun onCreate() {
         super.onCreate()
         runningService = this
@@ -344,12 +331,7 @@ class AudioPlaybackService : MediaSessionService() {
             addListener(PlayerListener())
         }
 
-        // 定时到点是"这次听完了",和按下暂停同一类,所以连 playIntent 一起清 —— 不清的话
-        // 回到播放页它会自己响起来,而用户设定时器正是为了让它别再响。
-        sleepTimer = SleepTimer(scope) {
-            playIntent = false
-            player.pause()
-        }
+        sleepTimer = SleepTimer(scope) { player.pause() }
         scope.launch {
             sleepTimer.state.collect {
                 _sleepTimerState.value = it
@@ -478,7 +460,6 @@ class AudioPlaybackService : MediaSessionService() {
                 return
             }
             fillItemDisplay(display.bvid, display.title, display.upName, display.coverUrl)
-            if (playIntent && !player.playWhenReady) player.playWhenReady = true
             publishState()
             return
         }
@@ -568,18 +549,17 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /**
-     * 回到了活帧那一页(从 UP 主页返回、转屏重连、关掉弹幕输入层)。
+     * 回到了活帧那一页(从 UP 主页返回、重连控制器)。
      *
-     * 播放器停着而 [playIntent] 还立着,说明上次停下不是用户的意思(多半是离开页面去看别的),
-     * 接着播。**这一句就是"非本意的停止,回来续播"的全部实现** —— 它不需要知道自己是被弹回来的
-     * 还是被重新露出来的,那两个问题正是之前三次尝试栽进去的地方。
+     * **不续播。** 离开页面时暂停了,回来就停着,由用户按播放。这里曾经靠一个"用户还想听"的
+     * 标志自动续播,而页面叠页面(播放中进 UP 主页、再从那里打开另一条视频)之后,哪一次停下
+     * 算用户本意已经判不准,而它换来的只是回到播放页时省一次点击。
      *
-     * 云端进度也在这里核对。装载解析只发生在冷装载,播放器常驻、跨页面存活,回到同一条视频一次
+     * 云端进度在这里核对。装载解析只发生在冷装载,播放器常驻、跨页面存活,回到同一条视频一次
      * 解析都不发生:在网页上看到后面某一 P,回到 Bilby 还停在旧位置。核对只摆一条提示,跳不跳由
      * 用户点(仓库主人定的,直接落位这个方案被否决过)。
      */
     private fun resumeFrame(frame: Frame, bvid: String, requestedCid: Long) {
-        if (playIntent && !player.playWhenReady) player.playWhenReady = true
         val current = currentItem()?.bvid
         if (current != null) {
             // 指名兑现成一次真正的切 P。已经在放的就是那一 P 时什么都不做:重来一遍只会把画面
@@ -624,7 +604,7 @@ class AudioPlaybackService : MediaSessionService() {
         )
     }
 
-    /** 换回一帧离开时的样子。 */
+    /** 换回一帧离开时的样子。停在离开时的位置,不起播,理由同 [resumeFrame]。 */
     private fun restoreFrame(frame: Frame, snapshot: FrameSnapshot) {
         frame.snapshot = null
         val current = snapshot.items[snapshot.index]
@@ -639,7 +619,7 @@ class AudioPlaybackService : MediaSessionService() {
                 item.toMediaItem()
             }
         }
-        replaceQueue(items, snapshot.index)
+        replaceQueue(items, snapshot.index, playWhenReady = false)
         player.shuffleModeEnabled = snapshot.shuffled
         // 帧在 playlist 换完之后才认领:[setQueue] 途中会发布一次状态,那时 playlist 里还是
         // 上一帧的内容,先认领的话这一页会跟着那一刻的当前条换一次详情。
@@ -662,7 +642,7 @@ class AudioPlaybackService : MediaSessionService() {
         openChain = PerfTrace.chain("openVideo").also { it.mark("command") }
         val temporary = QueueItem(bvid = bvid, title = "", upName = "", coverUrl = "", durationSeconds = 0)
             .toMediaItem(requestedCid = requestedCid, loadNonce = nextLoadNonce())
-        val kept = replaceQueue(listOf(temporary), 0)
+        val kept = replaceQueue(listOf(temporary), 0, playWhenReady = true)
         openChain?.mark("tempQueue")
         liveFrame = frame
         if (kept && requestedCid != 0L && requestedCid != loadedCid) playPart(requestedCid)
@@ -676,10 +656,10 @@ class AudioPlaybackService : MediaSessionService() {
      *
      * @return 是否留下了正在放的那一条。
      */
-    private fun replaceQueue(items: List<MediaItem>, index: Int): Boolean {
+    private fun replaceQueue(items: List<MediaItem>, index: Int, playWhenReady: Boolean): Boolean {
         val current = player.currentMediaItem
         if (current == null || current.isLive || current.mediaId != items[index].mediaId) {
-            setQueue(items, index)
+            setQueue(items, index, playWhenReady)
             return false
         }
         val here = player.currentMediaItemIndex
@@ -687,7 +667,7 @@ class AudioPlaybackService : MediaSessionService() {
         player.removeMediaItems(0, here)
         player.addMediaItems(1, items.drop(index + 1))
         player.addMediaItems(0, items.take(index))
-        if (playIntent && !player.playWhenReady) player.playWhenReady = true
+        player.playWhenReady = playWhenReady
         return true
     }
 
@@ -864,7 +844,7 @@ class AudioPlaybackService : MediaSessionService() {
             ?: -1
 
     /**
-     * 换一份队列并从第 [startIndex] 条起播。
+     * 换一份队列,从第 [startIndex] 条起。
      *
      * `setMediaItems` 之外不另发起播命令:每一条的取流由它自己的源在轮到时做
      * (见 [LazyMediaSource]),所以这里交出去的是一整份队列,不是一条流。
@@ -872,7 +852,7 @@ class AudioPlaybackService : MediaSessionService() {
      * 上一条留下的装载状态在这里一并作废。画质清单尤其不能留:直播的档位和视频不同源,
      * 留着上一条视频的会给出一个点了没用的菜单。
      */
-    private fun setQueue(items: List<MediaItem>, startIndex: Int) {
+    private fun setQueue(items: List<MediaItem>, startIndex: Int, playWhenReady: Boolean = true) {
         persistCachedProgress()
         // 上一条内容到此为止:定格补发它的最终位置。整份队列被换掉时不会有 transition 事件,
         // 会话自己缓存的那个位置就是唯一的来源。
@@ -881,7 +861,6 @@ class AudioPlaybackService : MediaSessionService() {
         retryJob?.cancel()
         failedAttempts = 0
         lastError = null
-        playIntent = true
         resolvingMediaId = items.getOrNull(startIndex)?.mediaId
         loadedMediaId = null
         loadedCid = 0
@@ -896,7 +875,7 @@ class AudioPlaybackService : MediaSessionService() {
         publishState(loading = true)
         player.setMediaItems(items, startIndex, C.TIME_UNSET)
         player.prepare()
-        player.playWhenReady = true
+        player.playWhenReady = playWhenReady
     }
 
     /** 见 [loadNonce]:每一次"要重新取流"的装载都要一个新的。 */
@@ -913,7 +892,6 @@ class AudioPlaybackService : MediaSessionService() {
         retryJob?.cancel()
         failedAttempts = 0
         lastError = null
-        playIntent = true
         resolvingMediaId = player.getMediaItemAt(index).mediaId
         player.seekToDefaultPosition(index)
         player.playWhenReady = true
@@ -941,7 +919,6 @@ class AudioPlaybackService : MediaSessionService() {
         val existing = player.currentMediaItem ?: return
         persistCachedProgress()
         resolvingMediaId = existing.mediaId
-        playIntent = playWhenReady
         publishState(loading = true)
         player.addMediaItem(index + 1, rebuild(existing, nextLoadNonce()))
         player.seekToDefaultPosition(index + 1)
@@ -1722,11 +1699,8 @@ class AudioPlaybackService : MediaSessionService() {
     /**
      * 停下来,而且是**结束意义上的停**:队列走完、睡眠定时器到点、队列空了。只暂停不停服务,
      * 用户可能想按上一条回去重听。
-     *
-     * 清掉 [playIntent] —— 这几种都是"这次听完了",回到播放页不该自己再响起来。
      */
     private fun stopPlayback() {
-        playIntent = false
         player.playWhenReady = false
         publishState()
     }
@@ -2014,19 +1988,6 @@ class AudioPlaybackService : MediaSessionService() {
     private inner class QueuePlayer(player: Player) : ForwardingSimpleBasePlayer(player) {
 
         /**
-         * 外部控制器按下的播放/暂停。**这是 [playIntent] 唯一的正门。**
-         *
-         * 通知栏、锁屏、耳机线控、车机都经过 MediaSession 落到这里,界面里的播放/暂停按钮走
-         * MediaController 也落到这里 —— 也就是说凡是用户亲手表达"放"或"停"的地方,全都在这条
-         * 路上。反过来,切后台([pauseForAppBackground])、来电避让(播放器内部处理音频焦点)、
-         * 页面离开([ACTION_PAGE_LEFT])都直接动 `player`,不经过这里,于是那个 bit 不受影响。
-         */
-        override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
-            playIntent = playWhenReady
-            return super.handleSetPlayWhenReady(playWhenReady)
-        }
-
-        /**
          * 随机开关本身归播放器,这里只把它记成下次新建队列的初值 —— 通知栏、车机和 app 内的
          * 按钮走的是同一条命令,所以记在哪条路上都一样,记一次就够。
          */
@@ -2091,7 +2052,6 @@ class AudioPlaybackService : MediaSessionService() {
                         .add(SessionCommand(ACTION_SET_QUALITY, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SET_AUDIO_QUALITY, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_RETRY, Bundle.EMPTY))
-                        .add(SessionCommand(ACTION_PAGE_LEFT, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_FLUSH_PROGRESS, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SLEEP_TIMER, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_STOP_SERVICE, Bundle.EMPTY))
@@ -2117,14 +2077,11 @@ class AudioPlaybackService : MediaSessionService() {
                 ACTION_SET_QUALITY -> setQuality(args.getInt(EXTRA_QUALITY))
                 ACTION_SET_AUDIO_QUALITY -> setAudioQuality(args.getInt(EXTRA_QUALITY))
                 ACTION_RETRY -> retryNow()
-                // 暂停,但**不动 playIntent**(见 [ACTION_PAGE_LEFT])。顺手写一次本地进度:
-                // 离开页面是这次观看最可能的终点。
-                ACTION_PAGE_LEFT -> {
-                    persistCachedProgress()
-                    player.pause()
-                }
                 // 直播没有会话,这条命令在直播间自然什么都不做,不必判一句"是不是直播"。
-                ACTION_FLUSH_PROGRESS -> progressSession?.flush()
+                ACTION_FLUSH_PROGRESS -> {
+                    persistCachedProgress()
+                    progressSession?.flush()
+                }
                 // 播放器的生命周期到此为止,见 [ACTION_STOP_SERVICE]。
                 ACTION_STOP_SERVICE -> pauseAllPlayersAndStopSelf()
                 // 分钟数是三态里唯一带参数的那个:大于 0 即定时,[SLEEP_END_OF_ITEM] 即播完这条,
@@ -2184,24 +2141,11 @@ class AudioPlaybackService : MediaSessionService() {
         const val ACTION_RETRY = "dev.bilby.RETRY"
 
         /**
-         * 播放页离开了组合。**暂停,但不动 [playIntent]。**
+         * 这次观看多半到此为止:本地副本的进度落盘,当前位置立刻报上去(见 [ProgressSession.flush])。
+         * 播放页离开时发。
          *
-         * 页面原先在 onDispose 里直接 `controller.pause()`,而那条路和用户按下暂停键是同一条
-         * (都落到 [QueuePlayer.pause]),于是服务分不出"他不想听了"和"他去看别的了"——回到
-         * 页面时只能一律停着。
-         *
-         * 分成两条命令而不是让服务去猜,是因为服务确实猜不出来:它看到的只是一次 pause。谁按的
-         * 这个信息只有发命令的那一方有。
-         */
-        const val ACTION_PAGE_LEFT = "dev.bilby.PAGE_LEFT"
-
-        /**
-         * 把这次观看的当前位置立刻报上去,见 [ProgressSession.flush]。
-         *
-         * **和 [ACTION_PAGE_LEFT] 分开两条命令**,尽管现在的调用点是同一处 onDispose:后者
-         * 早已不只在离开页面时发——打开发弹幕的输入层也发它,取的是"暂停,但不动 playIntent"
-         * 那半层意思(见 `VideoScreen` 的 `openDanmakuInput`)。并进去的话每开一次输入层就多
-         * 一条心跳,而那时用户明摆着还在这一页上。
+         * 落盘不能指望随后那次暂停:缓冲中离开时 isPlaying 早已是 false,暂停不再触发
+         * onIsPlayingChanged,那里的落盘就走不到。
          *
          * 命令里不带位置:位置归播放器,而播放器归服务。页面能提供的只有时机。
          */

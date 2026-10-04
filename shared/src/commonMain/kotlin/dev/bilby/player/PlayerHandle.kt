@@ -107,9 +107,6 @@ sealed interface PlaybackCommand {
     data class SetAudioQuality(val quality: Int) : PlaybackCommand
     data object Retry : PlaybackCommand
 
-    /** 页面离开。与用户按下暂停不是一回事,见 AudioPlaybackService.ACTION_PAGE_LEFT。 */
-    data object PageLeft : PlaybackCommand
-
     /** 先补一条进度。离开播放页多半就是这次观看的终点。 */
     data object FlushProgress : PlaybackCommand
 

@@ -154,7 +154,6 @@ private fun PlaybackCommand.toSessionCommand(): Pair<String, Bundle> = when (thi
         putInt(AudioPlaybackService.EXTRA_QUALITY, quality)
     }
     PlaybackCommand.Retry -> AudioPlaybackService.ACTION_RETRY to Bundle.EMPTY
-    PlaybackCommand.PageLeft -> AudioPlaybackService.ACTION_PAGE_LEFT to Bundle.EMPTY
     PlaybackCommand.FlushProgress -> AudioPlaybackService.ACTION_FLUSH_PROGRESS to Bundle.EMPTY
     is PlaybackCommand.SetSleepTimer -> AudioPlaybackService.ACTION_SLEEP_TIMER to Bundle().apply {
         // 三种模式压进一个 Int:分钟数,或服务那边定义的两个哨兵。

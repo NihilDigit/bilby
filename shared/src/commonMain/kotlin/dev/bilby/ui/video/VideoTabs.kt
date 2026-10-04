@@ -507,7 +507,7 @@ fun VideoTabs(
  * 胶囊就在画面正下方,人写的时候眼睛不用离开画面;键盘从底下升起,盖住的是简介和评论,
  * 不是画面。
  *
- * 暂停与续播归调用方(VideoScreen 的 openDanmakuInput / closeDanmakuInput),这里只报时机。
+ * 开关输入层归调用方(VideoScreen 的 openDanmakuInput / closeDanmakuInput),这里只报时机。
  */
 class DanmakuInput(
     /** 此刻是不是在写。 */

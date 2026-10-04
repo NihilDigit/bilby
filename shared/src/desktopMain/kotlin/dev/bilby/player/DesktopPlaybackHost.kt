@@ -57,11 +57,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     private val _positionTicks = MutableStateFlow(PositionTick())
     override val positionTicks: StateFlow<PositionTick> = _positionTicks.asStateFlow()
 
-    // 定时到点是"这次听完了",和按下暂停同一类,所以连 playIntent 一起清。
-    private val sleepTimer = SleepTimer(scope) {
-        playIntent = false
-        setPlayWhenReady(false)
-    }
+    private val sleepTimer = SleepTimer(scope) { setPlayWhenReady(false) }
     override val sleepTimerState: StateFlow<SleepTimerState> get() = sleepTimer.state
 
     /** 第一次有页面连上来时才建:mpv 的初始化要加载原生库,没打开过播放页就不必付这个代价。 */
@@ -114,12 +110,6 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
 
     /** 这一条播到末尾已经收过尾,同时就是 [AudioPlaybackUiState.stoppedAtEnd]。 */
     private var endHandled = false
-
-    /**
-     * 用户还想让它响着。只有用户亲手的播放/暂停([play]/[pause])和"这次听完了"(定时到点、
-     * 队列走完)改它;离开页面的暂停不改,回到页面时据此续播。见 Android 的同名字段。
-     */
-    private var playIntent = false
 
     /**
      * 正在取流、还没交给 mpv 的那一次装载要不要起播,不在取流时为 null。
@@ -217,7 +207,6 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         loading = false
         lastError = null
         endHandled = false
-        playIntent = false
         pendingPlayWhenReady = null
         _state.value = AudioPlaybackUiState()
         _positionTicks.value = PositionTick()
@@ -245,8 +234,6 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             is PlaybackCommand.SetAudioQuality -> setAudioQuality(command.quality)
             PlaybackCommand.Retry -> reloadThisItem()
             is PlaybackCommand.OpenLive -> playLive(command)
-            // 暂停,但不动 playIntent:回到页面时要接着放。
-            PlaybackCommand.PageLeft -> setPlayWhenReady(false)
             PlaybackCommand.FlushProgress -> progressSession?.flush()
             is PlaybackCommand.SetSleepTimer -> sleepTimer.start(command.mode)
             is PlaybackCommand.AdjustSleepTimer -> sleepTimer.extend(command.deltaMinutes * 60_000L)
@@ -260,18 +247,11 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     internal val playWhenReady: Boolean
         get() = pendingPlayWhenReady ?: player?.mediamp?.state?.value?.playWhenReady ?: false
 
-    /** 用户亲手按下的播放。**这是 [playIntent] 的正门**,暂停同。 */
-    internal fun play() {
-        playIntent = true
-        setPlayWhenReady(true)
-    }
+    internal fun play() = setPlayWhenReady(true)
 
-    internal fun pause() {
-        playIntent = false
-        setPlayWhenReady(false)
-    }
+    internal fun pause() = setPlayWhenReady(false)
 
-    /** 放或停,不碰 [playIntent]。取流途中落在 [pendingPlayWhenReady] 上。 */
+    /** 放或停。取流途中落在 [pendingPlayWhenReady] 上。 */
     private fun setPlayWhenReady(value: Boolean) {
         if (pendingPlayWhenReady != null) {
             pendingPlayWhenReady = value
@@ -361,9 +341,8 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         if (snapshot != null) restoreFrame(frame, snapshot) else openFrame(frame, bvid, requestedCid)
     }
 
-    /** 回到了活帧那一页。非本意的停止在这里续播,云端进度在这里核对。 */
+    /** 回到了活帧那一页。不续播,理由见 Android 的 resumeFrame;云端进度在这里核对。 */
     private fun resumeFrame(frame: Frame, bvid: String, requestedCid: Long) {
-        if (playIntent && !playWhenReady) setPlayWhenReady(true)
         val current = queue.current?.bvid
         if (current != null) {
             if (current == bvid && requestedCid != 0L && requestedCid != loadedCid) playPart(requestedCid)
@@ -395,9 +374,16 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         )
     }
 
+    /** 换回一帧离开时的样子。停在离开时的位置,不起播。 */
     private fun restoreFrame(frame: Frame, snapshot: FrameSnapshot) {
         frame.snapshot = null
-        replaceQueue(snapshot.items, snapshot.index, snapshot.cid, snapshot.positionMillis.takeIf { it > 0 })
+        replaceQueue(
+            snapshot.items,
+            snapshot.index,
+            snapshot.cid,
+            startMillis = snapshot.positionMillis.takeIf { it > 0 },
+            playWhenReady = false,
+        )
         queue.shuffled = snapshot.shuffled
         // 帧在队列换完之后才认领,理由同 Android 的 restoreFrame。
         liveFrame = frame
@@ -408,7 +394,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     /** 新的一帧:先装一份只有这条的临时队列并立刻起播,来源由 [enrichFrame] 在后台补上。 */
     private fun openFrame(frame: Frame, bvid: String, requestedCid: Long) {
         val temporary = QueueItem(bvid = bvid, title = "", upName = "", coverUrl = "", durationSeconds = 0)
-        val kept = replaceQueue(listOf(temporary), 0, requestedCid, startMillis = null)
+        val kept = replaceQueue(listOf(temporary), 0, requestedCid, startMillis = null, playWhenReady = true)
         liveFrame = frame
         if (kept && requestedCid != 0L && requestedCid != loadedCid) playPart(requestedCid)
         enrichFrame(frame, bvid)
@@ -420,15 +406,21 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
      *
      * @return 是否留下了正在放的那一条。
      */
-    private fun replaceQueue(items: List<QueueItem>, index: Int, requestedCid: Long, startMillis: Long?): Boolean {
+    private fun replaceQueue(
+        items: List<QueueItem>,
+        index: Int,
+        requestedCid: Long,
+        startMillis: Long?,
+        playWhenReady: Boolean,
+    ): Boolean {
         val current = queue.current
         if (liveRoom != null || current == null || current.bvid != items[index].bvid) {
             setQueue(items, index)
-            loadCurrent(playWhenReady = true, requestedCid = requestedCid, startMillis = startMillis)
+            loadCurrent(playWhenReady = playWhenReady, requestedCid = requestedCid, startMillis = startMillis)
             return false
         }
         queue.set(items.toMutableList().also { it[index] = current }, index)
-        if (playIntent && !playWhenReady) setPlayWhenReady(true)
+        setPlayWhenReady(playWhenReady)
         return true
     }
 
@@ -525,7 +517,6 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         closeProgressSession()
         player?.mediamp?.stopPlayback()
         liveRoom = null
-        playIntent = true
         queue.set(items, startIndex)
         clearLoaded()
         sessionQuality = 0
@@ -551,7 +542,6 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
                 loadCurrent(playWhenReady = true)
                 return
             }
-            if (playIntent && !playWhenReady) setPlayWhenReady(true)
             publishState()
             return
         }
@@ -577,7 +567,6 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         if (!queue.moveTo(index)) return
         closeProgressSession(atMillis = player?.positionMillis, completed = completed)
         player?.mediamp?.stopPlayback()
-        if (playWhenReady) playIntent = true
         currentQuality = 0
         loadCurrent(playWhenReady, startMillis = startMillis)
         extendNearEdges()
@@ -865,7 +854,6 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             return
         }
         sleepTimer.onItemFinished()
-        playIntent = false
         publishState()
     }
 

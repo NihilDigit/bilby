@@ -88,7 +88,7 @@ cid 不写进 MediaItem，标题/封面回填推迟到解析完成后走 `replac
 路径上，云端会停在最多 5 秒之前，而离开页面正是下一次续播要对准的地方。上报的所有权仍在会话，
 页面提供的只是时机，与 seek 落点那一行同构——它给不出位置（播放器归服务），也覆盖不了听视频、
 切后台、进程被杀这三种它不在场的情形，那些仍靠周期心跳。命令是 `ACTION_FLUSH_PROGRESS`，
-与 `ACTION_PAGE_LEFT` 分开：后者早已不只在离开页面时发，打开发弹幕输入层取的也是它。
+同时把本地副本的进度落盘；页面随后发一次普通的暂停，回到页面时不续播。
 
 位置来源两层：连播切条时 `Player.Listener.onPositionDiscontinuity` 的 `oldPosition`
 （`PositionInfo` 带 `mediaItem` 与 `positionMs`，即离开那条的权威最终位置；`reason` 区分
