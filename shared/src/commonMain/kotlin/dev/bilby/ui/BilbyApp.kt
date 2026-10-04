@@ -1216,11 +1216,10 @@ private fun RootTabsContent(
  * 历史、稍后再看、收藏夹)照样打出去,跟动态页自己的两组抢冷启动那几百毫秒,而用户一眼都
  * 没看见它们。
  *
- * **"建过就留着"由宿主保证,不是靠这里。** 这个 NavDisplay 没装 NavEntry 级的
- * ViewModelStore 装饰器(1.1.5 的 entryDecorators 默认值只有 SaveableStateHolder 一个,
- * 反编译核对过),`viewModel()` 因此落在 Activity 的 store 上。切走 tab 只是 composable
- * 离开组合,实例和 viewModelScope 都还在 —— 搜索助理的循环跑在 searchVm 的 scope 上,
- * 切 tab、压播放页都不打断它,这一点和重构前一样。
+ * **"建过就留着"由宿主保证,不是靠这里。** `viewModel()` 落在 Home 这个 NavEntry 的
+ * ViewModelStore 上(见 NavDisplay 的 entryDecorators),store 只在 Home 出栈时清理。切走 tab
+ * 只是 composable 离开组合,实例和 viewModelScope 都还在 —— 搜索助理的循环跑在 searchVm 的
+ * scope 上,切 tab、压播放页都不打断它。
  *
  * 状态收集跟着下沉:三份 state 以前都在 RootTabs 顶层收,任何一个更新都要重组整个 RootTabs
  * (含底栏),现在各收各的。
