@@ -62,6 +62,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.unit.dp
@@ -1156,6 +1157,9 @@ private fun RootTabsContent(
         // **不用 lateral(横滑)**:"A lateral transition pattern is not recommended for this type of
         // navigation. It implies you can swipe between top level destinations which conflicts with
         // other components like carousels or swipe-able list items." 这个应用里正好有那两样。
+        //
+        // 切走的 tab 整块离开组合,滚动位置之类的可保存状态由 [tabStates] 按 tab 存下,切回来还原。
+        val tabStates = rememberSaveableStateHolder()
         AnimatedContent(
             targetState = selected,
             transitionSpec = {
@@ -1165,6 +1169,7 @@ private fun RootTabsContent(
         ) { tab ->
             // 限宽下放到各个 tab:订阅页宽屏是网格,要拿到 rail 右边的全部宽度,行长由格宽
             // 管;另外两页仍是单栏,照旧限宽。
+            tabStates.SaveableStateProvider(tab.name) {
             when (tab) {
                 RootTab.Feed -> FeedPane(
                     container = container,
@@ -1198,6 +1203,7 @@ private fun RootTabsContent(
                     onOpenCoinLog = onOpenCoinLog,
                     onSettingsClick = onSettingsClick,
                 )
+            }
             }
         }
     }

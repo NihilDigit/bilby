@@ -98,6 +98,9 @@ fun Modifier.readableWidth(maxWidth: Dp = Breakpoints.ReadableWidth): Modifier =
  *
  * 单列时整列限宽是为了行长;多列时每格已经限了宽,外层再限一次只会把列数压死在两列,
  * 两边仍是大片留白。
+ *
+ * **两档的布局树同形,只换修饰符与列数。** 曾经是 if 两支各包一层,跨过 expanded(转屏、拖窗口)
+ * 时 [content] 换了组合位置,列表整个重建,滚动位置回到顶上。
  */
 @Composable
 fun AdaptiveListContent(
@@ -105,10 +108,15 @@ fun AdaptiveListContent(
     maxCellWidth: Dp = Breakpoints.VideoRowMaxWidth,
     content: @Composable BoxScope.(columns: GridCells) -> Unit,
 ) {
-    if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
-        Box(modifier = modifier.fillMaxSize()) { content(maxWidthGridCells(maxCellWidth)) }
-    } else {
-        AdaptiveContent(modifier = modifier) { content(GridCells.Fixed(1)) }
+    val expanded = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Box(
+            modifier = Modifier
+                .then(if (expanded) Modifier else Modifier.widthIn(max = Breakpoints.ReadableWidth))
+                .fillMaxSize(),
+        ) {
+            content(if (expanded) maxWidthGridCells(maxCellWidth) else GridCells.Fixed(1))
+        }
     }
 }
 
