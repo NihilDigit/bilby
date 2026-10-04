@@ -23,6 +23,13 @@
 -keep class com.github.luben.zstd.** { *; }
 -dontwarn com.github.luben.zstd.**
 
+# Enum.valueOf、EnumMap、EnumSet 经 Class.getEnumConstants 反射调用 values();依赖里没人直接调它,
+# 裁掉后反射得到 null,抛 "is not an enum class"(zxing 编码登录二维码时取纠错等级即如此)
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}
+
 # 内置 SQLite(Room 的驱动)经 JNI 调进 native,native 侧按类名与签名回找
 -keep class androidx.sqlite.driver.bundled.** { *; }
 
