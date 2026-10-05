@@ -194,7 +194,8 @@ the same breakpoints apply to a phone in landscape, a tablet and a desktop windo
 
 ## Modules and platforms
 
-The app is Kotlin Multiplatform with two targets, Android and desktop JVM (Windows x64).
+The app is Kotlin Multiplatform with two targets, Android and desktop JVM (Windows x64 and
+ARM64).
 
 - `:shared` holds all code and UI. `commonMain` is everything that is not a platform
   framework; `androidMain` holds Media3, the playback service, WorkManager and window
@@ -284,14 +285,27 @@ stub caching are off: machine code generated on an AVX-512 CI runner crashes CPU
 The window title bar is drawn by the app (`WindowsCaption.kt` subclasses the window procedure
 through FFM, which is why the `:desktop` compile needs JDK 22+).
 
+**Windows ARM64 is built natively, never cross-built.** jpackage only packages for its host,
+and the mpv, Skiko, zstd and SQLite natives are all picked by the build machine's `os.arch`;
+the release matrix runs the arm64 job on `windows-11-arm`. Two natives needed work:
+
+- androidx `sqlite-bundled` ships no `windows_arm64` library (none up to 2.8.0-alpha01).
+  `:sqlite-woa64` compiles one from the SQLite amalgamation and androidx's
+  `sqlite_bindings.cpp`, both pinned by sha256, with MSVC on ARM64 hosts only, and `:shared`
+  puts that resource jar on the runtime classpath, where androidx's loader finds it.
+- zstd-jni's `win_aarch64` library exports the C API but not a single JNI method; on JDK 22+
+  the jar switches some classes to FFM, and `ZstdDecompressCtx` is not one of them. Delta
+  restore therefore calls libzstd through FFM on both architectures (`update/ZstdPatch.kt`),
+  which is why `:shared`'s desktop compile and test run on JDK 25.
+
 The MSI's `upgradeUuid` in `desktop/build.gradle.kts` is fixed forever: Windows Installer
 recognises an upgrade by it, and changing it makes the next MSI install alongside the old one.
 The same value reaches the app as `-Dbilby.upgrade-code`, which the in-app updater uses to ask
 Windows Installer whether this install directory belongs to our MSI.
 
 The desktop updater (`update/DesktopAppUpdater.kt`) needs three assets per release —
-`bilby-windows-x64-<ver>.msi`, `-app.zip` and `-files.json` — and treats a version as available
-only when all three exist. A patch update swaps the files marked `patch` in `files.json` —
+`bilby-windows-<arch>-<ver>.msi`, `-app.zip` and `-files.json`, `<arch>` being the JVM's own —
+and treats a version as available only when all three exist. A patch update swaps the files marked `patch` in `files.json` —
 every jar under `app/`, `app.aot`, the cfg, the launcher and `.jpackage.xml`, which must change
 together for the AOT cache to stay valid — and removes jars the new version no longer has;
 anything else that differs (the runtime, the mpv DLLs) forces a full MSI reinstall. An

@@ -6,7 +6,7 @@
 
 <p align="center">
 <a href="#安装"><img alt="Android 10+" src="https://img.shields.io/badge/Android-10%2B-4A5C92?style=flat-square&logo=android&logoColor=white"></a>
-<a href="#安装"><img alt="Windows 10+ x64" src="https://img.shields.io/badge/Windows-10%2B%20x64-4A5C92?style=flat-square&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0yIDJoOS41djkuNUgyek0xMi41IDJIMjJ2OS41aC05LjV6TTIgMTIuNWg5LjVWMjJIMnpNMTIuNSAxMi41SDIyVjIyaC05LjV6Ii8+PC9zdmc+"></a>
+<a href="#安装"><img alt="Windows 10+ x64 / ARM64" src="https://img.shields.io/badge/Windows-10%2B%20x64%20%2F%20ARM64-4A5C92?style=flat-square&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0yIDJoOS41djkuNUgyek0xMi41IDJIMjJ2OS41aC05LjV6TTIgMTIuNWg5LjVWMjJIMnpNMTIuNSAxMi41SDIyVjIyaC05LjV6Ii8+PC9zdmc+"></a>
 <a href="https://github.com/NihilDigit/bilby/attestations"><img alt="SLSA Build L3" src="https://raw.githubusercontent.com/NihilDigit/bilby/badges/slsa-l3.svg"></a>
 <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/github/license/NihilDigit/bilby?style=flat-square&color=4A5C92&logo=gnu&logoColor=white"></a>
 <br>
@@ -68,7 +68,7 @@ Bilby 是一款面向 Android 与 Windows 的 bilibili 客户端。
 前往 [Releases](https://github.com/NihilDigit/bilby/releases/latest) 下载构建产物。所有二进制均由 GitHub Actions 从仓库源码构建。
 
 - **Android**：需要 Android 10 或更高版本。请根据设备架构选择对应 APK，无法确认时选 `universal`。
-- **Windows**：需要 64 位 Windows 10 或更高版本。
+- **Windows**：需要 64 位 Windows 10 或更高版本。x64 与 ARM64 各有安装包，骁龙等 ARM 处理器的设备选 `arm64`。
   - `.msi`：安装至当前用户目录，不需要管理员权限，支持后续应用内更新。
   - `.zip`：便携版，解压后运行 `Bilby.exe`。
 - **Agent 配置（可选）**：Agent 检索依赖兼容 OpenAI 协议的端点。在应用「设置」→「助理」中填入 API 地址与 Key 即可使用；不配置不影响其他功能。

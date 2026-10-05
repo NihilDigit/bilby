@@ -95,7 +95,7 @@ class DesktopAppUpdater private constructor(
             when {
                 canPatch(installation.dir, manifest) -> {
                     val patch = DesktopUpdatePlan.Patch(zip, manifest)
-                    val delta = release.asset("$prefix-from-${AppBuild.versionName}.zip")
+                    val delta = release.asset("$prefix-from-${AppBuild.versionName}.zip")?.takeIf { ZstdPatch.isAvailable }
                     update(delta?.let { DesktopUpdatePlan.Delta(it, patch) } ?: patch)
                 }
                 isMsiInstall(installation.dir) -> update(DesktopUpdatePlan.Installer(msi))
@@ -281,8 +281,11 @@ class DesktopAppUpdater private constructor(
         /** 换掉 Release 接口地址,用于在本机对着假的 Release 走一遍更新。 */
         private const val API_OVERRIDE_PROPERTY = "bilby.update.api"
 
-        /** 只出 x64:mediamp 的运行时包只有 x64。 */
-        private const val ARCH = "x64"
+        /**
+         * 发行包的架构与 JVM 的架构相同。x64 版跑在 ARM64 的仿真下时这里也是 x64,更新仍取 x64 的附件;
+         * 换成 arm64 版要手动装一次 MSI,两个架构的升级标识相同,装上即原地替换。
+         */
+        private val ARCH = if (System.getProperty("os.arch") == "aarch64") "arm64" else "x64"
 
         /**
          * 安装包把 zstd-jni 的 DLL 放在资源目录的 zstd 子目录里。zstd-jni 默认把它从 jar 解压到

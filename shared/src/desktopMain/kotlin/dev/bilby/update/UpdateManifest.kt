@@ -1,7 +1,5 @@
 package dev.bilby.update
 
-import com.github.luben.zstd.ZstdDecompressCtx
-import com.github.luben.zstd.ZstdException
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.io.InputStream
@@ -9,7 +7,7 @@ import java.security.MessageDigest
 import java.util.zip.ZipFile
 
 /**
- * 一个版本的应用目录清单(Release 附件 bilby-windows-x64-<版本>-files.json),由 :desktop 的
+ * 一个版本的应用目录清单(Release 附件 bilby-windows-<架构>-<版本>-files.json),由 :desktop 的
  * packageReleaseUpdate 任务生成。[ManifestFile.patch] 标出装进 app.zip 的文件,即每次构建都会
  * 变的那几个:exe、jar、AOT 缓存与启动配置。
  */
@@ -72,7 +70,7 @@ internal fun extractPatch(zip: File, manifest: UpdateManifest, target: File) {
 }
 
 /**
- * 差分包(Release 附件 bilby-windows-x64-<版本>-from-<旧版本>.zip)里每个补丁文件是一个
+ * 差分包(Release 附件 bilby-windows-<架构>-<版本>-from-<旧版本>.zip)里每个补丁文件是一个
  * `<路径>.zst`,由 CI 以旧版的对应文件为前缀字典(zstd --patch-from)压成,见
  * .github/scripts/delta-updates.sh。拿本机文件作字典还原,结果与 [extractPatch] 解出的逐字节相同,
  * 同样逐个对照清单、还原修改时间。
@@ -104,11 +102,8 @@ internal fun applyDelta(zip: File, manifest: UpdateManifest, installDir: File, t
             if (renamedFrom != null && !baseFile.isFile) throw ChecksumMismatchException("本机缺少差分的基准:$basePath")
             val base = baseFile.takeIf { it.isFile }?.readBytes()
             val restored = try {
-                ZstdDecompressCtx().use { ctx ->
-                    if (base != null) ctx.loadDict(base)
-                    ctx.decompress(archive.getInputStream(entry).use { it.readBytes() }, Math.toIntExact(spec.size))
-                }
-            } catch (e: ZstdException) {
+                ZstdPatch.decode(base, archive.getInputStream(entry).use { it.readBytes() }, Math.toIntExact(spec.size))
+            } catch (e: ZstdPatchException) {
                 throw ChecksumMismatchException("${spec.path}: ${e.message}")
             }
             val actual = MessageDigest.getInstance("SHA-256").digest(restored).toHex()

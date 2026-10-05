@@ -111,7 +111,7 @@ class UpdateManifestTest {
     }
 
     // 夹具由 zstd CLI 的 --patch-from 生成,参数与 delta-updates.sh 相同;验证的是 CLI 压出的
-    // 差分 zstd-jni 能否还原。
+    // 差分 ZstdPatch 能否还原。
     @Test
     fun deltaFromCliRestoresAgainstInstalledBase() {
         install.resolve("app").mkdirs()

@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 
 plugins {
     id("org.jetbrains.kotlin.multiplatform")
@@ -8,6 +9,11 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
 }
+
+// 桌面的原生库按构建机的架构取:jpackage 不能交叉打包,x64 与 arm64 的发行包各在对应的机器上构建。
+val isWindowsArm64Host = System.getProperty("os.name").startsWith("Windows") &&
+    System.getProperty("os.arch") == "aarch64"
+val zstdClassifier = if (isWindowsArm64Host) "win_aarch64" else "win_amd64"
 
 // 目标只有 Android 与桌面 JVM。两者都跑在 JVM 上,KGP 因此不单独编译 commonMain 的元数据,
 // 公共代码随各平台编译,可以直接用 JDK 与纯 Java 库(java.io.File、OkHttp、zxing)。
@@ -77,8 +83,9 @@ kotlin {
             api(libs.mediamp.mpv)
             // 应用内更新查 MSI 的安装登记(update/WindowsInstaller.kt)。
             implementation(libs.jna.platform)
-            // 应用内差分更新的解码器。只出 x64,取只捆 Windows x64 原生库的那一份。
-            implementation("${libs.zstd.jni.get()}:win_amd64")
+            // 应用内差分更新要的 libzstd,取只捆本架构原生库的那一份,理由见 update/ZstdPatch.kt。
+            implementation("${libs.zstd.jni.get()}:$zstdClassifier")
+            if (isWindowsArm64Host) runtimeOnly(project(":sqlite-woa64"))
         }
         androidMain.dependencies {
             // Android 目标上 Compose 各构件按 BOM 取,比 CMP 1.12.1 映射到的版本新
@@ -123,6 +130,18 @@ kotlin {
             runtimeOnly(libs.zstd.jni)
         }
     }
+}
+
+// 桌面目标的编译与单测用 JDK 25:差分解码经 FFM(java.lang.foreign)直调 libzstd,它在 JDK 22 转正,
+// 21 上还是预览 API。只改桌面这两个任务,Android 的编译与 Robolectric 单测仍用运行 Gradle 的 JDK。
+// 字节码仍是 17,发行包跑在 Zulu 25 上。
+val desktopJdk = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+tasks.named<KotlinJvmCompile>("compileKotlinDesktop") {
+    kotlinJavaToolchain.toolchain.use(desktopJdk)
+}
+tasks.named<Test>("desktopTest") {
+    javaLauncher = desktopJdk
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
 // mediamp 0.5.0 把 ui-test-junit4 误放在运行时作用域,理由同 :desktop 里的同一条排除。

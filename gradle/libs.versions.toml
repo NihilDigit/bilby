@@ -50,7 +50,7 @@ sqlite = "2.6.2"
 mediamp = "0.5.0"
 # 桌面全屏要直接调 Win32(见 desktop 的 WindowsFullscreen)。跟 mediamp 传递带进来的版本一致。
 jna = "5.13.0"
-# 应用内差分更新的解码器(update/UpdateManifest.kt 的 applyDelta)。
+# 应用内差分更新只用它带的 libzstd 原生库,解码经 FFM 直调 C API(update/ZstdPatch.kt)。
 zstdJni = "1.5.7-20"
 
 # 弹幕引擎,独立仓库。开发期走 composite build(settings.gradle.kts),这个版本号只在
@@ -141,11 +141,10 @@ androidx-sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version.r
 kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "kotlinxCoroutines" }
 jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
 mediamp-mpv = { module = "org.openani.mediamp:mediamp-mpv", version.ref = "mediamp" }
-mediamp-mpv-runtime-windows-x64 = { module = "org.openani.mediamp:mediamp-mpv-runtime-windows-x64", version.ref = "mediamp" }
-# 等同 compose.desktop.windows_x64,但版本跟界面库走,不跟打包插件走(见 composeGradlePlugin)。
-compose-mp-desktop-windows-x64 = { module = "org.jetbrains.compose.desktop:desktop-jvm-windows-x64", version.ref = "composeMultiplatform" }
+# mpv 运行库与 Compose 的桌面运行库按构建机的架构取(x64 或 arm64),坐标在 desktop/build.gradle.kts
+# 里拼出,版本目录只提供版本号。
 # 不带 classifier 的 jar 捆了二十个平台的原生库,按平台的只捆一个,类是同一套。
-# classifier 在引用处给出(win_amd64),版本目录写不了它。
+# classifier 按构建机的架构在引用处给出(win_amd64、win_aarch64),版本目录写不了它。
 zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstdJni" }
 
 junit = { module = "junit:junit", version.ref = "junit" }

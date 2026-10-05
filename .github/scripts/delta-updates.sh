@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # 应用内差分更新的附件:新版本 M.m.p 为已公开的 M.(m-1).x 与 M.m.x 各出一份
-# bilby-windows-x64-<新版本>-from-<旧版本>.zip,里面是补丁包每个文件以旧版对应文件为前缀字典的
-# zstd 差分(--patch-from),客户端的还原见 shared/src/desktopMain/kotlin/dev/bilby/update/UpdateManifest.kt
-# 的 applyDelta。
+# bilby-windows-<架构>-<新版本>-from-<旧版本>.zip(架构为 x64 与 arm64,各对各的旧版),里面是补丁包每个文件以旧版对应文件为前缀字典的
+# zstd 差分(--patch-from),客户端的还原见 shared/src/desktopMain/kotlin/dev/bilby/update/ZstdPatch.kt。
 #
 # 对应文件默认是同一路径。jar 名里的哈希取自 jar 的内容,Bilby 自己的 shared-desktop-<哈希>.jar
 # 每次构建都换名,同一路径找不到时按去掉哈希的名字在旧版里找唯一的一个,另写一个 <路径>.base
@@ -15,17 +14,20 @@ set -euo pipefail
 
 version=$1
 dist=$(cd "$2" && pwd)
-prefix=bilby-windows-x64
 work="${RUNNER_TEMP:-/tmp}/bilby-delta"
 rm -rf "$work"
-mkdir -p "$work/new"
 
 IFS=. read -r major minor _ <<< "$version"
 bases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
     --jq '.[] | select(.draft | not) | select(.prerelease | not) | .tag_name | ltrimstr("v")' |
     awk -F. -v M="$major" -v m="$minor" -v self="$version" '$0 != self && $1 == M && ($2 == m || $2 == m - 1)')
 
-unzip -q "$dist/$prefix-$version-app.zip" -d "$work/new"
+# 两个架构都要有新版的补丁包:少了一个说明构建或汇总出了错,不能悄悄只给一个架构出差分。
+arches="x64 arm64"
+for arch in $arches; do
+    mkdir -p "$work/new-$arch"
+    unzip -q "$dist/bilby-windows-$arch-$version-app.zip" -d "$work/new-$arch"
+done
 
 # 旧版里与 $1 对应的文件,相对 $2 目录;没有则输出空。
 # 同一路径优先;否则 jar 名去掉 -<哈希> 后在同一目录里找,恰好一个才算。
@@ -48,14 +50,16 @@ base_of() {
 }
 
 delta() {
-    local base=$1
-    local dir="$work/$base"
-    local new="$work/new"
+    local arch=$1 base=$2
+    local prefix="bilby-windows-$arch"
+    local dir="$work/$arch-$base"
+    local new="$work/new-$arch"
     local out="$dist/$prefix-$version-from-$base.zip"
     mkdir -p "$dir/old" "$dir/out"
+    # arm64 从首个带它的版本起才有,更早的版本下载不到,跳过即可
     if ! gh release download "v$base" --repo "$GITHUB_REPOSITORY" --dir "$dir" \
         -p "$prefix-$base-files.json" -p "$prefix-$base-app.zip"; then
-        echo "v$base 没有补丁包,跳过"
+        echo "v$base 没有 $arch 的补丁包,跳过"
         return 0
     fi
     if ! grep -q '"app/resources/zstd/' "$dir/$prefix-$base-files.json"; then
@@ -68,7 +72,8 @@ delta() {
         local from
         from=$(base_of "$file" "$dir/old")
         # --long 开长距离匹配,旧文件里隔得很远的相同段也能引用。文件大过 2^27 时 CLI 自行加大窗口;
-        # 客户端用 zstd-jni 的单次解压,不受流式解压的窗口上限约束(本机以 172 MB 的文件验证过)
+        # 客户端用 ZSTD_decompressDCtx 单次解压,不受流式解压的窗口上限约束(x64 以 172 MB、ARM64 以
+        # 160 MB 的文件验证过)
         if [ -n "$from" ]; then
             zstd -19 --long=27 -q --patch-from="$dir/old/$from" "$new/$file" -o "$dir/out/$file.zst"
             [ "$from" = "$file" ] || printf '%s' "$from" > "$dir/out/$file.base"
@@ -78,12 +83,14 @@ delta() {
     done
     # 已是 zstd,不再压缩;-D 不写目录条目
     (cd "$dir/out" && zip -q -r -D -0 "$out" .)
-    echo "v$base -> v$version: $(stat -c %s "$out") 字节"
+    echo "v$base -> v$version ($arch): $(stat -c %s "$out") 字节"
 }
 export -f delta base_of
-export version dist work prefix
+export version dist work
 
 # 每份差分里 AOT 缓存那一个文件就要压约一分钟,按核数并行
 for base in $bases; do
-    echo "$base"
-done | xargs -r -P "$(nproc)" -L 1 bash -c 'delta "$0"'
+    for arch in $arches; do
+        echo "$arch $base"
+    done
+done | xargs -r -P "$(nproc)" -L 1 bash -c 'delta "$0" "$1"'

@@ -29,11 +29,23 @@ permissions:
   attestations: write
 
 jobs:
-  # Windows x64 的 MSI、免安装 zip 与应用内更新的两个附件。只产出,不发布:上传由 release
+  # Windows x64 与 arm64 的 MSI、免安装 zip 与应用内更新的两个附件。只产出,不发布:上传由 release
   # 统一做,校验和与证明才能覆盖全部附件。代价是它失败时整个发版停下,而不是只发出 APK;
   # 发的是草稿,重跑失败的 job 即可,不会出现缺了桌面包却已公开的 release。
+  #
+  # jpackage 不能交叉打包,mpv、Skiko 与 SQLite 的原生库也按构建机的架构取,所以两个架构各在
+  # 自己的 runner 上构建。arm64 的 SQLite 原生库由 :sqlite-woa64 现场用 MSVC 编译,windows-11-arm
+  # 自带它要的 C++ ARM64 生成工具。
   desktop:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     steps:
@@ -55,8 +67,8 @@ jobs:
         shell: bash
         run: echo "name=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      # release job 在 Linux 上也跑这组测试;这里再跑一遍,是因为桌面端只发 Windows,
-      # 路径与原生库的问题只在这里暴露。
+      # release job 在 Linux 上也跑这组测试;这里在每个架构上再跑一遍,是因为桌面端只发 Windows,
+      # 路径与原生库的问题只在这里暴露,arm64 的尤其如此。
       - name: Test
         # 参数要加引号:这一步跑在 PowerShell 里,它把 -PbilbyVersion=0.15.0 在点号处拆成
         # -PbilbyVersion=0 和 .15.0 两个参数,构建拿到的版本号是 0,MSI 拒收。
@@ -81,18 +93,18 @@ jobs:
           if (-not (Test-Path "$appDir/Bilby.exe")) { throw "缺少 $appDir/Bilby.exe" }
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           # 免安装版:整个应用目录打包,解压即得 Bilby 目录。
-          Compress-Archive -Path $appDir -DestinationPath "dist/bilby-windows-x64-$version.zip"
+          Compress-Archive -Path $appDir -DestinationPath "dist/bilby-windows-${{ matrix.arch }}-$version.zip"
           # jpackage 按包名命名 MSI,改成与 APK 同一套规则,一眼看出平台与架构。
           $msi = Get-ChildItem "$binaries/msi/*.msi" | Select-Object -First 1
           if (-not $msi) { throw 'packageReleaseMsi 没有产出 MSI' }
-          Copy-Item $msi.FullName "dist/bilby-windows-x64-$version.msi"
+          Copy-Item $msi.FullName "dist/bilby-windows-${{ matrix.arch }}-$version.msi"
           # 应用内更新的 files.json 与 app.zip,名字由 packageReleaseUpdate 定好。
           Copy-Item "$binaries/update/*" dist/
           Get-ChildItem dist | Format-Table Name, Length
 
       - uses: actions/upload-artifact@v7
         with:
-          name: desktop-dist
+          name: desktop-${{ matrix.arch }}-dist
           path: dist/*
           if-no-files-found: error
           retention-days: 7
@@ -231,8 +243,9 @@ jobs:
             |---|---|
             | `universal.apk` | Android 通用安装包 |
             | `arm64-v8a.apk` 等 | 按 CPU 架构拆分的 Android 安装包，体积较小 |
-            | `.msi` | Windows 安装包，安装至当前用户目录，支持应用内更新 |
-            | `.zip` | Windows 便携版 |
+            | `windows-x64.msi` | Windows 安装包，安装至当前用户目录，支持应用内更新 |
+            | `windows-arm64.msi` | 骁龙等 ARM 处理器的 Windows 安装包 |
+            | `.zip` | Windows 便携版，同样分 x64 与 arm64 |
             | `-files.json`、`-app.zip`、`-from-*.zip` | 供应用内更新使用 |
 
             Windows 安装包未经代码签名，首次运行时 SmartScreen 会拦截，选择「更多信息」→「仍要运行」。

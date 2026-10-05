@@ -40,25 +40,30 @@ configurations.configureEach {
 
 val releaseVersionName: String = (findProperty("bilbyVersion") as String?) ?: "0.0.0-dev"
 
+// 原生库与安装包都按构建机的架构出:jpackage 不能交叉打包,mpv 与 Skiko 的原生库也只取构建机那一份。
+// x64 与 arm64 的发行包由 release.yml 各在对应架构的 runner 上构建。
+val hostArch = if (System.getProperty("os.arch") == "aarch64") "arm64" else "x64"
+val zstdClassifier = if (hostArch == "arm64") "win_aarch64" else "win_amd64"
+// 等同 compose.desktop.currentOs,但版本跟界面库走,不跟打包插件走(见 libs.versions.toml 的 composeGradlePlugin)
+val composeDesktopRuntime = "org.jetbrains.compose.desktop:desktop-jvm-windows-$hostArch:${libs.versions.composeMultiplatform.get()}"
+val mpvRuntime = "org.openani.mediamp:mediamp-mpv-runtime-windows-$hostArch:${libs.versions.mediamp.get()}"
+
 // 这个模块只是桌面的打包入口:窗口、平台对象与发行包。代码与界面在 :shared。
 dependencies {
     implementation(project(":shared"))
     implementation(libs.jna.platform)
-    runtimeOnly(libs.compose.mp.desktop.windows.x64)
+    runtimeOnly(composeDesktopRuntime)
 }
 
 // mpv 与 FFmpeg 的 DLL(约 55MB)解开放进应用资源目录,不走类路径。mediamp 的运行时包原本
 // 放在类路径上时,每次启动后首次播放都把整包 DLL 解压到 %TEMP% 下一个新目录,DLL 被进程占着,
 // deleteOnExit 删不掉,每运行一次就留一份。放进资源目录后安装时就位,两个版本之间逐字节相同,
 // 增量更新不碰它们;启动时经 MpvMediampPlayer.prepareLibraries 指过去。
-// 只做 x64,mediamp 的运行时包目前只有这一种。
-val mpvRuntimeJar = configurations.detachedConfiguration(
-    dependencies.create(libs.mediamp.mpv.runtime.windows.x64.get()),
-).apply { isTransitive = false }
+val mpvRuntimeJar = configurations.detachedConfiguration(dependencies.create(mpvRuntime)).apply { isTransitive = false }
 // zstd-jni 同样默认把 DLL 解压到 %TEMP%,改由 DesktopAppUpdater 经 ZstdNativePath 指过来。
 // CI 也据旧版清单里有没有这个 DLL 判断旧版客户端会不会用差分,见 .github/scripts/delta-updates.sh。
 val zstdJniJar = configurations.detachedConfiguration(
-    dependencies.create("${libs.zstd.jni.get()}:win_amd64"),
+    dependencies.create("${libs.zstd.jni.get()}:$zstdClassifier"),
 ).apply { isTransitive = false }
 val bundledAppResources by tasks.registering(Sync::class) {
     from({ mpvRuntimeJar.map { zipTree(it) } }) {
@@ -306,6 +311,6 @@ tasks.register<UpdateArtifactsTask>("packageReleaseUpdate") {
     dependsOn("createReleaseDistributable")
     appImage = layout.buildDirectory.dir("compose/binaries/main-release/app/$desktopPackageName")
     version = releaseVersionName
-    artifactPrefix = "bilby-windows-x64-$releaseVersionName"
+    artifactPrefix = "bilby-windows-$hostArch-$releaseVersionName"
     outputDir = layout.buildDirectory.dir("compose/binaries/main-release/update")
 }
