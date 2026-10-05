@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.FrameWindowScope
 import dev.bilby.BiliLog
 import dev.bilby.ui.theme.LocalIsDarkTheme
+import dev.nihildigit.windowstouch.ProvideTouchViewConfiguration
 import org.jetbrains.skia.FontMgr
 import org.jetbrains.skia.FontStyle
 
@@ -69,7 +70,8 @@ internal fun FrameWindowScope.WindowFrame(
     }
     Column(Modifier.fillMaxSize()) {
         if (showTitleBar && caption != null) WindowsTitleBar(caption, title, icon)
-        Box(Modifier.fillMaxWidth().weight(1f)) { content() }
+        // Compose Desktop 的触摸拖动阈值写死 18dp,手指要划出一大截才开始滚动;换成 Android 的 8dp。
+        Box(Modifier.fillMaxWidth().weight(1f)) { ProvideTouchViewConfiguration(content) }
     }
 }
 

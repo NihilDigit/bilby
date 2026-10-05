@@ -30,6 +30,27 @@
     public static ** valueOf(java.lang.String);
 }
 
+# 触摸桥(compose-windows-touch)经反射取 Compose Desktop 的内部入口,把 WM_POINTER 的触摸注入场景。
+# 取不到时静默退回鼠标路径,只在 release 里出现,所以这些成员要显式保留。升级 CMP 时先核对它们还在
+-keepclassmembers class androidx.compose.ui.awt.ComposeWindow {
+    *** composePanel;
+}
+-keepclassmembers class androidx.compose.ui.awt.ComposeWindowPanel {
+    *** _composeContainer;
+}
+-keepclassmembers class androidx.compose.ui.scene.ComposeContainer {
+    *** mediator;
+    *** getContentComponent();
+}
+-keepclassmembers class androidx.compose.ui.scene.ComposeSceneMediator {
+    *** scene$delegate;
+    *** getSceneBoundsInPx();
+    static *** access$getScene(androidx.compose.ui.scene.ComposeSceneMediator);
+}
+-keepclassmembers class androidx.compose.ui.scene.ComposeScene {
+    *** sendPointerEvent-*(...);
+}
+
 # 内置 SQLite(Room 的驱动)经 JNI 调进 native,native 侧按类名与签名回找
 -keep class androidx.sqlite.driver.bundled.** { *; }
 

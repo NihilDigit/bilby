@@ -52,6 +52,7 @@ val mpvRuntime = "org.openani.mediamp:mediamp-mpv-runtime-windows-$hostArch:${li
 dependencies {
     implementation(project(":shared"))
     implementation(libs.jna.platform)
+    implementation(libs.windows.touch)
     runtimeOnly(composeDesktopRuntime)
 }
 

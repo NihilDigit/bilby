@@ -298,6 +298,12 @@ the release matrix runs the arm64 job on `windows-11-arm`. Two natives needed wo
   restore therefore calls libzstd through FFM on both architectures (`update/ZstdPatch.kt`),
   which is why `:shared`'s desktop compile and test run on JDK 25.
 
+Touch and pen input on Windows go through `dev.nihildigit:compose-windows-touch`, called from
+both window procedures in `WindowsCaption`: AWT ignores `WM_POINTER`, so without it a finger
+is a single mouse pointer. The bridge reaches Compose internals by reflection; on a CMP
+upgrade check that the members kept in `desktop/proguard-rules.pro` still exist, because a
+failed lookup silently falls back to mouse input.
+
 The MSI's `upgradeUuid` in `desktop/build.gradle.kts` is fixed forever: Windows Installer
 recognises an upgrade by it, and changing it makes the next MSI install alongside the old one.
 The same value reaches the app as `-Dbilby.upgrade-code`, which the in-app updater uses to ask

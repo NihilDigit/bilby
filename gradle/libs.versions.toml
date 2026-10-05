@@ -52,6 +52,8 @@ mediamp = "0.5.0"
 jna = "5.13.0"
 # 应用内差分更新只用它带的 libzstd 原生库,解码经 FFM 直调 C API(update/ZstdPatch.kt)。
 zstdJni = "1.5.7-20"
+# Windows 的触摸与笔输入接进 Compose(desktop 的 WindowsCaption)。独立仓库 NihilDigit/compose-windows-touch。
+windowsTouch = "0.1.0"
 
 # 弹幕引擎,独立仓库。开发期走 composite build(settings.gradle.kts),这个版本号只在
 # 脱离 composite build 从仓库解析时才生效。
@@ -146,6 +148,7 @@ mediamp-mpv = { module = "org.openani.mediamp:mediamp-mpv", version.ref = "media
 # 不带 classifier 的 jar 捆了二十个平台的原生库,按平台的只捆一个,类是同一套。
 # classifier 按构建机的架构在引用处给出(win_amd64、win_aarch64),版本目录写不了它。
 zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstdJni" }
+windows-touch = { module = "dev.nihildigit:compose-windows-touch", version.ref = "windowsTouch" }
 
 junit = { module = "junit:junit", version.ref = "junit" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }

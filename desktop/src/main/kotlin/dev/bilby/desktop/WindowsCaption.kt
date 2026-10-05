@@ -7,6 +7,7 @@ import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import dev.bilby.BiliLog
+import dev.nihildigit.windowstouch.WindowsTouchInput
 import java.lang.foreign.Arena
 import java.lang.foreign.FunctionDescriptor
 import java.lang.foreign.Linker
@@ -52,6 +53,11 @@ import java.util.concurrent.ConcurrentHashMap
  * WM_NCLBUTTONDOWN/UP 驱动,经 [hovered] 与 [pressed] 交给界面。按下与松开不交给 DefWindowProc:
  * 它会进入按钮的模态跟踪并画出经典样式的按钮。
  *
+ * 触摸与笔输入也从这两个窗口过程进来。AWT 不处理 WM_POINTER,系统把触摸降级成单个鼠标指针,
+ * Compose 看不到多指、压力与笔的类型;交给 compose-windows-touch 直接注入 Compose。WM_POINTER 发给
+ * 指针下的子窗口(Skiko 画布),框架窗口也问一遍。非客户区的 WM_NCPOINTER 不碰,系统照常合成鼠标
+ * 消息,标题栏的拖动与按钮仍由上面这套处理。
+ *
  * 窗口过程运行在 AWT 的工具包线程上;[updateLayout] 由界面线程写入,所以布局整体替换成不可变快照。
  *
  * 两个窗口过程经 MethodHandles 按名字取出交给 upcallStub,代码里没有直接调用。桌面发行包若开
@@ -95,6 +101,8 @@ internal class WindowsCaption(private val window: ComposeWindow) {
     private val point = arena.allocate(8)
     private val rect = arena.allocate(16)
     private val trackMouseEvent = arena.allocate(TRACKMOUSEEVENT_BYTES)
+
+    private val touch = WindowsTouchInput.create(window) { message, error -> BiliLog.w("触摸输入:$message", error) }
 
     private val frameProcStub: MemorySegment by lazy { upcall("frameProc") }
     private val childProcStub: MemorySegment by lazy { upcall("childProc") }
@@ -159,6 +167,7 @@ internal class WindowsCaption(private val window: ComposeWindow) {
     @Suppress("unused") // 经 upcallStub 调用
     private fun frameProc(hwnd: MemorySegment, message: Int, wParam: Long, lParam: Long): Long {
         try {
+            if (touch?.handleMessage(message, wParam) == true) return 0
             when (message) {
                 WM_NCCALCSIZE -> return onNcCalcSize(hwnd, wParam, lParam)
                 WM_NCHITTEST -> {
@@ -198,6 +207,7 @@ internal class WindowsCaption(private val window: ComposeWindow) {
                     if (originalChildProcs.isEmpty()) hookChildren()
                 }
                 WM_NCDESTROY -> {
+                    touch?.close()
                     Win32.setWindowLongPtr.invokeWithArguments(hwnd, GWLP_WNDPROC, originalFrameProc)
                     live -= this
                     return callFrame(hwnd, message, wParam, lParam)
@@ -214,6 +224,7 @@ internal class WindowsCaption(private val window: ComposeWindow) {
     private fun childProc(hwnd: MemorySegment, message: Int, wParam: Long, lParam: Long): Long {
         val original = originalChildProcs[hwnd.address()] ?: return 0
         try {
+            if (touch?.handleMessage(message, wParam) == true) return 0
             when (message) {
                 WM_NCHITTEST -> if (hitTest(lParam) != HTCLIENT) return HTTRANSPARENT.toLong()
                 WM_NCDESTROY -> {
