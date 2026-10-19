@@ -46,7 +46,6 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.SignalCellularAlt
 import androidx.compose.material.icons.outlined.SkipNext
-import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Start
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.outlined.Wallpaper
@@ -91,7 +90,6 @@ import dev.bilby.player.audioQualityLabel
 import dev.bilby.player.DEFAULT_AUDIO_QUALITY_OPTIONS
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.BilbyTopBar
-import dev.bilby.ui.player.formatSpeed
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.video.CATEGORY_DESCRIPTIONS
@@ -131,7 +129,6 @@ import dev.bilby.ui.theme.LocalIsDarkTheme
 import dev.bilby.ui.theme.PaletteSchemes
 import dev.bilby.ui.theme.ThemePalette
 import dev.bilby.ui.theme.dynamicColorAvailable
-import kotlin.math.abs
 
 /**
  * 设置的二级页面。**每一页都是一整页,不是一个展开块**:展开块要么把首页撑回原来的长度,
@@ -209,7 +206,7 @@ fun PlaybackSettingsPage(
     onWifiQualityChange: (Int) -> Unit,
     onMeteredQualityChange: (Int) -> Unit,
     onCodecChange: (CodecPreference) -> Unit,
-    onFastForwardSpeedChange: (Float) -> Unit,
+    onDoubleTapSeekChange: (Boolean) -> Unit,
     onAutoNextChange: (Boolean) -> Unit,
     onWifiAudioChange: (Int) -> Unit,
     onMeteredAudioChange: (Int) -> Unit,
@@ -253,18 +250,13 @@ fun PlaybackSettingsPage(
                 )
             }
             row { position ->
-                ChoiceRow(
+                ToggleSettingRow(
                     position = position,
-                    icon = Icons.Outlined.Speed,
-                    title = stringResource(Res.string.settings_fast_forward_speed),
-                    // 长按加速没有播放页入口 —— 它是"长按的时候有多快"这条规则本身,不是看的时候
-                    // 顺手调的东西,所以按 §2.8 的判据("怎么做")放这里。
-                    subtitle = stringResource(Res.string.settings_fast_forward_speed_subtitle),
-                    options = SettingsStore.FAST_FORWARD_SPEEDS,
-                    selected = SettingsStore.FAST_FORWARD_SPEEDS.minByOrNull { abs(it - state.fastForwardSpeed) },
-                    label = { formatSpeed(it) },
-                    onChange = onFastForwardSpeedChange,
-                    valueAtEnd = true,
+                    icon = Icons.Outlined.FastForward,
+                    title = stringResource(Res.string.settings_double_tap_seek),
+                    subtitle = stringResource(Res.string.settings_double_tap_seek_subtitle),
+                    checked = state.doubleTapSeek,
+                    onCheckedChange = onDoubleTapSeekChange,
                 )
             }
         }

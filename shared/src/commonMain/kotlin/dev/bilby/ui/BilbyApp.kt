@@ -1534,7 +1534,7 @@ private fun SettingsPageRoute(
             onWifiQualityChange = { vm.setDefaultQuality(it, metered = false) },
             onMeteredQualityChange = { vm.setDefaultQuality(it, metered = true) },
             onCodecChange = vm::setCodec,
-            onFastForwardSpeedChange = vm::setFastForwardSpeed,
+            onDoubleTapSeekChange = vm::setDoubleTapSeek,
             onAutoNextChange = vm::setAutoNext,
             onWifiAudioChange = { vm.setDefaultAudio(it, metered = false) },
             onMeteredAudioChange = { vm.setDefaultAudio(it, metered = true) },
@@ -2886,7 +2886,7 @@ private fun VideoPane(
         danmakuSend = danmakuSend,
         onSendDanmaku = vm::sendDanmaku,
         onDanmakuSendConsumed = vm::clearDanmakuSend,
-        fastForwardSpeed = playerPrefs.fastForwardSpeed,
+        doubleTapSeek = playerPrefs.doubleTapSeek,
     )
 }
 

@@ -88,7 +88,6 @@ import dev.bilby.player.VideoDimensions
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.resources.*
 import dev.bilby.stringResource
-import dev.bilby.data.SettingsStore
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.rememberLoadingVisible
@@ -104,11 +103,13 @@ import kotlin.math.roundToInt
  * 而手势层本身(方向锁定、浮层、长按快进)两边一模一样,没有理由各写一份。
  */
 data class PlayerGestureOptions(
-    /** 横划改进度、双击 ±10 秒。关掉之后横划与两侧双击都不响应。 */
+    /** 是否允许跳转进度;直播关闭。 */
     val seek: Boolean = true,
+    /** 两侧双击 ±10 秒。关闭后整屏双击播放/暂停,不影响横划进度。 */
+    val doubleTapSeek: Boolean = true,
     /** 左半屏纵划调亮度、右半屏调音量。 */
     val brightnessAndVolume: Boolean = true,
-    /** 长按临时加速。 */
+    /** 长按选择临时倍速。 */
     val fastForward: Boolean = true,
 )
 
@@ -141,8 +142,6 @@ class PlayerShellScope internal constructor(
 
     fun togglePlayPause() = actions.togglePlayPause()
 
-    fun setSpeed(value: Float) = actions.setSpeed(value)
-
     /** 进度条按下:先暂停,松手时按 [onSeekFinished] 决定要不要恢复。 */
     fun onSeekStart() = actions.seekStart()
 
@@ -158,7 +157,6 @@ internal class PlayerShellActions(
     val keepAwake: () -> Unit,
     val setMenuOpen: (Boolean) -> Unit,
     val togglePlayPause: () -> Unit,
-    val setSpeed: (Float) -> Unit,
     val seekStart: () -> Unit,
     val seekTo: (Long) -> Unit,
     val seekFinished: () -> Unit,
@@ -221,8 +219,7 @@ fun PlayerShell(
     externalLoading: Boolean = false,
     modifier: Modifier = Modifier,
     gestures: PlayerGestureOptions = PlayerGestureOptions(),
-    /** 长按画面时的临时倍速,由设置页给(`SettingsStore.FAST_FORWARD_SPEEDS`)。 */
-    fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
+    speedController: PlaybackSpeedController? = null,
     /** 全屏顶栏右端的东西。只在全屏、控件可见且未锁定时组合(顶栏本身就这样)。 */
     topBarActions: @Composable RowScope.() -> Unit = {},
     /**
@@ -346,8 +343,7 @@ fun PlayerShell(
     var dragPosition by remember { mutableStateOf<Long?>(null) }
     var resumeAfterDrag by remember { mutableStateOf(false) }
 
-    var userSpeed by remember { mutableFloatStateOf(1f) }
-    var isFastForwarding by remember { mutableStateOf(false) }
+    val userSpeed = speedController?.speed ?: player.playbackSpeed
 
     var controlsVisible by remember { mutableStateOf(true) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -434,6 +430,16 @@ fun PlayerShell(
     }
 
     val focusRequester = remember { FocusRequester() }
+    var speedWasActive by remember { mutableStateOf(false) }
+    LaunchedEffect(speedController?.active) {
+        if (speedController?.active == true) {
+            controlsVisible = false
+            speedWasActive = true
+        } else if (speedWasActive) {
+            focusRequester.requestFocus()
+            speedWasActive = false
+        }
+    }
 
     /** 定下这一次拖拽在做什么。返回 null 表示这次不做事(这一档手势被关掉)。 */
     val startGesture: (Boolean, Long) -> PlayerGesture? = start@{ horizontal, playerPosition ->
@@ -515,11 +521,6 @@ fun PlayerShell(
         keepAwake = { interactionNonce += 1 },
         setMenuOpen = { menuOpen = it },
         togglePlayPause = togglePlayPause,
-        setSpeed = {
-            userSpeed = it
-            if (!isFastForwarding) player.setPlaybackSpeed(it)
-            interactionNonce++
-        },
         seekStart = {
             resumeAfterDrag = player.isPlaying
             player.pause()
@@ -554,11 +555,11 @@ fun PlayerShell(
             // 光标离开播放器就立即收起,不等计时:两栏布局里光标移去右栏读评论时,控件没有理由
             // 在画面上再挂 3 秒。暂停时照旧常驻,理由同自动隐藏。菜单开着时不收:菜单是弹出层,
             // 光标移进菜单对这个 Box 来说也是一次离开。
-            .pointerInput(locked) {
+            .pointerInput(locked, speedController) {
                 awaitPointerEventScope {
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
-                        if (locked || event.changes.firstOrNull()?.type != PointerType.Mouse) continue
+                        if (locked || speedController?.active == true || event.changes.firstOrNull()?.type != PointerType.Mouse) continue
                         when (event.type) {
                             PointerEventType.Move -> {
                                 controlsVisible = true
@@ -687,7 +688,7 @@ fun PlayerShell(
                     }
                 }
                 // 用鼠标看、控件收起且在播放时,光标跟着藏起来,不留一个箭头钉在画面上。
-                .playerCursor(hidden = !pointerSource.isTouchLike && !controlsVisible && isPlaying)
+                .playerCursor(hidden = !pointerSource.isTouchLike && !controlsVisible && isPlaying && speedController?.active != true)
                 .pointerInput(player, locked, gestures, pipWindow) {
                     if (locked) {
                         // 锁上时只留"点一下把解锁按钮唤出来",其余手势一概不接。
@@ -722,11 +723,11 @@ fun PlayerShell(
                             }
                             val quarter = size.width / 4f
                             when {
-                                gestures.seek && offset.x < quarter ->
+                                gestures.seek && gestures.doubleTapSeek && offset.x < quarter ->
                                     nudgeSeek(player, -DOUBLE_TAP_SEEK_MILLIS)
                                         .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, -DOUBLE_TAP_SEEK_MILLIS) }
 
-                                gestures.seek && offset.x > size.width - quarter ->
+                                gestures.seek && gestures.doubleTapSeek && offset.x > size.width - quarter ->
                                     nudgeSeek(player, DOUBLE_TAP_SEEK_MILLIS)
                                         .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, DOUBLE_TAP_SEEK_MILLIS) }
 
@@ -736,23 +737,6 @@ fun PlayerShell(
                                 }
                             }
                             interactionNonce++
-                        },
-                        onLongPress = {
-                            if (!gestures.fastForward) return@detectTapGestures
-                            isFastForwarding = true
-                            player.setPlaybackSpeed(fastForwardSpeed)
-                            // 长按到底了没有,光看画面分不出来:2x 的画面和 1x 的画面在最初那
-                            // 半秒里差不多。系统长按本来就带这一下,这个手势没有理由例外。
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        },
-                        onPress = {
-                            tryAwaitRelease()
-                            if (isFastForwarding) {
-                                isFastForwarding = false
-                                // 恢复到用户选的倍速而不是 1.0:用户可能本来就在 1.5x 看,
-                                // 长按只是临时叠加,松手不该把他的设置抹掉。
-                                player.setPlaybackSpeed(userSpeed)
-                            }
                         },
                     )
                 }
@@ -862,7 +846,17 @@ fun PlayerShell(
                         dragPosition = null
                         seekCancelArmed = null
                     }
-                },
+                }
+                .speedSelectionLongPress(
+                    speedController,
+                    enabled = gestures.fastForward && !locked && !pip,
+                    onStart = {
+                        controlsVisible = false
+                        gesture = null
+                        dragPosition = null
+                        interactionNonce++
+                    },
+                ),
         )
 
         // 顶部渐变在 overlay **之前**,于是弹幕落在它上面而不是底下。托的是页面画在壳外面的
@@ -885,7 +879,7 @@ fun PlayerShell(
         scope.overlay()
 
         // 手势反馈分三处,按手势发生在哪儿摆(见 [PlayerHud] 的说明):连续调整在正中、
-        // 双击在落点那一侧、长按加速在顶上。
+        // 双击在落点那一侧;倍速提示由页面的贴边选档覆盖层显示。
         //
         // 正中那一处的优先级按"哪个正在发生"排:拖拽中的进退最要紧,它还要显示能不能取消。
         val currentGesture = gesture
@@ -953,19 +947,6 @@ fun PlayerShell(
                 .fillMaxWidth(DoubleTapArcFraction),
         ) {
             DoubleTapSeekHint(shownNudge)
-        }
-
-        // 长按加速:顶上居中,从上沿滑进来 —— 它贴着哪条边就从哪条边进(transitions 页)。
-        AnimatedVisibility(
-            visible = isFastForwarding,
-            enter = slideInVertically(spatialOffsetSpec) { -it } + fadeIn(effectsSpec),
-            exit = slideOutVertically(spatialOffsetSpec) { -it } + fadeOut(effectsSpec),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .windowInsetsPadding(WindowInsets.barsAndCutout)
-                .padding(top = Spacing.Comfortable),
-        ) {
-            SpeedBoostCapsule(stringResource(Res.string.player_fast_forwarding, formatSpeed(fastForwardSpeed)))
         }
 
         // 全屏顶栏。全屏下没有别的东西说明"在看什么"和"怎么退出":系统栏是隐藏的,
@@ -1227,7 +1208,7 @@ private const val POSITION_POLL_IDLE_MILLIS = 500L
 internal val ControlScrimBottom = Color(0xB3000000)
 
 internal fun formatSpeed(speed: Float): String =
-    if (speed % 1f == 0f) "${speed.toInt()}x" else "${speed}x"
+    "${speedNumber((speed * 100).roundToInt())}x"
 
 /**
  * 手指在不在"松手取消"的角上。左上和右上各取宽高的 15%。

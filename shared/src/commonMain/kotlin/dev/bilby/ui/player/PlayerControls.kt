@@ -395,11 +395,10 @@ internal fun DoubleTapSeekHint(deltaMillis: Long, modifier: Modifier = Modifier)
 }
 
 /**
- * 长按加速:顶上居中一枚胶囊。**不占正中**:加速时人在看画面走得快不快,正中一个框正好挡在
- * 视线上;而"现在是 3x"这件事只要余光扫得到。
+ * 倍速选择的操作提示与锁定回执。贴在画面上方,给选择器让出画面底部和左侧。
  */
 @Composable
-internal fun SpeedBoostCapsule(text: String, modifier: Modifier = Modifier) {
+internal fun SpeedBoostCapsule(text: String, modifier: Modifier = Modifier, icon: ImageVector = Icons.Filled.FastForward) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
@@ -409,7 +408,7 @@ internal fun SpeedBoostCapsule(text: String, modifier: Modifier = Modifier) {
             .padding(horizontal = Spacing.Cozy, vertical = Spacing.Hair + Spacing.Hair / 2),
     ) {
         Icon(
-            Icons.Filled.FastForward,
+            icon,
             contentDescription = null,
             tint = FixedColors.OnMedia,
             modifier = Modifier.size(Dimens.IconInline),

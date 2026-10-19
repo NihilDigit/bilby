@@ -417,6 +417,7 @@ fun ListenScreen(
     onSleepTimerAdjust: (Int) -> Unit,
     /** 倍速面板里的音质一段,见 [PlayerSettingsContent]。 */
     onAudioQualityChange: (Int) -> Unit = {},
+    onOpenSpeed: () -> Unit,
     /** 手动重试当前这条。退避耗尽之后由用户决定是再试还是按下一条跳过。 */
     onRetry: () -> Unit,
     onBack: () -> Unit,
@@ -719,7 +720,7 @@ fun ListenScreen(
                     onPlayPause = { if (player.isPlaying) player.pause() else player.playOrReplay(playback) },
                     onPrevious = onPrevious,
                     onNext = onNext,
-                    onSpeedChange = { player.setPlaybackSpeed(it) },
+                    onOpenSpeed = onOpenSpeed,
                     onOpenSleepTimer = { sleepSheetOpen = true },
                     audioOptions = state.playInfo?.streams?.audioOptions.orEmpty(),
                     currentAudio = state.playInfo?.streams?.audioId ?: 0,
@@ -1094,7 +1095,7 @@ private fun PlaybackControls(
     onPlayPause: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
-    onSpeedChange: (Float) -> Unit,
+    onOpenSpeed: () -> Unit,
     onOpenSleepTimer: () -> Unit,
     modifier: Modifier = Modifier,
     audioOptions: List<Int> = emptyList(),
@@ -1126,7 +1127,10 @@ private fun PlaybackControls(
             PaneSheet(onDismissRequest = { speedSheetOpen = false }) {
                 PlayerSettingsContent(
                     speed = speed,
-                    onSpeedChange = onSpeedChange,
+                    onOpenSpeed = {
+                        speedSheetOpen = false
+                        onOpenSpeed()
+                    },
                     qualities = emptyList(),
                     currentQuality = 0,
                     onQualityChange = {},

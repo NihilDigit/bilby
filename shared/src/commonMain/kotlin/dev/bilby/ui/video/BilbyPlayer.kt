@@ -49,9 +49,11 @@ import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.player.ControlButton
 import dev.bilby.ui.player.FullscreenButton
 import dev.bilby.ui.player.InlineDanmakuBarMinWidth
-import dev.bilby.ui.player.playerControlBar
 import dev.bilby.ui.player.DanmakuButton
 import dev.bilby.ui.player.PlayerShell
+import dev.bilby.ui.player.PlaybackSpeedController
+import dev.bilby.ui.player.PlayerGestureOptions
+import dev.bilby.ui.player.playerControlBar
 import dev.bilby.ui.player.PlayerIconButton
 import dev.bilby.ui.player.PlayerSidePanel
 import dev.bilby.ui.components.rememberExpandedSheetState
@@ -62,7 +64,6 @@ import androidx.compose.foundation.layout.height
 import dev.bilby.ui.player.PlayerTooltip
 import dev.bilby.ui.player.formatSpeed
 import dev.bilby.data.QualityOption
-import dev.bilby.data.SettingsStore
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
 import dev.bilby.player.cueAt
@@ -151,8 +152,8 @@ fun BilbyPlayer(
     danmakuPrefs: DanmakuPrefs = DanmakuPrefs(),
     /** 控制条上的弹幕开关与设置面板里的弹幕各项都经它改。为 null 时面板里没有弹幕那一段。 */
     danmakuEditor: DanmakuPrefsEditor? = null,
-    /** 长按画面的临时倍速,来自设置页。 */
-    fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
+    doubleTapSeek: Boolean = true,
+    speedController: PlaybackSpeedController,
     /**
      * 控件锁。横屏看视频时手容易碰到画面,一碰就暂停或快进;锁上之后除了解锁按钮,所有手势
      * 与控件都不响应。状态提在 VideoScreen,因为返回键要按"先解锁、再退出全屏"的顺序处理它。
@@ -222,7 +223,8 @@ fun BilbyPlayer(
         topScrim = topScrim,
         externalLoading = externalLoading,
         modifier = modifier,
-        fastForwardSpeed = fastForwardSpeed,
+        speedController = speedController,
+        gestures = PlayerGestureOptions(doubleTapSeek = doubleTapSeek),
         topBarActions = topBarActions,
         embeddedTopActions = embeddedTopActions,
         pip = pip,
@@ -306,10 +308,13 @@ fun BilbyPlayer(
                 onSeekTo = { onSeekTo(it) },
                 onSeekFinished = { onSeekFinished() },
                 onOpenSettings = { section ->
-                    settingsOnly = section
-                    settingsOpen = true
-                    // 面板开着时控件不自动收:面板关了人还要回到控制条上。
-                    setMenuOpen(true)
+                    if (section == PlayerSettingsSection.Speed) {
+                        speedController.open()
+                    } else {
+                        settingsOnly = section
+                        settingsOpen = true
+                        setMenuOpen(true)
+                    }
                 },
                 onFullscreenToggle = { toggleFullscreen() },
                 danmakuEnabled = danmakuPrefs.enabled,
@@ -328,7 +333,11 @@ fun BilbyPlayer(
             val settings: @Composable () -> Unit = {
                 PlayerSettingsContent(
                     speed = speed,
-                    onSpeedChange = { setSpeed(it) },
+                    onOpenSpeed = {
+                        settingsOpen = false
+                        setMenuOpen(false)
+                        speedController.open()
+                    },
                     qualities = qualities,
                     currentQuality = currentQuality,
                     onQualityChange = onQualityChange,
@@ -358,7 +367,8 @@ fun BilbyPlayer(
  *   清晰度、字幕收进 ⚙ 打开的整块设置面板。内嵌画面只有两百来 dp 高,两行控制条加上顶上的
  *   返回键,中间就放不下播放键了。
  * - **宽**(全屏,或双栏里的内嵌画面,且宽度够):进度条独占一行,下面一行是读数和几枚写着
- *   当前档位的 chip(「1.5x」「1080P」),每一枚只开自己那一段;弹幕开关旁边的 ⚙ 只开弹幕那一段。
+ *   当前档位的 chip(「1.5x」「1080P」),倍速打开贴边选择器,其余各开面板中对应的一段;
+ *   弹幕开关旁边的 ⚙ 只开弹幕那一段。
  *   不只看宽度:单栏横屏的内嵌画面也有四五百 dp 宽,高度却放不下两行。
  *
  * 原先是一行按钮加一套"量一遍装不装得下、装不下就给不给档名、再装不下就分两行"的估算,
@@ -562,8 +572,7 @@ private fun TimeLabel(
 }
 
 /**
- * 宽排法里那几枚写着当前档位的 chip,用来快速换档。**每一枚只打开设置面板里自己那一段**
- * (见 [PlayerSettingsSection])。
+ * 宽排法里那几枚写着当前档位的 chip。倍速交给贴边选择器,其余打开设置面板里的对应段。
  * 没有字幕轨时那一枚不画,字幕关着时只画图标(写「关闭」读起来像按下去会关掉)。
  * 音质只有一条音轨时不画,同清晰度。
  */
@@ -621,4 +630,3 @@ private fun SettingChips(
 }
 
 private val ChipIconSize = 18.dp
-

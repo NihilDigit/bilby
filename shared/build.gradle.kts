@@ -128,6 +128,14 @@ kotlin {
         // 初始化即失败;测试另取捆全平台原生库的那一份,类与版本相同。
         getByName("desktopTest").dependencies {
             runtimeOnly(libs.zstd.jni)
+            val testOs = when {
+                System.getProperty("os.name").startsWith("Windows") -> "windows"
+                System.getProperty("os.name").startsWith("Mac") -> "macos"
+                else -> "linux"
+            }
+            val testArch = if (System.getProperty("os.arch") in listOf("aarch64", "arm64")) "arm64" else "x64"
+            // 手势回归通过离屏 Compose 场景发送真实指针事件,运行库版本与应用保持一致。
+            runtimeOnly("org.jetbrains.compose.desktop:desktop-jvm-$testOs-$testArch:${libs.versions.composeMultiplatform.get()}")
         }
     }
 }

@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.ExperimentalMaterial3Api
 import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.components.BilbyIcons
@@ -48,16 +50,15 @@ import dev.bilby.player.SubtitleTrack
 import dev.bilby.player.audioQualityLabel
 import dev.bilby.resources.*
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.player.formatSpeed
 import dev.nihildigit.danmaku.DanmakuDensity
 import dev.nihildigit.danmaku.DanmakuFrameRateCap
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/** 倍速的几档。和长按加速不是一回事:那个在设置页里定,是临时叠上去的。 */
-internal val SpeedOptions = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
-
 /**
- * 播放设置:倍速、清晰度、音质、字幕、弹幕,竖排。内嵌时装在底部 sheet 里,全屏时装在右侧
+ * 播放设置:倍速入口、清晰度、音质、字幕、弹幕,竖排。内嵌时装在底部 sheet 里,全屏时装在右侧
  * 面板里(见 BilbyPlayer),内容是同一份。全屏控制条上的 chip 打开同一块面板里的一段,
  * 见 [PlayerSettingsSection]。
  *
@@ -65,15 +66,14 @@ internal val SpeedOptions = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
  * 全屏画面上一块白底长列表,横屏时十来档清晰度纵向拉出去半屏;而三者本来就是"这个播放器
  * 现在怎么放"的同一组设置。
  *
- * **单选一律用 M3E 的 toggle button,不用 radio 列表。** 倍速六档等宽,排成一条 connected
- * 组;清晰度与字幕的档名长短不一、条数不定,排成可换行的一片。选中即生效、面板不关:调清晰度
- * 或字幕时人要看着画面确认效果。
+ * 清晰度与字幕的档名长短不一、条数不定,以 toggle button 排成可换行的一片。
+ * 选中即生效、面板不关;倍速入口则关闭面板,打开页面上的贴边选择器。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun PlayerSettingsContent(
     speed: Float,
-    onSpeedChange: (Float) -> Unit,
+    onOpenSpeed: () -> Unit,
     qualities: List<QualityOption>,
     currentQuality: Int,
     onQualityChange: (Int) -> Unit,
@@ -95,24 +95,14 @@ internal fun PlayerSettingsContent(
     val columns = if (only == null) GridColumns else 1
     PanelColumn(modifier) {
         if (only == null || only == PlayerSettingsSection.Speed) {
-            if (titled) SectionTitle(stringResource(Res.string.player_speed))
-            // **只写数字,不带「x」。** 段标题已经写着「倍速」,每格再挂一个 x 是六遍同一个单位,
-            // 还正好是「0.75x」放不下、被切掉的那一截。
-            if (only == null) {
-                ConnectedChoices(
-                    options = SpeedOptions,
-                    selected = { it == speed },
-                    onSelect = onSpeedChange,
-                    label = ::formatSpeedNumber,
-                )
-            } else {
-                ChoiceGrid(
-                    options = SpeedOptions,
-                    selected = { it == speed },
-                    onSelect = onSpeedChange,
-                    label = ::formatSpeedNumber,
-                    columns = 1,
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = Dimens.MinTouchTarget)
+                    .clickable(role = Role.Button, onClick = onOpenSpeed),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(stringResource(Res.string.player_speed), style = MaterialTheme.typography.titleSmall)
+                Text(formatSpeed(speed), style = MaterialTheme.typography.labelLarge)
             }
         }
 
@@ -440,10 +430,6 @@ private const val OpacitySteps = 8
 /** 50% 到 200%,10% 一档:两端之间 14 个刻度。 */
 private val FontScaleRange = SettingsStore.DANMAKU_FONT_SCALE_MIN..SettingsStore.DANMAKU_FONT_SCALE_MAX
 private const val FontScaleSteps = 14
-
-/** 倍速的数字部分:"0.75"、"1"、"2",不带单位,见倍速那一段。 */
-private fun formatSpeedNumber(speed: Float): String =
-    if (speed % 1f == 0f) speed.toInt().toString() else speed.toString()
 
 /**
  * 等宽的单选网格,整块面板里两列,单开一段时一列。**等宽而不是按字长排开**:档名长短差得多

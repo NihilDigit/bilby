@@ -389,7 +389,13 @@
     <string name="player_unlock">解锁</string>
     <string name="player_fullscreen">全屏</string>
     <string name="player_exit_fullscreen">退出全屏</string>
-    <string name="player_fast_forwarding">%1$s 快进中</string>
+    <string name="player_speed_coarse_horizontal">上滑精调　下滑锁定</string>
+    <string name="player_speed_coarse_vertical">右滑精调　左滑锁定</string>
+    <string name="player_speed_release_to_lock">松手锁定</string>
+    <string name="player_speed_locked">已锁定 %1$s</string>
+    <string name="player_speed_fine_action">进入精调</string>
+    <string name="player_speed_coarse_action">返回粗调</string>
+    <string name="player_speed_lock_action">锁定当前倍速</string>
 
     <!-- 播放器手势的浮层。百分比与秒数都由手势实时填。 -->
     <string name="player_brightness">亮度 %1$d%%</string>
@@ -664,8 +670,8 @@
     <string name="video_quality_dolby_vision">杜比视界</string>
     <string name="video_quality_unknown">画质 %1$d</string>
     <string name="comment_ip_location">IP属地：%1$s</string>
-    <string name="settings_fast_forward_speed">长按加速</string>
-    <string name="settings_fast_forward_speed_subtitle">长按画面期间的临时倍速,松手后恢复</string>
+    <string name="settings_double_tap_seek">双击快进/快退</string>
+    <string name="settings_double_tap_seek_subtitle">关闭后，双击画面任意位置播放或暂停</string>
     <string name="settings_auto_next">自动播放下一条</string>
     <string name="settings_auto_next_subtitle">一条播完后接着放队列里的下一条。关闭后播完即停,手动切换不受影响</string>
     <string name="player_seek_release_to_cancel">松手取消进退</string>
