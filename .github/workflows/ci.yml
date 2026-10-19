@@ -44,10 +44,16 @@ jobs:
       # 停在 v5 的理由见 release.yml。
       - uses: gradle/actions/setup-gradle@v5
 
+      # 离屏手势测试也会初始化播放器的 AWT 光标,需要可用的图形显示。
+      - name: Install virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth
+
       # 单测都在 :shared。Android 目标的宿主测试(含 Robolectric)与桌面 JVM 测试各跑一遍,
       # 公共代码的用例两边都会执行。:app 只是打包入口,没有单测。
       - name: Test
-        run: ./gradlew :shared:testAndroidHostTest :shared:desktopTest
+        run: xvfb-run --auto-servernum ./gradlew :shared:testAndroidHostTest :shared:desktopTest
 
       # 失败时要能看到是哪个用例、断言差在哪,光看日志行不够。
       - name: Upload test report
