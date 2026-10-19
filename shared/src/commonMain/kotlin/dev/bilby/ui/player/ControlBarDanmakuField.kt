@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.dp
 import dev.bilby.resources.Res
 import dev.bilby.resources.action_send
 import dev.bilby.resources.danmaku_input_hint
@@ -43,6 +44,9 @@ import dev.bilby.stringResource
 import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+
+/** 控制条能同时容纳弹幕输入框和设置按钮的最小宽度。 */
+internal val InlineDanmakuBarMinWidth = 720.dp
 
 /** 控制条里发弹幕要的全部状态,见 [ControlBarDanmakuField]。 */
 class ControlBarDanmaku(

@@ -368,6 +368,7 @@ fun PlayerShell(
 
     /** 正在进行的手势;横划与纵划在第一段位移里定死,见下面的 onDrag。 */
     var gesture by remember { mutableStateOf<PlayerGesture?>(null) }
+    var dragging by remember { mutableStateOf(false) }
     var dragStartX by remember { mutableFloatStateOf(0f) }
 
     /** 纵划时浮层要显示的百分比。 */
@@ -419,7 +420,7 @@ fun PlayerShell(
         if (levelHintNonce == 0) return@LaunchedEffect
         delay(HINT_VISIBLE_MILLIS)
         // 这段时间里开始了拖拽的话,浮层归拖拽管,不在这里收。
-        if (dragPosition == null && (gesture as? PlayerGesture.Adjust)?.kind == VerticalAdjust.Volume) gesture = null
+        if (!dragging && (gesture as? PlayerGesture.Adjust)?.kind == VerticalAdjust.Volume) gesture = null
     }
 
     /** 音量加减一档:滚轮一格、方向键一下都是这一步,浮层用纵划那一个。 */
@@ -757,7 +758,7 @@ fun PlayerShell(
                 }
                 // 拖拽单独一个 pointerInput:和上面的点按检测并列而不是塞进同一个块。
                 // 两者天然互斥 —— 位移超过 touch slop 之后点按检测就不会触发了。
-                .pointerInput(player, locked, duration, gestures, pipWindow) {
+                .pointerInput(player, locked, gestures, pipWindow) {
                     if (locked) return@pointerInput
                     // 小窗没有标题栏,拖画面就是拖窗口;小窗里也用不着横划 seek,底下有进度条。
                     if (pipWindow != null) {
@@ -767,84 +768,99 @@ fun PlayerShell(
                         }
                         return@pointerInput
                     }
-                    val width = size.width.toFloat().coerceAtLeast(1f)
-                    val height = size.height.toFloat().coerceAtLeast(1f)
                     var accumulated = Offset.Zero
 
-                    detectDragGestures(
-                        onDragStart = { start ->
-                            accumulated = Offset.Zero
-                            dragStartX = start.x / width
-                            // **起手就在取消区里的话,这次拖拽不给取消。** 顶部两角本来就是
-                            // 横屏握持时拇指容易搭上去的地方;不排除的话,从那儿起手的 seek
-                            // 一动就被判成"要取消",而用户根本没往哪儿拖。
-                            seekCancelArmed =
-                                if (inSeekCancelZone(start, width, height)) null else false
-                        },
-                        onDragEnd = {
-                            // 拖拽期间只动本地位置,松手才真 seek:每帧 seek 会让播放器不停丢
-                            // 缓冲重新起播,表现为拖不动。和进度条的处理是同一套。
-                            if (gesture is PlayerGesture.Seek && seekCancelArmed != true) {
-                                dragPosition?.let { target ->
-                                    player.seekTo(target)
-                                    position = target
+                    // 直播时间线会持续更新时长,不能用它重启拖拽监听;时长在 onDrag 里现读。
+                    // 监听因锁定或离开页面被取消时也要清理浮层,此时不保证调用 onDragCancel。
+                    try {
+                        detectDragGestures(
+                            onDragStart = { start ->
+                                dragging = true
+                                gesture = null
+                                val width = size.width.toFloat().coerceAtLeast(1f)
+                                val height = size.height.toFloat().coerceAtLeast(1f)
+                                accumulated = Offset.Zero
+                                dragStartX = start.x / width
+                                // **起手就在取消区里的话,这次拖拽不给取消。** 顶部两角本来就是
+                                // 横屏握持时拇指容易搭上去的地方;不排除的话,从那儿起手的 seek
+                                // 一动就被判成"要取消",而用户根本没往哪儿拖。
+                                seekCancelArmed =
+                                    if (inSeekCancelZone(start, width, height)) null else false
+                            },
+                            onDragEnd = {
+                                dragging = false
+                                // 拖拽期间只动本地位置,松手才真 seek:每帧 seek 会让播放器不停丢
+                                // 缓冲重新起播,表现为拖不动。和进度条的处理是同一套。
+                                if (gesture is PlayerGesture.Seek && seekCancelArmed != true) {
+                                    dragPosition?.let { target ->
+                                        player.seekTo(target)
+                                        position = target
+                                    }
+                                }
+                                gesture = null
+                                dragPosition = null
+                                seekCancelArmed = null
+                                interactionNonce++
+                            },
+                            onDragCancel = {
+                                dragging = false
+                                gesture = null
+                                dragPosition = null
+                                seekCancelArmed = null
+                            },
+                        ) { change, delta ->
+                            val width = size.width.toFloat().coerceAtLeast(1f)
+                            val height = size.height.toFloat().coerceAtLeast(1f)
+                            change.consume()
+                            accumulated += delta
+                            if (seekCancelArmed != null) {
+                                val inZone = inSeekCancelZone(change.position, width, height)
+                                // 进区的那一下给触感,出区不给:取消区没有边框,手指还压在画面上,
+                                // 浮层上那行字改成"松手取消"是唯一的提示,而手指正挡在它附近。
+                                // 只报"越过了门槛"这一次,所以判的是 false → true 那一次跳变。
+                                if (inZone && seekCancelArmed == false) {
+                                    haptics.performHapticFeedback(
+                                        HapticFeedbackType.GestureThresholdActivate,
+                                    )
+                                }
+                                seekCancelArmed = inZone
+                            }
+
+                            // 方向在第一段位移里定下,之后不再改判:不锁轴的话,横划途中手指
+                            // 稍微飘一点就会跳去改音量。
+                            val current = gesture ?: startGesture(
+                                abs(accumulated.x) >= abs(accumulated.y),
+                                player.currentPosition,
+                            )?.also { gesture = it } ?: return@detectDragGestures
+
+                            when (current) {
+                                is PlayerGesture.Seek -> {
+                                    // 整屏宽对应多长:按时长的四分之一取,夹在 1 到 5 分钟之间。
+                                    // 定长(比如恒定 2 分钟)在长视频里要划很多次;按整段时长又会让
+                                    // 长视频一格几十秒,微调不了。
+                                    val span = (duration / 4).coerceIn(60_000L, 300_000L)
+                                    val target = current.startPositionMillis +
+                                        (accumulated.x / width * span).toLong()
+                                    dragPosition = target.coerceIn(0L, duration.coerceAtLeast(0L))
+                                }
+
+                                is PlayerGesture.Adjust -> {
+                                    // 向上是变大,所以减去 y 的位移(屏幕坐标向下为正)。
+                                    val value = (current.startValue - accumulated.y / height)
+                                        .coerceIn(0f, 1f)
+                                    adjustValue = value
+                                    when (current.kind) {
+                                        VerticalAdjust.Brightness -> brightness?.set(value)
+                                        VerticalAdjust.Volume -> volume?.set(value)
+                                    }
                                 }
                             }
-                            gesture = null
-                            dragPosition = null
-                            seekCancelArmed = null
-                            interactionNonce++
-                        },
-                        onDragCancel = {
-                            gesture = null
-                            dragPosition = null
-                            seekCancelArmed = null
-                        },
-                    ) { change, delta ->
-                        change.consume()
-                        accumulated += delta
-                        if (seekCancelArmed != null) {
-                            val inZone = inSeekCancelZone(change.position, width, height)
-                            // 进区的那一下给触感,出区不给:取消区没有边框,手指还压在画面上,
-                            // 浮层上那行字改成"松手取消"是唯一的提示,而手指正挡在它附近。
-                            // 只报"越过了门槛"这一次,所以判的是 false → true 那一次跳变。
-                            if (inZone && seekCancelArmed == false) {
-                                haptics.performHapticFeedback(
-                                    HapticFeedbackType.GestureThresholdActivate,
-                                )
-                            }
-                            seekCancelArmed = inZone
                         }
-
-                        // 方向在第一段位移里定下,之后不再改判:不锁轴的话,横划途中手指
-                        // 稍微飘一点就会跳去改音量。
-                        val current = gesture ?: startGesture(
-                            abs(accumulated.x) >= abs(accumulated.y),
-                            player.currentPosition,
-                        )?.also { gesture = it } ?: return@detectDragGestures
-
-                        when (current) {
-                            is PlayerGesture.Seek -> {
-                                // 整屏宽对应多长:按时长的四分之一取,夹在 1 到 5 分钟之间。
-                                // 定长(比如恒定 2 分钟)在长视频里要划很多次;按整段时长又会让
-                                // 长视频一格几十秒,微调不了。
-                                val span = (duration / 4).coerceIn(60_000L, 300_000L)
-                                val target = current.startPositionMillis +
-                                    (accumulated.x / width * span).toLong()
-                                dragPosition = target.coerceIn(0L, duration.coerceAtLeast(0L))
-                            }
-
-                            is PlayerGesture.Adjust -> {
-                                // 向上是变大,所以减去 y 的位移(屏幕坐标向下为正)。
-                                val value = (current.startValue - accumulated.y / height)
-                                    .coerceIn(0f, 1f)
-                                adjustValue = value
-                                when (current.kind) {
-                                    VerticalAdjust.Brightness -> brightness?.set(value)
-                                    VerticalAdjust.Volume -> volume?.set(value)
-                                }
-                            }
-                        }
+                    } finally {
+                        dragging = false
+                        gesture = null
+                        dragPosition = null
+                        seekCancelArmed = null
                     }
                 },
         )

@@ -4,6 +4,7 @@ import dev.bilby.ui.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -47,12 +48,11 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.DropdownMenuItem
@@ -153,6 +153,9 @@ import dev.bilby.ui.player.PlayerDanmakuLayer
 import dev.bilby.ui.player.PlayerGestureOptions
 import dev.bilby.ui.player.PlayerShell
 import dev.bilby.ui.player.PlayerIconButton
+import dev.bilby.ui.player.FullscreenButton
+import dev.bilby.ui.player.InlineDanmakuBarMinWidth
+import dev.bilby.ui.player.playerControlBar
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
@@ -272,6 +275,7 @@ fun LiveRoomScreen(
                     hideStatusBar = expandedLayout,
                     // 同播放页:渐变归壳画,弹幕才落在它上面。
                     topScrim = !fullscreen,
+                    externalLoading = reloadingStream && playbackError == null,
                     // 直播既不能 seek 也不能快进:前者那条时间轴上没有往回拖这回事,后者会把
                     // 倍速设成 3x —— 在一条一直往前走的流上,那只是冲到最前沿然后卡住等数据。
                     // 亮度和音量照旧,它们跟内容是什么无关。
@@ -620,75 +624,92 @@ private fun LiveControlBar(
     pip: Boolean = false,
 ) {
     // 播放键不在这里:画面正中那颗(PlayerShell 的 CenterPlayButton)是视频和直播共用的。
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Tight),
-    ) {
-        // 取流中把图标换成转圈,而不是把图标置灰:置灰压在任意画面上要么看不出来,要么和
-        // "这个功能不可用"撞在一起。发弹幕那个按钮是同一个做法。
-        if (reloading) {
-            IconButton(onClick = {}, enabled = false) {
-                LoadingSpinner(color = MaterialTheme.colorScheme.onSurface)
-            }
-        } else {
-            PlayerIconButton(
-                onClick = onReload,
-                icon = Icons.Filled.Refresh,
-                contentDescription = stringResource(Res.string.live_refresh),
-            )
-        }
-        // 拿不到就留白,不写"0 人看过" —— 那是个具体而错误的数字。宽度照占,不然弹幕按钮
-        // 会在这一句到货的那一刻横着跳一下。
-        Text(
-            text = watched,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier
-                .then(if (danmakuField == null || pip) Modifier.weight(1f) else Modifier)
-                .padding(start = Spacing.Tight),
-        )
-        if (pip) return@Row
-        if (danmakuField != null) {
-            ControlBarDanmakuField(
-                draft = danmakuField.draft,
-                onDraftChange = danmakuField.onDraftChange,
-                maxLength = danmakuField.maxLength,
-                sending = danmakuField.sending,
-                error = danmakuField.error,
-                onSend = danmakuField.onSend,
-                onFocusChange = onDanmakuFieldFocusChange,
-                modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
-            )
-        }
-        // 排法同播放页:单栏内嵌只有 ⚙ 和全屏键,弹幕开关在底部发言栏的左端;大画面时弹幕开关、
-        // 快速换画质的 chip 和只管弹幕的 ⚙ 上到这里。
-        if (largePlayer && qualityLabel != null) {
-            val description = stringResource(Res.string.player_quality)
-            PlayerTooltip(description) {
-                ControlButton(
-                    expanded = false,
-                    onClick = { onOpenSettings(PlayerSettingsSection.Quality) },
-                    label = qualityLabel,
-                    icon = { tint ->
-                        Icon(Icons.Filled.HighQuality, description, tint = tint, modifier = Modifier.size(18.dp))
-                    },
+    BoxWithConstraints(Modifier.playerControlBar(isFullscreen)) {
+        val wide = largePlayer && maxWidth >= Breakpoints.StackedControlBar
+        val roomy = maxWidth >= InlineDanmakuBarMinWidth
+        var composing by remember { mutableStateOf(false) }
+        val showField = !pip && danmakuField != null && (roomy || composing)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            // 取流中把图标换成转圈,而不是把图标置灰:置灰压在任意画面上要么看不出来,要么和
+            // "这个功能不可用"撞在一起。发弹幕那个按钮是同一个做法。
+            if (reloading) {
+                IconButton(onClick = {}, enabled = false) {
+                    LoadingSpinner(color = MaterialTheme.colorScheme.onSurface)
+                }
+            } else {
+                PlayerIconButton(
+                    onClick = onReload,
+                    icon = Icons.Filled.Refresh,
+                    contentDescription = stringResource(Res.string.live_refresh),
                 )
             }
+            // 拿不到就留白,不写"0 人看过" —— 那是个具体而错误的数字。宽度照占,不然弹幕按钮
+            // 会在这一句到货的那一刻横着跳一下。
+            if (!composing || roomy || pip) Text(
+                text = watched,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .then(if (showField) Modifier.widthIn(max = Breakpoints.StackedControlBar / 3) else Modifier.weight(1f))
+                    .padding(start = Spacing.Tight),
+            )
+            if (pip) return@Row
+            if (showField) {
+                ControlBarDanmakuField(
+                    draft = danmakuField.draft,
+                    onDraftChange = danmakuField.onDraftChange,
+                    maxLength = danmakuField.maxLength,
+                    sending = danmakuField.sending,
+                    error = danmakuField.error,
+                    onSend = danmakuField.onSend,
+                    onFocusChange = { focused ->
+                        onDanmakuFieldFocusChange(focused)
+                        if (!focused) composing = false
+                    },
+                    autoFocus = !roomy,
+                    modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
+                )
+            }
+            // 排法同播放页:单栏内嵌只有 ⚙ 和全屏键,弹幕开关在底部发言栏的左端;大画面时弹幕开关、
+            // 快速换画质的 chip 和只管弹幕的 ⚙ 上到这里。
+            if (wide && (roomy || !composing) && qualityLabel != null) {
+                val description = stringResource(Res.string.player_quality)
+                PlayerTooltip(description) {
+                    ControlButton(
+                        expanded = false,
+                        onClick = { onOpenSettings(PlayerSettingsSection.Quality) },
+                        label = qualityLabel,
+                        icon = { tint ->
+                            Icon(Icons.Filled.HighQuality, description, tint = tint, modifier = Modifier.size(18.dp))
+                        },
+                    )
+                }
+            }
+            if (danmakuField != null && !showField) {
+                val description = stringResource(Res.string.danmaku_send)
+                PlayerTooltip(description) {
+                    PlayerIconButton(
+                        onClick = { composing = true },
+                        icon = Icons.Filled.Edit,
+                        contentDescription = description,
+                    )
+                }
+            }
+            if (roomy || !composing) LiveAudioOnlyButton(onlyAudio, onOnlyAudioChange, isFullscreen)
+            if (wide) {
+                DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+                DanmakuSettingsButton { onOpenSettings(PlayerSettingsSection.Danmaku) }
+            } else {
+                if (isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+                PlayerSettingsButton { onOpenSettings(null) }
+            }
+            FullscreenButton(isFullscreen, onFullscreenToggle)
         }
-        LiveAudioOnlyButton(onlyAudio, onOnlyAudioChange, isFullscreen)
-        if (largePlayer) {
-            DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-            DanmakuSettingsButton { onOpenSettings(PlayerSettingsSection.Danmaku) }
-        } else {
-            PlayerSettingsButton { onOpenSettings(null) }
-        }
-        PlayerIconButton(
-            onClick = onFullscreenToggle,
-            icon = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-            contentDescription = stringResource(
-                if (isFullscreen) Res.string.player_exit_fullscreen else Res.string.player_fullscreen,
-            ),
-        )
     }
 }
 

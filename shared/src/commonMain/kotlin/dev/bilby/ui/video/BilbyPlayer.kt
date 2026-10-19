@@ -18,8 +18,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Edit
@@ -40,7 +38,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.zIndex
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -50,7 +47,9 @@ import dev.bilby.stringResource
 import dev.bilby.formatDurationMillis
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.player.ControlButton
-import dev.bilby.ui.player.ControlScrimBottom
+import dev.bilby.ui.player.FullscreenButton
+import dev.bilby.ui.player.InlineDanmakuBarMinWidth
+import dev.bilby.ui.player.playerControlBar
 import dev.bilby.ui.player.DanmakuButton
 import dev.bilby.ui.player.PlayerShell
 import dev.bilby.ui.player.PlayerIconButton
@@ -399,25 +398,7 @@ private fun PlayerControlBar(
      */
     pip: Boolean = false,
 ) {
-    val safeInsets = WindowInsets.barsAndCutout
-    val container = Modifier
-        .fillMaxWidth()
-        // 渐变而不是一整条半透明黑。控件底下是画面本身,一条硬边的黑带会把画面横着切一刀。
-        // 按钮现在自带容器(见 PlayerControls 的 mediaControlContainer),渐变只需托住读数。
-        .background(
-            Brush.verticalGradient(
-                listOf(Color.Transparent, FixedColors.PlayerControlScrim, ControlScrimBottom),
-            ),
-        )
-        // 挖孔和手势条会切掉贴边的控件。**无条件躲**:横屏两栏下画面也是全出血的。竖排时页面
-        // 那一层已经躲过并消费掉了这份 inset,这里量到的是 0,不会重复叠加。
-        .windowInsetsPadding(safeInsets)
-        .padding(
-            start = if (isFullscreen) Spacing.Comfortable else Spacing.Tight,
-            end = if (isFullscreen) Spacing.Comfortable else Spacing.Tight,
-            top = Spacing.Comfortable,
-            bottom = Spacing.Tight,
-        )
+    val container = Modifier.playerControlBar(isFullscreen)
 
     val seekBar: @Composable (Modifier) -> Unit = { modifier ->
         SeekBar(
@@ -447,6 +428,7 @@ private fun PlayerControlBar(
     BoxWithConstraints(modifier = container) {
         val wide = largePlayer && !pip && maxWidth >= Breakpoints.StackedControlBar
         val roomy = maxWidth >= InlineDanmakuBarMinWidth
+        var composing by remember { mutableStateOf(false) }
         if (pip) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TimeLabel(position, modifier = Modifier.padding(start = Spacing.Tight))
@@ -455,9 +437,37 @@ private fun PlayerControlBar(
             }
         } else if (!wide) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TimeLabel(position, modifier = Modifier.padding(start = Spacing.Tight))
-                seekBar(Modifier.weight(1f))
-                TimeLabel(duration, secondary = true, modifier = Modifier.padding(end = Spacing.Hair))
+                if (composing && danmakuField != null) {
+                    ControlBarDanmakuField(
+                        draft = danmakuField.draft,
+                        onDraftChange = danmakuField.onDraftChange,
+                        maxLength = danmakuField.maxLength,
+                        sending = danmakuField.sending,
+                        error = danmakuField.error,
+                        onSend = danmakuField.onSend,
+                        onFocusChange = { focused ->
+                            onDanmakuFieldFocusChange(focused)
+                            danmakuField.onComposingChange(focused)
+                            if (!focused) composing = false
+                        },
+                        autoFocus = true,
+                        modifier = Modifier.weight(1f).padding(horizontal = Spacing.Tight),
+                    )
+                } else {
+                    TimeLabel(position, modifier = Modifier.padding(start = Spacing.Tight))
+                    seekBar(Modifier.weight(1f))
+                    TimeLabel(duration, secondary = true, modifier = Modifier.padding(end = Spacing.Hair))
+                    if (danmakuField != null) {
+                        val label = stringResource(Res.string.danmaku_send)
+                        PlayerTooltip(label) {
+                            PlayerIconButton(
+                                onClick = { composing = true },
+                                icon = Icons.Filled.Edit,
+                                contentDescription = label,
+                            )
+                        }
+                    }
+                }
                 // 全屏没有标签行,弹幕开关只能在这里;内嵌时它在标签行那枚胶囊里。
                 if (isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
                 PlayerSettingsButton { onOpenSettings(null) }
@@ -474,7 +484,6 @@ private fun PlayerControlBar(
                 seekBar(Modifier.fillMaxWidth().zIndex(1f))
                 // 弹幕输入框在读数与 chip 之间,同网页端。这一行放不下它和整排 chip 时,它收成一枚
                 // 「发弹幕」键,点开之后 chip 让位、输入框铺开,同窄屏胶囊写弹幕时视图切换退场。
-                var composing by remember { mutableStateOf(false) }
                 val showField = danmakuField != null && (roomy || composing)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Row(
@@ -612,25 +621,4 @@ private fun SettingChips(
 }
 
 private val ChipIconSize = 18.dp
-
-/**
- * 宽排法那一行常驻弹幕输入框所需的宽度:读数、四枚带档名的 chip、三颗图标键之外,输入框还剩
- * 两百来 dp。双栏最窄时左栏只有五百多 dp,够不着这一档,输入框收成一枚键。
- */
-private val InlineDanmakuBarMinWidth = 720.dp
-
-@Composable
-private fun FullscreenButton(isFullscreen: Boolean, onClick: () -> Unit) {
-    val description = stringResource(
-        if (isFullscreen) Res.string.player_exit_fullscreen else Res.string.player_fullscreen,
-    )
-    PlayerTooltip(description) {
-        PlayerIconButton(
-            onClick = onClick,
-            icon = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-            contentDescription = description,
-        )
-    }
-}
-
 

@@ -18,6 +18,8 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -70,6 +72,36 @@ import dev.bilby.ui.theme.rememberClockFont
  * 控制条上的通用件。**视频与直播共用** —— 它们长在同一个 [PlayerShell] 的控制条 slot 里,
  * 各写一份的话两条控制条会慢慢长得不一样,而用户看到的是同一个播放器。
  */
+
+@Composable
+internal fun Modifier.playerControlBar(isFullscreen: Boolean): Modifier =
+    fillMaxWidth()
+        .background(
+            Brush.verticalGradient(
+                listOf(Color.Transparent, FixedColors.PlayerControlScrim, ControlScrimBottom),
+            ),
+        )
+        .windowInsetsPadding(WindowInsets.barsAndCutout)
+        .padding(
+            start = if (isFullscreen) Spacing.Comfortable else Spacing.Tight,
+            end = if (isFullscreen) Spacing.Comfortable else Spacing.Tight,
+            top = Spacing.Comfortable,
+            bottom = Spacing.Tight,
+        )
+
+@Composable
+internal fun FullscreenButton(isFullscreen: Boolean, onClick: () -> Unit) {
+    val description = stringResource(
+        if (isFullscreen) Res.string.player_exit_fullscreen else Res.string.player_fullscreen,
+    )
+    PlayerTooltip(description) {
+        PlayerIconButton(
+            onClick = onClick,
+            icon = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+            contentDescription = description,
+        )
+    }
+}
 
 /**
  * 弹幕开关。开着时图标染主色,这是"当前状态"而不是"点了会怎样"。
