@@ -24,11 +24,13 @@ internal fun Modifier.speedSelectionLongPress(
     return pointerInput(controller, enabled, vertical) {
         if (controller == null || !enabled) return@pointerInput
         var owned = false
+        var dockEnd = false
         var displacement = Offset.Zero
         try {
             detectDragGesturesAfterLongPress(
-                onDragStart = {
-                    controller.open(temporary = true)
+                onDragStart = { startOffset ->
+                    dockEnd = vertical && startOffset.x < size.width / 2f
+                    controller.open(temporary = true, dockEnd = dockEnd)
                     owned = controller.beginDrag()
                     displacement = Offset.Zero
                     currentOnStart()
@@ -47,12 +49,22 @@ internal fun Modifier.speedSelectionLongPress(
                 if (!owned) return@detectDragGesturesAfterLongPress
                 displacement += amount
                 val before = controller.selection
+                val alongPos = if (vertical) change.position.y else change.position.x
+                val span = (if (vertical) size.height else size.width).toFloat()
+                val edgePx = SpeedEdgeZoneDp * density
+                val acrossPx = when {
+                    !vertical -> displacement.y
+                    dockEnd -> displacement.x
+                    else -> -displacement.x
+                }
                 controller.move(
                     alongDp = (if (vertical) displacement.y else displacement.x) / density,
-                    acrossDp = (if (vertical) -displacement.x else displacement.y) / density,
+                    acrossDp = acrossPx / density,
+                    atStartEdge = span > edgePx * 2f && alongPos <= edgePx,
+                    atEndEdge = span > edgePx * 2f && alongPos >= span - edgePx,
                 )
                 val after = controller.selection
-                if (after?.fine != before?.fine || after?.locked != before?.locked) {
+                if (after?.locked != before?.locked) {
                     haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
                 }
             }

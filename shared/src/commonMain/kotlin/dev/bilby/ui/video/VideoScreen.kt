@@ -654,42 +654,38 @@ fun VideoScreen(
         // 先接住返回、把 Sheet 收回把手,这句退听视频要按第二次才轮到。这个先后顺序是被依赖的。
         // 那是 BottomSheetScaffold,不像 ModalBottomSheet 自带返回处理,得自己注册。
         BackHandler { onListeningChange(false) }
-        Box(Modifier.fillMaxSize()) {
-            ListenScreen(
-                player = active,
-                state = audioState,
-                sleepTimer = sleepTimerState,
-                queue = shownQueue,
-                // 页面那个 `playing` 在下面才声明(它服务于画面钉住的判据),这里读服务的状态,
-                // 两者说的是同一件事。
-                playing = audioState.isPlaying,
-                onSelectEpisode = onSelectEpisode,
-                onRetryQueue = retryQueue,
-                onOpenQueueSource = onOpenQueueSource,
-                // 不带 MediaItem 的那一对:服务在这两条命令上先走分 P(QueuePlayer.handleSeek)。
-                onNext = { active?.seekToNext() },
-                onPrevious = { active?.seekToPrevious() },
-                onToggleShuffle = toggleShuffle,
-                onRetry = retryPlayback,
-                onSleepTimer = { mode -> active.send(PlaybackCommand.SetSleepTimer(mode)) },
-                onSleepTimerAdjust = { deltaMinutes -> active.send(PlaybackCommand.AdjustSleepTimer(deltaMinutes)) },
-                onAudioQualityChange = setAudioQuality,
-                onOpenSpeed = { speedController.open() },
-                // 退出听视频就是把这个壳关掉,**没有第二件事**。队列不动、播放不停、视频轨由上面
-                // 那个 LaunchedEffect 自己打开。页面此刻可能已经不是队列当前那一条了(听的时候
-                // 连播过去了),跟过去是 VideoRoute 的职责 —— 它盯着队列,不需要这里通知。
-                onBack = { onListeningChange(false) },
-                subtitleTracks = subtitleTracks,
-                subtitleLan = subtitleLan,
-                onSelectSubtitle = onSelectSubtitle,
-                subtitleCues = subtitleCues,
-                comments = { paneModifier -> commentsPane(paneModifier, true) },
-                // 听视频这一屏是普通页面(封面 + 控件),不是全出血的媒体,所以要像导航层那样
-                // 躲开横向挖孔 —— 播放页整个目的地被排除在 `CutoutSafe` 之外,这里没人替它做。
-                modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.horizontalCutout),
-            )
-            SpeedSelectionOverlay(speedController, dimDetails = true)
-        }
+        ListenScreen(
+            player = active,
+            state = audioState,
+            sleepTimer = sleepTimerState,
+            queue = shownQueue,
+            // 页面那个 `playing` 在下面才声明(它服务于画面钉住的判据),这里读服务的状态,
+            // 两者说的是同一件事。
+            playing = audioState.isPlaying,
+            onSelectEpisode = onSelectEpisode,
+            onRetryQueue = retryQueue,
+            onOpenQueueSource = onOpenQueueSource,
+            // 不带 MediaItem 的那一对:服务在这两条命令上先走分 P(QueuePlayer.handleSeek)。
+            onNext = { active.seekToNext() },
+            onPrevious = { active.seekToPrevious() },
+            onToggleShuffle = toggleShuffle,
+            onRetry = retryPlayback,
+            onSleepTimer = { mode -> active.send(PlaybackCommand.SetSleepTimer(mode)) },
+            onSleepTimerAdjust = { deltaMinutes -> active.send(PlaybackCommand.AdjustSleepTimer(deltaMinutes)) },
+            onAudioQualityChange = setAudioQuality,
+            // 退出听视频就是把这个壳关掉,**没有第二件事**。队列不动、播放不停、视频轨由上面
+            // 那个 LaunchedEffect 自己打开。页面此刻可能已经不是队列当前那一条了(听的时候
+            // 连播过去了),跟过去是 VideoRoute 的职责 —— 它盯着队列,不需要这里通知。
+            onBack = { onListeningChange(false) },
+            subtitleTracks = subtitleTracks,
+            subtitleLan = subtitleLan,
+            onSelectSubtitle = onSelectSubtitle,
+            subtitleCues = subtitleCues,
+            comments = { paneModifier -> commentsPane(paneModifier, true) },
+            // 听视频这一屏是普通页面(封面 + 控件),不是全出血的媒体,所以要像导航层那样
+            // 躲开横向挖孔 —— 播放页整个目的地被排除在 `CutoutSafe` 之外,这里没人替它做。
+            modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.horizontalCutout),
+        )
         return
     }
 

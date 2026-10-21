@@ -4,8 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.clickable
 import androidx.compose.material3.ExperimentalMaterial3Api
 import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.components.BilbyIcons
@@ -73,7 +71,7 @@ import kotlin.math.roundToInt
 @Composable
 internal fun PlayerSettingsContent(
     speed: Float,
-    onOpenSpeed: () -> Unit,
+    onSpeedChange: (Float) -> Unit,
     qualities: List<QualityOption>,
     currentQuality: Int,
     onQualityChange: (Int) -> Unit,
@@ -95,15 +93,7 @@ internal fun PlayerSettingsContent(
     val columns = if (only == null) GridColumns else 1
     PanelColumn(modifier) {
         if (only == null || only == PlayerSettingsSection.Speed) {
-            Row(
-                modifier = Modifier.fillMaxWidth().heightIn(min = Dimens.MinTouchTarget)
-                    .clickable(role = Role.Button, onClick = onOpenSpeed),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(stringResource(Res.string.player_speed), style = MaterialTheme.typography.titleSmall)
-                Text(formatSpeed(speed), style = MaterialTheme.typography.labelLarge)
-            }
+            SpeedSection(speed = speed, onSpeedChange = onSpeedChange, titled = titled)
         }
 
         if (only == null || only == PlayerSettingsSection.Quality) {
@@ -237,6 +227,26 @@ private fun playerSettingsTitle(only: PlayerSettingsSection?): String = stringRe
         PlayerSettingsSection.Danmaku -> Res.string.player_danmaku_settings
     },
 )
+
+/**
+ * 倍速:与画质切换一样,全屏单独打开倍速侧栏时按单列竖排,整块设置面板内按多列网格排开。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun SpeedSection(
+    speed: Float,
+    onSpeedChange: (Float) -> Unit,
+    titled: Boolean,
+) {
+    if (titled) SectionTitle(stringResource(Res.string.player_speed))
+    ChoiceGrid(
+        options = SpeedPresetValues,
+        selected = { abs(it - speed) < 0.01f },
+        onSelect = onSpeedChange,
+        label = ::formatSpeed,
+        columns = if (titled) SpeedGridColumns else 1,
+    )
+}
 
 /**
  * 画质。没有可选的就整段不画:一段只有一个选项的单选是纯噪声。[titled] 为假时是 chip 单独打开的
@@ -416,6 +426,10 @@ private fun <T> ConnectedChoices(
         }
     }
 }
+
+private val SpeedPresetValues =
+    listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 2.25f, 2.5f, 2.75f, 3f)
+private const val SpeedGridColumns = 4
 
 /**
  * 滚动弹幕显示区域的四档。存的是连续值(见 `SettingsStore.saveDanmakuScrollShowArea`),选中判定

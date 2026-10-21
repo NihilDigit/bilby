@@ -261,10 +261,7 @@ fun LiveRoomScreen(
                     // 纯音频时流里根本没有视频轨,挂上画面就是一块黑。屏幕常亮也认这个值,于是
                     // 纯音频时屏幕能自己息掉(见 PlayerShell)。
                     attached = attached && !onlyAudio,
-                    // **纯音频不走壳的占位封面。** 那一张是给取流窗口的,铺满整块画面;直播封面
-                    // 分辨率低,全屏下铺满就糊成一片,而纯音频会一直停在这个状态。纯音频的封面
-                    // 在 overlay 里按原比例缩小画(见 [AudioOnlyCover])。
-                    placeholderCoverUrl = if (onlyAudio) "" else state.coverUrl,
+                    placeholderCoverUrl = state.coverUrl,
                     isFullscreen = fullscreen,
                     onFullscreenChange = { fullscreen = it },
                     locked = locked,
@@ -309,7 +306,13 @@ fun LiveRoomScreen(
                         )
                     },
                     overlay = {
-                        if (onlyAudio) AudioOnlyCover(state.coverUrl)
+                        if (onlyAudio && state.coverUrl.isNotEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = AudioOnlyCoverScrimAlpha)),
+                            )
+                        }
                         if (!inPip || danmakuPrefs.inPip) {
                             PlayerDanmakuLayer(
                                 player = player,
@@ -324,6 +327,7 @@ fun LiveRoomScreen(
                                     scale = danmakuPrefs.fontScale,
                                 ),
                                 imageSource = emoteImages,
+                                avoidSystemBars = !inPip,
                             )
                         }
                     },
@@ -514,26 +518,7 @@ fun LiveRoomScreen(
     }
 }
 
-/**
- * 纯音频时画面正中那张封面:**按原比例缩小,不铺满。** 直播封面多是低分辨率的小图,铺满
- * 全屏的画面就糊成一片;缩到画面高度的一半上下,它读起来是"这一场是什么",而不是一张坏掉的画面。
- */
-@Composable
-private fun AudioOnlyCover(url: String) {
-    if (url.isEmpty()) return
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        BiliAsyncImage(
-            url = url,
-            contentDescription = null,
-            modifier = Modifier
-                .fillMaxHeight(AudioOnlyCoverHeightFraction)
-                .aspectRatio(16f / 9f)
-                .clip(MaterialTheme.shapes.medium),
-        )
-    }
-}
-
-private const val AudioOnlyCoverHeightFraction = 0.5f
+private const val AudioOnlyCoverScrimAlpha = 0.25f
 
 /** 未开播、或者流没取到。封面配一句话,不空着一块黑。 */
 @Composable

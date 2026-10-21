@@ -1,13 +1,19 @@
 package dev.bilby.ui.player
 
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.TextStyle
 import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.theme.CjkFontFamily
@@ -68,6 +74,13 @@ fun PlayerDanmakuLayer(
     selfDanmaku: Flow<Danmaku> = emptyFlow(),
     /** 弹幕里的表情图从这里取,见 [Danmaku.images]。点播弹幕不带图。 */
     imageSource: DanmakuImageSource = DanmakuImageSource.None,
+    /**
+     * 让开顶部状态栏与挖孔范围(画中画小窗除外)。
+     *
+     * 单栏内嵌时外层 `playerPane` 已经垫过黑边并 `consumeWindowInsets`,这里量到 0 不会重复叠加;
+     * 竖屏全屏或双栏下播放器顶到屏幕上边缘,这里负责把弹幕画布往下让出状态栏/前摄挖孔高度。
+     */
+    avoidSystemBars: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val isLive = feed is DanmakuFeed.Stream
@@ -141,7 +154,14 @@ fun PlayerDanmakuLayer(
 
     // **关掉时整个不进组合**,不是画了个空 —— 帧循环由组合驱动,不进组合就没有那条协程。
     if (!prefs.enabled) return
-    DanmakuLayer(controller, modifier)
+    val insetModifier = if (avoidSystemBars) {
+        modifier.windowInsetsPadding(
+            WindowInsets.barsAndCutout.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+        )
+    } else {
+        modifier
+    }
+    DanmakuLayer(controller, insetModifier.clipToBounds())
 }
 
 /**

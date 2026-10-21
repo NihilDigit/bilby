@@ -43,8 +43,6 @@ class PlaybackSpeedController internal constructor(
 
     private var originalSpeed = speed
     private var drag: SpeedSelectionDrag? = null
-    private var pending: Float? = null
-    private var writeJob: Job? = null
     private var repeatJob: Job? = null
     private var repeatRevision = -1
 
@@ -52,11 +50,11 @@ class PlaybackSpeedController internal constructor(
         if (!active) this.speed = speed
     }
 
-    fun open(temporary: Boolean = false) {
+    fun open(temporary: Boolean = false, dockEnd: Boolean = false) {
         if (active) finish(cancel = true)
         originalSpeed = readSpeed()
         lockedHint = null
-        selection = SpeedSelection.start(originalSpeed, temporary)
+        selection = SpeedSelection.start(originalSpeed, temporary, dockEnd)
         speed = originalSpeed
     }
 
@@ -68,30 +66,22 @@ class PlaybackSpeedController internal constructor(
         return true
     }
 
-    fun move(alongDp: Float, acrossDp: Float) {
+    fun move(
+        alongDp: Float,
+        acrossDp: Float,
+        atStartEdge: Boolean = false,
+        atEndEdge: Boolean = false,
+    ) {
         val current = selection ?: return
-        update(drag?.move(current, alongDp, acrossDp) ?: return, allowUnlock = true)
+        update(
+            drag?.move(current, alongDp, acrossDp, atStartEdge, atEndEdge) ?: return,
+            allowUnlock = true,
+        )
         refreshRepeat()
     }
 
-    fun finer() {
-        selection?.let { update(it.finer()) }
-    }
-
-    fun coarserOrLock() {
-        selection?.let {
-            if (it.fine) update(it.coarser())
-            else {
-                lock()
-                finish()
-            }
-        }
-    }
-
     fun step(direction: Int) {
-        selection?.let {
-            update(if (it.fine) it.fineAt(it.value + direction) else it.coarseAt(it.position + direction))
-        }
+        selection?.let { update(it.coarseAt(it.position + direction)) }
     }
 
     fun choose(value: Int) {
@@ -104,7 +94,7 @@ class PlaybackSpeedController internal constructor(
     }
 
     fun adjustTo(speed: Float) {
-        selection?.let { update(it.fineAt(speedHundredths(speed))) }
+        selection?.let { update(it.nearestTo(speedHundredths(speed))) }
     }
 
     fun lock() {
@@ -113,8 +103,7 @@ class PlaybackSpeedController internal constructor(
 
     fun finish(cancel: Boolean = false) {
         val current = selection ?: return
-        val lockOnRelease = current.fine && !cancel
-        val keep = current.locked || lockOnRelease || (!current.temporary && !cancel)
+        val keep = current.locked || (!current.temporary && !cancel)
         val finalSpeed = if (keep) current.speed else originalSpeed
         selection = null
         dragging = false
@@ -124,7 +113,7 @@ class PlaybackSpeedController internal constructor(
         drag = null
         speed = finalSpeed
         flush(finalSpeed)
-        if (current.locked || lockOnRelease) {
+        if (current.locked) {
             lockedHint = current.value
             hintRevision++
         }
@@ -142,9 +131,10 @@ class PlaybackSpeedController internal constructor(
         if (previous == next) return
         selection = next
         speed = next.speed
-        val coarseStep = dragging && !next.fine && !next.locked && previous?.value != next.value
-        if (coarseStep) coarseStepRevision++
-        if (next.locked || coarseStep) flush(next.speed) else enqueue(next.speed)
+        if (dragging && !next.locked && previous?.value != next.value) {
+            coarseStepRevision++
+        }
+        flush(next.speed)
     }
 
     private fun refreshRepeat() {
@@ -167,23 +157,7 @@ class PlaybackSpeedController internal constructor(
         }
     }
 
-    private fun enqueue(value: Float) {
-        pending = value
-        if (writeJob?.isActive == true) return
-        // 连续精调合并成每 40ms 一次;松手、取消和锁定都由 flush 保证最后一档落地。
-        writeJob = scope.launch {
-            delay(40)
-            val latest = pending
-            pending = null
-            writeJob = null
-            if (latest != null && abs(readSpeed() - latest) > 0.0001f) writeSpeed(latest)
-        }
-    }
-
     private fun flush(value: Float) {
-        writeJob?.cancel()
-        writeJob = null
-        pending = null
         if (abs(readSpeed() - value) > 0.0001f) writeSpeed(value)
     }
 }

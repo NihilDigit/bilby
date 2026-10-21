@@ -389,12 +389,11 @@
     <string name="player_unlock">解锁</string>
     <string name="player_fullscreen">全屏</string>
     <string name="player_exit_fullscreen">退出全屏</string>
-    <string name="player_speed_coarse_horizontal">上滑精调　下滑锁定</string>
-    <string name="player_speed_coarse_vertical">右滑精调　左滑锁定</string>
+    <string name="player_speed_coarse_horizontal">下滑锁定</string>
+    <string name="player_speed_coarse_vertical">左滑锁定</string>
+    <string name="player_speed_coarse_vertical_right">右滑锁定</string>
     <string name="player_speed_release_to_lock">松手锁定</string>
     <string name="player_speed_locked">已锁定 %1$s</string>
-    <string name="player_speed_fine_action">进入精调</string>
-    <string name="player_speed_coarse_action">返回粗调</string>
     <string name="player_speed_lock_action">锁定当前倍速</string>
 
     <!-- 播放器手势的浮层。百分比与秒数都由手势实时填。 -->

@@ -243,6 +243,7 @@ fun BilbyPlayer(
                         pip = pip,
                         scale = danmakuPrefs.fontScale,
                     ),
+                    avoidSystemBars = !pip,
                 )
             }
 
@@ -308,13 +309,9 @@ fun BilbyPlayer(
                 onSeekTo = { onSeekTo(it) },
                 onSeekFinished = { onSeekFinished() },
                 onOpenSettings = { section ->
-                    if (section == PlayerSettingsSection.Speed) {
-                        speedController.open()
-                    } else {
-                        settingsOnly = section
-                        settingsOpen = true
-                        setMenuOpen(true)
-                    }
+                    settingsOnly = section
+                    settingsOpen = true
+                    setMenuOpen(true)
                 },
                 onFullscreenToggle = { toggleFullscreen() },
                 danmakuEnabled = danmakuPrefs.enabled,
@@ -333,11 +330,7 @@ fun BilbyPlayer(
             val settings: @Composable () -> Unit = {
                 PlayerSettingsContent(
                     speed = speed,
-                    onOpenSpeed = {
-                        settingsOpen = false
-                        setMenuOpen(false)
-                        speedController.open()
-                    },
+                    onSpeedChange = { player.setPlaybackSpeed(it) },
                     qualities = qualities,
                     currentQuality = currentQuality,
                     onQualityChange = onQualityChange,
