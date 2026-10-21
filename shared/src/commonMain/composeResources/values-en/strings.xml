@@ -27,9 +27,9 @@
     <string name="stat_play">Views</string>
     <string name="stat_danmaku">Danmaku</string>
 
-    <!-- 底栏放不下 Subscriptions;页面标题有整行宽度,仍用全称(feed_title)。 -->
+    <!-- 底栏与首页标题行统一用 Following,给标题行右端三个动作留足宽度。 -->
     <string name="tab_feed">Following</string>
-    <string name="feed_title">Subscriptions</string>
+    <string name="feed_title">Following</string>
     <string name="tab_search">Search</string>
     <string name="tab_toview">Watch later</string>
 
@@ -51,7 +51,7 @@
     <string name="feed_exclude_up">Hide %1$s from home</string>
     <string name="feed_excluded">%1$s is now hidden</string>
     <string name="feed_article_badge">Article</string>
-    <string name="feed_read_marker">New since your last visit</string>
+    <string name="feed_read_marker">New above</string>
 
     <string name="search_empty">Search videos, creators and articles</string>
     <string name="search_history_title">Recent searches</string>
@@ -62,7 +62,7 @@
     <string name="search_loading_more">Loading more…</string>
     <string name="search_fans">%1$s followers</string>
     <string name="search_new_session">New session</string>
-    <string name="video_badge_charging">Supporters only</string>
+    <string name="video_badge_charging">Supporters</string>
     <string name="search_mode_agent">Assistant</string>
     <string name="search_ask_agent">Ask assistant</string>
     <string name="search_agent_panel_toggle">Assistant panel</string>
@@ -143,9 +143,9 @@
     <string name="toview_clear_finished_confirm">Clear %1$d watched items?</string>
     <string name="toview_clear_invalid">Clear unavailable</string>
     <string name="toview_clear_invalid_confirm">Clear unavailable videos?</string>
-    <string name="toview_listen_all">Listen to all</string>
-    <string name="toview_order_recent">Recently added</string>
-    <string name="toview_order_earliest">Earliest added</string>
+    <string name="toview_listen_all">Listen</string>
+    <string name="toview_order_recent">Recent</string>
+    <string name="toview_order_earliest">Earliest</string>
     <string name="toview_refresh_failed">Could not refresh: %1$s</string>
     <string name="toview_remove_failed">Could not remove: %1$s</string>
     <string name="toview_undo_failed">Could not undo: %1$s</string>
@@ -260,7 +260,7 @@
 
     <string name="offline_title">Downloads</string>
     <string name="offline_cache_action">Download</string>
-    <string name="offline_sheet_title">Download for offline</string>
+    <string name="offline_sheet_title">Download</string>
     <string name="offline_sheet_quality">Quality</string>
     <string name="offline_sheet_select_all">Select all</string>
     <string name="offline_selected_count">%1$d selected</string>
@@ -279,7 +279,7 @@
     <string name="offline_empty">Nothing downloaded yet</string>
     <string name="offline_section_in_flight">Downloading (%1$d)</string>
     <string name="offline_section_completed">Downloaded</string>
-    <string name="offline_listen_all">Listen to all</string>
+    <string name="offline_listen_all">Listen</string>
     <string name="offline_delete">Delete download: %1$s</string>
     <string name="offline_delete_confirm_title">Delete this download?</string>
     <string name="offline_delete_confirm_message">The file is removed from this device and caching again means downloading again.</string>
@@ -322,7 +322,7 @@
     <string name="danmaku_send">Send danmaku</string>
     <string name="danmaku_show">Show danmaku</string>
     <string name="danmaku_hide">Hide danmaku</string>
-    <string name="danmaku_input_hint">Send a danmaku</string>
+    <string name="danmaku_input_hint">Danmaku…</string>
     <string name="danmaku_length_counter">%1$d / %2$d</string>
     <string name="danmaku_send_failed">Failed to send: %1$s</string>
     <string name="player_listen">Listen</string>
@@ -330,22 +330,21 @@
     <string name="player_unlock">Unlock</string>
     <string name="player_fullscreen">Fullscreen</string>
     <string name="player_exit_fullscreen">Exit fullscreen</string>
-    <string name="player_speed_coarse_horizontal">Swipe up to fine-tune, down to lock</string>
-    <string name="player_speed_coarse_vertical">Swipe right to fine-tune, left to lock</string>
+    <string name="player_speed_coarse_horizontal">Swipe down to lock</string>
+    <string name="player_speed_coarse_vertical">Swipe left to lock</string>
+    <string name="player_speed_coarse_vertical_right">Swipe right to lock</string>
     <string name="player_speed_release_to_lock">Release to lock</string>
     <string name="player_speed_locked">Locked at %1$s</string>
-    <string name="player_speed_fine_action">Fine-tune speed</string>
-    <string name="player_speed_coarse_action">Return to presets</string>
     <string name="player_speed_lock_action">Lock current speed</string>
 
     <string name="listen_title">Listen</string>
     <string name="listen_not_playing">Nothing playing</string>
     <string name="listen_queue">Queue</string>
     <string name="listen_queue_title">Queue</string>
-    <string name="queue_order_sequential">In order</string>
+    <string name="queue_order_sequential">Order</string>
     <string name="queue_order_shuffle">Shuffle</string>
     <string name="sleep_timer_off">Sleep timer</string>
-    <string name="sleep_timer_end_of_item">After this one</string>
+    <string name="sleep_timer_end_of_item">End</string>
     <string name="sleep_timer_stop_in">Stop in %1$d min</string>
     <string name="sleep_timer_end_of_item_option">After this video</string>
     <string name="sleep_timer_cancel">Cancel timer</string>
@@ -408,7 +407,7 @@
     <string name="theme_palette_kanzo">Kanzo</string>
     <string name="theme_palette_moegi">Moegi</string>
     <string name="theme_palette_botan">Botan</string>
-    <string name="settings_offline_concurrency">Simultaneous downloads</string>
+    <string name="settings_offline_concurrency">Parallel downloads</string>
     <string name="settings_offline_concurrency_subtitle">A higher number caches a batch sooner, at the cost of more requests in flight and a greater chance of tripping risk control</string>
     <string name="settings_offline_concurrency_value">%1$d at a time</string>
     <string name="settings_danmakus_archive">Fill in earlier Super Chats</string>
@@ -437,7 +436,7 @@
     <string name="settings_danmaku_frame_rate_subtitle">Caps the danmaku layer only; unrelated to video decode frame rate</string>
     <string name="settings_danmaku_frame_rate_30">30 fps</string>
     <string name="settings_danmaku_frame_rate_60">60 fps</string>
-    <string name="settings_danmaku_frame_rate_display">Match display</string>
+    <string name="settings_danmaku_frame_rate_display">Display</string>
     <string name="settings_sponsorblock_toggle">Skip automatically</string>
     <string name="settings_sponsorblock_toggle_subtitle">Sponsor, intro and outro segments marked by the community</string>
     <string name="settings_sponsorblock_server">Server URL</string>
@@ -492,8 +491,8 @@
     <string name="followings_search_hint">Search your following list</string>
     <string name="followings_search_empty">No matching creators</string>
     <string name="followings_all">All</string>
-    <string name="followings_order_frequent">Most visited</string>
-    <string name="followings_order_recent">Recently followed</string>
+    <string name="followings_order_frequent">Frequent</string>
+    <string name="followings_order_recent">Recent</string>
     <string name="fav_folder_count">%1$d videos</string>
     <string name="fav_empty">This folder is empty</string>
     <string name="follow_groups_manage">Manage groups</string>
@@ -530,10 +529,10 @@
     <string name="fav_folder_delete_confirm">Delete folder</string>
     <string name="fav_invalid_video">Video unavailable</string>
     <string name="fav_folder_edit_info">Edit details</string>
-    <string name="fav_listen">Listen to folder</string>
-    <string name="fav_order_mtime">Recently saved</string>
-    <string name="fav_order_view">Most viewed</string>
-    <string name="fav_order_pubtime">Recently published</string>
+    <string name="fav_listen">Listen</string>
+    <string name="fav_order_mtime">Saved</string>
+    <string name="fav_order_view">Views</string>
+    <string name="fav_order_pubtime">Published</string>
     <string name="fav_search">Search</string>
     <string name="fav_search_hint">Search this folder</string>
     <string name="fav_search_close">Close search</string>
@@ -641,7 +640,7 @@
     <string name="settings_pause_history">Pause watch history</string>
     <string name="settings_pause_history_subtitle">New videos stop being recorded. Existing history and playback progress are unaffected.</string>
     <string name="settings_pause_history_failed">Couldn\'t load, tap to retry</string>
-    <string name="feed_all_followings">All following</string>
+    <string name="feed_all_followings">Following</string>
     <string name="feed_live_now">%1$d live</string>
     <string name="feed_live_now_title">Live now</string>
     <string name="video_action_listen">Listen</string>
@@ -666,8 +665,8 @@
     <string name="dynamic_text_expand">Show more</string>
     <string name="dynamic_reserve_calendar">Add to calendar</string>
     <string name="dynamic_reserve_calendar_note">%1$s\n%2$s</string>
-    <string name="dynamic_other_title">Following posts</string>
-    <string name="dynamic_other_entry">Following posts</string>
+    <string name="dynamic_other_title">Posts</string>
+    <string name="dynamic_other_entry">Posts</string>
     <string name="feed_up_pushes_entry">Pushes</string>
     <string name="dynamic_other_empty">The people you follow have posted nothing but videos lately</string>
     <!-- Forwarded post: the name and body open the original. Screen-reader label only. -->
@@ -703,7 +702,7 @@
     <string name="message_preview_sticker">[Sticker]</string>
     <string name="message_preview_withdrawn">[Unsent]</string>
     <string name="message_preview_video">[Video] %1$s</string>
-    <string name="message_up_pushes">Uploads from creators</string>
+    <string name="message_up_pushes">Creator pushes</string>
     <string name="coin_log_title">Coin history</string>
     <string name="coin_log_empty">No coin history</string>
     <string name="comment_thread_title">Comment</string>
