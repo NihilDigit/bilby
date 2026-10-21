@@ -405,6 +405,7 @@ fun VideoTabs(
                             else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
                         },
                         colors = toggleColors,
+                        contentPadding = PaddingValues(horizontal = Spacing.Cozy),
                         modifier = Modifier.semantics { role = Role.Tab },
                     ) {
                         Text(text = title, maxLines = 1, softWrap = false)

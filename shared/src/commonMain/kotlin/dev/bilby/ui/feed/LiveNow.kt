@@ -2,9 +2,12 @@ package dev.bilby.ui.feed
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import dev.bilby.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
 import dev.bilby.data.LiveUpBrief
@@ -45,7 +49,7 @@ import dev.bilby.ui.theme.Spacing
  * 没人在播时整格不画。**不留占位、不显示"当前无人直播"** —— 那句话每天要占着这个位置说
  * 二十三个小时的废话。
  *
- * 头像只堆前两个:第三个开始就只是一串糊在一起的圆,而"有几个"那个数字已经由旁边的文字说了。
+ * 头像至多叠前三个,从左到右每次缩小 10%。
  */
 @Composable
 fun LiveNowSlot(
@@ -55,69 +59,77 @@ fun LiveNowSlot(
     modifier: Modifier = Modifier,
 ) {
     if (liveUps.isEmpty()) return
+    val faces = liveUps.take(MaxStackedFaces)
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .clickable(role = Role.Button, onClick = onClick)
             .padding(vertical = 4.dp, horizontal = LiveSlotInset)
-            .width(LiveSlotWidth),
+            .width(liveSlotWidth(faces.size)),
     ) {
-        StackedFaces(liveUps)
-        Text(
-            text = stringResource(Res.string.feed_live_now, count.coerceAtLeast(liveUps.size)),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+        StackedFaces(faces)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
             modifier = Modifier.padding(top = 4.dp),
-        )
+        ) {
+            PlayingIndicator(
+                active = true,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(LiveSlotPulseSize),
+            )
+            Text(
+                text = stringResource(Res.string.feed_live_now, count.coerceAtLeast(liveUps.size)),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
 /**
- * 两张叠着的头像,右下角压一枚跳动的符号。
+ * 至多三张叠着的头像。
  *
- * **一大一小,大的在左。** 两张一样大的叠在一起读起来是"两个并列的人",而这一格要说的是
- * "有人在播,还不止一个" —— 第二张是那个"不止",不是并列的另一位。大小差还顺带定了叠放顺序:
- * 大的压在小的上面,不必再靠边框去区分谁在前。
+ * **从左到右依次缩小 10%,左前压右后。** 两张一样大的叠在一起读起来是"并列的人",而这一格要
+ * 说的是"有人在播,还不止一个" —— 后面的头像依次小一圈,顺带定下叠放顺序:大的压在小的上面。
  *
- * 大的那张和「最常访问」那排头像**一样大**:这一格站在那一排的最前面,矮一圈的话整行的
- * 头像上沿就不齐了,而那正是一眼看得出的毛病。
- *
- * 小的那张要描一圈背景色的边:两个圆的边缘不分开的话,叠合处糊成一块,看着像一张被啃掉
- * 一角的头像。
+ * 第一张和「最常访问」那排头像**一样大**:这一格站在那一排的最前面,矮一圈的话整行的
+ * 头像上沿就不齐了。叠在前面的头像外侧描一圈背景色的边,把相邻两个圆的边缘切开。
  */
 @Composable
-private fun StackedFaces(liveUps: List<LiveUpBrief>) {
+private fun StackedFaces(faces: List<LiveUpBrief>) {
     val ring = MaterialTheme.colorScheme.surface
-    Box(modifier = Modifier.size(width = StackWidth, height = FrontFaceSize)) {
-        // 先画小的(右后),再画大的(左前)。Box 里后画的在上,顺序就是层级。
-        liveUps.getOrNull(1)?.let { back ->
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .size(BackFaceSize + FaceRing * 2)
-                    .clip(CircleShape)
-                    .background(ring)
-                    .padding(FaceRing),
-            ) {
-                Avatar(url = back.faceUrl, size = BackFaceSize)
+    Box(modifier = Modifier.size(width = stackWidth(faces.size), height = FrontFaceSize)) {
+        // 从右后往左前画:Box 里后画的在上,左前的大头像压住右后的小头像。
+        for (index in faces.lastIndex downTo 0) {
+            val size = faceSize(index)
+            val startOffset = faceRightEdge(index) - size
+            val hasBackNeighbor = index < faces.lastIndex
+            if (hasBackNeighbor) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .offset(x = startOffset - FaceRing)
+                        .size(size + FaceRing * 2)
+                        .clip(CircleShape)
+                        .background(ring)
+                        .padding(FaceRing),
+                ) {
+                    Avatar(url = faces[index].faceUrl, size = size)
+                }
+            } else {
+                Avatar(
+                    url = faces[index].faceUrl,
+                    size = size,
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .offset(x = startOffset),
+                )
             }
         }
-        Avatar(
-            url = liveUps[0].faceUrl,
-            size = FrontFaceSize,
-            modifier = Modifier.align(Alignment.CenterStart),
-        )
-        // 直接画在头像上,不衬一个圆底。衬底是给"图标"用的 —— 一个有轮廓的形状压在另一个
-        // 形状上才需要底把它托起来;而这三根条本身就是稀疏的笔画,加个实心圆反倒把它围成了
-        // 一枚按钮。
-        PlayingIndicator(
-            active = true,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.align(Alignment.BottomEnd).size(PulseSize),
-        )
     }
 }
 
@@ -165,43 +177,54 @@ fun LiveNowSheet(
     }
 }
 
+private const val MaxStackedFaces = 3
+
 /**
- * 左边那张,压在上面。**取的就是那一排的尺寸** —— 这一格排在首页那排关注的最前面,
- * 头像不一样大的话整行的上沿就参差了。以前这里是一个同值的本地常量,配一句"改那边记得
- * 改这里"。
+ * 左边第一张,压在最上面。**取的就是那一排的尺寸** —— 这一格排在首页那排关注的最前面,
+ * 头像不一样大的话整行的上沿就参差了。
  */
 private val FrontFaceSize = Dimens.AvatarStack
 
-/**
- * 右边那张,压在下面。**按前一张的比例定,不写死 dp** —— 这两个数之间的差是有意义的
- * (它表示"还不止一个",不是并列的另一位),写成两个独立的常量之后,改大的那张时这层关系
- * 就悄悄变了。
- */
-private val BackFaceSize = FrontFaceSize * 0.75f
+/** 往右每多叠一张,直径缩小 10%。 */
+private const val FaceScaleStep = 0.9f
 
-/** 小的那张露出来多少。露出约六成,再少就只剩一道边,看不出是张脸。 */
-private const val BackFaceReveal = 0.61f
+/** 后面每张头像往右露出的比例。 */
+private const val BackFaceReveal = 0.36f
 
-private val StackWidth = FrontFaceSize + BackFaceSize * BackFaceReveal
+private fun faceSize(index: Int): Dp = when (index) {
+    0 -> FrontFaceSize
+    1 -> FrontFaceSize * FaceScaleStep
+    else -> FrontFaceSize * (FaceScaleStep * FaceScaleStep)
+}
 
-/** 小头像外那圈底色,把两个圆的边缘分开。 */
+private fun faceRightEdge(index: Int): Dp = when (index) {
+    0 -> FrontFaceSize
+    else -> faceRightEdge(index - 1) + faceSize(index) * BackFaceReveal
+}
+
+private fun stackWidth(faceCount: Int): Dp =
+    faceRightEdge(faceCount.coerceIn(1, MaxStackedFaces) - 1)
+
+/** 前面头像外侧那圈底色,把叠在一起的两个圆切开。 */
 private val FaceRing = 1.5.dp
 
-private val PulseSize = 16.dp
+private val LiveSlotPulseSize = 12.dp
 
 private val LivePulseSizeInList = 14.dp
 
-/** 比两张头像叠起来再宽一点,让"N 正在直播"那行字有地方站。 */
-/** 这一格**比头像格宽**:它装的是两张叠着的脸,不是一张。 */
-private val LiveSlotWidth = 72.dp
-
+private val MinLiveSlotWidth = 64.dp
+private val LiveSlotSidePadding = 4.dp
 private val LiveSlotInset = 2.dp
+
+private fun liveSlotWidth(faceCount: Int): Dp =
+    (stackWidth(faceCount) + LiveSlotSidePadding * 2).coerceAtLeast(MinLiveSlotWidth)
 
 /**
  * 这一格左沿到前面那张大头像左沿的距离:格子的左右内边距,加上头像叠在格里居中让出的一半。
- * 排在它引用的几个常量后面:顶层属性按文件顺序初始化,排在前面读到的是 0。
  */
-internal val LiveNowSlotFaceInset = LiveSlotInset + (LiveSlotWidth - StackWidth) / 2
+internal fun liveNowSlotFaceInset(faceCount: Int): Dp =
+    LiveSlotInset + (liveSlotWidth(faceCount) - stackWidth(faceCount)) / 2
 
 /** 这一格连内边距的总宽。动态页算那一排放不放得下时用。 */
-internal val LiveNowSlotOuterWidth = LiveSlotWidth + LiveSlotInset * 2
+internal fun liveNowSlotOuterWidth(faceCount: Int): Dp =
+    liveSlotWidth(faceCount) + LiveSlotInset * 2

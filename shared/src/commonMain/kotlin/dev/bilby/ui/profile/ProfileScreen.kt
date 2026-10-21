@@ -31,9 +31,6 @@ import dev.bilby.ui.components.VideoCover
 import dev.bilby.ui.components.FullScreenLoading
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilledTonalButton
 import dev.bilby.ui.components.verticalWheelScrollsRow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -489,11 +486,11 @@ private fun AccountCard(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
                 ) {
-                    // 名字后面一个 ›:它是"整张卡点得进去"的唯一视觉提示,跟在名字后面而不是
-                    // 卡片右端 —— 右端是设置,它去别处,摆在它旁边会读成第二个按钮。
+                    // 名字后面紧跟等级与 ›:这一页不放粉丝数,等级单占一行只剩一枚孤零零的小标;
+                    // 与名字同行同视频页 UP 行、评论区一致。
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
                     ) {
                         Text(
                             text = account.name,
@@ -502,6 +499,11 @@ private fun AccountCard(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
                         )
+                        LevelBadge(
+                            level = account.level,
+                            senior = account.isSeniorMember,
+                            height = Dimens.LevelBadgeHeight,
+                        )
                         Icon(
                             Icons.AutoMirrored.Filled.KeyboardArrowRight,
                             contentDescription = null,
@@ -509,12 +511,6 @@ private fun AccountCard(
                             modifier = Modifier.size(Dimens.IconInline),
                         )
                     }
-                    // 等级单独一行,同空间页;那里跟着粉丝数,这里不放(见 [AccountActions])。
-                    LevelBadge(
-                        level = account.level,
-                        senior = account.isSeniorMember,
-                        height = Dimens.LevelBadgeHeight,
-                    )
                     if (account.sign.isNotBlank()) {
                         Text(
                             text = account.sign,
@@ -672,9 +668,11 @@ private fun AccountSegment(spec: AccountSegmentSpec, shape: Shape, modifier: Mod
         // 字形、数、名字排成一行。竖排时没有数的那一段比旁边两段少一行,居中之后哪一行都对
         // 不上;横排成一行就没有这个问题,整排也矮了一截。
         Row(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair + Spacing.Hair / 2, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.heightIn(min = SegmentMinHeight).padding(horizontal = Spacing.Tight),
+            modifier = Modifier
+                .heightIn(min = SegmentMinHeight)
+                .padding(horizontal = Spacing.Hair + Spacing.Hair / 2),
         ) {
             spec.icon(MaterialTheme.colorScheme.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
@@ -691,6 +689,7 @@ private fun AccountSegment(spec: AccountSegmentSpec, shape: Shape, modifier: Mod
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.alignByBaseline(),
                 )
             }
@@ -715,8 +714,8 @@ private val SegmentGap = 2.dp
 private val SegmentIconSize = 24.dp
 private val SegmentCoinSize = 20.dp
 
-/** 消息那一段没有数,和前两段等宽时两边空出一大截。 */
-private const val MessagesSegmentWeight = 0.75f
+/** 消息那一段没有数,略窄一点,同时给英文 "Messages" 留足单行宽度。 */
+private const val MessagesSegmentWeight = 0.9f
 
 /** 一行排开之后每一段的高度,取触控目标的最小值。 */
 private val SegmentMinHeight = 48.dp
@@ -997,15 +996,23 @@ private fun ShelfTitle(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-        // 上下不另加内边距:按钮自带 48dp 触控高度,节与节之间的距离由上一节的下边距给,
-        // 再加一层就让整页在常见窗口高度下多出一截,只能滚一点点。
+        // 上下不另加内边距:48dp 触控高度由 heightIn 保证,节与节之间的距离由上一节的下边距给。
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = Dimens.MinTouchTarget)
-            .padding(horizontal = Spacing.Comfortable),
+            .padding(horizontal = Spacing.Tight)
+            .clip(MaterialTheme.shapes.small)
+            .then(
+                if (onSeeAll != null) {
+                    Modifier.clickable(role = Role.Button, onClick = onSeeAll)
+                } else {
+                    Modifier
+                },
+            )
+            .padding(horizontal = Spacing.Tight),
     ) {
         // 标题与 meta 的基线对齐只在内层做:外层 Row 里一旦有子项按基线对齐,这组子项就被
-        // 摆到基线所在的行顶,只有其余子项居中,标题便比右边的按钮高出一截。
+        // 摆到基线所在的行顶,只有其余子项居中,标题便比右边的箭头高出一截。
         Row(
             horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
             modifier = Modifier.weight(1f),
@@ -1027,18 +1034,12 @@ private fun ShelfTitle(
             }
         }
         if (onSeeAll != null) {
-            // 右端:宽屏上它对着这一排卡片的尾巴,读作"这一排还有";tonal 带字,读得出是按钮。
-            // 字加箭头试过的两种弱形态:标题后一个无底色的细线箭头,像装饰;标题后一个 tonal
-            // 小圆,仍要人猜它是什么。
-            FilledTonalButton(onClick = onSeeAll, contentPadding = ButtonDefaults.ButtonWithIconContentPadding) {
-                Text(stringResource(Res.string.profile_see_all), maxLines = 1)
-                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = null,
-                    modifier = Modifier.size(ButtonDefaults.IconSize),
-                )
-            }
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = stringResource(Res.string.profile_see_all),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(Dimens.IconAction),
+            )
         }
     }
 }

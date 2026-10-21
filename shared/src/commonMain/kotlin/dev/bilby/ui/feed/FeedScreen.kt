@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.TextButton
@@ -500,6 +501,8 @@ private fun FeedHeader(
         Text(
             text = stringResource(Res.string.feed_title),
             style = MaterialTheme.typography.titleLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         actions?.invoke()
@@ -535,7 +538,7 @@ private fun FeedHeaderActions(
             contentPadding = if (tonal) {
                 ButtonDefaults.ButtonWithIconContentPadding
             } else {
-                PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Tight)
+                PaddingValues(horizontal = Spacing.Tight, vertical = Spacing.Tight)
             },
         ) {
             Icon(
@@ -545,7 +548,8 @@ private fun FeedHeaderActions(
             )
             Text(
                 text = stringResource(Res.string.feed_up_pushes_entry),
-                modifier = Modifier.padding(start = Spacing.Tight),
+                maxLines = 1,
+                modifier = Modifier.padding(start = if (tonal) Spacing.Tight else Spacing.Hair),
             )
         }
         // 内边距写明而不取默认:箭头的右沿要落在 16dp 页边线上(见 [HeaderButtonEndInset]),
@@ -557,7 +561,7 @@ private fun FeedHeaderActions(
             contentPadding = if (tonal) {
                 ButtonDefaults.ButtonWithIconContentPadding
             } else {
-                PaddingValues(start = Spacing.Cozy, end = HeaderButtonEndInset, top = Spacing.Tight, bottom = Spacing.Tight)
+                PaddingValues(start = Spacing.Tight, end = HeaderButtonEndInset, top = Spacing.Tight, bottom = Spacing.Tight)
             },
         ) {
             Icon(
@@ -567,7 +571,8 @@ private fun FeedHeaderActions(
             )
             Text(
                 text = stringResource(Res.string.dynamic_other_entry),
-                modifier = Modifier.padding(start = Spacing.Tight, end = Spacing.Hair),
+                maxLines = 1,
+                modifier = Modifier.padding(start = if (tonal) Spacing.Tight else Spacing.Hair, end = Spacing.Hair),
             )
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -697,31 +702,46 @@ private fun FeedEntryMenuItems(
 }
 
 /**
- * 「以上是新内容」分隔线。DESIGN 2.1 只要求记住位置、不要红点/未读计数(4.2 节的永不实现
- * 清单),这条线本身不随时间变化去提醒用户回来看,进屏时算一次就不再动 —— 不落在那条禁令上。
+ * 「以上是新内容」分隔条。DESIGN 2.1 只要求记住位置、不要红点/未读计数(4.2 节的永不实现
+ * 清单),这条分界本身不随时间变化去提醒用户回来看,进屏时算一次就不再动 —— 不落在那条禁令上。
  *
- * 一枚居中的 tonal 胶囊,不是线:它独占一整行,新旧两段照样在这里断开;两根细线夹一行小字
- * 的画法在一列带封面的行里太轻,扫过去认不出是分界(风格指南 §2.3c:不用分割线)。
+ * 通栏微底色窄条(`surfaceContainer` + `shapes.small`)配向上箭头与 `onSurfaceVariant` 小字:
+ * 独占一整行把新旧两段切开,同时避免 `secondaryContainer` 胶囊被误读成可点击的筛选/刷新按钮
+ * (风格指南 §2.3c:不用分割线)。
  */
 @Composable
 private fun ReadMarkerDivider(modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier.fillMaxWidth().padding(vertical = Spacing.Cozy),
-        contentAlignment = Alignment.Center,
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
     ) {
-        Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight - Spacing.Hair / 2),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            Icon(
+                Icons.Filled.KeyboardArrowUp,
+                contentDescription = null,
+                modifier = Modifier.size(ReadMarkerIconSize),
+            )
             Text(
                 text = stringResource(Res.string.feed_read_marker),
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
 }
+
+private val ReadMarkerIconSize = 16.dp
 
 
 /**
@@ -861,10 +881,11 @@ private fun FrequentUpsRow(
     // 读不出是一组。放不下就回到钉住的排法,和窄屏一样。
     val shownUps = ups.take(FrequentUpLimit)
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-    val startPadding = Spacing.Comfortable - if (liveUps.isNotEmpty()) LiveNowSlotFaceInset else UpSlotFaceInset
+    val startPadding = Spacing.Comfortable -
+        if (liveUps.isNotEmpty()) liveNowSlotFaceInset(liveUps.size) else UpSlotFaceInset
     val slotCount = shownUps.size + 1
     val contentWidth = startPadding +
-        (if (liveUps.isNotEmpty()) LiveNowSlotOuterWidth + SlotGap else 0.dp) +
+        (if (liveUps.isNotEmpty()) liveNowSlotOuterWidth(liveUps.size) + SlotGap else 0.dp) +
         UpSlotOuterWidth * slotCount + SlotGap * (slotCount - 1)
     val fits = trailingWidth != null &&
         contentWidth + Spacing.Loose + trailingWidth + Spacing.Comfortable <= maxWidth
