@@ -6,6 +6,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import java.awt.GraphicsEnvironment
 import java.awt.Point
 import java.awt.Toolkit
 import java.awt.image.BufferedImage
@@ -30,14 +31,18 @@ interface DesktopPip : PipWindow {
 
 val LocalDesktopPip = staticCompositionLocalOf<DesktopPip?> { null }
 
-/** 一个 1×1 的全透明光标。AWT 没有"无光标"这个常量,只能自己造一个看不见的。 */
-private val BlankCursor = PointerIcon(
-    Toolkit.getDefaultToolkit().createCustomCursor(
-        BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB),
-        Point(0, 0),
-        "blank",
-    ),
-)
+/** 一个 1×1 的全透明光标。AWT 没有"无光标"这个常量,只能自己造一个看不见的;无头环境退回默认光标。 */
+private val BlankCursor: PointerIcon = if (GraphicsEnvironment.isHeadless()) {
+    PointerIcon.Default
+} else {
+    PointerIcon(
+        Toolkit.getDefaultToolkit().createCustomCursor(
+            BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB),
+            Point(0, 0),
+            "blank",
+        ),
+    )
+}
 
 /**
  * 两种状态用同一个修饰符、只换参数:换成"藏时多挂一层、不藏时不挂"的写法,修饰符链的结构一变,
