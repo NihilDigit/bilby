@@ -10,17 +10,17 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class SpeedSelectionTest {
     @Test
-    fun `repeat activates only when finger reaches the edge in the drag direction`() {
-        val start = SpeedSelection.start(1f, temporary = false)
-        val midDrag = SpeedSelectionDrag()
-        midDrag.move(start, 40f, 0f, atStartEdge = false, atEndEdge = false)
-        assertNull(midDrag.repeatIntervalMillis)
-        val wrongEdge = SpeedSelectionDrag()
-        wrongEdge.move(start, 40f, 0f, atStartEdge = true, atEndEdge = false)
-        assertNull(wrongEdge.repeatIntervalMillis)
-        val rightEdge = SpeedSelectionDrag()
-        rightEdge.move(start, 40f, 0f, atStartEdge = false, atEndEdge = true)
-        assertEquals(450L, rightEdge.repeatIntervalMillis)
+    fun `opening with initialSpeed immediately applies the boost and restores original on release`() = runTest {
+        var actual = 1.25f
+        val writes = mutableListOf<Float>()
+        val controller = PlaybackSpeedController(this, { actual }, { actual = it; writes += it })
+        controller.open(temporary = true, initialSpeed = 2.5f)
+        assertEquals(250, controller.selection!!.value)
+        assertEquals(2.5f, actual, 0f)
+        assertEquals(listOf(2.5f), writes)
+        controller.finish()
+        assertEquals(1.25f, actual, 0f)
+        assertEquals(listOf(2.5f, 1.25f), writes)
     }
 
     @Test
@@ -28,32 +28,30 @@ class SpeedSelectionTest {
         var state = SpeedSelection.start(1.5f, temporary = false)
         val drag = SpeedSelectionDrag()
         for (i in 1..12) {
-            state = drag.move(state, i * 20f, i * 8f, atEndEdge = true)
+            state = drag.move(state, i * 10f, i * 4f)
             assertFalse(state.locked)
         }
-        assertEquals(250, state.value)
-        assertNotNull(drag.repeatIntervalMillis)
-        state = drag.move(state, 240f, 105f, atEndEdge = true)
+        assertEquals(275, state.value)
+        state = drag.move(state, 120f, 52f)
         assertFalse(state.locked)
-        assertNotNull(drag.repeatIntervalMillis)
     }
 
     @Test
-    fun `curved cross gesture pauses selection and preserves speed through lock and undo`() = runTest {
+    fun `curved cross gesture preserves speed through lock and undo`() = runTest {
         var actual = 1.5f
         val controller = PlaybackSpeedController(this, { actual }, { actual = it })
         controller.open()
         controller.beginDrag()
-        controller.move(48f, 2f)
+        controller.move(30f, 2f)
         assertEquals(175, controller.selection!!.value)
-        controller.move(54f, 20f)
+        controller.move(34f, 20f)
         advanceTimeBy(1000)
         assertFalse(controller.selection!!.locked)
         assertEquals(175, controller.selection!!.value)
-        controller.move(64f, 44f)
+        controller.move(40f, 44f)
         assertTrue(controller.selection!!.locked)
         assertEquals(175, controller.selection!!.value)
-        controller.move(71f, 8f)
+        controller.move(45f, 8f)
         assertFalse(controller.selection!!.locked)
         assertEquals(175, controller.selection!!.value)
         advanceTimeBy(1000)
@@ -76,7 +74,7 @@ class SpeedSelectionTest {
     }
 
     @Test
-    fun `coarse drag intent takes one step and continuous drag follows finger`() {
+    fun `coarse drag intent takes one step and continuous drag follows finger in both directions immediately`() {
         val state = SpeedSelection.start(1.5f, temporary = false)
         val drag = SpeedSelectionDrag()
         val firstStep = SpeedSelectionIntentDp + SpeedDragStepDp
@@ -85,6 +83,32 @@ class SpeedSelectionTest {
         val further = drag.move(forward, firstStep + SpeedDragStepDp, 0f)
         assertEquals(200, further.value)
         assertEquals(175, drag.move(further, firstStep, 0f).value)
+    }
+
+    @Test
+    fun `sliding to min and reversing right responds immediately without lag`() {
+        var state = SpeedSelection.start(1f, temporary = true, initial = 2.5f)
+        val drag = SpeedSelectionDrag()
+        // 往左滑到底 0.25x
+        state = drag.move(state, -220f, 0f)
+        assertEquals(25, state.value)
+        // 从 -220dp 往右回拨两步(+44dp),无需回到原点 0f 即当场回到 0.75x
+        state = drag.move(state, -220f + SpeedDragStepDp * 2f, 0f)
+        assertEquals(75, state.value)
+    }
+
+    @Test
+    fun `holding still at any offset keeps the current speed without auto-scrolling`() = runTest {
+        var actual = 1f
+        val controller = PlaybackSpeedController(this, { actual }, { actual = it })
+        controller.open(temporary = true, initialSpeed = 2.5f)
+        controller.beginDrag()
+        controller.move(-(SpeedSelectionIntentDp + SpeedDragStepDp * 2f), 0f)
+        assertEquals(200, controller.selection!!.value)
+        advanceTimeBy(5000)
+        runCurrent()
+        assertEquals(200, controller.selection!!.value)
+        controller.finish()
     }
 
     @Test
@@ -97,9 +121,9 @@ class SpeedSelectionTest {
         assertTrue(controller.selection!!.locked)
         controller.move(0f, 0f)
         assertFalse(controller.selection!!.locked)
-        controller.move(48f, 0f)
+        controller.move(30f, 0f)
         assertEquals(175, controller.selection!!.value)
-        controller.move(48f, 36f)
+        controller.move(30f, 36f)
         assertTrue(controller.selection!!.locked)
         controller.finish()
         assertEquals(1.75f, actual, 0f)
@@ -112,10 +136,10 @@ class SpeedSelectionTest {
         val controller = PlaybackSpeedController(this, { actual }, { actual = it })
         controller.open(temporary = true)
         controller.beginDrag()
-        controller.move(48f, 0f)
-        controller.move(48f, 36f)
+        controller.move(30f, 0f)
+        controller.move(30f, 36f)
         assertEquals(1.5f, actual, 0f)
-        controller.move(48f, 0f)
+        controller.move(30f, 0f)
         assertFalse(controller.selection!!.locked)
         controller.finish()
         advanceTimeBy(100)
@@ -124,87 +148,12 @@ class SpeedSelectionTest {
     }
 
     @Test
-    fun `coarse selection snaps once on intent and ignores subthreshold jitter`() {
+    fun `coarse selection ignores subthreshold jitter`() {
         val state = SpeedSelection.start(1.5f, temporary = false)
         val drag = SpeedSelectionDrag()
-        assertEquals(state, drag.move(state, 11f, 0f))
-        assertNull(drag.repeatIntervalMillis)
-        val next = drag.move(state, 48f, 0f, atEndEdge = true)
+        assertEquals(state, drag.move(state, 7f, 0f))
+        val next = drag.move(state, 30f, 0f)
         assertEquals(175, next.value)
-        assertNotNull(drag.repeatIntervalMillis)
-        assertEquals(next.snapped(), drag.move(next, 6f, 0f, atEndEdge = true))
-        assertNull(drag.repeatIntervalMillis)
-    }
-
-    @Test
-    fun `edge hold traverses the full coarse range while mid-screen hold stays put`() = runTest {
-        var actual = .25f
-        val controller = PlaybackSpeedController(this, { actual }, { actual = it })
-        controller.open()
-        controller.beginDrag()
-        advanceTimeBy(2000)
-        assertEquals(25, controller.selection!!.value)
-        controller.move(48f, 0f, atEndEdge = false)
-        assertEquals(50, controller.selection!!.value)
-        advanceTimeBy(2000)
-        assertEquals("mid-screen hold must not auto-repeat", 50, controller.selection!!.value)
-        controller.move(48f, 0f, atEndEdge = true)
-        advanceTimeBy(5200)
-        runCurrent()
-        assertEquals(300, controller.selection!!.value)
-        assertEquals(11, controller.coarseStepRevision)
-        controller.move(-48f, 0f, atStartEdge = true)
-        advanceTimeBy(5500)
-        runCurrent()
-        assertEquals(25, controller.selection!!.value)
-        controller.finish()
-    }
-
-    @Test
-    fun `returning to neutral stops repeat and locking reanchors intent`() = runTest {
-        var actual = 1f
-        val controller = PlaybackSpeedController(this, { actual }, { actual = it })
-        controller.open()
-        controller.beginDrag()
-        controller.move(48f, 0f, atEndEdge = true)
-        assertEquals(125, controller.selection!!.value)
-        controller.move(0f, 0f)
-        advanceTimeBy(1000)
-        assertEquals(125, controller.selection!!.value)
-        controller.move(48f, 0f)
-        assertEquals(150, controller.selection!!.value)
-        controller.move(48f, 36f)
-        assertTrue(controller.selection!!.locked)
-        advanceTimeBy(1000)
-        assertEquals(150, controller.selection!!.value)
-        controller.move(48f, 0f)
-        assertFalse(controller.selection!!.locked)
-        advanceTimeBy(1000)
-        assertEquals(150, controller.selection!!.value)
-        controller.move(96f, 0f)
-        assertEquals(175, controller.selection!!.value)
-        controller.move(96f, 36f)
-        advanceTimeBy(1000)
-        assertEquals(175, controller.selection!!.value)
-        controller.finish()
-        advanceTimeBy(1000)
-        assertEquals(1.75f, actual, 0f)
-    }
-
-    @Test
-    fun `cancelling a running coarse repeat leaves no subsequent speed commands`() = runTest {
-        var actual = 1f
-        val writes = mutableListOf<Float>()
-        val controller = PlaybackSpeedController(this, { actual }, { actual = it; writes += it })
-        controller.open(temporary = true)
-        controller.beginDrag()
-        controller.move(120f, 0f, atEndEdge = true)
-        advanceTimeBy(500)
-        controller.cancel()
-        val count = writes.size
-        advanceTimeBy(2000)
-        assertEquals(count, writes.size)
-        assertEquals(1f, actual, 0f)
     }
 
     @Test
@@ -273,9 +222,9 @@ class SpeedSelectionTest {
         val controller = PlaybackSpeedController(this, { actual }, { actual = it })
         controller.open(temporary = true)
         controller.beginDrag()
-        controller.move(48f, 0f)
+        controller.move(30f, 0f)
         assertEquals(125, controller.selection!!.value)
-        controller.move(48f, 36f)
+        controller.move(30f, 36f)
         assertTrue(controller.selection!!.locked)
         controller.cancel()
         assertEquals(1.25f, actual, 0f)

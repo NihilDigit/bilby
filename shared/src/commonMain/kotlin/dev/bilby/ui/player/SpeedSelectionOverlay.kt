@@ -10,7 +10,6 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -19,7 +18,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -29,7 +27,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -56,13 +53,10 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
@@ -72,8 +66,6 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -101,11 +93,13 @@ import kotlinx.coroutines.flow.drop
 import kotlin.math.roundToInt
 
 private object SpeedDialSize {
-    val Thickness = 80.dp
-    val LongBlock = 108.dp
-    val ShortBlock = Dimens.MinTouchTarget
-    val UnselectedCorner = 12.dp
-    val EdgeFade = Spacing.Spacious
+    val HorizontalThickness = Dimens.MinTouchTarget
+    val VerticalThickness = 84.dp
+    val BlockWidth = 68.dp
+    val BlockHeight = ControlChipHeight
+    val BlockIconSize = 16.dp
+    val UnselectedCorner = 8.dp
+    val EdgeFade = Spacing.Loose
 }
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -143,10 +137,24 @@ private fun SpeedSelectionHint(controller: PlaybackSpeedController, modifier: Mo
         exit = fadeOut(effects),
         modifier = modifier,
     ) {
-        SpeedBoostCapsule(
-            text = shownText,
-            icon = if (shownLockedIcon) Icons.Filled.Lock else Icons.Filled.FastForward,
-        )
+        Overlay {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                Icon(
+                    imageVector = if (shownLockedIcon) Icons.Filled.Lock else Icons.Filled.FastForward,
+                    contentDescription = null,
+                    tint = FixedColors.OnMedia,
+                    modifier = Modifier.size(HintIconSize),
+                )
+                Text(
+                    text = shownText,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = FixedColors.OnMedia,
+                )
+            }
+        }
     }
 }
 
@@ -154,8 +162,7 @@ private fun SpeedSelectionHint(controller: PlaybackSpeedController, modifier: Mo
 @Composable
 internal fun SpeedSelectionOverlay(
     controller: PlaybackSpeedController,
-    playerBounds: Rect? = null,
-    dimDetails: Boolean = false,
+    isFullscreen: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var shownSelection by remember { mutableStateOf<SpeedSelection?>(null) }
@@ -169,7 +176,6 @@ internal fun SpeedSelectionOverlay(
     val window = LocalWindowInfo.current.containerSize
     val vertical = window.width > window.height
     val dockEnd = vertical && (controller.selection ?: shownSelection)?.dockEnd == true
-    var origin by remember { mutableStateOf(Offset.Zero) }
     val focus = remember { FocusRequester() }
     BackHandler(enabled = controller.active) { controller.cancel() }
     LaunchedEffect(controller.active) { if (controller.active) focus.requestFocus() }
@@ -178,7 +184,7 @@ internal fun SpeedSelectionOverlay(
         val spatialOffset = motion.fastSpatialSpec<IntOffset>()
         val effects = motion.fastEffectsSpec<Float>()
         Box(
-            modifier.fillMaxSize().onGloballyPositioned { origin = it.positionInRoot() }
+            modifier.fillMaxSize()
                 .onKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown || !controller.active) return@onKeyEvent false
                     when (event.key) {
@@ -203,20 +209,6 @@ internal fun SpeedSelectionOverlay(
         ) {
             if (controller.active) {
                 Box(Modifier.fillMaxSize().pointerInput(controller) { detectTapGestures { controller.finish() } })
-            }
-            AnimatedVisibility(
-                visible = controller.active && dimDetails,
-                enter = fadeIn(effects),
-                exit = fadeOut(effects),
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                Canvas(Modifier.fillMaxSize()) {
-                    val bounds = playerBounds?.translate(-origin)
-                    if (bounds == null) drawRect(FixedColors.ScrimOnMedia)
-                    else clipRect(bounds.left, bounds.top, bounds.right, bounds.bottom, ClipOp.Difference) {
-                        drawRect(FixedColors.ScrimOnMedia)
-                    }
-                }
             }
             AnimatedVisibility(
                 visible = controller.active,
@@ -257,29 +249,31 @@ internal fun SpeedSelectionOverlay(
                         vertical = vertical,
                         modifier = Modifier
                             .background(scrim)
-                            .windowInsetsPadding(
-                                WindowInsets.barsAndCutout.only(
-                                    when {
-                                        !vertical -> WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
-                                        selection.dockEnd -> WindowInsetsSides.End + WindowInsetsSides.Vertical
-                                        else -> WindowInsetsSides.Start + WindowInsetsSides.Vertical
-                                    },
-                                ),
+                            .then(
+                                if (isFullscreen) {
+                                    Modifier.windowInsetsPadding(
+                                        WindowInsets.barsAndCutout.only(
+                                            when {
+                                                !vertical -> WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
+                                                selection.dockEnd -> WindowInsetsSides.End + WindowInsetsSides.Vertical
+                                                else -> WindowInsetsSides.Start + WindowInsetsSides.Vertical
+                                            },
+                                        ),
+                                    )
+                                } else {
+                                    Modifier
+                                },
                             )
                             .then(
-                                if (vertical) Modifier.width(SpeedDialSize.Thickness).fillMaxHeight()
-                                else Modifier.height(SpeedDialSize.Thickness).fillMaxWidth(),
+                                if (vertical) Modifier.width(SpeedDialSize.VerticalThickness).fillMaxHeight()
+                                else Modifier.height(SpeedDialSize.HorizontalThickness).fillMaxWidth(),
                             ),
                     )
                 }
             }
             SpeedSelectionHint(
-                controller,
-                if (vertical) Modifier.align(Alignment.TopCenter)
-                    .windowInsetsPadding(WindowInsets.barsAndCutout).padding(top = Spacing.Comfortable)
-                else Modifier.align(Alignment.BottomCenter)
-                    .windowInsetsPadding(WindowInsets.barsAndCutout.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-                    .padding(bottom = SpeedDialSize.Thickness + Spacing.Tight),
+                controller = controller,
+                modifier = Modifier.align(Alignment.Center),
             )
         }
     }
@@ -374,9 +368,6 @@ private fun SpeedDial(
                     if (owned) {
                         displacement += amount
                         val before = controller.selection
-                        val alongPos = if (vertical) change.position.y else change.position.x
-                        val span = (if (vertical) size.height else size.width).toFloat()
-                        val edgePx = SpeedEdgeZoneDp * density.density
                         val acrossPx = when {
                             !vertical -> displacement.y
                             before?.dockEnd == true -> displacement.x
@@ -385,8 +376,6 @@ private fun SpeedDial(
                         controller.move(
                             alongDp = (if (vertical) displacement.y else displacement.x) / density.density,
                             acrossDp = acrossPx / density.density,
-                            atStartEdge = span > edgePx * 2f && alongPos <= edgePx,
-                            atEndEdge = span > edgePx * 2f && alongPos >= span - edgePx,
                         )
                         val after = controller.selection
                         if (after?.locked != before?.locked) {
@@ -407,17 +396,19 @@ private fun SpeedDial(
     val position = if (controller.dragging) selection.position else animatedPosition
     BoxWithConstraints(input) {
         val center = with(density) { if (vertical) maxHeight.toPx() / 2 else maxWidth.toPx() / 2 }
-        val width = if (vertical) SpeedDialSize.ShortBlock else SpeedDialSize.LongBlock
-        val height = if (vertical) SpeedDialSize.LongBlock else SpeedDialSize.ShortBlock
+        val width = SpeedDialSize.BlockWidth
+        val height = SpeedDialSize.BlockHeight
         val widthPx = with(density) { width.toPx() }
         val heightPx = with(density) { height.toPx() }
-        val stepPx = with(density) { SpeedBlockStepDp.dp.toPx() }
+        val stepPx = with(density) {
+            (if (vertical) SpeedVerticalStepDp else SpeedHorizontalStepDp).dp.toPx()
+        }
         val colors = MaterialTheme.colorScheme
         val unselectedContainer = mediaControlContainer()
         selection.choices.forEachIndexed { index, value ->
             val selected = value == selection.value
             val corner by animateDpAsState(
-                targetValue = if (selected) SpeedDialSize.ShortBlock / 2 else SpeedDialSize.UnselectedCorner,
+                targetValue = if (selected) SpeedDialSize.BlockHeight / 2 else SpeedDialSize.UnselectedCorner,
                 animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
                 label = "speed-corner",
             )
@@ -453,23 +444,10 @@ private fun SpeedDial(
                 contentAlignment = Alignment.Center,
             ) {
                 val label = formatSpeed(value / 100f)
-                val textStyle = (if (selected) MaterialTheme.typography.titleMediumEmphasized else MaterialTheme.typography.titleMedium)
+                val textStyle = (if (selected) MaterialTheme.typography.labelLargeEmphasized else MaterialTheme.typography.labelLarge)
                     .copy(fontFeatureSettings = "tnum")
                 val icon = if (selection.locked) Icons.Filled.Lock else Icons.Filled.FastForward
-                if (selected && vertical) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                    ) {
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = null,
-                            tint = contentColor,
-                            modifier = Modifier.size(Dimens.IconInline),
-                        )
-                        Text(label, style = textStyle, color = contentColor)
-                    }
-                } else if (selected) {
+                if (selected) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
@@ -478,7 +456,7 @@ private fun SpeedDial(
                             imageVector = icon,
                             contentDescription = null,
                             tint = contentColor,
-                            modifier = Modifier.size(Dimens.IconInline),
+                            modifier = Modifier.size(SpeedDialSize.BlockIconSize),
                         )
                         Text(label, style = textStyle, color = contentColor)
                     }

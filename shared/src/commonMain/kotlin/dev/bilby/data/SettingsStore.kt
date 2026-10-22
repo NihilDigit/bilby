@@ -127,6 +127,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
             defaultAudioWifi = p[KEY_DEFAULT_AUDIO] ?: DEFAULT_AUDIO_QUALITY,
             defaultAudioMetered = p[KEY_DEFAULT_AUDIO_METERED] ?: DEFAULT_AUDIO_QUALITY_METERED,
             playerPickUpdatesDefault = p[KEY_PLAYER_PICK_UPDATES_DEFAULT] ?: false,
+            fastForwardSpeed = p[KEY_FAST_FORWARD_SPEED] ?: DEFAULT_FAST_FORWARD_SPEED,
             doubleTapSeek = p[KEY_DOUBLE_TAP_SEEK] ?: true,
         )
     }
@@ -145,6 +146,10 @@ class SettingsStore(private val store: DataStore<Preferences>) {
 
     suspend fun saveCodecPreference(value: CodecPreference) {
         store.edit { p -> p[KEY_PREFERRED_CODEC] = value.key }
+    }
+
+    suspend fun saveFastForwardSpeed(speed: Float) {
+        store.edit { p -> p[KEY_FAST_FORWARD_SPEED] = speed }
     }
 
     suspend fun saveDoubleTapSeek(enabled: Boolean) {
@@ -467,6 +472,12 @@ class SettingsStore(private val store: DataStore<Preferences>) {
          */
         val QUALITY_OPTIONS = listOf(120, 116, 112, 80, 64, 32, 16)
 
+        private val KEY_FAST_FORWARD_SPEED = floatPreferencesKey("player_fast_forward_speed")
+
+        const val DEFAULT_FAST_FORWARD_SPEED = 2.5f
+
+        val FAST_FORWARD_SPEEDS = listOf(1.5f, 2f, 2.5f, 3f)
+
         private val KEY_DOUBLE_TAP_SEEK = booleanPreferencesKey("player_double_tap_seek")
 
         private val KEY_IGNORED_UPDATE = stringPreferencesKey("ignored_update_version")
@@ -610,6 +621,7 @@ data class PlayerPrefs(
      * 一个「临时播放配置」开关关掉它;这里反过来,默认只管这一次。
      */
     val playerPickUpdatesDefault: Boolean = false,
+    val fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
     val doubleTapSeek: Boolean = true,
 ) {
     fun defaultAudioOn(metered: Boolean): Int = if (metered) defaultAudioMetered else defaultAudioWifi

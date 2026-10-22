@@ -51,9 +51,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
@@ -71,7 +68,6 @@ import dev.bilby.resources.*
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.player.EpisodeTarget
 import dev.bilby.ui.player.PlayerIconButton
-import dev.bilby.ui.player.SpeedSelectionOverlay
 import dev.bilby.ui.player.rememberPlaybackSpeedController
 import dev.bilby.ui.player.ControlBarDanmaku
 import dev.bilby.ui.player.CenterPlayButton
@@ -84,6 +80,7 @@ import dev.bilby.data.FollowState
 import dev.bilby.data.MemberCard
 import dev.bilby.data.QueueContext
 import dev.bilby.data.QueueSource
+import dev.bilby.data.SettingsStore
 import dev.bilby.data.encodeQueueContext
 import dev.bilby.data.SponsorSegment
 import kotlinx.coroutines.delay
@@ -231,6 +228,7 @@ fun VideoScreen(
     /** cid 与进度由这一层给:播放器装着哪一 P、放到了哪儿,权威在服务那侧。 */
     onSendDanmaku: (text: String, cid: Long, progressMillis: Long) -> Unit = { _, _, _ -> },
     onDanmakuSendConsumed: () -> Unit = {},
+    fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
     doubleTapSeek: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
@@ -258,37 +256,15 @@ fun VideoScreen(
      */
     var dismissedResumeMillis by rememberSaveable { mutableStateOf<Long?>(null) }
 
-    // 判据是帧,不是 bvid:队列在这一页不在场时(UP 主页、找相关)自动连播到了别的视频,
-    // 这份队列仍是这一页的。用 `state.detail?.bvid` 的那一版在详情请求失败时是 null,离开页面
-    // 音频就继续响;用 bvid 的那一版在连播之后认不出自己的队列。
-    val playerHoldsThisPage = {
-        playback.state.value.queue?.frameId == frame.id
-    }
+    val currentFrameId by rememberUpdatedState(frame.id)
 
     DisposableEffect(playback) {
         val connection = playback.connect { controller = it }
 
         onDispose {
-            controller?.let { connected ->
-                // 播放页离开就暂停,**但只在播放器装的还是本页这一条时**。听视频是页面内的
-                // 状态,不会走到这里。
-                //
-                // 合集里点下一集是"压上新页、弹掉旧页":新页先组合,把自己的流交给那个唯一的
-                // 播放器并起播,旧页的 onDispose 之后才跑。不认身份就会把刚起播的下一集摁停,
-                // 表现为"进播放页不自动播放"。这与进度串味是同一个毛病——页面对着共享播放器
-                // 发命令,却没问播放器还是不是自己的。
-                //
-                // 回到这一页时停着,不续播,见 AudioPlaybackService.resumeFrame。
-                if (playerHoldsThisPage()) {
-                    // 先补一条进度再暂停。离开播放页多半就是这次观看的终点,而常规心跳带着
-                    // 5 秒节流、暂停本身又不发——"暂停,然后退出页面"这条路上,云端会停在最多
-                    // 5 秒之前。**页面给的只是时机**,报什么位置由会话说了算(见
-                    // [dev.bilby.player.ProgressSession.flush]):听视频、切后台、进程被杀
-                    // 这三种页面根本不在场,那些仍然靠会话自己的周期心跳。
-                    connected.send(PlaybackCommand.FlushProgress)
-                    connected.pause()
-                }
-            }
+            // 播放页离开就补一条进度并暂停,只在播放器装的还是本页这一帧时生效(由服务侧核对
+            // [currentFrameId],避免与 `MediaController.releaseFuture` 竞态丢掉单独的 `pause()`)。
+            controller?.send(PlaybackCommand.FlushProgress(currentFrameId))
             // **不 release 播放器**:它归服务所有,不归这个页面。页面离开只断开连接——
             // 在这里 release 就等于把后台正在听的那条一起掐了,而"页面走了"和"播放结束"
             // 本来就是两件事。
@@ -326,8 +302,7 @@ fun VideoScreen(
      * 分 P 行按它高亮、发弹幕按它带参数,全都会认成本页这条视频的。
      */
     val currentCid = if (matchesCurrentPage) audioState.currentCid else 0L
-    val speedController = rememberPlaybackSpeedController(active, bvid to currentCid)
-    var playerBounds by remember { mutableStateOf<Rect?>(null) }
+    val speedController = rememberPlaybackSpeedController(active, bvid to currentCid, fastForwardSpeed)
     LaunchedEffect(fullscreen, listening) {
         speedController.cancel()
         speedController.clearHint()
@@ -835,7 +810,7 @@ fun VideoScreen(
     // 画面这一块。**整页只有这一处 `BilbyPlayer` 调用**,两种排布传不同的约束进去;要它跨排布
     // 不重挂,靠的是下面的 movableContentOf,见 [playerPane]。
     val playerPaneContent: @Composable (Modifier) -> Unit = { paneModifier ->
-        Box(modifier = paneModifier.onGloballyPositioned { playerBounds = it.boundsInRoot() }.background(Color.Black)) {
+        Box(modifier = paneModifier.background(Color.Black)) {
             // **判据是"服务装上东西了没有",不是"有没有 playInfo"。**
             //
             // playInfo 是取流的产物,而有几种本地装载压根不取流:从缓存列表进来、没网、在线失败
@@ -1278,8 +1253,6 @@ fun VideoScreen(
         )
     }
     }
-
-    if (!inPip) SpeedSelectionOverlay(speedController, playerBounds, dimDetails = !immersive)
 
     // 全屏下不给:那时标签行根本不组合,而横屏起键盘会铺掉大半个画面 —— 发弹幕要看着画面发,
     // 盖掉画面就没有可发的对象了。写到一半转进全屏,就当退出输入(草稿留着)。

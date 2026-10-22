@@ -46,6 +46,7 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.SignalCellularAlt
 import androidx.compose.material.icons.outlined.SkipNext
+import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Start
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.outlined.Wallpaper
@@ -90,6 +91,7 @@ import dev.bilby.player.audioQualityLabel
 import dev.bilby.player.DEFAULT_AUDIO_QUALITY_OPTIONS
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.player.formatSpeed
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.video.CATEGORY_DESCRIPTIONS
@@ -129,6 +131,7 @@ import dev.bilby.ui.theme.LocalIsDarkTheme
 import dev.bilby.ui.theme.PaletteSchemes
 import dev.bilby.ui.theme.ThemePalette
 import dev.bilby.ui.theme.dynamicColorAvailable
+import kotlin.math.abs
 
 /**
  * 设置的二级页面。**每一页都是一整页,不是一个展开块**:展开块要么把首页撑回原来的长度,
@@ -206,6 +209,7 @@ fun PlaybackSettingsPage(
     onWifiQualityChange: (Int) -> Unit,
     onMeteredQualityChange: (Int) -> Unit,
     onCodecChange: (CodecPreference) -> Unit,
+    onFastForwardSpeedChange: (Float) -> Unit,
     onDoubleTapSeekChange: (Boolean) -> Unit,
     onAutoNextChange: (Boolean) -> Unit,
     onWifiAudioChange: (Int) -> Unit,
@@ -247,6 +251,19 @@ fun PlaybackSettingsPage(
                     subtitle = stringResource(Res.string.settings_auto_next_subtitle),
                     checked = state.autoNext,
                     onCheckedChange = onAutoNextChange,
+                )
+            }
+            row { position ->
+                ChoiceRow(
+                    position = position,
+                    icon = Icons.Outlined.Speed,
+                    title = stringResource(Res.string.settings_fast_forward_speed),
+                    subtitle = stringResource(Res.string.settings_fast_forward_speed_subtitle),
+                    options = SettingsStore.FAST_FORWARD_SPEEDS,
+                    selected = SettingsStore.FAST_FORWARD_SPEEDS.minByOrNull { abs(it - state.fastForwardSpeed) },
+                    label = { formatSpeed(it) },
+                    onChange = onFastForwardSpeedChange,
+                    valueAtEnd = true,
                 )
             }
             row { position ->

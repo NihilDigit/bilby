@@ -669,6 +669,8 @@
     <string name="video_quality_dolby_vision">杜比视界</string>
     <string name="video_quality_unknown">画质 %1$d</string>
     <string name="comment_ip_location">IP属地：%1$s</string>
+    <string name="settings_fast_forward_speed">长按倍速</string>
+    <string name="settings_fast_forward_speed_subtitle">长按画面期间的默认临时倍速，松手后恢复</string>
     <string name="settings_double_tap_seek">双击快进/快退</string>
     <string name="settings_double_tap_seek_subtitle">关闭后，双击画面任意位置播放或暂停</string>
     <string name="settings_auto_next">自动播放下一条</string>

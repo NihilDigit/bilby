@@ -2,14 +2,13 @@ package dev.bilby.ui.player
 
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.math.sign
 
-internal const val SpeedBlockStepDp = 112f
-internal const val SpeedDragStepDp = 56f
+internal const val SpeedHorizontalStepDp = 76f
+internal const val SpeedVerticalStepDp = 40f
+internal const val SpeedDragStepDp = 22f
 internal const val SpeedModeStepDp = 32f
-internal const val SpeedSelectionIntentDp = 12f
-internal const val SpeedEdgeZoneDp = 36f
-private const val SpeedEdgeRepeatIntervalMillis = 450L
-private const val SpeedSelectionStopDp = 6f
+internal const val SpeedSelectionIntentDp = 8f
 
 internal val SpeedPresets = listOf(25, 50, 75, 100, 125, 150, 175, 200, 225, 250, 275, 300)
 
@@ -47,9 +46,15 @@ internal data class SpeedSelection(
     }
 
     companion object {
-        fun start(original: Float, temporary: Boolean, dockEnd: Boolean = false): SpeedSelection {
-            val value = speedHundredths(original)
-            val choices = (SpeedPresets + value).distinct().sorted()
+        fun start(
+            original: Float,
+            temporary: Boolean,
+            dockEnd: Boolean = false,
+            initial: Float = original,
+        ): SpeedSelection {
+            val originalValue = speedHundredths(original)
+            val value = speedHundredths(initial)
+            val choices = (SpeedPresets + originalValue + value).distinct().sorted()
             return SpeedSelection(
                 value = value,
                 choices = choices,
@@ -61,47 +66,34 @@ internal data class SpeedSelection(
     }
 }
 
-/** 先识别主方向，再按手指位移连续跟手换档；仅当手指滑到屏幕边缘时才启动自动连切。 */
+/** 先识别主方向，再按手指增量位移纯跟手换档，往返转向即时响应。 */
 internal class SpeedSelectionDrag {
     private enum class Axis { Along, Across }
 
     private var axis: Axis? = null
-    private var anchorAlong = 0f
     private var lastAlong = 0f
     private var probeAlong = 0f
     private var probeAcross = 0f
     private var crossStartAlong = 0f
     private var crossStartAcross = 0f
     private var engaged = false
-    private var direction = 0
-    var repeatRevision = 0
-        private set
-    var repeatIntervalMillis: Long? = null
-        private set
-
-    fun repeat(selection: SpeedSelection): SpeedSelection =
-        if (selection.locked || direction == 0) selection
-        else selection.coarseAt(selection.position.roundToInt() + direction.toFloat())
 
     fun move(
         selection: SpeedSelection,
         along: Float,
         across: Float,
-        atStartEdge: Boolean = false,
-        atEndEdge: Boolean = false,
     ): SpeedSelection {
         val deltaAlong = along - lastAlong
         lastAlong = along
         val localAlong = along - probeAlong
         val localAcross = across - probeAcross
-        val alongIntent = abs(localAlong) >= 8f && abs(localAlong) >= abs(localAcross) * 1.15f
+        val alongIntent = abs(localAlong) >= SpeedSelectionIntentDp && abs(localAlong) >= abs(localAcross) * 1.15f
         val crossIntent = abs(localAcross) >= 14f && abs(localAcross) >= abs(localAlong) * 1.25f
 
         if (axis != Axis.Across && crossIntent) {
             axis = Axis.Across
             crossStartAlong = probeAlong
             crossStartAcross = probeAcross
-            pauseRepeat()
         } else if (axis == Axis.Across && abs(localAlong) >= SpeedSelectionIntentDp &&
             abs(localAlong) >= abs(localAcross) * 1.8f
         ) {
@@ -137,27 +129,9 @@ internal class SpeedSelectionDrag {
         }
         if (axis != Axis.Along || selection.locked) return selection
 
-        val distance = along - anchorAlong
-        val nextDirection = when {
-            distance >= SpeedSelectionIntentDp -> 1
-            distance <= -SpeedSelectionIntentDp -> -1
-            abs(distance) <= SpeedSelectionStopDp -> 0
-            else -> direction
-        }
-        if (nextDirection == 0) {
-            engaged = false
-            setDirection(0)
-            repeatIntervalMillis = null
-            return selection.snapped()
-        }
-
-        setDirection(nextDirection)
-        val atEdgeInDirection = (nextDirection > 0 && atEndEdge) || (nextDirection < 0 && atStartEdge)
-        repeatIntervalMillis = if (atEdgeInDirection) SpeedEdgeRepeatIntervalMillis else null
-
         if (!engaged) {
             engaged = true
-            val effective = distance - SpeedSelectionIntentDp * nextDirection
+            val effective = localAlong - SpeedSelectionIntentDp * sign(localAlong)
             return selection.coarseAt(selection.position + effective / SpeedDragStepDp)
         }
         return selection.coarseAt(selection.position + deltaAlong / SpeedDragStepDp)
@@ -165,21 +139,9 @@ internal class SpeedSelectionDrag {
 
     private fun reset(along: Float, across: Float) {
         axis = null
-        anchorAlong = along
         lastAlong = along
         probeAlong = along
         probeAcross = across
         engaged = false
-        pauseRepeat()
-    }
-
-    private fun pauseRepeat() {
-        setDirection(0)
-        repeatIntervalMillis = null
-    }
-
-    private fun setDirection(next: Int) {
-        if (direction != next) repeatRevision++
-        direction = next
     }
 }

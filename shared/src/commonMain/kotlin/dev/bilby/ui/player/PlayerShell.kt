@@ -302,6 +302,13 @@ fun PlayerShell(
                 if (playbackState == PlayerPhase.READY) everReady = true
             }
 
+            override fun onPositionDiscontinuity(oldPositionMillis: Long, newPositionMillis: Long, isSeek: Boolean) {
+                if (!isSeek) {
+                    // 自动连播或切条时不能把上一条(如竖屏 9:16)的比例当成新视频尺寸未知时的兜底。
+                    videoAspect = player.videoSize.displayAspectOr(null)
+                }
+            }
+
             // **每一批事件都重读一次尺寸,不是只听 onVideoSizeChanged。**
             //
             // 这里的 player 是 MediaController,尺寸是从 session 同步过来的,而"同步到了"
@@ -461,6 +468,11 @@ fun PlayerShell(
     //
     // 不一律用快的那一档:控件收起是这一页最常见的状态(还包括息屏只出声),而轮询本身要
     // 跨 binder 问一次 session。
+    LaunchedEffect(attached) {
+        if (!attached) videoAspect = null
+        else videoAspect = player.videoSize.displayAspectOr(videoAspect)
+    }
+
     val pollInterval =
         if (controlsVisible || dragPosition != null) POSITION_POLL_ACTIVE_MILLIS
         else POSITION_POLL_IDLE_MILLIS
@@ -469,6 +481,7 @@ fun PlayerShell(
             if (dragPosition == null) position = player.currentPosition
             bufferedPosition = player.bufferedPosition
             duration = player.duration.coerceAtLeast(0)
+            if (attached) videoAspect = player.videoSize.displayAspectOr(videoAspect)
             delay(pollInterval)
         }
     }
@@ -1105,6 +1118,7 @@ fun PlayerShell(
         AnimatedVisibility(
             // Android 小窗里不画:那里的播放键是系统给的。桌面小窗照画,和平时同一颗。
             visible = (!pip || pipWindow != null) && hud == null &&
+                speedController?.active != true && speedController?.lockedHint == null &&
                 ((controlsVisible && !locked) || loadingVisible || flashVisible),
             enter = scaleIn(scaleSpec, initialScale = CenterButtonEnterScale) + fadeIn(effectsSpec),
             exit = scaleOut(scaleSpec, targetScale = CenterButtonEnterScale) + fadeOut(effectsSpec),
@@ -1128,6 +1142,14 @@ fun PlayerShell(
             modifier = Modifier.align(Alignment.BottomCenter).hoverable(controlsHover),
         ) {
             scope.controlBar()
+        }
+
+        if (speedController != null && !pip) {
+            SpeedSelectionOverlay(
+                controller = speedController,
+                isFullscreen = isFullscreen,
+                modifier = Modifier.matchParentSize(),
+            )
         }
 
         scope.panel()

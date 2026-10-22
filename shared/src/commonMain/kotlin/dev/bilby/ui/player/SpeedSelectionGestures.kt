@@ -30,7 +30,11 @@ internal fun Modifier.speedSelectionLongPress(
             detectDragGesturesAfterLongPress(
                 onDragStart = { startOffset ->
                     dockEnd = vertical && startOffset.x < size.width / 2f
-                    controller.open(temporary = true, dockEnd = dockEnd)
+                    controller.open(
+                        temporary = true,
+                        dockEnd = dockEnd,
+                        initialSpeed = controller.defaultHoldSpeed,
+                    )
                     owned = controller.beginDrag()
                     displacement = Offset.Zero
                     currentOnStart()
@@ -49,9 +53,6 @@ internal fun Modifier.speedSelectionLongPress(
                 if (!owned) return@detectDragGesturesAfterLongPress
                 displacement += amount
                 val before = controller.selection
-                val alongPos = if (vertical) change.position.y else change.position.x
-                val span = (if (vertical) size.height else size.width).toFloat()
-                val edgePx = SpeedEdgeZoneDp * density
                 val acrossPx = when {
                     !vertical -> displacement.y
                     dockEnd -> displacement.x
@@ -60,8 +61,6 @@ internal fun Modifier.speedSelectionLongPress(
                 controller.move(
                     alongDp = (if (vertical) displacement.y else displacement.x) / density,
                     acrossDp = acrossPx / density,
-                    atStartEdge = span > edgePx * 2f && alongPos <= edgePx,
-                    atEndEdge = span > edgePx * 2f && alongPos >= span - edgePx,
                 )
                 val after = controller.selection
                 if (after?.locked != before?.locked) {

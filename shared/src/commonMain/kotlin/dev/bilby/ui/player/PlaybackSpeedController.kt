@@ -10,21 +10,22 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalWindowInfo
+import dev.bilby.data.SettingsStore
 import dev.bilby.player.PlayerHandle
 import dev.bilby.player.PlayerListener
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 @Stable
 class PlaybackSpeedController internal constructor(
-    private val scope: CoroutineScope,
+    @Suppress("UNUSED_PARAMETER")
+    scope: CoroutineScope,
     private val readSpeed: () -> Float,
     private val writeSpeed: (Float) -> Unit,
+    private val readFastForwardSpeed: () -> Float = { SettingsStore.DEFAULT_FAST_FORWARD_SPEED },
 ) {
     internal var selection by mutableStateOf<SpeedSelection?>(null)
         private set
@@ -40,22 +41,32 @@ class PlaybackSpeedController internal constructor(
         private set
 
     val active: Boolean get() = selection != null
+    internal val defaultHoldSpeed: Float get() = readFastForwardSpeed()
 
     private var originalSpeed = speed
     private var drag: SpeedSelectionDrag? = null
-    private var repeatJob: Job? = null
-    private var repeatRevision = -1
 
     fun sync(speed: Float) {
         if (!active) this.speed = speed
     }
 
-    fun open(temporary: Boolean = false, dockEnd: Boolean = false) {
+    fun open(temporary: Boolean = false, dockEnd: Boolean = false, initialSpeed: Float? = null) {
         if (active) finish(cancel = true)
         originalSpeed = readSpeed()
         lockedHint = null
-        selection = SpeedSelection.start(originalSpeed, temporary, dockEnd)
-        speed = originalSpeed
+        val next = SpeedSelection.start(
+            original = originalSpeed,
+            temporary = temporary,
+            dockEnd = dockEnd,
+            initial = initialSpeed ?: originalSpeed,
+        )
+        selection = next
+        if (initialSpeed != null) {
+            speed = next.speed
+            flush(next.speed)
+        } else {
+            speed = originalSpeed
+        }
     }
 
     fun beginDrag(): Boolean {
@@ -69,15 +80,12 @@ class PlaybackSpeedController internal constructor(
     fun move(
         alongDp: Float,
         acrossDp: Float,
-        atStartEdge: Boolean = false,
-        atEndEdge: Boolean = false,
     ) {
         val current = selection ?: return
         update(
-            drag?.move(current, alongDp, acrossDp, atStartEdge, atEndEdge) ?: return,
+            drag?.move(current, alongDp, acrossDp) ?: return,
             allowUnlock = true,
         )
-        refreshRepeat()
     }
 
     fun step(direction: Int) {
@@ -107,9 +115,6 @@ class PlaybackSpeedController internal constructor(
         val finalSpeed = if (keep) current.speed else originalSpeed
         selection = null
         dragging = false
-        repeatJob?.cancel()
-        repeatJob = null
-        repeatRevision = -1
         drag = null
         speed = finalSpeed
         flush(finalSpeed)
@@ -137,36 +142,26 @@ class PlaybackSpeedController internal constructor(
         flush(next.speed)
     }
 
-    private fun refreshRepeat() {
-        val gesture = drag ?: return
-        if (gesture.repeatIntervalMillis == null || repeatRevision != gesture.repeatRevision) {
-            repeatJob?.cancel()
-            repeatJob = null
-        }
-        repeatRevision = gesture.repeatRevision
-        if (gesture.repeatIntervalMillis == null || repeatJob?.isActive == true) return
-        repeatJob = scope.launch {
-            while (dragging) {
-                delay(gesture.repeatIntervalMillis ?: break)
-                val current = selection ?: break
-                if (current.locked || gesture.repeatIntervalMillis == null) break
-                val next = gesture.repeat(current)
-                if (next == current) break
-                update(next)
-            }
-        }
-    }
-
     private fun flush(value: Float) {
         if (abs(readSpeed() - value) > 0.0001f) writeSpeed(value)
     }
 }
 
 @Composable
-internal fun rememberPlaybackSpeedController(player: PlayerHandle?, mediaKey: Any): PlaybackSpeedController {
+internal fun rememberPlaybackSpeedController(
+    player: PlayerHandle?,
+    mediaKey: Any,
+    fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
+): PlaybackSpeedController {
     val scope = rememberCoroutineScope()
+    val currentFastForwardSpeed by rememberUpdatedState(fastForwardSpeed)
     val controller = remember(player, mediaKey) {
-        PlaybackSpeedController(scope, { player?.playbackSpeed ?: 1f }, { player?.setPlaybackSpeed(it) })
+        PlaybackSpeedController(
+            scope = scope,
+            readSpeed = { player?.playbackSpeed ?: 1f },
+            writeSpeed = { player?.setPlaybackSpeed(it) },
+            readFastForwardSpeed = { currentFastForwardSpeed },
+        )
     }
     DisposableEffect(player, controller) {
         val listener = object : PlayerListener {

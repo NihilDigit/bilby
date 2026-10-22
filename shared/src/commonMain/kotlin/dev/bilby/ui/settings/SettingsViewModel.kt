@@ -46,6 +46,7 @@ data class SettingsUiState(
     val sponsorBlock: SponsorBlockPrefs = SponsorBlockPrefs(),
     /** 本机真有硬解器的编码,决定编解码那一节列出哪几项。 */
     val hardwareCodecIds: Set<Int> = emptySet(),
+    val fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
     val doubleTapSeek: Boolean = true,
     /** 播完一条要不要接着放队列里的下一条。见 [dev.bilby.data.PlaybackPrefs.autoNext]。 */
     val autoNext: Boolean = true,
@@ -172,6 +173,7 @@ class SettingsViewModel(
                         defaultAudioWifi = prefs.defaultAudioWifi,
                         defaultAudioMetered = prefs.defaultAudioMetered,
                         playerPickUpdatesDefault = prefs.playerPickUpdatesDefault,
+                        fastForwardSpeed = prefs.fastForwardSpeed,
                         doubleTapSeek = prefs.doubleTapSeek,
                     )
                 }
@@ -279,6 +281,11 @@ class SettingsViewModel(
             settings.clearCredentials()
             onDone()
         }
+    }
+
+    fun setFastForwardSpeed(value: Float) {
+        _state.update { it.copy(fastForwardSpeed = value) }
+        persist { settings.saveFastForwardSpeed(value) }
     }
 
     fun setDoubleTapSeek(value: Boolean) {

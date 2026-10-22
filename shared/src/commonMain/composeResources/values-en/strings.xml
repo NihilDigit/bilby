@@ -602,6 +602,8 @@
     <string name="video_quality_dolby_vision">Dolby Vision</string>
     <string name="video_quality_unknown">Quality %1$d</string>
     <string name="comment_ip_location">IP: %1$s</string>
+    <string name="settings_fast_forward_speed">Press-and-hold speed</string>
+    <string name="settings_fast_forward_speed_subtitle">Default temporary speed while the picture is held; restored on release</string>
     <string name="settings_double_tap_seek">Double-tap to seek</string>
     <string name="settings_double_tap_seek_subtitle">When off, double-tap anywhere on the picture to play or pause</string>
     <string name="player_seek_release_to_cancel">Release to cancel</string>

@@ -61,6 +61,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
 import dev.bilby.ui.components.BilbyIcons
+import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
@@ -227,8 +228,8 @@ private val MediaScrimHeight = 72.dp
  * 挪了多少。现在分两类:
  *
  * - **连续调整**(这三种)留在正中,加一条量:手指在动,读数就该跟着一条看得见的量走。
- * - **一下就完的**(双击、长按加速)各回到它们发生的地方:双击在落点那一侧([DoubleTapSeekHint]),
- *   长按加速在顶上([SpeedBoostCapsule])。正中将来要让给播放键。
+ * - **一下就完的**(双击)回到它发生的地方([DoubleTapSeekHint]);长按倍速的锁定提示与中央读数
+ *   共用同一套 [Overlay] 容器。
  *
  * **摆位归调用方**,所以不是 `BoxScope` 扩展:它套在 `AnimatedVisibility` 里淡入淡出
  * (见 [PlayerShell]),而那一层的 content scope 不是 `BoxScope`,`align` 得挂在外面那个
@@ -394,31 +395,8 @@ internal fun DoubleTapSeekHint(deltaMillis: Long, modifier: Modifier = Modifier)
     }
 }
 
-/**
- * 倍速选择的操作提示与锁定回执。贴在画面上方,给选择器让出画面底部和左侧。
- */
-@Composable
-internal fun SpeedBoostCapsule(text: String, modifier: Modifier = Modifier, icon: ImageVector = Icons.Filled.FastForward) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        modifier = modifier
-            .clip(CircleShape)
-            .background(FixedColors.ScrimOnMedia)
-            .padding(horizontal = Spacing.Cozy, vertical = Spacing.Hair + Spacing.Hair / 2),
-    ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = FixedColors.OnMedia,
-            modifier = Modifier.size(Dimens.IconInline),
-        )
-        Text(text, style = MaterialTheme.typography.labelLarge, color = FixedColors.OnMedia)
-    }
-}
-
 /** 比正文大一档,和 titleMedium 的行高对得上。 */
-private val HintIconSize = 22.dp
+internal val HintIconSize = 22.dp
 
 private val LevelBarWidth = 120.dp
 private val SeekBarHudWidth = 180.dp
@@ -442,6 +420,13 @@ private const val SecondaryTextAlpha = 0.7f
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PlayerTooltip(text: String, content: @Composable () -> Unit) {
+    // 桌面端 CMP 1.12.1 的 CanvasLayersComposeSceneImpl.doMeasureAndLayout 在 mouseExited
+    // 同帧卸载 TooltipBox 的 Popup(独立 RootNodeOwner)时会遍历到已销毁的 RootNodeOwner 并抛
+    // IllegalArgumentException("RootNodeOwner is already disposed")。只保留触屏长按提示。
+    if (!LocalPointerSource.current.isTouchLike) {
+        content()
+        return
+    }
     TooltipBox(
         positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
         tooltip = { PlainTooltip { Text(text) } },
