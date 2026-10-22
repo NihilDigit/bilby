@@ -107,8 +107,15 @@ sealed interface PlaybackCommand {
     data class SetAudioQuality(val quality: Int) : PlaybackCommand
     data object Retry : PlaybackCommand
 
-    /** 先补一条进度。离开播放页多半就是这次观看的终点。 */
-    data object FlushProgress : PlaybackCommand
+    /**
+     * 播放页离开时发:若活帧仍是 [frameId],把本地进度落盘、立刻上报一次云端进度并暂停。
+     *
+     * **暂停跟在这条自定义命令里一起做,不单独调 `MediaController.pause()`:**
+     * `onDispose` 紧接着就会 `releaseFuture`,而 Media3 的 `pause()` 走 `FlushCommandQueueHandler`
+     * 在 `MediaSessionStub` 上要经过两跳 Handler,晚于 `release` 的一跳摘除 controller,
+     * 单独发的 `pause()` 会被当成已断开连接的请求静默丢弃。
+     */
+    data class FlushProgress(val frameId: String = "") : PlaybackCommand
 
     data class SetSleepTimer(val mode: SleepTimerMode) : PlaybackCommand
     data class AdjustSleepTimer(val deltaMinutes: Int) : PlaybackCommand

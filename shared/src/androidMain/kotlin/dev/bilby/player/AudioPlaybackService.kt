@@ -799,8 +799,9 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /**
-     * 导航栈上不再有的帧丢掉。活帧的页面出栈时,播放器照常放着它的队列,只是这份队列不再
-     * 属于任何一页:之后回到栈里更早的视频页,那一页按自己的快照换回来。
+     * 导航栈上不再有的帧丢掉。活帧的页面出栈时,一并落盘进度并暂停 —— `retainFrames` 在出栈当帧
+     * 立刻跑,早于页面退场动画结束时的 `onDispose`,不在这里停的话 `onDispose` 看到 `liveFrame`
+     * 已空就会跳过暂停。
      */
     private fun retainFrames(ids: Set<String>) {
         frames.keys.retainAll(ids)
@@ -810,7 +811,17 @@ class AudioPlaybackService : MediaSessionService() {
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        persistCachedProgress()
+        progressSession?.flush()
+        player.pause()
         publishQueueChange()
+    }
+
+    private fun leaveFrame(frameId: String) {
+        if (frameId.isNotEmpty() && liveFrame?.id != frameId) return
+        persistCachedProgress()
+        progressSession?.flush()
+        player.pause()
     }
 
     /**
@@ -1642,7 +1653,7 @@ class AudioPlaybackService : MediaSessionService() {
         publishState(loading = true)
         retryJob = scope.launch {
             delay(delayMillis)
-            reloadThisItem(playWhenReady)
+            reloadThisItem(playWhenReady && player.playWhenReady)
         }
     }
 
@@ -1969,7 +1980,7 @@ class AudioPlaybackService : MediaSessionService() {
                 } else {
                     getStringBlocking(Res.string.playback_error_decode, error.errorCode)
                 }
-            retryAfterFailure(reason, playWhenReady = true)
+            retryAfterFailure(reason, playWhenReady = player.playWhenReady)
         }
     }
 
@@ -2077,11 +2088,7 @@ class AudioPlaybackService : MediaSessionService() {
                 ACTION_SET_QUALITY -> setQuality(args.getInt(EXTRA_QUALITY))
                 ACTION_SET_AUDIO_QUALITY -> setAudioQuality(args.getInt(EXTRA_QUALITY))
                 ACTION_RETRY -> retryNow()
-                // 直播没有会话,这条命令在直播间自然什么都不做,不必判一句"是不是直播"。
-                ACTION_FLUSH_PROGRESS -> {
-                    persistCachedProgress()
-                    progressSession?.flush()
-                }
+                ACTION_FLUSH_PROGRESS -> leaveFrame(args.getString(EXTRA_FRAME_ID).orEmpty())
                 // 播放器的生命周期到此为止,见 [ACTION_STOP_SERVICE]。
                 ACTION_STOP_SERVICE -> pauseAllPlayersAndStopSelf()
                 // 分钟数是三态里唯一带参数的那个:大于 0 即定时,[SLEEP_END_OF_ITEM] 即播完这条,
@@ -2292,6 +2299,16 @@ class AudioPlaybackService : MediaSessionService() {
          */
         fun currentPositionMillis(): Long? =
             runningService?.takeIf { it::player.isInitialized }?.player?.currentPosition
+
+        /**
+         * 当场读播放器本人的画面尺寸。`MediaController` 在有 masked 命令(`setVideoSurfaceView`、
+         * `setTrackSelectionParameters`)在飞时把 `onPlayerInfoChanged` 攒进 `pendingPlayerInfo`
+         * 而不派发,且 `interfaceVersion >= 5` 时 future 完成不触发 fallback flush,会导致自动
+         * 连播切视频后 `controller.videoSize` 卡在上一条竖屏视频的尺寸上。
+         */
+        fun videoSize(): VideoDimensions? =
+            runningService?.takeIf { it::player.isInitialized }?.player?.videoSize
+                ?.let { VideoDimensions(it.width, it.height, it.pixelWidthHeightRatio) }
 
         private val _positionTicks = MutableStateFlow(PositionTick())
 

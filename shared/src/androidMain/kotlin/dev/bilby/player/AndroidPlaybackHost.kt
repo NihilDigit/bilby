@@ -65,7 +65,8 @@ class MediaControllerHandle(val controller: MediaController) : PlayerHandle {
     override val playbackSpeed: Float get() = controller.playbackParameters.speed
 
     override val videoSize: VideoDimensions
-        get() = controller.videoSize.let { VideoDimensions(it.width, it.height, it.pixelWidthHeightRatio) }
+        get() = AudioPlaybackService.videoSize()
+            ?: controller.videoSize.let { VideoDimensions(it.width, it.height, it.pixelWidthHeightRatio) }
 
     override var shuffleModeEnabled: Boolean
         get() = controller.shuffleModeEnabled
@@ -154,7 +155,9 @@ private fun PlaybackCommand.toSessionCommand(): Pair<String, Bundle> = when (thi
         putInt(AudioPlaybackService.EXTRA_QUALITY, quality)
     }
     PlaybackCommand.Retry -> AudioPlaybackService.ACTION_RETRY to Bundle.EMPTY
-    PlaybackCommand.FlushProgress -> AudioPlaybackService.ACTION_FLUSH_PROGRESS to Bundle.EMPTY
+    is PlaybackCommand.FlushProgress -> AudioPlaybackService.ACTION_FLUSH_PROGRESS to Bundle().apply {
+        putString(AudioPlaybackService.EXTRA_FRAME_ID, frameId)
+    }
     is PlaybackCommand.SetSleepTimer -> AudioPlaybackService.ACTION_SLEEP_TIMER to Bundle().apply {
         // 三种模式压进一个 Int:分钟数,或服务那边定义的两个哨兵。
         val minutes = when (mode) {

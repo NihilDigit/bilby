@@ -185,7 +185,15 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        progressSession?.flush()
+        pause()
         publishState()
+    }
+
+    private fun leaveFrame(frameId: String) {
+        if (frameId.isNotEmpty() && liveFrame?.id != frameId) return
+        progressSession?.flush()
+        pause()
     }
 
     override fun stop() {
@@ -234,7 +242,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             is PlaybackCommand.SetAudioQuality -> setAudioQuality(command.quality)
             PlaybackCommand.Retry -> reloadThisItem()
             is PlaybackCommand.OpenLive -> playLive(command)
-            PlaybackCommand.FlushProgress -> progressSession?.flush()
+            is PlaybackCommand.FlushProgress -> leaveFrame(command.frameId)
             is PlaybackCommand.SetSleepTimer -> sleepTimer.start(command.mode)
             is PlaybackCommand.AdjustSleepTimer -> sleepTimer.extend(command.deltaMinutes * 60_000L)
             PlaybackCommand.RetryQueue -> liveFrame?.let { frame -> queue.current?.let { enrichFrame(frame, it.bvid) } }
@@ -255,7 +263,6 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     private fun setPlayWhenReady(value: Boolean) {
         if (pendingPlayWhenReady != null) {
             pendingPlayWhenReady = value
-            return
         }
         val mediamp = player?.mediamp ?: return
         if (value) mediamp.play() else mediamp.pause()
@@ -606,11 +613,11 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             currentQuality = resolved.quality
             publishState()
             val play = pendingPlayWhenReady ?: playWhenReady
-            pendingPlayWhenReady = null
             PlayerLog.d("desktop open id=${item.bvid} cid=${resolved.cid} q=${resolved.quality} start=${resolved.startMillis}")
             try {
                 player.open(resolved.source, play, resolved.startMillis)
             } catch (failure: PlaybackException) {
+                pendingPlayWhenReady = null
                 // 不接住的话协程带着异常退出,界面停在转圈上,日志里只有线程的未捕获异常。
                 // 连播走到一条打不开的视频时最容易撞上。
                 // 不带错误码:mediamp 的错误是枚举,序号对谁都没有意义(Android 那边报的是
@@ -622,6 +629,11 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
                 }
                 fail("打开失败 id=${item.bvid} ${failure.code} ${failure.message}", shown)
                 return@launch
+            }
+            val desiredPlay = pendingPlayWhenReady
+            pendingPlayWhenReady = null
+            if (desiredPlay != null && desiredPlay != play) {
+                if (desiredPlay) player.mediamp.play() else player.mediamp.pause()
             }
             loading = false
             startProgressSession(item.bvid, resolved.cid)
