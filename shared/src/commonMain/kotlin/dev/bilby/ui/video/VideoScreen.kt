@@ -104,7 +104,6 @@ import dev.bilby.ui.horizontalCutout
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
-import dev.bilby.data.SettingsStore
 import dev.bilby.ui.player.MediaBackButton
 import dev.bilby.ui.player.PlaybackFailure
 import dev.bilby.ui.player.PlayerGestureOptions
