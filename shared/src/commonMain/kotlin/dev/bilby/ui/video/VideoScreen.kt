@@ -104,8 +104,10 @@ import dev.bilby.ui.horizontalCutout
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.data.SettingsStore
 import dev.bilby.ui.player.MediaBackButton
 import dev.bilby.ui.player.PlaybackFailure
+import dev.bilby.ui.player.PlayerGestureOptions
 import dev.bilby.ui.player.playOrReplay
 import dev.bilby.ui.player.rememberSettledPlaybackError
 import dev.bilby.ui.theme.Breakpoints
@@ -811,15 +813,10 @@ fun VideoScreen(
     // 不重挂,靠的是下面的 movableContentOf,见 [playerPane]。
     val playerPaneContent: @Composable (Modifier) -> Unit = { paneModifier ->
         Box(modifier = paneModifier.background(Color.Black)) {
-            // **判据是"服务装上东西了没有",不是"有没有 playInfo"。**
-            //
-            // playInfo 是取流的产物,而有几种本地装载压根不取流:从缓存列表进来、没网、在线失败
-            // 退回本地副本(docs/playback-refactor.md 决定 4)。这几种里它是 null。照 playInfo 判
-            // 的话,这些视频永远落到下面那个转圈分支:播放器其实早就 READY 了(真机上量到
-            // 237ms),只是没有人把画面挂上去。有网从别处进来、只把媒体源换成本地文件时,
-            // playInfo 照常在。
-            val loaded = matchesCurrentPage || audioState.playInfo != null
-            val shellShown = loaded && active != null
+            // 壳的生命周期跟连接走,不能跟取流结果走。连播先清 playInfo,页面的 bvid 再跟
+            // 队列更新;两者短暂不匹配不代表连接失效。拆壳会丢掉比例状态和事件订阅。
+            // 画面是否属于本页仍由 matchesCurrentPage 控制,取流期间显示封面与加载状态。
+            val shellShown = active != null
             val share = { system.shareVideo(bvid, state.detail?.title.orEmpty()) }
             // **`state.error` 画过了就不再画这一条。** 这里原先写着"两者不会同时出现",
             // 那句话不成立:详情取不到时取流同样会失败(一条不存在的 bvid 就两样都占),
@@ -827,7 +824,7 @@ fun VideoScreen(
             // 留下的是详情那一条 —— 它是根因,而取流失败只是它的后果。
             val shownError = playbackError.takeIf { state.error == null }
             when {
-                shellShown -> BilbyPlayer(
+                active != null -> BilbyPlayer(
                     player = active,
                     qualities = audioState.playInfo?.availableQualities.orEmpty(),
                     currentQuality = audioState.currentQuality,
@@ -924,13 +921,6 @@ fun VideoScreen(
                     modifier = Modifier.fillMaxSize(),
                 )
 
-                state.error != null -> PlaybackFailure(
-                    message = stringResource(state.error),
-                    retrying = state.loading,
-                    onRetry = onRetry,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-
                 // **和壳内那颗中央播放键的加载形态一模一样**:这里盖的是"服务还没装上这一条"
                 // 的窗口,壳内那颗盖的是装上之后的取流与缓冲,两段接起来观感是同一次等待。
                 // 这里原先是一个不带底色的 LoadingIndicator,壳接上来那一刻它换成一颗带底色的键,
@@ -938,10 +928,22 @@ fun VideoScreen(
                 //
                 // 取流已经失败时不画:壳还没挂上的这段窗口里下面那条失败提示同样居中,两者叠在
                 // 一起,加载键压着提示文字,读起来既像在等又像失败了。
-                shownError == null -> PlayerTheme {
+                shownError == null && state.error == null -> PlayerTheme {
                     Box(modifier = Modifier.align(Alignment.Center)) {
                         CenterPlayButton(isPlaying = true, loading = true, large = fullscreen, onClick = {})
                     }
+                }
+            }
+
+            // 详情失败仍可重试,但不以错误分支替换整个壳。已经装上流时继续显示播放画面。
+            if (state.error != null && !matchesCurrentPage && audioState.playInfo == null) {
+                Box(Modifier.fillMaxSize().background(Color.Black)) {
+                    PlaybackFailure(
+                        message = stringResource(state.error),
+                        retrying = state.loading,
+                        onRetry = onRetry,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
                 }
             }
 

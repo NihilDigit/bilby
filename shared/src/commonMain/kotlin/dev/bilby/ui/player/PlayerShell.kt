@@ -84,7 +84,6 @@ import dev.bilby.player.PlayerHandle
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.player.PlayerListener
 import dev.bilby.player.PlayerPhase
-import dev.bilby.player.VideoDimensions
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.resources.*
 import dev.bilby.stringResource
@@ -263,14 +262,13 @@ fun PlayerShell(
     val spatialOffsetSpec = motion.fastSpatialSpec<IntOffset>()
     val effectsSpec = motion.fastEffectsSpec<Float>()
 
-    // 画面比例。**null 是"还不知道",不是一个兜底值。** 竖屏视频、4:3 老片都存在,而写死的
-    // 16:9 在 9:16 的流上不是差一点:`aspectRatio(16f / 9f)` 正好铺满 16:9 的容器,画面被横着
-    // 拉开,看不出这是个"还没量到"的状态。不知道就不摆比例 —— 那时还没有帧,看到的是黑底;
-    // 量到之后按真实比例收进去,多出来的地方留黑边。
-    //
-    // 初值当场读,不等下面的 DisposableEffect:effect 里写的状态要到下一帧才重组,流已经在播时
-    // (页面重建、从听视频切回来)头一帧就按未知比例铺满,画面被拉伸一下。
-    var videoAspect by remember { mutableStateOf(player.videoSize.displayAspectOr(null)) }
+    // 尺寸属于播放器,不属于详情页。重新挂画面时同步读当前值,不能等下一条尺寸变化事件:
+    // Media3 对相同尺寸去重,连播的两条竖屏视频可能根本没有新的尺寸事件。
+    var videoAspect by remember(player, attached) { mutableStateOf(player.videoSize.displayAspect()) }
+    // 全屏方向记住最近一次已知的横竖结果:换条途中尺寸短暂为 UNKNOWN 时只遮住画面,
+    // 不把正在竖屏全屏连播的窗口拧回横屏再拧回来。
+    var lastKnownPortrait by remember(player) { mutableStateOf(videoAspect?.let { it < 1f } == true) }
+    videoAspect?.let { lastKnownPortrait = it < 1f }
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
     /**
      * "要不要放",不是"此刻在不在出声"。中央播放键的形态看它:缓冲中、取流中 [isPlaying] 都是
@@ -285,7 +283,7 @@ fun PlayerShell(
      */
     var everReady by remember { mutableStateOf(player.playbackState == PlayerPhase.READY) }
 
-    DisposableEffect(player) {
+    DisposableEffect(player, attached) {
         val listener = object : PlayerListener {
             @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE")
             override fun onIsPlayingChanged(playing: Boolean) {
@@ -304,35 +302,21 @@ fun PlayerShell(
 
             override fun onPositionDiscontinuity(oldPositionMillis: Long, newPositionMillis: Long, isSeek: Boolean) {
                 if (!isSeek) {
-                    // 自动连播或切条时不能把上一条(如竖屏 9:16)的比例当成新视频尺寸未知时的兜底。
-                    videoAspect = player.videoSize.displayAspectOr(null)
+                    videoAspect = player.videoSize.displayAspect()
                 }
             }
 
-            // **每一批事件都重读一次尺寸,不是只听 onVideoSizeChanged。**
-            //
-            // 这里的 player 是 MediaController,尺寸是从 session 同步过来的,而"同步到了"
-            // 和"发了一条 onVideoSizeChanged"是两回事。翻 media3 1.10.1 的 session 源码,
-            // 有两处同步不发事件:
-            //
-            // - 连上的那一刻,`MediaControllerImplBase.onConnected` 把整份 PlayerInfo 直接
-            //   赋值,一条 Player 事件都不发;而在那之前 `MediaController.getVideoSize()`
-            //   硬编码返回 `VideoSize.UNKNOWN`。也就是说"连上时就已经知道的那个尺寸"既不在
-            //   下面那句初始读里,也不会以事件的形式到。
-            // - 之后只要还有 masked 命令在飞,`onPlayerInfoChanged` 会把收到的 PlayerInfo
-            //   攒进 `pendingPlayerInfo` 直接 return,不派发。这一页进来就发一条 masked 命令
-            //   (VideoScreen 里关视频轨那句 `trackSelectionParameters`)。
-            //
-            // 漏掉的后果是画面一直按上一条(或未知)的比例摆着,而重读一个字段不花什么。
+            // 每批事件读取当前快照。UNKNOWN 也要接收:换流期间不能沿用上一条的比例。
             override fun onEvents() {
-                videoAspect = player.videoSize.displayAspectOr(videoAspect)
+                videoAspect = player.videoSize.displayAspect()
             }
         }
-        // 接上来时流可能已经在播了(页面重建、或从听视频切回来),那一次事件早就发过。
-        videoAspect = player.videoSize.displayAspectOr(videoAspect)
+        player.addListener(listener)
+        // 已连接的 controller 初始快照可直接读取,不依赖重放过去的事件。
+        videoAspect = player.videoSize.displayAspect()
+        isPlaying = player.isPlaying
         buffering = player.playbackState == PlayerPhase.BUFFERING
         playWhenReady = player.playWhenReady
-        player.addListener(listener)
         onDispose { player.removeListener(listener) }
     }
 
@@ -469,8 +453,7 @@ fun PlayerShell(
     // 不一律用快的那一档:控件收起是这一页最常见的状态(还包括息屏只出声),而轮询本身要
     // 跨 binder 问一次 session。
     LaunchedEffect(attached) {
-        if (!attached) videoAspect = null
-        else videoAspect = player.videoSize.displayAspectOr(videoAspect)
+        videoAspect = if (!attached) null else player.videoSize.displayAspect()
     }
 
     val pollInterval =
@@ -481,7 +464,7 @@ fun PlayerShell(
             if (dragPosition == null) position = player.currentPosition
             bufferedPosition = player.bufferedPosition
             duration = player.duration.coerceAtLeast(0)
-            if (attached) videoAspect = player.videoSize.displayAspectOr(videoAspect)
+            if (attached) videoAspect = player.videoSize.displayAspect()
             delay(pollInterval)
         }
     }
@@ -511,9 +494,7 @@ fun PlayerShell(
     // 的 key 会让全屏反复重设方向。
     FullscreenEffect(
         isFullscreen,
-        // 还不知道比例时按横屏处理(旧行为):比例总在第一帧之前到,
-        // EVENT_VIDEO_SIZE_CHANGED 早于 EVENT_RENDERED_FIRST_FRAME。
-        isPortraitVideo = videoAspect?.let { it < 1f } == true,
+        isPortraitVideo = lastKnownPortrait,
         fullBleed = fullBleed,
         hideStatusBar = hideStatusBar,
     )
@@ -609,10 +590,11 @@ fun PlayerShell(
                 player = player,
                 modifier = Modifier
                     .align(Alignment.Center)
-                    // 比例未知时铺满容器:此刻还没有帧,摆一个猜的比例只会让第一帧落进错的
-                    // 矩形里,而 SurfaceView 上的画面是被拉到 view 的矩形里的,不会自己留边。
                     .then(videoAspect?.let { Modifier.aspectRatio(it) } ?: Modifier.fillMaxSize()),
             )
+            // 未知不等于没有帧。Surface 必须先挂载(mpv 的输出初始化依赖它),但不能让未知
+            // 比例的画面可见。只按尺寸揭开,不等可能早已发生的 onRenderedFirstFrame。
+            if (videoAspect == null) Box(Modifier.fillMaxSize().background(Color.Black))
         } else if (placeholderCoverUrl.isNotEmpty()) {
             BiliAsyncImage(
                 url = placeholderCoverUrl,
@@ -1181,20 +1163,6 @@ private fun nudgeSeek(player: PlayerHandle, deltaMillis: Long) {
     val duration = player.duration.coerceAtLeast(0)
     val target = player.currentPosition + deltaMillis
     player.seekTo(if (duration > 0) target.coerceIn(0L, duration) else target.coerceAtLeast(0L))
-}
-
-/**
- * **显示比例,不是像素数之比。** `pixelWidthHeightRatio` 不为 1 的流(变形拉伸编码,少见但
- * 存在)像素本身是长方形的,按 width/height 摆会把画面压扁。media3 自己的
- * `PresentationState.getVideoSizeDp` 也是这么折算的。
- *
- * 尺寸未知(UNKNOWN,或换条时中间那一下的 0×0)时返回 [fallback]:保留上一个已知比例,
- * 画面不会先缩成一条再弹回来。
- */
-private fun VideoDimensions.displayAspectOr(fallback: Float?): Float? {
-    if (width <= 0 || height <= 0) return fallback
-    val par = if (pixelWidthHeightRatio > 0f) pixelWidthHeightRatio else 1f
-    return width * par / height
 }
 
 private const val CONTROLS_HIDE_DELAY_MILLIS = 3_000L

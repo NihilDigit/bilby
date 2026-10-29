@@ -27,10 +27,7 @@ interface PlayerListener {
     /** 位置跳变(seek、换条、自动跳过)。[isSeek] 为 true 表示是 seek 引起的。 */
     fun onPositionDiscontinuity(oldPositionMillis: Long, newPositionMillis: Long, isSeek: Boolean) {}
 
-    /**
-     * 一批事件处理完。Android 上 MediaController 同步 session 状态时有几处不发单项事件
-     * (见 PlayerShell 读画面尺寸那一段),要读的字段在这里重读。
-     */
+    /** 一批事件处理完,此时可重读播放器当前快照。初始状态不靠事件重放,订阅时另行读取。 */
     fun onEvents() {}
 }
 
