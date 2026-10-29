@@ -108,6 +108,8 @@ sealed interface DynamicAction {
  *   而那份状态在持有这一列动态的 ViewModel 里,拿不到它的调用方画出来的按钮按下去只能骗人。
  * @param contained 为 false 时不画这一条自己的底色和圆角,由外面那一整块区域当卡片(宽屏空间页
  *   的动态区)。里面嵌套的块照旧有底色,它们本来就比外层高一档。
+ * @param openable 整张卡片本身能不能点开进详情页。动态详情页顶上那一张自己已经在这页里了,传
+ *   false 不再原地压栈;它里面嵌着的那条被转发的原动态照旧可点。
  */
 @Composable
 fun DynamicCardView(
@@ -118,8 +120,17 @@ fun DynamicCardView(
     showAuthor: Boolean = true,
     onLike: ((like: Boolean) -> Unit)? = null,
     contained: Boolean = true,
+    openable: Boolean = true,
 ) {
     val block = blockStyle(nested)
+    // 20dp 不是随手挑的:内边距 12 时 20 − 12 = 8,正好落在 shapes.small 上,
+    // 里面那些块的圆角因此有据可依(风格指南 §1.4 的 optical roundness)。
+    val cardShape = if (nested) block.shape else MaterialTheme.shapes.largeIncreased
+    val openCard: (() -> Unit)? = if (openable) {
+        card.primaryAction()?.let { target -> { onAction(target) } }
+    } else {
+        null
+    }
     Surface(
         // 一条动态是一张 contained 卡片,**卡片自己带容器,不由调用方套一层**:关注动态页和
         // 空间页各套过一份,底色、圆角、边距三处都对不齐,同一条动态在两页里不是一个样子。
@@ -128,33 +139,22 @@ fun DynamicCardView(
             contained -> MaterialTheme.colorScheme.surfaceContainer
             else -> Color.Transparent
         },
-        // 20dp 不是随手挑的:内边距 12 时 20 − 12 = 8,正好落在 shapes.small 上,
-        // 里面那些块的圆角因此有据可依(风格指南 §1.4 的 optical roundness)。
-        shape = if (nested) block.shape else MaterialTheme.shapes.largeIncreased,
-        modifier = modifier.fillMaxWidth(),
+        shape = cardShape,
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (openCard != null) {
+                    Modifier.clip(cardShape).clickable(onClick = openCard)
+                } else {
+                    Modifier
+                },
+            ),
     ) {
         Box {
         Column(
             modifier = Modifier.padding(if (nested) Spacing.Tight else Spacing.Cozy),
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            // **被转发的那条点得开,落点是它自己那一页。** 以前整张嵌套卡片除了里面的视频、
-            // 直播这些块之外没有任何落点:一条转发别人图文的动态,想读原文只能点外层那条转发的
-            // 评论入口,进去看到的是转发者的评论区。原文的评论、完整正文都在
-            // [DynamicAction.OpenDynamic] 那一页。
-            //
-            // **可点的只有名字那一行和正文,不是整张卡片。** 里面的块各自已经有落点(视频进播放页、
-            // 直播进直播间、投票进那条动态),在它们头上再罩一层可点区等于同一次点击有两个候选答案,
-            // 而外层那层永远只是"退回去看原文"。
-            //
-            // 这一层不动颜色。§2.7c 把 `primary` 在这张卡片里限定成两处("正在直播"和"阅读全文"),
-            // 而"退回原文"是整块内容的落点,不是一行入口 —— 它靠位置说明自己,不靠染色。
-            val openForwarded: (() -> Unit)? = if (nested) {
-                { onAction(DynamicAction.OpenDynamic(card.id)) }
-            } else {
-                null
-            }
-
             if (!nested) {
                 // 空间页(不画作者)这一行整个没有:时间挪到了底栏,见 [DynamicFooter]。
                 if (showAuthor) {
@@ -165,10 +165,10 @@ fun DynamicCardView(
                     Spacer(modifier = Modifier.height(TagClearance))
                 }
             } else if (card.author.name.isNotBlank()) {
-                ForwardedAuthorRow(card, openForwarded)
+                ForwardedAuthorRow(card)
             }
 
-            DynamicText(card = card, onAction = onAction, onBodyClick = openForwarded)
+            DynamicText(card = card, onAction = onAction)
 
             // 话题不染 primary:这一页里 primary 只标"这段能点",而话题在本应用里没有落点
             // (没有话题页,也不该有——那是一条按热度排的池子)。染成可点色再点不动最难受。
@@ -291,17 +291,17 @@ private fun DynamicFooter(
             }
         }
         if (interaction != null && onLike != null) {
-            DynamicActions(interaction, onLike, onAction, card.id)
+            DynamicActions(card, interaction, onLike, onAction)
         }
     }
 }
 
 @Composable
 private fun DynamicActions(
+    card: DynamicCard,
     interaction: DynamicInteraction,
     onLike: (like: Boolean) -> Unit,
     onAction: (DynamicAction) -> Unit,
-    dynamicId: String,
 ) {
     Row {
         ActionCell(
@@ -313,23 +313,32 @@ private fun DynamicActions(
             label = interaction.likeCount.takeIf { it > 0 }?.let { formatCount(it) },
             onClick = { onLike(!interaction.liked) },
         )
+        val openTarget = card.primaryAction()
         ActionCell(
             selected = false,
             icon = Icons.AutoMirrored.Outlined.Comment,
             contentDescription = stringResource(Res.string.dynamic_action_comment),
             label = interaction.commentCount.takeIf { it > 0 }?.let { formatCount(it) },
-            // 专栏动态的评论区就是那篇文章的评论区(`comment_type == 12` 时 oid 是 cv 号),
-            // 所以直接进文章页 —— 那里有正文,而动态这一页只有一段摘要。PiliPlus 同样不给这一种
-            // 动态详情页(page_utils.dart:126、232)。
-            onClick = {
-                if (interaction.commentType == ARTICLE_COMMENT_TYPE && interaction.commentId.isNotBlank()) {
-                    onAction(DynamicAction.OpenArticle(interaction.commentId, isRead = true))
-                } else {
-                    onAction(DynamicAction.OpenDynamic(dynamicId))
-                }
-            },
+            onClick = { openTarget?.let(onAction) },
         )
     }
+}
+
+/**
+ * 整张动态卡片本身(含被转发的那张内层卡)的主落点。
+ *
+ * 专栏动态的评论区就是那篇文章的评论区(`comment_type == 12` 时 oid 是 cv 号),直接进文章页 ——
+ * 那里有完整正文,而动态这一页只有摘要。其余动态进它自己那一页(正文 + 评论区)。
+ */
+private fun DynamicCard.primaryAction(): DynamicAction? {
+    val info = interaction
+    if (info != null && info.commentType == ARTICLE_COMMENT_TYPE && info.commentId.isNotBlank()) {
+        return DynamicAction.OpenArticle(info.commentId, isRead = true)
+    }
+    if (id.isNotBlank()) return DynamicAction.OpenDynamic(id)
+    val targetArticle = article
+    if (targetArticle != null) return DynamicAction.OpenArticle(targetArticle.id, targetArticle.isRead)
+    return null
 }
 
 @Composable
@@ -429,11 +438,12 @@ private fun blockStyle(nested: Boolean) = BlockStyle(
 private fun DynamicText(
     card: DynamicCard,
     onAction: (DynamicAction) -> Unit,
-    onBodyClick: (() -> Unit)? = null,
 ) {
     var expanded by remember(card.id) { mutableStateOf(false) }
     val collapsed = card.textIsSummary && !expanded
 
+    // 正文里的链接与 @提及走 `LinkAnnotation`,只消费落在那一截上的点击;普通文字的点击照常
+    // 透传到所在卡片(外层动态卡或内层被转发卡)的容器上。
     if (card.text.isNotEmpty()) {
         BiliRichText(
             spans = card.text,
@@ -441,18 +451,6 @@ private fun DynamicText(
             onLinkClick = { onAction(DynamicAction.OpenUrl(it)) },
             onMentionClick = { onAction(DynamicAction.OpenUser(it)) },
             maxLines = if (collapsed) DynamicTextMaxLines else Int.MAX_VALUE,
-            modifier = if (onBodyClick == null) {
-                Modifier
-            } else {
-                Modifier
-                    .fillMaxWidth()
-                    .clip(MaterialTheme.shapes.extraSmall)
-                    .clickable(
-                        role = Role.Button,
-                        onClickLabel = stringResource(Res.string.dynamic_open_origin),
-                        onClick = onBodyClick,
-                    )
-            },
         )
     }
 
@@ -506,32 +504,38 @@ private fun DynamicAuthorRow(card: DynamicCard, onAction: (DynamicAction) -> Uni
     // 时间走全应用同一份相对时间(见 formatRelativeTime)—— 这里以前是绝对日期,同一个 app 里
     // 首页写"4分钟前"、动态卡片写"2026-08-09",读起来像两处在说不同的东西。
     val meta = formatRelativeTime(card.publishedAtEpochSeconds)
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    // 作者热区收在头像与名字本身,不占满整行宽度:右边那片空白属于卡片背景,点在那里应当与
+    // 空间页(不画作者行)一样打开这条动态,而不是两处点卡片上沿去了不同的页面。
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(role = Role.Button, enabled = card.author.mid != 0L) {
-                onAction(DynamicAction.OpenUser(card.author.mid))
-            },
+            .padding(end = if (card.tag != null) TagReserveWidth else 0.dp),
     ) {
-        Avatar(url = card.author.faceUrl, size = Dimens.AvatarRow)
-        Column(
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
             modifier = Modifier
-                .weight(1f)
-                .padding(end = if (card.tag != null) TagReserveWidth else 0.dp),
+                .heightIn(min = Dimens.MinTouchTarget)
+                .clip(MaterialTheme.shapes.small)
+                .clickable(role = Role.Button, enabled = card.author.mid != 0L) {
+                    onAction(DynamicAction.OpenUser(card.author.mid))
+                }
+                .padding(end = Spacing.Tight),
         ) {
-            Text(
-                text = card.author.name,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = meta,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Avatar(url = card.author.faceUrl, size = Dimens.AvatarRow)
+            Column {
+                Text(
+                    text = card.author.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = meta,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -542,30 +546,14 @@ private fun DynamicAuthorRow(card: DynamicCard, onAction: (DynamicAction) -> Uni
  * **不是外层那种两行的作者行**:再摆一次整套头像、名字、时间,转发卡片看起来像两条并排的
  * 动态;而只有一行灰字的话,认人全靠读名字。一个 20dp 的头像介于两者之间。
  *
- * **不再撑到 48dp。** 原先为了触控下限把这一行撑高,名字和下面正文之间于是空出一大截,
- * 整块转发内容像是从半空开始。点这一行去的地方([DynamicAction.OpenDynamic] 那一页)正文
- * 也去得了,正文那一块的热区足够大,这一行不必独自扛触控下限。
+ * 点击跟随所在的那张嵌套卡片一起进原动态详情,不单独撑 48dp 或截走热区。
  */
 @Composable
-private fun ForwardedAuthorRow(card: DynamicCard, onOpen: (() -> Unit)?) {
+private fun ForwardedAuthorRow(card: DynamicCard) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.extraSmall)
-            .then(
-                if (onOpen == null) {
-                    Modifier
-                } else {
-                    Modifier.clickable(
-                        role = Role.Button,
-                        onClickLabel = stringResource(Res.string.dynamic_open_origin),
-                        onClick = onOpen,
-                    )
-                },
-            )
-            .padding(vertical = Spacing.Hair / 2),
+        modifier = Modifier.padding(vertical = Spacing.Hair / 2),
     ) {
         if (card.author.faceUrl.isNotEmpty()) {
             Avatar(url = card.author.faceUrl, size = ForwardedAvatarSize)
@@ -789,7 +777,7 @@ private fun SideBySideCard(
         shape = block.shape,
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier),
+            .then(if (onClick != null) Modifier.clip(block.shape).clickable(role = Role.Button, onClick = onClick) else Modifier),
     ) {
         Row(
             modifier = Modifier.padding(Spacing.Tight),
@@ -879,7 +867,7 @@ private fun ReserveRow(
         shape = block.shape,
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (open != null) Modifier.clickable(role = Role.Button, onClick = open) else Modifier),
+            .then(if (open != null) Modifier.clip(block.shape).clickable(role = Role.Button, onClick = open) else Modifier),
     ) {
         Column(
             modifier = Modifier.padding(Spacing.Cozy),

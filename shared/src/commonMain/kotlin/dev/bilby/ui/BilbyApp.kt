@@ -802,9 +802,7 @@ private fun BilbyApp(
                     DynamicDetailRoute(
                         container = container,
                         id = key.id,
-                        onVideoClick = { push(Video(it)) },
-                        onUpClick = { push(Space(it)) },
-                        onArticleClick = { id, isRead -> push(ArticlePage(id, isRead)) },
+                        push = push,
                         onOpenLink = openLink,
                         onBack = { backStack.removeLastOrNull() },
                     )
@@ -2465,9 +2463,7 @@ private fun OtherDynamicsRoute(
 private fun DynamicDetailRoute(
     container: AppContainer,
     id: String,
-    onVideoClick: (String) -> Unit,
-    onUpClick: (Long) -> Unit,
-    onArticleClick: (String, Boolean) -> Unit,
+    push: (NavKey) -> Unit,
     onOpenLink: (String) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -2505,13 +2501,12 @@ private fun DynamicDetailRoute(
         onBack = onBack,
         onRetry = vm::retry,
         onAction = { action ->
-            when (action) {
-                is DynamicAction.OpenVideo -> onVideoClick(action.bvid)
-                is DynamicAction.OpenUser -> onUpClick(action.mid)
-                is DynamicAction.OpenArticle -> onArticleClick(action.id, action.isRead)
-                // 已经在一条动态里了,再点进"这条动态"没有去处。其余的交给公共那段。
-                is DynamicAction.OpenDynamic -> Unit
-                else -> handleDynamicAction(action, system, container, scope) { }
+            // 已经在这条动态里时不再原地压栈自身;嵌套在里面的被转发原动态(id 不同)、直播、
+            // 预约、视频、专栏与链接全部按同一套规则跳转。
+            if (action is DynamicAction.OpenDynamic && action.id == id) {
+                // 已在当前动态页
+            } else {
+                handleDynamicAction(action, system, container, scope, push)
             }
         },
         onLike = vm::like,

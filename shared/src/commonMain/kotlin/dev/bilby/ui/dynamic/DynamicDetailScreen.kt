@@ -78,6 +78,7 @@ fun DynamicDetailScreen(
                         card = card,
                         onAction = onAction,
                         onLike = onLike,
+                        openable = false,
                         modifier = Modifier.padding(
                             horizontal = Spacing.Comfortable,
                             vertical = Spacing.Cozy,
