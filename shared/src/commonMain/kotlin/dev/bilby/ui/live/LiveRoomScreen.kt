@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.size
@@ -47,7 +48,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.HighQuality
@@ -88,16 +93,25 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import coil3.compose.LocalPlatformContext
 import dev.bilby.player.PlayerHandle
 import dev.bilby.resources.*
 import org.jetbrains.compose.resources.StringResource
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
+import dev.bilby.data.EmoteAction
 import dev.bilby.data.QualityOption
 import androidx.compose.material3.IconToggleButton
 import dev.bilby.ui.components.BilbyIcons
+import dev.bilby.ui.components.EmotePickerPanel
+import dev.bilby.ui.components.EmoteToggleButton
+import dev.bilby.ui.components.LocalPointerSource
+import dev.bilby.ui.components.insertAtCursor
+import dev.bilby.ui.components.rememberComplementEmotePanelHeight
+import dev.bilby.ui.components.rememberLiveEmoteState
 import dev.bilby.ui.components.touchOnlyPaging
 import dev.bilby.ui.components.LocalSidePane
 import dev.bilby.ui.components.MetaSeparator
@@ -198,6 +212,7 @@ fun LiveRoomScreen(
     onLoadMoreGuards: () -> Unit,
     /** 发一条弹幕。直播不需要暂停,也不做本地回显(见 LiveRoomViewModel.sendDanmaku)。 */
     onSendDanmaku: (String) -> Unit,
+    onSendEmoticon: (String) -> Unit = {},
     onRetry: () -> Unit,
     /**
      * 播到一半断了,而且服务的退避重试已经用完。**和 [LiveRoomUiState.error] 不是一回事**:
@@ -435,10 +450,12 @@ fun LiveRoomScreen(
             LiveAnchorRow(state = state, onUserClick = onUserClick, onToggleFollow = onToggleFollow)
             LiveRoomTabs(
                 state = state,
+                roomId = roomId,
                 onLoadMoreGuards = onLoadMoreGuards,
                 danmakuDraft = danmakuDraft,
                 onDanmakuDraftChange = { danmakuDraft = it },
                 onSendDanmaku = sendDanmakuDraft,
+                onSendEmoticon = onSendEmoticon,
                 // 双栏时开关在画面的控制条上,发言栏左端不再放一枚。
                 showDanmakuToggle = !expandedLayout,
                 danmakuEnabled = danmakuPrefs.enabled,
@@ -805,10 +822,12 @@ private fun LiveAnchorRow(state: LiveRoomUiState, onUserClick: (Long) -> Unit, o
 @Composable
 private fun LiveRoomTabs(
     state: LiveRoomUiState,
+    roomId: Long,
     onLoadMoreGuards: () -> Unit,
     danmakuDraft: String,
     onDanmakuDraftChange: (String) -> Unit,
     onSendDanmaku: () -> Unit,
+    onSendEmoticon: (String) -> Unit,
     showDanmakuToggle: Boolean,
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
@@ -876,6 +895,7 @@ private fun LiveRoomTabs(
         // 简介和评论,没有它的位置;直播间本来就有一条聊天栏,输入栏接在它下面读起来就是
         // "在这儿说话",和评论区是同一个形状。直播也没什么好暂停的。
         LiveDanmakuInput(
+            roomId = roomId,
             text = danmakuDraft,
             onTextChange = onDanmakuDraftChange,
             sending = state.sendingDanmaku,
@@ -883,6 +903,7 @@ private fun LiveRoomTabs(
             // 未开播时不给输入:此刻画面是一张封面,服务端也会拒。
             enabled = state.isLive,
             onSend = onSendDanmaku,
+            onSendEmoticon = onSendEmoticon,
             showDanmakuToggle = showDanmakuToggle,
             danmakuEnabled = danmakuEnabled,
             onDanmakuEnabledChange = onDanmakuEnabledChange,
@@ -1407,12 +1428,14 @@ private fun ChatPane(
  */
 @Composable
 private fun LiveDanmakuInput(
+    roomId: Long,
     text: String,
     onTextChange: (String) -> Unit,
     sending: Boolean,
     error: String?,
     enabled: Boolean,
     onSend: () -> Unit,
+    onSendEmoticon: (String) -> Unit,
     /**
      * 左端画不画弹幕开关,同视频页标签栏那一枚。全屏时这一栏不在,双栏时开关在画面的控制条上,
      * 两种情况都不画。
@@ -1422,70 +1445,138 @@ private fun LiveDanmakuInput(
     onDanmakuEnabledChange: (Boolean) -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val isTouchLike = LocalPointerSource.current.isTouchLike
+    val complementPanelHeight = rememberComplementEmotePanelHeight()
+
+    var emojiOpen by rememberSaveable(roomId) { mutableStateOf(false) }
+    LaunchedEffect(enabled) { if (!enabled) emojiOpen = false }
+    BackHandler(enabled = emojiOpen) { emojiOpen = false }
+    val (emoteState, retryEmotes) = rememberLiveEmoteState(roomId = roomId, active = emojiOpen)
+
+    var fieldValue by remember {
+        mutableStateOf(TextFieldValue(text = text, selection = TextRange(text.length)))
+    }
+    if (fieldValue.text != text) {
+        fieldValue = TextFieldValue(
+            text = text,
+            selection = TextRange(fieldValue.selection.start.coerceAtMost(text.length)),
+        )
+    }
+    val updateField: (TextFieldValue) -> Unit = { next ->
+        if (next.text.length <= LiveDanmakuMaxLength) {
+            val changed = next.text != fieldValue.text
+            fieldValue = next
+            if (changed) onTextChange(next.text)
+        }
+    }
+
     val send = onSend
     Column(
         modifier = Modifier
             .imePadding()
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+            .fillMaxWidth(),
     ) {
-        // 失败原因贴在输入框上面。直播间没有别的地方说这句话,而"等级不够""房间禁言"
-        // 这几种失败,人得读一眼才知道下一步该干什么。
-        error?.let {
-            Text(
-                text = stringResource(Res.string.danmaku_send_failed, it),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(horizontal = Spacing.Hair),
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+        ) {
+            // 失败原因贴在输入框上面。直播间没有别的地方说这句话,而"等级不够""房间禁言"
+            // 这几种失败,人得读一眼才知道下一步该干什么。
+            error?.let {
+                Text(
+                    text = stringResource(Res.string.danmaku_send_failed, it),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = Spacing.Hair),
+                )
+            }
+            PillInputField(
+                value = fieldValue,
+                onValueChange = updateField,
+                placeholder = stringResource(Res.string.danmaku_input_hint),
+                canSend = enabled && !sending && fieldValue.text.isNotBlank(),
+                sending = sending,
+                onSend = send,
+                enabled = enabled,
+                maxLines = 1,
+                fieldModifier = Modifier.focusRequester(focusRequester),
+                onFocusChange = { focused ->
+                    if (focused && emojiOpen) emojiOpen = false
+                },
+                leading = if (showDanmakuToggle) {
+                    {
+                        // 开与关换的是字形,不只是颜色,同视频页那枚。
+                        IconToggleButton(checked = danmakuEnabled, onCheckedChange = onDanmakuEnabledChange) {
+                            Icon(
+                                imageVector = if (danmakuEnabled) BilbyIcons.Danmaku else BilbyIcons.DanmakuOff,
+                                contentDescription = stringResource(Res.string.danmaku_show),
+                                tint = if (danmakuEnabled) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                    }
+                } else {
+                    null
+                },
+                trailing = { focused ->
+                    EmoteToggleButton(
+                        open = emojiOpen,
+                        enabled = enabled,
+                        onToggle = {
+                            if (emojiOpen) {
+                                emojiOpen = false
+                                focusRequester.requestFocus()
+                                keyboard?.show()
+                            } else {
+                                emojiOpen = true
+                                if (isTouchLike) focusManager.clearFocus()
+                                keyboard?.hide()
+                            }
+                        },
+                    )
+                    if (focused) {
+                        IconButton(onClick = { focusManager.clearFocus() }) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = stringResource(Res.string.action_cancel),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                },
             )
         }
-        PillInputField(
-            value = text,
-            onValueChange = { if (it.length <= LiveDanmakuMaxLength) onTextChange(it) },
-            placeholder = stringResource(Res.string.danmaku_input_hint),
-            canSend = enabled && !sending && text.isNotBlank(),
-            sending = sending,
-            onSend = send,
-            enabled = enabled,
-            maxLines = 1,
-            leading = if (showDanmakuToggle) {
-                {
-                    // 开与关换的是字形,不只是颜色,同视频页那枚。
-                    IconToggleButton(checked = danmakuEnabled, onCheckedChange = onDanmakuEnabledChange) {
-                        Icon(
-                            imageVector = if (danmakuEnabled) BilbyIcons.Danmaku else BilbyIcons.DanmakuOff,
-                            contentDescription = stringResource(Res.string.danmaku_show),
-                            tint = if (danmakuEnabled) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                        )
+        if (emojiOpen) {
+            EmotePickerPanel(
+                state = emoteState,
+                onRetry = retryEmotes,
+                onSelect = { action ->
+                    when (action) {
+                        is EmoteAction.InsertText -> {
+                            updateField(fieldValue.insertAtCursor(action.text, maxLength = LiveDanmakuMaxLength))
+                        }
+                        is EmoteAction.SendLiveSticker -> {
+                            if (enabled && !sending) {
+                                onSendEmoticon(action.emoticonUnique)
+                            }
+                        }
                     }
-                }
-            } else {
-                null
-            },
-            // 写的时候最右端给退出键,同视频页的弹幕胶囊:输入栏常驻在页面底部,收键盘之外没有
-            // 别的出口,桌面上连这一条都没有。草稿留在框里。
-            trailing = { focused ->
-                if (focused) {
-                    IconButton(onClick = { focusManager.clearFocus() }) {
-                        Icon(
-                            imageVector = Icons.Filled.Close,
-                            contentDescription = stringResource(Res.string.action_cancel),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            },
-        )
+                },
+                height = complementPanelHeight,
+            )
+        }
     }
 }
 
-/** 直播弹幕的长度上限比点播短(B 站自己的输入框就是 20)。 */
-private const val LiveDanmakuMaxLength = 20
+/** 直播弹幕长度上限:高阶粉丝勋章最高可解锁至 40 字,内联表情占位符也按字符计。 */
+private const val LiveDanmakuMaxLength = 40
 
 
 @Composable

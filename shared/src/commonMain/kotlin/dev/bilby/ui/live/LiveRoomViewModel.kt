@@ -761,6 +761,21 @@ class LiveRoomViewModel(
         }
     }
 
+    /** 发一枚房间/粉丝勋章/大航海大表情(直接单发,见 `notes/live.md` §4.1)。 */
+    fun sendEmoticon(emoticonUnique: String) {
+        val key = emoticonUnique.trim()
+        if (key.isEmpty() || _state.value.sendingDanmaku || !_state.value.isLive) return
+        _state.update { it.copy(sendingDanmaku = true, sendError = null) }
+        viewModelScope.launch {
+            val error = when (val result = repository.sendEmoticon(roomId, key)) {
+                is BiliResult.Ok -> null
+                is BiliResult.ApiError -> "${result.message}(${result.code})"
+                is BiliResult.Failure -> result.cause.message ?: "网络错误"
+            }
+            _state.update { it.copy(sendingDanmaku = false, sendError = error) }
+        }
+    }
+
     /** 大航海按页拉。首次进入也走它,所以 [LiveGuardsState.page] 从 0 起。 */
     fun loadMoreGuards() {
         val guards = _state.value.guards

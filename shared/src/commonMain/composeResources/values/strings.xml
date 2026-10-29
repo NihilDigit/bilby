@@ -813,4 +813,11 @@
     <!-- 直播间的连接状态提示 -->
     <string name="live_notice_disconnected">连接已断开</string>
     <string name="live_notice_reconnected">已重新连接</string>
+
+    <!-- 表情面板 -->
+    <string name="emote_open">表情</string>
+    <string name="emote_keyboard">键盘</string>
+    <string name="emote_empty">暂无可用表情</string>
+    <string name="emote_kaomoji">颜文字</string>
+    <string name="emote_unlock_level">Lv.%1$d</string>
 </resources>

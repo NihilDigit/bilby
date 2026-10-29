@@ -26,12 +26,17 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
 import dev.bilby.stringResource
@@ -76,8 +81,57 @@ fun PillInputField(
     /** 发送键外侧、胶囊最右端的一格。参数是输入框此刻是否聚焦(直播间写的时候在这里放退出键)。 */
     trailing: (@Composable (focused: Boolean) -> Unit)? = null,
 ) {
+    var fieldValue by remember { mutableStateOf(TextFieldValue(text = value, selection = TextRange(value.length))) }
+    if (fieldValue.text != value) {
+        fieldValue = TextFieldValue(
+            text = value,
+            selection = TextRange(fieldValue.selection.start.coerceAtMost(value.length)),
+        )
+    }
+    PillInputField(
+        value = fieldValue,
+        onValueChange = { next ->
+            val changed = next.text != fieldValue.text
+            fieldValue = next
+            if (changed) onValueChange(next.text)
+        },
+        placeholder = placeholder,
+        canSend = canSend,
+        sending = sending,
+        onSend = onSend,
+        modifier = modifier,
+        enabled = enabled,
+        maxLines = maxLines,
+        minLines = minLines,
+        imeSend = imeSend,
+        fieldModifier = fieldModifier,
+        leading = leading,
+        trailing = trailing,
+    )
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun PillInputField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    placeholder: String,
+    canSend: Boolean,
+    sending: Boolean,
+    onSend: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    maxLines: Int = DefaultMaxLines,
+    minLines: Int = 1,
+    imeSend: Boolean = true,
+    fieldModifier: Modifier = Modifier,
+    onFocusChange: ((Boolean) -> Unit)? = null,
+    leading: (@Composable () -> Unit)? = null,
+    trailing: (@Composable (focused: Boolean) -> Unit)? = null,
+) {
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
+    LaunchedEffect(focused) { onFocusChange?.invoke(focused) }
     ReleaseFocusWhenKeyboardHides(focused)
     val fieldColor by animateColorAsState(
         targetValue = if (focused) {
@@ -109,7 +163,7 @@ fun PillInputField(
                 .heightIn(min = InnerMinHeight)
                 .padding(vertical = Spacing.Tight),
         ) {
-            if (value.isEmpty()) {
+            if (value.text.isEmpty()) {
                 Text(
                     placeholder,
                     style = MaterialTheme.typography.bodyLarge,
@@ -156,6 +210,24 @@ fun PillInputField(
         }
         trailing?.invoke(focused)
     }
+}
+
+/**
+ * 在当前光标或选区位置插入一段表情占位符或颜文字,并将光标推进到插入文本末尾。
+ * 超出 [maxLength] 时整枚不插,避免截出半截不闭合的 `[xxx`。
+ */
+fun TextFieldValue.insertAtCursor(token: String, maxLength: Int = Int.MAX_VALUE): TextFieldValue {
+    val start = selection.min.coerceIn(0, text.length)
+    val end = selection.max.coerceIn(start, text.length)
+    val nextLength = text.length - (end - start) + token.length
+    if (nextLength > maxLength) return this
+    val merged = buildString(nextLength) {
+        append(text, 0, start)
+        append(token)
+        append(text, end, text.length)
+    }
+    val cursor = start + token.length
+    return TextFieldValue(text = merged, selection = TextRange(cursor))
 }
 
 /** 胶囊的最低高度:单行字加上下各一截,与 48dp 的发送键加 4dp 边等高。 */

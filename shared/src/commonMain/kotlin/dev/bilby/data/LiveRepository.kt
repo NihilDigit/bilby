@@ -203,6 +203,31 @@ class LiveRepository(private val client: BiliClient) {
         referer = BiliConstants.LIVE_REFERER,
     )
 
+    /**
+     * 发一枚直播间专属/粉丝勋章/大航海大表情(接口事实见 `notes/live.md` §4.1)。
+     *
+     * 与普通文本弹幕共用 `/msg/send` 与 WBI 签名,区别是正文填 `emoticon_unique`,并附
+     * `dm_type = 1` 与 `emoticonOptions = "[object Object]"`。发出后同样由弹幕长连接推回。
+     */
+    suspend fun sendEmoticon(roomId: Long, emoticonUnique: String): BiliResult<Unit> = client.postAction(
+        url = "${BiliConstants.LIVE_HOST}/msg/send",
+        params = mapOf("web_location" to WEB_LOCATION_SEND_MSG),
+        signedParams = true,
+        form = mapOf(
+            "bubble" to "0",
+            "msg" to emoticonUnique,
+            "color" to WHITE_COLOR.toString(),
+            "mode" to "1",
+            "dm_type" to "1",
+            "emoticonOptions" to EMOTICON_OPTIONS,
+            "fontsize" to DEFAULT_FONT_SIZE.toString(),
+            "rnd" to (System.currentTimeMillis() / 1000).toString(),
+            "roomid" to roomId.toString(),
+        ),
+        csrfTokenAlias = true,
+        referer = "${BiliConstants.LIVE_REFERER}/$roomId",
+    )
+
     companion object {
         /** 原画。取不到时服务端会自己降档,`current_qn` 会告诉我们实际给了哪一档。 */
         const val DEFAULT_QN = 10000
@@ -212,6 +237,7 @@ class LiveRepository(private val client: BiliClient) {
         private const val WHITE_COLOR = 0xFFFFFF
         private const val DEFAULT_FONT_SIZE = 25
         private const val STATISTICS = """{"appId":100,"platform":5}"""
+        private const val EMOTICON_OPTIONS = "[object Object]"
 
         const val GUARD_PAGE_SIZE = 20
     }

@@ -8,3 +8,6 @@ internal actual fun fullScreenDialogProperties(): DialogProperties =
 
 @Composable
 internal actual fun DialogIntoDisplayCutout() = Unit
+
+@Composable
+internal actual fun ConfigureInputDialogWindow() = Unit

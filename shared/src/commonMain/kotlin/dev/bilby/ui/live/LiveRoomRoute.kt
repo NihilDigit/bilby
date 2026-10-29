@@ -128,6 +128,7 @@ fun LiveRoomRoute(
         onOnlyAudioChange = { onlyAudio = it },
         onLoadMoreGuards = vm::loadMoreGuards,
         onSendDanmaku = vm::sendDanmaku,
+        onSendEmoticon = vm::sendEmoticon,
         onRetry = vm::load,
         playbackError = playbackError,
         // 直播 MediaItem 化之后重取流就是标准那一条:重新解析、重新要一次地址,当前档位和

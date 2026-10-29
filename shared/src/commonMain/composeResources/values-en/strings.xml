@@ -748,4 +748,11 @@
     <!-- Live room connection notices -->
     <string name="live_notice_disconnected">Disconnected</string>
     <string name="live_notice_reconnected">Reconnected</string>
+
+    <!-- Emoji picker -->
+    <string name="emote_open">Emoji</string>
+    <string name="emote_keyboard">Keyboard</string>
+    <string name="emote_empty">No emoji available</string>
+    <string name="emote_kaomoji">Kaomoji</string>
+    <string name="emote_unlock_level">Lv.%1$d</string>
 </resources>

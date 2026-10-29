@@ -109,6 +109,7 @@ import dev.bilby.ui.comment.CommentThreadRoute
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.comment.CommentViewModel
 import dev.bilby.data.FavFolderDetail
+import dev.bilby.data.LocalEmoteRepository
 import dev.bilby.data.PlayerPrefs
 import dev.bilby.data.FavRepository
 import dev.bilby.data.QueueContext
@@ -244,6 +245,7 @@ fun BilbyRoot(
             CompositionLocalProvider(
                 LocalPointerSource provides pointerSource,
                 LocalSystemActions provides systemActions,
+                LocalEmoteRepository provides container.emoteRepository,
             ) {
                 BilbyApp(container, incomingLink, snackbarHostState)
             }

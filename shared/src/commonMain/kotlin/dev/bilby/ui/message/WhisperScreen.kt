@@ -12,11 +12,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
@@ -70,13 +72,20 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import dev.bilby.stringResource
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -84,11 +93,16 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import dev.bilby.resources.*
+import dev.bilby.data.EmoteAction
 import dev.bilby.data.WhisperContent
 import dev.bilby.data.model.plainText
+import dev.bilby.ui.BackHandler
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.BiliRichText
+import dev.bilby.ui.components.EmotePickerPanel
+import dev.bilby.ui.components.EmoteToggleButton
+import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.VideoCover
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FirstScreenState
@@ -98,6 +112,9 @@ import dev.bilby.ui.components.InlineError
 import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.components.SelectableTextDialog
 import dev.bilby.ui.components.PillInputField
+import dev.bilby.ui.components.insertAtCursor
+import dev.bilby.ui.components.rememberComplementEmotePanelHeight
+import dev.bilby.ui.components.rememberReplyEmoteState
 import dev.bilby.formatDurationSeconds
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -711,12 +728,28 @@ internal fun WhisperTopBar(
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun WhisperInput(sending: Boolean, error: SendError?, sentCount: Int, onSend: (String) -> Unit) {
-    var text by rememberSaveable { mutableStateOf("") }
+    var fieldValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue())
+    }
     var seenSentCount by rememberSaveable { mutableIntStateOf(sentCount) }
+    var emojiOpen by rememberSaveable { mutableStateOf(false) }
+    val (emoteState, retryEmotes) = rememberReplyEmoteState(active = emojiOpen)
+    val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val isTouchLike = LocalPointerSource.current.isTouchLike
+    val complementPanelHeight = rememberComplementEmotePanelHeight()
+
+    BackHandler(enabled = emojiOpen) { emojiOpen = false }
+
     LaunchedEffect(sentCount) {
-        if (sentCount > seenSentCount) text = ""
+        if (sentCount > seenSentCount) {
+            fieldValue = TextFieldValue()
+            emojiOpen = false
+        }
         seenSentCount = sentCount
     }
+    val text = fieldValue.text
     val send = { onSend(text) }
 
     // 过了刻度才出现,而且不拦输入 —— 私信长度上限同样只有服务端说得准,理由与评论那一侧同
@@ -734,48 +767,82 @@ private fun WhisperInput(sending: Boolean, error: SendError?, sentCount: Int, on
 
     val canSend = !sending && text.isNotBlank()
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-    ) {
-        // 失败原因摆在输入框上面,不做 toast:人正看着这条输入栏,而失败之后要做的两件事
-        // (改一句再发、直接重试)都在这一带。正在发的时候不画上一次的失败。
-        if (error != null && !sending) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(start = Spacing.Hair),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = stringResource(
-                        Res.string.whisper_send_failed,
-                        error.serverMessage ?: stringResource(error.fallback),
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                TextButton(onClick = send) { Text(stringResource(Res.string.action_retry)) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+        ) {
+            // 失败原因摆在输入框上面,不做 toast:人正看着这条输入栏,而失败之后要做的两件事
+            // (改一句再发、直接重试)都在这一带。正在发的时候不画上一次的失败。
+            if (error != null && !sending) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = Spacing.Hair),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(
+                            Res.string.whisper_send_failed,
+                            error.serverMessage ?: stringResource(error.fallback),
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    TextButton(onClick = send) { Text(stringResource(Res.string.action_retry)) }
+                }
+            }
+            // 输入框和发送键装在同一个胶囊里:发送是这个框的动作,不是旁边另一个控件。
+            PillInputField(
+                value = fieldValue,
+                onValueChange = { fieldValue = it },
+                placeholder = stringResource(Res.string.whisper_input_hint),
+                canSend = canSend,
+                sending = sending,
+                onSend = send,
+                fieldModifier = Modifier.focusRequester(focusRequester),
+                onFocusChange = { focused ->
+                    if (focused && emojiOpen) emojiOpen = false
+                },
+                trailing = {
+                    EmoteToggleButton(
+                        open = emojiOpen,
+                        onToggle = {
+                            if (emojiOpen) {
+                                emojiOpen = false
+                                focusRequester.requestFocus()
+                                keyboard?.show()
+                            } else {
+                                emojiOpen = true
+                                if (isTouchLike) focusManager.clearFocus()
+                                keyboard?.hide()
+                            }
+                        },
+                    )
+                },
+            )
+            // 字数刻度过了才出现,在框外右下,不占框里的行。
+            counter?.let { slot ->
+                ProvideTextStyle(
+                    MaterialTheme.typography.labelSmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
+                ) {
+                    Box(modifier = Modifier.padding(end = Spacing.Comfortable)) { slot() }
+                }
             }
         }
-        // 输入框和发送键装在同一个胶囊里:发送是这个框的动作,不是旁边另一个控件。
-        PillInputField(
-            value = text,
-            onValueChange = { text = it },
-            placeholder = stringResource(Res.string.whisper_input_hint),
-            canSend = canSend,
-            sending = sending,
-            onSend = send,
-        )
-        // 字数刻度过了才出现,在框外右下,不占框里的行。
-        counter?.let { slot ->
-            ProvideTextStyle(
-                MaterialTheme.typography.labelSmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
-            ) {
-                Box(modifier = Modifier.padding(end = Spacing.Comfortable)) { slot() }
-            }
+        if (emojiOpen) {
+            EmotePickerPanel(
+                state = emoteState,
+                onRetry = retryEmotes,
+                onSelect = { action ->
+                    if (action is EmoteAction.InsertText) {
+                        fieldValue = fieldValue.insertAtCursor(action.text)
+                    }
+                },
+                height = complementPanelHeight,
+            )
         }
     }
 }

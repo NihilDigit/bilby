@@ -106,12 +106,10 @@ import java.time.Instant
  * 可嵌进播放页的评论区(DESIGN 2.3)。不是整页:自带 LazyColumn 提供滚动,但不假设自己
  * 独占屏幕,调用方通过 [modifier] 给出高度约束。
  *
- * **写评论在列表底部常驻的输入栏里**([CommentInputBar]),与私信、直播间的输入栏同一个样子。
- * 之前是右下角一个 FAB 加一层从底部升起的编辑面板(照 PiliPlus),理由是常驻栏一直占着底部一条;
- * 宽屏上那一条几乎没有代价,三处输入栏形状不一反而要人分别去认,手机上多占的一行与直播间相同。
+ * **写评论走列表底部固定高度的触发条([CommentPromptBar])加独立模态浮层([CommentComposerDialog])**。
+ * 浏览列表不订阅软键盘 inset,键盘弹出与收起期间列表零重排;输入浮层可点上方遮罩、下滑或按返回键关闭。
  *
- * **单击一条评论就是回复它**,主楼、楼中楼、详情面板里的每一条都是:输入栏上方出现「回复 @某某」,
- * 焦点进框;✕ 回到评论这条视频。长按是选中正文。
+ * **单击一条评论就是回复它**,主楼、楼中楼、详情面板里的每一条都是;长按是选中正文。
  *
  * **楼中楼一律完整显示**。回复比主楼自带的那几条多的楼,末尾一行「查看全部 N 条回复」打开
  * 详情面板([CommentThreadSheet]),那里是读一整组回复的唯一地方。
@@ -168,9 +166,6 @@ fun CommentSection(
      */
     var selectionTarget by remember { mutableStateOf<String?>(null) }
 
-    /** 主列表那条输入栏写给谁。[CommentToVideo] 是评论这条视频,其余是被回复那条的 rpid。 */
-    var replyTarget by rememberSaveable { mutableStateOf(CommentToVideo) }
-
     /**
      * 草稿**按回复对象各存一份**,照 PiliPlus 的 `savedReplies[key]`。写了一半去回复别人,
      * 再点回同一个人,字还在;点另一个人则是另一份,不会把写给甲的半句话带到乙那里。
@@ -178,11 +173,15 @@ fun CommentSection(
      */
     val drafts = rememberSaveable(saver = DraftsSaver) { mutableStateMapOf<Long, String>() }
 
-    /** 最近一次按下发送时写给的是谁。成功回执回来时按它清掉那一份草稿。 */
-    var sentTarget by rememberSaveable { mutableStateOf<Long?>(null) }
+    /** 输入浮层此刻开着没有,以及正在写给谁([CommentToVideo] 是评论视频/动态本身,其余是被回复的 rpid)。 */
+    var composerOpen by rememberSaveable { mutableStateOf(false) }
+    var composerTarget by rememberSaveable { mutableStateOf(CommentToVideo) }
+    var composerFromPanel by rememberSaveable { mutableStateOf(false) }
+    var composerStartEmoji by rememberSaveable { mutableStateOf(false) }
 
-    /** 最近一次是从详情面板那条栏发的。失败原因只报在发出它的那一栏上。 */
-    var sentFromPanel by rememberSaveable { mutableStateOf(false) }
+    /** 最近一次真发出去的请求写给谁、提交的是哪段文本。发送在途时锁住不被别的浮层改写。 */
+    var sentTarget by rememberSaveable { mutableStateOf<Long?>(null) }
+    var sentText by rememberSaveable { mutableStateOf("") }
 
     // 面板正在读哪一楼。整个面板长在这个 composable 里,不进导航栈:它是评论区内部的一层,
     // 页面本身没有换,返回键由面板自己接管。
@@ -200,15 +199,14 @@ fun CommentSection(
         panelRoot = rpid
     }
 
-    /** 详情面板那条栏写给谁。null 是回复这一楼本身。换一楼时回到 null。 */
-    var panelReplyTarget by rememberSaveable { mutableStateOf<Long?>(null) }
-    LaunchedEffect(panelRoot) { panelReplyTarget = null }
+    val openComposer: (target: Long, fromPanel: Boolean, emoji: Boolean) -> Unit = { target, fromPanel, emoji ->
+        composerTarget = target
+        composerFromPanel = fromPanel
+        composerStartEmoji = emoji
+        composerOpen = true
+    }
 
-    val mainFocus = remember { FocusRequester() }
-    val panelFocus = remember { FocusRequester() }
-    val focusManager = LocalFocusManager.current
-
-    // **草稿只在发出去之后才清。** 失败时草稿留在框里,原因就在输入栏上一行。
+    // **草稿只在发出去之后才清。** 失败时草稿留在框里,原因就在输入浮层里。
     //
     // 成功与失败在 ViewModel 的协程里分道,界面读不到那个分支,只能读它报的成功计数
     // ([CommentUiState.sentCount])。**判据是"这个数变大了",不是"和记着的那个不一样"。**
@@ -221,20 +219,20 @@ fun CommentSection(
             return@LaunchedEffect
         }
         seenSentCount = state.sentCount
-        sentTarget?.let { target ->
-            drafts.remove(target)
-            // 发出去之后那一栏回到默认对象,收起键盘让人看见刚发的那条。
-            if (replyTarget == target) replyTarget = CommentToVideo
-            if (panelReplyTarget == target) panelReplyTarget = null
+        if (settleCommentSubmission(drafts, sentTarget, sentText, composerOpen, composerTarget)) {
+            composerOpen = false
         }
         sentTarget = null
-        focusManager.clearFocus()
+        sentText = ""
     }
 
     // 面板开着的时候主楼被刷掉了(下拉刷新之后它不在第一页了),把面板一起关掉:
     // 留着一个找不到主楼的面板,里面的回复没有任何上下文。
     LaunchedEffect(panelRoot, panelComment == null) {
-        if (panelRoot != null && panelComment == null) panelRoot = null
+        if (panelRoot != null && panelComment == null) {
+            panelRoot = null
+            if (composerFromPanel) composerOpen = false
+        }
     }
 
     PrefetchNearEnd(
@@ -246,8 +244,7 @@ fun CommentSection(
     val rowActions = CommentRowActions(
         myMid = state.myMid,
         onReply = { comment ->
-            replyTarget = comment.rpid
-            mainFocus.requestFocus()
+            openComposer(comment.rpid, false, false)
         },
         onLike = onLike,
         onDelete = onDelete,
@@ -368,24 +365,11 @@ fun CommentSection(
                 onDismiss = { selectionTarget = null },
             )
         }
-        val draft = drafts[replyTarget].orEmpty()
-        val replyName = if (replyTarget == CommentToVideo) null else findUname(state, replyTarget)
-        CommentInputBar(
-            draft = draft,
-            onDraftChange = { drafts[replyTarget] = it },
-            replyingTo = replyName,
-            onCancelReply = { replyTarget = CommentToVideo },
+        CommentPromptBar(
+            draftPreview = drafts[CommentToVideo].orEmpty(),
             placeholder = stringResource(Res.string.comment_input_hint),
-            label = replyName?.let { stringResource(Res.string.comment_replying_to, it) }
-                ?: stringResource(Res.string.comment_write),
-            sending = state.sending && !sentFromPanel,
-            error = sendError?.takeIf { !sentFromPanel },
-            onSend = {
-                sentTarget = replyTarget
-                sentFromPanel = false
-                onSend(draft, replyTarget.takeIf { it != CommentToVideo })
-            },
-            focusRequester = mainFocus,
+            onOpenKeyboard = { openComposer(CommentToVideo, false, false) },
+            onOpenEmoji = { openComposer(CommentToVideo, false, true) },
         )
     }
 
@@ -399,31 +383,15 @@ fun CommentSection(
             onLoadMore = { onExpandReplies(panelComment.rpid) },
             onLike = onLike,
             onCompose = { rpid ->
-                // 点的是这一楼本身就是默认对象,不另起那一行「回复 @」。
-                panelReplyTarget = rpid.takeIf { it != panelComment.rpid }
-                panelFocus.requestFocus()
+                openComposer(rpid, true, false)
             },
             inputBar = {
-                val target = panelReplyTarget ?: panelComment.rpid
-                val draft = drafts[target].orEmpty()
-                val replyName = panelReplyTarget?.let { findUname(state, it) }
                 val rootLabel = stringResource(Res.string.comment_replying_to, panelComment.uname)
-                CommentInputBar(
-                    draft = draft,
-                    onDraftChange = { drafts[target] = it },
-                    replyingTo = replyName,
-                    onCancelReply = { panelReplyTarget = null },
-                    // 默认就是回复这一楼,占位直接写明是谁,不再画那一行。
+                CommentPromptBar(
+                    draftPreview = drafts[panelComment.rpid].orEmpty(),
                     placeholder = rootLabel,
-                    label = replyName?.let { stringResource(Res.string.comment_replying_to, it) } ?: rootLabel,
-                    sending = state.sending && sentFromPanel,
-                    error = sendError?.takeIf { sentFromPanel },
-                    onSend = {
-                        sentTarget = target
-                        sentFromPanel = true
-                        onSend(draft, target)
-                    },
-                    focusRequester = panelFocus,
+                    onOpenKeyboard = { openComposer(panelComment.rpid, true, false) },
+                    onOpenEmoji = { openComposer(panelComment.rpid, true, true) },
                 )
             },
             onDelete = onDelete,
@@ -444,6 +412,33 @@ fun CommentSection(
         )
     }
 
+    if (composerOpen) {
+        val currentDraft = drafts[composerTarget].orEmpty()
+        val replyName = if (composerTarget == CommentToVideo) null else findUname(state, composerTarget)
+        val headerTitle = replyName?.let { stringResource(Res.string.comment_replying_to, it) }
+            ?: stringResource(Res.string.comment_write)
+        val placeholder = replyName?.let { stringResource(Res.string.comment_replying_to, it) }
+            ?: stringResource(Res.string.comment_input_hint)
+        CommentComposerDialog(
+            draft = currentDraft,
+            onDraftChange = { drafts[composerTarget] = it },
+            headerTitle = headerTitle,
+            placeholder = placeholder,
+            // 任何评论发送在途时统一锁定发送键,避免切去另一个回复对象后覆盖在途的 sentTarget。
+            sending = state.sending,
+            error = sendError?.takeIf { !state.sending && sentTarget == composerTarget },
+            initialOpenEmoji = composerStartEmoji,
+            onSend = {
+                if (!state.sending && currentDraft.isNotBlank()) {
+                    sentTarget = composerTarget
+                    sentText = currentDraft
+                    onSend(currentDraft, composerTarget.takeIf { it != CommentToVideo })
+                }
+            },
+            onDismiss = { composerOpen = false },
+        )
+    }
+
 }
 
 /** [replyTarget] 里表示"评论这条视频"的那个值。rpid 从 1 起,0 不会和哪条评论撞上。 */
@@ -458,6 +453,25 @@ internal val DraftsSaver = listSaver<SnapshotStateMap<Long, String>, String>(
         }
     },
 )
+
+/**
+ * 评论发送成功回执落定:
+ * - 只清理本次实际提交的 [sentTarget] 草稿(若用户在等待期间又往该对象追加了新字则保留新内容);
+ * - 只有当前浮层仍然停留在 [sentTarget] 时才返回 true 请求关闭浮层,不打断已切去回复另一个人的编辑态。
+ */
+internal fun settleCommentSubmission(
+    drafts: MutableMap<Long, String>,
+    sentTarget: Long?,
+    sentText: String,
+    composerOpen: Boolean,
+    activeTarget: Long,
+): Boolean {
+    if (sentTarget == null) return false
+    if (drafts[sentTarget] == sentText) {
+        drafts.remove(sentTarget)
+    }
+    return composerOpen && activeTarget == sentTarget
+}
 
 /**
  * 一条评论能做的几件事。主列表、楼中楼、详情面板三处共用同一份,不在每一层把七个回调
@@ -1135,7 +1149,7 @@ private fun CommentThreadSheet(
     // 触底预取,和主列表同一个组件。面板里手动点"加载更多"翻一百条太费事。
     PrefetchNearEnd(
         listState,
-        canLoad = hasMore && !loadingMore && expanded?.error == null,
+        canLoad = hasMore && !loadingMore && expanded.error == null,
         onLoadMore = onLoadMore,
     )
 

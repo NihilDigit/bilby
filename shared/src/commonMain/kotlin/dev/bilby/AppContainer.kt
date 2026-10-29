@@ -15,6 +15,7 @@ import dev.bilby.data.DynamicRepository
 import dev.bilby.data.FingerprintStore
 import dev.bilby.danmaku.DanmakuRepository
 import dev.bilby.data.CommentRepository
+import dev.bilby.data.EmoteRepository
 import dev.bilby.data.FavRepository
 import dev.bilby.data.FollowRepository
 import dev.bilby.data.HeartbeatReporter
@@ -150,6 +151,8 @@ class AppContainer(val platform: Platform) {
     val searchRepository: SearchRepository by lazy { SearchRepository(biliClient) }
 
     val commentRepository: CommentRepository by lazy { CommentRepository(biliClient, settings) }
+
+    val emoteRepository: EmoteRepository by lazy { EmoteRepository(biliClient, settings) }
 
     val spaceRepository: SpaceRepository by lazy { SpaceRepository(biliClient) }
 

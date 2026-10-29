@@ -32,3 +32,13 @@ internal actual fun DialogIntoDisplayCutout() {
         onDispose { }
     }
 }
+
+@Composable
+internal actual fun ConfigureInputDialogWindow() {
+    DialogIntoDisplayCutout()
+    val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
+    DisposableEffect(dialogWindow) {
+        dialogWindow?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        onDispose { }
+    }
+}

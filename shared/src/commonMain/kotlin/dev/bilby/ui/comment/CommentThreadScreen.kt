@@ -119,23 +119,24 @@ private fun CommentThreadScreen(
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     var selectionTarget by remember { mutableStateOf<String?>(null) }
-    /** 输入栏写给谁。null 是回复这一楼本身。 */
-    var replyTarget by rememberSaveable { mutableStateOf<Long?>(null) }
+    /** 输入浮层写给谁。null 是回复这一楼本身。 */
+    var composerOpen by rememberSaveable { mutableStateOf(false) }
+    var composerTarget by rememberSaveable { mutableStateOf<Long?>(null) }
+    var composerStartEmoji by rememberSaveable { mutableStateOf(false) }
     val drafts = rememberSaveable(saver = DraftsSaver) { mutableStateMapOf<Long, String>() }
     var sentTarget by rememberSaveable { mutableStateOf<Long?>(null) }
-    val inputFocus = remember { FocusRequester() }
-    val focusManager = LocalFocusManager.current
+    var sentText by rememberSaveable { mutableStateOf("") }
 
     // 草稿只在发出去之后才清,判据同 CommentSection:成功计数变大了。
     var seenSentCount by rememberSaveable { mutableIntStateOf(state.sentCount) }
     LaunchedEffect(state.sentCount) {
         if (state.sentCount > seenSentCount) {
-            sentTarget?.let { target ->
-                drafts.remove(target)
-                if (replyTarget == target) replyTarget = null
+            val activeTarget = composerTarget ?: state.root?.rpid ?: 0L
+            if (settleCommentSubmission(drafts, sentTarget, sentText, composerOpen, activeTarget)) {
+                composerOpen = false
             }
             sentTarget = null
-            focusManager.clearFocus()
+            sentText = ""
         }
         seenSentCount = state.sentCount
     }
@@ -185,9 +186,9 @@ private fun CommentThreadScreen(
                         actions = CommentRowActions(
                             myMid = state.myMid,
                             onReply = { comment ->
-                                // 点的是这一楼本身就是默认对象,不另起那一行「回复 @」。
-                                replyTarget = comment.rpid.takeIf { it != root.rpid }
-                                inputFocus.requestFocus()
+                                composerTarget = comment.rpid.takeIf { it != root.rpid }
+                                composerStartEmoji = false
+                                composerOpen = true
                             },
                             onLike = onLike,
                             onDelete = onDelete,
@@ -201,27 +202,48 @@ private fun CommentThreadScreen(
             }
             // 楼没读出来之前没有可回复的对象,不给栏。
             if (root != null) {
-                val target = replyTarget ?: root.rpid
-                val draft = drafts[target].orEmpty()
-                val replyName = replyTarget?.let { state.find(it)?.uname }
                 val rootLabel = stringResource(Res.string.comment_replying_to, root.uname)
-                CommentInputBar(
-                    draft = draft,
-                    onDraftChange = { drafts[target] = it },
-                    replyingTo = replyName,
-                    onCancelReply = { replyTarget = null },
+                CommentPromptBar(
+                    draftPreview = drafts[root.rpid].orEmpty(),
                     placeholder = rootLabel,
-                    label = replyName?.let { stringResource(Res.string.comment_replying_to, it) } ?: rootLabel,
-                    sending = state.sending,
-                    error = state.sendError?.let { stringResource(Res.string.comment_send_failed, it) },
-                    onSend = {
-                        sentTarget = target
-                        onSend(draft, target)
+                    onOpenKeyboard = {
+                        composerTarget = null
+                        composerStartEmoji = false
+                        composerOpen = true
                     },
-                    focusRequester = inputFocus,
+                    onOpenEmoji = {
+                        composerTarget = null
+                        composerStartEmoji = true
+                        composerOpen = true
+                    },
                 )
             }
         }
+    }
+    val root = state.root
+    if (composerOpen && root != null) {
+        val target = composerTarget ?: root.rpid
+        val draft = drafts[target].orEmpty()
+        val replyName = composerTarget?.let { state.find(it)?.uname } ?: root.uname
+        val title = stringResource(Res.string.comment_replying_to, replyName)
+        CommentComposerDialog(
+            draft = draft,
+            onDraftChange = { drafts[target] = it },
+            headerTitle = title,
+            placeholder = title,
+            sending = state.sending,
+            error = state.sendError?.takeIf { !state.sending && sentTarget == target }
+                ?.let { stringResource(Res.string.comment_send_failed, it) },
+            initialOpenEmoji = composerStartEmoji,
+            onSend = {
+                if (!state.sending && draft.isNotBlank()) {
+                    sentTarget = target
+                    sentText = draft
+                    onSend(draft, target)
+                }
+            },
+            onDismiss = { composerOpen = false },
+        )
     }
     selectionTarget?.let { target ->
         SelectableTextDialog(
