@@ -331,6 +331,7 @@
     <string name="player_fullscreen">Fullscreen</string>
     <string name="player_exit_fullscreen">Exit fullscreen</string>
     <string name="player_speed_coarse_horizontal">Swipe down to lock</string>
+    <string name="player_speed_coarse_horizontal_top">Swipe up to lock</string>
     <string name="player_speed_coarse_vertical">Swipe left to lock</string>
     <string name="player_speed_coarse_vertical_right">Swipe right to lock</string>
     <string name="player_speed_release_to_lock">Release to lock</string>
@@ -417,6 +418,15 @@
     <string name="settings_feed_excluded_count">%1$d</string>
     <string name="settings_feed_excluded_restore">Restore</string>
     <string name="settings_section_playback">Playback</string>
+    <string name="settings_section_gestures">Gestures</string>
+    <string name="settings_gestures_summary">Double-tap, hold speed and swipe controls</string>
+    <string name="settings_long_press_speed">Hold for temporary speed</string>
+    <string name="settings_long_press_speed_subtitle">Hold the picture to speed up, drag to adjust or lock</string>
+    <string name="settings_default_hold_speed">Default hold speed</string>
+    <string name="settings_swipe_seek">Swipe horizontally to seek</string>
+    <string name="settings_swipe_seek_subtitle">Drag left or right on the picture to scrub</string>
+    <string name="settings_swipe_brightness_volume">Swipe vertically for brightness and volume</string>
+    <string name="settings_swipe_brightness_volume_subtitle">Drag on the left half for brightness, right half for volume</string>
     <string name="settings_group_playback">Playback</string>
     <string name="settings_group_quality">Video and audio quality</string>
     <string name="settings_group_sponsorblock">Segment skipping</string>

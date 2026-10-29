@@ -1,8 +1,12 @@
 package dev.bilby.ui.video
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.ExperimentalMaterial3Api
 import dev.bilby.ui.components.PaneSheet
@@ -50,6 +54,10 @@ import dev.bilby.resources.*
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.player.formatSpeed
+import dev.bilby.ui.player.speedHundredths
+import dev.bilby.ui.player.speedNumber
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.dp
 import dev.nihildigit.danmaku.DanmakuDensity
 import dev.nihildigit.danmaku.DanmakuFrameRateCap
 import kotlin.math.abs
@@ -87,7 +95,17 @@ internal fun PlayerSettingsContent(
     danmakuEditor: DanmakuPrefsEditor? = null,
     /** 只画这一段(全屏控制条上的 chip 打开的)。null 画整块。 */
     only: PlayerSettingsSection? = null,
+    /** 宿主是整屏高的横屏右侧栏:单开倍速时铺开大号读数舞台填满纵向空间,竖屏底部面板不受影响。 */
+    fullHeightHost: Boolean = false,
 ) {
+    if (only == PlayerSettingsSection.Speed && fullHeightHost) {
+        ExpandedSpeedPanel(
+            speed = speed,
+            onSpeedChange = onSpeedChange,
+            modifier = modifier,
+        )
+        return
+    }
     val titled = only == null
     // 只开一段时一行一项:这时面板里只有这一组,竖着排一眼扫完,不必横着挤。
     val columns = if (only == null) GridColumns else 1
@@ -174,8 +192,10 @@ internal fun BoxScope.PlayerSettingsHost(
     content: @Composable () -> Unit,
 ) {
     if (isFullscreen) {
-        // 窄的那一档给 chip 开的单选段;弹幕那一段是几根滑块,窄了读数和标题挤在一起。
-        val narrow = only != null && only != PlayerSettingsSection.Danmaku
+        // 窄的那一档只给一列短选项的单选段;弹幕和倍速都带连续滑块与连体按钮,窄了读数和选项挤在一起。
+        val narrow = only != null &&
+            only != PlayerSettingsSection.Danmaku &&
+            only != PlayerSettingsSection.Speed
         PlayerSidePanel(visible = open, onDismiss = onDismiss, narrow = narrow) {
             Text(
                 playerSettingsTitle(only),
@@ -229,7 +249,115 @@ private fun playerSettingsTitle(only: PlayerSettingsSection?): String = stringRe
 )
 
 /**
- * 倍速:与画质切换一样,全屏单独打开倍速侧栏时按单列竖排,整块设置面板内按多列网格排开。
+ * 横屏侧栏单独打开倍速时的整高排布。
+ *
+ * 不套大块容器卡片、也不加多余的 tonal 按钮抢视觉重心:用安静的无底色大号等宽读数配连续滑块与五格快捷档,
+ * 借助上下弹性留白在侧栏纵向空间里自然居中,消除顶部挤成一条、底下大片死白的失衡感。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ExpandedSpeedPanel(
+    speed: Float,
+    onSpeedChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+    ) {
+        if (maxHeight < CompactFallbackHeight) {
+            PanelColumn(Modifier) {
+                SpeedSection(speed = speed, onSpeedChange = onSpeedChange, titled = false)
+            }
+            return@BoxWithConstraints
+        }
+        val clamped = speed.coerceIn(SpeedSliderRange.start, SpeedSliderRange.endInclusive)
+        val isDefault = abs(speed - 1f) < 0.01f
+
+        Column(modifier = Modifier.fillMaxSize()) {
+            Spacer(modifier = Modifier.weight(0.8f))
+
+            Row(
+                verticalAlignment = Alignment.Bottom,
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .clip(MaterialTheme.shapes.medium)
+                    .then(
+                        if (!isDefault) {
+                            Modifier.clickable(role = Role.Button) { onSpeedChange(1f) }
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .padding(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
+            ) {
+                Text(
+                    text = speedNumber(speedHundredths(speed)),
+                    style = MaterialTheme.typography.displaySmall.copy(fontFeatureSettings = "tnum"),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    modifier = Modifier.alignByBaseline(),
+                )
+                Text(
+                    text = "x",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    modifier = Modifier.alignByBaseline().padding(start = 2.dp),
+                )
+            }
+
+            Spacer(modifier = Modifier.height(Spacing.Loose))
+
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Slider(
+                    value = clamped,
+                    onValueChange = { raw ->
+                        val stepped = ((raw / SpeedSliderStep).roundToInt() * SpeedSliderStep)
+                            .coerceIn(SpeedSliderRange.start, SpeedSliderRange.endInclusive)
+                        if (abs(stepped - speed) >= 0.01f) onSpeedChange(stepped)
+                    },
+                    valueRange = SpeedSliderRange,
+                    steps = SpeedSliderSteps,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.Hair),
+                ) {
+                    SpeedScaleTicks.forEach { tick ->
+                        val active = abs(tick - speed) < 0.01f
+                        Text(
+                            text = formatSpeed(tick),
+                            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                            color = if (active) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(Spacing.Comfortable))
+
+            ConnectedChoices(
+                options = SpeedQuickPresets,
+                selected = { abs(it - speed) < 0.01f },
+                onSelect = onSpeedChange,
+                label = ::formatSpeed,
+            )
+
+            Spacer(modifier = Modifier.weight(1.2f))
+        }
+    }
+}
+
+/**
+ * 倍速(竖屏面板与整块设置面板内的紧凑节):连续刻度滑块(0.5x–3.0x,0.25x 步进)配一行五格高频快捷档。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -238,13 +366,35 @@ private fun SpeedSection(
     onSpeedChange: (Float) -> Unit,
     titled: Boolean,
 ) {
-    if (titled) SectionTitle(stringResource(Res.string.player_speed))
-    ChoiceGrid(
-        options = SpeedPresetValues,
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (titled) {
+            SectionTitle(stringResource(Res.string.player_speed), Modifier.weight(1f))
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
+        Text(
+            formatSpeed(speed),
+            style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = if (titled) Modifier else Modifier.padding(top = Spacing.Hair),
+        )
+    }
+    val sliderValue = speed.coerceIn(SpeedSliderRange.start, SpeedSliderRange.endInclusive)
+    Slider(
+        value = sliderValue,
+        onValueChange = { raw ->
+            val stepped = ((raw / SpeedSliderStep).roundToInt() * SpeedSliderStep)
+                .coerceIn(SpeedSliderRange.start, SpeedSliderRange.endInclusive)
+            if (abs(stepped - speed) >= 0.01f) onSpeedChange(stepped)
+        },
+        valueRange = SpeedSliderRange,
+        steps = SpeedSliderSteps,
+    )
+    ConnectedChoices(
+        options = SpeedQuickPresets,
         selected = { abs(it - speed) < 0.01f },
         onSelect = onSpeedChange,
         label = ::formatSpeed,
-        columns = if (titled) SpeedGridColumns else 1,
     )
 }
 
@@ -427,9 +577,12 @@ private fun <T> ConnectedChoices(
     }
 }
 
-private val SpeedPresetValues =
-    listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 2.25f, 2.5f, 2.75f, 3f)
-private const val SpeedGridColumns = 4
+private val SpeedQuickPresets = listOf(0.75f, 1f, 1.25f, 1.5f, 2f)
+private val SpeedScaleTicks = listOf(0.5f, 1f, 1.5f, 2f, 2.5f, 3f)
+private val SpeedSliderRange = 0.5f..3f
+private const val SpeedSliderStep = 0.25f
+private const val SpeedSliderSteps = 9
+private val CompactFallbackHeight = 220.dp
 
 /**
  * 滚动弹幕显示区域的四档。存的是连续值(见 `SettingsStore.saveDanmakuScrollShowArea`),选中判定

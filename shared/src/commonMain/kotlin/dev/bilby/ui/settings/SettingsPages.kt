@@ -16,8 +16,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.automirrored.outlined.AltRoute
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
-import androidx.compose.material.icons.outlined.AltRoute
 import androidx.compose.material.icons.outlined.Api
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Campaign
@@ -48,7 +48,10 @@ import androidx.compose.material.icons.outlined.SignalCellularAlt
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Start
+import androidx.compose.material.icons.outlined.SwapHoriz
+import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material.icons.outlined.ThumbUp
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Wallpaper
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.AlertDialog
@@ -131,7 +134,6 @@ import dev.bilby.ui.theme.LocalIsDarkTheme
 import dev.bilby.ui.theme.PaletteSchemes
 import dev.bilby.ui.theme.ThemePalette
 import dev.bilby.ui.theme.dynamicColorAvailable
-import kotlin.math.abs
 
 /**
  * 设置的二级页面。**每一页都是一整页,不是一个展开块**:展开块要么把首页撑回原来的长度,
@@ -143,6 +145,7 @@ import kotlin.math.abs
 enum class SettingsSection {
     Appearance,
     Playback,
+    Gestures,
 
     /** SponsorBlock 的九个分类。从播放页再降一层,理由见 [PlaybackSettingsPage]。 */
     SponsorCategories,
@@ -209,8 +212,6 @@ fun PlaybackSettingsPage(
     onWifiQualityChange: (Int) -> Unit,
     onMeteredQualityChange: (Int) -> Unit,
     onCodecChange: (CodecPreference) -> Unit,
-    onFastForwardSpeedChange: (Float) -> Unit,
-    onDoubleTapSeekChange: (Boolean) -> Unit,
     onAutoNextChange: (Boolean) -> Unit,
     onWifiAudioChange: (Int) -> Unit,
     onMeteredAudioChange: (Int) -> Unit,
@@ -251,29 +252,6 @@ fun PlaybackSettingsPage(
                     subtitle = stringResource(Res.string.settings_auto_next_subtitle),
                     checked = state.autoNext,
                     onCheckedChange = onAutoNextChange,
-                )
-            }
-            row { position ->
-                ChoiceRow(
-                    position = position,
-                    icon = Icons.Outlined.Speed,
-                    title = stringResource(Res.string.settings_fast_forward_speed),
-                    subtitle = stringResource(Res.string.settings_fast_forward_speed_subtitle),
-                    options = SettingsStore.FAST_FORWARD_SPEEDS,
-                    selected = SettingsStore.FAST_FORWARD_SPEEDS.minByOrNull { abs(it - state.fastForwardSpeed) },
-                    label = { formatSpeed(it) },
-                    onChange = onFastForwardSpeedChange,
-                    valueAtEnd = true,
-                )
-            }
-            row { position ->
-                ToggleSettingRow(
-                    position = position,
-                    icon = Icons.Outlined.FastForward,
-                    title = stringResource(Res.string.settings_double_tap_seek),
-                    subtitle = stringResource(Res.string.settings_double_tap_seek_subtitle),
-                    checked = state.doubleTapSeek,
-                    onCheckedChange = onDoubleTapSeekChange,
                 )
             }
         }
@@ -425,6 +403,90 @@ fun PlaybackSettingsPage(
     }
 }
 
+/**
+ * 快捷手势。播放器内的触控快捷操作集中在此,每一项都可以单独关闭;默认长按倍速随长按开关展开收起。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun GestureSettingsPage(
+    state: SettingsUiState,
+    onDoubleTapSeekChange: (Boolean) -> Unit,
+    onLongPressSpeedChange: (Boolean) -> Unit,
+    onDefaultHoldSpeedChange: (Float) -> Unit,
+    onSwipeSeekChange: (Boolean) -> Unit,
+    onSwipeBrightnessVolumeChange: (Boolean) -> Unit,
+    onBack: (() -> Unit)?,
+) {
+    val holdSpeedShown = remember { MutableTransitionState(state.longPressSpeed) }
+    holdSpeedShown.targetState = state.longPressSpeed
+    val holdSpeedOnScreen = state.longPressSpeed || holdSpeedShown.currentState
+    val enter = expandVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
+        fadeIn(MaterialTheme.motionScheme.fastEffectsSpec())
+    val exit = shrinkVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
+        fadeOut(MaterialTheme.motionScheme.fastEffectsSpec())
+
+    SettingsSubPage(stringResource(Res.string.settings_section_gestures), onBack, state.loaded) {
+        SettingsGroup {
+            row { position ->
+                ToggleSettingRow(
+                    position = position,
+                    icon = Icons.Outlined.FastForward,
+                    title = stringResource(Res.string.settings_double_tap_seek),
+                    subtitle = stringResource(Res.string.settings_double_tap_seek_subtitle),
+                    checked = state.doubleTapSeek,
+                    onCheckedChange = onDoubleTapSeekChange,
+                )
+            }
+            row { position ->
+                ToggleSettingRow(
+                    position = position,
+                    icon = Icons.Outlined.Speed,
+                    title = stringResource(Res.string.settings_long_press_speed),
+                    subtitle = stringResource(Res.string.settings_long_press_speed_subtitle),
+                    checked = state.longPressSpeed,
+                    onCheckedChange = onLongPressSpeedChange,
+                )
+            }
+            if (holdSpeedOnScreen) {
+                row { position ->
+                    AnimatedVisibility(visibleState = holdSpeedShown, enter = enter, exit = exit) {
+                        ChoiceRow(
+                            position = position,
+                            icon = Icons.Outlined.Tune,
+                            title = stringResource(Res.string.settings_default_hold_speed),
+                            options = SettingsStore.HOLD_SPEED_OPTIONS,
+                            selected = state.defaultHoldSpeed,
+                            label = { formatSpeed(it) },
+                            onChange = onDefaultHoldSpeedChange,
+                            valueAtEnd = true,
+                        )
+                    }
+                }
+            }
+            row { position ->
+                ToggleSettingRow(
+                    position = position,
+                    icon = Icons.Outlined.SwapHoriz,
+                    title = stringResource(Res.string.settings_swipe_seek),
+                    subtitle = stringResource(Res.string.settings_swipe_seek_subtitle),
+                    checked = state.swipeSeek,
+                    onCheckedChange = onSwipeSeekChange,
+                )
+            }
+            row { position ->
+                ToggleSettingRow(
+                    position = position,
+                    icon = Icons.Outlined.SwapVert,
+                    title = stringResource(Res.string.settings_swipe_brightness_volume),
+                    subtitle = stringResource(Res.string.settings_swipe_brightness_volume_subtitle),
+                    checked = state.swipeBrightnessVolume,
+                    onCheckedChange = onSwipeBrightnessVolumeChange,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun SponsorCategoriesPage(
     state: SettingsUiState,
@@ -470,7 +532,7 @@ private val CategoryIcons: Map<String, ImageVector> = mapOf(
     "outro" to Icons.Outlined.Flag,
     "preview" to Icons.Outlined.Preview,
     "padding" to Icons.Outlined.HourglassEmpty,
-    "filler" to Icons.Outlined.AltRoute,
+    "filler" to Icons.AutoMirrored.Outlined.AltRoute,
     "music_offtopic" to Icons.Outlined.MusicOff,
 )
 

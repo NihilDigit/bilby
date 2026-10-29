@@ -127,8 +127,12 @@ class SettingsStore(private val store: DataStore<Preferences>) {
             defaultAudioWifi = p[KEY_DEFAULT_AUDIO] ?: DEFAULT_AUDIO_QUALITY,
             defaultAudioMetered = p[KEY_DEFAULT_AUDIO_METERED] ?: DEFAULT_AUDIO_QUALITY_METERED,
             playerPickUpdatesDefault = p[KEY_PLAYER_PICK_UPDATES_DEFAULT] ?: false,
-            fastForwardSpeed = p[KEY_FAST_FORWARD_SPEED] ?: DEFAULT_FAST_FORWARD_SPEED,
             doubleTapSeek = p[KEY_DOUBLE_TAP_SEEK] ?: true,
+            longPressSpeed = p[KEY_LONG_PRESS_SPEED] ?: true,
+            defaultHoldSpeed = (p[KEY_DEFAULT_HOLD_SPEED] ?: p[KEY_LEGACY_HOLD_SPEED] ?: DEFAULT_HOLD_SPEED)
+                .takeIf { it in HOLD_SPEED_OPTIONS } ?: DEFAULT_HOLD_SPEED,
+            swipeSeek = p[KEY_SWIPE_SEEK] ?: true,
+            swipeBrightnessVolume = p[KEY_SWIPE_BRIGHTNESS_VOLUME] ?: true,
         )
     }
 
@@ -148,12 +152,25 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         store.edit { p -> p[KEY_PREFERRED_CODEC] = value.key }
     }
 
-    suspend fun saveFastForwardSpeed(speed: Float) {
-        store.edit { p -> p[KEY_FAST_FORWARD_SPEED] = speed }
-    }
-
     suspend fun saveDoubleTapSeek(enabled: Boolean) {
         store.edit { p -> p[KEY_DOUBLE_TAP_SEEK] = enabled }
+    }
+
+    suspend fun saveLongPressSpeed(enabled: Boolean) {
+        store.edit { p -> p[KEY_LONG_PRESS_SPEED] = enabled }
+    }
+
+    suspend fun saveDefaultHoldSpeed(speed: Float) {
+        val valid = speed.takeIf { it in HOLD_SPEED_OPTIONS } ?: DEFAULT_HOLD_SPEED
+        store.edit { p -> p[KEY_DEFAULT_HOLD_SPEED] = valid }
+    }
+
+    suspend fun saveSwipeSeek(enabled: Boolean) {
+        store.edit { p -> p[KEY_SWIPE_SEEK] = enabled }
+    }
+
+    suspend fun saveSwipeBrightnessVolume(enabled: Boolean) {
+        store.edit { p -> p[KEY_SWIPE_BRIGHTNESS_VOLUME] = enabled }
     }
 
     /**
@@ -472,13 +489,16 @@ class SettingsStore(private val store: DataStore<Preferences>) {
          */
         val QUALITY_OPTIONS = listOf(120, 116, 112, 80, 64, 32, 16)
 
-        private val KEY_FAST_FORWARD_SPEED = floatPreferencesKey("player_fast_forward_speed")
-
-        const val DEFAULT_FAST_FORWARD_SPEED = 2.5f
-
-        val FAST_FORWARD_SPEEDS = listOf(1.5f, 2f, 2.5f, 3f)
-
         private val KEY_DOUBLE_TAP_SEEK = booleanPreferencesKey("player_double_tap_seek")
+        private val KEY_LONG_PRESS_SPEED = booleanPreferencesKey("player_long_press_speed")
+        // 沿用 v0.18.1 已发布的键名,升级时不丢用户已选的默认长按倍速。
+        private val KEY_DEFAULT_HOLD_SPEED = floatPreferencesKey("player_fast_forward_speed")
+        private val KEY_LEGACY_HOLD_SPEED = floatPreferencesKey("player_default_hold_speed")
+        private val KEY_SWIPE_SEEK = booleanPreferencesKey("player_swipe_seek")
+        private val KEY_SWIPE_BRIGHTNESS_VOLUME = booleanPreferencesKey("player_swipe_brightness_volume")
+
+        const val DEFAULT_HOLD_SPEED = 2.5f
+        val HOLD_SPEED_OPTIONS = listOf(1.5f, 2f, 2.5f, 3f)
 
         private val KEY_IGNORED_UPDATE = stringPreferencesKey("ignored_update_version")
 
@@ -621,8 +641,11 @@ data class PlayerPrefs(
      * 一个「临时播放配置」开关关掉它;这里反过来,默认只管这一次。
      */
     val playerPickUpdatesDefault: Boolean = false,
-    val fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
     val doubleTapSeek: Boolean = true,
+    val longPressSpeed: Boolean = true,
+    val defaultHoldSpeed: Float = SettingsStore.DEFAULT_HOLD_SPEED,
+    val swipeSeek: Boolean = true,
+    val swipeBrightnessVolume: Boolean = true,
 ) {
     fun defaultAudioOn(metered: Boolean): Int = if (metered) defaultAudioMetered else defaultAudioWifi
 

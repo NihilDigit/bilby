@@ -19,6 +19,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.TouchApp
 import dev.bilby.data.AppearancePrefs
 import dev.bilby.ui.theme.ThemePalette
 import dev.bilby.ui.theme.dynamicColorAvailable
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -155,6 +157,17 @@ fun SettingsScreen(
                             target = RowTarget.Page,
                             onClick = { onOpenSection(SettingsSection.Playback) },
                             selected = selected(SettingsSection.Playback),
+                        )
+                    }
+                    row { position ->
+                        SettingRow(
+                            position = position,
+                            title = stringResource(Res.string.settings_section_gestures),
+                            icon = Icons.Outlined.TouchApp,
+                            value = stringResource(Res.string.settings_gestures_summary),
+                            target = RowTarget.Page,
+                            onClick = { onOpenSection(SettingsSection.Gestures) },
+                            selected = selected(SettingsSection.Gestures),
                         )
                     }
                     row { position ->
@@ -310,21 +323,22 @@ internal fun <T> ChoiceRow(
             // selectableGroup:读屏把这几行念成一组单选,而不是几个互不相干的按钮。
             Column(modifier = Modifier.selectableGroup().verticalScroll(rememberScrollState())) {
                 options.forEach { option ->
+                    @OptIn(ExperimentalMaterial3ExpressiveApi::class)
                     ListItem(
-                        headlineContent = { Text(label(option)) },
+                        selected = option == selected,
+                        onClick = {
+                            open = false
+                            onChange(option)
+                        },
                         leadingContent = { RadioButton(selected = option == selected, onClick = null) },
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = option == selected,
-                                role = Role.RadioButton,
-                                onClick = {
-                                    open = false
-                                    onChange(option)
-                                },
-                            ),
-                    )
+                        colors = ListItemDefaults.colors(
+                            containerColor = Color.Transparent,
+                            selectedContainerColor = Color.Transparent,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(label(option))
+                    }
                 }
             }
         },

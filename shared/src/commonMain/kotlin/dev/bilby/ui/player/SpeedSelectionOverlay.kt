@@ -93,12 +93,11 @@ import kotlinx.coroutines.flow.drop
 import kotlin.math.roundToInt
 
 private object SpeedDialSize {
-    val HorizontalThickness = Dimens.MinTouchTarget
-    val VerticalThickness = 84.dp
-    val BlockWidth = 68.dp
-    val BlockHeight = ControlChipHeight
-    val BlockIconSize = 16.dp
-    val UnselectedCorner = 8.dp
+    val HorizontalThickness = 54.dp
+    val VerticalThickness = 92.dp
+    val BlockWidth = 76.dp
+    val BlockHeight = 38.dp
+    val UnselectedCorner = 10.dp
     val EdgeFade = Spacing.Loose
 }
 
@@ -111,9 +110,11 @@ private fun SpeedSelectionHint(controller: PlaybackSpeedController, modifier: Mo
     val locked = controller.lockedHint
     val releaseToLock = selection?.locked == true
     val dockEnd = vertical && selection?.dockEnd == true
+    val dockTop = !vertical && selection?.dockTop == true
     val text = when {
         locked != null -> stringResource(Res.string.player_speed_locked, formatSpeed(locked / 100f))
         releaseToLock -> stringResource(Res.string.player_speed_release_to_lock)
+        !vertical && dockTop -> stringResource(Res.string.player_speed_coarse_horizontal_top)
         !vertical -> stringResource(Res.string.player_speed_coarse_horizontal)
         dockEnd -> stringResource(Res.string.player_speed_coarse_vertical_right)
         else -> stringResource(Res.string.player_speed_coarse_vertical)
@@ -175,7 +176,9 @@ internal fun SpeedSelectionOverlay(
     }
     val window = LocalWindowInfo.current.containerSize
     val vertical = window.width > window.height
-    val dockEnd = vertical && (controller.selection ?: shownSelection)?.dockEnd == true
+    val activeOrLast = controller.selection ?: shownSelection
+    val dockEnd = vertical && activeOrLast?.dockEnd == true
+    val dockTop = !vertical && activeOrLast?.dockTop == true
     val focus = remember { FocusRequester() }
     BackHandler(enabled = controller.active) { controller.cancel() }
     LaunchedEffect(controller.active) { if (controller.active) focus.requestFocus() }
@@ -190,8 +193,16 @@ internal fun SpeedSelectionOverlay(
                     when (event.key) {
                         Key.Escape -> controller.cancel()
                         Key.Enter -> { controller.lock(); controller.finish() }
-                        Key.DirectionUp -> if (vertical) controller.step(-1) else return@onKeyEvent false
-                        Key.DirectionDown -> if (vertical) controller.step(1) else { controller.lock(); controller.finish() }
+                        Key.DirectionUp -> when {
+                            vertical -> controller.step(-1)
+                            dockTop -> { controller.lock(); controller.finish() }
+                            else -> return@onKeyEvent false
+                        }
+                        Key.DirectionDown -> when {
+                            vertical -> controller.step(1)
+                            !dockTop -> { controller.lock(); controller.finish() }
+                            else -> return@onKeyEvent false
+                        }
                         Key.DirectionRight -> when {
                             !vertical -> controller.step(1)
                             dockEnd -> { controller.lock(); controller.finish() }
@@ -213,17 +224,20 @@ internal fun SpeedSelectionOverlay(
             AnimatedVisibility(
                 visible = controller.active,
                 enter = (when {
+                    !vertical && dockTop -> slideInVertically(spatialOffset) { -it / 2 }
                     !vertical -> slideInVertically(spatialOffset) { it / 2 }
                     dockEnd -> slideInHorizontally(spatialOffset) { it / 2 }
                     else -> slideInHorizontally(spatialOffset) { -it / 2 }
                 }) + fadeIn(effects),
                 exit = (when {
+                    !vertical && dockTop -> slideOutVertically(spatialOffset) { -it / 2 }
                     !vertical -> slideOutVertically(spatialOffset) { it / 2 }
                     dockEnd -> slideOutHorizontally(spatialOffset) { it / 2 }
                     else -> slideOutHorizontally(spatialOffset) { -it / 2 }
                 }) + fadeOut(effects),
                 modifier = Modifier.align(
                     when {
+                        !vertical && dockTop -> Alignment.TopCenter
                         !vertical -> Alignment.BottomCenter
                         dockEnd -> Alignment.CenterEnd
                         else -> Alignment.CenterStart
@@ -233,6 +247,9 @@ internal fun SpeedSelectionOverlay(
                 val selection = controller.selection ?: shownSelection
                 if (selection != null) {
                     val scrim = when {
+                        !vertical && selection.dockTop -> Brush.verticalGradient(
+                            listOf(ControlScrimBottom, FixedColors.PlayerControlScrim, Color.Transparent),
+                        )
                         !vertical -> Brush.verticalGradient(
                             listOf(Color.Transparent, FixedColors.PlayerControlScrim, ControlScrimBottom),
                         )
@@ -243,6 +260,12 @@ internal fun SpeedSelectionOverlay(
                             listOf(ControlScrimBottom, FixedColors.PlayerControlScrim, Color.Transparent),
                         )
                     }
+                    val insetSides = when {
+                        !vertical && selection.dockTop -> WindowInsetsSides.Horizontal + WindowInsetsSides.Top
+                        !vertical -> WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
+                        selection.dockEnd -> WindowInsetsSides.End + WindowInsetsSides.Vertical
+                        else -> WindowInsetsSides.Start + WindowInsetsSides.Vertical
+                    }
                     SpeedDial(
                         controller = controller,
                         selection = selection,
@@ -251,15 +274,7 @@ internal fun SpeedSelectionOverlay(
                             .background(scrim)
                             .then(
                                 if (isFullscreen) {
-                                    Modifier.windowInsetsPadding(
-                                        WindowInsets.barsAndCutout.only(
-                                            when {
-                                                !vertical -> WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
-                                                selection.dockEnd -> WindowInsetsSides.End + WindowInsetsSides.Vertical
-                                                else -> WindowInsetsSides.Start + WindowInsetsSides.Vertical
-                                            },
-                                        ),
-                                    )
+                                    Modifier.windowInsetsPadding(WindowInsets.barsAndCutout.only(insetSides))
                                 } else {
                                     Modifier
                                 },
@@ -316,7 +331,7 @@ private fun SpeedDial(
             stateDescription = valueDescription
             progressBarRangeInfo = ProgressBarRangeInfo(
                 current = selection.speed,
-                range = .25f..3f,
+                range = .5f..3f,
                 steps = (selection.choices.size - 2).coerceAtLeast(0),
             )
             setProgress {
@@ -369,6 +384,7 @@ private fun SpeedDial(
                         displacement += amount
                         val before = controller.selection
                         val acrossPx = when {
+                            !vertical && before?.dockTop == true -> -displacement.y
                             !vertical -> displacement.y
                             before?.dockEnd == true -> displacement.x
                             else -> -displacement.x
@@ -392,7 +408,6 @@ private fun SpeedDial(
         animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
         label = "speed-blocks",
     )
-    // 拖拽中直接跟手,松手或点击时走弹簧吸附。
     val position = if (controller.dragging) selection.position else animatedPosition
     BoxWithConstraints(input) {
         val center = with(density) { if (vertical) maxHeight.toPx() / 2 else maxWidth.toPx() / 2 }
@@ -400,9 +415,8 @@ private fun SpeedDial(
         val height = SpeedDialSize.BlockHeight
         val widthPx = with(density) { width.toPx() }
         val heightPx = with(density) { height.toPx() }
-        val stepPx = with(density) {
-            (if (vertical) SpeedVerticalStepDp else SpeedHorizontalStepDp).dp.toPx()
-        }
+        val stepDp = if (vertical) SpeedVerticalBlockStepDp else SpeedHorizontalBlockStepDp
+        val stepPx = with(density) { stepDp.dp.toPx() }
         val colors = MaterialTheme.colorScheme
         val unselectedContainer = mediaControlContainer()
         selection.choices.forEachIndexed { index, value ->
@@ -444,10 +458,10 @@ private fun SpeedDial(
                 contentAlignment = Alignment.Center,
             ) {
                 val label = formatSpeed(value / 100f)
-                val textStyle = (if (selected) MaterialTheme.typography.labelLargeEmphasized else MaterialTheme.typography.labelLarge)
+                val textStyle = (if (selected) MaterialTheme.typography.titleMediumEmphasized else MaterialTheme.typography.titleMedium)
                     .copy(fontFeatureSettings = "tnum")
-                val icon = if (selection.locked) Icons.Filled.Lock else Icons.Filled.FastForward
                 if (selected) {
+                    val icon = if (selection.locked) Icons.Filled.Lock else Icons.Filled.FastForward
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
@@ -456,7 +470,7 @@ private fun SpeedDial(
                             imageVector = icon,
                             contentDescription = null,
                             tint = contentColor,
-                            modifier = Modifier.size(SpeedDialSize.BlockIconSize),
+                            modifier = Modifier.size(Dimens.IconInline),
                         )
                         Text(label, style = textStyle, color = contentColor)
                     }

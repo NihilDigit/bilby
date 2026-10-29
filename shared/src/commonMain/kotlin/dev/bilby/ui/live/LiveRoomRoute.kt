@@ -55,6 +55,9 @@ fun LiveRoomRoute(
     val danmakuPrefs by container.settings.danmakuPrefs.collectAsStateWithLifecycle(
         initialValue = dev.bilby.data.DanmakuPrefs(),
     )
+    val playerPrefs by container.settings.playerPrefs.collectAsStateWithLifecycle(
+        initialValue = dev.bilby.data.PlayerPrefs(),
+    )
     // 弹幕设置是全局的,不是这个房间的状态:在直播间改了,回到视频页也是改过的。
     val danmakuEditor = remember { StoredDanmakuPrefsEditor(container.settings, container.persistScope) }
 
@@ -138,6 +141,7 @@ fun LiveRoomRoute(
         // 同上:别人的装载不该让这个房间的刷新按钮转圈。
         reloadingStream = audioState.loading && thisRoom,
         roomId = roomId,
+        swipeBrightnessVolume = playerPrefs.swipeBrightnessVolume,
         onBack = onBack,
         onUserClick = onUserClick,
         onToggleFollow = vm::toggleFollow,

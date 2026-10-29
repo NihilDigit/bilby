@@ -46,8 +46,11 @@ data class SettingsUiState(
     val sponsorBlock: SponsorBlockPrefs = SponsorBlockPrefs(),
     /** 本机真有硬解器的编码,决定编解码那一节列出哪几项。 */
     val hardwareCodecIds: Set<Int> = emptySet(),
-    val fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
     val doubleTapSeek: Boolean = true,
+    val longPressSpeed: Boolean = true,
+    val defaultHoldSpeed: Float = SettingsStore.DEFAULT_HOLD_SPEED,
+    val swipeSeek: Boolean = true,
+    val swipeBrightnessVolume: Boolean = true,
     /** 播完一条要不要接着放队列里的下一条。见 [dev.bilby.data.PlaybackPrefs.autoNext]。 */
     val autoNext: Boolean = true,
     /** 排除的 UP 主,名字已经带上。为空时那一行不显示 —— 没排除过的人不需要看见这个概念。 */
@@ -173,8 +176,11 @@ class SettingsViewModel(
                         defaultAudioWifi = prefs.defaultAudioWifi,
                         defaultAudioMetered = prefs.defaultAudioMetered,
                         playerPickUpdatesDefault = prefs.playerPickUpdatesDefault,
-                        fastForwardSpeed = prefs.fastForwardSpeed,
                         doubleTapSeek = prefs.doubleTapSeek,
+                        longPressSpeed = prefs.longPressSpeed,
+                        defaultHoldSpeed = prefs.defaultHoldSpeed,
+                        swipeSeek = prefs.swipeSeek,
+                        swipeBrightnessVolume = prefs.swipeBrightnessVolume,
                     )
                 }
             }
@@ -283,14 +289,29 @@ class SettingsViewModel(
         }
     }
 
-    fun setFastForwardSpeed(value: Float) {
-        _state.update { it.copy(fastForwardSpeed = value) }
-        persist { settings.saveFastForwardSpeed(value) }
-    }
-
     fun setDoubleTapSeek(value: Boolean) {
         _state.update { it.copy(doubleTapSeek = value) }
         persist { settings.saveDoubleTapSeek(value) }
+    }
+
+    fun setLongPressSpeed(value: Boolean) {
+        _state.update { it.copy(longPressSpeed = value) }
+        persist { settings.saveLongPressSpeed(value) }
+    }
+
+    fun setDefaultHoldSpeed(value: Float) {
+        _state.update { it.copy(defaultHoldSpeed = value) }
+        persist { settings.saveDefaultHoldSpeed(value) }
+    }
+
+    fun setSwipeSeek(value: Boolean) {
+        _state.update { it.copy(swipeSeek = value) }
+        persist { settings.saveSwipeSeek(value) }
+    }
+
+    fun setSwipeBrightnessVolume(value: Boolean) {
+        _state.update { it.copy(swipeBrightnessVolume = value) }
+        persist { settings.saveSwipeBrightnessVolume(value) }
     }
 
     fun setThemeMode(mode: ThemeMode) {

@@ -4,13 +4,14 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.sign
 
-internal const val SpeedHorizontalStepDp = 76f
-internal const val SpeedVerticalStepDp = 40f
-internal const val SpeedDragStepDp = 22f
+internal const val SpeedHorizontalBlockStepDp = 84f
+internal const val SpeedVerticalBlockStepDp = 46f
+internal const val SpeedDragStepDp = 36f
 internal const val SpeedModeStepDp = 32f
-internal const val SpeedSelectionIntentDp = 8f
+internal const val SpeedSelectionIntentDp = 10f
 
-internal val SpeedPresets = listOf(25, 50, 75, 100, 125, 150, 175, 200, 225, 250, 275, 300)
+internal val SpeedPresets = listOf(50, 100, 150, 200, 250, 300)
+internal const val DefaultHoldSpeed = 2.5f
 
 internal fun speedHundredths(speed: Float): Int = (speed * 100).roundToInt().coerceIn(25, 300)
 
@@ -27,6 +28,7 @@ internal data class SpeedSelection(
     val temporary: Boolean,
     val locked: Boolean = false,
     val dockEnd: Boolean = false,
+    val dockTop: Boolean = false,
 ) {
     val speed: Float get() = value / 100f
 
@@ -47,20 +49,20 @@ internal data class SpeedSelection(
 
     companion object {
         fun start(
-            original: Float,
+            initial: Float,
             temporary: Boolean,
             dockEnd: Boolean = false,
-            initial: Float = original,
+            dockTop: Boolean = false,
         ): SpeedSelection {
-            val originalValue = speedHundredths(original)
             val value = speedHundredths(initial)
-            val choices = (SpeedPresets + originalValue + value).distinct().sorted()
+            val choices = (SpeedPresets + value).distinct().sorted()
             return SpeedSelection(
                 value = value,
                 choices = choices,
                 position = choices.indexOf(value).toFloat(),
                 temporary = temporary,
                 dockEnd = dockEnd,
+                dockTop = dockTop,
             )
         }
     }

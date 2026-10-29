@@ -25,16 +25,15 @@ internal fun Modifier.speedSelectionLongPress(
         if (controller == null || !enabled) return@pointerInput
         var owned = false
         var dockEnd = false
+        var dockTop = false
         var displacement = Offset.Zero
         try {
             detectDragGesturesAfterLongPress(
                 onDragStart = { startOffset ->
                     dockEnd = vertical && startOffset.x < size.width / 2f
-                    controller.open(
-                        temporary = true,
-                        dockEnd = dockEnd,
-                        initialSpeed = controller.defaultHoldSpeed,
-                    )
+                    // 竖屏下偏下长按把选档条放画面上沿(上滑锁定),偏上长按放画面下沿(下滑锁定)。
+                    dockTop = !vertical && startOffset.y >= size.height / 2f
+                    controller.open(temporary = true, dockEnd = dockEnd, dockTop = dockTop)
                     owned = controller.beginDrag()
                     displacement = Offset.Zero
                     currentOnStart()
@@ -54,6 +53,7 @@ internal fun Modifier.speedSelectionLongPress(
                 displacement += amount
                 val before = controller.selection
                 val acrossPx = when {
+                    !vertical && dockTop -> -displacement.y
                     !vertical -> displacement.y
                     dockEnd -> displacement.x
                     else -> -displacement.x

@@ -102,8 +102,10 @@ import kotlin.math.roundToInt
  * 而手势层本身(方向锁定、浮层、长按快进)两边一模一样,没有理由各写一份。
  */
 data class PlayerGestureOptions(
-    /** 是否允许跳转进度;直播关闭。 */
+    /** 内容流本身是否允许跳转进度;直播关闭。 */
     val seek: Boolean = true,
+    /** 画面横划调整进度。关闭它不影响进度条与键盘左右方向键。 */
+    val swipeSeek: Boolean = true,
     /** 两侧双击 ±10 秒。关闭后整屏双击播放/暂停,不影响横划进度。 */
     val doubleTapSeek: Boolean = true,
     /** 左半屏纵划调亮度、右半屏调音量。 */
@@ -435,7 +437,7 @@ fun PlayerShell(
     /** 定下这一次拖拽在做什么。返回 null 表示这次不做事(这一档手势被关掉)。 */
     val startGesture: (Boolean, Long) -> PlayerGesture? = start@{ horizontal, playerPosition ->
         if (horizontal) {
-            return@start if (gestures.seek) PlayerGesture.Seek(playerPosition) else null
+            return@start if (gestures.seek && gestures.swipeSeek) PlayerGesture.Seek(playerPosition) else null
         }
         if (!gestures.brightnessAndVolume) return@start null
         val onLeftHalf = dragStartX < 0.5f

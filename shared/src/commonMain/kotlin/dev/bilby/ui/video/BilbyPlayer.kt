@@ -152,7 +152,7 @@ fun BilbyPlayer(
     danmakuPrefs: DanmakuPrefs = DanmakuPrefs(),
     /** 控制条上的弹幕开关与设置面板里的弹幕各项都经它改。为 null 时面板里没有弹幕那一段。 */
     danmakuEditor: DanmakuPrefsEditor? = null,
-    doubleTapSeek: Boolean = true,
+    gestures: PlayerGestureOptions = PlayerGestureOptions(),
     speedController: PlaybackSpeedController,
     /**
      * 控件锁。横屏看视频时手容易碰到画面,一碰就暂停或快进;锁上之后除了解锁按钮,所有手势
@@ -224,7 +224,7 @@ fun BilbyPlayer(
         externalLoading = externalLoading,
         modifier = modifier,
         speedController = speedController,
-        gestures = PlayerGestureOptions(doubleTapSeek = doubleTapSeek),
+        gestures = gestures,
         topBarActions = topBarActions,
         embeddedTopActions = embeddedTopActions,
         pip = pip,
@@ -330,7 +330,7 @@ fun BilbyPlayer(
             val settings: @Composable () -> Unit = {
                 PlayerSettingsContent(
                     speed = speed,
-                    onSpeedChange = { player.setPlaybackSpeed(it) },
+                    onSpeedChange = { speedController.applySpeed(it) },
                     qualities = qualities,
                     currentQuality = currentQuality,
                     onQualityChange = onQualityChange,
@@ -343,6 +343,7 @@ fun BilbyPlayer(
                     danmakuPrefs = danmakuPrefs,
                     danmakuEditor = danmakuEditor,
                     only = settingsOnly,
+                    fullHeightHost = isFullscreen || twoPane,
                 )
             }
             PlayerSettingsHost(isFullscreen, settingsOpen, settingsOnly, onDismiss = close, content = settings)

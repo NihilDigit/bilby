@@ -9,27 +9,24 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalWindowInfo
-import dev.bilby.data.SettingsStore
 import dev.bilby.player.PlayerHandle
 import dev.bilby.player.PlayerListener
-import kotlinx.coroutines.CoroutineScope
 import kotlin.math.abs
 
 @Stable
 class PlaybackSpeedController internal constructor(
-    @Suppress("UNUSED_PARAMETER")
-    scope: CoroutineScope,
     private val readSpeed: () -> Float,
     private val writeSpeed: (Float) -> Unit,
-    private val readFastForwardSpeed: () -> Float = { SettingsStore.DEFAULT_FAST_FORWARD_SPEED },
+    defaultHoldSpeed: Float = DefaultHoldSpeed,
 ) {
     internal var selection by mutableStateOf<SpeedSelection?>(null)
         private set
     var speed by mutableFloatStateOf(readSpeed())
+        private set
+    var defaultHoldSpeed by mutableFloatStateOf(defaultHoldSpeed)
+    var lockedByHold by mutableStateOf(false)
         private set
     var lockedHint by mutableStateOf<Int?>(null)
         private set
@@ -41,32 +38,52 @@ class PlaybackSpeedController internal constructor(
         private set
 
     val active: Boolean get() = selection != null
-    internal val defaultHoldSpeed: Float get() = readFastForwardSpeed()
 
-    private var originalSpeed = speed
+    /** 未被长按锁定的常驻基准倍速(如 1.0x 或面板设定的倍速)。 */
+    private var baseSpeed = speed
+    private var lockedHoldSpeed = speed
+    private var preOpenSpeed = speed
+    private var preOpenLocked = false
     private var drag: SpeedSelectionDrag? = null
 
     fun sync(speed: Float) {
-        if (!active) this.speed = speed
+        if (!active) {
+            this.speed = speed
+            if (lockedByHold && abs(speed - lockedHoldSpeed) > 0.005f) {
+                lockedByHold = false
+                baseSpeed = speed
+            } else if (!lockedByHold) {
+                baseSpeed = speed
+            }
+        }
     }
 
-    fun open(temporary: Boolean = false, dockEnd: Boolean = false, initialSpeed: Float? = null) {
-        if (active) finish(cancel = true)
-        originalSpeed = readSpeed()
+    /** 设置面板显式修改常驻倍速:清除长按锁定态并以新倍速作为基准原速。 */
+    fun applySpeed(target: Float) {
+        if (active) cancel()
+        lockedByHold = false
         lockedHint = null
-        val next = SpeedSelection.start(
-            original = originalSpeed,
-            temporary = temporary,
-            dockEnd = dockEnd,
-            initial = initialSpeed ?: originalSpeed,
-        )
-        selection = next
-        if (initialSpeed != null) {
-            speed = next.speed
-            flush(next.speed)
-        } else {
-            speed = originalSpeed
+        baseSpeed = target
+        speed = target
+        flush(target)
+    }
+
+    fun open(temporary: Boolean = false, dockEnd: Boolean = false, dockTop: Boolean = false) {
+        if (active) finish(cancel = true)
+        val currentActual = readSpeed()
+        preOpenSpeed = currentActual
+        preOpenLocked = lockedByHold
+        if (!lockedByHold) baseSpeed = currentActual
+        val initial = when {
+            !temporary -> currentActual
+            lockedByHold -> currentActual
+            else -> defaultHoldSpeed
         }
+        lockedHint = null
+        val started = SpeedSelection.start(initial, temporary, dockEnd = dockEnd, dockTop = dockTop)
+        selection = started
+        speed = started.speed
+        flush(started.speed)
     }
 
     fun beginDrag(): Boolean {
@@ -77,10 +94,7 @@ class PlaybackSpeedController internal constructor(
         return true
     }
 
-    fun move(
-        alongDp: Float,
-        acrossDp: Float,
-    ) {
+    fun move(alongDp: Float, acrossDp: Float) {
         val current = selection ?: return
         update(
             drag?.move(current, alongDp, acrossDp) ?: return,
@@ -111,14 +125,40 @@ class PlaybackSpeedController internal constructor(
 
     fun finish(cancel: Boolean = false) {
         val current = selection ?: return
-        val keep = current.locked || (!current.temporary && !cancel)
-        val finalSpeed = if (keep) current.speed else originalSpeed
+        val finalSpeed = when {
+            cancel -> {
+                lockedByHold = preOpenLocked
+                preOpenSpeed
+            }
+            current.locked -> {
+                val chosen = current.speed
+                if (current.temporary) {
+                    lockedByHold = true
+                    lockedHoldSpeed = chosen
+                } else {
+                    lockedByHold = false
+                    baseSpeed = chosen
+                }
+                chosen
+            }
+            !current.temporary -> {
+                val chosen = current.speed
+                lockedByHold = false
+                baseSpeed = chosen
+                chosen
+            }
+            else -> {
+                // 画面长按未锁定直接松手(含此前已处于长按锁定态时再次长按未重锁):解除锁定回到基准原速。
+                lockedByHold = false
+                baseSpeed
+            }
+        }
         selection = null
         dragging = false
         drag = null
         speed = finalSpeed
         flush(finalSpeed)
-        if (current.locked) {
+        if (!cancel && current.locked) {
             lockedHint = current.value
             hintRevision++
         }
@@ -151,18 +191,16 @@ class PlaybackSpeedController internal constructor(
 internal fun rememberPlaybackSpeedController(
     player: PlayerHandle?,
     mediaKey: Any,
-    fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
+    defaultHoldSpeed: Float = DefaultHoldSpeed,
 ): PlaybackSpeedController {
-    val scope = rememberCoroutineScope()
-    val currentFastForwardSpeed by rememberUpdatedState(fastForwardSpeed)
     val controller = remember(player, mediaKey) {
         PlaybackSpeedController(
-            scope = scope,
             readSpeed = { player?.playbackSpeed ?: 1f },
             writeSpeed = { player?.setPlaybackSpeed(it) },
-            readFastForwardSpeed = { currentFastForwardSpeed },
+            defaultHoldSpeed = defaultHoldSpeed,
         )
     }
+    controller.defaultHoldSpeed = defaultHoldSpeed
     DisposableEffect(player, controller) {
         val listener = object : PlayerListener {
             override fun onPlaybackSpeedChanged(speed: Float) = controller.sync(speed)

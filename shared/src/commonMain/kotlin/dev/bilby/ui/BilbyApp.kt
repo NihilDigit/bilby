@@ -161,9 +161,11 @@ import dev.bilby.ui.search.SearchResultScreen
 import dev.bilby.ui.search.SearchResultViewModel
 import dev.bilby.ui.search.SearchTab
 import dev.bilby.ui.components.RefreshAction
+import dev.bilby.ui.player.PlayerGestureOptions
 import dev.bilby.ui.settings.AboutSettingsPage
 import dev.bilby.ui.settings.AgentSettingsPage
 import dev.bilby.ui.settings.AppearanceSettingsPage
+import dev.bilby.ui.settings.GestureSettingsPage
 import dev.bilby.ui.settings.PlaybackSettingsPage
 import dev.bilby.data.model.ArticleRef
 import dev.bilby.data.model.FeedEntry
@@ -1532,8 +1534,6 @@ private fun SettingsPageRoute(
             onWifiQualityChange = { vm.setDefaultQuality(it, metered = false) },
             onMeteredQualityChange = { vm.setDefaultQuality(it, metered = true) },
             onCodecChange = vm::setCodec,
-            onFastForwardSpeedChange = vm::setFastForwardSpeed,
-            onDoubleTapSeekChange = vm::setDoubleTapSeek,
             onAutoNextChange = vm::setAutoNext,
             onWifiAudioChange = { vm.setDefaultAudio(it, metered = false) },
             onMeteredAudioChange = { vm.setDefaultAudio(it, metered = true) },
@@ -1541,6 +1541,16 @@ private fun SettingsPageRoute(
             onSponsorBlockChange = vm::updateSponsorBlock,
             onOpenSponsorCategories = { onOpenSection(SettingsSection.SponsorCategories) },
             onOfflineConcurrencyChange = vm::setOfflineConcurrency,
+            onBack = onBack,
+        )
+
+        SettingsSection.Gestures -> GestureSettingsPage(
+            state = state,
+            onDoubleTapSeekChange = vm::setDoubleTapSeek,
+            onLongPressSpeedChange = vm::setLongPressSpeed,
+            onDefaultHoldSpeedChange = vm::setDefaultHoldSpeed,
+            onSwipeSeekChange = vm::setSwipeSeek,
+            onSwipeBrightnessVolumeChange = vm::setSwipeBrightnessVolume,
             onBack = onBack,
         )
 
@@ -2882,8 +2892,13 @@ private fun VideoPane(
         danmakuSend = danmakuSend,
         onSendDanmaku = vm::sendDanmaku,
         onDanmakuSendConsumed = vm::clearDanmakuSend,
-        fastForwardSpeed = playerPrefs.fastForwardSpeed,
-        doubleTapSeek = playerPrefs.doubleTapSeek,
+        gestures = PlayerGestureOptions(
+            swipeSeek = playerPrefs.swipeSeek,
+            doubleTapSeek = playerPrefs.doubleTapSeek,
+            brightnessAndVolume = playerPrefs.swipeBrightnessVolume,
+            fastForward = playerPrefs.longPressSpeed,
+        ),
+        defaultHoldSpeed = playerPrefs.defaultHoldSpeed,
     )
 }
 

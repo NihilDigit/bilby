@@ -390,6 +390,7 @@
     <string name="player_fullscreen">全屏</string>
     <string name="player_exit_fullscreen">退出全屏</string>
     <string name="player_speed_coarse_horizontal">下滑锁定</string>
+    <string name="player_speed_coarse_horizontal_top">上滑锁定</string>
     <string name="player_speed_coarse_vertical">左滑锁定</string>
     <string name="player_speed_coarse_vertical_right">右滑锁定</string>
     <string name="player_speed_release_to_lock">松手锁定</string>
@@ -498,6 +499,15 @@
     <string name="settings_feed_excluded_count">%1$d 位</string>
     <string name="settings_feed_excluded_restore">恢复</string>
     <string name="settings_section_playback">播放</string>
+    <string name="settings_section_gestures">快捷手势</string>
+    <string name="settings_gestures_summary">双击进退、长按倍速与滑动调节</string>
+    <string name="settings_long_press_speed">长按倍速</string>
+    <string name="settings_long_press_speed_subtitle">按住画面临时加速播放，滑动可切换倍速并锁定</string>
+    <string name="settings_default_hold_speed">默认长按倍速</string>
+    <string name="settings_swipe_seek">横向滑动调节进度</string>
+    <string name="settings_swipe_seek_subtitle">在画面上左右拖动跳转播放位置</string>
+    <string name="settings_swipe_brightness_volume">纵向滑动调节亮度与音量</string>
+    <string name="settings_swipe_brightness_volume_subtitle">左半屏上下拖动调节亮度，右半屏调节音量</string>
     <string name="settings_group_playback">播放</string>
     <string name="settings_group_quality">画质与音质</string>
     <string name="settings_group_sponsorblock">跳过片段</string>

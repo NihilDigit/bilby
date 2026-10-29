@@ -230,8 +230,8 @@ fun VideoScreen(
     /** cid 与进度由这一层给:播放器装着哪一 P、放到了哪儿,权威在服务那侧。 */
     onSendDanmaku: (text: String, cid: Long, progressMillis: Long) -> Unit = { _, _, _ -> },
     onDanmakuSendConsumed: () -> Unit = {},
-    fastForwardSpeed: Float = SettingsStore.DEFAULT_FAST_FORWARD_SPEED,
-    doubleTapSeek: Boolean = true,
+    gestures: PlayerGestureOptions = PlayerGestureOptions(),
+    defaultHoldSpeed: Float = SettingsStore.DEFAULT_HOLD_SPEED,
     modifier: Modifier = Modifier,
 ) {
     val playback = LocalPlaybackHost.current
@@ -304,7 +304,11 @@ fun VideoScreen(
      * 分 P 行按它高亮、发弹幕按它带参数,全都会认成本页这条视频的。
      */
     val currentCid = if (matchesCurrentPage) audioState.currentCid else 0L
-    val speedController = rememberPlaybackSpeedController(active, bvid to currentCid, fastForwardSpeed)
+    val speedController = rememberPlaybackSpeedController(
+        player = active,
+        mediaKey = bvid to currentCid,
+        defaultHoldSpeed = defaultHoldSpeed,
+    )
     LaunchedEffect(fullscreen, listening) {
         speedController.cancel()
         speedController.clearHint()
@@ -832,7 +836,7 @@ fun VideoScreen(
                     audioOptions = audioState.playInfo?.streams?.audioOptions.orEmpty(),
                     currentAudio = audioState.playInfo?.streams?.audioId ?: 0,
                     onAudioChange = setAudioQuality,
-                    doubleTapSeek = doubleTapSeek,
+                    gestures = gestures,
                     speedController = speedController,
                     isFullscreen = fullscreen,
                     onFullscreenChange = { fullscreen = it },

@@ -213,6 +213,7 @@ fun LiveRoomScreen(
     reloadingStream: Boolean,
     /** 分享要给出 `live.bilibili.com/<roomId>`,而房间号不在 [state] 里。 */
     roomId: Long,
+    swipeBrightnessVolume: Boolean = true,
     onBack: () -> Unit,
     /** 进主播的个人空间。mid 由 [state] 带,这一页不认识导航。 */
     onUserClick: (Long) -> Unit,
@@ -276,7 +277,11 @@ fun LiveRoomScreen(
                     // 直播既不能 seek 也不能快进:前者那条时间轴上没有往回拖这回事,后者会把
                     // 倍速设成 3x —— 在一条一直往前走的流上,那只是冲到最前沿然后卡住等数据。
                     // 亮度和音量照旧,它们跟内容是什么无关。
-                    gestures = PlayerGestureOptions(seek = false, fastForward = false),
+                    gestures = PlayerGestureOptions(
+                        seek = false,
+                        fastForward = false,
+                        brightnessAndVolume = swipeBrightnessVolume,
+                    ),
                     // 分享与高能榜人数跟控件一起显隐,同播放页:常驻的话它们一直压在画面右上角。
                     pip = inPip,
                     // 全屏顶栏同样给画中画,理由同播放页:它只从按钮进。
