@@ -200,7 +200,7 @@ private fun FolderMenu(
                     text = { Text(stringResource(Res.string.fav_folder_delete_title)) },
                     onClick = {
                         open = false
-                        folder?.let(onDelete)
+                        onDelete(folder)
                     },
                     leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null) },
                     shape = MenuDefaults.trailingItemShape,

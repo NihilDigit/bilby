@@ -39,10 +39,12 @@ private fun ParagraphDto.toBlock(): ArticleBlock? = when (paraType) {
 
     PARA_LINK_CARD -> linkCard?.card?.toLinkCard()
 
-    PARA_CODE -> code?.content?.takeIf { it.isNotBlank() }?.let {
-        // lang 形如 `language-kotlin`,偶尔是 `language-clike`。这里只取名字给界面上那个
-        // 语言角标用,没有做语法高亮 —— 高亮要引一整套词法库,而专栏里的代码块多是几行示例。
-        ArticleBlock.Code(content = it, language = code?.lang.orEmpty().removePrefix("language-"))
+    PARA_CODE -> code?.let { block ->
+        block.content.takeIf { it.isNotBlank() }?.let {
+            // lang 形如 `language-kotlin`,偶尔是 `language-clike`。这里只取名字给界面上那个
+            // 语言角标用,没有做语法高亮 —— 高亮要引一整套词法库,而专栏里的代码块多是几行示例。
+            ArticleBlock.Code(content = it, language = block.lang.removePrefix("language-"))
+        }
     }
 
     PARA_HEADING -> heading?.nodes.orEmpty().toSpans().takeIf { it.isNotEmpty() }

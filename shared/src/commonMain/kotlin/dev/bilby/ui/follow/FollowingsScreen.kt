@@ -44,7 +44,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.ListItem
+import dev.bilby.ui.components.StaticListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -613,18 +613,17 @@ private fun SpecialFollowsColumn(
                 menuLabel = stringResource(Res.string.follow_row_actions, up.name),
                 menu = menu,
             ) {
-                ListItem(
-                    headlineContent = {
-                        Text(
-                            up.name,
-                            style = MaterialTheme.typography.bodyLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    },
+                StaticListItem(
                     leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarRow) },
                     modifier = Modifier.fillMaxWidth(),
-                )
+                ) {
+                    Text(
+                        up.name,
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
@@ -970,24 +969,7 @@ private fun FollowingListItem(
     trailing: (@Composable () -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
-    ListItem(
-        headlineContent = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                Text(
-                    up.name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    // fill = false:名字短时标记紧跟在后面,名字长时先截名字,标记不被挤掉。
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                if (up.special) RelationTag(stringResource(Res.string.follow_special_tag), emphasized = true)
-                if (up.mutual) RelationTag(stringResource(Res.string.follow_mutual), emphasized = false)
-            }
-        },
+    StaticListItem(
         supportingContent = up.sign.takeIf { it.isNotBlank() }?.let { sign ->
             {
                 Text(
@@ -1002,7 +984,23 @@ private fun FollowingListItem(
         leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarRow) },
         trailingContent = trailing,
         modifier = Modifier.fillMaxWidth().then(modifier),
-    )
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            Text(
+                up.name,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                // fill = false:名字短时标记紧跟在后面,名字长时先截名字,标记不被挤掉。
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (up.special) RelationTag(stringResource(Res.string.follow_special_tag), emphasized = true)
+            if (up.mutual) RelationTag(stringResource(Res.string.follow_mutual), emphasized = false)
+        }
+    }
 }
 
 /** material3 ListItem 的行尾内边距,库里是私有常量,抄一份。 */

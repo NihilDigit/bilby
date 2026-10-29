@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
@@ -155,8 +156,9 @@ fun LiveNowSheet(
         )
         LazyColumn {
             items(liveUps, key = { it.mid }) { up ->
+                @OptIn(ExperimentalMaterial3ExpressiveApi::class)
                 ListItem(
-                    headlineContent = { Text(up.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    onClick = { onLiveClick(up.roomId) },
                     supportingContent = up.roomTitle.takeIf { it.isNotEmpty() }?.let { title ->
                         { Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis) }
                     },
@@ -170,8 +172,10 @@ fun LiveNowSheet(
                     },
                     // sheet 自己就是容器,行底色跟着它走(风格指南 §2.3c)。
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { onLiveClick(up.roomId) },
-                )
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(up.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
     }

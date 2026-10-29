@@ -674,12 +674,12 @@ private fun FeedEntryMenuItems(
     onAddToView: (String) -> Unit,
 ) {
     val canAddToView = item is FeedEntry.Video
-    if (canAddToView) {
+    if (item is FeedEntry.Video) {
         // 只进不出,和播放页那一格同一套规矩(见 [FeedViewModel.addToView])。
         DropdownMenuItem(
             onClick = {
                 close()
-                onAddToView((item as FeedEntry.Video).bvid)
+                onAddToView(item.bvid)
             },
             text = { Text(stringResource(Res.string.video_action_toview_desc)) },
             // 与播放页动作栏那一格同一个图标,认得出是同一件事。

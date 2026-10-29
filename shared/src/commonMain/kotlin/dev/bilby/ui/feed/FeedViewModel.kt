@@ -71,6 +71,7 @@ class FeedViewModel(
         viewModelScope.launch { store.ensureStarted(DynamicFeedHalf.Home) }
         // 去抖落盘:滚动期间每一帧都可能换一次顶部条目,只在停下来之后写一次。1.2 秒是「已经
         // 停手」和「还在划」之间一个不难感知出来的分界,不是量出来的精确值。
+        @OptIn(kotlinx.coroutines.FlowPreview::class)
         viewModelScope.launch {
             visibleTopId.filterNotNull().distinctUntilChanged().debounce(READ_POSITION_DEBOUNCE_MS).collect { id ->
                 pendingReadId = null

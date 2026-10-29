@@ -161,11 +161,12 @@ class CommentRepository(
         return client.getData<ReplyMainResponseDto>(MAIN_URL_ANON, params).map { dto ->
             val uploaderMid = dto.upper?.mid ?: 0L
             val nextOffset = dto.cursor?.paginationReply?.nextOffset
-            val hasMore = dto.cursor?.isEnd == false && !nextOffset.isNullOrEmpty()
+            val validNextOffset = nextOffset?.takeIf { dto.cursor.isEnd == false && it.isNotEmpty() }
+            val hasMore = validNextOffset != null
             CommentPage(
                 topComment = dto.top?.pick()?.toCommentItem(uploaderMid),
                 items = dto.replies.orEmpty().map { it.toCommentItem(uploaderMid) },
-                nextCursor = if (hasMore) CommentCursor.Offset(nextOffset!!) else null,
+                nextCursor = validNextOffset?.let { CommentCursor.Offset(it) },
                 hasMore = hasMore,
                 total = dto.cursor?.allCount ?: 0,
             )

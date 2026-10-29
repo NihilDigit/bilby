@@ -20,9 +20,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
@@ -262,7 +263,7 @@ fun PaneSheet(
         val sheetState = if (skipPartiallyExpanded || !pointers.isTouchLike) {
             rememberExpandedSheetState()
         } else {
-            rememberModalBottomSheetState()
+            rememberBottomSheetState(SheetValue.Hidden)
         }
         ModalBottomSheet(onDismissRequest = onDismissRequest, sheetState = sheetState) {
             Column(modifier = Modifier.nestedScroll(remember(pointers) { WheelStopsAtSheet(pointers) })) {

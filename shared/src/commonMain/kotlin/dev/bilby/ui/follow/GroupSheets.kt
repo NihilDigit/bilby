@@ -16,10 +16,12 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
+import dev.bilby.ui.components.StaticListItem
 import androidx.compose.material3.MaterialTheme
 import dev.bilby.ui.components.PaneSheet
 import androidx.compose.material3.OutlinedTextField
@@ -98,25 +100,25 @@ fun GroupPickerSheet(
                 items(groups, key = { it.id }) { group ->
                     val checked =
                         if (group.id == SPECIAL_GROUP_ID) state.special else group.id in state.selected
+                    @OptIn(ExperimentalMaterial3ExpressiveApi::class)
                     ListItem(
-                        headlineContent = {
-                            Text(
-                                "${group.name}$MetaSeparator${group.count}",
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        },
-                        // 整行可选,不给 Checkbox 单挂 onClick:读屏要把这一行念成一个可选中的
-                        // 节点,而不是一段文字加一个孤立的控件(风格指南 §3)。
+                        checked = checked,
+                        onCheckedChange = { onToggle(group.id) },
+                        enabled = !state.saving,
                         trailingContent = { Checkbox(checked = checked, onCheckedChange = null) },
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        modifier = Modifier.fillMaxWidth().toggleable(
-                            value = checked,
-                            enabled = !state.saving,
-                            role = Role.Checkbox,
-                            onValueChange = { onToggle(group.id) },
+                        colors = ListItemDefaults.colors(
+                            containerColor = Color.Transparent,
+                            selectedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
                         ),
-                    )
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            "${group.name}$MetaSeparator${group.count}",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
@@ -138,7 +140,7 @@ fun GroupPickerSheet(
  * @param error 上一次写操作的失败原因。写在面板里而不是弹一个提示:这一页没有别的地方能说
  *   这件事,而失败之后用户多半要就着同一个名字再试一次。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun GroupManagerSheet(
     groups: List<FollowGroup>,
@@ -157,14 +159,7 @@ fun GroupManagerSheet(
         if (error != null) SheetMessage(error)
         LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
             items(groups, key = { it.id }) { group ->
-                ListItem(
-                    headlineContent = {
-                        Text(
-                            "${group.name}$MetaSeparator${group.count}",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    },
+                StaticListItem(
                     trailingContent = if (group.isBuiltIn) null else {
                         {
                             Row {
@@ -190,17 +185,23 @@ fun GroupManagerSheet(
                         }
                     },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                )
+                ) {
+                    Text(
+                        "${group.name}$MetaSeparator${group.count}",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             item(key = "create") {
                 ListItem(
-                    headlineContent = { Text(stringResource(Res.string.follow_group_create)) },
+                    onClick = { creating = true },
                     leadingContent = { Icon(Icons.Outlined.Add, contentDescription = null) },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(role = Role.Button) { creating = true },
-                )
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(Res.string.follow_group_create))
+                }
             }
         }
         SheetActions(

@@ -13,6 +13,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -209,16 +210,11 @@ fun OfflineCacheSheet(
                     target.isFailed(cached) -> Res.string.offline_status_failed
                     else -> null
                 }
+                @OptIn(ExperimentalMaterial3ExpressiveApi::class)
                 ListItem(
-                    headlineContent = {
-                        // 分 P 行显示的是这一 P 的名字。整条视频的标题不再重复印在每一行上 ——
-                        // 它们紧挨着,而用户正是从这条视频点进来的。
-                        Text(
-                            text = target.partTitle.ifEmpty { target.item.title },
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    },
+                    checked = checked,
+                    onCheckedChange = { selected[target.key] = it },
+                    enabled = enabled,
                     supportingContent = if (status != null) {
                         { Text(stringResource(status)) }
                     } else {
@@ -229,14 +225,21 @@ fun OfflineCacheSheet(
                     },
                     // sheet 自己就是容器,行底色跟着它走 —— 画死 surface 会在容器里留下一条条
                     // 比容器亮的补丁(风格指南 §2.3c 的第二个坑)。
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    modifier = Modifier.fillMaxWidth().toggleable(
-                        value = checked,
-                        enabled = enabled,
-                        role = Role.Checkbox,
-                        onValueChange = { selected[target.key] = it },
+                    colors = ListItemDefaults.colors(
+                        containerColor = Color.Transparent,
+                        selectedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
                     ),
-                )
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    // 分 P 行显示的是这一 P 的名字。整条视频的标题不再重复印在每一行上 ——
+                    // 它们紧挨着,而用户正是从这条视频点进来的。
+                    Text(
+                        text = target.partTitle.ifEmpty { target.item.title },
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
 

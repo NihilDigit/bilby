@@ -59,8 +59,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.SplitButtonDefaults
-import androidx.compose.material3.SplitButtonLayout
 import androidx.compose.material3.TopAppBar
+import dev.bilby.ui.components.BilbySplitButton
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.semantics.contentDescription
@@ -1410,7 +1410,7 @@ private fun SpaceFollowControl(
     val onLeading = if (following) ({ menuOpen = true }) else onToggleFollow
 
     Box {
-        SplitButtonLayout(
+        BilbySplitButton(
             leadingButton = {
                 if (following) {
                     SplitButtonDefaults.OutlinedLeadingButton(onClick = onLeading) { Text(label) }
@@ -1622,12 +1622,11 @@ private fun CollectionsTab(
  * 合集用方形封面,和视频行的 16:9 拉开 —— 一眼就能分出「这是一组视频」和「这是一个视频」,
  * 不用先去读下面那行小字。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun CollectionRow(item: SpaceCollectionItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
     ListItem(
-        headlineContent = {
-            Text(item.name, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        },
+        onClick = onClick,
         supportingContent = {
             Text(
                 text = stringResource(
@@ -1646,8 +1645,10 @@ private fun CollectionRow(item: SpaceCollectionItem, onClick: () -> Unit, modifi
             )
         },
         leadingContent = { SquareCover(url = item.coverUrl, size = CollectionCoverSize) },
-        modifier = modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
-    )
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Text(item.name, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
 }
 
 private val CollectionCoverSize = 72.dp

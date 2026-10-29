@@ -135,10 +135,10 @@ class DynamicCardMapperTest {
         ).toDynamicCard()
 
         assertEquals("午安\n现在是纽芬兰的凌晨四点多", (card?.text?.single() as RichSpan.Text).text)
-        assertNull(card?.article)
-        assertNull(card?.content)
+        assertNull(card.article)
+        assertNull(card.content)
         // desc 是这条动态自己写的话,一个字不少。界面据此把它整段铺开,不收也不给"阅读全文"。
-        assertEquals(false, card?.textIsSummary)
+        assertEquals(false, card.textIsSummary)
     }
 
     /** desc 整个缺失时才退到 opus,那时标题加粗排在摘要前面(PiliPlus rich_node_panel.dart:46-58)。 */
@@ -241,7 +241,7 @@ class DynamicCardMapperTest {
         ).toDynamicCard()
 
         assertEquals("第一次遇到这种情况", (card?.text?.get(0) as RichSpan.Text).text)
-        assertEquals("https://e.png", (card?.text?.get(1) as RichSpan.Emoji).url)
+        assertEquals("https://e.png", (card.text[1] as RichSpan.Emoji).url)
     }
 
     private fun reserveCard(reserve: AdditionalReserveDto) = item(
@@ -441,8 +441,8 @@ class DynamicCardMapperTest {
         ).toDynamicCard()
 
         assertEquals("原动态的正文", (card?.forwarded?.text?.single() as RichSpan.Text).text)
-        assertTrue(card?.forwarded?.content is DynamicContent.Images)
-        assertNull(card?.forwardTips)
+        assertTrue(card.forwarded.content is DynamicContent.Images)
+        assertNull(card.forwardTips)
     }
 
     /** 转发链最长两层。没有上限的话,一条自引用的数据就能把这里递归到栈溢出。 */
@@ -452,7 +452,7 @@ class DynamicCardMapperTest {
         val card = item("DYNAMIC_TYPE_FORWARD", desc = "第一层", orig = inner).toDynamicCard()
 
         assertEquals("第二层", (card?.forwarded?.text?.first() as RichSpan.Text).text)
-        assertNull(card?.forwarded?.forwarded)
+        assertNull(card.forwarded.forwarded)
     }
 
     @Test

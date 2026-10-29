@@ -19,6 +19,9 @@ val zstdClassifier = if (isWindowsArm64Host) "win_aarch64" else "win_amd64"
 // 公共代码随各平台编译,可以直接用 JDK 与纯 Java 库(java.io.File、OkHttp、zxing)。
 // 平台源码集只放两端确实不同的东西:Android 框架、Media3、mpv。
 kotlin {
+    compilerOptions {
+        freeCompilerArgs.add("-Xexpect-actual-classes")
+    }
     android {
         namespace = "dev.bilby"
         compileSdk = 37

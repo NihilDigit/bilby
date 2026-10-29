@@ -12,7 +12,7 @@ import io.ktor.http.isSuccess
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
-import io.ktor.utils.io.readUTF8Line
+import io.ktor.utils.io.readLine
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -106,7 +106,7 @@ class LlmClient(
             val pending = mutableMapOf<Int, PartialToolCall>()
 
             while (true) {
-                val line = channel.readUTF8Line() ?: break
+                val line = channel.readLine() ?: break
                 if (!line.startsWith(DATA_PREFIX)) continue
                 val payload = line.removePrefix(DATA_PREFIX).trim()
                 if (payload == DONE_SENTINEL) break

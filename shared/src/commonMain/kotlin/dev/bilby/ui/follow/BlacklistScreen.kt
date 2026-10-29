@@ -1,7 +1,7 @@
 package dev.bilby.ui.follow
 
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.material3.ListItem
+import dev.bilby.ui.components.StaticListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -148,15 +148,7 @@ fun BlacklistScreen(
  */
 @Composable
 private fun BlockedRow(user: BlockedUser, onUnblock: () -> Unit) {
-    ListItem(
-        headlineContent = {
-            Text(
-                user.name,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        },
+    StaticListItem(
         supportingContent = {
             Text(
                 stringResource(Res.string.blacklist_blocked_at, formatRelativeTime(user.blockedAt)),
@@ -170,5 +162,12 @@ private fun BlockedRow(user: BlockedUser, onUnblock: () -> Unit) {
         trailingContent = {
             TextButton(onClick = onUnblock) { Text(stringResource(Res.string.blacklist_unblock)) }
         },
-    )
+    ) {
+        Text(
+            user.name,
+            style = MaterialTheme.typography.bodyLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }

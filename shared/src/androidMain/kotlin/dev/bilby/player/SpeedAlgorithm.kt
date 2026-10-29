@@ -4,9 +4,9 @@ import android.content.Context
 import android.provider.Settings
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.AudioProcessorChain
 import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.audio.SilenceSkippingAudioProcessor
 
 /**
@@ -69,7 +69,7 @@ internal object SpeedAlgorithmSelector {
 @UnstableApi
 internal class SpeedAudioProcessorChain(
     forced: SpeedAlgorithm? = null,
-) : DefaultAudioSink.AudioProcessorChain {
+) : AudioProcessorChain {
 
     private val silenceSkipping = SilenceSkippingAudioProcessor()
     val speedProcessor = ResilientSpeedProcessor(forced)

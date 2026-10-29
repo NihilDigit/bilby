@@ -712,8 +712,8 @@ fun ListenScreen(
                     isPlaying = state.isPlaying,
                     loading = state.loading,
                     speed = speed,
-                    hasPrevious = state.queue?.canPrevious == true,
-                    hasNext = state.queue?.canNext == true,
+                    hasPrevious = state.queue.canPrevious,
+                    hasNext = state.queue.canNext,
                     sleepTimer = sleepTimer,
                     itemRemainingMillis = itemRemainingMillis,
                     onPlayPause = { if (player.isPlaying) player.pause() else player.playOrReplay(playback) },
@@ -1055,8 +1055,8 @@ private fun DiscView(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                val sourcePosition = state.queue?.sourcePosition
-                val sourceTotal = state.queue?.sourceTotal
+                val sourcePosition = state.queue.sourcePosition
+                val sourceTotal = state.queue.sourceTotal
                 if (sourcePosition != null && sourceTotal != null) {
                     // 队列位置和 UP 名同行:它是"这是第几条",属于同一句话的后半截,
                     // 单独占一行会让唱片和进度条之间空出一整行。
