@@ -62,8 +62,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.focusable
@@ -131,6 +134,11 @@ class PlayerShellScope internal constructor(
     val positionMillis: Long,
     /** 已缓冲到哪儿,画在进度条上。拖拽中不跟着拖走 —— 它说的是流,不是手指。 */
     val bufferedPositionMillis: Long,
+    /**
+     * 底部控制条实测的高度。overlay 层要让开控制条的东西(字幕)按它抬,不再猜档位 ——
+     * 一行与两行排法差着五十来 dp,常量只按得了一种。收起着时保留上一次的高度。
+     */
+    val controlBarHeight: Dp,
     val durationMillis: Long,
     val speed: Float,
     internal val actions: PlayerShellActions,
@@ -336,6 +344,8 @@ fun PlayerShell(
     var duration by remember { mutableLongStateOf(0L) }
     var dragPosition by remember { mutableStateOf<Long?>(null) }
     var resumeAfterDrag by remember { mutableStateOf(false) }
+    var controlBarHeight by remember(isFullscreen, pip) { mutableStateOf(0.dp) }
+    val density = LocalDensity.current
 
     val userSpeed = speedController?.speed ?: player.playbackSpeed
 
@@ -589,6 +599,7 @@ fun PlayerShell(
             controlsVisible = controlsVisible,
             positionMillis = displayPosition,
             bufferedPositionMillis = bufferedPosition,
+            controlBarHeight = controlBarHeight,
             durationMillis = duration,
             speed = userSpeed,
             actions = actions,
@@ -1136,7 +1147,9 @@ fun PlayerShell(
             exit = slideOutVertically(spatialOffsetSpec) { it / 2 } + fadeOut(effectsSpec),
             modifier = Modifier.align(Alignment.BottomCenter).hoverable(controlsHover),
         ) {
-            scope.controlBar()
+            Box(Modifier.onSizeChanged { controlBarHeight = with(density) { it.height.toDp() } }) {
+                scope.controlBar()
+            }
         }
 
         if (speedController != null && !pip) {
