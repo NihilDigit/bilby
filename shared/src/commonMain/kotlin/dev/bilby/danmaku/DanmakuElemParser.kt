@@ -15,7 +15,27 @@ internal data class RawDanmakuElem(
     val fontSize: Int = 0,
     val color: Int = 0,
     val content: String = "",
+    val pool: Int = 0,
+    val attr: Int = 0,
+    val dmFrom: Int = 0,
 )
+
+/**
+ * 是否为互动指令/投票衍生弹幕(notes/danmaku.md §11.2)。
+ *
+ * 观众点击官方互动投票/评分面板时,服务端会同时往 `seg.so` 里塞一条内容等于选项文案的弹幕:
+ * - `dmFrom`(tag 27)= 2(`DmFromCmd`)
+ * - `pool`(tag 11)= 3(指令弹幕池)
+ * - `attr`(tag 13)第 19 位(`0x80000`)置位
+ *
+ * 这类弹幕由独立的投票面板承载,不进普通滚动弹幕池。
+ */
+internal fun RawDanmakuElem.isCommandDanmaku(): Boolean =
+    dmFrom == DM_FROM_CMD || pool == POOL_CMD || (attr and ATTR_BIT_CMD) != 0
+
+private const val DM_FROM_CMD = 2
+private const val POOL_CMD = 3
+private const val ATTR_BIT_CMD = 1 shl 19
 
 /** 解析一条 `DanmakuElem` 消息体(已经是外层 length-delimited 切出来的那一段字节)。 */
 internal fun parseDanmakuElem(bytes: ByteArray): RawDanmakuElem =
@@ -33,6 +53,9 @@ internal fun parseDanmakuElem(reader: DanmakuProtoReader): RawDanmakuElem {
     var fontSize = 0
     var color = 0
     var content = ""
+    var pool = 0
+    var attr = 0
+    var dmFrom = 0
 
     while (reader.hasNext()) {
         val (field, wireType) = reader.readTag()
@@ -43,13 +66,16 @@ internal fun parseDanmakuElem(reader: DanmakuProtoReader): RawDanmakuElem {
             4 -> fontSize = reader.readVarint().toInt()
             5 -> color = reader.readVarint().toInt()
             7 -> content = reader.readString()
+            11 -> pool = reader.readVarint().toInt()
             12 -> idStr = reader.readString()
+            13 -> attr = reader.readVarint().toInt()
+            27 -> dmFrom = reader.readVarint().toInt()
             // 不认识的字段(未来新增的、或者我们没用到的,比如 ctime/weight/likeCount 这些)
             // 一律按它自己的 wire type 跳过,不能假设它是我们认识的哪一种。
             else -> reader.skip(wireType)
         }
     }
-    return RawDanmakuElem(id, idStr, progress, mode, fontSize, color, content)
+    return RawDanmakuElem(id, idStr, progress, mode, fontSize, color, content, pool, attr, dmFrom)
 }
 
 /**

@@ -3,6 +3,7 @@ package dev.bilby.ui.video
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
+import dev.bilby.BvidCodec
 import dev.bilby.agent.AgentTurnState
 import dev.bilby.agent.reduce
 import dev.bilby.agent.AgentIntent
@@ -13,6 +14,8 @@ import dev.bilby.api.BiliResult
 import dev.bilby.ui.errorTextRes
 import org.jetbrains.compose.resources.StringResource
 import dev.bilby.danmaku.DanmakuRepository
+import dev.bilby.danmaku.DanmakuVote
+import dev.bilby.danmaku.withoutVoteEchoes
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
 import dev.bilby.data.SettingsStore
@@ -400,6 +403,15 @@ class VideoViewModel(
     val specialDanmakuPool: StateFlow<List<SpecialDanmaku>> = _specialDanmakuPool.asStateFlow()
 
     /**
+     * 当前分 P 的互动投票弹幕(`#VOTE#`,见 notes/danmaku.md §11)。
+     *
+     * 随 `cid` 在弹幕开关打开时拉取一次;拉回后同时把 [_danmakuPool] 里落在投票窗口期、
+     * 内容恰为选项文案的回显弹幕剔掉,不再在画面上刷屏。
+     */
+    private val _danmakuVotes = MutableStateFlow<List<DanmakuVote>>(emptyList())
+    val danmakuVotes: StateFlow<List<DanmakuVote>> = _danmakuVotes.asStateFlow()
+
+    /**
      * 当前 cid 有分段没拉回来。**"这一段没人发弹幕"和"这一段没拉到"在画面上是同一个样子**
      * (都是空白),给 UI 一个能把两者分开的信号,否则用户只能看着空屏猜是网络还是视频本身。
      * 拉到任何一段就复位:后一次成功说明链路是通的。
@@ -474,8 +486,71 @@ class VideoViewModel(
         _danmakuSend.value = DanmakuSend.Idle
     }
 
+    /**
+     * 参与视频内互动投票(notes/danmaku.md §11.3)。
+     *
+     * 乐观更新:点击后立刻把选中项票数与总票数 +1、标记 `myVote = optionIdx`,直接切换到结果比例条,
+     * 不往 [_selfDanmaku] 塞回显弹幕(投票弹幕统一收进右下角面板,不污染滚动弹幕池)。接口失败则回滚。
+     */
+    fun voteDanmaku(voteId: Long, optionIdx: Int, cid: Long, progressMillis: Long) {
+        if (cid == 0L) return
+        val previous = _danmakuVotes.value.firstOrNull { it.voteId == voteId } ?: return
+        if (previous.hasVoted) return
+        if (previous.options.none { it.idx == optionIdx }) return
+
+        _danmakuVotes.update { list ->
+            list.map { vote ->
+                if (vote.voteId != voteId) vote
+                else vote.copy(
+                    myVote = optionIdx,
+                    totalCount = vote.totalCount + 1,
+                    options = vote.options.map { opt ->
+                        if (opt.idx == optionIdx) opt.copy(count = opt.count + 1) else opt
+                    },
+                )
+            }
+        }
+
+        val aid = currentAid()
+        val startGeneration = generation
+        val startCidGen = danmakuCidGeneration
+        viewModelScope.launch {
+            val result = danmakuRepository.postVote(aid, cid, previous, optionIdx, progressMillis)
+            if (result !is BiliResult.Ok) {
+                BiliLog.w("弹幕投票失败(voteId=$voteId, option=$optionIdx): $result")
+                ifCurrent(startGeneration) {
+                    if (danmakuCidGeneration == startCidGen && danmakuCid == cid) {
+                        _danmakuVotes.update { list ->
+                            list.map { vote ->
+                                if (vote.voteId != voteId || vote.myVote != optionIdx) vote
+                                else vote.copy(
+                                    myVote = 0,
+                                    totalCount = (vote.totalCount - 1).coerceAtLeast(0),
+                                    options = vote.options.map { opt ->
+                                        if (opt.idx == optionIdx) opt.copy(count = (opt.count - 1).coerceAtLeast(0)) else opt
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun currentAid(): Long =
+        _state.value.detail?.aid?.takeIf { it > 0L } ?: BvidCodec.toAid(bvid)
+
     /** 当前弹幕池所属的 cid,换 cid 时用来判断在飞的请求是否已经过期。 */
     private var danmakuCid = 0L
+
+    /** 每次切换弹幕 cid(含 P1 -> P2 -> P1 折返)自增,隔离跨会话的迟到响应与回滚。 */
+    private var danmakuCidGeneration = 0L
+
+    /** 当前 cid 会话是否已成功拉回 `dm/web/view` 投票元数据、是否在飞、已连续失败几次。 */
+    private var danmakuVotesLoaded = false
+    private var danmakuVotesInFlight = false
+    private var danmakuVotesFailures = 0
 
     /** 这一条 cid 已经请求过的分段号(1-based),防止播放进度在同一段内反复轮询时重复拉取。 */
     private val requestedDanmakuSegments = mutableSetOf<Int>()
@@ -553,9 +628,14 @@ class VideoViewModel(
         _subtitleCues.value = emptyList()
         _danmakuPool.value = emptyList()
         _specialDanmakuPool.value = emptyList()
+        _danmakuVotes.value = emptyList()
         _danmakuLoadFailed.value = false
         _danmakuSend.value = DanmakuSend.Idle
         danmakuCid = 0L
+        danmakuCidGeneration++
+        danmakuVotesLoaded = false
+        danmakuVotesInFlight = false
+        danmakuVotesFailures = 0
         requestedDanmakuSegments.clear()
         danmakuSegmentFailures.clear()
         lastDanmakuPositionMillis = 0L
@@ -620,11 +700,16 @@ class VideoViewModel(
             .distinctUntilChanged()
             .collect { cid ->
                 danmakuCid = cid
+                danmakuCidGeneration++
+                danmakuVotesLoaded = false
+                danmakuVotesInFlight = false
+                danmakuVotesFailures = 0
                 requestedDanmakuSegments.clear()
                 danmakuSegmentFailures.clear()
                 _danmakuLoadFailed.value = false
                 _danmakuPool.value = emptyList()
                 _specialDanmakuPool.value = emptyList()
+                _danmakuVotes.value = emptyList()
                 // 进度也要跟着归零:留着上一条的位置,中途开弹幕会照那个位置去拉段号。
                 lastDanmakuPositionMillis = 0L
                 if (_danmakuPrefs.value.enabled) fetchInitialDanmakuSegment(cid)
@@ -664,10 +749,40 @@ class VideoViewModel(
      */
     private fun fetchDanmakuAround(cid: Long, positionMillis: Long) {
         if (cid == 0L) return
+        fetchDanmakuVotesIfNeeded(cid)
         val segmentIndex = danmakuRepository.segmentIndexFor(positionMillis) + 1
         fetchDanmakuSegment(cid, segmentIndex)
         if (danmakuRepository.millisUntilNextSegment(positionMillis) <= DANMAKU_PREFETCH_LEAD_MILLIS) {
             fetchDanmakuSegment(cid, segmentIndex + 1)
+        }
+    }
+
+    private fun fetchDanmakuVotesIfNeeded(cid: Long) {
+        if (cid == 0L || danmakuVotesLoaded || danmakuVotesInFlight) return
+        if (danmakuVotesFailures >= DANMAKU_SEGMENT_RETRIES) return
+        danmakuVotesInFlight = true
+        val aid = currentAid()
+        val startCidGen = danmakuCidGeneration
+        videoScope.launch {
+            val result = danmakuRepository.getVotes(aid, cid)
+            if (danmakuCidGeneration != startCidGen || danmakuCid != cid) return@launch
+            danmakuVotesInFlight = false
+            when (result) {
+                is BiliResult.Ok -> {
+                    danmakuVotesLoaded = true
+                    val votes = result.value
+                    _danmakuVotes.value = votes
+                    if (votes.isNotEmpty()) {
+                        _danmakuPool.update { it.withoutVoteEchoes(votes) }
+                    }
+                }
+                else -> {
+                    danmakuVotesFailures++
+                    if (danmakuVotesFailures >= DANMAKU_SEGMENT_RETRIES) {
+                        BiliLog.w("互动投票弹幕放弃重试 cid=$cid 失败 $danmakuVotesFailures 次")
+                    }
+                }
+            }
         }
     }
 
@@ -694,7 +809,8 @@ class VideoViewModel(
             when (result) {
                 is BiliResult.Ok -> {
                     val segment = result.value
-                    if (segment.normal.isNotEmpty()) _danmakuPool.update { it + segment.normal }
+                    val filteredNormal = segment.normal.withoutVoteEchoes(_danmakuVotes.value)
+                    if (filteredNormal.isNotEmpty()) _danmakuPool.update { it + filteredNormal }
                     if (segment.special.isNotEmpty()) _specialDanmakuPool.update { it + segment.special }
                     // 一次成功不代表全部拿到了:被彻底放弃的段仍然是缺的,标志要留着。
                     _danmakuLoadFailed.value = danmakuSegmentFailures.values.any { it >= DANMAKU_SEGMENT_RETRIES }

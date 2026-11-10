@@ -28,6 +28,7 @@ internal fun List<RawDanmakuElem>.toMappedSegment(): DanmakuSegment {
     val special = mutableListOf<SpecialDanmaku>()
     var unsupportedScriptCount = 0
     forEachIndexed { index, elem ->
+        if (elem.isCommandDanmaku()) return@forEachIndexed
         when (elem.mode) {
             SPECIAL_MODE -> elem.toSpecialDanmakuOrNull(index)?.let(special::add)
             CODE_MODE, BAS_MODE -> unsupportedScriptCount++

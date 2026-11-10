@@ -91,6 +91,7 @@ import dev.bilby.data.VideoTag
 import dev.bilby.player.SleepTimerMode
 import dev.bilby.player.SubtitleCue
 import dev.bilby.player.SubtitleTrack
+import dev.bilby.danmaku.DanmakuVote
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
 import dev.nihildigit.danmaku.Danmaku
@@ -222,6 +223,8 @@ fun VideoScreen(
     /** 已拉到的弹幕池,时间轴的编译在 BilbyPlayer 里做(需要 Compose 层的测量与画布宽度)。 */
     danmakuPool: List<Danmaku> = emptyList(),
     specialDanmakuPool: List<SpecialDanmaku> = emptyList(),
+    danmakuVotes: List<DanmakuVote> = emptyList(),
+    onVoteDanmaku: (voteId: Long, optionIdx: Int, cid: Long, progressMillis: Long) -> Unit = { _, _, _, _ -> },
     /** 自己刚发出去的那条,立刻上屏。**不进弹幕池**,理由见 VideoViewModel.selfDanmaku。 */
     selfDanmaku: Flow<Danmaku> = emptyFlow(),
     /** 发弹幕这一次的进展。面板靠它显示转圈与失败原因,[DanmakuSend.Sent] 即关面板。 */
@@ -861,6 +864,10 @@ fun VideoScreen(
                     onLockedChange = { locked = it },
                     danmakuPool = danmakuPool,
                     specialDanmakuPool = specialDanmakuPool,
+                    danmakuVotes = danmakuVotes,
+                    onVoteDanmaku = { voteId, optionIdx, progressMillis ->
+                        onVoteDanmaku(voteId, optionIdx, currentCid, progressMillis)
+                    },
                     selfDanmaku = selfDanmaku,
                     danmakuCid = currentCid,
                     matchesCurrentPage = matchesCurrentPage,

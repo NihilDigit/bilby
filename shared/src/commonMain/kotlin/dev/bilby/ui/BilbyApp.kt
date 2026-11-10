@@ -2815,6 +2815,7 @@ private fun VideoPane(
     val danmakuPool by vm.danmakuPool.collectAsStateWithLifecycle()
     val cached by vm.cached.collectAsStateWithLifecycle()
     val specialDanmakuPool by vm.specialDanmakuPool.collectAsStateWithLifecycle()
+    val danmakuVotes by vm.danmakuVotes.collectAsStateWithLifecycle()
     val danmakuSend by vm.danmakuSend.collectAsStateWithLifecycle()
     val staffFollowed by vm.staffFollowed.collectAsStateWithLifecycle()
     val playerPrefs by container.settings.playerPrefs.collectAsStateWithLifecycle(
@@ -2895,6 +2896,8 @@ private fun VideoPane(
         danmakuEditor = vm.danmakuEditor,
         danmakuPool = danmakuPool,
         specialDanmakuPool = specialDanmakuPool,
+        danmakuVotes = danmakuVotes,
+        onVoteDanmaku = vm::voteDanmaku,
         selfDanmaku = vm.selfDanmaku,
         danmakuSend = danmakuSend,
         onSendDanmaku = vm::sendDanmaku,

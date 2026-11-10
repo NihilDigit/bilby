@@ -6,10 +6,12 @@ import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
 import dev.bilby.api.map
 import dev.bilby.api.pathOnly
+import dev.bilby.api.postAction
 import dev.bilby.api.postForm
 import io.ktor.client.call.body
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -183,6 +185,71 @@ class DanmakuRepository(
         ),
     ).map { it.dmidStr }
 
+    /**
+     * 拉取当前分 P 的互动投票弹幕(`#VOTE#`,见 notes/danmaku.md §11.1)。
+     *
+     * 接口是 `GET /x/v2/dm/web/view`,返回整条分 P 的裸 protobuf(`DmWebViewReply`,无 gRPC 帧头),
+     * 不需要按 6 分钟分段轮询,换 `cid` 时拉一次即可。登录态由 [BiliClient.rawGet] 自动带上,
+     * 已投过的选项会在 `extra.my_vote` 里直接反映出来。
+     */
+    suspend fun getVotes(aid: Long, cid: Long): BiliResult<List<DanmakuVote>> =
+        runCatching {
+            val response: HttpResponse = client.rawGet(
+                VIEW_URL,
+                params = buildMap {
+                    put("type", "1")
+                    put("oid", cid.toString())
+                    if (aid > 0L) put("pid", aid.toString())
+                },
+            )
+            if (!response.status.isSuccess()) {
+                val error = BiliResult.ApiError(response.status.value, response.status.description)
+                BiliLog.w(
+                    "拉弹幕 view 被拒 url=${VIEW_URL.pathOnly()} cid=$cid " +
+                        "code=${error.code} message=${error.message}",
+                )
+                return@runCatching error
+            }
+            val bytes = response.body<ByteArray>()
+            withContext(Dispatchers.Default) {
+                BiliResult.Ok(parseDmWebViewVotes(bytes))
+            }
+        }.getOrElse { cause ->
+            if (cause is CancellationException) throw cause
+            BiliLog.w("拉弹幕 view 失败 url=${VIEW_URL.pathOnly()} cid=$cid", cause)
+            BiliResult.Failure(cause)
+        }
+
+    /**
+     * 提交一次视频内互动投票(notes/danmaku.md §11.3,核实自网页播放器 `bpx-player` 的 `HttpVote`)。
+     *
+     * 凭据与普通发弹幕一致:走 web cookie 的 `csrf`,由 [BiliClient.postAction] 注入。
+     */
+    suspend fun postVote(
+        aid: Long,
+        cid: Long,
+        vote: DanmakuVote,
+        optionIdx: Int,
+        progressMillis: Long,
+    ): BiliResult<Unit> {
+        val option = vote.options.firstOrNull { it.idx == optionIdx }
+        return client.postAction(
+            VOTE_POST_URL,
+            form = mapOf(
+                "aid" to aid.toString(),
+                "cid" to cid.toString(),
+                "progress" to progressMillis.coerceAtLeast(0L).toString(),
+                "vote_id" to vote.voteId.toString(),
+                "vote_type" to vote.voteType.toString(),
+                "cmd_id_str" to vote.dmid,
+                "option_id" to optionIdx.toString(),
+                "has_self_def" to if (option?.hasSelfDef == true) "1" else "0",
+                "polaris_app_id" to "100",
+                "polaris_platform" to "5",
+            ),
+        )
+    }
+
     private fun logRejected(cid: Long, segmentIndex: Int, result: BiliResult.ApiError) {
         BiliLog.w(
             "拉弹幕分段被拒 url=${SEG_URL.pathOnly()} cid=$cid segment=$segmentIndex " +
@@ -203,7 +270,9 @@ class DanmakuRepository(
 
     private companion object {
         const val SEG_URL = "${BiliConstants.WEB_HOST}/x/v2/dm/web/seg.so"
+        const val VIEW_URL = "${BiliConstants.WEB_HOST}/x/v2/dm/web/view"
         const val POST_URL = "${BiliConstants.WEB_HOST}/x/v2/dm/post"
+        const val VOTE_POST_URL = "${BiliConstants.WEB_HOST}/x/v2/dm/command/vote/post"
         const val SEGMENT_LENGTH_MILLIS = 60L * 6 * 1000
 
         /** notes/danmaku.md §1.4 的模式号,发送侧只用滚动这一档。 */

@@ -69,6 +69,8 @@ import dev.bilby.player.SubtitleTrack
 import dev.bilby.player.cueAt
 import dev.bilby.ui.player.DanmakuFeed
 import dev.bilby.ui.player.DanmakuFontSizeSp
+import dev.bilby.ui.player.DanmakuVoteOverlay
+import dev.bilby.ui.player.rememberDanmakuVoteUiState
 import dev.bilby.ui.player.rememberLargePlayer
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.isAtLeast
@@ -79,6 +81,7 @@ import dev.bilby.ui.components.SeekBarSegment
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.danmaku.DanmakuVote
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
 import dev.nihildigit.danmaku.Danmaku
@@ -104,6 +107,8 @@ private val ControlRowOverlap = 12.dp
  */
 private val SubtitleBottomWithControls = 88.dp
 private val SubtitleBottomBare = 24.dp
+/** 字幕轨启用时,右下角投票面板抬升让开一行字幕槽的高度,避免窄宽度下与居中字幕横向重叠。 */
+private val SubtitleBandClearance = 48.dp
 
 /**
  * 播放器画面 + 控件。非全屏时被塞进 16:9 容器,全屏时铺满整屏,两种形态共用这一个 composable,
@@ -167,6 +172,9 @@ fun BilbyPlayer(
      * 渲染走独立的一层——合进同一个池只会让排布那条链路上到处是"这条是不是 7"的分支。
      */
     specialDanmakuPool: List<SpecialDanmaku> = emptyList(),
+    /** 视频内的互动投票弹幕(`#VOTE#`),渲染在画面右下角([DanmakuVoteOverlay])。 */
+    danmakuVotes: List<DanmakuVote> = emptyList(),
+    onVoteDanmaku: (voteId: Long, optionIdx: Int, progressMillis: Long) -> Unit = { _, _, _ -> },
     /** 自己刚发出去的那条,立刻上屏。**不并进 [danmakuPool]**,见 VideoViewModel.selfDanmaku。 */
     selfDanmaku: Flow<Danmaku> = emptyFlow(),
     /** 弹幕池所属的 cid,换一条(切分 P、队列走到下一条)要整池重编,不是接着追加。 */
@@ -209,6 +217,7 @@ fun BilbyPlayer(
     var settingsOpen by remember { mutableStateOf(false) }
     // 开的是哪一段。关面板时不清:退场动画里内容要保持原样,下次打开会重新赋值。
     var settingsOnly by remember { mutableStateOf<PlayerSettingsSection?>(null) }
+    val voteUiState = rememberDanmakuVoteUiState(danmakuCid)
     PlayerShell(
         player = player,
         attached = matchesCurrentPage,
@@ -229,6 +238,7 @@ fun BilbyPlayer(
         embeddedTopActions = embeddedTopActions,
         pip = pip,
         overlay = {
+            val largePlayer = rememberLargePlayer(isFullscreen)
             // 弹幕层:字号由这里按形态给,层自己不认识"全屏"。
             if (!pip || danmakuPrefs.inPip) {
                 PlayerDanmakuLayer(
@@ -239,7 +249,7 @@ fun BilbyPlayer(
                     selfDanmaku = selfDanmaku,
                     cid = danmakuCid,
                     fontSizeSp = DanmakuFontSizeSp.of(
-                        largePlayer = rememberLargePlayer(isFullscreen),
+                        largePlayer = largePlayer,
                         pip = pip,
                         scale = danmakuPrefs.fontScale,
                     ),
@@ -261,8 +271,9 @@ fun BilbyPlayer(
             // 让开控制条那一下要跟着控制条一起动。控制条自己是 spring 展开的([PlayerShell]),
             // 字幕原先是硬切:点一下画面,控制条缓缓升起,而字幕已经在上一帧跳到了新位置。
             // 用 spatial 那一档 —— 这是位移,不是透明度。
+            val subtitleBottomTarget = if (controlsVisible && !locked) SubtitleBottomWithControls else SubtitleBottomBare
             val subtitleBottom by animateDpAsState(
-                targetValue = if (controlsVisible && !locked) SubtitleBottomWithControls else SubtitleBottomBare,
+                targetValue = subtitleBottomTarget,
                 animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
                 label = "subtitle-bottom",
             )
@@ -284,6 +295,39 @@ fun BilbyPlayer(
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     )
                 }
+            }
+            if (matchesCurrentPage && danmakuPrefs.enabled && !pip && !locked && danmakuVotes.isNotEmpty()) {
+                val hasSubtitles = subtitleCues.isNotEmpty()
+                val voteBottom by animateDpAsState(
+                    targetValue = subtitleBottomTarget +
+                        if (hasSubtitles && (largePlayer || !controlsVisible)) SubtitleBandClearance else 0.dp,
+                    animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+                    label = "vote-bottom",
+                )
+                DanmakuVoteOverlay(
+                    votes = danmakuVotes,
+                    positionMillis = positionMillis,
+                    cid = danmakuCid,
+                    onVote = { voteId, optionIdx -> onVoteDanmaku(voteId, optionIdx, positionMillis) },
+                    uiState = voteUiState,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .then(
+                            if (isFullscreen) {
+                                Modifier.windowInsetsPadding(
+                                    WindowInsets.barsAndCutout.only(WindowInsetsSides.Horizontal),
+                                )
+                            } else {
+                                Modifier
+                            },
+                        )
+                        .padding(
+                            top = Spacing.Tight,
+                            bottom = voteBottom,
+                            start = Spacing.Comfortable,
+                            end = Spacing.Comfortable,
+                        ),
+                )
             }
         },
         controlBar = {

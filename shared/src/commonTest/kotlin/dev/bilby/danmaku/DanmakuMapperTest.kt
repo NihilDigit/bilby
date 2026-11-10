@@ -60,6 +60,19 @@ class DanmakuMapperTest {
         assertNull(raw(mode = 1, fontSize = 25).toDanmakuOrNull()?.fontSize)
     }
 
+    @Test
+    fun `指令与投票衍生弹幕(dmFrom=2 或 pool=3 或 attr bit19)不进入普通与高级弹幕池`() {
+        val segment = listOf(
+            raw(mode = 1, content = "普通弹幕"),
+            RawDanmakuElem(id = 2, progressMillis = 1000, mode = 1, content = "软一点", dmFrom = 2),
+            RawDanmakuElem(id = 3, progressMillis = 1000, mode = 1, content = "硬一点", pool = 3),
+            RawDanmakuElem(id = 4, progressMillis = 1000, mode = 1, content = "评分回显", attr = 1 shl 19),
+        ).toMappedSegment()
+
+        assertEquals(listOf("普通弹幕"), segment.normal.map { it.text })
+        assertEquals(emptyList<Any>(), segment.special)
+    }
+
     private fun raw(
         mode: Int,
         id: Long = 1,

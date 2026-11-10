@@ -687,6 +687,9 @@
     <string name="settings_auto_next_subtitle">一条播完后接着放队列里的下一条。关闭后播完即停,手动切换不受影响</string>
     <string name="settings_pbp_outro_completion">按热度判定完播</string>
     <string name="settings_pbp_outro_completion_subtitle">进入片尾低热度段落时即视为已看完</string>
+    <string name="player_vote_tag">投票</string>
+    <string name="player_vote_count">%1$s 人</string>
+    <string name="player_vote_close">收起投票</string>
     <string name="player_seek_release_to_cancel">松手取消进退</string>
     <string name="action_share">分享</string>
     <string name="share_link_copied">已复制链接</string>
