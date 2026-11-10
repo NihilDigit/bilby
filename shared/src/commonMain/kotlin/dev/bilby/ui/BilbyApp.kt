@@ -50,6 +50,7 @@ import androidx.compose.material3.WideNavigationRailItem
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
@@ -1135,16 +1136,18 @@ private fun RootTabsContent(
     onOpenMessages: () -> Unit,
     onOpen: (NavKey) -> Unit,
 ) {
-    // 只 padding 不声明消费的话,后面的 imePadding() 会再多退让一个底栏高度。消费之后它只让出
-    // 键盘高出底栏的那一截,内容正好停在键盘上沿,底栏留在键盘下面。
+    // 只 padding 不声明消费的话,子层的 imePadding() 会再多退让一个底栏高度。消费之后子层只让出
+    // 键盘高出底栏的那一截,贴底输入栏正好停在键盘上沿,底栏留在键盘下面。
+    // 注意:这里不直接挂 imePadding()——搜索页的普通搜索输入框在顶栏,整页跟着键盘缩半屏会在
+    // 手势收起输入法的过渡帧或 inset 卡滞时把下半屏裁空;需要贴着键盘顶起的页面(如搜索助理底栏)
+    // 在各自容器上单独挂 imePadding()。
     val bottom = PaddingValues(bottom = insets.calculateBottomPadding())
     Box(
         modifier = Modifier
             .fillMaxSize()
             .padding(top = insets.calculateTopPadding())
             .padding(bottom)
-            .consumeWindowInsets(bottom)
-            .imePadding(),
+            .consumeWindowInsets(bottom),
     ) {
         // **Top level**:点底栏或 rail 换根目的地。规范原文
         // "The exiting screen quickly fades out **and then** the entering screen fades in. Since the
@@ -2100,6 +2103,7 @@ private fun ToViewListRoute(
         val result = snackbarHostState.showSnackbar(
             message = removedMessage,
             actionLabel = undoLabel,
+            duration = SnackbarDuration.Short,
         )
         if (result == SnackbarResult.ActionPerformed) vm.undoDelete(removed) else vm.consumeRemoved()
     }

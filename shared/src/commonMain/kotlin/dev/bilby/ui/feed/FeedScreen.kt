@@ -15,6 +15,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
@@ -241,7 +242,11 @@ fun FeedScreen(
     val undoLabel = stringResource(Res.string.action_undo)
     LaunchedEffect(undo?.id) {
         if (undo == null || undoText == null) return@LaunchedEffect
-        val result = snackbarHostState.showSnackbar(message = undoText, actionLabel = undoLabel)
+        val result = snackbarHostState.showSnackbar(
+            message = undoText,
+            actionLabel = undoLabel,
+            duration = SnackbarDuration.Short,
+        )
         if (result == SnackbarResult.ActionPerformed) onUndoExclude(undo.mid) else onExcludeUndoShown()
     }
 

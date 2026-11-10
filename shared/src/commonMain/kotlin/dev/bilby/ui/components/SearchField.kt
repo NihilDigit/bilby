@@ -79,10 +79,11 @@ fun SearchField(
     /** 输入框拿到/失去焦点。搜索页靠它决定要不要把历史顶上来。 */
     onFocusChange: (Boolean) -> Unit = {},
     /**
-     * 键盘收起时一并放掉焦点,见 [ReleaseFocusWhenKeyboardHides]。贴底常驻的输入栏(助理)要;
-     * 顶栏里的搜索框不要:普通搜索的焦点就是展开态,由它自己的返回与收起键管。
+     * 键盘收起时一并放掉焦点,见 [ReleaseFocusWhenKeyboardHides]。移动端左滑手势收起输入法时,
+     * 系统返回事件被输入法动画消费而不会走到页面的 `BackHandler`;若不跟着放掉焦点,搜索页会卡在
+     * 展开态(下半屏的结果与浮动按钮都不画)。
      */
-    releaseFocusWithKeyboard: Boolean = false,
+    releaseFocusWithKeyboard: Boolean = true,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     // 焦点态。**必须是同一个 interactionSource 既交给 BasicTextField 又在这里读**:

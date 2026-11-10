@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -356,12 +357,12 @@ private fun NormalSearch(
                     .padding(start = Spacing.Comfortable, end = if (panelToggle != null) Spacing.Hair else Spacing.Comfortable),
             ) {
                 Box(modifier = Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
-                    panel(Modifier.widthIn(max = SearchBarMaxWidth).fillMaxSize().verticalScroll(rememberScrollState()))
+                    panel(Modifier.widthIn(max = SearchBarMaxWidth).fillMaxSize().imePadding().verticalScroll(rememberScrollState()))
                 }
                 if (panelToggle != null) Spacer(Modifier.width(PanelToggleWidth))
             }
         } else {
-            panel(Modifier.fillMaxSize().verticalScroll(rememberScrollState()))
+            panel(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()))
         }
     }
     val body: @Composable () -> Unit = {
@@ -792,7 +793,7 @@ private fun AgentConversation(
     actions: AgentActions,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.fillMaxSize()) {
+    Column(modifier = modifier.fillMaxSize().imePadding()) {
         Box(modifier = Modifier.weight(1f)) {
             AgentPane(state = state, onVideoClick = actions.onVideoClick, onRetry = actions.onRetry)
         }
