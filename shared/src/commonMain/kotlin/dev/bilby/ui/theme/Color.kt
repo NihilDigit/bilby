@@ -181,32 +181,72 @@ object FixedColors {
     }
 
     /**
-     * 醒目留言的档位色,画成流里那一行左侧 4dp 宽的竖条。
+     * 醒目留言的成对容器色([container] / [onContainer]),按 M3 自定义色角色(`xxxContainer` /
+     * `onXxxContainer`)的方式由各自色相沿 HCT 的 tone 轴派生:
+     * - 浅色主题:`container` 取 tone 90 / chroma 36,`onContainer` 取 tone 18 / chroma 48(对比度 ~10.7:1);
+     * - 深色主题:`container` 取 tone 24 / chroma 36,`onContainer` 取 tone 90 / chroma 36(对比度 ~8.9:1)。
      *
-     * **不用服务端给的 `background_color` / `background_bottom_color`。** 那两个值是照白底设计
-     * 的,深色主题下直接糊(接口字段本身记在 `notes/live.md` §8.1)。这里是一张本地表,手法同上面
-     * 的 [MentionLight] / [MentionDark]:一档一个色相,明度分深浅两套 ——
-     * **携带语义的是色相,承担可读性的是明度。**
-     *
-     * 色相是**刻意拉开**的,不是照抄 B 站那六个值。照抄的问题是它最贵那两档(¥1000 与 ¥2000)
-     * 的区别主要在明度上(色相只差 4.7°),而这里的明度已经被拿去保证对比度了,归一之后两档会变成
-     * 同一个红。现在的排布是冷到暖随价位单调升高,相邻两档色相至少差 19.8°。
-     *
-     * 全部取彩度 48、浅色 tone 45 / 深色 tone 72,于是六档对各自主题 surface 的对比度落在
-     * 5.08–5.12 与 8.57–8.64 之间。**统一到同一档的用意是没有哪一档的竖条比别档更抢眼** ——
-     * 这条竖条标的是档位,不是"快看这条"。图形元素只要 3:1,这里有富余。
-     *
-     * **颜色不是唯一线索**:金额数字就写在同一行里,分不出颜色的读者读数字。
-     *
-     * 价位到色相的对应关系待真机核对 —— 那六个价位取自 B 站现行的档位表,如果实测下来 SC 的
-     * `price` 落在别的刻度上,改这里的阈值,色相阶梯不用动。
+     * **不用左侧竖条加灰底**:风格指南 §2.3c 明确全项目不用左侧竖条,M3 的自定义类别强调靠成对的
+     * tonal container 与 on-container 表达(见 `m3-material-mirror/pages/styles/color/roles.md`),
+     * 流内行、顶部胶囊、展开卡片与汇总屏卡片共用同一套色阶。
      */
-    fun superChatTier(priceYuan: Int, dark: Boolean): Color = when {
-        priceYuan >= 2000 -> if (dark) Color(0xFFFD90AA) else Color(0xFFA94C65)
-        priceYuan >= 1000 -> if (dark) Color(0xFFFF9286) else Color(0xFFAC4D44)
-        priceYuan >= 500 -> if (dark) Color(0xFFF19E43) else Color(0xFF9C5B00)
-        priceYuan >= 100 -> if (dark) Color(0xFFD5AC33) else Color(0xFF846700)
-        priceYuan >= 50 -> if (dark) Color(0xFF55BBF0) else Color(0xFF00729D)
-        else -> if (dark) Color(0xFF88B0FF) else Color(0xFF3D6AB5)
+    data class SuperChatPalette(
+        val container: Color,
+        val onContainer: Color,
+    )
+
+    fun superChatPalette(priceYuan: Int, dark: Boolean): SuperChatPalette = when {
+        priceYuan >= 2000 -> if (dark) {
+            SuperChatPalette(container = Color(0xFF602536), onContainer = Color(0xFFFFD9DF))
+        } else {
+            SuperChatPalette(container = Color(0xFFFFD9DF), onContainer = Color(0xFF590C28))
+        }
+        priceYuan >= 1000 -> if (dark) {
+            SuperChatPalette(container = Color(0xFF622621), onContainer = Color(0xFFFFDAD6))
+        } else {
+            SuperChatPalette(container = Color(0xFFFFDAD6), onContainer = Color(0xFF59100D))
+        }
+        priceYuan >= 500 -> if (dark) {
+            SuperChatPalette(container = Color(0xFF563000), onContainer = Color(0xFFFFDCBE))
+        } else {
+            SuperChatPalette(container = Color(0xFFFFDCBE), onContainer = Color(0xFF442500))
+        }
+        priceYuan >= 100 -> if (dark) {
+            SuperChatPalette(container = Color(0xFF483700), onContainer = Color(0xFFFFDF90))
+        } else {
+            SuperChatPalette(container = Color(0xFFFFDF90), onContainer = Color(0xFF382A00))
+        }
+        priceYuan >= 50 -> if (dark) {
+            SuperChatPalette(container = Color(0xFF003E57), onContainer = Color(0xFFC5E7FF))
+        } else {
+            SuperChatPalette(container = Color(0xFFC5E7FF), onContainer = Color(0xFF003044))
+        }
+        else -> if (dark) {
+            SuperChatPalette(container = Color(0xFF1A3869), onContainer = Color(0xFFD7E2FF))
+        } else {
+            SuperChatPalette(container = Color(0xFFD7E2FF), onContainer = Color(0xFF002B5F))
+        }
+    }
+
+    /**
+     * 大航海三档(1 总督 / 2 提督 / 3 舰长)的成对容器色,同样沿 HCT 的 tone 轴派生(浅色 tone 90/18,
+     * 深色 tone 24/90):总督取琥珀金(hue 65)、提督取紫罗兰(hue 305)、舰长取海蓝(hue 245)。
+     */
+    fun guardPalette(guardLevel: Int, dark: Boolean): SuperChatPalette = when (guardLevel) {
+        1 -> if (dark) {
+            SuperChatPalette(container = Color(0xFF563000), onContainer = Color(0xFFFFDCBD))
+        } else {
+            SuperChatPalette(container = Color(0xFFFFDCBD), onContainer = Color(0xFF432500))
+        }
+        2 -> if (dark) {
+            SuperChatPalette(container = Color(0xFF432E64), onContainer = Color(0xFFECDCFF))
+        } else {
+            SuperChatPalette(container = Color(0xFFECDCFF), onContainer = Color(0xFF3A166A))
+        }
+        else -> if (dark) {
+            SuperChatPalette(container = Color(0xFF003D5E), onContainer = Color(0xFFCCE5FF))
+        } else {
+            SuperChatPalette(container = Color(0xFFCCE5FF), onContainer = Color(0xFF002F4A))
+        }
     }
 }

@@ -32,6 +32,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.SegmentedListItem
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -836,8 +839,6 @@ private fun LiveRoomTabs(
 ) {
     val pager = rememberPagerState(pageCount = { 3 })
     val scope = rememberCoroutineScope()
-    /** 从上面那一栏点过来要看的那一条。用完由那一屏清掉,否则回头再切过去又会滚一次。 */
-    var pendingSuperChat by remember { mutableStateOf<Long?>(null) }
     Column(modifier = modifier) {
         SecondaryTabRow(selectedTabIndex = pager.currentPage, divider = {}) {
             // 点标签要真的翻页。原来两个 onClick 都是空的,只有左右滑动能换页 ——
@@ -867,23 +868,19 @@ private fun LiveRoomTabs(
         HorizontalPager(state = pager, modifier = Modifier.weight(1f).fillMaxWidth().touchOnlyPaging()) { page ->
             when (page) {
                 0 -> ChatPane(
-                    state = state,
+                    feed = state.feed,
+                    sessionSuperChats = state.sessionSuperChats,
                     onUserClick = onUserClick,
-                    onSuperChatClick = { id ->
-                        // 先记下要看哪一条,再翻页 —— 翻页是动画,而那一屏要拿这个 id 定位。
-                        pendingSuperChat = id
-                        scope.launch { pager.animateScrollToPage(1) }
-                    },
                 )
 
                 1 -> SuperChatPane(
-                    state = state,
+                    sessionSuperChats = state.sessionSuperChats,
+                    superChatsLoading = state.superChatsLoading,
+                    hasArchive = state.hasArchive,
                     onUserClick = onUserClick,
-                    target = pendingSuperChat,
-                    onTargetHandled = { pendingSuperChat = null },
                 )
 
-                else -> GuardPane(state, onLoadMoreGuards, onUserClick)
+                else -> GuardPane(state.guards, onLoadMoreGuards, onUserClick)
             }
         }
 
@@ -939,25 +936,39 @@ private fun OnlineRankLabel(count: Int) {
  * 最上面那几行,而那是这一栏里最旧的几条,正在往上走,自己会走开。
  *
  * **只放生效中的那些。** 过期的进不来,否则这一栏会一直长;要看本场早前的切到那一屏。
+ * 点一个 chip 在这一栏下方**原地展开完整卡片**(再点同一枚或点卡片外收起),不切走当前正在看的聊天。
  */
 @Composable
 private fun SuperChatStrip(
     superChats: List<LiveMessage.SuperChat>,
-    onSuperChatClick: (Long) -> Unit,
+    expandedId: Long?,
+    onToggleExpand: (Long) -> Unit,
+    onDismissExpand: () -> Unit,
+    onUserClick: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 秒表在这一层,重组范围就是这一栏。和 SuperChatPane 各有一只:提到共同的父层去,
-    // 每秒会把整个 pager 连着两屏一起重组。
+    // 秒表在这一层,重组范围就是这一栏。只在有醒目留言时启动计时,空房零唤醒。
     var nowSeconds by remember { mutableStateOf(System.currentTimeMillis() / 1000) }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(superChats.isNotEmpty()) {
+        if (superChats.isEmpty()) return@LaunchedEffect
+        nowSeconds = System.currentTimeMillis() / 1000
         while (true) {
             delay(1_000)
             nowSeconds = System.currentTimeMillis() / 1000
         }
     }
-    val live = superChats.filter { it.endTimeSeconds > nowSeconds }
+    val live = remember(superChats, nowSeconds) {
+        superChats.filter { it.endTimeSeconds > nowSeconds }
+    }
+    LaunchedEffect(expandedId, live) {
+        if (expandedId != null && live.none { it.id == expandedId }) {
+            onDismissExpand()
+        }
+    }
+    BackHandler(enabled = expandedId != null, onBack = onDismissExpand)
     if (live.isEmpty()) return
     val dark = MaterialTheme.colorScheme.surface.luminance() < DarkSurfaceLuminance
+    val expandedSc = live.firstOrNull { it.id == expandedId }
     // 托一层底。chip 本身是不透明的,乱的是**缝**:聊天正文从 chip 之间和两端穿出来,和金额
     // 混在一行里读不出哪几个字是一起的。底色压住那些缝,这一栏就成了一件东西。
     //
@@ -965,21 +976,46 @@ private fun SuperChatStrip(
     // 自己的内容),自己实现要把整个聊天列表画进 GraphicsLayer 再模糊重绘 —— 弹幕每秒都在滚,
     // 那是每帧一次全列表离屏渲染,压在正在解码的画面旁边。
     Column(modifier = modifier.fillMaxWidth()) {
-        LazyRow(
-            modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface.copy(alpha = StripScrimAlpha)),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                horizontal = Spacing.Comfortable,
-                vertical = Spacing.Tight,
-            ),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = StripScrimAlpha)),
         ) {
-            items(live, key = { it.id }) { sc ->
-                SuperChatChip(
-                    sc = sc,
-                    tier = FixedColors.superChatTier(sc.priceYuan, dark),
-                    onClick = { onSuperChatClick(sc.id) },
-                )
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    horizontal = Spacing.Comfortable,
+                    vertical = Spacing.Tight,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                items(live, key = { it.id }) { sc ->
+                    SuperChatChip(
+                        sc = sc,
+                        palette = FixedColors.superChatPalette(sc.priceYuan, dark),
+                        selected = sc.id == expandedId,
+                        onClick = { onToggleExpand(sc.id) },
+                    )
+                }
+            }
+            if (expandedSc != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(
+                            start = Spacing.Comfortable,
+                            end = Spacing.Comfortable,
+                            bottom = Spacing.Tight,
+                        ),
+                ) {
+                    SuperChatSummaryCard(
+                        sc = expandedSc,
+                        remainingSeconds = expandedSc.endTimeSeconds - nowSeconds,
+                        onUserClick = onUserClick,
+                        onCardClick = onDismissExpand,
+                    )
+                }
             }
         }
         // 底边渐隐,不留一条硬边。硬边会读成"上面是另一栏",而这一栏是浮在聊天上的 ——
@@ -1013,35 +1049,42 @@ private val StripFadeHeight = 12.dp
  * 一个 chip:头像加金额,没有昵称 —— 带上昵称一个 chip 宽一倍,一屏排不下两个,而头像本身
  * 就是"是谁"的线索。
  *
- * **档位色画在金额上,不画成底色。** 那六个色值是按"在 surface 上当前景色"挑的
- * (见 FixedColors.superChatTier),拿去当底色要另配一套对比达标的文字色。
+ * 底色与文字色成对取自该档位的 [FixedColors.SuperChatPalette];展开态加一圈同色描边标出当前看的是哪枚。
  */
 @Composable
-private fun SuperChatChip(sc: LiveMessage.SuperChat, tier: Color, onClick: () -> Unit) {
+private fun SuperChatChip(
+    sc: LiveMessage.SuperChat,
+    palette: FixedColors.SuperChatPalette,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
     Surface(
         onClick = onClick,
         shape = MaterialTheme.shapes.extraLarge,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = palette.container,
+        contentColor = palette.onContainer,
+        border = if (selected) BorderStroke(SelectedChipBorderWidth, palette.onContainer) else null,
     ) {
         Row(
-            // 头像 36dp 加上下 4dp 是 44dp,差 4dp 到触摸下限;这一栏浮在聊天行上面,按不中
-            // 的那一下会落到底下的弹幕上,什么都不会发生。撑高不改头像尺寸。
             modifier = Modifier
-                .heightIn(min = Dimens.MinTouchTarget)
-                .padding(start = Spacing.Hair, end = Spacing.Cozy, top = Spacing.Hair, bottom = Spacing.Hair),
+                .heightIn(min = SuperChatChipMinHeight)
+                .padding(start = Spacing.Tight, end = Spacing.Cozy, top = Spacing.Hair, bottom = Spacing.Hair),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            Avatar(url = sc.senderFace, size = SuperChatChipAvatar)
+            Avatar(url = sc.senderFace, size = Dimens.AvatarNested)
             Text(
                 text = stringResource(Res.string.live_super_chat_price, sc.priceYuan),
                 style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Medium,
-                color = tier,
+                fontWeight = FontWeight.SemiBold,
+                color = palette.onContainer,
             )
         }
     }
 }
+
+private val SuperChatChipMinHeight = 36.dp
+private val SelectedChipBorderWidth = 1.5.dp
 
 /**
  * 此刻仍在有效期内的醒目留言,按到期时间从近到远排 —— 这一屏读的是"还剩多久",最快消失的
@@ -1052,13 +1095,17 @@ private fun SuperChatChip(sc: LiveMessage.SuperChat, tier: Color, onClick: () ->
  */
 @Composable
 private fun SuperChatPane(
-    state: LiveRoomUiState,
+    sessionSuperChats: List<LiveMessage.SuperChat>,
+    superChatsLoading: Boolean,
+    hasArchive: Boolean,
     onUserClick: (Long) -> Unit,
-    target: Long? = null,
-    onTargetHandled: () -> Unit = {},
 ) {
     var nowSeconds by remember { mutableStateOf(System.currentTimeMillis() / 1000) }
-    LaunchedEffect(Unit) {
+    val hasActive = remember(sessionSuperChats, nowSeconds) {
+        sessionSuperChats.any { it.endTimeSeconds > nowSeconds }
+    }
+    LaunchedEffect(hasActive) {
+        if (!hasActive) return@LaunchedEffect
         while (true) {
             delay(1_000)
             nowSeconds = System.currentTimeMillis() / 1000
@@ -1066,32 +1113,20 @@ private fun SuperChatPane(
     }
     // 两节都从同一份日志派生(见 LiveRoomUiState.sessionSuperChats):生效中按到期时间排,
     // 最快消失的在最上面;本场早前按发出时间倒序。
-    val live = state.sessionSuperChats
-        .filter { it.endTimeSeconds > nowSeconds }
-        .sortedBy { it.endTimeSeconds }
-    val earlier = state.sessionSuperChats.filter { it.endTimeSeconds <= nowSeconds }
-    val listState = rememberLazyListState()
-    /**
-     * 从上面那一栏点过来的那一条:滚过去,并让它亮一下。
-     *
-     * **只滚不亮不够** —— 这一屏十条卡片长得一模一样,滚到位之后读者不知道该看哪一条。
-     */
-    var highlighted by remember { mutableStateOf<Long?>(null) }
-    LaunchedEffect(target, live.size) {
-        val id = target ?: return@LaunchedEffect
-        val index = live.indexOfFirst { it.id == id }
-        onTargetHandled()
-        if (index < 0) return@LaunchedEffect
-        listState.animateScrollToItem(index)
-        highlighted = id
-        delay(HighlightMillis)
-        highlighted = null
+    val live = remember(sessionSuperChats, nowSeconds) {
+        sessionSuperChats
+            .filter { it.endTimeSeconds > nowSeconds }
+            .sortedBy { it.endTimeSeconds }
     }
+    val earlier = remember(sessionSuperChats, nowSeconds) {
+        sessionSuperChats.filter { it.endTimeSeconds <= nowSeconds }
+    }
+    val listState = rememberLazyListState()
 
     if (live.isEmpty() && earlier.isEmpty()) {
         // 正在补历史时给转圈,补完仍然空才说"暂无" —— 两者读起来完全不同,而这一屏在补历史
         // 的那一两秒里本来就是空的。
-        if (state.superChatsLoading) {
+        if (superChatsLoading) {
             ListSkeleton(
                 modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Comfortable),
                 count = SuperChatSkeletonCards,
@@ -1112,7 +1147,6 @@ private fun SuperChatPane(
             SuperChatSummaryCard(
                 sc = sc,
                 remainingSeconds = sc.endTimeSeconds - nowSeconds,
-                highlighted = sc.id == highlighted,
                 onUserClick = onUserClick,
             )
         }
@@ -1132,11 +1166,10 @@ private fun SuperChatPane(
                 SuperChatSummaryCard(
                     sc = sc,
                     remainingSeconds = null,
-                    highlighted = sc.id == highlighted,
                     onUserClick = onUserClick,
                 )
             }
-            if (state.hasArchive) {
+            if (hasArchive) {
                 item(key = "earlier-source") {
                     // 站外来的东西要说一句从哪来。**只在真有站外内容时说** —— 开关关着时这一节
                     // 里全是你在场期间过期的那些,标 danmakus 就是句假话(见 hasArchive)。
@@ -1153,8 +1186,10 @@ private fun SuperChatPane(
 }
 
 /**
- * 汇总屏里的一条。比流里那一行多一个剩余时间,少一条档位色竖条 —— 这一屏本来就按到期时间排,
- * 顺序已经说明了紧迫程度。
+ * 醒目留言的完整卡片(汇总屏与聊天顶栏原地展开共用)。
+ *
+ * 底色与文字色成对取自该档位的 [FixedColors.superChatPalette],与流内那一行完全一致,
+ * 比流内行多一行剩余时间读数。
  *
  * **剩余时间是数字,不是进度条。** 规范给这种已知终点的等待留的形态确实是 determinate 进度条,
  * 但一条持续跑动的进度条在直播间里就是一处一直在动的东西,而 M3 自己的可用性页写着动效要
@@ -1166,20 +1201,21 @@ private fun SuperChatSummaryCard(
     sc: LiveMessage.SuperChat,
     /** 剩余时间。**null 表示这一条早过期了**(本场早前那一节),那时不画倒计时。 */
     remainingSeconds: Long?,
-    highlighted: Boolean,
     onUserClick: (Long) -> Unit,
+    onCardClick: (() -> Unit)? = null,
 ) {
-    // 亮一下用描边,不换底色:换底色会让这张卡片在那一两秒里看起来是"另一类"的东西,
-    // 而它只是刚被指过来的那一条。
-    val border by animateColorAsState(
-        targetValue = if (highlighted) MaterialTheme.colorScheme.primary else Color.Transparent,
-        label = "superChatHighlight",
-    )
+    val dark = MaterialTheme.colorScheme.surface.luminance() < DarkSurfaceLuminance
+    val palette = FixedColors.superChatPalette(sc.priceYuan, dark)
+    val cardModifier = if (onCardClick != null) {
+        Modifier.fillMaxWidth().clickable(onClick = onCardClick)
+    } else {
+        Modifier.fillMaxWidth()
+    }
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = palette.container,
+        contentColor = palette.onContainer,
         shape = MaterialTheme.shapes.medium,
-        border = BorderStroke(HighlightBorderWidth, border),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = cardModifier,
     ) {
         Column(
             modifier = Modifier.padding(Spacing.Cozy),
@@ -1189,28 +1225,24 @@ private fun SuperChatSummaryCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
             ) {
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable(role = Role.Button) { onUserClick(sc.senderMid) },
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                ) {
-                    Avatar(url = sc.senderFace, size = Dimens.AvatarRow)
-                    Text(
-                        text = sc.senderName,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                SuperChatPrice(sc.priceYuan)
+                SenderRow(
+                    face = sc.senderFace,
+                    name = sc.senderName,
+                    contentColor = palette.onContainer,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onUserClick(sc.senderMid) },
+                )
+                Text(
+                    text = stringResource(Res.string.live_super_chat_price, sc.priceYuan),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.onContainer,
+                )
             }
             Text(
                 text = sc.message,
                 style = MaterialTheme.typography.bodyMediumEmphasized,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = palette.onContainer,
             )
             remainingSeconds?.let {
                 Text(
@@ -1219,7 +1251,7 @@ private fun SuperChatSummaryCard(
                         // **等宽数字。** 不加这一句,秒数每跳一下宽度就变一次,整行跟着抖。
                         fontFeatureSettings = TabularFigures,
                     ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = palette.onContainer,
                 )
             }
         }
@@ -1288,12 +1320,13 @@ private const val TabularFigures = "tnum"
  */
 @Composable
 private fun ChatPane(
-    state: LiveRoomUiState,
+    feed: List<LiveFeedItem>,
+    sessionSuperChats: List<LiveMessage.SuperChat>,
     onUserClick: (Long) -> Unit,
-    onSuperChatClick: (Long) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         val listState = rememberLazyListState()
+        var expandedScId by remember { mutableStateOf<Long?>(null) }
         /*
          * **只在本来就贴着底的时候跟着新消息走。** 用户往上翻是在读某一条,而这一栏每秒新增
          * 几十行,无条件跟到底等于把他刚找到的位置一次次拽走。往上翻之后列表就停在那儿,
@@ -1336,11 +1369,11 @@ private fun ChatPane(
                 .collect { if (!listState.canScrollForward) following = true }
         }
 
-        val lastId = state.feed.lastOrNull()?.id
+        val lastId = feed.lastOrNull()?.id
         /** 「回到最新」那一下要用的实时条数:按下那一刻的下标在动画走完前就过期了。 */
-        val feedSize by rememberUpdatedState(state.feed.size.coerceAtLeast(1))
-        LaunchedEffect(lastId) {
-            if (lastId != null && following) listState.scrollToItem(state.feed.lastIndex)
+        val feedSize by rememberUpdatedState(feed.size.coerceAtLeast(1))
+        LaunchedEffect(lastId, feed.size) {
+            if (lastId != null && following) listState.scrollToItem(feed.lastIndex)
         }
         val scope = rememberCoroutineScope()
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -1356,14 +1389,28 @@ private fun ChatPane(
                 // 只靠间距。
                 verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
             ) {
-                items(state.feed, key = { it.id }) { item -> LiveFeedRow(item, onUserClick) }
+                items(feed, key = { it.id }) { item -> LiveFeedRow(item, onUserClick) }
+            }
+            if (expandedScId != null) {
+                // 展开卡片外侧的透明点击区:点聊天区任意位置即收起卡片,不打断看弹幕。
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                        ) { expandedScId = null },
+                )
             }
             // **浮在聊天上面,不占一栏。** 被盖住的是最上面那几行,也就是这一栏里最旧的几条,
             // 而它们正在往上走 —— 盖住是暂时的,自己会走开。换来的是列表一格高度都不让,
             // 有没有醒目留言都不影响读到的行数。
             SuperChatStrip(
-                superChats = state.sessionSuperChats,
-                onSuperChatClick = onSuperChatClick,
+                superChats = sessionSuperChats,
+                expandedId = expandedScId,
+                onToggleExpand = { id -> expandedScId = if (expandedScId == id) null else id },
+                onDismissExpand = { expandedScId = null },
+                onUserClick = onUserClick,
                 modifier = Modifier.align(Alignment.TopCenter),
             )
             // 翻上去之后给一条回程。**不带条数** —— 一个自己会变大的数字说的是"有多少条在等你",
@@ -1372,7 +1419,7 @@ private fun ChatPane(
             // 用 animateScrollToItem:这一下是用户自己按的,一次滚动动画正是他要的反馈;
             // 上面跟着新消息走的那处不能用动画,理由见那段注释。
             androidx.compose.animation.AnimatedVisibility(
-                visible = !following && state.feed.isNotEmpty(),
+                visible = !following && feed.isNotEmpty(),
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = Spacing.Tight),
@@ -1579,24 +1626,25 @@ private fun LiveDanmakuInput(
 private const val LiveDanmakuMaxLength = 40
 
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit, onUserClick: (Long) -> Unit) {
+private fun GuardPane(guards: LiveGuardsState, onLoadMore: () -> Unit, onUserClick: (Long) -> Unit) {
     val listState = rememberLazyListState()
     // 触底再拉下一页。分页是接口给的(page/page_size),不一次拉完 —— 大主播的大航海是几千人。
-    LaunchedEffect(listState, state.guards.items.size) {
+    LaunchedEffect(listState, guards.items.size) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
             .collect { last ->
-                val total = state.guards.items.size
+                val total = guards.items.size
                 if (last != null && total > 0 && last >= total - GUARD_PREFETCH) onLoadMore()
             }
     }
     // 首屏失败给整屏错误,空列表给空态 —— 原来两种情况都只是一片什么都没有的白。
-    if (state.guards.items.isEmpty()) {
+    if (guards.items.isEmpty()) {
         when {
-            state.guards.error != null ->
-                FullScreenError(stringResource(state.guards.error), onLoadMore, Modifier.fillMaxSize())
+            guards.error != null ->
+                FullScreenError(stringResource(guards.error), onLoadMore, Modifier.fillMaxSize())
 
-            !state.guards.loading ->
+            !guards.loading ->
                 EmptyState(stringResource(Res.string.live_guard_empty), Modifier.fillMaxSize())
 
             // 骨架与下面一行同尺寸:头像 AvatarRow,行高 48,行距 Cozy(上下各垫一半)。
@@ -1610,50 +1658,46 @@ private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit, onUserClic
         }
         return
     }
+    val itemColors = ListItemDefaults.segmentedColors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    )
+    val count = guards.items.size
+    // M3 Expressive segmented list(见 m3-material-mirror/pages/components/lists.md):
+    // 每行一块 surfaceContainer 分段,组内行间留 SegmentedGap,首尾两行各带 16dp 外圆角、中间 4dp 内圆角。
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(Spacing.Comfortable),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
     ) {
-        items(state.guards.items, key = { it.uid }) { guard ->
-            // 整行可点:这一行从头到尾都在说同一个人。头像 36dp 撑不到 48dp 的触摸下限,
-            // 而这是一列密排的行,按偏一点就点到隔壁那个人身上去了。
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = Dimens.MinTouchTarget)
-                    .clickable(role = Role.Button) { onUserClick(guard.uid) },
-            ) {
-                Avatar(url = guard.face, size = Dimens.AvatarRow)
-                Text(
-                    text = guard.username,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f).padding(start = Spacing.Cozy),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = stringResource(
-                        when (guard.guardLevel) {
-                            1 -> Res.string.live_guard_governor
-                            2 -> Res.string.live_guard_admiral
-                            else -> Res.string.live_guard_captain
-                        },
-                    ),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
+        itemsIndexed(guards.items, key = { _, it -> it.uid }) { index, guard ->
+            SegmentedListItem(
+                onClick = { onUserClick(guard.uid) },
+                shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
+                colors = itemColors,
+                leadingContent = {
+                    Avatar(url = guard.face, size = Dimens.AvatarRow)
+                },
+                trailingContent = {
+                    GuardLevelBadge(guardLevel = guard.guardLevel)
+                },
+                content = {
+                    Text(
+                        text = guard.username,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+            )
         }
         item(key = "footer") {
             // 翻页失败不清列表,只在底下加一行重试。
             ListFooter(
-                appending = state.guards.loading,
+                appending = guards.loading,
                 hasMore = true,
                 hasItems = true,
-                error = state.guards.error?.let { stringResource(it) },
+                error = guards.error?.let { stringResource(it) },
                 onRetry = onLoadMore,
             )
         }
@@ -1661,14 +1705,6 @@ private fun GuardPane(state: LiveRoomUiState, onLoadMore: () -> Unit, onUserClic
 }
 
 private const val GUARD_PREFETCH = 5
-
-/** chip 里的头像。和 [Dimens.AvatarRow] 同一档:这一栏是要被看见的,小一号就淹在聊天里了。 */
-private val SuperChatChipAvatar = Dimens.AvatarRow
-
-/** 跳过去那一条亮多久。 */
-private const val HighlightMillis = 1_500L
-
-private val HighlightBorderWidth = 2.dp
 
 /** 档位号到档名。取值见 PiliPlus `api.dart` 对 `getRoomPlayInfo` 的注释。 */
 private fun qualityLabel(qn: Int): StringResource = when (qn) {

@@ -20,12 +20,11 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
@@ -51,9 +50,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.bilby.api.toHttpsUrl
+import dev.bilby.live.LiveEmote
+import dev.bilby.live.LiveEmoteMatch
 import dev.bilby.live.LiveFanMedal
+import dev.bilby.live.findEmotes
 import dev.bilby.resources.*
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.BiliAsyncImage
+import dev.bilby.ui.components.inlineEmoteSize
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
@@ -100,37 +105,80 @@ private fun DanmakuRow(item: LiveFeedItem.Danmaku, onUserClick: (Long) -> Unit, 
     // 回调**:下面那段 AnnotatedString 按 item 记忆,而回调每次重组都是新的 lambda,
     // 把它排进 remember 的键会让每条弹幕每帧重建一次文本 —— 这是每秒几十行的热路径。
     val openUser by rememberUpdatedState(onUserClick)
+    val containerColor = if (item.isSelf) {
+        MaterialTheme.colorScheme.secondaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceContainer
+    }
     val nameColor = if (item.isSelf) {
         MaterialTheme.colorScheme.primary
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
-    val bodyColor = MaterialTheme.colorScheme.onSurface
+    val bodyColor = if (item.isSelf) {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
 
-    // 表情一律按代号(`[dog]` 一类)显示成文字,不画图:图在画面上的弹幕里已经画过一遍,聊天栏
-    // 再画一遍是同一份内容占两处,而整条大表情在这里比一行字高出一截。
     val medalInline = rememberMedalInline(item.medal)
-    val text = remember(item, nameColor, bodyColor) {
+    val inlineMatches = remember(item.text, item.emote, item.inlineEmotes) {
+        if (item.emote != null) emptyList() else findEmotes(item.text, item.inlineEmotes)
+    }
+    val emoteInline = rememberEmoteInline(style, item.emote, inlineMatches)
+    val text = remember(item, inlineMatches, nameColor, bodyColor) {
         buildAnnotatedString {
             appendMedal(item.medal)
             appendName(item.name, item.mid, nameColor) { openUser(it) }
-            withStyle(SpanStyle(color = nameColor)) { append("：") }
+            withStyle(SpanStyle(color = nameColor, fontWeight = FontWeight.Medium)) { append("：") }
             // 回复某人:本项目没有可跳转的目标页,所以它只是一段低强调的字,不染可点色。
             item.replyName?.let {
-                withStyle(SpanStyle(color = nameColor)) { append("@$it ") }
+                withStyle(SpanStyle(color = nameColor, fontWeight = FontWeight.Medium)) { append("@$it ") }
             }
-            withStyle(SpanStyle(color = bodyColor)) { append(item.text) }
+            if (item.emote != null) {
+                appendInlineContent(StickerInlineTag, item.text.ifBlank { "[表情]" })
+            } else if (inlineMatches.isEmpty()) {
+                withStyle(SpanStyle(color = bodyColor)) { append(item.text) }
+            } else {
+                var cursor = 0
+                inlineMatches.forEachIndexed { index, match ->
+                    if (match.start > cursor) {
+                        withStyle(SpanStyle(color = bodyColor)) {
+                            append(item.text.substring(cursor, match.start))
+                        }
+                    }
+                    appendInlineContent(inlineEmoteTag(index), item.text.substring(match.start, match.end))
+                    cursor = match.end
+                }
+                if (cursor < item.text.length) {
+                    withStyle(SpanStyle(color = bodyColor)) {
+                        append(item.text.substring(cursor))
+                    }
+                }
+            }
         }
     }
-    Text(text = text, style = style, inlineContent = medalInline, modifier = modifier.fillMaxWidth())
+    // 每条弹幕套一层紧凑的 surfaceContainer 圆角胶囊(contained list,风格指南 §2.3c):
+    // 短弹幕按内容宽度成块,两行长弹幕折行后收在自己的气泡内,不与上下行的昵称粘成一片。
+    Surface(
+        color = containerColor,
+        shape = MaterialTheme.shapes.small,
+        modifier = modifier,
+    ) {
+        Text(
+            text = text,
+            style = style,
+            inlineContent = if (emoteInline.isEmpty()) medalInline else medalInline + emoteInline,
+            modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
+        )
+    }
 }
 
 /**
  * 一条醒目留言。
  *
- * 左边一条 4dp 的档位色竖条,右边署名加金额一行、正文一段。竖条用 `drawBehind` 画,不摆一个
- * `Box` 进 `Row`:那样要给整行加 `IntrinsicSize.Min` 才能让它跟着内容长高,而求一次内在尺寸意味着
- * 多测一遍——在一条每秒几十行的流上这是热路径。
+ * 按 M3 的 containment 做法直接用该档位的成对容器色([FixedColors.superChatPalette])作底色与前景色,
+ * 不用左侧竖条加灰底(风格指南 §2.3c)。
  *
  * 被撤回的那条留在流里并加删除线(理由见 [LiveFeedItem.SuperChat.removed])。
  */
@@ -141,16 +189,15 @@ private fun SuperChatRow(item: LiveFeedItem.SuperChat, onUserClick: (Long) -> Un
     // 档位色分深浅两套,而判断深浅要看**此刻主题的 surface**,不能问系统:动态取色和强制深色
     // 两种情况下系统的答案都可能与眼前这一屏不一致。
     val dark = MaterialTheme.colorScheme.surface.luminance() < DarkSurfaceLuminance
-    val tier = FixedColors.superChatTier(sc.priceYuan, dark)
+    val palette = FixedColors.superChatPalette(sc.priceYuan, dark)
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = palette.container,
+        contentColor = palette.onContainer,
         shape = MaterialTheme.shapes.medium,
         modifier = modifier.fillMaxWidth(),
     ) {
         Column(
-            modifier = Modifier
-                .drawBehind { drawRect(color = tier, size = Size(TierBarWidth.toPx(), size.height)) }
-                .padding(start = Spacing.Cozy, top = Spacing.Tight, end = Spacing.Tight, bottom = Spacing.Tight),
+            modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
             verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
         ) {
             Row(
@@ -162,10 +209,16 @@ private fun SuperChatRow(item: LiveFeedItem.SuperChat, onUserClick: (Long) -> Un
                 SenderRow(
                     face = sc.senderFace,
                     name = sc.senderName,
+                    contentColor = palette.onContainer,
                     modifier = Modifier.weight(1f),
                     onClick = { onUserClick(sc.senderMid) },
                 )
-                SuperChatPrice(sc.priceYuan)
+                Text(
+                    text = stringResource(Res.string.live_super_chat_price, sc.priceYuan),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.onContainer,
+                )
             }
             Text(
                 text = sc.message,
@@ -173,79 +226,89 @@ private fun SuperChatRow(item: LiveFeedItem.SuperChat, onUserClick: (Long) -> Un
                 // "highlighted moment",而放大字号会把行高一起改掉,整条流跟着跳。
                 style = MaterialTheme.typography.bodyMediumEmphasized,
                 textDecoration = if (item.removed) TextDecoration.LineThrough else null,
-                color = if (item.removed) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
+                color = palette.onContainer,
             )
         }
     }
 }
 
 /**
- * 金额。容器色与文字色成对取自同一组 role,不用 alpha 兑(风格指南 §3)。
- *
- * tertiary 这一组正是 M3 给这种东西留的:"smaller elements that need special emphasis but don't
- * require immediate attention"。
- */
-@Composable
-internal fun SuperChatPrice(priceYuan: Int, modifier: Modifier = Modifier) {
-    Surface(
-        color = MaterialTheme.colorScheme.tertiaryContainer,
-        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-        // 外 12(shapes.medium)− 内边距 8 = 4,落在刻度末档(optical roundness,§1.4)。
-        shape = MaterialTheme.shapes.extraSmall,
-        modifier = modifier,
-    ) {
-        Text(
-            text = stringResource(Res.string.live_super_chat_price, priceYuan),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = Spacing.Hair),
-        )
-    }
-}
-
-/**
  * 有人上舰。
  *
+ * 按总督/提督/舰长三档取对应的成对容器色([FixedColors.guardPalette]),与大航海列表页共用同一套色调。
  * 月数只有 `USER_TOAST_MSG` 那条带,拿不到就不写 —— 「开通了舰长」本身是完整的一句话,而补一个
  * 猜出来的月数是在说一件没有依据的事。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun GuardRow(item: LiveFeedItem.Guard, onUserClick: (Long) -> Unit, modifier: Modifier = Modifier) {
-    val level = stringResource(
-        when (item.guardLevel) {
-            1 -> Res.string.live_guard_governor
-            2 -> Res.string.live_guard_admiral
-            else -> Res.string.live_guard_captain
-        },
-    )
+    val dark = MaterialTheme.colorScheme.surface.luminance() < DarkSurfaceLuminance
+    val palette = FixedColors.guardPalette(item.guardLevel, dark)
+    val level = guardLevelLabel(item.guardLevel)
     Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        onClick = { onUserClick(item.mid) },
+        color = palette.container,
+        contentColor = palette.onContainer,
         shape = MaterialTheme.shapes.small,
-        // 整行可点,不只是名字那几个字:这一行整句都在说同一个人,而"某某"在译文里的位置
-        // 由 strings 决定,按子串去找它是在解析自己刚拼出来的句子。
-        //
-        // 一行 `bodyMedium` 加上下 4dp 只有 26dp 左右,够不到 48dp 的触摸下限;撑的是点击区,
-        // 字号和内边距都没动(风格指南 §3 第一条)。
-        modifier = modifier
-            .fillMaxWidth()
-            .heightIn(min = Dimens.MinTouchTarget)
-            .clickable(role = Role.Button) { onUserClick(item.mid) },
+        // 用 minimumInteractiveComponentSize 保证 48dp 触控热区(Dimens.MinTouchTarget),而不把色块背景本身硬撑成 48dp 高的大空块。
+        modifier = modifier.fillMaxWidth().minimumInteractiveComponentSize(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            Surface(
+                color = palette.onContainer.copy(alpha = GuardBadgeBgAlpha),
+                shape = MaterialTheme.shapes.extraSmall,
+            ) {
+                Text(
+                    text = level,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.onContainer,
+                    modifier = Modifier.padding(horizontal = Spacing.Hair, vertical = 2.dp),
+                )
+            }
+            Text(
+                text = item.months?.let {
+                    stringResource(Res.string.live_guard_opened_months, item.name, level, it)
+                } ?: stringResource(Res.string.live_guard_opened, item.name, level),
+                style = MaterialTheme.typography.bodyMediumEmphasized,
+                color = palette.onContainer,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+/** 大航海列表页与流内共用的舰种名称。 */
+@Composable
+internal fun guardLevelLabel(guardLevel: Int): String = stringResource(
+    when (guardLevel) {
+        1 -> Res.string.live_guard_governor
+        2 -> Res.string.live_guard_admiral
+        else -> Res.string.live_guard_captain
+    },
+)
+
+/** 大航海列表页行尾的舰种色调胶囊(总督金、提督紫、舰长蓝)。 */
+@Composable
+internal fun GuardLevelBadge(guardLevel: Int, modifier: Modifier = Modifier) {
+    val dark = MaterialTheme.colorScheme.surface.luminance() < DarkSurfaceLuminance
+    val palette = FixedColors.guardPalette(guardLevel, dark)
+    Surface(
+        color = palette.container,
+        contentColor = palette.onContainer,
+        shape = MaterialTheme.shapes.small,
+        modifier = modifier,
     ) {
         Text(
-            text = item.months?.let {
-                stringResource(Res.string.live_guard_opened_months, item.name, level, it)
-            } ?: stringResource(Res.string.live_guard_opened, item.name, level),
-            style = MaterialTheme.typography.bodyMedium,
-            // 触摸区撑到 48dp 之后文字要跟着居中:Surface 不替内容对齐,不加这一句字会贴在
-            // 色块顶上,看起来像下半块是空的。
-            modifier = Modifier
-                .wrapContentHeight(Alignment.CenterVertically)
-                .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
+            text = guardLevelLabel(guardLevel),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = palette.onContainer,
+            modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
         )
     }
 }
@@ -386,22 +449,93 @@ private fun AnnotatedString.Builder.appendName(
     onUserClick: (Long) -> Unit,
 ) {
     if (mid == 0L) {
-        withStyle(SpanStyle(color = nameColor)) { append(name) }
+        withStyle(SpanStyle(color = nameColor, fontWeight = FontWeight.Medium)) { append(name) }
         return
     }
     // **显式关掉下划线。** 不给 styles 时用的是文本层的默认链接样式,那一份带下划线;
-    // 一屏几十行昵称全画上下划线,读起来就是一列横杠。
-    val plain = TextLinkStyles(style = SpanStyle(color = nameColor, textDecoration = TextDecoration.None))
+    // 一屏几十行昵称全画上下划线,读起来就是一列横杠。字重抬到 Medium(对应 emphasized 档),
+    // 让句子式的中文昵称与正文一眼分开。
+    val plain = TextLinkStyles(
+        style = SpanStyle(
+            color = nameColor,
+            fontWeight = FontWeight.Medium,
+            textDecoration = TextDecoration.None,
+        ),
+    )
     withLink(LinkAnnotation.Clickable(tag = "live-user-$mid", styles = plain) { onUserClick(mid) }) {
         append(name)
     }
 }
 
-/** 头像加昵称,一起可点。醒目留言的两处(流里那一行、汇总屏那张卡)用的是同一份。 */
+/**
+ * 聊天行里的表情占位符(整条大表情与正文内联小表情)。
+ *
+ * 高度一律走 [inlineEmoteSize] 夹在当前行高之内(风格指南 §2.7c & `docs/live-room-redesign.md` §3.3):
+ * Compose 的 `lineHeight` 是硬行距,占位符超过行高不会把行撑高,只会压到上下行文字上。
+ */
 @Composable
-private fun SenderRow(
+private fun rememberEmoteInline(
+    style: TextStyle,
+    sticker: LiveEmote?,
+    inlineMatches: List<LiveEmoteMatch>,
+): Map<String, InlineTextContent> {
+    if (sticker == null && inlineMatches.isEmpty()) return emptyMap()
+    val baseHeight = inlineEmoteSize(style)
+    return remember(sticker, inlineMatches, baseHeight) {
+        buildMap {
+            if (sticker != null) {
+                val aspect = if (sticker.widthPx > 0 && sticker.heightPx > 0) {
+                    (sticker.widthPx.toFloat() / sticker.heightPx).coerceIn(0.5f, 2.5f)
+                } else {
+                    1f
+                }
+                val width = (baseHeight.value * aspect).sp
+                put(
+                    StickerInlineTag,
+                    InlineTextContent(
+                        Placeholder(width, baseHeight, PlaceholderVerticalAlign.TextCenter),
+                    ) {
+                        BiliAsyncImage(
+                            url = sticker.url.toHttpsUrl(),
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    },
+                )
+            }
+            inlineMatches.forEachIndexed { index, match ->
+                val emote = match.emote
+                val aspect = if (emote.widthPx > 0 && emote.heightPx > 0) {
+                    (emote.widthPx.toFloat() / emote.heightPx).coerceIn(0.5f, 2.5f)
+                } else {
+                    1f
+                }
+                val width = (baseHeight.value * aspect).sp
+                put(
+                    inlineEmoteTag(index),
+                    InlineTextContent(
+                        Placeholder(width, baseHeight, PlaceholderVerticalAlign.TextCenter),
+                    ) {
+                        BiliAsyncImage(
+                            url = emote.url.toHttpsUrl(),
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    },
+                )
+            }
+        }
+    }
+}
+
+private fun inlineEmoteTag(index: Int) = "live-emote-$index"
+
+/** 头像加昵称,一起可点。醒目留言的三处(流里那一行、顶部展开卡、汇总屏那张卡)用的是同一份。 */
+@Composable
+internal fun SenderRow(
     face: String,
     name: String,
+    contentColor: Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -410,19 +544,16 @@ private fun SenderRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
-        Avatar(url = face, size = Dimens.AvatarRow)
+        Avatar(url = face, size = Dimens.AvatarNested)
         Text(
             text = name,
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = contentColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
     }
 }
-
-/** 档位色竖条的宽度。 */
-private val TierBarWidth = 4.dp
 
 // 勋章那一块的四个数,全部照 PiliPlus 的 MedalWidget(见 rememberMedalInline)。
 // **字号是定值,不跟正文缩放** —— 它是身份标记,在哪儿都该一样大。
@@ -432,6 +563,8 @@ private val MedalVPadding = 3.dp
 private val MedalCorner = 10.dp
 
 private const val MedalInlineTag = "live-medal"
+private const val StickerInlineTag = "live-sticker"
+private const val GuardBadgeBgAlpha = 0.14f
 
 /**
  * `surface` 的相对亮度低于这个数就按深色主题取档位色。0.5 是中点,而深浅两套 surface

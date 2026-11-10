@@ -58,6 +58,8 @@ sealed interface LiveFeedItem {
         val isSelf: Boolean,
         val medal: LiveFanMedal?,
         val replyName: String?,
+        val emote: LiveEmote? = null,
+        val inlineEmotes: Map<String, LiveEmote> = emptyMap(),
     ) : LiveFeedItem
 
     /**
@@ -462,6 +464,8 @@ class LiveRoomViewModel(
                 isSelf = message.isSelf,
                 medal = message.medal,
                 replyName = message.replyName,
+                emote = message.emote,
+                inlineEmotes = message.inlineEmotes,
             ),
         )
 
