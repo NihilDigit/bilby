@@ -24,6 +24,8 @@ data class ReplyEmoteItemDto(
     val id: Long = 0,
     val text: String = "",
     val url: String = "",
+    @SerialName("webp_url") val webpUrl: String = "",
+    @SerialName("gif_url") val gifUrl: String = "",
     val meta: ReplyEmoteMetaDto? = null,
 )
 

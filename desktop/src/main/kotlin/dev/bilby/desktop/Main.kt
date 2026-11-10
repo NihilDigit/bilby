@@ -25,6 +25,7 @@ import dev.bilby.ui.BilbyRoot
 import dev.bilby.ui.DesktopSystemActions
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.LocalSystemActions
+import dev.bilby.ui.components.SkiaAnimatedImageDecoder
 import dev.bilby.ui.player.LocalWindowFullscreen
 import dev.bilby.ui.player.LocalDesktopPip
 import dev.bilby.ui.theme.BilbyTheme
@@ -54,9 +55,13 @@ fun main() {
     container = AppContainer(platform)
 
     // Coil 3 不会自动接上网络加载器,不注册的话 http(s) 图片静默不加载,同 Android 的 BilbyApplication。
+    // 桌面端额外注册 SkiaAnimatedImageDecoder,让 GIF 与动态 WebP 按多帧动图解码渲染。
     SingletonImageLoader.setSafe { context ->
         ImageLoader.Builder(context)
-            .components { add(OkHttpNetworkFetcherFactory()) }
+            .components {
+                add(OkHttpNetworkFetcherFactory())
+                add(SkiaAnimatedImageDecoder.Factory())
+            }
             .crossfade(true)
             .build()
     }

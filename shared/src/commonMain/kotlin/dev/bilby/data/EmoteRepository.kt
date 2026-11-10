@@ -142,13 +142,14 @@ private fun ReplyEmotePackageDto.toEmoteTab(): EmoteTab? {
     }
     val items = emote.mapIndexedNotNull { index, item ->
         if (item.text.isEmpty()) return@mapIndexedNotNull null
-        if (!isKaomoji && item.url.isEmpty()) return@mapIndexedNotNull null
+        val rawUrl = listOf(item.webpUrl, item.gifUrl, item.url).firstOrNull(String::isNotBlank).orEmpty()
+        if (!isKaomoji && rawUrl.isEmpty()) return@mapIndexedNotNull null
         val displayLabel = item.meta?.alias?.takeIf { it.isNotBlank() }
             ?: item.text.removePrefix("[").removeSuffix("]")
         EmoteEntry(
             key = "${id}_${item.id}_$index",
             label = if (isKaomoji) item.text else displayLabel,
-            imageUrl = if (isKaomoji) "" else item.url.toHttpsUrl(),
+            imageUrl = if (isKaomoji) "" else rawUrl.toHttpsUrl(),
             action = EmoteAction.InsertText(item.text),
         )
     }

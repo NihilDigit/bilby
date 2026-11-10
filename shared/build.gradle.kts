@@ -117,6 +117,7 @@ kotlin {
             api(libs.androidx.room.runtime)
             api(libs.androidx.datastore.preferences)
             api(libs.androidx.work.runtime.ktx)
+            api(libs.coil.gif)
         }
         // 公共单测两个目标各跑一遍。两端都是 JVM,直接用 JUnit 4,不另套 kotlin.test。
         commonTest.dependencies {

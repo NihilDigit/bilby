@@ -666,8 +666,9 @@ private object MessageContent {
         var last = 0
         EmotePattern.findAll(text).forEach { match ->
             val emote = emotes[match.value] ?: return@forEach
+            val rawUrl = listOf(emote.webpUrl, emote.gifUrl, emote.uri).firstOrNull(String::isNotBlank) ?: return@forEach
             if (match.range.first > last) spans += RichSpan.Text(text.substring(last, match.range.first))
-            spans += RichSpan.Emoji(url = emote.uri.toHttpsUrl(), alt = emote.text, scale = emote.size.toFloat())
+            spans += RichSpan.Emoji(url = rawUrl.toHttpsUrl(), alt = emote.text, scale = emote.size.toFloat())
             last = match.range.last + 1
         }
         if (last < text.length) spans += RichSpan.Text(text.substring(last))
@@ -812,6 +813,8 @@ private data class SessionMessagesDto(
 private data class EmoteInfoDto(
     val text: String = "",
     val uri: String = "",
+    @SerialName("gif_url") val gifUrl: String = "",
+    @SerialName("webp_url") val webpUrl: String = "",
     /** 1 是跟着文字走的小表情,2 是大表情。 */
     val size: Int = 1,
 )

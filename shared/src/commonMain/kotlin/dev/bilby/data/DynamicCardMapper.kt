@@ -403,11 +403,12 @@ private fun DynamicAdditionalDto.toAdditional(): DynamicAdditional? = when (type
  */
 private fun List<DynamicRichNodeDto>.toSpans(): List<RichSpan> = mapNotNull { node ->
     when (node.type) {
-        "RICH_TEXT_NODE_TYPE_EMOJI" -> node.emoji?.iconUrl?.takeIf { it.isNotBlank() }?.let {
+        "RICH_TEXT_NODE_TYPE_EMOJI" -> node.emoji?.let {
+            val url = listOf(it.webpUrl, it.gifUrl, it.iconUrl).firstOrNull(String::isNotBlank) ?: return@mapNotNull null
             RichSpan.Emoji(
-                url = it.toHttpsUrl(),
+                url = url.toHttpsUrl(),
                 alt = node.origText.ifBlank { node.text },
-                scale = node.emoji.size.toFloat().takeIf { size -> size > 0f } ?: 1f,
+                scale = it.size.toFloat().takeIf { size -> size > 0f } ?: 1f,
             )
         }
 

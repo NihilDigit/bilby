@@ -130,6 +130,8 @@ data class DynamicRichNodeDto(
 @Serializable
 data class DynamicEmojiDto(
     @SerialName("icon_url") val iconUrl: String = "",
+    @SerialName("webp_url") val webpUrl: String = "",
+    @SerialName("gif_url") val gifUrl: String = "",
     val text: String = "",
     val size: Int = 1,
 )

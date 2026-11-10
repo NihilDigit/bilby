@@ -161,6 +161,8 @@ data class ReplyAtMemberDto(
 @Serializable
 data class ReplyEmoteDto(
     val url: String = "",
+    @SerialName("webp_url") val webpUrl: String = "",
+    @SerialName("gif_url") val gifUrl: String = "",
 )
 
 @Serializable

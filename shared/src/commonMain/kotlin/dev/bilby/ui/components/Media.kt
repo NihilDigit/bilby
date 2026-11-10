@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,17 +37,49 @@ import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 
+private val BiliRefererHeaders = NetworkHeaders.Builder()
+    .add("Referer", "https://www.bilibili.com")
+    .build()
+
 /**
  * B 站图床有防盗链,不带 Referer 一律 403;部分接口还会返回 `//` 开头的协议相对地址。
  * 这两件事以前散在七八个 AsyncImage 调用点上,漏一个就是一张裂图,收到这里来。
  */
 @Composable
-fun biliImageRequest(url: String) = biliImageRequestBuilder(LocalPlatformContext.current, url).build()
+fun biliImageRequest(url: String): ImageRequest {
+    val context = LocalPlatformContext.current
+    return remember(context, url) { biliImageRequestBuilder(context, url).build() }
+}
 
 /** 组合之外发请求用(比如画进弹幕的表情),要自己挂 target 时拿这个 builder。 */
 fun biliImageRequestBuilder(context: PlatformContext, url: String) = ImageRequest.Builder(context)
     .data(url.toHttpsUrl())
-    .httpHeaders(NetworkHeaders.Builder().add("Referer", "https://www.bilibili.com").build())
+    .httpHeaders(BiliRefererHeaders)
+
+/**
+ * 给固定尺寸的封面/头像挂上 B 站图床的缩略图后缀(`@{w}w_{h}h_1c.webp`),避免桌面端 SkiaImageDecoder
+ * 无降采样地直接解码并上传 1080p/4K 原图。
+ *
+ * 尺寸按固定档位取(视频封面 640×400、方形封面 320×320、头像 160×160),让同一张图在不同字号/列表里的
+ * 调用命中同一份 CDN 与本地缓存。已经带 `@`/`?` 参数、`.gif` 动图或非 B 站图床地址原样保留。
+ */
+private fun biliThumbnailUrl(url: String, widthPx: Int, heightPx: Int): String {
+    val https = url.toHttpsUrl()
+    if (!https.startsWith("https://")) return https
+    if (https.contains('@') || https.contains('?') || https.contains('#')) return https
+    if (https.endsWith(".gif", ignoreCase = true)) return https
+    val hostEnd = https.indexOf('/', startIndex = 8)
+    if (hostEnd <= 8) return https
+    val host = https.substring(8, hostEnd)
+    if (!host.endsWith(".hdslb.com", ignoreCase = true) && !host.endsWith(".biliimg.com", ignoreCase = true)) {
+        return https
+    }
+    return "$https@${widthPx}w_${heightPx}h_1c.webp"
+}
+
+private const val CoverThumbWidthPx = 640
+private const val SquareCoverThumbPx = 320
+private const val AvatarThumbPx = 160
 
 /**
  * 通用的 B 站图片。封面/头像之外的地方(评论配图、表情)用它 —— 形状和尺寸各处不同,
@@ -107,9 +140,11 @@ fun VideoCover(
      */
     typeBadge: String = "",
 ) {
+    val thumbHeightPx = (CoverThumbWidthPx / aspectRatio).toInt().coerceAtLeast(1)
+    val thumbUrl = remember(url, thumbHeightPx) { biliThumbnailUrl(url, CoverThumbWidthPx, thumbHeightPx) }
     Box(modifier = modifier.aspectRatio(aspectRatio).clip(RoundedCornerShape(cornerRadius))) {
         AsyncImage(
-            model = biliImageRequest(url),
+            model = biliImageRequest(thumbUrl),
             // 封面是装饰:它右边就是同一条视频的标题,读屏再念一遍图片等于把每条读两遍。
             contentDescription = null,
             contentScale = ContentScale.Crop,
@@ -206,8 +241,9 @@ private val BadgeTextInset = 2.dp
  */
 @Composable
 fun SquareCover(url: String, size: Dp, modifier: Modifier = Modifier) {
+    val thumbUrl = remember(url) { biliThumbnailUrl(url, SquareCoverThumbPx, SquareCoverThumbPx) }
     AsyncImage(
-        model = biliImageRequest(url),
+        model = biliImageRequest(thumbUrl),
         contentDescription = null,
         contentScale = ContentScale.Crop,
         modifier = modifier.size(size).clip(RoundedCornerShape(CoverCornerRadius)),
@@ -217,8 +253,9 @@ fun SquareCover(url: String, size: Dp, modifier: Modifier = Modifier) {
 /** 圆形头像。同样走 [biliImageRequest],同样是装饰(旁边一定跟着用户名)。 */
 @Composable
 fun Avatar(url: String, modifier: Modifier = Modifier, size: Dp = Dimens.AvatarRow) {
+    val thumbUrl = remember(url) { biliThumbnailUrl(url, AvatarThumbPx, AvatarThumbPx) }
     AsyncImage(
-        model = biliImageRequest(url),
+        model = biliImageRequest(thumbUrl),
         contentDescription = null,
         contentScale = ContentScale.Crop,
         modifier = modifier.size(size).clip(CircleShape),

@@ -313,7 +313,9 @@ class CommentRepository(
             // 见 decodeHtmlEntities。表情占位符和 @ 的匹配都在解码后的文本上做,所以解码要
             // 发生在这里而不是渲染时。
             message = content.message.decodeHtmlEntities(),
-            emotes = content.emote?.mapValues { it.value.url.toHttpsUrl() }.orEmpty(),
+            emotes = content.emote?.mapValues { (_, e) ->
+                listOf(e.webpUrl, e.gifUrl, e.url).firstOrNull(String::isNotBlank).orEmpty().toHttpsUrl()
+            }.orEmpty(),
             mentions = content.members.mapNotNull { member ->
                 member.mid.toLongOrNull()?.takeIf { it != 0L }
                     ?.let { CommentMention(it, member.uname.decodeHtmlEntities()) }
