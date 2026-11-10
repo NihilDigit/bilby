@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.swing.Swing
+import kotlinx.coroutines.withContext
 import org.openani.mediamp.PlaybackErrorCode
 import org.openani.mediamp.PlaybackEvent
 import org.openani.mediamp.PlaybackException
@@ -880,7 +881,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             var wasPlaying = false
             while (true) {
                 val playing = player.mediamp.state.value.isPlaying
-                val position = player.positionMillis
+                val position = player.observedPositionMillis
                 val duration = player.mediamp.mediaProperties.value?.durationMillis ?: 0L
                 _positionTicks.value = PositionTick(
                     positionMillis = position,
@@ -898,6 +899,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
                 if (playing) endHandled = false
                 _state.update { it.copy(isPlaying = playing, stoppedAtEnd = endHandled) }
                 wasPlaying = playing
+                withContext(Dispatchers.IO) { player.refreshBufferedPosition() }
                 delay(TICK_MILLIS)
             }
         }

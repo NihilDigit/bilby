@@ -3,24 +3,18 @@ package dev.bilby.ui.message
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import dev.bilby.ui.components.listCoverWidthFor
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import dev.bilby.ui.components.BiliRichText
-import dev.bilby.ui.components.ListCover
+import dev.bilby.ui.components.VideoCover
+import dev.bilby.ui.components.listCoverWidthFor
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -134,49 +128,58 @@ private class PushItem(val push: WhisperContent.VideoPush, val seqno: Long, val 
 @Composable
 private fun PushRow(item: PushItem, onClick: () -> Unit, onOpenLink: (String) -> Unit) {
     val push = item.push
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-    val coverWidth = listCoverWidthFor(maxWidth)
-    Row(
+    Layout(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-    ) {
-        ListCover(
-            url = push.coverUrl,
-            durationText = if (push.durationSeconds > 0) formatDurationSeconds(push.durationSeconds) else "",
-            width = coverWidth,
-        )
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        ) {
-            Text(text = push.title, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                text = formatChatTime(item.timeSeconds),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        content = {
+            VideoCover(
+                url = push.coverUrl,
+                durationText = if (push.durationSeconds > 0) formatDurationSeconds(push.durationSeconds) else "",
             )
-            // UP 主附的那句话是引用,用一个有底色的块认,不用左侧竖条(风格指南 §2.3c)。
-            if (push.note.isNotEmpty()) {
-                Surface(
-                    shape = MaterialTheme.shapes.small,
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    modifier = Modifier.padding(top = Spacing.Hair),
-                ) {
-                    BiliRichText(
-                        spans = push.note,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        onLinkClick = onOpenLink,
-                        onMentionClick = {},
-                        modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
-                    )
+            Column(
+                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+            ) {
+                Text(text = push.title, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = formatChatTime(item.timeSeconds),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                // UP 主附的那句话是引用,用一个有底色的块认,不用左侧竖条(风格指南 §2.3c)。
+                if (push.note.isNotEmpty()) {
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.padding(top = Spacing.Hair),
+                    ) {
+                        BiliRichText(
+                            spans = push.note,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            onLinkClick = onOpenLink,
+                            onMentionClick = {},
+                            modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
+                        )
+                    }
                 }
             }
+        },
+    ) { measurables, constraints ->
+        val contentWidth = constraints.maxWidth
+        val gapPx = Spacing.Cozy.roundToPx()
+        val coverWidthPx = listCoverWidthFor(contentWidth.toDp() + Spacing.Comfortable * 2).roundToPx()
+        val coverPlaceable = measurables[0].measure(Constraints.fixedWidth(coverWidthPx))
+        val textWidthPx = (contentWidth - coverWidthPx - gapPx).coerceAtLeast(0)
+        val textPlaceable = measurables[1].measure(
+            Constraints(minWidth = textWidthPx, maxWidth = textWidthPx),
+        )
+        val rowHeight = maxOf(coverPlaceable.height, textPlaceable.height)
+        layout(contentWidth, rowHeight) {
+            coverPlaceable.placeRelative(0, 0)
+            textPlaceable.placeRelative(coverWidthPx + gapPx, 0)
         }
-    }
     }
 }
 

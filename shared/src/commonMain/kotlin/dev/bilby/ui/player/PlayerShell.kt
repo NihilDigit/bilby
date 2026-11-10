@@ -80,6 +80,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerType
+import dev.bilby.elapsedRealtimeMillis
 import dev.bilby.player.PlayerHandle
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.player.PlayerListener
@@ -340,8 +341,10 @@ fun PlayerShell(
 
     var controlsVisible by remember { mutableStateOf(true) }
     var menuOpen by remember { mutableStateOf(false) }
-    // 每次操作控件都让自动隐藏重新计时,靠这个计数把 LaunchedEffect 重启。
-    var interactionNonce by remember { mutableIntStateOf(0) }
+    // 每次操作控件都让自动隐藏重新计时:记下最近一次交互的时刻供自动隐藏循环检查,不走 Compose
+    // 状态,否则鼠标在画面上移动时(500~1000Hz)每帧都会触发整棵 PlayerShell 重组并重启协程。
+    val lastInteractionMillis = remember { longArrayOf(elapsedRealtimeMillis()) }
+    val keepAwake = { lastInteractionMillis[0] = elapsedRealtimeMillis() }
     // 光标停在控件上(顶栏、控制条、中央键、锁)时不自动隐藏。只看移动的话,光标停在进度条上
     // 不动,3 秒后控制条就在光标底下收走了。几块控件共用一个 source:hoverable 在控件退场
     // 被移除时会补发 Exit,悬停状态不会卡在 true。
@@ -484,11 +487,19 @@ fun PlayerShell(
     }
     // 进画中画那一刻把控件收起;出来之后照常点一下再唤出。
     LaunchedEffect(pip) { if (pip) controlsVisible = false }
-    LaunchedEffect(controlsVisible, isPlaying, dragPosition, menuOpen, hoveringControls, interactionNonce) {
+    LaunchedEffect(controlsVisible, isPlaying, dragPosition, menuOpen, hoveringControls) {
         // 暂停时控件常驻:此时用户多半正要点什么,把它藏掉只会逼人再点一次。
         if (controlsVisible && isPlaying && dragPosition == null && !menuOpen && !hoveringControls) {
-            delay(hideDelayMillis)
-            controlsVisible = false
+            lastInteractionMillis[0] = elapsedRealtimeMillis()
+            while (true) {
+                val elapsed = (elapsedRealtimeMillis() - lastInteractionMillis[0]).coerceAtLeast(0L)
+                val remaining = hideDelayMillis - elapsed
+                if (remaining <= 0L) {
+                    controlsVisible = false
+                    break
+                }
+                delay(remaining)
+            }
         }
     }
 
@@ -510,11 +521,11 @@ fun PlayerShell(
             player.playWhenReady -> player.pause()
             else -> player.playOrReplay(playback)
         }
-        interactionNonce += 1
+        keepAwake()
     }
 
     val actions = PlayerShellActions(
-        keepAwake = { interactionNonce += 1 },
+        keepAwake = keepAwake,
         setMenuOpen = { menuOpen = it },
         togglePlayPause = togglePlayPause,
         seekStart = {
@@ -529,11 +540,11 @@ fun PlayerShell(
                 dragPosition = null
                 if (resumeAfterDrag) player.play()
             }
-            interactionNonce++
+            keepAwake()
         },
         toggleFullscreen = {
             onFullscreenChange(!isFullscreen)
-            interactionNonce++
+            keepAwake()
         },
     )
 
@@ -558,8 +569,8 @@ fun PlayerShell(
                         if (locked || speedController?.active == true || event.changes.firstOrNull()?.type != PointerType.Mouse) continue
                         when (event.type) {
                             PointerEventType.Move -> {
-                                controlsVisible = true
-                                interactionNonce++
+                                if (!controlsVisible) controlsVisible = true
+                                keepAwake()
                             }
                             PointerEventType.Exit -> {
                                 if (isPlaying && !menuOpen && dragPosition == null) controlsVisible = false
@@ -700,7 +711,7 @@ fun PlayerShell(
                                 togglePlayPause()
                                 playToggleFlash++
                             }
-                            interactionNonce++
+                            keepAwake()
                         },
                         // 双击按落点分四段:两侧各四分之一是 ±10 秒,中间仍是播放/暂停,
                         // 对齐 PiliPlus 的左右边缘手势区域。
@@ -733,7 +744,7 @@ fun PlayerShell(
                                     playToggleFlash++
                                 }
                             }
-                            interactionNonce++
+                            keepAwake()
                         },
                     )
                 }
@@ -781,7 +792,7 @@ fun PlayerShell(
                                 gesture = null
                                 dragPosition = null
                                 seekCancelArmed = null
-                                interactionNonce++
+                                keepAwake()
                             },
                             onDragCancel = {
                                 dragging = false
@@ -851,7 +862,7 @@ fun PlayerShell(
                         controlsVisible = false
                         gesture = null
                         dragPosition = null
-                        interactionNonce++
+                        keepAwake()
                     },
                 ),
         )

@@ -3,15 +3,11 @@ package dev.bilby.ui.components
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -20,14 +16,16 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.ui.theme.Dimens
@@ -103,10 +101,11 @@ fun VideoRow(
      */
     overflow: (@Composable () -> Unit)? = null,
 ) {
-    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
-    val coverWidth = listCoverWidthFor(maxWidth)
-    Row(
-        modifier = Modifier
+    // 单遍 Layout 替代原先的 BoxWithConstraints(SubcomposeLayout) + Row(IntrinsicSize.Min):
+    // 先按行宽算出封面宽度并量出封面高度,再把封面高度作为文字列的 minHeight 传入,一遍测量即可让
+    // 文字比封面矮时上下贴齐封面(SpaceBetween)、文字比封面高时自然撑高且封面垂直居中。
+    Layout(
+        modifier = modifier
             .fillMaxWidth()
             .combinedClickable(
                 enabled = enabled,
@@ -117,27 +116,16 @@ fun VideoRow(
             // 失效稿件仍保留在收藏夹里,但它必须看起来不可打开。仅禁用语义和点击
             // 会留下一个“看起来正常、点了没反应”的粗糙行。
             .alpha(if (enabled) 1f else DisabledContentAlpha)
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight)
-            // 行高取封面与文字里高的那个,文字列再撑满这个高度:文字比封面矮时,标题贴封面
-            // 上沿、元信息贴下沿,两列的上下边都对齐。原先是整列居中,文字只有两层时上下
-            // 各空出一截,标题和封面的上沿差着半行,哪条边都不齐。
-            .height(IntrinsicSize.Min),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-        // 字体放大或助理理由变长时,右侧内容可能高过固定比例的封面。
-        // 居中比把封面钉在顶部更稳定,不会在行尾留下明显的“封面下坠”空白。
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ListCover(
-            url = item.coverUrl,
-            durationText = item.durationText,
-            progressFraction = item.progressFraction,
-            typeBadge = item.typeBadge,
-            width = coverWidth,
-        )
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+        content = {
+            VideoCover(
+                url = item.coverUrl,
+                durationText = item.durationText,
+                progressFraction = item.progressFraction,
+                typeBadge = item.typeBadge,
+            )
 
-        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
             Column(
-                modifier = Modifier.fillMaxHeight(),
                 verticalArrangement = Arrangement.SpaceBetween,
             ) {
                 // bodyLarge(16sp)。这一行是整条的标题,它下面几行是 labelSmall 和 bodySmall,
@@ -190,6 +178,7 @@ fun VideoRow(
                     }
                 }
             }
+
             // 叠在文字列右下角,不进列的布局流 —— 排进去的话这一行会跟着按钮的 48dp 长高,
             // 而它挡住的位置上本来就没有字(见上面那圈 end padding)。
             //
@@ -201,17 +190,62 @@ fun VideoRow(
             // **横向也往外挪一个图标内缩,伸进行的右边距。** 48dp 的格贴着文字列右沿时,图标
             // 离屏幕右沿是 16 + 12 = 28dp,标题再让出一截又更远,左边封面却只离 16dp,整行
             // 看起来右边空得多。挪出去之后图标框的右沿落在 16dp 页边线上,和左边对称。
-            overflow?.let {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .offset(x = OverflowIconInset, y = OverflowDrop),
-                ) { it() }
+            if (overflow != null) {
+                Box(modifier = Modifier.offset(x = OverflowIconInset, y = OverflowDrop)) {
+                    overflow()
+                }
             }
-        }
 
-        trailing?.invoke(this)
-    }
+            if (trailing != null) {
+                Row(verticalAlignment = Alignment.CenterVertically, content = trailing)
+            }
+        },
+    ) { measurables, constraints ->
+        val contentWidth = constraints.maxWidth
+        val gapPx = Spacing.Cozy.roundToPx()
+        val coverWidthPx = listCoverWidthFor(contentWidth.toDp() + Spacing.Comfortable * 2).roundToPx()
+        val coverPlaceable = measurables[0].measure(Constraints.fixedWidth(coverWidthPx))
+
+        var nextIndex = 2
+        val overflowMeasurable = if (overflow != null) measurables[nextIndex++] else null
+        val trailingMeasurable = if (trailing != null) measurables[nextIndex] else null
+
+        val trailingPlaceable = trailingMeasurable?.measure(
+            Constraints(maxWidth = (contentWidth - coverWidthPx - gapPx).coerceAtLeast(0)),
+        )
+        val trailingWidth = if (trailingPlaceable != null) trailingPlaceable.width + gapPx else 0
+        val textWidthPx = (contentWidth - coverWidthPx - gapPx - trailingWidth).coerceAtLeast(0)
+
+        val textPlaceable = measurables[1].measure(
+            Constraints(
+                minWidth = textWidthPx,
+                maxWidth = textWidthPx,
+                minHeight = coverPlaceable.height,
+            ),
+        )
+        val overflowPlaceable = overflowMeasurable?.measure(Constraints())
+
+        // 字体放大或助理理由变长时,右侧内容可能高过固定比例的封面。
+        // 居中比把封面钉在顶部更稳定,不会在行尾留下明显的“封面下坠”空白。
+        val rowHeight = maxOf(
+            coverPlaceable.height,
+            textPlaceable.height,
+            trailingPlaceable?.height ?: 0,
+        )
+        layout(contentWidth, rowHeight) {
+            coverPlaceable.placeRelative(0, (rowHeight - coverPlaceable.height) / 2)
+            val textX = coverWidthPx + gapPx
+            val textY = (rowHeight - textPlaceable.height) / 2
+            textPlaceable.placeRelative(textX, textY)
+            overflowPlaceable?.placeRelative(
+                textX + textWidthPx - overflowPlaceable.width,
+                textY + textPlaceable.height - overflowPlaceable.height,
+            )
+            trailingPlaceable?.placeRelative(
+                textX + textWidthPx + gapPx,
+                (rowHeight - trailingPlaceable.height) / 2,
+            )
+        }
     }
 }
 

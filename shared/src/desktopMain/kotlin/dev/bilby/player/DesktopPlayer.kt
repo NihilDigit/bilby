@@ -28,6 +28,7 @@ class DesktopPlayer(parentCoroutineContext: CoroutineContext) : AutoCloseable {
     }
 
     suspend fun open(source: StreamSource, playWhenReady: Boolean = true, startPositionMillis: Long = 0L) {
+        observedBufferedPositionMillis = 0L
         mediamp.setMediaData(source.toMediaData(), playWhenReady, startPositionMillis)
     }
 
@@ -36,7 +37,7 @@ class DesktopPlayer(parentCoroutineContext: CoroutineContext) : AutoCloseable {
      *
      * **不能逐帧调。** 读属性要拿 mpv 的核心锁,mpv 正在解码或渲染时就得等;弹幕时钟曾经每帧
      * 调它,UI 线程每帧卡在这把锁上,弹幕一开帧率从一百七十掉到十几,而 JFR 里 JVM 几乎空闲
-     * (线程停在 native 调用里,不在执行采样里)。逐帧的读数用 [observedPositionMillis]。
+     * (线程停在 native 调用里,不在执行采样里)。逐帧或高频轮询的读数用 [observedPositionMillis]。
      */
     val positionMillis: Long
         get() = (mpv.getPropertyDouble("time-pos") * 1000).toLong().coerceAtLeast(0L)
@@ -48,7 +49,30 @@ class DesktopPlayer(parentCoroutineContext: CoroutineContext) : AutoCloseable {
     val observedPositionMillis: Long
         get() = mediamp.currentPositionMillis.value.coerceAtLeast(0L)
 
-    val speed: Float get() = mpv.getPropertyDouble("speed").toFloat()
+    /**
+     * 已缓冲位置(毫秒),由后台刻度在 IO 线程定期向 mpv 读取 `demuxer-cache-time` 更新,避免
+     * UI 线程轮询时争抢 mpv 核心锁。
+     */
+    @Volatile
+    var observedBufferedPositionMillis: Long = 0L
+        private set
+
+    internal fun refreshBufferedPosition() {
+        observedBufferedPositionMillis =
+            (mpv.getPropertyDouble("demuxer-cache-time") * 1000).toLong().coerceAtLeast(0L)
+    }
+
+    /**
+     * 播放倍速。在设置时缓存到本地,避免每次重组在 UI 线程同步读 `mpv.getPropertyDouble("speed")`。
+     */
+    @Volatile
+    var speed: Float = 1f
+        private set
+
+    fun setSpeed(value: Float) {
+        speed = value
+        mpv.setPropertyDouble("speed", value.toDouble())
+    }
 
     override fun close() = mediamp.close()
 }

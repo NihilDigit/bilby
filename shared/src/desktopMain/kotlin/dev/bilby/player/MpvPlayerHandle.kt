@@ -31,12 +31,11 @@ class MpvPlayerHandle internal constructor(
     override val isPlaying: Boolean get() = mediamp.state.value.isPlaying
     override val playWhenReady: Boolean get() = host.playWhenReady
     override val playbackState: Int get() = mediamp.state.value.phase()
-    override val currentPosition: Long get() = player.positionMillis
+    override val currentPosition: Long get() = player.observedPositionMillis
 
-    /** 已缓冲到哪儿:mpv 的 demuxer 缓存末端,秒。没有缓存信息时退回当前位置。 */
+    /** 已缓冲到哪儿:mpv 的 demuxer 缓存末端,由后台刻度刷新。没有缓存信息时退回当前位置。 */
     override val bufferedPosition: Long
-        get() = (player.mpv.getPropertyDouble("demuxer-cache-time") * 1000).toLong()
-            .takeIf { it > 0 } ?: currentPosition
+        get() = player.observedBufferedPositionMillis.takeIf { it > 0 } ?: currentPosition
 
     override val duration: Long get() = mediamp.mediaProperties.value?.durationMillis ?: -1L
     override val playbackSpeed: Float get() = player.speed
@@ -64,7 +63,7 @@ class MpvPlayerHandle internal constructor(
     override fun seekToPrevious() = host.seekToPrevious()
 
     override fun setPlaybackSpeed(speed: Float) {
-        player.mpv.setPropertyDouble("speed", speed.toDouble())
+        player.setSpeed(speed)
         listeners.toList().forEach { it.onPlaybackSpeedChanged(speed) }
     }
 

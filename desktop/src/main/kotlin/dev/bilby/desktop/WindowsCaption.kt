@@ -110,6 +110,12 @@ internal class WindowsCaption(private val window: ComposeWindow) {
     @Volatile
     private var procFailureLogged = false
 
+    @Volatile
+    private var cachedStyle: Int = WS_CAPTION or WS_THICKFRAME
+
+    @Volatile
+    private var cachedResizeBorder: Int = 8
+
     /**
      * 窗口已有 HWND 时接管标题栏。须在窗口首次显示前调用,否则系统标题栏会先闪一下。
      * 非 Windows 或调用失败时返回 false,窗口保持系统标题栏。
@@ -121,6 +127,7 @@ internal class WindowsCaption(private val window: ComposeWindow) {
         val hwnd = MemorySegment.ofAddress(handle)
         return runCatching {
             frame = hwnd
+            refreshWindowMetrics()
             // 这里在界面线程,窗口过程在工具包线程上跑:先记下原窗口过程再替换,替换后的第一条消息就要用到它。
             originalFrameProc = Win32.getWindowLongPtr.invokeWithArguments(hwnd, GWLP_WNDPROC) as MemorySegment
             live += this
@@ -199,11 +206,13 @@ internal class WindowsCaption(private val window: ComposeWindow) {
                     }
                 }
                 WM_NCACTIVATE -> isActive = wParam != 0L
+                WM_STYLECHANGED, WM_DPICHANGED -> refreshWindowMetrics()
                 WM_SIZE -> {
                     when (wParam) {
                         SIZE_MAXIMIZED -> isMaximized = true
                         SIZE_RESTORED -> isMaximized = false
                     }
+                    refreshWindowMetrics()
                     if (originalChildProcs.isEmpty()) hookChildren()
                 }
                 WM_NCDESTROY -> {
@@ -254,6 +263,7 @@ internal class WindowsCaption(private val window: ComposeWindow) {
      * lParam 在 wParam 为 TRUE 时指向 NCCALCSIZE_PARAMS,否则指向 RECT;两者开头都是要计算的那个矩形。
      */
     private fun onNcCalcSize(hwnd: MemorySegment, wParam: Long, lParam: Long): Long {
+        refreshWindowMetrics()
         if (!hasCaption()) return callFrame(hwnd, WM_NCCALCSIZE, wParam, lParam)
         val proposed = MemorySegment.ofAddress(lParam).reinterpret(16)
         val originalLeft = proposed.get(JAVA_INT, 0)
@@ -272,8 +282,16 @@ internal class WindowsCaption(private val window: ComposeWindow) {
         val screenX = lParam.toInt().toShort().toInt()
         val screenY = (lParam.toInt() shr 16).toShort().toInt()
 
-        if (!isMaximized && hasThickFrame()) {
-            val band = resizeBorder()
+        toClient(if (canvas != MemorySegment.NULL) canvas else frame, screenX, screenY)
+        val clientX = point.get(JAVA_INT, 0)
+        val clientY = point.get(JAVA_INT, 4)
+        val band = cachedResizeBorder
+
+        // 鼠标在窗口主体区域时(不在标题栏也不在顶边缩放带)直接答 HTCLIENT:避免每次鼠标移动
+        // (1000Hz)都跨 FFM 重复调 GetWindowLongW / GetDpiForWindow / GetSystemMetricsForDpi / ScreenToClient。
+        if (clientY >= current.bar.bottom && clientY >= band) return HTCLIENT
+
+        if (!isMaximized && hasThickFrame() && clientY in 0 until band) {
             toClient(frame, screenX, screenY)
             val x = point.get(JAVA_INT, 0)
             val y = point.get(JAVA_INT, 4)
@@ -289,8 +307,7 @@ internal class WindowsCaption(private val window: ComposeWindow) {
             }
         }
 
-        toClient(if (canvas != MemorySegment.NULL) canvas else frame, screenX, screenY)
-        val position = Offset(point.get(JAVA_INT, 0).toFloat(), point.get(JAVA_INT, 4).toFloat())
+        val position = Offset(clientX.toFloat(), clientY.toFloat())
         for ((button, bounds) in current.buttons) {
             if (bounds.contains(position)) {
                 return when (button) {
@@ -338,19 +355,17 @@ internal class WindowsCaption(private val window: ComposeWindow) {
         Win32.trackMouseEvent.invokeWithArguments(trackMouseEvent)
     }
 
-    private fun style(): Int = Win32.getWindowLong.invokeWithArguments(frame, GWL_STYLE) as Int
-
-    /** 全屏与小窗去掉了标题栏样式,见类注释。WS_CAPTION 是两个位的组合,要两位都在。 */
-    private fun hasCaption(): Boolean = style() and WS_CAPTION == WS_CAPTION
-
-    private fun hasThickFrame(): Boolean = style() and WS_THICKFRAME != 0
-
-    /** 标题栏收进客户区之前,系统在顶端留给缩放的厚度,按窗口当前所在显示器的 DPI 取。 */
-    private fun resizeBorder(): Int {
+    private fun refreshWindowMetrics() {
+        cachedStyle = Win32.getWindowLong.invokeWithArguments(frame, GWL_STYLE) as Int
         val dpi = Win32.getDpiForWindow.invokeWithArguments(frame) as Int
-        return (Win32.getSystemMetricsForDpi.invokeWithArguments(SM_CYSIZEFRAME, dpi) as Int) +
+        cachedResizeBorder = (Win32.getSystemMetricsForDpi.invokeWithArguments(SM_CYSIZEFRAME, dpi) as Int) +
             (Win32.getSystemMetricsForDpi.invokeWithArguments(SM_CXPADDEDBORDER, dpi) as Int)
     }
+
+    /** 全屏与小窗去掉了标题栏样式,见类注释。WS_CAPTION 是两个位的组合,要两位都在。 */
+    private fun hasCaption(): Boolean = cachedStyle and WS_CAPTION == WS_CAPTION
+
+    private fun hasThickFrame(): Boolean = cachedStyle and WS_THICKFRAME != 0
 
     private fun toClient(hwnd: MemorySegment, screenX: Int, screenY: Int) {
         point.set(JAVA_INT, 0, screenX)
@@ -414,6 +429,7 @@ internal class WindowsCaption(private val window: ComposeWindow) {
         const val GW_CHILD = 5
 
         const val WM_SIZE = 0x0005
+        const val WM_STYLECHANGED = 0x007D
         const val WM_NCDESTROY = 0x0082
         const val WM_NCCALCSIZE = 0x0083
         const val WM_NCHITTEST = 0x0084
@@ -424,6 +440,7 @@ internal class WindowsCaption(private val window: ComposeWindow) {
         const val WM_NCLBUTTONDBLCLK = 0x00A3
         const val WM_SYSCOMMAND = 0x0112
         const val WM_NCMOUSELEAVE = 0x02A2
+        const val WM_DPICHANGED = 0x02E0
 
         const val SIZE_RESTORED = 0L
         const val SIZE_MAXIMIZED = 2L
