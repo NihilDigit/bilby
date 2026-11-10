@@ -133,6 +133,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
                 .takeIf { it in HOLD_SPEED_OPTIONS } ?: DEFAULT_HOLD_SPEED,
             swipeSeek = p[KEY_SWIPE_SEEK] ?: true,
             swipeBrightnessVolume = p[KEY_SWIPE_BRIGHTNESS_VOLUME] ?: true,
+            pbpOutroCompletion = p[KEY_PBP_OUTRO_COMPLETION] ?: true,
         )
     }
 
@@ -171,6 +172,11 @@ class SettingsStore(private val store: DataStore<Preferences>) {
 
     suspend fun saveSwipeBrightnessVolume(enabled: Boolean) {
         store.edit { p -> p[KEY_SWIPE_BRIGHTNESS_VOLUME] = enabled }
+    }
+
+    /** 见 [PlayerPrefs.pbpOutroCompletion]。 */
+    suspend fun savePbpOutroCompletion(enabled: Boolean) {
+        store.edit { p -> p[KEY_PBP_OUTRO_COMPLETION] = enabled }
     }
 
     /**
@@ -496,6 +502,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_LEGACY_HOLD_SPEED = floatPreferencesKey("player_default_hold_speed")
         private val KEY_SWIPE_SEEK = booleanPreferencesKey("player_swipe_seek")
         private val KEY_SWIPE_BRIGHTNESS_VOLUME = booleanPreferencesKey("player_swipe_brightness_volume")
+        private val KEY_PBP_OUTRO_COMPLETION = booleanPreferencesKey("player_pbp_outro_completion")
 
         const val DEFAULT_HOLD_SPEED = 2.5f
         val HOLD_SPEED_OPTIONS = listOf(1.5f, 2f, 2.5f, 3f)
@@ -646,6 +653,11 @@ data class PlayerPrefs(
     val defaultHoldSpeed: Float = SettingsStore.DEFAULT_HOLD_SPEED,
     val swipeSeek: Boolean = true,
     val swipeBrightnessVolume: Boolean = true,
+    /**
+     * 按热度曲线识别低留存片尾(如演职员表)并提前记为已看完。关闭后完全不请求 `bvc.bilivideo.com/pbp/data`,
+     * 完播阈值恒取固定容差(见 [dev.bilby.player.finishedThresholdMillis])。
+     */
+    val pbpOutroCompletion: Boolean = true,
 ) {
     fun defaultAudioOn(metered: Boolean): Int = if (metered) defaultAudioMetered else defaultAudioWifi
 

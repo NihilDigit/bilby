@@ -241,6 +241,22 @@ class ProgressSessionTest {
         assertTrue(sent.isEmpty())
     }
 
+    @Test
+    fun `热度曲线推高完播阈值后在片尾退出也报完播`() {
+        val session = session()
+        // 比如 260 秒的 ERB 在 234 秒进入 Casting,阈值推高到 26 秒。
+        session.completedThresholdMillis = 26_000L
+
+        session.onPosition(230_000, 260_000)
+        assertEquals(listOf(230L to false), sent)
+
+        sent.clear()
+        // 播到 236 秒(已进 Casting)离开页面或切走,flush/close 报的就是完播(played_time=-1)。
+        session.onPosition(236_000, 260_000)
+        assertEquals(listOf(236L to true), sent)
+        assertEquals(true, session.reported?.completed)
+    }
+
     private companion object {
         const val DURATION = 600_000L
     }

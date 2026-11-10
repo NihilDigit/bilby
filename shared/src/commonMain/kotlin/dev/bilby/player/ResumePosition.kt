@@ -1,6 +1,7 @@
 package dev.bilby.player
 
 import dev.bilby.data.LastPlayed
+import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -31,13 +32,82 @@ fun finishedThresholdMillis(durationMillis: Long): Long =
     min(FINISHED_THRESHOLD_CAP_MILLIS, durationMillis * FINISHED_THRESHOLD_PERCENT / 100)
 
 /**
+ * 结合高能进度条(`bvc.bilivideo.com/pbp/data`,见 `notes/playurl.md` §9)识别"几乎没人看"的
+ * 片尾(如 ERB 的 Casting、演职员表、片尾曲),返回这条视频的完播豁免阈值。
+ *
+ * 拿不到有效曲线或末尾没有断崖时,原样退回 [finishedThresholdMillis]。
+ *
+ * 三条实测约束(`notes/playurl.md` §9.1):
+ * - **过滤越界幽灵桶**:`values[0]` 恒为 0,且大量视频在 `i * stepSeconds >= duration` 之后
+ *   还拖着一长串接近 0 的越界桶,必须只取 `1 <= i` 且桶起点 `< durationMillis` 的有效区间。
+ * - **百分位 + 中位数双门限(Seed-and-Grow)**:纯百分位($P_{10}$)会把长公开课末尾的自然留存
+ *   衰减误判成片尾;真正的片尾谷底还会跌破全片中位数 $P_{50}$ 的 35%。先用严门限
+ *   `min(P10, 0.35 * P50)` 确认末尾存在冷清谷底,再用宽门限 `min(P15, 0.50 * P50)` 向前回溯
+ *   到断崖起点。
+ * - **跳过末桶"完结撒花"反弹**:最后一个有效桶常因"完结撒花"弹幕出现孤立尖峰,若最末一桶高于
+ *   严门限但倒数第二桶已在严门限之下,允许跳过最末这一个桶。
+ */
+fun pbpFinishedThresholdMillis(
+    durationMillis: Long,
+    stepSeconds: Int,
+    values: List<Double>,
+): Long {
+    val base = finishedThresholdMillis(durationMillis)
+    if (durationMillis <= 0 || stepSeconds <= 0 || values.isEmpty()) return base
+    val stepMillis = stepSeconds * 1_000L
+    val lastValidIndex = min(values.lastIndex.toLong(), (durationMillis - 1) / stepMillis).toInt()
+    if (lastValidIndex < MIN_PBP_VALID_BUCKETS) return base
+
+    val sorted = values.subList(1, lastValidIndex + 1).sorted()
+    val p50 = sorted[sorted.size / 2]
+    if (p50 <= 0.0) return base
+    val p10 = sorted[sorted.size * 10 / 100]
+    val p15 = sorted[sorted.size * 15 / 100]
+    val seedThreshold = min(p10, p50 * SEED_MEDIAN_RATIO)
+    val growThreshold = min(p15, p50 * GROW_MEDIAN_RATIO)
+    val earliestStartMillis = earliestOutroStartMillis(durationMillis)
+
+    var k = lastValidIndex
+    if (k >= 2 && values[k] > seedThreshold && values[k - 1] <= seedThreshold) {
+        k--
+    }
+    if (k < 1 || k * stepMillis < earliestStartMillis || values[k] > seedThreshold) {
+        return base
+    }
+    var outroStartMillis = k * stepMillis
+    while (k >= 1 && k * stepMillis >= earliestStartMillis && values[k] <= growThreshold) {
+        outroStartMillis = k * stepMillis
+        k--
+    }
+    return max(base, durationMillis - outroStartMillis)
+}
+
+/**
+ * [positionMillis] 是否落在了可能由热度曲线豁免的片尾窗口里。
+ *
+ * 起播时只有服务端记的位置落在这个窗口内(已经过完正片前 80% 且距结尾不超过 90 秒,同时还没进
+ * 基础的 10 秒/5% 阈值),才值得去问一次热度曲线;停在正片中途的视频一概不挡起播。
+ */
+fun isInPbpOutroWindow(positionMillis: Long, durationMillis: Long): Boolean =
+    durationMillis > 0 &&
+        positionMillis >= earliestOutroStartMillis(durationMillis) &&
+        !isWatchedToEnd(positionMillis, durationMillis)
+
+private fun earliestOutroStartMillis(durationMillis: Long): Long =
+    max(durationMillis * OUTRO_EARLIEST_PERCENT / 100, durationMillis - OUTRO_MAX_DURATION_MILLIS)
+
+/**
  * [positionMillis] 这个位置算不算已经看完。
  *
  * 时长未知(两个来源都缺)时一律不算 —— 没有分母就没有"还剩多少"这个问题,那时宁可续播:
  * 从头开始是可感知的损失,而多播一段片尾不是。
  */
-fun isWatchedToEnd(positionMillis: Long, durationMillis: Long): Boolean =
-    durationMillis > 0 && positionMillis >= durationMillis - finishedThresholdMillis(durationMillis)
+fun isWatchedToEnd(
+    positionMillis: Long,
+    durationMillis: Long,
+    thresholdMillis: Long = finishedThresholdMillis(durationMillis),
+): Boolean =
+    durationMillis > 0 && positionMillis >= durationMillis - thresholdMillis
 
 /**
  * 起播位置。看完了就从 0 开始,否则就是记下的那个位置。
@@ -46,8 +116,12 @@ fun isWatchedToEnd(positionMillis: Long, durationMillis: Long): Boolean =
  * 又从头播:前者说的是它被看过,后者说的是这次从哪儿开始。把两者绑在一起会逼出一个"看完之后
  * 要不要清掉记录"的问题,而那个问题没有答案。
  */
-fun resumePositionMillis(positionMillis: Long, durationMillis: Long): Long =
-    if (positionMillis <= 0 || isWatchedToEnd(positionMillis, durationMillis)) 0 else positionMillis
+fun resumePositionMillis(
+    positionMillis: Long,
+    durationMillis: Long,
+    thresholdMillis: Long = finishedThresholdMillis(durationMillis),
+): Long =
+    if (positionMillis <= 0 || isWatchedToEnd(positionMillis, durationMillis, thresholdMillis)) 0 else positionMillis
 
 /**
  * 本地那份进度和服务端那份冲突时听谁的。
@@ -108,6 +182,11 @@ fun cloudProgressWrittenElsewhere(server: LastPlayed?, ours: ReportedProgress?):
     return server.positionMillis
 }
 
-/** 见 [finishedThresholdMillis]。 */
+/** 见 [finishedThresholdMillis] 与 [pbpFinishedThresholdMillis]。 */
 private const val FINISHED_THRESHOLD_CAP_MILLIS = 10_000L
 private const val FINISHED_THRESHOLD_PERCENT = 5L
+private const val MIN_PBP_VALID_BUCKETS = 10
+private const val SEED_MEDIAN_RATIO = 0.35
+private const val GROW_MEDIAN_RATIO = 0.50
+private const val OUTRO_EARLIEST_PERCENT = 80L
+private const val OUTRO_MAX_DURATION_MILLIS = 90_000L

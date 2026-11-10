@@ -122,3 +122,42 @@ data class DurlDto(
     val url: String = "",
     @SerialName("backup_url") val backupUrl: List<String>? = null,
 )
+
+/**
+ * `GET https://bvc.bilivideo.com/pbp/data` 的响应体(notes/playurl.md §9)。
+ *
+ * **没有 `{code, message, data}` 信封**:带 `r=loader` 时实际数据包裹在
+ * `modules[0].params.data` 下(PiliPlus `pages/video/controller.dart:1324`),
+ * 同时兼容顶层直出 `step_sec` + `events` 的结构。
+ */
+@Serializable
+data class PbpResponseDto(
+    val modules: List<PbpModuleDto>? = null,
+    @SerialName("step_sec") val stepSec: Int = 0,
+    val events: PbpEventsDto? = null,
+) {
+    val effectiveData: PbpDataDto?
+        get() = modules?.firstOrNull()?.params?.data
+            ?: stepSec.takeIf { it > 0 }?.let { PbpDataDto(it, events) }
+}
+
+@Serializable
+data class PbpModuleDto(
+    val params: PbpParamsDto? = null,
+)
+
+@Serializable
+data class PbpParamsDto(
+    val data: PbpDataDto? = null,
+)
+
+@Serializable
+data class PbpDataDto(
+    @SerialName("step_sec") val stepSec: Int = 0,
+    val events: PbpEventsDto? = null,
+)
+
+@Serializable
+data class PbpEventsDto(
+    val default: List<Double>? = null,
+)

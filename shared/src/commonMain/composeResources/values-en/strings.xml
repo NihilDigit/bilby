@@ -570,6 +570,8 @@
     <string name="playback_error_live_ended">The stream has ended</string>
     <string name="settings_auto_next">Play the next item automatically</string>
     <string name="settings_auto_next_subtitle">When one item finishes, the next in the queue plays. Turn this off and playback stops at the end; switching by hand is unaffected</string>
+    <string name="settings_pbp_outro_completion">Mark outro as finished by heat</string>
+    <string name="settings_pbp_outro_completion_subtitle">Treat the video as watched upon reaching a low-retention outro</string>
 
     <!-- Live -->
     <string name="live_offline">This streamer is offline</string>

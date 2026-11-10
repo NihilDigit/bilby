@@ -1093,6 +1093,7 @@ class AudioPlaybackService : MediaSessionService() {
             preferredQuality = quality,
             preferredCodecs = prefs.codec.codecIds,
             preferredAudioQuality = audio,
+            pbpOutroCompletion = prefs.pbpOutroCompletion,
         )
         val playUrl = when (result) {
             is BiliResult.Ok -> result.value
@@ -1165,7 +1166,8 @@ class AudioPlaybackService : MediaSessionService() {
             base = local.serverProgressBaseMillis,
             serverMillis = serverMillis,
         )
-        return resumePositionMillis(merged, playUrl.durationMillis.takeIf { it > 0 } ?: local.durationSeconds * 1000)
+        val durationMillis = playUrl.durationMillis.takeIf { it > 0 } ?: local.durationSeconds * 1000
+        return resumePositionMillis(merged, durationMillis, playUrl.finishedThresholdMillis)
     }
 
     /**
@@ -1398,12 +1400,36 @@ class AudioPlaybackService : MediaSessionService() {
             BiliLog.w("建不了进度会话 bvid=$bvid cid=$cid")
             return
         }
-        progressSession = ProgressSession(aid, cid) { playedTimeSeconds, finished, onConfirmed ->
+        val session = ProgressSession(aid, cid) { playedTimeSeconds, finished, onConfirmed ->
             // 缓存条目的进度与 base 由上报方随结果一起记(成功推两者,没发出去只记本地),
             // 见 [HeartbeatReporter.report]。这里只把确认送回会话。
             heartbeatReporter.report(aid, cid, bvid, playedTimeSeconds, finished) {
                 // 回到会话所在的线程再动它的状态:这个回调跑在心跳自己的 IO scope 上。
                 withContext(Dispatchers.Main.immediate) { onConfirmed() }
+            }
+        }
+        progressSession = session
+        val currentPlayInfo = playInfo ?: return
+        val durationMillis = currentPlayInfo.durationMillis
+        if (durationMillis <= 0) return
+        val baseThreshold = finishedThresholdMillis(durationMillis)
+        if (currentPlayInfo.finishedThresholdMillis > baseThreshold) {
+            session.completedThresholdMillis = currentPlayInfo.finishedThresholdMillis
+            return
+        }
+        // 起播之后异步查一次热度曲线:若识别出片尾(如 ERB 的 Casting),把会话的完播阈值推高到
+        // 片尾起点,用户在片尾退出时直接报 `played_time=-1`。关闭设置时完全不出网。
+        scope.launch {
+            if (!settings.playerPrefs.first().pbpOutroCompletion) return@launch
+            val threshold = videoRepository.resolveFinishedThresholdMillis(bvid, cid, durationMillis)
+            if (progressSession !== session || loadedMediaId != bvid || loadedCid != cid) return@launch
+            if (threshold > baseThreshold) {
+                session.completedThresholdMillis = threshold
+                playInfo?.let { info ->
+                    if (info.finishedThresholdMillis != threshold) {
+                        playInfo = info.copy(finishedThresholdMillis = threshold)
+                    }
+                }
             }
         }
     }

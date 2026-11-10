@@ -53,6 +53,8 @@ data class SettingsUiState(
     val swipeBrightnessVolume: Boolean = true,
     /** 播完一条要不要接着放队列里的下一条。见 [dev.bilby.data.PlaybackPrefs.autoNext]。 */
     val autoNext: Boolean = true,
+    /** 见 [dev.bilby.data.PlayerPrefs.pbpOutroCompletion]。 */
+    val pbpOutroCompletion: Boolean = true,
     /** 排除的 UP 主,名字已经带上。为空时那一行不显示 —— 没排除过的人不需要看见这个概念。 */
     val excludedFeedUps: List<ExcludedUp> = emptyList(),
     /** 直播间要不要去 danmakus.com 补本场早前的醒目留言。见 SettingsStore.danmakusArchiveEnabled。 */
@@ -181,6 +183,7 @@ class SettingsViewModel(
                         defaultHoldSpeed = prefs.defaultHoldSpeed,
                         swipeSeek = prefs.swipeSeek,
                         swipeBrightnessVolume = prefs.swipeBrightnessVolume,
+                        pbpOutroCompletion = prefs.pbpOutroCompletion,
                     )
                 }
             }
@@ -312,6 +315,11 @@ class SettingsViewModel(
     fun setSwipeBrightnessVolume(value: Boolean) {
         _state.update { it.copy(swipeBrightnessVolume = value) }
         persist { settings.saveSwipeBrightnessVolume(value) }
+    }
+
+    fun setPbpOutroCompletion(value: Boolean) {
+        _state.update { it.copy(pbpOutroCompletion = value) }
+        persist { settings.savePbpOutroCompletion(value) }
     }
 
     fun setThemeMode(mode: ThemeMode) {

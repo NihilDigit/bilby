@@ -668,7 +668,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             ?: sessionQuality.takeIf { it != 0 }
             ?: prefs.defaultQualityOn(metered)
         val audio = sessionAudio.takeIf { it != 0 } ?: prefs.defaultAudioOn(metered)
-        val info = when (val result = app.videoRepository.getPlayUrl(bvid, cid, quality, prefs.codec.codecIds, audio)) {
+        val info = when (val result = app.videoRepository.getPlayUrl(bvid, cid, quality, prefs.codec.codecIds, audio, prefs.pbpOutroCompletion)) {
             is BiliResult.Ok -> result.value
             is BiliResult.ApiError -> {
                 fail("取流失败 bvid=$bvid code=${result.code} ${result.message}", getString(Res.string.playback_error_stream, result.message))
@@ -917,9 +917,32 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         if (cid == 0L) return
         val aid = BvidCodec.toAid(bvid)
         if (aid <= 0) return
-        val reporter = container().heartbeatReporter
-        progressSession = ProgressSession(aid, cid) { playedTimeSeconds, finished, onConfirmed ->
+        val app = container()
+        val reporter = app.heartbeatReporter
+        val session = ProgressSession(aid, cid) { playedTimeSeconds, finished, onConfirmed ->
             reporter.report(aid, cid, bvid, playedTimeSeconds, finished) { scope.launch { onConfirmed() } }
+        }
+        progressSession = session
+        val currentPlayInfo = playInfo ?: return
+        val durationMillis = currentPlayInfo.durationMillis
+        if (durationMillis <= 0) return
+        val baseThreshold = finishedThresholdMillis(durationMillis)
+        if (currentPlayInfo.finishedThresholdMillis > baseThreshold) {
+            session.completedThresholdMillis = currentPlayInfo.finishedThresholdMillis
+            return
+        }
+        scope.launch {
+            if (!app.settings.playerPrefs.first().pbpOutroCompletion) return@launch
+            val threshold = app.videoRepository.resolveFinishedThresholdMillis(bvid, cid, durationMillis)
+            if (progressSession !== session || loadedMediaId != bvid || loadedCid != cid) return@launch
+            if (threshold > baseThreshold) {
+                session.completedThresholdMillis = threshold
+                playInfo?.let { info ->
+                    if (info.finishedThresholdMillis != threshold) {
+                        playInfo = info.copy(finishedThresholdMillis = threshold)
+                    }
+                }
+            }
         }
     }
 

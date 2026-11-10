@@ -69,6 +69,13 @@ class ProgressSession(
     var reported: ReportedProgress? = null
         private set
 
+    /**
+     * 距结尾多少毫秒算播完。默认是 1 秒精度容差([COMPLETED_TOLERANCE_MILLIS]);当热度曲线识别出
+     * 这条视频有"几乎没人看"的片尾(见 [pbpFinishedThresholdMillis])时,服务层把它推高到片尾长度,
+     * 于是用户播进片尾后退出也会直接向服务端报 `played_time=-1`(已看完)。
+     */
+    var completedThresholdMillis: Long = COMPLETED_TOLERANCE_MILLIS
+
     private var closed = false
 
     /**
@@ -168,7 +175,7 @@ class ProgressSession(
         val seconds = positionMillis.coerceAtLeast(0) / 1000
         if (seconds == 0L) return
         reportedSeconds = seconds
-        val completed = finished || isPlayedToEnd(positionMillis, durationMillis)
+        val completed = finished || isPlayedToEnd(positionMillis, durationMillis, completedThresholdMillis)
         // **发出去的和确认落地的分开记。** 两者都要,因为它们各自挡住一种误判:确认还没回来
         // 的那个窗口是真实存在的(离开播放页的 flush 紧接着就可能重开页面),只认确认过的会把
         // 自己刚写上去的值当成别处写的;反过来只认发出去的,一次失败的上报会让我们以为服务端
@@ -203,6 +210,10 @@ class ProgressSession(
 }
 
 /** 这个位置算不算把这一条播完了,见 [ProgressSession.COMPLETED_TOLERANCE_MILLIS]。 */
-fun isPlayedToEnd(positionMillis: Long, durationMillis: Long): Boolean =
+fun isPlayedToEnd(
+    positionMillis: Long,
+    durationMillis: Long,
+    toleranceMillis: Long = ProgressSession.COMPLETED_TOLERANCE_MILLIS,
+): Boolean =
     durationMillis > 0 &&
-        positionMillis >= durationMillis - ProgressSession.COMPLETED_TOLERANCE_MILLIS
+        positionMillis >= durationMillis - toleranceMillis

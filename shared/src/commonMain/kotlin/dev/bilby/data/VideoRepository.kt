@@ -1,27 +1,35 @@
 package dev.bilby.data
 
 import dev.bilby.BiliLog
+import dev.bilby.BvidCodec
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
 import dev.bilby.api.DmImgParams
 import dev.bilby.api.dto.MemberCardResponseDto
+import dev.bilby.api.dto.PbpDataDto
+import dev.bilby.api.dto.PbpResponseDto
 import dev.bilby.api.dto.PlayUrlDto
 import dev.bilby.api.dto.UgcSeasonDto
 import dev.bilby.api.dto.VideoDetailDto
 import dev.bilby.api.dto.VideoTagDto
+import dev.bilby.api.getCdnJson
 import dev.bilby.api.getData
 import dev.bilby.api.map
 import dev.bilby.api.toHttpsUrl
 import dev.bilby.player.AUDIO_QUALITY_BEST
 import dev.bilby.player.DEFAULT_PREFERRED_CODECS
 import dev.bilby.player.SelectedStreams
+import dev.bilby.player.finishedThresholdMillis
+import dev.bilby.player.isInPbpOutroWindow
+import dev.bilby.player.pbpFinishedThresholdMillis
 import dev.bilby.player.resumePositionMillis
 import dev.bilby.player.selectStreams
 import dev.bilby.player.videoQualityLabel
 import dev.bilby.data.model.RichSpan
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** 播放页要显示的一切。分 P 与合集分集都摊平成列表,cid 已经取好,播放器那边不用再挖嵌套。 */
 data class VideoDetail(
@@ -116,6 +124,11 @@ data class PlayInfo(
     /** 画质菜单的数据源,来自 accept_quality,不一定每档都真有流。 */
     val availableQualities: List<QualityOption>,
     val durationMillis: Long,
+    /**
+     * 这条视频剩下多少毫秒就算看完了。默认是 [finishedThresholdMillis];当热度曲线识别出
+     * "几乎没人看"的片尾(见 [pbpFinishedThresholdMillis])时扩到片尾起点。
+     */
+    val finishedThresholdMillis: Long = finishedThresholdMillis(durationMillis),
 )
 
 data class QualityOption(val quality: Int, val label: String)
@@ -141,12 +154,15 @@ data class QualityOption(val quality: Int, val label: String)
  */
 fun PlayInfo.resumeAtMillisFor(cid: Long): Long {
     if (lastPlayCid != 0L && lastPlayCid != cid) return 0
-    return resumePositionMillis(lastPlayTimeMillis, durationMillis)
+    return resumePositionMillis(lastPlayTimeMillis, durationMillis, finishedThresholdMillis)
 }
 
 class VideoRepository(private val client: BiliClient) {
 
     private val detailCache = ExpiringLruCache<String, VideoDetail>(DETAIL_CACHE_SIZE, DETAIL_TTL_NANOS)
+
+    /** 热度曲线只和 cid 有关,整场播放都不会变。 */
+    private val pbpCache = ExpiringLruCache<Long, PbpDataDto>(PBP_CACHE_SIZE, PBP_TTL_NANOS)
 
     /** 正在飞的详情请求,按 bvid 归并。见 [getVideoDetail]。 */
     private val detailInFlight = ConcurrentHashMap<String, CompletableDeferred<VideoDetail?>>()
@@ -228,6 +244,7 @@ class VideoRepository(private val client: BiliClient) {
         preferredQuality: Int,
         preferredCodecs: List<Int> = DEFAULT_PREFERRED_CODECS,
         preferredAudioQuality: Int = AUDIO_QUALITY_BEST,
+        pbpOutroCompletion: Boolean = false,
     ): BiliResult<PlayInfo> {
         val result =
             client.getData<PlayUrlDto>(
@@ -247,7 +264,7 @@ class VideoRepository(private val client: BiliClient) {
                         "playurl qn=$preferredQuality 下发了空视频流(quality=${dto.quality}),退回 " +
                             "qn=$STANDARD_QUALITY 重取 bvid=$bvid cid=$cid",
                     )
-                    return getPlayUrl(bvid, cid, STANDARD_QUALITY, preferredCodecs, preferredAudioQuality)
+                    return getPlayUrl(bvid, cid, STANDARD_QUALITY, preferredCodecs, preferredAudioQuality, pbpOutroCompletion)
                 }
                 val streams = dto.dash
                     ?.let { selectStreams(it, preferredQuality, preferredCodecs, preferredAudioQuality) }
@@ -264,21 +281,37 @@ class VideoRepository(private val client: BiliClient) {
                     )
                     BiliResult.Failure(IllegalStateException("playurl 没有可用的流(dash 与 durl 都为空)"))
                 } else {
+                    // **last_play_time 本来就是毫秒,不要再乘 1000。** PiliPlus 是
+                    // `Duration(milliseconds: data.lastPlayTime)`(lib/pages/video/
+                    // controller.dart:843)。乘过一次之后每个位置都远超片长,于是被
+                    // resumeAtMillisFor 的"看完即归零"那道闸吞掉,表现是心跳照常回传、
+                    // 每次进来却都从头开始 —— 一个单位错误伪装成了一个逻辑问题。
+                    //
+                    // 服务端在"没进度"和"已看完"时都可能给 <=0(notes §3),统一归零,
+                    // 免得 seek 到负数。
+                    val lastPlayTimeMillis = dto.lastPlayTime.coerceAtLeast(0)
+                    val durationMillis = dto.dash?.duration?.times(1000L) ?: dto.timeLength
+                    // 只有开关开启且上次恰好停在片尾窗口内(比如网页端看进 ERB 的 Casting 后关掉)时,
+                    // 才在起播前顺手查一次热度曲线;常规续播或从头看都不挡起播。
+                    val thresholdMillis =
+                        if (pbpOutroCompletion &&
+                            (dto.lastPlayCid == 0L || dto.lastPlayCid == cid) &&
+                            isInPbpOutroWindow(lastPlayTimeMillis, durationMillis)
+                        ) {
+                            withTimeoutOrNull(PBP_STARTUP_TIMEOUT_MILLIS) {
+                                resolveFinishedThresholdMillis(bvid, cid, durationMillis)
+                            } ?: finishedThresholdMillis(durationMillis)
+                        } else {
+                            finishedThresholdMillis(durationMillis)
+                        }
                     BiliResult.Ok(
                         PlayInfo(
                             streams = streams,
-                            // **last_play_time 本来就是毫秒,不要再乘 1000。** PiliPlus 是
-                            // `Duration(milliseconds: data.lastPlayTime)`(lib/pages/video/
-                            // controller.dart:843)。乘过一次之后每个位置都远超片长,于是被
-                            // resumeAtMillisFor 的"看完即归零"那道闸吞掉,表现是心跳照常回传、
-                            // 每次进来却都从头开始 —— 一个单位错误伪装成了一个逻辑问题。
-                            //
-                            // 服务端在"没进度"和"已看完"时都可能给 <=0(notes §3),统一归零,
-                            // 免得 seek 到负数。
-                            lastPlayTimeMillis = dto.lastPlayTime.coerceAtLeast(0),
+                            lastPlayTimeMillis = lastPlayTimeMillis,
                             lastPlayCid = dto.lastPlayCid,
                             availableQualities = dto.qualityOptions(),
-                            durationMillis = dto.dash?.duration?.times(1000L) ?: dto.timeLength,
+                            durationMillis = durationMillis,
+                            finishedThresholdMillis = thresholdMillis,
                         )
                     )
                 }
@@ -286,6 +319,41 @@ class VideoRepository(private val client: BiliClient) {
             is BiliResult.ApiError -> result
             is BiliResult.Failure -> result
         }
+    }
+
+    /**
+     * 拉取高能进度条(`bvc.bilivideo.com/pbp/data`,见 `notes/playurl.md` §9)并算出该分 P
+     * 的完播豁免阈值。接口无数据或请求失败时退回 [finishedThresholdMillis]。
+     */
+    suspend fun resolveFinishedThresholdMillis(
+        bvid: String,
+        cid: Long,
+        durationMillis: Long,
+    ): Long {
+        val base = finishedThresholdMillis(durationMillis)
+        if (cid <= 0L || durationMillis <= 0L) return base
+        val cached = pbpCache.get(cid)
+        if (cached != null) {
+            return pbpFinishedThresholdMillis(durationMillis, cached.stepSec, cached.events?.default.orEmpty())
+        }
+        val aid = BvidCodec.toAid(bvid)
+        if (aid <= 0L) return base
+        val result = client.getCdnJson<PbpResponseDto>(
+            url = PBP_URL,
+            params = mapOf(
+                "aid" to aid.toString(),
+                "bvid" to bvid,
+                "cid" to cid.toString(),
+                "r" to "loader",
+            ),
+            referer = "${BiliConstants.REFERER}/video/$bvid",
+        )
+        val data = when (result) {
+            is BiliResult.Ok -> result.value.effectiveData ?: PbpDataDto()
+            else -> return base
+        }
+        pbpCache.put(cid, data)
+        return pbpFinishedThresholdMillis(durationMillis, data.stepSec, data.events?.default.orEmpty())
     }
 
     /**
@@ -418,6 +486,7 @@ class VideoRepository(private val client: BiliClient) {
         const val CARD_URL = "${BiliConstants.WEB_HOST}/x/web-interface/card"
         const val TAG_URL = "${BiliConstants.WEB_HOST}/x/web-interface/view/detail/tag"
         const val PLAY_URL = "${BiliConstants.WEB_HOST}/x/player/wbi/playurl"
+        const val PBP_URL = "https://bvc.bilivideo.com/pbp/data"
 
         /** 1080P。PiliPlus 起播请求的档位,空视频流时退回这里(notes/playurl.md 3.5)。 */
         const val STANDARD_QUALITY = 80
@@ -431,6 +500,12 @@ class VideoRepository(private val client: BiliClient) {
 
         /** 30 秒。理由见 [getVideoDetail]:它要盖住的是"同时问两遍"那个窗口,不是省流量。 */
         val DETAIL_TTL_NANOS = 30L * 1_000_000_000L
+
+        const val PBP_CACHE_SIZE = 32
+        val PBP_TTL_NANOS = 10L * 60L * 1_000_000_000L
+
+        /** 起播命中片尾窗口时顺手查 pbp 的最大等待时间,超时退回基础阈值,绝不卡住起播。 */
+        const val PBP_STARTUP_TIMEOUT_MILLIS = 800L
     }
 }
 

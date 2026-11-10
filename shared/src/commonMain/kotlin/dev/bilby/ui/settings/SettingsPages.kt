@@ -213,6 +213,7 @@ fun PlaybackSettingsPage(
     onMeteredQualityChange: (Int) -> Unit,
     onCodecChange: (CodecPreference) -> Unit,
     onAutoNextChange: (Boolean) -> Unit,
+    onPbpOutroCompletionChange: (Boolean) -> Unit = {},
     onWifiAudioChange: (Int) -> Unit,
     onMeteredAudioChange: (Int) -> Unit,
     onPickUpdatesDefaultChange: (Boolean) -> Unit,
@@ -252,6 +253,16 @@ fun PlaybackSettingsPage(
                     subtitle = stringResource(Res.string.settings_auto_next_subtitle),
                     checked = state.autoNext,
                     onCheckedChange = onAutoNextChange,
+                )
+            }
+            row { position ->
+                ToggleSettingRow(
+                    position = position,
+                    icon = Icons.Outlined.Flag,
+                    title = stringResource(Res.string.settings_pbp_outro_completion),
+                    subtitle = stringResource(Res.string.settings_pbp_outro_completion_subtitle),
+                    checked = state.pbpOutroCompletion,
+                    onCheckedChange = onPbpOutroCompletionChange,
                 )
             }
         }

@@ -106,6 +106,23 @@ class BiliClient(
     }.execute { block(it) }
 
     /**
+     * CDN 侧的 JSON 读接口(如 `bvc.bilivideo.com/pbp/data`,见 `notes/playurl.md` §9)。
+     *
+     * 和 [streamGet] 同属 `*.bilivideo.com` 域:**不带 Cookie、不带账号 header、不签名**,
+     * 只带桌面 UA 与站内 Referer/Origin。
+     */
+    suspend fun cdnGet(
+        url: String,
+        params: Map<String, String> = emptyMap(),
+        referer: String? = null,
+    ): HttpResponse = http.get(url) {
+        header(HttpHeaders.UserAgent, BiliConstants.USER_AGENT)
+        header(HttpHeaders.Referrer, referer ?: BiliConstants.REFERER)
+        referer?.let { header(HttpHeaders.Origin, it.originOf()) }
+        params.forEach { (k, v) -> parameter(k, v) }
+    }
+
+    /**
      * app 端路线 + 参数走 query。TV 扫码登录的三个接口用它。
      *
      * 关键是**不能用网页端 header**:参数里带的是 TV/HD 的 appkey,UA 却是桌面 Chrome 的话,
@@ -413,6 +430,17 @@ suspend inline fun <reified T> BiliClient.getAppData(
                 BiliResult.ApiError(envelope.code, envelope.message)
             }
         },
+        onFailure = { transportFailure("GET ${url.pathOnly()}", it) },
+    )
+
+/** 无 `{code, message, data}` 信封的 CDN JSON 接口(见 [BiliClient.cdnGet])。 */
+suspend inline fun <reified T> BiliClient.getCdnJson(
+    url: String,
+    params: Map<String, String> = emptyMap(),
+    referer: String? = null,
+): BiliResult<T> = runCatching { cdnGet(url, params, referer).body<T>() }
+    .fold(
+        onSuccess = { BiliResult.Ok(it) },
         onFailure = { transportFailure("GET ${url.pathOnly()}", it) },
     )
 

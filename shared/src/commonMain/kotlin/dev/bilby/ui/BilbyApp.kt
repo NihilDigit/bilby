@@ -1537,6 +1537,7 @@ private fun SettingsPageRoute(
             onMeteredQualityChange = { vm.setDefaultQuality(it, metered = true) },
             onCodecChange = vm::setCodec,
             onAutoNextChange = vm::setAutoNext,
+            onPbpOutroCompletionChange = vm::setPbpOutroCompletion,
             onWifiAudioChange = { vm.setDefaultAudio(it, metered = false) },
             onMeteredAudioChange = { vm.setDefaultAudio(it, metered = true) },
             onPickUpdatesDefaultChange = vm::setPlayerPickUpdatesDefault,
