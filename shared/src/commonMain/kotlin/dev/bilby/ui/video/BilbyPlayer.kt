@@ -38,7 +38,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -245,7 +244,13 @@ fun BilbyPlayer(
         speedController = speedController,
         showSpeedOverlay = showSpeedOverlay,
         gestures = gestures,
-        topBarActions = topBarActions,
+        topBarActions = {
+            topBarActions()
+            PlayerSettingsButton {
+                settingsOnly = null
+                settingsOpen = true
+            }
+        },
         embeddedTopActions = embeddedTopActions,
         pip = pip,
         wheelAdjustsVolume = isFullscreen || twoPane,
@@ -367,7 +372,6 @@ fun BilbyPlayer(
                 currentAudio = currentAudio,
                 isFullscreen = isFullscreen,
                 largePlayer = isFullscreen || twoPane,
-                hasDanmakuSettings = danmakuEditor != null,
                 danmakuField = controlBarDanmaku,
                 danmakuFocusNonce = danmakuFocusNonce,
                 // 写弹幕时控制条不自动收起,同设置面板开着时。
@@ -390,6 +394,7 @@ fun BilbyPlayer(
             )
         },
         panel = {
+            if (settingsOpen) setMenuOpen(true)
             val close = {
                 settingsOpen = false
                 setMenuOpen(false)
@@ -452,8 +457,6 @@ private fun PlayerControlBar(
     isFullscreen: Boolean,
     /** 全屏,或双栏里那块占满整列高度的内嵌画面。只有这时才考虑宽排法。 */
     largePlayer: Boolean,
-    /** 有没有弹幕设置可调。没有时宽排法不画那枚弹幕设置键。 */
-    hasDanmakuSettings: Boolean,
     danmakuField: ControlBarDanmaku?,
     danmakuFocusNonce: Int = 0,
     onDanmakuFieldFocusChange: (Boolean) -> Unit,
@@ -556,35 +559,17 @@ private fun PlayerControlBar(
         } else {
             // **两行负间距叠着放。** 两者都是 48dp 的触摸区,画出来的东西却只有十几 dp 高,两块
             // 空 padding 摞在一起读起来像两组不相干的控件。叠 [ControlRowOverlap] 之后看着是一组,
-            // 两边的触摸区都还在 36dp 以上。进度条画在上层,叠掉的那一截归它。
+            // 两边的触摸区都还在 36dp 以上。按钮行在后,叠掉的那一截归按钮,避免点设置/全屏偏上时误触进度条。
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(-ControlRowOverlap),
             ) {
-                seekBar(Modifier.fillMaxWidth().zIndex(1f))
+                seekBar(Modifier.fillMaxWidth())
                 // 弹幕输入框在读数与 chip 之间,同网页端。这一行放不下它和整排 chip 时,它收成一枚
                 // 「发弹幕」键,点开之后 chip 让位、输入框铺开,同窄屏胶囊写弹幕时视图切换退场。
                 val showField = danmakuField != null && (roomy || composing)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (composing && danmakuField != null && !wide) {
-                        // 不够宽时写弹幕:输入框顶掉读数铺整行,同上面窄排法。
-                        ControlBarDanmakuField(
-                            draft = danmakuField.draft,
-                            onDraftChange = danmakuField.onDraftChange,
-                            maxLength = danmakuField.maxLength,
-                            sending = danmakuField.sending,
-                            error = danmakuField.error,
-                            onSend = danmakuField.onSend,
-                            onFocusChange = { focused ->
-                                onDanmakuFieldFocusChange(focused)
-                                danmakuField.onComposingChange(focused)
-                                if (!focused) composing = false
-                            },
-                            autoFocus = true,
-                            focusRequestNonce = danmakuFocusNonce,
-                            modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
-                        )
-                    } else {
+                    if (!composing || roomy) {
                         Row(
                             verticalAlignment = Alignment.Bottom,
                             modifier = Modifier.padding(start = Spacing.Tight, end = Spacing.Tight),
@@ -593,38 +578,48 @@ private fun PlayerControlBar(
                             TimeLabel(duration, large = true, secondary = true, prefix = " / ")
                         }
                         PlayerVolumeControl()
-                        if (showField) {
-                            ControlBarDanmakuField(
-                                draft = danmakuField.draft,
-                                onDraftChange = danmakuField.onDraftChange,
-                                maxLength = danmakuField.maxLength,
-                                sending = danmakuField.sending,
-                                error = danmakuField.error,
-                                onSend = danmakuField.onSend,
-                                onFocusChange = { focused ->
-                                    onDanmakuFieldFocusChange(focused)
-                                    danmakuField.onComposingChange(focused)
-                                    if (!focused) composing = false
-                                },
-                                autoFocus = !roomy,
-                                focusRequestNonce = danmakuFocusNonce,
-                                modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
-                            )
-                        } else {
-                            Spacer(Modifier.weight(1f))
-                        }
                     }
-                    if (wide && (roomy || !composing)) {
-                        SettingChips(
-                            speed = speed,
-                            // 只有一档时没什么可换,chip 不画(面板里那一段同样不画)。
-                            qualityLabel = qualities.takeIf { it.size > 1 }
-                                ?.firstOrNull { it.quality == currentQuality }?.label,
-                            audioLabel = currentAudio.takeIf { audioOptions.size > 1 }?.let { audioQualityLabel(it) },
-                            subtitleLabel = subtitleTracks.firstOrNull { it.lan == currentSubtitleLan }?.displayName,
-                            hasSubtitles = subtitleTracks.isNotEmpty(),
-                            onOpenSection = onOpenSettings,
-                        )
+                    // 中间段(弹幕输入框 + 档位 chip)装进 weight(1f) 容器,保证右侧的弹幕开关、
+                    // 设置按钮、全屏按钮由外层 Row 优先测量,任何字号/屏幕宽度下都不会被挤出屏幕。
+                    BoxWithConstraints(modifier = Modifier.weight(1f)) {
+                        val showChips = wide && !composing && maxWidth >= if (showField) 420.dp else 240.dp
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            if (showField) {
+                                ControlBarDanmakuField(
+                                    draft = danmakuField.draft,
+                                    onDraftChange = danmakuField.onDraftChange,
+                                    maxLength = danmakuField.maxLength,
+                                    sending = danmakuField.sending,
+                                    error = danmakuField.error,
+                                    onSend = danmakuField.onSend,
+                                    onFocusChange = { focused ->
+                                        composing = focused
+                                        onDanmakuFieldFocusChange(focused)
+                                        danmakuField.onComposingChange(focused)
+                                    },
+                                    autoFocus = !roomy,
+                                    focusRequestNonce = danmakuFocusNonce,
+                                    modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
+                                )
+                            } else {
+                                Spacer(Modifier.weight(1f))
+                            }
+                            if (showChips) {
+                                SettingChips(
+                                    speed = speed,
+                                    // 只有一档时没什么可换,chip 不画(面板里那一段同样不画)。
+                                    qualityLabel = qualities.takeIf { it.size > 1 }
+                                        ?.firstOrNull { it.quality == currentQuality }?.label,
+                                    audioLabel = currentAudio.takeIf { audioOptions.size > 1 }?.let { audioQualityLabel(it) },
+                                    subtitleLabel = subtitleTracks.firstOrNull { it.lan == currentSubtitleLan }?.displayName,
+                                    hasSubtitles = subtitleTracks.isNotEmpty(),
+                                    onOpenSection = onOpenSettings,
+                                )
+                            }
+                        }
                     }
                     if (danmakuField != null && !showField) {
                         val label = stringResource(Res.string.danmaku_send)
@@ -633,11 +628,7 @@ private fun PlayerControlBar(
                         }
                     }
                     DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-                    if (wide) {
-                        if (hasDanmakuSettings) DanmakuSettingsButton { onOpenSettings(PlayerSettingsSection.Danmaku) }
-                    } else {
-                        PlayerSettingsButton { onOpenSettings(null) }
-                    }
+                    PlayerSettingsButton { onOpenSettings(null) }
                     FullscreenButton(isFullscreen, onFullscreenToggle)
                 }
             }

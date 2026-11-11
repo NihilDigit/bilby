@@ -14,6 +14,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -26,6 +27,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,10 +40,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import dev.bilby.resources.Res
+import dev.bilby.resources.action_close
 import dev.bilby.resources.action_send
 import dev.bilby.resources.danmaku_input_hint
 import dev.bilby.stringResource
 import dev.bilby.ui.components.LoadingSpinner
+import dev.bilby.ui.components.ReleaseFocusWhenKeyboardHides
 import dev.bilby.ui.components.trackEditableFocus
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -91,15 +95,41 @@ internal fun ControlBarDanmakuField(
     val hint = stringResource(Res.string.danmaku_input_hint)
     val canSend = draft.isNotBlank() && !sending
     val focusRequester = remember { FocusRequester() }
-    if (autoFocus) LaunchedEffect(Unit) { focusRequester.requestFocus() }
-    LaunchedEffect(focusRequestNonce) {
-        if (focusRequestNonce > 0) runCatching { focusRequester.requestFocus() }
-    }
+    val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    var hadDraft by remember { mutableStateOf(false) }
-    LaunchedEffect(draft) {
-        if (draft.isEmpty() && hadDraft) focusManager.clearFocus()
-        hadDraft = draft.isNotEmpty()
+    var focused by remember { mutableStateOf(false) }
+    var wasFocused by remember { mutableStateOf(false) }
+    var sendPending by remember { mutableStateOf(false) }
+
+    if (autoFocus) {
+        LaunchedEffect(Unit) {
+            focusRequester.requestFocus()
+            keyboard?.show()
+        }
+    }
+    LaunchedEffect(focusRequestNonce) {
+        if (focusRequestNonce > 0) {
+            runCatching { focusRequester.requestFocus() }
+            keyboard?.show()
+        }
+    }
+    ReleaseFocusWhenKeyboardHides(focused)
+
+    val submit: () -> Unit = {
+        if (canSend) {
+            sendPending = true
+            onSend()
+        }
+    }
+    LaunchedEffect(sendPending, sending, draft, error) {
+        if (!sendPending) return@LaunchedEffect
+        if (!sending && draft.isEmpty()) {
+            sendPending = false
+            keyboard?.hide()
+            focusManager.clearFocus()
+        } else if (!sending && error != null) {
+            sendPending = false
+        }
     }
 
     // 外层撑到触摸下限,画出来的胶囊与旁边的 chip 同高。
@@ -129,12 +159,22 @@ internal fun ControlBarDanmakuField(
                     textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
+                    keyboardActions = KeyboardActions(onSend = { submit() }),
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
                         .trackEditableFocus()
-                        .onFocusChanged { onFocusChange(it.isFocused) }
+                        // 刚进组合的那一帧焦点还没到,初始 false 不能当成"放掉焦点",否则点「发弹幕」
+                        // 展开的那一帧就会立刻把 composing 重置回 false。
+                        .onFocusChanged { state ->
+                            focused = state.isFocused
+                            if (state.isFocused) {
+                                wasFocused = true
+                                onFocusChange(true)
+                            } else if (wasFocused) {
+                                onFocusChange(false)
+                            }
+                        }
                         .semantics { contentDescription = hint },
                 )
             }
@@ -148,15 +188,32 @@ internal fun ControlBarDanmakuField(
                     )
                 }
             }
-            IconButton(onClick = onSend, enabled = canSend, modifier = Modifier.size(ControlChipHeight)) {
-                if (sending) {
-                    LoadingSpinner()
-                } else {
+            if (autoFocus && draft.isEmpty() && !sending) {
+                IconButton(
+                    onClick = {
+                        keyboard?.hide()
+                        focusManager.clearFocus()
+                        onFocusChange(false)
+                    },
+                    modifier = Modifier.size(ControlChipHeight),
+                ) {
                     Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = stringResource(Res.string.action_send),
+                        Icons.Filled.Close,
+                        contentDescription = stringResource(Res.string.action_close),
                         modifier = Modifier.size(Dimens.IconInline),
                     )
+                }
+            } else {
+                IconButton(onClick = submit, enabled = canSend, modifier = Modifier.size(ControlChipHeight)) {
+                    if (sending) {
+                        LoadingSpinner()
+                    } else {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = stringResource(Res.string.action_send),
+                            modifier = Modifier.size(Dimens.IconInline),
+                        )
+                    }
                 }
             }
         }

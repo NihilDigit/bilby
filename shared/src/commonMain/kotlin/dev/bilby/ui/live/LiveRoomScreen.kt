@@ -134,7 +134,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import dev.bilby.ui.player.PlayerTooltip
 import dev.bilby.ui.video.LiveSettingsContent
 import dev.bilby.ui.video.PlayerSettingsButton
-import dev.bilby.ui.video.DanmakuSettingsButton
 import dev.bilby.ui.player.ControlBarDanmaku
 import dev.bilby.ui.player.ControlBarDanmakuField
 import dev.bilby.ui.video.PlayerSettingsHost
@@ -337,6 +336,10 @@ fun LiveRoomScreen(
                                 )
                             }
                         }
+                        PlayerSettingsButton {
+                            settingsOnly = null
+                            settingsOpen = true
+                        }
                     },
                     embeddedTopActions = {
                         OnlineRankLabel(state.onlineRank)
@@ -435,6 +438,7 @@ fun LiveRoomScreen(
                     },
                     // 外壳与内容的排法同播放页,见 PlayerSettingsHost。
                     panel = {
+                        if (settingsOpen) setMenuOpen(true)
                         val close = {
                             settingsOpen = false
                             setMenuOpen(false)
@@ -754,8 +758,8 @@ private fun LiveControlBar(
                     error = danmakuField.error,
                     onSend = danmakuField.onSend,
                     onFocusChange = { focused ->
+                        composing = focused
                         onDanmakuFieldFocusChange(focused)
-                        if (!focused) composing = false
                     },
                     autoFocus = !roomy,
                     focusRequestNonce = danmakuFocusNonce,
@@ -788,13 +792,8 @@ private fun LiveControlBar(
                 }
             }
             if (roomy || !composing) LiveAudioOnlyButton(onlyAudio, onOnlyAudioChange, isFullscreen)
-            if (wide) {
-                DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-                DanmakuSettingsButton { onOpenSettings(PlayerSettingsSection.Danmaku) }
-            } else {
-                if (isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-                PlayerSettingsButton { onOpenSettings(null) }
-            }
+            if (wide || isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+            PlayerSettingsButton { onOpenSettings(null) }
             FullscreenButton(isFullscreen, onFullscreenToggle)
         }
     }

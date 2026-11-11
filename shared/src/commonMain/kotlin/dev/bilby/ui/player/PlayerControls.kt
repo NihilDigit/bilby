@@ -39,6 +39,8 @@ import dev.bilby.formatDurationMillis
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -103,7 +105,9 @@ internal fun Modifier.playerControlBar(isFullscreen: Boolean): Modifier =
                 listOf(Color.Transparent, FixedColors.PlayerControlScrim, ControlScrimBottom),
             ),
         )
-        .windowInsetsPadding(WindowInsets.barsAndCutout)
+        .windowInsetsPadding(
+            if (isFullscreen) WindowInsets.barsAndCutout.union(WindowInsets.ime) else WindowInsets.barsAndCutout,
+        )
         .padding(
             start = if (isFullscreen) Spacing.Comfortable else Spacing.Tight,
             end = if (isFullscreen) Spacing.Comfortable else Spacing.Tight,

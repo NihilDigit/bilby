@@ -68,6 +68,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -381,6 +382,7 @@ fun PlayerShell(
     // 手势的反馈只有画面正中那个浮层,而横屏时手指往往正压在它上面。触感补的是"这一下认了"
     // 这件事:长按真的进了加速、锁真的合上了、拖到取消区了。
     val haptics = LocalHapticFeedback.current
+    val focusManager = LocalFocusManager.current
     val playback = LocalPlaybackHost.current
     val brightness = rememberWindowBrightness()
     val volume = rememberMediaVolume()
@@ -779,6 +781,11 @@ fun PlayerShell(
                     }
                     detectTapGestures(
                         onTap = {
+                            if (menuOpen) {
+                                focusManager.clearFocus()
+                                keepAwake()
+                                return@detectTapGestures
+                            }
                             if (pointerSource.isTouchLike) {
                                 controlsVisible = !controlsVisible
                             } else {
