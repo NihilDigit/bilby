@@ -25,7 +25,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -36,7 +38,9 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import dev.bilby.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
 import dev.bilby.ui.theme.Dimens
@@ -86,6 +90,17 @@ fun SearchField(
     releaseFocusWithKeyboard: Boolean = true,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
+    val effectiveFocusRequester = focusRequester ?: remember { FocusRequester() }
+    var textFieldValue by remember {
+        mutableStateOf(TextFieldValue(text = value, selection = TextRange(value.length)))
+    }
+    var previousValueProp by remember { mutableStateOf(value) }
+    if (value != previousValueProp) {
+        previousValueProp = value
+        if (value != textFieldValue.text) {
+            textFieldValue = TextFieldValue(text = value, selection = TextRange(value.length))
+        }
+    }
     // 焦点态。**必须是同一个 interactionSource 既交给 BasicTextField 又在这里读**:
     // 光标在框里而容器没反应,是这个组件没有描边、没有 label 之后唯一缺的那点反馈。
     val interactionSource = remember { MutableInteractionSource() }
@@ -131,8 +146,12 @@ fun SearchField(
                 )
             }
             BasicTextField(
-                value = value,
-                onValueChange = onValueChange,
+                value = textFieldValue,
+                onValueChange = { next ->
+                    val changed = next.text != textFieldValue.text
+                    textFieldValue = next
+                    if (changed) onValueChange(next.text)
+                },
                 singleLine = true,
                 textStyle = LocalTextStyle.current.merge(
                     MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
@@ -155,11 +174,18 @@ fun SearchField(
                     .semantics { contentDescription = placeholder }
                     .trackEditableFocus()
                     .onFocusChanged { onFocusChange(it.isFocused) }
-                    .let { if (focusRequester != null) it.focusRequester(focusRequester) else it },
+                    .focusRequester(effectiveFocusRequester),
             )
         }
         if (value.isNotEmpty()) {
-            IconButton(onClick = { onValueChange("") }) {
+            IconButton(
+                onClick = {
+                    textFieldValue = TextFieldValue("")
+                    onValueChange("")
+                    effectiveFocusRequester.requestFocus()
+                    keyboard?.show()
+                },
+            ) {
                 Icon(
                     imageVector = Icons.Filled.Close,
                     contentDescription = stringResource(Res.string.action_clear),

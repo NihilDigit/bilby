@@ -55,6 +55,7 @@
 
     <string name="search_empty">Search videos, creators and articles</string>
     <string name="search_history_title">Recent searches</string>
+    <string name="search_history_manage">Manage search history</string>
     <string name="search_history_remove">Remove this search</string>
     <string name="search_agent_empty">Describe what you want to watch</string>
     <string name="search_no_results">No results</string>
@@ -103,6 +104,7 @@
     <string name="search_user_order_level_asc">Lowest level</string>
     <string name="search_open_uid">Open profile of UID %1$s</string>
     <string name="search_suggestions">Suggestions</string>
+    <string name="search_suggestion_fill">Fill %1$s</string>
     <string name="search_tab_video">Videos</string>
     <string name="search_tab_user">Creators</string>
     <string name="search_tab_article">Articles</string>
