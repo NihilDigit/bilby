@@ -6,6 +6,7 @@ import dev.bilby.BvidCodec
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
 import dev.bilby.data.OpenedQueue
+import dev.bilby.data.PlayEndMode
 import dev.bilby.data.PlayInfo
 import dev.bilby.data.QueueContext
 import dev.bilby.data.QueueFeed
@@ -60,6 +61,14 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
 
     private val sleepTimer = SleepTimer(scope) { setPlayWhenReady(false) }
     override val sleepTimerState: StateFlow<SleepTimerState> get() = sleepTimer.state
+
+    override val hasSoftwareVolume: Boolean = true
+    private val _softwareVolume = MutableStateFlow(1f)
+    override val softwareVolume: StateFlow<Float> = _softwareVolume.asStateFlow()
+    private val _softwareMuted = MutableStateFlow(false)
+    override val softwareMuted: StateFlow<Boolean> = _softwareMuted.asStateFlow()
+    private var audioTouched = false
+    private var audioSaveJob: Job? = null
 
     /** 第一次有页面连上来时才建:mpv 的初始化要加载原生库,没打开过播放页就不必付这个代价。 */
     private var player: DesktopPlayer? = null
@@ -124,6 +133,36 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     private var cloudResumeMillis: Long? = null
     private var cloudResumeCid: Long = 0
 
+    private var prefsInitialized = false
+    private var endMode: PlayEndMode = PlayEndMode.Continue
+    private var defaultShuffled: Boolean = false
+    private var frameShuffleTouched: Boolean = false
+
+    private fun ensurePrefsLoaded() {
+        if (prefsInitialized) return
+        prefsInitialized = true
+        scope.launch {
+            var firstLoad = true
+            container().settings.playbackPrefs.collect { prefs ->
+                endMode = prefs.endMode
+                defaultShuffled = prefs.shuffled
+                if (firstLoad && liveFrame != null && !frameShuffleTouched) {
+                    queue.shuffled = prefs.shuffled
+                }
+                firstLoad = false
+                publishState()
+            }
+        }
+        scope.launch {
+            val audio = container().settings.desktopAudioPrefs.first()
+            if (!audioTouched) {
+                _softwareVolume.value = audio.volume.coerceIn(0f, 1f)
+                _softwareMuted.value = audio.muted
+                applyAudioToPlayer()
+            }
+        }
+    }
+
     /**
      * 桌面还不放本地副本:从缓存列表进来的视频也走在线,所以本地那一支恒为空。网络状态桌面
      * 一律当作通着(见 DesktopPlatform.network),两个探测都用默认值。
@@ -169,10 +208,50 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
      * 上限取 100,不用 mpv 允许的放大区间,放大会削波。
      */
     var volume: Float
-        get() = ((player?.mpv?.getPropertyDouble("volume") ?: 100.0) / 100.0).toFloat().coerceIn(0f, 1f)
-        set(value) {
-            player?.mpv?.setPropertyDouble("volume", value.coerceIn(0f, 1f) * 100.0)
+        get() = if (_softwareMuted.value) 0f else _softwareVolume.value
+        set(value) = setSoftwareVolume(value)
+
+    override fun setSoftwareVolume(volume: Float) {
+        ensurePrefsLoaded()
+        audioTouched = true
+        val clamped = volume.coerceIn(0f, 1f)
+        _softwareVolume.value = clamped
+        if (clamped > 0f && _softwareMuted.value) {
+            _softwareMuted.value = false
         }
+        applyAudioToPlayer()
+        schedulePersistAudio()
+    }
+
+    override fun setSoftwareMuted(muted: Boolean) {
+        ensurePrefsLoaded()
+        audioTouched = true
+        if (_softwareMuted.value == muted) return
+        _softwareMuted.value = muted
+        if (!muted && _softwareVolume.value <= 0f) {
+            _softwareVolume.value = DEFAULT_UNMUTE_VOLUME
+        }
+        applyAudioToPlayer()
+        schedulePersistAudio()
+    }
+
+    private fun applyAudioToPlayer() {
+        val mpv = player?.mpv ?: return
+        mpv.setPropertyDouble("volume", _softwareVolume.value * 100.0)
+        mpv.setPropertyString("mute", if (_softwareMuted.value) "yes" else "no")
+    }
+
+    private fun schedulePersistAudio() {
+        audioSaveJob?.cancel()
+        val vol = _softwareVolume.value
+        val muted = _softwareMuted.value
+        audioSaveJob = scope.launch {
+            delay(AUDIO_SAVE_DEBOUNCE_MILLIS)
+            container().persistScope.launch {
+                container().settings.saveDesktopAudio(vol, muted)
+            }
+        }
+    }
 
     // 桌面窗口最小化不暂停,没有"后台"这回事,这两个开关无事可做。
     override fun setBackgroundPlaybackAllowed(allowed: Boolean) = Unit
@@ -222,9 +301,11 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     }
 
     override fun connect(onConnected: (PlayerHandle) -> Unit): PlayerConnection {
+        ensurePrefsLoaded()
         val handle = handle ?: run {
             val created = DesktopPlayer(scope.coroutineContext)
             player = created
+            applyAudioToPlayer()
             watchEnded(created)
             MpvPlayerHandle(created, this, scope).also { handle = it }
         }
@@ -236,6 +317,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     }
 
     internal fun handle(command: PlaybackCommand) {
+        ensurePrefsLoaded()
         when (command) {
             is PlaybackCommand.ActivateFrame -> activateFrame(command)
             is PlaybackCommand.PlayPart -> if (liveRoom == null) playPart(command.cid, command.positionMillis ?: 0)
@@ -248,6 +330,9 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             is PlaybackCommand.AdjustSleepTimer -> sleepTimer.extend(command.deltaMinutes * 60_000L)
             PlaybackCommand.RetryQueue -> liveFrame?.let { frame -> queue.current?.let { enrichFrame(frame, it.bvid) } }
             is PlaybackCommand.ExtendQueue -> extendQueue(command.before)
+            PlaybackCommand.ToggleShuffle -> toggleShuffle()
+            PlaybackCommand.CycleEndMode -> setEndMode(endMode.next())
+            is PlaybackCommand.SetEndMode -> setEndMode(command.mode)
         }
     }
 
@@ -256,9 +341,15 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     internal val playWhenReady: Boolean
         get() = pendingPlayWhenReady ?: player?.mediamp?.state?.value?.playWhenReady ?: false
 
-    internal fun play() = setPlayWhenReady(true)
+    fun play() {
+        if (endHandled && liveRoom == null) {
+            player?.mediamp?.seekTo(0)
+            onSeeked(0)
+        }
+        setPlayWhenReady(true)
+    }
 
-    internal fun pause() = setPlayWhenReady(false)
+    fun pause() = setPlayWhenReady(false)
 
     /** 放或停。取流途中落在 [pendingPlayWhenReady] 上。 */
     private fun setPlayWhenReady(value: Boolean) {
@@ -272,8 +363,10 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     internal var shuffled: Boolean
         get() = queue.shuffled
         set(value) {
+            frameShuffleTouched = true
             if (queue.shuffled == value) return
             queue.shuffled = value
+            defaultShuffled = value
             // 开关本身归队列,这里只把它记成下次新建队列的初值。
             container().persistScope.launch {
                 val settings = container().settings
@@ -281,6 +374,30 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             }
             publishState()
         }
+
+    private fun toggleShuffle() {
+        frameShuffleTouched = true
+        val nextShuffled = !queue.shuffled
+        queue.shuffled = nextShuffled
+        defaultShuffled = nextShuffled
+        val promotedMode = if (nextShuffled && endMode != PlayEndMode.Continue) PlayEndMode.Continue else endMode
+        endMode = promotedMode
+        container().persistScope.launch {
+            val settings = container().settings
+            settings.savePlaybackPrefs(settings.playbackPrefs.first().copy(endMode = promotedMode, shuffled = nextShuffled))
+        }
+        publishState()
+    }
+
+    private fun setEndMode(mode: PlayEndMode) {
+        if (endMode == mode) return
+        endMode = mode
+        container().persistScope.launch {
+            val settings = container().settings
+            settings.savePlaybackPrefs(settings.playbackPrefs.first().copy(endMode = mode))
+        }
+        publishState()
+    }
 
     /** 跳到队列里的第 [index] 条。已经是它就只在这一条里跳,同 Media3 的 `seekTo(index, position)`。 */
     internal fun seekToQueueIndex(index: Int, positionMillis: Long) {
@@ -292,7 +409,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     }
 
     /** 下一条先在分 P 之间走,见 Android 的 QueuePlayer.handleSeek。 */
-    internal fun seekToNext() {
+    fun seekToNext() {
         if (liveRoom != null) return
         neighbourPart(1)?.let {
             playPart(it)
@@ -305,7 +422,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
      * 上一条沿用 Media3 `seekToPrevious` 的语义:播过 [MAX_SEEK_TO_PREVIOUS_MILLIS] 先回本 P
      * 开头,否则先走上一 P,再走队列里的上一条,都没有也回开头。
      */
-    internal fun seekToPrevious() {
+    fun seekToPrevious() {
         if (liveRoom != null) return
         val position = player?.positionMillis ?: 0L
         if (position <= MAX_SEEK_TO_PREVIOUS_MILLIS) {
@@ -401,6 +518,8 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
 
     /** 新的一帧:先装一份只有这条的临时队列并立刻起播,来源由 [enrichFrame] 在后台补上。 */
     private fun openFrame(frame: Frame, bvid: String, requestedCid: Long) {
+        frameShuffleTouched = false
+        queue.shuffled = defaultShuffled
         val temporary = QueueItem(bvid = bvid, title = "", upName = "", coverUrl = "", durationSeconds = 0)
         val kept = replaceQueue(listOf(temporary), 0, requestedCid, startMillis = null, playWhenReady = true)
         liveFrame = frame
@@ -454,7 +573,6 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             frame.label = opened.label
             frame.source = opened.source
             frame.feed = opened.feed
-            queue.shuffled = container().settings.playbackPrefs.first().shuffled
             publishState()
             extendNearEdges()
         }
@@ -840,31 +958,38 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     }
 
     /**
-     * 播到了这一条的末尾。次序与 Android 相同:自动连播开着、没有"播完这条"的定时、没有下一 P
-     * 时走到队列里的下一条;有下一 P 先放下一 P;其余停下。
+     * 播到了这一条的末尾。次序与 Android 相同:没有"播完这条"的定时时,单条循环回本 P 开头再放,
+     * 连播则先走下一 P、再走队列里的下一条;其余停下。
      *
-     * Android 把前一种交给播放器自己换条,后几种由 `pauseAtEndOfMediaItems` 拦下来再到这里;
+     * Android 把连播换条交给播放器自己做,后几种由 `pauseAtEndOfMediaItems` 拦下来再到这里;
      * 桌面没有播放器可交,几种都在这里分。
      */
-    private suspend fun onReachedEnd() {
+    private fun onReachedEnd() {
         if (endHandled) return
         endHandled = true
-        val autoNext = container().settings.playbackPrefs.first().autoNext
-        // 读设置是挂起的,这期间用户可能已经按了下一条或拖回去(两者都清掉 endHandled)。
-        // 那之后再往下走就是替他又跳了一条。
-        if (!endHandled) return
         val endOfItem = sleepTimer.state.value.mode == SleepTimerMode.EndOfItem
-        val nextPart = neighbourPart(1)
-        val nextItem = queue.nextIndex()
-        if (autoNext && !endOfItem && nextPart == null && nextItem != null) {
-            moveTo(nextItem, playWhenReady = true, completed = true)
-            return
-        }
-        // 完播上报,但不关会话:这一条还装着,拖回去还能接着看。
-        progressSession?.onCompleted()
-        if (nextPart != null && autoNext && !endOfItem) {
-            playPart(nextPart)
-            return
+        if (!endOfItem) {
+            if (endMode == PlayEndMode.RepeatOne && liveRoom == null) {
+                progressSession?.onCompleted()
+                player?.mediamp?.seekTo(0)
+                onSeeked(0)
+                play()
+                return
+            }
+            val nextPart = neighbourPart(1)
+            val nextItem = queue.nextIndex()
+            if (endMode == PlayEndMode.Continue && nextPart == null && nextItem != null) {
+                moveTo(nextItem, playWhenReady = true, completed = true)
+                return
+            }
+            // 完播上报,但不关会话:这一条还装着,拖回去还能接着看。
+            progressSession?.onCompleted()
+            if (nextPart != null && endMode == PlayEndMode.Continue) {
+                playPart(nextPart)
+                return
+            }
+        } else {
+            progressSession?.onCompleted()
         }
         sleepTimer.onItemFinished()
         publishState()
@@ -996,6 +1121,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
                 sourcePosition = feed?.offsetOfFirst?.takeIf { queue.size > 0 }?.let { it + queue.index + 1 },
                 sourceTotal = feed?.total,
                 shuffled = queue.shuffled,
+                endMode = endMode,
                 canPrevious = canPrevious,
                 canNext = canNext,
                 frameId = frame?.id,
@@ -1019,5 +1145,8 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
 
         /** 上一条先回本 P 开头的界线,Media3 `C.DEFAULT_MAX_SEEK_TO_PREVIOUS_POSITION_MS` 同值。 */
         const val MAX_SEEK_TO_PREVIOUS_MILLIS = 3_000L
+
+        const val DEFAULT_UNMUTE_VOLUME = 0.5f
+        const val AUDIO_SAVE_DEBOUNCE_MILLIS = 120L
     }
 }

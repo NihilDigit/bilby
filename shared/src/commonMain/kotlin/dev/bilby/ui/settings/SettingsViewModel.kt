@@ -10,6 +10,7 @@ import dev.bilby.data.CodecPreference
 import dev.bilby.agent.LlmClient
 import dev.bilby.data.ExcludedUp
 import dev.bilby.data.LlmConfig
+import dev.bilby.data.PlayEndMode
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockPrefs
 import dev.bilby.player.hardwareDecodableCodecIds
@@ -41,6 +42,8 @@ data class SettingsUiState(
     val defaultQualityMetered: Int = SettingsStore.DEFAULT_QUALITY_METERED,
     val defaultAudioWifi: Int = SettingsStore.DEFAULT_AUDIO_QUALITY,
     val defaultAudioMetered: Int = SettingsStore.DEFAULT_AUDIO_QUALITY_METERED,
+    val defaultLiveQualityWifi: Int = SettingsStore.DEFAULT_LIVE_QUALITY,
+    val defaultLiveQualityMetered: Int = SettingsStore.DEFAULT_LIVE_QUALITY_METERED,
     /** 见 [dev.bilby.data.PlayerPrefs.playerPickUpdatesDefault]。 */
     val playerPickUpdatesDefault: Boolean = false,
     val sponsorBlock: SponsorBlockPrefs = SponsorBlockPrefs(),
@@ -51,8 +54,8 @@ data class SettingsUiState(
     val defaultHoldSpeed: Float = SettingsStore.DEFAULT_HOLD_SPEED,
     val swipeSeek: Boolean = true,
     val swipeBrightnessVolume: Boolean = true,
-    /** 播完一条要不要接着放队列里的下一条。见 [dev.bilby.data.PlaybackPrefs.autoNext]。 */
-    val autoNext: Boolean = true,
+    /** 一条内容播完后的行为。见 [dev.bilby.data.PlaybackPrefs.endMode]。 */
+    val endMode: PlayEndMode = PlayEndMode.Continue,
     /** 见 [dev.bilby.data.PlayerPrefs.pbpOutroCompletion]。 */
     val pbpOutroCompletion: Boolean = true,
     /** 排除的 UP 主,名字已经带上。为空时那一行不显示 —— 没排除过的人不需要看见这个概念。 */
@@ -177,6 +180,8 @@ class SettingsViewModel(
                         defaultQualityMetered = prefs.defaultQualityMetered,
                         defaultAudioWifi = prefs.defaultAudioWifi,
                         defaultAudioMetered = prefs.defaultAudioMetered,
+                        defaultLiveQualityWifi = prefs.defaultLiveQualityWifi,
+                        defaultLiveQualityMetered = prefs.defaultLiveQualityMetered,
                         playerPickUpdatesDefault = prefs.playerPickUpdatesDefault,
                         doubleTapSeek = prefs.doubleTapSeek,
                         longPressSpeed = prefs.longPressSpeed,
@@ -192,7 +197,7 @@ class SettingsViewModel(
             settings.sponsorBlockPrefs.collect { prefs -> _state.update { it.copy(sponsorBlock = prefs) } }
         }
         viewModelScope.launch {
-            settings.playbackPrefs.collect { prefs -> _state.update { it.copy(autoNext = prefs.autoNext) } }
+            settings.playbackPrefs.collect { prefs -> _state.update { it.copy(endMode = prefs.endMode) } }
         }
         viewModelScope.launch {
             settings.appearancePrefs.collect { prefs -> _state.update { it.copy(appearance = prefs) } }
@@ -263,6 +268,13 @@ class SettingsViewModel(
         persist { settings.saveDefaultQuality(quality, metered) }
     }
 
+    fun setDefaultLiveQuality(quality: Int, metered: Boolean) {
+        _state.update {
+            if (metered) it.copy(defaultLiveQualityMetered = quality) else it.copy(defaultLiveQualityWifi = quality)
+        }
+        persist { settings.saveDefaultLiveQuality(quality, metered) }
+    }
+
     fun setCodec(value: CodecPreference) {
         _state.update { it.copy(codec = value) }
         persist { settings.saveCodecPreference(value) }
@@ -272,11 +284,11 @@ class SettingsViewModel(
      * 读一次再写回去,不拿界面上那份拼一个新的:[dev.bilby.data.PlaybackPrefs] 里还有随机播放,
      * 而它归播放页管、随时会变。整份覆盖会把用户刚在播放页开的随机播放悄悄关掉。
      */
-    fun setAutoNext(value: Boolean) {
-        _state.update { it.copy(autoNext = value) }
+    fun setEndMode(value: PlayEndMode) {
+        _state.update { it.copy(endMode = value) }
         persist {
             val prefs = settings.playbackPrefs.first()
-            settings.savePlaybackPrefs(prefs.copy(autoNext = value))
+            settings.savePlaybackPrefs(prefs.copy(endMode = value))
         }
     }
 

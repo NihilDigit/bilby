@@ -72,6 +72,7 @@ import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.trackEditableFocus
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
@@ -342,9 +343,9 @@ internal fun <T> ChoiceRow(
                 }
             }
         },
-        // 选中即生效即关闭,所以只留取消。多一个「确定」等于让人按两次才改得掉一项。
+        // 选中即生效即关闭,所以只留关闭。多一个「确定」等于让人按两次才改得掉一项。
         confirmButton = {
-            TextButton(onClick = { open = false }) { Text(stringResource(Res.string.action_cancel)) }
+            TextButton(onClick = { open = false }) { Text(stringResource(Res.string.action_close)) }
         },
     )
 }
@@ -461,12 +462,14 @@ internal fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Ll
                         ({ Text(stringResource(Res.string.settings_url_invalid)) })
                     },
                     singleLine = true,
+                    modifier = Modifier.trackEditableFocus(),
                 )
                 OutlinedTextField(
                     value = apiKey,
                     onValueChange = { apiKey = it },
                     label = { Text(stringResource(Res.string.settings_api_key)) },
                     singleLine = true,
+                    modifier = Modifier.trackEditableFocus(),
                     // 默认遮蔽。给一个显形按钮是因为长串 key 手输时看不见就没法核对,
                     // 但默认态必须是遮住的 —— 设置页经常是当着别人的面打开的。
                     visualTransformation = if (keyVisible) {
@@ -494,6 +497,7 @@ internal fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Ll
                     onValueChange = { model = it },
                     label = { Text(stringResource(Res.string.settings_model)) },
                     singleLine = true,
+                    modifier = Modifier.trackEditableFocus(),
                 )
             }
         },
@@ -555,6 +559,7 @@ internal fun UrlFieldDialog(
                     ({ Text(stringResource(Res.string.settings_url_invalid)) })
                 },
                 singleLine = true,
+                modifier = Modifier.trackEditableFocus(),
             )
         },
         confirmButton = {

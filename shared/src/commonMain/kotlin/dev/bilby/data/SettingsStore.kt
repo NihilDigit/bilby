@@ -52,18 +52,34 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         }
     }
 
-    /** 播放偏好:连播与随机。是用户偏好,不按队列类型猜(DESIGN 2.4b)。 */
+    /** 播放偏好:完播行为与随机。是用户偏好,不按队列类型猜(DESIGN 2.4b)。 */
     val playbackPrefs: Flow<PlaybackPrefs> = store.data.map { p ->
         PlaybackPrefs(
-            autoNext = p[KEY_AUTO_NEXT] ?: true,
+            endMode = PlayEndMode.fromPrefs(p[KEY_END_MODE], p[KEY_AUTO_NEXT]),
             shuffled = p[KEY_SHUFFLED] ?: false,
         )
     }
 
     suspend fun savePlaybackPrefs(value: PlaybackPrefs) {
         store.edit { p ->
+            p[KEY_END_MODE] = value.endMode.key
             p[KEY_AUTO_NEXT] = value.autoNext
             p[KEY_SHUFFLED] = value.shuffled
+        }
+    }
+
+    /** 桌面端 mpv 的软件音量与静音开关。Android 走系统媒体音量,不读这里。 */
+    val desktopAudioPrefs: Flow<DesktopAudioPrefs> = store.data.map { p ->
+        DesktopAudioPrefs(
+            volume = (p[KEY_DESKTOP_VOLUME] ?: 1f).coerceIn(0f, 1f),
+            muted = p[KEY_DESKTOP_MUTED] ?: false,
+        )
+    }
+
+    suspend fun saveDesktopAudio(volume: Float, muted: Boolean) {
+        store.edit { p ->
+            p[KEY_DESKTOP_VOLUME] = volume.coerceIn(0f, 1f)
+            p[KEY_DESKTOP_MUTED] = muted
         }
     }
 
@@ -126,6 +142,8 @@ class SettingsStore(private val store: DataStore<Preferences>) {
             defaultQualityMetered = p[KEY_DEFAULT_QUALITY_METERED] ?: DEFAULT_QUALITY_METERED,
             defaultAudioWifi = p[KEY_DEFAULT_AUDIO] ?: DEFAULT_AUDIO_QUALITY,
             defaultAudioMetered = p[KEY_DEFAULT_AUDIO_METERED] ?: DEFAULT_AUDIO_QUALITY_METERED,
+            defaultLiveQualityWifi = p[KEY_DEFAULT_LIVE_QUALITY] ?: DEFAULT_LIVE_QUALITY,
+            defaultLiveQualityMetered = p[KEY_DEFAULT_LIVE_QUALITY_METERED] ?: DEFAULT_LIVE_QUALITY_METERED,
             playerPickUpdatesDefault = p[KEY_PLAYER_PICK_UPDATES_DEFAULT] ?: false,
             doubleTapSeek = p[KEY_DOUBLE_TAP_SEEK] ?: true,
             longPressSpeed = p[KEY_LONG_PRESS_SPEED] ?: true,
@@ -187,6 +205,13 @@ class SettingsStore(private val store: DataStore<Preferences>) {
     suspend fun saveDefaultQuality(quality: Int, metered: Boolean) {
         store.edit { p ->
             if (metered) p[KEY_DEFAULT_QUALITY_METERED] = quality else p[KEY_DEFAULT_QUALITY] = quality
+        }
+    }
+
+    /** 默认直播画质,按网络计不计费分两档,同 [saveDefaultQuality]。 */
+    suspend fun saveDefaultLiveQuality(quality: Int, metered: Boolean) {
+        store.edit { p ->
+            if (metered) p[KEY_DEFAULT_LIVE_QUALITY_METERED] = quality else p[KEY_DEFAULT_LIVE_QUALITY] = quality
         }
     }
 
@@ -446,7 +471,10 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_ACCESS_KEY = stringPreferencesKey("access_key")
 
         private val KEY_AUTO_NEXT = booleanPreferencesKey("playback_auto_next")
+        private val KEY_END_MODE = stringPreferencesKey("playback_end_mode")
         private val KEY_SHUFFLED = booleanPreferencesKey("playback_shuffled")
+        private val KEY_DESKTOP_VOLUME = floatPreferencesKey("desktop_volume")
+        private val KEY_DESKTOP_MUTED = booleanPreferencesKey("desktop_muted")
 
         private val KEY_LLM_BASE_URL = stringPreferencesKey("llm_base_url")
         private val KEY_LLM_API_KEY = stringPreferencesKey("llm_api_key")
@@ -464,6 +492,8 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_DEFAULT_QUALITY = intPreferencesKey("player_default_quality")
         private val KEY_DEFAULT_AUDIO = intPreferencesKey("player_default_audio")
         private val KEY_DEFAULT_AUDIO_METERED = intPreferencesKey("player_default_audio_metered")
+        private val KEY_DEFAULT_LIVE_QUALITY = intPreferencesKey("player_default_live_quality")
+        private val KEY_DEFAULT_LIVE_QUALITY_METERED = intPreferencesKey("player_default_live_quality_metered")
         private val KEY_PLAYER_PICK_UPDATES_DEFAULT = booleanPreferencesKey("player_pick_updates_default")
         private val KEY_DEFAULT_QUALITY_METERED = intPreferencesKey("player_default_quality_metered")
 
@@ -485,6 +515,12 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         /** 计费网络的默认音质:132K。无损一分钟十几 MB,这一档存在的理由就是省流量。 */
         const val DEFAULT_AUDIO_QUALITY_METERED = 30232
 
+        /** WiFi 的默认直播画质:原画。直播服务端在没有该档时自动退档。 */
+        const val DEFAULT_LIVE_QUALITY = 10000
+
+        /** 计费网络的默认直播画质:超清。 */
+        const val DEFAULT_LIVE_QUALITY_METERED = 250
+
         /**
          * 设置页能选的档。**是一张固定表,不是某条视频的 accept_quality** —— 这里设的是
          * "默认想要哪一档",而每条视频真有哪几档要取流才知道;片源没有时
@@ -494,6 +530,9 @@ class SettingsStore(private val store: DataStore<Preferences>) {
          * 永远退档的值。
          */
         val QUALITY_OPTIONS = listOf(120, 116, 112, 80, 64, 32, 16)
+
+        /** 直播默认画质可选档位:原画、蓝光、超清、高清、流畅。 */
+        val LIVE_QUALITY_OPTIONS = listOf(10000, 400, 250, 150, 80)
 
         private val KEY_DOUBLE_TAP_SEEK = booleanPreferencesKey("player_double_tap_seek")
         private val KEY_LONG_PRESS_SPEED = booleanPreferencesKey("player_long_press_speed")
@@ -595,23 +634,62 @@ data class Credentials(
 }
 
 /**
- * [autoNext] 只管**自动**前进:一条播完了要不要接着放队列里的下一条。手动的下一条(界面按钮、
- * 通知栏、耳机线控双击)不受它影响 —— 那些是用户当场表达的意思,没有理由被一个设置挡住。
+ * 一条内容播完之后的自动行为:
+ * - [Pause]:停在末尾(看视频只想看这一条时用)。
+ * - [Continue]:接着放下一 P 或队列里的下一条;整份有限队列走完即停(DESIGN 2.4b,不从推荐池续接)。
+ * - [RepeatOne]:回到本条(本 P)开头再放一遍(洗脑循环)。
  *
- * 默认开。DESIGN 1.3 原先把"自动连播"整条列进永不实现清单,那一条已经作废(见该处),现在的
+ * 手动的上一条/下一条(界面按钮、通知栏、媒体键)不受它影响 —— 那些是用户当场表达的意思。
+ */
+enum class PlayEndMode(val key: String) {
+    Pause("pause"),
+    Continue("continue"),
+    RepeatOne("repeat_one"),
+    ;
+
+    fun next(): PlayEndMode = when (this) {
+        Pause -> Continue
+        Continue -> RepeatOne
+        RepeatOne -> Pause
+    }
+
+    companion object {
+        fun fromPrefs(modeKey: String?, legacyAutoNext: Boolean? = null): PlayEndMode =
+            entries.firstOrNull { it.key == modeKey }
+                ?: if (legacyAutoNext == false) Pause else Continue
+    }
+}
+
+/**
+ * [endMode] 只管**自动**前进:一条播完了是停下、接着放队列里的下一条,还是单条循环。手动的下一条
+ * (界面按钮、通知栏、耳机线控双击)不受它影响 —— 那些是用户当场表达的意思,没有理由被一个设置挡住。
+ *
+ * 默认连播。DESIGN 1.3 原先把"自动连播"整条列进永不实现清单,那一条已经作废(见该处),现在的
  * 边界只剩 2.4b 那句:**禁止从推荐池续接队列**。队列的内容来自合集、UP 投稿或稍后再看,都是
  * 有限且能穷尽的集合,播完即停 —— 这与"放完一条自动放下一条"是两件事,前者是产品约束,后者
  * 是听感偏好。
  */
-data class PlaybackPrefs(val autoNext: Boolean = true, val shuffled: Boolean = false)
+data class PlaybackPrefs(
+    val endMode: PlayEndMode = PlayEndMode.Continue,
+    val shuffled: Boolean = false,
+) {
+    val autoNext: Boolean get() = endMode == PlayEndMode.Continue
+}
+
+data class DesktopAudioPrefs(
+    val volume: Float = 1f,
+    val muted: Boolean = false,
+)
 
 /** 可拖宽的侧栏。[widthDp] 为 null 是从没拖过,宽度由界面取默认值。 */
-data class SideSheetPrefs(val open: Boolean, val widthDp: Float?)
+data class SideSheetPrefs(val open: Boolean = false, val widthDp: Float? = null)
 
 /** 哪一页的侧栏。[key] 进偏好的键名,改了等于把所有人的设置清掉。 */
 enum class SidePanelId(val key: String) {
     SpaceDynamics("space_dynamics"),
     SearchAgent("search_agent"),
+    VideoTabs("video_tabs"),
+    LiveChat("live_chat"),
 }
 
 /**
@@ -642,6 +720,10 @@ data class PlayerPrefs(
     /** 不计费网络下的默认音质,音质 id 或 [AUDIO_QUALITY_BEST]。 */
     val defaultAudioWifi: Int = SettingsStore.DEFAULT_AUDIO_QUALITY,
     val defaultAudioMetered: Int = SettingsStore.DEFAULT_AUDIO_QUALITY_METERED,
+    /** 不计费网络下的默认直播画质。 */
+    val defaultLiveQualityWifi: Int = SettingsStore.DEFAULT_LIVE_QUALITY,
+    /** 计费网络下的默认直播画质。 */
+    val defaultLiveQualityMetered: Int = SettingsStore.DEFAULT_LIVE_QUALITY_METERED,
     /**
      * 播放页里切画质、音质时,顺带改掉设置里当前网络那一档的默认值。**默认关**:在一条恰好有
      * 1080P+ 的视频上切了一下,不该连带改掉以后所有视频的默认档。PiliPlus 默认是开的,另有
@@ -668,6 +750,9 @@ data class PlayerPrefs(
      */
     fun defaultQualityOn(metered: Boolean): Int =
         if (metered) defaultQualityMetered else defaultQualityWifi
+
+    fun defaultLiveQualityOn(metered: Boolean): Int =
+        if (metered) defaultLiveQualityMetered else defaultLiveQualityWifi
 }
 
 /** 明暗。三档互斥;纯黑是深色之下的另一个开关,不是第四档,见 [AppearancePrefs.pureBlack]。 */

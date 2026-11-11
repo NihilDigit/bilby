@@ -1,7 +1,11 @@
 package dev.bilby.ui.player
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,12 +15,20 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.outlined.PauseCircleOutline
+import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -25,21 +37,24 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import dev.bilby.stringResource
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
-import dev.bilby.resources.*
-import dev.bilby.formatDurationSeconds
+import androidx.compose.ui.unit.dp
+import dev.bilby.data.PlayEndMode
 import dev.bilby.data.VideoPart
+import dev.bilby.formatDurationSeconds
 import dev.bilby.player.QueueItem
+import dev.bilby.resources.*
+import dev.bilby.stringResource
 import dev.bilby.ui.components.ListCover
 import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import org.jetbrains.compose.resources.StringResource
 
 /**
  * 切集能落到的目标。**两种,因为队列和分 P 是两条不同的命令**:跳队列是标准 Player 命令
@@ -281,38 +296,57 @@ fun EpisodeList(
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun QueueRowItem(row: EpisodeRow, playing: Boolean, index: Int, count: Int, onClick: () -> Unit) {
-    SegmentedListItem(
-        selected = row.isCurrent,
-        onClick = onClick,
-        shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
-        colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        modifier = Modifier.padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
-        // 居中,不用默认值:默认在条目高过 88dp 时把首尾元素顶到上沿(lists.md 规格表),两行标题
-        // 加一行时长就过线,播放指示于是跑到右上角,而且只在那一条变成当前项时才露出来。
-        verticalAlignment = Alignment.CenterVertically,
-        leadingContent = {
-            ListCover(
-                url = row.coverUrl,
-                width = QueueCoverWidth,
-                cornerRadius = QueueCoverCorner,
-                durationText = if (row.durationSeconds > 0) formatDurationSeconds(row.durationSeconds) else "",
-            )
-        },
-        trailingContent = if (row.isCurrent) {
-            {
-                PlayingIndicator(
-                    active = playing,
-                    contentDescription = stringResource(
-                        if (playing) Res.string.video_queue_now_playing else Res.string.video_queue_paused,
-                    ),
-                    modifier = Modifier.size(Dimens.IconInline),
+    val itemContent: @Composable () -> Unit = {
+        SegmentedListItem(
+            selected = row.isCurrent,
+            onClick = onClick,
+            shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
+            colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+            modifier = Modifier.padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
+            // 居中,不用默认值:默认在条目高过 88dp 时把首尾元素顶到上沿(lists.md 规格表),两行标题
+            // 加一行时长就过线,播放指示于是跑到右上角,而且只在那一条变成当前项时才露出来。
+            verticalAlignment = Alignment.CenterVertically,
+            leadingContent = {
+                ListCover(
+                    url = row.coverUrl,
+                    width = QueueCoverWidth,
+                    cornerRadius = QueueCoverCorner,
+                    durationText = if (row.durationSeconds > 0) formatDurationSeconds(row.durationSeconds) else "",
                 )
-            }
-        } else {
-            null
-        },
-    ) {
-        Text(text = row.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            },
+            trailingContent = if (row.isCurrent) {
+                {
+                    PlayingIndicator(
+                        active = playing,
+                        contentDescription = stringResource(
+                            if (playing) Res.string.video_queue_now_playing else Res.string.video_queue_paused,
+                        ),
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                }
+            } else {
+                null
+            },
+        ) {
+            Text(text = row.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+    if (row.bvid.startsWith("BV", ignoreCase = true)) {
+        dev.bilby.ui.components.ContextMenuBox(
+            onClick = null,
+            menuLabel = stringResource(Res.string.menu_item_actions),
+            menu = { close ->
+                dev.bilby.ui.components.VideoCommonMenuItems(
+                    bvid = row.bvid,
+                    title = row.title,
+                    close = close,
+                )
+            },
+        ) { _ ->
+            itemContent()
+        }
+    } else {
+        itemContent()
     }
 }
 
@@ -368,3 +402,99 @@ private val QueueCoverWidth = 96.dp
 
 /** 队列条目封面的圆角。列表项自己的圆角在 4dp 到 16dp 之间变,封面取中间一档。 */
 private val QueueCoverCorner = 8.dp
+
+fun PlayEndMode.labelRes(): StringResource = when (this) {
+    PlayEndMode.Pause -> Res.string.queue_end_pause
+    PlayEndMode.Continue -> Res.string.queue_end_continue
+    PlayEndMode.RepeatOne -> Res.string.queue_end_repeat_one
+}
+
+/**
+ * 队列头部的两个播放策略开关,看视频(简介队列、完整队列、全屏切集面板)与听视频共用同一组控件:
+ * - 完播行为:「播完暂停 → 连播 → 洗脑循环」三态一键轮换。
+ * - 队列顺序:「顺序 ↔ 随机」一键切换。
+ *
+ * 文字与图标同步报当前状态,读屏经 `stateDescription` 念当前档名。
+ */
+@Composable
+fun RowScope.QueuePlaybackControls(
+    endMode: PlayEndMode,
+    shuffled: Boolean,
+    onCycleEndMode: () -> Unit,
+    onToggleShuffle: () -> Unit,
+    showShuffle: Boolean = true,
+) {
+    val endLabel = stringResource(endMode.labelRes())
+    TextButton(
+        onClick = onCycleEndMode,
+        contentPadding = PaddingValues(horizontal = Spacing.Tight),
+        modifier = Modifier
+            .defaultMinSize(minWidth = 1.dp)
+            .semantics { stateDescription = endLabel },
+    ) {
+        Icon(
+            imageVector = when (endMode) {
+                PlayEndMode.Pause -> Icons.Outlined.PauseCircleOutline
+                PlayEndMode.Continue -> Icons.Outlined.SkipNext
+                PlayEndMode.RepeatOne -> Icons.Filled.RepeatOne
+            },
+            contentDescription = null,
+            modifier = Modifier.size(Dimens.IconInline),
+        )
+        Text(
+            text = endLabel,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(start = Spacing.Hair),
+        )
+    }
+    if (showShuffle) {
+        val orderLabel = stringResource(
+            if (shuffled) Res.string.queue_order_shuffle else Res.string.queue_order_sequential,
+        )
+        TextButton(
+            onClick = onToggleShuffle,
+            contentPadding = PaddingValues(horizontal = Spacing.Tight),
+            modifier = Modifier
+                .defaultMinSize(minWidth = 1.dp)
+                .semantics { stateDescription = orderLabel },
+        ) {
+            Icon(
+                imageVector = if (shuffled) Icons.Filled.Shuffle else Icons.AutoMirrored.Filled.PlaylistPlay,
+                contentDescription = null,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+            Text(
+                text = orderLabel,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(start = Spacing.Hair),
+            )
+        }
+    }
+}
+
+@Composable
+fun QueuePlaybackControlsRow(
+    endMode: PlayEndMode,
+    shuffled: Boolean,
+    onCycleEndMode: () -> Unit,
+    onToggleShuffle: () -> Unit,
+    modifier: Modifier = Modifier,
+    horizontalArrangement: Arrangement.Horizontal = Arrangement.End,
+    showShuffle: Boolean = true,
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = horizontalArrangement,
+    ) {
+        QueuePlaybackControls(
+            endMode = endMode,
+            shuffled = shuffled,
+            onCycleEndMode = onCycleEndMode,
+            onToggleShuffle = onToggleShuffle,
+            showShuffle = showShuffle,
+        )
+    }
+}

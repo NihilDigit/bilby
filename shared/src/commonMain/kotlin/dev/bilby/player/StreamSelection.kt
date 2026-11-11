@@ -3,9 +3,7 @@ package dev.bilby.player
 import dev.bilby.api.dto.DashDto
 import dev.bilby.api.dto.DashStreamDto
 import dev.bilby.getStringBlocking
-import dev.bilby.resources.Res
-import dev.bilby.resources.video_quality_dolby_vision
-import dev.bilby.resources.video_quality_unknown
+import dev.bilby.resources.*
 
 /**
  * 从 playurl 的 dash 节点里挑出一条视频流和一条音频流。纯函数、不碰 Android、不碰网络,
@@ -239,6 +237,18 @@ fun videoQualityLabel(id: Int): String = when (id) {
     6 -> "240P"
     // 表是抄的,服务端将来加新档这里会认不出来,如实显示 id,不按数字猜一个分辨率名字。
     else -> getStringBlocking(Res.string.video_quality_unknown, id)
+}
+
+/** 直播清晰度档位号 → 档名。取值见 PiliPlus `api.dart` 对 `getRoomPlayInfo` 的注释。 */
+fun liveQualityLabel(qn: Int): String = when (qn) {
+    30000 -> getStringBlocking(Res.string.live_quality_dolby)
+    20000 -> getStringBlocking(Res.string.live_quality_4k)
+    10000 -> getStringBlocking(Res.string.live_quality_original)
+    400 -> getStringBlocking(Res.string.live_quality_blu_ray)
+    250 -> getStringBlocking(Res.string.live_quality_ultra)
+    150 -> getStringBlocking(Res.string.live_quality_high)
+    80 -> getStringBlocking(Res.string.live_quality_smooth)
+    else -> getStringBlocking(Res.string.video_quality_unknown, qn)
 }
 
 /**

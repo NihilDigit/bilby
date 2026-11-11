@@ -170,4 +170,9 @@ private fun PlaybackCommand.toSessionCommand(): Pair<String, Bundle> = when (thi
     is PlaybackCommand.AdjustSleepTimer -> AudioPlaybackService.ACTION_SLEEP_TIMER to Bundle().apply {
         putInt(AudioPlaybackService.EXTRA_SLEEP_DELTA_MINUTES, deltaMinutes)
     }
+    PlaybackCommand.ToggleShuffle -> AudioPlaybackService.ACTION_TOGGLE_SHUFFLE to Bundle.EMPTY
+    PlaybackCommand.CycleEndMode -> AudioPlaybackService.ACTION_CYCLE_END_MODE to Bundle.EMPTY
+    is PlaybackCommand.SetEndMode -> AudioPlaybackService.ACTION_SET_END_MODE to Bundle().apply {
+        putString(AudioPlaybackService.EXTRA_END_MODE, mode.key)
+    }
 }

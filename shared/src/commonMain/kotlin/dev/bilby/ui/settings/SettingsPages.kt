@@ -81,6 +81,7 @@ import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.data.CodecPreference
 import dev.bilby.data.LlmConfig
+import dev.bilby.data.PlayEndMode
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockPrefs
 import dev.bilby.ui.update.UpdateDialog
@@ -89,12 +90,14 @@ import dev.bilby.update.AvailableUpdate
 import dev.bilby.update.UpdateStatus
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
+import dev.bilby.player.liveQualityLabel
 import dev.bilby.player.videoQualityLabel
 import dev.bilby.player.audioQualityLabel
 import dev.bilby.player.DEFAULT_AUDIO_QUALITY_OPTIONS
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.player.formatSpeed
+import dev.bilby.ui.player.labelRes
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.video.CATEGORY_DESCRIPTIONS
@@ -212,10 +215,12 @@ fun PlaybackSettingsPage(
     onWifiQualityChange: (Int) -> Unit,
     onMeteredQualityChange: (Int) -> Unit,
     onCodecChange: (CodecPreference) -> Unit,
-    onAutoNextChange: (Boolean) -> Unit,
+    onEndModeChange: (PlayEndMode) -> Unit,
     onPbpOutroCompletionChange: (Boolean) -> Unit = {},
     onWifiAudioChange: (Int) -> Unit,
     onMeteredAudioChange: (Int) -> Unit,
+    onWifiLiveQualityChange: (Int) -> Unit = {},
+    onMeteredLiveQualityChange: (Int) -> Unit = {},
     onPickUpdatesDefaultChange: (Boolean) -> Unit,
     onSponsorBlockChange: (SponsorBlockPrefs) -> Unit,
     onOpenSponsorCategories: () -> Unit,
@@ -245,14 +250,15 @@ fun PlaybackSettingsPage(
     SettingsSubPage(stringResource(Res.string.settings_section_playback), onBack, state.loaded) {
         SettingsGroup(title = stringResource(Res.string.settings_group_playback)) {
             row { position ->
-                ToggleSettingRow(
+                ChoiceRow(
                     position = position,
                     icon = Icons.Outlined.SkipNext,
-                    title = stringResource(Res.string.settings_auto_next),
-                    // 说明这一行为什么存在:队列不是用户建的,自动前进因此是一个没人点过头的默认。
-                    subtitle = stringResource(Res.string.settings_auto_next_subtitle),
-                    checked = state.autoNext,
-                    onCheckedChange = onAutoNextChange,
+                    title = stringResource(Res.string.settings_end_mode),
+                    subtitle = stringResource(Res.string.settings_end_mode_subtitle),
+                    options = PlayEndMode.entries,
+                    selected = state.endMode,
+                    label = { stringResource(it.labelRes()) },
+                    onChange = onEndModeChange,
                 )
             }
             row { position ->
@@ -266,7 +272,7 @@ fun PlaybackSettingsPage(
                 )
             }
         }
-        // 四行默认值两两成对,差别在网络,所以图标标网络,画质还是音质由标题说。
+        // 六行默认值两两成对,差别在网络,所以图标标网络,画质还是音质由标题说。
         SettingsGroup(title = stringResource(Res.string.settings_group_quality)) {
             // 两行是同一个值按网络分的两格。播放页里切画质默认只管那一次播放,「播放页切换改为默认」
             // 打开之后才写进当下所在的那一格(见 AudioPlaybackService.setQuality)。
@@ -316,6 +322,29 @@ fun PlaybackSettingsPage(
                     selected = state.defaultAudioMetered,
                     label = { audioQualityLabel(it) },
                     onChange = onMeteredAudioChange,
+                )
+            }
+            // 直播画质同样按网络分两格。服务端没有该档时自动就近退档。
+            row { position ->
+                ChoiceRow(
+                    position = position,
+                    icon = Icons.Outlined.Wifi,
+                    title = stringResource(Res.string.settings_default_live_quality_wifi),
+                    options = SettingsStore.LIVE_QUALITY_OPTIONS,
+                    selected = state.defaultLiveQualityWifi,
+                    label = { liveQualityLabel(it) },
+                    onChange = onWifiLiveQualityChange,
+                )
+            }
+            row { position ->
+                ChoiceRow(
+                    position = position,
+                    icon = Icons.Outlined.SignalCellularAlt,
+                    title = stringResource(Res.string.settings_default_live_quality_metered),
+                    options = SettingsStore.LIVE_QUALITY_OPTIONS,
+                    selected = state.defaultLiveQualityMetered,
+                    label = { liveQualityLabel(it) },
+                    onChange = onMeteredLiveQualityChange,
                 )
             }
             // 放这一组而不是「播放」组:它管的正是上面四行什么时候被播放页改写。

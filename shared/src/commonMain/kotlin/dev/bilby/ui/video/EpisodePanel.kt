@@ -2,13 +2,17 @@ package dev.bilby.ui.video
 
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
+import dev.bilby.data.PlayEndMode
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.player.EpisodeList
@@ -16,6 +20,7 @@ import dev.bilby.ui.player.EpisodeRow
 import dev.bilby.ui.player.EpisodeTarget
 import dev.bilby.ui.player.PlayerSidePanel
 import dev.bilby.ui.player.QueueEdges
+import dev.bilby.ui.player.QueuePlaybackControls
 import dev.bilby.ui.theme.Spacing
 
 /**
@@ -30,6 +35,10 @@ fun BoxScope.EpisodePanel(
     visible: Boolean,
     rows: List<EpisodeRow>,
     sourceLabel: String,
+    endMode: PlayEndMode = PlayEndMode.Continue,
+    shuffled: Boolean = false,
+    onCycleEndMode: () -> Unit = {},
+    onToggleShuffle: () -> Unit = {},
     onSelect: (EpisodeTarget) -> Unit,
     onDismiss: () -> Unit,
     edges: QueueEdges? = null,
@@ -38,19 +47,32 @@ fun BoxScope.EpisodePanel(
     PlayerSidePanel(visible = visible, onDismiss = onDismiss) {
         // 队列来源那一行。**这里不给目录入口** —— 目录是另一个页面,而全屏下离开这一页
         // 要先退出全屏,一个点了就把人踢出全屏的链接不如不给。
-        Text(
-            text = sourceLabel.ifEmpty { stringResource(Res.string.video_parts) },
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(
-                start = Spacing.Comfortable,
-                end = Spacing.Comfortable,
-                top = Spacing.Comfortable,
-                bottom = Spacing.Hair,
-            ),
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = Spacing.Comfortable,
+                    end = Spacing.Tight,
+                    top = Spacing.Tight,
+                ),
+        ) {
+            Text(
+                text = sourceLabel.ifEmpty { stringResource(Res.string.video_parts) },
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            QueuePlaybackControls(
+                endMode = endMode,
+                shuffled = shuffled,
+                onCycleEndMode = onCycleEndMode,
+                onToggleShuffle = onToggleShuffle,
+                showShuffle = rows.size > 1,
+            )
+        }
         EpisodeList(
             rows = rows,
             edges = edges,

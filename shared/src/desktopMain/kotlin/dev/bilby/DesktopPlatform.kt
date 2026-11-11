@@ -48,7 +48,7 @@ class DesktopPlatform(
         override fun isMetered(): Boolean = false
     }
 
-    override val playback: PlaybackHost = DesktopPlaybackHost(container)
+    override val playback: DesktopPlaybackHost = DesktopPlaybackHost(container)
 
     override fun databaseBuilder(): RoomDatabase.Builder<BilbyDatabase> =
         Room.databaseBuilder<BilbyDatabase>(name = File(dataDir, "bilby.db").absolutePath)

@@ -1,5 +1,6 @@
 package dev.bilby.player
 
+import dev.bilby.data.PlayEndMode
 import dev.bilby.data.PlayInfo
 import dev.bilby.data.QueueSource
 
@@ -28,6 +29,7 @@ data class QueueState(
     val items: List<QueueItem> = emptyList(),
     val size: Int = 0,
     val shuffled: Boolean = false,
+    val endMode: PlayEndMode = PlayEndMode.Continue,
     /**
      * 上/下一条此刻按不按得动,来自播放器,认随机顺序,也认分 P。按钮可用态用这两个,不要拿
      * [sourcePosition] 推:那是列表位置,随机播放下列表第 1 条照样可以有上一条。

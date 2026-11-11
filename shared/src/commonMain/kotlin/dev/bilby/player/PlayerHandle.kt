@@ -1,5 +1,7 @@
 package dev.bilby.player
 
+import dev.bilby.data.PlayEndMode
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /** 播放器状态,取值与 media3 `Player.STATE_*` 相同,Android 端原样透传。 */
@@ -116,6 +118,15 @@ sealed interface PlaybackCommand {
 
     data class SetSleepTimer(val mode: SleepTimerMode) : PlaybackCommand
     data class AdjustSleepTimer(val deltaMinutes: Int) : PlaybackCommand
+
+    /** 切换队列的顺序/随机。从非连播态打开随机时自动升到连播。 */
+    data object ToggleShuffle : PlaybackCommand
+
+    /** 在「播完暂停 → 连播 → 洗脑循环」三态间轮换。 */
+    data object CycleEndMode : PlaybackCommand
+
+    /** 直接设定完播行为。 */
+    data class SetEndMode(val mode: PlayEndMode) : PlaybackCommand
 }
 
 /** 连上的那一个 [PlayerHandle]。断开由拿到它的一方负责,见 [PlaybackHost.connect]。 */
@@ -132,6 +143,15 @@ interface PlaybackHost {
     val state: StateFlow<AudioPlaybackUiState>
     val positionTicks: StateFlow<PositionTick>
     val sleepTimerState: StateFlow<SleepTimerState>
+
+    /** 是否具备应用内软件音量控制(桌面端 mpv 增益;Android 走系统媒体音量,为 false)。 */
+    val hasSoftwareVolume: Boolean get() = false
+    val softwareVolume: StateFlow<Float> get() = DefaultSoftwareVolume
+    val softwareMuted: StateFlow<Boolean> get() = DefaultSoftwareMuted
+
+    fun setSoftwareVolume(volume: Float) {}
+    fun setSoftwareMuted(muted: Boolean) {}
+    fun toggleSoftwareMute() = setSoftwareMuted(!softwareMuted.value)
 
     /** 此刻的播放位置,服务没起来时为 null。弹幕逐帧读它。 */
     fun currentPositionMillis(): Long?
@@ -154,3 +174,6 @@ interface PlaybackHost {
     /** 连上播放器。[onConnected] 在主线程上回调;连接失败时不回调,原因记日志。 */
     fun connect(onConnected: (PlayerHandle) -> Unit): PlayerConnection
 }
+
+private val DefaultSoftwareVolume: StateFlow<Float> = MutableStateFlow(1f)
+private val DefaultSoftwareMuted: StateFlow<Boolean> = MutableStateFlow(false)
