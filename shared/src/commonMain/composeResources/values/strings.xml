@@ -71,6 +71,7 @@
     <!-- 搜索 -->
     <string name="search_empty">搜索视频、UP 主与专栏</string>
     <string name="search_history_title">最近搜索</string>
+    <string name="search_history_manage">管理搜索记录</string>
     <string name="search_history_remove">删除这条搜索记录</string>
     <string name="search_agent_empty">描述想看的内容</string>
     <string name="search_no_results">没有结果</string>
@@ -119,6 +120,7 @@
     <string name="search_user_order_level_asc">等级最低</string>
     <string name="search_open_uid">打开 UID %1$s 的空间</string>
     <string name="search_suggestions">补全</string>
+    <string name="search_suggestion_fill">填入 %1$s</string>
     <string name="search_tab_video">视频</string>
     <string name="search_tab_user">用户</string>
     <string name="search_tab_article">专栏</string>
