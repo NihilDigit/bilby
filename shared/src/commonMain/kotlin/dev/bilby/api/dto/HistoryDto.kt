@@ -24,6 +24,7 @@ data class HistoryItemDto(
     val cover: String = "",
     val history: HistoryRefDto = HistoryRefDto(),
     @SerialName("author_name") val authorName: String = "",
+    @SerialName("author_mid") val authorMid: Long = 0L,
     /** 观看时间戳,也是下一页游标的一半(notes §3.3:游标取上一页最后一条的 oid/view_at)。 */
     @SerialName("view_at") val viewAt: Long = 0L,
     /** 观看进度,秒;-1 表示已看完,与稍后再看同规则(notes §3.4)。 */

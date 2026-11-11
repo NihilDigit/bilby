@@ -7,10 +7,16 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
+import dev.bilby.ui.CaptionDragHeight
+import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.maxWidthGridCells
+import dev.bilby.ui.rememberCaptionSlot
+import dev.bilby.ui.windowDragArea
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
@@ -1155,7 +1161,10 @@ private fun SpaceTopBar(
     canSearch: Boolean,
 ) {
     val focusRequester = remember { FocusRequester() }
+    LocalWindowCaption.current?.Host()
+    val captionSlot = rememberCaptionSlot()
     TopAppBar(
+        modifier = captionSlot.modifier,
         title = {
             if (searching) {
                 SearchField(
@@ -1171,40 +1180,60 @@ private fun SpaceTopBar(
                     if (keyword.isEmpty()) focusRequester.requestFocus()
                 }
             } else {
-                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = CaptionDragHeight)
+                        .windowDragArea(captionSlot.atTop),
+                ) {
+                    Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         },
         navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(Res.string.action_back),
-                )
+            val backLabel = stringResource(Res.string.action_back)
+            BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = backLabel,
+                    )
+                }
             }
         },
         actions = {
             RefreshAction(refreshing = refreshing, onRefresh = onRefresh)
             if (searching) {
-                IconButton(onClick = onCloseSearch) {
-                    Icon(
-                        Icons.Filled.Close,
-                        contentDescription = stringResource(Res.string.space_search_close),
-                    )
-                }
-            } else {
-                if (canSearch) {
-                    IconButton(onClick = onOpenSearch) {
+                val closeLabel = stringResource(Res.string.space_search_close)
+                BilbyTooltip(text = closeLabel) {
+                    IconButton(onClick = onCloseSearch) {
                         Icon(
-                            Icons.Filled.Search,
-                            contentDescription = stringResource(Res.string.space_search_hint),
+                            Icons.Filled.Close,
+                            contentDescription = closeLabel,
                         )
                     }
                 }
-                IconButton(onClick = onShare) {
-                    Icon(
-                        imageVector = Icons.Filled.Share,
-                        contentDescription = stringResource(Res.string.action_share),
-                    )
+            } else {
+                if (canSearch) {
+                    val searchLabel = stringResource(Res.string.space_search_hint)
+                    BilbyTooltip(text = searchLabel) {
+                        IconButton(onClick = onOpenSearch) {
+                            Icon(
+                                Icons.Filled.Search,
+                                contentDescription = searchLabel,
+                            )
+                        }
+                    }
+                }
+                val shareLabel = stringResource(Res.string.action_share)
+                BilbyTooltip(text = shareLabel) {
+                    IconButton(onClick = onShare) {
+                        Icon(
+                            imageVector = Icons.Filled.Share,
+                            contentDescription = shareLabel,
+                        )
+                    }
                 }
             }
             // 侧栏关掉之后回来的唯一入口。放在最右,正对着侧栏所在的那一侧;搜索态也留着,
@@ -1216,6 +1245,7 @@ private fun SpaceTopBar(
                     description = stringResource(Res.string.space_dynamics_sheet_toggle),
                 )
             }
+            captionSlot.buttons?.invoke()
         },
     )
 }
@@ -1793,18 +1823,31 @@ internal fun VideoListTab(
         header = header,
     ) { item ->
         // 整页都是同一个 UP,不重复印 UP 名(upName 留空)。
-        VideoRow(
-            item = VideoRowUi(
-                title = item.title,
-                coverUrl = item.coverUrl,
-                durationText = item.durationText,
-                dateText = formatDate(item.publishedAtEpochSeconds),
-                playText = item.playCountText,
-                danmakuText = item.danmakuCountText,
-                typeBadge = chargingBadgeText(item.chargingOnly),
-            ),
-            onClick = { onVideoClick(item) },
-        )
+        dev.bilby.ui.components.ContextMenuBox(
+            onClick = null,
+            menuLabel = stringResource(Res.string.menu_item_actions),
+            menu = { close ->
+                dev.bilby.ui.components.VideoCommonMenuItems(
+                    bvid = item.bvid,
+                    title = item.title,
+                    close = close,
+                )
+            },
+        ) { openMenu ->
+            VideoRow(
+                item = VideoRowUi(
+                    title = item.title,
+                    coverUrl = item.coverUrl,
+                    durationText = item.durationText,
+                    dateText = formatDate(item.publishedAtEpochSeconds),
+                    playText = item.playCountText,
+                    danmakuText = item.danmakuCountText,
+                    typeBadge = chargingBadgeText(item.chargingOnly),
+                ),
+                onClick = { onVideoClick(item) },
+                onLongClick = openMenu,
+            )
+        }
     }
 }
 

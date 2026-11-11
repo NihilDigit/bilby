@@ -39,11 +39,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Reply
 import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -64,9 +69,19 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalClipboard
+import dev.bilby.ui.components.ContextMenuBox
+import dev.bilby.ui.components.LocalCopyNotice
+import dev.bilby.ui.components.NeedsCopyNotice
 import dev.bilby.ui.components.PrefetchNearEnd
+import dev.bilby.ui.components.RefreshAction
+import dev.bilby.ui.components.SortMenu
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.plainTextClip
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.layout
@@ -241,6 +256,7 @@ fun CommentSection(
         onLoadMore = onLoadMore,
     )
 
+    val scope = rememberCoroutineScope()
     val rowActions = CommentRowActions(
         myMid = state.myMid,
         onReply = { comment ->
@@ -252,6 +268,9 @@ fun CommentSection(
         onUserClick = onUserClick,
         onOpenLink = onOpenLink,
         onSelectText = { selectionTarget = it },
+        onCopiedNotice = { msg ->
+            if (NeedsCopyNotice) scope.launch { snackbarHostState.showSnackbar(msg) }
+        },
     )
 
     val sendError = state.sendError?.let { stringResource(Res.string.comment_send_failed, it) }
@@ -283,7 +302,15 @@ fun CommentSection(
                 contentPadding = PaddingValues(bottom = Spacing.Tight),
             ) {
                 header?.let { item(key = "header") { it() } }
-                item(key = "sort-bar") { SortBar(state.sort, onSort) }
+                item(key = "sort-bar") {
+                    SortBar(
+                        sort = state.sort,
+                        onSort = onSort,
+                        refreshEnabled = refreshEnabled,
+                        refreshing = state.refreshing,
+                        onRefresh = onRefresh,
+                    )
+                }
 
                 // **条与条之间只留白,不画线。** 上一版画的是 inset 分割线,真机上一屏七八根细线
                 // 把列表切成一格一格,读起来像表格。M3 divider 页另有一句 "List items with
@@ -488,6 +515,8 @@ internal class CommentRowActions(
     val onOpenLink: (String) -> Unit,
     /** 长按正文要选中它,由所在那一层弹面板。 */
     val onSelectText: (String) -> Unit,
+    /** 复制提示宿主;面板内有独立 SnackbarHost 时由它接管,否则落回根层 [LocalCopyNotice]。 */
+    val onCopiedNotice: ((String) -> Unit)? = null,
 ) {
     fun canDelete(comment: CommentItem): Boolean = myMid != null && myMid == comment.mid
 }
@@ -509,18 +538,138 @@ private fun findUname(state: CommentUiState, rpid: Long): String? {
 
 /** 最热 / 最新是排序,风格指南 §2.1 把排序划给 SortRow;segmented button 留给切换视图。 */
 @Composable
-private fun SortBar(sort: CommentSort, onSort: (CommentSort) -> Unit) {
+private fun SortBar(
+    sort: CommentSort,
+    onSort: (CommentSort) -> Unit,
+    refreshEnabled: Boolean = false,
+    refreshing: Boolean = false,
+    onRefresh: () -> Unit = {},
+) {
     val options = listOf(
         CommentSort.HOT to Res.string.comment_sort_hot,
         CommentSort.TIME to Res.string.comment_sort_time,
     )
     // 左右只垫 Tight:下拉按钮自带内边距,再垫一档页边距,▾ 就离右缘比正文远一截。
-    SortRow(
-        options = options,
-        selected = sort,
-        onSelect = onSort,
-        modifier = Modifier.padding(horizontal = Spacing.Tight),
-    )
+    if (!refreshEnabled) {
+        SortRow(
+            options = options,
+            selected = sort,
+            onSelect = onSort,
+            modifier = Modifier.padding(horizontal = Spacing.Tight),
+        )
+    } else {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Tight),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RefreshAction(refreshing = refreshing, onRefresh = onRefresh)
+            SortMenu(options = options, selected = sort, onSelect = onSort)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun CommentContextMenu(
+    comment: CommentItem,
+    actions: CommentRowActions,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    val fallbackCopyNotice = LocalCopyNotice.current
+    val copiedNotice = actions.onCopiedNotice ?: fallbackCopyNotice
+    val clipLabel = stringResource(Res.string.comment_copied)
+    val copiedText = stringResource(Res.string.comment_copied)
+    var confirmingDelete by remember { mutableStateOf(false) }
+
+    ContextMenuBox(
+        onClick = null,
+        menuLabel = stringResource(Res.string.menu_item_actions),
+        modifier = modifier,
+        menu = { close ->
+            val hasSpace = comment.mid != 0L
+            val canDelete = actions.canDelete(comment)
+            val totalCount = 3 + (if (hasSpace) 1 else 0) + (if (canDelete) 1 else 0)
+            var idx = 0
+
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    actions.onReply(comment)
+                },
+                text = { Text(stringResource(Res.string.comment_reply)) },
+                leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Reply, contentDescription = null) },
+                shape = menuItemShape(idx++, totalCount),
+            )
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    val raw = comment.message.trim()
+                    scope.launch {
+                        clipboard.setClipEntry(plainTextClip(clipLabel, raw))
+                        copiedNotice(copiedText)
+                    }
+                },
+                text = { Text(stringResource(Res.string.menu_copy_comment)) },
+                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                shape = menuItemShape(idx++, totalCount),
+            )
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    actions.onSelectText(comment.message.trim())
+                },
+                text = { Text(stringResource(Res.string.text_select_title)) },
+                leadingIcon = { Icon(Icons.Outlined.SelectAll, contentDescription = null) },
+                shape = menuItemShape(idx++, totalCount),
+            )
+            if (hasSpace) {
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        actions.onUserClick(comment.mid)
+                    },
+                    text = { Text(stringResource(Res.string.menu_open_space)) },
+                    leadingIcon = { Icon(Icons.Outlined.Person, contentDescription = null) },
+                    shape = menuItemShape(idx++, totalCount),
+                )
+            }
+            if (canDelete) {
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        confirmingDelete = true
+                    },
+                    text = { Text(stringResource(Res.string.comment_delete)) },
+                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null) },
+                    shape = menuItemShape(idx, totalCount),
+                )
+            }
+        },
+    ) { _ ->
+        content()
+    }
+
+    if (confirmingDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmingDelete = false },
+            title = { Text(stringResource(Res.string.comment_delete_confirm)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmingDelete = false
+                    actions.onDelete(comment.rpid)
+                }) { Text(stringResource(Res.string.action_delete)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingDelete = false }) {
+                    Text(stringResource(Res.string.action_cancel))
+                }
+            },
+        )
+    }
 }
 
 /**
@@ -570,50 +719,52 @@ private fun CommentRow(
     // 12 合起来,两条评论之间是 24dp 左右的空白 —— 这就是没有分割线之后的分隔。
     //
     // 内边距在点击之后:涟漪铺满整条,贴着屏幕两边,而不是缩在内容那一块里。
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .replyOnClick(comment, actions)
-            .padding(start = Spacing.Comfortable, end = Spacing.Comfortable, top = Spacing.Cozy, bottom = Spacing.Hair),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-    ) {
-        // 头像本身仍是 36dp,热区往下补到 48dp:这一列的高度由右边那一整条评论决定,
-        // 往下扩不挤走任何东西。对齐取 TopCenter 而不是默认的居中,否则头像会跟着下沉 6dp。
-        Box(
+    CommentContextMenu(comment = comment, actions = actions, modifier = modifier) {
+        Row(
             modifier = Modifier
-                .heightIn(min = Dimens.MinTouchTarget)
-                .openSpace(comment, actions.onUserClick),
-            contentAlignment = Alignment.TopCenter,
+                .fillMaxWidth()
+                .replyOnClick(comment, actions)
+                .padding(start = Spacing.Comfortable, end = Spacing.Comfortable, top = Spacing.Cozy, bottom = Spacing.Hair),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
         ) {
-            Avatar(url = comment.avatarUrl, size = Dimens.AvatarRow)
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            // **头部只有名字这一行。** 时间与属地在正文下面,和点赞排成一行(见 [CommentFooter])。
-            // 名字那一行只有 16dp 高,单独按不中;去空间的主要落点是左边的头像(热区补到 48dp),
-            // 名字是附带的第二个落点。
-            NameLine(comment = comment, modifier = Modifier.openSpace(comment, actions.onUserClick)) {
-                CommentTags(comment, pinned = pinned, threadAuthorMid = threadAuthorMid)
+            // 头像本身仍是 36dp,热区往下补到 48dp:这一列的高度由右边那一整条评论决定,
+            // 往下扩不挤走任何东西。对齐取 TopCenter 而不是默认的居中,否则头像会跟着下沉 6dp。
+            Box(
+                modifier = Modifier
+                    .heightIn(min = Dimens.MinTouchTarget)
+                    .openSpace(comment, actions.onUserClick),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                Avatar(url = comment.avatarUrl, size = Dimens.AvatarRow)
             }
-            Spacer(Modifier.height(Spacing.Hair))
-            CommentText(
-                message = comment.message,
-                emotes = comment.emotes,
-                mentions = comment.mentions,
-                style = CommentBodyStyle,
-                links = comment.links,
-                onSeek = actions.onSeek,
-                onUserClick = actions.onUserClick,
-                onOpenLink = actions.onOpenLink,
-            )
-            if (comment.pictureUrls.isNotEmpty()) {
-                PictureGrid(
-                    urls = comment.pictureUrls,
-                    onClick = { index -> viewerIndex = index },
-                    modifier = Modifier.padding(top = Spacing.Tight),
+            Column(modifier = Modifier.weight(1f)) {
+                // **头部只有名字这一行。** 时间与属地在正文下面,和点赞排成一行(见 [CommentFooter])。
+                // 名字那一行只有 16dp 高,单独按不中;去空间的主要落点是左边的头像(热区补到 48dp),
+                // 名字是附带的第二个落点。
+                NameLine(comment = comment, modifier = Modifier.openSpace(comment, actions.onUserClick)) {
+                    CommentTags(comment, pinned = pinned, threadAuthorMid = threadAuthorMid)
+                }
+                Spacer(Modifier.height(Spacing.Hair))
+                CommentText(
+                    message = comment.message,
+                    emotes = comment.emotes,
+                    mentions = comment.mentions,
+                    style = CommentBodyStyle,
+                    links = comment.links,
+                    onSeek = actions.onSeek,
+                    onUserClick = actions.onUserClick,
+                    onOpenLink = actions.onOpenLink,
                 )
+                if (comment.pictureUrls.isNotEmpty()) {
+                    PictureGrid(
+                        urls = comment.pictureUrls,
+                        onClick = { index -> viewerIndex = index },
+                        modifier = Modifier.padding(top = Spacing.Tight),
+                    )
+                }
+                CommentFooter(comment = comment, actions = actions, endInset = RootFooterEndInset)
+                replies?.invoke()
             }
-            CommentFooter(comment = comment, actions = actions, endInset = RootFooterEndInset)
-            replies?.invoke()
         }
     }
 
@@ -992,51 +1143,53 @@ private fun SubReplyRow(
 
     // 左右 12dp、上 4dp:容器顶上另有 8dp,底行按钮的触摸区又带着 8dp 的留白,
     // 条与条之间因此是 12dp 左右。上一版左右只有 8dp,文字贴着容器边。
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .replyOnClick(comment, actions)
-            .padding(start = Spacing.Cozy, end = Spacing.Cozy, top = Spacing.Hair),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-    ) {
-        Box(
+    CommentContextMenu(comment = comment, actions = actions) {
+        Row(
             modifier = Modifier
-                .heightIn(min = Dimens.MinTouchTarget)
-                .openSpace(comment, actions.onUserClick),
-            contentAlignment = Alignment.TopCenter,
+                .fillMaxWidth()
+                .replyOnClick(comment, actions)
+                .padding(start = Spacing.Cozy, end = Spacing.Cozy, top = Spacing.Hair),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            Avatar(url = comment.avatarUrl, size = Dimens.AvatarNested)
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            NameLine(comment = comment, modifier = Modifier.openSpace(comment, actions.onUserClick)) {
-                CommentTags(comment, pinned = false, threadAuthorMid = rootAuthorMid)
+            Box(
+                modifier = Modifier
+                    .heightIn(min = Dimens.MinTouchTarget)
+                    .openSpace(comment, actions.onUserClick),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                Avatar(url = comment.avatarUrl, size = Dimens.AvatarNested)
             }
-            Spacer(Modifier.height(Spacing.Hair))
-            // 回复楼中楼时正文开头自带一截"回复 @某某 :",那是发送方写进 message 的字面文本
-            // (见 CommentRepository.postComment),原样留着 —— 它就是这条的正文,而剥掉它要去猜
-            // 那一截到底有多长,名字改过就会剥错。
-            CommentText(
-                message = comment.message,
-                emotes = comment.emotes,
-                mentions = comment.mentions,
-                style = SubReplyBodyStyle,
-                links = comment.links,
-                onSeek = actions.onSeek,
-                onUserClick = actions.onUserClick,
-                onOpenLink = actions.onOpenLink,
-            )
-            // 配图在每一级都画。一条只发了张图的回复不画的话渲染成一行空白,看起来像接口少给了
-            // 内容。PiliPlus 在每一级都画 `ImageGridView`。
-            if (comment.pictureUrls.isNotEmpty()) {
-                PictureGrid(
-                    urls = comment.pictureUrls,
-                    onClick = { index -> viewerIndex = index },
-                    modifier = Modifier.padding(top = Spacing.Tight),
+            Column(modifier = Modifier.weight(1f)) {
+                NameLine(comment = comment, modifier = Modifier.openSpace(comment, actions.onUserClick)) {
+                    CommentTags(comment, pinned = false, threadAuthorMid = rootAuthorMid)
+                }
+                Spacer(Modifier.height(Spacing.Hair))
+                // 回复楼中楼时正文开头自带一截"回复 @某某 :",那是发送方写进 message 的字面文本
+                // (见 CommentRepository.postComment),原样留着 —— 它就是这条的正文,而剥掉它要去猜
+                // 那一截到底有多长,名字改过就会剥错。
+                CommentText(
+                    message = comment.message,
+                    emotes = comment.emotes,
+                    mentions = comment.mentions,
+                    style = SubReplyBodyStyle,
+                    links = comment.links,
+                    onSeek = actions.onSeek,
+                    onUserClick = actions.onUserClick,
+                    onOpenLink = actions.onOpenLink,
                 )
+                // 配图在每一级都画。一条只发了张图的回复不画的话渲染成一行空白,看起来像接口少给了
+                // 内容。PiliPlus 在每一级都画 `ImageGridView`。
+                if (comment.pictureUrls.isNotEmpty()) {
+                    PictureGrid(
+                        urls = comment.pictureUrls,
+                        onClick = { index -> viewerIndex = index },
+                        modifier = Modifier.padding(top = Spacing.Tight),
+                    )
+                }
+                // 和主楼共用同一行,不另写一份小号的:点赞在两级走的是同一个 `x/v2/reply/action`
+                // (notes §1.7),长得不一样只会让人以为这里的点赞是另一回事。
+                CommentFooter(comment = comment, actions = actions)
             }
-            // 和主楼共用同一行,不另写一份小号的:点赞在两级走的是同一个 `x/v2/reply/action`
-            // (notes §1.7),长得不一样只会让人以为这里的点赞是另一回事。
-            CommentFooter(comment = comment, actions = actions)
         }
     }
 
@@ -1129,6 +1282,7 @@ private fun CommentThreadSheet(
 
     // **面板自己的 snackbar 宿主,不用外面那一份**,理由见 [CommentSection] 里那处。
     val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     var selectionTarget by remember { mutableStateOf<String?>(null) }
 
     val actions = CommentRowActions(
@@ -1140,6 +1294,9 @@ private fun CommentThreadSheet(
         onUserClick = onUserClick,
         onOpenLink = onOpenLink,
         onSelectText = { selectionTarget = it },
+        onCopiedNotice = { msg ->
+            if (NeedsCopyNotice) scope.launch { snackbarHostState.showSnackbar(msg) }
+        },
     )
 
     val shown = expanded?.items?.takeIf { it.isNotEmpty() } ?: root.previewReplies

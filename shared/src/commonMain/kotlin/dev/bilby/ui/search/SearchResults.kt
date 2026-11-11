@@ -379,7 +379,27 @@ private fun VideoResults(
         onLoadMore = actions.onLoadMore,
         onRetry = actions.onRetry,
         contentPadding = contentPadding,
-    ) { video -> VideoRow(item = video.toRowUi(), onClick = { actions.onVideoClick(video.bvid) }) }
+    ) { video ->
+        dev.bilby.ui.components.ContextMenuBox(
+            onClick = null,
+            menuLabel = stringResource(Res.string.menu_item_actions),
+            menu = { close ->
+                dev.bilby.ui.components.VideoCommonMenuItems(
+                    bvid = video.bvid,
+                    title = video.title,
+                    close = close,
+                    upMid = video.upMid,
+                    onOpenUpSpace = actions.onUserClick,
+                )
+            },
+        ) { openMenu ->
+            VideoRow(
+                item = video.toRowUi(),
+                onClick = { actions.onVideoClick(video.bvid) },
+                onLongClick = openMenu,
+            )
+        }
+    }
 }
 
 /** 「用户」栏的一行:头像、名字、粉丝与投稿数,签名一行。 */

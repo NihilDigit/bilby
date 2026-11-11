@@ -24,6 +24,7 @@ import androidx.compose.material3.ListItemDefaults
 import dev.bilby.ui.components.StaticListItem
 import androidx.compose.material3.MaterialTheme
 import dev.bilby.ui.components.PaneSheet
+import dev.bilby.ui.components.trackEditableFocus
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -273,6 +274,7 @@ private fun GroupNameDialog(
                 onValueChange = { name = it },
                 label = { Text(stringResource(Res.string.follow_group_name_hint)) },
                 singleLine = true,
+                modifier = Modifier.trackEditableFocus(),
             )
         },
         confirmButton = {

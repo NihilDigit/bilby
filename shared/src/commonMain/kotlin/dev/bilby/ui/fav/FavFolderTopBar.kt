@@ -1,6 +1,11 @@
 package dev.bilby.ui.fav
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.CleaningServices
@@ -34,8 +39,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.data.FavFolderDetail
 import dev.bilby.resources.*
 import dev.bilby.stringResource
+import dev.bilby.ui.CaptionDragHeight
+import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.SearchField
+import dev.bilby.ui.rememberCaptionSlot
+import dev.bilby.ui.windowDragArea
 
 /**
  * 收藏夹内容页的顶栏:返回、夹内搜索、管理菜单;搜索态下标题位换成输入框。
@@ -73,7 +83,10 @@ fun FavFolderTopBar(
     val searching = searchOpen || appliedKeyword.isNotBlank()
     var confirmingClean by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
+    LocalWindowCaption.current?.Host()
+    val captionSlot = rememberCaptionSlot()
     TopAppBar(
+        modifier = captionSlot.modifier,
         title = {
             if (searching) {
                 SearchField(
@@ -89,31 +102,48 @@ fun FavFolderTopBar(
                     if (keyword.isEmpty()) focusRequester.requestFocus()
                 }
             } else {
-                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = CaptionDragHeight)
+                        .windowDragArea(captionSlot.atTop),
+                ) {
+                    Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         },
         navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(Res.string.action_back),
-                )
+            val backLabel = stringResource(Res.string.action_back)
+            BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = backLabel,
+                    )
+                }
             }
         },
         actions = {
             RefreshAction(refreshing, onRefresh)
             if (searching) {
-                IconButton(
-                    onClick = {
-                        searchOpen = false
-                        onCloseSearch()
-                    },
-                ) {
-                    Icon(Icons.Outlined.Close, contentDescription = stringResource(Res.string.fav_search_close))
+                val closeLabel = stringResource(Res.string.fav_search_close)
+                BilbyTooltip(text = closeLabel) {
+                    IconButton(
+                        onClick = {
+                            searchOpen = false
+                            onCloseSearch()
+                        },
+                    ) {
+                        Icon(Icons.Outlined.Close, contentDescription = closeLabel)
+                    }
                 }
             } else {
-                IconButton(onClick = { searchOpen = true }) {
-                    Icon(Icons.Outlined.Search, contentDescription = stringResource(Res.string.fav_search))
+                val searchLabel = stringResource(Res.string.fav_search)
+                BilbyTooltip(text = searchLabel) {
+                    IconButton(onClick = { searchOpen = true }) {
+                        Icon(Icons.Outlined.Search, contentDescription = searchLabel)
+                    }
                 }
                 FolderMenu(
                     folder = folder,
@@ -123,6 +153,7 @@ fun FavFolderTopBar(
                     onDelete = onDelete,
                 )
             }
+            captionSlot.buttons?.invoke()
         },
         colors = TopAppBarDefaults.topAppBarColors(),
         scrollBehavior = scrollBehavior,

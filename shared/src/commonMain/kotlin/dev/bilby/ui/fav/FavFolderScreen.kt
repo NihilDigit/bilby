@@ -13,8 +13,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Headphones as OutlinedHeadphones
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import dev.bilby.ui.components.ContextMenuBox
+import dev.bilby.ui.components.VideoCommonMenuItems
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.videoCommonMenuItemCount
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -278,6 +285,7 @@ private val FavOrders = listOf(
  *
  * 顶栏(搜索、管理菜单)在 [FavFolderTopBar],这里是页头与列表。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun FavFolderScreen(
     state: FavFolderUiState,
@@ -292,6 +300,7 @@ fun FavFolderScreen(
     onRetry: () -> Unit,
     editorActions: FavFolderEditorActions,
     deletionActions: FavFolderDeletionActions,
+    onUpClick: (Long) -> Unit = {},
     onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
@@ -339,13 +348,53 @@ fun FavFolderScreen(
                         )
                     },
                 ) { item ->
-                    VideoRow(
-                        item = item.toRowUi(),
-                        // 失效稿件、音频与剧集照常列出但不可点:前者悄悄隐藏会让人以为自己记错了
-                        // 收藏过什么,后两者不在本应用的范围里(UGC-only)。
-                        enabled = item.playable,
-                        onClick = { if (item.playable) onItemClick(item) },
-                    )
+                    val hasMenu = item.playable || item.upMid != 0L
+                    if (hasMenu) {
+                        ContextMenuBox(
+                            onClick = null,
+                            menuLabel = stringResource(Res.string.menu_item_actions),
+                            menu = { close ->
+                                val bvid = if (item.playable) item.bvid else ""
+                                val leadingCount = if (item.playable) 1 else 0
+                                val totalCount = leadingCount + videoCommonMenuItemCount(bvid, item.upMid, onUpClick)
+                                if (item.playable) {
+                                    DropdownMenuItem(
+                                        onClick = {
+                                            close()
+                                            onListen(item)
+                                        },
+                                        text = { Text(stringResource(Res.string.fav_listen)) },
+                                        leadingIcon = { Icon(Icons.Outlined.OutlinedHeadphones, contentDescription = null) },
+                                        shape = menuItemShape(0, totalCount),
+                                    )
+                                }
+                                VideoCommonMenuItems(
+                                    bvid = bvid,
+                                    title = item.title,
+                                    close = close,
+                                    upMid = item.upMid,
+                                    onOpenUpSpace = onUpClick,
+                                    startIndex = leadingCount,
+                                    totalCount = totalCount,
+                                )
+                            },
+                        ) { openMenu ->
+                            VideoRow(
+                                item = item.toRowUi(),
+                                // 失效稿件、音频与剧集照常列出但不可点:前者悄悄隐藏会让人以为自己记错了
+                                // 收藏过什么,后两者不在本应用的范围里(UGC-only)。
+                                enabled = item.playable,
+                                onClick = { if (item.playable) onItemClick(item) },
+                                onLongClick = if (item.playable) openMenu else null,
+                            )
+                        }
+                    } else {
+                        VideoRow(
+                            item = item.toRowUi(),
+                            enabled = item.playable,
+                            onClick = { if (item.playable) onItemClick(item) },
+                        )
+                    }
                 }
             }
         }

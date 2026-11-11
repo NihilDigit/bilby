@@ -1,6 +1,10 @@
 package dev.bilby.ui.search
 
 import dev.bilby.ui.BackHandler
+import dev.bilby.ui.CaptionDragHeight
+import dev.bilby.ui.components.BilbyTooltip
+import dev.bilby.ui.rememberCaptionSlot
+import dev.bilby.ui.windowDragArea
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -67,6 +71,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -175,6 +180,8 @@ fun SearchChatScreen(
     onHistoryRemove: (String) -> Unit = {},
     onHistoryClear: () -> Unit = {},
     onSuggestionClick: (String) -> Unit = {},
+    /** 快捷键(`Ctrl+F` / `/`)请求聚焦主搜索框的计数器。 */
+    focusSearchNonce: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
@@ -211,6 +218,7 @@ fun SearchChatScreen(
                 focusManager.clearFocus()
                 onSuggestionClick(term)
             },
+            focusSearchNonce = focusSearchNonce,
         )
     }
 
@@ -266,18 +274,28 @@ private val PanelToggleWidth = 48.dp
 /** 窄屏助理那一屏的顶栏:返回和栏名。返回回到搜索结果,助理的对话留着。 */
 @Composable
 private fun AgentTopBar(onBack: () -> Unit) {
+    val captionSlot = rememberCaptionSlot()
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Hair, vertical = Spacing.Tight),
+        modifier = captionSlot.modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Hair, vertical = Spacing.Tight),
     ) {
-        IconButton(onClick = onBack) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.action_back))
+        val backLabel = stringResource(Res.string.action_back)
+        BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = backLabel)
+            }
         }
         Text(
             stringResource(Res.string.search_mode_agent),
             style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(start = Spacing.Hair),
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = Spacing.Hair)
+                .windowDragArea(captionSlot.atTop),
         )
+        captionSlot.buttons?.invoke()
     }
 }
 
@@ -307,9 +325,16 @@ private fun NormalSearch(
     onHistoryClear: () -> Unit,
     suggestions: List<SearchSuggestion>,
     onSuggestionClick: (String) -> Unit,
+    focusSearchNonce: Int = 0,
 ) {
     var focused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
+    val searchFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(focusSearchNonce) {
+        if (focusSearchNonce > 0) {
+            runCatching { searchFocusRequester.requestFocus() }
+        }
+    }
     // 展开态(搜索栏有焦点)时,返回先收起,不直接离开这一页。
     BackHandler(enabled = focused) { focusManager.clearFocus() }
 
@@ -334,6 +359,7 @@ private fun NormalSearch(
             wide = wide,
             trailing = panelToggle,
             dropdown = dropdown,
+            focusRequester = searchFocusRequester,
         )
     }
     val historyPanel: @Composable (Modifier) -> Unit = { panelModifier ->
@@ -443,39 +469,79 @@ private fun SearchBarRow(
     trailing: (@Composable () -> Unit)?,
     /** 宽屏展开态接在框下面的那一截(补全或历史),见 [DockedSurface]。 */
     dropdown: (@Composable (Modifier) -> Unit)? = null,
+    focusRequester: FocusRequester? = null,
 ) {
     val back = showBack && focused
+    val captionSlot = rememberCaptionSlot()
+    val hasTrailing = trailing != null || captionSlot.buttons != null
     Row(
         verticalAlignment = Alignment.Top,
-        modifier = Modifier
+        modifier = captionSlot.modifier
             .fillMaxWidth()
-            .padding(start = if (back) Spacing.Hair else Spacing.Comfortable, end = if (trailing != null) Spacing.Hair else Spacing.Comfortable)
+            .padding(
+                start = if (back) Spacing.Hair else Spacing.Comfortable,
+                end = if (hasTrailing) Spacing.Hair else Spacing.Comfortable,
+            )
             // 宽屏的上边距由外层给(见 SearchChatScreen),框与侧栏卡片同一条上沿。
             .padding(top = if (wide) 0.dp else Spacing.Tight, bottom = Spacing.Tight),
     ) {
         if (back) {
-            IconButton(onClick = onCollapse) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.action_back))
+            val backLabel = stringResource(Res.string.action_back)
+            BilbyTooltip(text = backLabel, shortcut = "Esc") {
+                IconButton(onClick = onCollapse) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = backLabel)
+                }
             }
         }
-        // 宽屏框居中、限宽;侧栏开关在行尾,不算进居中的那一段。
-        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
-            DockedSurface(
-                dropdown = dropdown,
-                modifier = if (wide) Modifier.widthIn(max = SearchBarMaxWidth) else Modifier,
-            ) {
-                SearchField(
-                    value = input,
-                    onValueChange = onInputChange,
-                    // 占位文案同时是这个框的无障碍标签,所以不能空着。
-                    placeholder = stringResource(Res.string.search_empty),
-                    // 回车即搜。DESIGN 2.2 的快路原话是"输入直接回车 = 原始 B 站搜索"。
-                    onSearch = onSearch,
-                    onFocusChange = onFocusChange,
+        // 宽屏框居中、限宽;两侧留出的大片空白登记为窗口拖动区,侧栏开关与窗口按钮在行尾。
+        if (wide) {
+            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.Top) {
+                Spacer(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(CaptionDragHeight)
+                        .windowDragArea(captionSlot.atTop),
+                )
+                DockedSurface(
+                    dropdown = dropdown,
+                    modifier = Modifier.widthIn(max = SearchBarMaxWidth),
+                ) {
+                    SearchField(
+                        value = input,
+                        onValueChange = onInputChange,
+                        // 占位文案同时是这个框的无障碍标签,所以不能空着。
+                        placeholder = stringResource(Res.string.search_empty),
+                        // 回车即搜。DESIGN 2.2 的快路原话是"输入直接回车 = 原始 B 站搜索"。
+                        onSearch = onSearch,
+                        focusRequester = focusRequester,
+                        onFocusChange = onFocusChange,
+                    )
+                }
+                Spacer(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(CaptionDragHeight)
+                        .windowDragArea(captionSlot.atTop),
                 )
             }
+        } else {
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                DockedSurface(dropdown = dropdown) {
+                    SearchField(
+                        value = input,
+                        onValueChange = onInputChange,
+                        placeholder = stringResource(Res.string.search_empty),
+                        onSearch = onSearch,
+                        focusRequester = focusRequester,
+                        onFocusChange = onFocusChange,
+                    )
+                }
+            }
         }
-        trailing?.invoke()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            trailing?.invoke()
+            captionSlot.buttons?.invoke()
+        }
     }
 }
 

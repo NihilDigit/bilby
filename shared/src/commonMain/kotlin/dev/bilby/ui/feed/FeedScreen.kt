@@ -33,6 +33,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
+import dev.bilby.ui.CaptionDragHeight
+import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.rememberCaptionSlot
+import dev.bilby.ui.windowDragArea
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
@@ -89,6 +93,10 @@ import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.fadingRightEdge
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.ContextMenuBox
+import dev.bilby.ui.components.VideoCommonMenuItems
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.videoCommonMenuItemCount
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material3.ButtonDefaults
@@ -363,11 +371,27 @@ private fun FeedList(
     val density = LocalDensity.current
     var actionsWidth by remember { mutableStateOf(0.dp) }
     var upsRowFits by remember { mutableStateOf(false) }
+    val pinnedHeader = LocalWindowCaption.current != null
+    val actionsInUpsRow = wide && hasUpsRow && upsRowFits
+    val headerActions: @Composable () -> Unit = {
+        FeedHeaderActions(
+            refreshing = state.refreshing,
+            onRefresh = onRefresh,
+            onOpenOtherDynamics = onOpenOtherDynamics,
+            onOpenPushes = onOpenPushes,
+            tonal = wide,
+            modifier = Modifier.onSizeChanged { actionsWidth = with(density) { it.width.toDp() } },
+        )
+    }
     val feedList: @Composable (Modifier) -> Unit = { listModifier ->
+        Column(modifier = listModifier) {
+        if (pinnedHeader) {
+            FeedHeader(actions = headerActions.takeUnless { actionsInUpsRow })
+        }
         RefreshBox(
             refreshing = state.refreshing,
             onRefresh = onRefresh,
-            modifier = listModifier,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
             LazyVerticalGrid(
                 columns = if (wide) maxWidthGridCells(Breakpoints.VideoRowMaxWidth) else GridCells.Fixed(1),
@@ -380,19 +404,10 @@ private fun FeedList(
         // 宽屏一排放得下时,刷新与两个入口挪进头像那一排的右端:标题行只剩页名,头像排右边也
         // 不再空着半屏。放不下(窄屏,或关注的人多)就维持原样:入口在标题行,「关注列表」钉住。
         // 入口的宽度量一次记下,无论它此刻画在哪一行,判断都用同一个值,不会来回跳。
-        val actionsInUpsRow = wide && hasUpsRow && upsRowFits
-        val headerActions: @Composable () -> Unit = {
-            FeedHeaderActions(
-                refreshing = state.refreshing,
-                onRefresh = onRefresh,
-                onOpenOtherDynamics = onOpenOtherDynamics,
-                onOpenPushes = onOpenPushes,
-                tonal = wide,
-                modifier = Modifier.onSizeChanged { actionsWidth = with(density) { it.width.toDp() } },
-            )
-        }
-        item(key = "header", span = FullLine) {
-            FeedHeader(actions = headerActions.takeUnless { actionsInUpsRow })
+        if (!pinnedHeader) {
+            item(key = "header", span = FullLine) {
+                FeedHeader(actions = headerActions.takeUnless { actionsInUpsRow })
+            }
         }
         // 「最常访问」跟着列表一起滚,不吸顶:吸顶会让它变成常驻的入口带,而这一页的主体是
         // 动态流。
@@ -424,14 +439,14 @@ private fun FeedList(
         // animateItem:「不再显示这个 UP」当场生效,那一刻被摘掉的可能是连着好几条,
         // 下面几十行硬切着往上跳一格;条目认的是 FeedEntry.id,翻页追加也走同一条动效。
         gridItems(beforeMarker, key = { it.id }) { item ->
-            FeedEntryItem(item, onItemClick, onExcludeUp, onAddToView, wide, Modifier.animateItem())
+            FeedEntryItem(item, onItemClick, onUpClick, onExcludeUp, onAddToView, wide, Modifier.animateItem())
         }
         if (markerIndex != null) {
             // 横跨整行:分隔线前那一行没排满也照样断开,新旧两段不共用一行。
             item(key = "read-marker", span = FullLine) { ReadMarkerDivider(Modifier.animateItem()) }
         }
         gridItems(fromMarker, key = { it.id }) { item ->
-            FeedEntryItem(item, onItemClick, onExcludeUp, onAddToView, wide, Modifier.animateItem())
+            FeedEntryItem(item, onItemClick, onUpClick, onExcludeUp, onAddToView, wide, Modifier.animateItem())
         }
             item(key = "footer", span = FullLine) {
                 ListFooter(
@@ -442,6 +457,7 @@ private fun FeedList(
             }
             }
             ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
+        }
         }
     }
 
@@ -492,25 +508,34 @@ private fun FeedHeader(
      */
     actions: (@Composable () -> Unit)?,
 ) {
+    val captionSlot = rememberCaptionSlot()
     Row(
-        modifier = Modifier
+        modifier = captionSlot.modifier
             .fillMaxWidth()
             .heightIn(min = Dimens.MinTouchTarget)
             .padding(
                 start = Spacing.Comfortable,
-                end = Spacing.Comfortable - HeaderButtonEndInset,
+                end = if (captionSlot.buttons != null) Spacing.Hair else Spacing.Comfortable - HeaderButtonEndInset,
                 top = Spacing.Tight,
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = stringResource(Res.string.feed_title),
-            style = MaterialTheme.typography.titleLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .weight(1f)
+                .height(CaptionDragHeight)
+                .windowDragArea(captionSlot.atTop),
+        ) {
+            Text(
+                text = stringResource(Res.string.feed_title),
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         actions?.invoke()
+        captionSlot.buttons?.invoke()
     }
 }
 
@@ -609,6 +634,7 @@ private fun HeaderEntryButton(
 private fun FeedEntryItem(
     item: FeedEntry,
     onItemClick: (FeedEntry) -> Unit,
+    onUpClick: (Long) -> Unit,
     onExcludeUp: (Long, String) -> Unit,
     onAddToView: (String) -> Unit,
     /** 宽屏网格:不画 ⋮,同一份菜单由右键或长按在按下处弹出,见 [ContextMenuBox]。 */
@@ -616,7 +642,7 @@ private fun FeedEntryItem(
     modifier: Modifier = Modifier,
 ) {
     val menu: @Composable ColumnScope.(close: () -> Unit) -> Unit = { close ->
-        FeedEntryMenuItems(item, close, onExcludeUp, onAddToView)
+        FeedEntryMenuItems(item, close, onUpClick, onExcludeUp, onAddToView)
     }
     if (wide) {
         ContextMenuBox(
@@ -675,23 +701,37 @@ private fun FeedEntryItem(
 private fun FeedEntryMenuItems(
     item: FeedEntry,
     close: () -> Unit,
+    onUpClick: (Long) -> Unit,
     onExcludeUp: (Long, String) -> Unit,
     onAddToView: (String) -> Unit,
 ) {
-    val canAddToView = item is FeedEntry.Video
-    if (item is FeedEntry.Video) {
+    val videoBvid = (item as? FeedEntry.Video)?.bvid.orEmpty()
+    val leadingCount = if (videoBvid.isNotEmpty()) 1 else 0
+    val commonCount = videoCommonMenuItemCount(videoBvid, item.upMid, onUpClick)
+    val totalCount = leadingCount + commonCount + 1
+
+    if (videoBvid.isNotEmpty()) {
         // 只进不出,和播放页那一格同一套规矩(见 [FeedViewModel.addToView])。
         DropdownMenuItem(
             onClick = {
                 close()
-                onAddToView(item.bvid)
+                onAddToView(videoBvid)
             },
             text = { Text(stringResource(Res.string.video_action_toview_desc)) },
             // 与播放页动作栏那一格同一个图标,认得出是同一件事。
             leadingIcon = { Icon(Icons.Outlined.WatchLater, contentDescription = null) },
-            shape = MenuDefaults.leadingItemShape,
+            shape = menuItemShape(0, totalCount),
         )
     }
+    VideoCommonMenuItems(
+        bvid = videoBvid,
+        title = (item as? FeedEntry.Video)?.title.orEmpty(),
+        close = close,
+        upMid = item.upMid,
+        onOpenUpSpace = onUpClick,
+        startIndex = leadingCount,
+        totalCount = totalCount,
+    )
     // **当场生效,撤销在 snackbar 上**(见 [ExcludeUndo])。从前这里还隔着一个确认对话框,
     // 理由是撤销无处可落;设置里那份名单可以逐个恢复之后,那个理由不成立了,而一个撤得回来的
     // 操作不值得一次拦截。
@@ -702,7 +742,7 @@ private fun FeedEntryMenuItems(
         },
         text = { Text(stringResource(Res.string.feed_exclude_up, item.upName)) },
         leadingIcon = { Icon(Icons.Outlined.VisibilityOff, contentDescription = null) },
-        shape = if (canAddToView) MenuDefaults.trailingItemShape else MenuDefaults.standaloneItemShape,
+        shape = menuItemShape(totalCount - 1, totalCount),
     )
 }
 

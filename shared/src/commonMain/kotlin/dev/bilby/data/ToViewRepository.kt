@@ -19,6 +19,7 @@ data class ToViewItem(
     /** 存秒,不存拼好的文案:进度条要拿它算比例,而展示统一交给 `formatDurationSeconds`。 */
     val durationSeconds: Long,
     val upName: String,
+    val upMid: Long = 0L,
     val progressSeconds: Long,
     val pubdateEpochSeconds: Long,
     val playCount: Long,
@@ -97,6 +98,7 @@ class ToViewRepository(private val client: BiliClient) {
         title = title,
         durationSeconds = duration,
         upName = owner.name,
+        upMid = owner.mid,
         progressSeconds = progress,
         pubdateEpochSeconds = pubdate,
         playCount = stat.view,

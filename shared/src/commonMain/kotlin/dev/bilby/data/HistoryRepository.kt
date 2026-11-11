@@ -30,6 +30,7 @@ data class HistoryItem(
     val durationText: String,
     val durationSeconds: Long,
     val upName: String,
+    val upMid: Long = 0L,
     val viewAtEpochSeconds: Long,
     val progressSeconds: Long,
 ) {
@@ -160,6 +161,7 @@ private fun HistoryItemDto.toDomain() = HistoryItem(
     durationText = formatDurationSeconds(duration),
     durationSeconds = duration,
     upName = authorName,
+    upMid = authorMid,
     viewAtEpochSeconds = viewAt,
     progressSeconds = progress,
 )

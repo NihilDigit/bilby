@@ -12,8 +12,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Headphones as OutlinedHeadphones
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import dev.bilby.ui.components.ContextMenuBox
+import dev.bilby.ui.components.VideoCommonMenuItems
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.videoCommonMenuItemCount
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -218,6 +225,7 @@ class ToViewViewModel(private val repository: ToViewRepository) : ViewModel() {
 /**
  * 稍后再看。清空在顶栏的菜单里(见 MainActivity),这里是容量、听全部、排序和列表。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun ToViewScreen(
     state: ToViewUiState,
@@ -227,6 +235,8 @@ fun ToViewScreen(
     /** 听全部。给的是列表里第一条能放的,队列由播放页按同一个排序建。 */
     onListenAll: (ToViewItem) -> Unit,
     onAscChanged: (Boolean) -> Unit,
+    onListenItem: ((ToViewItem) -> Unit)? = null,
+    onUpClick: (Long) -> Unit = {},
     onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
@@ -266,23 +276,64 @@ fun ToViewScreen(
                     }
                 },
             ) { item ->
-                VideoRow(
-                    item = item.toRowUi(),
-                    // 剧集与课程照常列出但不可打开(UGC-only);移出按钮仍在,它们正是该清掉的那一类。
-                    enabled = item.playable,
-                    onClick = { if (item.playable) onItemClick(item) },
-                    trailing = {
-                        // 图标用 Close 而不是 Delete:这里是"从列表里拿掉",
-                        // 不是把视频删了。垃圾桶图标承诺的破坏性比实际动作大。
-                        IconButton(onClick = { onDelete(item) }) {
-                            Icon(
-                                Icons.Outlined.Close,
-                                contentDescription = stringResource(Res.string.toview_remove, item.title),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                ContextMenuBox(
+                    onClick = null,
+                    menuLabel = stringResource(Res.string.menu_item_actions),
+                    menu = { close ->
+                        val canListenOne = item.playable && onListenItem != null
+                        val bvid = if (item.playable) item.bvid else ""
+                        val leadingCount = 1 + (if (canListenOne) 1 else 0)
+                        val totalCount = leadingCount + videoCommonMenuItemCount(bvid, item.upMid, onUpClick)
+                        DropdownMenuItem(
+                            onClick = {
+                                close()
+                                onDelete(item)
+                            },
+                            text = { Text(stringResource(Res.string.toview_remove_action)) },
+                            leadingIcon = { Icon(Icons.Outlined.Close, contentDescription = null) },
+                            shape = menuItemShape(0, totalCount),
+                        )
+                        if (canListenOne) {
+                            DropdownMenuItem(
+                                onClick = {
+                                    close()
+                                    onListenItem.invoke(item)
+                                },
+                                text = { Text(stringResource(Res.string.toview_listen_all)) },
+                                leadingIcon = { Icon(Icons.Outlined.OutlinedHeadphones, contentDescription = null) },
+                                shape = menuItemShape(1, totalCount),
                             )
                         }
+                        VideoCommonMenuItems(
+                            bvid = bvid,
+                            title = item.title,
+                            close = close,
+                            upMid = item.upMid,
+                            onOpenUpSpace = onUpClick,
+                            startIndex = leadingCount,
+                            totalCount = totalCount,
+                        )
                     },
-                )
+                ) { openMenu ->
+                    VideoRow(
+                        item = item.toRowUi(),
+                        // 剧集与课程照常列出但不可打开(UGC-only);移出按钮仍在,它们正是该清掉的那一类。
+                        enabled = item.playable,
+                        onClick = { if (item.playable) onItemClick(item) },
+                        onLongClick = if (item.playable) openMenu else null,
+                        trailing = {
+                            // 图标用 Close 而不是 Delete:这里是"从列表里拿掉",
+                            // 不是把视频删了。垃圾桶图标承诺的破坏性比实际动作大。
+                            IconButton(onClick = { onDelete(item) }) {
+                                Icon(
+                                    Icons.Outlined.Close,
+                                    contentDescription = stringResource(Res.string.toview_remove, item.title),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                    )
+                }
             }
         }
     }

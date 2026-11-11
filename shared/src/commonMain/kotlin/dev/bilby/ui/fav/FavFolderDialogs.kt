@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.components.LoadingSpinner
+import dev.bilby.ui.components.trackEditableFocus
 import dev.bilby.ui.theme.Spacing
 
 /** 编辑对话框往回传的动作。挤成一个对象是因为它们只在这一个对话框里成套出现。 */
@@ -68,7 +69,7 @@ fun FavFolderEditorDialog(state: FavFolderEditorState, actions: FavFolderEditorA
                     singleLine = true,
                     // 默认收藏夹的名称是固定的,改不了;它的公开性仍然能改,所以对话框照开。
                     enabled = !state.isDefaultFolder,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().trackEditableFocus(),
                 )
                 if (!state.isDefaultFolder) {
                     OutlinedTextField(
@@ -77,7 +78,7 @@ fun FavFolderEditorDialog(state: FavFolderEditorState, actions: FavFolderEditorA
                         label = { Text(stringResource(Res.string.fav_folder_intro_label)) },
                         minLines = 2,
                         maxLines = 4,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().trackEditableFocus(),
                     )
                 }
                 Text(

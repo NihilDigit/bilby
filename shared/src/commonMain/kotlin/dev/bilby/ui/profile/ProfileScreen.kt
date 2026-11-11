@@ -29,6 +29,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.Dp
 import dev.bilby.ui.components.VideoCover
 import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.BilbyTooltip
+import dev.bilby.ui.CaptionLeadWithDrag
+import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.rememberCaptionSlot
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import dev.bilby.ui.components.verticalWheelScrollsRow
@@ -354,8 +358,9 @@ fun ProfileScreen(
     ) {
             val sectionModifier = if (fit) Modifier.weight(1f) else Modifier
             // 窄屏限宽:卡片横跨整屏时,名字在最左、两个图标在最右,中间是一大片空。宽屏把三连
-            // 挪进名字那一行,卡片和下面的货架同宽。
-            if (wide) {
+            // 挪进名字那一行,卡片和下面的货架同宽。桌面端中等宽度窗口下卡片也贴满岛宽,让右上角
+            // 窗口按钮与设置图标紧邻同排,中间空白作拖动区。
+            if (wide || LocalWindowCaption.current != null) {
                 AccountCard(
                     state = state,
                     onOpenSelf = onOpenSelf,
@@ -364,7 +369,7 @@ fun ProfileScreen(
                     onOpenCoinLog = onOpenCoinLog,
                     onSettingsClick = onSettingsClick,
                     onRetry = onRetryAccount,
-                    wide = true,
+                    wide = wide,
                 )
             } else {
                 AdaptiveContent(maxWidth = Breakpoints.ReadableWidth) {
@@ -448,13 +453,14 @@ private fun AccountCard(
             .fillMaxWidth()
             .padding(Spacing.Tight),
     ) {
+        val hasWindowCaption = LocalWindowCaption.current != null
         Column(
             verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
             modifier = Modifier
                 // **role 要给。** 不给的话读屏只念出里面那几段文字,念不出"这是个可以点的东西",
-                // 而这张卡是进自己空间的唯一入口。
+                // 而这张卡是进自己空间的唯一入口。桌面端下点击范围收束到左侧头像名片块,右侧留白让给窗口拖动。
                 .then(
-                    if (account != null) {
+                    if (account != null && !hasWindowCaption) {
                         Modifier.clickable(role = Role.Button) { onOpenSelf(account.mid) }
                     } else {
                         Modifier
@@ -463,13 +469,17 @@ private fun AccountCard(
                 // 右边只留 4:设置按钮自带 48dp 触控格,图标本身离页边已经有 24。
                 .padding(start = Spacing.Tight, top = Spacing.Tight, bottom = Spacing.Tight, end = Spacing.Hair),
         ) {
+        val captionSlot = rememberCaptionSlot()
         val settingsButton: @Composable () -> Unit = {
-            IconButton(onClick = onSettingsClick) {
-                Icon(
-                    Icons.Outlined.Settings,
-                    contentDescription = stringResource(Res.string.settings_title),
-                    modifier = Modifier.size(AccountActionIconSize),
-                )
+            val settingsLabel = stringResource(Res.string.settings_title)
+            BilbyTooltip(text = settingsLabel, shortcut = "Ctrl+,") {
+                IconButton(onClick = onSettingsClick) {
+                    Icon(
+                        Icons.Outlined.Settings,
+                        contentDescription = settingsLabel,
+                        modifier = Modifier.size(AccountActionIconSize),
+                    )
+                }
             }
         }
         // 头像、名字、等级、签名的尺寸与排法同空间页页头(SpaceScreen 的 ProfileHeader):自己的
@@ -478,74 +488,102 @@ private fun AccountCard(
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-            modifier = Modifier.heightIn(min = AccountAvatarSize),
+            modifier = captionSlot.modifier.heightIn(min = AccountAvatarSize),
         ) {
-            if (account != null) {
-                Avatar(url = account.faceUrl, size = AccountAvatarSize)
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                ) {
-                    // 名字后面紧跟等级与 ›:这一页不放粉丝数,等级单占一行只剩一枚孤零零的小标;
-                    // 与名字同行同视频页 UP 行、评论区一致。
+            CaptionLeadWithDrag(
+                dragEnabled = captionSlot.atTop,
+                dragHeight = AccountAvatarSize,
+                modifier = Modifier.weight(1f),
+            ) {
+                if (account != null) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                        modifier = if (hasWindowCaption) {
+                            Modifier
+                                .clip(MaterialTheme.shapes.large)
+                                .clickable(role = Role.Button) { onOpenSelf(account.mid) }
+                                .padding(end = Spacing.Tight)
+                        } else {
+                            Modifier.fillMaxWidth()
+                        },
                     ) {
-                        Text(
-                            text = account.name,
-                            style = MaterialTheme.typography.titleLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
-                        LevelBadge(
-                            level = account.level,
-                            senior = account.isSeniorMember,
-                            height = Dimens.LevelBadgeHeight,
-                        )
-                        Icon(
-                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(Dimens.IconInline),
-                        )
-                    }
-                    if (account.sign.isNotBlank()) {
-                        Text(
-                            text = account.sign,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            } else {
-                Box(modifier = Modifier.weight(1f)) {
-                    if (state.accountError != null) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = stringResource(state.accountError),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.weight(1f, fill = false),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            TextButton(onClick = onRetry) { Text(stringResource(Res.string.action_retry)) }
+                        Avatar(url = account.faceUrl, size = AccountAvatarSize)
+                        Column(
+                            modifier = Modifier.weight(1f, fill = !hasWindowCaption),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                        ) {
+                            // 名字后面紧跟等级与 ›:这一页不放粉丝数,等级单占一行只剩一枚孤零零的小标;
+                            // 与名字同行同视频页 UP 行、评论区一致。
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                            ) {
+                                Text(
+                                    text = account.name,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                LevelBadge(
+                                    level = account.level,
+                                    senior = account.isSeniorMember,
+                                    height = Dimens.LevelBadgeHeight,
+                                )
+                                Icon(
+                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(Dimens.IconInline),
+                                )
+                            }
+                            if (account.sign.isNotBlank()) {
+                                Text(
+                                    text = account.sign,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
-                    } else {
-                        // 头像、名字、签名各一块,位置和尺寸同真实内容:账号到了只是颜色在变。
-                        SkeletonPulse {
-                            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy)) {
-                                Box(Modifier.size(AccountAvatarSize).skeleton(CircleShape))
-                                Column(
-                                    modifier = Modifier.weight(1f).padding(top = Spacing.Tight),
-                                    verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                                ) {
-                                    SkeletonLine(Modifier.fillMaxWidth(0.5f), height = AccountNameSkeletonHeight)
-                                    SkeletonLine(Modifier.fillMaxWidth(0.8f))
+                    }
+                } else {
+                    Box(modifier = if (hasWindowCaption) Modifier else Modifier.fillMaxWidth()) {
+                        if (state.accountError != null) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = stringResource(state.accountError),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                TextButton(onClick = onRetry) { Text(stringResource(Res.string.action_retry)) }
+                            }
+                        } else {
+                            // 头像、名字、签名各一块,位置和尺寸同真实内容:账号到了只是颜色在变。
+                            SkeletonPulse {
+                                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy)) {
+                                    Box(Modifier.size(AccountAvatarSize).skeleton(CircleShape))
+                                    Column(
+                                        modifier = if (hasWindowCaption) {
+                                            Modifier.padding(top = Spacing.Tight)
+                                        } else {
+                                            Modifier.weight(1f).padding(top = Spacing.Tight)
+                                        },
+                                        verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                                    ) {
+                                        SkeletonLine(
+                                            if (hasWindowCaption) Modifier.width(120.dp) else Modifier.fillMaxWidth(0.5f),
+                                            height = AccountNameSkeletonHeight,
+                                        )
+                                        SkeletonLine(
+                                            if (hasWindowCaption) Modifier.width(192.dp) else Modifier.fillMaxWidth(0.8f),
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -561,7 +599,10 @@ private fun AccountCard(
                     modifier = Modifier.width(WideAccountActionsWidth),
                 )
             }
-            settingsButton()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                settingsButton()
+                captionSlot.buttons?.invoke()
+            }
         }
         // 关注、硬币、消息三连,横跨整行。右边再补 4,右沿和左沿一样落在 16 的页边线上
         // (外边距 8 + 内边距 4 + 4)。

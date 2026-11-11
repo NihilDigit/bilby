@@ -1,8 +1,34 @@
 package dev.bilby.ui
 
+import dev.bilby.ui.components.EditableFocusTracker
+import dev.bilby.ui.components.LocalCopyNotice
+import dev.bilby.ui.components.LocalEditableFocusTracker
+import dev.bilby.ui.components.LocalPageRefreshRegistry
 import dev.bilby.ui.components.LocalPointerSource
+import dev.bilby.ui.components.NeedsCopyNotice
+import dev.bilby.ui.components.PageRefreshRegistry
 import dev.bilby.ui.components.PointerSource
+import dev.bilby.ui.components.RegisterPageRefresh
+import dev.bilby.ui.components.ShortcutsSheet
+import dev.bilby.ui.components.readClipboardText
 import dev.bilby.ui.components.trackPointerSource
+import dev.bilby.data.HistoryItem
+import dev.bilby.data.SidePanelId
+import dev.bilby.data.SideSheetPrefs
+import dev.bilby.ui.search.directDestination
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
@@ -11,11 +37,16 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -46,7 +77,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ShortNavigationBar
 import androidx.compose.material3.ShortNavigationBarItem
 import androidx.compose.material3.WideNavigationRail
+import androidx.compose.material3.WideNavigationRailDefaults
 import androidx.compose.material3.WideNavigationRailItem
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBarDefaults
@@ -183,6 +217,7 @@ import dev.bilby.ui.space.CollectionViewModel
 import dev.bilby.ui.space.SpaceScreen
 import dev.bilby.ui.space.SpaceViewModel
 import dev.bilby.ui.theme.Motion
+import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.rememberReducedMotion
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.update.StartupUpdatePrompt
@@ -233,6 +268,9 @@ fun BilbyRoot(
         // 是压栈动作,而压栈能从任何一页发起,各页面的 Scaffold 都会跟着页面一起换掉。
         val snackbarHostState = remember { SnackbarHostState() }
         val pointerSource = remember { PointerSource() }
+        val editableFocusTracker = remember { EditableFocusTracker() }
+        val pageRefreshRegistry = remember { PageRefreshRegistry() }
+        val triggerBack = rememberBackTrigger()
         // 分享在桌面上是复制链接,按下去界面上看不出变化;报一句,见 SystemActions.shareCopiesLink。
         val scope = rememberCoroutineScope()
         val copiedText = stringResource(Res.string.share_link_copied)
@@ -242,9 +280,24 @@ fun BilbyRoot(
                 scope.launch { snackbarHostState.showSnackbar(copiedText, withDismissAction = true) }
             }
         }
-        Box(modifier = Modifier.fillMaxSize().trackPointerSource(pointerSource)) {
+        val copyNotice = remember(scope, snackbarHostState) {
+            { message: String ->
+                if (NeedsCopyNotice) {
+                    scope.launch { snackbarHostState.showSnackbar(message, withDismissAction = true) }
+                }
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .trackPointerSource(pointerSource)
+                .mouseBackNavigation(triggerBack),
+        ) {
             CompositionLocalProvider(
                 LocalPointerSource provides pointerSource,
+                LocalEditableFocusTracker provides editableFocusTracker,
+                LocalPageRefreshRegistry provides pageRefreshRegistry,
+                LocalCopyNotice provides copyNotice,
                 LocalSystemActions provides systemActions,
                 LocalEmoteRepository provides container.emoteRepository,
             ) {
@@ -462,6 +515,103 @@ private fun BilbyApp(
         ?.let { backStack.getOrNull(it + 1) as? SettingsPage }
         ?.section
 
+    val editableFocus = LocalEditableFocusTracker.current
+    val pageRefresh = LocalPageRefreshRegistry.current
+    val triggerBack = rememberBackTrigger()
+    val clipboard = LocalClipboard.current
+    val rootFocusRequester = remember { FocusRequester() }
+    var shortcutsOpen by remember { mutableStateOf(false) }
+    var rootTabRequest by remember { mutableStateOf<Pair<RootTab, Int>?>(null) }
+    var focusSearchNonce by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        if (!editableFocus.isEditableFocused) {
+            runCatching { rootFocusRequester.requestFocus() }
+        }
+    }
+
+    val switchRootTab: (RootTab) -> Boolean = { tab ->
+        val playingPage = backStack.any { it is Video || it is LiveRoom }
+        if (playingPage) {
+            false
+        } else {
+            while (backStack.size > 1) backStack.removeLastOrNull()
+            rootTabRequest = tab to ((rootTabRequest?.second ?: 0) + 1)
+            true
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                val ctrl = event.isCtrlPressed && !event.isAltPressed && !event.isMetaPressed
+                val alt = event.isAltPressed && !event.isCtrlPressed && !event.isMetaPressed
+                val bare = !event.isCtrlPressed && !event.isAltPressed && !event.isShiftPressed && !event.isMetaPressed
+
+                // F1 / Ctrl+/ 快捷键面板
+                if ((bare && event.key == Key.F1) || (ctrl && event.key == Key.Slash)) {
+                    shortcutsOpen = !shortcutsOpen
+                    return@onPreviewKeyEvent true
+                }
+                // Ctrl+, 打开设置
+                if (ctrl && !event.isShiftPressed && event.key == Key.Comma) {
+                    if (backStack.none { it is Settings }) openSettings()
+                    return@onPreviewKeyEvent true
+                }
+                // Ctrl+1/2/3 切换三个根目的地(播放与直播中不切走页面)
+                if (ctrl && !event.isShiftPressed) {
+                    val targetTab = when (event.key) {
+                        Key.One, Key.NumPad1 -> RootTab.Feed
+                        Key.Two, Key.NumPad2 -> RootTab.Search
+                        Key.Three, Key.NumPad3 -> RootTab.Profile
+                        else -> null
+                    }
+                    if (targetTab != null) return@onPreviewKeyEvent switchRootTab(targetTab)
+                }
+                // Ctrl+F 或首页下的单键 / 聚焦主搜索框
+                if ((ctrl && !event.isShiftPressed && event.key == Key.F) ||
+                    (bare && !editableFocus.isEditableFocused && backStack.lastOrNull() is Home && event.key == Key.Slash)
+                ) {
+                    if (switchRootTab(RootTab.Search)) {
+                        focusSearchNonce++
+                        return@onPreviewKeyEvent true
+                    }
+                }
+                // 以下动作在输入框聚焦时一律放行给文本编辑
+                if (editableFocus.isEditableFocused) return@onPreviewKeyEvent false
+
+                // Alt+← 浏览器式返回
+                if (alt && !event.isShiftPressed && event.key == Key.DirectionLeft) {
+                    triggerBack()
+                    return@onPreviewKeyEvent true
+                }
+                // F5 / Ctrl+R 刷新当前最上层页面
+                if ((bare && event.key == Key.F5) || (ctrl && !event.isShiftPressed && event.key == Key.R)) {
+                    return@onPreviewKeyEvent pageRefresh.trigger()
+                }
+                // Ctrl+V 直接跳转剪贴板里的站内链接或 BV / av 号
+                if (ctrl && !event.isShiftPressed && event.key == Key.V) {
+                    snackbarScope.launch {
+                        val text = readClipboardText(clipboard)?.trim()?.takeIf { it.isNotEmpty() } ?: return@launch
+                        val direct = directDestination(text)
+                        if (direct != null) {
+                            push(direct)
+                            return@launch
+                        }
+                        val url = BilbyLink.extractUrl(text)
+                        if (url != null && BilbyLink.isShortLink(url)) {
+                            incomingLink.value = url
+                        }
+                    }
+                    return@onPreviewKeyEvent true
+                }
+                false
+            }
+            .focusRequester(rootFocusRequester)
+            .focusable(),
+    ) {
     NavDisplay(
         backStack = backStack,
         onBack = popBack,
@@ -545,6 +695,8 @@ private fun BilbyApp(
                 CutoutSafe {
                     RootTabs(
                         container = container,
+                        tabRequest = rootTabRequest,
+                        focusSearchNonce = focusSearchNonce,
                         onVideoClick = { push(Video(it)) },
                         onVideoInContext = { bvid, context -> push(Video(bvid, context = context)) },
                         onUserClick = { push(Space(it)) },
@@ -605,6 +757,7 @@ private fun BilbyApp(
                     HistoryRoute(
                         container = container,
                         onVideoClick = { push(Video(it)) },
+                        onUpClick = { push(Space(it)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -772,6 +925,7 @@ private fun BilbyApp(
                         container = container,
                         onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
                         onListen = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
+                        onUpClick = { push(Space(it)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -784,6 +938,7 @@ private fun BilbyApp(
                         title = key.title,
                         onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
                         onListen = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
+                        onUpClick = { push(Space(it)) },
                         onBack = { backStack.removeLastOrNull() },
                     )
                 }
@@ -884,6 +1039,10 @@ private fun BilbyApp(
             }
         },
     )
+    if (shortcutsOpen) {
+        ShortcutsSheet(onDismiss = { shortcutsOpen = false })
+    }
+    }
 }
 
 /**
@@ -931,6 +1090,8 @@ private fun CutoutSafe(content: @Composable () -> Unit) {
 @Composable
 private fun RootTabs(
     container: AppContainer,
+    tabRequest: Pair<RootTab, Int>? = null,
+    focusSearchNonce: Int = 0,
     onVideoClick: (String) -> Unit,
     /**
      * 「我的」页稍后再看、缓存预览里的一条:队列是那一节对应的列表,不是这条视频的归属。
@@ -977,6 +1138,10 @@ private fun RootTabs(
             selected = tab
         }
     }
+    LaunchedEffect(tabRequest?.second) {
+        val target = tabRequest?.first ?: return@LaunchedEffect
+        if (selected != target) selected = target
+    }
 
     // 键盘弹起时盖住底栏,底栏不跟着上移:navigation-bar.md 的 Placement 一节列明底栏可以被
     // 键盘临时遮住,示例正是搜索。跟着上移的话底栏夹在输入框和键盘之间,白占一条高度。
@@ -1015,6 +1180,7 @@ private fun RootTabs(
                 selected = selected,
                 feedScrollToTop = feedScrollToTop,
                 profileScrollToTop = profileScrollToTop,
+                focusSearchNonce = focusSearchNonce,
                 container = container,
                 onVideoClick = onVideoClick,
                 onVideoInContext = onVideoInContext,
@@ -1042,27 +1208,16 @@ private fun RootTabs(
         // collapsed 款(WideNavigationRail 的默认态)。baseline 的 NavigationRail 已被
         // navigation-rail.md 标为 "no longer recommended"。目的地居中:同一页对平板给的就是
         // 这个摆法,三格顶在屏幕最上沿时握持的那只手要伸到最远处。
-        Row(modifier = Modifier.fillMaxSize()) {
-            WideNavigationRail(
-                modifier = Modifier.fillMaxHeight(),
-                arrangement = Arrangement.Center,
-            ) {
-                RootTab.entries.forEach { tab ->
-                    WideNavigationRailItem(
-                        selected = selected == tab,
-                        onClick = { onTabClick(tab) },
-                        icon = { RootTabIcon(tab, selected == tab) },
-                        label = { RootTabLabel(tab, selected == tab) },
-                        railExpanded = false,
-                    )
-                }
-            }
-            Scaffold(modifier = Modifier.weight(1f)) { insets ->
+        LocalWindowCaption.current?.Host()
+        val desktopFramed = LocalWindowCaption.current != null
+        val tabsScaffold: @Composable (Modifier) -> Unit = { scaffoldModifier ->
+            Scaffold(modifier = scaffoldModifier) { insets ->
                 RootTabsContent(
                     insets = insets,
                     selected = selected,
                     feedScrollToTop = feedScrollToTop,
                     profileScrollToTop = profileScrollToTop,
+                    focusSearchNonce = focusSearchNonce,
                     container = container,
                     onVideoClick = onVideoClick,
                     onVideoInContext = onVideoInContext,
@@ -1072,7 +1227,7 @@ private fun RootTabs(
                     onOpenFollowings = onOpenFollowings,
                     onOpenCoinLog = onOpenCoinLog,
                     onOpenOtherDynamics = onOpenOtherDynamics,
-        onOpenPushes = onOpenPushes,
+                    onOpenPushes = onOpenPushes,
                     onOpenArticle = onOpenArticle,
                     onOpenHistory = onOpenHistory,
                     onOpenToView = onOpenToView,
@@ -1082,6 +1237,77 @@ private fun RootTabs(
                     onOpenMessages = onOpenMessages,
                     onOpen = onOpen,
                 )
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(
+                    if (desktopFramed) {
+                        Modifier.background(MaterialTheme.colorScheme.surfaceContainer)
+                    } else {
+                        Modifier
+                    },
+                ),
+        ) {
+            Box(modifier = Modifier.fillMaxHeight()) {
+                WideNavigationRail(
+                    modifier = Modifier.fillMaxHeight(),
+                    arrangement = Arrangement.Center,
+                    colors = if (desktopFramed) {
+                        WideNavigationRailDefaults.colors(containerColor = Color.Transparent)
+                    } else {
+                        WideNavigationRailDefaults.colors()
+                    },
+                ) {
+                    RootTab.entries.forEach { tab ->
+                        WideNavigationRailItem(
+                            selected = selected == tab,
+                            onClick = { onTabClick(tab) },
+                            icon = { RootTabIcon(tab, selected == tab) },
+                            label = { RootTabLabel(tab, selected == tab) },
+                            railExpanded = false,
+                        )
+                    }
+                }
+                if (desktopFramed) {
+                    Spacer(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .width(80.dp)
+                            .height(72.dp)
+                            .windowDragArea(),
+                    )
+                    Spacer(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .width(80.dp)
+                            .height(72.dp)
+                            .windowDragArea(),
+                    )
+                }
+            }
+            if (desktopFramed) {
+                // 桌面端外框深底圆角内容岛:侧栏与外框同色通顶,右侧主内容盛在 16dp 圆角岛内,零分隔线。
+                Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    Spacer(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(Spacing.Tight)
+                            .windowDragArea(),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(end = Spacing.Tight, bottom = Spacing.Tight)
+                            .clip(MaterialTheme.shapes.large),
+                    ) {
+                        tabsScaffold(Modifier.fillMaxSize())
+                    }
+                }
+            } else {
+                tabsScaffold(Modifier.weight(1f))
             }
         }
     }
@@ -1116,6 +1342,7 @@ private fun RootTabsContent(
     /** 每变一次就回到顶部。计数器而不是布尔:连按两下要滚两次,而布尔第二下没有变化。 */
     feedScrollToTop: Int,
     profileScrollToTop: Int,
+    focusSearchNonce: Int,
     container: AppContainer,
     onVideoClick: (String) -> Unit,
     onVideoInContext: (String, QueueContext) -> Unit,
@@ -1189,7 +1416,7 @@ private fun RootTabsContent(
                 )
 
                 // 不限宽:宽屏结果是格子、助理是侧栏,搜索框自己限宽(见 SearchChatScreen)。
-                RootTab.Search -> SearchPane(container, onVideoClick, onUserClick, onOpenArticle, onOpen)
+                RootTab.Search -> SearchPane(container, focusSearchNonce, onVideoClick, onUserClick, onOpenArticle, onOpen)
 
                 // 不限宽:宽屏每节是一排卡片,宽度换成条数(见 ProfileScreen);窄屏账号卡自己限宽。
                 RootTab.Profile -> ProfilePane(
@@ -1258,6 +1485,7 @@ private fun FeedPane(
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    RegisterPageRefresh(refreshing = state.refreshing, onRefresh = vm::refresh)
     FeedScreen(
         state = state,
         scrollToTop = scrollToTop,
@@ -1289,6 +1517,7 @@ private fun FeedPane(
 @Composable
 private fun SearchPane(
     container: AppContainer,
+    focusSearchNonce: Int,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onOpenArticle: (ArticleRef) -> Unit,
@@ -1313,8 +1542,10 @@ private fun SearchPane(
     val history by vm.searchHistory.collectAsStateWithLifecycle()
     val agentAvailable by vm.agentAvailable.collectAsStateWithLifecycle()
     val agentPanel by vm.agentPanel.collectAsStateWithLifecycle()
+    RegisterPageRefresh(refreshing = state.normal.videos.loading && state.normal.videos.items.isNotEmpty(), onRefresh = vm::refresh)
     SearchChatScreen(
         state = state,
+        focusSearchNonce = focusSearchNonce,
         searchHistory = history,
         onHistoryClick = vm::searchFromHistory,
         onHistoryRemove = vm::removeSearchHistory,
@@ -1374,6 +1605,9 @@ private fun SearchResultRoute(
     // 标题底下钻出来的。pinned 而不是 enterAlways —— 顶栏上写着"这是哪一页",而这些页面没有
     // 底栏兜底;滑走之后返回箭头也跟着走了。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    LaunchedEffect(state.tab) {
+        scrollBehavior.state.contentOffset = 0f
+    }
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
@@ -1450,6 +1684,7 @@ private fun ProfilePane(
     // 首次进入时 ViewModel 的 init 已经拉过一次,这里会再来一次 —— 认了。少这一次的写法
     // (去抖 + 版本号)试过,漏的比省的多,见 [ProfileViewModel.refresh]。
     LaunchedEffect(Unit) { vm.refresh() }
+    RegisterPageRefresh(onRefresh = vm::refresh)
 
     ProfileScreen(
         state = state,
@@ -1539,10 +1774,12 @@ private fun SettingsPageRoute(
             onWifiQualityChange = { vm.setDefaultQuality(it, metered = false) },
             onMeteredQualityChange = { vm.setDefaultQuality(it, metered = true) },
             onCodecChange = vm::setCodec,
-            onAutoNextChange = vm::setAutoNext,
+            onEndModeChange = vm::setEndMode,
             onPbpOutroCompletionChange = vm::setPbpOutroCompletion,
             onWifiAudioChange = { vm.setDefaultAudio(it, metered = false) },
             onMeteredAudioChange = { vm.setDefaultAudio(it, metered = true) },
+            onWifiLiveQualityChange = { vm.setDefaultLiveQuality(it, metered = false) },
+            onMeteredLiveQualityChange = { vm.setDefaultLiveQuality(it, metered = true) },
             onPickUpdatesDefaultChange = vm::setPlayerPickUpdatesDefault,
             onSponsorBlockChange = vm::updateSponsorBlock,
             onOpenSponsorCategories = { onOpenSection(SettingsSection.SponsorCategories) },
@@ -1628,18 +1865,21 @@ private fun rememberSettingsViewModel(container: AppContainer): SettingsViewMode
 private fun HistoryRoute(
     container: AppContainer,
     onVideoClick: (String) -> Unit,
+    onUpClick: (Long) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: HistoryViewModel = viewModel(
         factory = viewModelFactory { initializer { HistoryViewModel(container.historyRepository) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    RegisterPageRefresh(refreshing = state.refreshing, onRefresh = vm::refresh)
 
     // null 表示不在多选态。空集合是多选态里的合法状态 —— 顶栏的「选择」要在一条都没选的
     // 时候就进得去。
     var selectedIds by remember { mutableStateOf<Set<Long>?>(null) }
     var menuExpanded by remember { mutableStateOf(false) }
     var confirmingDeleteSelected by remember { mutableStateOf(false) }
+    var confirmingDeleteSingle by remember { mutableStateOf<HistoryItem?>(null) }
     var confirmingClearFinished by remember { mutableStateOf(false) }
     var confirmingClearAll by remember { mutableStateOf(false) }
 
@@ -1658,6 +1898,9 @@ private fun HistoryRoute(
     // 见 [SearchResultRoute] 里那段说明。多选态那条顶栏也接同一个 behavior:两条是同一个位置
     // 的两种长相,只有一条变色的话切进多选就像顶栏换了一层底。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    LaunchedEffect(state.items.isEmpty()) {
+        if (state.items.isEmpty()) scrollBehavior.state.contentOffset = 0f
+    }
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
@@ -1764,6 +2007,8 @@ private fun HistoryRoute(
                 val current = selectedIds ?: emptySet()
                 selectedIds = if (item.oid in current) current - item.oid else current + item.oid
             },
+            onDeleteSingle = { item -> confirmingDeleteSingle = item },
+            onUpClick = onUpClick,
             onDismissMutationError = vm::dismissMutationError,
             contentPadding = insets,
         )
@@ -1771,6 +2016,13 @@ private fun HistoryRoute(
 
     // 三个确认框各说各的范围。删除不可撤销,而这三件事影响的条数各不相同 —— 合并成一句
     // "确定删除吗"就把范围这个唯一值得确认的东西省掉了。
+    confirmingDeleteSingle?.let { target ->
+        HistoryConfirmDialog(
+            message = stringResource(Res.string.history_delete_one_confirm),
+            onConfirm = { vm.delete(listOf(target)) },
+            onDismiss = { confirmingDeleteSingle = null },
+        )
+    }
     if (confirmingDeleteSelected) {
         HistoryConfirmDialog(
             message = stringResource(Res.string.history_delete_confirm, selected.size),
@@ -1963,6 +2215,9 @@ private fun OfflineRoute(
 
     // 见 [SearchResultRoute];两条顶栏同接一个 behavior,同历史记录页。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    LaunchedEffect(items.isEmpty()) {
+        if (items.isEmpty()) scrollBehavior.state.contentOffset = 0f
+    }
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
@@ -2085,6 +2340,7 @@ private fun ToViewListRoute(
     container: AppContainer,
     onVideoClick: (String, QueueContext) -> Unit,
     onListen: (String, QueueContext) -> Unit,
+    onUpClick: (Long) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: ToViewViewModel = viewModel(
@@ -2118,6 +2374,9 @@ private fun ToViewListRoute(
 
     // 见 [SearchResultRoute]。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    LaunchedEffect(state.asc, state.items.isEmpty()) {
+        scrollBehavior.state.contentOffset = 0f
+    }
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
@@ -2165,6 +2424,8 @@ private fun ToViewListRoute(
             onRetry = vm::retry,
             onListenAll = { onListen(it.bvid, QueueContext.ToView(state.asc)) },
             onAscChanged = vm::setAsc,
+            onListenItem = { onListen(it.bvid, QueueContext.ToView(state.asc)) },
+            onUpClick = onUpClick,
             onRefresh = vm::refresh,
             contentPadding = PaddingValues(
                 start = insets.calculateStartPadding(layoutDirection),
@@ -2197,6 +2458,7 @@ private fun FavFolderRoute(
     title: String,
     onVideoClick: (String, QueueContext) -> Unit,
     onListen: (String, QueueContext) -> Unit,
+    onUpClick: (Long) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: FavFolderViewModel = viewModel(
@@ -2221,6 +2483,9 @@ private fun FavFolderRoute(
 
     // 见 [SearchResultRoute]。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    LaunchedEffect(state.order, state.appliedKeyword, state.items.isEmpty()) {
+        scrollBehavior.state.contentOffset = 0f
+    }
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
@@ -2256,6 +2521,7 @@ private fun FavFolderRoute(
             onNoticeShown = vm::dismissNotice,
             editorActions = vm.manager.editorActions,
             deletionActions = vm.manager.deletionActions,
+            onUpClick = onUpClick,
             contentPadding = insets,
         )
     }
@@ -2275,6 +2541,9 @@ private fun FollowingsRoute(
     val state by vm.state.collectAsStateWithLifecycle()
     // 见 [SearchResultRoute]。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    LaunchedEffect(state.source, state.order, state.query, state.items.isEmpty()) {
+        scrollBehavior.state.contentOffset = 0f
+    }
     // 宽屏时刷新与排序进名单上方的筛选行(见 WideFilterRow),搜索框换到顶栏正中:
     // 放在筛选行里,48dp 的输入框和 32dp 的芯片挤在一条线上,高低不齐。
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
@@ -2431,6 +2700,7 @@ private fun CollectionRoute(
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    RegisterPageRefresh(refreshing = state.refreshing, onRefresh = vm::refresh)
     CollectionScreen(
         title = key.name,
         state = state,
@@ -2457,6 +2727,7 @@ private fun OtherDynamicsRoute(
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    RegisterPageRefresh(refreshing = state.refreshing, onRefresh = vm::refresh)
     OtherDynamicsScreen(
         state = state,
         onBack = onBack,
@@ -2557,6 +2828,9 @@ private fun FavFoldersRoute(
     LaunchedEffect(Unit) { vm.onEnter() }
     // 见 [SearchResultRoute]。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    LaunchedEffect(state.folders.isEmpty()) {
+        if (state.folders.isEmpty()) scrollBehavior.state.contentOffset = 0f
+    }
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
@@ -2600,6 +2874,9 @@ private fun BlacklistRoute(container: AppContainer, onBack: () -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
     // 见 [SearchResultRoute]。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    LaunchedEffect(state.users.isEmpty()) {
+        if (state.users.isEmpty()) scrollBehavior.state.contentOffset = 0f
+    }
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
@@ -2821,6 +3098,8 @@ private fun VideoPane(
     val playerPrefs by container.settings.playerPrefs.collectAsStateWithLifecycle(
         initialValue = PlayerPrefs(),
     )
+    val panelPrefs by remember(container) { container.settings.sidePanel(SidePanelId.VideoTabs) }
+        .collectAsStateWithLifecycle(initialValue = SideSheetPrefs())
 
     // 评论用 aid 作 oid,要等视频详情回来才知道 —— 但**不能拿它卡住整页**。
     //
@@ -2909,6 +3188,12 @@ private fun VideoPane(
             fastForward = playerPrefs.longPressSpeed,
         ),
         defaultHoldSpeed = playerPrefs.defaultHoldSpeed,
+        panelPrefs = panelPrefs,
+        onPanelWidthChange = { widthDp ->
+            container.persistScope.launch {
+                container.settings.saveSidePanelWidth(SidePanelId.VideoTabs, widthDp)
+            }
+        },
     )
 }
 

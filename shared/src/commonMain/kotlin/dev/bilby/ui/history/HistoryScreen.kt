@@ -10,11 +10,21 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import dev.bilby.ui.components.ContextMenuBox
+import dev.bilby.ui.components.VideoCommonMenuItems
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.videoCommonMenuItemCount
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -233,6 +243,7 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
  *
  *   用 oid 而不是 kid:列表本来就按 oid 去重、按 oid 作 key,选中集合跟着同一个键走。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun HistoryScreen(
     state: HistoryUiState,
@@ -242,6 +253,8 @@ fun HistoryScreen(
     onRefresh: () -> Unit = {},
     selectedIds: Set<Long>? = null,
     onToggleSelection: (HistoryItem) -> Unit = {},
+    onDeleteSingle: ((HistoryItem) -> Unit)? = null,
+    onUpClick: (Long) -> Unit = {},
     onDismissMutationError: () -> Unit = {},
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
@@ -293,39 +306,85 @@ fun HistoryScreen(
                     animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
                     label = "history-row-selected",
                 )
-                VideoRow(
-                    item = item.toRowUi(),
-                    // 多选态下点一行是勾选,不是打开:进了多选还去播放,等于长按一下就再也
-                    // 删不成批。
-                    onClick = { if (selecting) onToggleSelection(item) else onItemClick(item) },
-                    // 长按只是快捷方式,不是唯一入口 —— 顶栏另有一个「选择」。长按没有任何
-                    // 视觉提示,只发现得了点击的人也必须能进多选。
-                    //
-                    // 进多选态那一下给触感:屏上多出来的只是一列勾选框。已经在多选态里时不震,
-                    // 那一下和点击等价。
-                    onLongClick = {
-                        if (!selecting) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onToggleSelection(item)
-                    },
-                    // 整行染色而不是只画一个勾:勾在行尾,而人是从左往右扫的。
-                    modifier = Modifier.background(rowColor),
-                    // onCheckedChange = null:整行已经是一个可点节点,勾选框自己再接一次
-                    // 点击会让读屏把它和这一行当成两件事。
-                    //
-                    // 平时这一格是空的,进多选时整列勾选框一起出现 —— 淡入带着宽度一起过渡,
-                    // 否则标题那一列会被瞬间挤窄一格,几十行同时重排。
-                    trailing = {
-                        // transitionSpec 不是组合上下文,主题里的 spec 要先在外面取出来。
-                        val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
-                        AnimatedContent(
-                            targetState = selecting,
-                            transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
-                            label = "history-row-trailing",
-                        ) { inSelection ->
-                            if (inSelection) Checkbox(checked = selected, onCheckedChange = null)
-                        }
-                    },
-                )
+                val rowContent: @Composable () -> Unit = {
+                    VideoRow(
+                        item = item.toRowUi(),
+                        // 多选态下点一行是勾选,不是打开:进了多选还去播放,等于长按一下就再也
+                        // 删不成批。
+                        onClick = { if (selecting) onToggleSelection(item) else onItemClick(item) },
+                        // 长按只是快捷方式,不是唯一入口 —— 顶栏另有一个「选择」。长按没有任何
+                        // 视觉提示,只发现得了点击的人也必须能进多选。
+                        //
+                        // 进多选态那一下给触感:屏上多出来的只是一列勾选框。已经在多选态里时不震,
+                        // 那一下和点击等价。
+                        onLongClick = {
+                            if (!selecting) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onToggleSelection(item)
+                        },
+                        // 整行染色而不是只画一个勾:勾在行尾,而人是从左往右扫的。
+                        modifier = Modifier.background(rowColor),
+                        // onCheckedChange = null:整行已经是一个可点节点,勾选框自己再接一次
+                        // 点击会让读屏把它和这一行当成两件事。
+                        //
+                        // 平时这一格是空的,进多选时整列勾选框一起出现 —— 淡入带着宽度一起过渡,
+                        // 否则标题那一列会被瞬间挤窄一格,几十行同时重排。
+                        trailing = {
+                            // transitionSpec 不是组合上下文,主题里的 spec 要先在外面取出来。
+                            val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+                            AnimatedContent(
+                                targetState = selecting,
+                                transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
+                                label = "history-row-trailing",
+                            ) { inSelection ->
+                                if (inSelection) Checkbox(checked = selected, onCheckedChange = null)
+                            }
+                        },
+                    )
+                }
+                if (selecting) {
+                    rowContent()
+                } else {
+                    ContextMenuBox(
+                        onClick = null,
+                        menuLabel = stringResource(Res.string.menu_item_actions),
+                        menu = { close ->
+                            val canDeleteOne = !state.mutating && item.kid != 0L && onDeleteSingle != null
+                            val leadingCount = 1 + (if (canDeleteOne) 1 else 0)
+                            val totalCount = leadingCount + videoCommonMenuItemCount(item.bvid, item.upMid, onUpClick)
+                            DropdownMenuItem(
+                                onClick = {
+                                    close()
+                                    onToggleSelection(item)
+                                },
+                                text = { Text(stringResource(Res.string.action_select)) },
+                                leadingIcon = { Icon(Icons.Outlined.Checklist, contentDescription = null) },
+                                shape = menuItemShape(0, totalCount),
+                            )
+                            if (canDeleteOne) {
+                                DropdownMenuItem(
+                                    onClick = {
+                                        close()
+                                        onDeleteSingle.invoke(item)
+                                    },
+                                    text = { Text(stringResource(Res.string.action_delete)) },
+                                    leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null) },
+                                    shape = menuItemShape(1, totalCount),
+                                )
+                            }
+                            VideoCommonMenuItems(
+                                bvid = item.bvid,
+                                title = item.title,
+                                close = close,
+                                upMid = item.upMid,
+                                onOpenUpSpace = onUpClick,
+                                startIndex = leadingCount,
+                                totalCount = totalCount,
+                            )
+                        },
+                    ) { _ ->
+                        rowContent()
+                    }
+                }
             }
         }
     }
