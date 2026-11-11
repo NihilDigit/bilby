@@ -1,9 +1,13 @@
 package dev.bilby.ui.components
 
 import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.Clipboard
 
 /** 一段纯文本的剪贴板条目。[label] 只有 Android 用得上(系统复制预览里显示)。 */
 expect fun plainTextClip(label: String, text: String): ClipEntry
+
+/** 读取剪贴板里的纯文本;没有文本或读取失败时返回 null。 */
+expect suspend fun readClipboardText(clipboard: Clipboard): String?
 
 /**
  * 要不要自己报一句「已复制」。

@@ -153,6 +153,7 @@ fun SearchField(
                 // 或外层 Row 上会落到别的语义节点,输入框那一格照旧是空的。
                 modifier = Modifier.fillMaxWidth()
                     .semantics { contentDescription = placeholder }
+                    .trackEditableFocus()
                     .onFocusChanged { onFocusChange(it.isFocused) }
                     .let { if (focusRequester != null) it.focusRequester(focusRequester) else it },
             )

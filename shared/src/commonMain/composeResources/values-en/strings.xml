@@ -344,6 +344,11 @@
     <string name="listen_queue_title">Queue</string>
     <string name="queue_order_sequential">Order</string>
     <string name="queue_order_shuffle">Shuffle</string>
+    <string name="queue_end_pause">Pause at end</string>
+    <string name="queue_end_continue">Continue</string>
+    <string name="queue_end_repeat_one">Repeat one</string>
+    <string name="settings_end_mode">When an item finishes</string>
+    <string name="settings_end_mode_subtitle">What happens automatically at the end; switching by hand is unaffected</string>
     <string name="sleep_timer_off">Sleep timer</string>
     <string name="sleep_timer_end_of_item">End</string>
     <string name="sleep_timer_stop_in">Stop in %1$d min</string>
@@ -652,6 +657,8 @@
     <string name="settings_default_quality_metered_subtitle">Follows the system\'s metered flag, so hotspots and metered Wi-Fi count too</string>
     <string name="settings_default_audio_wifi">Default audio on Wi-Fi</string>
     <string name="settings_default_audio_metered">Default audio on metered networks</string>
+    <string name="settings_default_live_quality_wifi">Default live quality on Wi-Fi</string>
+    <string name="settings_default_live_quality_metered">Default live quality on metered networks</string>
     <string name="settings_pick_updates_default">Player choices become defaults</string>
     <string name="settings_pick_updates_default_subtitle">When off, changing quality or audio in the player only applies to this playback</string>
     <string name="settings_pause_history">Pause watch history</string>
@@ -760,4 +767,53 @@
     <string name="emote_empty">No emoji available</string>
     <string name="emote_kaomoji">Kaomoji</string>
     <string name="emote_unlock_level">Lv.%1$d</string>
+
+    <!-- Desktop window fault, volume, and keyboard shortcuts -->
+    <string name="window_fault_message">An interface error occurred and the window must close. Attach exported logs from Settings → About → Export logs when reporting the issue.</string>
+    <string name="player_mute">Mute</string>
+    <string name="player_unmute">Unmute</string>
+    <string name="shortcuts_title">Keyboard shortcuts</string>
+    <string name="shortcuts_group_global">Navigation</string>
+    <string name="shortcuts_group_player">Playback</string>
+    <string name="shortcuts_nav_tabs">Switch Feed / Search / Profile</string>
+    <string name="shortcuts_search_focus">Focus search field</string>
+    <string name="shortcuts_open_settings">Open settings</string>
+    <string name="shortcuts_refresh">Refresh current page</string>
+    <string name="shortcuts_paste_link">Open Bilibili link or BV ID from clipboard</string>
+    <string name="shortcuts_back">Go back</string>
+    <string name="shortcuts_help">Keyboard shortcuts</string>
+    <string name="shortcuts_play_pause">Play / pause</string>
+    <string name="shortcuts_seek_short">Seek backward / forward 10 s</string>
+    <string name="shortcuts_seek_long">Seek backward / forward 60 s</string>
+    <string name="shortcuts_seek_percent">Jump to 0%–90% of video</string>
+    <string name="shortcuts_prev_next">Previous / next item (parts first)</string>
+    <string name="shortcuts_volume">Adjust volume</string>
+    <string name="shortcuts_mute">Mute / unmute</string>
+    <string name="shortcuts_fullscreen">Enter / exit fullscreen</string>
+    <string name="shortcuts_danmaku_toggle">Show / hide danmaku</string>
+    <string name="shortcuts_danmaku_input">Write danmaku</string>
+    <string name="shortcuts_group_image">Image viewer</string>
+    <string name="shortcuts_image_zoom">Zoom in / out / actual size</string>
+    <string name="shortcuts_image_copy_save">Copy / save image</string>
+
+    <!-- Context menus and image viewer actions -->
+    <string name="video_bvid_copy">Copy BV ID</string>
+    <string name="video_bvid_copied">Copied</string>
+    <string name="video_bvid_clip_label">BV ID</string>
+    <string name="menu_item_actions">More actions</string>
+    <string name="menu_copy_link">Copy link</string>
+    <string name="menu_copy_comment">Copy comment</string>
+    <string name="menu_open_space">Open profile</string>
+    <string name="toview_remove_action">Remove from Watch later</string>
+    <string name="history_delete_one_confirm">Delete this history entry?</string>
+    <string name="image_copy">Copy image</string>
+    <string name="image_copied">Image copied</string>
+    <string name="image_copy_failed">Could not copy image</string>
+    <string name="image_save">Save image</string>
+    <string name="image_saved">Image saved</string>
+    <string name="image_save_failed">Could not save image</string>
+    <string name="image_zoom_in">Zoom in</string>
+    <string name="image_zoom_out">Zoom out</string>
+    <string name="image_zoom_reset">Actual size</string>
+    <string name="drop_link_hint">Release to open Bilibili link or BV ID</string>
 </resources>

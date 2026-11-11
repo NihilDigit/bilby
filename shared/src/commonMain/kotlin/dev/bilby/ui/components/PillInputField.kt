@@ -183,7 +183,7 @@ fun PillInputField(
                 keyboardOptions = KeyboardOptions(imeAction = if (imeSend) ImeAction.Send else ImeAction.Default),
                 keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
                 interactionSource = interactionSource,
-                modifier = Modifier.fillMaxWidth().then(fieldModifier),
+                modifier = Modifier.fillMaxWidth().trackEditableFocus().then(fieldModifier),
             )
         }
         // **没字时不画发送键,不是画一个灰的。** 一个按不动的键常驻在框里,占着 48dp 宽度,
@@ -193,18 +193,25 @@ fun PillInputField(
             enter = scaleIn(MaterialTheme.motionScheme.fastSpatialSpec()) + fadeIn(),
             exit = scaleOut(MaterialTheme.motionScheme.fastSpatialSpec()) + fadeOut(),
         ) {
-            FilledIconButton(
-                onClick = onSend,
-                enabled = canSend,
-                shapes = IconButtonDefaults.shapes(),
+            val sendLabel = stringResource(Res.string.action_send)
+            BilbyTooltip(
+                text = sendLabel,
+                shortcut = if (imeSend) "Enter" else null,
+                anchorAbove = true,
             ) {
-                if (sending) {
-                    LoadingSpinner()
-                } else {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = stringResource(Res.string.action_send),
-                    )
+                FilledIconButton(
+                    onClick = onSend,
+                    enabled = canSend,
+                    shapes = IconButtonDefaults.shapes(),
+                ) {
+                    if (sending) {
+                        LoadingSpinner()
+                    } else {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = sendLabel,
+                        )
+                    }
                 }
             }
         }

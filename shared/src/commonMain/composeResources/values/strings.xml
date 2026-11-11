@@ -193,6 +193,8 @@
     <string name="settings_default_quality_metered_subtitle">按系统的流量计费标记判断,手机热点和按量计费的 WiFi 也算</string>
     <string name="settings_default_audio_wifi">WiFi 默认音质</string>
     <string name="settings_default_audio_metered">计费网络默认音质</string>
+    <string name="settings_default_live_quality_wifi">WiFi 默认直播画质</string>
+    <string name="settings_default_live_quality_metered">计费网络默认直播画质</string>
     <string name="settings_pick_updates_default">播放页切换改为默认</string>
     <string name="settings_pick_updates_default_subtitle">关闭时,播放页切换画质与音质只对本次播放生效</string>
     <string name="settings_pause_history">暂停记录观看历史</string>
@@ -422,6 +424,11 @@
     <string name="playback_error_live_ended">直播已结束</string>
     <string name="queue_order_sequential">顺序</string>
     <string name="queue_order_shuffle">随机</string>
+    <string name="queue_end_pause">播完暂停</string>
+    <string name="queue_end_continue">连播</string>
+    <string name="queue_end_repeat_one">洗脑循环</string>
+    <string name="settings_end_mode">完播行为</string>
+    <string name="settings_end_mode_subtitle">一条播完后的处理。手动切换上一条、下一条不受影响</string>
     <string name="sleep_timer_off">定时关闭</string>
     <string name="sleep_timer_end_of_item">播完当前</string>
     <string name="sleep_timer_stop_in">%1$d 分钟后停止</string>
@@ -825,4 +832,50 @@
     <string name="emote_empty">暂无可用表情</string>
     <string name="emote_kaomoji">颜文字</string>
     <string name="emote_unlock_level">Lv.%1$d</string>
+
+    <!-- 桌面端窗口异常与音量、快捷键 -->
+    <string name="window_fault_message">界面发生错误，窗口即将关闭。反馈问题时可在「设置 → 关于 → 导出日志」中附上日志。</string>
+    <string name="player_mute">静音</string>
+    <string name="player_unmute">取消静音</string>
+    <string name="shortcuts_title">快捷键</string>
+    <string name="shortcuts_group_global">全局与导航</string>
+    <string name="shortcuts_group_player">播放控制</string>
+    <string name="shortcuts_nav_tabs">切换订阅 / 搜索 / 我的</string>
+    <string name="shortcuts_search_focus">聚焦搜索框</string>
+    <string name="shortcuts_open_settings">打开设置</string>
+    <string name="shortcuts_refresh">刷新当前页面</string>
+    <string name="shortcuts_paste_link">打开剪贴板中的站内链接或 BV 号</string>
+    <string name="shortcuts_back">返回上一级</string>
+    <string name="shortcuts_help">查看快捷键</string>
+    <string name="shortcuts_play_pause">播放 / 暂停</string>
+    <string name="shortcuts_seek_short">快退 / 快进 10 秒</string>
+    <string name="shortcuts_seek_long">快退 / 快进 60 秒</string>
+    <string name="shortcuts_seek_percent">跳至视频 0%–90% 位置</string>
+    <string name="shortcuts_prev_next">上一条 / 下一条（优先切换分 P）</string>
+    <string name="shortcuts_volume">调节音量</string>
+    <string name="shortcuts_mute">静音 / 取消静音</string>
+    <string name="shortcuts_fullscreen">进入 / 退出全屏</string>
+    <string name="shortcuts_danmaku_toggle">开启 / 关闭弹幕</string>
+    <string name="shortcuts_danmaku_input">输入弹幕</string>
+    <string name="shortcuts_group_image">图片查看</string>
+    <string name="shortcuts_image_zoom">放大 / 缩小 / 实际大小</string>
+    <string name="shortcuts_image_copy_save">复制 / 保存图片</string>
+
+    <!-- 右键上下文菜单与图片查看操作 -->
+    <string name="menu_item_actions">更多操作</string>
+    <string name="menu_copy_link">复制链接</string>
+    <string name="menu_copy_comment">复制评论</string>
+    <string name="menu_open_space">查看个人空间</string>
+    <string name="toview_remove_action">移出稍后再看</string>
+    <string name="history_delete_one_confirm">删除这条历史记录？</string>
+    <string name="image_copy">复制图片</string>
+    <string name="image_copied">已复制图片</string>
+    <string name="image_copy_failed">复制图片失败</string>
+    <string name="image_save">保存图片</string>
+    <string name="image_saved">已保存图片</string>
+    <string name="image_save_failed">保存图片失败</string>
+    <string name="image_zoom_in">放大</string>
+    <string name="image_zoom_out">缩小</string>
+    <string name="image_zoom_reset">实际大小</string>
+    <string name="drop_link_hint">松开以打开站内链接或 BV 号</string>
 </resources>

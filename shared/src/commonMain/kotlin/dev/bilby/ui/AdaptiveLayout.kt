@@ -8,14 +8,25 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.WindowInfo
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import dev.bilby.ui.theme.Breakpoints
 import kotlin.math.ceil
+
+/**
+ * 桌面拖拉窗口边框期间,[LocalWindowInfo] 的 `containerSize` 会暂冻在起拖前的尺寸,防止连续跨越断点时
+ * 整树反复拆装(列表与详情并排、视频双栏、侧栏开关)。少数真要按实时外框响应的地方读 [LocalLiveWindowInfo]。
+ */
+val LocalLiveWindowInfo = compositionLocalOf<WindowInfo?> { null }
+
+/** 桌面窗口此刻是否正在拖拉边框或标题栏移动(`WM_ENTERSIZEMOVE`..`WM_EXITSIZEMOVE`)。 */
+val LocalWindowResizing = compositionLocalOf { false }
 
 /** M3 的五档窗口断点,按可用窗口宽度而不是设备型号判断。 */
 enum class BilbyWindowSize {

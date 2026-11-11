@@ -78,4 +78,23 @@ class BilbyLinkTest {
         assertTrue(BilbyLink.isShortLink("https://b23.tv/AbCdEf"))
         assertTrue(!BilbyLink.isShortLink("https://www.bilibili.com/video/BV1xx411c7mD"))
     }
+
+    @Test
+    fun `外部拖放与命令行入参提取站内链接与视频编号`() {
+        assertEquals(
+            "https://b23.tv/AbCdEf",
+            BilbyLink.extractIncomingLink("【标题】 https://b23.tv/AbCdEf"),
+        )
+        assertEquals(
+            "https://www.bilibili.com/video/BV1xx411c7mD",
+            BilbyLink.extractIncomingLink("bv1xx411c7mD"),
+        )
+        assertEquals(
+            "https://www.bilibili.com/video/av170001",
+            BilbyLink.extractIncomingLink("AV170001"),
+        )
+        assertNull(BilbyLink.extractIncomingLink("https://example.com/video/BV1xx411c7mD"))
+        assertNull(BilbyLink.extractIncomingLink("https://www.bilibili.com/bangumi/play/ep123456"))
+        assertNull(BilbyLink.extractIncomingLink("普通文本没有链接"))
+    }
 }

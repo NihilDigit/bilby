@@ -5,6 +5,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -42,6 +43,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import dev.bilby.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -55,6 +61,7 @@ import dev.bilby.ui.theme.Dimens
 
 /** 进度条的槽高与滑块半径。由"别挡住画面"定,不走主题刻度。 */
 private val TrackHeight = 3.dp
+private val TrackHeightHover = 5.dp
 
 /**
  * 拖动时的槽高。**按下就加粗**:手指压在细线上时线被整个盖住,加粗之后露在指头两侧的那截
@@ -140,6 +147,7 @@ fun SeekBar(
     segments: List<SeekBarSegment> = emptyList(),
 ) {
     var dragging by remember { mutableStateOf(false) }
+    var hoverX by remember { mutableStateOf<Float?>(null) }
     // 两个量走同一个 spatial 弹簧:它们是"按住了"这一个反馈的两面,节奏对不上会看出来。
     val thumbRadius by animateDpAsState(
         targetValue = if (dragging) ThumbRadiusDragging else ThumbRadius,
@@ -147,7 +155,11 @@ fun SeekBar(
         label = "seek-thumb",
     )
     val trackHeight by animateDpAsState(
-        targetValue = if (dragging) TrackHeightDragging else TrackHeight,
+        targetValue = when {
+            dragging -> TrackHeightDragging
+            hoverX != null && duration > 0 -> TrackHeightHover
+            else -> TrackHeight
+        },
         animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
         label = "seek-track",
     )
@@ -188,6 +200,28 @@ fun SeekBar(
         modifier = modifier
             .heightIn(min = TouchHeight)
             .onSizeChanged { widthPx = it.width }
+            .then(if (duration > 0) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier)
+            .pointerInput(duration) {
+                if (duration <= 0) {
+                    hoverX = null
+                    return@pointerInput
+                }
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull() ?: continue
+                        when (event.type) {
+                            PointerEventType.Enter, PointerEventType.Move -> {
+                                if (change.type == PointerType.Mouse) {
+                                    hoverX = change.position.x
+                                }
+                            }
+                            PointerEventType.Exit -> hoverX = null
+                            else -> Unit
+                        }
+                    }
+                }
+            }
             // 手写的进度轨没有任何自带语义:读屏在这里既读不出播到哪了,也没有可用的动作。
             // progressBarRangeInfo 给出位置,setProgress 让读屏的"调整"手势能真的跳转 ——
             // 拖拽手势对读屏用户是不存在的。
@@ -327,33 +361,59 @@ fun SeekBar(
 
         // 时间气泡。**不占布局高度**:它上报 0×0,画在进度条上方的界外 —— 占了高度的话,一按
         // 下去整条控制条就往上长一截,手指下的东西跟着挪。水平方向跟着滑块,贴边时收在条内。
-        if (timeBubble && dragging && duration > 0) {
+        // 鼠标悬停但未按住时预览光标处时间(及所在跳过段落名称),用 inverseSurface 与按住态主色区分。
+        val currentHoverX = hoverX
+        if (timeBubble && duration > 0 && (dragging || currentHoverX != null)) {
             val gapPx = with(density) { (BubbleGap + ThumbRadiusDragging).roundToPx() }
+            val previewing = !dragging && currentHoverX != null
+            val targetFraction = if (dragging) fraction else currentHoverX!!.toFraction()
+            val targetMillis = if (dragging) position else targetFraction.toPosition(duration)
+            val segmentLabel = if (previewing) {
+                segments.firstOrNull { targetMillis in it.startMillis..it.endMillis }
+                    ?.label
+                    ?.takeIf { it.isNotBlank() }
+            } else {
+                null
+            }
+            val bubbleContainer = if (dragging) activeColor else MaterialTheme.colorScheme.inverseSurface
+            val bubbleContent = if (dragging) contentColorFor(activeColor) else MaterialTheme.colorScheme.inverseOnSurface
             Surface(
-                color = activeColor,
-                contentColor = contentColorFor(activeColor),
+                color = bubbleContainer,
+                contentColor = bubbleContent,
                 shape = MaterialTheme.shapes.small,
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .layout { measurable, constraints ->
                         val bubble = measurable.measure(constraints.copy(minWidth = 0, minHeight = 0))
                         layout(0, 0) {
-                            val center = insetPx + (widthPx - insetPx * 2) * fraction
+                            val center = insetPx + (widthPx - insetPx * 2) * targetFraction
                             val x = (center - bubble.width / 2f).roundToInt()
                                 .coerceIn(0, (widthPx - bubble.width).coerceAtLeast(0))
                             bubble.place(x, -bubble.height - gapPx)
                         }
                     },
             ) {
-                // 字形同横划读数与定时倒计时(ClockAxes);等宽,拖动时不左右抖。
-                Text(
-                    text = formatDurationMillis(position),
-                    style = MaterialTheme.typography.labelLarge.copy(
-                        fontFamily = rememberClockFont(),
-                        fontFeatureSettings = "tnum",
-                    ),
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
-                )
+                ) {
+                    // 字形同横划读数与定时倒计时(ClockAxes);等宽,拖动与悬停扫动时不左右抖。
+                    Text(
+                        text = formatDurationMillis(targetMillis),
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontFamily = rememberClockFont(),
+                            fontFeatureSettings = "tnum",
+                        ),
+                    )
+                    if (segmentLabel != null) {
+                        Text(
+                            text = MetaSeparator + segmentLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = bubbleContent.copy(alpha = 0.8f),
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
         }
     }
@@ -380,7 +440,12 @@ private const val WaveStepPx = 2f
 private const val InactiveAlpha = 0.28f
 private const val BufferedAlpha = 0.55f
 
-/** 进度条上要染色的一段。颜色由调用方给 —— 类别到颜色的映射是 SponsorBlock 的领域知识。 */
-data class SeekBarSegment(val startMillis: Long, val endMillis: Long, val color: Color)
+/** 进度条上要染色的一段。颜色与名称由调用方给 —— 类别到颜色和文案的映射是 SponsorBlock 的领域知识。 */
+data class SeekBarSegment(
+    val startMillis: Long,
+    val endMillis: Long,
+    val color: Color,
+    val label: String? = null,
+)
 
 private fun Float.toPosition(duration: Long): Long = (this * duration).toLong()

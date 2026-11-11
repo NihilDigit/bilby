@@ -24,6 +24,9 @@ actual val CjkFontFamily: FontFamily = FontFamily(
 @Composable
 internal actual fun dynamicColorSchemes(): PaletteSchemes = error("桌面没有按壁纸取色")
 
-/** 读 Windows 的"动画效果"开关要走系统接口,尚未接入,先按未开启处理。 */
+/** 读取并跟随 Windows 的「设置 → 辅助功能 → 视觉效果 → 动画效果」开关,见 [SystemReducedMotion]。 */
 @Composable
-actual fun rememberReducedMotion(): Boolean = false
+actual fun rememberReducedMotion(): Boolean {
+    SystemReducedMotion.ensureStarted()
+    return SystemReducedMotion.reduced
+}

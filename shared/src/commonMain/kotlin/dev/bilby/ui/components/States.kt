@@ -217,12 +217,16 @@ fun RefreshBox(
  */
 @Composable
 fun RefreshAction(refreshing: Boolean, onRefresh: () -> Unit) {
+    RegisterPageRefresh(refreshing = refreshing, onRefresh = onRefresh)
     if (LocalPointerSource.current.isTouchLike) return
     if (refreshing) {
         Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) { LoadingSpinner() }
     } else {
-        IconButton(onClick = onRefresh) {
-            Icon(Icons.Filled.Refresh, contentDescription = stringResource(Res.string.action_refresh))
+        val refreshLabel = stringResource(Res.string.action_refresh)
+        BilbyTooltip(text = refreshLabel, shortcut = "F5") {
+            IconButton(onClick = onRefresh) {
+                Icon(Icons.Filled.Refresh, contentDescription = refreshLabel)
+            }
         }
     }
 }

@@ -53,8 +53,10 @@ import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.resources.action_close
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.filled.Close
@@ -64,7 +66,11 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.neverEqualPolicy
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import dev.bilby.ui.CaptionDragHeight
+import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.windowDragArea
 
 /**
  * 两栏布局里右栏的面板层。视频页、直播间宽屏时,右栏是简介与评论,二级面板(评论详情、
@@ -156,18 +162,39 @@ private fun PanePanelSurface(panel: PanePanel) {
         Column(modifier = Modifier.fillMaxSize()) {
             // 常驻面板的标题行归内容自己画(标题带着内容的状态,关闭在右端);这里再画一行
             // 返回箭头,就是两行标题摞在一起。
-            if (!panel.persistent) Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = panel.onDismiss) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.action_back))
-                }
-                panel.title?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(end = Spacing.Comfortable),
-                    )
+            if (!panel.persistent) {
+                val captionSlot = rememberCaptionSlot()
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = captionSlot.modifier
+                        .fillMaxWidth()
+                        .padding(end = if (captionSlot.buttons != null) Spacing.Hair else 0.dp),
+                ) {
+                    val backLabel = stringResource(Res.string.action_back)
+                    BilbyTooltip(text = backLabel, shortcut = "Esc") {
+                        IconButton(onClick = panel.onDismiss) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = backLabel)
+                        }
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = CaptionDragHeight)
+                            .windowDragArea(captionSlot.atTop),
+                    ) {
+                        panel.title?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(end = Spacing.Comfortable),
+                            )
+                        }
+                        Spacer(Modifier.weight(1f))
+                    }
+                    captionSlot.buttons?.invoke()
                 }
             }
             panel.content(this)
@@ -297,6 +324,7 @@ private fun ModalSideSheet(onDismissRequest: () -> Unit, content: @Composable Co
         if (visibility.isIdle && !visibility.currentState && !visibility.targetState) latestDismiss()
     }
     Dialog(onDismissRequest = dismiss, properties = fullScreenDialogProperties()) {
+        LocalWindowCaption.current?.Suppress()
         DialogIntoDisplayCutout()
         Box(modifier = Modifier.fillMaxSize()) {
             // 点在面板外面就是关掉。不画按下的波纹:这一整片是遮罩,不是一个按钮。
@@ -322,12 +350,14 @@ private fun ModalSideSheet(onDismissRequest: () -> Unit, content: @Composable Co
                 ) {
                     Column(modifier = Modifier.fillMaxSize()) {
                         Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-                            IconButton(onClick = dismiss) {
-                                Icon(
-                                    Icons.Filled.Close,
-                                    contentDescription = stringResource(Res.string.action_close),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                            BilbyTooltip(text = stringResource(Res.string.action_close), shortcut = "Esc") {
+                                IconButton(onClick = dismiss) {
+                                    Icon(
+                                        Icons.Filled.Close,
+                                        contentDescription = stringResource(Res.string.action_close),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                         }
                         content()

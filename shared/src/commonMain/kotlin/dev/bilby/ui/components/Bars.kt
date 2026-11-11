@@ -24,6 +24,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -34,8 +35,12 @@ import dev.bilby.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.resources.*
+import dev.bilby.ui.CaptionDragHeight
+import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.windowDragArea
 
 /**
  * 顶栏。M3 的 small app bar:页面标题 + 最多两个动作。
@@ -65,8 +70,19 @@ fun BilbyTopBar(
     center: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
-    Box(modifier = modifier) {
-        SmallTopBar(title, onBack, scrollBehavior, actions)
+    LocalWindowCaption.current?.Host()
+    val captionSlot = rememberCaptionSlot()
+    Box(modifier = modifier.then(captionSlot.modifier)) {
+        SmallTopBar(
+            title = title,
+            onBack = onBack,
+            scrollBehavior = scrollBehavior,
+            dragTitleArea = captionSlot.atTop && center == null,
+            actions = {
+                actions()
+                captionSlot.buttons?.invoke()
+            },
+        )
         if (center != null) {
             Box(
                 modifier = Modifier.matchParentSize().windowInsetsPadding(TopAppBarDefaults.windowInsets),
@@ -82,20 +98,38 @@ private fun SmallTopBar(
     title: String,
     onBack: (() -> Unit)?,
     scrollBehavior: TopAppBarScrollBehavior?,
+    dragTitleArea: Boolean,
     actions: @Composable RowScope.() -> Unit,
 ) {
+    LaunchedEffect(title) {
+        scrollBehavior?.state?.let { state ->
+            state.contentOffset = 0f
+            state.heightOffset = 0f
+        }
+    }
     TopAppBar(
         title = {
-            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = CaptionDragHeight)
+                    .windowDragArea(dragTitleArea),
+            ) {
+                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         },
         navigationIcon = {
             if (onBack != null) {
-                IconButton(onClick = onBack) {
-                    // AutoMirrored:supportsRtl 开着,RTL 语言下返回箭头必须翻过来。
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(Res.string.action_back),
-                    )
+                val backLabel = stringResource(Res.string.action_back)
+                BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
+                    IconButton(onClick = onBack) {
+                        // AutoMirrored:supportsRtl 开着,RTL 语言下返回箭头必须翻过来。
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = backLabel,
+                        )
+                    }
                 }
             }
         },
@@ -132,9 +166,19 @@ fun BilbyFlexibleTopBar(
     windowInsets: WindowInsets = TopAppBarDefaults.windowInsets,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
+    LocalWindowCaption.current?.Host()
+    val captionSlot = rememberCaptionSlot()
     MediumFlexibleTopAppBar(
         title = {
-            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = CaptionDragHeight)
+                    .windowDragArea(captionSlot.atTop),
+            ) {
+                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         },
         subtitle = subtitle?.let {
             {
@@ -143,20 +187,26 @@ fun BilbyFlexibleTopBar(
         },
         navigationIcon = {
             if (onBack != null) {
-                IconButton(onClick = onBack) {
-                    // 同 BilbyTopBar:RTL 下返回箭头必须翻过来。
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(Res.string.action_back),
-                    )
+                val backLabel = stringResource(Res.string.action_back)
+                BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
+                    IconButton(onClick = onBack) {
+                        // 同 BilbyTopBar:RTL 下返回箭头必须翻过来。
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = backLabel,
+                        )
+                    }
                 }
             }
         },
-        actions = actions,
+        actions = {
+            actions()
+            captionSlot.buttons?.invoke()
+        },
         windowInsets = windowInsets,
         colors = TopAppBarDefaults.topAppBarColors(),
         scrollBehavior = scrollBehavior,
-        modifier = modifier,
+        modifier = modifier.then(captionSlot.modifier),
     )
 }
 

@@ -1,6 +1,9 @@
 package dev.bilby
 
 import androidx.compose.runtime.Composable
+import dev.bilby.resources.Res
+import dev.bilby.resources.drop_link_hint
+import dev.bilby.resources.window_fault_message
 import kotlinx.coroutines.runBlocking
 import org.jetbrains.compose.resources.StringResource
 
@@ -30,3 +33,10 @@ suspend fun getString(resource: StringResource, vararg formatArgs: Any): String 
  */
 fun getStringBlocking(resource: StringResource, vararg formatArgs: Any): String =
     runBlocking { getString(resource, *formatArgs) }
+
+/** 桌面窗口不可恢复异常关闭前的系统弹窗文案。 */
+fun windowFaultMessage(): String = getStringBlocking(Res.string.window_fault_message)
+
+/** 桌面窗口拖放链接时的浮层提示文案。 */
+@Composable
+fun dropLinkHintMessage(): String = stringResource(Res.string.drop_link_hint)

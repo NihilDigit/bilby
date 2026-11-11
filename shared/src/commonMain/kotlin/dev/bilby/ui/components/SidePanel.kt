@@ -46,7 +46,9 @@ import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.ui.unit.coerceIn
 import androidx.compose.ui.unit.dp
 import dev.bilby.data.SideSheetPrefs
+import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.windowDragArea
 
 /**
  * 宽屏的主区加右侧侧栏。空间页的动态、订阅页的关注都走这里,开关、拖宽、记忆宽度只有一份。
@@ -129,19 +131,23 @@ fun SidePanelLayout(
                                 .panelCard()
                                 .semantics { paneTitle = title },
                         ) {
+                            val captionSlot = rememberCaptionSlot()
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 // 关闭按钮的触摸区比图标宽 12dp,右边留 4dp,图标的右沿落在 16dp 线上。
-                                modifier = Modifier.padding(end = Spacing.Hair),
+                                modifier = captionSlot.modifier.padding(end = Spacing.Hair),
                             ) {
-                                PaneTitle(title, Modifier.weight(1f))
-                                IconButton(onClick = { onOpenChange(false) }) {
-                                    Icon(
-                                        Icons.Filled.Close,
-                                        contentDescription = closeDescription,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
+                                PaneTitle(title, Modifier.weight(1f).windowDragArea(captionSlot.atTop))
+                                BilbyTooltip(text = closeDescription) {
+                                    IconButton(onClick = { onOpenChange(false) }) {
+                                        Icon(
+                                            Icons.Filled.Close,
+                                            contentDescription = closeDescription,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 }
+                                captionSlot.buttons?.invoke()
                             }
                             Box(modifier = Modifier.weight(1f)) { panel() }
                         }
@@ -158,11 +164,13 @@ fun SidePanelLayout(
  */
 @Composable
 fun SidePanelToggle(open: Boolean, onOpenChange: (Boolean) -> Unit, description: String) {
-    IconToggleButton(checked = open, onCheckedChange = onOpenChange) {
-        Icon(
-            imageVector = if (open) Icons.AutoMirrored.Filled.ViewSidebar else Icons.AutoMirrored.Outlined.ViewSidebar,
-            contentDescription = description,
-        )
+    BilbyTooltip(text = description) {
+        IconToggleButton(checked = open, onCheckedChange = onOpenChange) {
+            Icon(
+                imageVector = if (open) Icons.AutoMirrored.Filled.ViewSidebar else Icons.AutoMirrored.Outlined.ViewSidebar,
+                contentDescription = description,
+            )
+        }
     }
 }
 
@@ -222,6 +230,39 @@ private fun PanelDragHandle(onDrag: (Dp) -> Unit, onDragStopped: () -> Unit) {
     ) {
         VerticalDragHandle(interactionSource = interactions)
     }
+}
+
+/**
+ * 紧贴分栏边界的无间隙拖宽热区(播放页与直播间右栏)。
+ *
+ * 与 [PanelDragHandle] 的区别:播放器黑底和右栏之间不能留 24dp 间隔也不能画分割线(见 VideoScreen),
+ * 所以热区是一条 8dp 宽的透明边缘条,叠在右栏起始沿内部。触屏(`isTouchLike`)下整条不组合,
+ * 免得拦截右栏 `HorizontalPager` 的边缘横滑手势。
+ */
+@Composable
+fun SplitPaneResizeHandle(
+    onDrag: (Dp) -> Unit,
+    onDragStopped: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (LocalPointerSource.current.isTouchLike) return
+    val density = LocalDensity.current
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val dragState = rememberDraggableState { deltaPx ->
+        val towardsEnd = if (rtl) -deltaPx else deltaPx
+        onDrag(with(density) { towardsEnd.toDp() })
+    }
+    Box(
+        modifier = modifier
+            .width(Spacing.Tight)
+            .fillMaxHeight()
+            .horizontalResizeCursor()
+            .draggable(
+                state = dragState,
+                orientation = Orientation.Horizontal,
+                onDragStopped = { onDragStopped() },
+            ),
+    )
 }
 
 /** 两栏之间的间隔宽度(layout-overview.md 的 Spacers 一节)。 */

@@ -31,6 +31,31 @@ object BilbyLink {
     fun extractUrl(text: String): String? = URL_PATTERN.find(text)?.value
 
     /**
+     * 从启动参数或拖入的文本中提取可交给 `BilbyRoot.incomingLink` 的链接。
+     *
+     * 含 `http(s)://` 地址时只按该地址判断(避免把外站 URL 路径里的 `BV1…` 误认成站内视频);
+     * 无网页地址时再认 `bilibili://` 评论定位链或独立的 `BV1…` / `av…` 编号。
+     */
+    fun extractIncomingLink(raw: String): String? {
+        val text = raw.trim()
+        if (text.isEmpty()) return null
+        extractUrl(text)?.let { url ->
+            return url.takeIf { isShortLink(it) || destinationOf(it) != null }
+        }
+        if (text.startsWith("bilibili://", ignoreCase = true)) {
+            return text.takeIf { destinationOf(it) != null }
+        }
+        BV_TOKEN.find(text)?.let { match ->
+            return "https://www.bilibili.com/video/BV${match.groupValues[1].drop(2)}"
+        }
+        AV_TOKEN.find(text)?.let { match ->
+            val aid = match.groupValues[1].toLongOrNull()
+            if (aid != null && aid > 0) return "https://www.bilibili.com/video/av$aid"
+        }
+        return null
+    }
+
+    /**
      * 链接指向哪一页。认不出来返回 null。
      *
      * 分 P 参数(`?p=2`)**故意不解析**:换 P 走的是播放页内部的重组,而 [Video] 这个
@@ -193,5 +218,7 @@ object BilbyLink {
 
     /** 链接里合法的字符按 RFC 3986 取,末尾的中文标点不吃进来。 */
     private val URL_PATTERN = Regex("""https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+""")
+    private val BV_TOKEN = Regex("""(?<![0-9A-Za-z])(BV1[0-9A-Za-z]{9})(?![0-9A-Za-z])""", RegexOption.IGNORE_CASE)
+    private val AV_TOKEN = Regex("""(?<![0-9A-Za-z])av(\d+)(?![0-9A-Za-z])""", RegexOption.IGNORE_CASE)
 }
 

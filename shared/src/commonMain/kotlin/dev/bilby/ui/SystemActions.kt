@@ -31,6 +31,14 @@ interface SystemActions {
     fun currentLanguage(): AppLanguage
 
     fun applyLanguage(language: AppLanguage)
+
+    val supportsImageActions: Boolean get() = false
+
+    /** 把原图写进系统剪贴板,成功返回 true。 */
+    suspend fun copyImage(url: String): Boolean = false
+
+    /** 弹出系统另存为对话框并保存原图;保存成功返回 true,失败返回 false,用户取消返回 null。 */
+    suspend fun saveImage(url: String): Boolean? = null
 }
 
 /**
