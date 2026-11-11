@@ -173,3 +173,13 @@ fun List<SponsorSegment>.toSeekBarSegments(): List<SeekBarSegment> = mapNotNull 
         SeekBarSegment(segment.startMillis, segment.endMillis, it)
     }
 }
+
+/** 组合上下文里连同本地化类别名一起转成进度条染色段,供桌面端进度条悬停预览显示段落名。 */
+@Composable
+fun rememberSeekBarSegments(segments: List<SponsorSegment>): List<SeekBarSegment> =
+    segments.mapNotNull { segment ->
+        sponsorCategoryColor(segment.category)?.let { color ->
+            val label = CATEGORY_LABELS[segment.category]?.let { stringResource(it) }
+            SeekBarSegment(segment.startMillis, segment.endMillis, color, label)
+        }
+    }

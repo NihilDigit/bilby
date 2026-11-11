@@ -28,6 +28,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.rememberCaptionSlot
+import dev.bilby.ui.windowDragArea
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -50,7 +53,9 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.PaneSheet
+import dev.bilby.ui.player.QueuePlaybackControls
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -131,9 +136,23 @@ import dev.bilby.resources.*
 import dev.bilby.ui.player.EpisodeList
 import dev.bilby.ui.player.EpisodeTarget
 import dev.bilby.ui.player.playOrReplay
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import dev.bilby.ui.components.LocalEditableFocusTracker
 import dev.bilby.ui.player.CenterPlayButton
 import dev.bilby.ui.player.ControlButton
 import dev.bilby.ui.player.PlayerIconButton
+import dev.bilby.ui.player.PlayerVolumeControl
 import dev.bilby.ui.video.PlayerSettingsContent
 import dev.bilby.data.QueueSource
 import dev.bilby.ui.components.InlineProgress
@@ -378,6 +397,20 @@ private class BarScrub {
 /** 这个向量指向的角度,度数,屏幕坐标下顺时针为正。 */
 private fun Offset.degrees(): Float = Math.toDegrees(kotlin.math.atan2(y, x).toDouble()).toFloat()
 
+private fun listenDigitIndex(key: Key): Int? = when (key) {
+    Key.Zero, Key.NumPad0 -> 0
+    Key.One, Key.NumPad1 -> 1
+    Key.Two, Key.NumPad2 -> 2
+    Key.Three, Key.NumPad3 -> 3
+    Key.Four, Key.NumPad4 -> 4
+    Key.Five, Key.NumPad5 -> 5
+    Key.Six, Key.NumPad6 -> 6
+    Key.Seven, Key.NumPad7 -> 7
+    Key.Eight, Key.NumPad8 -> 8
+    Key.Nine, Key.NumPad9 -> 9
+    else -> null
+}
+
 /**
  * 听视频界面。播放器归 [dev.bilby.player.AudioPlaybackService] 所有,这里只读状态、发命令
  * (DESIGN 2.4b「一个播放状态,两个 UI」)——不 prepare、不 release,和看视频共用同一个播放器。
@@ -410,6 +443,7 @@ fun ListenScreen(
     onOpenQueueSource: (QueueSource) -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
+    onCycleEndMode: () -> Unit = {},
     onToggleShuffle: () -> Unit,
     /** 三选一,见 [dev.bilby.player.SleepTimerMode]。 */
     onSleepTimer: (SleepTimerMode) -> Unit,
@@ -509,12 +543,73 @@ fun ListenScreen(
     // 一盏亮着却什么都没显示的灯,换视频、关字幕也各要一个 LaunchedEffect 去同步。
     // 顺带解决了空窗——`cues` 是选轨之后才去取的,等它到了才切,不会先闪一页空歌词。
     val showLyrics = subtitleLan.isNotEmpty() && subtitleCues.isNotEmpty()
+    val editableFocus = LocalEditableFocusTracker.current
+    val listenFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(player) {
+        if (player != null && !editableFocus.isEditableFocused) {
+            runCatching { listenFocusRequester.requestFocus() }
+        }
+    }
 
     // 必须自己给顶栏:听视频是播放页内的一个状态,VideoScreen 在这条分支上提前 return,
     // 外层那句 windowInsetsPadding(statusBars) 走不到 —— 不处理的话标题和返回箭头
     // 会直接压在状态栏的时钟上。用 Scaffold 而不是手贴 padding,和其余页面一致。
     Scaffold(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .onKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown || editableFocus.isEditableFocused) return@onKeyEvent false
+                if (event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return@onKeyEvent false
+                val activePlayer = player ?: return@onKeyEvent false
+                val digit = listenDigitIndex(event.key)
+                if (digit != null) {
+                    if (event.isShiftPressed || duration <= 0L) return@onKeyEvent false
+                    val target = (duration * digit / 10L).coerceIn(0L, duration)
+                    activePlayer.seekTo(target)
+                    position = target
+                    return@onKeyEvent true
+                }
+                when (event.key) {
+                    Key.Spacebar -> {
+                        if (activePlayer.isPlaying) activePlayer.pause() else activePlayer.playOrReplay(playback)
+                    }
+                    Key.DirectionLeft, Key.DirectionRight -> {
+                        val step = if (event.isShiftPressed) 60_000L else 10_000L
+                        val delta = if (event.key == Key.DirectionLeft) -step else step
+                        val target = if (duration > 0L) {
+                            (position + delta).coerceIn(0L, duration)
+                        } else {
+                            (position + delta).coerceAtLeast(0L)
+                        }
+                        activePlayer.seekTo(target)
+                        position = target
+                    }
+                    Key.DirectionUp -> {
+                        if (!playback.hasSoftwareVolume) return@onKeyEvent false
+                        playback.setSoftwareVolume((playback.softwareVolume.value + 0.05f).coerceIn(0f, 1f))
+                    }
+                    Key.DirectionDown -> {
+                        if (!playback.hasSoftwareVolume) return@onKeyEvent false
+                        playback.setSoftwareVolume((playback.softwareVolume.value - 0.05f).coerceIn(0f, 1f))
+                    }
+                    Key.M -> {
+                        if (!playback.hasSoftwareVolume) return@onKeyEvent false
+                        playback.toggleSoftwareMute()
+                    }
+                    Key.LeftBracket -> {
+                        if (state.queue?.canPrevious != true) return@onKeyEvent false
+                        onPrevious()
+                    }
+                    Key.RightBracket -> {
+                        if (state.queue?.canNext != true) return@onKeyEvent false
+                        onNext()
+                    }
+                    else -> return@onKeyEvent false
+                }
+                true
+            }
+            .focusRequester(listenFocusRequester)
+            .focusable(),
         // **两个模式的顶栏不一样,因为它们缺的东西不一样。**
         //
         // 唱片模式只要一个退出按钮:那一屏自己说明了在干什么(一张转着的唱片),在听哪一条也
@@ -528,13 +623,20 @@ fun ListenScreen(
         topBar = {
             val item = state.queue?.current
             val barActions: @Composable () -> Unit = {
+                PlayerVolumeControl(
+                    surfaceTone = true,
+                    modifier = Modifier.padding(end = Spacing.Hair),
+                )
                 if (comments != null) {
-                    IconButton(onClick = { commentsOpen = true }) {
-                        Icon(
-                            Icons.AutoMirrored.Outlined.Comment,
-                            contentDescription = stringResource(Res.string.video_tab_comment),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    val commentLabel = stringResource(Res.string.video_tab_comment)
+                    BilbyTooltip(text = commentLabel) {
+                        IconButton(onClick = { commentsOpen = true }) {
+                            Icon(
+                                Icons.AutoMirrored.Outlined.Comment,
+                                contentDescription = commentLabel,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
                 SubtitleBarButton(
@@ -587,6 +689,7 @@ fun ListenScreen(
             QueueSheetContent(
                 queue = queue,
                 playing = playing,
+                onCycleEndMode = onCycleEndMode,
                 onToggleShuffle = onToggleShuffle,
                 onSelectEpisode = onSelectEpisode,
                 onRetryQueue = onRetryQueue,
@@ -1111,14 +1214,16 @@ private fun PlaybackControls(
         var speedSheetOpen by remember { mutableStateOf(false) }
         val speedLabel = stringResource(Res.string.player_speed)
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            ControlButton(
-                expanded = speedSheetOpen,
-                onClick = { speedSheetOpen = true },
-                label = formatSpeed(speed),
-                icon = { tint ->
-                    Icon(Icons.Filled.Speed, speedLabel, tint = tint, modifier = Modifier.size(ChipIconSize))
-                },
-            )
+            BilbyTooltip(text = speedLabel, anchorAbove = true) {
+                ControlButton(
+                    expanded = speedSheetOpen,
+                    onClick = { speedSheetOpen = true },
+                    label = formatSpeed(speed),
+                    icon = { tint ->
+                        Icon(Icons.Filled.Speed, speedLabel, tint = tint, modifier = Modifier.size(ChipIconSize))
+                    },
+                )
+            }
         }
         // 倍速面板和视频播放器那块是同一份内容:倍速与音质两段。听视频没有画面,清晰度不给;
         // 字幕在顶栏的歌词按钮上。
@@ -1141,37 +1246,46 @@ private fun PlaybackControls(
             }
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            PlayerIconButton(
-                onClick = onPrevious,
-                icon = Icons.Filled.SkipPrevious,
-                contentDescription = stringResource(Res.string.player_previous),
-                enabled = hasPrevious,
-                iconSize = SkipIconSize,
-                modifier = Modifier.size(SkipButtonSize),
-            )
+            val prevLabel = stringResource(Res.string.player_previous)
+            BilbyTooltip(text = prevLabel, shortcut = "[", anchorAbove = true) {
+                PlayerIconButton(
+                    onClick = onPrevious,
+                    icon = Icons.Filled.SkipPrevious,
+                    contentDescription = prevLabel,
+                    enabled = hasPrevious,
+                    iconSize = SkipIconSize,
+                    modifier = Modifier.size(SkipButtonSize),
+                )
+            }
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
             // 和视频画面正中那颗是同一个组件:停着是 primary 的正圆,放着变成圆角方块,取流时
             // 变回正圆、里面转加载指示 —— 加载不再是换掉按钮的另一个圈,按钮所在的这一格也就
             // 不会在取流那一瞬间塌下去。
-            CenterPlayButton(
-                isPlaying = isPlaying,
-                loading = loading,
-                // 不用全屏那一档(72dp,放着时 83dp 宽):控制行五等分,360dp 宽的屏上每格
-                // 只有 65.6dp。
-                large = false,
-                onClick = onPlayPause,
-            )
+            val playLabel = stringResource(if (isPlaying) Res.string.player_pause else Res.string.player_play)
+            BilbyTooltip(text = playLabel, shortcut = "Space", anchorAbove = true) {
+                CenterPlayButton(
+                    isPlaying = isPlaying,
+                    loading = loading,
+                    // 不用全屏那一档(72dp,放着时 83dp 宽):控制行五等分,360dp 宽的屏上每格
+                    // 只有 65.6dp。
+                    large = false,
+                    onClick = onPlayPause,
+                )
+            }
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            PlayerIconButton(
-                onClick = onNext,
-                icon = Icons.Filled.SkipNext,
-                contentDescription = stringResource(Res.string.player_next),
-                enabled = hasNext,
-                iconSize = SkipIconSize,
-                modifier = Modifier.size(SkipButtonSize),
-            )
+            val nextLabel = stringResource(Res.string.player_next)
+            BilbyTooltip(text = nextLabel, shortcut = "]", anchorAbove = true) {
+                PlayerIconButton(
+                    onClick = onNext,
+                    icon = Icons.Filled.SkipNext,
+                    contentDescription = nextLabel,
+                    enabled = hasNext,
+                    iconSize = SkipIconSize,
+                    modifier = Modifier.size(SkipButtonSize),
+                )
+            }
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
             val label = sleepTimerLabel(sleepTimer, itemRemainingMillis)
@@ -1179,16 +1293,18 @@ private fun PlaybackControls(
             // **计时中就只剩数字,图标让位,不是在图标下面再挂一行。** 挂一行的写法会让整条
             // 控制行在开始计时的那一刻长高一截,播放键跟着往下跳。同一枚 chip 里图标与数字
             // 二选一,计时中换成选中态的底色,行高恒定。
-            ControlButton(
-                expanded = label != null,
-                onClick = onOpenSleepTimer,
-                label = label,
-                icon = { tint ->
-                    if (label == null) {
-                        Icon(Icons.Filled.Bedtime, sleepLabel, tint = tint, modifier = Modifier.size(ChipIconSize))
-                    }
-                },
-            )
+            BilbyTooltip(text = sleepLabel, anchorAbove = true) {
+                ControlButton(
+                    expanded = label != null,
+                    onClick = onOpenSleepTimer,
+                    label = label,
+                    icon = { tint ->
+                        if (label == null) {
+                            Icon(Icons.Filled.Bedtime, sleepLabel, tint = tint, modifier = Modifier.size(ChipIconSize))
+                        }
+                    },
+                )
+            }
         }
     }
 }
@@ -1231,6 +1347,7 @@ private fun FailureRow(message: String, retrying: Boolean, onRetry: () -> Unit) 
 private fun QueueSheetContent(
     queue: QueueUiState,
     playing: Boolean,
+    onCycleEndMode: () -> Unit,
     onToggleShuffle: () -> Unit,
     onSelectEpisode: (EpisodeTarget) -> Unit,
     onRetryQueue: () -> Unit,
@@ -1238,7 +1355,6 @@ private fun QueueSheetContent(
     /** 宽屏右栏:撑满栏高,列表在栏里自己滚。Sheet 里由 Sheet 定高,不撑。 */
     fillHeight: Boolean = false,
 ) {
-    val shuffled = queue.shuffled
     Column(modifier = if (fillHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
         // 标题是这份队列的来源,和详情页那一段的标题行是同一个组件、同一个判据:合集/系列点得进
         // 目录,UP 投稿之类没有目录页的不给入口。来源名还没有时退回「播放队列」。
@@ -1250,26 +1366,12 @@ private fun QueueSheetContent(
             onTitleClick = queue.source?.let { source -> { onOpenQueueSource(source) } },
             modifier = Modifier.padding(start = Spacing.Comfortable, end = Spacing.Tight),
         ) {
-            // 靠右:左边是标题,顺序切换是对整个列表的操作,和标题分列两端读起来是一组。
-            //
-            // **图标跟着状态换,和文字说的是同一件事。** 这里原先恒定是 `Shuffle`:文字写着
-            // 「顺序播放」而旁边画着交叉的箭头,两个符号一个说顺序、一个说随机,而它们本来
-            // 是同一个读数。图标不给 contentDescription —— 文字已经念出来了。
-            val orderLabel =
-                stringResource(if (shuffled) Res.string.queue_order_shuffle else Res.string.queue_order_sequential)
-            TextButton(
-                onClick = onToggleShuffle,
-                // 读屏念的是「顺序播放,按钮」,听起来像"按下去会变成顺序播放",而实际相反。
-                // stateDescription 把这句归到状态那一栏,念出来是「按钮,顺序播放」。
-                modifier = Modifier.semantics { stateDescription = orderLabel },
-            ) {
-                Icon(
-                    if (shuffled) Icons.Filled.Shuffle else Icons.AutoMirrored.Filled.PlaylistPlay,
-                    contentDescription = null,
-                    modifier = Modifier.size(OrderIconSize),
-                )
-                Text(orderLabel, modifier = Modifier.padding(start = Spacing.Hair))
-            }
+            QueuePlaybackControls(
+                endMode = queue.endMode,
+                shuffled = queue.shuffled,
+                onCycleEndMode = onCycleEndMode,
+                onToggleShuffle = onToggleShuffle,
+            )
         }
         // 三种状态与详情页那一段(VideoTabs 的 queueItems)同一套文案与判据。
         when {
@@ -1479,7 +1581,9 @@ private const val SleepAdjustFloorMillis = 120_000L
  */
 @Composable
 private fun LyricsHeader(item: QueueItem, onBack: () -> Unit, trailing: @Composable () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surface) {
+    LocalWindowCaption.current?.Host()
+    val captionSlot = rememberCaptionSlot()
+    Surface(color = MaterialTheme.colorScheme.surface, modifier = captionSlot.modifier) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
             modifier = Modifier
@@ -1491,12 +1595,15 @@ private fun LyricsHeader(item: QueueItem, onBack: () -> Unit, trailing: @Composa
             // **两颗按钮贴顶,不居中。** 贴顶时它们的中心离上沿 8 + 24 = 32dp,正是 64dp 高的
             // 普通顶栏里按钮的位置 —— 在唱片和歌词之间切换,返回和字幕都原地不动。居中的话
             // 这一栏有多高(标题一行还是三行)它们就往下挪多少。
-            IconButton(onClick = onBack) {
-                // AutoMirrored:supportsRtl 开着,RTL 语言下返回箭头必须翻过来。
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(Res.string.action_back),
-                )
+            val backLabel = stringResource(Res.string.action_back)
+            BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
+                IconButton(onClick = onBack) {
+                    // AutoMirrored:supportsRtl 开着,RTL 语言下返回箭头必须翻过来。
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = backLabel,
+                    )
+                }
             }
             VideoCover(
                 url = item.coverUrl,
@@ -1507,9 +1614,15 @@ private fun LyricsHeader(item: QueueItem, onBack: () -> Unit, trailing: @Composa
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).align(Alignment.CenterVertically),
+                modifier = Modifier
+                    .weight(1f)
+                    .align(Alignment.CenterVertically)
+                    .windowDragArea(captionSlot.atTop),
             )
-            trailing()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                trailing()
+                captionSlot.buttons?.invoke()
+            }
         }
     }
 }
@@ -1702,17 +1815,20 @@ private fun SubtitleBarButton(
 ) {
     if (tracks.isEmpty()) return
     var expanded by remember { mutableStateOf(false) }
+    val subtitleLabel = stringResource(Res.string.player_subtitle)
     Box {
-        IconButton(onClick = { if (lyricsShown) onSelect("") else expanded = true }) {
-            Icon(
-                Icons.Filled.Subtitles,
-                contentDescription = stringResource(Res.string.player_subtitle),
-                tint = if (currentLan.isNotEmpty()) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
+        BilbyTooltip(text = subtitleLabel) {
+            IconButton(onClick = { if (lyricsShown) onSelect("") else expanded = true }) {
+                Icon(
+                    Icons.Filled.Subtitles,
+                    contentDescription = subtitleLabel,
+                    tint = if (currentLan.isNotEmpty()) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
         }
         SubtitleTrackMenu(
             expanded = expanded,

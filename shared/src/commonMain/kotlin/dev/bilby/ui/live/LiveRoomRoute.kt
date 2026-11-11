@@ -14,12 +14,15 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.bilby.AppContainer
+import dev.bilby.data.SidePanelId
+import dev.bilby.data.SideSheetPrefs
 import dev.bilby.data.StoredDanmakuPrefsEditor
 import dev.bilby.player.PlaybackCommand
 import dev.bilby.player.PlayerHandle
 import dev.bilby.player.liveMediaId
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.player.rememberSettledPlaybackError
+import kotlinx.coroutines.launch
 
 /**
  * 直播间的接线:连 session、把选好的流交给服务、把状态和弹幕流交给界面。
@@ -47,6 +50,8 @@ fun LiveRoomRoute(
                     container.danmakusRepository,
                     container.messageRepository::userFaces,
                     container.relationRepository,
+                    container.platform.network::isMetered,
+                    container.persistScope,
                 )
             }
         },
@@ -58,6 +63,8 @@ fun LiveRoomRoute(
     val playerPrefs by container.settings.playerPrefs.collectAsStateWithLifecycle(
         initialValue = dev.bilby.data.PlayerPrefs(),
     )
+    val panelPrefs by remember(container) { container.settings.sidePanel(SidePanelId.LiveChat) }
+        .collectAsStateWithLifecycle(initialValue = SideSheetPrefs())
     // 弹幕设置是全局的,不是这个房间的状态:在直播间改了,回到视频页也是改过的。
     val danmakuEditor = remember { StoredDanmakuPrefsEditor(container.settings, container.persistScope) }
 
@@ -146,6 +153,12 @@ fun LiveRoomRoute(
         onBack = onBack,
         onUserClick = onUserClick,
         onToggleFollow = vm::toggleFollow,
+        panelPrefs = panelPrefs,
+        onPanelWidthChange = { widthDp ->
+            container.persistScope.launch {
+                container.settings.saveSidePanelWidth(SidePanelId.LiveChat, widthDp)
+            }
+        },
         modifier = modifier,
     )
 }

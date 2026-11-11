@@ -258,4 +258,18 @@ class SpeedSelectionTest {
         assertEquals(2f, actual, 0f)
         assertTrue(controller.lockedByHold)
     }
+
+    @Test
+    fun `horizontal dial uses wider drag step than vertical dial`() {
+        var actual = 1f
+        val controller = PlaybackSpeedController({ actual }, { actual = it }, defaultHoldSpeed = 2.5f)
+        controller.open(temporary = true)
+        controller.beginDrag(vertical = false)
+        // 36dp 在竖排里已过半格阈值并换档,横排(56dp/档)下 (36 - 10) / 56 = 0.46 < 0.5 仍停在 2.5x。
+        controller.move(-36f, 0f)
+        assertEquals(250, controller.selection!!.value)
+        controller.move(-(SpeedSelectionIntentDp + SpeedHorizontalDragStepDp), 0f)
+        assertEquals(200, controller.selection!!.value)
+        controller.cancel()
+    }
 }

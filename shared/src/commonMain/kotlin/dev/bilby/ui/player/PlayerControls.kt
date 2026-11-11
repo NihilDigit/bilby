@@ -1,11 +1,19 @@
 package dev.bilby.ui.player
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -39,29 +47,41 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.VolumeDown
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
-import androidx.compose.material3.TooltipAnchorPosition
-import androidx.compose.material3.TooltipBox
-import androidx.compose.material3.TooltipDefaults
-import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.bilby.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import dev.bilby.resources.*
+import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.components.BilbyIcons
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.theme.Dimens
@@ -96,7 +116,7 @@ internal fun FullscreenButton(isFullscreen: Boolean, onClick: () -> Unit) {
     val description = stringResource(
         if (isFullscreen) Res.string.player_exit_fullscreen else Res.string.player_fullscreen,
     )
-    PlayerTooltip(description) {
+    PlayerTooltip(description, shortcut = "F") {
         PlayerIconButton(
             onClick = onClick,
             icon = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
@@ -118,7 +138,7 @@ internal fun DanmakuButton(
     isFullscreen: Boolean,
 ) {
     val description = stringResource(if (enabled) Res.string.danmaku_hide else Res.string.danmaku_show)
-    PlayerTooltip(description) {
+    PlayerTooltip(description, shortcut = "D") {
         ControlButton(
             expanded = enabled,
             onClick = { onEnabledChange(!enabled) },
@@ -166,15 +186,21 @@ internal fun BoxScope.MediaBackButton(
     // 浅色配色,画面上浮着两颗浅灰的圆。
     PlayerTheme {
         with(box) {
-            PlayerIconButton(
-                onClick = onBack,
-                icon = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = stringResource(Res.string.action_back),
+            val backLabel = stringResource(Res.string.action_back)
+            BilbyTooltip(
+                text = backLabel,
+                shortcut = "Alt+←",
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .windowInsetsPadding(safeInsets)
                     .padding(Spacing.Tight),
-            )
+            ) {
+                PlayerIconButton(
+                    onClick = onBack,
+                    icon = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = backLabel,
+                )
+            }
             // 分享和返回一样是页面级动作,所以对称地摆在另一端,而不是塞进四格动作栏
             // —— 那一行是「对这条视频表态」(赞/币/藏/稍后再看),分享不是表态,而且 M3 也说
             // 一处按钮不超过三个。
@@ -186,11 +212,12 @@ internal fun BoxScope.MediaBackButton(
                         .padding(Spacing.Tight),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    onShare.let { share ->
+                    val shareLabel = stringResource(Res.string.action_share)
+                    BilbyTooltip(text = shareLabel) {
                         PlayerIconButton(
-                            onClick = share,
+                            onClick = onShare,
                             icon = Icons.Filled.Share,
-                            contentDescription = stringResource(Res.string.action_share),
+                            contentDescription = shareLabel,
                         )
                     }
                 }
@@ -222,17 +249,13 @@ internal fun BoxScope.MediaTopScrim() {
 private val MediaScrimHeight = 72.dp
 
 /**
- * 画面中央那个框的内容:**按住画面连续调一个量**时的读数。横划进退、音量、亮度三种。
+ * 手势连续调整时的读数模型:
  *
- * 这三种原先和长按加速、双击快进共用一个"图标 + 一句话"的框,理由是位置固定、学一次。
- * 共用下来的毛病是它只剩一句话:音量是多少只能读百分比,进退只有一串"12:30 / 45:00",看不出
- * 挪了多少。现在分两类:
+ * - **横划进退**([Seek])留在画面正中([PlayerHudOverlay]),展示目标时刻、位移秒数与进度条。
+ * - **音量与亮度**([Level])贴画面侧边([PlayerLevelEdgeBar]),用极窄竖条避开画面主体与手指。
+ * - **双击进退**落在点下去的那一侧([DoubleTapSeekHint])。
  *
- * - **连续调整**(这三种)留在正中,加一条量:手指在动,读数就该跟着一条看得见的量走。
- * - **一下就完的**(双击)回到它发生的地方([DoubleTapSeekHint]);长按倍速的锁定提示与中央读数
- *   共用同一套 [Overlay] 容器。
- *
- * **摆位归调用方**,所以不是 `BoxScope` 扩展:它套在 `AnimatedVisibility` 里淡入淡出
+ * **摆位归调用方**,所以不是 `BoxScope` 扩展:它们套在 `AnimatedVisibility` 里进出
  * (见 [PlayerShell]),而那一层的 content scope 不是 `BoxScope`,`align` 得挂在外面那个
  * `AnimatedVisibility` 上。
  */
@@ -250,106 +273,133 @@ internal sealed interface PlayerHud {
 }
 
 @Composable
-internal fun PlayerHudOverlay(hud: PlayerHud, modifier: Modifier = Modifier) {
+internal fun PlayerHudOverlay(hud: PlayerHud.Seek, modifier: Modifier = Modifier) {
     Overlay(modifier = modifier) {
-        when (hud) {
-            is PlayerHud.Level -> Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-            ) {
-                Icon(
-                    imageVector = hud.icon,
-                    contentDescription = null,
-                    tint = FixedColors.OnMedia,
-                    modifier = Modifier.size(HintIconSize),
-                )
-                // 条而不是只写百分比:手指在屏上滑,眼睛扫一下条的长短比读一个两位数快。
-                // 百分比留在右边给要精确值的人,读屏也念它。
-                LinearProgressIndicator(
-                    progress = { hud.value },
-                    gapSize = 0.dp,
-                    drawStopIndicator = {},
-                    modifier = Modifier.width(LevelBarWidth),
-                )
-                Text(
-                    text = hud.label,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = FixedColors.OnMedia,
-                )
-            }
-
-            is PlayerHud.Seek -> Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-            ) {
-                if (hud.cancelArmed) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                    ) {
-                        Icon(
-                            Icons.Filled.Close,
-                            contentDescription = null,
-                            tint = FixedColors.OnMedia,
-                            modifier = Modifier.size(HintIconSize),
-                        )
-                        Text(
-                            stringResource(Res.string.player_seek_release_to_cancel),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = FixedColors.OnMedia,
-                        )
-                    }
-                } else {
-                    // 目标时间大写,总时长小一号跟在后面:拖的时候要读的是"到哪了"。
-                    // 瘦高的读数(ClockAxes),同定时倒计时与进度条气泡。
-                    // 等宽数字:秒数每跳一下,不等宽的话整行左右抖。
-                    val readoutFont = rememberClockFont()
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Text(
-                            formatDurationMillis(hud.targetMillis),
-                            style = MaterialTheme.typography.headlineSmall.copy(
-                                fontFamily = readoutFont,
-                                fontFeatureSettings = "tnum",
-                            ),
-                            color = FixedColors.OnMedia,
-                        )
-                        Text(
-                            " / ${formatDurationMillis(hud.durationMillis)}",
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                fontFamily = readoutFont,
-                                fontFeatureSettings = "tnum",
-                            ),
-                            color = FixedColors.OnMedia.copy(alpha = SecondaryTextAlpha),
-                            modifier = Modifier.padding(bottom = Spacing.Hair / 2),
-                        )
-                    }
-                    // 挪了多少。起手那一刻是 0,不写"快进 0 秒"。
-                    val seconds = kotlin.math.abs(hud.deltaMillis) / 1000
-                    if (seconds > 0) {
-                        Text(
-                            stringResource(
-                                if (hud.deltaMillis > 0) Res.string.player_seek_forward else Res.string.player_seek_backward,
-                                seconds,
-                            ),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+        ) {
+            if (hud.cancelArmed) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                ) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = null,
+                        tint = FixedColors.OnMedia,
+                        modifier = Modifier.size(HintIconSize),
+                    )
+                    Text(
+                        stringResource(Res.string.player_seek_release_to_cancel),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = FixedColors.OnMedia,
+                    )
                 }
-                LinearProgressIndicator(
-                    progress = {
-                        if (hud.durationMillis > 0) {
-                            (hud.targetMillis.toFloat() / hud.durationMillis).coerceIn(0f, 1f)
-                        } else {
-                            0f
-                        }
-                    },
-                    gapSize = 0.dp,
-                    drawStopIndicator = {},
-                    modifier = Modifier.width(SeekBarHudWidth).padding(top = Spacing.Hair),
-                )
+            } else {
+                // 目标时间大写,总时长小一号跟在后面:拖的时候要读的是"到哪了"。
+                // 瘦高的读数(ClockAxes),同定时倒计时与进度条气泡。
+                // 等宽数字:秒数每跳一下,不等宽的话整行左右抖。
+                val readoutFont = rememberClockFont()
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        formatDurationMillis(hud.targetMillis),
+                        style = MaterialTheme.typography.headlineSmall.copy(
+                            fontFamily = readoutFont,
+                            fontFeatureSettings = "tnum",
+                        ),
+                        color = FixedColors.OnMedia,
+                    )
+                    Text(
+                        " / ${formatDurationMillis(hud.durationMillis)}",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontFamily = readoutFont,
+                            fontFeatureSettings = "tnum",
+                        ),
+                        color = FixedColors.OnMedia.copy(alpha = SecondaryTextAlpha),
+                        modifier = Modifier.padding(bottom = Spacing.Hair / 2),
+                    )
+                }
+                // 挪了多少。起手那一刻是 0,不写"快进 0 秒"。
+                val seconds = kotlin.math.abs(hud.deltaMillis) / 1000
+                if (seconds > 0) {
+                    Text(
+                        stringResource(
+                            if (hud.deltaMillis > 0) Res.string.player_seek_forward else Res.string.player_seek_backward,
+                            seconds,
+                        ),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
+            LinearProgressIndicator(
+                progress = {
+                    if (hud.durationMillis > 0) {
+                        (hud.targetMillis.toFloat() / hud.durationMillis).coerceIn(0f, 1f)
+                    } else {
+                        0f
+                    }
+                },
+                gapSize = 0.dp,
+                drawStopIndicator = {},
+                modifier = Modifier.width(SeekBarHudWidth).padding(top = Spacing.Hair),
+            )
         }
+    }
+}
+
+/**
+ * 音量与亮度的贴边极窄竖条指示器:取代早先压在画面正中的宽横条,不遮挡画面主体。
+ * 触屏纵划时停靠在对侧边缘以避开手指与手掌,滚轮与键盘触发时停靠在右侧边缘。
+ */
+@Composable
+internal fun PlayerLevelEdgeBar(
+    hud: PlayerHud.Level,
+    large: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val clamped = hud.value.coerceIn(0f, 1f)
+    val trackHeight = if (large) LevelEdgeTrackHeightLarge else LevelEdgeTrackHeightCompact
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = modifier
+            .width(LevelEdgePillWidth)
+            .clip(CircleShape)
+            .background(FixedColors.ScrimOnMedia)
+            .padding(horizontal = 6.dp, vertical = 10.dp)
+            .semantics(mergeDescendants = true) { contentDescription = hud.label },
+    ) {
+        Text(
+            text = "${(clamped * 100).roundToInt()}",
+            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+            color = FixedColors.OnMedia,
+            maxLines = 1,
+            softWrap = false,
+        )
+        Box(
+            contentAlignment = Alignment.BottomCenter,
+            modifier = Modifier
+                .width(LevelEdgeTrackWidth)
+                .height(trackHeight)
+                .clip(CircleShape)
+                .background(FixedColors.OnMedia.copy(alpha = LevelEdgeTrackBgAlpha)),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(clamped)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
+            )
+        }
+        Icon(
+            imageVector = hud.icon,
+            contentDescription = null,
+            tint = FixedColors.OnMedia,
+            modifier = Modifier.size(LevelEdgeIconSize),
+        )
     }
 }
 
@@ -399,8 +449,13 @@ internal fun DoubleTapSeekHint(deltaMillis: Long, modifier: Modifier = Modifier)
 /** 比正文大一档,和 titleMedium 的行高对得上。 */
 internal val HintIconSize = 22.dp
 
-private val LevelBarWidth = 120.dp
 private val SeekBarHudWidth = 180.dp
+private val LevelEdgePillWidth = 36.dp
+private val LevelEdgeTrackWidth = 4.dp
+private val LevelEdgeTrackHeightCompact = 72.dp
+private val LevelEdgeTrackHeightLarge = 104.dp
+private val LevelEdgeIconSize = 18.dp
+private const val LevelEdgeTrackBgAlpha = 0.24f
 
 /** 双击那块半圆占画面宽度的比例。比双击判定区(四分之一)略宽,落点一定在它里面。 */
 internal const val DoubleTapArcFraction = 0.3f
@@ -418,20 +473,17 @@ private const val SecondaryTextAlpha = 0.7f
  * 包一层函数而不是在六处各写一遍 `TooltipBox`:那三行样板里有两行(位置提供者、state)在
  * 每一处都一模一样,而抄六遍的东西改一处就会漏五处。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun PlayerTooltip(text: String, content: @Composable () -> Unit) {
-    // 桌面端 CMP 1.12.1 的 CanvasLayersComposeSceneImpl.doMeasureAndLayout 在 mouseExited
-    // 同帧卸载 TooltipBox 的 Popup(独立 RootNodeOwner)时会遍历到已销毁的 RootNodeOwner 并抛
-    // IllegalArgumentException("RootNodeOwner is already disposed")。只保留触屏长按提示。
-    if (!LocalPointerSource.current.isTouchLike) {
-        content()
-        return
-    }
-    TooltipBox(
-        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
-        tooltip = { PlainTooltip { Text(text) } },
-        state = rememberTooltipState(),
+internal fun PlayerTooltip(
+    text: String,
+    shortcut: String? = null,
+    anchorAbove: Boolean = true,
+    content: @Composable () -> Unit,
+) {
+    BilbyTooltip(
+        text = text,
+        shortcut = shortcut,
+        anchorAbove = anchorAbove,
         content = content,
     )
 }
@@ -530,6 +582,161 @@ internal fun ControlButton(
 
 /** 控制条 chip 的容器高度,M3E XS 按钮那一档。 */
 internal val ControlChipHeight = 32.dp
+
+private val VolumeSliderWidth = 76.dp
+private val VolumeTrackStroke = 4.dp
+private val VolumeThumbRadius = 6.dp
+private const val VolumeWheelStep = 0.05f
+
+/**
+ * 桌面端软件音量控件:静音切换 + 悬停/拖拽展开的紧凑横向滑杆,且控件上可直接滚轮微调。
+ *
+ * 只在播放宿主具备应用内软件音量([dev.bilby.player.PlaybackHost.hasSoftwareVolume])且当前指针不是触屏时渲染:
+ * 移动端与平板走系统硬件音量键与右侧竖滑手势,控制条里不再重复塞滑杆。
+ *
+ * @param surfaceTone 放在普通页面顶栏(如听视频界面)而非深色画面控制条上时传 true,容器取页面的 `surfaceContainerHigh`。
+ */
+@Composable
+internal fun PlayerVolumeControl(
+    modifier: Modifier = Modifier,
+    surfaceTone: Boolean = false,
+) {
+    val playback = LocalPlaybackHost.current
+    if (!playback.hasSoftwareVolume || LocalPointerSource.current.isTouchLike) return
+
+    val volume by playback.softwareVolume.collectAsStateWithLifecycle()
+    val muted by playback.softwareMuted.collectAsStateWithLifecycle()
+    val effective = if (muted) 0f else volume
+
+    val hoverSource = remember { MutableInteractionSource() }
+    val hovered by hoverSource.collectIsHoveredAsState()
+    var dragging by remember { mutableStateOf(false) }
+    val expanded = hovered || dragging
+    val sliderWidth by animateDpAsState(
+        targetValue = if (expanded) VolumeSliderWidth else 0.dp,
+        animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+        label = "volume-slider-width",
+    )
+
+    val colors = MaterialTheme.colorScheme
+    val containerColor = if (surfaceTone) colors.surfaceContainerHigh else mediaControlContainer()
+    val contentColor = if (surfaceTone) colors.onSurfaceVariant else colors.onSurface
+    val activeTrackColor = colors.primary
+    val inactiveTrackColor = colors.onSurfaceVariant.copy(alpha = 0.32f)
+
+    val description = stringResource(if (muted || volume <= 0f) Res.string.player_unmute else Res.string.player_mute)
+    val icon = when {
+        muted || volume <= 0f -> Icons.AutoMirrored.Filled.VolumeOff
+        volume < 0.5f -> Icons.AutoMirrored.Filled.VolumeDown
+        else -> Icons.AutoMirrored.Filled.VolumeUp
+    }
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .sizeIn(minHeight = if (surfaceTone) ControlChipHeight else Dimens.MinTouchTarget)
+            .hoverable(hoverSource)
+            .pointerInput(playback) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.type != PointerEventType.Scroll) continue
+                        val change = event.changes.firstOrNull() ?: continue
+                        val dy = change.scrollDelta.y
+                        if (dy != 0f) {
+                            val base = if (playback.softwareMuted.value) 0f else playback.softwareVolume.value
+                            val delta = if (dy < 0f) VolumeWheelStep else -VolumeWheelStep
+                            playback.setSoftwareVolume((base + delta).coerceIn(0f, 1f))
+                            change.consume()
+                        }
+                    }
+                }
+            },
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .height(ControlChipHeight)
+                .clip(CircleShape)
+                .background(containerColor),
+        ) {
+            PlayerTooltip(description, shortcut = "M") {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(ControlChipHeight)
+                        .clip(CircleShape)
+                        .clickable(role = Role.Button) { playback.toggleSoftwareMute() }
+                        .pointerHoverIcon(PointerIcon.Hand),
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = description,
+                        tint = contentColor,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            if (sliderWidth > 1.dp) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .width(sliderWidth)
+                        .height(ControlChipHeight)
+                        .padding(end = Spacing.Cozy, start = Spacing.Hair / 2)
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .pointerInput(playback) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                val span = size.width.toFloat().coerceAtLeast(1f)
+                                dragging = true
+                                try {
+                                    playback.setSoftwareVolume((down.position.x / span).coerceIn(0f, 1f))
+                                    down.consume()
+                                    drag(down.id) { change ->
+                                        playback.setSoftwareVolume((change.position.x / span).coerceIn(0f, 1f))
+                                        change.consume()
+                                    }
+                                } finally {
+                                    dragging = false
+                                }
+                            }
+                        },
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val cy = size.height / 2f
+                        val radius = VolumeThumbRadius.toPx()
+                        val startX = radius
+                        val endX = (size.width - radius).coerceAtLeast(startX)
+                        val thumbX = startX + (endX - startX) * effective.coerceIn(0f, 1f)
+                        val stroke = VolumeTrackStroke.toPx()
+                        drawLine(
+                            color = inactiveTrackColor,
+                            start = Offset(startX, cy),
+                            end = Offset(endX, cy),
+                            strokeWidth = stroke,
+                            cap = StrokeCap.Round,
+                        )
+                        if (thumbX > startX) {
+                            drawLine(
+                                color = activeTrackColor,
+                                start = Offset(startX, cy),
+                                end = Offset(thumbX, cy),
+                                strokeWidth = stroke,
+                                cap = StrokeCap.Round,
+                            )
+                        }
+                        drawCircle(
+                            color = activeTrackColor,
+                            radius = radius,
+                            center = Offset(thumbX, cy),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
 
 /**
  * 画面正中的播放键,**三种形态由同一块容器连续变过去**:

@@ -18,6 +18,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -27,9 +28,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FastForward
@@ -96,21 +99,34 @@ private object SpeedDialSize {
     val HorizontalThickness = 54.dp
     val VerticalThickness = 92.dp
     val BlockWidth = 76.dp
+    val HorizontalBlockWidth = 68.dp
     val BlockHeight = 38.dp
     val UnselectedCorner = 10.dp
     val EdgeFade = Spacing.Loose
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+private val BelowVideoDimScrim = Color(0x61000000)
+private val BelowVideoShelfTop = Color(0xD8000000)
+private val BelowVideoShelfMid = Color(0x99000000)
+
+private data class SpeedHintState(
+    val visible: Boolean,
+    val text: String,
+    val lockedIcon: Boolean,
+)
+
 @Composable
-private fun SpeedSelectionHint(controller: PlaybackSpeedController, modifier: Modifier = Modifier) {
+private fun rememberSpeedHintState(
+    controller: PlaybackSpeedController,
+    forceHorizontalBelow: Boolean,
+): SpeedHintState {
     val selection = controller.selection
     val window = LocalWindowInfo.current.containerSize
-    val vertical = window.width > window.height
+    val vertical = !forceHorizontalBelow && window.width > window.height
     val locked = controller.lockedHint
     val releaseToLock = selection?.locked == true
     val dockEnd = vertical && selection?.dockEnd == true
-    val dockTop = !vertical && selection?.dockTop == true
+    val dockTop = !vertical && !forceHorizontalBelow && selection?.dockTop == true
     val text = when {
         locked != null -> stringResource(Res.string.player_speed_locked, formatSpeed(locked / 100f))
         releaseToLock -> stringResource(Res.string.player_speed_release_to_lock)
@@ -121,41 +137,46 @@ private fun SpeedSelectionHint(controller: PlaybackSpeedController, modifier: Mo
     }
     var shownText by remember { mutableStateOf(text) }
     var shownLockedIcon by remember { mutableStateOf(false) }
-    if (selection != null || locked != null) {
+    val visible = selection != null || locked != null
+    if (visible) {
         shownText = text
         shownLockedIcon = locked != null || releaseToLock
     }
     val revision = controller.hintRevision
-    val effects = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
     LaunchedEffect(revision) {
         if (controller.lockedHint == null) return@LaunchedEffect
         delay(900)
         if (controller.hintRevision == revision) controller.clearHint()
     }
-    AnimatedVisibility(
-        visible = selection != null || locked != null,
-        enter = fadeIn(effects),
-        exit = fadeOut(effects),
-        modifier = modifier,
+    return SpeedHintState(visible = visible, text = shownText, lockedIcon = shownLockedIcon)
+}
+
+/** 贴画面顶/底边缘或详情区顶部的紧凑胶囊提示,取代早先压在画面正中的矩形块。 */
+@Composable
+private fun SpeedHintCapsule(
+    text: String,
+    lockedIcon: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+        modifier = modifier
+            .clip(CircleShape)
+            .background(FixedColors.ScrimOnMedia)
+            .padding(horizontal = Spacing.Cozy, vertical = 6.dp),
     ) {
-        Overlay {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                Icon(
-                    imageVector = if (shownLockedIcon) Icons.Filled.Lock else Icons.Filled.FastForward,
-                    contentDescription = null,
-                    tint = FixedColors.OnMedia,
-                    modifier = Modifier.size(HintIconSize),
-                )
-                Text(
-                    text = shownText,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = FixedColors.OnMedia,
-                )
-            }
-        }
+        Icon(
+            imageVector = if (lockedIcon) Icons.Filled.Lock else Icons.Filled.FastForward,
+            contentDescription = null,
+            tint = FixedColors.OnMedia,
+            modifier = Modifier.size(Dimens.IconInline),
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            color = FixedColors.OnMedia,
+        )
     }
 }
 
@@ -179,6 +200,7 @@ internal fun SpeedSelectionOverlay(
     val activeOrLast = controller.selection ?: shownSelection
     val dockEnd = vertical && activeOrLast?.dockEnd == true
     val dockTop = !vertical && activeOrLast?.dockTop == true
+    val hintState = rememberSpeedHintState(controller, forceHorizontalBelow = false)
     val focus = remember { FocusRequester() }
     BackHandler(enabled = controller.active) { controller.cancel() }
     LaunchedEffect(controller.active) { if (controller.active) focus.requestFocus() }
@@ -286,10 +308,144 @@ internal fun SpeedSelectionOverlay(
                     )
                 }
             }
-            SpeedSelectionHint(
-                controller = controller,
-                modifier = Modifier.align(Alignment.Center),
-            )
+            val hintAtBottom = !vertical && dockTop
+            val hintInsetSides = WindowInsetsSides.Horizontal +
+                if (hintAtBottom) WindowInsetsSides.Bottom else WindowInsetsSides.Top
+            AnimatedVisibility(
+                visible = hintState.visible,
+                enter = slideInVertically(spatialOffset) { if (hintAtBottom) it / 2 else -it / 2 } + fadeIn(effects),
+                exit = slideOutVertically(spatialOffset) { if (hintAtBottom) it / 2 else -it / 2 } + fadeOut(effects),
+                modifier = Modifier
+                    .align(if (hintAtBottom) Alignment.BottomCenter else Alignment.TopCenter)
+                    .then(
+                        if (isFullscreen) {
+                            Modifier.windowInsetsPadding(WindowInsets.barsAndCutout.only(hintInsetSides))
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .padding(Spacing.Comfortable),
+            ) {
+                SpeedHintCapsule(text = hintState.text, lockedIcon = hintState.lockedIcon)
+            }
+        }
+    }
+}
+
+/**
+ * 竖屏单栏内嵌时的长按倍速层:画在 16:9 画面正下方(盖在详情/评论区顶部),
+ * 对下方详情/评论区轻压一层暗色遮罩,使 16:9 播放画面全程零遮挡。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+internal fun BelowVideoSpeedOverlay(
+    controller: PlaybackSpeedController,
+    modifier: Modifier = Modifier,
+) {
+    var shownSelection by remember { mutableStateOf<SpeedSelection?>(null) }
+    controller.selection?.let { shownSelection = it }
+    val haptics = LocalHapticFeedback.current
+    LaunchedEffect(controller) {
+        snapshotFlow { controller.coarseStepRevision }.drop(1).collect {
+            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        }
+    }
+    val hintState = rememberSpeedHintState(controller, forceHorizontalBelow = true)
+    val focus = remember { FocusRequester() }
+    BackHandler(enabled = controller.active) { controller.cancel() }
+    LaunchedEffect(controller.active) { if (controller.active) focus.requestFocus() }
+    PlayerTheme {
+        val motion = MaterialTheme.motionScheme
+        val spatialOffset = motion.fastSpatialSpec<IntOffset>()
+        val effects = motion.fastEffectsSpec<Float>()
+        Box(
+            modifier = modifier
+                .onKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown || !controller.active) return@onKeyEvent false
+                    when (event.key) {
+                        Key.Escape -> controller.cancel()
+                        Key.Enter, Key.DirectionDown -> {
+                            controller.lock()
+                            controller.finish()
+                        }
+                        Key.DirectionRight -> controller.step(1)
+                        Key.DirectionLeft -> controller.step(-1)
+                        else -> return@onKeyEvent false
+                    }
+                    true
+                }
+                .then(if (controller.active) Modifier.focusRequester(focus).focusable() else Modifier),
+        ) {
+            AnimatedVisibility(
+                visible = controller.active,
+                enter = fadeIn(effects),
+                exit = fadeOut(effects),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(BelowVideoDimScrim)
+                        .pointerInput(controller) { detectTapGestures { controller.finish() } },
+                )
+            }
+            AnimatedVisibility(
+                visible = controller.active,
+                enter = slideInVertically(spatialOffset) { -it / 2 } + fadeIn(effects),
+                exit = slideOutVertically(spatialOffset) { -it / 2 } + fadeOut(effects),
+                modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(),
+            ) {
+                val selection = controller.selection ?: shownSelection
+                if (selection != null) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(BelowVideoShelfTop, BelowVideoShelfMid, Color.Transparent),
+                                ),
+                            )
+                            .padding(top = Spacing.Hair, bottom = Spacing.Cozy),
+                    ) {
+                        SpeedDial(
+                            controller = controller,
+                            selection = selection,
+                            vertical = false,
+                            modifier = Modifier
+                                .height(SpeedDialSize.HorizontalThickness)
+                                .fillMaxWidth(),
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                            modifier = Modifier.padding(top = 2.dp),
+                        ) {
+                            Icon(
+                                imageVector = if (hintState.lockedIcon) Icons.Filled.Lock else Icons.Filled.FastForward,
+                                contentDescription = null,
+                                tint = FixedColors.OnMedia.copy(alpha = 0.9f),
+                                modifier = Modifier.size(Dimens.IconInline),
+                            )
+                            Text(
+                                text = hintState.text,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = FixedColors.OnMedia.copy(alpha = 0.9f),
+                            )
+                        }
+                    }
+                }
+            }
+            AnimatedVisibility(
+                visible = !controller.active && controller.lockedHint != null,
+                enter = slideInVertically(spatialOffset) { -it / 2 } + fadeIn(effects),
+                exit = slideOutVertically(spatialOffset) { -it / 2 } + fadeOut(effects),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = Spacing.Cozy),
+            ) {
+                SpeedHintCapsule(text = hintState.text, lockedIcon = true)
+            }
         }
     }
 }
@@ -367,7 +523,7 @@ private fun SpeedDial(
             try {
                 detectDragGestures(
                     onDragStart = {
-                        owned = controller.beginDrag()
+                        owned = controller.beginDrag(vertical = vertical)
                         displacement = Offset.Zero
                     },
                     onDragEnd = {
@@ -411,7 +567,7 @@ private fun SpeedDial(
     val position = if (controller.dragging) selection.position else animatedPosition
     BoxWithConstraints(input) {
         val center = with(density) { if (vertical) maxHeight.toPx() / 2 else maxWidth.toPx() / 2 }
-        val width = SpeedDialSize.BlockWidth
+        val width = if (vertical) SpeedDialSize.BlockWidth else SpeedDialSize.HorizontalBlockWidth
         val height = SpeedDialSize.BlockHeight
         val widthPx = with(density) { width.toPx() }
         val heightPx = with(density) { height.toPx() }

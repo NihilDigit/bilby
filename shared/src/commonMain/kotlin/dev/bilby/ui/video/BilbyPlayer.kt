@@ -30,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +52,7 @@ import dev.bilby.ui.player.FullscreenButton
 import dev.bilby.ui.player.InlineDanmakuBarMinWidth
 import dev.bilby.ui.player.DanmakuButton
 import dev.bilby.ui.player.PlayerShell
+import dev.bilby.ui.player.PlayerVolumeControl
 import dev.bilby.ui.player.PlaybackSpeedController
 import dev.bilby.ui.player.PlayerGestureOptions
 import dev.bilby.ui.player.playerControlBar
@@ -213,6 +215,10 @@ fun BilbyPlayer(
     pip: Boolean = false,
     /** 宽排法控制条里的弹幕输入框。null 即不给(没登录、或这一形态不在这里发)。 */
     controlBarDanmaku: ControlBarDanmaku? = null,
+    /** 单栏下控制条没有内联输入框时,`Enter` 唤起标签行弹幕胶囊的回调。 */
+    onRequestExternalDanmakuInput: (() -> Unit)? = null,
+    /** 是否在播放器画面内渲染长按倍速覆盖层;竖屏单栏内嵌时由外层画在画面下方,传 false。 */
+    showSpeedOverlay: Boolean = true,
 ) {
     /** 两栏布局:内嵌画面占整窗高度,控制条按全屏的尺寸排。 */
     val twoPane = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
@@ -220,6 +226,7 @@ fun BilbyPlayer(
     var settingsOpen by remember { mutableStateOf(false) }
     // 开的是哪一段。关面板时不清:退场动画里内容要保持原样,下次打开会重新赋值。
     var settingsOnly by remember { mutableStateOf<PlayerSettingsSection?>(null) }
+    var danmakuFocusNonce by remember { mutableStateOf(0) }
     val voteUiState = rememberDanmakuVoteUiState(danmakuCid)
     PlayerShell(
         player = player,
@@ -236,10 +243,18 @@ fun BilbyPlayer(
         externalLoading = externalLoading,
         modifier = modifier,
         speedController = speedController,
+        showSpeedOverlay = showSpeedOverlay,
         gestures = gestures,
         topBarActions = topBarActions,
         embeddedTopActions = embeddedTopActions,
         pip = pip,
+        wheelAdjustsVolume = isFullscreen || twoPane,
+        onToggleDanmaku = danmakuEditor?.let { editor -> { editor.setEnabled(!danmakuPrefs.enabled) } },
+        onRequestDanmakuInput = when {
+            controlBarDanmaku != null -> ({ danmakuFocusNonce += 1 })
+            onRequestExternalDanmakuInput != null -> onRequestExternalDanmakuInput
+            else -> null
+        },
         overlay = {
             val largePlayer = rememberLargePlayer(isFullscreen)
             // 弹幕层:字号由这里按形态给,层自己不认识"全屏"。
@@ -354,6 +369,7 @@ fun BilbyPlayer(
                 largePlayer = isFullscreen || twoPane,
                 hasDanmakuSettings = danmakuEditor != null,
                 danmakuField = controlBarDanmaku,
+                danmakuFocusNonce = danmakuFocusNonce,
                 // 写弹幕时控制条不自动收起,同设置面板开着时。
                 onDanmakuFieldFocusChange = { setMenuOpen(it) },
                 onSeekStart = { onSeekStart() },
@@ -439,6 +455,7 @@ private fun PlayerControlBar(
     /** 有没有弹幕设置可调。没有时宽排法不画那枚弹幕设置键。 */
     hasDanmakuSettings: Boolean,
     danmakuField: ControlBarDanmaku?,
+    danmakuFocusNonce: Int = 0,
     onDanmakuFieldFocusChange: (Boolean) -> Unit,
     onSeekStart: () -> Unit,
     onSeekTo: (Long) -> Unit,
@@ -487,6 +504,9 @@ private fun PlayerControlBar(
         val wide = stacked && maxWidth >= Breakpoints.StackedControlBar
         val roomy = maxWidth >= InlineDanmakuBarMinWidth
         var composing by remember { mutableStateOf(false) }
+        LaunchedEffect(danmakuFocusNonce) {
+            if (danmakuFocusNonce > 0 && danmakuField != null) composing = true
+        }
         if (pip) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TimeLabel(position, modifier = Modifier.padding(start = Spacing.Tight))
@@ -509,6 +529,7 @@ private fun PlayerControlBar(
                             if (!focused) composing = false
                         },
                         autoFocus = true,
+                        focusRequestNonce = danmakuFocusNonce,
                         modifier = Modifier.weight(1f).padding(horizontal = Spacing.Tight),
                     )
                 } else {
@@ -517,7 +538,7 @@ private fun PlayerControlBar(
                     TimeLabel(duration, secondary = true, modifier = Modifier.padding(end = Spacing.Hair))
                     if (danmakuField != null) {
                         val label = stringResource(Res.string.danmaku_send)
-                        PlayerTooltip(label) {
+                        PlayerTooltip(label, shortcut = "Enter") {
                             PlayerIconButton(
                                 onClick = { composing = true },
                                 icon = Icons.Filled.Edit,
@@ -526,6 +547,7 @@ private fun PlayerControlBar(
                         }
                     }
                 }
+                PlayerVolumeControl()
                 // 全屏没有标签行,弹幕开关只能在这里;内嵌时它在标签行那枚胶囊里。
                 if (isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
                 PlayerSettingsButton { onOpenSettings(null) }
@@ -559,16 +581,18 @@ private fun PlayerControlBar(
                                 if (!focused) composing = false
                             },
                             autoFocus = true,
+                            focusRequestNonce = danmakuFocusNonce,
                             modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
                         )
                     } else {
                         Row(
                             verticalAlignment = Alignment.Bottom,
-                            modifier = Modifier.padding(start = Spacing.Tight),
+                            modifier = Modifier.padding(start = Spacing.Tight, end = Spacing.Tight),
                         ) {
                             TimeLabel(position, large = true)
                             TimeLabel(duration, large = true, secondary = true, prefix = " / ")
                         }
+                        PlayerVolumeControl()
                         if (showField) {
                             ControlBarDanmakuField(
                                 draft = danmakuField.draft,
@@ -583,6 +607,7 @@ private fun PlayerControlBar(
                                     if (!focused) composing = false
                                 },
                                 autoFocus = !roomy,
+                                focusRequestNonce = danmakuFocusNonce,
                                 modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
                             )
                         } else {
@@ -603,7 +628,7 @@ private fun PlayerControlBar(
                     }
                     if (danmakuField != null && !showField) {
                         val label = stringResource(Res.string.danmaku_send)
-                        PlayerTooltip(label) {
+                        PlayerTooltip(label, shortcut = "Enter") {
                             PlayerIconButton(onClick = { composing = true }, icon = Icons.Filled.Edit, contentDescription = label)
                         }
                     }

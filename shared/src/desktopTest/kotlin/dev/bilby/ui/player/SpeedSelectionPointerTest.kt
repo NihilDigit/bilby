@@ -36,7 +36,7 @@ class SpeedSelectionPointerTest {
         }
         lateinit var selector: PlaybackSpeedController
         var controls = true
-        val scene = ImageComposeScene(360, 640, coroutineContext = coroutineContext) {
+        val scene = ImageComposeScene(390, 844, coroutineContext = coroutineContext) {
             BilbyTheme {
                 CompositionLocalProvider(LocalPlaybackHost provides host, LocalNavigationEventDispatcherOwner provides navigation) {
                     selector = rememberPlaybackSpeedController(player, "qa", defaultHoldSpeed = 2.5f)
@@ -45,7 +45,7 @@ class SpeedSelectionPointerTest {
                             player = player, attached = false, placeholderCoverUrl = "",
                             isFullscreen = false, onFullscreenChange = {}, locked = false, onLockedChange = {}, title = "",
                             speedController = selector,
-                            modifier = Modifier.size(360.dp, 202.dp),
+                            modifier = Modifier.size(390.dp, 220.dp),
                             overlay = { controls = controlsVisible },
                         )
                     }
@@ -56,50 +56,50 @@ class SpeedSelectionPointerTest {
         fun event(type: PointerEventType, x: Float, y: Float) = scene.sendPointerEvent(type, Offset(x, y), type = PointerType.Touch)
         try {
             frame()
-            // 1. 偏下长按(y = 140 >= 101):选档条放画面上沿(dockTop = true),起手跳默认 2.5x,单滑直达 0.5x 并即时反向回拨
-            event(PointerEventType.Press, 200f, 140f)
+            // 1. 偏下长按(y = 150 >= 110):选档条放画面上沿(dockTop = true),起手跳默认 2.5x,单滑直达 0.5x 并即时反向回拨
+            event(PointerEventType.Press, 240f, 150f)
             delay(650)
             frame()
             assertTrue(selector.active)
             assertTrue("lower-half press must dock dial to top", selector.selection!!.dockTop)
             assertEquals("first hold must jump to default hold speed", 2.5f, player.playbackSpeed, 0f)
             assertFalse("normal controls should hide", controls)
-            event(PointerEventType.Move, 162f, 140f)
+            event(PointerEventType.Move, 198f, 150f)
             frame()
             assertEquals(2f, player.playbackSpeed, 0f)
             delay(600)
             frame()
             assertEquals("holding still must keep the chosen speed", 2f, player.playbackSpeed, 0f)
-            event(PointerEventType.Move, 40f, 140f)
+            event(PointerEventType.Move, 30f, 150f)
             frame()
             assertEquals("single swipe must directly reach 0.5x", .5f, player.playbackSpeed, 0f)
-            event(PointerEventType.Move, 112f, 140f)
+            event(PointerEventType.Move, 142f, 150f)
             frame()
             assertEquals("reversing right responds immediately to 1.5x", 1.5f, player.playbackSpeed, 0f)
-            event(PointerEventType.Release, 112f, 140f)
+            event(PointerEventType.Release, 142f, 150f)
             frame()
             assertEquals("plain release restores base speed", 1.25f, player.playbackSpeed, 0f)
 
-            // 2. 偏上长按(y = 60 < 101):选档条放画面下沿(dockTop = false),下滑锁定到 2.0x
-            event(PointerEventType.Press, 180f, 60f)
+            // 2. 偏上长按(y = 60 < 110):选档条放画面下沿(dockTop = false),下滑锁定到 2.0x
+            event(PointerEventType.Press, 200f, 60f)
             delay(650)
             frame()
             assertTrue(selector.active)
             assertFalse("upper-half press must dock dial at bottom", selector.selection!!.dockTop)
             assertEquals(2.5f, player.playbackSpeed, 0f)
-            event(PointerEventType.Move, 142f, 60f)
+            event(PointerEventType.Move, 158f, 60f)
             frame()
             assertEquals(2f, player.playbackSpeed, 0f)
-            event(PointerEventType.Move, 142f, 100f)
+            event(PointerEventType.Move, 158f, 100f)
             frame()
             assertTrue("downward slide locks when docked at bottom", selector.selection!!.locked)
-            event(PointerEventType.Move, 142f, 60f)
+            event(PointerEventType.Move, 158f, 60f)
             frame()
             assertFalse("returning upward undoes bottom-docked lock", selector.selection!!.locked)
-            event(PointerEventType.Move, 142f, 100f)
+            event(PointerEventType.Move, 158f, 100f)
             frame()
             assertTrue(selector.selection!!.locked)
-            event(PointerEventType.Release, 142f, 100f)
+            event(PointerEventType.Release, 158f, 100f)
             frame()
             assertFalse(selector.active)
             assertEquals(2f, player.playbackSpeed, 0f)
@@ -109,43 +109,43 @@ class SpeedSelectionPointerTest {
             frame()
             assertNull(selector.lockedHint)
 
-            // 3. 已锁在 2.0x 时再次偏下长按(y = 150 >= 101):从已锁定的 2.0x 开始,上滑锁定再下滑解锁,松手回 1.25x
-            event(PointerEventType.Press, 180f, 150f)
+            // 3. 已锁在 2.0x 时再次偏下长按(y = 160 >= 110):从已锁定的 2.0x 开始,上滑锁定再下滑解锁,松手回 1.25x
+            event(PointerEventType.Press, 180f, 160f)
             delay(650)
             frame()
             assertTrue(selector.selection!!.dockTop)
             assertEquals("subsequent hold starts from locked speed", 2f, player.playbackSpeed, 0f)
-            event(PointerEventType.Move, 260f, 150f)
+            event(PointerEventType.Move, 280f, 160f)
             frame()
             assertEquals(3f, player.playbackSpeed, 0f)
-            event(PointerEventType.Move, 260f, 110f)
+            event(PointerEventType.Move, 280f, 120f)
             frame()
             assertTrue("upward slide locks when docked at top", selector.selection!!.locked)
-            event(PointerEventType.Move, 260f, 150f)
+            event(PointerEventType.Move, 280f, 160f)
             frame()
             assertFalse("returning downward undoes top-docked lock", selector.selection!!.locked)
-            event(PointerEventType.Release, 260f, 150f)
+            event(PointerEventType.Release, 280f, 160f)
             frame()
             assertEquals(1.25f, player.playbackSpeed, 0f)
             assertFalse(selector.lockedByHold)
 
-            // 4. 在画面底沿选档条本体(y = 148..202 -> y = 175)直接横向拖拽并下滑锁定 2.0x
+            // 4. 在画面底沿选档条本体(y = 166..220 -> y = 190)直接横向拖拽并下滑锁定 2.0x
             selector.applySpeed(1.5f)
             selector.open(dockTop = false)
             frame()
-            event(PointerEventType.Press, 180f, 175f)
-            event(PointerEventType.Move, 198f, 175f)
-            event(PointerEventType.Move, 236f, 175f)
+            event(PointerEventType.Press, 180f, 190f)
+            event(PointerEventType.Move, 198f, 190f)
+            event(PointerEventType.Move, 240f, 190f)
             frame()
             assertTrue("dial host must handle horizontal drag", selector.active)
             assertEquals(2f, selector.selection!!.speed, 0f)
-            event(PointerEventType.Move, 236f, 215f)
-            event(PointerEventType.Release, 236f, 215f)
+            event(PointerEventType.Move, 240f, 230f)
+            event(PointerEventType.Release, 240f, 230f)
             frame()
             assertFalse(selector.active)
             assertEquals(2f, player.playbackSpeed, 0f)
 
-            event(PointerEventType.Press, 180f, 150f)
+            event(PointerEventType.Press, 180f, 160f)
             delay(650)
             frame()
             assertEquals(2.5f, player.playbackSpeed, 0f)

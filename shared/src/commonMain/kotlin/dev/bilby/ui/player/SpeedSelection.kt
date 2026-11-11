@@ -4,9 +4,11 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.sign
 
-internal const val SpeedHorizontalBlockStepDp = 84f
+internal const val SpeedHorizontalBlockStepDp = 76f
 internal const val SpeedVerticalBlockStepDp = 46f
-internal const val SpeedDragStepDp = 36f
+internal const val SpeedVerticalDragStepDp = 36f
+internal const val SpeedHorizontalDragStepDp = 56f
+internal const val SpeedDragStepDp = SpeedVerticalDragStepDp
 internal const val SpeedModeStepDp = 32f
 internal const val SpeedSelectionIntentDp = 10f
 
@@ -69,7 +71,9 @@ internal data class SpeedSelection(
 }
 
 /** 先识别主方向，再按手指增量位移纯跟手换档，往返转向即时响应。 */
-internal class SpeedSelectionDrag {
+internal class SpeedSelectionDrag(
+    private val stepDp: Float = SpeedVerticalDragStepDp,
+) {
     private enum class Axis { Along, Across }
 
     private var axis: Axis? = null
@@ -134,9 +138,9 @@ internal class SpeedSelectionDrag {
         if (!engaged) {
             engaged = true
             val effective = localAlong - SpeedSelectionIntentDp * sign(localAlong)
-            return selection.coarseAt(selection.position + effective / SpeedDragStepDp)
+            return selection.coarseAt(selection.position + effective / stepDp)
         }
-        return selection.coarseAt(selection.position + deltaAlong / SpeedDragStepDp)
+        return selection.coarseAt(selection.position + deltaAlong / stepDp)
     }
 
     private fun reset(along: Float, across: Float) {

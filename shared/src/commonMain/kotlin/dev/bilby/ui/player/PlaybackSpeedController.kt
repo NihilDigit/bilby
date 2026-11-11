@@ -86,11 +86,13 @@ class PlaybackSpeedController internal constructor(
         flush(started.speed)
     }
 
-    fun beginDrag(): Boolean {
+    fun beginDrag(vertical: Boolean = true): Boolean {
         val current = selection ?: return false
         if (dragging || current.locked) return false
         dragging = true
-        drag = SpeedSelectionDrag()
+        drag = SpeedSelectionDrag(
+            stepDp = if (vertical) SpeedVerticalDragStepDp else SpeedHorizontalDragStepDp,
+        )
         return true
     }
 

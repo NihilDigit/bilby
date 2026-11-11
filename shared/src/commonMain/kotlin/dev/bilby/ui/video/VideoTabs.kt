@@ -2,6 +2,7 @@ package dev.bilby.ui.video
 
 import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.touchOnlyPaging
+import dev.bilby.ui.components.trackEditableFocus
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.FilledIconButton
@@ -33,7 +34,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.ToggleButton
-import androidx.compose.material3.PrimaryScrollableTabRow
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Tab
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.animation.core.LinearEasing
@@ -43,8 +44,18 @@ import androidx.compose.animation.core.tween
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
+import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.theme.Breakpoints
+import dev.bilby.ui.windowDragArea
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -103,15 +114,14 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ListItemDefaults
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -141,6 +151,8 @@ import dev.bilby.ui.player.EpisodePart
 import dev.bilby.ui.player.EpisodeRow
 import dev.bilby.ui.player.EpisodeTarget
 import dev.bilby.ui.player.QueueEdges
+import dev.bilby.ui.player.QueuePlaybackControls
+import dev.bilby.ui.player.QueuePlaybackControlsRow
 import dev.bilby.ui.player.QueueRowItem
 import dev.bilby.ui.player.currentIndex
 import dev.bilby.formatDurationSeconds
@@ -148,6 +160,7 @@ import dev.bilby.agent.AgentTurnState
 import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
 import dev.bilby.data.MemberCard
+import dev.bilby.data.PlayEndMode
 import dev.bilby.data.QueueSource
 import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
@@ -170,6 +183,7 @@ import dev.bilby.ui.components.SectionHeader
 import dev.bilby.ui.components.StatRow
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
+import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.launch
@@ -233,6 +247,7 @@ data class QueueUiState(
     /** 来源的身份。非空时标题行可以点进那个合集的目录;为空的来源没有目录页可去。 */
     val source: QueueSource? = null,
     val shuffled: Boolean = false,
+    val endMode: PlayEndMode = PlayEndMode.Continue,
     /**
      * 完整队列还没建好。**此刻 [rows] 里那一条不是队列,是占位** —— 起播时先装的临时队列
      * (见 AudioPlaybackService.openFrame),把它当队列摆出来会读成"这个 UP 只有一条投稿"。
@@ -294,6 +309,7 @@ fun VideoTabs(
     playing: Boolean,
     onOpenQueueSource: (QueueSource) -> Unit,
     onToggleShuffle: () -> Unit,
+    onCycleEndMode: () -> Unit = {},
     onRetryQueue: () -> Unit,
     onUpClick: (Long) -> Unit,
     staffFollowed: Set<Long>?,
@@ -361,20 +377,45 @@ fun VideoTabs(
          * 读起来是一条和标签无关的横杠。和窄屏那一行一样,与下面的内容只靠留白分开。
          */
         if (!showDanmakuCapsule) {
-            PrimaryScrollableTabRow(
-                selectedTabIndex = pagerState.currentPage,
-                edgePadding = 0.dp,
-                divider = {},
+            val captionSlot = rememberCaptionSlot()
+            BoxWithConstraints(
+                modifier = captionSlot.modifier.fillMaxWidth(),
             ) {
-                titles.forEachIndexed { index, title ->
-                    Tab(
-                        selected = pagerState.currentPage == index,
-                        onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
-                        text = { Text(text = title, maxLines = 1, softWrap = false) },
+                val leadingInset = ((maxWidth - Breakpoints.ReadableWidth) / 2).coerceAtLeast(0.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(end = if (captionSlot.buttons != null) Spacing.Hair else 0.dp),
+                ) {
+                    if (leadingInset > 0.dp) {
+                        Spacer(
+                            modifier = Modifier
+                                .width(leadingInset)
+                                .height(48.dp)
+                                .windowDragArea(captionSlot.atTop),
+                        )
+                    }
+                    CompactPrimaryTabStrip(
+                        titles = titles,
+                        pagerState = pagerState,
+                        onSelect = { index -> scope.launch { pagerState.animateScrollToPage(index) } },
                     )
+                    Spacer(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .windowDragArea(captionSlot.atTop),
+                    )
+                    captionSlot.buttons?.invoke()
                 }
             }
         }
+        AdaptiveContent(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            maxWidth = Breakpoints.ReadableWidth,
+        ) {
+        Column(modifier = Modifier.fillMaxSize()) {
         val toggleColors = ToggleButtonDefaults.toggleButtonColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
             contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -453,6 +494,7 @@ fun VideoTabs(
                     playing = playing,
                     onOpenQueueSource = onOpenQueueSource,
                     onToggleShuffle = onToggleShuffle,
+                    onCycleEndMode = onCycleEndMode,
                     onRetryQueue = onRetryQueue,
                     relation = relation,
                     favFolders = favFolders,
@@ -471,6 +513,105 @@ fun VideoTabs(
                 )
 
                 else -> comments(Modifier.fillMaxSize())
+            }
+        }
+        }
+        }
+    }
+}
+
+private class CompactTabMetrics {
+    var lefts: IntArray = IntArray(0)
+    var widths: IntArray = IntArray(0)
+}
+
+/**
+ * 双栏顶部按字宽紧贴左侧的标签组(照 Piko 的 `IslandTabRow`):只占实际标签宽度,不铺满整行,
+ * 把「评论」到右上角窗口按钮之间的空白留给 [windowDragArea],无底部分割线。
+ */
+@Composable
+private fun CompactPrimaryTabStrip(
+    titles: List<String>,
+    pagerState: PagerState,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val primary = MaterialTheme.colorScheme.primary
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    val metrics = remember { CompactTabMetrics() }
+    val indicatorPath = remember { Path() }
+    Layout(
+        content = {
+            titles.forEachIndexed { index, title ->
+                Tab(
+                    selected = pagerState.currentPage == index,
+                    onClick = { onSelect(index) },
+                    selectedContentColor = primary,
+                    unselectedContentColor = onSurfaceVariant,
+                    text = { Text(text = title, maxLines = 1, softWrap = false) },
+                )
+            }
+        },
+        modifier = modifier
+            .selectableGroup()
+            .drawWithContent {
+                drawContent()
+                val lefts = metrics.lefts
+                val widths = metrics.widths
+                val count = widths.size
+                if (count > 0 && lefts.size == count) {
+                    val padPx = 16.dp.toPx()
+                    val minWidthPx = 24.dp.toPx()
+                    val indicatorHeightPx = 3.dp.toPx()
+                    val pos = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
+                        .coerceIn(0f, (count - 1).toFloat())
+                    val low = pos.toInt().coerceIn(0, count - 1)
+                    val high = (low + 1).coerceAtMost(count - 1)
+                    val frac = pos - low
+                    val lowW = (widths[low] - padPx * 2f).coerceAtLeast(minWidthPx)
+                    val lowX = lefts[low] + (widths[low] - lowW) / 2f
+                    val highW = (widths[high] - padPx * 2f).coerceAtLeast(minWidthPx)
+                    val highX = lefts[high] + (widths[high] - highW) / 2f
+                    val indLeft = lowX + (highX - lowX) * frac
+                    val indWidth = lowW + (highW - lowW) * frac
+                    val radius = CornerRadius(indicatorHeightPx, indicatorHeightPx)
+                    indicatorPath.reset()
+                    indicatorPath.addRoundRect(
+                        RoundRect(
+                            rect = Rect(
+                                left = indLeft,
+                                top = size.height - indicatorHeightPx,
+                                right = indLeft + indWidth,
+                                bottom = size.height,
+                            ),
+                            topLeft = radius,
+                            topRight = radius,
+                        ),
+                    )
+                    drawPath(path = indicatorPath, color = primary)
+                }
+            },
+    ) { measurables, constraints ->
+        // M3 的 Tab 内部带 fillMaxWidth(),须以无限上限测量才会收缩为标签自身的文字加内边距宽度。
+        val tabConstraints = constraints.copy(minWidth = 0, maxWidth = Constraints.Infinity)
+        val placeables = measurables.map { it.measure(tabConstraints) }
+        val lefts = IntArray(placeables.size)
+        val widths = IntArray(placeables.size)
+        var x = 0
+        var maxHeight = 0
+        placeables.forEachIndexed { index, placeable ->
+            lefts[index] = x
+            widths[index] = placeable.width
+            x += placeable.width
+            if (placeable.height > maxHeight) maxHeight = placeable.height
+        }
+        metrics.lefts = lefts
+        metrics.widths = widths
+        val totalWidth = x.coerceIn(constraints.minWidth, constraints.maxWidth)
+        val totalHeight = maxHeight.coerceIn(constraints.minHeight, constraints.maxHeight)
+        layout(totalWidth, totalHeight) {
+            placeables.forEachIndexed { index, placeable ->
+                placeable.placeRelative(lefts[index], (totalHeight - placeable.height) / 2)
             }
         }
     }
@@ -587,6 +728,7 @@ private fun DanmakuCapsule(
                         modifier = Modifier
                             .fillMaxWidth()
                             .focusRequester(focusRequester)
+                            .trackEditableFocus()
                             // 放掉焦点就是退出输入。判"曾经拿到过":刚进组合的那一帧焦点还没到,
                             // 那一下的 false 不能当成放掉。
                             .onFocusChanged { state ->
@@ -764,6 +906,7 @@ private fun IntroTab(
     playing: Boolean,
     onOpenQueueSource: (QueueSource) -> Unit,
     onToggleShuffle: () -> Unit,
+    onCycleEndMode: () -> Unit = {},
     onRetryQueue: () -> Unit,
     onUpClick: (Long) -> Unit,
     staffFollowed: Set<Long>?,
@@ -892,6 +1035,7 @@ private fun IntroTab(
             onOpenFullQueue = { fullQueueOpen = true },
             onOpenQueueSource = onOpenQueueSource,
             onSelectEpisode = onSelectEpisode,
+            onCycleEndMode = onCycleEndMode,
             onToggleShuffle = onToggleShuffle,
             onFindRelated = onFindRelated,
             onCache = onCache,
@@ -915,6 +1059,8 @@ private fun IntroTab(
         FullQueueSheet(
             queue = queue,
             playing = playing,
+            onCycleEndMode = onCycleEndMode,
+            onToggleShuffle = onToggleShuffle,
             onSelectEpisode = { target ->
                 fullQueueOpen = false
                 onSelectEpisode(target)
@@ -936,6 +1082,8 @@ private fun IntroTab(
 private fun FullQueueSheet(
     queue: QueueUiState,
     playing: Boolean,
+    onCycleEndMode: () -> Unit,
+    onToggleShuffle: () -> Unit,
     onSelectEpisode: (EpisodeTarget) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -943,15 +1091,26 @@ private fun FullQueueSheet(
     // 视口的下半截还在屏幕外,居中的那一条正好落在看不见的地方。跳过半开、内容只要可用高度
     // 的一部分,sheet 打开就停在这个高度,视口就是看得见的那一块。
     PaneSheet(onDismissRequest = onDismiss) {
-        EpisodeList(
-            rows = queue.rows,
-            onSelect = onSelectEpisode,
-            edges = queue.edges,
-            playing = playing,
-            // 左右留页边距:分段列表项自己不带外边距,贴着 sheet 边缘时圆角看不出来。
-            contentPadding = PaddingValues(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Loose),
-            modifier = Modifier.fillMaxWidth().bodyHeight(FullQueueHeightFraction),
-        )
+        Column(modifier = Modifier.fillMaxWidth().bodyHeight(FullQueueHeightFraction)) {
+            QueuePlaybackControlsRow(
+                endMode = queue.endMode,
+                shuffled = queue.shuffled,
+                onCycleEndMode = onCycleEndMode,
+                onToggleShuffle = onToggleShuffle,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Comfortable),
+            )
+            EpisodeList(
+                rows = queue.rows,
+                onSelect = onSelectEpisode,
+                edges = queue.edges,
+                playing = playing,
+                // 左右留页边距:分段列表项自己不带外边距,贴着 sheet 边缘时圆角看不出来。
+                contentPadding = PaddingValues(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Loose),
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            )
+        }
     }
 }
 
@@ -1134,49 +1293,67 @@ private fun TitleBlock(
             modifier = Modifier.size(Dimens.IconInline),
         )
     }
+    val pointerSelectsText = expanded && !dev.bilby.ui.components.LocalPointerSource.current.isTouchLike
     Column(
         modifier = modifier
             .fillMaxWidth()
             .animateContentSize()
-            .clickable(onClick = onToggle),
+            .then(if (pointerSelectsText) Modifier else Modifier.clickable(onClick = onToggle)),
         verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
-        Text(
-            text = detail.title,
-            style = MaterialTheme.typography.titleMedium,
-            maxLines = if (expanded) Int.MAX_VALUE else 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            StatRow(
-                playText = formatCount(detail.stat.view),
-                danmakuText = formatCount(detail.stat.danmaku),
-                dateText = formatDate(detail.publishedAtEpochSeconds),
+        Column(
+            modifier = if (pointerSelectsText) {
+                Modifier.fillMaxWidth().clickable(onClick = onToggle)
+            } else {
+                Modifier.fillMaxWidth()
+            },
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            Text(
+                text = detail.title,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = if (expanded) Int.MAX_VALUE else 2,
+                overflow = TextOverflow.Ellipsis,
             )
-            // BV 号接在日期后面,和它同属"这条稿件是哪一条"的元信息。收起时也显示,这一行在
-            // 360dp 上放得下(三项统计 + BV + 箭头约 310dp)。
-            //
-            // **收起时只显示,不能复制。** 收起时整块是"点开简介"的一个大按钮,这一段字夹在
-            // 中间接走点击的话,点在它上面的那一下既不展开,还悄悄往剪贴板里写了东西。
-            BvidLabel(
-                bvid = detail.bvid,
-                copyable = expanded,
-                modifier = Modifier.padding(start = Spacing.Tight),
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            if (!expanded) arrow()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatRow(
+                    playText = formatCount(detail.stat.view),
+                    danmakuText = formatCount(detail.stat.danmaku),
+                    dateText = formatDate(detail.publishedAtEpochSeconds),
+                )
+                // BV 号接在日期后面,和它同属"这条稿件是哪一条"的元信息。收起时也显示,这一行在
+                // 360dp 上放得下(三项统计 + BV + 箭头约 310dp)。
+                //
+                // **收起时只显示,不能复制。** 收起时整块是"点开简介"的一个大按钮,这一段字夹在
+                // 中间接走点击的话,点在它上面的那一下既不展开,还悄悄往剪贴板里写了东西。
+                BvidLabel(
+                    bvid = detail.bvid,
+                    copyable = expanded,
+                    modifier = Modifier.padding(start = Spacing.Tight),
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                if (!expanded) arrow()
+            }
         }
         if (expanded) {
             if (detail.description.isNotBlank()) {
                 // 与评论、专栏、动态共用一个渲染器:@ 进空间,链接按站内解析,时间点跳进度。
-                BiliRichText(
-                    spans = detail.descriptionSpans,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    onLinkClick = onOpenLink,
-                    onMentionClick = onMentionClick,
-                    onSeek = onSeek,
-                )
+                // 鼠标操作时展开后的简介允许直接划词复制;标题区与底端收起箭头单独接点击,不与划词冲突。
+                val descriptionContent: @Composable () -> Unit = {
+                    BiliRichText(
+                        spans = detail.descriptionSpans,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        onLinkClick = onOpenLink,
+                        onMentionClick = onMentionClick,
+                        onSeek = onSeek,
+                    )
+                }
+                if (pointerSelectsText) {
+                    androidx.compose.foundation.text.selection.SelectionContainer(content = descriptionContent)
+                } else {
+                    descriptionContent()
+                }
             }
             if (tags.isNotEmpty()) {
                 // 不另给行距:每枚标签的布局高度已被最小触控尺寸撑到 48dp,32dp 的标签上下
@@ -1185,7 +1362,12 @@ private fun TitleBlock(
                     tags.forEach { tag -> TagToken(tag, onClick = { onTagClick(tag.name) }) }
                 }
             }
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) { arrow() }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(if (pointerSelectsText) Modifier.clickable(onClick = onToggle) else Modifier),
+                contentAlignment = Alignment.CenterEnd,
+            ) { arrow() }
         }
     }
 }
@@ -2084,6 +2266,7 @@ private fun LazyListScope.queueItems(
     onOpenFullQueue: () -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
     onSelectEpisode: (EpisodeTarget) -> Unit,
+    onCycleEndMode: () -> Unit,
     onToggleShuffle: () -> Unit,
     onFindRelated: () -> Unit,
     onCache: () -> Unit,
@@ -2095,6 +2278,7 @@ private fun LazyListScope.queueItems(
         QueueHeader(
             queue = queue,
             onOpenQueueSource = onOpenQueueSource,
+            onCycleEndMode = onCycleEndMode,
             onToggleShuffle = onToggleShuffle,
             onFindRelated = onFindRelated,
             onCache = onCache,
@@ -2183,60 +2367,65 @@ private fun ShowAllRow(onClick: () -> Unit) {
 private fun QueueHeader(
     queue: QueueUiState,
     onOpenQueueSource: (QueueSource) -> Unit,
+    onCycleEndMode: () -> Unit,
     onToggleShuffle: () -> Unit,
     onFindRelated: () -> Unit,
     onCache: () -> Unit,
 ) {
-    SectionHeader(
-        title = queue.sourceLabel,
-        // 不再缩进到封面那条线:标题、UP 行和这里的小节标题都是裸文字,一起贴页边距;缩进过一版,
-        // 整页的文字左右都显得窄。
-        onTitleClick = queue.source?.let { source -> { onOpenQueueSource(source) } },
-    ) {
-        // 「找相关」长在这份列表上:这个位置在别的客户端是相关推荐,在这里是合集/UP 投稿,
-        // 把"要不要另找几个"做成这份列表的一个小动作,力度正好 —— 可用,但不劝你用。
-        //
-        // 用闪光而不是星形:星形在这个 app 里已经是收藏(动作栏那排),同一界面里两个星星
-        // 表示两件事,用户会以为点了是收藏。闪光是"AI 辅助动作"的通行符号。
-        IconButton(onClick = onFindRelated) {
-            Icon(
-                Icons.Filled.AutoAwesome,
-                contentDescription = stringResource(Res.string.video_find_related),
-                modifier = Modifier.size(Dimens.IconInline),
-            )
-        }
-        // **缓存的入口长在这里**,因为要选的东西就是这份列表:合集分集 / 这位 UP 的其他
-        // 投稿。摆进上面那排动作栏不行 —— 那四格的宽度是照 360dp 屏量出来的(风格指南
-        // §2.3),加第五格会把每格挤到 72dp,"赞 12.3万"那种标签就放不下了。
-        IconButton(onClick = onCache) {
-            Icon(
-                Icons.Outlined.DownloadForOffline,
-                contentDescription = stringResource(Res.string.offline_cache_action),
-                modifier = Modifier.size(Dimens.IconInline),
-            )
-        }
-        // 顺序/随机只有两态,是个开关而不是两个选项,所以用带图标的 text button
-        // 而不是 segmented button —— 后者会让人以为还有第三格。
-        //
-        // 文字写的是当前状态,图标必须跟着状态换:原先图标恒为 Shuffle 而文字写「顺序」,
-        // 两个通道给的是相反的信号。听视频页的同款按钮是同一套(ListenScreen)。
-        val orderLabel = stringResource(
-            if (queue.shuffled) Res.string.queue_order_shuffle else Res.string.queue_order_sequential,
-        )
-        TextButton(
-            onClick = onToggleShuffle,
-            contentPadding = PaddingValues(horizontal = Spacing.Tight),
-            modifier = Modifier.semantics { stateDescription = orderLabel },
-        ) {
-            Icon(
-                if (queue.shuffled) Icons.Filled.Shuffle else Icons.AutoMirrored.Filled.PlaylistPlay,
-                contentDescription = null,
-                modifier = Modifier.size(Dimens.IconInline),
-            )
-            Text(text = orderLabel, modifier = Modifier.padding(start = Spacing.Hair))
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val inlineControls = maxWidth >= QueueSingleRowMinWidth
+        Column(modifier = Modifier.fillMaxWidth()) {
+            SectionHeader(
+                title = queue.sourceLabel,
+                // 不再缩进到封面那条线:标题、UP 行和这里的小节标题都是裸文字,一起贴页边距;缩进过一版,
+                // 整页的文字左右都显得窄。
+                onTitleClick = queue.source?.let { source -> { onOpenQueueSource(source) } },
+            ) {
+                // 「找相关」长在这份列表上:这个位置在别的客户端是相关推荐,在这里是合集/UP 投稿,
+                // 把"要不要另找几个"做成这份列表的一个小动作,力度正好 —— 可用,但不劝你用。
+                //
+                // 用闪光而不是星形:星形在这个 app 里已经是收藏(动作栏那排),同一界面里两个星星
+                // 表示两件事,用户会以为点了是收藏。闪光是"AI 辅助动作"的通行符号。
+                IconButton(onClick = onFindRelated) {
+                    Icon(
+                        Icons.Filled.AutoAwesome,
+                        contentDescription = stringResource(Res.string.video_find_related),
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                }
+                // **缓存的入口长在这里**,因为要选的东西就是这份列表:合集分集 / 这位 UP 的其他
+                // 投稿。摆进上面那排动作栏不行 —— 那四格的宽度是照 360dp 屏量出来的(风格指南
+                // §2.3),加第五格会把每格挤到 72dp,"赞 12.3万"那种标签就放不下了。
+                IconButton(onClick = onCache) {
+                    Icon(
+                        Icons.Outlined.DownloadForOffline,
+                        contentDescription = stringResource(Res.string.offline_cache_action),
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                }
+                if (inlineControls) {
+                    QueuePlaybackControls(
+                        endMode = queue.endMode,
+                        shuffled = queue.shuffled,
+                        onCycleEndMode = onCycleEndMode,
+                        onToggleShuffle = onToggleShuffle,
+                    )
+                }
+            }
+            if (!inlineControls) {
+                QueuePlaybackControlsRow(
+                    endMode = queue.endMode,
+                    shuffled = queue.shuffled,
+                    onCycleEndMode = onCycleEndMode,
+                    onToggleShuffle = onToggleShuffle,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Hair),
+                )
+            }
         }
     }
 }
+
+private val QueueSingleRowMinWidth = 420.dp
 
 
 

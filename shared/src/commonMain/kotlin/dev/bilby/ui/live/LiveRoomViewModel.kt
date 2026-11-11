@@ -22,7 +22,9 @@ import dev.bilby.live.LiveMessage
 import dev.bilby.live.findEmotes
 import dev.nihildigit.danmaku.Danmaku
 import dev.nihildigit.danmaku.DanmakuImage
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -204,6 +206,8 @@ class LiveRoomViewModel(
     /** 一批 mid 的头像。danmakus 补来的醒目留言不带头像,见 [loadArchivedSuperChats]。 */
     private val userFaces: suspend (Collection<Long>) -> Map<Long, String>,
     private val relationRepository: RelationRepository,
+    private val isMetered: () -> Boolean = { false },
+    private val persistScope: CoroutineScope = CoroutineScope(SupervisorJob()),
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LiveRoomUiState())
@@ -240,6 +244,9 @@ class LiveRoomViewModel(
         load()
     }
 
+    private suspend fun defaultLiveQn(): Int =
+        settings.playerPrefs.first().defaultLiveQualityOn(isMetered())
+
     fun load() {
         viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null) }
@@ -260,7 +267,7 @@ class LiveRoomViewModel(
                 }
             }
 
-            when (val playback = repository.loadPlayback(roomId)) {
+            when (val playback = repository.loadPlayback(roomId, qn = defaultLiveQn())) {
                 is BiliResult.Ok -> {
                     val value = playback.value
                     _state.update {
@@ -704,7 +711,7 @@ class LiveRoomViewModel(
         // 流也不清:它是这个页面上发生过什么的记录,两场之间隔着一行下播和一行开播,读得出来。
         _state.update { it.copy(sessionSuperChats = emptyList(), hasArchive = false) }
         viewModelScope.launch {
-            val playback = repository.loadPlayback(roomId)
+            val playback = repository.loadPlayback(roomId, qn = defaultLiveQn())
             if (playback is BiliResult.Ok) {
                 val value = playback.value
                 _state.update {
@@ -728,6 +735,12 @@ class LiveRoomViewModel(
      * **不动弹幕连接**:信息流跟清晰度没关系,断开重连只会白丢几条。
      */
     fun setQuality(qn: Int) {
+        val metered = isMetered()
+        persistScope.launch {
+            if (settings.playerPrefs.first().playerPickUpdatesDefault) {
+                settings.saveDefaultLiveQuality(qn, metered)
+            }
+        }
         viewModelScope.launch {
             val playback = repository.loadPlayback(roomId, qn)
             if (playback is BiliResult.Ok) {

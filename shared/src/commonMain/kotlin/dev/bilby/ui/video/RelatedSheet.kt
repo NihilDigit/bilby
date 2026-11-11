@@ -36,10 +36,13 @@ import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.components.AgentQuestionBubble
 import dev.bilby.ui.components.AgentTurnView
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.KeepScrolledToBottom
 import dev.bilby.ui.components.PillInputField
 import dev.bilby.ui.components.rememberBottomFollow
+import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.windowDragArea
 
 /**
  * 找相关的面板,装在 [dev.bilby.ui.components.PaneSheet] 里(宽屏在右栏,窄屏是 sheet,见 VideoScreen)。
@@ -85,9 +88,11 @@ fun RelatedSheet(
     Column(modifier = modifier.fillMaxWidth().fillMaxHeight()) {
         // 这一行不跟着滚:它是这块内容的名字,报着第一轮在找还是找到了几条。右栏里右端是关闭,
         // 位置同侧栏(SidePanelLayout)的关闭:右栏里的找相关常驻,点画面不收起,关它只走这里。
+        val captionSlot = if (onClose != null) rememberCaptionSlot() else null
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
+                .then(captionSlot?.modifier ?: Modifier)
                 .fillMaxWidth()
                 .background(headerColor)
                 .heightIn(min = Dimens.MinTouchTarget + Spacing.Tight)
@@ -102,17 +107,24 @@ fun RelatedSheet(
                     else -> stringResource(Res.string.related_title)
                 },
                 style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = Dimens.MinTouchTarget)
+                    .windowDragArea(captionSlot?.atTop == true),
             )
             onClose?.let { close ->
-                IconButton(onClick = close) {
-                    Icon(
-                        Icons.Filled.Close,
-                        contentDescription = stringResource(Res.string.action_close),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                val closeLabel = stringResource(Res.string.action_close)
+                BilbyTooltip(text = closeLabel, shortcut = "Esc") {
+                    IconButton(onClick = close) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = closeLabel,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
+            captionSlot?.buttons?.invoke()
         }
 
         Column(

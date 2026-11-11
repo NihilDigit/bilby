@@ -3,6 +3,7 @@ package dev.bilby.ui.video
 import dev.bilby.ui.BackHandler
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.LocalSystemActions
+import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.rememberNotificationPermissionRequest
 import dev.bilby.player.PlaybackCommand
 import dev.bilby.player.PlayerHandle
@@ -66,6 +67,7 @@ import dev.bilby.ui.player.rememberPictureInPicture
 import dev.bilby.ui.player.videoAspect
 import dev.bilby.resources.*
 import dev.bilby.ui.theme.FixedColors
+import dev.bilby.ui.player.BelowVideoSpeedOverlay
 import dev.bilby.ui.player.EpisodeTarget
 import dev.bilby.ui.player.PlayerIconButton
 import dev.bilby.ui.player.rememberPlaybackSpeedController
@@ -99,18 +101,18 @@ import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.bilby.ui.comment.CommentSection
 import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.listen.ListenScreen
-import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.horizontalCutout
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.ui.windowDragArea
 import dev.bilby.ui.player.MediaBackButton
 import dev.bilby.ui.player.PlaybackFailure
 import dev.bilby.ui.player.PlayerGestureOptions
 import dev.bilby.ui.player.playOrReplay
 import dev.bilby.ui.player.rememberSettledPlaybackError
-import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Spacing
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.pager.rememberPagerState
@@ -125,6 +127,13 @@ import dev.bilby.ui.components.SidePaneLayer
 import dev.bilby.ui.components.collapsingHeader
 import dev.bilby.ui.components.rememberSidePaneState
 import dev.bilby.ui.components.rememberCollapsingHeaderState
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import dev.bilby.data.SideSheetPrefs
+import dev.bilby.ui.components.SplitPaneResizeHandle
+import dev.bilby.ui.player.PlayerTooltip
 
 /**
  * 视频页在队列栈里的那一帧(docs/queue-redesign.md 决定 3):帧 id 与点开时的入口上下文,
@@ -234,6 +243,8 @@ fun VideoScreen(
     onDanmakuSendConsumed: () -> Unit = {},
     gestures: PlayerGestureOptions = PlayerGestureOptions(),
     defaultHoldSpeed: Float = SettingsStore.DEFAULT_HOLD_SPEED,
+    panelPrefs: SideSheetPrefs? = null,
+    onPanelWidthChange: (Float) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val playback = LocalPlaybackHost.current
@@ -424,6 +435,7 @@ fun VideoScreen(
         sourceLabel = audioState.queue?.sourceLabel.orEmpty(),
         source = audioState.queue?.source,
         shuffled = (audioState.queue?.shuffled == true),
+        endMode = audioState.queue?.endMode ?: dev.bilby.data.PlayEndMode.Continue,
         // 判据从"取流转圈且队列是空的"换成"完整队列建好了没有"。起播现在不等建队列,队列里
         // 那一条是临时占位而不是队列内容(见 AudioPlaybackService.openFrame),按旧判据永远
         // 是"有队列",面板上会摆出一条孤零零的视频。
@@ -465,7 +477,10 @@ fun VideoScreen(
     // 里,它自己就能答"有没有下一条",而且答完会发 onXxxChanged —— controller 那份命令缓存
     // 于是跟得上,不必再为此单开一组自定义命令。
     val toggleShuffle: () -> Unit = {
-        active?.shuffleModeEnabled = !(audioState.queue?.shuffled == true)
+        send(PlaybackCommand.ToggleShuffle)
+    }
+    val cycleEndMode: () -> Unit = {
+        send(PlaybackCommand.CycleEndMode)
     }
 
     /** 点队列里的一条 = 让队列跳过去。页面不自己导航,它跟着队列走(见 VideoRoute)。 */
@@ -651,6 +666,7 @@ fun VideoScreen(
             // 不带 MediaItem 的那一对:服务在这两条命令上先走分 P(QueuePlayer.handleSeek)。
             onNext = { active.seekToNext() },
             onPrevious = { active.seekToPrevious() },
+            onCycleEndMode = cycleEndMode,
             onToggleShuffle = toggleShuffle,
             onRetry = retryPlayback,
             onSleepTimer = { mode -> active.send(PlaybackCommand.SetSleepTimer(mode)) },
@@ -734,7 +750,7 @@ fun VideoScreen(
     }
     val immersive = fullscreen || inPip
     val pip = rememberPictureInPicture()
-    val playerPinned = playing || immersive || expandedLayout
+    val playerPinned = playing || immersive || expandedLayout || speedController.active
     val playerScroll = rememberCollapsingHeaderState { !playerPinned }
     // 画面收到底时留下一条快捷播放条的高度,那块位置由它占住(见 QuickPlayBar)。
     // 收不干净是有意的:收干净之后"把画面拿回来"就没有入口了,只能靠一路往回滚。
@@ -840,6 +856,7 @@ fun VideoScreen(
                     onAudioChange = setAudioQuality,
                     gestures = gestures,
                     speedController = speedController,
+                    showSpeedOverlay = expandedLayout || immersive,
                     isFullscreen = fullscreen,
                     onFullscreenChange = { fullscreen = it },
                     // 非全屏时画面一直顶到屏幕上边缘,状态栏压在它身上。
@@ -853,7 +870,7 @@ fun VideoScreen(
                     // 不然文字后面还有一朵在转。
                     externalLoading = (audioState.loading || state.loading) && playbackError == null,
                     title = state.detail?.title.orEmpty(),
-            seekBarSegments = sponsorSegments.toSeekBarSegments(),
+                    seekBarSegments = rememberSeekBarSegments(sponsorSegments),
                     subtitleTracks = subtitleTracks,
                     currentSubtitleLan = subtitleLan,
                     onSubtitleTrackChange = onSelectSubtitle,
@@ -892,40 +909,53 @@ fun VideoScreen(
                     } else {
                         null
                     },
+                    onRequestExternalDanmakuInput = openDanmakuInput,
                     topBarActions = {
                         // 画中画也在全屏顶栏上:它只从按钮进(见 PictureInPicture),全屏时
                         // 没有这一颗就得先退出全屏。
                         if (pip.supported) {
-                            PlayerIconButton(
-                                onClick = { pip.enter(active.videoAspect()) },
-                                icon = Icons.Filled.PictureInPictureAlt,
-                                contentDescription = stringResource(Res.string.player_pip),
-                            )
+                            val pipLabel = stringResource(Res.string.player_pip)
+                            PlayerTooltip(pipLabel, anchorAbove = false) {
+                                PlayerIconButton(
+                                    onClick = { pip.enter(active.videoAspect()) },
+                                    icon = Icons.Filled.PictureInPictureAlt,
+                                    contentDescription = pipLabel,
+                                )
+                            }
                         }
                         // 没有可切的东西就不给入口:单条队列的单 P 视频点开只有它自己。
                         if (episodeRows.hasSomethingToSwitch()) {
-                            PlayerIconButton(
-                                onClick = { episodePanelOpen = true },
-                                icon = Icons.AutoMirrored.Filled.PlaylistPlay,
-                                contentDescription = stringResource(Res.string.video_episodes),
-                            )
+                            val episodesLabel = stringResource(Res.string.video_episodes)
+                            PlayerTooltip(episodesLabel, anchorAbove = false) {
+                                PlayerIconButton(
+                                    onClick = { episodePanelOpen = true },
+                                    icon = Icons.AutoMirrored.Filled.PlaylistPlay,
+                                    contentDescription = episodesLabel,
+                                )
+                            }
                         }
                     },
                     embeddedTopActions = {
                         // 画中画在分享左边:它和分享一样是"把这条视频带到别处"的动作,而不是
                         // 控制条上那类"这个播放器怎么放"。设备不支持时不给。
                         if (pip.supported) {
+                            val pipLabel = stringResource(Res.string.player_pip)
+                            PlayerTooltip(pipLabel, anchorAbove = false) {
+                                PlayerIconButton(
+                                    onClick = { pip.enter(active.videoAspect()) },
+                                    icon = Icons.Filled.PictureInPictureAlt,
+                                    contentDescription = pipLabel,
+                                )
+                            }
+                        }
+                        val shareLabel = stringResource(Res.string.action_share)
+                        PlayerTooltip(shareLabel, anchorAbove = false) {
                             PlayerIconButton(
-                                onClick = { pip.enter(active.videoAspect()) },
-                                icon = Icons.Filled.PictureInPictureAlt,
-                                contentDescription = stringResource(Res.string.player_pip),
+                                onClick = share,
+                                icon = Icons.Filled.Share,
+                                contentDescription = shareLabel,
                             )
                         }
-                        PlayerIconButton(
-                            onClick = share,
-                            icon = Icons.Filled.Share,
-                            contentDescription = stringResource(Res.string.action_share),
-                        )
                     },
                     pip = inPip,
                     modifier = Modifier.fillMaxSize(),
@@ -1018,6 +1048,10 @@ fun VideoScreen(
                     visible = episodePanelOpen && !locked,
                     rows = episodeRows,
                     sourceLabel = shownQueue.sourceLabel,
+                    endMode = shownQueue.endMode,
+                    shuffled = shownQueue.shuffled,
+                    onCycleEndMode = cycleEndMode,
+                    onToggleShuffle = toggleShuffle,
                     onSelect = onSelectEpisode,
                     onDismiss = { episodePanelOpen = false },
                     edges = queueEdges,
@@ -1036,77 +1070,76 @@ fun VideoScreen(
     // 简介与评论。竖排时在画面下面、拿剩下的高度;横排时是右边那个 secondary pane。
     val tabsPaneContent: @Composable (Modifier) -> Unit = { paneModifier ->
         state.detail?.let { detail ->
-            AdaptiveContent(modifier = paneModifier, maxWidth = Breakpoints.ReadableWidth) {
-                VideoTabs(
-                    pagerState = tabPager,
-                    detail = detail,
-                    onSelectEpisode = onSelectEpisode,
-                    videoTags = videoTags,
-                    onLoadTags = onLoadTags,
-                    onTagClick = onTagClick,
-                    commentTotal = commentState.total,
-                    comments = { paneModifier ->
-                        // 画面收起着的时候下滑先把它拉回来,那一下不该被读成刷新。
-                        commentsPane(paneModifier, playerScroll.offsetPx == 0f)
+            VideoTabs(
+                pagerState = tabPager,
+                detail = detail,
+                onSelectEpisode = onSelectEpisode,
+                videoTags = videoTags,
+                onLoadTags = onLoadTags,
+                onTagClick = onTagClick,
+                commentTotal = commentState.total,
+                comments = { commentModifier ->
+                    // 画面收起着的时候下滑先把它拉回来,那一下不该被读成刷新。
+                    commentsPane(commentModifier, playerScroll.offsetPx == 0f)
+                },
+                // 点闪光:没问过就发起检索,问过就只是把 sheet 再打开 —— 再点一次重跑
+                // 会把已有结果冲掉,而用户此刻多半只是想再看一眼。
+                onFindRelated = {
+                    if (!related.started) onFindRelated()
+                    relatedOpen = true
+                },
+                onListen = { onListeningChange(true) },
+                danmakuInput = DanmakuInput(
+                    open = danmakuInputOpen,
+                    draft = danmakuDraft,
+                    onDraftChange = { danmakuDraft = it },
+                    send = danmakuSend,
+                    onOpen = openDanmakuInput,
+                    onClose = closeDanmakuInput,
+                    onSend = {
+                        onSendDanmaku(
+                            danmakuDraft,
+                            // 页面这条视频的那一 P。发弹幕的 bvid 由 ViewModel 带,两者必须是
+                            // 同一条内容 —— 直接读 audioState 的话,换一集那一瞬发出去的是
+                            // 新 bvid 配上一条的 cid。
+                            currentCid,
+                            danmakuProgress,
+                        )
                     },
-                    // 点闪光:没问过就发起检索,问过就只是把 sheet 再打开 —— 再点一次重跑
-                    // 会把已有结果冲掉,而用户此刻多半只是想再看一眼。
-                    onFindRelated = {
-                        if (!related.started) onFindRelated()
-                        relatedOpen = true
-                    },
-                    onListen = { onListeningChange(true) },
-                    danmakuInput = DanmakuInput(
-                        open = danmakuInputOpen,
-                        draft = danmakuDraft,
-                        onDraftChange = { danmakuDraft = it },
-                        send = danmakuSend,
-                        onOpen = openDanmakuInput,
-                        onClose = closeDanmakuInput,
-                        onSend = {
-                            onSendDanmaku(
-                                danmakuDraft,
-                                // 页面这条视频的那一 P。发弹幕的 bvid 由 ViewModel 带,两者必须是
-                                // 同一条内容 —— 直接读 audioState 的话,换一集那一瞬发出去的是
-                                // 新 bvid 配上一条的 cid。
-                                currentCid,
-                                danmakuProgress,
-                            )
-                        },
-                    ),
-                    showDanmakuCapsule = !expandedLayout,
-                    danmakuEnabled = danmakuPrefs.enabled,
-                    onDanmakuEnabledChange = { danmakuEditor?.setEnabled(it) },
-                    onCache = { cacheSheetOpen = true },
-                    // 全屏下这一栏根本不组合,所以不必先退出全屏 —— 能点到这个按钮
-                    // 就说明已经不在全屏了。
-                    followState = followState,
-                    onToggleFollow = onToggleFollow,
-                    upCard = upCard,
-                    queue = shownQueue,
-                    playing = playing,
-                    onOpenQueueSource = onOpenQueueSource,
-                    onToggleShuffle = toggleShuffle,
-                    onRetryQueue = retryQueue,
-                    onUpClick = onUpClick,
-                    staffFollowed = staffFollowed,
-                    onFollowStaff = onFollowStaff,
-                    relation = relation,
-                    favFolders = favFolders,
-                    addedToView = addedToView,
-                    onLike = onLike,
-                    onTriple = onTriple,
-                    onToggleToView = onToggleToView,
-                    onCoin = onCoin,
-                    coinAttempt = coinAttempt,
-                    onCoinDialogClosed = onCoinDialogClosed,
-                    onOpenFavPicker = onOpenFavPicker,
-                    onFavConfirm = onFavConfirm,
-                    onOpenLink = onOpenLink,
-                    onSeek = seekToTimestamp,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+                ),
+                showDanmakuCapsule = !expandedLayout,
+                danmakuEnabled = danmakuPrefs.enabled,
+                onDanmakuEnabledChange = { danmakuEditor?.setEnabled(it) },
+                onCache = { cacheSheetOpen = true },
+                // 全屏下这一栏根本不组合,所以不必先退出全屏 —— 能点到这个按钮
+                // 就说明已经不在全屏了。
+                followState = followState,
+                onToggleFollow = onToggleFollow,
+                upCard = upCard,
+                queue = shownQueue,
+                playing = playing,
+                onOpenQueueSource = onOpenQueueSource,
+                onToggleShuffle = toggleShuffle,
+                onCycleEndMode = cycleEndMode,
+                onRetryQueue = retryQueue,
+                onUpClick = onUpClick,
+                staffFollowed = staffFollowed,
+                onFollowStaff = onFollowStaff,
+                relation = relation,
+                favFolders = favFolders,
+                addedToView = addedToView,
+                onLike = onLike,
+                onTriple = onTriple,
+                onToggleToView = onToggleToView,
+                onCoin = onCoin,
+                coinAttempt = coinAttempt,
+                onCoinDialogClosed = onCoinDialogClosed,
+                onOpenFavPicker = onOpenFavPicker,
+                onFavConfirm = onFavConfirm,
+                onOpenLink = onOpenLink,
+                onSeek = seekToTimestamp,
+                modifier = paneModifier,
+            )
         }
     }
     // 理由同上面的 playerPane:跨过 Expanded 时这一块随排布搬家,简介与评论读到的位置跟着走。
@@ -1128,36 +1161,72 @@ fun VideoScreen(
     Box(modifier = Modifier.fillMaxSize()) {
     Box(modifier = rootModifier) {
     if (expandedLayout) {
+        if (!immersive) LocalWindowCaption.current?.Host()
         // 主区约三分之二,和规范给的比例一致。**全屏也走这个分支**,只是右栏不组合、
         // 左栏权重给满 —— 这样进出全屏时布局树的形状不变,播放器不会重挂。
         CompositionLocalProvider(LocalSidePane provides sidePane) {
-        Row(modifier = Modifier.fillMaxSize()) {
-            // **左栏整列都是播放器**,画面按比例居中在里面,四周是它自己的黑底。
-            //
-            // 原先这里给的是 `fillMaxWidth().aspectRatio(16:9)`,于是画面只有左栏宽度的
-            // 九分之十六那么高,在更高的列里垂直居中——上下各露出一条页面底色。那条白带
-            // 才是"横屏不沉浸"的真身,和根容器的 inset 无关。
-            Box(Modifier.weight(if (immersive) 1f else 2f).fillMaxHeight()) {
-                playerPane(Modifier.fillMaxSize())
-                SidePaneDismissLayer(sidePane)
-            }
-            // 文字这一栏躲开状态栏与刘海,**但不躲 start 那一侧**:它的左边挨着的是播放器,
-            // 不是屏幕边缘,垫了就在画面和简介之间劈出一道缝。
-            //
-            // **也不躲底部,同竖排。** 列表铺到屏幕底边,手势条的高度由列表自己的底部留白和
-            // 评论区的 FAB 各自让(它们量的是 navigationBars)。这一栏替它们躲掉的话 inset 被
-            // 消费成 0,列表在手势条上方就被切断,滑到底也碰不到屏幕下沿。
-            if (!immersive) {
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .windowInsetsPadding(
-                            safeInsets.only(WindowInsetsSides.End + WindowInsetsSides.Top),
-                        ),
-                ) {
-                    tabsPane(Modifier.fillMaxSize())
-                    SidePaneLayer(sidePane)
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            var draggingWidth by remember { mutableStateOf<Dp?>(null) }
+            val minPanelWidth = 320.dp
+            val maxPanelWidth = (maxWidth - 440.dp).coerceAtLeast(minPanelWidth)
+            val defaultPanelWidth = (maxWidth / 3).coerceIn(minPanelWidth, 440.dp)
+            val panelWidth = (draggingWidth ?: panelPrefs?.widthDp?.dp ?: defaultPanelWidth)
+                .coerceIn(minPanelWidth, maxPanelWidth)
+
+            Row(modifier = Modifier.fillMaxSize()) {
+                // **左栏整列都是播放器**,画面按比例居中在里面,四周是它自己的黑底。
+                //
+                // 原先这里给的是 `fillMaxWidth().aspectRatio(16:9)`,于是画面只有左栏宽度的
+                // 九分之十六那么高,在更高的列里垂直居中——上下各露出一条页面底色。那条白带
+                // 才是"横屏不沉浸"的真身,和根容器的 inset 无关。
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    playerPane(Modifier.fillMaxSize())
+                    SidePaneDismissLayer(sidePane)
+                    // 桌面双栏下左栏顶边在左上返回键与右上画中画/分享键之间的空白作为窗口拖动带(照 Piko)。
+                    if (!immersive && LocalWindowCaption.current != null) {
+                        Spacer(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .fillMaxWidth()
+                                .padding(start = 64.dp, end = 120.dp)
+                                .height(CaptionDragHeight)
+                                .windowDragArea(!locked && !speedController.active && !sidePane.isOpen),
+                        )
+                    }
+                }
+                // 文字这一栏躲开状态栏与刘海,**但不躲 start 那一侧**:它的左边挨着的是播放器,
+                // 不是屏幕边缘,垫了就在画面和简介之间劈出一道缝。
+                //
+                // **也不躲底部,同竖排。** 列表铺到屏幕底边,手势条的高度由列表自己的底部留白和
+                // 评论区的 FAB 各自让(它们量的是 navigationBars)。这一栏替它们躲掉的话 inset 被
+                // 消费成 0,列表在手势条上方就被切断,滑到底也碰不到屏幕下沿。
+                if (!immersive) {
+                    Box(
+                        Modifier
+                            .width(panelWidth)
+                            .fillMaxHeight()
+                            .windowInsetsPadding(
+                                safeInsets.only(WindowInsetsSides.End + WindowInsetsSides.Top),
+                            ),
+                    ) {
+                        // 右栏二级面板盖上来时撤下底层标签栏的拖动区与按钮登记,交由面板顶栏接管。
+                        CompositionLocalProvider(
+                            LocalWindowCaption provides LocalWindowCaption.current.takeIf { !sidePane.isOpen },
+                        ) {
+                            tabsPane(Modifier.fillMaxSize())
+                        }
+                        SidePaneLayer(sidePane)
+                        SplitPaneResizeHandle(
+                            onDrag = { deltaDp ->
+                                draggingWidth = ((draggingWidth ?: panelWidth) - deltaDp)
+                                    .coerceIn(minPanelWidth, maxPanelWidth)
+                            },
+                            onDragStopped = {
+                                draggingWidth?.let { onPanelWidthChange(it.value) }
+                            },
+                            modifier = Modifier.align(Alignment.CenterStart),
+                        )
+                    }
                 }
             }
         }
@@ -1246,12 +1315,18 @@ fun VideoScreen(
             // 画面上没有东西:内嵌控制条底部让出了同样的高度(见 BilbyPlayer 的
             // PlayerControlBar),快捷播放条那一截也多留了同样的高度(见上面的 minVisiblePx)。
             if (!immersive) {
-                tabsPane(
-                    Modifier
-                        .weight(1f)
-                        .background(MaterialTheme.colorScheme.surface)
-                        .windowInsetsPadding(WindowInsets.horizontalCutout),
-                )
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    tabsPane(
+                        Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surface)
+                            .windowInsetsPadding(WindowInsets.horizontalCutout),
+                    )
+                    BelowVideoSpeedOverlay(
+                        controller = speedController,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
     }

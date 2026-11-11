@@ -42,6 +42,7 @@ import dev.bilby.resources.action_send
 import dev.bilby.resources.danmaku_input_hint
 import dev.bilby.stringResource
 import dev.bilby.ui.components.LoadingSpinner
+import dev.bilby.ui.components.trackEditableFocus
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 
@@ -85,11 +86,15 @@ internal fun ControlBarDanmakuField(
     onFocusChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     autoFocus: Boolean = false,
+    focusRequestNonce: Int = 0,
 ) {
     val hint = stringResource(Res.string.danmaku_input_hint)
     val canSend = draft.isNotBlank() && !sending
     val focusRequester = remember { FocusRequester() }
     if (autoFocus) LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    LaunchedEffect(focusRequestNonce) {
+        if (focusRequestNonce > 0) runCatching { focusRequester.requestFocus() }
+    }
     val focusManager = LocalFocusManager.current
     var hadDraft by remember { mutableStateOf(false) }
     LaunchedEffect(draft) {
@@ -128,6 +133,7 @@ internal fun ControlBarDanmakuField(
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
+                        .trackEditableFocus()
                         .onFocusChanged { onFocusChange(it.isFocused) }
                         .semantics { contentDescription = hint },
                 )

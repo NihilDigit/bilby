@@ -6,7 +6,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.unit.IntOffset
@@ -19,9 +21,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -77,6 +81,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
@@ -85,6 +93,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerType
 import dev.bilby.elapsedRealtimeMillis
 import dev.bilby.player.PlayerHandle
+import dev.bilby.ui.components.LocalEditableFocusTracker
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.player.PlayerListener
 import dev.bilby.player.PlayerPhase
@@ -230,6 +239,8 @@ fun PlayerShell(
     modifier: Modifier = Modifier,
     gestures: PlayerGestureOptions = PlayerGestureOptions(),
     speedController: PlaybackSpeedController? = null,
+    /** 是否在壳内渲染长按倍速层;竖屏单栏内嵌时由外层画在画面正下方,此处传 false。 */
+    showSpeedOverlay: Boolean = true,
     /** 全屏顶栏右端的东西。只在全屏、控件可见且未锁定时组合(顶栏本身就这样)。 */
     topBarActions: @Composable RowScope.() -> Unit = {},
     /**
@@ -254,6 +265,12 @@ fun PlayerShell(
      * 置顶、回到窗口、关闭;双击回到窗口,拖动挪窗口。
      */
     pip: Boolean = false,
+    /** 画面上的滚轮是否调节音量(全屏与宽屏双栏左列不参与页面纵向滚动,滚轮调音量;窄屏内嵌留给页面滚动)。 */
+    wheelAdjustsVolume: Boolean = isFullscreen,
+    /** 键盘 `D` 切换弹幕开关。 */
+    onToggleDanmaku: (() -> Unit)? = null,
+    /** 键盘 `Enter` 唤起并聚焦弹幕输入框。 */
+    onRequestDanmakuInput: (() -> Unit)? = null,
 ) {
     val pipWindow = rememberPipWindow().takeIf { pip }
     // 在小窗里离开了这一页(键盘返回、队列播完退页)时,窗口不能留在右下角那一小块里。
@@ -436,6 +453,12 @@ fun PlayerShell(
     }
 
     val focusRequester = remember { FocusRequester() }
+    val editableFocus = LocalEditableFocusTracker.current
+    LaunchedEffect(Unit) {
+        if (!editableFocus.isEditableFocused) {
+            runCatching { focusRequester.requestFocus() }
+        }
+    }
     var speedWasActive by remember { mutableStateOf(false) }
     LaunchedEffect(speedController?.active) {
         if (speedController?.active == true) {
@@ -666,10 +689,21 @@ fun PlayerShell(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                // 键盘:空格播放/暂停,←→ 进退(与双击同一个步长),↑↓ 音量,F 全屏。Esc 退全屏走
-                // 返回那条路(见 FullscreenEffect 旁的 BackHandler),不在这里接。
+                // 键盘快捷键(输入框聚焦时一律放行):
+                // 空格播放/暂停,←→ ±10 秒(Shift+←→ ±60 秒),0–9 跳百分比,[/] 上下条,
+                // ↑↓ 音量,M 静音,F 全屏,D 弹幕,Enter 输入弹幕。Esc 退全屏走 BackHandler。
                 .onKeyEvent { event ->
-                    if (event.type != KeyEventType.KeyDown || locked) return@onKeyEvent false
+                    if (event.type != KeyEventType.KeyDown || locked || editableFocus.isEditableFocused) return@onKeyEvent false
+                    if (event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return@onKeyEvent false
+                    val digit = event.key.digitIndex()
+                    if (digit != null) {
+                        if (event.isShiftPressed || !gestures.seek || duration <= 0L) return@onKeyEvent false
+                        val target = (duration * digit / 10L).coerceIn(0L, duration)
+                        player.seekTo(target)
+                        position = target
+                        keepAwake()
+                        return@onKeyEvent true
+                    }
                     when (event.key) {
                         Key.Spacebar -> {
                             togglePlayPause()
@@ -677,26 +711,55 @@ fun PlayerShell(
                         }
                         Key.DirectionLeft, Key.DirectionRight -> {
                             if (!gestures.seek) return@onKeyEvent false
-                            val delta = if (event.key == Key.DirectionLeft) -DOUBLE_TAP_SEEK_MILLIS else DOUBLE_TAP_SEEK_MILLIS
+                            val step = if (event.isShiftPressed) LONG_SEEK_MILLIS else DOUBLE_TAP_SEEK_MILLIS
+                            val delta = if (event.key == Key.DirectionLeft) -step else step
                             nudgeSeek(player, delta)
                             seekNudgeMillis = accumulateNudge(seekNudgeMillis, delta)
                         }
                         Key.DirectionUp -> nudgeVolume(VOLUME_STEP)
                         Key.DirectionDown -> nudgeVolume(-VOLUME_STEP)
+                        Key.M -> {
+                            if (!playback.hasSoftwareVolume) return@onKeyEvent false
+                            playback.toggleSoftwareMute()
+                            val shown = if (playback.softwareMuted.value) 0f else playback.softwareVolume.value
+                            adjustValue = shown
+                            gesture = PlayerGesture.Adjust(VerticalAdjust.Volume, shown)
+                            levelHintNonce++
+                        }
                         Key.F -> onFullscreenChange(!isFullscreen)
+                        Key.D -> {
+                            val toggle = onToggleDanmaku ?: return@onKeyEvent false
+                            toggle()
+                            keepAwake()
+                        }
+                        Key.LeftBracket -> {
+                            if (!gestures.seek) return@onKeyEvent false
+                            player.seekToPrevious()
+                            keepAwake()
+                        }
+                        Key.RightBracket -> {
+                            if (!gestures.seek) return@onKeyEvent false
+                            player.seekToNext()
+                            keepAwake()
+                        }
+                        Key.Enter, Key.NumPadEnter -> {
+                            val openInput = onRequestDanmakuInput ?: return@onKeyEvent false
+                            controlsVisible = true
+                            keepAwake()
+                            openInput()
+                        }
                         else -> return@onKeyEvent false
                     }
                     true
                 }
                 .focusRequester(focusRequester)
                 .focusable()
-                // 全屏时滚轮调音量。只在全屏接管:内嵌时画面在可滚动的页面顶上,滚轮是用来翻页、
-                // 收起画面的。
-                .pointerInput(locked, isFullscreen) {
+                // 全屏与双栏左列的大画面上滚轮调音量。单栏内嵌时画面在可滚动的页面顶上,滚轮留给翻页。
+                .pointerInput(locked, wheelAdjustsVolume) {
                     awaitPointerEventScope {
                         while (true) {
                             val event = awaitPointerEvent()
-                            if (event.type != PointerEventType.Scroll || !isFullscreen || locked) continue
+                            if (event.type != PointerEventType.Scroll || !wheelAdjustsVolume || locked) continue
                             val change = event.changes.firstOrNull() ?: continue
                             val dy = change.scrollDelta.y
                             if (dy != 0f) {
@@ -869,6 +932,7 @@ fun PlayerShell(
                 .speedSelectionLongPress(
                     speedController,
                     enabled = gestures.fastForward && !locked && !pip,
+                    forceHorizontalBelow = !showSpeedOverlay,
                     onStart = {
                         controlsVisible = false
                         gesture = null
@@ -897,22 +961,39 @@ fun PlayerShell(
         // 不拦截手势,底下的双击/拖拽照常命中。
         scope.overlay()
 
-        // 手势反馈分三处,按手势发生在哪儿摆(见 [PlayerHud] 的说明):连续调整在正中、
-        // 双击在落点那一侧;倍速提示由页面的贴边选档覆盖层显示。
-        //
-        // 正中那一处的优先级按"哪个正在发生"排:拖拽中的进退最要紧,它还要显示能不能取消。
+        // 手势反馈按形态分三处(见 [PlayerHud] 的说明):横划进退在正中、音量与亮度用极窄竖条贴侧边、
+        // 双击在落点那一侧;倍速提示归贴边或画面下方的选档覆盖层显示。
+        val largePlayer = rememberLargePlayer(isFullscreen)
         val currentGesture = gesture
-        val hud: PlayerHud? = when {
+        val seekHud: PlayerHud.Seek? =
             // 只认画面上的横划。拖进度条时读数在手指上方的气泡里(见 SeekBar 的 timeBubble),
             // 这里再亮一个框就是同一个时间印两遍。
-            dragPosition != null && currentGesture is PlayerGesture.Seek -> PlayerHud.Seek(
-                targetMillis = displayPosition,
-                durationMillis = duration,
-                deltaMillis = displayPosition - currentGesture.startPositionMillis,
-                cancelArmed = seekCancelArmed == true,
-            )
+            if (dragPosition != null && currentGesture is PlayerGesture.Seek) {
+                PlayerHud.Seek(
+                    targetMillis = displayPosition,
+                    durationMillis = duration,
+                    deltaMillis = displayPosition - currentGesture.startPositionMillis,
+                    cancelArmed = seekCancelArmed == true,
+                )
+            } else {
+                null
+            }
+        // 退场的那几帧里读数已经是 null 了,而那时框还在屏上,总得有东西可画 —— 留住最后一份
+        // 非空的内容,和 [dev.bilby.ui.video.TripleToast] 里的 `shown` 是同一个写法。
+        var shownSeekHud by remember { mutableStateOf<PlayerHud.Seek?>(null) }
+        if (seekHud != null) shownSeekHud = seekHud
 
-            (currentGesture as? PlayerGesture.Adjust)?.kind == VerticalAdjust.Brightness -> {
+        AnimatedVisibility(
+            visible = seekHud != null,
+            enter = fadeIn(effectsSpec),
+            exit = fadeOut(effectsSpec),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            shownSeekHud?.let { PlayerHudOverlay(it) }
+        }
+
+        val levelHud: PlayerHud.Level? = when ((currentGesture as? PlayerGesture.Adjust)?.kind) {
+            VerticalAdjust.Brightness -> {
                 val percent = (adjustValue * 100).roundToInt()
                 PlayerHud.Level(
                     icon = if (adjustValue >= 0.5f) Icons.Filled.BrightnessHigh else Icons.Filled.BrightnessLow,
@@ -921,7 +1002,7 @@ fun PlayerShell(
                 )
             }
 
-            (currentGesture as? PlayerGesture.Adjust)?.kind == VerticalAdjust.Volume -> {
+            VerticalAdjust.Volume -> {
                 val percent = (adjustValue * 100).roundToInt()
                 PlayerHud.Level(
                     icon = when {
@@ -934,23 +1015,33 @@ fun PlayerShell(
                 )
             }
 
-            else -> null
+            null -> null
         }
-        // 退场的那几帧里 hud 已经是 null 了,而那时框还在屏上,总得有东西可画 —— 留住最后一份
-        // 非空的内容,和 [dev.bilby.ui.video.TripleToast] 里的 `shown` 是同一个写法。
-        var shownHud by remember { mutableStateOf<PlayerHud?>(null) }
-        if (hud != null) shownHud = hud
-
-        // 淡入淡出而不是直接出现:三种读数在同一个位置上互相替换,硬切时看起来像画面上闪了
-        // 一下。**只给透明度,不给位移或缩放** —— 它是"手势正在发生"的读数,位置固定在正中
-        // 才不用每次重新找;effects 那一档也正是无回弹的那组。
+        var shownLevelHud by remember { mutableStateOf<PlayerHud.Level?>(null) }
+        var shownLevelDockEnd by remember { mutableStateOf(true) }
+        if (levelHud != null) {
+            shownLevelHud = levelHud
+            // 触屏纵划时停靠在对侧边缘(左半屏调亮度贴右,右半屏调音量贴左),避开手指与手掌;
+            // 滚轮与方向键触发时无手指遮挡,固定停靠在右侧边缘。
+            shownLevelDockEnd = if (dragging) dragStartX < 0.5f else true
+        }
+        val levelInsetSide = if (shownLevelDockEnd) WindowInsetsSides.End else WindowInsetsSides.Start
         AnimatedVisibility(
-            visible = hud != null,
-            enter = fadeIn(effectsSpec),
-            exit = fadeOut(effectsSpec),
-            modifier = Modifier.align(Alignment.Center),
+            visible = levelHud != null,
+            enter = slideInHorizontally(spatialOffsetSpec) { if (shownLevelDockEnd) it / 2 else -it / 2 } + fadeIn(effectsSpec),
+            exit = slideOutHorizontally(spatialOffsetSpec) { if (shownLevelDockEnd) it / 2 else -it / 2 } + fadeOut(effectsSpec),
+            modifier = Modifier
+                .align(if (shownLevelDockEnd) Alignment.CenterEnd else Alignment.CenterStart)
+                .then(
+                    if (isFullscreen) {
+                        Modifier.windowInsetsPadding(WindowInsets.barsAndCutout.only(levelInsetSide))
+                    } else {
+                        Modifier
+                    },
+                )
+                .padding(horizontal = Spacing.Comfortable),
         ) {
-            shownHud?.let { PlayerHudOverlay(it) }
+            shownLevelHud?.let { PlayerLevelEdgeBar(hud = it, large = largePlayer && !pip) }
         }
 
         // 双击:贴着点下去的那一侧。方向在退场时也要留住,否则淡出那几帧会跳到另一边。
@@ -997,11 +1088,14 @@ fun PlayerShell(
                     .windowInsetsPadding(WindowInsets.barsAndCutout)
                     .padding(end = Spacing.Comfortable, bottom = Spacing.Comfortable),
             ) {
-                PlayerIconButton(
-                    onClick = { onFullscreenChange(false) },
-                    icon = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(Res.string.player_exit_fullscreen),
-                )
+                val exitFullscreenLabel = stringResource(Res.string.player_exit_fullscreen)
+                PlayerTooltip(exitFullscreenLabel, shortcut = "Esc", anchorAbove = false) {
+                    PlayerIconButton(
+                        onClick = { onFullscreenChange(false) },
+                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = exitFullscreenLabel,
+                    )
+                }
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleSmall,
@@ -1046,7 +1140,7 @@ fun PlayerShell(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val pinLabel = stringResource(Res.string.player_pip_pin)
-                    PlayerTooltip(pinLabel) {
+                    PlayerTooltip(pinLabel, anchorAbove = false) {
                         PlayerIconButton(
                             onClick = { pipWindow.setPinned(!pipWindow.pinned) },
                             icon = Icons.Filled.PushPin,
@@ -1055,11 +1149,11 @@ fun PlayerShell(
                         )
                     }
                     val exitLabel = stringResource(Res.string.player_pip_exit)
-                    PlayerTooltip(exitLabel) {
+                    PlayerTooltip(exitLabel, anchorAbove = false) {
                         PlayerIconButton(onClick = pipWindow::exit, icon = Icons.Filled.OpenInFull, contentDescription = exitLabel)
                     }
                     val closeLabel = stringResource(Res.string.player_pip_close)
-                    PlayerTooltip(closeLabel) {
+                    PlayerTooltip(closeLabel, anchorAbove = false) {
                         PlayerIconButton(
                             onClick = {
                                 player.pause()
@@ -1082,8 +1176,11 @@ fun PlayerShell(
         //
         // 锁按钮浮在画面中间,不贴任何一条边,所以它走的是 enter/exit 里"在主界面语境中
         // 出现的组件"那一支:缩放加淡入,没有方向可言。
+        // 鼠标模式下隐藏防误触锁:锁按钮专为横屏握持手指防误触设立,鼠标不存在误触;但若此前触屏已锁上,
+        // 仍保留显示以便鼠标也能解锁。
         AnimatedVisibility(
-            visible = isFullscreen && !pip && controlsVisible,
+            visible = isFullscreen && !pip && controlsVisible && (pointerSource.isTouchLike || locked) &&
+                !(levelHud != null && shownLevelDockEnd),
             enter = scaleIn(scaleSpec) + fadeIn(effectsSpec),
             exit = scaleOut(scaleSpec) + fadeOut(effectsSpec),
             modifier = Modifier
@@ -1119,12 +1216,12 @@ fun PlayerShell(
         //
         // 锁上时不出现:锁上之后唯一能点的是解锁按钮。
         //
-        // **手势读数在屏时让开。** 两者都在正中,播放键画在读数之后,控件还没收起时开始横划,
+        // **横划进退读数在屏时让开。** 两者都在正中,播放键画在读数之后,控件还没收起时开始横划,
         // 暂停那个方块就压在进退读数上。手势进行中没有人要去点播放键,松手后读数淡出、它再回来。
         AnimatedVisibility(
             // Android 小窗里不画:那里的播放键是系统给的。桌面小窗照画,和平时同一颗。
-            visible = (!pip || pipWindow != null) && hud == null &&
-                speedController?.active != true && speedController?.lockedHint == null &&
+            visible = (!pip || pipWindow != null) && seekHud == null &&
+                speedController?.active != true &&
                 ((controlsVisible && !locked) || loadingVisible || flashVisible),
             enter = scaleIn(scaleSpec, initialScale = CenterButtonEnterScale) + fadeIn(effectsSpec),
             exit = scaleOut(scaleSpec, targetScale = CenterButtonEnterScale) + fadeOut(effectsSpec),
@@ -1152,7 +1249,7 @@ fun PlayerShell(
             }
         }
 
-        if (speedController != null && !pip) {
+        if (showSpeedOverlay && speedController != null && !pip) {
             SpeedSelectionOverlay(
                 controller = speedController,
                 isFullscreen = isFullscreen,
@@ -1209,6 +1306,21 @@ private val PlayerMotion = MotionScheme.standard()
 /** 中央播放键进出时从多大缩放起。0.6 而不是 0:从无到有的缩放太猛,读起来像弹出一个对话框。 */
 private const val CenterButtonEnterScale = 0.6f
 private const val DOUBLE_TAP_SEEK_MILLIS = 10_000L
+private const val LONG_SEEK_MILLIS = 60_000L
+
+private fun Key.digitIndex(): Int? = when (this) {
+    Key.Zero, Key.NumPad0 -> 0
+    Key.One, Key.NumPad1 -> 1
+    Key.Two, Key.NumPad2 -> 2
+    Key.Three, Key.NumPad3 -> 3
+    Key.Four, Key.NumPad4 -> 4
+    Key.Five, Key.NumPad5 -> 5
+    Key.Six, Key.NumPad6 -> 6
+    Key.Seven, Key.NumPad7 -> 7
+    Key.Eight, Key.NumPad8 -> 8
+    Key.Nine, Key.NumPad9 -> 9
+    else -> null
+}
 
 /** 滚轮一格、方向键一下的音量步长。 */
 private const val VOLUME_STEP = 0.05f

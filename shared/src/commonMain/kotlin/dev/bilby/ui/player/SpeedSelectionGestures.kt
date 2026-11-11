@@ -15,13 +15,14 @@ import androidx.compose.ui.platform.LocalWindowInfo
 internal fun Modifier.speedSelectionLongPress(
     controller: PlaybackSpeedController?,
     enabled: Boolean,
+    forceHorizontalBelow: Boolean = false,
     onStart: () -> Unit,
 ): Modifier {
     val currentOnStart by rememberUpdatedState(onStart)
     val haptics = LocalHapticFeedback.current
     val window = LocalWindowInfo.current.containerSize
-    val vertical = window.width > window.height
-    return pointerInput(controller, enabled, vertical) {
+    val vertical = !forceHorizontalBelow && window.width > window.height
+    return pointerInput(controller, enabled, vertical, forceHorizontalBelow) {
         if (controller == null || !enabled) return@pointerInput
         var owned = false
         var dockEnd = false
@@ -31,10 +32,11 @@ internal fun Modifier.speedSelectionLongPress(
             detectDragGesturesAfterLongPress(
                 onDragStart = { startOffset ->
                     dockEnd = vertical && startOffset.x < size.width / 2f
-                    // 竖屏下偏下长按把选档条放画面上沿(上滑锁定),偏上长按放画面下沿(下滑锁定)。
-                    dockTop = !vertical && startOffset.y >= size.height / 2f
+                    // 竖屏内嵌时选档块画在画面下方(forceHorizontalBelow),一律下滑锁定;
+                    // 竖屏全屏时偏下长按把选档条放画面上沿(上滑锁定),偏上长按放画面下沿(下滑锁定)。
+                    dockTop = !vertical && !forceHorizontalBelow && startOffset.y >= size.height / 2f
                     controller.open(temporary = true, dockEnd = dockEnd, dockTop = dockTop)
-                    owned = controller.beginDrag()
+                    owned = controller.beginDrag(vertical = vertical)
                     displacement = Offset.Zero
                     currentOnStart()
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)

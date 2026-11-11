@@ -1,6 +1,11 @@
 package dev.bilby.ui.live
 
 import dev.bilby.ui.BackHandler
+import dev.bilby.ui.CaptionDragHeight
+import dev.bilby.ui.CaptionLeadWithDrag
+import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.rememberCaptionSlot
+import dev.bilby.ui.windowDragArea
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -121,6 +126,10 @@ import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SidePaneDismissLayer
 import dev.bilby.ui.components.SidePaneLayer
 import dev.bilby.ui.components.rememberSidePaneState
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.unit.Dp
+import dev.bilby.data.SideSheetPrefs
+import dev.bilby.ui.components.SplitPaneResizeHandle
 import androidx.compose.runtime.CompositionLocalProvider
 import dev.bilby.ui.player.PlayerTooltip
 import dev.bilby.ui.video.LiveSettingsContent
@@ -169,6 +178,7 @@ import dev.bilby.ui.player.PlaybackFailure
 import dev.bilby.ui.player.PlayerDanmakuLayer
 import dev.bilby.ui.player.PlayerGestureOptions
 import dev.bilby.ui.player.PlayerShell
+import dev.bilby.ui.player.PlayerVolumeControl
 import dev.bilby.ui.player.PlayerIconButton
 import dev.bilby.ui.player.FullscreenButton
 import dev.bilby.ui.player.InlineDanmakuBarMinWidth
@@ -237,6 +247,8 @@ fun LiveRoomScreen(
     onUserClick: (Long) -> Unit,
     /** 关注或取关主播。取关的确认框由按钮自己弹(见 FollowButton)。 */
     onToggleFollow: () -> Unit,
+    panelPrefs: SideSheetPrefs? = null,
+    onPanelWidthChange: (Float) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var fullscreen by remember { mutableStateOf(false) }
@@ -266,6 +278,8 @@ fun LiveRoomScreen(
 
     // 弹幕草稿归页面:底部发言栏与全屏控制条里的输入框是同一句话的两个位置,进出全屏不丢。
     var danmakuDraft by rememberSaveable { mutableStateOf("") }
+    var danmakuFocusNonce by remember { mutableStateOf(0) }
+    val bottomDanmakuFocusRequester = remember { FocusRequester() }
     val sendDanmakuDraft: () -> Unit = {
         onSendDanmaku(danmakuDraft)
         danmakuDraft = ""
@@ -302,31 +316,49 @@ fun LiveRoomScreen(
                     ),
                     // 分享与高能榜人数跟控件一起显隐,同播放页:常驻的话它们一直压在画面右上角。
                     pip = inPip,
+                    wheelAdjustsVolume = fullscreen || expandedLayout,
+                    onToggleDanmaku = { danmakuEditor.setEnabled(!danmakuPrefs.enabled) },
+                    onRequestDanmakuInput = {
+                        if (fullscreen) {
+                            danmakuFocusNonce++
+                        } else {
+                            runCatching { bottomDanmakuFocusRequester.requestFocus() }
+                        }
+                    },
                     // 全屏顶栏同样给画中画,理由同播放页:它只从按钮进。
                     topBarActions = {
                         if (pip.supported) {
-                            PlayerIconButton(
-                                onClick = { pip.enter(player.videoAspect()) },
-                                icon = Icons.Filled.PictureInPictureAlt,
-                                contentDescription = stringResource(Res.string.player_pip),
-                            )
+                            val pipLabel = stringResource(Res.string.player_pip)
+                            PlayerTooltip(pipLabel, anchorAbove = false) {
+                                PlayerIconButton(
+                                    onClick = { pip.enter(player.videoAspect()) },
+                                    icon = Icons.Filled.PictureInPictureAlt,
+                                    contentDescription = pipLabel,
+                                )
+                            }
                         }
                     },
                     embeddedTopActions = {
                         OnlineRankLabel(state.onlineRank)
                         // 画中画在分享左边,同播放页。
                         if (pip.supported) {
+                            val pipLabel = stringResource(Res.string.player_pip)
+                            PlayerTooltip(pipLabel, anchorAbove = false) {
+                                PlayerIconButton(
+                                    onClick = { pip.enter(player.videoAspect()) },
+                                    icon = Icons.Filled.PictureInPictureAlt,
+                                    contentDescription = pipLabel,
+                                )
+                            }
+                        }
+                        val shareLabel = stringResource(Res.string.action_share)
+                        PlayerTooltip(shareLabel, anchorAbove = false) {
                             PlayerIconButton(
-                                onClick = { pip.enter(player.videoAspect()) },
-                                icon = Icons.Filled.PictureInPictureAlt,
-                                contentDescription = stringResource(Res.string.player_pip),
+                                onClick = share,
+                                icon = Icons.Filled.Share,
+                                contentDescription = shareLabel,
                             )
                         }
-                        PlayerIconButton(
-                            onClick = share,
-                            icon = Icons.Filled.Share,
-                            contentDescription = stringResource(Res.string.action_share),
-                        )
                     },
                     overlay = {
                         if (onlyAudio && state.coverUrl.isNotEmpty()) {
@@ -370,6 +402,7 @@ fun LiveRoomScreen(
                             } else {
                                 null
                             },
+                            danmakuFocusNonce = danmakuFocusNonce,
                             // 写弹幕时控制条不自动收起,同设置面板开着时。
                             onDanmakuFieldFocusChange = { setMenuOpen(it) },
                             watched = state.watched,
@@ -464,36 +497,71 @@ fun LiveRoomScreen(
                 danmakuEnabled = danmakuPrefs.enabled,
                 onDanmakuEnabledChange = danmakuEditor::setEnabled,
                 onUserClick = onUserClick,
+                danmakuFocusRequester = bottomDanmakuFocusRequester,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
         }
     }
 
     if (expandedLayout) {
+        if (!immersive) LocalWindowCaption.current?.Host()
         // 宽屏两栏,同播放页:左栏约三分之二整列是画面,画面按比例居中在自己的黑底里;右栏是聊天,
         // 从上到下铺满,输入框一直在手边。**全屏也走这个分支**,只是右栏不组合、左栏权重给满 ——
         // 布局树的形状不变,进出全屏时播放器不会重挂。
         // 播放设置这类二级面板画在右栏里,不挡画面(见 [SidePaneState])。
         val sidePane = rememberSidePaneState()
         CompositionLocalProvider(LocalSidePane provides sidePane) {
-        Row(modifier = modifier.fillMaxSize()) {
-            Box(Modifier.weight(if (immersive) 1f else 2f).fillMaxHeight()) {
-                playerPane(Modifier.fillMaxSize())
-                SidePaneDismissLayer(sidePane)
-            }
-            if (!immersive) {
-                // 左边挨着的是画面,不是屏幕边缘,所以不躲 start 那一侧。底下要躲:输入框贴着底边。
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .windowInsetsPadding(
-                            WindowInsets.barsAndCutout
-                                .only(WindowInsetsSides.End + WindowInsetsSides.Vertical),
-                        ),
-                ) {
-                    infoPane(Modifier.fillMaxSize())
-                    SidePaneLayer(sidePane)
+        BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+            var draggingWidth by remember { mutableStateOf<Dp?>(null) }
+            val minPanelWidth = 320.dp
+            val maxPanelWidth = (maxWidth - 440.dp).coerceAtLeast(minPanelWidth)
+            val defaultPanelWidth = (maxWidth / 3).coerceIn(minPanelWidth, 440.dp)
+            val panelWidth = (draggingWidth ?: panelPrefs?.widthDp?.dp ?: defaultPanelWidth)
+                .coerceIn(minPanelWidth, maxPanelWidth)
+
+            Row(modifier = Modifier.fillMaxSize()) {
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    playerPane(Modifier.fillMaxSize())
+                    SidePaneDismissLayer(sidePane)
+                    if (!immersive && LocalWindowCaption.current != null) {
+                        Spacer(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .fillMaxWidth()
+                                .padding(start = 64.dp, end = 200.dp)
+                                .height(CaptionDragHeight)
+                                .windowDragArea(!locked && !sidePane.isOpen),
+                        )
+                    }
+                }
+                if (!immersive) {
+                    // 左边挨着的是画面,不是屏幕边缘,所以不躲 start 那一侧。底下要躲:输入框贴着底边。
+                    Box(
+                        Modifier
+                            .width(panelWidth)
+                            .fillMaxHeight()
+                            .windowInsetsPadding(
+                                WindowInsets.barsAndCutout
+                                    .only(WindowInsetsSides.End + WindowInsetsSides.Vertical),
+                            ),
+                    ) {
+                        CompositionLocalProvider(
+                            LocalWindowCaption provides LocalWindowCaption.current.takeIf { !sidePane.isOpen },
+                        ) {
+                            infoPane(Modifier.fillMaxSize())
+                        }
+                        SidePaneLayer(sidePane)
+                        SplitPaneResizeHandle(
+                            onDrag = { deltaDp ->
+                                draggingWidth = ((draggingWidth ?: panelWidth) - deltaDp)
+                                    .coerceIn(minPanelWidth, maxPanelWidth)
+                            },
+                            onDragStopped = {
+                                draggingWidth?.let { onPanelWidthChange(it.value) }
+                            },
+                            modifier = Modifier.align(Alignment.CenterStart),
+                        )
+                    }
                 }
             }
         }
@@ -615,6 +683,7 @@ private fun LiveControlBar(
     largePlayer: Boolean,
     /** 全屏时这一行里的弹幕输入框;双栏时输入框在右栏聊天底下,这里是 null。 */
     danmakuField: ControlBarDanmaku?,
+    danmakuFocusNonce: Int = 0,
     onDanmakuFieldFocusChange: (Boolean) -> Unit,
     /** 「N 人看过」整句,服务端拼好的。空串就不画这一格,见 LiveRoomUiState.watched。 */
     watched: String,
@@ -638,6 +707,9 @@ private fun LiveControlBar(
         val wide = largePlayer && maxWidth >= Breakpoints.StackedControlBar
         val roomy = maxWidth >= InlineDanmakuBarMinWidth
         var composing by remember { mutableStateOf(false) }
+        LaunchedEffect(danmakuFocusNonce) {
+            if (danmakuFocusNonce > 0 && danmakuField != null) composing = true
+        }
         val showField = !pip && danmakuField != null && (roomy || composing)
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -650,12 +722,16 @@ private fun LiveControlBar(
                     LoadingSpinner(color = MaterialTheme.colorScheme.onSurface)
                 }
             } else {
-                PlayerIconButton(
-                    onClick = onReload,
-                    icon = Icons.Filled.Refresh,
-                    contentDescription = stringResource(Res.string.live_refresh),
-                )
+                val reloadLabel = stringResource(Res.string.live_refresh)
+                PlayerTooltip(reloadLabel) {
+                    PlayerIconButton(
+                        onClick = onReload,
+                        icon = Icons.Filled.Refresh,
+                        contentDescription = reloadLabel,
+                    )
+                }
             }
+            if (!pip) PlayerVolumeControl()
             // 拿不到就留白,不写"0 人看过" —— 那是个具体而错误的数字。宽度照占,不然弹幕按钮
             // 会在这一句到货的那一刻横着跳一下。
             if (!composing || roomy || pip) Text(
@@ -682,6 +758,7 @@ private fun LiveControlBar(
                         if (!focused) composing = false
                     },
                     autoFocus = !roomy,
+                    focusRequestNonce = danmakuFocusNonce,
                     modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
                 )
             }
@@ -735,21 +812,24 @@ private fun LiveAudioOnlyButton(
     onOnlyAudioChange: (Boolean) -> Unit,
     isFullscreen: Boolean,
 ) {
-    ControlButton(
-        expanded = onlyAudio,
-        onClick = { onOnlyAudioChange(!onlyAudio) },
-        label = null,
-        icon = { tint ->
-            Icon(
-                imageVector = if (onlyAudio) Icons.Filled.Headset else Icons.Filled.HeadsetOff,
-                contentDescription = stringResource(
-                    if (onlyAudio) Res.string.live_audio_only_off else Res.string.live_audio_only_on,
-                ),
-                tint = tint,
-                modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp),
-            )
-        },
+    val description = stringResource(
+        if (onlyAudio) Res.string.live_audio_only_off else Res.string.live_audio_only_on,
     )
+    PlayerTooltip(description) {
+        ControlButton(
+            expanded = onlyAudio,
+            onClick = { onOnlyAudioChange(!onlyAudio) },
+            label = null,
+            icon = { tint ->
+                Icon(
+                    imageVector = if (onlyAudio) Icons.Filled.Headset else Icons.Filled.HeadsetOff,
+                    contentDescription = description,
+                    tint = tint,
+                    modifier = Modifier.size(if (isFullscreen) 22.dp else 18.dp),
+                )
+            },
+        )
+    }
 }
 
 /**
@@ -767,58 +847,132 @@ private fun LiveAudioOnlyButton(
  */
 @Composable
 private fun LiveAnchorRow(state: LiveRoomUiState, onUserClick: (Long) -> Unit, onToggleFollow: () -> Unit) {
+    val captionSlot = rememberCaptionSlot()
+    val hasWindowCaption = LocalWindowCaption.current != null
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-        modifier = Modifier
+        modifier = captionSlot.modifier
             .fillMaxWidth()
-            // mid 要到房间信息回来才有,那之前整行不可点(点了也不知道去谁那儿)。
-            .clickable(role = Role.Button, enabled = state.anchorMid != 0L) {
-                onUserClick(state.anchorMid)
-            }
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            .padding(end = if (captionSlot.buttons != null) Spacing.Hair else 0.dp),
     ) {
-        Avatar(url = state.anchorFace, size = Dimens.AvatarRow)
-        Column(modifier = Modifier.weight(1f)) {
-            // 开播时刻跟在名字后面,整块只占两行:单独一行时它比名字和标题都短,却要多占一行高度。
-            // 名字过长时截断的是名字,时刻留着 —— 名字截掉一截还认得出是谁,时刻截掉就没了。
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = state.anchorName,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                // 写绝对时刻而不是"已播 2 小时":后者要每分钟重算一遍,而人想知道的多半是
-                // "是不是刚开"或"从几点播到现在",一个时刻两件事都答得了。当天只写时刻,跨了天
-                // 带上日期 —— 通宵的直播跨过零点很常见,只写"23:10"会读成今晚。
-                state.liveStartedAt?.let { startedAt ->
-                    Text(
-                        text = MetaSeparator +
-                            stringResource(Res.string.live_started_at, formatTimeOfDay(startedAt * 1000)),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
+        if (hasWindowCaption) {
+            CaptionLeadWithDrag(
+                dragEnabled = captionSlot.atTop,
+                modifier = Modifier.weight(1f),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                    modifier = Modifier
+                        // mid 要到房间信息回来才有,那之前整行不可点(点了也不知道去谁那儿)。
+                        .clickable(role = Role.Button, enabled = state.anchorMid != 0L) {
+                            onUserClick(state.anchorMid)
+                        }
+                        .padding(
+                            start = Spacing.Comfortable,
+                            end = Spacing.Tight,
+                            top = Spacing.Tight,
+                            bottom = Spacing.Tight,
+                        ),
+                ) {
+                    Avatar(url = state.anchorFace, size = Dimens.AvatarRow)
+                    Column(modifier = Modifier.weight(1f, fill = false)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = state.anchorName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            state.liveStartedAt?.let { startedAt ->
+                                Text(
+                                    text = MetaSeparator +
+                                        stringResource(Res.string.live_started_at, formatTimeOfDay(startedAt * 1000)),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                        if (state.title.isNotBlank()) {
+                            Text(
+                                text = state.title,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                 }
             }
-            if (state.title.isNotBlank()) {
-                Text(
-                    text = state.title,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            state.followState?.let { follow ->
+                Box(modifier = Modifier.padding(end = if (captionSlot.buttons != null) Spacing.Tight else Spacing.Comfortable)) {
+                    FollowButton(state = follow, onClick = onToggleFollow, prominent = false, name = state.anchorName)
+                }
+            }
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                modifier = Modifier
+                    // mid 要到房间信息回来才有,那之前整行不可点(点了也不知道去谁那儿)。
+                    .weight(1f)
+                    .clickable(role = Role.Button, enabled = state.anchorMid != 0L) {
+                        onUserClick(state.anchorMid)
+                    }
+                    .padding(
+                        start = Spacing.Comfortable,
+                        end = if (captionSlot.buttons != null) Spacing.Tight else Spacing.Comfortable,
+                        top = Spacing.Tight,
+                        bottom = Spacing.Tight,
+                    ),
+            ) {
+                Avatar(url = state.anchorFace, size = Dimens.AvatarRow)
+                Column(modifier = Modifier.weight(1f)) {
+                    // 开播时刻跟在名字后面,整块只占两行:单独一行时它比名字和标题都短,却要多占一行高度。
+                    // 名字过长时截断的是名字,时刻留着 —— 名字截掉一截还认得出是谁,时刻截掉就没了。
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = state.anchorName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        // 写绝对时刻而不是"已播 2 小时":后者要每分钟重算一遍,而人想知道的多半是
+                        // "是不是刚开"或"从几点播到现在",一个时刻两件事都答得了。当天只写时刻,跨了天
+                        // 带上日期 —— 通宵的直播跨过零点很常见,只写"23:10"会读成今晚。
+                        state.liveStartedAt?.let { startedAt ->
+                            Text(
+                                text = MetaSeparator +
+                                    stringResource(Res.string.live_started_at, formatTimeOfDay(startedAt * 1000)),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    if (state.title.isNotBlank()) {
+                        Text(
+                            text = state.title,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                // 行尾是关注,不是一个 → 箭头:整行可点已经说明了"进空间",箭头只是重复;而关注
+                // 此前要进了空间才按得到。样式同播放页 UP 那一行(不突出的那一档):这一页的主角是
+                // 这场直播,不是这个人。关注态还没查到时不画,免得先闪一个「关注」。
+                state.followState?.let { follow ->
+                    FollowButton(state = follow, onClick = onToggleFollow, prominent = false, name = state.anchorName)
+                }
             }
         }
-        // 行尾是关注,不是一个 → 箭头:整行可点已经说明了"进空间",箭头只是重复;而关注
-        // 此前要进了空间才按得到。样式同播放页 UP 那一行(不突出的那一档):这一页的主角是
-        // 这场直播,不是这个人。关注态还没查到时不画,免得先闪一个「关注」。
-        state.followState?.let { follow ->
-            FollowButton(state = follow, onClick = onToggleFollow, prominent = false, name = state.anchorName)
-        }
+        captionSlot.buttons?.invoke()
     }
 }
 
@@ -835,6 +989,7 @@ private fun LiveRoomTabs(
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
     onUserClick: (Long) -> Unit,
+    danmakuFocusRequester: FocusRequester? = null,
     modifier: Modifier = Modifier,
 ) {
     val pager = rememberPagerState(pageCount = { 3 })
@@ -904,6 +1059,7 @@ private fun LiveRoomTabs(
             showDanmakuToggle = showDanmakuToggle,
             danmakuEnabled = danmakuEnabled,
             onDanmakuEnabledChange = onDanmakuEnabledChange,
+            externalFocusRequester = danmakuFocusRequester,
         )
     }
 }
@@ -1490,9 +1646,11 @@ private fun LiveDanmakuInput(
     showDanmakuToggle: Boolean,
     danmakuEnabled: Boolean,
     onDanmakuEnabledChange: (Boolean) -> Unit,
+    externalFocusRequester: FocusRequester? = null,
 ) {
     val focusManager = LocalFocusManager.current
-    val focusRequester = remember { FocusRequester() }
+    val fallbackFocusRequester = remember { FocusRequester() }
+    val focusRequester = externalFocusRequester ?: fallbackFocusRequester
     val keyboard = LocalSoftwareKeyboardController.current
     val isTouchLike = LocalPointerSource.current.isTouchLike
     val complementPanelHeight = rememberComplementEmotePanelHeight()
