@@ -7,6 +7,10 @@
 # 的方法(自绘标题栏的窗口过程)也由这一条保住,不必另写。
 -keep class dev.bilby.** { *; }
 
+# FFM 下调句柄的 MethodHandle.invokeExact 属签名多态(@PolymorphicSignature):编译器按调用处实参生成
+# 具象描述符,MethodHandle 类文件里只有 Object... 原型,ProGuard 逐字核对库方法签名时会报找不到。
+-dontwarn java.lang.invoke.MethodHandle
+
 # JNA 按接口方法名绑定 native 函数,结构体按字段名映射内存布局。Bilby 用 jna-platform 的
 # User32 改窗口样式(无边框全屏、画中画),mediamp 也经它调 kernel32。
 -keep class com.sun.jna.** { *; }
