@@ -7,6 +7,7 @@ import java.awt.Container
 import java.awt.Dimension
 import java.awt.LayoutManager
 import javax.swing.JFrame
+import javax.swing.SwingUtilities
 import kotlin.math.abs
 import kotlin.math.round
 
@@ -42,6 +43,7 @@ private object PixelAlignedLayout : LayoutManager {
 
     // 显示器缩放变化时 skiko 会 revalidate SkiaLayer,失效一路传到 JRootPane,这里随之按新缩放重排。
     override fun layoutContainer(parent: Container) {
+        if (GpuDeviceWatch.checkLost(SwingUtilities.getWindowAncestor(parent))) return
         val step = pixelAlignedStep(parent.graphicsConfiguration?.defaultTransform?.scaleX ?: 1.0)
         val width = roundUp(parent.width, step)
         val height = roundUp(parent.height, step)

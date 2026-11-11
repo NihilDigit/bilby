@@ -7,6 +7,7 @@ import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import dev.bilby.BiliLog
+import dev.bilby.ui.theme.SystemReducedMotion
 import dev.nihildigit.windowstouch.WindowsTouchInput
 import java.lang.foreign.Arena
 import java.lang.foreign.FunctionDescriptor
@@ -67,8 +68,13 @@ import java.util.concurrent.ConcurrentHashMap
 internal class WindowsCaption(private val window: ComposeWindow) {
     enum class Button { MINIMIZE, MAXIMIZE, CLOSE }
 
-    /** 标题栏与按钮在 Compose 根坐标系里的位置,单位为像素,即 Skiko 画布的客户区坐标。 */
-    private class Layout(val bar: Rect, val buttons: Map<Button, Rect>)
+    /** 标题栏拖动区与按钮在 Compose 根坐标系里的位置,单位为像素,即 Skiko 画布的客户区坐标。 */
+    private class Layout(val dragAreas: List<Rect>, val buttons: Map<Button, Rect>) {
+        val maxBottom: Float = maxOf(
+            dragAreas.maxOfOrNull { it.bottom } ?: 0f,
+            buttons.values.maxOfOrNull { it.bottom } ?: 0f,
+        )
+    }
 
     @Volatile
     private var layout: Layout? = null
@@ -82,6 +88,10 @@ internal class WindowsCaption(private val window: ComposeWindow) {
         private set
 
     var isMaximized: Boolean by mutableStateOf(false)
+        private set
+
+    /** 用户正按住窗口边框或标题栏拖移缩放(`WM_ENTERSIZEMOVE`..`WM_EXITSIZEMOVE`)。 */
+    var isSizing: Boolean by mutableStateOf(false)
         private set
 
     /**
@@ -149,7 +159,12 @@ internal class WindowsCaption(private val window: ComposeWindow) {
 
     /** 标题栏的位置变化时由界面调用。 */
     fun updateLayout(bar: Rect, buttons: Map<Button, Rect>) {
-        layout = Layout(bar, buttons)
+        updateLayout(listOf(bar), buttons)
+    }
+
+    /** 多块拖动区与按钮的位置变化时由界面调用。 */
+    fun updateLayout(dragAreas: List<Rect>, buttons: Map<Button, Rect>) {
+        layout = Layout(dragAreas, buttons)
     }
 
     /** 不显示标题栏时整个窗口都是客户区。 */
@@ -206,6 +221,9 @@ internal class WindowsCaption(private val window: ComposeWindow) {
                     }
                 }
                 WM_NCACTIVATE -> isActive = wParam != 0L
+                WM_SETTINGCHANGE -> SystemReducedMotion.onSystemSettingChange()
+                WM_ENTERSIZEMOVE -> isSizing = true
+                WM_EXITSIZEMOVE -> isSizing = false
                 WM_STYLECHANGED, WM_DPICHANGED -> refreshWindowMetrics()
                 WM_SIZE -> {
                     when (wParam) {
@@ -216,6 +234,7 @@ internal class WindowsCaption(private val window: ComposeWindow) {
                     if (originalChildProcs.isEmpty()) hookChildren()
                 }
                 WM_NCDESTROY -> {
+                    isSizing = false
                     touch?.close()
                     Win32.setWindowLongPtr.invokeWithArguments(hwnd, GWLP_WNDPROC, originalFrameProc)
                     live -= this
@@ -289,7 +308,7 @@ internal class WindowsCaption(private val window: ComposeWindow) {
 
         // 鼠标在窗口主体区域时(不在标题栏也不在顶边缩放带)直接答 HTCLIENT:避免每次鼠标移动
         // (1000Hz)都跨 FFM 重复调 GetWindowLongW / GetDpiForWindow / GetSystemMetricsForDpi / ScreenToClient。
-        if (clientY >= current.bar.bottom && clientY >= band) return HTCLIENT
+        if (clientY >= current.maxBottom && clientY >= band) return HTCLIENT
 
         if (!isMaximized && hasThickFrame() && clientY in 0 until band) {
             toClient(frame, screenX, screenY)
@@ -317,7 +336,7 @@ internal class WindowsCaption(private val window: ComposeWindow) {
                 }
             }
         }
-        return if (current.bar.contains(position)) HTCAPTION else HTCLIENT
+        return if (current.dragAreas.any { it.contains(position) }) HTCAPTION else HTCLIENT
     }
 
     private fun perform(hwnd: MemorySegment, button: Button) {
@@ -429,6 +448,7 @@ internal class WindowsCaption(private val window: ComposeWindow) {
         const val GW_CHILD = 5
 
         const val WM_SIZE = 0x0005
+        const val WM_SETTINGCHANGE = 0x001A
         const val WM_STYLECHANGED = 0x007D
         const val WM_NCDESTROY = 0x0082
         const val WM_NCCALCSIZE = 0x0083
@@ -439,6 +459,8 @@ internal class WindowsCaption(private val window: ComposeWindow) {
         const val WM_NCLBUTTONUP = 0x00A2
         const val WM_NCLBUTTONDBLCLK = 0x00A3
         const val WM_SYSCOMMAND = 0x0112
+        const val WM_ENTERSIZEMOVE = 0x0231
+        const val WM_EXITSIZEMOVE = 0x0232
         const val WM_NCMOUSELEAVE = 0x02A2
         const val WM_DPICHANGED = 0x02E0
 

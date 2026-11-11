@@ -51,6 +51,15 @@
     *** sendPointerEvent-*(...);
 }
 
+# 显卡设备失效检测(GpuDeviceWatch)经反射取 Skiko 的 Direct3DRedrawer 及其原生设备结构指针,
+# 问 ID3D12Device::GetDeviceRemovedReason。升级 Skiko 时同步核对这两个成员仍在。
+-keepclassmembers class org.jetbrains.skiko.SkiaLayer {
+    *** getRedrawer$skiko();
+}
+-keepclassmembers class org.jetbrains.skiko.redrawer.Direct3DRedrawer {
+    *** device;
+}
+
 # 内置 SQLite(Room 的驱动)经 JNI 调进 native,native 侧按类名与签名回找
 -keep class androidx.sqlite.driver.bundled.** { *; }
 

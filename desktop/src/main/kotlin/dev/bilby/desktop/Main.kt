@@ -10,7 +10,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import dev.bilby.ui.DesktopLanguageStore
-import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.application
 import coil3.ImageLoader
@@ -37,10 +36,12 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import org.jetbrains.skia.Image
 import org.openani.mediamp.mpv.MpvMediampPlayer
 import java.awt.Dimension
+import java.awt.Frame
+import javax.swing.SwingUtilities
 import kotlin.system.exitProcess
 import java.io.File
 
-fun main() {
+fun main(args: Array<String>) {
     exitAfterAotTraining()
     AppBuild.init(
         debug = System.getProperty("bilby.debug").toBoolean(),
@@ -51,7 +52,7 @@ fun main() {
     lateinit var container: AppContainer
     val updater = DesktopAppUpdater.create()
     val platform = DesktopPlatform(container = { container }, updater = updater)
-    if (!SingleInstance.claim(platform.filesDir)) exitProcess(0)
+    val instance = SingleInstance.claimOrForward(platform.filesDir, args.toList()) ?: exitProcess(0)
     container = AppContainer(platform)
 
     // Coil 3 不会自动接上网络加载器,不注册的话 http(s) 图片静默不加载,同 Android 的 BilbyApplication。
@@ -84,7 +85,7 @@ fun main() {
         }
         // 更新脚本已经在等这个进程退出,由它替换文件后再把应用拉起来。
         LaunchedEffect(updater) { updater.exitRequests.collect { quit() } }
-        Window(
+        BilbyWindow(
             onCloseRequest = quit,
             title = "Bilby",
             // 标题栏与任务栏的图标。exe 与快捷方式的图标另由打包配置的 icon.ico 给。
@@ -105,9 +106,23 @@ fun main() {
                 ).also { pip = it }
             }
             PixelAlignedContentEffect(window)
-            val systemActions = remember { DesktopSystemActions(languageStore) }
-            // 桌面没有外部链接唤起,这条流只是 BilbyRoot 的入参,始终为空。
-            val incomingLink = remember { MutableStateFlow<String?>(null) }
+            WindowsSmtcEffect(window, platform.playback)
+            val systemActions = remember { DesktopSystemActions(languageStore, container.biliClient) }
+            // 启动参数、二次启动转发与窗口拖放共用这一条外部链接入口。
+            val incomingLink = remember { MutableStateFlow(args.firstNotNullOfOrNull(::extractIncomingLink)) }
+            LaunchedEffect(window) {
+                instance.listen { forwarded ->
+                    SwingUtilities.invokeLater {
+                        if (window.extendedState and Frame.ICONIFIED != 0) {
+                            window.extendedState = window.extendedState and Frame.ICONIFIED.inv()
+                        }
+                        window.toFront()
+                        forwarded.firstNotNullOfOrNull(::extractIncomingLink)?.let { link ->
+                            incomingLink.value = link
+                        }
+                    }
+                }
+            }
             // 标题栏在 BilbyRoot 之外,主题要在这里再套一层。初值同 BilbyRoot 里那一层,两层读同一份设置。
             val appearance by container.settings.appearancePrefs.collectAsState(initial = AppearancePrefs())
             CompositionLocalProvider(
@@ -139,7 +154,9 @@ fun main() {
                         var composedLanguage by remember { mutableStateOf(language) }
                         if (composedLanguage == language) {
                             saveableHolder.SaveableStateProvider("root") {
-                                BilbyRoot(container, incomingLink)
+                                LinkDropTarget(onLinkDropped = { incomingLink.value = it }) {
+                                    BilbyRoot(container, incomingLink)
+                                }
                             }
                         } else {
                             SideEffect { composedLanguage = language }
