@@ -267,7 +267,6 @@ private class PointerTestPlayer : PlayerHandle {
     override val duration = 120000L
     override val playbackSpeed get() = actualSpeed
     override val videoSize = VideoDimensions(1920, 1080)
-    override var shuffleModeEnabled = false
     override fun play() { playPauseCalls++ }
     override fun pause() { playPauseCalls++ }
     override fun seekTo(positionMillis: Long) { seeks++ }

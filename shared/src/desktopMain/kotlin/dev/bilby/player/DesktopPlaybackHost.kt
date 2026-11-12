@@ -10,6 +10,7 @@ import dev.bilby.data.PlayEndMode
 import dev.bilby.data.PlayInfo
 import dev.bilby.data.QueueContext
 import dev.bilby.data.QueueFeed
+import dev.bilby.data.QueueOrder
 import dev.bilby.data.QueueSource
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.decodeQueueContext
@@ -135,8 +136,8 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
 
     private var prefsInitialized = false
     private var endMode: PlayEndMode = PlayEndMode.Continue
-    private var defaultShuffled: Boolean = false
-    private var frameShuffleTouched: Boolean = false
+    private var defaultOrder: QueueOrder = QueueOrder.Forward
+    private var frameOrderTouched: Boolean = false
 
     private fun ensurePrefsLoaded() {
         if (prefsInitialized) return
@@ -145,9 +146,9 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             var firstLoad = true
             container().settings.playbackPrefs.collect { prefs ->
                 endMode = prefs.endMode
-                defaultShuffled = prefs.shuffled
-                if (firstLoad && liveFrame != null && !frameShuffleTouched) {
-                    queue.shuffled = prefs.shuffled
+                defaultOrder = prefs.order
+                if (firstLoad && liveFrame != null && !frameOrderTouched) {
+                    queue.order = prefs.order
                 }
                 firstLoad = false
                 publishState()
@@ -197,7 +198,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         val index: Int,
         val cid: Long,
         val positionMillis: Long,
-        val shuffled: Boolean,
+        val order: QueueOrder,
     )
 
     // 弹幕时钟逐帧调这里,所以读不经 JNI 的那一份,见 DesktopPlayer.positionMillis。
@@ -265,6 +266,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        sleepTimer.cancel()
         progressSession?.flush()
         pause()
         publishState()
@@ -272,6 +274,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
 
     private fun leaveFrame(frameId: String) {
         if (frameId.isNotEmpty() && liveFrame?.id != frameId) return
+        sleepTimer.cancel()
         progressSession?.flush()
         pause()
     }
@@ -330,7 +333,8 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             is PlaybackCommand.AdjustSleepTimer -> sleepTimer.extend(command.deltaMinutes * 60_000L)
             PlaybackCommand.RetryQueue -> liveFrame?.let { frame -> queue.current?.let { enrichFrame(frame, it.bvid) } }
             is PlaybackCommand.ExtendQueue -> extendQueue(command.before)
-            PlaybackCommand.ToggleShuffle -> toggleShuffle()
+            PlaybackCommand.CycleQueueOrder -> setQueueOrder(queue.order.next())
+            is PlaybackCommand.SetQueueOrder -> setQueueOrder(command.order)
             PlaybackCommand.CycleEndMode -> setEndMode(endMode.next())
             is PlaybackCommand.SetEndMode -> setEndMode(command.mode)
         }
@@ -360,32 +364,22 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         if (value) mediamp.play() else mediamp.pause()
     }
 
-    internal var shuffled: Boolean
-        get() = queue.shuffled
-        set(value) {
-            frameShuffleTouched = true
-            if (queue.shuffled == value) return
-            queue.shuffled = value
-            defaultShuffled = value
-            // 开关本身归队列,这里只把它记成下次新建队列的初值。
-            container().persistScope.launch {
-                val settings = container().settings
-                settings.savePlaybackPrefs(settings.playbackPrefs.first().copy(shuffled = value))
-            }
-            publishState()
+    private fun setQueueOrder(order: QueueOrder) {
+        frameOrderTouched = true
+        val orderChanged = queue.order != order
+        queue.order = order
+        defaultOrder = order
+        val promotedMode = if (orderChanged && order != QueueOrder.Forward && endMode != PlayEndMode.Continue) {
+            PlayEndMode.Continue
+        } else {
+            endMode
         }
-
-    private fun toggleShuffle() {
-        frameShuffleTouched = true
-        val nextShuffled = !queue.shuffled
-        queue.shuffled = nextShuffled
-        defaultShuffled = nextShuffled
-        val promotedMode = if (nextShuffled && endMode != PlayEndMode.Continue) PlayEndMode.Continue else endMode
         endMode = promotedMode
         container().persistScope.launch {
             val settings = container().settings
-            settings.savePlaybackPrefs(settings.playbackPrefs.first().copy(endMode = promotedMode, shuffled = nextShuffled))
+            settings.savePlaybackPrefs(settings.playbackPrefs.first().copy(endMode = promotedMode, order = order))
         }
+        if (orderChanged) extendNearEdges()
         publishState()
     }
 
@@ -479,6 +473,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
 
     /** 活帧退到栈里:存下它此刻的队列、当前条、分 P 与位置。 */
     private fun suspendLiveFrame() {
+        sleepTimer.cancel()
         val frame = liveFrame ?: return
         liveFrame = null
         enrichJob?.cancel()
@@ -495,7 +490,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             index = queue.index,
             cid = if (loadedMediaId == current.bvid) loadedCid else 0,
             positionMillis = player?.positionMillis ?: 0L,
-            shuffled = queue.shuffled,
+            order = queue.order,
         )
     }
 
@@ -509,7 +504,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             startMillis = snapshot.positionMillis.takeIf { it > 0 },
             playWhenReady = false,
         )
-        queue.shuffled = snapshot.shuffled
+        queue.order = snapshot.order
         // 帧在队列换完之后才认领,理由同 Android 的 restoreFrame。
         liveFrame = frame
         publishState()
@@ -518,8 +513,8 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
 
     /** 新的一帧:先装一份只有这条的临时队列并立刻起播,来源由 [enrichFrame] 在后台补上。 */
     private fun openFrame(frame: Frame, bvid: String, requestedCid: Long) {
-        frameShuffleTouched = false
-        queue.shuffled = defaultShuffled
+        frameOrderTouched = false
+        queue.order = defaultOrder
         val temporary = QueueItem(bvid = bvid, title = "", upName = "", coverUrl = "", durationSeconds = 0)
         val kept = replaceQueue(listOf(temporary), 0, requestedCid, startMillis = null, playWhenReady = true)
         liveFrame = frame
@@ -674,6 +669,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         // 直播不是帧。盖在视频页上面时先把那一帧存下来,返回时它换回自己的队列。
         suspendLiveFrame()
         setQueue(listOf(display), 0)
+        queue.order = QueueOrder.Forward
         liveRoom = command
         loadCurrent(playWhenReady = true)
     }
@@ -1008,13 +1004,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
                 val playing = player.mediamp.state.value.isPlaying
                 val position = player.observedPositionMillis
                 val duration = player.mediamp.mediaProperties.value?.durationMillis ?: 0L
-                _positionTicks.value = PositionTick(
-                    positionMillis = position,
-                    durationMillis = duration,
-                    isPlaying = playing,
-                    speed = player.speed,
-                    anchorMillis = elapsedRealtimeMillis(),
-                )
+                emitPositionTick(position)
                 progressSession?.let { session ->
                     if (playing && !wasPlaying) session.onResumed(position, duration)
                     else if (playing) session.onPosition(position, duration)
@@ -1030,11 +1020,28 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         }
     }
 
+    /**
+     * 立刻发一条带当前锚点的刻度,与 Android 服务的 `emitPositionTick` 对齐:倍速、暂停/恢复、
+     * seek 在唤醒弹幕时钟之前先把最新状态写进 [positionTicks],否则时钟读到的是上一格半秒刻度。
+     */
+    internal fun emitPositionTick(positionMillis: Long? = null) {
+        val player = player ?: return
+        if (loadedMediaId == null) return
+        _positionTicks.value = PositionTick(
+            positionMillis = (positionMillis ?: player.observedPositionMillis).coerceAtLeast(0L),
+            durationMillis = player.mediamp.mediaProperties.value?.durationMillis ?: 0L,
+            isPlaying = player.mediamp.state.value.isPlaying,
+            speed = player.speed,
+            anchorMillis = elapsedRealtimeMillis(),
+        )
+    }
+
     /** 跳转要立刻报一次,不等下一格心跳,见 [ProgressSession.onSeeked]。 */
     internal fun onSeeked(positionMillis: Long) {
         val duration = player?.mediamp?.mediaProperties?.value?.durationMillis ?: 0L
         progressSession?.onSeeked(positionMillis, duration)
         endHandled = false
+        emitPositionTick(positionMillis)
         _state.update { it.copy(stoppedAtEnd = false) }
     }
 
@@ -1117,10 +1124,10 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
                 current = queue.current,
                 items = queue.items,
                 size = queue.size,
-                // 随机播放下这个数字是列表里的第几条,不是播放顺序里的第几个,理由同 Android。
+                // 倒序或随机播放下这个数字仍是列表里的第几条,不是播放顺序里的第几个,理由同 Android。
                 sourcePosition = feed?.offsetOfFirst?.takeIf { queue.size > 0 }?.let { it + queue.index + 1 },
                 sourceTotal = feed?.total,
-                shuffled = queue.shuffled,
+                order = queue.order,
                 endMode = endMode,
                 canPrevious = canPrevious,
                 canNext = canNext,

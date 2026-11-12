@@ -1,5 +1,6 @@
 package dev.bilby.player
 
+import dev.bilby.data.QueueOrder
 import kotlin.random.Random
 
 /**
@@ -19,13 +20,13 @@ import kotlin.random.Random
 internal class DesktopQueue(private val random: Random = Random.Default) {
 
     private val entries = mutableListOf<QueueItem>()
-    private var order = ShuffleOrder.create(0, random)
+    private var shuffleOrder = ShuffleOrder.create(0, random)
 
     /** 当前这一条的列表下标,队列空时为 -1。 */
     var index: Int = -1
         private set
 
-    var shuffled: Boolean = false
+    var order: QueueOrder = QueueOrder.Forward
 
     val items: List<QueueItem> get() = entries.toList()
     val size: Int get() = entries.size
@@ -39,7 +40,7 @@ internal class DesktopQueue(private val random: Random = Random.Default) {
         val unique = items.distinctBy { it.bvid }
         entries.clear()
         entries.addAll(unique)
-        order = ShuffleOrder.create(unique.size, random)
+        shuffleOrder = ShuffleOrder.create(unique.size, random)
         index = if (start == null) -1 else unique.indexOfFirst { it.bvid == start.bvid }
     }
 
@@ -55,7 +56,7 @@ internal class DesktopQueue(private val random: Random = Random.Default) {
         if (fresh.isEmpty()) return 0
         val position = at.coerceIn(0, entries.size)
         entries.addAll(position, fresh)
-        order = order.cloneAndInsert(position, fresh.size, random)
+        shuffleOrder = shuffleOrder.cloneAndInsert(position, fresh.size, random)
         if (index >= position) index += fresh.size
         return fresh.size
     }
@@ -74,15 +75,23 @@ internal class DesktopQueue(private val random: Random = Random.Default) {
         return true
     }
 
-    /** 下一条的列表下标,没有则 null。随机时走随机顺序,否则走列表顺序。循环不存在。 */
+    /** 下一条的列表下标,没有则 null。按 [order] 走正序、倒序或随机顺序。循环不存在。 */
     fun nextIndex(): Int? {
         if (index < 0) return null
-        return if (shuffled) order.next(index) else (index + 1).takeIf { it < entries.size }
+        return when (order) {
+            QueueOrder.Forward -> (index + 1).takeIf { it < entries.size }
+            QueueOrder.Reverse -> (index - 1).takeIf { it >= 0 }
+            QueueOrder.Shuffle -> shuffleOrder.next(index)
+        }
     }
 
     fun previousIndex(): Int? {
         if (index < 0) return null
-        return if (shuffled) order.previous(index) else (index - 1).takeIf { it >= 0 }
+        return when (order) {
+            QueueOrder.Forward -> (index - 1).takeIf { it >= 0 }
+            QueueOrder.Reverse -> (index + 1).takeIf { it < entries.size }
+            QueueOrder.Shuffle -> shuffleOrder.previous(index)
+        }
     }
 }
 

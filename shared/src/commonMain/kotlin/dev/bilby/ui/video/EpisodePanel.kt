@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.data.PlayEndMode
+import dev.bilby.data.QueueOrder
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.player.EpisodeList
@@ -36,9 +37,9 @@ fun BoxScope.EpisodePanel(
     rows: List<EpisodeRow>,
     sourceLabel: String,
     endMode: PlayEndMode = PlayEndMode.Continue,
-    shuffled: Boolean = false,
+    order: QueueOrder = QueueOrder.Forward,
     onCycleEndMode: () -> Unit = {},
-    onToggleShuffle: () -> Unit = {},
+    onCycleOrder: () -> Unit = {},
     onSelect: (EpisodeTarget) -> Unit,
     onDismiss: () -> Unit,
     edges: QueueEdges? = null,
@@ -67,10 +68,10 @@ fun BoxScope.EpisodePanel(
             )
             QueuePlaybackControls(
                 endMode = endMode,
-                shuffled = shuffled,
+                order = order,
                 onCycleEndMode = onCycleEndMode,
-                onToggleShuffle = onToggleShuffle,
-                showShuffle = rows.size > 1,
+                onCycleOrder = onCycleOrder,
+                showOrder = rows.size > 1,
             )
         }
         EpisodeList(

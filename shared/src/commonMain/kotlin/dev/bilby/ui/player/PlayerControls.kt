@@ -569,7 +569,7 @@ internal fun ControlButton(
             if (label != null) {
                 Text(
                     label,
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
                     color = tint,
                     maxLines = 1,
                     // **不设宽度上限,也不截断**:这里的标签是画质档名("1080P60"、"1080P 高码率"),

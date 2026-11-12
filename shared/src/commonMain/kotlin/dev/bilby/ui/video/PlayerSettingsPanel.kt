@@ -48,11 +48,15 @@ import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.QualityOption
+import dev.bilby.player.SleepTimerMode
+import dev.bilby.player.SleepTimerState
 import dev.bilby.player.SubtitleTrack
 import dev.bilby.player.audioQualityLabel
 import dev.bilby.resources.*
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.player.SleepTimerCompactSection
+import dev.bilby.ui.player.SleepTimerStandaloneContent
 import dev.bilby.ui.player.formatSpeed
 import dev.bilby.ui.player.speedHundredths
 import dev.bilby.ui.player.speedNumber
@@ -93,6 +97,11 @@ internal fun PlayerSettingsContent(
     onAudioChange: (Int) -> Unit = {},
     danmakuPrefs: DanmakuPrefs = DanmakuPrefs(),
     danmakuEditor: DanmakuPrefsEditor? = null,
+    sleepTimer: SleepTimerState = SleepTimerState(),
+    itemRemainingMillis: Long? = null,
+    onSleepTimer: ((SleepTimerMode) -> Unit)? = null,
+    onSleepTimerAdjust: (Int) -> Unit = {},
+    onDismiss: () -> Unit = {},
     /** 只画这一段(全屏控制条上的 chip 打开的)。null 画整块。 */
     only: PlayerSettingsSection? = null,
     /** 宿主是整屏高的横屏右侧栏:单开倍速时铺开大号读数舞台填满纵向空间,竖屏底部面板不受影响。 */
@@ -104,6 +113,19 @@ internal fun PlayerSettingsContent(
             onSpeedChange = onSpeedChange,
             modifier = modifier,
         )
+        return
+    }
+    if (only == PlayerSettingsSection.SleepTimer && onSleepTimer != null) {
+        PanelColumn(modifier) {
+            SleepTimerStandaloneContent(
+                sleepTimer = sleepTimer,
+                itemRemainingMillis = itemRemainingMillis,
+                onSet = onSleepTimer,
+                onAdjust = onSleepTimerAdjust,
+                onDismiss = onDismiss,
+                modifier = Modifier.padding(vertical = Spacing.Hair),
+            )
+        }
         return
     }
     val titled = only == null
@@ -144,6 +166,15 @@ internal fun PlayerSettingsContent(
             )
         }
 
+        if (only == null && onSleepTimer != null) {
+            SleepTimerCompactSection(
+                sleepTimer = sleepTimer,
+                itemRemainingMillis = itemRemainingMillis,
+                onSet = onSleepTimer,
+                onAdjust = onSleepTimerAdjust,
+            )
+        }
+
         if ((only == null || only == PlayerSettingsSection.Danmaku) && danmakuEditor != null) {
             DanmakuSettingsSection(danmakuPrefs, danmakuEditor)
         }
@@ -176,7 +207,7 @@ internal fun LiveSettingsContent(
  * chip 只开自己那一段,不开整块:几枚 chip 看起来各管一项,点开却是同一块长面板,读不出
  * 它们之间有什么区别。
  */
-internal enum class PlayerSettingsSection { Speed, Quality, Audio, Subtitle, Danmaku }
+internal enum class PlayerSettingsSection { Speed, Quality, Audio, Subtitle, SleepTimer, Danmaku }
 
 /**
  * 设置面板的外壳,点播与直播共用。全屏从右边划出(横屏下底部 sheet 只剩一条缝),内嵌时
@@ -192,25 +223,32 @@ internal fun BoxScope.PlayerSettingsHost(
     content: @Composable () -> Unit,
 ) {
     if (isFullscreen) {
-        // 窄的那一档只给一列短选项的单选段;弹幕和倍速都带连续滑块与连体按钮,窄了读数和选项挤在一起。
+        // 窄的那一档只给一列短选项的单选段;弹幕、倍速、定时关闭分别带滑块、连体按钮或三列钟面预设,窄了挤不开。
         val narrow = only != null &&
             only != PlayerSettingsSection.Danmaku &&
-            only != PlayerSettingsSection.Speed
+            only != PlayerSettingsSection.Speed &&
+            only != PlayerSettingsSection.SleepTimer
         PlayerSidePanel(visible = open, onDismiss = onDismiss, narrow = narrow) {
-            Text(
-                playerSettingsTitle(only),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(
-                    start = Spacing.Comfortable,
-                    end = Spacing.Comfortable,
-                    top = Spacing.Comfortable,
-                ),
-            )
+            // 定时关闭单开时 SleepClock 自己在左半边写「定时关闭」(或大号倒计时),外层再画一行标题就重了。
+            if (only == PlayerSettingsSection.SleepTimer) {
+                Spacer(modifier = Modifier.height(Spacing.Tight))
+            } else {
+                Text(
+                    playerSettingsTitle(only),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(
+                        start = Spacing.Comfortable,
+                        end = Spacing.Comfortable,
+                        top = Spacing.Comfortable,
+                    ),
+                )
+            }
             content()
         }
     } else if (open) {
         // 两栏时画在右栏,画面不挡,调画质、倍速时看得见效果。
-        PaneSheet(onDismissRequest = onDismiss, title = playerSettingsTitle(only)) {
+        val sheetTitle = if (only == PlayerSettingsSection.SleepTimer) null else playerSettingsTitle(only)
+        PaneSheet(onDismissRequest = onDismiss, title = sheetTitle) {
             content()
             Spacer(modifier = Modifier.height(Spacing.Comfortable))
         }
@@ -219,10 +257,10 @@ internal fun BoxScope.PlayerSettingsHost(
 
 /** 窄排法里打开整块设置面板的 ⚙。点播与直播都是这一枚,位置在全屏键左边。 */
 @Composable
-internal fun PlayerSettingsButton(onClick: () -> Unit) {
+internal fun PlayerSettingsButton(selected: Boolean = false, onClick: () -> Unit) {
     val label = stringResource(Res.string.player_settings)
     PlayerTooltip(label) {
-        PlayerIconButton(onClick = onClick, icon = Icons.Filled.Tune, contentDescription = label)
+        PlayerIconButton(onClick = onClick, icon = Icons.Filled.Tune, contentDescription = label, selected = selected)
     }
 }
 
@@ -244,6 +282,7 @@ private fun playerSettingsTitle(only: PlayerSettingsSection?): String = stringRe
         PlayerSettingsSection.Quality -> Res.string.player_quality
         PlayerSettingsSection.Audio -> Res.string.player_audio_quality
         PlayerSettingsSection.Subtitle -> Res.string.player_subtitle
+        PlayerSettingsSection.SleepTimer -> Res.string.sleep_timer_off
         PlayerSettingsSection.Danmaku -> Res.string.player_danmaku_settings
     },
 )

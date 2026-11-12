@@ -81,6 +81,7 @@ import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
 import dev.bilby.data.MemberCard
 import dev.bilby.data.QueueContext
+import dev.bilby.data.QueueOrder
 import dev.bilby.data.QueueSource
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.encodeQueueContext
@@ -434,7 +435,7 @@ fun VideoScreen(
         rows = episodeRows,
         sourceLabel = audioState.queue?.sourceLabel.orEmpty(),
         source = audioState.queue?.source,
-        shuffled = (audioState.queue?.shuffled == true),
+        order = audioState.queue?.order ?: QueueOrder.Forward,
         endMode = audioState.queue?.endMode ?: dev.bilby.data.PlayEndMode.Continue,
         // 判据从"取流转圈且队列是空的"换成"完整队列建好了没有"。起播现在不等建队列,队列里
         // 那一条是临时占位而不是队列内容(见 AudioPlaybackService.openFrame),按旧判据永远
@@ -473,11 +474,9 @@ fun VideoScreen(
         }
     }
 
-    // 随机、上下一条、跳到队列里的某一条,现在都是标准 Player 命令:队列住在播放器的 playlist
-    // 里,它自己就能答"有没有下一条",而且答完会发 onXxxChanged —— controller 那份命令缓存
-    // 于是跟得上,不必再为此单开一组自定义命令。
-    val toggleShuffle: () -> Unit = {
-        send(PlaybackCommand.ToggleShuffle)
+    // 队列顺序(正序/倒序/随机)、完播行为、上下一条与跳条目均由播放服务统一维护并广播状态。
+    val cycleQueueOrder: () -> Unit = {
+        send(PlaybackCommand.CycleQueueOrder)
     }
     val cycleEndMode: () -> Unit = {
         send(PlaybackCommand.CycleEndMode)
@@ -667,7 +666,7 @@ fun VideoScreen(
             onNext = { active.seekToNext() },
             onPrevious = { active.seekToPrevious() },
             onCycleEndMode = cycleEndMode,
-            onToggleShuffle = toggleShuffle,
+            onCycleOrder = cycleQueueOrder,
             onRetry = retryPlayback,
             onSleepTimer = { mode -> active.send(PlaybackCommand.SetSleepTimer(mode)) },
             onSleepTimerAdjust = { deltaMinutes -> active.send(PlaybackCommand.AdjustSleepTimer(deltaMinutes)) },
@@ -877,7 +876,10 @@ fun VideoScreen(
                     subtitleCues = subtitleCues,
                     danmakuPrefs = danmakuPrefs,
                     danmakuEditor = danmakuEditor,
-                            locked = locked,
+                    sleepTimer = sleepTimerState,
+                    onSleepTimer = { mode -> active.send(PlaybackCommand.SetSleepTimer(mode)) },
+                    onSleepTimerAdjust = { deltaMinutes -> active.send(PlaybackCommand.AdjustSleepTimer(deltaMinutes)) },
+                    locked = locked,
                     onLockedChange = { locked = it },
                     danmakuPool = danmakuPool,
                     specialDanmakuPool = specialDanmakuPool,
@@ -1049,9 +1051,9 @@ fun VideoScreen(
                     rows = episodeRows,
                     sourceLabel = shownQueue.sourceLabel,
                     endMode = shownQueue.endMode,
-                    shuffled = shownQueue.shuffled,
+                    order = shownQueue.order,
                     onCycleEndMode = cycleEndMode,
-                    onToggleShuffle = toggleShuffle,
+                    onCycleOrder = cycleQueueOrder,
                     onSelect = onSelectEpisode,
                     onDismiss = { episodePanelOpen = false },
                     edges = queueEdges,
@@ -1119,7 +1121,7 @@ fun VideoScreen(
                 queue = shownQueue,
                 playing = playing,
                 onOpenQueueSource = onOpenQueueSource,
-                onToggleShuffle = toggleShuffle,
+                onCycleOrder = cycleQueueOrder,
                 onCycleEndMode = cycleEndMode,
                 onRetryQueue = retryQueue,
                 onUpClick = onUpClick,

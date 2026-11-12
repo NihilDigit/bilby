@@ -161,6 +161,7 @@ import dev.bilby.data.FavFolder
 import dev.bilby.data.FollowState
 import dev.bilby.data.MemberCard
 import dev.bilby.data.PlayEndMode
+import dev.bilby.data.QueueOrder
 import dev.bilby.data.QueueSource
 import dev.bilby.data.VideoDetail
 import dev.bilby.data.VideoRelation
@@ -234,7 +235,7 @@ data class RelatedTurn(val id: Long, val question: String?, val result: AgentTur
 
 /**
  * 播放队列(DESIGN 2.4b):合集分集或该 UP 的其他投稿,同时也是「听视频」要播的队列本身。
- * currentBvid 驱动列表里的高亮,shuffled 驱动顺序/随机按钮的文案。
+ * currentBvid 驱动列表里的高亮,[order] 驱动「正序 / 倒序 / 随机」按钮的文案。
  */
 data class QueueUiState(
     /**
@@ -246,7 +247,7 @@ data class QueueUiState(
     val sourceLabel: String = "",
     /** 来源的身份。非空时标题行可以点进那个合集的目录;为空的来源没有目录页可去。 */
     val source: QueueSource? = null,
-    val shuffled: Boolean = false,
+    val order: QueueOrder = QueueOrder.Forward,
     val endMode: PlayEndMode = PlayEndMode.Continue,
     /**
      * 完整队列还没建好。**此刻 [rows] 里那一条不是队列,是占位** —— 起播时先装的临时队列
@@ -308,7 +309,7 @@ fun VideoTabs(
     /** 播放器此刻在不在放。队列里正在播的那一条据此跳动或静止,见 [PlayingIndicator]。 */
     playing: Boolean,
     onOpenQueueSource: (QueueSource) -> Unit,
-    onToggleShuffle: () -> Unit,
+    onCycleOrder: () -> Unit,
     onCycleEndMode: () -> Unit = {},
     onRetryQueue: () -> Unit,
     onUpClick: (Long) -> Unit,
@@ -493,7 +494,7 @@ fun VideoTabs(
                     queue = queue,
                     playing = playing,
                     onOpenQueueSource = onOpenQueueSource,
-                    onToggleShuffle = onToggleShuffle,
+                    onCycleOrder = onCycleOrder,
                     onCycleEndMode = onCycleEndMode,
                     onRetryQueue = onRetryQueue,
                     relation = relation,
@@ -905,7 +906,7 @@ private fun IntroTab(
     queue: QueueUiState,
     playing: Boolean,
     onOpenQueueSource: (QueueSource) -> Unit,
-    onToggleShuffle: () -> Unit,
+    onCycleOrder: () -> Unit,
     onCycleEndMode: () -> Unit = {},
     onRetryQueue: () -> Unit,
     onUpClick: (Long) -> Unit,
@@ -1036,7 +1037,7 @@ private fun IntroTab(
             onOpenQueueSource = onOpenQueueSource,
             onSelectEpisode = onSelectEpisode,
             onCycleEndMode = onCycleEndMode,
-            onToggleShuffle = onToggleShuffle,
+            onCycleOrder = onCycleOrder,
             onFindRelated = onFindRelated,
             onCache = onCache,
             onRetryQueue = onRetryQueue,
@@ -1060,7 +1061,7 @@ private fun IntroTab(
             queue = queue,
             playing = playing,
             onCycleEndMode = onCycleEndMode,
-            onToggleShuffle = onToggleShuffle,
+            onCycleOrder = onCycleOrder,
             onSelectEpisode = { target ->
                 fullQueueOpen = false
                 onSelectEpisode(target)
@@ -1083,7 +1084,7 @@ private fun FullQueueSheet(
     queue: QueueUiState,
     playing: Boolean,
     onCycleEndMode: () -> Unit,
-    onToggleShuffle: () -> Unit,
+    onCycleOrder: () -> Unit,
     onSelectEpisode: (EpisodeTarget) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1094,9 +1095,9 @@ private fun FullQueueSheet(
         Column(modifier = Modifier.fillMaxWidth().bodyHeight(FullQueueHeightFraction)) {
             QueuePlaybackControlsRow(
                 endMode = queue.endMode,
-                shuffled = queue.shuffled,
+                order = queue.order,
                 onCycleEndMode = onCycleEndMode,
-                onToggleShuffle = onToggleShuffle,
+                onCycleOrder = onCycleOrder,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = Spacing.Comfortable),
@@ -2267,7 +2268,7 @@ private fun LazyListScope.queueItems(
     onOpenQueueSource: (QueueSource) -> Unit,
     onSelectEpisode: (EpisodeTarget) -> Unit,
     onCycleEndMode: () -> Unit,
-    onToggleShuffle: () -> Unit,
+    onCycleOrder: () -> Unit,
     onFindRelated: () -> Unit,
     onCache: () -> Unit,
     onRetryQueue: () -> Unit,
@@ -2279,7 +2280,7 @@ private fun LazyListScope.queueItems(
             queue = queue,
             onOpenQueueSource = onOpenQueueSource,
             onCycleEndMode = onCycleEndMode,
-            onToggleShuffle = onToggleShuffle,
+            onCycleOrder = onCycleOrder,
             onFindRelated = onFindRelated,
             onCache = onCache,
         )
@@ -2368,7 +2369,7 @@ private fun QueueHeader(
     queue: QueueUiState,
     onOpenQueueSource: (QueueSource) -> Unit,
     onCycleEndMode: () -> Unit,
-    onToggleShuffle: () -> Unit,
+    onCycleOrder: () -> Unit,
     onFindRelated: () -> Unit,
     onCache: () -> Unit,
 ) {
@@ -2406,18 +2407,18 @@ private fun QueueHeader(
                 if (inlineControls) {
                     QueuePlaybackControls(
                         endMode = queue.endMode,
-                        shuffled = queue.shuffled,
+                        order = queue.order,
                         onCycleEndMode = onCycleEndMode,
-                        onToggleShuffle = onToggleShuffle,
+                        onCycleOrder = onCycleOrder,
                     )
                 }
             }
             if (!inlineControls) {
                 QueuePlaybackControlsRow(
                     endMode = queue.endMode,
-                    shuffled = queue.shuffled,
+                    order = queue.order,
                     onCycleEndMode = onCycleEndMode,
-                    onToggleShuffle = onToggleShuffle,
+                    onCycleOrder = onCycleOrder,
                     modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Hair),
                 )
             }

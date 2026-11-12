@@ -15,6 +15,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.ShuffleOrder
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
@@ -36,6 +37,7 @@ import dev.bilby.data.PlayEndMode
 import dev.bilby.data.PlayInfo
 import dev.bilby.data.QueueContext
 import dev.bilby.data.QueueFeed
+import dev.bilby.data.QueueOrder
 import dev.bilby.data.OpenedQueue
 import dev.bilby.data.decodeQueueContext
 import dev.bilby.data.QueueSource
@@ -288,9 +290,10 @@ class AudioPlaybackService : MediaSessionService() {
      * 而读设置是挂起的。启动一个协程去读、读完再决定,中间那一小段里播放器已经停在片尾了。
      */
     private var endMode = PlayEndMode.Continue
-    private var defaultShuffled = false
+    private var queueOrder = QueueOrder.Forward
+    private var defaultQueueOrder = QueueOrder.Forward
     private var playbackPrefsLoaded = false
-    private var frameShuffleTouched = false
+    private var frameOrderTouched = false
 
     override fun onCreate() {
         super.onCreate()
@@ -347,9 +350,9 @@ class AudioPlaybackService : MediaSessionService() {
                 val firstLoad = !playbackPrefsLoaded
                 playbackPrefsLoaded = true
                 endMode = it.endMode
-                defaultShuffled = it.shuffled
-                if (firstLoad && liveFrame != null && !frameShuffleTouched) {
-                    player.shuffleModeEnabled = it.shuffled
+                defaultQueueOrder = it.order
+                if (firstLoad && liveFrame != null && !frameOrderTouched) {
+                    applyQueueOrder(it.order)
                 }
                 applyStopAtEndOfItem()
                 publishState()
@@ -489,6 +492,7 @@ class AudioPlaybackService : MediaSessionService() {
             ),
             startIndex = 0,
         )
+        applyQueueOrder(QueueOrder.Forward)
     }
 
     /**
@@ -519,7 +523,7 @@ class AudioPlaybackService : MediaSessionService() {
         val index: Int,
         val cid: Long,
         val positionMillis: Long,
-        val shuffled: Boolean,
+        val order: QueueOrder,
     )
 
     /**
@@ -591,6 +595,7 @@ class AudioPlaybackService : MediaSessionService() {
      * 之间没有挂起点,取消插不进去,所以来源与快照不会错开一段。
      */
     private fun suspendLiveFrame() {
+        sleepTimer.cancel()
         val frame = liveFrame ?: return
         liveFrame = null
         enrichJob?.cancel()
@@ -611,7 +616,7 @@ class AudioPlaybackService : MediaSessionService() {
             index = index,
             cid = if (loadedMediaId == current.mediaId) loadedCid else 0,
             positionMillis = player.currentPosition,
-            shuffled = player.shuffleModeEnabled,
+            order = queueOrder,
         )
     }
 
@@ -631,7 +636,7 @@ class AudioPlaybackService : MediaSessionService() {
             }
         }
         replaceQueue(items, snapshot.index, playWhenReady = false)
-        player.shuffleModeEnabled = snapshot.shuffled
+        applyQueueOrder(snapshot.order)
         // 帧在 playlist 换完之后才认领:[setQueue] 途中会发布一次状态,那时 playlist 里还是
         // 上一帧的内容,先认领的话这一页会跟着那一刻的当前条换一次详情。
         liveFrame = frame
@@ -651,11 +656,11 @@ class AudioPlaybackService : MediaSessionService() {
     private fun openFrame(frame: Frame, bvid: String, requestedCid: Long) {
         finishOpenChain("superseded")
         openChain = PerfTrace.chain("openVideo").also { it.mark("command") }
-        frameShuffleTouched = false
+        frameOrderTouched = false
         val temporary = QueueItem(bvid = bvid, title = "", upName = "", coverUrl = "", durationSeconds = 0)
             .toMediaItem(requestedCid = requestedCid, loadNonce = nextLoadNonce())
         val kept = replaceQueue(listOf(temporary), 0, playWhenReady = true)
-        player.shuffleModeEnabled = defaultShuffled
+        applyQueueOrder(defaultQueueOrder)
         openChain?.mark("tempQueue")
         liveFrame = frame
         if (kept && requestedCid != 0L && requestedCid != loadedCid) playPart(requestedCid)
@@ -823,6 +828,7 @@ class AudioPlaybackService : MediaSessionService() {
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        sleepTimer.cancel()
         persistCachedProgress()
         progressSession?.flush()
         player.pause()
@@ -831,6 +837,7 @@ class AudioPlaybackService : MediaSessionService() {
 
     private fun leaveFrame(frameId: String) {
         if (frameId.isNotEmpty() && liveFrame?.id != frameId) return
+        sleepTimer.cancel()
         persistCachedProgress()
         progressSession?.flush()
         player.pause()
@@ -1734,36 +1741,51 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     /**
-     * 随机开关翻过了。**开关本身归播放器**(`shuffleModeEnabled`),这里只把它记成下次新建
-     * 队列的初值 —— 通知栏、车机和 app 内的按钮走的都是标准命令,不再各有一条路。
+     * 把三态队列顺序落到 ExoPlayer:正序关掉 `shuffleModeEnabled`;倒序装上 [ReverseShuffleOrder]
+     * 并打开 `shuffleModeEnabled`;随机则装上 `DefaultShuffleOrder` 并打开 `shuffleModeEnabled`
+     * (从倒序切到随机时 `shuffleModeEnabled` 本来就是 true,必须显式换回随机排列,且不会触发
+     * `onShuffleModeEnabledChanged`,调用方自己发布状态)。
      */
-    private fun persistShuffled(shuffled: Boolean) {
-        defaultShuffled = shuffled
-        persistScope.launch {
-            val prefs = settings.playbackPrefs.first()
-            settings.savePlaybackPrefs(prefs.copy(shuffled = shuffled))
+    private fun applyQueueOrder(order: QueueOrder) {
+        val previous = queueOrder
+        queueOrder = order
+        when (order) {
+            QueueOrder.Forward -> {
+                player.shuffleModeEnabled = false
+            }
+            QueueOrder.Reverse -> {
+                player.setShuffleOrder(ReverseShuffleOrder(player.mediaItemCount))
+                player.shuffleModeEnabled = true
+            }
+            QueueOrder.Shuffle -> {
+                if (previous != QueueOrder.Shuffle || !player.shuffleModeEnabled) {
+                    player.setShuffleOrder(ShuffleOrder.DefaultShuffleOrder(player.mediaItemCount))
+                }
+                player.shuffleModeEnabled = true
+            }
         }
-        publishState()
     }
 
     /**
-     * 界面点下「顺序 / 随机」:一次点击内原子翻转随机开关,并在从「播完暂停」或「洗脑循环」
-     * 切到随机时顺手升到「连播」,免得打开随机之后播完第一条就停在原地。
+     * 设定队列顺序(「正序 → 倒序 → 随机」或车机/通知栏切换随机),并在从「播完暂停」或「洗脑循环」
+     * 切入倒序/随机时自动升到「连播」,免得切完之后播完第一条就停在原地。
      */
-    private fun toggleShuffle() {
-        frameShuffleTouched = true
-        val nextShuffled = !player.shuffleModeEnabled
-        player.shuffleModeEnabled = nextShuffled
-        defaultShuffled = nextShuffled
-        val promotedMode = if (nextShuffled && endMode != PlayEndMode.Continue) PlayEndMode.Continue else endMode
+    private fun setQueueOrder(order: QueueOrder, fromUser: Boolean = true) {
+        if (fromUser) frameOrderTouched = true
+        val orderChanged = queueOrder != order
+        applyQueueOrder(order)
+        defaultQueueOrder = order
+        val promote = fromUser && orderChanged && order != QueueOrder.Forward && endMode != PlayEndMode.Continue
+        val promotedMode = if (promote) PlayEndMode.Continue else endMode
         if (promotedMode != endMode) {
             endMode = promotedMode
             applyStopAtEndOfItem()
         }
         persistScope.launch {
             val prefs = settings.playbackPrefs.first()
-            settings.savePlaybackPrefs(prefs.copy(endMode = promotedMode, shuffled = nextShuffled))
+            settings.savePlaybackPrefs(prefs.copy(endMode = promotedMode, order = order))
         }
+        if (orderChanged) extendNearEdges()
         publishState()
     }
 
@@ -1845,13 +1867,13 @@ class AudioPlaybackService : MediaSessionService() {
                 current = currentItem(),
                 items = queueItems,
                 size = player.mediaItemCount,
-                // **随机播放下这个数字是"列表里的第几条",不是"播放顺序里的第几个"。**
-                // 列表本身不重排(随机只改播放顺序),高亮跟着滚动 —— 那么这一格跟着列表走才
-                // 对得上眼睛看到的位置,而且开关随机时它不会平白跳一下。
+                // **倒序或随机播放下这个数字仍是"列表里的第几条",不是"播放顺序里的第几个"。**
+                // 列表本身不重排(倒序与随机只改播放顺序),高亮跟着滚动 —— 那么这一格跟着列表走才
+                // 对得上眼睛看到的位置,而且切换顺序时它不会平白跳一下。
                 sourcePosition = liveFrame?.feed?.offsetOfFirst?.takeIf { player.mediaItemCount > 0 }
                     ?.let { it + player.currentMediaItemIndex + 1 },
                 sourceTotal = liveFrame?.feed?.total,
-                shuffled = player.shuffleModeEnabled,
+                order = queueOrder,
                 endMode = endMode,
                 canPrevious = player.hasPreviousMediaItem() || neighbourPart(-1) != null,
                 canNext = player.hasNextMediaItem() || neighbourPart(1) != null,
@@ -2082,14 +2104,16 @@ class AudioPlaybackService : MediaSessionService() {
     private inner class QueuePlayer(player: Player) : ForwardingSimpleBasePlayer(player) {
 
         /**
-         * 随机开关本身归播放器,这里只把它记成下次新建队列的初值 —— 通知栏、车机和 app 内的
-         * 按钮走的是同一条命令,所以记在哪条路上都一样,记一次就够。
+         * 外部媒体控制器(车机、蓝牙)只认布尔随机开关,映射为随机与正序。
+         *
+         * 倒序态不在 `getState()` 里把 `shuffleModeEnabled` 改成 false:Media3 1.10.1 的
+         * `Timeline.toBundle` 只跨进程传 `shuffledWindowIndices`,`MediaControllerImplBase`
+         * 靠 `shuffleModeEnabled` 决定 `hasNextMediaItem` 与乐观跳转方向(javap 验证);
+         * 强压成 false 会让控制器端按正序算上下条。应用内 UI 一律读 [QueueState.order]。
          */
         override fun handleSetShuffleModeEnabled(shuffleModeEnabled: Boolean): ListenableFuture<*> {
-            frameShuffleTouched = true
-            val future = super.handleSetShuffleModeEnabled(shuffleModeEnabled)
-            persistShuffled(shuffleModeEnabled)
-            return future
+            setQueueOrder(if (shuffleModeEnabled) QueueOrder.Shuffle else QueueOrder.Forward, fromUser = true)
+            return Futures.immediateVoidFuture()
         }
 
         /**
@@ -2150,7 +2174,8 @@ class AudioPlaybackService : MediaSessionService() {
                         .add(SessionCommand(ACTION_RETRY, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_FLUSH_PROGRESS, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SLEEP_TIMER, Bundle.EMPTY))
-                        .add(SessionCommand(ACTION_TOGGLE_SHUFFLE, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_CYCLE_QUEUE_ORDER, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_SET_QUEUE_ORDER, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_CYCLE_END_MODE, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SET_END_MODE, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_STOP_SERVICE, Bundle.EMPTY))
@@ -2177,7 +2202,8 @@ class AudioPlaybackService : MediaSessionService() {
                 ACTION_SET_AUDIO_QUALITY -> setAudioQuality(args.getInt(EXTRA_QUALITY))
                 ACTION_RETRY -> retryNow()
                 ACTION_FLUSH_PROGRESS -> leaveFrame(args.getString(EXTRA_FRAME_ID).orEmpty())
-                ACTION_TOGGLE_SHUFFLE -> toggleShuffle()
+                ACTION_CYCLE_QUEUE_ORDER -> setQueueOrder(queueOrder.next())
+                ACTION_SET_QUEUE_ORDER -> setQueueOrder(QueueOrder.fromPrefs(args.getString(EXTRA_QUEUE_ORDER)))
                 ACTION_CYCLE_END_MODE -> setEndMode(endMode.next())
                 ACTION_SET_END_MODE -> setEndMode(PlayEndMode.fromPrefs(args.getString(EXTRA_END_MODE)))
                 // 播放器的生命周期到此为止,见 [ACTION_STOP_SERVICE]。
@@ -2251,7 +2277,9 @@ class AudioPlaybackService : MediaSessionService() {
 
         const val ACTION_SLEEP_TIMER = "dev.bilby.SLEEP_TIMER"
 
-        const val ACTION_TOGGLE_SHUFFLE = "dev.bilby.TOGGLE_SHUFFLE"
+        const val ACTION_CYCLE_QUEUE_ORDER = "dev.bilby.CYCLE_QUEUE_ORDER"
+        const val ACTION_SET_QUEUE_ORDER = "dev.bilby.SET_QUEUE_ORDER"
+        const val EXTRA_QUEUE_ORDER = "queueOrder"
         const val ACTION_CYCLE_END_MODE = "dev.bilby.CYCLE_END_MODE"
         const val ACTION_SET_END_MODE = "dev.bilby.SET_END_MODE"
         const val EXTRA_END_MODE = "endMode"

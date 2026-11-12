@@ -422,7 +422,8 @@
     <string name="playback_error_open">无法打开视频</string>
     <string name="playback_error_live_stream">直播流获取失败</string>
     <string name="playback_error_live_ended">直播已结束</string>
-    <string name="queue_order_sequential">顺序</string>
+    <string name="queue_order_forward">正序</string>
+    <string name="queue_order_reverse">倒序</string>
     <string name="queue_order_shuffle">随机</string>
     <string name="queue_end_pause">播完暂停</string>
     <string name="queue_end_continue">连播</string>

@@ -43,12 +43,6 @@ class MpvPlayerHandle internal constructor(
     override val videoSize: VideoDimensions
         get() = mediamp.mediaProperties.value.let { VideoDimensions(it?.videoWidth ?: 0, it?.videoHeight ?: 0) }
 
-    override var shuffleModeEnabled: Boolean
-        get() = host.shuffled
-        set(value) {
-            host.shuffled = value
-        }
-
     override fun play() = host.play()
     override fun pause() = host.pause()
 
@@ -64,6 +58,7 @@ class MpvPlayerHandle internal constructor(
 
     override fun setPlaybackSpeed(speed: Float) {
         player.setSpeed(speed)
+        host.emitPositionTick()
         listeners.toList().forEach { it.onPlaybackSpeedChanged(speed) }
     }
 
@@ -91,14 +86,17 @@ class MpvPlayerHandle internal constructor(
             var previous: PlayerState? = null
             combine(mediamp.state, mediamp.mediaProperties) { state, _ -> state }.collect { state ->
                 val last = previous
+                val isPlayingChanged = last == null || last.isPlaying != state.isPlaying
+                val phaseChanged = last == null || last.phase() != state.phase()
+                if (isPlayingChanged || phaseChanged) host.emitPositionTick()
                 val snapshot = listeners.toList()
-                if (last == null || last.isPlaying != state.isPlaying) {
+                if (isPlayingChanged) {
                     snapshot.forEach { it.onIsPlayingChanged(state.isPlaying) }
                 }
                 if (last == null || last.playWhenReady != state.playWhenReady) {
                     snapshot.forEach { it.onPlayWhenReadyChanged(state.playWhenReady) }
                 }
-                if (last == null || last.phase() != state.phase()) {
+                if (phaseChanged) {
                     snapshot.forEach { it.onPlaybackStateChanged(state.phase()) }
                 }
                 snapshot.forEach { it.onEvents() }
@@ -109,6 +107,7 @@ class MpvPlayerHandle internal constructor(
             mediamp.events.collect { event ->
                 if (event is PlaybackEvent.SeekCompleted) {
                     val position = player.positionMillis
+                    host.emitPositionTick(position)
                     listeners.toList().forEach { it.onPositionDiscontinuity(position, position, isSeek = true) }
                 }
             }

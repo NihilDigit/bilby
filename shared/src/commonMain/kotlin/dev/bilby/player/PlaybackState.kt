@@ -2,6 +2,7 @@ package dev.bilby.player
 
 import dev.bilby.data.PlayEndMode
 import dev.bilby.data.PlayInfo
+import dev.bilby.data.QueueOrder
 import dev.bilby.data.QueueSource
 
 /** 直播项的 mediaId。带前缀是为了和 bvid 分得开:两种条目住在同一份 playlist 里。 */
@@ -25,10 +26,10 @@ data class NowPlaying(
 data class QueueState(
     /** 队列当前这一条。 */
     val current: QueueItem? = null,
-    /** 队列内容,自然顺序(随机只改播放顺序,不改列表怎么摆)。 */
+    /** 队列内容,自然顺序(倒序与随机只改播放顺序,不改列表怎么摆)。 */
     val items: List<QueueItem> = emptyList(),
     val size: Int = 0,
-    val shuffled: Boolean = false,
+    val order: QueueOrder = QueueOrder.Forward,
     val endMode: PlayEndMode = PlayEndMode.Continue,
     /**
      * 上/下一条此刻按不按得动,来自播放器,认随机顺序,也认分 P。按钮可用态用这两个,不要拿

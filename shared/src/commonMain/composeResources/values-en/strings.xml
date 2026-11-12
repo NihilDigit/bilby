@@ -342,7 +342,8 @@
     <string name="listen_not_playing">Nothing playing</string>
     <string name="listen_queue">Queue</string>
     <string name="listen_queue_title">Queue</string>
-    <string name="queue_order_sequential">Order</string>
+    <string name="queue_order_forward">Forward</string>
+    <string name="queue_order_reverse">Reverse</string>
     <string name="queue_order_shuffle">Shuffle</string>
     <string name="queue_end_pause">Pause at end</string>
     <string name="queue_end_continue">Continue</string>

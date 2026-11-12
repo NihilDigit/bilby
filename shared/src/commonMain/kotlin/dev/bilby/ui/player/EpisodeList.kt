@@ -16,7 +16,8 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.outlined.PauseCircleOutline
@@ -43,6 +44,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.bilby.data.PlayEndMode
+import dev.bilby.data.QueueOrder
 import dev.bilby.data.VideoPart
 import dev.bilby.formatDurationSeconds
 import dev.bilby.player.QueueItem
@@ -409,20 +411,26 @@ fun PlayEndMode.labelRes(): StringResource = when (this) {
     PlayEndMode.RepeatOne -> Res.string.queue_end_repeat_one
 }
 
+fun QueueOrder.labelRes(): StringResource = when (this) {
+    QueueOrder.Forward -> Res.string.queue_order_forward
+    QueueOrder.Reverse -> Res.string.queue_order_reverse
+    QueueOrder.Shuffle -> Res.string.queue_order_shuffle
+}
+
 /**
  * 队列头部的两个播放策略开关,看视频(简介队列、完整队列、全屏切集面板)与听视频共用同一组控件:
  * - 完播行为:「播完暂停 → 连播 → 洗脑循环」三态一键轮换。
- * - 队列顺序:「顺序 ↔ 随机」一键切换。
+ * - 队列顺序:「正序 → 倒序 → 随机」三态一键轮换。
  *
  * 文字与图标同步报当前状态,读屏经 `stateDescription` 念当前档名。
  */
 @Composable
 fun RowScope.QueuePlaybackControls(
     endMode: PlayEndMode,
-    shuffled: Boolean,
+    order: QueueOrder,
     onCycleEndMode: () -> Unit,
-    onToggleShuffle: () -> Unit,
-    showShuffle: Boolean = true,
+    onCycleOrder: () -> Unit,
+    showOrder: Boolean = true,
 ) {
     val endLabel = stringResource(endMode.labelRes())
     TextButton(
@@ -448,19 +456,21 @@ fun RowScope.QueuePlaybackControls(
             modifier = Modifier.padding(start = Spacing.Hair),
         )
     }
-    if (showShuffle) {
-        val orderLabel = stringResource(
-            if (shuffled) Res.string.queue_order_shuffle else Res.string.queue_order_sequential,
-        )
+    if (showOrder) {
+        val orderLabel = stringResource(order.labelRes())
         TextButton(
-            onClick = onToggleShuffle,
+            onClick = onCycleOrder,
             contentPadding = PaddingValues(horizontal = Spacing.Tight),
             modifier = Modifier
                 .defaultMinSize(minWidth = 1.dp)
                 .semantics { stateDescription = orderLabel },
         ) {
             Icon(
-                imageVector = if (shuffled) Icons.Filled.Shuffle else Icons.AutoMirrored.Filled.PlaylistPlay,
+                imageVector = when (order) {
+                    QueueOrder.Forward -> Icons.Filled.ArrowDownward
+                    QueueOrder.Reverse -> Icons.Filled.ArrowUpward
+                    QueueOrder.Shuffle -> Icons.Filled.Shuffle
+                },
                 contentDescription = null,
                 modifier = Modifier.size(Dimens.IconInline),
             )
@@ -477,12 +487,12 @@ fun RowScope.QueuePlaybackControls(
 @Composable
 fun QueuePlaybackControlsRow(
     endMode: PlayEndMode,
-    shuffled: Boolean,
+    order: QueueOrder,
     onCycleEndMode: () -> Unit,
-    onToggleShuffle: () -> Unit,
+    onCycleOrder: () -> Unit,
     modifier: Modifier = Modifier,
     horizontalArrangement: Arrangement.Horizontal = Arrangement.End,
-    showShuffle: Boolean = true,
+    showOrder: Boolean = true,
 ) {
     Row(
         modifier = modifier,
@@ -491,10 +501,10 @@ fun QueuePlaybackControlsRow(
     ) {
         QueuePlaybackControls(
             endMode = endMode,
-            shuffled = shuffled,
+            order = order,
             onCycleEndMode = onCycleEndMode,
-            onToggleShuffle = onToggleShuffle,
-            showShuffle = showShuffle,
+            onCycleOrder = onCycleOrder,
+            showOrder = showOrder,
         )
     }
 }

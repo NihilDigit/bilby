@@ -68,12 +68,6 @@ class MediaControllerHandle(val controller: MediaController) : PlayerHandle {
         get() = AudioPlaybackService.videoSize()
             ?: controller.videoSize.let { VideoDimensions(it.width, it.height, it.pixelWidthHeightRatio) }
 
-    override var shuffleModeEnabled: Boolean
-        get() = controller.shuffleModeEnabled
-        set(value) {
-            controller.shuffleModeEnabled = value
-        }
-
     override fun play() = controller.play()
     override fun pause() = controller.pause()
     override fun seekTo(positionMillis: Long) = controller.seekTo(positionMillis)
@@ -170,7 +164,10 @@ private fun PlaybackCommand.toSessionCommand(): Pair<String, Bundle> = when (thi
     is PlaybackCommand.AdjustSleepTimer -> AudioPlaybackService.ACTION_SLEEP_TIMER to Bundle().apply {
         putInt(AudioPlaybackService.EXTRA_SLEEP_DELTA_MINUTES, deltaMinutes)
     }
-    PlaybackCommand.ToggleShuffle -> AudioPlaybackService.ACTION_TOGGLE_SHUFFLE to Bundle.EMPTY
+    PlaybackCommand.CycleQueueOrder -> AudioPlaybackService.ACTION_CYCLE_QUEUE_ORDER to Bundle.EMPTY
+    is PlaybackCommand.SetQueueOrder -> AudioPlaybackService.ACTION_SET_QUEUE_ORDER to Bundle().apply {
+        putString(AudioPlaybackService.EXTRA_QUEUE_ORDER, order.key)
+    }
     PlaybackCommand.CycleEndMode -> AudioPlaybackService.ACTION_CYCLE_END_MODE to Bundle.EMPTY
     is PlaybackCommand.SetEndMode -> AudioPlaybackService.ACTION_SET_END_MODE to Bundle().apply {
         putString(AudioPlaybackService.EXTRA_END_MODE, mode.key)

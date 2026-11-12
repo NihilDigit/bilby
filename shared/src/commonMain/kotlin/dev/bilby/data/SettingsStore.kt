@@ -52,11 +52,11 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         }
     }
 
-    /** 播放偏好:完播行为与随机。是用户偏好,不按队列类型猜(DESIGN 2.4b)。 */
+    /** 播放偏好:完播行为与队列顺序。是用户偏好,不按队列类型猜(DESIGN 2.4b)。 */
     val playbackPrefs: Flow<PlaybackPrefs> = store.data.map { p ->
         PlaybackPrefs(
             endMode = PlayEndMode.fromPrefs(p[KEY_END_MODE], p[KEY_AUTO_NEXT]),
-            shuffled = p[KEY_SHUFFLED] ?: false,
+            order = QueueOrder.fromPrefs(p[KEY_QUEUE_ORDER], p[KEY_SHUFFLED]),
         )
     }
 
@@ -64,6 +64,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         store.edit { p ->
             p[KEY_END_MODE] = value.endMode.key
             p[KEY_AUTO_NEXT] = value.autoNext
+            p[KEY_QUEUE_ORDER] = value.order.key
             p[KEY_SHUFFLED] = value.shuffled
         }
     }
@@ -472,6 +473,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
 
         private val KEY_AUTO_NEXT = booleanPreferencesKey("playback_auto_next")
         private val KEY_END_MODE = stringPreferencesKey("playback_end_mode")
+        private val KEY_QUEUE_ORDER = stringPreferencesKey("playback_queue_order")
         private val KEY_SHUFFLED = booleanPreferencesKey("playback_shuffled")
         private val KEY_DESKTOP_VOLUME = floatPreferencesKey("desktop_volume")
         private val KEY_DESKTOP_MUTED = booleanPreferencesKey("desktop_muted")
@@ -661,6 +663,29 @@ enum class PlayEndMode(val key: String) {
 }
 
 /**
+ * 队列条目的播放顺序。列表本身始终按来源自然顺序摆,只改上一条/下一条与自动连播走的次序;
+ * 单条视频内的分 P 始终按 P1 → P2 走,不受这里影响。
+ */
+enum class QueueOrder(val key: String) {
+    Forward("forward"),
+    Reverse("reverse"),
+    Shuffle("shuffle"),
+    ;
+
+    fun next(): QueueOrder = when (this) {
+        Forward -> Reverse
+        Reverse -> Shuffle
+        Shuffle -> Forward
+    }
+
+    companion object {
+        fun fromPrefs(orderKey: String?, legacyShuffled: Boolean? = null): QueueOrder =
+            entries.firstOrNull { it.key == orderKey }
+                ?: if (legacyShuffled == true) Shuffle else Forward
+    }
+}
+
+/**
  * [endMode] 只管**自动**前进:一条播完了是停下、接着放队列里的下一条,还是单条循环。手动的下一条
  * (界面按钮、通知栏、耳机线控双击)不受它影响 —— 那些是用户当场表达的意思,没有理由被一个设置挡住。
  *
@@ -671,9 +696,10 @@ enum class PlayEndMode(val key: String) {
  */
 data class PlaybackPrefs(
     val endMode: PlayEndMode = PlayEndMode.Continue,
-    val shuffled: Boolean = false,
+    val order: QueueOrder = QueueOrder.Forward,
 ) {
     val autoNext: Boolean get() = endMode == PlayEndMode.Continue
+    val shuffled: Boolean get() = order == QueueOrder.Shuffle
 }
 
 data class DesktopAudioPrefs(

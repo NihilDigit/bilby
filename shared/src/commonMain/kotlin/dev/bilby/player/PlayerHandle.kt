@@ -1,6 +1,7 @@
 package dev.bilby.player
 
 import dev.bilby.data.PlayEndMode
+import dev.bilby.data.QueueOrder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -52,7 +53,6 @@ interface PlayerHandle {
     val duration: Long
     val playbackSpeed: Float
     val videoSize: VideoDimensions
-    var shuffleModeEnabled: Boolean
 
     fun play()
     fun pause()
@@ -119,8 +119,11 @@ sealed interface PlaybackCommand {
     data class SetSleepTimer(val mode: SleepTimerMode) : PlaybackCommand
     data class AdjustSleepTimer(val deltaMinutes: Int) : PlaybackCommand
 
-    /** 切换队列的顺序/随机。从非连播态打开随机时自动升到连播。 */
-    data object ToggleShuffle : PlaybackCommand
+    /** 在「正序 → 倒序 → 随机」三态间轮换。从非连播态切进倒序或随机时自动升到连播。 */
+    data object CycleQueueOrder : PlaybackCommand
+
+    /** 直接设定队列顺序。从非连播态设成倒序或随机时自动升到连播。 */
+    data class SetQueueOrder(val order: QueueOrder) : PlaybackCommand
 
     /** 在「播完暂停 → 连播 → 洗脑循环」三态间轮换。 */
     data object CycleEndMode : PlaybackCommand
