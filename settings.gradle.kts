@@ -36,6 +36,9 @@ include(":sqlite-woa64")
 // 弹幕引擎(https://github.com/NihilDigit/tdanmaku)已发布到 Maven Central,按坐标解析,
 // 见版本目录里的 `tdanmaku`。
 //
-// 这里曾经是一行 `includeBuild("../tdanmaku")`,让开发期直接吃隔壁仓库的源码。代价是
-// **一个干净的 clone 编不过**:CI 只 checkout 这个仓库,那行会指向一个不存在的目录,
-// 打 v tag 就失败。要临时回到那种模式(两边一起改的时候)就把它加回来,发版前记得撤掉。
+// 本地并排存在 `../tdanmaku` 且不在 CI 环境时自动启用复合构建,让开发期直接联调隔壁仓库源码;
+// 干净 clone 或 CI(无 `../tdanmaku` 目录 / `CI` 环境变量存在)则走 Maven Central 坐标。
+// 注意:若 Bilby 使用了隔壁尚未发版的新 API,打 v tag 发版前仍须先发版 tdanmaku 并升级版本目录。
+if (System.getenv("CI").isNullOrEmpty() && file("../tdanmaku").isDirectory) {
+    includeBuild("../tdanmaku")
+}

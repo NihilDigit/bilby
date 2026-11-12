@@ -168,9 +168,10 @@ fun SeekBar(
         animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "seek-wave",
     )
-    // 相位只在要画波浪时才走:无限动画每帧都要重绘,直线模式下不该为它付钱。**只在画的时候读**
-    // (下面 Canvas 里),读在这里的话整条进度条每一帧都要重组一遍。
-    val wavePhase: State<Float> = if (wavy) {
+    // 相位只在波浪实际在动(播放中或振幅尚未收回到平直)时才挂入组合:无限动画只要在组合里就会每帧唤醒
+    // 主线程,暂停落稳后不该继续空转。**只在画的时候读**(下面 Canvas 里),读在这里的话整条进度条
+    // 每一帧都要重组一遍。
+    val wavePhase: State<Float> = if (wavy && ((playing && !dragging) || waveAmplitude > 0.1.dp)) {
         rememberInfiniteTransition(label = "seek-wave-phase").animateFloat(
             initialValue = 0f,
             targetValue = (2 * PI).toFloat(),

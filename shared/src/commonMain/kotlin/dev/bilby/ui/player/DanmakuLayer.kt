@@ -34,9 +34,11 @@ import dev.nihildigit.danmaku.DanmakuOptions
 import dev.nihildigit.danmaku.SmoothedDanmakuClock
 import dev.nihildigit.danmaku.SpecialDanmaku
 import dev.nihildigit.danmaku.rememberDanmakuController
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.withContext
 import kotlin.time.TimeSource
 
 /** 弹幕从哪来。两种形态的差别只在这里,排布与渲染都一样。 */
@@ -106,18 +108,29 @@ fun PlayerDanmakuLayer(
         imageSource = imageSource,
     )
 
-    controller.setSpecial(specialPool)
+    // 高级弹幕整池可能达数千条且跨分段无序到达:脱离组合体并在后台排好序后再交给状态持有者,
+    // 避免重组期间在 UI 主线程同步跑 TimSort。
+    LaunchedEffect(controller, specialPool) {
+        val sorted = if (specialPool.isSortedByStartTime()) {
+            specialPool
+        } else {
+            withContext(Dispatchers.Default) {
+                specialPool.sortedBy { it.startTimeMillis }
+            }
+        }
+        controller.setSpecial(sorted)
+    }
 
     // **只监听弹幕要的信号。** 播放状态归播放器壳监听(它管常亮和播放按钮);两者曾经挤在同一个
     // listener 里,于是"谁该关心什么"看不出来,弹幕这一层也就搬不走。
     DisposableEffect(player, controller) {
         val listener = object : PlayerListener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) = controller.notifyChanged()
+            override fun onIsPlayingChanged(isPlaying: Boolean) = controller.notifyDiscontinuity()
 
             // 覆盖 seek(拖拽松手、双击 ±10 秒、播完重播)。帧循环空闲挂起时只认这一条和兜底
-            // 轮询,不接的话 seek 之后弹幕要等最坏 500ms 才跟上。
+            // 轮询,不接的话 seek 之后弹幕要等最坏 500ms 才跟上;同时通知平滑时钟立即对齐新位置。
             override fun onPositionDiscontinuity(oldPositionMillis: Long, newPositionMillis: Long, isSeek: Boolean) =
-                controller.notifyChanged()
+                controller.notifyDiscontinuity()
 
             override fun onPlaybackSpeedChanged(speed: Float) = controller.notifyChanged()
         }
@@ -308,3 +321,10 @@ private const val LIVE_TRIM_INTERVAL_MILLIS = 30_000L
 
 /** 裁剪时在播放位置之前保留多久。留一个穿屏时长的余量,免得把还在屏上的裁掉。 */
 private const val LIVE_TRIM_KEEP_MILLIS = 15_000L
+
+private fun List<SpecialDanmaku>.isSortedByStartTime(): Boolean {
+    for (i in 1 until size) {
+        if (this[i - 1].startTimeMillis > this[i].startTimeMillis) return false
+    }
+    return true
+}

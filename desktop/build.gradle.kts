@@ -114,6 +114,9 @@ compose.desktop {
         mainClass = "dev.bilby.desktop.MainKt"
         // JDK 24 起加载 JNI 库属受限操作,不声明会在每次启动时打印警告
         jvmArgs += "--enable-native-access=ALL-UNNAMED"
+        // Skiko 的 FrameWatcher 在连续出帧期间每 30 秒主动调一次 System.gc() 催收原生 Skia 对象;
+        // 默认触发整堆 STW G1Full(实测单次停顿约 50.9ms),改为触发并发收集周期以保留 Cleaner 回收并避免整堆 Full GC 长停顿。
+        jvmArgs += "-XX:+ExplicitGCInvokesConcurrent"
         jvmArgs += "-Dbilby.version=$releaseVersionName"
         // 应用内更新据此在 Windows Installer 的登记里判断自己是否由 MSI 安装
         jvmArgs += "-Dbilby.upgrade-code=$msiUpgradeUuid"

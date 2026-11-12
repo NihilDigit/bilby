@@ -42,19 +42,26 @@ fun PlayingIndicator(
     color: Color = LocalContentColor.current,
     contentDescription: String? = null,
 ) {
-    val transition = rememberInfiniteTransition(label = "playing")
-    // 每根在图标原本的高度和另一个高度之间往返,**从原高起跳**:五根各自从同一个最矮值起跳的话,
-    // 第一帧是一条扁线,看起来像卡了一下。
-    val bouncing = IconBarHeights.indices.map { index ->
-        transition.animateFloat(
-            initialValue = IconBarHeights[index],
-            targetValue = PartnerBarHeights[index],
-            animationSpec = infiniteRepeatable(tween(BarPeriodsMillis[index]), RepeatMode.Reverse),
-            label = "bar$index",
-        )
-    }
     // 在原高与跳动高度之间按活跃度插值,不让弹簧去追一个每帧都在变的目标 —— 那样起伏会被抹平。
+    // 静止落稳后撤掉无限动画:rememberInfiniteTransition 只要还在组合里就会每个 vsync 挂一次
+    // withFrameNanos,暂停或播完停在详情页时会持续驱动桌面端渲染链路按屏幕刷新率空转。
     val activeness by animateFloatAsState(if (active) 1f else 0f, label = "playingActive")
+    val animating = active || activeness > 0.001f
+    val bouncing = if (animating) {
+        val transition = rememberInfiniteTransition(label = "playing")
+        // 每根在图标原本的高度和另一个高度之间往返,**从原高起跳**:五根各自从同一个最矮值起跳的话,
+        // 第一帧是一条扁线,看起来像卡了一下。
+        IconBarHeights.indices.map { index ->
+            transition.animateFloat(
+                initialValue = IconBarHeights[index],
+                targetValue = PartnerBarHeights[index],
+                animationSpec = infiniteRepeatable(tween(BarPeriodsMillis[index]), RepeatMode.Reverse),
+                label = "bar$index",
+            )
+        }
+    } else {
+        null
+    }
     val semantics = if (contentDescription == null) {
         Modifier
     } else {
@@ -63,7 +70,11 @@ fun PlayingIndicator(
     Canvas(modifier = modifier.then(semantics)) {
         val unit = size.width / IconViewport
         IconBarHeights.forEachIndexed { index, restHeight ->
-            val height = lerp(restHeight, bouncing[index].value, activeness) * unit
+            val height = if (bouncing != null) {
+                lerp(restHeight, bouncing[index].value, activeness) * unit
+            } else {
+                restHeight * unit
+            }
             drawRect(
                 color = color,
                 topLeft = Offset(x = IconBarLefts[index] * unit, y = IconCenter * unit - height / 2),
