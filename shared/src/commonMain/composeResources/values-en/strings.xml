@@ -427,8 +427,10 @@
     <string name="settings_section_gestures">Gestures</string>
     <string name="settings_gestures_summary">Double-tap, hold speed and swipe controls</string>
     <string name="settings_long_press_speed">Hold for temporary speed</string>
-    <string name="settings_long_press_speed_subtitle">Hold the picture to speed up, drag to adjust or lock</string>
+    <string name="settings_long_press_speed_subtitle">Hold the picture to speed up</string>
     <string name="settings_default_hold_speed">Default hold speed</string>
+    <string name="settings_long_press_speed_dial">Hold speed dial</string>
+    <string name="settings_long_press_speed_dial_subtitle">Show the speed dial while holding to drag or lock</string>
     <string name="settings_swipe_seek">Swipe horizontally to seek</string>
     <string name="settings_swipe_seek_subtitle">Drag left or right on the picture to scrub</string>
     <string name="settings_swipe_brightness_volume">Swipe vertically for brightness and volume</string>

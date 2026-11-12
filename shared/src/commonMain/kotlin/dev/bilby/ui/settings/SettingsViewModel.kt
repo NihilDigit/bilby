@@ -51,6 +51,7 @@ data class SettingsUiState(
     val hardwareCodecIds: Set<Int> = emptySet(),
     val doubleTapSeek: Boolean = true,
     val longPressSpeed: Boolean = true,
+    val longPressSpeedDial: Boolean = true,
     val defaultHoldSpeed: Float = SettingsStore.DEFAULT_HOLD_SPEED,
     val swipeSeek: Boolean = true,
     val swipeBrightnessVolume: Boolean = true,
@@ -185,6 +186,7 @@ class SettingsViewModel(
                         playerPickUpdatesDefault = prefs.playerPickUpdatesDefault,
                         doubleTapSeek = prefs.doubleTapSeek,
                         longPressSpeed = prefs.longPressSpeed,
+                        longPressSpeedDial = prefs.longPressSpeedDial,
                         defaultHoldSpeed = prefs.defaultHoldSpeed,
                         swipeSeek = prefs.swipeSeek,
                         swipeBrightnessVolume = prefs.swipeBrightnessVolume,
@@ -312,6 +314,11 @@ class SettingsViewModel(
     fun setLongPressSpeed(value: Boolean) {
         _state.update { it.copy(longPressSpeed = value) }
         persist { settings.saveLongPressSpeed(value) }
+    }
+
+    fun setLongPressSpeedDial(value: Boolean) {
+        _state.update { it.copy(longPressSpeedDial = value) }
+        persist { settings.saveLongPressSpeedDial(value) }
     }
 
     fun setDefaultHoldSpeed(value: Float) {
