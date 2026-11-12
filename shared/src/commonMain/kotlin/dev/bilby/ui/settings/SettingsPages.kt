@@ -128,6 +128,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.bilby.data.AppearancePrefs
+import dev.bilby.data.StartTab
 import dev.bilby.data.ThemeMode
 import dev.bilby.ui.AppLanguage
 import dev.bilby.ui.LocalSystemActions
@@ -594,6 +595,7 @@ fun AppearanceSettingsPage(
     onModeChange: (ThemeMode) -> Unit,
     onPureBlackChange: (Boolean) -> Unit,
     onPaletteChange: (String) -> Unit,
+    onStartTabChange: (StartTab) -> Unit = {},
     onLanguageChange: (AppLanguage) -> Unit,
     onBack: (() -> Unit)?,
 ) {
@@ -618,6 +620,9 @@ fun AppearanceSettingsPage(
             row { position ->
                 PaletteRow(position = position, selected = appearance.palette, onSelect = onPaletteChange)
             }
+            row { position ->
+                StartTabRow(position = position, selected = appearance.startTab, onSelect = onStartTabChange)
+            }
             if (supportsLanguageSwitch) {
                 row { position ->
                     ChoiceRow(
@@ -641,6 +646,45 @@ private val ThemeMode.label: StringResource
         ThemeMode.Light -> Res.string.settings_theme_light
         ThemeMode.Dark -> Res.string.settings_theme_dark
     }
+
+private val StartTab.label: StringResource
+    get() = when (this) {
+        StartTab.Feed -> Res.string.tab_feed
+        StartTab.Search -> Res.string.tab_search
+        StartTab.Profile -> Res.string.tab_profile
+    }
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun StartTabRow(position: RowPosition, selected: StartTab, onSelect: (StartTab) -> Unit) {
+    val options = StartTab.entries
+    ControlSettingRow(
+        position = position,
+        icon = Icons.Outlined.Start,
+        title = stringResource(Res.string.settings_start_tab),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+            modifier = Modifier.fillMaxWidth().selectableGroup(),
+        ) {
+            options.forEachIndexed { index, option ->
+                ToggleButton(
+                    checked = option == selected,
+                    onCheckedChange = { onSelect(option) },
+                    shapes = when (index) {
+                        0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                        options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                        else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                    },
+                    contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                    modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
+                ) {
+                    Text(stringResource(option.label), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+}
 
 /**
  * 明暗三档,连体按钮组。写法与播放器设置面板的 ConnectedChoices 相同:各格等宽,

@@ -1,4 +1,6 @@
 <resources>
+    <string name="app_name">Bilby</string>
+
     <!-- 导航。 -->
     <string name="nav_already_here">已在当前页面</string>
 
@@ -479,6 +481,7 @@
     <string name="settings_theme_system">跟随系统</string>
     <string name="settings_theme_light">浅色</string>
     <string name="settings_theme_dark">深色</string>
+    <string name="settings_start_tab">默认启动页</string>
     <string name="settings_pure_black">纯黑背景</string>
     <string name="settings_pure_black_subtitle">深色时页面底色为纯黑</string>
     <string name="settings_theme_palette">配色</string>

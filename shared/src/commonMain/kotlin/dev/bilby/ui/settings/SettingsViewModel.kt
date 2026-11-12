@@ -3,6 +3,7 @@ package dev.bilby.ui.settings
 import dev.bilby.api.BiliResult
 import dev.bilby.data.HistoryRepository
 import dev.bilby.data.AppearancePrefs
+import dev.bilby.data.StartTab
 import dev.bilby.data.ThemeMode
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -347,6 +348,11 @@ class SettingsViewModel(
     fun setThemePalette(palette: String) {
         _state.update { it.copy(appearance = it.appearance.copy(palette = palette)) }
         persist { settings.saveThemePalette(palette) }
+    }
+
+    fun setStartTab(tab: StartTab) {
+        _state.update { it.copy(appearance = it.appearance.copy(startTab = tab)) }
+        persist { settings.saveStartTab(tab) }
     }
 
     fun setOfflineConcurrency(value: Int) {

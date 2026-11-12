@@ -237,7 +237,13 @@ class SettingsStore(private val store: DataStore<Preferences>) {
                 ?: ThemeMode.System,
             pureBlack = p[KEY_PURE_BLACK] ?: false,
             palette = p[KEY_THEME_PALETTE] ?: AppearancePrefs.DYNAMIC,
+            startTab = p[KEY_START_TAB]?.let { name -> StartTab.entries.firstOrNull { it.name == name } }
+                ?: StartTab.Search,
         )
+    }
+
+    val startTab: Flow<StartTab?> = store.data.map { p ->
+        p[KEY_START_TAB]?.let { name -> StartTab.entries.firstOrNull { it.name == name } } ?: StartTab.Search
     }
 
     suspend fun saveThemeMode(mode: ThemeMode) {
@@ -251,6 +257,10 @@ class SettingsStore(private val store: DataStore<Preferences>) {
     /** [AppearancePrefs.palette] 的取值:[AppearancePrefs.DYNAMIC] 或内置配色的名字。 */
     suspend fun saveThemePalette(palette: String) {
         store.edit { p -> p[KEY_THEME_PALETTE] = palette }
+    }
+
+    suspend fun saveStartTab(tab: StartTab) {
+        store.edit { p -> p[KEY_START_TAB] = tab.name }
     }
 
     /**
@@ -452,6 +462,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
         private val KEY_PURE_BLACK = booleanPreferencesKey("theme_pure_black")
         private val KEY_THEME_PALETTE = stringPreferencesKey("theme_palette")
+        private val KEY_START_TAB = stringPreferencesKey("start_tab")
         private val KEY_SESSDATA = stringPreferencesKey("sessdata")
         private val KEY_BILI_JCT = stringPreferencesKey("bili_jct")
         private val KEY_DEDE_USER_ID = stringPreferencesKey("dede_user_id")
@@ -758,6 +769,9 @@ data class PlayerPrefs(
 /** 明暗。三档互斥;纯黑是深色之下的另一个开关,不是第四档,见 [AppearancePrefs.pureBlack]。 */
 enum class ThemeMode { System, Light, Dark }
 
+/** 启动时默认落到哪一栏:动态、搜索着陆页或我的。 */
+enum class StartTab { Feed, Search, Profile }
+
 data class AppearancePrefs(
     val mode: ThemeMode = ThemeMode.System,
     /**
@@ -772,6 +786,7 @@ data class AppearancePrefs(
      * 指到别的颜色上。
      */
     val palette: String = DYNAMIC,
+    val startTab: StartTab = StartTab.Search,
 ) {
     companion object {
         const val DYNAMIC = "dynamic"

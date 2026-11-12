@@ -184,6 +184,16 @@ class SearchChatViewModel(
     fun leaveAgent() = _state.update { it.copy(mode = SearchMode.Normal) }
 
     /**
+     * 重按搜索 tab 或在结果页返回:清掉当前查询与输入框,翻回着陆页(居中的框 + 自己敲过的词)。
+     * 助理那一屏开着的话一并退回普通模式;助理的对话不动,它有自己的会话。
+     */
+    fun backToLanding() {
+        suggestJob?.cancel()
+        normal.clear()
+        _state.update { it.copy(input = "", suggestions = emptyList(), mode = SearchMode.Normal) }
+    }
+
+    /**
      * 普通搜索是一次查询一份结果,不累积轮次:它就是一个搜索页。留着上一次的结果只会让人往上翻,
      * 而翻上去的东西和这次要找的无关。排序沿用上一次选的那档 —— 新起一份 NormalSearchState()
      * 会把它悄悄弹回综合。

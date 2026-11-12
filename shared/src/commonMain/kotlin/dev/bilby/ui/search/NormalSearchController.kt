@@ -255,6 +255,12 @@ class NormalSearchController(
         restart(userPager)
     }
 
+    /** 回到还没搜过的状态:三栏归零、查询抹掉,界面翻回着陆页。重按搜索 tab 走这里。 */
+    fun clear() {
+        _state.update { it.copy(query = "") }
+        SearchTab.entries.forEach { pagerFor(it).reset(keepVisible = false) }
+    }
+
     /** 重试和下拉刷新:当前栏从第一页重来,已有结果留在屏幕上等新页落地。 */
     fun retry() {
         val s = _state.value
