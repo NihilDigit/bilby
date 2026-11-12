@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalWindowInfo
 internal fun Modifier.speedSelectionLongPress(
     controller: PlaybackSpeedController?,
     enabled: Boolean,
+    dialEnabled: Boolean = true,
     forceHorizontalBelow: Boolean = false,
     onStart: () -> Unit,
 ): Modifier {
@@ -22,7 +23,7 @@ internal fun Modifier.speedSelectionLongPress(
     val haptics = LocalHapticFeedback.current
     val window = LocalWindowInfo.current.containerSize
     val vertical = !forceHorizontalBelow && window.width > window.height
-    return pointerInput(controller, enabled, vertical, forceHorizontalBelow) {
+    return pointerInput(controller, enabled, dialEnabled, vertical, forceHorizontalBelow) {
         if (controller == null || !enabled) return@pointerInput
         var owned = false
         var dockEnd = false
@@ -31,10 +32,10 @@ internal fun Modifier.speedSelectionLongPress(
         try {
             detectDragGesturesAfterLongPress(
                 onDragStart = { startOffset ->
-                    dockEnd = vertical && startOffset.x < size.width / 2f
+                    dockEnd = dialEnabled && vertical && startOffset.x < size.width / 2f
                     // 竖屏内嵌时选档块画在画面下方(forceHorizontalBelow),一律下滑锁定;
                     // 竖屏全屏时偏下长按把选档条放画面上沿(上滑锁定),偏上长按放画面下沿(下滑锁定)。
-                    dockTop = !vertical && !forceHorizontalBelow && startOffset.y >= size.height / 2f
+                    dockTop = dialEnabled && !vertical && !forceHorizontalBelow && startOffset.y >= size.height / 2f
                     controller.open(temporary = true, dockEnd = dockEnd, dockTop = dockTop)
                     owned = controller.beginDrag(vertical = vertical)
                     displacement = Offset.Zero
@@ -51,7 +52,7 @@ internal fun Modifier.speedSelectionLongPress(
                 },
             ) { change, amount ->
                 change.consume()
-                if (!owned) return@detectDragGesturesAfterLongPress
+                if (!owned || !dialEnabled) return@detectDragGesturesAfterLongPress
                 displacement += amount
                 val before = controller.selection
                 val acrossPx = when {

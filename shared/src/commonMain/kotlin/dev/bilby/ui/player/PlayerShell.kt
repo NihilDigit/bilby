@@ -125,6 +125,8 @@ data class PlayerGestureOptions(
     val brightnessAndVolume: Boolean = true,
     /** 长按选择临时倍速。 */
     val fastForward: Boolean = true,
+    /** 长按时展开倍速选档条并允许滑动切换或锁定倍速;关闭后仅按默认倍速临时加速并在画面顶部显示提示。 */
+    val fastForwardDial: Boolean = true,
 )
 
 /**
@@ -932,7 +934,8 @@ fun PlayerShell(
                 .speedSelectionLongPress(
                     speedController,
                     enabled = gestures.fastForward && !locked && !pip,
-                    forceHorizontalBelow = !showSpeedOverlay,
+                    dialEnabled = gestures.fastForwardDial,
+                    forceHorizontalBelow = !showSpeedOverlay && gestures.fastForwardDial,
                     onStart = {
                         controlsVisible = false
                         gesture = null
@@ -1249,10 +1252,11 @@ fun PlayerShell(
             }
         }
 
-        if (showSpeedOverlay && speedController != null && !pip) {
+        if ((showSpeedOverlay || !gestures.fastForwardDial) && speedController != null && !pip) {
             SpeedSelectionOverlay(
                 controller = speedController,
                 isFullscreen = isFullscreen,
+                showDial = gestures.fastForwardDial,
                 modifier = Modifier.matchParentSize(),
             )
         }

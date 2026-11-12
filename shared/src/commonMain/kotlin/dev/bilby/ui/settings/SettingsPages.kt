@@ -452,6 +452,7 @@ fun GestureSettingsPage(
     state: SettingsUiState,
     onDoubleTapSeekChange: (Boolean) -> Unit,
     onLongPressSpeedChange: (Boolean) -> Unit,
+    onLongPressSpeedDialChange: (Boolean) -> Unit = {},
     onDefaultHoldSpeedChange: (Float) -> Unit,
     onSwipeSeekChange: (Boolean) -> Unit,
     onSwipeBrightnessVolumeChange: (Boolean) -> Unit,
@@ -490,9 +491,21 @@ fun GestureSettingsPage(
             if (holdSpeedOnScreen) {
                 row { position ->
                     AnimatedVisibility(visibleState = holdSpeedShown, enter = enter, exit = exit) {
-                        ChoiceRow(
+                        ToggleSettingRow(
                             position = position,
                             icon = Icons.Outlined.Tune,
+                            title = stringResource(Res.string.settings_long_press_speed_dial),
+                            subtitle = stringResource(Res.string.settings_long_press_speed_dial_subtitle),
+                            checked = state.longPressSpeedDial,
+                            onCheckedChange = onLongPressSpeedDialChange,
+                        )
+                    }
+                }
+                row { position ->
+                    AnimatedVisibility(visibleState = holdSpeedShown, enter = enter, exit = exit) {
+                        ChoiceRow(
+                            position = position,
+                            icon = Icons.Outlined.Speed,
                             title = stringResource(Res.string.settings_default_hold_speed),
                             options = SettingsStore.HOLD_SPEED_OPTIONS,
                             selected = state.defaultHoldSpeed,
