@@ -1,4 +1,5 @@
 <resources>
+    <string name="app_name">Bilby</string>
     <string name="action_back">Back</string>
     <string name="action_cancel">Cancel</string>
     <string name="nav_already_here">Already on this page</string>
@@ -396,6 +397,7 @@
     <string name="settings_theme_system">System</string>
     <string name="settings_theme_light">Light</string>
     <string name="settings_theme_dark">Dark</string>
+    <string name="settings_start_tab">Start page</string>
     <string name="settings_pure_black">Pure black</string>
     <string name="settings_pure_black_subtitle">Black background in dark theme</string>
     <string name="settings_theme_palette">Color</string>

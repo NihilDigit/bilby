@@ -148,7 +148,8 @@ class AgentActions(
 /**
  * 搜索 tab:一个搜索框,回车是 B 站原始结果;助理在旁边另起一块。
  *
- * - **普通搜索是一个搜索页**:搜索栏在顶上,下面是结果(或历史)。
+ * - **普通搜索有两张脸**:还没搜过是着陆页,字标加居中的框、下面是自己敲过的词;
+ *   搜过之后是结果页,搜索栏挪到顶上、下面是结果。
  * - **助理是一段对话**:输入在下,一轮轮结果在上。它是进阶工具,不是每个人都用:模型没配时
  *   它的入口一概不出现。
  *
@@ -178,10 +179,12 @@ fun SearchChatScreen(
     searchHistory: List<String> = emptyList(),
     onHistoryClick: (String) -> Unit = {},
     onHistoryRemove: (String) -> Unit = {},
-    onHistoryClear: () -> Unit = {},
+    onHistoryClear: ( ) -> Unit = {},
     onSuggestionClick: (String) -> Unit = {},
     /** 快捷键(`Ctrl+F` / `/`)请求聚焦主搜索框的计数器。 */
     focusSearchNonce: Int = 0,
+    /** 结果页上侧滑返回:退到着陆页,不直接退出。 */
+    onBackToLanding: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
@@ -219,6 +222,7 @@ fun SearchChatScreen(
                 onSuggestionClick(term)
             },
             focusSearchNonce = focusSearchNonce,
+            onBackToLanding = onBackToLanding,
         )
     }
 
@@ -268,6 +272,13 @@ private val AgentPanelMinWidth = 320.dp
 /** 宽屏搜索栏的最大宽度。再宽,左端的放大镜和右端的清除键就隔得太远,一眼看不全。 */
 private val SearchBarMaxWidth = 720.dp
 
+/**
+ * 着陆页的上下留白比。上 2 下 3:框的重心停在中线偏上,是搜索着陆页(Google、百度)
+ * 的通行摆法 —— 正中反而显得沉,偏上一点下面正好留给历史。
+ */
+private const val LandingTopWeight = 2f
+private const val LandingBottomWeight = 3f
+
 /** 搜索栏行尾那颗侧栏开关的宽度(M3 图标按钮的触控格)。 */
 private val PanelToggleWidth = 48.dp
 
@@ -300,11 +311,13 @@ private fun AgentTopBar(onBack: () -> Unit) {
 }
 
 /**
- * 普通搜索:搜索栏,下面是历史或结果。
+ * 普通搜索的两张脸:**还没搜过是着陆页**,字标与框居中、下面是自己敲过的词;
+ * **搜过之后是结果页**,搜索栏在顶上、下面是结果。
  *
  * **聚焦时就是 M3 search 的展开态**,建议(这里是历史)的摆法按窗口分:窄屏整块换成历史
  * (full-screen 布局),宽屏从搜索栏下方垂下一张卡,底下的结果盖一层 scrim(docked 布局)。
- * search.md 原话是紧凑窗口用前者,中等以上换后者。
+ * search.md 原话是紧凑窗口用前者,中等以上换后者。着陆页不适用这一节:它没有结果可盖,
+ * 历史直接摆在框下面,不弹展开态。
  *
  * 窄屏的搜索栏随列表上滑收起、下滑露出(search.md Scroll 一节的第一种),结果多占一截屏。
  * 宽屏不收:竖向不缺那 64dp,而侧栏开关长在这一行上。
@@ -326,6 +339,7 @@ private fun NormalSearch(
     suggestions: List<SearchSuggestion>,
     onSuggestionClick: (String) -> Unit,
     focusSearchNonce: Int = 0,
+    onBackToLanding: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
@@ -337,14 +351,12 @@ private fun NormalSearch(
     }
     // 展开态(搜索栏有焦点)时,返回先收起,不直接离开这一页。
     BackHandler(enabled = focused) { focusManager.clearFocus() }
+    // 结果页上的返回退到着陆页,不直接退出;和上面那个互斥,聚焦时仍先收起。
+    BackHandler(enabled = state.query.isNotEmpty() && !focused) { onBackToLanding() }
 
     // 宽屏的助理是常驻侧栏,不要这个按钮(见 [AskAgentFab])。
     val askAgentFab = onAskAgent.takeIf { !wide }
     val fab = askAgentFab != null
-
-    val collapsing = remember { CollapsingBar() }
-    // 打字时和换了一次查询时栏一定在:前者正对着它,后者要看得见查的是什么。
-    LaunchedEffect(focused, state.query) { collapsing.offsetPx = 0f }
 
     val bar: @Composable ((@Composable (Modifier) -> Unit)?) -> Unit = { dropdown ->
         SearchBarRow(
@@ -357,7 +369,7 @@ private fun NormalSearch(
             // 宽屏不给返回箭头:docked 布局点 scrim 就收起,箭头在桌面上是多余的一格。
             showBack = !wide,
             wide = wide,
-            trailing = panelToggle,
+            trailing = panelToggle.takeUnless { state.query.isEmpty() && wide },
             dropdown = dropdown,
             focusRequester = searchFocusRequester,
         )
@@ -365,46 +377,102 @@ private fun NormalSearch(
     val historyPanel: @Composable (Modifier) -> Unit = { panelModifier ->
         SearchHistoryPanel(history, onHistoryClick, onHistoryRemove, onHistoryClear, panelModifier)
     }
+    val suggestionPanel: @Composable (Modifier) -> Unit = { panelModifier ->
+        SuggestionPanel(suggestions, onSuggestionClick, panelModifier)
+    }
     // 聚焦时盖在结果上的那一块:正在打字而且有补全就是补全,否则是历史。
     val typing = focused && input.isNotBlank() && suggestions.isNotEmpty()
     val focusPanel: (@Composable (Modifier) -> Unit)? = when {
-        typing -> { panelModifier -> SuggestionPanel(suggestions, onSuggestionClick, panelModifier) }
+        typing -> suggestionPanel
         history.isNotEmpty() -> historyPanel
         else -> null
     }
     val scrollingPanel: @Composable (@Composable (Modifier) -> Unit) -> Unit = { panel ->
         if (wide) {
+            val hasTrailingToggle = panelToggle != null && state.query.isNotEmpty()
             // 和搜索框同一条中线、同样宽,一眼对得上是这个框的历史与补全。照搜索栏那一行的
             // 结构排([SearchBarRow]):行尾让出侧栏开关那一格,框在剩下那段里居中。按整个主区
             // 居中的话,框和下面的历史各自对着不同的中线,左沿错开一截,历史看着像被收窄了。
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(start = Spacing.Comfortable, end = if (panelToggle != null) Spacing.Hair else Spacing.Comfortable),
+                    .padding(start = Spacing.Comfortable, end = if (hasTrailingToggle) Spacing.Hair else Spacing.Comfortable),
             ) {
                 Box(modifier = Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
                     panel(Modifier.widthIn(max = SearchBarMaxWidth).fillMaxSize().imePadding().verticalScroll(rememberScrollState()))
                 }
-                if (panelToggle != null) Spacer(Modifier.width(PanelToggleWidth))
+                if (hasTrailingToggle) Spacer(Modifier.width(PanelToggleWidth))
             }
         } else {
             panel(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()))
         }
     }
+
+    // **还没搜过时是着陆页,不是顶栏版搜索页**:字标加居中搜索框,重心停在中线偏上,
+    // 框下面是自己敲过的词;打出一个字,那块换成补全。发出第一个查询之后才翻成下面的
+    // 顶栏 + 结果,重按搜索 tab 回得来(见 RootTabs)。
+    if (state.query.isEmpty()) {
+        val landingPanel = when {
+            input.isNotBlank() && suggestions.isNotEmpty() -> suggestionPanel
+            history.isNotEmpty() -> historyPanel
+            else -> null
+        }
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                if (wide) {
+                    val captionSlot = rememberCaptionSlot()
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = captionSlot.modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.Hair),
+                    ) {
+                        Spacer(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(CaptionDragHeight)
+                                .windowDragArea(captionSlot.atTop),
+                        )
+                        panelToggle?.invoke()
+                        captionSlot.buttons?.invoke()
+                    }
+                }
+                Spacer(Modifier.weight(LandingTopWeight))
+                Text(
+                    text = stringResource(Res.string.app_name),
+                    style = MaterialTheme.typography.displayMediumEmphasized,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.height(Spacing.Spacious))
+                bar(null)
+                Box(modifier = Modifier.weight(LandingBottomWeight)) {
+                    landingPanel?.let { scrollingPanel(it) }
+                }
+            }
+            if (!focused) {
+                askAgentFab?.let {
+                    AskAgentFab(
+                        onClick = it,
+                        expanded = true,
+                        modifier = Modifier.align(Alignment.BottomEnd),
+                    )
+                }
+            }
+        }
+        return
+    }
+
+    val collapsing = remember { CollapsingBar() }
+    // 打字时和换了一次查询时栏一定在:前者正对着它,后者要看得见查的是什么。
+    LaunchedEffect(focused, state.query) { collapsing.offsetPx = 0f }
+
     val body: @Composable () -> Unit = {
         when {
             // 窄屏展开态:整块换成补全或历史(full-screen 布局)。
             !wide && focused && focusPanel != null -> scrollingPanel(focusPanel)
-
-            // 还没搜过时历史就是正文。
-            state.query.isEmpty() && history.isNotEmpty() -> scrollingPanel(historyPanel)
-
-            state.query.isEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                EmptyState(
-                    message = stringResource(Res.string.search_empty),
-                    icon = Icons.Outlined.Search,
-                )
-            }
 
             else -> Column(modifier = Modifier.fillMaxSize()) {
                 uidCandidate(state.query)?.let { mid ->
@@ -422,8 +490,8 @@ private fun NormalSearch(
             }
         }
     }
-    // 宽屏展开态的卡片。历史已经是正文(还没搜过)时不再垂一份一样的下来。
-    val dockedPanel = focusPanel.takeIf { focused && (typing || state.query.isNotEmpty()) }
+    // 宽屏展开态的卡片。
+    val dockedPanel = focusPanel.takeIf { focused }
 
     if (wide) {
         // 搜索栏叠在最上层:展开时它向下长成一张卡,压在结果与 scrim 之上。
@@ -990,6 +1058,20 @@ private fun previewTrace(bvid: String, title: String) = TraceItem(
     coverUrl = "https://i0.hdslb.com/bfs/archive/preview.jpg",
     upName = "某知名UP主",
 )
+
+@Preview
+@Composable
+private fun SearchChatScreenLandingPreview() {
+    BilbyTheme {
+        SearchChatScreen(
+            state = SearchChatUiState(mode = SearchMode.Normal),
+            onInputChange = {}, onSearch = {}, onAskAgent = {}, onLeaveAgent = {},
+            agentActions = PreviewAgentActions, resultActions = PreviewResultActions,
+            agentAvailable = true,
+            searchHistory = listOf("宝可梦", "烹饪 一人食", "坂本龙一", "M3 Expressive"),
+        )
+    }
+}
 
 @Preview
 @Composable
