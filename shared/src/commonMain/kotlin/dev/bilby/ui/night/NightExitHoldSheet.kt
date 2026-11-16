@@ -89,6 +89,7 @@ import dev.bilby.stringResource
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.player.KeepScreenOn
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -116,74 +117,77 @@ fun NightExitHoldSheet(
     onCompleted: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var pointerPresses by remember { mutableIntStateOf(0) }
-    var heldKey by remember { mutableStateOf<Key?>(null) }
-    var completed by remember { mutableStateOf(false) }
-    val windowFocused = LocalWindowInfo.current.isWindowFocused
-    val lifecycleOwner = LocalLifecycleOwner.current
-
-    LaunchedEffect(windowFocused) {
-        if (!windowFocused) {
-            heldKey = null
-            pointerPresses = 0
-        }
-    }
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
-                heldKey = null
-                pointerPresses = 0
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-
-    val holding = !completed && windowFocused && (pointerPresses > 0 || heldKey != null)
-
-    val progress = remember { Animatable(0f) }
-    val currentOnCompleted by rememberUpdatedState(onCompleted)
-    val haptic = LocalHapticFeedback.current
-
-    LaunchedEffect(holding, completed) {
-        if (completed) return@LaunchedEffect
-        if (holding) {
-            // 松手重按必须重新连续按满 30 秒，与「松开将重置」一致。
-            progress.snapTo(0f)
-            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-            var lastMilestone = 0
-            val startNanos = withFrameNanos { it }
-            while (isActive && holding && !completed) {
-                val nowNanos = withFrameNanos { it }
-                val elapsedMillis = (nowNanos - startNanos).coerceAtLeast(0L) / 1_000_000f
-                val next = (elapsedMillis / HoldDurationMillis).coerceIn(0f, 1f)
-                progress.snapTo(next)
-                val elapsedSeconds = (next * HoldDurationSeconds).toInt()
-                val milestone = (elapsedSeconds / MilestoneStepSeconds)
-                if (milestone in 1..2 && milestone != lastMilestone) {
-                    lastMilestone = milestone
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                }
-                if (next >= 1f) {
-                    completed = true
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    currentOnCompleted()
-                    break
-                }
-            }
-        } else if (progress.value > 0f) {
-            progress.animateTo(
-                targetValue = 0f,
-                animationSpec = tween(durationMillis = RewindDurationMillis, easing = FastOutSlowInEasing),
-            )
-        }
-    }
-
     val fullHeightHost = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     PaneSheet(
         onDismissRequest = onDismiss,
         title = title,
     ) {
+        // 必须在 PaneSheet 内部读取 LocalWindowInfo / LocalHapticFeedback / KeepScreenOn：
+        // Android 上 ModalBottomSheet 与 ModalSideSheet 均为独立 Dialog 窗口，外层 Activity 窗口在弹窗打开期间
+        // isWindowFocused 恒为 false；且触控按压由手势生命周期自行成对增减，不应受窗口焦点位阻塞。
+        var pointerPresses by remember { mutableIntStateOf(0) }
+        var heldKey by remember { mutableStateOf<Key?>(null) }
+        var completed by remember { mutableStateOf(false) }
+        val sheetWindowFocused = LocalWindowInfo.current.isWindowFocused
+        val lifecycleOwner = LocalLifecycleOwner.current
+
+        LaunchedEffect(sheetWindowFocused) {
+            if (!sheetWindowFocused) {
+                heldKey = null
+            }
+        }
+        DisposableEffect(lifecycleOwner) {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_STOP) {
+                    heldKey = null
+                    pointerPresses = 0
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        }
+
+        val holding = !completed && (pointerPresses > 0 || (sheetWindowFocused && heldKey != null))
+        KeepScreenOn(enabled = holding)
+
+        val progress = remember { Animatable(0f) }
+        val currentOnCompleted by rememberUpdatedState(onCompleted)
+        val haptic = LocalHapticFeedback.current
+
+        LaunchedEffect(holding, completed) {
+            if (completed) return@LaunchedEffect
+            if (holding) {
+                // 松手重按必须重新连续按满 30 秒，与「松开即重置」一致。
+                progress.snapTo(0f)
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                var lastMilestone = 0
+                val startNanos = withFrameNanos { it }
+                while (isActive && holding && !completed) {
+                    val nowNanos = withFrameNanos { it }
+                    val elapsedMillis = (nowNanos - startNanos).coerceAtLeast(0L) / 1_000_000f
+                    val next = (elapsedMillis / HoldDurationMillis).coerceIn(0f, 1f)
+                    progress.snapTo(next)
+                    val elapsedSeconds = (next * HoldDurationSeconds).toInt()
+                    val milestone = (elapsedSeconds / MilestoneStepSeconds)
+                    if (milestone in 1..2 && milestone != lastMilestone) {
+                        lastMilestone = milestone
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    }
+                    if (next >= 1f) {
+                        completed = true
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        currentOnCompleted()
+                        break
+                    }
+                }
+            } else if (progress.value > 0f) {
+                progress.animateTo(
+                    targetValue = 0f,
+                    animationSpec = tween(durationMillis = RewindDurationMillis, easing = FastOutSlowInEasing),
+                )
+            }
+        }
+
         val showTitle = !inPane
         val fillsHeight = inPane || fullHeightHost
         val fraction = progress.value.coerceIn(0f, 1f)
