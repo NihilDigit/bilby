@@ -2,6 +2,7 @@ package dev.bilby.data
 
 import dev.bilby.BiliLog
 import dev.bilby.formatDurationSeconds
+import dev.bilby.normalizeDurationText
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
@@ -405,7 +406,7 @@ class SpaceRepository(private val client: BiliClient) {
         bvid = bvid,
         title = title,
         coverUrl = pic.toHttpsUrl(),
-        durationText = length,
+        durationText = normalizeDurationText(length),
         publishedAtEpochSeconds = created,
         playCountText = play.formatCount(),
         danmakuCountText = videoReview.formatCount(),

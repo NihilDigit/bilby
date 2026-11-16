@@ -310,6 +310,9 @@ fun ToViewScreen(
                             close = close,
                             upMid = item.upMid,
                             onOpenUpSpace = onUpClick,
+                            coverUrl = item.coverUrl,
+                            upName = item.upName,
+                            durationSeconds = item.durationSeconds,
                             startIndex = leadingCount,
                             totalCount = totalCount,
                         )

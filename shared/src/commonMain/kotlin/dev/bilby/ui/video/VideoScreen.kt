@@ -75,6 +75,7 @@ import dev.bilby.ui.player.ControlBarDanmaku
 import dev.bilby.ui.player.CenterPlayButton
 import dev.bilby.ui.theme.PlayerTheme
 import dev.bilby.ui.player.QueueEdges
+import dev.bilby.ui.player.QueueEditActions
 import dev.bilby.ui.player.buildEpisodeRows
 import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
@@ -166,11 +167,11 @@ fun VideoScreen(
     /** 第一次展开简介时拉标签,见 VideoViewModel.loadVideoTags。 */
     onLoadTags: () -> Unit,
     /** 点一枚标签 = 拿它的原文开一页普通搜索结果。 */
-    onTagClick: (String) -> Unit,
+    onTagClick: ((String) -> Unit)?,
     related: RelatedState,
     commentState: CommentUiState,
     sponsorSegments: List<SponsorSegment>,
-    onFindRelated: () -> Unit,
+    onFindRelated: (() -> Unit)?,
     /** 找相关之后的追问,见 VideoViewModel.askRelated。 */
     onAskRelated: (String) -> Unit,
     /** 重跑出错的那一轮找相关或追问。 */
@@ -246,12 +247,22 @@ fun VideoScreen(
     defaultHoldSpeed: Float = SettingsStore.DEFAULT_HOLD_SPEED,
     panelPrefs: SideSheetPrefs? = null,
     onPanelWidthChange: (Float) -> Unit = {},
+    nightBanner: (@Composable () -> Unit)? = null,
+    onAuthorResolved: (upMid: Long, staffMids: Set<Long>) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val playback = LocalPlaybackHost.current
     val system = LocalSystemActions.current
     var controller by remember { mutableStateOf<PlayerHandle?>(null) }
     var fullscreen by rememberSaveable { mutableStateOf(false) }
+
+    val currentOnAuthorResolved by rememberUpdatedState(onAuthorResolved)
+    LaunchedEffect(state.detail?.bvid, state.detail?.up?.mid, state.detail?.staff, bvid) {
+        val detail = state.detail ?: return@LaunchedEffect
+        if (detail.bvid == bvid) {
+            currentOnAuthorResolved(detail.up.mid, detail.staff.mapTo(HashSet()) { it.mid })
+        }
+    }
 
     /**
      * 控件锁。提到这一层是因为返回键要先解锁再退出全屏(见下面的 BackHandler),而它原先是
@@ -431,6 +442,25 @@ fun VideoScreen(
     }
 
     /** 队列的唯一来源是服务。页面只是把它摆出来,不自己攒一份。 */
+    val queueDetached = audioState.queue?.detached == true
+    val queueEditActions = remember(audioState.queue?.frameId, frame.id, active, queueDetached) {
+        if (audioState.queue?.frameId != frame.id || active == null) {
+            null
+        } else {
+            QueueEditActions(
+                onMove = { targetBvid, toIndex -> active.send(PlaybackCommand.MoveQueueItem(targetBvid, toIndex)) },
+                onRemove = { targetBvid -> active.send(PlaybackCommand.RemoveQueueItem(targetBvid)) },
+                onPlayNext = { item -> active.send(PlaybackCommand.EnqueueItem(frame.id, item, playNext = true)) },
+                onClearOthers = { active.send(PlaybackCommand.ClearQueueExceptCurrent) },
+                onReset = if (queueDetached) {
+                    { active.send(PlaybackCommand.ResetQueue) }
+                } else {
+                    null
+                },
+            )
+        }
+    }
+
     val shownQueue = QueueUiState(
         rows = episodeRows,
         sourceLabel = audioState.queue?.sourceLabel.orEmpty(),
@@ -443,6 +473,7 @@ fun VideoScreen(
         enriching = (audioState.queue?.enriching == true),
         incomplete = (audioState.queue?.incomplete == true),
         edges = queueEdges,
+        editActions = queueEditActions,
     )
 
     /**
@@ -651,39 +682,78 @@ fun VideoScreen(
         // 先接住返回、把 Sheet 收回把手,这句退听视频要按第二次才轮到。这个先后顺序是被依赖的。
         // 那是 BottomSheetScaffold,不像 ModalBottomSheet 自带返回处理,得自己注册。
         BackHandler { onListeningChange(false) }
-        ListenScreen(
-            player = active,
-            state = audioState,
-            sleepTimer = sleepTimerState,
-            queue = shownQueue,
-            // 页面那个 `playing` 在下面才声明(它服务于画面钉住的判据),这里读服务的状态,
-            // 两者说的是同一件事。
-            playing = audioState.isPlaying,
-            onSelectEpisode = onSelectEpisode,
-            onRetryQueue = retryQueue,
-            onOpenQueueSource = onOpenQueueSource,
-            // 不带 MediaItem 的那一对:服务在这两条命令上先走分 P(QueuePlayer.handleSeek)。
-            onNext = { active.seekToNext() },
-            onPrevious = { active.seekToPrevious() },
-            onCycleEndMode = cycleEndMode,
-            onCycleOrder = cycleQueueOrder,
-            onRetry = retryPlayback,
-            onSleepTimer = { mode -> active.send(PlaybackCommand.SetSleepTimer(mode)) },
-            onSleepTimerAdjust = { deltaMinutes -> active.send(PlaybackCommand.AdjustSleepTimer(deltaMinutes)) },
-            onAudioQualityChange = setAudioQuality,
-            // 退出听视频就是把这个壳关掉,**没有第二件事**。队列不动、播放不停、视频轨由上面
-            // 那个 LaunchedEffect 自己打开。页面此刻可能已经不是队列当前那一条了(听的时候
-            // 连播过去了),跟过去是 VideoRoute 的职责 —— 它盯着队列,不需要这里通知。
-            onBack = { onListeningChange(false) },
-            subtitleTracks = subtitleTracks,
-            subtitleLan = subtitleLan,
-            onSelectSubtitle = onSelectSubtitle,
-            subtitleCues = subtitleCues,
-            comments = { paneModifier -> commentsPane(paneModifier, true) },
-            // 听视频这一屏是普通页面(封面 + 控件),不是全出血的媒体,所以要像导航层那样
-            // 躲开横向挖孔 —— 播放页整个目的地被排除在 `CutoutSafe` 之外,这里没人替它做。
-            modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.horizontalCutout),
-        )
+        val renderListen: @Composable (Modifier) -> Unit = { listenModifier ->
+            ListenScreen(
+                player = active,
+                state = audioState,
+                sleepTimer = sleepTimerState,
+                queue = shownQueue,
+                // 页面那个 `playing` 在下面才声明(它服务于画面钉住的判据),这里读服务的状态,
+                // 两者说的是同一件事。
+                playing = audioState.isPlaying,
+                onSelectEpisode = onSelectEpisode,
+                onRetryQueue = retryQueue,
+                onOpenQueueSource = onOpenQueueSource,
+                // 不带 MediaItem 的那一对:服务在这两条命令上先走分 P(QueuePlayer.handleSeek)。
+                onNext = { active.seekToNext() },
+                onPrevious = { active.seekToPrevious() },
+                onCycleEndMode = cycleEndMode,
+                onCycleOrder = cycleQueueOrder,
+                onRetry = retryPlayback,
+                onSleepTimer = { mode -> active.send(PlaybackCommand.SetSleepTimer(mode)) },
+                onSleepTimerAdjust = { deltaMinutes -> active.send(PlaybackCommand.AdjustSleepTimer(deltaMinutes)) },
+                onAudioQualityChange = setAudioQuality,
+                // 退出听视频就是把这个壳关掉,**没有第二件事**。队列不动、播放不停、视频轨由上面
+                // 那个 LaunchedEffect 自己打开。页面此刻可能已经不是队列当前那一条了(听的时候
+                // 连播过去了),跟过去是 VideoRoute 的职责 —— 它盯着队列,不需要这里通知。
+                onBack = { onListeningChange(false) },
+                subtitleTracks = subtitleTracks,
+                subtitleLan = subtitleLan,
+                onSelectSubtitle = onSelectSubtitle,
+                subtitleCues = subtitleCues,
+                comments = { paneModifier -> commentsPane(paneModifier, true) },
+                // 听视频这一屏是普通页面(封面 + 控件),不是全出血的媒体,所以要像导航层那样
+                // 躲开横向挖孔 —— 播放页整个目的地被排除在 `CutoutSafe` 之外,这里没人替它做。
+                modifier = listenModifier,
+            )
+        }
+        val baseListenModifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.horizontalCutout)
+        if (nightBanner == null) {
+            renderListen(baseListenModifier)
+        } else if (LocalWindowCaption.current == null) {
+            Column(modifier = baseListenModifier) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .windowInsetsPadding(WindowInsets.barsAndCutout.only(WindowInsetsSides.Top))
+                        .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                ) {
+                    nightBanner()
+                }
+                renderListen(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .consumeWindowInsets(WindowInsets.barsAndCutout.only(WindowInsetsSides.Top)),
+                )
+            }
+        } else {
+            Box(modifier = baseListenModifier) {
+                renderListen(Modifier.fillMaxSize())
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(
+                            top = NightListenDesktopBannerTopOffset,
+                            start = Spacing.Comfortable,
+                            end = Spacing.Comfortable,
+                        ),
+                ) {
+                    nightBanner()
+                }
+            }
+        }
         return
     }
 
@@ -764,7 +834,11 @@ fun VideoScreen(
     // 两栏时二级面板画在右栏里(见 [SidePaneState])。单栏时右栏的面板层不组合,面板照旧是 sheet。
     val sidePane = rememberSidePaneState()
 
-    if (relatedOpen && !immersive) {
+    LaunchedEffect(onFindRelated) {
+        if (onFindRelated == null) relatedOpen = false
+    }
+
+    if (relatedOpen && !immersive && onFindRelated != null) {
         CompositionLocalProvider(LocalSidePane provides sidePane) {
             PaneSheet(
                 onDismissRequest = { relatedOpen = false },
@@ -1058,6 +1132,7 @@ fun VideoScreen(
                     onDismiss = { episodePanelOpen = false },
                     edges = queueEdges,
                     playing = playing,
+                    editActions = shownQueue.editActions,
                 )
             }
         }
@@ -1086,9 +1161,11 @@ fun VideoScreen(
                 },
                 // 点闪光:没问过就发起检索,问过就只是把 sheet 再打开 —— 再点一次重跑
                 // 会把已有结果冲掉,而用户此刻多半只是想再看一眼。
-                onFindRelated = {
-                    if (!related.started) onFindRelated()
-                    relatedOpen = true
+                onFindRelated = onFindRelated?.let { find ->
+                    {
+                        if (!related.started) find()
+                        relatedOpen = true
+                    }
                 },
                 onListen = { onListeningChange(true) },
                 danmakuInput = DanmakuInput(
@@ -1140,6 +1217,19 @@ fun VideoScreen(
                 onFavConfirm = onFavConfirm,
                 onOpenLink = onOpenLink,
                 onSeek = seekToTimestamp,
+                banner = if (expandedLayout && !immersive && nightBanner != null) {
+                    {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                        ) {
+                            nightBanner()
+                        }
+                    }
+                } else {
+                    null
+                },
                 modifier = paneModifier,
             )
         }
@@ -1317,6 +1407,17 @@ fun VideoScreen(
             // 画面上没有东西:内嵌控制条底部让出了同样的高度(见 BilbyPlayer 的
             // PlayerControlBar),快捷播放条那一截也多留了同样的高度(见上面的 minVisiblePx)。
             if (!immersive) {
+                if (nightBanner != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surface)
+                            .windowInsetsPadding(WindowInsets.horizontalCutout)
+                            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                    ) {
+                        nightBanner()
+                    }
+                }
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     tabsPane(
                         Modifier
@@ -1420,5 +1521,8 @@ private val ToastAnchorInDetail = BiasAlignment(horizontalBias = 0f, verticalBia
 /** [VideoScreen] 里 paneStates 的两个存档键。 */
 private const val TabsStateKey = "tabs"
 private const val CommentsStateKey = "comments"
+
+/** 桌面端自定义标题栏下听视频页顶栏高度，避免提醒横幅压住窗口控制键。 */
+private val NightListenDesktopBannerTopOffset = 64.dp
 
 

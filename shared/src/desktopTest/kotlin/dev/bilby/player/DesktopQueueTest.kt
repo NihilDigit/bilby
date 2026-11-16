@@ -118,4 +118,70 @@ class DesktopQueueTest {
             assertEquals(before, after.filter { it in before })
         }
     }
+
+    @Test
+    fun `move preserves current item identity and adjusts current index`() {
+        val queue = DesktopQueue(Random(1))
+        queue.set(items("A", "B", "C", "D"), 1) // current = B
+        assertEquals(true, queue.move(0, 2))
+        assertEquals(listOf("B", "C", "A", "D"), queue.bvids())
+        assertEquals("B", queue.current?.bvid)
+        assertEquals(0, queue.index)
+
+        assertEquals(true, queue.move(0, 3))
+        assertEquals(listOf("C", "A", "D", "B"), queue.bvids())
+        assertEquals("B", queue.current?.bvid)
+        assertEquals(3, queue.index)
+    }
+
+    @Test
+    fun `removeAt and clearExceptCurrent preserve current item and shuffle invariants`() {
+        val queue = DesktopQueue(Random(3))
+        queue.set(items("A", "B", "C", "D", "E"), 2) // current = C
+        queue.order = QueueOrder.Shuffle
+
+        assertEquals(false, queue.removeAt(2)) // cannot remove current directly
+        assertEquals(true, queue.removeAt(0))
+        assertEquals(listOf("B", "C", "D", "E"), queue.bvids())
+        assertEquals("C", queue.current?.bvid)
+        assertEquals(1, queue.index)
+        assertEquals(setOf("B", "C", "D", "E"), queue.playOrder().toSet())
+
+        assertEquals(true, queue.clearExceptCurrent())
+        assertEquals(listOf("C"), queue.bvids())
+        assertEquals(0, queue.index)
+        assertEquals(listOf("C"), queue.playOrder())
+    }
+
+    @Test
+    fun `enqueue playNext honors Forward Reverse and Shuffle orders`() {
+        // Forward
+        val forward = DesktopQueue(Random(1))
+        forward.set(items("A", "B", "C"), 1) // B
+        forward.enqueue(item("X"), playNext = true)
+        assertEquals(listOf("A", "B", "X", "C"), forward.bvids())
+        assertEquals(2, forward.nextIndex())
+        // Moving existing item to next
+        forward.enqueue(item("A"), playNext = true)
+        assertEquals(listOf("B", "A", "X", "C"), forward.bvids())
+        assertEquals(0, forward.index)
+        assertEquals(1, forward.nextIndex())
+
+        // Reverse
+        val reverse = DesktopQueue(Random(1))
+        reverse.set(items("A", "B", "C"), 1) // B
+        reverse.order = QueueOrder.Reverse
+        reverse.enqueue(item("X"), playNext = true)
+        assertEquals(listOf("A", "X", "B", "C"), reverse.bvids())
+        assertEquals("B", reverse.current?.bvid)
+        assertEquals(1, reverse.nextIndex()) // X
+
+        // Shuffle
+        val shuffle = DesktopQueue(Random(9))
+        shuffle.set(items("A", "B", "C", "D"), 1) // B
+        shuffle.order = QueueOrder.Shuffle
+        shuffle.enqueue(item("Z"), playNext = true)
+        assertEquals("Z", shuffle[shuffle.nextIndex()!!].bvid)
+        assertEquals(5, shuffle.playOrder().size)
+    }
 }

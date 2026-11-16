@@ -23,11 +23,11 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Mail
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.WatchLater
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -58,9 +58,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope
+import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.runtime.saveable.listSaver
 import dev.bilby.ui.maxWidthGridCells
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -68,9 +71,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.material3.Surface
 import androidx.compose.ui.semantics.Role
@@ -321,12 +326,51 @@ private fun FeedList(
     }
     val markerIndex = state.items.indexOfReadMarker(state.readMarkerEntryId)
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    val pinnedHeader = LocalWindowCaption.current != null
     // 那一排头像排在动态流前面,分隔线/条目在网格里的绝对下标要把它加回来。
     // 「最常访问」那一格在没人可显示时整格不画,正在直播的那一格自己也可以撑起它 ——
     // 判据必须和下面渲染时用的是同一个,差一格就是开屏定位落错一条。
     val hasUpsRow = state.topUps.isNotEmpty() || state.liveUps.isNotEmpty()
-    // 标题行恒占一格。
-    val baseOffset = (if (hasUpsRow) 1 else 0) + 1
+    // 标题行在网格外（桌面固定标题栏）时不占网格下标。
+    val baseOffset = (if (pinnedHeader) 0 else 1) + (if (hasUpsRow) 1 else 0)
+
+    val beforeMarker = remember(state.items, markerIndex) {
+        if (markerIndex != null) state.items.subList(0, markerIndex) else state.items
+    }
+    val fromMarker = remember(state.items, markerIndex) {
+        if (markerIndex != null) state.items.subList(markerIndex, state.items.size) else emptyList()
+    }
+    val beforeNodes = remember(beforeMarker) { groupFeedBursts(beforeMarker) }
+    val fromNodes = remember(fromMarker) { groupFeedBursts(fromMarker) }
+    var expandedBurstIds by rememberSaveable(stateSaver = BurstIdSetSaver) { mutableStateOf(emptySet()) }
+    val collapseScope = rememberCoroutineScope()
+    val collapseBurst: (String) -> Unit = { burstId ->
+        val nextExpanded = expandedBurstIds - burstId
+        var targetIndex: Int? = null
+        var cursor = baseOffset
+        for (node in beforeNodes) {
+            if (node is FeedDisplayNode.Burst && node.anchorId == burstId) {
+                targetIndex = cursor
+                break
+            }
+            cursor += node.emittedGridItemCount(node.anchorId in nextExpanded)
+        }
+        if (targetIndex == null && markerIndex != null) {
+            cursor += 1
+            for (node in fromNodes) {
+                if (node is FeedDisplayNode.Burst && node.anchorId == burstId) {
+                    targetIndex = cursor
+                    break
+                }
+                cursor += node.emittedGridItemCount(node.anchorId in nextExpanded)
+            }
+        }
+        val leadAlreadyVisible = listState.layoutInfo.visibleItemsInfo.any { it.key == burstId }
+        expandedBurstIds = nextExpanded
+        if (!leadAlreadyVisible && targetIndex != null) {
+            collapseScope.launch { listState.scrollToItem(targetIndex) }
+        }
+    }
 
     var liveSheetOpen by rememberSaveable { mutableStateOf(false) }
 
@@ -348,17 +392,33 @@ private fun FeedList(
         // 找不到分隔线也算定位过:那说明记录不在已加载范围内,再等下去只会在某次翻页之后
         // 突然跳一下。
         onLocated()
-        val target = markerIndex ?: return@LaunchedEffect
-        listState.scrollToItem(baseOffset + target)
+        if (markerIndex == null) return@LaunchedEffect
+        val targetOffset = beforeNodes.sumOf { it.emittedGridItemCount(it.anchorId in expandedBurstIds) }
+        listState.scrollToItem(baseOffset + targetOffset)
     }
 
-    // 顶部可见条目上报给 ViewModel 去抖落盘。用 layoutInfo 里第一个「是投稿条目」的 key,
-    // 不用 firstVisibleItemIndex 反查 —— 分隔线、顶部 UP 排都会占用网格的下标,
-    // 换算回 state.items 的下标要跟着这两样是否存在反复调整,直接认 key 更不容易算错。
-    val idSet = remember(state.items) { state.items.mapTo(HashSet()) { it.id } }
-    LaunchedEffect(listState, idSet) {
+    // 顶部可见条目上报给 ViewModel 去抖落盘。直接用网格 item key 反查对应的真实条目 id,
+    // 兼容连发收起卡/行与普通条目。
+    val keyToAnchorId = remember(beforeNodes, fromNodes) {
+        buildMap<Any, String>(state.items.size * 2) {
+            fun indexNodes(nodes: List<FeedDisplayNode>) {
+                for (node in nodes) {
+                    when (node) {
+                        is FeedDisplayNode.Single -> put(node.entry.id, node.entry.id)
+                        is FeedDisplayNode.Burst -> {
+                            put(burstCollapseKey(node.lead.id), node.lead.id)
+                            for (entry in node.all) put(entry.id, entry.id)
+                        }
+                    }
+                }
+            }
+            indexNodes(beforeNodes)
+            indexNodes(fromNodes)
+        }
+    }
+    LaunchedEffect(listState, keyToAnchorId) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo }
-            .mapNotNull { visible -> visible.firstOrNull { (it.key as? String) in idSet }?.key as? String }
+            .mapNotNull { visible -> visible.firstNotNullOfOrNull { keyToAnchorId[it.key] } }
             .distinctUntilChanged()
             .collect { onScrollPositionChanged(it) }
     }
@@ -371,7 +431,6 @@ private fun FeedList(
     val density = LocalDensity.current
     var actionsWidth by remember { mutableStateOf(0.dp) }
     var upsRowFits by remember { mutableStateOf(false) }
-    val pinnedHeader = LocalWindowCaption.current != null
     val actionsInUpsRow = wide && hasUpsRow && upsRowFits
     val headerActions: @Composable () -> Unit = {
         FeedHeaderActions(
@@ -434,20 +493,34 @@ private fun FeedList(
         if (state.items.isEmpty()) {
             item(key = "empty", span = FullLine) { EmptyState(stringResource(Res.string.feed_empty)) }
         }
-        val beforeMarker = if (markerIndex != null) state.items.subList(0, markerIndex) else state.items
-        val fromMarker = if (markerIndex != null) state.items.subList(markerIndex, state.items.size) else emptyList()
         // animateItem:「不再显示这个 UP」当场生效,那一刻被摘掉的可能是连着好几条,
         // 下面几十行硬切着往上跳一格;条目认的是 FeedEntry.id,翻页追加也走同一条动效。
-        gridItems(beforeMarker, key = { it.id }) { item ->
-            FeedEntryItem(item, onItemClick, onUpClick, onExcludeUp, onAddToView, wide, Modifier.animateItem())
-        }
+        feedDisplayNodes(
+            nodes = beforeNodes,
+            expandedBurstIds = expandedBurstIds,
+            wide = wide,
+            onExpandBurst = { expandedBurstIds = expandedBurstIds + it },
+            onCollapseBurst = collapseBurst,
+            onItemClick = onItemClick,
+            onUpClick = onUpClick,
+            onExcludeUp = onExcludeUp,
+            onAddToView = onAddToView,
+        )
         if (markerIndex != null) {
             // 横跨整行:分隔线前那一行没排满也照样断开,新旧两段不共用一行。
             item(key = "read-marker", span = FullLine) { ReadMarkerDivider(Modifier.animateItem()) }
         }
-        gridItems(fromMarker, key = { it.id }) { item ->
-            FeedEntryItem(item, onItemClick, onUpClick, onExcludeUp, onAddToView, wide, Modifier.animateItem())
-        }
+        feedDisplayNodes(
+            nodes = fromNodes,
+            expandedBurstIds = expandedBurstIds,
+            wide = wide,
+            onExpandBurst = { expandedBurstIds = expandedBurstIds + it },
+            onCollapseBurst = collapseBurst,
+            onItemClick = onItemClick,
+            onUpClick = onUpClick,
+            onExcludeUp = onExcludeUp,
+            onAddToView = onAddToView,
+        )
             item(key = "footer", span = FullLine) {
                 ListFooter(
                     appending = state.appending,
@@ -629,7 +702,6 @@ private fun HeaderEntryButton(
 }
 
 /** 单条投稿行,含「不再显示」的菜单。从 [FeedList] 拆出来是因为分隔线要把 items(...) 切成两段,两段用的是同一份行 UI。 */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun FeedEntryItem(
     item: FeedEntry,
@@ -638,6 +710,31 @@ private fun FeedEntryItem(
     onExcludeUp: (Long, String) -> Unit,
     onAddToView: (String) -> Unit,
     /** 宽屏网格:不画 ⋮,同一份菜单由右键或长按在按下处弹出,见 [ContextMenuBox]。 */
+    wide: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    FeedEntryRow(
+        item = item,
+        rowUi = item.toRowUi(),
+        onClick = { onItemClick(item) },
+        onUpClick = onUpClick,
+        onExcludeUp = onExcludeUp,
+        onAddToView = onAddToView,
+        wide = wide,
+        modifier = modifier,
+    )
+}
+
+/** 共用投稿行渲染与长按/右键/⋮ 菜单挂载;供普通条目与连发叠卡共用,避免叠卡改变行高或交互方式。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun FeedEntryRow(
+    item: FeedEntry,
+    rowUi: VideoRowUi,
+    onClick: () -> Unit,
+    onUpClick: (Long) -> Unit,
+    onExcludeUp: (Long, String) -> Unit,
+    onAddToView: (String) -> Unit,
     wide: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -651,7 +748,7 @@ private fun FeedEntryItem(
             modifier = modifier,
             menu = menu,
         ) { openMenu ->
-            VideoRow(item = item.toRowUi(), onClick = { onItemClick(item) }, onLongClick = openMenu)
+            VideoRow(item = rowUi, onClick = onClick, onLongClick = openMenu)
         }
         return
     }
@@ -661,8 +758,8 @@ private fun FeedEntryItem(
     // 没有鼠标的平板上的同一个动作。
     var menuOpen by remember { mutableStateOf(false) }
     VideoRow(
-        item = item.toRowUi(),
-        onClick = { onItemClick(item) },
+        item = rowUi,
+        onClick = onClick,
         modifier = modifier,
         overflow = {
             // 菜单挂在按钮上,不挂在整行上 —— 挂在行上时 Popup 以整行为锚,菜单从行的左下角
@@ -705,7 +802,8 @@ private fun FeedEntryMenuItems(
     onExcludeUp: (Long, String) -> Unit,
     onAddToView: (String) -> Unit,
 ) {
-    val videoBvid = (item as? FeedEntry.Video)?.bvid.orEmpty()
+    val video = item as? FeedEntry.Video
+    val videoBvid = video?.bvid.orEmpty()
     val leadingCount = if (videoBvid.isNotEmpty()) 1 else 0
     val commonCount = videoCommonMenuItemCount(videoBvid, item.upMid, onUpClick)
     val totalCount = leadingCount + commonCount + 1
@@ -725,10 +823,13 @@ private fun FeedEntryMenuItems(
     }
     VideoCommonMenuItems(
         bvid = videoBvid,
-        title = (item as? FeedEntry.Video)?.title.orEmpty(),
+        title = video?.title.orEmpty(),
         close = close,
         upMid = item.upMid,
         onOpenUpSpace = onUpClick,
+        coverUrl = video?.coverUrl.orEmpty(),
+        upName = item.upName,
+        durationSeconds = video?.let { dev.bilby.parseDurationSeconds(it.durationText) } ?: 0L,
         startIndex = leadingCount,
         totalCount = totalCount,
     )
@@ -1048,6 +1149,226 @@ private fun UpSlot(
     }
 }
 
+private fun burstCollapseKey(leadId: String): String = "burst-collapse:$leadId"
+
+private val BurstIdSetSaver = listSaver<Set<String>, String>(
+    save = { it.toList() },
+    restore = { it.toSet() },
+)
+
+private fun LazyGridScope.feedDisplayNodes(
+    nodes: List<FeedDisplayNode>,
+    expandedBurstIds: Set<String>,
+    wide: Boolean,
+    onExpandBurst: (String) -> Unit,
+    onCollapseBurst: (String) -> Unit,
+    onItemClick: (FeedEntry) -> Unit,
+    onUpClick: (Long) -> Unit,
+    onExcludeUp: (Long, String) -> Unit,
+    onAddToView: (String) -> Unit,
+) {
+    nodes.forEach { node ->
+        when (node) {
+            is FeedDisplayNode.Single -> item(key = node.entry.id) {
+                FeedEntryItem(node.entry, onItemClick, onUpClick, onExcludeUp, onAddToView, wide, Modifier.animateItem())
+            }
+
+            is FeedDisplayNode.Burst -> {
+                val expanded = node.anchorId in expandedBurstIds
+                if (!expanded) {
+                    item(key = node.lead.id) {
+                        BurstStackedItem(
+                            node = node,
+                            wide = wide,
+                            onExpand = { onExpandBurst(node.anchorId) },
+                            onUpClick = onUpClick,
+                            onExcludeUp = onExcludeUp,
+                            onAddToView = onAddToView,
+                            modifier = Modifier.animateItem(),
+                        )
+                    }
+                } else {
+                    gridItems(node.all, key = { it.id }) { entry ->
+                        FeedEntryItem(
+                            entry,
+                            onItemClick,
+                            onUpClick,
+                            onExcludeUp,
+                            onAddToView,
+                            wide,
+                            Modifier.animateItem(),
+                        )
+                    }
+                    item(key = burstCollapseKey(node.lead.id)) {
+                        if (wide) {
+                            BurstCollapseCard(
+                                upName = node.lead.upName,
+                                totalCount = node.totalCount,
+                                onCollapse = { onCollapseBurst(node.anchorId) },
+                                modifier = Modifier.animateItem(),
+                            )
+                        } else {
+                            BurstCollapseRow(
+                                upName = node.lead.upName,
+                                totalCount = node.totalCount,
+                                onCollapse = { onCollapseBurst(node.anchorId) },
+                                modifier = Modifier.animateItem(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 连发组收起态叠卡:保持与普通 [VideoRow] 完全一致的行高，避免宽屏网格同一行其他单元格下方出现空白；
+ * 三层衬底通过 [Modifier.matchParentSize] 落在外边距内侧形成卡片叠放效果。
+ */
+@Composable
+private fun BurstStackedItem(
+    node: FeedDisplayNode.Burst,
+    wide: Boolean,
+    onExpand: () -> Unit,
+    onUpClick: (Long) -> Unit,
+    onExcludeUp: (Long, String) -> Unit,
+    onAddToView: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val rowUi = node.lead.toRowUi().copy(
+        typeBadge = stringResource(Res.string.feed_burst_stack_badge, node.totalCount),
+    )
+    Box(modifier = modifier.fillMaxWidth()) {
+        Surface(
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            border = BorderStroke(DeckBorderWidth, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier
+                .matchParentSize()
+                .padding(start = Spacing.Comfortable, end = DeckOuterEndInset, top = Spacing.Cozy, bottom = 0.dp),
+        ) {}
+        Surface(
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            border = BorderStroke(DeckBorderWidth, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier
+                .matchParentSize()
+                .padding(start = Spacing.Cozy, end = DeckMidEndInset, top = Spacing.Tight, bottom = DeckStepOffset),
+        ) {}
+        Surface(
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = BorderStroke(DeckBorderWidth, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier
+                .matchParentSize()
+                .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
+        ) {}
+        FeedEntryRow(
+            item = node.lead,
+            rowUi = rowUi,
+            onClick = onExpand,
+            onUpClick = onUpClick,
+            onExcludeUp = onExcludeUp,
+            onAddToView = onAddToView,
+            wide = wide,
+        )
+    }
+}
+
+/** 宽屏连发组展开后跟在最后一条之后的收起卡片，占 1 格网格单元。 */
+@Composable
+private fun BurstCollapseCard(
+    upName: String,
+    totalCount: Int,
+    onCollapse: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+    ) {
+        Surface(
+            onClick = onCollapse,
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = BurstCollapseCardMinHeight),
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterVertically),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.KeyboardArrowUp,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(Dimens.IconAction),
+                )
+                Text(
+                    text = stringResource(Res.string.feed_burst_collapse_card_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = stringResource(Res.string.feed_burst_collapse_card_subtitle, upName, totalCount),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** 单列列表连发组展开后跟在最后一条之后的紧凑收起行。 */
+@Composable
+private fun BurstCollapseRow(
+    upName: String,
+    totalCount: Int,
+    onCollapse: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onCollapse,
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.CenterHorizontally),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = Dimens.MinTouchTarget)
+                .padding(horizontal = Spacing.Cozy),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.KeyboardArrowUp,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+            Text(
+                text = stringResource(Res.string.feed_burst_collapse_row, upName, totalCount),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
 /** 网格里横跨整行的那几格:标题行、分隔线、页脚。 */
 private val FullLine: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
 
@@ -1088,3 +1409,18 @@ private val SlotGap = Spacing.Tight
  * 再多的人本来就该从右边那个入口进完整名单。
  */
 private const val FrequentUpLimit = 20
+
+/** 连发叠卡各层边框宽度。 */
+private val DeckBorderWidth = 1.dp
+
+/** 连发叠卡中层相对外层底部的错位步长。 */
+private val DeckStepOffset = 2.dp
+
+/** 连发叠卡中层右侧内缩，使其右沿比前卡探出半阶。 */
+private val DeckMidEndInset = 5.dp
+
+/** 连发叠卡外层右侧内缩，使其右沿比中层再探出半阶。 */
+private val DeckOuterEndInset = 2.dp
+
+/** 宽屏连发收起卡的最小高度，接近常规视频行封面区高度。 */
+private val BurstCollapseCardMinHeight = 90.dp

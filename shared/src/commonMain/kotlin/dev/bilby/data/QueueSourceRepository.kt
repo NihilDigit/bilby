@@ -2,9 +2,12 @@ package dev.bilby.data
 
 import dev.bilby.BiliLog
 import dev.bilby.api.BiliResult
+import dev.bilby.getString
 import dev.bilby.offline.OfflineStatus
 import dev.bilby.offline.OfflineStore
 import dev.bilby.player.QueueItem
+import dev.bilby.resources.Res
+import dev.bilby.resources.queue_source_custom
 
 /**
  * 打开好的一份队列:当前视频附近的一段、来源名、目录入口,以及往两头续取用的 [feed]。
@@ -112,6 +115,16 @@ class QueueSourceRepository(
             }
         }
         QueueContext.Offline -> offline(bvid)
+        is QueueContext.Custom -> openFeed(
+            feed = StaticFeed(
+                context.items.map {
+                    QueueItem(it.bvid, it.title, it.upName, it.coverUrl, it.durationSeconds)
+                },
+            ),
+            bvid = bvid,
+            label = getString(Res.string.queue_source_custom),
+            source = null,
+        )
     }
 
     /**
@@ -322,8 +335,4 @@ class QueueSourceRepository(
  * `"12:34"` / `"1:02:03"` 换成秒,认不出时给 0。投稿列表与稍后再看给的时长是这种字符串
  * (合集详情给的是数值秒,不走这里)。队列面板要显示时长,0 表示不显示。
  */
-internal fun parseDurationText(text: String): Long {
-    val parts = text.trim().split(':').map { it.toLongOrNull() ?: return 0L }
-    if (parts.size !in 2..3) return 0L
-    return parts.fold(0L) { total, part -> total * 60 + part }
-}
+internal fun parseDurationText(text: String): Long = dev.bilby.parseDurationSeconds(text)

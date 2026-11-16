@@ -16,15 +16,19 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.outlined.PauseCircleOutline
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedListItem
@@ -52,6 +56,7 @@ import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.components.ListCover
 import dev.bilby.ui.components.PlayingIndicator
+import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -104,6 +109,24 @@ data class EpisodeRow(
     val durationSeconds: Long,
     val isCurrent: Boolean,
     val parts: List<EpisodePart> = emptyList(),
+)
+
+/** 队列交互式编辑操作，由拥有活帧队列或待播草稿的页面传入。 */
+data class QueueEditActions(
+    val onMove: (bvid: String, toIndex: Int) -> Unit,
+    val onRemove: (bvid: String) -> Unit,
+    val onPlayNext: ((QueueItem) -> Unit)? = null,
+    val onClearOthers: (() -> Unit)? = null,
+    val onReset: (() -> Unit)? = null,
+    val allowRemoveLast: Boolean = false,
+)
+
+private fun EpisodeRow.toQueueItem(): QueueItem = QueueItem(
+    bvid = bvid,
+    title = title,
+    upName = upName,
+    coverUrl = coverUrl,
+    durationSeconds = durationSeconds,
 )
 
 /**
@@ -196,6 +219,10 @@ fun EpisodeList(
     edges: QueueEdges? = null,
     /** 正在放还是停着,决定当前那条尾部的指示跳不跳。 */
     playing: Boolean = false,
+    /** 队列编辑回调；为空时仅支持只读点选。 */
+    editActions: QueueEditActions? = null,
+    /** 是否处于行内排序/移除编辑态。 */
+    editing: Boolean = false,
 ) {
     val currentIndex = remember(rows) { rows.currentIndex() }
     val currentBvid = rows.getOrNull(currentIndex)?.bvid
@@ -252,7 +279,7 @@ fun EpisodeList(
             item(key = "loading-before") { EdgeProgress() }
         }
         var segment = 0
-        rows.forEach { row ->
+        rows.forEachIndexed { videoIndex, row ->
             val rowSegment = segment++
             item(key = row.bvid) {
                 QueueRowItem(
@@ -261,6 +288,10 @@ fun EpisodeList(
                     index = rowSegment,
                     count = segmentCount,
                     onClick = { onSelect(EpisodeTarget.Video(row.bvid)) },
+                    videoIndex = videoIndex,
+                    videoCount = rows.size,
+                    editActions = editActions,
+                    editing = editing,
                 )
             }
             // 二级:当前这条的分 P。**key 带上 bvid**,否则连播走到另一条多 P 视频时,
@@ -297,7 +328,25 @@ fun EpisodeList(
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun QueueRowItem(row: EpisodeRow, playing: Boolean, index: Int, count: Int, onClick: () -> Unit) {
+fun QueueRowItem(
+    row: EpisodeRow,
+    playing: Boolean,
+    index: Int,
+    count: Int,
+    onClick: () -> Unit,
+    videoIndex: Int = index,
+    videoCount: Int = count,
+    editActions: QueueEditActions? = null,
+    editing: Boolean = false,
+) {
+    val canPlayNext = editActions?.onPlayNext != null &&
+        !row.isCurrent &&
+        videoCount > 1 &&
+        (!editActions.allowRemoveLast || videoIndex > 0)
+    val canMoveUp = editActions != null && videoIndex > 0
+    val canMoveDown = editActions != null && videoIndex in 0 until (videoCount - 1)
+    val canRemove = editActions != null && (videoCount > 1 || editActions.allowRemoveLast)
+
     val itemContent: @Composable () -> Unit = {
         SegmentedListItem(
             selected = row.isCurrent,
@@ -316,33 +365,148 @@ fun QueueRowItem(row: EpisodeRow, playing: Boolean, index: Int, count: Int, onCl
                     durationText = if (row.durationSeconds > 0) formatDurationSeconds(row.durationSeconds) else "",
                 )
             },
-            trailingContent = if (row.isCurrent) {
-                {
-                    PlayingIndicator(
-                        active = playing,
-                        contentDescription = stringResource(
-                            if (playing) Res.string.video_queue_now_playing else Res.string.video_queue_paused,
-                        ),
-                        modifier = Modifier.size(Dimens.IconInline),
-                    )
+            trailingContent = when {
+                editing && editActions != null -> {
+                    {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (row.isCurrent) {
+                                PlayingIndicator(
+                                    active = playing,
+                                    contentDescription = stringResource(
+                                        if (playing) Res.string.video_queue_now_playing else Res.string.video_queue_paused,
+                                    ),
+                                    modifier = Modifier
+                                        .padding(end = Spacing.Hair)
+                                        .size(Dimens.IconInline),
+                                )
+                            }
+                            IconButton(
+                                onClick = { editActions.onMove(row.bvid, videoIndex - 1) },
+                                enabled = canMoveUp,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.ArrowUpward,
+                                    contentDescription = stringResource(Res.string.queue_move_up),
+                                    modifier = Modifier.size(Dimens.IconInline),
+                                )
+                            }
+                            IconButton(
+                                onClick = { editActions.onMove(row.bvid, videoIndex + 1) },
+                                enabled = canMoveDown,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.ArrowDownward,
+                                    contentDescription = stringResource(Res.string.queue_move_down),
+                                    modifier = Modifier.size(Dimens.IconInline),
+                                )
+                            }
+                            IconButton(
+                                onClick = { editActions.onRemove(row.bvid) },
+                                enabled = canRemove,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = stringResource(Res.string.queue_remove),
+                                    modifier = Modifier.size(Dimens.IconInline),
+                                )
+                            }
+                        }
+                    }
                 }
-            } else {
-                null
+                row.isCurrent -> {
+                    {
+                        PlayingIndicator(
+                            active = playing,
+                            contentDescription = stringResource(
+                                if (playing) Res.string.video_queue_now_playing else Res.string.video_queue_paused,
+                            ),
+                            modifier = Modifier.size(Dimens.IconInline),
+                        )
+                    }
+                }
+                else -> null
             },
         ) {
             Text(text = row.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
-    if (row.bvid.startsWith("BV", ignoreCase = true)) {
+    val hasCommon = row.bvid.startsWith("BV", ignoreCase = true)
+    val editCount = (if (canPlayNext) 1 else 0) +
+        (if (canMoveUp) 1 else 0) +
+        (if (canMoveDown) 1 else 0) +
+        (if (canRemove) 1 else 0)
+    if (hasCommon || editCount > 0) {
         dev.bilby.ui.components.ContextMenuBox(
             onClick = null,
             menuLabel = stringResource(Res.string.menu_item_actions),
             menu = { close ->
-                dev.bilby.ui.components.VideoCommonMenuItems(
-                    bvid = row.bvid,
-                    title = row.title,
-                    close = close,
-                )
+                val commonCount = if (hasCommon) {
+                    dev.bilby.ui.components.videoCommonMenuItemCount(
+                        bvid = row.bvid,
+                        includeQueueActions = false,
+                    )
+                } else {
+                    0
+                }
+                val totalCount = editCount + commonCount
+                var cursor = 0
+                if (canPlayNext) {
+                    DropdownMenuItem(
+                        onClick = {
+                            close()
+                            editActions.onPlayNext(row.toQueueItem())
+                        },
+                        text = { Text(stringResource(Res.string.queue_play_next)) },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Outlined.PlaylistPlay, contentDescription = null) },
+                        shape = menuItemShape(cursor++, totalCount),
+                    )
+                }
+                if (canMoveUp) {
+                    DropdownMenuItem(
+                        onClick = {
+                            close()
+                            editActions.onMove(row.bvid, videoIndex - 1)
+                        },
+                        text = { Text(stringResource(Res.string.queue_move_up)) },
+                        leadingIcon = { Icon(Icons.Filled.ArrowUpward, contentDescription = null) },
+                        shape = menuItemShape(cursor++, totalCount),
+                    )
+                }
+                if (canMoveDown) {
+                    DropdownMenuItem(
+                        onClick = {
+                            close()
+                            editActions.onMove(row.bvid, videoIndex + 1)
+                        },
+                        text = { Text(stringResource(Res.string.queue_move_down)) },
+                        leadingIcon = { Icon(Icons.Filled.ArrowDownward, contentDescription = null) },
+                        shape = menuItemShape(cursor++, totalCount),
+                    )
+                }
+                if (canRemove) {
+                    DropdownMenuItem(
+                        onClick = {
+                            close()
+                            editActions.onRemove(row.bvid)
+                        },
+                        text = { Text(stringResource(Res.string.queue_remove)) },
+                        leadingIcon = { Icon(Icons.Filled.Close, contentDescription = null) },
+                        shape = menuItemShape(cursor++, totalCount),
+                    )
+                }
+                if (hasCommon) {
+                    dev.bilby.ui.components.VideoCommonMenuItems(
+                        bvid = row.bvid,
+                        title = row.title,
+                        close = close,
+                        coverUrl = row.coverUrl,
+                        upName = row.upName,
+                        durationSeconds = row.durationSeconds,
+                        includeQueueActions = false,
+                        startIndex = cursor,
+                        totalCount = totalCount,
+                    )
+                }
             },
         ) { _ ->
             itemContent()

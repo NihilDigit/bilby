@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.offset
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
+import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Person
@@ -51,10 +53,13 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.round
+import dev.bilby.player.QueueItem
 import dev.bilby.resources.Res
 import dev.bilby.resources.action_share
 import dev.bilby.resources.menu_copy_link
 import dev.bilby.resources.menu_open_space
+import dev.bilby.resources.queue_add
+import dev.bilby.resources.queue_play_next
 import dev.bilby.resources.video_bvid_clip_label
 import dev.bilby.resources.video_bvid_copied
 import dev.bilby.resources.video_bvid_copy
@@ -67,6 +72,15 @@ import kotlinx.coroutines.launch
  * 由根部 [dev.bilby.ui.BilbyRoot] 接到全局 SnackbarHost。
  */
 val LocalCopyNotice = staticCompositionLocalOf<(String) -> Unit> { {} }
+
+/**
+ * 列表视频项菜单入队动作(「下一条播放」「加入播放队列」)，由根部 [dev.bilby.ui.BilbyApp] 提供。
+ */
+data class QueueMenuActions(
+    val enqueue: (item: QueueItem, playNext: Boolean) -> Unit,
+)
+
+val LocalQueueActions = staticCompositionLocalOf<QueueMenuActions?> { null }
 
 /**
  * 桌面右键菜单的动效方案:去掉移动端 `DropdownMenu` 默认的 `0.8 -> 1.0` 缩放弹簧,保留极短的
@@ -216,19 +230,24 @@ fun menuItemShape(index: Int, total: Int): Shape = when {
 }
 
 /** [VideoCommonMenuItems] 会画出的项数,供外层合并前后自定义菜单项时计算总项数。 */
+@Composable
 fun videoCommonMenuItemCount(
     bvid: String,
     upMid: Long = 0L,
     onOpenUpSpace: ((Long) -> Unit)? = null,
+    includeQueueActions: Boolean = true,
 ): Int {
     var count = 0
-    if (bvid.isNotEmpty()) count += 2
+    if (bvid.isNotEmpty()) {
+        if (includeQueueActions && LocalQueueActions.current != null) count += 2
+        count += 2
+    }
     if (upMid != 0L && onOpenUpSpace != null) count += 1
     return count
 }
 
 /**
- * 视频列表项共用的右键/长按动作:复制 BV 号、复制链接(或系统分享)、打开 UP 主空间。
+ * 视频列表项共用的右键/长按动作:入队操作、复制 BV 号、复制链接(或系统分享)、打开 UP 主空间。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -238,18 +257,52 @@ fun VideoCommonMenuItems(
     close: () -> Unit,
     upMid: Long = 0L,
     onOpenUpSpace: ((Long) -> Unit)? = null,
+    coverUrl: String = "",
+    upName: String = "",
+    durationSeconds: Long = 0L,
+    includeQueueActions: Boolean = true,
     startIndex: Int = 0,
-    totalCount: Int = startIndex + videoCommonMenuItemCount(bvid, upMid, onOpenUpSpace),
+    totalCount: Int = startIndex + videoCommonMenuItemCount(bvid, upMid, onOpenUpSpace, includeQueueActions),
 ) {
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val copyNotice = LocalCopyNotice.current
     val system = LocalSystemActions.current
+    val queueActions = LocalQueueActions.current.takeIf { includeQueueActions }
     val clipLabel = stringResource(Res.string.video_bvid_clip_label)
     val copiedText = stringResource(Res.string.video_bvid_copied)
 
     var cursor = startIndex
     if (bvid.isNotEmpty()) {
+        if (queueActions != null) {
+            val queueItem = QueueItem(
+                bvid = bvid,
+                title = title,
+                upName = upName,
+                coverUrl = coverUrl,
+                durationSeconds = durationSeconds,
+            )
+            val playNextIndex = cursor++
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    queueActions.enqueue(queueItem, true)
+                },
+                text = { Text(stringResource(Res.string.queue_play_next)) },
+                leadingIcon = { Icon(Icons.AutoMirrored.Outlined.PlaylistPlay, contentDescription = null) },
+                shape = menuItemShape(playNextIndex, totalCount),
+            )
+            val addQueueIndex = cursor++
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    queueActions.enqueue(queueItem, false)
+                },
+                text = { Text(stringResource(Res.string.queue_add)) },
+                leadingIcon = { Icon(Icons.AutoMirrored.Outlined.PlaylistAdd, contentDescription = null) },
+                shape = menuItemShape(addQueueIndex, totalCount),
+            )
+        }
         val copyBvIndex = cursor++
         DropdownMenuItem(
             onClick = {

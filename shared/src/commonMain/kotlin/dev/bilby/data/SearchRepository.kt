@@ -1,6 +1,7 @@
 package dev.bilby.data
 
 import dev.bilby.BiliLog
+import dev.bilby.normalizeDurationText
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
@@ -229,7 +230,7 @@ class SearchRepository(private val client: BiliClient) {
             title = plainTitle,
             titleHighlights = highlights,
             coverUrl = pic.toHttpsUrl(),
-            durationText = duration,
+            durationText = normalizeDurationText(duration),
             upName = author,
             upMid = mid,
             publishedAtEpochSeconds = pubdate,

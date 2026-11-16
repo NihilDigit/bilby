@@ -9,6 +9,7 @@ import dev.bilby.api.dto.DynamicItemDto
 import dev.bilby.api.getData
 import dev.bilby.api.postJsonAction
 import dev.bilby.api.toHttpsUrl
+import dev.bilby.normalizeDurationText
 import dev.bilby.data.model.DynamicAdditional
 import dev.bilby.data.model.DynamicCard
 import dev.bilby.data.model.FeedEntry
@@ -145,7 +146,7 @@ class DynamicRepository(private val client: BiliClient) {
             bvid = bvid,
             title = archive.title,
             coverUrl = archive.cover.toHttpsUrl(),
-            durationText = archive.durationText,
+            durationText = normalizeDurationText(archive.durationText),
             upName = author.name,
             upMid = author.mid,
             upFaceUrl = author.face.toHttpsUrl(),

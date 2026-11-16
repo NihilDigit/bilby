@@ -11,14 +11,21 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material.icons.automirrored.outlined.AltRoute
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Api
+import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Check
@@ -34,16 +41,19 @@ import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.HistoryToggleOff
 import androidx.compose.material.icons.outlined.HourglassEmpty
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.MusicOff
 import androidx.compose.material.icons.outlined.NetworkCheck
 import androidx.compose.material.icons.outlined.Paid
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PersonOff
 import androidx.compose.material.icons.outlined.Preview
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SignalCellularAlt
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.Speed
@@ -57,20 +67,32 @@ import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ButtonGroupDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimeInput
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TimePickerDialog
 import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -81,9 +103,15 @@ import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.data.CodecPreference
 import dev.bilby.data.LlmConfig
+import dev.bilby.data.MINUTES_PER_DAY
+import dev.bilby.data.NightWindowStatus
 import dev.bilby.data.PlayEndMode
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockPrefs
+import dev.bilby.data.WhitelistedUp
+import dev.bilby.data.evaluateNightMode
+import dev.bilby.data.formatMinuteOfDay
+import dev.bilby.api.toHttpsUrl
 import dev.bilby.ui.update.UpdateDialog
 import dev.bilby.update.AppUpdateService
 import dev.bilby.update.AvailableUpdate
@@ -95,7 +123,17 @@ import dev.bilby.player.videoQualityLabel
 import dev.bilby.player.audioQualityLabel
 import dev.bilby.player.DEFAULT_AUDIO_QUALITY_OPTIONS
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.EmptyState
+import dev.bilby.ui.components.FullScreenError
+import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.ListItemPersonSkeleton
+import dev.bilby.ui.components.ListSkeleton
+import dev.bilby.ui.components.PaneSheet
+import dev.bilby.ui.components.PrefetchNearEnd
+import dev.bilby.ui.components.SearchField
+import dev.bilby.ui.night.NightExitHoldSheet
 import dev.bilby.ui.player.formatSpeed
 import dev.bilby.ui.player.labelRes
 import dev.bilby.ui.theme.Breakpoints
@@ -157,6 +195,7 @@ enum class SettingsSection {
     ExcludedFeed,
     Agent,
     Privacy,
+    NightMode,
     About,
 }
 
@@ -1144,3 +1183,459 @@ private val AboutBadgeSize = 48.dp
 
 /** 外链标记比按钮前置图标小一档,读作附注,不与前面的 Code 图标抢。 */
 private val ExternalMarkSize = 16.dp
+
+/** 允许列表单行高度，与 [StaticSettingRow] 保持一致。 */
+private val NightUpRowMinHeight = 56.dp
+
+/** 关注列表选择面板在底部 sheet 形态下占窗口高度的比例。 */
+private const val NightPickerSheetBodyFraction = 0.65f
+
+private enum class TimeEditTarget { Start, End }
+
+private sealed interface PendingNightRestrictionAction {
+    data object Disable : PendingNightRestrictionAction
+    data class UpdateSchedule(val startMinute: Int, val endMinute: Int) : PendingNightRestrictionAction
+    data class UpdateAllowedUps(val ups: List<WhitelistedUp>) : PendingNightRestrictionAction
+}
+
+/**
+ * 夜间模式设置页：开关、生效时段（24h 表盘/键盘切换）、临时退出恢复、允许访问的 UP 主白名单。
+ *
+ * 在夜间模式生效中尝试关闭开关、缩窄当前生效时段或新增 UP 主时，需先完成一次 30 秒长按确认
+ * （同一次页面停留期间解锁一次即可；移除 UP 主始终即时生效）。
+ */
+@Composable
+fun NightModeSettingsPage(
+    state: SettingsUiState,
+    followPicker: NightFollowPickerState,
+    onLoadFollowings: () -> Unit,
+    onLoadMoreFollowings: () -> Unit,
+    onSearchFollowings: (String) -> Unit,
+    onEnabledChange: (Boolean) -> Unit,
+    onScheduleChange: (Int, Int) -> Unit,
+    onAllowedUpsChange: (List<WhitelistedUp>) -> Unit,
+    onRemoveUp: (Long) -> Unit,
+    onClearOverride: () -> Unit,
+    onBack: (() -> Unit)?,
+) {
+    val prefs = state.nightMode
+    var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(prefs) {
+        nowMillis = System.currentTimeMillis()
+        if (!prefs.enabled) return@LaunchedEffect
+        while (true) {
+            delay(15_000L)
+            nowMillis = System.currentTimeMillis()
+        }
+    }
+    val status = evaluateNightMode(prefs, nowMillis)
+    var unlocked by rememberSaveable { mutableStateOf(false) }
+    var editingTimeTarget by rememberSaveable { mutableStateOf<TimeEditTarget?>(null) }
+    var showUpPicker by rememberSaveable { mutableStateOf(false) }
+    var pendingAction by remember { mutableStateOf<PendingNightRestrictionAction?>(null) }
+
+    fun executeAction(action: PendingNightRestrictionAction) {
+        when (action) {
+            PendingNightRestrictionAction.Disable -> onEnabledChange(false)
+            is PendingNightRestrictionAction.UpdateSchedule -> onScheduleChange(action.startMinute, action.endMinute)
+            is PendingNightRestrictionAction.UpdateAllowedUps -> onAllowedUpsChange(action.ups)
+        }
+    }
+
+    fun runOrGate(action: PendingNightRestrictionAction, shouldGate: Boolean) {
+        if (shouldGate && !unlocked && evaluateNightMode(prefs, System.currentTimeMillis()) is NightWindowStatus.Active) {
+            pendingAction = action
+        } else {
+            executeAction(action)
+        }
+    }
+
+    SettingsSubPage(stringResource(Res.string.settings_section_night_mode), onBack, state.loaded) {
+        SettingsGroup {
+            row { position ->
+                ToggleSettingRow(
+                    position = position,
+                    icon = Icons.Outlined.Bedtime,
+                    title = stringResource(Res.string.night_mode_enable),
+                    subtitle = stringResource(Res.string.night_mode_enable_subtitle),
+                    checked = prefs.enabled,
+                    onCheckedChange = { enabled ->
+                        if (enabled) {
+                            onEnabledChange(true)
+                        } else {
+                            runOrGate(PendingNightRestrictionAction.Disable, shouldGate = true)
+                        }
+                    },
+                )
+            }
+            if (status is NightWindowStatus.Overridden) {
+                row { position ->
+                    SettingRow(
+                        position = position,
+                        icon = Icons.Outlined.Restore,
+                        title = stringResource(Res.string.night_mode_resume_now),
+                        onClick = onClearOverride,
+                    )
+                }
+            }
+        }
+        SettingsGroup(title = stringResource(Res.string.night_mode_schedule_group)) {
+            row { position ->
+                SettingRow(
+                    position = position,
+                    icon = Icons.Outlined.Schedule,
+                    title = stringResource(Res.string.night_mode_start_time),
+                    value = formatMinuteOfDay(prefs.startMinuteOfDay),
+                    valueAtEnd = true,
+                    onClick = { editingTimeTarget = TimeEditTarget.Start },
+                )
+            }
+            row { position ->
+                SettingRow(
+                    position = position,
+                    icon = Icons.Outlined.AccessTime,
+                    title = stringResource(Res.string.night_mode_end_time),
+                    value = formatMinuteOfDay(prefs.endMinuteOfDay),
+                    valueAtEnd = true,
+                    onClick = { editingTimeTarget = TimeEditTarget.End },
+                )
+            }
+        }
+        SettingsGroup(title = stringResource(Res.string.night_mode_allowed_ups)) {
+            row { position ->
+                SettingRow(
+                    position = position,
+                    icon = Icons.Outlined.PersonAdd,
+                    title = stringResource(Res.string.night_mode_add_up),
+                    onClick = { showUpPicker = true },
+                )
+            }
+            prefs.allowedUps.forEach { up ->
+                row { position ->
+                    AllowedUpRow(
+                        position = position,
+                        up = up,
+                        onRemove = { onRemoveUp(up.mid) },
+                    )
+                }
+            }
+        }
+    }
+
+    editingTimeTarget?.let { target ->
+        key(target) {
+            val initialMinute = when (target) {
+                TimeEditTarget.Start -> prefs.startMinuteOfDay
+                TimeEditTarget.End -> prefs.endMinuteOfDay
+            }
+            val dialogTitle = stringResource(
+                when (target) {
+                    TimeEditTarget.Start -> Res.string.night_mode_start_time
+                    TimeEditTarget.End -> Res.string.night_mode_end_time
+                },
+            )
+            NightTimePickerDialog(
+                title = dialogTitle,
+                initialMinuteOfDay = initialMinute,
+                onConfirm = { pickedMinute ->
+                    val nextStart = if (target == TimeEditTarget.Start) pickedMinute else prefs.startMinuteOfDay
+                    val nextEnd = if (target == TimeEditTarget.End) pickedMinute else prefs.endMinuteOfDay
+                    editingTimeTarget = null
+                    if (nextStart == prefs.startMinuteOfDay && nextEnd == prefs.endMinuteOfDay) return@NightTimePickerDialog
+                    val now = System.currentTimeMillis()
+                    val currentStatus = evaluateNightMode(prefs, now)
+                    val nextStatus = evaluateNightMode(
+                        prefs.copy(startMinuteOfDay = nextStart, endMinuteOfDay = nextEnd),
+                        now,
+                    )
+                    val shrinksActiveWindow = currentStatus is NightWindowStatus.Active && (
+                        nextStatus !is NightWindowStatus.Active ||
+                            nextStatus.window.endEpochMillis < currentStatus.window.endEpochMillis
+                        )
+                    runOrGate(
+                        PendingNightRestrictionAction.UpdateSchedule(nextStart, nextEnd),
+                        shouldGate = shrinksActiveWindow,
+                    )
+                },
+                onDismiss = { editingTimeTarget = null },
+            )
+        }
+    }
+
+    if (showUpPicker) {
+        NightFollowPickerSheet(
+            followPicker = followPicker,
+            initialAllowed = prefs.allowedUps,
+            onLoadFollowings = onLoadFollowings,
+            onLoadMoreFollowings = onLoadMoreFollowings,
+            onSearchFollowings = onSearchFollowings,
+            onConfirm = { selectedUps ->
+                showUpPicker = false
+                val changed = selectedUps.map { it.mid } != prefs.allowedUps.map { it.mid }
+                if (!changed) return@NightFollowPickerSheet
+                val currentMids = prefs.allowedMids
+                val addedAny = selectedUps.any { it.mid !in currentMids }
+                runOrGate(
+                    PendingNightRestrictionAction.UpdateAllowedUps(selectedUps),
+                    shouldGate = addedAny,
+                )
+            },
+            onDismiss = { showUpPicker = false },
+        )
+    }
+
+    pendingAction?.let { action ->
+        NightExitHoldSheet(
+            title = stringResource(Res.string.night_mode_hold_settings_title),
+            onCompleted = {
+                unlocked = true
+                executeAction(action)
+                pendingAction = null
+            },
+            onDismiss = { pendingAction = null },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun AllowedUpRow(
+    position: RowPosition,
+    up: WhitelistedUp,
+    onRemove: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        shape = ListItemDefaults.segmentedShapes(index = position.index, count = position.count).shape,
+        color = colors.surfaceContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = NightUpRowMinHeight)
+                .padding(ListItemDefaults.ContentPadding),
+        ) {
+            if (up.faceUrl.isNotEmpty()) {
+                Avatar(url = up.faceUrl, size = Dimens.AvatarRow)
+            } else {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.size(Dimens.AvatarRow),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Person,
+                        contentDescription = null,
+                        tint = colors.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(Spacing.Cozy))
+            Text(
+                text = up.name,
+                style = MaterialTheme.typography.bodyLarge,
+                color = colors.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(modifier = Modifier.width(Spacing.Cozy))
+            TextButton(onClick = onRemove) {
+                Text(stringResource(Res.string.night_mode_remove_up))
+            }
+        }
+    }
+}
+
+@Composable
+private fun NightTimePickerDialog(
+    title: String,
+    initialMinuteOfDay: Int,
+    onConfirm: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val clamped = initialMinuteOfDay.coerceIn(0, MINUTES_PER_DAY - 1)
+    val pickerState = rememberTimePickerState(
+        initialHour = clamped / 60,
+        initialMinute = clamped % 60,
+        is24Hour = true,
+    )
+    var showDial by rememberSaveable { mutableStateOf(true) }
+
+    TimePickerDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(bottom = Spacing.Comfortable),
+            )
+        },
+        modeToggleButton = {
+            val toggleLabel = stringResource(
+                if (showDial) Res.string.night_mode_time_input else Res.string.night_mode_time_dial,
+            )
+            IconButton(onClick = { showDial = !showDial }) {
+                Icon(
+                    imageVector = if (showDial) Icons.Outlined.Keyboard else Icons.Outlined.Schedule,
+                    contentDescription = toggleLabel,
+                )
+            }
+        },
+        confirmButton = {
+            val inputValid = showDial || (pickerState.hourInput in 0..23 && pickerState.minuteInput in 0..59)
+            TextButton(
+                enabled = inputValid,
+                onClick = { onConfirm(pickerState.hour * 60 + pickerState.minute) },
+            ) {
+                Text(stringResource(Res.string.action_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(Res.string.action_cancel))
+            }
+        },
+    ) {
+        if (showDial) {
+            TimePicker(state = pickerState)
+        } else {
+            TimeInput(state = pickerState)
+        }
+    }
+}
+
+@Composable
+private fun NightFollowPickerSheet(
+    followPicker: NightFollowPickerState,
+    initialAllowed: List<WhitelistedUp>,
+    onLoadFollowings: () -> Unit,
+    onLoadMoreFollowings: () -> Unit,
+    onSearchFollowings: (String) -> Unit,
+    onConfirm: (List<WhitelistedUp>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    LaunchedEffect(Unit) { onLoadFollowings() }
+    var draftSelected by remember { mutableStateOf(initialAllowed.distinctBy { it.mid }) }
+    val selectedMids = remember(draftSelected) { draftSelected.mapTo(HashSet()) { it.mid } }
+
+    PaneSheet(
+        onDismissRequest = onDismiss,
+        title = stringResource(Res.string.night_mode_picker_title),
+        skipPartiallyExpanded = false,
+    ) {
+        if (!inPane) {
+            Text(
+                text = stringResource(Res.string.night_mode_picker_title),
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            )
+        }
+        var queryInput by rememberSaveable(followPicker.query) { mutableStateOf(followPicker.query) }
+        SearchField(
+            value = queryInput,
+            onValueChange = { text ->
+                queryInput = text
+                if (text.isEmpty()) onSearchFollowings("")
+            },
+            placeholder = stringResource(Res.string.followings_search_hint),
+            onSearch = { onSearchFollowings(queryInput) },
+            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+        )
+        val listState = rememberLazyListState()
+        PrefetchNearEnd(
+            state = listState,
+            canLoad = followPicker.hasMore &&
+                !followPicker.loading &&
+                !followPicker.appending &&
+                followPicker.error == null,
+            onLoadMore = onLoadMoreFollowings,
+        )
+        Box(modifier = Modifier.fillMaxWidth().bodyHeight(NightPickerSheetBodyFraction)) {
+            when {
+                followPicker.loading && followPicker.items.isEmpty() -> {
+                    ListSkeleton(row = { ListItemPersonSkeleton() })
+                }
+
+                followPicker.error != null && followPicker.items.isEmpty() -> {
+                    FullScreenError(
+                        message = stringResource(followPicker.error),
+                        onRetry = onLoadMoreFollowings,
+                    )
+                }
+
+                followPicker.items.isEmpty() -> {
+                    EmptyState(
+                        message = stringResource(
+                            if (followPicker.query.isNotBlank()) {
+                                Res.string.followings_search_empty
+                            } else {
+                                Res.string.followings_empty
+                            },
+                        ),
+                    )
+                }
+
+                else -> {
+                    LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                        items(followPicker.items, key = { it.mid }) { up ->
+                            val checked = up.mid in selectedMids
+                            @OptIn(ExperimentalMaterial3ExpressiveApi::class)
+                            ListItem(
+                                checked = checked,
+                                onCheckedChange = { nextChecked ->
+                                    draftSelected = if (nextChecked) {
+                                        if (up.mid in selectedMids) {
+                                            draftSelected
+                                        } else {
+                                            draftSelected + WhitelistedUp(
+                                                mid = up.mid,
+                                                name = up.name,
+                                                faceUrl = up.faceUrl.toHttpsUrl(),
+                                            )
+                                        }
+                                    } else {
+                                        draftSelected.filterNot { it.mid == up.mid }
+                                    }
+                                },
+                                leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarRow) },
+                                trailingContent = { Checkbox(checked = checked, onCheckedChange = null) },
+                                colors = ListItemDefaults.colors(
+                                    containerColor = Color.Transparent,
+                                    selectedContainerColor = Color.Transparent,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(up.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        item(key = "footer") {
+                            ListFooter(
+                                appending = followPicker.appending,
+                                hasMore = followPicker.hasMore,
+                                hasItems = followPicker.items.isNotEmpty(),
+                                error = followPicker.error?.let { stringResource(it) },
+                                onRetry = onLoadMoreFollowings,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            TextButton(onClick = onDismiss) { Text(stringResource(Res.string.action_cancel)) }
+            TextButton(onClick = { onConfirm(draftSelected) }) {
+                Text(stringResource(Res.string.action_confirm))
+            }
+        }
+    }
+}

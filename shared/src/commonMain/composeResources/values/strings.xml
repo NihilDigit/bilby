@@ -67,6 +67,13 @@
     <string name="feed_excluded">已不再显示 %1$s</string>
     <string name="feed_article_badge">文章</string>
     <string name="feed_read_marker">以上是新内容</string>
+    <string name="feed_burst_expand">另外 %1$d 条视频</string>
+    <string name="feed_burst_header">%1$s  共 %2$d 条视频</string>
+    <string name="feed_burst_collapse">收起</string>
+    <string name="feed_burst_stack_badge">共 %1$d 条</string>
+    <string name="feed_burst_collapse_card_title">收起连发</string>
+    <string name="feed_burst_collapse_card_subtitle">%1$s  共 %2$d 条</string>
+    <string name="feed_burst_collapse_row">收起连发（%1$s  共 %2$d 条）</string>
 
     <!-- 搜索 -->
     <string name="search_empty">搜索视频、UP 主与专栏</string>
@@ -430,6 +437,19 @@
     <string name="queue_end_pause">播完暂停</string>
     <string name="queue_end_continue">连播</string>
     <string name="queue_end_repeat_one">洗脑循环</string>
+    <string name="queue_source_custom">自定义队列</string>
+    <string name="queue_play_next">下一条播放</string>
+    <string name="queue_add">加入播放队列</string>
+    <string name="queue_added_next">已设为下一条播放</string>
+    <string name="queue_added">已加入播放队列</string>
+    <string name="queue_move_up">上移</string>
+    <string name="queue_move_down">下移</string>
+    <string name="queue_remove">移出队列</string>
+    <string name="queue_clear_others">清空其余</string>
+    <string name="queue_reset">重置队列</string>
+    <string name="queue_edit">编辑</string>
+    <string name="queue_draft_summary">自定义队列  %1$d 条</string>
+    <string name="queue_draft_play">播放</string>
     <string name="settings_end_mode">完播行为</string>
     <string name="settings_end_mode_subtitle">一条播完后的处理。手动切换上一条、下一条不受影响</string>
     <string name="sleep_timer_off">定时关闭</string>
@@ -883,4 +903,40 @@
     <string name="image_zoom_out">缩小</string>
     <string name="image_zoom_reset">实际大小</string>
     <string name="drop_link_hint">松开以打开站内链接或 BV 号</string>
+
+    <!-- 夜间模式 -->
+    <string name="settings_section_night_mode">夜间模式</string>
+    <string name="night_mode_off">已关闭</string>
+    <string name="night_mode_summary_on">%1$s  %2$d 位</string>
+    <string name="night_mode_summary_paused">%1$s  已暂停</string>
+    <string name="night_mode_enable">开启</string>
+    <string name="night_mode_enable_subtitle">时段内只显示所选 UP 主的投稿</string>
+    <string name="night_mode_schedule_group">时段</string>
+    <string name="night_mode_start_time">开始</string>
+    <string name="night_mode_end_time">结束</string>
+    <string name="night_mode_resume_now">恢复夜间模式</string>
+    <string name="night_mode_allowed_ups">UP 主</string>
+    <string name="night_mode_add_up">添加</string>
+    <string name="night_mode_remove_up">移除</string>
+    <string name="night_mode_picker_title">选择 UP 主</string>
+    <string name="night_mode_time_dial">切换为表盘选择</string>
+    <string name="night_mode_time_input">切换为键盘输入</string>
+    <string name="night_mode_temp_exit">临时退出</string>
+    <string name="night_mode_all_ups">全部</string>
+    <string name="night_mode_open_space">个人空间</string>
+    <string name="night_mode_empty_ups">还没有选定 UP 主</string>
+    <string name="night_mode_empty_videos">暂无投稿</string>
+    <string name="night_mode_go_settings">选择 UP 主</string>
+    <string name="night_mode_reminder_idle">%1$d 秒后进入夜间模式</string>
+    <string name="night_mode_reminder_video">播完当前视频后进入夜间模式</string>
+    <string name="night_mode_switch_now">立即进入</string>
+    <string name="night_mode_entered_notice">已进入夜间模式</string>
+    <string name="night_mode_blocked_up">不在夜间名单中</string>
+    <string name="night_mode_blocked_unavailable">夜间模式下不可用</string>
+    <string name="night_mode_hold_title">临时退出</string>
+    <string name="night_mode_hold_settings_title">修改夜间模式</string>
+    <string name="night_mode_hold_body">恢复常规视图至 %1$s</string>
+    <string name="night_mode_hold_idle">按住确认</string>
+    <string name="night_mode_hold_holding">松开即重置</string>
+    <string name="night_mode_hold_progress">剩余 %1$d 秒</string>
 </resources>

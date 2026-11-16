@@ -218,6 +218,7 @@ class AudioPlaybackService : MediaSessionService() {
      * 同时就是 [AudioPlaybackUiState.stoppedAtEnd]。
      */
     private var endHandled = false
+    private var nightStopAtEnd = false
 
     /**
      * 解析完了但播放器还没走到那一条。
@@ -383,6 +384,7 @@ class AudioPlaybackService : MediaSessionService() {
         player.pauseAtEndOfMediaItems =
             endMode != PlayEndMode.Continue ||
             sleepTimer.state.value.mode == SleepTimerMode.EndOfItem ||
+            nightStopAtEnd ||
             neighbourPart(1) != null
     }
 
@@ -509,8 +511,11 @@ class AudioPlaybackService : MediaSessionService() {
         /** 补全在飞/补全失败,两者都表示当前停在只有一条的临时队列上。 */
         var enriching = false
         var incomplete = false
+        var detached = false
         var extendingBefore = false
         var extendingAfter = false
+        var anchorBvid = ""
+        var pendingReset = false
         var snapshot: FrameSnapshot? = null
     }
 
@@ -524,6 +529,7 @@ class AudioPlaybackService : MediaSessionService() {
         val cid: Long,
         val positionMillis: Long,
         val order: QueueOrder,
+        val detached: Boolean = false,
     )
 
     /**
@@ -617,12 +623,14 @@ class AudioPlaybackService : MediaSessionService() {
             cid = if (loadedMediaId == current.mediaId) loadedCid else 0,
             positionMillis = player.currentPosition,
             order = queueOrder,
+            detached = frame.detached,
         )
     }
 
     /** 换回一帧离开时的样子。停在离开时的位置,不起播,理由同 [resumeFrame]。 */
     private fun restoreFrame(frame: Frame, snapshot: FrameSnapshot) {
         frame.snapshot = null
+        frame.detached = snapshot.detached
         val current = snapshot.items[snapshot.index]
         val items = snapshot.items.mapIndexed { index, item ->
             if (index == snapshot.index) {
@@ -654,6 +662,7 @@ class AudioPlaybackService : MediaSessionService() {
      * [LoadResolver] 在装载时解析。
      */
     private fun openFrame(frame: Frame, bvid: String, requestedCid: Long) {
+        if (frame.anchorBvid.isEmpty()) frame.anchorBvid = bvid
         finishOpenChain("superseded")
         openChain = PerfTrace.chain("openVideo").also { it.mark("command") }
         frameOrderTouched = false
@@ -697,14 +706,27 @@ class AudioPlaybackService : MediaSessionService() {
      *   结果属于上一帧,写进去就是把队列换成另一条视频的集合。
      * - 当前 bvid 再挡一次,因为队列还会被通知栏的上/下一条移动,那些路径不碰 generation。
      */
-    private fun enrichFrame(frame: Frame, bvid: String) {
+    private fun enrichFrame(frame: Frame, bvid: String, allowReplace: Boolean = frame.pendingReset) {
         enrichJob?.cancel()
         frame.incomplete = false
         frame.enriching = true
         val generation = ++openGeneration
         val chain = PerfTrace.chain("queueEnrich")
         enrichJob = scope.launch {
-            val opened = openQueue(frame.context, bvid)
+            val opened = if (allowReplace && frame.context != QueueContext.Offline) {
+                if (frame.context is QueueContext.Affiliation && frame.anchorBvid.isNotEmpty()) {
+                    queueSourceRepository.open(frame.context, frame.anchorBvid)
+                        ?: queueSourceRepository.open(frame.context, bvid)
+                        ?: openQueue(frame.context, bvid)
+                } else {
+                    queueSourceRepository.open(frame.context, bvid)
+                        ?: frame.anchorBvid.takeIf { it.isNotEmpty() && it != bvid }
+                            ?.let { queueSourceRepository.open(frame.context, it) }
+                        ?: openQueue(frame.context, bvid)
+                }
+            } else {
+                openQueue(frame.context, bvid)
+            }
             chain.mark("built")
             if (generation != openGeneration || liveFrame !== frame || currentItem()?.bvid != bvid) {
                 // 不动 enriching:此刻它属于顶掉这次的那一轮补全。
@@ -713,23 +735,40 @@ class AudioPlaybackService : MediaSessionService() {
                 return@launch
             }
             frame.enriching = false
-            if (opened == null || !fillQueueAround(bvid, opened.items)) {
-                // 宁可只有一条,也不能换上一份不含这条视频的队列:正在播的那一条会从队列里
-                // 消失,而队列界面高亮的是别人。
-                BiliLog.w("队列补全失败或来源里没有当前视频,留在单条队列 bvid=$bvid")
-                frame.incomplete = true
-                chain.mark("failed")
+            val unique = opened?.items?.distinctBy { it.bvid }.orEmpty()
+            if (opened != null && fillQueueAround(bvid, unique)) {
+                frame.pendingReset = false
+                frame.label = opened.label
+                frame.source = opened.source
+                frame.feed = opened.feed
+                chain.count("items", player.mediaItemCount.toLong())
                 chain.end()
                 publishQueueChange()
+                extendNearEdges()
                 return@launch
             }
-            frame.label = opened.label
-            frame.source = opened.source
-            frame.feed = opened.feed
-            chain.count("items", player.mediaItemCount.toLong())
+            if (allowReplace && opened != null && unique.isNotEmpty()) {
+                frame.pendingReset = false
+                frame.label = opened.label
+                frame.source = opened.source
+                frame.feed = opened.feed
+                val replacement = unique.mapIndexed { idx, item ->
+                    if (idx == 0) item.toMediaItem(loadNonce = nextLoadNonce()) else item.toMediaItem()
+                }
+                replaceQueue(replacement, 0, playWhenReady = player.playWhenReady)
+                chain.count("items", player.mediaItemCount.toLong())
+                chain.end()
+                publishQueueChange()
+                extendNearEdges()
+                return@launch
+            }
+            // 宁可只有一条,也不能换上一份不含这条视频的队列:正在播的那一条会从队列里
+            // 消失,而队列界面高亮的是别人。
+            BiliLog.w("队列补全失败或来源里没有当前视频,留在单条队列 bvid=$bvid")
+            frame.incomplete = true
+            chain.mark("failed")
             chain.end()
             publishQueueChange()
-            extendNearEdges()
         }
         // 补全在飞这件事本身要发出去:此刻队列还只有一条。
         publishQueueChange()
@@ -806,6 +845,7 @@ class AudioPlaybackService : MediaSessionService() {
                 publishQueueChange()
                 return@launch
             }
+            if (liveFrame !== frame || frame.feed !== feed) return@launch
             val present = (0 until player.mediaItemCount).mapTo(HashSet()) { player.getMediaItemAt(it).mediaId }
             val fresh = loaded.distinctBy { it.bvid }.filter { it.bvid !in present }.map { it.toMediaItem() }
             if (before) player.addMediaItems(0, fresh) else player.addMediaItems(player.mediaItemCount, fresh)
@@ -813,6 +853,199 @@ class AudioPlaybackService : MediaSessionService() {
             if (fresh.isEmpty() && loaded.isNotEmpty()) extendQueue(before)
         }
         if (before) extendBeforeJob = job else extendAfterJob = job
+    }
+
+    /** 队列经用户手工编辑后与原分页/合集来源脱钩，不再续取、不再由补全覆盖。 */
+    private fun detachToCustomQueue(frame: Frame) {
+        if (liveFrame === frame) {
+            enrichJob?.cancel()
+            extendBeforeJob?.cancel()
+            extendAfterJob?.cancel()
+            openGeneration++
+        }
+        frame.enriching = false
+        frame.incomplete = false
+        frame.detached = true
+        frame.pendingReset = false
+        frame.extendingBefore = false
+        frame.extendingAfter = false
+        frame.feed = null
+        frame.source = null
+        frame.label = getStringBlocking(Res.string.queue_source_custom)
+    }
+
+    private fun enqueueItem(args: Bundle) {
+        val frameId = args.getString(EXTRA_FRAME_ID).orEmpty()
+        val bvid = args.getString(EXTRA_BVID).orEmpty()
+        if (frameId.isEmpty() || bvid.isBlank()) return
+        val item = QueueItem(
+            bvid = bvid,
+            title = args.getString(EXTRA_TITLE).orEmpty(),
+            upName = args.getString(EXTRA_UP_NAME).orEmpty(),
+            coverUrl = args.getString(EXTRA_COVER_URL).orEmpty(),
+            durationSeconds = args.getLong(EXTRA_DURATION_SECONDS, 0L),
+        )
+        val playNext = args.getBoolean(EXTRA_PLAY_NEXT, false)
+
+        val live = liveFrame
+        if (live?.id == frameId) {
+            if (player.currentMediaItem?.isLive == true) return
+            val count = player.mediaItemCount
+            if (count == 0) {
+                detachToCustomQueue(live)
+                player.setMediaItems(listOf(item.toMediaItem()))
+                publishQueueChange()
+                return
+            }
+            val cur = player.currentMediaItemIndex
+            val existing = indexOfMediaId(bvid)
+            if (existing == cur) return
+            detachToCustomQueue(live)
+            if (!playNext) {
+                if (existing >= 0) {
+                    if (existing != count - 1) player.moveMediaItem(existing, count - 1)
+                } else {
+                    player.addMediaItem(count, item.toMediaItem())
+                }
+                publishQueueChange()
+                return
+            }
+            if (existing >= 0) {
+                val curAfterRemove = if (existing < cur) cur - 1 else cur
+                val insertPos = (if (queueOrder == QueueOrder.Reverse) curAfterRemove else curAfterRemove + 1)
+                    .coerceIn(0, count - 1)
+                if (existing != insertPos) player.moveMediaItem(existing, insertPos)
+            } else {
+                val insertPos = if (queueOrder == QueueOrder.Reverse) {
+                    cur.coerceAtLeast(0)
+                } else {
+                    (cur + 1).coerceIn(0, count)
+                }
+                player.addMediaItem(insertPos, item.toMediaItem())
+            }
+            if (queueOrder == QueueOrder.Shuffle) {
+                val newCur = player.currentMediaItemIndex
+                val nextIndex = indexOfMediaId(bvid)
+                if (newCur >= 0 && nextIndex >= 0 && nextIndex != newCur) {
+                    player.currentTimeline.shuffledOrderWithNextAfter(newCur, nextIndex)
+                        ?.let { player.setShuffleOrder(it) }
+                }
+            }
+            publishQueueChange()
+            return
+        }
+
+        val frame = frames[frameId] ?: return
+        val snap = frame.snapshot ?: return
+        val curItem = snap.items.getOrNull(snap.index) ?: return
+        val existing = snap.items.indexOfFirst { it.bvid == bvid }
+        if (existing == snap.index) return
+        val mutable = snap.items.toMutableList()
+        if (existing >= 0) mutable.removeAt(existing)
+        val curAfterRemove = mutable.indexOfFirst { it.bvid == curItem.bvid }.coerceAtLeast(0)
+        val insertPos = when {
+            !playNext -> mutable.size
+            snap.order == QueueOrder.Reverse -> curAfterRemove
+            else -> (curAfterRemove + 1).coerceIn(0, mutable.size)
+        }
+        mutable.add(insertPos, item)
+        val newIndex = mutable.indexOfFirst { it.bvid == curItem.bvid }.coerceAtLeast(0)
+        detachToCustomQueue(frame)
+        frame.snapshot = FrameSnapshot(
+            items = mutable,
+            index = newIndex,
+            cid = snap.cid,
+            positionMillis = snap.positionMillis,
+            order = snap.order,
+            detached = frame.detached,
+        )
+    }
+
+    private fun moveQueueItem(args: Bundle) {
+        val live = liveFrame ?: return
+        if (player.currentMediaItem?.isLive == true) return
+        val bvid = args.getString(EXTRA_BVID).orEmpty()
+        val count = player.mediaItemCount
+        if (bvid.isEmpty() || count <= 1) return
+        val from = indexOfMediaId(bvid)
+        if (from < 0) return
+        val target = args.getInt(EXTRA_TO_INDEX, from).coerceIn(0, count - 1)
+        if (from == target) return
+        detachToCustomQueue(live)
+        player.moveMediaItem(from, target)
+        publishQueueChange()
+    }
+
+    private fun removeQueueItem(args: Bundle) {
+        val live = liveFrame ?: return
+        if (player.currentMediaItem?.isLive == true) return
+        val bvid = args.getString(EXTRA_BVID).orEmpty()
+        val count = player.mediaItemCount
+        if (bvid.isEmpty() || count <= 1) return
+        val idx = indexOfMediaId(bvid)
+        if (idx < 0) return
+        detachToCustomQueue(live)
+        val currentIdx = player.currentMediaItemIndex
+        if (idx == currentIdx) {
+            val timelineNext = player.currentTimeline.takeIf { !it.isEmpty }
+                ?.getNextWindowIndex(idx, Player.REPEAT_MODE_OFF, player.shuffleModeEnabled)
+                ?.takeIf { it != C.INDEX_UNSET && it in 0 until count && it != idx }
+            val successor = timelineNext ?: if (idx + 1 < count) idx + 1 else idx - 1
+            val wasPlaying = player.playWhenReady
+            retryJob?.cancel()
+            failedAttempts = 0
+            lastError = null
+            resolvingMediaId = player.getMediaItemAt(successor).mediaId
+            player.seekToDefaultPosition(successor)
+            player.playWhenReady = wasPlaying
+        }
+        player.removeMediaItem(idx)
+        publishQueueChange()
+    }
+
+    private fun clearQueueExceptCurrent() {
+        val live = liveFrame ?: return
+        if (player.currentMediaItem?.isLive == true) return
+        val count = player.mediaItemCount
+        val currentIdx = player.currentMediaItemIndex
+        if (count <= 1 || currentIdx !in 0 until count) return
+        detachToCustomQueue(live)
+        if (currentIdx + 1 < count) {
+            player.removeMediaItems(currentIdx + 1, count)
+        }
+        if (currentIdx > 0) {
+            player.removeMediaItems(0, currentIdx)
+        }
+        publishQueueChange()
+    }
+
+    private fun resetLiveQueue() {
+        val live = liveFrame ?: return
+        val current = player.currentMediaItem ?: return
+        if (current.isLive) return
+        val count = player.mediaItemCount
+        val curIdx = player.currentMediaItemIndex
+        if (count == 0 || curIdx !in 0 until count) return
+
+        enrichJob?.cancel()
+        extendBeforeJob?.cancel()
+        extendAfterJob?.cancel()
+        live.extendingBefore = false
+        live.extendingAfter = false
+        live.detached = false
+        live.pendingReset = true
+        live.feed = null
+        live.source = null
+        live.label = ""
+
+        if (curIdx > 0) {
+            player.removeMediaItems(0, curIdx)
+        }
+        if (player.mediaItemCount > 1) {
+            player.removeMediaItems(1, player.mediaItemCount)
+        }
+
+        enrichFrame(live, current.mediaId, allowReplace = true)
     }
 
     /**
@@ -1882,6 +2115,7 @@ class AudioPlaybackService : MediaSessionService() {
                 source = liveFrame?.source,
                 enriching = liveFrame?.enriching == true,
                 incomplete = liveFrame?.incomplete == true,
+                detached = liveFrame?.detached == true,
                 canExtendBefore = liveFrame?.feed?.hasBefore == true,
                 canExtendAfter = liveFrame?.feed?.hasAfter == true,
                 extendingBefore = liveFrame?.extendingBefore == true,
@@ -1928,8 +2162,13 @@ class AudioPlaybackService : MediaSessionService() {
         // 完播上报,**但不关会话**:这一条还装在播放器里,用户按下播放或者拖回去还能接着
         // 看,而关掉的会话是死的,那之后的位置一个字都报不出去。会话在内容离开时才关。
         progressSession?.onCompleted()
+        val forceStop = nightStopAtEnd
+        if (forceStop) {
+            nightStopAtEnd = false
+            applyStopAtEndOfItem()
+        }
         // "播完这条"按 P 计:人听到的一段就是一 P,定时器到这里为止。
-        if (sleepTimer.state.value.mode != SleepTimerMode.EndOfItem) {
+        if (sleepTimer.state.value.mode != SleepTimerMode.EndOfItem && !forceStop) {
             if (endMode == PlayEndMode.RepeatOne && player.currentMediaItem?.isLive != true) {
                 player.seekTo(0)
                 player.play()
@@ -2178,6 +2417,12 @@ class AudioPlaybackService : MediaSessionService() {
                         .add(SessionCommand(ACTION_SET_QUEUE_ORDER, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_CYCLE_END_MODE, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_SET_END_MODE, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_ENQUEUE_ITEM, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_MOVE_QUEUE_ITEM, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_REMOVE_QUEUE_ITEM, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_CLEAR_QUEUE_EXCEPT_CURRENT, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_RESET_QUEUE, Bundle.EMPTY))
+                        .add(SessionCommand(ACTION_NIGHT_HOLD_END, Bundle.EMPTY))
                         .add(SessionCommand(ACTION_STOP_SERVICE, Bundle.EMPTY))
                         .build()
                 )
@@ -2206,6 +2451,15 @@ class AudioPlaybackService : MediaSessionService() {
                 ACTION_SET_QUEUE_ORDER -> setQueueOrder(QueueOrder.fromPrefs(args.getString(EXTRA_QUEUE_ORDER)))
                 ACTION_CYCLE_END_MODE -> setEndMode(endMode.next())
                 ACTION_SET_END_MODE -> setEndMode(PlayEndMode.fromPrefs(args.getString(EXTRA_END_MODE)))
+                ACTION_ENQUEUE_ITEM -> enqueueItem(args)
+                ACTION_MOVE_QUEUE_ITEM -> moveQueueItem(args)
+                ACTION_REMOVE_QUEUE_ITEM -> removeQueueItem(args)
+                ACTION_CLEAR_QUEUE_EXCEPT_CURRENT -> clearQueueExceptCurrent()
+                ACTION_RESET_QUEUE -> resetLiveQueue()
+                ACTION_NIGHT_HOLD_END -> {
+                    nightStopAtEnd = args.getBoolean(EXTRA_NIGHT_HOLD_END, false)
+                    applyStopAtEndOfItem()
+                }
                 // 播放器的生命周期到此为止,见 [ACTION_STOP_SERVICE]。
                 ACTION_STOP_SERVICE -> pauseAllPlayersAndStopSelf()
                 // 分钟数是三态里唯一带参数的那个:大于 0 即定时,[SLEEP_END_OF_ITEM] 即播完这条,
@@ -2283,6 +2537,16 @@ class AudioPlaybackService : MediaSessionService() {
         const val ACTION_CYCLE_END_MODE = "dev.bilby.CYCLE_END_MODE"
         const val ACTION_SET_END_MODE = "dev.bilby.SET_END_MODE"
         const val EXTRA_END_MODE = "endMode"
+        const val ACTION_ENQUEUE_ITEM = "dev.bilby.ENQUEUE_ITEM"
+        const val ACTION_MOVE_QUEUE_ITEM = "dev.bilby.MOVE_QUEUE_ITEM"
+        const val ACTION_REMOVE_QUEUE_ITEM = "dev.bilby.REMOVE_QUEUE_ITEM"
+        const val ACTION_CLEAR_QUEUE_EXCEPT_CURRENT = "dev.bilby.CLEAR_QUEUE_EXCEPT_CURRENT"
+        const val ACTION_RESET_QUEUE = "dev.bilby.action.RESET_QUEUE"
+        const val ACTION_NIGHT_HOLD_END = "dev.bilby.NIGHT_HOLD_END"
+        const val EXTRA_NIGHT_HOLD_END = "nightHoldEnd"
+        const val EXTRA_DURATION_SECONDS = "durationSeconds"
+        const val EXTRA_PLAY_NEXT = "playNext"
+        const val EXTRA_TO_INDEX = "toIndex"
 
         /**
          * 播放器的生命周期到此为止,见 [stop]。

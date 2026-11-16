@@ -15,6 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.PlayCircleOutline
@@ -45,11 +46,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.Color
@@ -66,7 +70,10 @@ import java.net.URISyntaxException
 import dev.bilby.resources.*
 import dev.bilby.data.CodecPreference
 import dev.bilby.data.LlmConfig
+import dev.bilby.data.NightWindowStatus
 import dev.bilby.data.SettingsStore
+import dev.bilby.data.evaluateNightMode
+import dev.bilby.data.formatNightRange
 import dev.bilby.player.videoQualityLabel
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.navigationBarsBottom
@@ -109,6 +116,15 @@ fun SettingsScreen(
     var confirmingLogout by rememberSaveable { mutableStateOf(false) }
     val notConfigured = stringResource(Res.string.settings_not_configured)
     val selected: (SettingsSection) -> Boolean? = { section -> if (twoPane) section == openSection else null }
+    var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(state.nightMode) {
+        nowMillis = System.currentTimeMillis()
+        if (!state.nightMode.enabled) return@LaunchedEffect
+        while (true) {
+            delay(15_000L)
+            nowMillis = System.currentTimeMillis()
+        }
+    }
 
     // pinned 而不是 enterAlways:顶栏留着不动,内容滚起来之后只换一档容器色。这一页的入口
     // 不满一屏,顶栏跟着一起走反而像页面自己跳了一下。
@@ -199,6 +215,30 @@ fun SettingsScreen(
                             target = RowTarget.Page,
                             onClick = { onOpenSection(SettingsSection.Privacy) },
                             selected = selected(SettingsSection.Privacy),
+                        )
+                    }
+                    row { position ->
+                        val nightPrefs = state.nightMode
+                        SettingRow(
+                            position = position,
+                            title = stringResource(Res.string.settings_section_night_mode),
+                            icon = Icons.Outlined.Bedtime,
+                            value = state.loaded.then {
+                                if (!nightPrefs.enabled) {
+                                    stringResource(Res.string.night_mode_off)
+                                } else {
+                                    val range = formatNightRange(nightPrefs.startMinuteOfDay, nightPrefs.endMinuteOfDay)
+                                    when (evaluateNightMode(nightPrefs, nowMillis)) {
+                                        is NightWindowStatus.Overridden ->
+                                            stringResource(Res.string.night_mode_summary_paused, range)
+                                        is NightWindowStatus.Active, NightWindowStatus.Inactive ->
+                                            stringResource(Res.string.night_mode_summary_on, range, nightPrefs.allowedUps.size)
+                                    }
+                                }
+                            },
+                            target = RowTarget.Page,
+                            onClick = { onOpenSection(SettingsSection.NightMode) },
+                            selected = selected(SettingsSection.NightMode),
                         )
                     }
                     row { position ->

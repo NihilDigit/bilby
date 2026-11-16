@@ -41,6 +41,7 @@ import dev.bilby.live.LiveDanmakuClient
 import dev.bilby.offline.OfflineDownloader
 import dev.bilby.offline.OfflineStore
 import dev.bilby.offline.PendingHeartbeatStore
+import dev.bilby.player.CustomQueueDraftStore
 import dev.bilby.player.PartRequest
 import dev.bilby.player.awaitInternet
 import dev.bilby.resources.*
@@ -252,6 +253,8 @@ class AppContainer(val platform: Platform) {
     val queueSourceRepository: QueueSourceRepository by lazy {
         QueueSourceRepository(spaceRepository, videoRepository, favRepository, toViewRepository, offlineStore)
     }
+
+    val customQueueDraft: CustomQueueDraftStore by lazy { CustomQueueDraftStore() }
 
     val llmClient: LlmClient by lazy {
         LlmClient(httpClient, json) { settings.llmConfig.first() }

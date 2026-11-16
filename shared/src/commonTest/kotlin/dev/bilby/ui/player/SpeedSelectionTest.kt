@@ -6,7 +6,7 @@ import org.junit.Test
 class SpeedSelectionTest {
     @Test
     fun `presets use half-step granularity`() {
-        assertEquals(listOf(50, 100, 150, 200, 250, 300), SpeedPresets)
+        assertEquals(listOf(50, 100, 150, 200, 250, 300, 350), SpeedPresets)
     }
 
     @Test
@@ -17,7 +17,7 @@ class SpeedSelectionTest {
             state = drag.move(state, i * 20f, i * 8f)
             assertFalse(state.locked)
         }
-        assertEquals(300, state.value)
+        assertEquals(350, state.value)
         state = drag.move(state, 240f, 105f)
         assertFalse(state.locked)
     }
@@ -53,7 +53,7 @@ class SpeedSelectionTest {
         )
         controller.open(temporary = true)
         assertEquals(250, controller.selection!!.value)
-        assertEquals(listOf(50, 100, 150, 200, 250, 300), controller.selection!!.choices)
+        assertEquals(listOf(50, 100, 150, 200, 250, 300, 350), controller.selection!!.choices)
         assertEquals(2.5f, actual, 0f)
         assertEquals(listOf(2.5f), writes)
         controller.finish()

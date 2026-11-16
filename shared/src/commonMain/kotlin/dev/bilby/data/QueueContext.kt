@@ -68,7 +68,20 @@ sealed interface QueueContext {
     /** 缓存列表。本地有完整副本的视频在离线时也退到这里,见 `AudioPlaybackService.openQueue`。 */
     @Serializable
     data object Offline : QueueContext
+
+    /** 用户手工拼出来的临时自定义队列,不从网络拉取或续取。 */
+    @Serializable
+    data class Custom(val items: List<CustomQueueEntry>) : QueueContext
 }
+
+@Serializable
+data class CustomQueueEntry(
+    val bvid: String,
+    val title: String = "",
+    val upName: String = "",
+    val coverUrl: String = "",
+    val durationSeconds: Long = 0L,
+)
 
 /**
  * 过 session 命令的 Bundle 时用 JSON 串:Bundle 装不下密封类,而 NavKey 本来就按 kotlinx

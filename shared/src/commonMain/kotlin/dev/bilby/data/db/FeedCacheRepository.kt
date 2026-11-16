@@ -2,6 +2,7 @@ package dev.bilby.data.db
 
 import dev.bilby.data.model.ArticleRef
 import dev.bilby.data.model.FeedEntry
+import dev.bilby.normalizeDurationText
 
 /**
  * 首页动态流的本地缓存,包一层 [FeedCacheItemDao]。
@@ -42,7 +43,7 @@ private fun FeedCacheItemEntity.toFeedEntry(): FeedEntry = when (kind) {
         bvid = id,
         title = title,
         coverUrl = coverUrl,
-        durationText = durationText,
+        durationText = normalizeDurationText(durationText),
         upName = upName,
         upMid = upMid,
         upFaceUrl = upFaceUrl,

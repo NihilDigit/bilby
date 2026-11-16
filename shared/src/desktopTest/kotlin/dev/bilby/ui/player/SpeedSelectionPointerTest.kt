@@ -200,7 +200,7 @@ class SpeedSelectionPointerTest {
             assertEquals(1.5f, player.playbackSpeed, 0f)
             event(PointerEventType.Move, 200f, 250f)
             frame()
-            assertEquals("downward swipe reaches 3.0x directly", 3f, player.playbackSpeed, 0f)
+            assertEquals("downward swipe reaches 3.5x directly", 3.5f, player.playbackSpeed, 0f)
             event(PointerEventType.Release, 200f, 250f)
             frame()
             assertEquals(1f, player.playbackSpeed, 0f)

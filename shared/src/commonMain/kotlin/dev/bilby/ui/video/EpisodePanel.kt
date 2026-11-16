@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -21,6 +22,7 @@ import dev.bilby.ui.player.EpisodeRow
 import dev.bilby.ui.player.EpisodeTarget
 import dev.bilby.ui.player.PlayerSidePanel
 import dev.bilby.ui.player.QueueEdges
+import dev.bilby.ui.player.QueueEditActions
 import dev.bilby.ui.player.QueuePlaybackControls
 import dev.bilby.ui.theme.Spacing
 
@@ -44,6 +46,7 @@ fun BoxScope.EpisodePanel(
     onDismiss: () -> Unit,
     edges: QueueEdges? = null,
     playing: Boolean = false,
+    editActions: QueueEditActions? = null,
 ) {
     PlayerSidePanel(visible = visible, onDismiss = onDismiss) {
         // 队列来源那一行。**这里不给目录入口** —— 目录是另一个页面,而全屏下离开这一页
@@ -66,6 +69,18 @@ fun BoxScope.EpisodePanel(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            editActions?.onReset?.let { onReset ->
+                TextButton(
+                    onClick = onReset,
+                    contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                ) {
+                    Text(
+                        text = stringResource(Res.string.queue_reset),
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+            }
             QueuePlaybackControls(
                 endMode = endMode,
                 order = order,
@@ -78,6 +93,7 @@ fun BoxScope.EpisodePanel(
             rows = rows,
             edges = edges,
             playing = playing,
+            editActions = editActions,
             onSelect = {
                 onSelect(it)
                 onDismiss()
@@ -91,6 +107,5 @@ fun BoxScope.EpisodePanel(
     }
 }
 
-/** 面板里没有可切的东西时不给入口。单条队列且单 P 的视频就是这种。 */
-fun List<EpisodeRow>.hasSomethingToSwitch(): Boolean =
-    size > 1 || firstOrNull()?.parts?.isNotEmpty() == true
+/** 队列非空时即提供面板入口,单条单 P 也可进入面板修改完播策略或重置队列。 */
+fun List<EpisodeRow>.hasSomethingToSwitch(): Boolean = isNotEmpty()

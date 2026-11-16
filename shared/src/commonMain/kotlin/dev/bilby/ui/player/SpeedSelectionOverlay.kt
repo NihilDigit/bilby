@@ -490,7 +490,7 @@ private fun SpeedDial(
             stateDescription = valueDescription
             progressBarRangeInfo = ProgressBarRangeInfo(
                 current = selection.speed,
-                range = .5f..3f,
+                range = .5f..3.5f,
                 steps = (selection.choices.size - 2).coerceAtLeast(0),
             )
             setProgress {

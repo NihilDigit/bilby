@@ -1,9 +1,18 @@
 package dev.bilby.ui.settings
 
 import dev.bilby.api.BiliResult
+import dev.bilby.api.map
+import dev.bilby.api.toHttpsUrl
+import dev.bilby.appendDistinctBy
+import dev.bilby.data.FollowOrder
+import dev.bilby.data.FollowRepository
 import dev.bilby.data.HistoryRepository
 import dev.bilby.data.AppearancePrefs
+import dev.bilby.data.MINUTES_PER_DAY
+import dev.bilby.data.NightModePrefs
 import dev.bilby.data.ThemeMode
+import dev.bilby.data.UpBrief
+import dev.bilby.data.WhitelistedUp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.data.CodecPreference
@@ -15,13 +24,16 @@ import dev.bilby.data.SettingsStore
 import dev.bilby.data.SponsorBlockPrefs
 import dev.bilby.player.hardwareDecodableCodecIds
 import dev.bilby.player.VideoCodecId
+import dev.bilby.ui.errorTextRes
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 
 data class SettingsUiState(
     val llm: LlmConfig? = null,
@@ -65,8 +77,19 @@ data class SettingsUiState(
     val danmakusArchive: Boolean = true,
     val offlineConcurrency: Int = SettingsStore.DEFAULT_OFFLINE_CONCURRENCY,
     val appearance: AppearancePrefs = AppearancePrefs(),
+    val nightMode: NightModePrefs = NightModePrefs(),
     /** 服务端的「暂停记录观看历史」。不是本机偏好,所以有读不到这一档,见 [HistoryPause]。 */
     val historyPause: HistoryPause = HistoryPause.Loading,
+)
+
+/** 夜间模式“添加 UP 主”选择面板的关注列表分页状态。 */
+data class NightFollowPickerState(
+    val items: List<UpBrief> = emptyList(),
+    val query: String = "",
+    val loading: Boolean = false,
+    val appending: Boolean = false,
+    val hasMore: Boolean = true,
+    val error: StringResource? = null,
 )
 
 /**
@@ -98,6 +121,7 @@ class SettingsViewModel(
     private val llmClient: LlmClient,
     private val historyRepository: HistoryRepository,
     private val persistScope: CoroutineScope,
+    private val followRepository: FollowRepository? = null,
 ) : ViewModel() {
 
     /**
@@ -160,6 +184,13 @@ class SettingsViewModel(
     private val _state = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
+    private val _followPicker = MutableStateFlow(NightFollowPickerState())
+    val followPicker: StateFlow<NightFollowPickerState> = _followPicker.asStateFlow()
+
+    private var followPage = 0
+    private var followGeneration = 0
+    private var followJob: Job? = null
+
     init {
         // **全部持续收流,不是进页面时读一次快照。** 设置拆成首页加二级页之后,两层是两个
         // NavEntry、两个 ViewModel 实例:在子页改完返回,首页那一份快照仍是进来时读到的,
@@ -217,6 +248,11 @@ class SettingsViewModel(
         viewModelScope.launch {
             settings.danmakusArchiveEnabled.collect { enabled ->
                 _state.update { it.copy(danmakusArchive = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            settings.nightModePrefs.collect { prefs ->
+                _state.update { it.copy(nightMode = prefs) }
             }
         }
     }
@@ -364,6 +400,131 @@ class SettingsViewModel(
     fun updateSponsorBlock(value: SponsorBlockPrefs) {
         _state.update { it.copy(sponsorBlock = value) }
         persist { settings.saveSponsorBlockPrefs(value) }
+    }
+
+    fun setNightModeEnabled(enabled: Boolean) {
+        _state.update {
+            it.copy(
+                nightMode = it.nightMode.copy(
+                    enabled = enabled,
+                    overrideUntilEpochMillis = if (enabled) it.nightMode.overrideUntilEpochMillis else 0L,
+                ),
+            )
+        }
+        persist { settings.setNightModeEnabled(enabled) }
+    }
+
+    fun setNightModeSchedule(startMinute: Int, endMinute: Int) {
+        val start = startMinute.coerceIn(0, MINUTES_PER_DAY - 1)
+        val end = endMinute.coerceIn(0, MINUTES_PER_DAY - 1)
+        _state.update {
+            it.copy(nightMode = it.nightMode.copy(startMinuteOfDay = start, endMinuteOfDay = end))
+        }
+        persist { settings.setNightModeSchedule(start, end) }
+    }
+
+    fun setNightModeAllowedUps(ups: List<WhitelistedUp>) {
+        val normalized = ups.distinctBy { it.mid }.map { it.copy(faceUrl = it.faceUrl.toHttpsUrl()) }
+        _state.update { it.copy(nightMode = it.nightMode.copy(allowedUps = normalized)) }
+        persist { settings.setNightModeAllowedUps(normalized) }
+    }
+
+    fun removeNightModeAllowedUp(mid: Long) {
+        _state.update {
+            it.copy(
+                nightMode = it.nightMode.copy(
+                    allowedUps = it.nightMode.allowedUps.filterNot { up -> up.mid == mid },
+                ),
+            )
+        }
+        persist { settings.removeNightModeAllowedUp(mid) }
+    }
+
+    fun clearNightModeOverride() {
+        _state.update { it.copy(nightMode = it.nightMode.copy(overrideUntilEpochMillis = 0L)) }
+        persist { settings.setNightModeOverrideUntil(0L) }
+    }
+
+    fun loadFollowingsIfNeeded() {
+        if (followPage > 0 || _followPicker.value.loading || _followPicker.value.appending) return
+        loadFollowingsPage(replace = true)
+    }
+
+    fun loadMoreFollowings() {
+        loadFollowingsPage(replace = followPage == 0)
+    }
+
+    fun searchFollowings(query: String) {
+        if (_followPicker.value.query == query) return
+        followGeneration++
+        followJob?.cancel()
+        followPage = 0
+        _followPicker.update {
+            it.copy(
+                items = emptyList(),
+                query = query,
+                loading = false,
+                appending = false,
+                hasMore = true,
+                error = null,
+            )
+        }
+        loadFollowingsPage(replace = true)
+    }
+
+    private fun loadFollowingsPage(replace: Boolean) {
+        val repo = followRepository ?: run {
+            _followPicker.update { it.copy(loading = false, appending = false, hasMore = false) }
+            return
+        }
+        val current = _followPicker.value
+        if (current.loading || current.appending || !current.hasMore) return
+        val next = if (replace) 1 else followPage + 1
+        val gen = followGeneration
+        _followPicker.update {
+            it.copy(
+                loading = replace || next == 1,
+                appending = !replace && next > 1,
+                error = null,
+            )
+        }
+        followJob = viewModelScope.launch {
+            val result = if (current.query.isNotBlank()) {
+                repo.searchFollowings(current.query.trim(), next)
+            } else {
+                repo.followings(next, FollowOrder.Frequent).map { it.items }
+            }
+            if (gen != followGeneration) return@launch
+            when (result) {
+                is BiliResult.Ok -> {
+                    followPage = next
+                    val fetched = result.value
+                    _followPicker.update {
+                        it.copy(
+                            items = if (replace) {
+                                fetched.distinctBy(UpBrief::mid)
+                            } else {
+                                it.items.appendDistinctBy(fetched, UpBrief::mid)
+                            },
+                            hasMore = fetched.isNotEmpty(),
+                            loading = false,
+                            appending = false,
+                            error = null,
+                        )
+                    }
+                }
+
+                is BiliResult.ApiError, is BiliResult.Failure -> {
+                    _followPicker.update {
+                        it.copy(
+                            loading = false,
+                            appending = false,
+                            error = result.errorTextRes("夜间模式加载关注列表"),
+                        )
+                    }
+                }
+            }
+        }
     }
 
 }

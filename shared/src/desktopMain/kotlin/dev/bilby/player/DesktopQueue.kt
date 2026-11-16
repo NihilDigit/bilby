@@ -67,6 +67,94 @@ internal class DesktopQueue(private val random: Random = Random.Default) {
         entries[at] = item
     }
 
+    /** 将 [fromIndex] 移到自然顺序下标 [toIndex],保持当前播放项身份不变。 */
+    fun move(fromIndex: Int, toIndex: Int): Boolean {
+        if (fromIndex !in entries.indices) return false
+        val target = toIndex.coerceIn(0, entries.lastIndex)
+        if (fromIndex == target) return false
+        val moved = entries.removeAt(fromIndex)
+        entries.add(target, moved)
+        index = when (index) {
+            fromIndex -> target
+            in (fromIndex + 1)..target -> index - 1
+            in target until fromIndex -> index + 1
+            else -> index
+        }
+        return true
+    }
+
+    /** 移除非当前播放项;若要移除当前项,调用方须先切到后继项。 */
+    fun removeAt(at: Int): Boolean {
+        if (at !in entries.indices || at == index) return false
+        entries.removeAt(at)
+        shuffleOrder = shuffleOrder.cloneAndRemove(at, at + 1)
+        if (at < index) index -= 1
+        return true
+    }
+
+    /** 清空除当前播放项以外的全部条目。 */
+    fun clearExceptCurrent(): Boolean {
+        if (index !in entries.indices || entries.size <= 1) return false
+        val oldSize = entries.size
+        if (index + 1 < oldSize) {
+            entries.subList(index + 1, oldSize).clear()
+            shuffleOrder = shuffleOrder.cloneAndRemove(index + 1, oldSize)
+        }
+        if (index > 0) {
+            entries.subList(0, index).clear()
+            shuffleOrder = shuffleOrder.cloneAndRemove(0, index)
+            index = 0
+        }
+        return true
+    }
+
+    /** 插入或移动 [item] 至下一条或队尾,保证队列内 bvid 唯一。 */
+    fun enqueue(item: QueueItem, playNext: Boolean): Boolean {
+        if (item.bvid.isBlank()) return false
+        if (entries.isEmpty()) {
+            set(listOf(item), 0)
+            return true
+        }
+        val cur = index
+        if (cur !in entries.indices) {
+            insert(entries.size, listOf(item))
+            return true
+        }
+        val existing = indexOf(item.bvid)
+        if (existing == cur) return false
+
+        val targetIndex: Int
+        if (existing >= 0) {
+            entries[existing] = item
+            targetIndex = if (playNext) {
+                val curAfterRemove = if (existing < cur) cur - 1 else cur
+                val insertPos = (if (order == QueueOrder.Reverse) curAfterRemove else curAfterRemove + 1)
+                    .coerceIn(0, entries.lastIndex)
+                move(existing, insertPos)
+                this.index + if (order == QueueOrder.Reverse) -1 else 1
+            } else {
+                move(existing, entries.lastIndex)
+                entries.lastIndex
+            }
+        } else {
+            val insertPos = when {
+                !playNext -> entries.size
+                order == QueueOrder.Reverse -> cur
+                else -> cur + 1
+            }
+            insert(insertPos, listOf(item))
+            targetIndex = when {
+                !playNext -> entries.lastIndex
+                order == QueueOrder.Reverse -> this.index - 1
+                else -> this.index + 1
+            }
+        }
+        if (playNext && order == QueueOrder.Shuffle && targetIndex in entries.indices && targetIndex != this.index) {
+            shuffleOrder = shuffleOrder.cloneWithNextAfter(this.index, targetIndex)
+        }
+        return true
+    }
+
     fun indexOf(bvid: String): Int = entries.indexOfFirst { it.bvid == bvid }
 
     fun moveTo(target: Int): Boolean {
@@ -134,6 +222,33 @@ internal class ShuffleOrder private constructor(private val shuffled: IntArray) 
             }
         }
         return ShuffleOrder(result)
+    }
+
+    fun cloneAndRemove(indexFrom: Int, indexToExclusive: Int): ShuffleOrder {
+        val numberOfElementsToRemove = indexToExclusive - indexFrom
+        val newShuffled = IntArray(shuffled.size - numberOfElementsToRemove)
+        var foundElementsCount = 0
+        for (i in shuffled.indices) {
+            val v = shuffled[i]
+            if (v >= indexFrom && v < indexToExclusive) {
+                foundElementsCount++
+            } else {
+                newShuffled[i - foundElementsCount] =
+                    if (v >= indexFrom) v - numberOfElementsToRemove else v
+            }
+        }
+        return ShuffleOrder(newShuffled)
+    }
+
+    fun cloneWithNextAfter(currentIndex: Int, nextIndex: Int): ShuffleOrder {
+        if (currentIndex == nextIndex || currentIndex !in shuffled.indices || nextIndex !in shuffled.indices) {
+            return this
+        }
+        val list = shuffled.toMutableList()
+        list.remove(nextIndex)
+        val curPos = list.indexOf(currentIndex)
+        list.add(curPos + 1, nextIndex)
+        return ShuffleOrder(list.toIntArray())
     }
 
     companion object {

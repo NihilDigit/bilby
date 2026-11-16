@@ -782,7 +782,7 @@ fun SpaceScreen(
     /** 动态栏里点开这位 UP 自己发的视频,队列取动态列表。见 [DynamicListTab]。 */
     onDynamicVideoClick: (SpaceDynamicItem) -> Unit,
     onLikeDynamic: (String, Boolean) -> Unit,
-    onLiveClick: (Long) -> Unit,
+    onLiveClick: ((Long) -> Unit)? = null,
     onToggleFollow: () -> Unit,
     onSetBlocked: (Boolean) -> Unit,
     onOpenGroupPicker: () -> Unit,
@@ -799,6 +799,7 @@ fun SpaceScreen(
     onDynamicsSheetOpenChange: (Boolean) -> Unit = {},
     /** 拖动松手时的侧栏宽度,单位 dp。 */
     onDynamicsSheetWidthChange: (Float) -> Unit = {},
+    vodOnly: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val system = LocalSystemActions.current
@@ -818,7 +819,7 @@ fun SpaceScreen(
     val allTabs = SpaceTab.entries.filter { tab ->
         when (tab) {
             SpaceTab.Archives -> state.archivesAvailable == true
-            SpaceTab.Dynamics -> state.dynamicsAvailable == true
+            SpaceTab.Dynamics -> !vodOnly && state.dynamicsAvailable == true
             SpaceTab.Collections -> state.collectionsAvailable == true
         }
     }
@@ -889,7 +890,7 @@ fun SpaceScreen(
                     onToggleFollow = onToggleFollow,
                     onSetBlocked = onSetBlocked,
                     onOpenGroupPicker = onOpenGroupPicker,
-                    onLiveClick = onLiveClick,
+                    onLiveClick = if (vodOnly) null else onLiveClick,
                     modifier = paneModifier,
                 )
             }
@@ -1274,7 +1275,7 @@ private fun SpaceHeader(
     onToggleFollow: () -> Unit,
     onSetBlocked: (Boolean) -> Unit,
     onOpenGroupPicker: () -> Unit,
-    onLiveClick: (Long) -> Unit,
+    onLiveClick: ((Long) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     // **没填签名就不画。** 原先兜一句「这个人很懒,什么都没写」—— 那是 B 站网页端的
@@ -1344,7 +1345,7 @@ private fun SpaceHeader(
 
         // 正在直播时才出现,而且只出现在这里 —— 直播间的唯一入口是"我点了这个人",
         // 不是一个可以浏览的列表(DESIGN 1.1)。
-        profile.liveRoom?.let { live ->
+        if (onLiveClick != null) profile.liveRoom?.let { live ->
             Surface(
                 onClick = { onLiveClick(live.roomId) },
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -1831,6 +1832,8 @@ internal fun VideoListTab(
                     bvid = item.bvid,
                     title = item.title,
                     close = close,
+                    coverUrl = item.coverUrl,
+                    durationSeconds = dev.bilby.parseDurationSeconds(item.durationText),
                 )
             },
         ) { openMenu ->

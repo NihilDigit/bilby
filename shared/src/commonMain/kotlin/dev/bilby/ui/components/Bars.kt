@@ -2,6 +2,7 @@ package dev.bilby.ui.components
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
@@ -68,6 +69,7 @@ fun BilbyTopBar(
     onBack: (() -> Unit)? = null,
     scrollBehavior: TopAppBarScrollBehavior? = null,
     center: (@Composable () -> Unit)? = null,
+    subtitle: String? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     LocalWindowCaption.current?.Host()
@@ -75,6 +77,7 @@ fun BilbyTopBar(
     Box(modifier = modifier.then(captionSlot.modifier)) {
         SmallTopBar(
             title = title,
+            subtitle = subtitle,
             onBack = onBack,
             scrollBehavior = scrollBehavior,
             dragTitleArea = captionSlot.atTop && center == null,
@@ -99,6 +102,7 @@ private fun SmallTopBar(
     onBack: (() -> Unit)?,
     scrollBehavior: TopAppBarScrollBehavior?,
     dragTitleArea: Boolean,
+    subtitle: String? = null,
     actions: @Composable RowScope.() -> Unit,
 ) {
     LaunchedEffect(title) {
@@ -116,7 +120,20 @@ private fun SmallTopBar(
                     .heightIn(min = CaptionDragHeight)
                     .windowDragArea(dragTitleArea),
             ) {
-                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (subtitle == null) {
+                    Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                } else {
+                    Column {
+                        Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
         },
         navigationIcon = {

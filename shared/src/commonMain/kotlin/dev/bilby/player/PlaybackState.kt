@@ -58,6 +58,8 @@ data class QueueState(
      * 还是"来源没拉到",而后者重试一下往往就好了。重试点是 [PlaybackCommand.RetryQueue]。
      */
     val incomplete: Boolean = false,
+    /** 队列是否经用户手工编辑而与原来源脱钩,可用 [PlaybackCommand.ResetQueue] 还原。 */
+    val detached: Boolean = false,
     /** 来源在已读部分之前/之后还有。完整队列面板滚到头时据此续取。 */
     val canExtendBefore: Boolean = false,
     val canExtendAfter: Boolean = false,

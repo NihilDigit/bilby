@@ -12,15 +12,15 @@ import org.junit.Test
  */
 class FeedScreenTest {
 
-    private fun item(bvid: String) = FeedEntry.Video(
+    private fun item(bvid: String, upMid: Long = 0L, publishedAt: Long = 0L) = FeedEntry.Video(
         bvid = bvid,
         title = bvid,
         coverUrl = "",
         durationText = "",
-        upName = "",
-        upMid = 0L,
+        upName = "UP$upMid",
+        upMid = upMid,
         upFaceUrl = "",
-        publishedAtEpochSeconds = 0L,
+        publishedAtEpochSeconds = publishedAt,
         playCount = "",
         danmakuCount = "",
     )
@@ -57,5 +57,94 @@ class FeedScreenTest {
     fun `从没记过时不显示分隔线`() {
         val items = listOf("bv1", "bv2").map(::item)
         assertNull(items.indexOfReadMarker(null))
+    }
+
+    @Test
+    fun `同一 UP 连发达到三条时折叠而两条不折叠`() {
+        val t = 1_700_000_000L
+        val entries = listOf(
+            item("a1", upMid = 1L, publishedAt = t),
+            item("a2", upMid = 1L, publishedAt = t - 60),
+            item("a3", upMid = 1L, publishedAt = t - 120),
+            item("b1", upMid = 2L, publishedAt = t - 180),
+            item("b2", upMid = 2L, publishedAt = t - 240),
+        )
+        val grouped = groupFeedBursts(entries)
+        assertEquals(3, grouped.size)
+        val burst = grouped[0] as FeedDisplayNode.Burst
+        assertEquals("a1", burst.lead.bvid)
+        assertEquals(listOf("a2", "a3"), burst.rest.map { it.bvid })
+        assertEquals("b1", (grouped[1] as FeedDisplayNode.Single).entry.id)
+        assertEquals("b2", (grouped[2] as FeedDisplayNode.Single).entry.id)
+    }
+
+    @Test
+    fun `两人轮换连发各自折叠且保留中间单发条目顺序`() {
+        val t = 1_700_000_000L
+        val entries = listOf(
+            item("a1", upMid = 1L, publishedAt = t),
+            item("b1", upMid = 2L, publishedAt = t - 10),
+            item("c1", upMid = 3L, publishedAt = t - 20),
+            item("a2", upMid = 1L, publishedAt = t - 30),
+            item("b2", upMid = 2L, publishedAt = t - 40),
+            item("a3", upMid = 1L, publishedAt = t - 50),
+            item("b3", upMid = 2L, publishedAt = t - 60),
+        )
+        val grouped = groupFeedBursts(entries)
+        assertEquals(3, grouped.size)
+        assertEquals(listOf("a1", "a2", "a3"), (grouped[0] as FeedDisplayNode.Burst).all.map { it.bvid })
+        assertEquals(listOf("b1", "b2", "b3"), (grouped[1] as FeedDisplayNode.Burst).all.map { it.bvid })
+        assertEquals("c1", (grouped[2] as FeedDisplayNode.Single).entry.id)
+    }
+
+    @Test
+    fun `间隔超过六小时不折叠成同一连发组`() {
+        val t = 1_700_000_000L
+        val entries = listOf(
+            item("a1", upMid = 1L, publishedAt = t),
+            item("a2", upMid = 1L, publishedAt = t - 60),
+            item("a3", upMid = 1L, publishedAt = t - (6L * 3600L + 120L)),
+        )
+        val grouped = groupFeedBursts(entries)
+        assertEquals(3, grouped.size)
+        grouped.forEach { node -> assert(node is FeedDisplayNode.Single) }
+    }
+
+    @Test
+    fun `展开与收起态网格占格数与连发分组一致`() {
+        val t = 1_700_000_000L
+        val entries = listOf(
+            item("s1", upMid = 10L, publishedAt = t),
+            item("a1", upMid = 1L, publishedAt = t - 10),
+            item("a2", upMid = 1L, publishedAt = t - 20),
+            item("a3", upMid = 1L, publishedAt = t - 30),
+            item("a4", upMid = 1L, publishedAt = t - 40),
+        )
+        val grouped = groupFeedBursts(entries)
+        assertEquals(2, grouped.size)
+        val single = grouped[0] as FeedDisplayNode.Single
+        val burst = grouped[1] as FeedDisplayNode.Burst
+
+        assertEquals(1, single.emittedGridItemCount(expanded = false))
+        assertEquals(1, single.emittedGridItemCount(expanded = true))
+        assertEquals(1, burst.emittedGridItemCount(expanded = false))
+        assertEquals(burst.totalCount + 1, burst.emittedGridItemCount(expanded = true))
+        assertEquals(5, burst.emittedGridItemCount(expanded = true))
+    }
+
+    @Test
+    fun `索引间隔超过上限时不跨段合并连发`() {
+        val t = 1_700_000_000L
+        val entries = buildList {
+            add(item("a1", upMid = 1L, publishedAt = t))
+            repeat(BURST_MAX_INDEX_GAP) { idx ->
+                add(item("other$idx", upMid = 100L + idx, publishedAt = t - (idx + 1) * 10L))
+            }
+            add(item("a2", upMid = 1L, publishedAt = t - 100))
+            add(item("a3", upMid = 1L, publishedAt = t - 110))
+        }
+        val grouped = groupFeedBursts(entries)
+        assertEquals(entries.size, grouped.size)
+        grouped.forEach { node -> assert(node is FeedDisplayNode.Single) }
     }
 }

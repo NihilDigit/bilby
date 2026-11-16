@@ -41,10 +41,12 @@ import androidx.compose.material.icons.automirrored.outlined.Comment
 import androidx.compose.runtime.saveable.rememberSaveable
 import dev.bilby.resources.video_tab_comment
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -175,6 +177,7 @@ import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.components.panelCard
 import androidx.compose.foundation.layout.fillMaxHeight
 import dev.bilby.ui.theme.Breakpoints
+import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import kotlin.math.roundToInt
@@ -1345,6 +1348,10 @@ private fun QueueSheetContent(
     /** 宽屏右栏:撑满栏高,列表在栏里自己滚。Sheet 里由 Sheet 定高,不撑。 */
     fillHeight: Boolean = false,
 ) {
+    var editing by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(queue.rows.size) {
+        if (queue.rows.size <= 1) editing = false
+    }
     Column(modifier = if (fillHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
         // 标题是这份队列的来源,和详情页那一段的标题行是同一个组件、同一个判据:合集/系列点得进
         // 目录,UP 投稿之类没有目录页的不给入口。来源名还没有时退回「播放队列」。
@@ -1362,6 +1369,45 @@ private fun QueueSheetContent(
                 onCycleEndMode = onCycleEndMode,
                 onCycleOrder = onCycleOrder,
             )
+            if (queue.editActions != null && queue.rows.size > 1) {
+                val editLabel = stringResource(if (editing) Res.string.action_done else Res.string.queue_edit)
+                IconButton(onClick = { editing = !editing }) {
+                    Icon(
+                        imageVector = if (editing) Icons.Filled.Check else Icons.Outlined.Edit,
+                        contentDescription = editLabel,
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                }
+            }
+        }
+        val showReset = queue.editActions?.onReset != null
+        val showClearOthers = editing && queue.editActions?.onClearOthers != null && queue.rows.size > 1
+        if (showReset || showClearOthers) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.End),
+            ) {
+                if (showReset) {
+                    TextButton(
+                        onClick = {
+                            queue.editActions.onReset()
+                            editing = false
+                        },
+                    ) {
+                        Text(stringResource(Res.string.queue_reset))
+                    }
+                }
+                if (showClearOthers) {
+                    TextButton(
+                        onClick = {
+                            queue.editActions.onClearOthers()
+                            editing = false
+                        },
+                    ) {
+                        Text(stringResource(Res.string.queue_clear_others))
+                    }
+                }
+            }
         }
         // 三种状态与详情页那一段(VideoTabs 的 queueItems)同一套文案与判据。
         when {
@@ -1395,6 +1441,8 @@ private fun QueueSheetContent(
                 onSelect = onSelectEpisode,
                 edges = queue.edges,
                 playing = playing,
+                editActions = queue.editActions,
+                editing = editing,
                 contentPadding = PaddingValues(
                     horizontal = Spacing.Comfortable,
                     vertical = Spacing.Tight,

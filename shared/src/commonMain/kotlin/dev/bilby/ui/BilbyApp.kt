@@ -17,6 +17,7 @@ import dev.bilby.data.SidePanelId
 import dev.bilby.data.SideSheetPrefs
 import dev.bilby.ui.search.directDestination
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
@@ -45,19 +46,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Subscriptions
+import androidx.compose.material3.Surface
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Forum
 import dev.bilby.ui.components.EmptyState
@@ -95,6 +96,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -128,7 +131,9 @@ import dev.bilby.BiliLog
 import dev.bilby.resources.*
 import org.jetbrains.compose.resources.StringResource
 import dev.bilby.agent.AgentIntent
+import dev.bilby.api.BiliResult
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import dev.bilby.ui.article.ArticleScreen
@@ -145,7 +150,10 @@ import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.comment.CommentViewModel
 import dev.bilby.data.FavFolderDetail
 import dev.bilby.data.LocalEmoteRepository
+import dev.bilby.data.NightModePrefs
+import dev.bilby.data.NightWindowStatus
 import dev.bilby.data.PlayerPrefs
+import dev.bilby.data.evaluateNightMode
 import dev.bilby.data.FavRepository
 import dev.bilby.data.QueueContext
 import dev.bilby.data.SpaceRepository
@@ -167,8 +175,29 @@ import dev.bilby.ui.follow.BlacklistViewModel
 import dev.bilby.ui.follow.FollowingsScreen
 import dev.bilby.ui.follow.FollowingsSearchField
 import dev.bilby.ui.follow.FollowingsSearchFieldMaxWidth
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.widthIn
+import dev.bilby.data.CustomQueueEntry
+import dev.bilby.player.PlaybackCommand
+import dev.bilby.player.PlayerConnection
+import dev.bilby.player.PlayerHandle
+import dev.bilby.player.SleepTimerMode
+import dev.bilby.ui.components.LocalQueueActions
+import dev.bilby.ui.components.PaneSheet
+import dev.bilby.ui.components.QueueMenuActions
+import dev.bilby.ui.player.EpisodeList
+import dev.bilby.ui.player.EpisodeRow
+import dev.bilby.ui.player.EpisodeTarget
+import dev.bilby.ui.player.QueueEditActions
+import dev.bilby.ui.theme.Breakpoints
+import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.follow.FollowOrderOptions
 import dev.bilby.ui.follow.canSort
 import dev.bilby.ui.components.SortMenu
@@ -209,8 +238,12 @@ import dev.bilby.ui.settings.ExcludedFeedPage
 import dev.bilby.ui.settings.PrivacySettingsPage
 import dev.bilby.ui.settings.SettingsScreen
 import dev.bilby.ui.settings.SettingsSection
+import dev.bilby.ui.settings.NightModeSettingsPage
 import dev.bilby.ui.settings.SponsorCategoriesPage
 import dev.bilby.ui.settings.SettingsViewModel
+import dev.bilby.ui.night.NightModeScreen
+import dev.bilby.ui.night.NightModeViewModel
+import dev.bilby.ui.night.NightReminderBanner
 import dev.bilby.data.SpaceCollectionItem
 import dev.bilby.ui.space.CollectionScreen
 import dev.bilby.ui.space.CollectionViewModel
@@ -343,6 +376,26 @@ private fun BilbyApp(
         return
     }
 
+    // 夜间模式配置在冷启动首帧内先读完再建导航树，落在生效窗口内时不闪过常规信息流。
+    val nightPrefsState by container.settings.nightModePrefs.collectAsStateWithLifecycle(initialValue = null)
+    val nightPrefs = nightPrefsState ?: return
+    var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(
+        nightPrefs.enabled,
+        nightPrefs.startMinuteOfDay,
+        nightPrefs.endMinuteOfDay,
+        nightPrefs.overrideUntilEpochMillis,
+    ) {
+        nowMillis = System.currentTimeMillis()
+        while (true) {
+            delay(if (nightPrefs.enabled) NIGHT_ACTIVE_TICK_MILLIS else NIGHT_IDLE_TICK_MILLIS)
+            nowMillis = System.currentTimeMillis()
+        }
+    }
+    val nightStatus = evaluateNightMode(nightPrefs, nowMillis)
+    val allowedMids = remember(nightPrefs.allowedUps) { nightPrefs.allowedMids }
+    var nightEngaged by remember { mutableStateOf(nightStatus is NightWindowStatus.Active) }
+
     LaunchedEffect(Unit) {
         // buvid 激活只需成功一次,失败被内部吞掉:没有设备身份只影响写接口,
         // 不该让整个 app 打不开。
@@ -351,6 +404,124 @@ private fun BilbyApp(
 
     val reducedMotion = rememberReducedMotion()
     val backStack = rememberNavBackStack(DestinationSavedState, Home)
+
+    val snackbarScope = rememberCoroutineScope()
+    val system = LocalSystemActions.current
+    val playback = LocalPlaybackHost.current
+    val appAudioState by playback.state.collectAsStateWithLifecycle()
+    val resolvedAuthors = remember { mutableStateMapOf<String, Set<Long>>() }
+    val offlineVerified = remember { mutableStateMapOf<String, Boolean>() }
+
+    var deferredForBvid by remember { mutableStateOf<String?>(null) }
+    var sawDeferredCurrent by remember { mutableStateOf(false) }
+    var idleCountdownSeconds by remember { mutableStateOf<Int?>(null) }
+
+    val currentNightEngaged by rememberUpdatedState(nightEngaged)
+    val currentAllowedMids by rememberUpdatedState(allowedMids)
+    val currentNightStatus by rememberUpdatedState(nightStatus)
+    val currentAudioState by rememberUpdatedState(appAudioState)
+
+    val alreadyHere = stringResource(Res.string.nav_already_here)
+    val blockedUpText = stringResource(Res.string.night_mode_blocked_up)
+    val blockedUnavailableText = stringResource(Res.string.night_mode_blocked_unavailable)
+    val nightEnteredNotice = stringResource(Res.string.night_mode_entered_notice)
+
+    val showNightBlocked: (String) -> Unit = { message ->
+        snackbarScope.launch { snackbarHostState.showSnackbar(message) }
+    }
+
+    suspend fun isLocallyCachedOffline(bvid: String): Boolean {
+        offlineVerified[bvid]?.let { return it }
+        val cached = container.offlineStore.completedFor(bvid) != null
+        offlineVerified[bvid] = cached
+        return cached
+    }
+
+    suspend fun resolveAuthorsFor(bvid: String): Set<Long>? {
+        resolvedAuthors[bvid]?.let { return it }
+        return when (val res = container.videoRepository.getVideoDetail(bvid)) {
+            is BiliResult.Ok -> buildSet {
+                add(res.value.up.mid)
+                res.value.staff.forEach { add(it.mid) }
+            }.also { resolvedAuthors[bvid] = it }
+            else -> null
+        }
+    }
+
+    fun activeVideoBvid(video: Video): String =
+        if (currentAudioState.queue?.frameId == video.frame) {
+            currentAudioState.queue?.current?.bvid ?: video.bvid
+        } else {
+            video.bvid
+        }
+
+    fun isVideoAllowed(video: Video, mids: Set<Long>): Boolean {
+        val bvid = activeVideoBvid(video)
+        if (offlineVerified[bvid] == true) return true
+        val frameDetached = currentAudioState.queue?.frameId == video.frame &&
+            currentAudioState.queue?.detached == true
+        if (video.context is QueueContext.Offline && !frameDetached) return true
+        resolvedAuthors[bvid]?.let { authors ->
+            return authors.any { it in mids }
+        }
+        if (frameDetached) return false
+        return when (val ctx = video.context) {
+            is QueueContext.UpArchive -> ctx.mid in mids
+            is QueueContext.Collection -> ctx.mid in mids
+            else -> false
+        }
+    }
+
+    fun isDestinationAllowed(key: NavKey, mids: Set<Long>): Boolean = when (key) {
+        Home, Offline, Settings -> true
+        is SettingsPage -> true
+        is Space -> key.mid in mids
+        is CollectionContents -> key.mid in mids
+        is Video -> isVideoAllowed(key, mids)
+        else -> false
+    }
+
+    fun pruneBackStackForNightMode(mids: Set<Long>) {
+        var stoppedSourceRemoved = false
+        val activeFrameId = currentAudioState.queue?.frameId
+        for (index in backStack.lastIndex downTo 1) {
+            val entry = backStack[index]
+            if (!isDestinationAllowed(entry, mids)) {
+                if (entry is LiveRoom) stoppedSourceRemoved = true
+                if (entry is Video && entry.frame == activeFrameId) stoppedSourceRemoved = true
+                backStack.removeAt(index)
+            }
+        }
+        if (stoppedSourceRemoved || backStack.none { it is Video }) {
+            playback.stop()
+        }
+    }
+
+    fun pruneDraftQueueForNightMode() {
+        val snapshot = container.customQueueDraft.items.value
+        if (snapshot.isEmpty()) return
+        snackbarScope.launch {
+            for (item in snapshot) {
+                if (isLocallyCachedOffline(item.bvid)) continue
+                val authors = resolveAuthorsFor(item.bvid)
+                if (authors == null || authors.none { it in currentAllowedMids }) {
+                    container.customQueueDraft.remove(item.bvid)
+                }
+            }
+        }
+    }
+
+    fun engageNightModeNow(showNotice: Boolean) {
+        deferredForBvid = null
+        sawDeferredCurrent = false
+        idleCountdownSeconds = null
+        nightEngaged = true
+        pruneBackStackForNightMode(currentAllowedMids)
+        pruneDraftQueueForNightMode()
+        if (showNotice) {
+            snackbarScope.launch { snackbarHostState.showSnackbar(nightEnteredNotice) }
+        }
+    }
 
     /**
      * 压栈的唯一入口。同一个 key 在栈里只留一份,规则与理由见 [pushUnique]。
@@ -362,14 +533,63 @@ private fun BilbyApp(
      * 用 snackbar 而不是系统 `Toast`:Toast 不参与主题,字号、圆角、深浅色全是系统的,
      * 和它盖着的这个应用对不上。host 在 `setContent` 那一层,理由见那里。
      */
-    val snackbarScope = rememberCoroutineScope()
-    val alreadyHere = stringResource(Res.string.nav_already_here)
-    val push: (NavKey) -> Unit = remember(backStack, snackbarHostState, snackbarScope, alreadyHere) {
-        { key ->
+    val push: (NavKey) -> Unit = remember(
+        backStack,
+        snackbarHostState,
+        snackbarScope,
+        alreadyHere,
+        blockedUpText,
+        blockedUnavailableText,
+    ) {
+        fun pushConfirmed(key: NavKey) {
             if (!backStack.pushUnique(key.withNewFrame())) {
                 // 连点几下只留最后一条:SnackbarHostState 自带 MutatorMutex,新的一条会
                 // 取消正在显示的那条,不用自己去 dismiss。
                 snackbarScope.launch { snackbarHostState.showSnackbar(alreadyHere) }
+            }
+        }
+        { key ->
+            if (!currentNightEngaged) {
+                pushConfirmed(key)
+            } else {
+                val mids = currentAllowedMids
+                when (key) {
+                    Home, Offline, Settings -> pushConfirmed(key)
+                    is SettingsPage -> pushConfirmed(key)
+                    is LiveRoom -> showNightBlocked(blockedUnavailableText)
+                    is Space -> if (key.mid in mids) pushConfirmed(key) else showNightBlocked(blockedUpText)
+                    is CollectionContents -> if (key.mid in mids) pushConfirmed(key) else showNightBlocked(blockedUpText)
+                    is Video -> {
+                        val ctx = key.context
+                        when {
+                            ctx is QueueContext.Offline -> pushConfirmed(key)
+                            ctx is QueueContext.UpArchive -> if (ctx.mid in mids) pushConfirmed(key) else showNightBlocked(blockedUpText)
+                            ctx is QueueContext.Collection -> if (ctx.mid in mids) pushConfirmed(key) else showNightBlocked(blockedUpText)
+                            else -> {
+                                val cached = resolvedAuthors[key.bvid]
+                                if (offlineVerified[key.bvid] == true || (cached != null && cached.any { it in mids })) {
+                                    pushConfirmed(key)
+                                } else if (offlineVerified[key.bvid] == false && cached != null) {
+                                    showNightBlocked(blockedUpText)
+                                } else {
+                                    snackbarScope.launch {
+                                        if (isLocallyCachedOffline(key.bvid)) {
+                                            pushConfirmed(key)
+                                            return@launch
+                                        }
+                                        val authors = resolveAuthorsFor(key.bvid)
+                                        if (!currentNightEngaged || (authors != null && authors.any { it in currentAllowedMids })) {
+                                            pushConfirmed(key)
+                                        } else {
+                                            showNightBlocked(blockedUpText)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else -> showNightBlocked(blockedUnavailableText)
+                }
             }
         }
     }
@@ -383,11 +603,13 @@ private fun BilbyApp(
      * 收在这一层是因为它出现在四个地方(专栏、通知、评论、动态详情),而判断只有一条。
      * 原先每处各抄一份,四份里已经有一份写法不同。
      */
-    val system = LocalSystemActions.current
-    val playback = LocalPlaybackHost.current
     val openLink: (String) -> Unit = { url ->
         val destination = BilbyLink.destinationOf(url)
-        if (destination != null) push(destination) else system.openInBrowser(url)
+        when {
+            destination != null -> push(destination)
+            currentNightEngaged -> showNightBlocked(blockedUnavailableText)
+            else -> system.openInBrowser(url)
+        }
     }
 
     // 新版本提示。挂在这一层而不是首页里:它和用户此刻在哪一页无关,而首页会随 tab 切换
@@ -449,6 +671,224 @@ private fun BilbyApp(
     val videoFrames = backStack.mapNotNullTo(HashSet()) { (it as? Video)?.frame }
     LaunchedEffect(videoFrames) { playback.retainFrames(videoFrames) }
 
+    var appPlayerHandle by remember { mutableStateOf<PlayerHandle?>(null) }
+    DisposableEffect(hasVideoPage, playback) {
+        if (!hasVideoPage) {
+            appPlayerHandle = null
+            onDispose {}
+        } else {
+            val conn = playback.connect { appPlayerHandle = it }
+            onDispose {
+                appPlayerHandle = null
+                conn.release()
+            }
+        }
+    }
+    fun sendPlaybackCommand(command: PlaybackCommand) {
+        val handle = appPlayerHandle
+        if (handle != null) {
+            handle.send(command)
+        } else {
+            var released = false
+            var oneShot: PlayerConnection? = null
+            oneShot = playback.connect { connected ->
+                connected.send(command)
+                released = true
+                oneShot?.release()
+            }
+            if (released) oneShot.release()
+        }
+    }
+
+    LaunchedEffect(deferredForBvid != null) {
+        sendPlaybackCommand(PlaybackCommand.SetNightHoldCurrentEnd(deferredForBvid != null))
+    }
+
+    suspend fun classifyActiveVodOrFallback(startIdleCountdown: Boolean) {
+        val state = currentAudioState
+        val topIsLive = backStack.lastOrNull() is LiveRoom ||
+            state.queue?.current?.bvid?.startsWith("live:") == true
+        val activeVodBvid = state.queue?.current?.bvid
+            ?.takeIf {
+                !topIsLive &&
+                    state.queue.frameId != null &&
+                    hasVideoPage &&
+                    (state.isPlaying || state.loading)
+            }
+        if (activeVodBvid != null) {
+            val whitelisted = isLocallyCachedOffline(activeVodBvid) ||
+                resolveAuthorsFor(activeVodBvid)?.any { it in currentAllowedMids } == true
+            if (whitelisted) {
+                engageNightModeNow(showNotice = true)
+            } else {
+                idleCountdownSeconds = null
+                deferredForBvid = activeVodBvid
+                sawDeferredCurrent = true
+            }
+        } else if (startIdleCountdown) {
+            idleCountdownSeconds = NIGHT_IDLE_COUNTDOWN_SECONDS
+        } else {
+            engageNightModeNow(showNotice = true)
+        }
+    }
+
+    // 夜间模式状态协调：冷启动已在窗口内时无闪切入；运行中跨入窗口按当前实际活跃播放会话分流。
+    var prevNightStatus by remember { mutableStateOf<NightWindowStatus?>(null) }
+    LaunchedEffect(nightStatus) {
+        val previous = prevNightStatus
+        prevNightStatus = nightStatus
+        if (previous == null) return@LaunchedEffect
+
+        when {
+            nightStatus !is NightWindowStatus.Active -> {
+                deferredForBvid = null
+                sawDeferredCurrent = false
+                idleCountdownSeconds = null
+                nightEngaged = false
+            }
+
+            previous is NightWindowStatus.Overridden -> {
+                engageNightModeNow(showNotice = true)
+            }
+
+            previous is NightWindowStatus.Inactive -> {
+                if (nightEngaged) return@LaunchedEffect
+                classifyActiveVodOrFallback(startIdleCountdown = true)
+            }
+
+            else -> {
+                if (!nightEngaged && deferredForBvid == null && idleCountdownSeconds == null) {
+                    engageNightModeNow(showNotice = false)
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(nightEngaged, allowedMids) {
+        if (nightEngaged) {
+            pruneBackStackForNightMode(allowedMids)
+            pruneDraftQueueForNightMode()
+        }
+    }
+
+    // 夜间模式生效期间：任何活跃队列换条（含缓存队列追加了在线视频、后台听视频自动切条）都按单条校验本地副本或白名单身份。
+    LaunchedEffect(nightEngaged, appAudioState.queue?.current?.bvid, allowedMids) {
+        if (!nightEngaged) return@LaunchedEffect
+        val bvid = appAudioState.queue?.current?.bvid ?: return@LaunchedEffect
+        if (bvid.startsWith("live:")) {
+            playback.stop()
+            return@LaunchedEffect
+        }
+        if (isLocallyCachedOffline(bvid)) return@LaunchedEffect
+        val authors = resolveAuthorsFor(bvid)
+        if (!currentNightEngaged) return@LaunchedEffect
+        if (authors == null || authors.none { it in currentAllowedMids }) {
+            val activeFrameId = currentAudioState.queue?.frameId
+            for (index in backStack.lastIndex downTo 1) {
+                val entry = backStack[index]
+                if (entry is Video && (entry.frame == activeFrameId || entry.bvid == bvid)) {
+                    backStack.removeAt(index)
+                }
+            }
+            playback.stop()
+            showNightBlocked(blockedUpText)
+        }
+    }
+
+    LaunchedEffect(idleCountdownSeconds != null) {
+        if (idleCountdownSeconds == null) return@LaunchedEffect
+        while (true) {
+            val remaining = idleCountdownSeconds ?: break
+            if (remaining <= 0) {
+                classifyActiveVodOrFallback(startIdleCountdown = false)
+                break
+            }
+            delay(1_000L)
+            val currentRemaining = idleCountdownSeconds ?: break
+            idleCountdownSeconds = (currentRemaining - 1).coerceAtLeast(0)
+        }
+    }
+
+    LaunchedEffect(
+        deferredForBvid,
+        hasVideoPage,
+        appAudioState.stoppedAtEnd,
+        appAudioState.queue?.current?.bvid,
+        nightStatus,
+    ) {
+        val waitingBvid = deferredForBvid ?: return@LaunchedEffect
+        if (nightStatus !is NightWindowStatus.Active) {
+            deferredForBvid = null
+            sawDeferredCurrent = false
+            return@LaunchedEffect
+        }
+        val currentQueueBvid = appAudioState.queue?.current?.bvid
+        if (currentQueueBvid == waitingBvid) {
+            sawDeferredCurrent = true
+        }
+        val switchedBvid = sawDeferredCurrent && currentQueueBvid != waitingBvid
+        val finishedHere = appAudioState.stoppedAtEnd &&
+            (!hasVideoPage || currentQueueBvid == null || currentQueueBvid == waitingBvid)
+        if (!hasVideoPage || switchedBvid || finishedHere) {
+            engageNightModeNow(showNotice = true)
+        }
+    }
+
+    val addedNextText = stringResource(Res.string.queue_added_next)
+    val addedText = stringResource(Res.string.queue_added)
+    val queueMenuActions = remember(
+        container,
+        playback,
+        snackbarHostState,
+        snackbarScope,
+        addedNextText,
+        addedText,
+        blockedUpText,
+    ) {
+        QueueMenuActions { item, playNext ->
+            val enqueueNow = {
+                val targetVideo = backStack.lastOrNull { it is Video } as? Video
+                if (targetVideo != null) {
+                    sendPlaybackCommand(PlaybackCommand.EnqueueItem(targetVideo.frame, item, playNext))
+                } else {
+                    container.customQueueDraft.enqueue(item, playNext)
+                }
+                snackbarScope.launch {
+                    snackbarHostState.showSnackbar(if (playNext) addedNextText else addedText)
+                }
+            }
+            if (!currentNightEngaged) {
+                enqueueNow()
+            } else {
+                snackbarScope.launch {
+                    val allowed = isLocallyCachedOffline(item.bvid) ||
+                        resolveAuthorsFor(item.bvid)?.any { it in currentAllowedMids } == true
+                    if (!currentNightEngaged || allowed) {
+                        enqueueNow()
+                    } else {
+                        snackbarHostState.showSnackbar(blockedUpText)
+                    }
+                }
+            }
+        }
+    }
+    val playDraftQueue: (String?) -> Unit = { chosenBvid ->
+        val taken = container.customQueueDraft.consumeAll()
+        if (taken.isNotEmpty()) {
+            val entries = taken.map {
+                CustomQueueEntry(
+                    bvid = it.bvid,
+                    title = it.title,
+                    upName = it.upName,
+                    coverUrl = it.coverUrl,
+                    durationSeconds = it.durationSeconds,
+                )
+            }
+            val firstBvid = chosenBvid?.takeIf { b -> entries.any { it.bvid == b } } ?: entries.first().bvid
+            push(Video(bvid = firstBvid, context = QueueContext.Custom(entries)))
+        }
+    }
+
     // 列表与详情并排:material3 adaptive 的 ListDetailSceneStrategy。条目用 listPane / detailPane
     // 标记,栈顶往下连续带标记的几条拼成一个 ListDetailPaneScaffold。
     //
@@ -490,7 +930,9 @@ private fun BilbyApp(
     // 不然右栏空了又被补上,返回键退不出设置。
     val openSettings: () -> Unit = {
         push(Settings)
-        if (listDetailWide) push(SettingsPage(SettingsSection.Appearance))
+        if (listDetailWide) {
+            push(SettingsPage(if (currentNightEngaged) SettingsSection.NightMode else SettingsSection.Appearance))
+        }
     }
     // 左栏点一项是换掉右栏,理由同 openWhisper;连同压在上面的二级子页一起换掉。
     val openSettingsSection: (SettingsSection) -> Unit = { section ->
@@ -541,6 +983,7 @@ private fun BilbyApp(
         }
     }
 
+    CompositionLocalProvider(LocalQueueActions provides queueMenuActions) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -568,12 +1011,22 @@ private fun BilbyApp(
                         Key.Three, Key.NumPad3 -> RootTab.Profile
                         else -> null
                     }
-                    if (targetTab != null) return@onPreviewKeyEvent switchRootTab(targetTab)
+                    if (targetTab != null) {
+                        if (currentNightEngaged) {
+                            showNightBlocked(blockedUnavailableText)
+                            return@onPreviewKeyEvent true
+                        }
+                        return@onPreviewKeyEvent switchRootTab(targetTab)
+                    }
                 }
                 // Ctrl+F 或首页下的单键 / 聚焦主搜索框
                 if ((ctrl && !event.isShiftPressed && event.key == Key.F) ||
                     (bare && !editableFocus.isEditableFocused && backStack.lastOrNull() is Home && event.key == Key.Slash)
                 ) {
+                    if (currentNightEngaged) {
+                        showNightBlocked(blockedUnavailableText)
+                        return@onPreviewKeyEvent true
+                    }
                     if (switchRootTab(RootTab.Search)) {
                         focusSearchNonce++
                         return@onPreviewKeyEvent true
@@ -693,37 +1146,63 @@ private fun BilbyApp(
         entryProvider = entryProvider {
             entry<Home> {
                 CutoutSafe {
-                    RootTabs(
-                        container = container,
-                        tabRequest = rootTabRequest,
-                        focusSearchNonce = focusSearchNonce,
-                        onVideoClick = { push(Video(it)) },
-                        onVideoInContext = { bvid, context -> push(Video(bvid, context = context)) },
-                        onUserClick = { push(Space(it)) },
-                        onLiveClick = { push(LiveRoom(it)) },
-                        onSettingsClick = openSettings,
-                        onOpenFollowings = { push(Followings) },
-                        onOpenCoinLog = { push(CoinLog) },
-                        onOpenOtherDynamics = { push(OtherDynamics) },
-                        onOpenPushes = { push(MessagePushes) },
-                        onOpenArticle = { ref -> push(ArticlePage(ref.id, ref.isRead)) },
-                        onOpenHistory = { push(History) },
-                        onOpenToView = { push(ToViewList) },
-                        onOpenOffline = { push(Offline) },
-                        onOpenFavFolder = { folder ->
-                            push(FavFolderContents(folder.id, folder.title))
-                        },
-                        onOpenFavFolders = { push(FavFolders) },
-                        onOpenMessages = { push(Messages) },
-                        onOpen = { push(it) },
-                    )
+                    if (nightEngaged) {
+                        NightModeHomeRoute(
+                            container = container,
+                            prefs = nightPrefs,
+                            hasVideoPage = hasVideoPage,
+                            onPlayDraftQueue = playDraftQueue,
+                            onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
+                            onOpenSpace = { push(Space(it)) },
+                            onOpenOffline = { push(Offline) },
+                            onOpenSettings = openSettings,
+                            onTempExit = {
+                                val activeWindow = (currentNightStatus as? NightWindowStatus.Active)?.window
+                                    ?: (evaluateNightMode(nightPrefs, System.currentTimeMillis()) as? NightWindowStatus.Active)?.window
+                                if (activeWindow != null) {
+                                    container.persistScope.launch {
+                                        container.settings.setNightModeOverrideUntil(activeWindow.endEpochMillis)
+                                    }
+                                }
+                            },
+                        )
+                    } else {
+                        RootTabs(
+                            container = container,
+                            hasVideoPage = hasVideoPage,
+                            tabRequest = rootTabRequest,
+                            focusSearchNonce = focusSearchNonce,
+                            onPlayDraftQueue = playDraftQueue,
+                            onVideoClick = { push(Video(it)) },
+                            onVideoInContext = { bvid, context -> push(Video(bvid, context = context)) },
+                            onUserClick = { push(Space(it)) },
+                            onLiveClick = { push(LiveRoom(it)) },
+                            onSettingsClick = openSettings,
+                            onOpenFollowings = { push(Followings) },
+                            onOpenCoinLog = { push(CoinLog) },
+                            onOpenOtherDynamics = { push(OtherDynamics) },
+                            onOpenPushes = { push(MessagePushes) },
+                            onOpenArticle = { ref -> push(ArticlePage(ref.id, ref.isRead)) },
+                            onOpenHistory = { push(History) },
+                            onOpenToView = { push(ToViewList) },
+                            onOpenOffline = { push(Offline) },
+                            onOpenFavFolder = { folder ->
+                                push(FavFolderContents(folder.id, folder.title))
+                            },
+                            onOpenFavFolders = { push(FavFolders) },
+                            onOpenMessages = { push(Messages) },
+                            onOpen = { push(it) },
+                        )
+                    }
                 }
             }
             entry<Settings>(
                 metadata = ListDetailSceneStrategy.listPane(
                     sceneKey = SettingsScene,
                     detailPlaceholder = {
-                        LaunchedEffect(Unit) { push(SettingsPage(SettingsSection.Appearance)) }
+                        LaunchedEffect(Unit) {
+                            push(SettingsPage(if (currentNightEngaged) SettingsSection.NightMode else SettingsSection.Appearance))
+                        }
                     },
                 ),
             ) {
@@ -763,6 +1242,7 @@ private fun BilbyApp(
                 }
             }
             entry<Video> { key ->
+                val isTopVideo = (backStack.lastOrNull { it is Video } as? Video)?.frame == key.frame
                 VideoRoute(
                     container = container,
                     key = key,
@@ -777,9 +1257,49 @@ private fun BilbyApp(
                     //
                     // 今天那个"点下一集不自动播放"的 bug 也出在这里:压栈时旧页的 onDispose
                     // 在新页起播之后才跑,把刚起播的下一集暂停了。替换栈顶让这个错位不成立。
-                    onOpenVideo = { backStack.replaceTopUnique(Video(it).withNewFrame()) },
+                    onOpenVideo = { nextBvid ->
+                        if (currentNightEngaged) {
+                            push(Video(nextBvid))
+                        } else {
+                            backStack.replaceTopUnique(Video(nextBvid).withNewFrame())
+                        }
+                    },
                     onOpenLink = openLink,
-                    onSearchTag = { push(SearchResult(it)) },
+                    onSearchTag = if (nightEngaged) null else { tag -> push(SearchResult(tag)) },
+                    disableDiscovery = nightEngaged,
+                    nightBanner = if (isTopVideo && deferredForBvid != null) {
+                        {
+                            NightReminderBanner(
+                                text = stringResource(Res.string.night_mode_reminder_video),
+                                actionLabel = stringResource(Res.string.night_mode_switch_now),
+                                onAction = { engageNightModeNow(showNotice = true) },
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    onAuthorResolved = { resolvedBvid, upMid, staffMids ->
+                        val authors = buildSet {
+                            add(upMid)
+                            addAll(staffMids)
+                        }
+                        resolvedAuthors[resolvedBvid] = authors
+                        val whitelisted = authors.any { it in currentAllowedMids }
+                        if (currentNightEngaged) {
+                            if (!whitelisted) {
+                                snackbarScope.launch {
+                                    if (!isLocallyCachedOffline(resolvedBvid) && currentNightEngaged) {
+                                        if (backStack.remove(key) && backStack.none { it is Video }) {
+                                            playback.stop()
+                                        }
+                                        showNightBlocked(blockedUpText)
+                                    }
+                                }
+                            }
+                        } else if (deferredForBvid == resolvedBvid && whitelisted) {
+                            engageNightModeNow(showNotice = true)
+                        }
+                    },
                 )
             }
             entry<SearchResult> { key ->
@@ -989,11 +1509,12 @@ private fun BilbyApp(
                 val scope = rememberCoroutineScope()
                 CutoutSafe {
                     SpaceRoute(
-                        container,
-                        key.mid,
+                        container = container,
+                        mid = key.mid,
+                        vodOnly = nightEngaged,
                         onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
                         onListenUp = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
-                        onLiveClick = { push(LiveRoom(it)) },
+                        onLiveClick = if (nightEngaged) null else { roomId -> push(LiveRoom(roomId)) },
                         onCollectionClick = {
                             push(CollectionContents(key.mid, it.id, it.isSeason, it.name))
                         },
@@ -1039,8 +1560,27 @@ private fun BilbyApp(
             }
         },
     )
+    if (idleCountdownSeconds != null) {
+        val countdown = idleCountdownSeconds ?: 0
+        val topBarInset = WindowInsets.barsAndCutout.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+        NightReminderBanner(
+            text = stringResource(Res.string.night_mode_reminder_idle, countdown),
+            actionLabel = stringResource(Res.string.night_mode_switch_now),
+            onAction = { engageNightModeNow(showNotice = true) },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .widthIn(max = Breakpoints.ReadableWidth)
+                .windowInsetsPadding(topBarInset)
+                .padding(
+                    top = NightIdleBannerTopOffset,
+                    start = Spacing.Comfortable,
+                    end = Spacing.Comfortable,
+                ),
+        )
+    }
     if (shortcutsOpen) {
         ShortcutsSheet(onDismiss = { shortcutsOpen = false })
+    }
     }
     }
 }
@@ -1090,8 +1630,10 @@ private fun CutoutSafe(content: @Composable () -> Unit) {
 @Composable
 private fun RootTabs(
     container: AppContainer,
+    hasVideoPage: Boolean,
     tabRequest: Pair<RootTab, Int>? = null,
     focusSearchNonce: Int = 0,
+    onPlayDraftQueue: (String?) -> Unit,
     onVideoClick: (String) -> Unit,
     /**
      * 「我的」页稍后再看、缓存预览里的一条:队列是那一节对应的列表,不是这条视频的归属。
@@ -1182,6 +1724,8 @@ private fun RootTabs(
                 profileScrollToTop = profileScrollToTop,
                 focusSearchNonce = focusSearchNonce,
                 container = container,
+                hasVideoPage = hasVideoPage,
+                onPlayDraftQueue = onPlayDraftQueue,
                 onVideoClick = onVideoClick,
                 onVideoInContext = onVideoInContext,
                 onUserClick = onUserClick,
@@ -1219,6 +1763,8 @@ private fun RootTabs(
                     profileScrollToTop = profileScrollToTop,
                     focusSearchNonce = focusSearchNonce,
                     container = container,
+                    hasVideoPage = hasVideoPage,
+                    onPlayDraftQueue = onPlayDraftQueue,
                     onVideoClick = onVideoClick,
                     onVideoInContext = onVideoInContext,
                     onUserClick = onUserClick,
@@ -1344,6 +1890,8 @@ private fun RootTabsContent(
     profileScrollToTop: Int,
     focusSearchNonce: Int,
     container: AppContainer,
+    hasVideoPage: Boolean,
+    onPlayDraftQueue: (String?) -> Unit,
     onVideoClick: (String) -> Unit,
     onVideoInContext: (String, QueueContext) -> Unit,
     onUserClick: (Long) -> Unit,
@@ -1436,6 +1984,161 @@ private fun RootTabsContent(
                     onSettingsClick = onSettingsClick,
                 )
             }
+            }
+        }
+        DraftQueueOverlay(
+            container = container,
+            hasVideoPage = hasVideoPage,
+            onPlayDraftQueue = onPlayDraftQueue,
+        )
+    }
+}
+
+@Composable
+private fun BoxScope.DraftQueueOverlay(
+    container: AppContainer,
+    hasVideoPage: Boolean,
+    onPlayDraftQueue: (String?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val draftItems by container.customQueueDraft.items.collectAsStateWithLifecycle()
+    var draftSheetOpen by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(draftItems.isEmpty(), hasVideoPage) {
+        if (draftItems.isEmpty() || hasVideoPage) draftSheetOpen = false
+    }
+    AnimatedVisibility(
+        visible = !hasVideoPage && draftItems.isNotEmpty(),
+        modifier = modifier.align(Alignment.BottomCenter),
+    ) {
+        DraftQueueBar(
+            count = draftItems.size,
+            onOpen = { draftSheetOpen = true },
+            onPlay = { onPlayDraftQueue(null) },
+            onClear = container.customQueueDraft::clear,
+        )
+    }
+    if (draftSheetOpen && !hasVideoPage && draftItems.isNotEmpty()) {
+        val draftRows = remember(draftItems) {
+            draftItems.map { item ->
+                EpisodeRow(
+                    bvid = item.bvid,
+                    title = item.title,
+                    upName = item.upName,
+                    coverUrl = item.coverUrl,
+                    durationSeconds = item.durationSeconds,
+                    isCurrent = false,
+                )
+            }
+        }
+        val draftEditActions = remember(container.customQueueDraft) {
+            QueueEditActions(
+                onMove = container.customQueueDraft::move,
+                onRemove = container.customQueueDraft::remove,
+                onPlayNext = { item -> container.customQueueDraft.enqueue(item, playNext = true) },
+                allowRemoveLast = true,
+            )
+        }
+        PaneSheet(
+            onDismissRequest = { draftSheetOpen = false },
+            title = stringResource(Res.string.queue_source_custom),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Comfortable),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(Res.string.queue_draft_summary, draftItems.size),
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    onClick = {
+                        container.customQueueDraft.clear()
+                        draftSheetOpen = false
+                    },
+                ) {
+                    Text(stringResource(Res.string.action_clear))
+                }
+                TextButton(
+                    onClick = {
+                        draftSheetOpen = false
+                        onPlayDraftQueue(null)
+                    },
+                ) {
+                    Text(stringResource(Res.string.queue_draft_play))
+                }
+            }
+            EpisodeList(
+                rows = draftRows,
+                onSelect = { target ->
+                    if (target is EpisodeTarget.Video) {
+                        draftSheetOpen = false
+                        onPlayDraftQueue(target.bvid)
+                    }
+                },
+                editActions = draftEditActions,
+                editing = true,
+                contentPadding = PaddingValues(
+                    start = Spacing.Comfortable,
+                    end = Spacing.Comfortable,
+                    bottom = Spacing.Loose,
+                ),
+                modifier = Modifier.fillMaxWidth().bodyHeight(0.75f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DraftQueueBar(
+    count: Int,
+    onOpen: () -> Unit,
+    onPlay: () -> Unit,
+    onClear: () -> Unit,
+) {
+    Surface(
+        onClick = onOpen,
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier
+            .widthIn(max = Breakpoints.VideoRowMaxWidth)
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+    ) {
+        Row(
+            modifier = Modifier.padding(
+                start = Spacing.Comfortable,
+                end = Spacing.Tight,
+                top = Spacing.Hair,
+                bottom = Spacing.Hair,
+            ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Outlined.PlaylistPlay,
+                contentDescription = null,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+            Text(
+                text = stringResource(Res.string.queue_draft_summary, count),
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onPlay) {
+                Text(stringResource(Res.string.queue_draft_play))
+            }
+            IconButton(onClick = onClear) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = stringResource(Res.string.action_clear),
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
             }
         }
     }
@@ -1837,6 +2540,23 @@ private fun SettingsPageRoute(
             onOpenGithub = { system.openInBrowser(PROJECT_GITHUB_URL) },
             onBack = onBack,
         )
+
+        SettingsSection.NightMode -> {
+            val followPicker by vm.followPicker.collectAsStateWithLifecycle()
+            NightModeSettingsPage(
+                state = state,
+                followPicker = followPicker,
+                onLoadFollowings = vm::loadFollowingsIfNeeded,
+                onLoadMoreFollowings = vm::loadMoreFollowings,
+                onSearchFollowings = vm::searchFollowings,
+                onEnabledChange = vm::setNightModeEnabled,
+                onScheduleChange = vm::setNightModeSchedule,
+                onAllowedUpsChange = vm::setNightModeAllowedUps,
+                onRemoveUp = vm::removeNightModeAllowedUp,
+                onClearOverride = vm::clearNightModeOverride,
+                onBack = onBack,
+            )
+        }
     }
 }
 
@@ -1849,6 +2569,7 @@ private fun rememberSettingsViewModel(container: AppContainer): SettingsViewMode
                 container.llmClient,
                 container.historyRepository,
                 container.persistScope,
+                followRepository = container.followRepository,
             )
         }
     },
@@ -2614,15 +3335,66 @@ private fun FollowingsRoute(
 }
 
 @Composable
+private fun NightModeHomeRoute(
+    container: AppContainer,
+    prefs: NightModePrefs,
+    hasVideoPage: Boolean,
+    onPlayDraftQueue: (String?) -> Unit,
+    onVideoClick: (String, QueueContext) -> Unit,
+    onOpenSpace: (Long) -> Unit,
+    onOpenOffline: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onTempExit: () -> Unit,
+) {
+    val vm: NightModeViewModel = viewModel(
+        key = "night-mode",
+        factory = viewModelFactory {
+            initializer {
+                NightModeViewModel(
+                    settings = container.settings,
+                    spaceRepository = container.spaceRepository,
+                    toViewRepository = container.toViewRepository,
+                )
+            }
+        },
+    )
+    val state by vm.state.collectAsStateWithLifecycle()
+    NightModeScreen(
+        prefs = prefs,
+        state = state,
+        onSelectUp = vm::selectUp,
+        onLoadMore = vm::loadMore,
+        onRetry = vm::retry,
+        onRefresh = vm::refresh,
+        onVideoClick = { item -> onVideoClick(item.bvid, vm.buildQueueContext(item)) },
+        onAddToView = vm::addToView,
+        onClearToViewNotice = vm::clearToViewNotice,
+        onOpenSpace = onOpenSpace,
+        onOpenOffline = onOpenOffline,
+        onOpenSettings = onOpenSettings,
+        onTempExit = onTempExit,
+        bottomOverlay = {
+            DraftQueueOverlay(
+                container = container,
+                hasVideoPage = hasVideoPage,
+                onPlayDraftQueue = onPlayDraftQueue,
+                modifier = Modifier.navigationBarsPadding(),
+            )
+        },
+    )
+}
+
+@Composable
 private fun SpaceRoute(
     container: AppContainer,
     mid: Long,
     onVideoClick: (String, QueueContext) -> Unit,
     onListenUp: (String, QueueContext) -> Unit,
-    onLiveClick: (Long) -> Unit,
+    onLiveClick: ((Long) -> Unit)?,
     onCollectionClick: (SpaceCollectionItem) -> Unit,
     onDynamicAction: (DynamicAction) -> Unit,
     onBack: () -> Unit,
+    vodOnly: Boolean = false,
 ) {
     val vm: SpaceViewModel = viewModel(
         key = "space-$mid",
@@ -2678,6 +3450,7 @@ private fun SpaceRoute(
         onRefresh = vm::refresh,
         onDynamicsSheetOpenChange = vm::setDynamicsSheetOpen,
         onDynamicsSheetWidthChange = vm::setDynamicsSheetWidth,
+        vodOnly = vodOnly,
     )
 }
 
@@ -2967,8 +3740,11 @@ private fun VideoRoute(
     onOpenLink: (String) -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
     onOpenVideo: (String) -> Unit,
-    onSearchTag: (String) -> Unit,
+    onSearchTag: ((String) -> Unit)?,
     onBack: () -> Unit,
+    disableDiscovery: Boolean = false,
+    nightBanner: (@Composable () -> Unit)? = null,
+    onAuthorResolved: (bvid: String, upMid: Long, staffMids: Set<Long>) -> Unit = { _, _, _ -> },
 ) {
     val frame = remember(key.frame) { PlayerFrame(key.frame, key.context) }
 
@@ -3021,6 +3797,9 @@ private fun VideoRoute(
         onOpenVideo = onOpenVideo,
         onSearchTag = onSearchTag,
         onBack = onBack,
+        disableDiscovery = disableDiscovery,
+        nightBanner = nightBanner,
+        onAuthorResolved = { upMid, staffMids -> onAuthorResolved(shownBvid, upMid, staffMids) },
     )
 }
 
@@ -3035,8 +3814,11 @@ private fun VideoPane(
     onOpenLink: (String) -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
     onOpenVideo: (String) -> Unit,
-    onSearchTag: (String) -> Unit,
+    onSearchTag: ((String) -> Unit)?,
     onBack: () -> Unit,
+    disableDiscovery: Boolean = false,
+    nightBanner: (@Composable () -> Unit)? = null,
+    onAuthorResolved: (upMid: Long, staffMids: Set<Long>) -> Unit = { _, _ -> },
 ) {
     // **key 与 bvid 无关,一个播放页只有一个 VideoViewModel。**
     //
@@ -3127,11 +3909,11 @@ private fun VideoPane(
         state = state,
         videoTags = videoTags,
         onLoadTags = vm::loadVideoTags,
-        onTagClick = onSearchTag,
+        onTagClick = if (disableDiscovery) null else onSearchTag,
         related = related,
         commentState = commentState,
         sponsorSegments = sponsorSegments,
-        onFindRelated = vm::findRelated,
+        onFindRelated = if (disableDiscovery) null else vm::findRelated,
         onAskRelated = vm::askRelated,
         onRetryRelated = vm::retryRelated,
         cached = cached,
@@ -3196,8 +3978,15 @@ private fun VideoPane(
                 container.settings.saveSidePanelWidth(SidePanelId.VideoTabs, widthDp)
             }
         },
+        nightBanner = nightBanner,
+        onAuthorResolved = onAuthorResolved,
     )
 }
+
+private const val NIGHT_ACTIVE_TICK_MILLIS = 1_000L
+private const val NIGHT_IDLE_TICK_MILLIS = 15_000L
+private const val NIGHT_IDLE_COUNTDOWN_SECONDS = 10
+private val NightIdleBannerTopOffset = 64.dp
 
 /**
  * lateral(同级平移)没有在这里定义 spec:它由 `HorizontalPager` 自己承担,而规范要的正是

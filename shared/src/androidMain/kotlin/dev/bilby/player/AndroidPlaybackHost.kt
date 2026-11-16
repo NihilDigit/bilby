@@ -172,4 +172,25 @@ private fun PlaybackCommand.toSessionCommand(): Pair<String, Bundle> = when (thi
     is PlaybackCommand.SetEndMode -> AudioPlaybackService.ACTION_SET_END_MODE to Bundle().apply {
         putString(AudioPlaybackService.EXTRA_END_MODE, mode.key)
     }
+    is PlaybackCommand.EnqueueItem -> AudioPlaybackService.ACTION_ENQUEUE_ITEM to Bundle().apply {
+        putString(AudioPlaybackService.EXTRA_FRAME_ID, frameId)
+        putString(AudioPlaybackService.EXTRA_BVID, item.bvid)
+        putString(AudioPlaybackService.EXTRA_TITLE, item.title)
+        putString(AudioPlaybackService.EXTRA_UP_NAME, item.upName)
+        putString(AudioPlaybackService.EXTRA_COVER_URL, item.coverUrl)
+        putLong(AudioPlaybackService.EXTRA_DURATION_SECONDS, item.durationSeconds)
+        putBoolean(AudioPlaybackService.EXTRA_PLAY_NEXT, playNext)
+    }
+    is PlaybackCommand.MoveQueueItem -> AudioPlaybackService.ACTION_MOVE_QUEUE_ITEM to Bundle().apply {
+        putString(AudioPlaybackService.EXTRA_BVID, bvid)
+        putInt(AudioPlaybackService.EXTRA_TO_INDEX, toIndex)
+    }
+    is PlaybackCommand.RemoveQueueItem -> AudioPlaybackService.ACTION_REMOVE_QUEUE_ITEM to Bundle().apply {
+        putString(AudioPlaybackService.EXTRA_BVID, bvid)
+    }
+    PlaybackCommand.ClearQueueExceptCurrent -> AudioPlaybackService.ACTION_CLEAR_QUEUE_EXCEPT_CURRENT to Bundle.EMPTY
+    PlaybackCommand.ResetQueue -> AudioPlaybackService.ACTION_RESET_QUEUE to Bundle.EMPTY
+    is PlaybackCommand.SetNightHoldCurrentEnd -> AudioPlaybackService.ACTION_NIGHT_HOLD_END to Bundle().apply {
+        putBoolean(AudioPlaybackService.EXTRA_NIGHT_HOLD_END, enabled)
+    }
 }

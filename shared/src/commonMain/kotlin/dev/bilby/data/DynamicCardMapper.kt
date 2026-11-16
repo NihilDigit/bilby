@@ -1,6 +1,7 @@
 package dev.bilby.data
 
 import dev.bilby.BiliLog
+import dev.bilby.normalizeDurationText
 import dev.bilby.api.dto.DynamicAdditionalDto
 import dev.bilby.api.dto.DynamicItemDto
 import dev.bilby.api.dto.DynamicRichNodeDto
@@ -305,7 +306,7 @@ private fun dev.bilby.api.dto.ArchiveDto?.toVideo(): DynamicContent? {
         bvid = bvid,
         title = archive.title,
         coverUrl = archive.cover.toHttpsUrl(),
-        durationText = archive.durationText,
+        durationText = normalizeDurationText(archive.durationText),
         playCountText = archive.stat?.play.orEmpty(),
         danmakuCountText = archive.stat?.danmaku.orEmpty(),
         badge = archive.badge?.text?.takeIf { it != DEFAULT_BADGE }.orEmpty(),
@@ -326,7 +327,7 @@ private fun dev.bilby.api.dto.ArchiveDto?.toSeason(): DynamicContent? {
     return DynamicContent.Season(
         title = archive.title,
         coverUrl = archive.cover.toHttpsUrl(),
-        durationText = archive.durationText,
+        durationText = normalizeDurationText(archive.durationText),
         webUrl = archive.jumpUrl.toHttpsUrl(),
         badge = archive.badge?.text?.takeIf { it != DEFAULT_BADGE }.orEmpty(),
     )
@@ -379,7 +380,7 @@ private fun DynamicAdditionalDto.toAdditional(): DynamicAdditional? = when (type
             coverUrl = it.cover.toHttpsUrl(),
             description = it.descSecond,
             webUrl = it.jumpUrl.toHttpsUrl(),
-            durationText = it.duration,
+            durationText = normalizeDurationText(it.duration),
         )
     }
 

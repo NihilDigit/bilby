@@ -130,6 +130,24 @@ sealed interface PlaybackCommand {
 
     /** 直接设定完播行为。 */
     data class SetEndMode(val mode: PlayEndMode) : PlaybackCommand
+
+    /** 向指定视频页帧追加或设为下一条播放。 */
+    data class EnqueueItem(val frameId: String, val item: QueueItem, val playNext: Boolean) : PlaybackCommand
+
+    /** 将队列中的 [bvid] 移到自然顺序下标 [toIndex]。 */
+    data class MoveQueueItem(val bvid: String, val toIndex: Int) : PlaybackCommand
+
+    /** 将队列中的 [bvid] 移出当前队列。 */
+    data class RemoveQueueItem(val bvid: String) : PlaybackCommand
+
+    /** 清空除当前正在播放条目以外的所有队列条目。 */
+    data object ClearQueueExceptCurrent : PlaybackCommand
+
+    /** 将手工编辑脱钩后的队列还原为入口来源。 */
+    data object ResetQueue : PlaybackCommand
+
+    /** 夜间模式延后切入时，强制当前视频播完本 P 即停（独立于用户的定时关闭）。 */
+    data class SetNightHoldCurrentEnd(val enabled: Boolean) : PlaybackCommand
 }
 
 /** 连上的那一个 [PlayerHandle]。断开由拿到它的一方负责,见 [PlaybackHost.connect]。 */

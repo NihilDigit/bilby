@@ -80,6 +80,8 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -151,6 +153,7 @@ import dev.bilby.ui.player.EpisodePart
 import dev.bilby.ui.player.EpisodeRow
 import dev.bilby.ui.player.EpisodeTarget
 import dev.bilby.ui.player.QueueEdges
+import dev.bilby.ui.player.QueueEditActions
 import dev.bilby.ui.player.QueuePlaybackControls
 import dev.bilby.ui.player.QueuePlaybackControlsRow
 import dev.bilby.ui.player.QueueRowItem
@@ -260,6 +263,7 @@ data class QueueUiState(
     val incomplete: Boolean = false,
     /** 两头续取,只给完整队列面板用。页内那一段只摊当前项附近几条,不续。 */
     val edges: QueueEdges? = null,
+    val editActions: QueueEditActions? = null,
 )
 
 private const val VideoTabIntro = 0
@@ -284,12 +288,12 @@ fun VideoTabs(
     /** 第一次展开简介时拉标签,幂等,见 VideoViewModel.loadVideoTags。 */
     onLoadTags: () -> Unit,
     /** 点一枚标签 = 拿它的原文开一页普通搜索结果(Destinations.kt 的 SearchResult)。 */
-    onTagClick: (String) -> Unit,
+    onTagClick: ((String) -> Unit)?,
     /** 服务端给的评论总数,标签上用。 */
     commentTotal: Int,
     /** 评论页的内容。由 VideoScreen 搭好,听视频那一屏用的是同一份,见那里的 commentsPane。 */
     comments: @Composable (Modifier) -> Unit,
-    onFindRelated: () -> Unit,
+    onFindRelated: (() -> Unit)?,
     /** 写弹幕,见 [DanmakuInput]。 */
     danmakuInput: DanmakuInput,
     /**
@@ -333,6 +337,7 @@ fun VideoTabs(
     onOpenLink: (String) -> Unit,
     /** 点了简介里的时间戳。null 表示此刻跳不了,时间戳会画成普通文字。 */
     onSeek: ((Long) -> Unit)? = null,
+    banner: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     // 评论数用服务端给的总数,不是已渲染条数 —— 后者会随翻页一路变大,像个假计数器。
@@ -417,6 +422,7 @@ fun VideoTabs(
             maxWidth = Breakpoints.ReadableWidth,
         ) {
         Column(modifier = Modifier.fillMaxSize()) {
+        banner?.invoke()
         val toggleColors = ToggleButtonDefaults.toggleButtonColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
             contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -897,8 +903,8 @@ private fun IntroTab(
     onSelectEpisode: (EpisodeTarget) -> Unit,
     videoTags: List<VideoTag>,
     onLoadTags: () -> Unit,
-    onTagClick: (String) -> Unit,
-    onFindRelated: () -> Unit,
+    onTagClick: ((String) -> Unit)?,
+    onFindRelated: (() -> Unit)?,
     onCache: () -> Unit,
     followState: FollowState,
     onToggleFollow: () -> Unit,
@@ -1091,22 +1097,73 @@ private fun FullQueueSheet(
     // **不停在半开,内容高度自己定。** 列表把当前项居中时按的是自己的视口高度;sheet 半开时
     // 视口的下半截还在屏幕外,居中的那一条正好落在看不见的地方。跳过半开、内容只要可用高度
     // 的一部分,sheet 打开就停在这个高度,视口就是看得见的那一块。
+    var editing by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(queue.rows.size) {
+        if (queue.rows.size <= 1) editing = false
+    }
     PaneSheet(onDismissRequest = onDismiss) {
         Column(modifier = Modifier.fillMaxWidth().bodyHeight(FullQueueHeightFraction)) {
-            QueuePlaybackControlsRow(
-                endMode = queue.endMode,
-                order = queue.order,
-                onCycleEndMode = onCycleEndMode,
-                onCycleOrder = onCycleOrder,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = Spacing.Comfortable),
-            )
+            ) {
+                FlowRow(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                ) {
+                    val actions = queue.editActions
+                    if (actions != null && queue.rows.size > 1) {
+                        TextButton(
+                            onClick = { editing = !editing },
+                            contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                            modifier = Modifier.defaultMinSize(minWidth = 1.dp),
+                        ) {
+                            Text(stringResource(if (editing) Res.string.action_done else Res.string.queue_edit))
+                        }
+                        if (editing && actions.onClearOthers != null) {
+                            TextButton(
+                                onClick = {
+                                    actions.onClearOthers.invoke()
+                                    editing = false
+                                },
+                                contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                                modifier = Modifier.defaultMinSize(minWidth = 1.dp),
+                            ) {
+                                Text(stringResource(Res.string.queue_clear_others))
+                            }
+                        }
+                    }
+                    val onReset = actions?.onReset
+                    if (onReset != null) {
+                        TextButton(
+                            onClick = {
+                                onReset()
+                                editing = false
+                            },
+                            contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                            modifier = Modifier.defaultMinSize(minWidth = 1.dp),
+                        ) {
+                            Text(stringResource(Res.string.queue_reset))
+                        }
+                    }
+                }
+                QueuePlaybackControls(
+                    endMode = queue.endMode,
+                    order = queue.order,
+                    onCycleEndMode = onCycleEndMode,
+                    onCycleOrder = onCycleOrder,
+                    showOrder = queue.rows.size > 1,
+                )
+            }
             EpisodeList(
                 rows = queue.rows,
                 onSelect = onSelectEpisode,
                 edges = queue.edges,
                 playing = playing,
+                editActions = queue.editActions,
+                editing = editing,
                 // 左右留页边距:分段列表项自己不带外边距,贴着 sheet 边缘时圆角看不出来。
                 contentPadding = PaddingValues(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Loose),
                 modifier = Modifier.fillMaxWidth().weight(1f),
@@ -1280,7 +1337,7 @@ private fun TitleBlock(
     tags: List<VideoTag>,
     expanded: Boolean,
     onToggle: () -> Unit,
-    onTagClick: (String) -> Unit,
+    onTagClick: ((String) -> Unit)?,
     onOpenLink: (String) -> Unit,
     onMentionClick: (Long) -> Unit,
     onSeek: ((Long) -> Unit)?,
@@ -1360,7 +1417,7 @@ private fun TitleBlock(
                 // 不另给行距:每枚标签的布局高度已被最小触控尺寸撑到 48dp,32dp 的标签上下
                 // 各多出 8dp,两行之间自然就是 16dp。见 [TagToken]。
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
-                    tags.forEach { tag -> TagToken(tag, onClick = { onTagClick(tag.name) }) }
+                    tags.forEach { tag -> TagToken(tag, onClick = onTagClick?.let { click -> { click(tag.name) } }) }
                 }
             }
             Box(
@@ -1384,16 +1441,11 @@ private fun TitleBlock(
  * 只会让结果变差。PiliPlus 对 topic/bgm 各有专页可去,本项目没有,三种类型都落到搜索。
  */
 @Composable
-private fun TagToken(tag: VideoTag, onClick: () -> Unit) {
+private fun TagToken(tag: VideoTag, onClick: (() -> Unit)?) {
     // **32dp 高,照 M3 chip。** 可点的 Surface 会把布局高度撑到最小触控尺寸 48dp;标签曾经
     // 只有 20dp 高,多出来的 28dp 全成了行与行之间的空白,换行后第二行离得很远。标签做到
     // chip 的高度,撑出来的只剩上下各 8dp。
-    Surface(
-        onClick = onClick,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        shape = MaterialTheme.shapes.small,
-    ) {
+    val content: @Composable () -> Unit = {
         Box(
             modifier = Modifier
                 .heightIn(min = TagHeight)
@@ -1402,6 +1454,22 @@ private fun TagToken(tag: VideoTag, onClick: () -> Unit) {
         ) {
             Text(text = tag.displayText(), style = MaterialTheme.typography.labelMedium)
         }
+    }
+    if (onClick != null) {
+        Surface(
+            onClick = onClick,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            shape = MaterialTheme.shapes.small,
+            content = content,
+        )
+    } else {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            shape = MaterialTheme.shapes.small,
+            content = content,
+        )
     }
 }
 
@@ -2269,7 +2337,7 @@ private fun LazyListScope.queueItems(
     onSelectEpisode: (EpisodeTarget) -> Unit,
     onCycleEndMode: () -> Unit,
     onCycleOrder: () -> Unit,
-    onFindRelated: () -> Unit,
+    onFindRelated: (() -> Unit)?,
     onCache: () -> Unit,
     onRetryQueue: () -> Unit,
 ) {
@@ -2320,6 +2388,7 @@ private fun LazyListScope.queueItems(
         }
 
         else -> {
+            val fullIndexByBvid = queue.rows.withIndex().associate { (i, r) -> r.bvid to i }
             itemsIndexed(shownRows, key = { _, row -> row.bvid }) { index, row ->
                 QueueRowItem(
                     row = row,
@@ -2327,9 +2396,12 @@ private fun LazyListScope.queueItems(
                     index = index,
                     count = shownRows.size,
                     onClick = { onSelectEpisode(EpisodeTarget.Video(row.bvid)) },
+                    videoIndex = fullIndexByBvid[row.bvid] ?: index,
+                    videoCount = queue.rows.size,
+                    editActions = queue.editActions,
                 )
             }
-            if (shownRows.size < queue.rows.size) {
+            if (queue.rows.isNotEmpty()) {
                 item(key = "queue-show-all") {
                     ShowAllRow(onClick = onOpenFullQueue)
                 }
@@ -2370,29 +2442,59 @@ private fun QueueHeader(
     onOpenQueueSource: (QueueSource) -> Unit,
     onCycleEndMode: () -> Unit,
     onCycleOrder: () -> Unit,
-    onFindRelated: () -> Unit,
+    onFindRelated: (() -> Unit)?,
     onCache: () -> Unit,
 ) {
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val inlineControls = maxWidth >= QueueSingleRowMinWidth
-        Column(modifier = Modifier.fillMaxWidth()) {
-            SectionHeader(
-                title = queue.sourceLabel,
-                // 不再缩进到封面那条线:标题、UP 行和这里的小节标题都是裸文字,一起贴页边距;缩进过一版,
-                // 整页的文字左右都显得窄。
-                onTitleClick = queue.source?.let { source -> { onOpenQueueSource(source) } },
-            ) {
+    val onTitleClick = queue.source?.let { source -> { onOpenQueueSource(source) } }
+    val titleStyle = MaterialTheme.typography.titleSmall
+    Layout(
+        modifier = Modifier.fillMaxWidth(),
+        content = {
+            if (onTitleClick == null) {
+                Text(
+                    text = queue.sourceLabel,
+                    style = titleStyle,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(vertical = Spacing.Tight),
+                )
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .heightIn(min = Dimens.MinTouchTarget)
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable(role = Role.Button, onClick = onTitleClick)
+                        .padding(vertical = Spacing.Tight),
+                ) {
+                    Text(
+                        text = queue.sourceLabel,
+                        style = titleStyle,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 // 「找相关」长在这份列表上:这个位置在别的客户端是相关推荐,在这里是合集/UP 投稿,
                 // 把"要不要另找几个"做成这份列表的一个小动作,力度正好 —— 可用,但不劝你用。
                 //
                 // 用闪光而不是星形:星形在这个 app 里已经是收藏(动作栏那排),同一界面里两个星星
                 // 表示两件事,用户会以为点了是收藏。闪光是"AI 辅助动作"的通行符号。
-                IconButton(onClick = onFindRelated) {
-                    Icon(
-                        Icons.Filled.AutoAwesome,
-                        contentDescription = stringResource(Res.string.video_find_related),
-                        modifier = Modifier.size(Dimens.IconInline),
-                    )
+                if (onFindRelated != null) {
+                    IconButton(onClick = onFindRelated) {
+                        Icon(
+                            Icons.Filled.AutoAwesome,
+                            contentDescription = stringResource(Res.string.video_find_related),
+                            modifier = Modifier.size(Dimens.IconInline),
+                        )
+                    }
                 }
                 // **缓存的入口长在这里**,因为要选的东西就是这份列表:合集分集 / 这位 UP 的其他
                 // 投稿。摆进上面那排动作栏不行 —— 那四格的宽度是照 360dp 屏量出来的(风格指南
@@ -2404,29 +2506,59 @@ private fun QueueHeader(
                         modifier = Modifier.size(Dimens.IconInline),
                     )
                 }
-                if (inlineControls) {
-                    QueuePlaybackControls(
-                        endMode = queue.endMode,
-                        order = queue.order,
-                        onCycleEndMode = onCycleEndMode,
-                        onCycleOrder = onCycleOrder,
-                    )
-                }
             }
-            if (!inlineControls) {
-                QueuePlaybackControlsRow(
-                    endMode = queue.endMode,
-                    order = queue.order,
-                    onCycleEndMode = onCycleEndMode,
-                    onCycleOrder = onCycleOrder,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Hair),
+            QueuePlaybackControlsRow(
+                endMode = queue.endMode,
+                order = queue.order,
+                onCycleEndMode = onCycleEndMode,
+                onCycleOrder = onCycleOrder,
+            )
+        },
+    ) { measurables, constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val iconsPlaceable = measurables[1].measure(loose)
+        val controlsPlaceable = measurables[2].measure(loose)
+        val gapPx = Spacing.Tight.roundToPx()
+        val minTouchPx = Dimens.MinTouchTarget.roundToPx()
+        val minInlineTitlePx = QueueInlineTitleMinWidth.roundToPx()
+        val titleNaturalWidth = measurables[0].maxIntrinsicWidth(Constraints.Infinity)
+        val requiredTitleWidth = minOf(titleNaturalWidth, minInlineTitlePx)
+        val trailingInlineWidth = iconsPlaceable.width + controlsPlaceable.width
+        val singleRow = requiredTitleWidth + gapPx + trailingInlineWidth <= constraints.maxWidth
+
+        if (singleRow) {
+            val titleMaxWidth = (constraints.maxWidth - gapPx - trailingInlineWidth).coerceAtLeast(0)
+            val titlePlaceable = measurables[0].measure(loose.copy(maxWidth = titleMaxWidth))
+            val height = maxOf(minTouchPx, titlePlaceable.height, iconsPlaceable.height, controlsPlaceable.height)
+            layout(constraints.maxWidth, height) {
+                titlePlaceable.placeRelative(0, (height - titlePlaceable.height) / 2)
+                val controlsX = constraints.maxWidth - controlsPlaceable.width
+                val iconsX = controlsX - iconsPlaceable.width
+                iconsPlaceable.placeRelative(iconsX, (height - iconsPlaceable.height) / 2)
+                controlsPlaceable.placeRelative(controlsX, (height - controlsPlaceable.height) / 2)
+            }
+        } else {
+            val titleMaxWidth = (constraints.maxWidth - gapPx - iconsPlaceable.width).coerceAtLeast(0)
+            val titlePlaceable = measurables[0].measure(loose.copy(maxWidth = titleMaxWidth))
+            val row1Height = maxOf(minTouchPx, titlePlaceable.height, iconsPlaceable.height)
+            val totalHeight = row1Height + controlsPlaceable.height
+            layout(constraints.maxWidth, totalHeight) {
+                titlePlaceable.placeRelative(0, (row1Height - titlePlaceable.height) / 2)
+                iconsPlaceable.placeRelative(
+                    constraints.maxWidth - iconsPlaceable.width,
+                    (row1Height - iconsPlaceable.height) / 2,
+                )
+                controlsPlaceable.placeRelative(
+                    (constraints.maxWidth - controlsPlaceable.width).coerceAtLeast(0),
+                    row1Height,
                 )
             }
         }
     }
 }
 
-private val QueueSingleRowMinWidth = 420.dp
+/** 标题与动作按钮挤在同一行时，为长合集标题保留的最小宽度（约 6 个汉字）；更短的标题如「UP 主投稿」只按自然宽度计。 */
+private val QueueInlineTitleMinWidth = 84.dp
 
 
 

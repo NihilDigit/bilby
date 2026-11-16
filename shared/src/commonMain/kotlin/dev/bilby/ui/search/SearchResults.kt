@@ -390,6 +390,9 @@ private fun VideoResults(
                     close = close,
                     upMid = video.upMid,
                     onOpenUpSpace = actions.onUserClick,
+                    coverUrl = video.coverUrl,
+                    upName = video.upName,
+                    durationSeconds = dev.bilby.parseDurationSeconds(video.durationText),
                 )
             },
         ) { openMenu ->

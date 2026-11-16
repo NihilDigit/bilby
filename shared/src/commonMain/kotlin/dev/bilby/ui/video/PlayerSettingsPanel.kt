@@ -396,7 +396,7 @@ private fun ExpandedSpeedPanel(
 }
 
 /**
- * 倍速(竖屏面板与整块设置面板内的紧凑节):连续刻度滑块(0.5x–3.0x,0.25x 步进)配一行五格高频快捷档。
+ * 倍速(竖屏面板与整块设置面板内的紧凑节):连续刻度滑块(0.5x–3.5x,0.25x 步进)配一行五格高频快捷档。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -617,10 +617,10 @@ private fun <T> ConnectedChoices(
 }
 
 private val SpeedQuickPresets = listOf(0.75f, 1f, 1.25f, 1.5f, 2f)
-private val SpeedScaleTicks = listOf(0.5f, 1f, 1.5f, 2f, 2.5f, 3f)
-private val SpeedSliderRange = 0.5f..3f
+private val SpeedScaleTicks = listOf(0.5f, 1f, 1.5f, 2f, 2.5f, 3f, 3.5f)
+private val SpeedSliderRange = 0.5f..3.5f
 private const val SpeedSliderStep = 0.25f
-private const val SpeedSliderSteps = 9
+private const val SpeedSliderSteps = 11
 private val CompactFallbackHeight = 220.dp
 
 /**

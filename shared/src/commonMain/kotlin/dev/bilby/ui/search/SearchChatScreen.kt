@@ -65,6 +65,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -74,6 +75,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -330,16 +333,22 @@ private fun NormalSearch(
     onSuggestionClick: (String) -> Unit,
     focusSearchNonce: Int = 0,
 ) {
-    var focused by remember { mutableStateOf(false) }
+    var barFocused by remember { mutableStateOf(false) }
+    var panelFocused by remember { mutableStateOf(false) }
+    var historyDialogOpen by remember { mutableStateOf(false) }
+    val focused = barFocused || (!wide && panelFocused) || historyDialogOpen
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val searchFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(wide) {
+        if (wide) panelFocused = false
+    }
     LaunchedEffect(focusSearchNonce) {
         if (focusSearchNonce > 0) {
             runCatching { searchFocusRequester.requestFocus() }
         }
     }
-    // 展开态(搜索栏有焦点)时,返回先收起,不直接离开这一页。
+    // 展开态(搜索栏或建议面板有焦点)时,返回先收起,不直接离开这一页。
     BackHandler(enabled = focused) { focusManager.clearFocus() }
 
     // 宽屏的助理是常驻侧栏,不要这个按钮(见 [AskAgentFab])。
@@ -356,7 +365,7 @@ private fun NormalSearch(
             onInputChange = onInputChange,
             onSearch = onSearch,
             focused = focused,
-            onFocusChange = { focused = it },
+            onFocusChange = { barFocused = it },
             onCollapse = { focusManager.clearFocus() },
             // 宽屏不给返回箭头:docked 布局点 scrim 就收起,箭头在桌面上是多余的一格。
             showBack = !wide,
@@ -367,7 +376,14 @@ private fun NormalSearch(
         )
     }
     val historyPanel: @Composable (Modifier) -> Unit = { panelModifier ->
-        SearchHistoryPanel(history, onHistoryClick, onHistoryRemove, onHistoryClear, panelModifier)
+        SearchHistoryPanel(
+            history = history,
+            onClick = onHistoryClick,
+            onRemove = onHistoryRemove,
+            onClear = onHistoryClear,
+            onDialogOpenChange = { historyDialogOpen = it },
+            modifier = panelModifier,
+        )
     }
     // 聚焦时盖在结果上的那一块:正在打字而且有补全就是补全,否则是历史。
     val typing = focused && input.isNotBlank() && suggestions.isNotEmpty()
@@ -387,13 +403,18 @@ private fun NormalSearch(
         history.isNotEmpty() -> historyPanel
         else -> null
     }
-    val scrollingPanel: @Composable (@Composable (Modifier) -> Unit) -> Unit = { panel ->
+    val scrollingPanel: @Composable (@Composable (Modifier) -> Unit, Boolean) -> Unit = { panel, trackFocus ->
+        val focusMod = if (trackFocus) {
+            Modifier.onFocusChanged { panelFocused = it.hasFocus }
+        } else {
+            Modifier
+        }
         if (wide) {
             // 和搜索框同一条中线、同样宽,一眼对得上是这个框的历史与补全。照搜索栏那一行的
             // 结构排([SearchBarRow]):行尾让出侧栏开关那一格,框在剩下那段里居中。按整个主区
             // 居中的话,框和下面的历史各自对着不同的中线,左沿错开一截,历史看着像被收窄了。
             Row(
-                modifier = Modifier
+                modifier = focusMod
                     .fillMaxSize()
                     .padding(start = Spacing.Comfortable, end = if (panelToggle != null) Spacing.Hair else Spacing.Comfortable),
             ) {
@@ -403,16 +424,16 @@ private fun NormalSearch(
                 if (panelToggle != null) Spacer(Modifier.width(PanelToggleWidth))
             }
         } else {
-            panel(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()))
+            panel(focusMod.fillMaxSize().imePadding().verticalScroll(rememberScrollState()))
         }
     }
     val body: @Composable () -> Unit = {
         when {
             // 窄屏展开态:整块换成补全或历史(full-screen 布局)。
-            !wide && focused && focusPanel != null -> scrollingPanel(focusPanel)
+            !wide && focused && focusPanel != null -> scrollingPanel(focusPanel, true)
 
             // 还没搜过时历史就是正文。
-            state.query.isEmpty() && history.isNotEmpty() -> scrollingPanel(historyPanel)
+            state.query.isEmpty() && history.isNotEmpty() -> scrollingPanel(historyPanel, false)
 
             state.query.isEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 EmptyState(
@@ -519,7 +540,9 @@ private fun SearchBarRow(
                 )
                 DockedSurface(
                     dropdown = dropdown,
-                    modifier = Modifier.widthIn(max = SearchBarMaxWidth),
+                    modifier = Modifier
+                        .widthIn(max = SearchBarMaxWidth)
+                        .onFocusChanged { onFocusChange(it.hasFocus) },
                 ) {
                     SearchField(
                         value = input,
@@ -529,7 +552,6 @@ private fun SearchBarRow(
                         // 回车即搜。DESIGN 2.2 的快路原话是"输入直接回车 = 原始 B 站搜索"。
                         onSearch = onSearch,
                         focusRequester = focusRequester,
-                        onFocusChange = onFocusChange,
                     )
                 }
                 Spacer(
@@ -541,14 +563,16 @@ private fun SearchBarRow(
             }
         } else {
             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
-                DockedSurface(dropdown = dropdown) {
+                DockedSurface(
+                    dropdown = dropdown,
+                    modifier = Modifier.onFocusChanged { onFocusChange(it.hasFocus) },
+                ) {
                     SearchField(
                         value = input,
                         onValueChange = onInputChange,
                         placeholder = stringResource(Res.string.search_empty),
                         onSearch = onSearch,
                         focusRequester = focusRequester,
-                        onFocusChange = onFocusChange,
                     )
                 }
             }
@@ -642,6 +666,7 @@ private fun SuggestionPanel(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = SuggestionRowHeight)
+                    .focusProperties { canFocus = false }
                     .clickable(role = Role.Button) { onClick(suggestion.term) }
                     .padding(start = Spacing.Comfortable, end = Spacing.Hair),
             ) {
@@ -664,7 +689,10 @@ private fun SuggestionPanel(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = { onFill(suggestion.term) }) {
+                IconButton(
+                    onClick = { onFill(suggestion.term) },
+                    modifier = Modifier.focusProperties { canFocus = false },
+                ) {
                     Icon(
                         imageVector = Icons.Outlined.NorthWest,
                         contentDescription = stringResource(Res.string.search_suggestion_fill, suggestion.term),
@@ -781,10 +809,17 @@ private fun SearchHistoryPanel(
     onClick: (String) -> Unit,
     onRemove: (String) -> Unit,
     onClear: () -> Unit,
+    onDialogOpenChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var editing by remember { mutableStateOf(false) }
     var confirmingClear by remember { mutableStateOf(false) }
+    LaunchedEffect(confirmingClear) {
+        onDialogOpenChange(confirmingClear)
+    }
+    DisposableEffect(Unit) {
+        onDispose { onDialogOpenChange(false) }
+    }
     LaunchedEffect(history.isEmpty()) {
         if (history.isEmpty()) editing = false
     }

@@ -12,10 +12,10 @@ internal const val SpeedDragStepDp = SpeedVerticalDragStepDp
 internal const val SpeedModeStepDp = 32f
 internal const val SpeedSelectionIntentDp = 10f
 
-internal val SpeedPresets = listOf(50, 100, 150, 200, 250, 300)
+internal val SpeedPresets = listOf(50, 100, 150, 200, 250, 300, 350)
 internal const val DefaultHoldSpeed = 2.5f
 
-internal fun speedHundredths(speed: Float): Int = (speed * 100).roundToInt().coerceIn(25, 300)
+internal fun speedHundredths(speed: Float): Int = (speed * 100).roundToInt().coerceIn(25, 350)
 
 internal fun speedNumber(value: Int): String = when {
     value % 100 == 0 -> (value / 100).toString()

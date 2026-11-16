@@ -17,6 +17,7 @@ import dev.bilby.data.decodeQueueContext
 import dev.bilby.data.resumeAtMillisFor
 import dev.bilby.elapsedRealtimeMillis
 import dev.bilby.getString
+import dev.bilby.getStringBlocking
 import dev.bilby.resources.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -121,6 +122,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
 
     /** 这一条播到末尾已经收过尾,同时就是 [AudioPlaybackUiState.stoppedAtEnd]。 */
     private var endHandled = false
+    private var nightStopAtEnd = false
 
     /**
      * 正在取流、还没交给 mpv 的那一次装载要不要起播,不在取流时为 null。
@@ -188,8 +190,11 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         var feed: QueueFeed? = null
         var enriching = false
         var incomplete = false
+        var detached = false
         var extendingBefore = false
         var extendingAfter = false
+        var anchorBvid = ""
+        var pendingReset = false
         var snapshot: FrameSnapshot? = null
     }
 
@@ -199,6 +204,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         val cid: Long,
         val positionMillis: Long,
         val order: QueueOrder,
+        val detached: Boolean = false,
     )
 
     // 弹幕时钟逐帧调这里,所以读不经 JNI 的那一份,见 DesktopPlayer.positionMillis。
@@ -337,6 +343,12 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             is PlaybackCommand.SetQueueOrder -> setQueueOrder(command.order)
             PlaybackCommand.CycleEndMode -> setEndMode(endMode.next())
             is PlaybackCommand.SetEndMode -> setEndMode(command.mode)
+            is PlaybackCommand.EnqueueItem -> enqueueItem(command.frameId, command.item, command.playNext)
+            is PlaybackCommand.MoveQueueItem -> moveQueueItem(command.bvid, command.toIndex)
+            is PlaybackCommand.RemoveQueueItem -> removeQueueItem(command.bvid)
+            PlaybackCommand.ClearQueueExceptCurrent -> clearQueueExceptCurrent()
+            PlaybackCommand.ResetQueue -> resetLiveQueue()
+            is PlaybackCommand.SetNightHoldCurrentEnd -> nightStopAtEnd = command.enabled
         }
     }
 
@@ -491,12 +503,14 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             cid = if (loadedMediaId == current.bvid) loadedCid else 0,
             positionMillis = player?.positionMillis ?: 0L,
             order = queue.order,
+            detached = frame.detached,
         )
     }
 
     /** 换回一帧离开时的样子。停在离开时的位置,不起播。 */
     private fun restoreFrame(frame: Frame, snapshot: FrameSnapshot) {
         frame.snapshot = null
+        frame.detached = snapshot.detached
         replaceQueue(
             snapshot.items,
             snapshot.index,
@@ -513,6 +527,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
 
     /** 新的一帧:先装一份只有这条的临时队列并立刻起播,来源由 [enrichFrame] 在后台补上。 */
     private fun openFrame(frame: Frame, bvid: String, requestedCid: Long) {
+        if (frame.anchorBvid.isEmpty()) frame.anchorBvid = bvid
         frameOrderTouched = false
         queue.order = defaultOrder
         val temporary = QueueItem(bvid = bvid, title = "", upName = "", coverUrl = "", durationSeconds = 0)
@@ -550,26 +565,58 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
      * 按帧的入口上下文建队列,补到正在播的这一条前后。结果过两道校验才用,理由同 Android 的
      * enrichFrame:generation 与活帧挡"期间又打开了别的视频",当前 bvid 挡"期间队列被上/下一条挪过"。
      */
-    private fun enrichFrame(frame: Frame, bvid: String) {
+    private fun enrichFrame(frame: Frame, bvid: String, allowReplace: Boolean = frame.pendingReset) {
         enrichJob?.cancel()
         frame.incomplete = false
         frame.enriching = true
         val generation = ++openGeneration
         enrichJob = scope.launch {
-            val opened = openQueue(frame.context, bvid)
+            val opened = if (allowReplace && frame.context != QueueContext.Offline) {
+                val repository = container().queueSourceRepository
+                if (frame.context is QueueContext.Affiliation && frame.anchorBvid.isNotEmpty()) {
+                    repository.open(frame.context, frame.anchorBvid)
+                        ?: repository.open(frame.context, bvid)
+                        ?: openQueue(frame.context, bvid)
+                } else {
+                    repository.open(frame.context, bvid)
+                        ?: frame.anchorBvid.takeIf { it.isNotEmpty() && it != bvid }
+                            ?.let { repository.open(frame.context, it) }
+                        ?: openQueue(frame.context, bvid)
+                }
+            } else {
+                openQueue(frame.context, bvid)
+            }
             if (generation != openGeneration || liveFrame !== frame || queue.current?.bvid != bvid) return@launch
             frame.enriching = false
-            if (opened == null || !fillQueueAround(bvid, opened.items)) {
-                BiliLog.w("队列补全失败或来源里没有当前视频,留在单条队列 bvid=$bvid")
-                frame.incomplete = true
+            val unique = opened?.items?.distinctBy { it.bvid }.orEmpty()
+            if (opened != null && fillQueueAround(bvid, unique)) {
+                frame.pendingReset = false
+                frame.label = opened.label
+                frame.source = opened.source
+                frame.feed = opened.feed
                 publishState()
+                extendNearEdges()
                 return@launch
             }
-            frame.label = opened.label
-            frame.source = opened.source
-            frame.feed = opened.feed
+            if (allowReplace && opened != null && unique.isNotEmpty()) {
+                frame.pendingReset = false
+                frame.label = opened.label
+                frame.source = opened.source
+                frame.feed = opened.feed
+                replaceQueue(
+                    unique,
+                    0,
+                    requestedCid = 0L,
+                    startMillis = null,
+                    playWhenReady = playWhenReady,
+                )
+                publishState()
+                extendNearEdges()
+                return@launch
+            }
+            BiliLog.w("队列补全失败或来源里没有当前视频,留在单条队列 bvid=$bvid")
+            frame.incomplete = true
             publishState()
-            extendNearEdges()
         }
         publishState()
     }
@@ -623,11 +670,118 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
                 publishState()
                 return@launch
             }
+            if (liveFrame !== frame || frame.feed !== feed) return@launch
             val added = queue.insert(if (before) 0 else queue.size, loaded)
             publishState()
             if (added == 0 && loaded.isNotEmpty()) extendQueue(before)
         }
         if (before) extendBeforeJob = job else extendAfterJob = job
+    }
+
+    /** 队列经用户手工编辑后与原分页/合集来源脱钩，不再续取、不再由补全覆盖。 */
+    private fun detachToCustomQueue(frame: Frame) {
+        if (liveFrame === frame) {
+            enrichJob?.cancel()
+            extendBeforeJob?.cancel()
+            extendAfterJob?.cancel()
+            openGeneration++
+        }
+        frame.enriching = false
+        frame.incomplete = false
+        frame.detached = true
+        frame.pendingReset = false
+        frame.extendingBefore = false
+        frame.extendingAfter = false
+        frame.feed = null
+        frame.source = null
+        frame.label = getStringBlocking(Res.string.queue_source_custom)
+    }
+
+    private fun enqueueItem(frameId: String, item: QueueItem, playNext: Boolean) {
+        val live = liveFrame
+        if (live?.id == frameId) {
+            if (liveRoom != null) return
+            if (queue.enqueue(item, playNext)) {
+                detachToCustomQueue(live)
+                publishState()
+            }
+            return
+        }
+        val frame = frames[frameId] ?: return
+        val snap = frame.snapshot ?: return
+        val temp = DesktopQueue().apply {
+            set(snap.items, snap.index)
+            order = snap.order
+        }
+        if (temp.enqueue(item, playNext)) {
+            detachToCustomQueue(frame)
+            frame.snapshot = FrameSnapshot(
+                items = temp.items,
+                index = temp.index,
+                cid = snap.cid,
+                positionMillis = snap.positionMillis,
+                order = snap.order,
+                detached = frame.detached,
+            )
+        }
+    }
+
+    private fun moveQueueItem(bvid: String, toIndex: Int) {
+        val live = liveFrame ?: return
+        if (liveRoom != null) return
+        val from = queue.indexOf(bvid)
+        if (from < 0) return
+        if (queue.move(from, toIndex)) {
+            detachToCustomQueue(live)
+            publishState()
+        }
+    }
+
+    private fun removeQueueItem(bvid: String) {
+        val live = liveFrame ?: return
+        if (liveRoom != null || queue.size <= 1) return
+        val idx = queue.indexOf(bvid)
+        if (idx < 0) return
+        val removingCurrent = idx == queue.index
+        val successor = if (removingCurrent) {
+            queue.nextIndex() ?: ((idx + 1).takeIf { it < queue.size } ?: (idx - 1))
+        } else {
+            -1
+        }
+        if (removingCurrent) {
+            moveTo(successor, playWhenReady)
+        }
+        if (queue.removeAt(idx)) {
+            detachToCustomQueue(live)
+            publishState()
+        }
+    }
+
+    private fun clearQueueExceptCurrent() {
+        val live = liveFrame ?: return
+        if (liveRoom != null || queue.size <= 1) return
+        if (queue.clearExceptCurrent()) {
+            detachToCustomQueue(live)
+            publishState()
+        }
+    }
+
+    private fun resetLiveQueue() {
+        val frame = liveFrame ?: return
+        if (liveRoom != null) return
+        val current = queue.current ?: return
+        enrichJob?.cancel()
+        extendBeforeJob?.cancel()
+        extendAfterJob?.cancel()
+        frame.extendingBefore = false
+        frame.extendingAfter = false
+        frame.detached = false
+        frame.pendingReset = true
+        frame.feed = null
+        frame.source = null
+        frame.label = ""
+        queue.set(listOf(current), 0)
+        enrichFrame(frame, current.bvid, allowReplace = true)
     }
 
     /**
@@ -963,7 +1117,9 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     private fun onReachedEnd() {
         if (endHandled) return
         endHandled = true
-        val endOfItem = sleepTimer.state.value.mode == SleepTimerMode.EndOfItem
+        val forceStop = nightStopAtEnd
+        nightStopAtEnd = false
+        val endOfItem = sleepTimer.state.value.mode == SleepTimerMode.EndOfItem || forceStop
         if (!endOfItem) {
             if (endMode == PlayEndMode.RepeatOne && liveRoom == null) {
                 progressSession?.onCompleted()
@@ -987,6 +1143,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         } else {
             progressSession?.onCompleted()
         }
+        if (forceStop) pause()
         sleepTimer.onItemFinished()
         publishState()
     }
@@ -1136,6 +1293,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
                 source = frame?.source,
                 enriching = frame?.enriching == true,
                 incomplete = frame?.incomplete == true,
+                detached = frame?.detached == true,
                 canExtendBefore = feed?.hasBefore == true,
                 canExtendAfter = feed?.hasAfter == true,
                 extendingBefore = frame?.extendingBefore == true,

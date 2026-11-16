@@ -6,9 +6,12 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import dev.bilby.AppBuild
+import dev.bilby.BiliLog
+import dev.bilby.api.toHttpsUrl
 import dev.bilby.player.DEFAULT_PREFERRED_CODECS
 import dev.bilby.player.AUDIO_QUALITY_BEST
 import dev.bilby.player.VideoCodecId
@@ -16,6 +19,9 @@ import dev.nihildigit.danmaku.DanmakuDensity
 import dev.nihildigit.danmaku.DanmakuFrameRateCap
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 
 /**
  * 凭据与 LLM 配置一律明文存 DataStore。单用户个人设备的威胁模型下已明确接受
@@ -453,6 +459,63 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         }
     }
 
+    /** 夜间模式设置与临时退出截止时间戳，见 [NightModePrefs]。 */
+    val nightModePrefs: Flow<NightModePrefs> = store.data.map { p ->
+        NightModePrefs(
+            enabled = p[KEY_NIGHT_ENABLED] ?: false,
+            startMinuteOfDay = (p[KEY_NIGHT_START_MINUTE] ?: DEFAULT_NIGHT_START_MINUTE)
+                .coerceIn(0, MINUTES_PER_DAY - 1),
+            endMinuteOfDay = (p[KEY_NIGHT_END_MINUTE] ?: DEFAULT_NIGHT_END_MINUTE)
+                .coerceIn(0, MINUTES_PER_DAY - 1),
+            allowedUps = decodeNightUps(p[KEY_NIGHT_ALLOWED_UPS]),
+            overrideUntilEpochMillis = (p[KEY_NIGHT_OVERRIDE_UNTIL] ?: 0L).coerceAtLeast(0L),
+        )
+    }
+
+    suspend fun setNightModeEnabled(enabled: Boolean) {
+        store.edit { p ->
+            p[KEY_NIGHT_ENABLED] = enabled
+            if (!enabled) p[KEY_NIGHT_OVERRIDE_UNTIL] = 0L
+        }
+    }
+
+    suspend fun setNightModeSchedule(startMinute: Int, endMinute: Int) {
+        store.edit { p ->
+            p[KEY_NIGHT_START_MINUTE] = startMinute.coerceIn(0, MINUTES_PER_DAY - 1)
+            p[KEY_NIGHT_END_MINUTE] = endMinute.coerceIn(0, MINUTES_PER_DAY - 1)
+        }
+    }
+
+    suspend fun setNightModeAllowedUps(ups: List<WhitelistedUp>) {
+        store.edit { p ->
+            val normalized = ups
+                .distinctBy { it.mid }
+                .map { it.copy(faceUrl = it.faceUrl.toHttpsUrl()) }
+            if (normalized.isEmpty()) {
+                p.remove(KEY_NIGHT_ALLOWED_UPS)
+            } else {
+                p[KEY_NIGHT_ALLOWED_UPS] = encodeNightUps(normalized)
+            }
+        }
+    }
+
+    suspend fun removeNightModeAllowedUp(mid: Long) {
+        store.edit { p ->
+            val remaining = decodeNightUps(p[KEY_NIGHT_ALLOWED_UPS]).filterNot { it.mid == mid }
+            if (remaining.isEmpty()) {
+                p.remove(KEY_NIGHT_ALLOWED_UPS)
+            } else {
+                p[KEY_NIGHT_ALLOWED_UPS] = encodeNightUps(remaining)
+            }
+        }
+    }
+
+    suspend fun setNightModeOverrideUntil(epochMillis: Long) {
+        store.edit { p ->
+            p[KEY_NIGHT_OVERRIDE_UNTIL] = epochMillis.coerceAtLeast(0L)
+        }
+    }
+
     companion object {
         private val KEY_SEARCH_HISTORY = stringPreferencesKey("search_history")
         private val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
@@ -552,7 +615,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_PBP_OUTRO_COMPLETION = booleanPreferencesKey("player_pbp_outro_completion")
 
         const val DEFAULT_HOLD_SPEED = 2.5f
-        val HOLD_SPEED_OPTIONS = listOf(1.5f, 2f, 2.5f, 3f)
+        val HOLD_SPEED_OPTIONS = listOf(1.5f, 2f, 2.5f, 3f, 3.5f)
 
         private val KEY_IGNORED_UPDATE = stringPreferencesKey("ignored_update_version")
 
@@ -585,6 +648,12 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_EXCLUDED_FEED_MIDS = stringSetPreferencesKey("excluded_feed_mids")
 
         private val KEY_DANMAKUS_ARCHIVE = booleanPreferencesKey("danmakus_archive_enabled")
+
+        private val KEY_NIGHT_ENABLED = booleanPreferencesKey("night_mode_enabled")
+        private val KEY_NIGHT_START_MINUTE = intPreferencesKey("night_mode_start_minute")
+        private val KEY_NIGHT_END_MINUTE = intPreferencesKey("night_mode_end_minute")
+        private val KEY_NIGHT_ALLOWED_UPS = stringPreferencesKey("night_mode_allowed_ups")
+        private val KEY_NIGHT_OVERRIDE_UNTIL = longPreferencesKey("night_mode_override_until")
 
         /** 见 [excludedFeedMids]。 */
         const val EXCLUDED_SEPARATOR = '|'
@@ -863,4 +932,31 @@ private fun String.withScheme(): String {
     if (value.isEmpty() || value.contains("://")) return value
     val local = value.startsWith("localhost") || value.startsWith("127.0.0.1") || value.startsWith("10.0.2.2")
     return if (local) "http://$value" else "https://$value"
+}
+
+@Serializable
+private data class WhitelistedUpDto(
+    val mid: Long,
+    val name: String,
+    val faceUrl: String = "",
+)
+
+private val NightUpsJson = Json { ignoreUnknownKeys = true }
+private val NightUpsSerializer = ListSerializer(WhitelistedUpDto.serializer())
+
+private fun encodeNightUps(ups: List<WhitelistedUp>): String =
+    NightUpsJson.encodeToString(
+        NightUpsSerializer,
+        ups.map { WhitelistedUpDto(mid = it.mid, name = it.name, faceUrl = it.faceUrl.toHttpsUrl()) },
+    )
+
+private fun decodeNightUps(raw: String?): List<WhitelistedUp> {
+    if (raw.isNullOrBlank()) return emptyList()
+    return runCatching {
+        NightUpsJson.decodeFromString(NightUpsSerializer, raw)
+            .distinctBy { it.mid }
+            .map { WhitelistedUp(mid = it.mid, name = it.name, faceUrl = it.faceUrl.toHttpsUrl()) }
+    }.onFailure {
+        BiliLog.w("夜间模式允许名单解析失败: ${it.message}")
+    }.getOrDefault(emptyList())
 }

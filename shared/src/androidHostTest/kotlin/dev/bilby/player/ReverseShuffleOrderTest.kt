@@ -49,4 +49,21 @@ class ReverseShuffleOrderTest {
         assertEquals(0, cleared.length)
         assertEquals(C.INDEX_UNSET, cleared.firstIndex)
     }
+
+    @Test
+    fun `shuffledOrderWithNextAfter places nextIndex right after currentIndex`() {
+        val reordered = shuffledOrderWithNextAfter(
+            shuffledIndices = intArrayOf(3, 1, 0, 2, 4),
+            currentIndex = 1,
+            nextIndex = 4,
+            seed = 42L,
+        )
+        assertEquals(5, reordered.length)
+        assertEquals(3, reordered.firstIndex)
+        assertEquals(1, reordered.getNextIndex(3))
+        assertEquals(4, reordered.getNextIndex(1))
+        assertEquals(0, reordered.getNextIndex(4))
+        assertEquals(2, reordered.getNextIndex(0))
+        assertEquals(C.INDEX_UNSET, reordered.getNextIndex(2))
+    }
 }
