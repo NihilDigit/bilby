@@ -173,7 +173,7 @@ private fun DanmakuRow(item: LiveFeedItem.Danmaku, onUserClick: (Long) -> Unit, 
     // 每条弹幕套一层紧凑的 surfaceContainer 圆角胶囊(contained list,风格指南 §2.3c):
     // 短弹幕按内容宽度成块,两行长弹幕折行后收在自己的气泡内,不与上下行的昵称粘成一片。
     val copy = rememberCopyAction()
-    val copyDanmakuText = item.text.ifBlank { item.emote?.text.orEmpty() }
+    val copyDanmakuText = item.text
     val copyDanmakuLabel = stringResource(Res.string.action_copy_danmaku)
     val copyNicknameLabel = stringResource(Res.string.action_copy_nickname)
     val copyUidLabel = stringResource(Res.string.action_copy_uid)

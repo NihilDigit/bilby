@@ -852,8 +852,12 @@ private fun FeedEntryMenuItems(
     onAddToView: (String) -> Unit,
 ) {
     val video = item as? FeedEntry.Video
+    val itemTitle = when (item) {
+        is FeedEntry.Video -> item.title
+        is FeedEntry.Article -> item.title
+    }
     val videoBvid = video?.bvid.orEmpty()
-    val articleCopyTitle = videoBvid.isEmpty() && item.title.isNotBlank()
+    val articleCopyTitle = videoBvid.isEmpty() && itemTitle.isNotBlank()
     val copyAction = rememberCopyAction()
     val leadingCount = when {
         videoBvid.isNotEmpty() -> 1
@@ -864,7 +868,7 @@ private fun FeedEntryMenuItems(
         bvid = videoBvid,
         upMid = item.upMid,
         onOpenUpSpace = onUpClick,
-        title = item.title,
+        title = itemTitle,
     )
     val totalCount = leadingCount + commonCount + 1
 
@@ -882,7 +886,7 @@ private fun FeedEntryMenuItems(
         DropdownMenuItem(
             onClick = {
                 close()
-                copyAction(item.title)
+                copyAction(itemTitle)
             },
             text = { Text(stringResource(Res.string.action_copy_title)) },
             leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
@@ -891,7 +895,7 @@ private fun FeedEntryMenuItems(
     }
     VideoCommonMenuItems(
         bvid = videoBvid,
-        title = item.title,
+        title = itemTitle,
         close = close,
         upMid = item.upMid,
         onOpenUpSpace = onUpClick,

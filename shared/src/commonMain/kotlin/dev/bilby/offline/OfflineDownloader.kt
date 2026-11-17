@@ -474,6 +474,9 @@ class OfflineDownloader(
             upFaceUrl = detail.up.faceUrl,
             description = detail.description,
             publishedAtEpochSeconds = detail.publishedAtEpochSeconds,
+            copyright = detail.copyright,
+            noReprint = detail.noReprint,
+            chargingOnly = detail.chargingOnly,
             stat = detail.stat.toOfflineStat(),
         )
     }
