@@ -175,19 +175,39 @@ import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.components.panelCard
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.semantics.onLongClick
+import dev.bilby.player.QueueState
+import dev.bilby.ui.components.ContextMenuBox
+import dev.bilby.ui.components.LoadingSpinner
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.rememberCopyAction
+import dev.bilby.ui.player.QueuePositionText
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.interactiveCard
+import dev.bilby.ui.theme.tabular
+import dev.bilby.ui.video.PlayerSettingsSection
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-
-/** 评论面板占屏高的比例,同评论区的楼中楼面板:露出上面一截,看得出还在听视频这一屏。 */
-private const val CommentsSheetHeightFraction = 0.9f
 
 /**
  * 唱片占「剩余空间」的比例(取宽高中较小的一边)。留一点边距而不是顶满,
@@ -678,26 +698,40 @@ fun ListenScreen(
         // 队列没建过时不给——一个空把手拉起来什么都没有,是纯噪声。建过之后常显,不需要再点
         // 一行入口才能看到它。建队列中与建失败也露出来:标题那一行正是说明这两件事的地方。
         val hasQueue = queue.rows.isNotEmpty() || queue.enriching || queue.incomplete
-        val queueContent: @Composable (fillHeight: Boolean) -> Unit = { fillHeight ->
-            QueueSheetContent(
-                queue = queue,
-                playing = playing,
-                onCycleEndMode = onCycleEndMode,
-                onCycleOrder = onCycleOrder,
-                onSelectEpisode = onSelectEpisode,
-                onRetryQueue = onRetryQueue,
-                onOpenQueueSource = onOpenQueueSource,
-                fillHeight = fillHeight,
-            )
+        val expandedWindow = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+        val sheetState = rememberBottomSheetScaffoldState()
+        val sheetScope = rememberCoroutineScope()
+        val toggleQueueSheet: () -> Unit = {
+            sheetScope.launch {
+                if (sheetState.bottomSheetState.currentValue == SheetValue.Expanded) {
+                    sheetState.bottomSheetState.partialExpand()
+                } else {
+                    sheetState.bottomSheetState.expand()
+                }
+            }
         }
+        val queueContent: @Composable (fillHeight: Boolean, onToggleSheet: (() -> Unit)?) -> Unit =
+            { fillHeight, onToggleSheet ->
+                QueueSheetContent(
+                    queue = queue,
+                    queueState = queue.state ?: state.queue,
+                    playing = playing,
+                    sheetExpanded = sheetState.bottomSheetState.targetValue == SheetValue.Expanded,
+                    onToggleSheet = onToggleSheet,
+                    onCycleEndMode = onCycleEndMode,
+                    onCycleOrder = onCycleOrder,
+                    onSelectEpisode = onSelectEpisode,
+                    onRetryQueue = onRetryQueue,
+                    onOpenQueueSource = onOpenQueueSource,
+                    fillHeight = fillHeight,
+                )
+            }
 
         // 正在放的那一列:唱片或歌词、读数、进度条、控制行。窄屏和宽屏是同一份,只是外面不同。
         val nowPlaying: @Composable (Modifier) -> Unit = { columnModifier ->
                 Column(modifier = columnModifier) {
                 // 唱片(或歌词)吃掉除控制区之外的全部空间;没有字幕时这里就是空间的唯一主角,
                 // 不用再另外做"整体居中"的特判——weight(1f) 本身就把它撑满了。
-                // 唱片与歌词是**同一块区域的两页**,左右滑动切换。
-                //
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     if (showLyrics) {
                         LyricsView(
@@ -712,6 +746,9 @@ fun ListenScreen(
                     } else {
                         DiscView(
                             state = state,
+                            queue = queue,
+                            onOpenQueueSource = onOpenQueueSource,
+                            onExpandQueue = if (!expandedWindow && hasQueue) toggleQueueSheet else null,
                             speed = speed,
                             subtitleTracks = subtitleTracks,
                             subtitleLan = subtitleLan,
@@ -831,7 +868,7 @@ fun ListenScreen(
                 }
         }
 
-        if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
+        if (expandedWindow) {
             // **宽屏两栏:左边正在放,右边队列常驻。** 底部 Sheet 在宽屏上是一条横贯窗口的把手,
             // 拉起来盖住唱片的下半截;而右边本来空着两大片。队列放进右栏之后不用拉,看着唱片
             // 就能点下一条。右栏和空间页、搜索页的侧栏是同一种卡([panelCard]),不可关:
@@ -849,16 +886,14 @@ fun ListenScreen(
                             .panelCard()
                             .padding(top = Spacing.Tight),
                     ) {
-                        queueContent(true)
+                        queueContent(true, null)
                     }
                 }
             }
         } else {
-            val sheetState = rememberBottomSheetScaffoldState()
             // BottomSheetScaffold 不管返回键(ModalBottomSheet 才管),不拦的话展开队列之后一按
             // 返回,落到的是外面那句"退出听视频"。看 targetValue 而不是 currentValue:拉到一半
             // 松手、正往上弹的那一刻按返回,也该是收回。
-            val sheetScope = rememberCoroutineScope()
             BackHandler(enabled = sheetState.bottomSheetState.targetValue == SheetValue.Expanded) {
                 sheetScope.launch { sheetState.bottomSheetState.partialExpand() }
             }
@@ -866,9 +901,40 @@ fun ListenScreen(
                 scaffoldState = sheetState,
                 modifier = Modifier.fillMaxSize().padding(insets),
                 sheetPeekHeight = if (hasQueue) QueueHandleHeight else 0.dp,
+                sheetContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                sheetShape = RoundedCornerShape(
+                    topStart = SheetTopCornerRadius,
+                    topEnd = SheetTopCornerRadius,
+                ),
+                sheetDragHandle = if (hasQueue) {
+                    {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(
+                                    role = Role.Button,
+                                    onClickLabel = stringResource(Res.string.listen_queue_title),
+                                    onClick = toggleQueueSheet,
+                                )
+                                .padding(top = Spacing.Cozy, bottom = Spacing.Hair),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(width = SheetDragHandleWidth, height = SheetDragHandleHeight)
+                                    .background(
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                                        shape = CircleShape,
+                                    ),
+                            )
+                        }
+                    }
+                } else {
+                    null
+                },
                 sheetContent = {
                     AdaptiveContent(modifier = Modifier.fillMaxWidth(), maxWidth = Breakpoints.MediaWidth) {
-                        queueContent(false)
+                        queueContent(false, toggleQueueSheet)
                     }
                 },
             ) { sheetInsets ->
@@ -884,7 +950,7 @@ fun ListenScreen(
             onDismissRequest = { commentsOpen = false },
             title = stringResource(Res.string.video_tab_comment),
         ) {
-            comments(Modifier.fillMaxWidth().bodyHeight(CommentsSheetHeightFraction))
+            comments(Modifier.fillMaxWidth().weight(1f, fill = false))
         }
     }
 
@@ -899,24 +965,28 @@ fun ListenScreen(
     }
 }
 
+private const val DiscHaloAlpha = 0.11f
+private const val DiscHaloRadiusRatio = 1.18f
+private val SheetTopCornerRadius = 28.dp
+private val SheetDragHandleWidth = 32.dp
+private val SheetDragHandleHeight = 4.dp
+private val QueueBadgeVerticalPadding = 2.dp
+
 /**
- * 没有字幕、或还没点开歌词页时的默认呈现:圆形唱片居中 + 标题 + UP 名/队列位置。
+ * 没有字幕、或还没点开歌词页时的默认呈现:圆形唱片居中 + 标题 + UP 名/队列来源与位置胶囊。
  *
  * 封面裁成圆形、center crop。**这条推翻了这里以前"保持封面比例、不裁方形"的结论**——
  * 旧结论成立的前提是封面上可能正好写着标题,裁掉等于丢信息;但标题在这一屏是单独渲染的
  * 真文字(下面这一行),封面在这里已经降格成纯装饰,被圆形裁掉的边不再独占任何信息,
  * 旧的反对理由不再成立。B 站封面原图是 16:10 宽幅,圆形只取正中间的正方形。
- *
- * 不做旋转动画:这一页最常见的状态是息屏后台播放,转盘只在盯着看的那一刻才有意义,
- * 而旋转动画每帧都要重绘,为一个多数时间没人看的效果长期占着刷新预算不值得。
- *
- * 字幕轨按钮仍浮在唱片右上角——它是播放器控件层的一部分(docs/ui-style-guide.md §4.3),
- * 不是"有文稿才出现"的东西:没有它,用户在这个页面上就永远打不开字幕,只能先跳回看视频页
- * 选一次。没有可用轨时按钮自己不出现。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun DiscView(
     state: AudioPlaybackUiState,
+    queue: QueueUiState,
+    onOpenQueueSource: (QueueSource) -> Unit,
+    onExpandQueue: (() -> Unit)?,
     speed: Float,
     subtitleTracks: List<SubtitleTrack>,
     subtitleLan: String,
@@ -939,10 +1009,16 @@ private fun DiscView(
 ) {
     val item = state.queue?.current ?: return
     val currentPosition by rememberUpdatedState(position)
-    // 外面套一层 Box,只为让字幕按钮的参照物是**传进来的整块区域**,和歌词模式一致。
-    // 挂在下面那个 Column 上不行:它自带 Loose/Comfortable 的内边距,按钮会被一并推进去,
-    // 于是两个模式里同一个按钮仍然落在两个位置 —— 而它是同一个按钮的两个状态,
-    // 来回切时应该原地不动。
+    val haloColor = MaterialTheme.colorScheme.primary.copy(alpha = DiscHaloAlpha)
+    val copyTitle = rememberCopyAction()
+    val copyBvid = rememberCopyAction(
+        clipLabel = stringResource(Res.string.video_bvid_clip_label),
+        copiedMessage = stringResource(Res.string.video_bvid_copied),
+    )
+    val copyTitleLabel = stringResource(Res.string.action_copy_title)
+    val copyBvidLabel = stringResource(Res.string.video_bvid_copy)
+    val menuLabel = stringResource(Res.string.menu_item_actions)
+
     Box(modifier = modifier) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -951,35 +1027,17 @@ private fun DiscView(
                 // 底边不留:标题和 UP 名下面紧接着就是大数字(排在这一块外面)。
                 .padding(start = Spacing.Loose, end = Spacing.Loose, top = Spacing.Comfortable),
         ) {
-            // BoxWithConstraints 而不是 fillMaxWidth(fraction) + aspectRatio(1f):唱片要占的是
-            // "剩余空间"里较短的那一边,横屏或者窗口矮的时候按宽度定size会把圆形顶出可视区域。
-            //
-            // **唱片贴着这块区域的下沿,不居中。** 竖屏上区域比宽高,居中时多出来的高度上下
-            // 对半分,下面那一半正夹在唱片和标题之间,标题读起来不像这张唱片的。多出来的
-            // 高度全留在上面,落在顶栏和唱片之间。
             BoxWithConstraints(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentAlignment = Alignment.BottomCenter,
             ) {
                 val discSize = min(maxWidth, maxHeight) * DiscSizeFraction
 
-                // 播放时缓慢转动,暂停时停在当前角度(不归零——归零会让"暂停"看起来像"换了一张")。
-                //
-                // 曾经以"息屏后台是常态,旋转每帧重绘不值"为由不做这个动画。那条理由是错的:
-                // 页面不可见时应用根本不出帧,旋转的开销只存在于用户正盯着它看的时候,
-                // 而那恰好是它唯一有价值的时候。
                 val angle = remember { Animatable(0f) }
-                // 转唱片时手指拧过去的角度。单独一份,叠在 [angle] 上;松手时并进去。
                 var scrubTurn by remember { mutableFloatStateOf(0f) }
                 val scope = rememberCoroutineScope()
-                // 这一次拖动是不是在唱片上拧的。不是的话就是在拖进度条。
                 var discGesture by remember { mutableStateOf(false) }
 
-                // **拖进度条时唱片也跟着转**,按同一个比例:整条时长对应一圈。转唱片能拖进度,
-                // 反过来拖进度时唱片纹丝不动的话,两件事读起来就不是同一回事了。
-                //
-                // 起点记在按下之前的那一刻:进度条按下去就已经跳到手指的位置,等拖动开始再记,
-                // 点下去那一跳就不转了。记在普通字段里而不是状态里,它只供下面换算用,不驱动重组。
                 val barScrub = remember { BarScrub() }
                 if (scrubbing && !barScrub.active && !discGesture) {
                     barScrub.active = true
@@ -1011,12 +1069,27 @@ private fun DiscView(
                 Box(
                     modifier = Modifier
                         .size(discSize)
-                        // **转唱片就是拖进度。** 转一圈等于整条时长,和从进度条左端拖到右端是
-                        // 同一段;顺时针往前,逆时针往后。唱片跟着手指转,松手才 seek,和拖进度条
-                        // 同一套三步(见 ListenScreen 的 seekStart/seekTo/seekFinished)。
-                        //
-                        // 只认落在盘面上的按下,轴孔外、圆以外的都不接:这块区域的四角是空白,
-                        // 在那儿划一下不该拨动进度。起手要过触摸阈值,单击不算。
+                        // 盘体背后的柔和径向主题色光晕:不随唱片转动,也不裁剪出局外。
+                        .drawBehind {
+                            val r = size.minDimension / 2f
+                            val c = Offset(size.width / 2f, size.height / 2f)
+                            val haloRadius = r * DiscHaloRadiusRatio
+                            if (haloRadius > 0f) {
+                                drawCircle(
+                                    brush = Brush.radialGradient(
+                                        colors = listOf(
+                                            haloColor,
+                                            haloColor.copy(alpha = DiscHaloAlpha * 0.36f),
+                                            Color.Transparent,
+                                        ),
+                                        center = c,
+                                        radius = haloRadius,
+                                    ),
+                                    radius = haloRadius,
+                                    center = c,
+                                )
+                            }
+                        }
                         .pointerInput(duration) {
                             if (duration <= 0) return@pointerInput
                             awaitEachGesture {
@@ -1031,10 +1104,6 @@ private fun DiscView(
                                 val startPosition = currentPosition
                                 var lastAngle = (first.position - center).degrees()
                                 var turned = 0f
-                                // **手指离开盘面够远就是取消**,松手不 seek。和播放器横划进退的取消区
-                                // 是同一种做法:拧过头了、改主意了,不用再拧回去。
-                                // 边界放在盘面外再走出半个半径:贴着盘沿拧时手指常常滑出圆外一点,
-                                // 那不该算取消。
                                 val cancelRadius = minOf(size.width, size.height) / 2f * CancelRadiusRatio
                                 var cancelArmed = false
                                 discGesture = true
@@ -1046,7 +1115,6 @@ private fun DiscView(
                                         onScrubCancelArmed(armed)
                                     }
                                     val a = (change.position - center).degrees()
-                                    // 跨过 ±180° 那条线时按最短的一段算,否则一跨线就差一整圈。
                                     var delta = a - lastAngle
                                     if (delta > 180f) delta -= 360f
                                     if (delta < -180f) delta += 360f
@@ -1059,14 +1127,12 @@ private fun DiscView(
                                 }
                                 if (cancelArmed) {
                                     onScrubCancel()
-                                    // 取消:唱片转回按下时的角度,拧过的那一段不作数。
                                     scope.launch {
                                         Animatable(scrubTurn).animateTo(0f) { scrubTurn = value }
                                         discGesture = false
                                     }
                                 } else {
                                     onScrubEnd()
-                                    // 拧过的角度并进唱片本身的角度:松手后它从手放开的地方接着转。
                                     scope.launch {
                                         angle.snapTo(angle.value + scrubTurn)
                                         scrubTurn = 0f
@@ -1086,7 +1152,6 @@ private fun DiscView(
                                 val r = size.minDimension / 2f
                                 val c = Offset(size.width / 2f, size.height / 2f)
                                 drawCircle(FixedColors.VinylBody, radius = r, center = c)
-                                // 纹路只画在盘体那一圈(标签纸之外),画进标签底下是白费。
                                 val inner = r * DiscLabelFraction
                                 repeat(DiscGrooveCount) { i ->
                                     val t = (i + 1f) / (DiscGrooveCount + 1f)
@@ -1116,9 +1181,6 @@ private fun DiscView(
                                 .background(FixedColors.VinylHole),
                         )
                     }
-                    // 浮在唱片正中,不进布局流,见 CancelPill。排在转动的那一层外面:它是提示,
-                    // 不是唱片上的字,不跟着转。
-                    // 写全名:外层是 Column,不写的话解析到 ColumnScope 那个重载,那个在 Box 里调不了。
                     androidx.compose.animation.AnimatedVisibility(
                         visible = cancelArmed,
                         enter = fadeIn() + scaleIn(initialScale = CancelPillEnterScale),
@@ -1129,41 +1191,127 @@ private fun DiscView(
                     }
                 }
             }
-            // 整屏的主角是这张唱片,标题跟着抬一档到 titleLarge —— 听视频页一屏只有一条内容,
-            // 不像列表要压字号换密度。
-            Text(
-                item.title,
-                style = MaterialTheme.typography.titleLarge,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth().padding(top = Spacing.Loose),
-            )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                modifier = Modifier.padding(top = Spacing.Tight),
-            ) {
+            // 听视频整屏只有一条内容,曲目名抬至 headlineSmallEmphasized 建立主视觉锚点。
+            val titleMenuCount = (if (item.title.isNotBlank()) 1 else 0) + (if (item.bvid.isNotBlank()) 1 else 0)
+            ContextMenuBox(
+                onClick = null,
+                menuLabel = menuLabel,
+                modifier = Modifier.fillMaxWidth().padding(top = Spacing.Comfortable),
+                menu = { close ->
+                    var idx = 0
+                    if (item.title.isNotBlank()) {
+                        DropdownMenuItem(
+                            onClick = {
+                                close()
+                                copyTitle(item.title)
+                            },
+                            text = { Text(copyTitleLabel) },
+                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                            shape = menuItemShape(idx++, titleMenuCount),
+                        )
+                    }
+                    if (item.bvid.isNotBlank()) {
+                        DropdownMenuItem(
+                            onClick = {
+                                close()
+                                copyBvid(item.bvid)
+                            },
+                            text = { Text(copyBvidLabel) },
+                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                            shape = menuItemShape(idx, titleMenuCount),
+                        )
+                    }
+                },
+            ) { openMenu ->
+                Text(
+                    item.title,
+                    style = MaterialTheme.typography.headlineSmallEmphasized,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics {
+                            onLongClick(label = menuLabel) {
+                                openMenu()
+                                true
+                            }
+                        }
+                        .pointerInput(openMenu) {
+                            detectTapGestures(onLongPress = { openMenu() })
+                        },
+                )
+            }
+
+            if (item.upName.isNotBlank()) {
                 Text(
                     item.upName,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = Spacing.Hair),
                 )
-                val sourcePosition = state.queue.sourcePosition
-                val sourceTotal = state.queue.sourceTotal
-                if (sourcePosition != null && sourceTotal != null) {
-                    // 队列位置和 UP 名同行:它是"这是第几条",属于同一句话的后半截,
-                    // 单独占一行会让唱片和进度条之间空出一整行。
-                    //
-                    // 数的是在整份来源里的位置,不是 playlist 下标:队列只读了来源的一段,
-                    // 拿已读条数当 M 会让三千条的 UP 读成"共 40 条"。来源给不出总数时不显示。
-                    Text(
-                        "$sourcePosition / $sourceTotal",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            }
+
+            val qState = queue.state ?: state.queue
+            val posText = qState?.let { QueuePositionText(it) }
+            val sourceText = queue.sourceLabel.ifBlank { qState?.sourceLabel.orEmpty() }
+            val edgeLoading = qState?.let { it.loadingBefore || it.loadingAfter } == true
+            if (sourceText.isNotBlank() || !posText.isNullOrBlank()) {
+                val pillClick: (() -> Unit)? = queue.source?.let { src -> { onOpenQueueSource(src) } } ?: onExpandQueue
+                Box(
+                    modifier = Modifier
+                        .padding(top = Spacing.Tight)
+                        .interactiveCard(
+                            shape = CircleShape,
+                            baseColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            hoverColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            enableScale = pillClick != null,
+                        )
+                        .then(
+                            if (pillClick != null) {
+                                Modifier.clickable(role = Role.Button, onClick = pillClick)
+                            } else {
+                                Modifier
+                            },
+                        )
+                        .padding(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    ) {
+                        if (sourceText.isNotBlank()) {
+                            Text(
+                                text = sourceText,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                        }
+                        if (!posText.isNullOrBlank()) {
+                            Text(
+                                text = posText,
+                                style = MaterialTheme.typography.labelMediumEmphasized.tabular,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        }
+                        if (edgeLoading) {
+                            LoadingSpinner()
+                        } else if (queue.source != null) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(Dimens.IconInline),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1221,7 +1369,12 @@ private fun PlaybackControls(
         // 倍速面板和视频播放器那块是同一份内容:倍速与音质两段。听视频没有画面,清晰度不给;
         // 字幕在顶栏的歌词按钮上。
         if (speedSheetOpen) {
-            PaneSheet(onDismissRequest = { speedSheetOpen = false }) {
+            PaneSheet(
+                onDismissRequest = { speedSheetOpen = false },
+                title = stringResource(
+                    if (audioOptions.size > 1) Res.string.player_settings else Res.string.player_speed,
+                ),
+            ) {
                 PlayerSettingsContent(
                     speed = speed,
                     onSpeedChange = onSpeedChange,
@@ -1234,8 +1387,8 @@ private fun PlaybackControls(
                     audioOptions = audioOptions,
                     currentAudio = currentAudio,
                     onAudioChange = onAudioChange,
+                    only = if (audioOptions.size > 1) null else PlayerSettingsSection.Speed,
                 )
-                Spacer(modifier = Modifier.height(Spacing.Loose))
             }
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
@@ -1336,10 +1489,14 @@ private fun FailureRow(message: String, retrying: Boolean, onRetry: () -> Unit) 
  * 收起状态下只露出这里的第一行文字(见 [QueueHandleHeight]),内容本身不需要为收起态
  * 另写一份——`BottomSheetScaffold` 只是把超出 peek 高度的部分裁掉。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun QueueSheetContent(
     queue: QueueUiState,
+    queueState: QueueState?,
     playing: Boolean,
+    sheetExpanded: Boolean,
+    onToggleSheet: (() -> Unit)?,
     onCycleEndMode: () -> Unit,
     onCycleOrder: () -> Unit,
     onSelectEpisode: (EpisodeTarget) -> Unit,
@@ -1352,22 +1509,81 @@ private fun QueueSheetContent(
     LaunchedEffect(queue.rows.size) {
         if (queue.rows.size <= 1) editing = false
     }
+    val posText = queueState?.let { QueuePositionText(it) }
+    val edgeLoading = queueState?.let { it.loadingBefore || it.loadingAfter } == true
+    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val sourceClick = queue.source?.let { source -> { onOpenQueueSource(source) } }
+    val headerPrimaryClick = sourceClick ?: onToggleSheet
+
     Column(modifier = if (fillHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
-        // 标题是这份队列的来源,和详情页那一段的标题行是同一个组件、同一个判据:合集/系列点得进
-        // 目录,UP 投稿之类没有目录页的不给入口。来源名还没有时退回「播放队列」。
-        //
-        // **不带条数**。条数在唱片页的「N / M」里,而且它在这里没有可操作性 —— 知道有 23 条,
-        // 既不改变要不要展开,也不改变点哪一条。
-        SectionHeader(
-            title = queue.sourceLabel.ifEmpty { stringResource(Res.string.listen_queue_title) },
-            onTitleClick = queue.source?.let { source -> { onOpenQueueSource(source) } },
-            modifier = Modifier.padding(start = Spacing.Comfortable, end = Spacing.Tight),
+        // 标题是这份队列的来源,配「X / N」等宽胶囊;在窄屏 BottomSheet 里无目录来源时点击整块标题可展开/收起队列抽屉。
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = Dimens.MinTouchTarget)
+                .padding(start = Spacing.Comfortable, end = Spacing.Tight),
         ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = Dimens.MinTouchTarget)
+                    .clip(MaterialTheme.shapes.small)
+                    .then(
+                        if (headerPrimaryClick != null) {
+                            Modifier.clickable(role = Role.Button, onClick = headerPrimaryClick)
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .padding(vertical = Spacing.Hair),
+            ) {
+                Text(
+                    text = queue.sourceLabel.ifEmpty { stringResource(Res.string.listen_queue_title) },
+                    style = MaterialTheme.typography.titleSmallEmphasized,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (sourceClick != null) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                }
+                if (!posText.isNullOrBlank()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        shape = CircleShape,
+                    ) {
+                        Text(
+                            text = posText,
+                            style = MaterialTheme.typography.labelSmallEmphasized.tabular,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(
+                                horizontal = Spacing.Tight,
+                                vertical = QueueBadgeVerticalPadding,
+                            ),
+                        )
+                    }
+                }
+                if (edgeLoading) {
+                    LoadingSpinner()
+                }
+            }
             QueuePlaybackControls(
                 endMode = queue.endMode,
                 order = queue.order,
                 onCycleEndMode = onCycleEndMode,
                 onCycleOrder = onCycleOrder,
+                showOrder = queue.rows.size > 1,
             )
             if (queue.editActions != null && queue.rows.size > 1) {
                 val editLabel = stringResource(if (editing) Res.string.action_done else Res.string.queue_edit)
@@ -1375,6 +1591,16 @@ private fun QueueSheetContent(
                     Icon(
                         imageVector = if (editing) Icons.Filled.Check else Icons.Outlined.Edit,
                         contentDescription = editLabel,
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                }
+            }
+            if (onToggleSheet != null) {
+                IconButton(onClick = onToggleSheet) {
+                    Icon(
+                        imageVector = if (sheetExpanded) Icons.Filled.ExpandMore else Icons.Filled.ExpandLess,
+                        contentDescription = stringResource(Res.string.listen_queue_title),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(Dimens.IconInline),
                     )
                 }
@@ -1443,9 +1669,15 @@ private fun QueueSheetContent(
                 playing = playing,
                 editActions = queue.editActions,
                 editing = editing,
+                errorBefore = queueState?.errorBefore == true || queue.edges?.errorBefore == true,
+                errorAfter = queueState?.errorAfter == true || queue.edges?.errorAfter == true,
+                remainingBefore = queueState?.remainingBefore ?: queue.edges?.remainingBefore,
+                remainingAfter = queueState?.remainingAfter ?: queue.edges?.remainingAfter,
                 contentPadding = PaddingValues(
-                    horizontal = Spacing.Comfortable,
-                    vertical = Spacing.Tight,
+                    start = Spacing.Comfortable,
+                    end = Spacing.Comfortable,
+                    top = Spacing.Tight,
+                    bottom = Spacing.Tight + if (fillHeight) 0.dp else navBottom,
                 ),
                 modifier = Modifier.fillMaxWidth().then(if (fillHeight) Modifier.weight(1f) else Modifier),
             )
@@ -1454,7 +1686,7 @@ private fun QueueSheetContent(
 }
 
 /**
- * 定时停止:一张底部 sheet,**点一下就生效并收起**,没有「确认」。
+ * 定时停止:统一二级面板([PaneSheet]),**点一下就生效并收起**,没有「确认」。
  * 正文与视频播放器控制条的定时面板共用 [SleepTimerStandaloneContent]。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1467,7 +1699,10 @@ private fun SleepTimerDialog(
     onAdjust: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    PaneSheet(onDismissRequest = onDismiss) {
+    PaneSheet(
+        onDismissRequest = onDismiss,
+        title = stringResource(Res.string.sleep_timer_off),
+    ) {
         SleepTimerStandaloneContent(
             sleepTimer = sleepTimer,
             itemRemainingMillis = itemRemainingMillis,
@@ -1475,9 +1710,9 @@ private fun SleepTimerDialog(
             onAdjust = onAdjust,
             onDismiss = onDismiss,
             modifier = Modifier.padding(
-                start = Spacing.Comfortable,
-                end = Spacing.Comfortable,
-                bottom = Spacing.Loose,
+                start = Spacing.Loose,
+                end = Spacing.Loose,
+                bottom = Spacing.Comfortable,
             ),
         )
     }

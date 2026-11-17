@@ -2,14 +2,13 @@ package dev.bilby.ui.video
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -17,33 +16,31 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import dev.bilby.ui.components.PaneSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import dev.bilby.data.QualityOption
-import dev.bilby.resources.*
-import dev.bilby.stringResource
 import dev.bilby.offline.CachedIndex
 import dev.bilby.offline.OfflineRequest
 import dev.bilby.offline.offlineId
 import dev.bilby.player.QueueItem
 import dev.bilby.player.videoQualityLabel
+import dev.bilby.resources.*
+import dev.bilby.stringResource
+import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 
 /**
  * 缓存面板里的一行:**一个能单独缓存的单元**,不是队列里的一条视频。
@@ -67,6 +64,9 @@ data class OfflineTarget(
      */
     val cid: Long = 0,
     val partTitle: String = "",
+    val copyright: Int = 0,
+    val noReprint: Boolean = false,
+    val chargingOnly: Boolean = false,
 ) {
     /** 列表 key 与勾选状态的键。用 (bvid, cid) 而不是 bvid:同一条视频的两个分 P 是两行。 */
     val key: String get() = offlineId(item.bvid, cid)
@@ -102,16 +102,11 @@ fun OfflineTarget.toOfflineRequest(qualityId: Int) = OfflineRequest(
  * 目录 —— 队列本来就是用户打开这条视频时选定的有限集合(DESIGN 2.4b),缓存只是把其中几条
  * 搬到本地,不引入任何新的内容来源。
  *
- * 用面板([PaneSheet])而不是对话框,理由和全部分集那个 sheet 一样:条数从一条到几十条都有,
- * 必然要滚,而 dialogs 页写着 "Most dialog content should avoid scrolling"。
- *
- * 已经缓存过的条目**显示出来但不可选**:藏起来会让人以为队列少了一条,而"这条已经在本地了"
- * 正是用户此刻想知道的事。
- *
- * 弹幕这里没有开关:它一律跟着视频一起缓存。一条视频的全部弹幕只有几十 KB,给它一个勾等于
- * 让人为一个不存在的取舍做决定,而漏勾的代价是离线打开时才发现一条弹幕都没有。
+ * 用统一面板([PaneSheet],`skipPartiallyExpanded = true`):标题与全选在统一顶栏,清晰度档位以
+ * [FlowRow] 排在固定 `subheader`(避免窄侧边面板内产生横向滚动条,`side-sheets.md:320`),
+ * 条目列表占弹性主体,底部确认按钮常驻 `footer`。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun OfflineCacheSheet(
     targets: List<OfflineTarget>,
@@ -136,69 +131,79 @@ fun OfflineCacheSheet(
     val selectable = targets.filter { it.isSelectable(cached) }
     val chosen = selectable.filter { selected[it.key] == true }
     val allChosen = selectable.isNotEmpty() && chosen.size == selectable.size
+    val options = qualities.ifEmpty {
+        listOf(QualityOption(defaultQuality, videoQualityLabel(defaultQuality)))
+    }
 
-    PaneSheet(onDismissRequest = onDismiss, skipPartiallyExpanded = false) {
-        Column(
-            modifier = Modifier.padding(horizontal = Spacing.Comfortable),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
+    PaneSheet(
+        onDismissRequest = onDismiss,
+        title = stringResource(Res.string.offline_sheet_title),
+        skipPartiallyExpanded = true,
+        headerTrailing = if (selectable.isNotEmpty()) {
+            {
+                // 全选/全不选是同一个入口:已缓存的那些不在 [selectable] 里,全选也不会碰它们。
+                TextButton(
+                    onClick = {
+                        selectable.forEach { selected[it.key] = !allChosen }
+                    },
+                ) {
+                    Text(
+                        stringResource(
+                            if (allChosen) Res.string.offline_sheet_select_none else Res.string.offline_sheet_select_all,
+                        ),
+                    )
+                }
+            }
+        } else {
+            null
+        },
+        subheader = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Loose, vertical = Spacing.Tight),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
             ) {
                 Text(
-                    text = stringResource(Res.string.offline_sheet_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
+                    text = stringResource(Res.string.offline_sheet_quality),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                // 全选/全不选是同一个入口:一个只能全选的按钮,按下之后就再没有用处了,而这
-                // 恰好是最想撤销的一刻。已缓存的那些不在 [selectable] 里,全选也不会碰它们。
-                if (selectable.isNotEmpty()) {
-                    TextButton(
-                        onClick = {
-                            selectable.forEach { selected[it.key] = !allChosen }
-                        },
-                    ) {
-                        Text(
-                            stringResource(
-                                if (allChosen) Res.string.offline_sheet_select_none else Res.string.offline_sheet_select_all,
-                            ),
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                ) {
+                    options.forEach { option ->
+                        FilterChip(
+                            selected = quality == option.quality,
+                            onClick = { quality = option.quality },
+                            label = { Text(option.label) },
                         )
                     }
                 }
             }
-
-            Text(
-                text = stringResource(Res.string.offline_sheet_quality),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            // chip 而不是 connected button group:档数随视频变(几档到十几档都有)、要横滚,
-            // 正是风格指南 §2.1 给 chip 的那一格。
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
-                val options = qualities.ifEmpty {
-                    listOf(QualityOption(defaultQuality, videoQualityLabel(defaultQuality)))
-                }
-                items(options, key = { it.quality }) { option ->
-                    FilterChip(
-                        selected = quality == option.quality,
-                        onClick = { quality = option.quality },
-                        label = { Text(option.label) },
-                    )
-                }
+        },
+        footer = {
+            Button(
+                onClick = { onConfirm(chosen, quality) },
+                enabled = chosen.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = if (chosen.isEmpty()) {
+                        stringResource(Res.string.offline_sheet_empty_selection)
+                    } else {
+                        stringResource(Res.string.offline_sheet_confirm, chosen.size)
+                    },
+                    style = LocalTextStyle.current.tabular,
+                )
             }
-        }
-
-        // 列表最多占窗口的这么高。**不能写死 dp** —— 横屏时窗口只有六百多 dp 高,一个按竖屏
-        // 定的 320dp 列表加上标题和档位那两行正好把确认按钮顶出屏幕外,而 sheet 里 `weight`
-        // 分不到东西(内容测的是 wrap content),那个按钮就只能滚出来。按比例算才跟着窗口走。
-        val density = LocalDensity.current
-        val listMaxHeight = with(density) {
-            (LocalWindowInfo.current.containerSize.height * SheetListHeightFraction).toDp()
-        }
-        // 右栏里高度是定的,列表占满标题与确认按钮之间的全部。
-        val listModifier = if (inPane) Modifier.weight(1f) else Modifier.weight(1f, fill = false).heightIn(max = listMaxHeight)
-        LazyColumn(modifier = listModifier) {
+        },
+    ) {
+        LazyColumn(
+            contentPadding = PaddingValues(horizontal = Spacing.Tight),
+            modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+        ) {
             items(targets, key = { it.key }) { target ->
                 val enabled = target.isSelectable(cached)
                 val checked = selected[target.key] == true
@@ -242,27 +247,5 @@ fun OfflineCacheSheet(
                 }
             }
         }
-
-        Button(
-            onClick = { onConfirm(chosen, quality) },
-            enabled = chosen.isNotEmpty(),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        ) {
-            Text(
-                if (chosen.isEmpty()) {
-                    stringResource(Res.string.offline_sheet_empty_selection)
-                } else {
-                    stringResource(Res.string.offline_sheet_confirm, chosen.size)
-                },
-            )
-        }
     }
 }
-
-/**
- * 列表最多占窗口高度的这一比例。剩下的留给标题、清晰度那一行和底部的确认按钮 —— 竖屏上
- * 40% 约等于原先那个 320dp,横屏上它会自己收窄,而不是把按钮挤出去。
- */
-private const val SheetListHeightFraction = 0.4f
