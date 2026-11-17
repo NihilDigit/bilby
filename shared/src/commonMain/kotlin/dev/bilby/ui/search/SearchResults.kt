@@ -1,71 +1,98 @@
 package dev.bilby.ui.search
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MenuDefaults
-import androidx.compose.material3.PrimaryScrollableTabRow
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
-import dev.bilby.ui.components.verticalWheelScrollsRow
-import dev.bilby.ui.components.menuSelectedMark
-import dev.bilby.ui.components.selectedSemantics
-import org.jetbrains.compose.resources.StringResource
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.snapshotFlow
-import kotlinx.coroutines.launch
+import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import dev.bilby.stringResource
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
-import dev.bilby.resources.*
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import dev.bilby.data.SearchArticle
 import dev.bilby.data.SearchUser
 import dev.bilby.data.SearchVideo
-import dev.bilby.ui.navigationBarsBottom
+import dev.bilby.parseDurationSeconds
+import dev.bilby.resources.*
+import dev.bilby.stringResource
+import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.components.Avatar
-import dev.bilby.ui.components.touchOnlyPaging
+import dev.bilby.ui.components.ContextMenuBox
+import dev.bilby.ui.components.CoverAspectRatio
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
-import androidx.compose.foundation.lazy.grid.GridCells
 import dev.bilby.ui.components.PersonRowSkeleton
 import dev.bilby.ui.components.RefreshBox
+import dev.bilby.ui.components.SkeletonLine
+import dev.bilby.ui.components.VideoCommonMenuItems
+import dev.bilby.ui.components.VideoGridCard
 import dev.bilby.ui.components.VideoRow
+import dev.bilby.ui.components.VideoRowSkeleton
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.components.formatCount
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.menuSelectedMark
+import dev.bilby.ui.components.rememberCopyAction
+import dev.bilby.ui.components.selectedSemantics
+import dev.bilby.ui.components.skeleton
+import dev.bilby.ui.components.touchOnlyPaging
+import dev.bilby.ui.components.verticalWheelScrollsRow
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.navigationBarsBottom
+import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.interactiveCard
+import dev.bilby.ui.theme.tabular
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 
 /** 结果区的全部动作。搜索 tab 和标签结果页各自接到自己的 ViewModel 上。 */
 class SearchResultActions(
@@ -130,10 +157,6 @@ internal fun SearchResults(
     val pagerState = rememberPagerState(initialPage = state.tab.ordinal) { tabs.size }
     val scope = rememberCoroutineScope()
 
-    // 两个方向各一条:划 pager 回写当前栏(顺带触发那一栏的首次加载),当前栏变了滚 pager。
-    // **比较用 rememberUpdatedState 读当前值**:这个效应只在 pagerState 变化时重启,直接读
-    // `state.tab` 读到的永远是启动那一刻的那一份,划回原来那一栏时会判成"没变"不写回
-    // (空间页踩过同一个坑)。
     val currentTab by rememberUpdatedState(state.tab)
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }.collect { page ->
@@ -190,7 +213,14 @@ internal fun SearchResults(
                 }
             }
             HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).touchOnlyPaging()) { page ->
-                ResultPage(tabs[page], state, actions, PagedLayout.Grid(columns), showFilters = !joined, bottomPadding)
+                ResultPage(
+                    tab = tabs[page],
+                    state = state,
+                    actions = actions,
+                    layout = PagedLayout.Grid(columns),
+                    showFilters = !joined,
+                    bottomPadding = bottomPadding,
+                )
             }
         }
     }
@@ -201,12 +231,6 @@ private val JoinedHeaderMinWidth = 760.dp
 
 /**
  * 一栏的筛选,每一项是一枚带下拉的 filter chip,chip 上写着当前选的那一档。
- *
- * **不再是右端两个文字下拉。** 那两个只有字和一个小三角,读起来像标签不像控件;chip 有容器,
- * 一看就能点,而且偏离默认值时换成选中态,扫一眼就知道这份结果被筛过。排序不铺成一排
- * 单选 chip:六档加上另外三枚,手机上一屏看不全。
- *
- * 视频栏四枚在窄屏排不下一行,整行横滑;鼠标滚轮也能横滚,见 [verticalWheelScrollsRow]。
  */
 @Composable
 private fun FilterChips(
@@ -319,7 +343,13 @@ private fun ResultPage(
             modifier = Modifier.weight(1f),
         ) {
             when (tab) {
-                SearchTab.Video -> VideoResults(state, actions, layout, listPadding)
+                SearchTab.Video -> VideoResults(
+                    state = state,
+                    actions = actions,
+                    contentPadding = listPadding,
+                    bottomPadding = bottomPadding,
+                )
+
                 SearchTab.User -> PagedColumn(
                     layout = layout,
                     items = state.users.items,
@@ -333,7 +363,9 @@ private fun ResultPage(
                     onLoadMore = actions.onLoadMore,
                     onRetry = actions.onRetry,
                     contentPadding = listPadding,
-                ) { user -> UserResultRow(user, onClick = { actions.onUserClick(user.mid) }) }
+                ) { user ->
+                    UserResultRow(user, onClick = { actions.onUserClick(user.mid) })
+                }
 
                 SearchTab.Article -> PagedColumn(
                     layout = layout,
@@ -348,43 +380,95 @@ private fun ResultPage(
                     onRetry = actions.onRetry,
                     contentPadding = listPadding,
                 ) { article ->
-                    VideoRow(item = article.toRowUi(), onClick = { actions.onArticleClick(article.id) })
+                    ArticleResultRow(
+                        article = article,
+                        onClick = { actions.onArticleClick(article.id) },
+                    )
                 }
             }
         }
     }
 }
 
+private val GridCellOuterPadding = 2.dp
+
 /**
- * 视频栏。**顶上不再摆一排搜到的 UP 主**:找人有「用户」那一栏,一划就到;那一排挤在视频
- * 列表头上,每次搜什么都先看到几张不相干的脸。
+ * 视频栏:
+ * - `Medium+` / `Expanded+` 多列空间下以纵向 16:10 [VideoGridCard] 排布(含右键/长按菜单与点击 UP 名进空间);
+ * - 单列 `Compact` 或侧栏压缩后的窄主区下采用拇指友好的 [VideoRow](窄屏附行尾溢出菜单)。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun VideoResults(
     state: NormalSearchState,
     actions: SearchResultActions,
-    layout: PagedLayout,
     contentPadding: PaddingValues,
+    bottomPadding: Dp,
 ) {
     val videos = state.videos
-    PagedColumn(
-        layout = layout,
-        items = videos.items,
-        key = { it.bvid },
-        loading = videos.loading && videos.items.isEmpty(),
-        appending = videos.appending,
-        hasMore = videos.hasMore,
-        error = videos.error.takeIf { videos.items.isEmpty() },
-        emptyText = stringResource(Res.string.search_no_results),
-        onLoadMore = actions.onLoadMore,
-        onRetry = actions.onRetry,
-        contentPadding = contentPadding,
-    ) { video ->
-        dev.bilby.ui.components.ContextMenuBox(
-            onClick = null,
-            menuLabel = stringResource(Res.string.menu_item_actions),
-            menu = { close ->
-                dev.bilby.ui.components.VideoCommonMenuItems(
+    val windowSize = rememberBilbyWindowSize()
+    val multiColumnAllowed = windowSize.isAtLeast(BilbyWindowSize.Medium)
+    val wideWindow = windowSize.isAtLeast(BilbyWindowSize.Expanded)
+
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val usableWidth = (maxWidth - Spacing.Tight * 2).coerceAtLeast(0.dp)
+        val gridCols = if (multiColumnAllowed) {
+            (usableWidth / (Dimens.VideoGridMinCellWidth + Spacing.Hair)).toInt().coerceAtLeast(1)
+        } else {
+            1
+        }
+        val useGrid = gridCols > 1
+        val effectiveLayout = if (useGrid) {
+            PagedLayout.Grid(GridCells.Fixed(gridCols))
+        } else {
+            PagedLayout.SingleColumn
+        }
+        val effectivePadding = if (useGrid) {
+            PaddingValues(
+                start = Spacing.Tight - GridCellOuterPadding,
+                end = Spacing.Tight - GridCellOuterPadding,
+                top = Spacing.Hair,
+                bottom = bottomPadding + Spacing.Comfortable + navigationBarsBottom(),
+            )
+        } else {
+            contentPadding
+        }
+
+        PagedColumn(
+            layout = effectiveLayout,
+            items = videos.items,
+            key = { it.bvid },
+            loading = videos.loading && videos.items.isEmpty(),
+            appending = videos.appending,
+            hasMore = videos.hasMore,
+            error = videos.error.takeIf { videos.items.isEmpty() },
+            emptyText = stringResource(Res.string.search_no_results),
+            onLoadMore = actions.onLoadMore,
+            onRetry = actions.onRetry,
+            contentPadding = effectivePadding,
+            skeletonRow = if (useGrid) {
+                {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.Tight - GridCellOuterPadding),
+                    ) {
+                        repeat(gridCols) {
+                            VideoGridCardSkeleton(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(GridCellOuterPadding),
+                            )
+                        }
+                    }
+                }
+            } else {
+                { VideoRowSkeleton() }
+            },
+        ) { video ->
+            val rowUi = video.toRowUi()
+            val menu: @Composable ColumnScope.(close: () -> Unit) -> Unit = { close ->
+                VideoCommonMenuItems(
                     bvid = video.bvid,
                     title = video.title,
                     close = close,
@@ -392,47 +476,198 @@ private fun VideoResults(
                     onOpenUpSpace = actions.onUserClick,
                     coverUrl = video.coverUrl,
                     upName = video.upName,
-                    durationSeconds = dev.bilby.parseDurationSeconds(video.durationText),
+                    durationSeconds = parseDurationSeconds(video.durationText),
                 )
-            },
-        ) { openMenu ->
-            VideoRow(
-                item = video.toRowUi(),
-                onClick = { actions.onVideoClick(video.bvid) },
-                onLongClick = openMenu,
-            )
+            }
+            ContextMenuBox(
+                onClick = null,
+                menuLabel = stringResource(Res.string.menu_item_actions),
+                modifier = if (useGrid) Modifier.padding(GridCellOuterPadding) else Modifier,
+                menu = menu,
+            ) { openMenu ->
+                if (useGrid) {
+                    VideoGridCard(
+                        ui = rowUi,
+                        onClick = { actions.onVideoClick(video.bvid) },
+                        onLongClick = openMenu,
+                        onUpClick = video.upMid.takeIf { it != 0L }?.let { mid -> { actions.onUserClick(mid) } },
+                    )
+                } else if (wideWindow) {
+                    VideoRow(
+                        item = rowUi,
+                        onClick = { actions.onVideoClick(video.bvid) },
+                        onLongClick = openMenu,
+                    )
+                } else {
+                    var menuOpen by remember { mutableStateOf(false) }
+                    VideoRow(
+                        item = rowUi,
+                        onClick = { actions.onVideoClick(video.bvid) },
+                        onLongClick = openMenu,
+                        overflow = {
+                            Box {
+                                IconButton(onClick = { menuOpen = true }) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.MoreVert,
+                                        contentDescription = stringResource(Res.string.menu_item_actions),
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = menuOpen,
+                                    onDismissRequest = { menuOpen = false },
+                                    shape = MenuDefaults.shape,
+                                    containerColor = MenuDefaults.containerColor,
+                                ) {
+                                    menu { menuOpen = false }
+                                }
+                            }
+                        },
+                    )
+                }
+            }
         }
     }
 }
 
+@Composable
+private fun VideoGridCardSkeleton(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(Spacing.Tight),
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(CoverAspectRatio)
+                .skeleton(RoundedCornerShape(Dimens.CoverCornerGrid)),
+        )
+        SkeletonLine(Modifier.fillMaxWidth())
+        SkeletonLine(Modifier.fillMaxWidth(0.65f))
+        SkeletonLine(Modifier.fillMaxWidth(0.45f), height = 10.dp)
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ArticleResultRow(
+    article: SearchArticle,
+    onClick: () -> Unit,
+) {
+    val copy = rememberCopyAction()
+    val copyTitleLabel = stringResource(Res.string.action_copy_title)
+    val copyArticleIdLabel = stringResource(Res.string.action_copy_article_id)
+
+    ContextMenuBox(
+        onClick = null,
+        menuLabel = stringResource(Res.string.menu_item_actions),
+        menu = { close ->
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    copy(article.title)
+                },
+                text = { Text(copyTitleLabel) },
+                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                shape = menuItemShape(0, 2),
+            )
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    copy("cv${article.id}")
+                },
+                text = { Text(copyArticleIdLabel) },
+                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                shape = menuItemShape(1, 2),
+            )
+        },
+    ) { openMenu ->
+        VideoRow(
+            item = article.toRowUi(),
+            onClick = onClick,
+            onLongClick = openMenu,
+        )
+    }
+}
+
 /** 「用户」栏的一行:头像、名字、粉丝与投稿数,签名一行。 */
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun UserResultRow(user: SearchUser, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-    ) {
-        Avatar(url = user.avatarUrl, size = Dimens.AvatarStack)
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.Hair / 2)) {
-            Text(user.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                stringResource(Res.string.search_user_meta, formatCount(user.fansCount), formatCount(user.videoCount)),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+    val copy = rememberCopyAction()
+    val copyNicknameLabel = stringResource(Res.string.action_copy_nickname)
+    val copyUidLabel = stringResource(Res.string.action_copy_uid)
+
+    ContextMenuBox(
+        onClick = null,
+        menuLabel = stringResource(Res.string.menu_item_actions),
+        menu = { close ->
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    copy(user.name)
+                },
+                text = { Text(copyNicknameLabel) },
+                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                shape = menuItemShape(0, 2),
             )
-            // 没填签名就整行不画,同空间页头部的判据。
-            if (user.signature.isNotBlank()) {
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    copy(user.mid.toString())
+                },
+                text = { Text(copyUidLabel) },
+                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                shape = menuItemShape(1, 2),
+            )
+        },
+    ) { openMenu ->
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Tight, vertical = 2.dp)
+                .interactiveCard(
+                    shape = MaterialTheme.shapes.large,
+                    baseColor = Color.Transparent,
+                    hoverColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                )
+                .combinedClickable(
+                    role = Role.Button,
+                    onClick = onClick,
+                    onLongClick = openMenu,
+                )
+                .padding(horizontal = Spacing.Tight, vertical = Spacing.Tight),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        ) {
+            Avatar(url = user.avatarUrl, size = Dimens.AvatarStack)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.Hair / 2)) {
                 Text(
-                    user.signature,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = user.name,
+                    style = MaterialTheme.typography.bodyLargeEmphasized,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                Text(
+                    text = stringResource(
+                        Res.string.search_user_meta,
+                        formatCount(user.fansCount),
+                        formatCount(user.videoCount),
+                    ),
+                    style = MaterialTheme.typography.labelSmall.tabular,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                // 没填签名就整行不画,同空间页头部的判据。
+                if (user.signature.isNotBlank()) {
+                    Text(
+                        text = user.signature,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
@@ -467,13 +702,13 @@ private fun SearchArticle.toRowUi() = VideoRowUi(
     titleHighlights = titleHighlights,
 )
 
-private val DateFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd")
+private val DateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
 private fun formatDate(epochSeconds: Long): String =
     if (epochSeconds <= 0) {
         ""
     } else {
-        java.time.Instant.ofEpochSecond(epochSeconds)
-            .atZone(java.time.ZoneId.systemDefault())
+        Instant.ofEpochSecond(epochSeconds)
+            .atZone(ZoneId.systemDefault())
             .format(DateFormatter)
     }
