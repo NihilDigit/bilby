@@ -1,62 +1,84 @@
 package dev.bilby.ui.profile
 
 import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Mail
+import androidx.compose.material.icons.outlined.PeopleAlt
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.Surface
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.unit.Dp
-import dev.bilby.ui.components.VideoCover
-import dev.bilby.ui.components.FullScreenLoading
-import dev.bilby.ui.components.BilbyTooltip
-import dev.bilby.ui.CaptionLeadWithDrag
-import dev.bilby.ui.LocalWindowCaption
-import dev.bilby.ui.rememberCaptionSlot
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.rememberLazyListState
-import dev.bilby.ui.components.verticalWheelScrollsRow
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.material3.SegmentedListItem
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import dev.bilby.stringResource
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.bilby.resources.*
-import org.jetbrains.compose.resources.StringResource
 import dev.bilby.api.BiliResult
 import dev.bilby.data.AccountInfo
 import dev.bilby.data.AccountRepository
@@ -70,52 +92,53 @@ import dev.bilby.offline.OfflineDownloader
 import dev.bilby.offline.OfflineItem
 import dev.bilby.offline.OfflineStatus
 import dev.bilby.offline.OfflineStore
-import dev.bilby.ui.components.MetaSeparator
-import dev.bilby.ui.fav.FavFolderCard
-import dev.bilby.ui.fav.FavFolderCover
-import dev.bilby.ui.fav.favFolderMeta
-import androidx.compose.foundation.layout.width
-import dev.bilby.ui.offline.formatBytes
-import dev.bilby.ui.offline.toRowUi
-import dev.bilby.ui.components.Avatar
-import dev.bilby.ui.components.formatCount
+import dev.bilby.parseDurationSeconds
+import dev.bilby.resources.*
+import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveContent
-import dev.bilby.ui.theme.Breakpoints
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.foundation.layout.size
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.unit.dp
-import dev.bilby.ui.components.InlineProgress
-import dev.bilby.ui.components.LevelBadge
-import dev.bilby.ui.components.VideoRowUi
-import dev.bilby.ui.components.SkeletonLine
-import dev.bilby.ui.components.SkeletonPulse
-import dev.bilby.ui.components.skeleton
+import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.CaptionDragHeight
+import dev.bilby.ui.CaptionLeadWithDrag
+import dev.bilby.ui.LocalLiveWindowInfo
+import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.BilbyTooltip
+import dev.bilby.ui.components.CoinGlyph
+import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.CoverAspectRatio
 import dev.bilby.ui.components.CoverCornerRadius
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.foundation.background
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.outlined.PeopleAlt
-import dev.bilby.ui.components.CoinGlyph
-import androidx.compose.ui.graphics.Color
+import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.ListCover
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.SegmentedListItem
-import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.components.LocalCopyNotice
+import dev.bilby.ui.components.MetaSeparator
+import dev.bilby.ui.components.SkeletonLine
+import dev.bilby.ui.components.SkeletonPulse
+import dev.bilby.ui.components.VideoCommonMenuItems
+import dev.bilby.ui.components.VideoCover
+import dev.bilby.ui.components.VideoRowUi
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.plainTextClip
+import dev.bilby.ui.components.skeleton
+import dev.bilby.ui.components.verticalWheelScrollsRow
 import dev.bilby.ui.errorTextRes
-import dev.bilby.ui.rememberBilbyWindowSize
-import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.fav.FavFolderCover
+import dev.bilby.ui.fav.favFolderMeta
 import dev.bilby.ui.history.toRowUi
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.offline.formatBytes
+import dev.bilby.ui.offline.toRowUi
+import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.theme.BilbyTheme
+import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.LocalIsDarkTheme
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.interactiveCard
+import dev.bilby.ui.theme.tabular
 import dev.bilby.ui.toview.toRowUi
+import dev.bilby.ui.windowDragArea
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -123,6 +146,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 
 /** 历史记录 / 稍后再看 / 收藏夹三个预览区共用的形状:各自独立加载、独立失败。 */
 data class ProfilePreviewState<T>(
@@ -150,11 +174,7 @@ data class ProfileUiState(
 
 /**
  * 账号信息、历史记录预览、稍后再看预览、收藏夹列表 —— 四样各自独立加载,一个失败
- * 不连坐其它三个:收藏夹拉不到就只显示那一节的失败态,不影响历史记录或稍后再看照常展示。
- *
- * 历史记录与稍后再看只取**第一页的前 [PreviewCount] 条**,不做翻页:这一页是概览,不是列表,
- * 要看全部就点小节标题进各自的完整页面(DESIGN 1.1:有限集合,不在概览页再造一个能无限滚的
- * 地方)。收藏夹取 created/list 的第一页,横排成一行封面卡片,更多的在收藏夹页。
+ * 不连坐其它三个。
  */
 class ProfileViewModel(
     private val accountRepository: AccountRepository,
@@ -170,12 +190,9 @@ class ProfileViewModel(
 
     init {
         refresh()
-        // 缓存列表是本地状态,跟着下载器走就行 —— 它不参与上面那四块的"重进就重拉"。
         viewModelScope.launch {
             offlineDownloader.items.collect { items -> _state.update { it.copy(offline = items) } }
         }
-        // 已用空间只在"有哪些条目、哪些下完了"变的时候重算:下载器每次进度更新都会发一份新列表,
-        // 每次都遍历一遍目录不值。
         viewModelScope.launch {
             offlineDownloader.items
                 .map { items -> items.map { it.id to (it.status == OfflineStatus.Completed) }.toSet() }
@@ -187,17 +204,6 @@ class ProfileViewModel(
         }
     }
 
-    /**
-     * 每次重新进入「我的」都把四块概览整个重取。
-     *
-     * **不做去抖,也不比版本号。** 两者都试过:去抖窗口内的改动看不见,于是按仓库记的版本号
-     * 补判;但版本号只认得**经这几个仓库发生的写**,而这一页显示的东西在别处也会变 —— 官方
-     * 客户端、网页端,以及播放页那个收藏面板(它走 `VideoActionRepository`,压根不碰
-     * `FavRepository`)。补不完,而每补一处就多一处"忘了同步"的可能。
-     *
-     * 代价比想的小:下面每一块在重取期间都原样留着旧内容,不退回骨架屏(见 [retryHistory]
-     * 那几处的写法),所以多打这几个请求不会让页面闪。
-     */
     fun refresh() {
         retryAccount()
         retryHistory()
@@ -210,7 +216,6 @@ class ProfileViewModel(
         viewModelScope.launch {
             when (val result = accountRepository.loadInfo()) {
                 is BiliResult.Ok -> _state.update { it.copy(accountLoading = false, account = result.value) }
-                // 错误码与原文由 errorTextRes 打进 BiliLog,这里不再各写一份日志。
                 else -> _state.update {
                     it.copy(accountLoading = false, accountError = result.errorTextRes("取账号信息"))
                 }
@@ -256,7 +261,6 @@ class ProfileViewModel(
     fun retryFavFolders() {
         _state.update { it.copy(favFolders = it.favFolders.copy(loading = true, error = null)) }
         viewModelScope.launch {
-            // 只取第一页:这一节是一行横滑的卡片,不在概览页翻页。
             when (val result = favRepository.folderPage(1)) {
                 is BiliResult.Ok -> _state.update {
                     it.copy(favFolders = it.favFolders.copy(loading = false, items = result.value.items))
@@ -268,29 +272,14 @@ class ProfileViewModel(
             }
         }
     }
-
 }
 
-/**
- * 每一节预览几条。**硬编码,不做"加载更多"**(DESIGN 2.7):这一页是概览,要看全的进那一页。
- * 一个能在这里无限往下滚的地方,和 1.1 表里"无限滚动"那一格没有区别,哪怕滚的是自己看过的。
- *
- * 取 3 不取 5:两节预览加上收藏夹要一起放进一屏,5 条时光历史记录就吃掉整屏,
- * 底下两节要滚很久才见得到,那就不再是概览了。缓存那一节同一个数,它在本地排序截取。
- *
- * 宽屏每节是一排卡片,最多 [ShelfMaxCount] 张,放不下的横滚进来(见 [Shelf])。
- */
 private const val PreviewCount = 3
-
-/**
- * 宽屏一排最多几张。一屏宽能站五到七张,再多三四张横滚就到头:仍是概览,看全的进完整页。
- * 窄屏从同一份里取前 [PreviewCount] 条。
- */
 private const val ShelfMaxCount = 10
 
 /**
- * 「我的」:账号卡 + 历史记录、稍后再看、收藏夹、缓存四节概览。每一节的标题就是进完整页的
- * 入口。这一页是底部导航的根 tab,没有顶栏,见 [AccountCard]。
+ * 「我的」:大尺寸身份卡([AccountCard]) + 历史记录、稍后再看、收藏夹、离线缓存四节概览。
+ * 整页按自然 16:10 比例纵向滚动,不再按窗口高度反向挤压货架卡片。
  */
 @Composable
 fun ProfileScreen(
@@ -303,7 +292,7 @@ fun ProfileScreen(
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
     onOpenOffline: () -> Unit,
-    /** 进消息页。见 MessagesEntry 那一行的说明:入口不带任何计数。 */
+    /** 进消息页。入口严格不带任何未读计数或红点。 */
     onOpenMessages: () -> Unit,
     /** 账号卡上的「关注」那一格,进关注列表。 */
     onOpenFollowings: () -> Unit,
@@ -325,8 +314,6 @@ fun ProfileScreen(
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     val scrollState = rememberScrollState()
-    // 只认"进这次组合之后又变了":计数器在 MainActivity 手里,切走再切回来时它带着上一次的
-    // 值,而 LaunchedEffect 进组合就跑一次。
     var handledScrollToTop by remember { mutableIntStateOf(scrollToTop) }
     LaunchedEffect(scrollToTop) {
         if (scrollToTop != handledScrollToTop) {
@@ -334,33 +321,32 @@ fun ProfileScreen(
             scrollState.animateScrollTo(0)
         }
     }
-    // **没有顶栏。** 名字、设置、消息都收进最上面那张账号卡([AccountCard]):顶栏里只剩一个
-    // 名字和一个齿轮时,名字、等级、签名、消息入口分在顶栏、卡片、分割线下三处,读起来是散的。
-    //
-    // **宽屏每节是一排卡片(货架),不再分左右两栏。** 两栏试过:四节的长短差得多(收藏夹常常
-    // 只有一个),左栏三条行、右栏一张卡,右边和底下都空着;窗口再宽,每节也还是那三条。
-    // 一节一排,宽度直接换成条数。
+
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
-    // **宽屏放得下就不滚:各节平分账号卡以下的高度,卡片按分到的高度收窄**(见 [Shelf])。
-    // 卡片高度原本只跟着宽度走,页面总高随窗口宽高比浮动,常见窗口下正好高出一截、只能滚
-    // 一点点。窗口矮到连最小的卡片都放不下时退回整页滚动,不把卡片压扁或裁掉。
-    // 节数同各节自己的显隐判据:稍后再看确实为空时不画(PreviewSection 的 hideWhenEmpty),
-    // 缓存没有条目时不画。
-    val toView = state.toView
-    val toViewHidden = !toView.loading && toView.error == null && toView.items.isEmpty()
-    val shelfCount = 2 + (if (toViewHidden) 0 else 1) + (if (state.offline.isEmpty()) 0 else 1)
-    BoxWithConstraints(modifier = modifier.fillMaxSize().padding(contentPadding)) {
-    val fit = wide && maxHeight >= WideAccountHeaderHeight + ShelfSectionMinHeight * shelfCount
-    Column(
-        modifier = Modifier
+    val caption = LocalWindowCaption.current
+    val liveWindow = LocalLiveWindowInfo.current ?: LocalWindowInfo.current
+    val density = LocalDensity.current
+    val edgeTolerancePx = with(density) { 32.dp.toPx() }
+    var rootTouchesTopRight by remember { mutableStateOf(false) }
+    var cardAtTop by remember { mutableStateOf(true) }
+
+    Box(
+        modifier = modifier
             .fillMaxSize()
-            .then(if (fit) Modifier else Modifier.verticalScroll(scrollState)),
+            .padding(contentPadding)
+            .onGloballyPositioned { coordinates ->
+                if (!coordinates.isAttached) return@onGloballyPositioned
+                val bounds = coordinates.boundsInWindow()
+                rootTouchesTopRight = bounds.top <= edgeTolerancePx &&
+                    bounds.right >= liveWindow.containerSize.width - edgeTolerancePx
+            },
     ) {
-            val sectionModifier = if (fit) Modifier.weight(1f) else Modifier
-            // 窄屏限宽:卡片横跨整屏时,名字在最左、两个图标在最右,中间是一大片空。宽屏把三连
-            // 挪进名字那一行,卡片和下面的货架同宽。桌面端中等宽度窗口下卡片也贴满岛宽,让右上角
-            // 窗口按钮与设置图标紧邻同排,中间空白作拖动区。
-            if (wide || LocalWindowCaption.current != null) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState),
+        ) {
+            if (wide || caption != null) {
                 AccountCard(
                     state = state,
                     onOpenSelf = onOpenSelf,
@@ -369,7 +355,7 @@ fun ProfileScreen(
                     onOpenCoinLog = onOpenCoinLog,
                     onSettingsClick = onSettingsClick,
                     onRetry = onRetryAccount,
-                    wide = wide,
+                    onCaptionAtTopChanged = { cardAtTop = it },
                 )
             } else {
                 AdaptiveContent(maxWidth = Breakpoints.ReadableWidth) {
@@ -381,49 +367,59 @@ fun ProfileScreen(
                         onOpenCoinLog = onOpenCoinLog,
                         onSettingsClick = onSettingsClick,
                         onRetry = onRetryAccount,
+                        onCaptionAtTopChanged = { cardAtTop = it },
                     )
                 }
             }
 
-            HistorySection(state.history, wide, onVideoClick, onOpenHistory, onRetryHistory, sectionModifier)
-            ToViewSection(state.toView, wide, onToViewItemClick, onOpenToView, onRetryToView, sectionModifier)
-            FavFoldersSection(state.favFolders, wide, onOpenFavFolder, onOpenFavFolders, onRetryFavFolders, sectionModifier)
-            OfflineSection(state.offline, state.offlineUsedBytes, wide, onOfflineItemClick, onOpenOffline, sectionModifier)
+            Spacer(Modifier.height(Spacing.Hair))
 
-            // 宽屏不要这段收尾:最后一节自带下边距,再加一段只会让页面刚好高出一屏。
-            if (!wide) Spacer(Modifier.height(Spacing.Comfortable))
-    }
+            HistorySection(state.history, wide, onVideoClick, onOpenHistory, onRetryHistory)
+            ToViewSection(state.toView, wide, onToViewItemClick, onOpenToView, onRetryToView)
+            FavFoldersSection(state.favFolders, wide, onOpenFavFolder, onOpenFavFolders, onRetryFavFolders)
+            OfflineSection(state.offline, state.offlineUsedBytes, wide, onOfflineItemClick, onOpenOffline)
+
+            Spacer(Modifier.height(Spacing.Comfortable))
+        }
+
+        // 桌面端下滚离开顶部身份卡后,右上角仍保留轻量拖动条与窗口控制按钮,保证随时可最小化/关闭窗口。
+        if (caption != null && rootTouchesTopRight && !cardAtTop && scrollState.value > 0) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f),
+                shape = CircleShape,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = Spacing.Tight, end = Spacing.Comfortable),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(start = Spacing.Tight, end = Spacing.Hair),
+                ) {
+                    Spacer(Modifier.width(24.dp).height(CaptionDragHeight).windowDragArea(true))
+                    caption.Buttons()
+                }
+            }
+        }
     }
 }
 
-/**
- * 宽屏账号卡那一行的高度:外边距 8 两侧、内边距 8 两侧,加 56dp 头像。算"放不放得下"用,
- * 只在判断里出现;卡片本身按内容量高度。
- */
-private val WideAccountHeaderHeight = Spacing.Tight * 4 + Dimens.AvatarHeader
+private val InlineActionsThreshold = 880.dp
+private val AccountAvatarSize = Dimens.AvatarHero
+private val AccountActionIconSize = 24.dp
+private val WideAccountActionsWidth = 396.dp
+private val AccountNameSkeletonHeight = 22.dp
 
 /**
- * 一节在宽屏最矮的高度:标题行、最窄的卡片、节下边距。低于它整页改为滚动。
- * 写成 getter:同一文件的顶层 val 按书写顺序初始化,[ShelfCardMinHeight] 在后面。
+ * 个人页主视觉身份卡:
+ * - 容器色浅色取 `surfaceContainer`、深色取 `surfaceContainerLow`,配 `shapes.extraLarge`(28dp)与 `16dp` 内边距;
+ * - 72dp `AvatarHero` + `headlineSmallEmphasized` 昵称 + `LevelBadge` + 一键复制 `UID` 胶囊 + 右键/长按复制菜单;
+ * - 关注 / 硬币 / 消息三段式 `surfaceContainerHigh` 操作条(消息入口严格零红点、零未读角标)。
  */
-private val ShelfSectionMinHeight get() = Dimens.MinTouchTarget + ShelfCardMinHeight + Spacing.Comfortable
-
-/**
- * 这一页最上面的账号卡:头像、名字加等级、个性签名,下面是关注、硬币、私信三连。整张卡点下去进自己的
- * 空间 —— 这一页看得到的是"我攒了什么",而"我发了什么"在空间页。
- *
- * - **一张卡装下"我"的全部**,取代原先的顶栏(名字、齿轮)+ 头像行 + 分割线 + 分割线下的消息
- *   入口。同一个人的几样东西分在四处,中间还隔一道线,读不出是一组。它是页头,不画底色,
- *   和下面各节之间靠留白分开(风格指南 §2.3c)。
- * - **头像、名字、等级、签名同空间页页头**:字号、间距、等级单独一行都照那边。
- * - **设置在这一行右端,垂直居中**,位置同空间页的关注按钮。
- * - **关注、硬币、私信三格相连**,形状沿用视频动作栏的分段。私信不带未读计数、不带红点
- *   (DESIGN 1.3)。每一格和设置都是独立的点击目标,不触发整卡的"进空间"。
- * - **签名为空时那一行不画**,不给"这个人很懒"一类的占位:签名本来就可能没填。
- * - 账号还没到或拉取失败时,卡照样在:两个图标不依赖账号,设置在失败时尤其要够得着。
- *   还在读时左边是头像和名字的骨架([SkeletonPulse]),失败时换成一句话加重试。
- *   下面各节不依赖账号信息,不被这一次请求的成败连坐。
- */
+@OptIn(
+    ExperimentalMaterial3ExpressiveApi::class,
+    ExperimentalLayoutApi::class,
+    ExperimentalFoundationApi::class,
+)
 @Composable
 private fun AccountCard(
     state: ProfileUiState,
@@ -433,205 +429,261 @@ private fun AccountCard(
     onOpenCoinLog: () -> Unit,
     onSettingsClick: () -> Unit,
     onRetry: () -> Unit,
-    /**
-     * 宽屏:三连挪到名字那一行的右端,设置之前。卡片和下面的货架同宽,三连留在底下单占一行
-     * 的话会横跨一千多 dp,每一格都成了一长条。
-     */
-    wide: Boolean = false,
+    onCaptionAtTopChanged: (Boolean) -> Unit = {},
 ) {
     val account = state.account
-    // 不画底色,窄屏宽屏都一样。宽屏上一块底色横跨整个窗口,读起来是一条横幅;窄屏上它是页面
-    // 第一张卡,下面各节又是一块块带底色的行,整页层层叠叠。去掉底色后它是页头,和空间页的
-    // 页头同一种读法,三连自己的底色已经够把它们圈成一组。
-    // 内外边距各 8:点按的涟漪仍有一圈余量,头像左沿落在 16 的页边线上,和下面各节对齐;
-    // 上沿同样是 16,贴着状态栏会像被裁了一截。
-    Surface(
-        color = Color.Transparent,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        shape = MaterialTheme.shapes.extraLarge,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(Spacing.Tight),
-    ) {
-        val hasWindowCaption = LocalWindowCaption.current != null
-        Column(
-            verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-            modifier = Modifier
-                // **role 要给。** 不给的话读屏只念出里面那几段文字,念不出"这是个可以点的东西",
-                // 而这张卡是进自己空间的唯一入口。桌面端下点击范围收束到左侧头像名片块,右侧留白让给窗口拖动。
-                .then(
-                    if (account != null && !hasWindowCaption) {
-                        Modifier.clickable(role = Role.Button) { onOpenSelf(account.mid) }
-                    } else {
-                        Modifier
-                    },
-                )
-                // 右边只留 4:设置按钮自带 48dp 触控格,图标本身离页边已经有 24。
-                .padding(start = Spacing.Tight, top = Spacing.Tight, bottom = Spacing.Tight, end = Spacing.Hair),
-        ) {
-        val captionSlot = rememberCaptionSlot()
-        val settingsButton: @Composable () -> Unit = {
-            val settingsLabel = stringResource(Res.string.settings_title)
-            BilbyTooltip(text = settingsLabel, shortcut = "Ctrl+,") {
-                IconButton(onClick = onSettingsClick) {
-                    Icon(
-                        Icons.Outlined.Settings,
-                        contentDescription = settingsLabel,
-                        modifier = Modifier.size(AccountActionIconSize),
-                    )
-                }
-            }
+    val colorScheme = MaterialTheme.colorScheme
+    val isDark = LocalIsDarkTheme.current
+    val cardColor = if (isDark) colorScheme.surfaceContainerLow else colorScheme.surfaceContainer
+    val hasWindowCaption = LocalWindowCaption.current != null
+    val captionSlot = rememberCaptionSlot(topInset = 32.dp)
+    LaunchedEffect(captionSlot.atTop) {
+        onCaptionAtTopChanged(captionSlot.atTop)
+    }
+
+    val clipboard = LocalClipboard.current
+    val copyNotice = LocalCopyNotice.current
+    val scope = rememberCoroutineScope()
+    val copiedText = stringResource(Res.string.comment_copied)
+    val copyNicknameLabel = stringResource(Res.string.action_copy_nickname)
+    val copyUidLabel = stringResource(Res.string.action_copy_uid)
+    val menuLabel = stringResource(Res.string.menu_item_actions)
+
+    val copyValue: (String, String) -> Unit = { label, text ->
+        scope.launch {
+            clipboard.setClipEntry(plainTextClip(label, text))
+            copyNotice(copiedText)
         }
-        // 头像、名字、等级、签名的尺寸与排法同空间页页头(SpaceScreen 的 ProfileHeader):自己的
-        // 这一块和点进去的空间页是同一个人的同一张名片,换一页就换一套字号读起来像两个东西。
-        // 空间页右端是关注按钮,这里是设置,同样垂直居中。
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-            modifier = captionSlot.modifier.heightIn(min = AccountAvatarSize),
+    }
+
+    BoxWithConstraints(
+        modifier = captionSlot.modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+    ) {
+        val inlineActions = maxWidth >= InlineActionsThreshold
+
+        Surface(
+            color = cardColor,
+            contentColor = colorScheme.onSurface,
+            shape = MaterialTheme.shapes.extraLarge,
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            CaptionLeadWithDrag(
-                dragEnabled = captionSlot.atTop,
-                dragHeight = AccountAvatarSize,
-                modifier = Modifier.weight(1f),
+            Column(
+                verticalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
+                modifier = Modifier.padding(Spacing.Comfortable),
             ) {
-                if (account != null) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                        modifier = if (hasWindowCaption) {
-                            Modifier
-                                .clip(MaterialTheme.shapes.large)
-                                .clickable(role = Role.Button) { onOpenSelf(account.mid) }
-                                .padding(end = Spacing.Tight)
-                        } else {
-                            Modifier.fillMaxWidth()
-                        },
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = AccountAvatarSize),
+                ) {
+                    CaptionLeadWithDrag(
+                        dragEnabled = captionSlot.atTop,
+                        dragHeight = AccountAvatarSize,
+                        modifier = Modifier.weight(1f),
                     ) {
-                        Avatar(url = account.faceUrl, size = AccountAvatarSize)
-                        Column(
-                            modifier = Modifier.weight(1f, fill = !hasWindowCaption),
-                            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                        ) {
-                            // 名字后面紧跟等级与 ›:这一页不放粉丝数,等级单占一行只剩一枚孤零零的小标;
-                            // 与名字同行同视频页 UP 行、评论区一致。
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                            ) {
-                                Text(
-                                    text = account.name,
-                                    style = MaterialTheme.typography.titleLarge,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f, fill = false),
-                                )
-                                LevelBadge(
-                                    level = account.level,
-                                    senior = account.isSeniorMember,
-                                    height = Dimens.LevelBadgeHeight,
-                                )
-                                Icon(
-                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(Dimens.IconInline),
-                                )
-                            }
-                            if (account.sign.isNotBlank()) {
-                                Text(
-                                    text = account.sign,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    Box(modifier = if (hasWindowCaption) Modifier else Modifier.fillMaxWidth()) {
-                        if (state.accountError != null) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = stringResource(state.accountError),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.weight(1f, fill = false),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                TextButton(onClick = onRetry) { Text(stringResource(Res.string.action_retry)) }
+                        if (account != null) {
+                            ContextMenuBox(
+                                onClick = { onOpenSelf(account.mid) },
+                                menuLabel = menuLabel,
+                                modifier = Modifier
+                                    .then(if (hasWindowCaption) Modifier else Modifier.fillMaxWidth())
+                                    .clip(MaterialTheme.shapes.large),
+                                menu = { close ->
+                                    DropdownMenuItem(
+                                        onClick = {
+                                            close()
+                                            copyValue(copyNicknameLabel, account.name)
+                                        },
+                                        text = { Text(copyNicknameLabel) },
+                                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                                        shape = menuItemShape(0, 2),
+                                    )
+                                    DropdownMenuItem(
+                                        onClick = {
+                                            close()
+                                            copyValue(copyUidLabel, account.mid.toString())
+                                        },
+                                        text = { Text(copyUidLabel) },
+                                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                                        shape = menuItemShape(1, 2),
+                                    )
+                                },
+                            ) { _ ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
+                                    modifier = if (hasWindowCaption) {
+                                        Modifier.padding(end = Spacing.Tight)
+                                    } else {
+                                        Modifier.fillMaxWidth()
+                                    },
+                                ) {
+                                    Avatar(url = account.faceUrl, size = AccountAvatarSize)
+                                    Column(
+                                        modifier = Modifier.weight(1f, fill = !hasWindowCaption),
+                                        verticalArrangement = Arrangement.spacedBy(Spacing.Hair + 2.dp),
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                                        ) {
+                                            Text(
+                                                text = account.name,
+                                                style = MaterialTheme.typography.headlineSmallEmphasized,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f, fill = false),
+                                            )
+                                            LevelBadge(
+                                                level = account.level,
+                                                senior = account.isSeniorMember,
+                                                height = Dimens.LevelBadgeHeight,
+                                            )
+                                            Icon(
+                                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                                contentDescription = null,
+                                                tint = colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(Dimens.IconInline),
+                                            )
+                                        }
+
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                                            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                                            itemVerticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            AccountUidPill(
+                                                mid = account.mid,
+                                                onCopy = { copyValue(copyUidLabel, account.mid.toString()) },
+                                            )
+                                        }
+
+                                        if (account.sign.isNotBlank()) {
+                                            Text(
+                                                text = account.sign,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = colorScheme.onSurfaceVariant,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         } else {
-                            // 头像、名字、签名各一块,位置和尺寸同真实内容:账号到了只是颜色在变。
-                            SkeletonPulse {
-                                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy)) {
-                                    Box(Modifier.size(AccountAvatarSize).skeleton(CircleShape))
-                                    Column(
-                                        modifier = if (hasWindowCaption) {
-                                            Modifier.padding(top = Spacing.Tight)
-                                        } else {
-                                            Modifier.weight(1f).padding(top = Spacing.Tight)
-                                        },
-                                        verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                                    ) {
-                                        SkeletonLine(
-                                            if (hasWindowCaption) Modifier.width(120.dp) else Modifier.fillMaxWidth(0.5f),
-                                            height = AccountNameSkeletonHeight,
+                            Box(modifier = if (hasWindowCaption) Modifier else Modifier.fillMaxWidth()) {
+                                if (state.accountError != null) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = stringResource(state.accountError),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.weight(1f, fill = false),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
                                         )
-                                        SkeletonLine(
-                                            if (hasWindowCaption) Modifier.width(192.dp) else Modifier.fillMaxWidth(0.8f),
-                                        )
+                                        TextButton(onClick = onRetry) { Text(stringResource(Res.string.action_retry)) }
+                                    }
+                                } else {
+                                    SkeletonPulse {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
+                                        ) {
+                                            Box(Modifier.size(AccountAvatarSize).skeleton(CircleShape))
+                                            Column(
+                                                modifier = if (hasWindowCaption) {
+                                                    Modifier
+                                                } else {
+                                                    Modifier.weight(1f)
+                                                },
+                                                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                                            ) {
+                                                SkeletonLine(
+                                                    if (hasWindowCaption) Modifier.width(136.dp) else Modifier.fillMaxWidth(0.5f),
+                                                    height = AccountNameSkeletonHeight,
+                                                )
+                                                SkeletonLine(
+                                                    if (hasWindowCaption) Modifier.width(96.dp) else Modifier.fillMaxWidth(0.35f),
+                                                )
+                                                SkeletonLine(
+                                                    if (hasWindowCaption) Modifier.width(200.dp) else Modifier.fillMaxWidth(0.8f),
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+
+                    if (inlineActions) {
+                        AccountActions(
+                            account = account,
+                            onOpenFollowings = onOpenFollowings,
+                            onOpenCoinLog = onOpenCoinLog,
+                            onOpenMessages = onOpenMessages,
+                            modifier = Modifier.width(WideAccountActionsWidth),
+                        )
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val settingsLabel = stringResource(Res.string.settings_title)
+                        BilbyTooltip(text = settingsLabel, shortcut = "Ctrl+,") {
+                            IconButton(onClick = onSettingsClick) {
+                                Icon(
+                                    Icons.Outlined.Settings,
+                                    contentDescription = settingsLabel,
+                                    modifier = Modifier.size(AccountActionIconSize),
+                                )
+                            }
+                        }
+                        captionSlot.buttons?.invoke()
+                    }
+                }
+
+                if (!inlineActions) {
+                    AccountActions(
+                        account = account,
+                        onOpenFollowings = onOpenFollowings,
+                        onOpenCoinLog = onOpenCoinLog,
+                        onOpenMessages = onOpenMessages,
+                    )
                 }
             }
-            if (wide) {
-                AccountActions(
-                    account = account,
-                    onOpenFollowings = onOpenFollowings,
-                    onOpenCoinLog = onOpenCoinLog,
-                    onOpenMessages = onOpenMessages,
-                    modifier = Modifier.width(WideAccountActionsWidth),
-                )
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                settingsButton()
-                captionSlot.buttons?.invoke()
-            }
-        }
-        // 关注、硬币、消息三连,横跨整行。右边再补 4,右沿和左沿一样落在 16 的页边线上
-        // (外边距 8 + 内边距 4 + 4)。
-        if (!wide) {
-            AccountActions(
-                account = account,
-                onOpenFollowings = onOpenFollowings,
-                onOpenCoinLog = onOpenCoinLog,
-                onOpenMessages = onOpenMessages,
-                modifier = Modifier.padding(end = Spacing.Hair),
-            )
-        }
         }
     }
 }
 
+@Composable
+private fun AccountUidPill(
+    mid: Long,
+    onCopy: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val copyUidLabel = stringResource(Res.string.action_copy_uid)
+    Surface(
+        onClick = onCopy,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        shape = MaterialTheme.shapes.extraSmall,
+        modifier = modifier.semantics { contentDescription = "$copyUidLabel $mid" },
+    ) {
+        Text(
+            text = "UID: $mid",
+            style = MaterialTheme.typography.labelSmall.tabular,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = 2.dp),
+        )
+    }
+}
+
 /**
- * 账号卡底下那一排三连:关注、硬币、消息。**外形照视频页的动作栏**(赞、币、藏那一排):
- * 三段连成一组,整排首尾大圆角、中间小圆角、段间一道细缝,每段字形、数、名字排成一行。同一个
- * 应用里"一排能点的东西"只长一个样子。
- *
- * - 关注:自己一个个点出来的数,点它进关注列表。
- * - 硬币:投币时要用的余额,点它进硬币记录,看每一枚的去向。连成一组之后每一段都得能按,
- *   一段按不动的会被读成坏了。
- * - 消息:私信与回复、@、赞的入口。不带未读数,不带红点(DESIGN 1.3)。
- * - 粉丝数、经验条不放:它们随别人的行为变化,摆在自己的主页上就是一个引人回来刷新的数
- *   (风格指南 §4.2)。
- *
- * 数还没拿到(账号在读、关注数这一次没取到)时那一段只写名字,不写 0 —— 0 是一个真的数。
+ * 账号卡底下的三段式操作条:关注、硬币、消息。
+ * 消息入口严格不带任何未读计数或红点(DESIGN 1.3)。
  */
 @Composable
 private fun AccountActions(
@@ -643,20 +695,24 @@ private fun AccountActions(
 ) {
     val segments = listOf(
         AccountSegmentSpec(
-            icon = { tint ->
-                Icon(Icons.Outlined.PeopleAlt, contentDescription = null, tint = tint, modifier = Modifier.size(SegmentIconSize))
+            icon = { tint, _ ->
+                Icon(
+                    Icons.Outlined.PeopleAlt,
+                    contentDescription = null,
+                    tint = tint,
+                    modifier = Modifier.size(SegmentIconSize),
+                )
             },
             value = account?.following?.let { formatSegmentValue(it.toDouble()) },
             label = stringResource(Res.string.profile_following),
             onClick = onOpenFollowings,
         ),
         AccountSegmentSpec(
-            // 和视频页投币那一格同一个字形(圈里一个 B),空心:余额不是"已投"那种状态。
-            icon = { tint ->
+            icon = { tint, cutout ->
                 CoinGlyph(
                     tint = tint,
                     filled = false,
-                    cutout = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    cutout = cutout,
                     size = SegmentCoinSize,
                 )
             },
@@ -665,8 +721,13 @@ private fun AccountActions(
             onClick = onOpenCoinLog,
         ),
         AccountSegmentSpec(
-            icon = { tint ->
-                Icon(Icons.Outlined.Mail, contentDescription = null, tint = tint, modifier = Modifier.size(SegmentIconSize))
+            icon = { tint, _ ->
+                Icon(
+                    Icons.Outlined.Mail,
+                    contentDescription = null,
+                    tint = tint,
+                    modifier = Modifier.size(SegmentIconSize),
+                )
             },
             value = null,
             label = stringResource(Res.string.message_title),
@@ -689,56 +750,53 @@ private fun AccountActions(
 }
 
 private class AccountSegmentSpec(
-    val icon: @Composable (tint: Color) -> Unit,
-    /** 这一段的数;为 null 时只写 [label]。 */
+    val icon: @Composable (tint: Color, cutout: Color) -> Unit,
     val value: String?,
     val label: String,
     val onClick: () -> Unit,
-    /** 这一段在整排里分到的宽度比例。 */
     val weight: Float = 1f,
 )
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun AccountSegment(spec: AccountSegmentSpec, shape: Shape, modifier: Modifier = Modifier) {
-    Surface(
-        onClick = spec.onClick,
-        shape = shape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        modifier = modifier,
+    val colorScheme = MaterialTheme.colorScheme
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair + 2.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .interactiveCard(
+                shape = shape,
+                baseColor = colorScheme.surfaceContainerHigh,
+                hoverColor = colorScheme.surfaceContainerHighest,
+            )
+            .clickable(role = Role.Button, onClick = spec.onClick)
+            .heightIn(min = SegmentMinHeight)
+            .padding(horizontal = Spacing.Tight),
     ) {
-        // 字形、数、名字排成一行。竖排时没有数的那一段比旁边两段少一行,居中之后哪一行都对
-        // 不上;横排成一行就没有这个问题,整排也矮了一截。
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair + Spacing.Hair / 2, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .heightIn(min = SegmentMinHeight)
-                .padding(horizontal = Spacing.Hair + Spacing.Hair / 2),
-        ) {
-            spec.icon(MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-                spec.value?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
-                        maxLines = 1,
-                        modifier = Modifier.alignByBaseline(),
-                    )
-                }
+        spec.icon(colorScheme.onSurfaceVariant, colorScheme.surfaceContainerHigh)
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+            spec.value?.let {
                 Text(
-                    spec.label,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = it,
+                    style = MaterialTheme.typography.titleSmallEmphasized.tabular,
+                    color = colorScheme.onSurface,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.alignByBaseline(),
                 )
             }
+            Text(
+                text = spec.label,
+                style = MaterialTheme.typography.labelMediumEmphasized,
+                color = colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.alignByBaseline(),
+            )
         }
     }
 }
 
-/** 三连第 [index] 段的外形,同视频页动作栏:整排首尾 16dp,中间 4dp。 */
 private fun segmentShape(index: Int, count: Int): Shape {
     val start = if (index == 0) SegmentOuterCorner else SegmentInnerCorner
     val end = if (index == count - 1) SegmentOuterCorner else SegmentInnerCorner
@@ -748,45 +806,17 @@ private fun segmentShape(index: Int, count: Int): Shape {
 private val SegmentOuterCorner = 16.dp
 private val SegmentInnerCorner = 4.dp
 private val SegmentGap = 2.dp
-/**
- * Material 图标的字形只占 24dp 画布里 20dp 的活动区,硬币却是画满自己那个框的圆。两者同写
- * 20 时信封和人像比硬币小一圈;图标取 24、硬币取 20,可见的字形才一样大,同视频页动作栏。
- */
-private val SegmentIconSize = 24.dp
-private val SegmentCoinSize = 20.dp
-
-/** 消息那一段没有数,略窄一点,同时给英文 "Messages" 留足单行宽度。 */
-private const val MessagesSegmentWeight = 0.9f
-
-/** 一行排开之后每一段的高度,取触控目标的最小值。 */
+private val SegmentIconSize = 22.dp
+private val SegmentCoinSize = 19.dp
+private const val MessagesSegmentWeight = 0.92f
 private val SegmentMinHeight = 48.dp
 
-
-/**
- * 三连里的数。**过了 999 一律写成 K、M**,不走全应用的 [formatCount]:那一套中文到一万才进位,
- * 四位数加一位小数的硬币余额("1194.1")在三等分的一格里太长,数字与字形横排之后更放不下。
- * 这样每一格的数最长 5 个字符("999.5"、"12.3K")。
- *
- * 1000 以内的硬币余额保留小数:整数不带 ".0",投过币剩的半枚写成 "42.5"。
- */
 private fun formatSegmentValue(value: Double): String = when {
     value >= 999_950 -> "%.1fM".format(value / 1_000_000)
     value >= 1_000 -> "%.1fK".format(value / 1_000)
     value % 1.0 == 0.0 -> value.toLong().toString()
     else -> "%.1f".format(value)
 }
-
-/** 账号卡的头像,同空间页页头:同一个人的头像在两页里一样大。64 比全应用最大的一档还大,显得突兀。 */
-private val AccountAvatarSize = Dimens.AvatarHeader
-
-/** 消息与设置两个图标。比默认的 24 大一号,和页头的头像、放大了的名字相称;触控格仍是 48。 */
-private val AccountActionIconSize = 28.dp
-
-/** 宽屏账号卡里三连的宽度,约窄屏上那一排的宽度:每一格的字形、数、名字排得开,不多出空白。 */
-private val WideAccountActionsWidth = 420.dp
-
-/** 名字那一行的骨架高度,对应 titleLarge 的字形高。 */
-private val AccountNameSkeletonHeight = 18.dp
 
 /** 历史记录预览:最近 [PreviewCount] 条,点标题进完整的历史记录页。 */
 @Composable
@@ -806,11 +836,23 @@ private fun HistorySection(
         onOpen = onOpen,
         onRetry = onRetry,
         wide = wide,
-        shelfCard = { item, modifier ->
-            ShelfVideoCard(item = item.toRowUi(), onClick = { onVideoClick(item.bvid) }, modifier = modifier)
+        shelfCard = { item, cardModifier ->
+            ShelfVideoCard(
+                item = item.toRowUi(),
+                bvid = item.bvid,
+                upName = item.upName,
+                durationSeconds = item.durationSeconds.toLong(),
+                onClick = { onVideoClick(item.bvid) },
+                modifier = cardModifier,
+            )
         },
     ) { item, index, count ->
-        PreviewRow(item = item.toRowUi(), index = index, count = count, onClick = { onVideoClick(item.bvid) })
+        PreviewRow(
+            item = item.toRowUi(),
+            index = index,
+            count = count,
+            onClick = { onVideoClick(item.bvid) },
+        )
     }
 }
 
@@ -833,16 +875,18 @@ private fun ToViewSection(
         onRetry = onRetry,
         hideWhenEmpty = true,
         wide = wide,
-        shelfCard = { item, modifier ->
+        shelfCard = { item, cardModifier ->
             ShelfVideoCard(
                 item = item.toRowUi(),
+                bvid = if (item.playable) item.bvid else "",
+                upName = item.upName,
+                durationSeconds = item.durationSeconds,
                 enabled = item.playable,
                 onClick = { if (item.playable) onVideoClick(item.bvid) },
-                modifier = modifier,
+                modifier = cardModifier,
             )
         },
     ) { item, index, count ->
-        // 剧集与课程在这里同样打不开,判据同稍后再看页。
         PreviewRow(
             item = item.toRowUi(),
             index = index,
@@ -853,19 +897,6 @@ private fun ToViewSection(
     }
 }
 
-/**
- * 预览区的一行:和播放页队列同一种带底色的分段列表项(见 `EpisodeList.QueueRowItem`)。
- *
- * **预览用分段卡片,完整页用平铺行。** 这几条是一屏概览里的一小组,底色和首尾圆角把它们圈成
- * 一块,和上面的账号卡、旁边的收藏夹卡片同一种"一块一块"的读法;完整页是一整屏的列表,
- * 那里一行一张卡只会让列表变成一摞补丁。
- *
- * 分段容器的左沿对齐页边(16dp),封面在容器里再缩进 16dp(lists.md 的 leading padding),
- * 于是和账号卡里头像的左沿落在同一条线上(卡片 16dp + 卡内 16dp)。
- *
- * 行里只有标题和一行状态(看到哪了、已看完),时间、UP 名、计数都不带:概览里要认出的是
- * "哪一条",细节在完整页。
- */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun PreviewRow(
@@ -881,23 +912,24 @@ private fun PreviewRow(
         shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
         colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
         modifier = Modifier.padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
-        // 居中,理由同 QueueRowItem:两行标题加一行状态就过了 88dp,默认会把封面顶到上沿。
         verticalAlignment = Alignment.CenterVertically,
         leadingContent = {
-            ListCover(
-                url = item.coverUrl,
-                durationText = item.durationText,
-                progressFraction = item.progressFraction,
-                width = PreviewCoverWidth,
-                cornerRadius = PreviewCoverCorner,
-                typeBadge = item.typeBadge,
-            )
+            ProvideTextStyle(LocalTextStyle.current.tabular) {
+                ListCover(
+                    url = item.coverUrl,
+                    durationText = item.durationText,
+                    progressFraction = item.progressFraction,
+                    width = PreviewCoverWidth,
+                    cornerRadius = PreviewCoverCorner,
+                    typeBadge = item.typeBadge,
+                )
+            }
         },
         supportingContent = item.meta?.let { meta ->
             {
                 Text(
                     meta,
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelSmall.tabular,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -905,25 +937,20 @@ private fun PreviewRow(
             }
         },
     ) {
-        Text(item.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(
+            item.title,
+            style = MaterialTheme.typography.bodyMediumEmphasized,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
-/** 预览行的封面,同播放页队列条目:16:9 下约 54dp 高,和两行标题齐平。 */
 private val PreviewCoverWidth = 96.dp
-
-/** 同队列条目:列表项自己的圆角在 4dp 到 16dp 之间变,封面取中间一档。 */
 private val PreviewCoverCorner = 8.dp
 
 /**
- * 缓存预览。与其余几节同一个形状:标题进缓存页,下面是最近缓存的几条。
- *
- * **一条都没有时整节不画**,和稍后再看同一条判据:没缓存过东西的人不需要先认识"离线缓存"
- * 这个概念,才能看懂自己页面上多出来的一行字。
- *
- * 条数与已用空间写在标题行右端:缓存会攒到几十条,预览的三条看不出全貌,"存了多少、占了多少"
- * 是这一节在概览页真正要回答的。它原先是一行 `ListItem` 入口外加一条通栏分割线,和上面几节
- * 长得不一样,读起来像另一类东西。
+ * 缓存预览。一条都没有时整节不画。
  */
 @Composable
 private fun OfflineSection(
@@ -935,32 +962,38 @@ private fun OfflineSection(
     modifier: Modifier = Modifier,
 ) {
     if (items.isEmpty()) return
-    // 最近加进来的在前。在途的也算:刚点了缓存的人回到这一页,要找的正是那几条。
     val recent = items.sortedByDescending { it.createdAtMillis }
     val preview = recent.take(PreviewCount)
     val summary = stringResource(Res.string.offline_count, items.size) + MetaSeparator + formatBytes(usedBytes)
     Column(modifier = modifier.padding(bottom = Spacing.Comfortable)) {
-        ShelfTitle(stringResource(Res.string.offline_title), meta = summary, onSeeAll = onOpen, compact = !wide)
+        ShelfTitle(stringResource(Res.string.offline_title), meta = summary, onSeeAll = onOpen)
         if (wide) {
-            Shelf(recent.take(ShelfMaxCount)) { item, modifier ->
-                ShelfVideoCard(item = item.toRowUi(), onClick = { onItemClick(item) }, modifier = modifier)
+            Shelf(recent.take(ShelfMaxCount)) { item, cardModifier ->
+                val rowUi = item.toRowUi()
+                ShelfVideoCard(
+                    item = rowUi,
+                    bvid = item.bvid,
+                    upName = item.upName,
+                    durationSeconds = parseDurationSeconds(rowUi.durationText),
+                    onClick = { onItemClick(item) },
+                    modifier = cardModifier,
+                )
             }
             return@Column
         }
         Column(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
             preview.forEachIndexed { index, item ->
-                PreviewRow(item = item.toRowUi(), index = index, count = preview.size, onClick = { onItemClick(item) })
+                PreviewRow(
+                    item = item.toRowUi(),
+                    index = index,
+                    count = preview.size,
+                    onClick = { onItemClick(item) },
+                )
             }
         }
     }
 }
 
-/**
- * 预览区共用的骨架:小节标题、loading/error/empty 三态、内容。
- *
- * 进完整页的入口是标题行右端的「展示全部 →」(见 [ShelfTitle])。它曾经是"标题本身可点、后面
- * 跟一个 ›",看不出能点。条数为 0 时不给入口 —— 链接到一个空页面没有意义。
- */
 @Composable
 private fun <T> PreviewSection(
     title: String,
@@ -968,29 +1001,15 @@ private fun <T> PreviewSection(
     emptyText: String,
     onOpen: () -> Unit,
     onRetry: () -> Unit,
-    /**
-     * 空的时候整节不画,而不是画一行"还没有"。给**用不到这个功能的人**用:没往稍后再看
-     * 存过东西的人不需要先认识"稍后再看"这个概念,才能看懂自己页面上多出来的一行字。
-     * 和设置页那条"一个 UP 都没排除过就不显示排除名单"是同一条判据。
-     *
-     * 只对"确实是空的"成立 —— loading 和 error 照常显示,那两种情况下这一节是存在的,
-     * 只是还不知道里面有什么。
-     */
     hideWhenEmpty: Boolean = false,
-    /** 宽屏:排成一排 [shelfCard],不是一列 [itemRow]。 */
     wide: Boolean,
     shelfCard: @Composable (item: T, modifier: Modifier) -> Unit,
-    /** 宽屏放得下时是 weight,各节平分高度,见 ProfileScreen。 */
     modifier: Modifier = Modifier,
-    /** 一行。给出下标与条数,分段列表项按它们取首尾圆角。 */
     itemRow: @Composable (item: T, index: Int, count: Int) -> Unit,
 ) {
     if (hideWhenEmpty && !state.loading && state.error == null && state.items.isEmpty()) return
-    // **间距记在这一节的下面,不是上面。** 记在上面的话,排在最前的那一节会在它和上面那个
-    // 入口之间多出一段谁也没要的留白;而节与节之间的距离两种写法是一样的。末尾多出的一段
-    // 落在页面底部,那里本来就有收尾的 Spacer。
     Column(modifier = modifier.padding(bottom = Spacing.Comfortable)) {
-        ShelfTitle(title, onSeeAll = onOpen.takeIf { state.items.isNotEmpty() }, compact = !wide)
+        ShelfTitle(title, onSeeAll = onOpen.takeIf { state.items.isNotEmpty() })
         SectionBody(
             state,
             onRetry,
@@ -1010,64 +1029,53 @@ private fun <T> PreviewSection(
 }
 
 /**
- * 一节的标题行:标题在左,「展示全部 →」在同一行右端。
- *
- * **照 M3 carousel 的无障碍要求**(m3 components/carousel.md,Accessibility requirements on
- * scrolling pages):竖向滚动页上的一排横滚卡片,必须有不横滚也能看全的入口,带标题的放在
- * "directly next to the header or in the same row"。同一节写明 "Don't cover the carousel
- * with buttons or other UI" —— 试过把按钮浮在那一排右端、卡片从底下淡出,正是这一条。
- *
- * 规范图示是标题后紧跟一个箭头图标按钮;试下来一个图标在一行大字旁边太容易被略过,改成带字的
- * 按钮,放在同一行的右端(规范允许的另一种位置)。
- *
- * 更早是 titleSmall 加一个 ›、整行可点:放在宽屏上像一行注脚,在手机上看不出能点。
- *
- * [onSeeAll] 为 null 时不画按钮:条数为 0 时链接到一个空页面没有意义。[meta](缓存的条数与
- * 占用)跟在标题后面。
- *
- * @param compact 窄屏用 titleMedium。titleLarge 在手机上和账号卡里的名字一样大,每节标题都在喊。
+ * 一节的标题行:升级至 `titleMediumEmphasized`,计数摘要启用等宽数字。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ShelfTitle(
     title: String,
     meta: String? = null,
     onSeeAll: (() -> Unit)? = null,
-    compact: Boolean = false,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-        // 上下不另加内边距:48dp 触控高度由 heightIn 保证,节与节之间的距离由上一节的下边距给。
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = Dimens.MinTouchTarget)
             .padding(horizontal = Spacing.Tight)
-            .clip(MaterialTheme.shapes.small)
             .then(
                 if (onSeeAll != null) {
-                    Modifier.clickable(role = Role.Button, onClick = onSeeAll)
-                } else {
                     Modifier
+                        .interactiveCard(
+                            shape = MaterialTheme.shapes.small,
+                            baseColor = Color.Transparent,
+                            hoverColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                            enableScale = false,
+                        )
+                        .clickable(role = Role.Button, onClick = onSeeAll)
+                } else {
+                    Modifier.clip(MaterialTheme.shapes.small)
                 },
             )
             .padding(horizontal = Spacing.Tight),
     ) {
-        // 标题与 meta 的基线对齐只在内层做:外层 Row 里一旦有子项按基线对齐,这组子项就被
-        // 摆到基线所在的行顶,只有其余子项居中,标题便比右边的箭头高出一截。
         Row(
             horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
             modifier = Modifier.weight(1f),
         ) {
             Text(
                 text = title,
-                style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleMediumEmphasized,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 modifier = Modifier.alignByBaseline(),
             )
             meta?.let {
                 Text(
                     text = it,
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelMedium.tabular,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     modifier = Modifier.alignByBaseline(),
@@ -1086,32 +1094,13 @@ private fun ShelfTitle(
 }
 
 /**
- * 宽屏的一节:一排等宽的卡片,最多 [ShelfMaxCount] 张,放不下的横滚进来。
- *
- * 卡宽按"这一排正好站满几张"算,滚到哪里都是整张对齐页边,不在右沿切出半张。
- *
- * **高度也约束卡宽。** 宽屏放得下时各节平分窗口高度(见 [ProfileScreen]),这一排拿到的高度
- * 定出卡片最高多少,反推封面最宽多少;宽度给的卡比这个宽,就多站一张、每张窄一点。整页滚动时
- * 高度无界,只按宽度算。
- *
- * **鼠标滚轮在这一排上是横滚**(见 [verticalWheelScrollsRow]):横着排的东西只接 Shift+滚轮,
- * 用户得先知道这个组合键。滚到头之后滚轮交还给页面,照常往下滚。
- *
- * 进完整页的入口在标题行(见 [ShelfTitle]),不压在这一排上。
+ * 宽屏货架:按 `228.dp` 最小卡片宽度自然排布 16:10 封面卡片,移除高度反向压缩逻辑。
  */
 @Composable
 private fun <T> Shelf(items: List<T>, card: @Composable (item: T, modifier: Modifier) -> Unit) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val available = maxWidth - Spacing.Comfortable * 2
-        val widestByHeight = if (constraints.hasBoundedHeight) {
-            ((maxHeight - ShelfCardChrome) * CoverAspectRatio + ShelfCardPadding * 2).coerceAtLeast(ShelfCardFloorWidth)
-        } else {
-            Dp.Infinity
-        }
-        val columns = maxOf(
-            shelfColumns(available),
-            ((available + ShelfGap) / (widestByHeight + ShelfGap)).let { kotlin.math.ceil(it).toInt() },
-        )
+        val available = (maxWidth - Spacing.Comfortable * 2).coerceAtLeast(ShelfCardMinWidth)
+        val columns = shelfColumns(available)
         val cardWidth = (available - ShelfGap * (columns - 1)) / columns
         val rowState = rememberLazyListState()
         LazyRow(
@@ -1128,102 +1117,118 @@ private fun <T> Shelf(items: List<T>, card: @Composable (item: T, modifier: Modi
 private fun shelfColumns(width: Dp): Int =
     ((width + ShelfGap) / (ShelfCardMinWidth + ShelfGap)).toInt().coerceAtLeast(1)
 
-/** 货架上一张卡的最窄宽度。封面 16:10 约 115dp 高,两行标题 bodyMedium 一行约 11 个字。 */
-private val ShelfCardMinWidth = 200.dp
+private val ShelfCardMinWidth = 228.dp
 private val ShelfGap = Spacing.Cozy
 
-/** 卡片的内边距,见 [ShelfVideoCard] 与 FavFolderCard。 */
-private val ShelfCardPadding = Spacing.Tight
-
 /**
- * 卡片除封面以外的高度:上下内边距,两行 bodyMedium 标题(行高 20),一行 labelSmall 状态
- * (行高 16),两道 4dp 行距。用它从一排的高度反推封面能多高。字号放大时实际更高,那时
- * 这一排的卡会比算出来的高一点,整页仍在滚动与否的判断里留了余量。
+ * 货架视频卡:16:10 封面 + 两行强调标题 + 等宽状态文案,带悬停色阶抬升与右键/长按复制入队菜单。
  */
-private val ShelfCardChrome = ShelfCardPadding * 2 + 20.dp * 2 + 16.dp + Spacing.Hair * 2
-
-/** 高度吃紧时卡片最窄收到多少。再窄两行标题只剩七八个字,认不出是哪一条。 */
-private val ShelfCardFloorWidth = 160.dp
-
-/** 最窄那张卡的高度,判断"放不放得下"用。 */
-private val ShelfCardMinHeight = (ShelfCardFloorWidth - ShelfCardPadding * 2) / CoverAspectRatio + ShelfCardChrome
-
-/**
- * 货架里的一条视频:封面在上,标题两行、状态一行在下。外形同 [FavFolderCard](底色、圆角、
- * 8dp 内边距),收藏夹那一排和视频那几排是同一种卡。
- *
- * 标题固定占两行:一行就写完的标题也留出第二行,同一排的状态行才在一条线上。
- */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalFoundationApi::class)
 @Composable
 private fun ShelfVideoCard(
     item: VideoRowUi,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    bvid: String = "",
+    upName: String = "",
+    durationSeconds: Long = 0L,
     enabled: Boolean = true,
 ) {
-    Column(
-        modifier = modifier
-            .clip(MaterialTheme.shapes.large)
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-            .alpha(if (enabled) 1f else DisabledShelfAlpha)
-            .padding(Spacing.Tight),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-    ) {
-        VideoCover(
-            url = item.coverUrl,
-            durationText = item.durationText,
-            progressFraction = item.progressFraction,
-            typeBadge = item.typeBadge,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text(
-            text = item.title,
-            style = MaterialTheme.typography.bodyMedium,
-            minLines = 2,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        item.meta?.let {
+    val colorScheme = MaterialTheme.colorScheme
+    val cardContent: @Composable (openMenu: (() -> Unit)?) -> Unit = { openMenu ->
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .interactiveCard(
+                    shape = MaterialTheme.shapes.large,
+                    baseColor = colorScheme.surfaceContainer,
+                    hoverColor = if (enabled) {
+                        lerp(colorScheme.surfaceContainer, colorScheme.surfaceContainerHigh, 0.65f)
+                    } else {
+                        colorScheme.surfaceContainer
+                    },
+                    enableScale = enabled,
+                )
+                .combinedClickable(
+                    enabled = enabled,
+                    role = Role.Button,
+                    onClick = onClick,
+                    onLongClick = openMenu,
+                )
+                .alpha(if (enabled) 1f else DisabledShelfAlpha)
+                .padding(Spacing.Tight),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Hair + 2.dp),
+        ) {
+            ProvideTextStyle(LocalTextStyle.current.tabular) {
+                VideoCover(
+                    url = item.coverUrl,
+                    durationText = item.durationText,
+                    progressFraction = item.progressFraction,
+                    cornerRadius = Dimens.CoverCornerGrid,
+                    typeBadge = item.typeBadge,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             Text(
-                text = it,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                text = item.title,
+                style = MaterialTheme.typography.bodyMediumEmphasized,
+                color = colorScheme.onSurface,
+                minLines = 2,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            item.meta?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall.tabular,
+                    color = colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+
+    if (enabled && bvid.isNotEmpty()) {
+        ContextMenuBox(
+            onClick = null,
+            menuLabel = stringResource(Res.string.menu_item_actions),
+            modifier = modifier,
+            menu = { close ->
+                VideoCommonMenuItems(
+                    bvid = bvid,
+                    title = item.title,
+                    close = close,
+                    coverUrl = item.coverUrl,
+                    upName = upName,
+                    durationSeconds = durationSeconds,
+                )
+            },
+        ) { openMenu ->
+            cardContent(openMenu)
+        }
+    } else {
+        Box(modifier = modifier) {
+            cardContent(null)
         }
     }
 }
 
-/** 同 VideoRow 里失效稿件的透明度。 */
 private const val DisabledShelfAlpha = 0.38f
 
-/**
- * 货架读取中:一个加载指示器,不画骨架。一排同形占位铺满一千多 dp,张数又常和真的条数对不上
- * (收藏夹多半只有一个),读起来比等着更乱。高度约一排卡片,内容到了页面不至于大跳。
- */
 @Composable
 private fun ShelfLoading() {
-    // heightIn 而不是 height:各节平分高度时这一节可能比 200 矮,指示器跟着缩在里面。
-    FullScreenLoading(Modifier.fillMaxWidth().heightIn(max = ShelfLoadingHeight))
+    FullScreenLoading(Modifier.fillMaxWidth().height(ShelfLoadingHeight))
 }
 
 private val ShelfLoadingHeight = 200.dp
 
-/**
- * 预览区读取中的样子:[PreviewCount] 条和 [PreviewRow] 同形的分段行,封面、标题、状态各一块。
- * 用同一个分段列表项去画,底色、圆角、内边距一分不差,内容到了只有占位块换成真的。
- */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun PreviewRowsSkeleton() {
     SkeletonPulse {
         Column(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
             repeat(PreviewCount) { index ->
-                // 用可点击的那个重载再禁用,而不是不带 onClick 的那个:后者 material3 1.5.0-alpha25
-                // 才有,桌面端编译用的 CMP 1.12.1 对应 alpha22。禁用时的底色设成同一个,占位块自己
-                // 上色,禁用的内容色影响不到它们。
                 SegmentedListItem(
                     onClick = {},
                     enabled = false,
@@ -1251,29 +1256,13 @@ private fun PreviewRowsSkeleton() {
     }
 }
 
-/**
- * 一节的四态:骨架 / 出错 / 空 / 内容。**四态之间淡入淡出**,不是硬切。
- *
- * 这一页进一次就重取一次四块(见 [ProfileViewModel.refresh]),所以这几态之间的切换是每次
- * 打开「我的」都会发生的事,而硬切的表现是同一块位置上的字凭空换掉一行 —— 读起来像刚才那行
- * 从来没存在过。用 [Crossfade] 而不是 `AnimatedContent`:换的是同一块区域的几种填充,没有
- * 方向可言,而 `AnimatedContent` 默认还要连尺寸一起过渡,那份 `SizeTransform` 只会多抖一下。
- * spec 取 `motionScheme` 的 effects 档:淡入淡出是效果,不是空间位移(风格指南 §6 那张表)。
- *
- * **切换的键是"哪一态",文案带在键里。** 直接在分支里读外面的 `state.error` 不行:淡出还没
- * 走完时旧分支仍在组合,而那一刻 error 已经是 null 了。
- *
- * 手里已经有内容时重取不退回骨架:重进这一页就是最常见的重取时机,退回去的话每次进来都要
- * 先看着几节各闪一下。等新的一份回来直接换掉即可。
- */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun <T> SectionBody(
     state: ProfilePreviewState<T>,
     onRetry: () -> Unit,
     emptyText: String,
-    /** 首载时的占位,和内容同形,见 ui/components/Skeleton.kt。 */
     skeleton: @Composable () -> Unit,
-    /** 内容那一态怎么排:预览区是一列行,收藏夹是一行横滑的卡片。 */
     content: @Composable (List<T>) -> Unit,
 ) {
     val phase: SectionPhase = when {
@@ -1291,29 +1280,20 @@ private fun <T> SectionBody(
             SectionPhase.Loading -> skeleton()
             is SectionPhase.Failed -> InlineSectionError(stringResource(current.message), onRetry)
             SectionPhase.Empty -> InlineSectionMessage(emptyText)
-            // 内容那一支读的是最新的 items,不是 target 里的快照:淡入期间又回来一页的话,
-            // 该显示的是新的那一份。
             SectionPhase.Content -> content(state.items)
         }
     }
 }
 
-/** [SectionBody] 的四态。错误文案带在态里,理由见那个函数。 */
 private sealed interface SectionPhase {
     data object Loading : SectionPhase
-
     data class Failed(val message: StringResource) : SectionPhase
-
     data object Empty : SectionPhase
-
     data object Content : SectionPhase
 }
 
 /**
- * 收藏夹:一行横滑的封面卡片,照 PiliPlus「我的」页。竖排的话每个收藏夹占一整行,十来个夹子
- * 就把这一页撑成一张长列表,而这一页是一屏看完的概览。
- *
- * 标题叫「收藏夹」,与它点进去那一页同名 —— 原先写「收藏」,读起来像"收藏过的视频"。
+ * 收藏夹概览:宽屏走等宽自然货架卡片,窄屏多个收藏夹走横滑卡片、仅单个时走分段横排卡片。
  */
 @Composable
 private fun FavFoldersSection(
@@ -1324,29 +1304,24 @@ private fun FavFoldersSection(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // **间距记在这一节的下面,不是上面。** 记在上面的话,排在最前的那一节会在它和上面那个
-    // 入口之间多出一段谁也没要的留白;而节与节之间的距离两种写法是一样的。末尾多出的一段
-    // 落在页面底部,那里本来就有收尾的 Spacer。
     Column(modifier = modifier.padding(bottom = Spacing.Comfortable)) {
-        // **一个都没有时也可点**,与上面几节按 items 非空判不同:那一页挂着「新建收藏夹」,
-        // 而一个还没建过收藏夹的人,恰好最需要走进去。
-        ShelfTitle(stringResource(Res.string.fav_folders_title), onSeeAll = onOpen, compact = !wide)
-        // 同 PreviewSection 一份四态,见 [SectionBody]。
+        ShelfTitle(stringResource(Res.string.fav_folders_title), onSeeAll = onOpen)
         SectionBody(
             state,
             onRetry,
             stringResource(Res.string.profile_favorites_empty),
             skeleton = { if (wide) ShelfLoading() else FolderCardsSkeleton() },
         ) { folders ->
-            // 宽屏同其余几节一排卡片;只有一个时也是一张卡,和上面几排的卡一样大,不另起横排。
             if (wide) {
-                Shelf(folders.take(ShelfMaxCount)) { folder, modifier ->
-                    FavFolderCard(folder, onClick = { onOpenFolder(folder) }, modifier = modifier)
+                Shelf(folders.take(ShelfMaxCount)) { folder, cardModifier ->
+                    ProfileFavFolderCard(
+                        folder = folder,
+                        onClick = { onOpenFolder(folder) },
+                        modifier = cardModifier,
+                    )
                 }
                 return@SectionBody
             }
-            // **只有一个(多半就是默认收藏夹)时横着排**:封面在左、名字和条数在右,和上面几节的
-            // 预览行同一个样子。一张竖卡孤零零地站在左边,右边空着一大片。
             val only = folders.singleOrNull()
             if (only != null) {
                 Box(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
@@ -1354,21 +1329,98 @@ private fun FavFoldersSection(
                 }
                 return@SectionBody
             }
-            // 左右留白放进 contentPadding 而不是外层 padding:滑动时卡片要能滑到屏幕边缘,
-            // 静止时第一张仍和上面的标题对齐。
             LazyRow(
                 contentPadding = PaddingValues(horizontal = Spacing.Comfortable),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
             ) {
                 items(folders, key = { it.id }) { folder ->
-                    FavFolderCard(folder, onClick = { onOpenFolder(folder) })
+                    ProfileFavFolderCard(
+                        folder = folder,
+                        onClick = { onOpenFolder(folder) },
+                        modifier = Modifier.width(CompactFolderCardWidth),
+                    )
                 }
             }
         }
     }
 }
 
-/** 只有一个收藏夹时的那一行。形状同 [PreviewRow]:单独一段的分段列表项,四角都是大圆角。 */
+private val CompactFolderCardWidth = Dimens.ListCoverWidth + Spacing.Tight * 3
+
+/**
+ * 个人页收藏夹卡片:带悬停容器反馈、强调标题、等宽视频条数与右键/长按复制标题动作。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalFoundationApi::class)
+@Composable
+private fun ProfileFavFolderCard(
+    folder: FavFolderDetail,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val clipboard = LocalClipboard.current
+    val copyNotice = LocalCopyNotice.current
+    val scope = rememberCoroutineScope()
+    val copyTitleLabel = stringResource(Res.string.action_copy_title)
+    val copiedText = stringResource(Res.string.comment_copied)
+
+    ContextMenuBox(
+        onClick = null,
+        menuLabel = stringResource(Res.string.menu_item_actions),
+        modifier = modifier,
+        menu = { close ->
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    scope.launch {
+                        clipboard.setClipEntry(plainTextClip(copyTitleLabel, folder.title))
+                        copyNotice(copiedText)
+                    }
+                },
+                text = { Text(copyTitleLabel) },
+                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                shape = menuItemShape(0, 1),
+            )
+        },
+    ) { openMenu ->
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .interactiveCard(
+                    shape = MaterialTheme.shapes.large,
+                    baseColor = colorScheme.surfaceContainer,
+                    hoverColor = lerp(colorScheme.surfaceContainer, colorScheme.surfaceContainerHigh, 0.65f),
+                )
+                .combinedClickable(
+                    role = Role.Button,
+                    onClick = onClick,
+                    onLongClick = openMenu,
+                )
+                .padding(Spacing.Tight),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Hair + 2.dp),
+        ) {
+            FavFolderCover(
+                url = folder.coverUrl,
+                modifier = Modifier.fillMaxWidth(),
+                private = !folder.isPublic,
+            )
+            Text(
+                text = folder.title,
+                style = MaterialTheme.typography.bodyMediumEmphasized,
+                color = colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = stringResource(Res.string.fav_folder_count, folder.count),
+                style = MaterialTheme.typography.labelSmall.tabular,
+                color = colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SingleFolderRow(folder: FavFolderDetail, onClick: () -> Unit) {
@@ -1387,20 +1439,21 @@ private fun SingleFolderRow(folder: FavFolderDetail, onClick: () -> Unit) {
         supportingContent = {
             Text(
                 favFolderMeta(folder),
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.tabular,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
             )
         },
     ) {
-        Text(folder.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            folder.title,
+            style = MaterialTheme.typography.bodyMediumEmphasized,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
-/**
- * 收藏夹读取中的样子:和 [FavFolderCard] 同尺寸的几张卡。收藏夹有几个事先不知道,按一屏
- * 放得下的张数画,多的滑出视口外;真的只有一个时,内容换成横排那一行。
- */
 @Composable
 private fun FolderCardsSkeleton() {
     SkeletonPulse {
@@ -1415,7 +1468,7 @@ private fun FolderCardsSkeleton() {
                 Column(
                     verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
                     modifier = Modifier
-                        .width(Dimens.ListCoverWidth + Spacing.Tight * 2)
+                        .width(CompactFolderCardWidth)
                         .clip(MaterialTheme.shapes.large)
                         .background(MaterialTheme.colorScheme.surfaceContainer)
                         .padding(Spacing.Tight),
@@ -1472,8 +1525,6 @@ private fun InlineSectionMessage(text: String) {
 
 private fun previewHistoryItem(oid: Long, title: String) = HistoryItem(
     oid = oid,
-    // 故意取一个和 oid 不同的值:两者是否相等没有证据,预览里写成 oid 会把「它们一样」
-    // 这个未经证实的判断留在代码里当样板抄。
     kid = oid + 1,
     bvid = "BV1aa$oid",
     title = title,
