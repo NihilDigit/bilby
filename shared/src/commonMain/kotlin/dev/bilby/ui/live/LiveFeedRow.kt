@@ -1,6 +1,7 @@
 package dev.bilby.ui.live
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +17,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -27,12 +32,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import dev.bilby.stringResource
 import androidx.compose.foundation.clickable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.withLink
@@ -58,10 +66,14 @@ import dev.bilby.live.findEmotes
 import dev.bilby.resources.*
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
+import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.inlineEmoteSize
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.rememberCopyAction
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 
 /**
  * 消息流里的一行。
@@ -160,17 +172,57 @@ private fun DanmakuRow(item: LiveFeedItem.Danmaku, onUserClick: (Long) -> Unit, 
     }
     // 每条弹幕套一层紧凑的 surfaceContainer 圆角胶囊(contained list,风格指南 §2.3c):
     // 短弹幕按内容宽度成块,两行长弹幕折行后收在自己的气泡内,不与上下行的昵称粘成一片。
-    Surface(
-        color = containerColor,
-        shape = MaterialTheme.shapes.small,
+    val copy = rememberCopyAction()
+    val copyDanmakuText = item.text.ifBlank { item.emote?.text.orEmpty() }
+    val copyDanmakuLabel = stringResource(Res.string.action_copy_danmaku)
+    val copyNicknameLabel = stringResource(Res.string.action_copy_nickname)
+    val copyUidLabel = stringResource(Res.string.action_copy_uid)
+    val menuLabel = stringResource(Res.string.menu_item_actions)
+
+    ContextMenuBox(
+        onClick = null,
+        menuLabel = menuLabel,
         modifier = modifier,
-    ) {
-        Text(
-            text = text,
-            style = style,
-            inlineContent = if (emoteInline.isEmpty()) medalInline else medalInline + emoteInline,
-            modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
-        )
+        menu = { close ->
+            val menuItems = buildList {
+                if (copyDanmakuText.isNotBlank()) add(copyDanmakuLabel to copyDanmakuText)
+                if (item.name.isNotBlank()) add(copyNicknameLabel to item.name)
+                if (item.mid != 0L) add(copyUidLabel to item.mid.toString())
+            }
+            menuItems.forEachIndexed { idx, (label, value) ->
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        copy(value)
+                    },
+                    text = { Text(label) },
+                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                    shape = menuItemShape(idx, menuItems.size),
+                )
+            }
+        },
+    ) { openMenu ->
+        Surface(
+            color = containerColor,
+            shape = MaterialTheme.shapes.small,
+            modifier = Modifier
+                .semantics {
+                    onLongClick(label = menuLabel) {
+                        openMenu()
+                        true
+                    }
+                }
+                .pointerInput(openMenu) {
+                    detectTapGestures(onLongPress = { openMenu() })
+                },
+        ) {
+            Text(
+                text = text,
+                style = style,
+                inlineContent = if (emoteInline.isEmpty()) medalInline else medalInline + emoteInline,
+                modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
+            )
+        }
     }
 }
 
@@ -186,48 +238,87 @@ private fun DanmakuRow(item: LiveFeedItem.Danmaku, onUserClick: (Long) -> Unit, 
 @Composable
 private fun SuperChatRow(item: LiveFeedItem.SuperChat, onUserClick: (Long) -> Unit, modifier: Modifier = Modifier) {
     val sc = item.message
+    val copy = rememberCopyAction()
+    val copyDanmakuLabel = stringResource(Res.string.action_copy_danmaku)
+    val copyNicknameLabel = stringResource(Res.string.action_copy_nickname)
+    val copyUidLabel = stringResource(Res.string.action_copy_uid)
+    val menuLabel = stringResource(Res.string.menu_item_actions)
     // 档位色分深浅两套,而判断深浅要看**此刻主题的 surface**,不能问系统:动态取色和强制深色
     // 两种情况下系统的答案都可能与眼前这一屏不一致。
     val dark = MaterialTheme.colorScheme.surface.luminance() < DarkSurfaceLuminance
     val palette = FixedColors.superChatPalette(sc.priceYuan, dark)
-    Surface(
-        color = palette.container,
-        contentColor = palette.onContainer,
-        shape = MaterialTheme.shapes.medium,
+    ContextMenuBox(
+        onClick = null,
+        menuLabel = menuLabel,
         modifier = modifier.fillMaxWidth(),
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                // 头像加昵称一起可点,正文不可点 —— 这张卡片上要读的是留言本身,
-                // 整卡可点会让"想读完"和"想看看是谁"变成同一个手势。
-                SenderRow(
-                    face = sc.senderFace,
-                    name = sc.senderName,
-                    contentColor = palette.onContainer,
-                    modifier = Modifier.weight(1f),
-                    onClick = { onUserClick(sc.senderMid) },
+        menu = { close ->
+            val menuItems = buildList {
+                if (sc.message.isNotBlank()) add(copyDanmakuLabel to sc.message)
+                if (sc.senderName.isNotBlank()) add(copyNicknameLabel to sc.senderName)
+                if (sc.senderMid != 0L) add(copyUidLabel to sc.senderMid.toString())
+            }
+            menuItems.forEachIndexed { idx, (label, value) ->
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        copy(value)
+                    },
+                    text = { Text(label) },
+                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                    shape = menuItemShape(idx, menuItems.size),
                 )
+            }
+        },
+    ) { openMenu ->
+        Surface(
+            color = palette.container,
+            contentColor = palette.onContainer,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics {
+                    onLongClick(label = menuLabel) {
+                        openMenu()
+                        true
+                    }
+                }
+                .pointerInput(openMenu) {
+                    detectTapGestures(onLongPress = { openMenu() })
+                },
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                ) {
+                    // 头像加昵称一起可点,正文不可点 —— 这张卡片上要读的是留言本身,
+                    // 整卡可点会让"想读完"和"想看看是谁"变成同一个手势。
+                    SenderRow(
+                        face = sc.senderFace,
+                        name = sc.senderName,
+                        contentColor = palette.onContainer,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onUserClick(sc.senderMid) },
+                    )
+                    Text(
+                        text = stringResource(Res.string.live_super_chat_price, sc.priceYuan),
+                        style = MaterialTheme.typography.labelLarge.tabular,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.onContainer,
+                    )
+                }
                 Text(
-                    text = stringResource(Res.string.live_super_chat_price, sc.priceYuan),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
+                    text = sc.message,
+                    // 同字号换 token,行高和布局都不动。醒目留言相对周围的弹幕正是 M3 说的
+                    // "highlighted moment",而放大字号会把行高一起改掉,整条流跟着跳。
+                    style = MaterialTheme.typography.bodyMediumEmphasized,
+                    textDecoration = if (item.removed) TextDecoration.LineThrough else null,
                     color = palette.onContainer,
                 )
             }
-            Text(
-                text = sc.message,
-                // 同字号换 token,行高和布局都不动。醒目留言相对周围的弹幕正是 M3 说的
-                // "highlighted moment",而放大字号会把行高一起改掉,整条流跟着跳。
-                style = MaterialTheme.typography.bodyMediumEmphasized,
-                textDecoration = if (item.removed) TextDecoration.LineThrough else null,
-                color = palette.onContainer,
-            )
         }
     }
 }
@@ -242,42 +333,71 @@ private fun SuperChatRow(item: LiveFeedItem.SuperChat, onUserClick: (Long) -> Un
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun GuardRow(item: LiveFeedItem.Guard, onUserClick: (Long) -> Unit, modifier: Modifier = Modifier) {
+    val copy = rememberCopyAction()
+    val copyNicknameLabel = stringResource(Res.string.action_copy_nickname)
+    val copyUidLabel = stringResource(Res.string.action_copy_uid)
+    val menuLabel = stringResource(Res.string.menu_item_actions)
     val dark = MaterialTheme.colorScheme.surface.luminance() < DarkSurfaceLuminance
     val palette = FixedColors.guardPalette(item.guardLevel, dark)
     val level = guardLevelLabel(item.guardLevel)
-    Surface(
-        onClick = { onUserClick(item.mid) },
-        color = palette.container,
-        contentColor = palette.onContainer,
-        shape = MaterialTheme.shapes.small,
+    ContextMenuBox(
+        onClick = if (item.mid != 0L) ({ onUserClick(item.mid) }) else null,
+        menuLabel = menuLabel,
         // 用 minimumInteractiveComponentSize 保证 48dp 触控热区(Dimens.MinTouchTarget),而不把色块背景本身硬撑成 48dp 高的大空块。
-        modifier = modifier.fillMaxWidth().minimumInteractiveComponentSize(),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        ) {
-            Surface(
-                color = palette.onContainer.copy(alpha = GuardBadgeBgAlpha),
-                shape = MaterialTheme.shapes.extraSmall,
-            ) {
-                Text(
-                    text = level,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = palette.onContainer,
-                    modifier = Modifier.padding(horizontal = Spacing.Hair, vertical = 2.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .minimumInteractiveComponentSize()
+            .clip(MaterialTheme.shapes.small),
+        menu = { close ->
+            val menuItems = buildList {
+                if (item.name.isNotBlank()) add(copyNicknameLabel to item.name)
+                if (item.mid != 0L) add(copyUidLabel to item.mid.toString())
+            }
+            menuItems.forEachIndexed { idx, (label, value) ->
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        copy(value)
+                    },
+                    text = { Text(label) },
+                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                    shape = menuItemShape(idx, menuItems.size),
                 )
             }
-            Text(
-                text = item.months?.let {
-                    stringResource(Res.string.live_guard_opened_months, item.name, level, it)
-                } ?: stringResource(Res.string.live_guard_opened, item.name, level),
-                style = MaterialTheme.typography.bodyMediumEmphasized,
-                color = palette.onContainer,
-                modifier = Modifier.weight(1f),
-            )
+        },
+    ) { _ ->
+        Surface(
+            color = palette.container,
+            contentColor = palette.onContainer,
+            shape = MaterialTheme.shapes.small,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                Surface(
+                    color = palette.onContainer.copy(alpha = GuardBadgeBgAlpha),
+                    shape = MaterialTheme.shapes.extraSmall,
+                ) {
+                    Text(
+                        text = level,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.onContainer,
+                        modifier = Modifier.padding(horizontal = Spacing.Hair, vertical = 2.dp),
+                    )
+                }
+                Text(
+                    text = item.months?.let {
+                        stringResource(Res.string.live_guard_opened_months, item.name, level, it)
+                    } ?: stringResource(Res.string.live_guard_opened, item.name, level),
+                    style = MaterialTheme.typography.bodyMediumEmphasized,
+                    color = palette.onContainer,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
     }
 }

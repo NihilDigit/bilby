@@ -18,13 +18,16 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.WindowInsets
 import dev.bilby.ui.imeTarget
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.shrinkHorizontally
-import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.material3.ripple
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -58,8 +61,16 @@ import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.windowDragArea
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalDensity
@@ -191,7 +202,6 @@ import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.launch
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
@@ -207,17 +217,25 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import dev.bilby.BvidCodec
+import dev.bilby.data.model.plainText
+import dev.bilby.player.QueueState
 import dev.bilby.ui.components.PlayingIndicator
-import dev.bilby.ui.components.ListCover
-import androidx.compose.ui.platform.LocalClipboard
-import dev.bilby.ui.components.plainTextClip
+import dev.bilby.ui.components.ContextMenuBox
+import dev.bilby.ui.components.CopyableIdPill
+import dev.bilby.ui.components.LocalPointerSource
+import dev.bilby.ui.components.SelectableTextDialog
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.rememberCopyAction
 import kotlinx.coroutines.delay
-import dev.bilby.ui.components.NeedsCopyNotice
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.foundation.layout.fillMaxHeight
 import dev.bilby.ui.player.EpisodeList
+import dev.bilby.ui.player.QueuePositionText
 import dev.bilby.ui.components.BiliRichText
+import dev.bilby.ui.theme.interactiveCard
+import dev.bilby.ui.theme.rememberReducedMotion
+import dev.bilby.ui.theme.tabular
 
 /**
  * 「找相关」的状态:一段以这条视频为上下文的助理会话。第一轮是找相关本身,之后是用户的追问
@@ -264,6 +282,8 @@ data class QueueUiState(
     /** 两头续取,只给完整队列面板用。页内那一段只摊当前项附近几条,不续。 */
     val edges: QueueEdges? = null,
     val editActions: QueueEditActions? = null,
+    /** 服务侧队列快照,供标题栏、页内队列与听视频统一读取「X / N」位置与边界加载态。 */
+    val state: QueueState? = null,
 )
 
 private const val VideoTabIntro = 0
@@ -1082,9 +1102,10 @@ private fun IntroTab(
  * 有自己的视口 —— 两头都能延伸的列表只能待在这种地方。列表本身是听视频与全屏共用的
  * [EpisodeList]。
  *
- * 不带标题:打开它的那一段上面就是来源名,再写一遍只是重复。目录入口也只在那一行上。
+ * 走统一 [PaneSheet] 顶栏(来源标题 + 「X / N」位置胶囊 + 边界加载指示)与固定副头栏,列表用
+ * `weight(1f, fill = false)` 在面板高度上限内弹性伸缩。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun FullQueueSheet(
     queue: QueueUiState,
@@ -1094,20 +1115,36 @@ private fun FullQueueSheet(
     onSelectEpisode: (EpisodeTarget) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    // **不停在半开,内容高度自己定。** 列表把当前项居中时按的是自己的视口高度;sheet 半开时
-    // 视口的下半截还在屏幕外,居中的那一条正好落在看不见的地方。跳过半开、内容只要可用高度
-    // 的一部分,sheet 打开就停在这个高度,视口就是看得见的那一块。
     var editing by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(queue.rows.size) {
         if (queue.rows.size <= 1) editing = false
     }
-    PaneSheet(onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.fillMaxWidth().bodyHeight(FullQueueHeightFraction)) {
+    val title = queue.sourceLabel.ifBlank { stringResource(Res.string.listen_queue_title) }
+    val posText = queue.state?.takeIf { !queue.enriching }?.let { QueuePositionText(it) }
+    val edgeLoading = queue.state?.let { it.loadingBefore || it.loadingAfter } == true
+
+    PaneSheet(
+        onDismissRequest = onDismiss,
+        title = title,
+        skipPartiallyExpanded = true,
+        headerTrailing = if (!posText.isNullOrBlank() || edgeLoading) {
+            {
+                if (!posText.isNullOrBlank()) {
+                    QueuePositionBadge(text = posText)
+                }
+                if (edgeLoading) {
+                    LoadingSpinner()
+                }
+            }
+        } else {
+            null
+        },
+        subheader = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = Spacing.Comfortable),
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
             ) {
                 FlowRow(
                     modifier = Modifier.weight(1f),
@@ -1157,23 +1194,32 @@ private fun FullQueueSheet(
                     showOrder = queue.rows.size > 1,
                 )
             }
-            EpisodeList(
-                rows = queue.rows,
-                onSelect = onSelectEpisode,
-                edges = queue.edges,
-                playing = playing,
-                editActions = queue.editActions,
-                editing = editing,
-                // 左右留页边距:分段列表项自己不带外边距,贴着 sheet 边缘时圆角看不出来。
-                contentPadding = PaddingValues(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Loose),
-                modifier = Modifier.fillMaxWidth().weight(1f),
-            )
-        }
+        },
+    ) {
+        EpisodeList(
+            rows = queue.rows,
+            onSelect = onSelectEpisode,
+            edges = queue.edges,
+            playing = playing,
+            editActions = queue.editActions,
+            editing = editing,
+            errorBefore = queue.edges?.errorBefore == true,
+            errorAfter = queue.edges?.errorAfter == true,
+            remainingBefore = queue.edges?.remainingBefore,
+            remainingAfter = queue.edges?.remainingAfter,
+            // 左右留页边距:分段列表项自己不带外边距,贴着 sheet 边缘时圆角看不出来。
+            contentPadding = PaddingValues(
+                start = Spacing.Comfortable,
+                end = Spacing.Comfortable,
+                bottom = Spacing.Loose,
+            ),
+            modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+        )
     }
 }
 
 /**
- * @param upCard UP 主等级(+粉丝数,这一轮不显示)。null 表示还没查到或查失败——徽章不画,
+ * @param upCard UP 主等级与粉丝数。null 表示还没查到或查失败——徽章不画,
  *   不阻断这一行其余部分,和 UP 名/关注按钮相互独立(见 VideoViewModel.upCard 的说明)。
  */
 @Composable
@@ -1190,147 +1236,209 @@ private fun UpRow(
     followState: FollowState,
     onToggleFollow: () -> Unit,
 ) {
-    // mid 必须进 key:它是列表第一项的身份,也是点击跳转的目标。漏了它,队列走到同一个 UP
-    // 的另一条视频上时头像和名字都没变,participants 不重建,第一项还指着上一条的 mid。
-    //
-    // 接口的 staff 本身就含 UP 主,身份写着「UP主」(BV1xGZTB6EJD 的 staff[0])。这里曾经把 UP 主
-    // 另拼一份放在最前、身份留空,于是第一格只有名字一行,和后面几格上下对不齐。只在他不在
-    // staff 里时才补一格。
     val participants = remember(mid, faceUrl, name, staff) {
         if (staff.any { it.mid == mid }) staff else listOf(VideoStaff(mid, "", name, faceUrl)) + staff
     }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    val copyText = rememberCopyAction()
+    val copyUpNameLabel = stringResource(Res.string.action_copy_up_name)
+    val copyUidLabel = stringResource(Res.string.action_copy_uid)
+    val menuLabel = stringResource(Res.string.menu_item_actions)
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        if (staff.isEmpty()) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable { onUpClick(mid) }
-                    .padding(start = UpAvatarInset)
-                    .heightIn(min = Dimens.MinTouchTarget),
-            ) {
-                Avatar(url = faceUrl, size = UpAvatarSize)
-                // 名字和粉丝数上下两行。粉丝数是**决定要不要关注时看的那个数**,而关注按钮
-                // 就在这一行的另一端;原先它拉到了(`upCard.follower`)却没画出来,人得点进
-                // 空间页才看得到。等级徽章跟着名字走,它说的是同一个人的另一件事。
-                Column(modifier = Modifier.weight(1f)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Cozy, vertical = UpCardVerticalPadding),
+        ) {
+            if (staff.isEmpty()) {
+                val itemCount = (if (name.isNotBlank()) 1 else 0) + (if (mid > 0L) 1 else 0)
+                ContextMenuBox(
+                    onClick = { onUpClick(mid) },
+                    menuLabel = menuLabel,
+                    modifier = Modifier
+                        .weight(1f)
+                        .interactiveCard(
+                            shape = MaterialTheme.shapes.medium,
+                            baseColor = Color.Transparent,
+                            hoverColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        ),
+                    menu = { close ->
+                        var cursor = 0
+                        if (name.isNotBlank()) {
+                            DropdownMenuItem(
+                                onClick = {
+                                    close()
+                                    copyText(name)
+                                },
+                                text = { Text(copyUpNameLabel) },
+                                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                                shape = menuItemShape(cursor++, itemCount),
+                            )
+                        }
+                        if (mid > 0L) {
+                            DropdownMenuItem(
+                                onClick = {
+                                    close()
+                                    copyText(mid.toString())
+                                },
+                                text = { Text(copyUidLabel) },
+                                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                                shape = menuItemShape(cursor++, itemCount),
+                            )
+                        }
+                    },
+                ) { _ ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = Dimens.MinTouchTarget)
+                            .padding(horizontal = Spacing.Hair / 2),
                     ) {
-                        // titleSmall 而不是正文字号:这一行是"谁发的",名字要和下面的粉丝数拉开层级。
-                        Text(
-                            text = name,
-                            style = MaterialTheme.typography.titleSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
-                        upCard?.let {
-                            LevelBadge(
-                                level = it.level,
-                                senior = it.isSeniorMember,
-                                height = Dimens.LevelBadgeHeight,
-                            )
+                        Avatar(url = faceUrl, size = UpAvatarSize)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                            ) {
+                                Text(
+                                    text = name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                upCard?.let {
+                                    LevelBadge(
+                                        level = it.level,
+                                        senior = it.isSeniorMember,
+                                        height = Dimens.LevelBadgeHeight,
+                                    )
+                                }
+                            }
+                            upCard?.let {
+                                Text(
+                                    text = stringResource(Res.string.space_followers, formatCount(it.follower)),
+                                    style = MaterialTheme.typography.labelSmall.tabular,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                )
+                            }
                         }
                     }
-                    // 拿不到就整行不画,不占位:这一行是独立请求、独立失败的(见 upCard 的说明)。
-                    upCard?.let {
-                        Text(
-                            text = stringResource(Res.string.space_followers, formatCount(it.follower)),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                        )
-                    }
                 }
-            }
-        } else {
-            // **每一格等宽。** 格宽曾随名字在一个区间里伸缩,名字长短不一时头像间距忽大忽小,
-            // 一排头像读不成一排。等宽之后长名字截断,完整名字在对方空间页里。
-            LazyRow(
-                modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-            ) {
-                items(participants, key = { "${it.mid}-${it.name}" }) { participant ->
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .width(StaffCellWidth)
-                            .clip(MaterialTheme.shapes.small)
-                            .clickable { onUpClick(participant.mid) },
-                    ) {
-                        // 关注加号贴在头像右下角。**关注态未知时(staffFollowed 还是 null)不显示**,
-                        // 否则每次打开都会先闪一排加号再消失。
-                        //
-                        // UP 主自己也走这一套,不再另开关注按钮:联合投稿这一排里他只是署名
-                        // 第一位,单独给他一个按钮会让人以为关注的是"这条视频的作者"整体。
-                        val followable = staffFollowed?.contains(participant.mid) == false
-                        BadgedAvatar(
-                            url = participant.faceUrl,
-                            size = Dimens.AvatarRow,
-                            badge = if (!followable) null else AvatarBadge(
-                                icon = Icons.Filled.Add,
-                                contentDescription = stringResource(
-                                    Res.string.video_follow_staff,
-                                    participant.name,
+            } else {
+                LazyRow(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                ) {
+                    items(participants, key = { "${it.mid}-${it.name}" }) { participant ->
+                        val itemCount = (if (participant.name.isNotBlank()) 1 else 0) +
+                            (if (participant.mid > 0L) 1 else 0)
+                        ContextMenuBox(
+                            onClick = { onUpClick(participant.mid) },
+                            menuLabel = menuLabel,
+                            modifier = Modifier
+                                .width(StaffCellWidth)
+                                .interactiveCard(
+                                    shape = MaterialTheme.shapes.small,
+                                    baseColor = Color.Transparent,
+                                    hoverColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                                 ),
-                                onClick = { onFollowStaff(participant.mid) },
-                            ),
-                        )
-                        Text(
-                            participant.name,
-                            style = MaterialTheme.typography.labelSmall,
-                            textAlign = TextAlign.Center,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        // 身份为空也占着这一行:空串照样量出一行高,各格因此一样高。
-                        Text(
-                            participant.title,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                            menu = { close ->
+                                var cursor = 0
+                                if (participant.name.isNotBlank()) {
+                                    DropdownMenuItem(
+                                        onClick = {
+                                            close()
+                                            copyText(participant.name)
+                                        },
+                                        text = { Text(copyUpNameLabel) },
+                                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                                        shape = menuItemShape(cursor++, itemCount),
+                                    )
+                                }
+                                if (participant.mid > 0L) {
+                                    DropdownMenuItem(
+                                        onClick = {
+                                            close()
+                                            copyText(participant.mid.toString())
+                                        },
+                                        text = { Text(copyUidLabel) },
+                                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                                        shape = menuItemShape(cursor++, itemCount),
+                                    )
+                                }
+                            },
+                        ) { _ ->
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = Spacing.Hair / 2),
+                            ) {
+                                val followable = staffFollowed?.contains(participant.mid) == false
+                                BadgedAvatar(
+                                    url = participant.faceUrl,
+                                    size = Dimens.AvatarRow,
+                                    badge = if (!followable) null else AvatarBadge(
+                                        icon = Icons.Filled.Add,
+                                        contentDescription = stringResource(
+                                            Res.string.video_follow_staff,
+                                            participant.name,
+                                        ),
+                                        onClick = { onFollowStaff(participant.mid) },
+                                    ),
+                                )
+                                Text(
+                                    participant.name,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                Text(
+                                    participant.title,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
                     }
                 }
             }
-        }
-        // 联合投稿没有这个按钮:关注态全部由头像角上的加号表达,一个人一个。留着它就成了
-        // 第二套状态——它只讲 UP 主一个人,而旁边那排讲所有人,两处对同一个人给出两种说法。
-        //
-        // 代价是联合投稿下没有取关入口,取关走那个人的空间页。这一排是署名,不是关系管理。
-        if (staff.isEmpty()) {
-            // 这一页的主角是这条视频,不是这个人 —— 关注用 tonal,别和左边那排动作抢。
-            FollowButton(state = followState, onClick = onToggleFollow, prominent = false)
+            if (staff.isEmpty()) {
+                FollowButton(
+                    state = followState,
+                    onClick = onToggleFollow,
+                    prominent = false,
+                    name = name,
+                )
+            }
         }
     }
 }
 
 /**
- * 标题、计数行和就地展开的简介。
+ * 标题、元信息胶囊行和就地平滑展开的版权声明、简介与标签。
  *
- * 标题与计数行合成一个可展开的块,照 PiliPlus 的 `introduction/ugc/view.dart`(它的
- * `ExpandablePanel` 收起时只给标题两行,展开后才露出 bvid、简介和标签)。两个开关管的本来就是
- * 同一件事:这条视频要看多细。
- *
- * **展开就地长出来。** 简介曾经走过面板,因为那时这一栏不滚动、没有地方容纳一段没有上界的
- * 正文;这一栏是列表之后,正文长在标题下面,控件和效果挨着。
- *
- * 展开指示放在计数行右端,不放标题末尾:标题会截断,截断处的箭头看起来像正文的一部分。
- * **展开之后它挪到整块的最下面**:收起的入口该在读完的地方,简介一长,停在上面的箭头得
- * 往回找。
+ * - 标题升至 `titleLargeEmphasized`,长按/右键支持复制标题、BV 号、AV 号与自由选词;
+ * - BV 号与 AV 号在收起与展开两态均提供单击即复制的 [CopyableIdPill](独立消费点按,不误触展开切换);
+ * - 展开区以 `expandVertically + fadeIn` 在列表内原地生长,绝不卸载下方的播放队列。
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun TitleBlock(
     detail: VideoDetail,
@@ -1343,170 +1451,387 @@ private fun TitleBlock(
     onSeek: ((Long) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
+    val isTouch = LocalPointerSource.current.isTouchLike
+    val pointerSelectsText = expanded && !isTouch
+    val resolvedAid = remember(detail.aid, detail.bvid) {
+        detail.aid.takeIf { it > 0L } ?: BvidCodec.toAid(detail.bvid).takeIf { it > 0L }
+    }
+    val avidText = resolvedAid?.let { "av$it" }.orEmpty()
+
+    val copyText = rememberCopyAction()
+    val copyBvid = rememberCopyAction(
+        clipLabel = stringResource(Res.string.video_bvid_clip_label),
+        copiedMessage = stringResource(Res.string.video_bvid_copied),
+    )
+    val menuLabel = stringResource(Res.string.menu_item_actions)
+    val copyTitleLabel = stringResource(Res.string.action_copy_title)
+    val copyBvidLabel = stringResource(Res.string.video_bvid_copy)
+    val copyAvidLabel = stringResource(Res.string.action_copy_avid)
+    val copyDescLabel = stringResource(Res.string.action_copy_desc)
+    val selectTextLabel = stringResource(Res.string.action_select_text)
+
+    var selectableText by rememberSaveable { mutableStateOf<String?>(null) }
+
     val arrow: @Composable () -> Unit = {
         Icon(
             imageVector = if (expanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
             contentDescription = stringResource(Res.string.video_intro_open),
-            tint = MaterialTheme.colorScheme.outline,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(Dimens.IconInline),
         )
     }
-    val pointerSelectsText = expanded && !dev.bilby.ui.components.LocalPointerSource.current.isTouchLike
+
     Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .animateContentSize()
-            .then(if (pointerSelectsText) Modifier else Modifier.clickable(onClick = onToggle)),
+        modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
-        Column(
-            modifier = if (pointerSelectsText) {
-                Modifier.fillMaxWidth().clickable(onClick = onToggle)
-            } else {
-                Modifier.fillMaxWidth()
+        val titleMenuCount = (if (detail.title.isNotBlank()) 1 else 0) +
+            (if (detail.bvid.isNotBlank()) 1 else 0) +
+            (if (avidText.isNotEmpty()) 1 else 0) +
+            (if (detail.title.isNotBlank()) 1 else 0)
+
+        ContextMenuBox(
+            onClick = if (pointerSelectsText) null else onToggle,
+            menuLabel = menuLabel,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(MaterialTheme.shapes.extraSmall),
+            menu = { close ->
+                var cursor = 0
+                if (detail.title.isNotBlank()) {
+                    DropdownMenuItem(
+                        onClick = {
+                            close()
+                            copyText(detail.title)
+                        },
+                        text = { Text(copyTitleLabel) },
+                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                        shape = menuItemShape(cursor++, titleMenuCount),
+                    )
+                }
+                if (detail.bvid.isNotBlank()) {
+                    DropdownMenuItem(
+                        onClick = {
+                            close()
+                            copyBvid(detail.bvid)
+                        },
+                        text = { Text(copyBvidLabel) },
+                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                        shape = menuItemShape(cursor++, titleMenuCount),
+                    )
+                }
+                if (avidText.isNotEmpty()) {
+                    DropdownMenuItem(
+                        onClick = {
+                            close()
+                            copyText(avidText)
+                        },
+                        text = { Text(copyAvidLabel) },
+                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                        shape = menuItemShape(cursor++, titleMenuCount),
+                    )
+                }
+                if (detail.title.isNotBlank()) {
+                    DropdownMenuItem(
+                        onClick = {
+                            close()
+                            selectableText = detail.title
+                        },
+                        text = { Text(selectTextLabel) },
+                        leadingIcon = { Icon(Icons.Outlined.SelectAll, contentDescription = null) },
+                        shape = menuItemShape(cursor++, titleMenuCount),
+                    )
+                }
             },
-            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) { _ ->
+            val titleNode: @Composable () -> Unit = {
+                Text(
+                    text = detail.title,
+                    style = MaterialTheme.typography.titleLargeEmphasized,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = if (expanded) Int.MAX_VALUE else 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (pointerSelectsText) {
+                SelectionContainer(content = titleNode)
+            } else {
+                titleNode()
+            }
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(MaterialTheme.shapes.extraSmall)
+                .clickable(
+                    interactionSource = null,
+                    indication = null,
+                    onClick = onToggle,
+                ),
         ) {
-            Text(
-                text = detail.title,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = if (expanded) Int.MAX_VALUE else 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            FlowRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                itemVerticalAlignment = Alignment.CenterVertically,
+            ) {
                 StatRow(
                     playText = formatCount(detail.stat.view),
                     danmakuText = formatCount(detail.stat.danmaku),
-                    dateText = formatDate(detail.publishedAtEpochSeconds),
                 )
-                // BV 号接在日期后面,和它同属"这条稿件是哪一条"的元信息。收起时也显示,这一行在
-                // 360dp 上放得下(三项统计 + BV + 箭头约 310dp)。
-                //
-                // **收起时只显示,不能复制。** 收起时整块是"点开简介"的一个大按钮,这一段字夹在
-                // 中间接走点击的话,点在它上面的那一下既不展开,还悄悄往剪贴板里写了东西。
-                BvidLabel(
-                    bvid = detail.bvid,
-                    copyable = expanded,
-                    modifier = Modifier.padding(start = Spacing.Tight),
+                Text(
+                    text = if (expanded) {
+                        formatFullTimestamp(detail.publishedAtEpochSeconds)
+                    } else {
+                        formatDate(detail.publishedAtEpochSeconds)
+                    },
+                    style = MaterialTheme.typography.labelSmall.tabular,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
                 )
-                Spacer(modifier = Modifier.weight(1f))
-                if (!expanded) arrow()
-            }
-        }
-        if (expanded) {
-            if (detail.description.isNotBlank()) {
-                // 与评论、专栏、动态共用一个渲染器:@ 进空间,链接按站内解析,时间点跳进度。
-                // 鼠标操作时展开后的简介允许直接划词复制;标题区与底端收起箭头单独接点击,不与划词冲突。
-                val descriptionContent: @Composable () -> Unit = {
-                    BiliRichText(
-                        spans = detail.descriptionSpans,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        onLinkClick = onOpenLink,
-                        onMentionClick = onMentionClick,
-                        onSeek = onSeek,
+                if (detail.chargingOnly) {
+                    MetadataBadgePill(
+                        text = stringResource(Res.string.video_badge_charging),
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                     )
                 }
-                if (pointerSelectsText) {
-                    androidx.compose.foundation.text.selection.SelectionContainer(content = descriptionContent)
-                } else {
-                    descriptionContent()
+                if (detail.copyright == 2) {
+                    MetadataBadgePill(
+                        text = stringResource(Res.string.video_badge_repost),
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (detail.bvid.isNotBlank()) {
+                    CopyableIdPill(text = detail.bvid)
+                }
+                if (avidText.isNotEmpty()) {
+                    CopyableIdPill(text = avidText)
                 }
             }
-            if (tags.isNotEmpty()) {
-                // 不另给行距:每枚标签的布局高度已被最小触控尺寸撑到 48dp,32dp 的标签上下
-                // 各多出 8dp,两行之间自然就是 16dp。见 [TagToken]。
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
-                    tags.forEach { tag -> TagToken(tag, onClick = onTagClick?.let { click -> { click(tag.name) } }) }
-                }
+            if (!expanded) {
+                Spacer(modifier = Modifier.width(Spacing.Hair))
+                arrow()
             }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .then(if (pointerSelectsText) Modifier.clickable(onClick = onToggle) else Modifier),
-                contentAlignment = Alignment.CenterEnd,
-            ) { arrow() }
         }
+
+        val hasCopyrightNotice = detail.copyright == 1 && detail.noReprint
+        val hasDescription = detail.description.isNotBlank() || detail.descriptionSpans.isNotEmpty()
+
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) +
+                fadeIn(MaterialTheme.motionScheme.defaultEffectsSpec()),
+            exit = shrinkVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) +
+                fadeOut(MaterialTheme.motionScheme.defaultEffectsSpec()),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                if (hasCopyrightNotice) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Block,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(CopyrightIconSize),
+                        )
+                        Text(
+                            text = stringResource(Res.string.video_copyright_no_reprint),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (hasDescription) {
+                    val plainDesc = remember(detail.descriptionSpans, detail.description) {
+                        detail.descriptionSpans.plainText().ifBlank { detail.description }
+                    }
+                    ContextMenuBox(
+                        onClick = null,
+                        menuLabel = menuLabel,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(MaterialTheme.shapes.extraSmall),
+                        menu = { close ->
+                            DropdownMenuItem(
+                                onClick = {
+                                    close()
+                                    copyText(plainDesc)
+                                },
+                                text = { Text(copyDescLabel) },
+                                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                                shape = menuItemShape(0, 2),
+                            )
+                            DropdownMenuItem(
+                                onClick = {
+                                    close()
+                                    selectableText = plainDesc
+                                },
+                                text = { Text(selectTextLabel) },
+                                leadingIcon = { Icon(Icons.Outlined.SelectAll, contentDescription = null) },
+                                shape = menuItemShape(1, 2),
+                            )
+                        },
+                    ) { openMenu ->
+                        val descriptionContent: @Composable () -> Unit = {
+                            BiliRichText(
+                                spans = detail.descriptionSpans,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                onLinkClick = onOpenLink,
+                                onMentionClick = onMentionClick,
+                                onSeek = onSeek,
+                            )
+                        }
+                        if (pointerSelectsText) {
+                            SelectionContainer(content = descriptionContent)
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .semantics {
+                                        onLongClick(label = menuLabel) {
+                                            openMenu()
+                                            true
+                                        }
+                                    }
+                                    .pointerInput(openMenu) {
+                                        detectTapGestures(onLongPress = { openMenu() })
+                                    },
+                            ) {
+                                descriptionContent()
+                            }
+                        }
+                    }
+                }
+                if (tags.isNotEmpty()) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    ) {
+                        tags.forEach { tag ->
+                            TagToken(
+                                tag = tag,
+                                onClick = onTagClick?.let { click -> { click(tag.name) } },
+                            )
+                        }
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.extraSmall)
+                        .clickable(role = Role.Button, onClick = onToggle)
+                        .padding(vertical = Spacing.Hair / 2),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    arrow()
+                }
+            }
+        }
+    }
+
+    selectableText?.let { target ->
+        SelectableTextDialog(
+            text = target,
+            onDismiss = { selectableText = null },
+        )
+    }
+}
+
+@Composable
+private fun MetadataBadgePill(
+    text: String,
+    containerColor: Color,
+    contentColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = containerColor,
+        contentColor = contentColor,
+        shape = MaterialTheme.shapes.extraSmall,
+        modifier = modifier,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(horizontal = Spacing.Hair, vertical = MetadataBadgeVerticalPadding),
+        )
     }
 }
 
 /**
- * 一枚标签,点开是这个词的普通搜索结果页。带底色的一小块,判据同动态卡片的「置顶」
- * (DynamicCardView 的 DynamicTagChip):排成灰字会和上面的简介连成一片。底色取
- * surfaceContainerHigh 而不是 secondaryContainer —— 那边是单枚的排序标记,这边是成排的
- * 元数据,染 secondary 会比简介正文还重。可点但不染 primary:一排七八枚全上 primary,
- * 这一块会比标题还响,底色块本身已经说了"这是控件"。
+ * 一枚标签,点开是这个词的普通搜索结果页,右键/长按复制标签原文。
  *
- * 搜索用的是 tag_name 原文,不是展示文本:`#` 和「BGM:」都是这里加的装饰,带进搜索词
- * 只会让结果变差。PiliPlus 对 topic/bgm 各有专页可去,本项目没有,三种类型都落到搜索。
+ * 搜索用的是 tag_name 原文,不是展示文本:`#` 和「BGM：」都是这里加的装饰,带进搜索词
+ * 只会让结果变差。
  */
 @Composable
 private fun TagToken(tag: VideoTag, onClick: (() -> Unit)?) {
-    // **32dp 高,照 M3 chip。** 可点的 Surface 会把布局高度撑到最小触控尺寸 48dp;标签曾经
-    // 只有 20dp 高,多出来的 28dp 全成了行与行之间的空白,换行后第二行离得很远。标签做到
-    // chip 的高度,撑出来的只剩上下各 8dp。
-    val content: @Composable () -> Unit = {
+    val copyTag = rememberCopyAction()
+    val copyTagLabel = stringResource(Res.string.action_copy_tag)
+    val menuLabel = stringResource(Res.string.menu_item_actions)
+
+    ContextMenuBox(
+        onClick = onClick,
+        menuLabel = menuLabel,
+        modifier = Modifier.interactiveCard(
+            shape = CircleShape,
+            baseColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            hoverColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+        ),
+        menu = { close ->
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    copyTag(tag.name)
+                },
+                text = { Text(copyTagLabel) },
+                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                shape = menuItemShape(0, 1),
+            )
+        },
+    ) { openMenu ->
         Box(
             modifier = Modifier
                 .heightIn(min = TagHeight)
+                .then(
+                    if (onClick == null) {
+                        Modifier
+                            .semantics {
+                                onLongClick(label = menuLabel) {
+                                    openMenu()
+                                    true
+                                }
+                            }
+                            .pointerInput(openMenu) {
+                                detectTapGestures(onLongPress = { openMenu() })
+                            }
+                    } else {
+                        Modifier
+                    },
+                )
                 .padding(horizontal = Spacing.Cozy),
             contentAlignment = Alignment.Center,
         ) {
-            Text(text = tag.displayText(), style = MaterialTheme.typography.labelMedium)
+            Text(
+                text = tag.displayText(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
-    if (onClick != null) {
-        Surface(
-            onClick = onClick,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            shape = MaterialTheme.shapes.small,
-            content = content,
-        )
-    } else {
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            shape = MaterialTheme.shapes.small,
-            content = content,
-        )
-    }
-}
-
-/**
- * 可复制的 BV 号。点一下写进剪贴板。
- *
- * Android 13 起系统自己弹复制确认;更早的系统由应用反馈,这里让这段字原地换成「已复制」
- * 一会儿([NeedsCopyNotice])。简介页附近没有 snackbar 宿主,为这一处挂一个不值得。
- */
-@Composable
-private fun BvidLabel(bvid: String, copyable: Boolean, modifier: Modifier = Modifier) {
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
-    val clipLabel = stringResource(Res.string.video_bvid_clip_label)
-    var justCopied by remember { mutableStateOf(false) }
-    LaunchedEffect(justCopied) {
-        if (justCopied) {
-            delay(CopiedNoticeMillis)
-            justCopied = false
-        }
-    }
-    Text(
-        text = if (justCopied) stringResource(Res.string.video_bvid_copied) else bvid,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1,
-        softWrap = false,
-        modifier = modifier
-            .clip(MaterialTheme.shapes.extraSmall)
-            .clickable(enabled = copyable, onClickLabel = stringResource(Res.string.video_bvid_copy)) {
-                scope.launch {
-                    clipboard.setClipEntry(plainTextClip(clipLabel, bvid))
-                    if (NeedsCopyNotice) justCopied = true
-                }
-            }
-            .padding(horizontal = Spacing.Hair / 2),
-    )
 }
 
 /**
@@ -1702,7 +2027,7 @@ private fun ActionButtonsRow(
     }
 
     if (awaitingFavFolders && favFolders.isNotEmpty()) {
-        FavPickerDialog(
+        FavPickerSheet(
             favFolders = favFolders,
             onDismiss = { awaitingFavFolders = false },
             onConfirm = { addIds, delIds ->
@@ -1718,9 +2043,8 @@ private fun ActionButtonsRow(
  *
  * 触摸目标由 `heightIn(min = 48dp)` 加上外面给的 `weight(1f)` 撑起来(360dp 屏上一项
  * 90dp × 48dp),不靠 `IconButton` 的默认尺寸 —— 那样计数文字会掉到触摸区外面。
- * 未选中用 `outline` 而不是 `onSurfaceVariant`:这一排四个图标同时出现,再亮一档就会和
- * 上面的标题抢注意力,而它们本来是"想做才做"的动作。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ActionItem(
     selected: Boolean,
@@ -1749,10 +2073,8 @@ private fun ActionItem(
      * 手指按在能长按的那一格上时报上去,由 [ActionButtonsRow] 换算成进度。
      *
      * **不读 `interactionSource` 的按下态。** `clickable` 在可滚动容器里会把按下这条交互
-     * 压后 150ms 才发出(免得滑动时一路闪涟漪),而这一排正长在评论区那条滚动列表里 ——
-     * 环于是比手指晚 150ms 起步,在 400ms 的长按窗口里只画得出三分之二就被判定长按了,
-     * 看上去和没有环一样。这里直接听指针按下,`requireUnconsumed = false` 且全程不消费,
-     * 底下那层 `combinedClickable` 照常收到同一串事件。
+     * 压后 150ms 才发出(免得滑动时一路闪涟漪),而这一排正长在滚动列表里 —— 这里直接听指针按下,
+     * `requireUnconsumed = false` 且全程不消费,底下那层 `combinedClickable` 照常收到同一串事件。
      */
     onHoldingChange: (Boolean) -> Unit = {},
     /** 这一格上那圈进度环画到哪儿了。0 就是不画,见 [ActionButtonsRow]。 */
@@ -1763,13 +2085,16 @@ private fun ActionItem(
      */
     glyph: (@Composable (tint: Color, container: Color) -> Unit)? = null,
 ) {
-    // 底色与字色成对取:选中是 secondaryContainer / onSecondaryContainer,与队列的选中项同一组。
-    // 未选中的字色不再用 outline —— 它是给描边的,压在 surfaceContainer 上对比度不够。
-    val container = if (selected) {
+    val targetContainer = if (selected) {
         MaterialTheme.colorScheme.secondaryContainer
     } else {
         MaterialTheme.colorScheme.surfaceContainer
     }
+    val container by animateColorAsState(
+        targetValue = targetContainer,
+        animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+        label = "actionItemContainer",
+    )
     val tint = when {
         !enabled -> MaterialTheme.colorScheme.outlineVariant
         selected -> MaterialTheme.colorScheme.onSecondaryContainer
@@ -1777,44 +2102,59 @@ private fun ActionItem(
     }
     val holdable = enabled && onLongClick != null
     val currentOnHoldingChange by rememberUpdatedState(onHoldingChange)
+    val reducedMotion = rememberReducedMotion()
 
-    /**
-     * 这一按是什么时候按下去的。用来分开"点一下"和"按住又松手",见下面 `onClick` 那一句。
-     *
-     * **读的是按下那一刻,不是松手那一刻。** 两个 pointerInput 节点在 Main 这一趟的先后
-     * 不定,松手之后再去比标志位可能已经晚了;按下必然远early于松手,拿它当基准没有竞态。
-     */
     var pressedAtMillis by remember { mutableLongStateOf(0L) }
+    var isPressed by remember { mutableStateOf(false) }
+    var popActive by remember { mutableStateOf(false) }
+    var prevSelected by remember { mutableStateOf(selected) }
+    LaunchedEffect(selected) {
+        if (selected && !prevSelected && !reducedMotion) {
+            popActive = true
+            delay(ActionPopMillis)
+            popActive = false
+        }
+        prevSelected = selected
+    }
+    val targetScale = when {
+        reducedMotion || !enabled -> 1f
+        popActive -> ActionPopScale
+        isPressed -> ActionPressScale
+        else -> 1f
+    }
+    val itemScale by animateFloatAsState(
+        targetValue = targetScale,
+        animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+        label = "actionItemScale",
+    )
 
     WithHoldTimeout(holdable) {
     Column(
         modifier = modifier
+            .graphicsLayer {
+                scaleX = itemScale
+                scaleY = itemScale
+            }
             .clip(shape)
             .background(container)
-            .then(
-                if (!holdable) {
-                    Modifier
-                } else {
-                    Modifier.pointerInput(Unit) {
-                        awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false)
-                            pressedAtMillis = elapsedRealtimeMillis()
-                            currentOnHoldingChange(true)
-                            waitForUpOrCancellation()
-                            currentOnHoldingChange(false)
-                        }
+            .pointerInput(enabled, holdable) {
+                if (!enabled) return@pointerInput
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    isPressed = true
+                    if (holdable) {
+                        pressedAtMillis = elapsedRealtimeMillis()
+                        currentOnHoldingChange(true)
                     }
-                },
-            )
+                    waitForUpOrCancellation()
+                    isPressed = false
+                    if (holdable) {
+                        currentOnHoldingChange(false)
+                    }
+                }
+            }
             .combinedClickable(
                 enabled = enabled,
-                // **按住又松手不算点赞。** 手指一压过 [TapMaxMillis] 那圈进度环就开始画,
-                // 这一下从那一刻起表达的已经是"我要三连";没走完就松手是**取消**,
-                // 补一次点赞等于把取消办成了另一件事,而这两件事在硬币上不可逆的那一半正好相反。
-                //
-                // 判据是这一按持续了多久,不是环画到哪儿:环是 [ActionButtonsRow] 那一层的
-                // 动画状态,这里够不着,而且它退场时还有一段回落,拿它判会把刚松手那几十毫秒
-                // 也算成"还在按"。
                 onClick = {
                     val heldMillis = elapsedRealtimeMillis() - pressedAtMillis
                     if (!holdable || heldMillis <= TapMaxMillis) onClick()
@@ -1830,16 +2170,6 @@ private fun ActionItem(
         val ring = MaterialTheme.colorScheme.primary
         Box(
             contentAlignment = Alignment.Center,
-            // **环画在图标外面,但不占布局。** 原先它是一个 28dp 的 `Canvas` 兄弟节点,
-            // 于是这个 Box 在环出现的那一刻从 20dp 长到 28dp,整排跟着抬一下 —— 一个为了
-            // 说明"正在按住"的东西,自己先把界面顶动了。
-            //
-            // `drawBehind` 只画不量:环从 Box 的边界往外画。这一层没有裁剪(外面那个 `clip`
-            // 在整格上,放得下这个环),所以画得出来。
-            //
-            // **Box 定高 [ActionIconBox],不随字形变。** 各格字形高矮不一(硬币是自己画的,
-            // 星形放大过),整组居中时下面那行字会跟着上下错开;框定高之后,五格的计数与文字
-            // 落在同一条线上。
             modifier = Modifier.size(ActionIconBox).drawBehind {
                 if (holdProgress <= 0f) return@drawBehind
                 val inset = HoldRingInset.toPx()
@@ -1868,7 +2198,11 @@ private fun ActionItem(
         Spacer(modifier = Modifier.height(ActionLabelGap))
         Text(
             text = label,
-            style = MaterialTheme.typography.labelSmall,
+            style = if (selected) {
+                MaterialTheme.typography.labelSmallEmphasized.tabular
+            } else {
+                MaterialTheme.typography.labelSmall.tabular
+            },
             color = tint,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -2022,6 +2356,7 @@ private fun ToggleRow(checked: Boolean, onToggle: (Boolean) -> Unit, label: Stri
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = Dimens.MinTouchTarget)
+            .clip(MaterialTheme.shapes.small)
             .toggleable(value = checked, role = Role.Checkbox, onValueChange = onToggle),
     ) {
         Checkbox(checked = checked, onCheckedChange = null)
@@ -2032,17 +2367,22 @@ private fun ToggleRow(checked: Boolean, onToggle: (Boolean) -> Unit, label: Stri
             overflow = TextOverflow.Ellipsis,
         )
         count?.let {
-            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall.tabular,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
 
 /**
- * 收藏夹多选。确认时只算增量(新勾选的 add,取消勾选的 del),不把全部勾选项都当 add 传——
- * 服务端 fav/resource/deal 的 add/del 语义本身就是增量操作,传全集会把"没变的"也当动作提交。
+ * 收藏夹多选面板。走统一 [PaneSheet](`skipPartiallyExpanded = true`):宽屏两栏播放页内嵌进右栏,
+ * 不给左侧画面打遮罩;确认时只算增量(新勾选的 add,取消勾选的 del)。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FavPickerDialog(
+private fun FavPickerSheet(
     favFolders: List<FavFolder>,
     onDismiss: () -> Unit,
     onConfirm: (addIds: List<Long>, delIds: List<Long>) -> Unit,
@@ -2051,35 +2391,45 @@ private fun FavPickerDialog(
         mutableStateMapOf<Long, Boolean>().apply { favFolders.forEach { put(it.id, it.containsThis) } }
     }
 
-    AlertDialog(
+    PaneSheet(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(Res.string.fav_dialog_title)) },
-        text = {
-            // 收藏夹可以有几十个,对话框里的固定高度列表要能滚,Column 撑高之后按钮会被挤出屏幕。
-            LazyColumn(modifier = Modifier.heightIn(max = FavPickerMaxHeight)) {
-                items(favFolders, key = { it.id }) { folder ->
-                    ToggleRow(
-                        checked = selected[folder.id] ?: folder.containsThis,
-                        onToggle = { checked -> selected[folder.id] = checked },
-                        label = folder.title,
-                        count = formatCount(folder.count.toLong()),
-                    )
+        title = stringResource(Res.string.fav_dialog_title),
+        skipPartiallyExpanded = true,
+        footer = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(Res.string.action_cancel))
+                }
+                Button(
+                    onClick = {
+                        val addIds = favFolders.filter { selected[it.id] == true && !it.containsThis }.map { it.id }
+                        val delIds = favFolders.filter { selected[it.id] == false && it.containsThis }.map { it.id }
+                        onConfirm(addIds, delIds)
+                    },
+                ) {
+                    Text(stringResource(Res.string.action_save))
                 }
             }
         },
-        confirmButton = {
-            TextButton(onClick = {
-                val addIds = favFolders.filter { selected[it.id] == true && !it.containsThis }.map { it.id }
-                val delIds = favFolders.filter { selected[it.id] == false && it.containsThis }.map { it.id }
-                onConfirm(addIds, delIds)
-            }) {
-                Text(stringResource(Res.string.action_confirm))
+    ) {
+        LazyColumn(
+            contentPadding = PaddingValues(horizontal = Spacing.Loose, vertical = Spacing.Tight),
+            modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+        ) {
+            items(favFolders, key = { it.id }) { folder ->
+                ToggleRow(
+                    checked = selected[folder.id] ?: folder.containsThis,
+                    onToggle = { checked -> selected[folder.id] = checked },
+                    label = folder.title,
+                    count = formatCount(folder.count.toLong()),
+                )
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(Res.string.action_cancel)) }
-        },
-    )
+        }
+    }
 }
 
 /**
@@ -2099,7 +2449,10 @@ private fun LazyListScope.partItems(
         SectionHeader(title = stringResource(Res.string.video_parts)) {
             // 内边距与队列标题行的「顺序/随机」同一档,两节标题行右端的字才对得齐。
             TextButton(onClick = onOpenAll, contentPadding = PaddingValues(horizontal = Spacing.Tight)) {
-                Text(stringResource(Res.string.video_parts_expand, parts.size))
+                Text(
+                    text = stringResource(Res.string.video_parts_expand, parts.size),
+                    style = MaterialTheme.typography.labelLarge.tabular,
+                )
             }
         }
     }
@@ -2253,7 +2606,7 @@ private fun PartListItem(part: EpisodePart, playing: Boolean, index: Int, count:
         leadingContent = {
             Text(
                 text = stringResource(Res.string.video_part_ordinal, part.ordinal),
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.labelLarge.tabular,
             )
         },
         trailingContent = if (part.isCurrent) {
@@ -2278,8 +2631,8 @@ private fun PartListItem(part: EpisodePart, playing: Boolean, index: Int, count:
  * 全部分集。**一行一条而不是铺一片 chip**:几百 P 的标题是"第 12 讲 线性方程组"这种,
  * 挤成 chip 只剩截断后的两三个字,而用户要找的正是标题。
  *
- * 外形与打开方式照完整队列([FullQueueSheet]):不停在半开、高度自己定,打开时当前 P 上方
- * 留两条,看得出前面还有什么。
+ * 走统一 [PaneSheet](`skipPartiallyExpanded = true`),顶栏右端带「当前 P / 总 P 数」胶囊,
+ * 打开时当前 P 上方留两条。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -2292,11 +2645,27 @@ private fun PartSheet(
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = (parts.indexOfFirst { it.isCurrent } - InlineQueueRadius).coerceAtLeast(0),
     )
-    PaneSheet(onDismissRequest = onDismiss) {
+    val currentOrdinal = parts.firstOrNull { it.isCurrent }?.ordinal
+        ?: parts.indexOfFirst { it.isCurrent }.takeIf { it >= 0 }?.plus(1)
+    val badgeText = if (currentOrdinal != null) {
+        "$currentOrdinal / ${parts.size}"
+    } else {
+        parts.size.toString()
+    }
+    PaneSheet(
+        onDismissRequest = onDismiss,
+        title = stringResource(Res.string.video_parts),
+        skipPartiallyExpanded = true,
+        headerTrailing = { QueuePositionBadge(text = badgeText) },
+    ) {
         LazyColumn(
             state = listState,
-            contentPadding = PaddingValues(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Loose),
-            modifier = Modifier.fillMaxWidth().bodyHeight(FullQueueHeightFraction),
+            contentPadding = PaddingValues(
+                start = Spacing.Comfortable,
+                end = Spacing.Comfortable,
+                bottom = Spacing.Loose,
+            ),
+            modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
         ) {
             itemsIndexed(parts, key = { _, part -> part.cid }) { index, part ->
                 PartListItem(
@@ -2319,14 +2688,9 @@ private fun PartSheet(
  * 官方在简介下方放算法召回的相关推荐,这里放的是确定性的有限集合,不是"从推荐池续接",
  * 不违反 1.3 的推荐禁令。这个列表同时就是「听视频」要播的队列本身,点条目直接切歌。
  *
- * **只摊开当前项附近几条**,完整队列在面板里,由段尾的「查看全部」打开(见 [IntroTab])。队列曾以
- * 当前项为中心一次摊开全部,那要求它有自己的视口;打开最新一条时,当前项排在几十条之后。
- *
- * **条目是 M3 Expressive 的分段列表([SegmentedListItem]),标题行和「查看全部」在分段外面。**
- * 这一段曾是手写的分段:标题行、加载状态、「查看全部」也各占一块,选中那条又在块里再画一块
- * 底色,读起来是一堆块挤在一起。分段只装列表项;选中态由组件自己换成 secondaryContainer
- * 并把四角收成 16dp(lists.md 的 Selected list items)。
+ * **只摊开当前项附近几条**,完整队列在面板里,由段尾的分段收底块([ShowAllRow])打开。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 private fun LazyListScope.queueItems(
     queue: QueueUiState,
     playing: Boolean,
@@ -2362,10 +2726,6 @@ private fun LazyListScope.queueItems(
             )
         }
 
-        // 只有一条的队列自己解释不了自己:看不出是"这个 UP 只发过这一条"还是"来源没拉到"。
-        // 说出后者并给一次重试,重试是 ACTION_RETRY_QUEUE(见 VideoScreen)。
-        // 文案不染 error 色,重试用 text button —— 一次拉取失败不该被渲染成需要下决心的事
-        // (风格指南 §2.4)。
         queue.incomplete -> item(key = "queue-status") {
             Row(
                 modifier = Modifier.padding(start = Spacing.Comfortable),
@@ -2389,21 +2749,27 @@ private fun LazyListScope.queueItems(
 
         else -> {
             val fullIndexByBvid = queue.rows.withIndex().associate { (i, r) -> r.bvid to i }
+            val showAllShown = queue.rows.isNotEmpty()
+            val segmentedTotal = if (showAllShown) shownRows.size + 1 else shownRows.size
             itemsIndexed(shownRows, key = { _, row -> row.bvid }) { index, row ->
                 QueueRowItem(
                     row = row,
                     playing = playing,
                     index = index,
-                    count = shownRows.size,
+                    count = segmentedTotal,
                     onClick = { onSelectEpisode(EpisodeTarget.Video(row.bvid)) },
                     videoIndex = fullIndexByBvid[row.bvid] ?: index,
                     videoCount = queue.rows.size,
                     editActions = queue.editActions,
                 )
             }
-            if (queue.rows.isNotEmpty()) {
+            if (showAllShown) {
                 item(key = "queue-show-all") {
-                    ShowAllRow(onClick = onOpenFullQueue)
+                    ShowAllRow(
+                        queue = queue,
+                        hasPrecedingRows = shownRows.isNotEmpty(),
+                        onClick = onOpenFullQueue,
+                    )
                 }
             }
         }
@@ -2411,31 +2777,74 @@ private fun LazyListScope.queueItems(
 }
 
 /**
- * 段尾那一行「查看全部」,在分段外面。**一整行宽的按钮**:页内只摊几条,
- * 其余都在完整队列里,这个入口得一眼看得见。照 M3 carousel 页对"列表只露一部分"的建议,
- * 给一个明确的 show all 去处。
+ * 页内队列分段列表的收底入口块:与上方条目保持 2dp 分段缝、上沿 4dp 内角、下沿 16dp 外角,
+ * 并把窗口态/全量条数透明报出(`video_queue_show_all_windowed` / `video_queue_show_all_count`)。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun ShowAllRow(onClick: () -> Unit) {
-    TextButton(
+private fun ShowAllRow(
+    queue: QueueUiState,
+    hasPrecedingRows: Boolean,
+    onClick: () -> Unit,
+) {
+    val qState = queue.state
+    val loadedCount = queue.rows.size
+    val isWindowed = qState?.isWindowed == true ||
+        queue.edges?.canLoadBefore == true ||
+        queue.edges?.canLoadAfter == true
+    val totalCount = qState?.displayTotal ?: loadedCount
+    val label = when {
+        isWindowed && qState?.sourceTotal != null ->
+            stringResource(Res.string.video_queue_show_all_windowed, loadedCount, qState.sourceTotal)
+        totalCount > 0 ->
+            stringResource(Res.string.video_queue_show_all_count, totalCount)
+        else ->
+            stringResource(Res.string.video_queue_show_all)
+    }
+    val topCorner = if (hasPrecedingRows) ActionInnerCorner else ActionOuterCorner
+    val shape = RoundedCornerShape(
+        topStart = topCorner,
+        topEnd = topCorner,
+        bottomStart = ActionOuterCorner,
+        bottomEnd = ActionOuterCorner,
+    )
+
+    Surface(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth().padding(top = Spacing.Hair),
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = if (hasPrecedingRows) ListItemDefaults.SegmentedGap else 0.dp),
     ) {
-        Text(stringResource(Res.string.video_queue_show_all))
-        Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            modifier = Modifier.size(Dimens.IconInline),
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterHorizontally),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = Dimens.MinTouchTarget)
+                .padding(horizontal = Spacing.Comfortable),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge.tabular,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+        }
     }
 }
 
 /**
- * 队列的标题行:来源名,以及找相关、缓存、顺序三个动作。
- *
- * 标题就是这份队列的来源。是合集/系列时它点得进目录;UP 投稿和 UP 动态没有目录页,不给入口。
- * 完整队列不从这里进,入口只有段尾的「查看全部」:两个入口通向同一处,人会去猜它们有什么不同。
+ * 队列的标题行:来源名 + 「X / N」位置胶囊,以及找相关、缓存、播放模式三个动作。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun QueueHeader(
     queue: QueueUiState,
@@ -2446,47 +2855,53 @@ private fun QueueHeader(
     onCache: () -> Unit,
 ) {
     val onTitleClick = queue.source?.let { source -> { onOpenQueueSource(source) } }
-    val titleStyle = MaterialTheme.typography.titleSmall
+    val resolvedLabel = queue.sourceLabel.ifBlank { stringResource(Res.string.listen_queue_title) }
+    val posText = queue.state?.takeIf { !queue.enriching }?.let { QueuePositionText(it) }
+    val edgeLoading = queue.state?.let { it.loadingBefore || it.loadingAfter } == true
+
     Layout(
         modifier = Modifier.fillMaxWidth(),
         content = {
-            if (onTitleClick == null) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                modifier = Modifier
+                    .heightIn(min = Dimens.MinTouchTarget)
+                    .then(
+                        if (onTitleClick != null) {
+                            Modifier
+                                .clip(MaterialTheme.shapes.small)
+                                .clickable(role = Role.Button, onClick = onTitleClick)
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .padding(vertical = Spacing.Tight),
+            ) {
                 Text(
-                    text = queue.sourceLabel,
-                    style = titleStyle,
+                    text = resolvedLabel,
+                    style = MaterialTheme.typography.titleSmallEmphasized,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(vertical = Spacing.Tight),
+                    modifier = Modifier.weight(1f, fill = false),
                 )
-            } else {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .heightIn(min = Dimens.MinTouchTarget)
-                        .clip(MaterialTheme.shapes.small)
-                        .clickable(role = Role.Button, onClick = onTitleClick)
-                        .padding(vertical = Spacing.Tight),
-                ) {
-                    Text(
-                        text = queue.sourceLabel,
-                        style = titleStyle,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
+                if (onTitleClick != null) {
                     Icon(
-                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(Dimens.IconInline),
                     )
                 }
+                if (!posText.isNullOrBlank()) {
+                    QueuePositionBadge(text = posText)
+                }
+                if (edgeLoading) {
+                    LoadingSpinner()
+                }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // 「找相关」长在这份列表上:这个位置在别的客户端是相关推荐,在这里是合集/UP 投稿,
-                // 把"要不要另找几个"做成这份列表的一个小动作,力度正好 —— 可用,但不劝你用。
-                //
-                // 用闪光而不是星形:星形在这个 app 里已经是收藏(动作栏那排),同一界面里两个星星
-                // 表示两件事,用户会以为点了是收藏。闪光是"AI 辅助动作"的通行符号。
                 if (onFindRelated != null) {
                     IconButton(onClick = onFindRelated) {
                         Icon(
@@ -2496,9 +2911,6 @@ private fun QueueHeader(
                         )
                     }
                 }
-                // **缓存的入口长在这里**,因为要选的东西就是这份列表:合集分集 / 这位 UP 的其他
-                // 投稿。摆进上面那排动作栏不行 —— 那四格的宽度是照 360dp 屏量出来的(风格指南
-                // §2.3),加第五格会把每格挤到 72dp,"赞 12.3万"那种标签就放不下了。
                 IconButton(onClick = onCache) {
                     Icon(
                         Icons.Outlined.DownloadForOffline,
@@ -2520,7 +2932,11 @@ private fun QueueHeader(
         val controlsPlaceable = measurables[2].measure(loose)
         val gapPx = Spacing.Tight.roundToPx()
         val minTouchPx = Dimens.MinTouchTarget.roundToPx()
-        val minInlineTitlePx = QueueInlineTitleMinWidth.roundToPx()
+        val minInlineTitlePx = (if (!posText.isNullOrBlank()) {
+            QueueInlineTitleWithBadgeMinWidth
+        } else {
+            QueueInlineTitleMinWidth
+        }).roundToPx()
         val titleNaturalWidth = measurables[0].maxIntrinsicWidth(Constraints.Infinity)
         val requiredTitleWidth = minOf(titleNaturalWidth, minInlineTitlePx)
         val trailingInlineWidth = iconsPlaceable.width + controlsPlaceable.width
@@ -2557,27 +2973,57 @@ private fun QueueHeader(
     }
 }
 
-/** 标题与动作按钮挤在同一行时，为长合集标题保留的最小宽度（约 6 个汉字）；更短的标题如「UP 主投稿」只按自然宽度计。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun QueuePositionBadge(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = CircleShape,
+        modifier = modifier,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmallEmphasized.tabular,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(
+                horizontal = Spacing.Tight,
+                vertical = QueueBadgeVerticalPadding,
+            ),
+        )
+    }
+}
+
+/** 标题与动作按钮挤在同一行时,为长合集标题保留的最小宽度;带「X / N」位置胶囊时放宽,避免挤扁。 */
 private val QueueInlineTitleMinWidth = 84.dp
-
-
+private val QueueInlineTitleWithBadgeMinWidth = 132.dp
+private val QueueBadgeVerticalPadding = 2.dp
+private val MetadataBadgeVerticalPadding = 2.dp
+private val CopyrightIconSize = 14.dp
+private val UpCardVerticalPadding = 10.dp
+private const val ActionPressScale = 0.95f
+private const val ActionPopScale = 1.06f
+private const val ActionPopMillis = 140L
 
 private fun formatDate(epochSeconds: Long): String =
     java.time.Instant.ofEpochSecond(epochSeconds)
         .atZone(java.time.ZoneId.systemDefault())
         .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"))
 
+private fun formatFullTimestamp(epochSeconds: Long): String =
+    java.time.Instant.ofEpochSecond(epochSeconds)
+        .atZone(java.time.ZoneId.systemDefault())
+        .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+
 /** 联合投稿一排里每一格的宽度。约五个汉字的名字放得下,再长截断。 */
 private val StaffCellWidth = 72.dp
 
 /** 标签的高度,照 M3 chip。 */
 private val TagHeight = 32.dp
-
-/** BV 号复制后「已复制」停留多久。 */
-private const val CopiedNoticeMillis = 1500L
-
-/** 收藏夹对话框里列表的高度上限。再高会把确认/取消按钮顶出屏幕。 */
-private val FavPickerMaxHeight = 360.dp
 
 /**
  * 简介页里标题、UP 行、动作栏、分 P 这几块之间的距离。块内的行距是 8dp,块间再宽一档,
@@ -2595,12 +3041,6 @@ private val BeforeSectionHeaderGap = 4.dp
 /** 单个 UP 那一行的头像。比联合投稿那一排大一档:这里只有一个人,名字也升到了 titleSmall。 */
 private val UpAvatarSize = 40.dp
 
-/**
- * UP 头像比页边多缩进的量。下面队列条目里封面缩进 16dp(lists.md 的 leading element left
- * padding),头像取一半:贴页边时它和封面差着一截,缩满 16dp 又显得离左边太远。联合投稿那一排
- * 不补:格子本身比头像宽,单边让出的已经比这条线多。
- */
-private val UpAvatarInset = 8.dp
 /** 分 P 横排里一格的宽度。两行 bodySmall 标题各放得下七八个字。 */
 private val PartCardWidth = 128.dp
 
@@ -2633,6 +3073,3 @@ private val ActionInnerCorner = 4.dp
 
 /** 页内队列在当前项前后各摊几条。其余在完整队列里,由段尾的「查看全部」打开。 */
 private const val InlineQueueRadius = 2
-
-/** 完整队列面板占 sheet 可用高度的比例。上面还露着画面和标题,知道自己在哪一页。 */
-private const val FullQueueHeightFraction = 0.6f

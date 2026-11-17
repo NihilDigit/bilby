@@ -13,6 +13,7 @@ import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.components.BilbyIcons
 import dev.bilby.ui.player.PlayerIconButton
 import dev.bilby.ui.player.PlayerSidePanel
+import dev.bilby.ui.player.PlayerSidePanelHeader
 import dev.bilby.ui.player.PlayerTooltip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Tune
@@ -55,6 +56,7 @@ import dev.bilby.player.audioQualityLabel
 import dev.bilby.resources.*
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.tabular
 import dev.bilby.ui.player.SleepTimerCompactSection
 import dev.bilby.ui.player.SleepTimerStandaloneContent
 import dev.bilby.ui.player.formatSpeed
@@ -222,6 +224,7 @@ internal fun BoxScope.PlayerSettingsHost(
     onDismiss: () -> Unit,
     content: @Composable () -> Unit,
 ) {
+    val sheetTitle = if (only == PlayerSettingsSection.SleepTimer) null else playerSettingsTitle(only)
     if (isFullscreen) {
         // 窄的那一档只给一列短选项的单选段;弹幕、倍速、定时关闭分别带滑块、连体按钮或三列钟面预设,窄了挤不开。
         val narrow = only != null &&
@@ -229,28 +232,17 @@ internal fun BoxScope.PlayerSettingsHost(
             only != PlayerSettingsSection.Speed &&
             only != PlayerSettingsSection.SleepTimer
         PlayerSidePanel(visible = open, onDismiss = onDismiss, narrow = narrow) {
-            // 定时关闭单开时 SleepClock 自己在左半边写「定时关闭」(或大号倒计时),外层再画一行标题就重了。
-            if (only == PlayerSettingsSection.SleepTimer) {
-                Spacer(modifier = Modifier.height(Spacing.Tight))
-            } else {
-                Text(
-                    playerSettingsTitle(only),
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(
-                        start = Spacing.Comfortable,
-                        end = Spacing.Comfortable,
-                        top = Spacing.Comfortable,
-                    ),
-                )
-            }
+            // 统一侧栏顶栏(带 48dp 关闭按钮,`side-sheets.md:354`);定时关闭单开时 SleepClock 自己在下方写「定时关闭」或倒计时。
+            PlayerSidePanelHeader(
+                title = sheetTitle.orEmpty(),
+                onClose = onDismiss,
+            )
             content()
         }
     } else if (open) {
-        // 两栏时画在右栏,画面不挡,调画质、倍速时看得见效果。
-        val sheetTitle = if (only == PlayerSettingsSection.SleepTimer) null else playerSettingsTitle(only)
+        // 两栏时画在右栏,画面不挡,调画质、倍速时看得见效果;底部系统安全区由统一 PaneSheet 负责。
         PaneSheet(onDismissRequest = onDismiss, title = sheetTitle) {
             content()
-            Spacer(modifier = Modifier.height(Spacing.Comfortable))
         }
     }
 }
@@ -466,7 +458,12 @@ private fun PanelColumn(modifier: Modifier, content: @Composable ColumnScope.() 
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            .padding(
+                start = Spacing.Comfortable,
+                end = Spacing.Comfortable,
+                top = Spacing.Tight,
+                bottom = Spacing.Comfortable,
+            ),
         content = content,
     )
 }
@@ -485,7 +482,7 @@ private fun DanmakuSettingsSection(prefs: DanmakuPrefs, editor: DanmakuPrefsEdit
         SectionTitle(stringResource(Res.string.settings_danmaku_opacity), Modifier.weight(1f))
         Text(
             stringResource(Res.string.settings_danmaku_opacity_value, (opacity * 100).roundToInt()),
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.labelLarge.tabular,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -505,7 +502,7 @@ private fun DanmakuSettingsSection(prefs: DanmakuPrefs, editor: DanmakuPrefsEdit
         SectionTitle(stringResource(Res.string.settings_danmaku_font_scale), Modifier.weight(1f))
         Text(
             stringResource(Res.string.settings_danmaku_opacity_value, (fontScale * 100).roundToInt()),
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.labelLarge.tabular,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }

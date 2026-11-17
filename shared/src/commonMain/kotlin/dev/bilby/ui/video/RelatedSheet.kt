@@ -1,37 +1,39 @@
 package dev.bilby.ui.video
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.foundation.background
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.ui.graphics.Color
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.ui.Alignment
-import dev.bilby.ui.theme.Dimens
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.components.AgentQuestionBubble
@@ -41,8 +43,24 @@ import dev.bilby.ui.components.KeepScrolledToBottom
 import dev.bilby.ui.components.PillInputField
 import dev.bilby.ui.components.rememberBottomFollow
 import dev.bilby.ui.rememberCaptionSlot
+import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import dev.bilby.ui.windowDragArea
+
+/** 找相关面板的动态状态标题,供常驻侧栏头与统一 [dev.bilby.ui.components.PaneSheet] 顶栏共用。 */
+@Composable
+internal fun relatedSheetTitle(related: RelatedState): String {
+    val first = related.turns.firstOrNull()?.result
+    val videoCount = first?.answer?.sources?.size ?: 0
+    return when {
+        first == null -> stringResource(Res.string.related_title)
+        first.running -> stringResource(Res.string.related_title_running)
+        first.error != null -> stringResource(Res.string.related_title_error)
+        videoCount > 0 -> stringResource(Res.string.related_title_count, videoCount)
+        else -> stringResource(Res.string.related_title)
+    }
+}
 
 /**
  * 找相关的面板,装在 [dev.bilby.ui.components.PaneSheet] 里(宽屏在右栏,窄屏是 sheet,见 VideoScreen)。
@@ -54,6 +72,7 @@ import dev.bilby.ui.windowDragArea
  * 内容增长只表现为面板内部滚动 —— 于是检索过程要自己跟着往下走(见 [KeepScrolledToBottom]),
  * 否则用户只看得见最初一两步。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun RelatedSheet(
     related: RelatedState,
@@ -61,11 +80,16 @@ fun RelatedSheet(
     onAsk: (String) -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
-    /** 标题行右端的关闭。右栏里给;底部 sheet 有把手和下拉,不给。 */
+    /** 标题行右端的关闭。右栏常驻面板里给;模态 sheet 有统一标题行/把手,不重复画。 */
     onClose: (() -> Unit)? = null,
+    /** 重新发起第一轮检索。空闲时可选提供。 */
+    onReset: (() -> Unit)? = null,
+    /** 右栏常驻模式下自己画带窗口控制按钮的标题行;模态 sheet 交由 [dev.bilby.ui.components.PaneSheet] 顶栏统一绘制。 */
+    showHeader: Boolean = true,
+    /** 追问输入栏已交由 [dev.bilby.ui.components.PaneSheet] 的 `footer` 承载时传 false,避免画两份。 */
+    showFollowUpInBody: Boolean = true,
 ) {
     val first = related.turns.firstOrNull()?.result
-    val videoCount = first?.answer?.sources?.size ?: 0
 
     val scrollState = rememberScrollState()
     val follow = rememberBottomFollow(scrollState)
@@ -86,45 +110,50 @@ fun RelatedSheet(
     )
 
     Column(modifier = modifier.fillMaxWidth().fillMaxHeight()) {
-        // 这一行不跟着滚:它是这块内容的名字,报着第一轮在找还是找到了几条。右栏里右端是关闭,
-        // 位置同侧栏(SidePanelLayout)的关闭:右栏里的找相关常驻,点画面不收起,关它只走这里。
-        val captionSlot = if (onClose != null) rememberCaptionSlot() else null
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .then(captionSlot?.modifier ?: Modifier)
-                .fillMaxWidth()
-                .background(headerColor)
-                .heightIn(min = Dimens.MinTouchTarget + Spacing.Tight)
-                .padding(start = Spacing.Comfortable, end = if (onClose != null) Spacing.Hair else Spacing.Comfortable),
-        ) {
-            Text(
-                text = when {
-                    first == null -> stringResource(Res.string.related_title)
-                    first.running -> stringResource(Res.string.related_title_running)
-                    first.error != null -> stringResource(Res.string.related_title_error)
-                    videoCount > 0 -> stringResource(Res.string.related_title_count, videoCount)
-                    else -> stringResource(Res.string.related_title)
-                },
-                style = MaterialTheme.typography.titleMedium,
+        if (showHeader) {
+            // 这一行不跟着滚:它是这块内容的名字,报着第一轮在找还是找到了几条。右栏里右端是关闭,
+            // 位置同侧栏(SidePanelLayout)的关闭:右栏里的找相关常驻,点画面不收起,关它只走这里。
+            val captionSlot = if (onClose != null) rememberCaptionSlot() else null
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = Dimens.MinTouchTarget)
-                    .windowDragArea(captionSlot?.atTop == true),
-            )
-            onClose?.let { close ->
-                val closeLabel = stringResource(Res.string.action_close)
-                BilbyTooltip(text = closeLabel, shortcut = "Esc") {
-                    IconButton(onClick = close) {
-                        Icon(
-                            Icons.Filled.Close,
-                            contentDescription = closeLabel,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    .then(captionSlot?.modifier ?: Modifier)
+                    .fillMaxWidth()
+                    .background(headerColor)
+                    .heightIn(min = Dimens.MinTouchTarget + Spacing.Tight)
+                    .padding(start = Spacing.Comfortable, end = if (onClose != null) Spacing.Hair else Spacing.Comfortable),
+            ) {
+                BoxTitleText(
+                    text = relatedSheetTitle(related),
+                    dragAtTop = captionSlot?.atTop == true,
+                    modifier = Modifier.weight(1f),
+                )
+                if (onReset != null && !related.running) {
+                    val refreshLabel = stringResource(Res.string.action_refresh)
+                    BilbyTooltip(text = refreshLabel) {
+                        IconButton(onClick = onReset) {
+                            Icon(
+                                Icons.Filled.Refresh,
+                                contentDescription = refreshLabel,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
+                onClose?.let { close ->
+                    val closeLabel = stringResource(Res.string.action_close)
+                    BilbyTooltip(text = closeLabel, shortcut = "Esc") {
+                        IconButton(onClick = close) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = closeLabel,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                captionSlot?.buttons?.invoke()
             }
-            captionSlot?.buttons?.invoke()
         }
 
         Column(
@@ -148,18 +177,48 @@ fun RelatedSheet(
         }
 
         // 第一轮跑完才露出来:追问接着一个回答问,在那之前没有东西可追。
-        if (first != null && !first.running) {
-            FollowUpBar(running = related.running, onAsk = onAsk)
+        if (showFollowUpInBody && first != null && !first.running) {
+            RelatedFollowUpBar(
+                running = related.running,
+                onAsk = onAsk,
+                modifier = Modifier.imePadding().padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+            )
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun BoxTitleText(
+    text: String,
+    dragAtTop: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .heightIn(min = Dimens.MinTouchTarget)
+            .windowDragArea(dragAtTop),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.titleMediumEmphasized.tabular,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 /**
- * 追问的输入栏,贴在面板底部。上一轮还在跑时不能发,不排队:同一段会话里两个循环并行会拼出
- * 一段谁也没说过的对话。
+ * 追问的输入栏,贴在面板底部(优先交由 [dev.bilby.ui.components.PaneSheet] 的粘性 `footer` 承载)。
+ * 上一轮还在跑时不能发,不排队:同一段会话里两个循环并行会拼出一段谁也没说过的对话。
  */
 @Composable
-private fun FollowUpBar(running: Boolean, onAsk: (String) -> Unit) {
+internal fun RelatedFollowUpBar(
+    running: Boolean,
+    onAsk: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     var text by rememberSaveable { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
     val send = {
@@ -177,6 +236,6 @@ private fun FollowUpBar(running: Boolean, onAsk: (String) -> Unit) {
         canSend = text.isNotBlank() && !running,
         sending = running,
         onSend = send,
-        modifier = Modifier.imePadding().padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+        modifier = modifier.fillMaxWidth(),
     )
 }

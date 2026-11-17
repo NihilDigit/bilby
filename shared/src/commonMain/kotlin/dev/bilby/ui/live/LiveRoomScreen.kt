@@ -147,6 +147,14 @@ import dev.bilby.ui.formatTimeOfDay
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.onLongClick
+import dev.bilby.ui.components.ContextMenuBox
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.rememberCopyAction
+import dev.bilby.ui.theme.tabular
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.FollowButton
 import dev.bilby.ui.components.ListSkeleton
@@ -483,7 +491,12 @@ fun LiveRoomScreen(
     // 主播、聊天、醒目留言、大航海。
     val infoPane: @Composable (Modifier) -> Unit = { paneModifier ->
         Column(modifier = paneModifier) {
-            LiveAnchorRow(state = state, onUserClick = onUserClick, onToggleFollow = onToggleFollow)
+            LiveAnchorRow(
+                state = state,
+                roomId = roomId,
+                onUserClick = onUserClick,
+                onToggleFollow = onToggleFollow,
+            )
             LiveRoomTabs(
                 state = state,
                 roomId = roomId,
@@ -845,110 +858,95 @@ private fun LiveAudioOnlyButton(
  * 整行是一个语义节点(`clickable` + `role`),不是给头像单独挂点击 —— 那样读屏会把头像和
  * 名字念成两件无关的东西,而且只有那个小圆点能点(风格指南 §3)。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun LiveAnchorRow(state: LiveRoomUiState, onUserClick: (Long) -> Unit, onToggleFollow: () -> Unit) {
+private fun LiveAnchorRow(
+    state: LiveRoomUiState,
+    roomId: Long,
+    onUserClick: (Long) -> Unit,
+    onToggleFollow: () -> Unit,
+) {
     val captionSlot = rememberCaptionSlot()
     val hasWindowCaption = LocalWindowCaption.current != null
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = captionSlot.modifier
-            .fillMaxWidth()
-            .padding(end = if (captionSlot.buttons != null) Spacing.Hair else 0.dp),
-    ) {
-        if (hasWindowCaption) {
-            CaptionLeadWithDrag(
-                dragEnabled = captionSlot.atTop,
-                modifier = Modifier.weight(1f),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                    modifier = Modifier
-                        // mid 要到房间信息回来才有,那之前整行不可点(点了也不知道去谁那儿)。
-                        .clickable(role = Role.Button, enabled = state.anchorMid != 0L) {
-                            onUserClick(state.anchorMid)
-                        }
-                        .padding(
-                            start = Spacing.Comfortable,
-                            end = Spacing.Tight,
-                            top = Spacing.Tight,
-                            bottom = Spacing.Tight,
-                        ),
-                ) {
-                    Avatar(url = state.anchorFace, size = Dimens.AvatarRow)
-                    Column(modifier = Modifier.weight(1f, fill = false)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = state.anchorName,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false),
-                            )
-                            state.liveStartedAt?.let { startedAt ->
-                                Text(
-                                    text = MetaSeparator +
-                                        stringResource(Res.string.live_started_at, formatTimeOfDay(startedAt * 1000)),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                )
-                            }
-                        }
-                        if (state.title.isNotBlank()) {
-                            Text(
-                                text = state.title,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
+    val copy = rememberCopyAction()
+    val copyTitleLabel = stringResource(Res.string.action_copy_live_title)
+    val copyUpNameLabel = stringResource(Res.string.action_copy_up_name)
+    val copyUidLabel = stringResource(Res.string.action_copy_uid)
+    val copyRoomIdLabel = stringResource(Res.string.action_copy_room_id)
+    val menuLabel = stringResource(Res.string.menu_item_actions)
+
+    val anchorMenuItems = buildList {
+        if (state.title.isNotBlank()) add(copyTitleLabel to state.title)
+        if (state.anchorName.isNotBlank()) add(copyUpNameLabel to state.anchorName)
+        if (state.anchorMid != 0L) add(copyUidLabel to state.anchorMid.toString())
+        if (roomId > 0L) add(copyRoomIdLabel to roomId.toString())
+    }
+
+    val anchorIdentity: @Composable (Modifier, Dp) -> Unit = { outerModifier, endPadding ->
+        ContextMenuBox(
+            // mid 要到房间信息回来才有,那之前整行不跳转空间,但右键/长按仍可复制房间号等信息。
+            onClick = if (state.anchorMid != 0L) ({ onUserClick(state.anchorMid) }) else null,
+            menuLabel = menuLabel,
+            modifier = outerModifier,
+            menu = { close ->
+                anchorMenuItems.forEachIndexed { idx, (label, value) ->
+                    DropdownMenuItem(
+                        onClick = {
+                            close()
+                            copy(value)
+                        },
+                        text = { Text(label) },
+                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                        shape = menuItemShape(idx, anchorMenuItems.size),
+                    )
                 }
-            }
-            state.followState?.let { follow ->
-                Box(modifier = Modifier.padding(end = if (captionSlot.buttons != null) Spacing.Tight else Spacing.Comfortable)) {
-                    FollowButton(state = follow, onClick = onToggleFollow, prominent = false, name = state.anchorName)
-                }
-            }
-        } else {
+            },
+        ) { openMenu ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
                 modifier = Modifier
-                    // mid 要到房间信息回来才有,那之前整行不可点(点了也不知道去谁那儿)。
-                    .weight(1f)
-                    .clickable(role = Role.Button, enabled = state.anchorMid != 0L) {
-                        onUserClick(state.anchorMid)
-                    }
+                    .then(if (hasWindowCaption) Modifier else Modifier.fillMaxWidth())
+                    .then(
+                        if (state.anchorMid == 0L && anchorMenuItems.isNotEmpty()) {
+                            Modifier
+                                .semantics {
+                                    onLongClick(label = menuLabel) {
+                                        openMenu()
+                                        true
+                                    }
+                                }
+                                .pointerInput(openMenu) {
+                                    detectTapGestures(onLongPress = { openMenu() })
+                                }
+                        } else {
+                            Modifier
+                        },
+                    )
                     .padding(
                         start = Spacing.Comfortable,
-                        end = if (captionSlot.buttons != null) Spacing.Tight else Spacing.Comfortable,
+                        end = endPadding,
                         top = Spacing.Tight,
                         bottom = Spacing.Tight,
                     ),
             ) {
                 Avatar(url = state.anchorFace, size = Dimens.AvatarRow)
-                Column(modifier = Modifier.weight(1f)) {
+                Column(modifier = if (hasWindowCaption) Modifier.weight(1f, fill = false) else Modifier.weight(1f)) {
                     // 开播时刻跟在名字后面,整块只占两行:单独一行时它比名字和标题都短,却要多占一行高度。
                     // 名字过长时截断的是名字,时刻留着 —— 名字截掉一截还认得出是谁,时刻截掉就没了。
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = state.anchorName,
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodyMediumEmphasized,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
                         )
-                        // 写绝对时刻而不是"已播 2 小时":后者要每分钟重算一遍,而人想知道的多半是
-                        // "是不是刚开"或"从几点播到现在",一个时刻两件事都答得了。当天只写时刻,跨了天
-                        // 带上日期 —— 通宵的直播跨过零点很常见,只写"23:10"会读成今晚。
                         state.liveStartedAt?.let { startedAt ->
                             Text(
                                 text = MetaSeparator +
                                     stringResource(Res.string.live_started_at, formatTimeOfDay(startedAt * 1000)),
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.labelSmall.tabular,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                             )
@@ -964,13 +962,38 @@ private fun LiveAnchorRow(state: LiveRoomUiState, onUserClick: (Long) -> Unit, o
                         )
                     }
                 }
-                // 行尾是关注,不是一个 → 箭头:整行可点已经说明了"进空间",箭头只是重复;而关注
-                // 此前要进了空间才按得到。样式同播放页 UP 那一行(不突出的那一档):这一页的主角是
-                // 这场直播,不是这个人。关注态还没查到时不画,免得先闪一个「关注」。
-                state.followState?.let { follow ->
+                if (!hasWindowCaption) {
+                    state.followState?.let { follow ->
+                        FollowButton(state = follow, onClick = onToggleFollow, prominent = false, name = state.anchorName)
+                    }
+                }
+            }
+        }
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = captionSlot.modifier
+            .fillMaxWidth()
+            .padding(end = if (captionSlot.buttons != null) Spacing.Hair else 0.dp),
+    ) {
+        if (hasWindowCaption) {
+            CaptionLeadWithDrag(
+                dragEnabled = captionSlot.atTop,
+                modifier = Modifier.weight(1f),
+            ) {
+                anchorIdentity(Modifier, Spacing.Tight)
+            }
+            state.followState?.let { follow ->
+                Box(modifier = Modifier.padding(end = if (captionSlot.buttons != null) Spacing.Tight else Spacing.Comfortable)) {
                     FollowButton(state = follow, onClick = onToggleFollow, prominent = false, name = state.anchorName)
                 }
             }
+        } else {
+            anchorIdentity(
+                Modifier.weight(1f),
+                if (captionSlot.buttons != null) Spacing.Tight else Spacing.Comfortable,
+            )
         }
         captionSlot.buttons?.invoke()
     }
@@ -1360,55 +1383,96 @@ private fun SuperChatSummaryCard(
     onUserClick: (Long) -> Unit,
     onCardClick: (() -> Unit)? = null,
 ) {
+    val copy = rememberCopyAction()
+    val copyDanmakuLabel = stringResource(Res.string.action_copy_danmaku)
+    val copyNicknameLabel = stringResource(Res.string.action_copy_nickname)
+    val copyUidLabel = stringResource(Res.string.action_copy_uid)
+    val menuLabel = stringResource(Res.string.menu_item_actions)
     val dark = MaterialTheme.colorScheme.surface.luminance() < DarkSurfaceLuminance
     val palette = FixedColors.superChatPalette(sc.priceYuan, dark)
-    val cardModifier = if (onCardClick != null) {
-        Modifier.fillMaxWidth().clickable(onClick = onCardClick)
-    } else {
-        Modifier.fillMaxWidth()
+    val scMenuItems = buildList {
+        if (sc.message.isNotBlank()) add(copyDanmakuLabel to sc.message)
+        if (sc.senderName.isNotBlank()) add(copyNicknameLabel to sc.senderName)
+        if (sc.senderMid != 0L) add(copyUidLabel to sc.senderMid.toString())
     }
-    Surface(
-        color = palette.container,
-        contentColor = palette.onContainer,
-        shape = MaterialTheme.shapes.medium,
-        modifier = cardModifier,
-    ) {
-        Column(
-            modifier = Modifier.padding(Spacing.Cozy),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                SenderRow(
-                    face = sc.senderFace,
-                    name = sc.senderName,
-                    contentColor = palette.onContainer,
-                    modifier = Modifier.weight(1f),
-                    onClick = { onUserClick(sc.senderMid) },
-                )
-                Text(
-                    text = stringResource(Res.string.live_super_chat_price, sc.priceYuan),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = palette.onContainer,
+    ContextMenuBox(
+        onClick = onCardClick,
+        menuLabel = menuLabel,
+        modifier = Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium),
+        menu = { close ->
+            scMenuItems.forEachIndexed { idx, (label, value) ->
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        copy(value)
+                    },
+                    text = { Text(label) },
+                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                    shape = menuItemShape(idx, scMenuItems.size),
                 )
             }
-            Text(
-                text = sc.message,
-                style = MaterialTheme.typography.bodyMediumEmphasized,
-                color = palette.onContainer,
-            )
-            remainingSeconds?.let {
+        },
+    ) { openMenu ->
+        Surface(
+            color = palette.container,
+            contentColor = palette.onContainer,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(
+                    if (onCardClick == null && scMenuItems.isNotEmpty()) {
+                        Modifier
+                            .semantics {
+                                onLongClick(label = menuLabel) {
+                                    openMenu()
+                                    true
+                                }
+                            }
+                            .pointerInput(openMenu) {
+                                detectTapGestures(onLongPress = { openMenu() })
+                            }
+                    } else {
+                        Modifier
+                    },
+                ),
+        ) {
+            Column(
+                modifier = Modifier.padding(Spacing.Cozy),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                ) {
+                    SenderRow(
+                        face = sc.senderFace,
+                        name = sc.senderName,
+                        contentColor = palette.onContainer,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onUserClick(sc.senderMid) },
+                    )
+                    Text(
+                        text = stringResource(Res.string.live_super_chat_price, sc.priceYuan),
+                        style = MaterialTheme.typography.labelLarge.tabular,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.onContainer,
+                    )
+                }
                 Text(
-                    text = stringResource(Res.string.live_super_chat_remaining, formatRemaining(it)),
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        // **等宽数字。** 不加这一句,秒数每跳一下宽度就变一次,整行跟着抖。
-                        fontFeatureSettings = TabularFigures,
-                    ),
+                    text = sc.message,
+                    style = MaterialTheme.typography.bodyMediumEmphasized,
                     color = palette.onContainer,
                 )
+                remainingSeconds?.let {
+                    Text(
+                        text = stringResource(Res.string.live_super_chat_remaining, formatRemaining(it)),
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            // **等宽数字。** 不加这一句,秒数每跳一下宽度就变一次,整行跟着抖。
+                            fontFeatureSettings = TabularFigures,
+                        ),
+                        color = palette.onContainer,
+                    )
+                }
             }
         }
     }

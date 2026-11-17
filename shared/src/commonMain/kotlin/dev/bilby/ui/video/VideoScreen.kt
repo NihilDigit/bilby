@@ -60,6 +60,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import dev.bilby.BiliLog
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import dev.bilby.ui.player.rememberIsInPipMode
@@ -76,6 +77,7 @@ import dev.bilby.ui.player.CenterPlayButton
 import dev.bilby.ui.theme.PlayerTheme
 import dev.bilby.ui.player.QueueEdges
 import dev.bilby.ui.player.QueueEditActions
+import dev.bilby.ui.player.QueuePositionText
 import dev.bilby.ui.player.buildEpisodeRows
 import dev.bilby.data.CommentSort
 import dev.bilby.data.FavFolder
@@ -122,6 +124,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import dev.bilby.offline.CachedIndex
 import dev.bilby.offline.offlineId
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.LocalSidePane
 import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.components.SidePaneDismissLayer
@@ -438,6 +441,10 @@ fun VideoScreen(
             loadingBefore = queue.extendingBefore,
             loadingAfter = queue.extendingAfter,
             onLoad = { before -> send(PlaybackCommand.ExtendQueue(before)) },
+            errorBefore = queue.errorBefore,
+            errorAfter = queue.errorAfter,
+            remainingBefore = queue.remainingBefore,
+            remainingAfter = queue.remainingAfter,
         )
     }
 
@@ -474,6 +481,7 @@ fun VideoScreen(
         incomplete = (audioState.queue?.incomplete == true),
         edges = queueEdges,
         editActions = queueEditActions,
+        state = audioState.queue,
     )
 
     /**
@@ -839,13 +847,37 @@ fun VideoScreen(
     }
 
     if (relatedOpen && !immersive && onFindRelated != null) {
+        val firstRelated = related.turns.firstOrNull()?.result
+        val showFollowUp = firstRelated != null && !firstRelated.running
         CompositionLocalProvider(LocalSidePane provides sidePane) {
             PaneSheet(
                 onDismissRequest = { relatedOpen = false },
-                // 标题行在 RelatedSheet 里,带着检索进度。
-                skipPartiallyExpanded = false,
-                // 找相关是边看画面边读、还能追问的:点画面暂停时它不该跟着收起。
-                persistent = true,
+                title = relatedSheetTitle(related),
+                skipPartiallyExpanded = true,
+                // 双栏下右栏面板常驻(点画面暂停时不收起,顶栏由 RelatedSheet 带窗口按钮绘制);
+                // 单栏模态 sheet 由 PaneSheet 统一绘制顶栏与刷新按钮。
+                persistent = expandedLayout,
+                headerTrailing = if (!expandedLayout && !related.running) {
+                    {
+                        val refreshLabel = stringResource(Res.string.action_refresh)
+                        BilbyTooltip(text = refreshLabel) {
+                            IconButton(onClick = onFindRelated) {
+                                Icon(
+                                    Icons.Filled.Refresh,
+                                    contentDescription = refreshLabel,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    null
+                },
+                footer = if (showFollowUp) {
+                    { RelatedFollowUpBar(running = related.running, onAsk = onAskRelated) }
+                } else {
+                    null
+                },
             ) {
                 RelatedSheet(
                     onClose = if (inPane) {
@@ -853,13 +885,16 @@ fun VideoScreen(
                     } else {
                         null
                     },
+                    onReset = onFindRelated,
+                    showHeader = inPane,
+                    showFollowUpInBody = false,
                     related = related,
                     // 先关面板再跳走:面板自己注册的 BackHandler 排在导航那一层之后,
                     // 留着它跳到下一页,那一页的第一次返回会被这个看不见的面板吃掉。
                     // LiveNowSheet 是同一条规矩。
-                    onVideoClick = { bvid ->
+                    onVideoClick = { targetBvid ->
                         relatedOpen = false
-                        onRelatedVideoClick(bvid)
+                        onRelatedVideoClick(targetBvid)
                     },
                     onAsk = onAskRelated,
                     onRetry = onRetryRelated,
@@ -1133,6 +1168,8 @@ fun VideoScreen(
                     edges = queueEdges,
                     playing = playing,
                     editActions = shownQueue.editActions,
+                    positionText = shownQueue.state?.takeIf { !shownQueue.enriching }?.let { QueuePositionText(it) },
+                    loading = shownQueue.enriching,
                 )
             }
         }
@@ -1388,6 +1425,7 @@ fun VideoScreen(
                         // 上面那个 LaunchedEffect(playerPinned) 会把画面收回来。
                     },
                     visibility = playerScroll.collapsedFraction,
+                    coverUrl = state.detail?.coverUrl.orEmpty(),
                     modifier = Modifier.align(Alignment.TopCenter),
                 )
             }
@@ -1462,16 +1500,31 @@ fun VideoScreen(
         // 已经在手上的这份详情,而队列里其他视频要各打一次详情请求才知道有几 P,不值得在
         // 打开面板时先发十几个请求去换一个多数视频用不上的选项。
         val partsByBvid = episodeRows.associate { it.bvid to it.parts }
+        val currentDetail = state.detail
         val targets = audioState.queue?.items.orEmpty().flatMap { item ->
             val parts = partsByBvid[item.bvid].orEmpty()
+            val detailMatch = currentDetail?.takeIf { it.bvid == item.bvid }
+            val copyright = detailMatch?.copyright ?: 0
+            val noReprint = detailMatch?.noReprint ?: false
+            val chargingOnly = detailMatch?.chargingOnly ?: false
             if (parts.isEmpty()) {
-                listOf(OfflineTarget(item))
+                listOf(
+                    OfflineTarget(
+                        item = item,
+                        copyright = copyright,
+                        noReprint = noReprint,
+                        chargingOnly = chargingOnly,
+                    ),
+                )
             } else {
                 parts.map { part ->
                     OfflineTarget(
                         item = item,
                         cid = part.cid,
                         partTitle = stringResource(Res.string.video_part_label, part.ordinal, part.title),
+                        copyright = copyright,
+                        noReprint = noReprint,
+                        chargingOnly = chargingOnly,
                     )
                 }
             }

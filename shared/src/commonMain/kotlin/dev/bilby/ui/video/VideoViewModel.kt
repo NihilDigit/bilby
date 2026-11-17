@@ -313,22 +313,25 @@ class VideoViewModel(
     private var videoTagsRequested = false
 
     /**
-     * 拉标签。第一次展开简介时由页面调用:标签只在展开态可见,随详情 eager 拉等于每次
-     * 打开视频都白背一次请求(理由展开写在 VideoRepository.getVideoTags)。幂等,展开收起
-     * 反复点不重发;失败把闸放回去,下一次展开还有机会重试。
+     * 拉视频标签。随详情到位即并发预热(见 [startVideoJobs] / [load]),消除点开标题块时先展开简介、
+     * 标签稍后到货再把播放队列往下顶一次的二段跳动。幂等,重复调用不重发;失败时复位闸门,
+     * 用户展开简介时仍可借 [loadVideoTags] 再试一次。
      */
     fun loadVideoTags() {
-        if (videoTagsRequested) return
         val detail = _state.value.detail ?: return
+        loadVideoTagsFor(bvid, detail.cid)
+    }
+
+    private fun loadVideoTagsFor(target: String, cid: Long) {
+        if (videoTagsRequested || cid == 0L) return
         videoTagsRequested = true
-        val target = bvid
         videoScope.launch {
-            when (val tags = repository.getVideoTags(target, detail.cid)) {
-                is BiliResult.Ok -> _videoTags.value = tags.value
+            when (val tags = repository.getVideoTags(target, cid)) {
+                is BiliResult.Ok -> if (target == bvid) _videoTags.value = tags.value
                 // 具体的码和 message 已由 getData 打过,这里只留场景。
                 else -> {
                     BiliLog.w("查视频标签失败 bvid=$target")
-                    videoTagsRequested = false
+                    if (target == bvid) videoTagsRequested = false
                 }
             }
         }
@@ -650,6 +653,7 @@ class VideoViewModel(
     private fun startVideoJobs() {
         val target = bvid
         load(target)
+        loadVideoTags()
         observeCurrentPart(target)
         observePlaybackPosition(target)
         observeDanmakuCid(target)
@@ -1000,6 +1004,7 @@ class VideoViewModel(
         when (val detail = repository.getVideoDetail(target)) {
             is BiliResult.Ok -> {
                 _state.update { it.copy(detail = detail.value, loading = false) }
+                loadVideoTagsFor(target, detail.value.cid)
                 launch {
                     when (val follow = relationRepository.stateOf(detail.value.up.mid)) {
                         is BiliResult.Ok -> _followState.value = follow.value
@@ -1096,18 +1101,18 @@ class VideoViewModel(
                         like = cached.stat.like,
                     ),
                     pages = emptyList(),
-                    // 缓存索引里没有 copyright,这里只能退回自制稿的 2 枚。给多了的代价是
-                    // 转载稿上多列一个选项、投出去被服务端拒(面板里会说明);给少了的代价是
-                    // 自制稿的第二枚永远投不出去。何况这条路径是"详情拉不到"的兜底,
-                    // 详情一到就会被真实值换掉。
-                    maxCoins = VideoActionRepository.MAX_COIN_PER_VIDEO,
+                    maxCoins = if (cached.copyright == 2) 1 else VideoActionRepository.MAX_COIN_PER_VIDEO,
                     seasonTitle = "",
                     seasonId = 0L,
                     seasonMid = 0L,
                     seasonEpisodes = emptyList(),
+                    copyright = cached.copyright,
+                    noReprint = cached.noReprint,
+                    chargingOnly = cached.chargingOnly,
                 ),
             )
         }
+        loadVideoTagsFor(target, cached.cid)
         return true
     }
 
