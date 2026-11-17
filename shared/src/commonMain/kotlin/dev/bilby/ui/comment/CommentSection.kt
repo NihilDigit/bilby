@@ -194,6 +194,8 @@ fun CommentSection(
     var composerTarget by rememberSaveable { mutableStateOf(CommentToVideo) }
     var composerFromPanel by rememberSaveable { mutableStateOf(false) }
     var composerStartEmoji by rememberSaveable { mutableStateOf(false) }
+    var composerFocusNonce by remember { mutableIntStateOf(0) }
+    val useInlineComposer = rememberUseInlineCommentComposer(composerOpen)
 
     /** 最近一次真发出去的请求写给谁、提交的是哪段文本。发送在途时锁住不被别的浮层改写。 */
     var sentTarget by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -211,15 +213,30 @@ fun CommentSection(
     var threadScrollRoot by rememberSaveable { mutableStateOf<Long?>(null) }
     val threadListState = rememberSaveable(threadScrollRoot, saver = LazyListState.Saver) { LazyListState() }
     val openThread: (Long) -> Unit = { rpid ->
+        if (composerOpen && !composerFromPanel) composerOpen = false
         threadScrollRoot = rpid
         panelRoot = rpid
+    }
+    val closeThread: () -> Unit = {
+        panelRoot = null
+        if (composerFromPanel) composerOpen = false
     }
 
     val openComposer: (target: Long, fromPanel: Boolean, emoji: Boolean) -> Unit = { target, fromPanel, emoji ->
         composerTarget = target
         composerFromPanel = fromPanel
         composerStartEmoji = emoji
+        composerFocusNonce++
         composerOpen = true
+    }
+
+    val submitDraft: (Long) -> Unit = { target ->
+        val textToSend = drafts[target].orEmpty()
+        if (!state.sending && textToSend.isNotBlank()) {
+            sentTarget = target
+            sentText = textToSend
+            onSend(textToSend, target.takeIf { it != CommentToVideo })
+        }
     }
 
     // **草稿只在发出去之后才清。** 失败时草稿留在框里,原因就在输入浮层里。
@@ -393,12 +410,43 @@ fun CommentSection(
                 onDismiss = { selectionTarget = null },
             )
         }
-        CommentPromptBar(
-            draftPreview = drafts[CommentToVideo].orEmpty(),
-            placeholder = stringResource(Res.string.comment_input_hint),
-            onOpenKeyboard = { openComposer(CommentToVideo, false, false) },
-            onOpenEmoji = { openComposer(CommentToVideo, false, true) },
-        )
+        if (useInlineComposer && composerOpen && !composerFromPanel) {
+            val replyLabel = if (composerTarget == CommentToVideo) {
+                null
+            } else {
+                findUname(state, composerTarget)?.takeIf { it.isNotBlank() }
+                    ?.let { stringResource(Res.string.comment_replying_to, it) }
+                    ?: stringResource(Res.string.comment_reply)
+            }
+            InlineCommentComposer(
+                targetKey = composerTarget,
+                draft = drafts[composerTarget].orEmpty(),
+                onDraftChange = { drafts[composerTarget] = it },
+                replyLabel = replyLabel,
+                onClearReply = if (composerTarget != CommentToVideo) {
+                    {
+                        composerTarget = CommentToVideo
+                        composerFocusNonce++
+                    }
+                } else {
+                    null
+                },
+                placeholder = stringResource(Res.string.comment_input_hint),
+                sending = state.sending,
+                error = sendError?.takeIf { !state.sending && sentTarget == composerTarget },
+                initialOpenEmoji = composerStartEmoji,
+                onSend = { submitDraft(composerTarget) },
+                onDismiss = { composerOpen = false },
+                focusRequestKey = composerFocusNonce,
+            )
+        } else {
+            CommentPromptBar(
+                draftPreview = drafts[CommentToVideo].orEmpty(),
+                placeholder = stringResource(Res.string.comment_input_hint),
+                onOpenKeyboard = { openComposer(CommentToVideo, false, false) },
+                onOpenEmoji = { openComposer(CommentToVideo, false, true) },
+            )
+        }
     }
 
     // 详情面板挂在外面:单栏时它是 ModalBottomSheet,自己就是一个 window;两栏时它画在右栏的面板层。
@@ -414,14 +462,42 @@ fun CommentSection(
                 openComposer(rpid, true, false)
             },
             inputBar = {
-                val rootLabel = stringResource(Res.string.comment_replying_to, panelComment.uname)
-                CommentPromptBar(
-                    draftPreview = drafts[panelComment.rpid].orEmpty(),
-                    placeholder = rootLabel,
-                    onOpenKeyboard = { openComposer(panelComment.rpid, true, false) },
-                    onOpenEmoji = { openComposer(panelComment.rpid, true, true) },
-                    inSheetFooter = true,
-                )
+                if (useInlineComposer && composerOpen && composerFromPanel) {
+                    val activeTarget = composerTarget.takeIf { it != CommentToVideo } ?: panelComment.rpid
+                    val replyName = findUname(state, activeTarget)?.takeIf { it.isNotBlank() } ?: panelComment.uname
+                    val replyLabel = stringResource(Res.string.comment_replying_to, replyName)
+                    InlineCommentComposer(
+                        targetKey = activeTarget,
+                        draft = drafts[activeTarget].orEmpty(),
+                        onDraftChange = { drafts[activeTarget] = it },
+                        replyLabel = replyLabel,
+                        onClearReply = {
+                            if (activeTarget != panelComment.rpid) {
+                                composerTarget = panelComment.rpid
+                                composerFocusNonce++
+                            } else {
+                                composerOpen = false
+                            }
+                        },
+                        placeholder = stringResource(Res.string.comment_input_hint),
+                        sending = state.sending,
+                        error = sendError?.takeIf { !state.sending && sentTarget == activeTarget },
+                        initialOpenEmoji = composerStartEmoji,
+                        onSend = { submitDraft(activeTarget) },
+                        onDismiss = { composerOpen = false },
+                        focusRequestKey = composerFocusNonce,
+                        inSheetFooter = true,
+                    )
+                } else {
+                    val rootLabel = stringResource(Res.string.comment_replying_to, panelComment.uname)
+                    CommentPromptBar(
+                        draftPreview = drafts[panelComment.rpid].orEmpty(),
+                        placeholder = rootLabel,
+                        onOpenKeyboard = { openComposer(panelComment.rpid, true, false) },
+                        onOpenEmoji = { openComposer(panelComment.rpid, true, true) },
+                        inSheetFooter = true,
+                    )
+                }
             },
             onDelete = onDelete,
             onSeek = onSeek,
@@ -430,18 +506,18 @@ fun CommentSection(
             // 或浏览器落地页之后,这一页仍在栈里、面板仍在组合中,新页的第一次返回被它吃掉 ——
             // 表现是"返回键没反应",而实际上是在关一个看不见的面板。
             onUserClick = { mid ->
-                panelRoot = null
+                closeThread()
                 onUserClick(mid)
             },
             onOpenLink = { url ->
-                panelRoot = null
+                closeThread()
                 onOpenLink(url)
             },
-            onDismiss = { panelRoot = null },
+            onDismiss = closeThread,
         )
     }
 
-    if (composerOpen) {
+    if (!useInlineComposer && composerOpen) {
         val currentDraft = drafts[composerTarget].orEmpty()
         val replyName = if (composerTarget == CommentToVideo) null else findUname(state, composerTarget)
         val headerTitle = replyName?.let { stringResource(Res.string.comment_replying_to, it) }
@@ -457,13 +533,7 @@ fun CommentSection(
             sending = state.sending,
             error = sendError?.takeIf { !state.sending && sentTarget == composerTarget },
             initialOpenEmoji = composerStartEmoji,
-            onSend = {
-                if (!state.sending && currentDraft.isNotBlank()) {
-                    sentTarget = composerTarget
-                    sentText = currentDraft
-                    onSend(currentDraft, composerTarget.takeIf { it != CommentToVideo })
-                }
-            },
+            onSend = { submitDraft(composerTarget) },
             onDismiss = { composerOpen = false },
         )
     }
