@@ -54,18 +54,26 @@ private fun cjk(
     lineHeightStyle = CjkLineHeight,
 )
 
-/** 强调档:同字号同行高,只把字重往上抬一级。 */
+/**
+ * 等宽数字(`tnum`):时长、计数、`X / N` 队列位置与倒计时跳字时整行宽度保持稳定。
+ */
+val TextStyle.tabular: TextStyle
+    get() = copy(fontFeatureSettings = "tnum")
+
+/**
+ * 强调档:同字号同行高,按中文笔画密度拉清层级且避免合成粗体糊笔:
+ * display / headline / title / label 取 SemiBold(600),body 取 Medium(500)。
+ */
 private fun cjkEmphasized(
     size: Int,
     lineHeight: Int,
-    weight: FontWeight = FontWeight.Medium,
+    weight: FontWeight = FontWeight.SemiBold,
     letterSpacing: Double = 0.0,
 ) = cjk(size, lineHeight, weight, letterSpacing)
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 internal val BilbyTypography = Typography(
-    // display / headline 这一档 Bilby 全程用不到(没有营销页、没有大标题页),
-    // 保留只是为了让字号表完整,免得某个 material3 组件默认取到 display* 时拿到的是别处的值。
+    // 大标题与主视觉锚点(个人页、空间头图、专栏标题、听视频曲目名等按需取对应档或其 Emphasized)。
     displayLarge = cjk(57, 64, letterSpacing = -0.25),
     displayMedium = cjk(45, 52),
     displaySmall = cjk(36, 44),
@@ -73,16 +81,16 @@ internal val BilbyTypography = Typography(
     headlineMedium = cjk(28, 36),
     headlineSmall = cjk(24, 32),
 
-    // 页面标题(顶栏)。
+    // 页面标题(顶栏、播放页主标题)。
     titleLarge = cjk(22, 28),
-    // 区块标题、播放页视频标题、列表页的"已用 N / 100"。
+    // 区块标题、卡片组标题。
     titleMedium = cjk(16, 24, FontWeight.Medium),
     titleSmall = cjk(14, 22, FontWeight.Medium),
 
-    // 列表条目主标题。视频标题两行截断,16sp/24 是能在 140dp 封面旁排满两行又不显拥挤的档。
+    // 列表与网格条目主标题(强调档 bodyLargeEmphasized 抬至 Medium,压住次级元信息)。
     bodyLarge = cjk(16, 24),
     bodyMedium = cjk(14, 22),
-    // UP 主名、播放量那一行元信息。
+    // UP 主名、辅助说明等次级正文。
     bodySmall = cjk(12, 18),
 
     // 按钮文字与小节标题。
@@ -91,18 +99,18 @@ internal val BilbyTypography = Typography(
     // 封面上的时长角标、倍速、清晰度——几乎全是数字和短英文,保留基线字距。
     labelSmall = cjk(11, 16, FontWeight.Medium, letterSpacing = 0.5),
 
-    displayLargeEmphasized = cjkEmphasized(57, 64, letterSpacing = -0.25),
-    displayMediumEmphasized = cjkEmphasized(45, 52),
-    displaySmallEmphasized = cjkEmphasized(36, 44),
-    headlineLargeEmphasized = cjkEmphasized(32, 40),
-    headlineMediumEmphasized = cjkEmphasized(28, 36),
-    headlineSmallEmphasized = cjkEmphasized(24, 32),
-    titleLargeEmphasized = cjkEmphasized(22, 28),
+    displayLargeEmphasized = cjkEmphasized(57, 64, FontWeight.SemiBold, letterSpacing = -0.25),
+    displayMediumEmphasized = cjkEmphasized(45, 52, FontWeight.SemiBold),
+    displaySmallEmphasized = cjkEmphasized(36, 44, FontWeight.SemiBold),
+    headlineLargeEmphasized = cjkEmphasized(32, 40, FontWeight.SemiBold),
+    headlineMediumEmphasized = cjkEmphasized(28, 36, FontWeight.SemiBold),
+    headlineSmallEmphasized = cjkEmphasized(24, 32, FontWeight.SemiBold),
+    titleLargeEmphasized = cjkEmphasized(22, 28, FontWeight.SemiBold),
     titleMediumEmphasized = cjkEmphasized(16, 24, FontWeight.SemiBold),
     titleSmallEmphasized = cjkEmphasized(14, 22, FontWeight.SemiBold),
-    bodyLargeEmphasized = cjkEmphasized(16, 24),
-    bodyMediumEmphasized = cjkEmphasized(14, 22),
-    bodySmallEmphasized = cjkEmphasized(12, 18),
+    bodyLargeEmphasized = cjkEmphasized(16, 24, FontWeight.Medium),
+    bodyMediumEmphasized = cjkEmphasized(14, 22, FontWeight.Medium),
+    bodySmallEmphasized = cjkEmphasized(12, 18, FontWeight.Medium),
     labelLargeEmphasized = cjkEmphasized(14, 20, FontWeight.SemiBold, letterSpacing = 0.1),
     labelMediumEmphasized = cjkEmphasized(12, 16, FontWeight.SemiBold, letterSpacing = 0.5),
     labelSmallEmphasized = cjkEmphasized(11, 16, FontWeight.SemiBold, letterSpacing = 0.5),

@@ -10,7 +10,10 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -18,6 +21,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.Role
@@ -30,6 +34,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.interactiveCard
+import dev.bilby.ui.theme.tabular
 
 /**
  * 一条视频在列表里的样子。
@@ -80,6 +86,7 @@ data class VideoRowUi(
  * @param trailing 行尾的操作(稍后再看的删除按钮)。放在这里而不是让调用方套一层 Row,
  *   是为了保证操作按钮和文字块的对齐在所有列表里一致。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun VideoRow(
     item: VideoRowUi,
@@ -118,24 +125,24 @@ fun VideoRow(
             .alpha(if (enabled) 1f else DisabledContentAlpha)
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
         content = {
-            VideoCover(
-                url = item.coverUrl,
-                durationText = item.durationText,
-                progressFraction = item.progressFraction,
-                typeBadge = item.typeBadge,
-            )
+            ProvideTextStyle(LocalTextStyle.current.tabular) {
+                VideoCover(
+                    url = item.coverUrl,
+                    durationText = item.durationText,
+                    progressFraction = item.progressFraction,
+                    typeBadge = item.typeBadge,
+                )
+            }
 
             Column(
                 verticalArrangement = Arrangement.SpaceBetween,
             ) {
-                // bodyLarge(16sp)。这一行是整条的标题,它下面几行是 labelSmall 和 bodySmall,
-                // 标题用 14sp 时与它们只差 2sp —— 一列列表扫下来认不出哪一行是主的。M3 给
-                // list item 的 headline 定的也是 bodyLarge。字号占掉的行宽从封面那边让出来,
-                // 见 Dimens.ListCoverWidth 那道算术。标题不给溢出按钮让位,见 [TitleOverflowGutter]。
+                // bodyLargeEmphasized(16sp/24 Medium)。字号与两行行高预算不变,字重升至 Medium
+                // 让主标题明确领跑底下的 onSurfaceVariant 元信息。标题不给溢出按钮让位,见 [TitleOverflowGutter]。
                 Text(
                     text = highlightedTitle(item.title, item.titleHighlights),
                     modifier = Modifier.padding(end = if (overflow != null) TitleOverflowGutter else 0.dp),
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyLargeEmphasized,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -153,11 +160,13 @@ fun VideoRow(
                     // 两者都是"这条是谁什么时候发的",分两行摆会把三行文字撑到四行,
                     // 而封面高度是固定的,多出来的那行只能让行距变松、看起来更空。
                     SecondaryLine(dateText = item.dateText, upName = item.upName, upFaceUrl = item.upFaceUrl)
-                    StatRow(playText = item.playText, danmakuText = item.danmakuText)
+                    ProvideTextStyle(LocalTextStyle.current.tabular) {
+                        StatRow(playText = item.playText, danmakuText = item.danmakuText)
+                    }
                     item.meta?.let {
                         Text(
                             text = it,
-                            style = MaterialTheme.typography.labelSmall,
+                            style = MaterialTheme.typography.labelSmall.tabular,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -323,11 +332,229 @@ private fun SecondaryLine(dateText: String?, upName: String?, upFaceUrl: String?
         if (!upFaceUrl.isNullOrEmpty()) Avatar(url = upFaceUrl, size = InlineAvatarSize)
         Text(
             text = text,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.tabular,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+    }
+}
+
+/** 宽屏纵向卡片里 UP 主的小头像尺寸。 */
+private val GridAvatarSize = 20.dp
+
+/** 带溢出按钮时底栏的最小高度,避免单行元信息时 48dp 触控区向上侵占标题行。 */
+private val GridOverflowMinFooterHeight = 32.dp
+
+/**
+ * 宽屏多列网格(`Medium+` / `Expanded+`)专用的纵向 16:10 媒体卡。
+ *
+ * - 封面固定 16:10 与 [Dimens.CoverCornerGrid](14dp)圆角,承载类型/充电角标、时长读数与已看进度条。
+ * - 标题固定占满两行(`minLines = 2`),让同一横排卡片的元信息基线严格对齐。
+ * - 元信息行可选展示 20dp 头像与可点击 UP 名,与发布时间之间以 [MetaSeparator] 分隔(禁用中点),
+ *   下接播放/弹幕等宽计数与行尾 [overflow] 槽位。
+ * - 外层通过非消费式的 [interactiveCard] 提供平滑悬停底色(`surfaceContainerLow`、`shapes.large`、8dp 内边距)。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun VideoGridCard(
+    ui: VideoRowUi,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
+    onUpClick: (() -> Unit)? = null,
+    upAvatarUrl: String? = null,
+    enabled: Boolean = true,
+    overflow: (@Composable () -> Unit)? = null,
+) {
+    val resolvedAvatarUrl = (upAvatarUrl ?: ui.upFaceUrl)?.takeIf { it.isNotBlank() }
+    val upText = ui.upName?.takeIf { it.isNotBlank() }
+    val dateText = ui.dateText?.takeIf { it.isNotBlank() }
+    val showAuthorLine = resolvedAvatarUrl != null || upText != null
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .interactiveCard(
+                shape = MaterialTheme.shapes.large,
+                baseColor = Color.Transparent,
+                hoverColor = if (enabled) MaterialTheme.colorScheme.surfaceContainerLow else Color.Transparent,
+                enableScale = enabled,
+            )
+            .combinedClickable(
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+                onLongClick = onLongClick,
+            )
+            .alpha(if (enabled) 1f else DisabledContentAlpha)
+            .padding(Spacing.Tight),
+    ) {
+        ProvideTextStyle(LocalTextStyle.current.tabular) {
+            VideoCover(
+                url = ui.coverUrl,
+                durationText = ui.durationText,
+                progressFraction = ui.progressFraction,
+                cornerRadius = Dimens.CoverCornerGrid,
+                typeBadge = ui.typeBadge,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        Text(
+            text = highlightedTitle(ui.title, ui.titleHighlights),
+            style = MaterialTheme.typography.bodyLargeEmphasized,
+            color = MaterialTheme.colorScheme.onSurface,
+            minLines = 2,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = Spacing.Tight),
+        )
+
+        Layout(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = Spacing.Hair),
+            content = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                ) {
+                    if (showAuthorLine) {
+                        GridAuthorLine(
+                            upName = upText,
+                            dateText = dateText,
+                            avatarUrl = resolvedAvatarUrl,
+                            onUpClick = onUpClick?.takeIf { enabled },
+                        )
+                    }
+                    ProvideTextStyle(LocalTextStyle.current.tabular) {
+                        StatRow(
+                            playText = ui.playText,
+                            danmakuText = ui.danmakuText,
+                            dateText = if (!showAuthorLine) dateText else null,
+                        )
+                    }
+                    ui.meta?.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.labelSmall.tabular,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    ui.note?.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (ui.accentNote) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (overflow != null) {
+                    Box { overflow() }
+                }
+            },
+        ) { measurables, constraints ->
+            val overflowPlaceable = measurables.getOrNull(1)?.measure(Constraints())
+            val standardTouchPx = Dimens.MinTouchTarget.roundToPx()
+            val outsetPx = if (overflowPlaceable != null && overflowPlaceable.width >= standardTouchPx) {
+                Spacing.Tight.roundToPx()
+            } else {
+                0
+            }
+            val reservedEnd = if (overflowPlaceable != null) {
+                (overflowPlaceable.width - outsetPx).coerceAtLeast(0)
+            } else {
+                0
+            }
+            val metaMaxWidth = if (constraints.hasBoundedWidth) {
+                (constraints.maxWidth - reservedEnd).coerceAtLeast(0)
+            } else {
+                Constraints.Infinity
+            }
+            val metaMinWidth = if (constraints.hasBoundedWidth) metaMaxWidth else 0
+            val metaPlaceable = measurables[0].measure(
+                Constraints(minWidth = metaMinWidth, maxWidth = metaMaxWidth),
+            )
+            val layoutWidth = if (constraints.hasBoundedWidth) {
+                constraints.maxWidth
+            } else {
+                metaPlaceable.width + reservedEnd
+            }
+            val minFooterHeight = if (overflowPlaceable != null) {
+                GridOverflowMinFooterHeight.roundToPx()
+            } else {
+                0
+            }
+            val layoutHeight = maxOf(metaPlaceable.height, minFooterHeight)
+            layout(layoutWidth, layoutHeight) {
+                metaPlaceable.placeRelative(0, (layoutHeight - metaPlaceable.height) / 2)
+                if (overflowPlaceable != null) {
+                    val overflowX = layoutWidth - overflowPlaceable.width + outsetPx
+                    val overflowY = ((layoutHeight - overflowPlaceable.height) / 2)
+                        .coerceAtLeast(-Spacing.Hair.roundToPx())
+                    overflowPlaceable.placeRelative(overflowX, overflowY)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GridAuthorLine(
+    upName: String?,
+    dateText: String?,
+    avatarUrl: String?,
+    onUpClick: (() -> Unit)?,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .then(
+                    if (onUpClick != null) {
+                        Modifier
+                            .clip(MaterialTheme.shapes.extraSmall)
+                            .clickable(role = Role.Button, onClick = onUpClick)
+                    } else {
+                        Modifier
+                    },
+                ),
+        ) {
+            if (avatarUrl != null) {
+                Avatar(url = avatarUrl, size = GridAvatarSize)
+            }
+            if (upName != null) {
+                Text(
+                    text = upName,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (dateText != null) {
+            Text(
+                text = MetaSeparator + dateText,
+                style = MaterialTheme.typography.labelSmall.tabular,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
     }
 }
 

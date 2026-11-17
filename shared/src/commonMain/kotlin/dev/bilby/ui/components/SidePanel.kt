@@ -175,12 +175,12 @@ fun SidePanelToggle(open: Boolean, onOpenChange: (Boolean) -> Unit, description:
 }
 
 /**
- * 侧栏那一整张卡。取 surfaceContainerLow:里面转发、直播这些块是 surfaceContainerHigh,
- * 要比底子高出一档才分得开。
+ * 侧栏那一整张卡。取 `surfaceContainer` 配 `largeIncreased`(20dp):浅色与纯黑主题下都能和页面背景
+ * 拉开清晰边界,栏内转发、直播等次级块仍取高一档的 `surfaceContainerHigh`。
  */
 @Composable
 fun Modifier.panelCard(): Modifier =
-    clip(MaterialTheme.shapes.largeIncreased).background(MaterialTheme.colorScheme.surfaceContainerLow)
+    clip(MaterialTheme.shapes.largeIncreased).background(MaterialTheme.colorScheme.surfaceContainer)
 
 /**
  * 一栏的栏名,48dp 高,与标签栏同高,栏名与相邻的标签在同一条水平线上。只有一栏、无可切换时

@@ -1,8 +1,28 @@
 package dev.bilby.ui.theme
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 
 /**
@@ -125,4 +145,97 @@ object Motion {
         tween(Duration.Medium4, easing = Easing.StandardDecelerate)
     val PredictivePopFade: FiniteAnimationSpec<Float> =
         tween(Duration.Medium4, easing = Easing.StandardDecelerate)
+}
+
+private const val InteractiveCardPressScale = 0.985f
+
+/**
+ * 交互式卡片容器:指针悬停时平滑插值过渡底色([baseColor] → [hoverColor]),主按键或触屏按下时给
+ * `0.985f` 的空间弹簧微缩反馈(开启系统"减弱动效"或 [enableScale] 为 false 时关闭缩放)。
+ *
+ * 在 [PointerEventPass.Final] 被动观察指针状态、**绝不消费任何按下或抬起事件**,保证外层
+ * `ContextMenuBox` 以及内层 `clickable` / `combinedClickable` / 子按钮全部按原样响应。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun Modifier.interactiveCard(
+    shape: Shape = MaterialTheme.shapes.large,
+    baseColor: Color = Color.Transparent,
+    hoverColor: Color = MaterialTheme.colorScheme.surfaceContainerLow,
+    enableScale: Boolean = true,
+): Modifier {
+    val reducedMotion = rememberReducedMotion()
+    val motion = MaterialTheme.motionScheme
+    var hovered by remember { mutableStateOf(false) }
+    var pressed by remember { mutableStateOf(false) }
+
+    // 透明端点的 RGB 与对端对齐(alpha = 0),避免浅色主题下从纯黑透明插值时途经灰雾。
+    val restingColor = if (baseColor.alpha == 0f && hoverColor.alpha > 0f) {
+        hoverColor.copy(alpha = 0f)
+    } else {
+        baseColor
+    }
+    val activeHoverColor = if (hoverColor.alpha == 0f && baseColor.alpha > 0f) {
+        baseColor.copy(alpha = 0f)
+    } else {
+        hoverColor
+    }
+
+    val containerColor by animateColorAsState(
+        targetValue = if (hovered) activeHoverColor else restingColor,
+        animationSpec = motion.fastEffectsSpec(),
+        label = "interactiveCardColor",
+    )
+    val scale by animateFloatAsState(
+        targetValue = if (enableScale && !reducedMotion && pressed) InteractiveCardPressScale else 1f,
+        animationSpec = motion.fastSpatialSpec(),
+        label = "interactiveCardScale",
+    )
+
+    return this
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+        .clip(shape)
+        .background(containerColor, shape)
+        .pointerInput(Unit) {
+            try {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Final)
+                        val isTouch = event.changes.any { it.type == PointerType.Touch }
+                        when (event.type) {
+                            PointerEventType.Enter -> if (!isTouch) hovered = true
+                            PointerEventType.Exit -> {
+                                hovered = false
+                                pressed = false
+                            }
+                            PointerEventType.Move -> {
+                                if (isTouch) {
+                                    hovered = false
+                                } else if (!hovered) {
+                                    hovered = true
+                                }
+                                if (pressed && event.changes.any { !it.pressed || it.isConsumed }) {
+                                    pressed = false
+                                }
+                            }
+                            else -> Unit
+                        }
+                        val anyPrimaryPressed =
+                            event.changes.any { it.pressed } && !event.buttons.isSecondaryPressed
+                        if (!anyPrimaryPressed) {
+                            pressed = false
+                        } else if (event.type == PointerEventType.Press) {
+                            if (isTouch) hovered = false
+                            pressed = true
+                        }
+                    }
+                }
+            } finally {
+                hovered = false
+                pressed = false
+            }
+        }
 }

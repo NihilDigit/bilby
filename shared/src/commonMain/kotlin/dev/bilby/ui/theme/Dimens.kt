@@ -143,8 +143,17 @@ object Dimens {
     /** 成排站着的头像:首页那一排关注、正在直播那一叠的前脸。 */
     val AvatarStack = 48.dp
 
+    /** 宽屏网格卡片([dev.bilby.ui.components.VideoGridCard])的封面圆角。 */
+    val CoverCornerGrid = 14.dp
+
+    /** 宽屏视频网格单元格的最小宽度,自适应多列据此折算列数。 */
+    val VideoGridMinCellWidth = 248.dp
+
     /** 页头的大头像:空间页、我的。 */
     val AvatarHeader = 56.dp
+
+    /** 空间头图与个人页身份卡的主视觉头像。 */
+    val AvatarHero = 72.dp
 
     /**
      * 可点区域的最小边长。M3 与 Android 无障碍规范都取 48dp;

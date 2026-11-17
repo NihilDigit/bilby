@@ -12,6 +12,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import dev.bilby.data.AppearancePrefs
 import dev.bilby.data.ThemeMode
 
@@ -96,22 +97,52 @@ private fun resolveSchemes(appearance: AppearancePrefs): PaletteSchemes {
 }
 
 /**
- * 纯黑:页面底色压到 #000,几档容器色跟着各降一档,最高那一档空出来。
+ * 纯黑:页面底色压到 #000,四档容器色保留原色板的色相倾向并拉开清晰、均匀的明度阶梯。
  *
- * **降档而不是只改底色。** 只把 background/surface 改成纯黑的话,surfaceContainerLow 那一档
- * (列表、卡片常用)和黑底之间的差一下子拉大,卡片浮成一块块灰补丁;整体下移一档,层次的
- * 间距还是原来那样,只是整块沉下去。
+ * 不能简单按槽位整体顺移一格:M3 深色基线里 `surfaceContainerLowest`(tone 4)几乎贴着纯黑,
+ * 而 `surfaceContainerLow`(tone 10)与 `surfaceContainer`(tone 12)只差两档——顺移一格会让
+ * `Low` 陷进黑底看不见、`High` 与 `Container` 挤成同一片灰。在 Oklab 空间插值重排后,
+ * `#000000 < Low < Container < High < Highest` 每一级都有稳定的可辨跨度。
  */
 private fun ColorScheme.toPureBlack(): ColorScheme = copy(
     background = Color.Black,
     surface = Color.Black,
     surfaceDim = Color.Black,
     surfaceContainerLowest = Color.Black,
-    surfaceContainerLow = surfaceContainerLowest,
-    surfaceContainer = surfaceContainerLow,
-    surfaceContainerHigh = surfaceContainer,
-    surfaceContainerHighest = surfaceContainerHigh,
+    surfaceContainerLow = lerp(surface, surfaceContainerLow, 0.2f),
+    surfaceContainer = lerp(surfaceContainerLow, surfaceContainer, 0.35f),
+    surfaceContainerHigh = lerp(surfaceContainer, surfaceContainerHigh, 0.65f),
+    surfaceContainerHighest = lerp(surfaceContainerHigh, surfaceContainerHighest, 0.75f),
 )
+
+/**
+ * 夜间静息模式的专属主题封装。
+ *
+ * 无论外层日间主题是浅色、深色还是壁纸动态色,进入夜间静息视图后统一使用 [NightSanctuaryColorScheme],
+ * 并同步提供深色下的 [LocalMentionColor]、[LocalPlayerColorScheme] 与 [LocalIsDarkTheme]。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun BilbyNightSanctuaryTheme(content: @Composable () -> Unit) {
+    MaterialExpressiveTheme(
+        colorScheme = NightSanctuaryColorScheme,
+        motionScheme = MotionScheme.expressive(),
+        typography = BilbyTypography,
+        shapes = BilbyShapes,
+    ) {
+        CompositionLocalProvider(
+            LocalMentionColor provides FixedColors.MentionDark,
+            LocalPlayerColorScheme provides NightSanctuaryColorScheme,
+            LocalIsDarkTheme provides true,
+        ) {
+            Surface(
+                color = NightSanctuaryColorScheme.surface,
+                contentColor = NightSanctuaryColorScheme.onSurface,
+                content = content,
+            )
+        }
+    }
+}
 
 /** 外层主题的深色那一套,[PlayerTheme] 用它:取色来源、纯黑与否都跟外层一致。 */
 private val LocalPlayerColorScheme = staticCompositionLocalOf { BilbyDarkColors }
