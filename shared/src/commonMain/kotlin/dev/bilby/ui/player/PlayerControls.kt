@@ -2,6 +2,7 @@ package dev.bilby.ui.player
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -89,6 +90,7 @@ import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.PlayerTheme
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.rememberClockFont
+import dev.bilby.ui.theme.tabular
 
 /**
  * 控制条上的通用件。**视频与直播共用** —— 它们长在同一个 [PlayerShell] 的控制条 slot 里,
@@ -304,18 +306,12 @@ internal fun PlayerHudOverlay(hud: PlayerHud.Seek, modifier: Modifier = Modifier
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(
                         formatDurationMillis(hud.targetMillis),
-                        style = MaterialTheme.typography.headlineSmall.copy(
-                            fontFamily = readoutFont,
-                            fontFeatureSettings = "tnum",
-                        ),
+                        style = MaterialTheme.typography.headlineSmall.copy(fontFamily = readoutFont).tabular,
                         color = FixedColors.OnMedia,
                     )
                     Text(
                         " / ${formatDurationMillis(hud.durationMillis)}",
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontFamily = readoutFont,
-                            fontFeatureSettings = "tnum",
-                        ),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = readoutFont).tabular,
                         color = FixedColors.OnMedia.copy(alpha = SecondaryTextAlpha),
                         modifier = Modifier.padding(bottom = Spacing.Hair / 2),
                     )
@@ -328,7 +324,7 @@ internal fun PlayerHudOverlay(hud: PlayerHud.Seek, modifier: Modifier = Modifier
                             if (hud.deltaMillis > 0) Res.string.player_seek_forward else Res.string.player_seek_backward,
                             seconds,
                         ),
-                        style = MaterialTheme.typography.labelLarge,
+                        style = MaterialTheme.typography.labelLarge.tabular,
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
@@ -368,12 +364,13 @@ internal fun PlayerLevelEdgeBar(
             .width(LevelEdgePillWidth)
             .clip(CircleShape)
             .background(FixedColors.ScrimOnMedia)
+            .border(HudSpecularBorderWidth, HudSpecularBorderColor, CircleShape)
             .padding(horizontal = 6.dp, vertical = 10.dp)
             .semantics(mergeDescendants = true) { contentDescription = hud.label },
     ) {
         Text(
             text = "${(clamped * 100).roundToInt()}",
-            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+            style = MaterialTheme.typography.labelSmall.tabular,
             color = FixedColors.OnMedia,
             maxLines = 1,
             softWrap = false,
@@ -439,7 +436,7 @@ internal fun DoubleTapSeekHint(deltaMillis: Long, modifier: Modifier = Modifier)
                     if (forward) Res.string.player_seek_forward else Res.string.player_seek_backward,
                     kotlin.math.abs(deltaMillis) / 1000,
                 ),
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.labelLarge.tabular,
                 color = FixedColors.OnMedia,
             )
         }
@@ -500,6 +497,10 @@ internal fun mediaControlContainer(): Color =
     MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = MediaControlContainerAlpha)
 
 private const val MediaControlContainerAlpha = 0.72f
+
+/** 深色半透明浮层的高光细描边,保证在雪景/纯白视频帧上仍能勾出控件边界。 */
+val HudSpecularBorderWidth = 1.dp
+val HudSpecularBorderColor = Color.White.copy(alpha = 0.08f)
 
 /**
  * 一颗浮在画面上的图标按钮(全屏、设置、弹幕开关这类),带半透明容器,理由见
@@ -563,13 +564,20 @@ internal fun ControlButton(
                 .height(ControlChipHeight)
                 .clip(CircleShape)
                 .background(container)
+                .then(
+                    if (!expanded) {
+                        Modifier.border(HudSpecularBorderWidth, HudSpecularBorderColor, CircleShape)
+                    } else {
+                        Modifier
+                    },
+                )
                 .padding(horizontal = if (label != null) Spacing.Cozy else Spacing.Tight - Spacing.Hair / 2),
         ) {
             icon(tint)
             if (label != null) {
                 Text(
                     label,
-                    style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                    style = MaterialTheme.typography.labelMedium.tabular,
                     color = tint,
                     maxLines = 1,
                     // **不设宽度上限,也不截断**:这里的标签是画质档名("1080P60"、"1080P 高码率"),
@@ -658,7 +666,14 @@ internal fun PlayerVolumeControl(
             modifier = Modifier
                 .height(ControlChipHeight)
                 .clip(CircleShape)
-                .background(containerColor),
+                .background(containerColor)
+                .then(
+                    if (!surfaceTone) {
+                        Modifier.border(HudSpecularBorderWidth, HudSpecularBorderColor, CircleShape)
+                    } else {
+                        Modifier
+                    },
+                ),
         ) {
             PlayerTooltip(description, shortcut = "M") {
                 Box(

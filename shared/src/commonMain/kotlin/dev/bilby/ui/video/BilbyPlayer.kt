@@ -2,6 +2,7 @@ package dev.bilby.ui.video
 
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -60,12 +61,9 @@ import dev.bilby.ui.player.PlaybackSpeedController
 import dev.bilby.ui.player.PlayerGestureOptions
 import dev.bilby.ui.player.playerControlBar
 import dev.bilby.ui.player.PlayerIconButton
-import dev.bilby.ui.player.PlayerSidePanel
-import dev.bilby.ui.components.rememberExpandedSheetState
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material3.ModalBottomSheet
+import dev.bilby.ui.player.HudSpecularBorderColor
+import dev.bilby.ui.player.HudSpecularBorderWidth
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
 import dev.bilby.ui.player.PlayerTooltip
 import dev.bilby.ui.player.computeItemRemainingMillis
 import dev.bilby.ui.player.formatSpeed
@@ -88,6 +86,7 @@ import dev.bilby.ui.components.SeekBarSegment
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import dev.bilby.danmaku.DanmakuVote
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
@@ -136,7 +135,6 @@ private val SubtitleBandClearance = 48.dp
  *   Surface 也走它:`COMMAND_SET_VIDEO_SURFACE` 在 MediaController 上是有的,Surface 作为
  *   Parcelable 跨 binder 送到 session 那一侧。
  */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun BilbyPlayer(
     player: PlayerHandle,
@@ -309,6 +307,7 @@ fun BilbyPlayer(
                 label = "subtitle-bottom",
             )
             cue?.let {
+                val subtitleShape = RoundedCornerShape(6.dp)
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -321,8 +320,9 @@ fun BilbyPlayer(
                         color = FixedColors.OnMedia,
                         textAlign = TextAlign.Center,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(subtitleShape)
                             .background(FixedColors.ScrimOnMedia)
+                            .border(HudSpecularBorderWidth, HudSpecularBorderColor, subtitleShape)
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     )
                 }
@@ -704,8 +704,7 @@ private fun TimeLabel(
 ) {
     Text(
         text = prefix + formatDurationMillis(millis),
-        style = (if (large) MaterialTheme.typography.labelLarge else MaterialTheme.typography.labelMedium)
-            .copy(fontFeatureSettings = "tnum"),
+        style = (if (large) MaterialTheme.typography.labelLarge else MaterialTheme.typography.labelMedium).tabular,
         color = if (secondary) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
         maxLines = 1,
         modifier = modifier,

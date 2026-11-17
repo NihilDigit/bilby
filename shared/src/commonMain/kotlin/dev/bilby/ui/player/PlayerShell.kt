@@ -12,9 +12,12 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
@@ -29,6 +32,7 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.VolumeDown
@@ -41,6 +45,10 @@ import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.outlined.Lan
+import androidx.compose.material.icons.outlined.SignalCellularAlt
+import androidx.compose.material.icons.outlined.Wifi
+import androidx.compose.material.icons.outlined.WifiOff
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.Icon
@@ -61,9 +69,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -106,6 +118,7 @@ import dev.bilby.ui.components.rememberLoadingVisible
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.PlayerTheme
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -386,6 +399,7 @@ fun PlayerShell(
     val playback = LocalPlaybackHost.current
     val brightness = rememberWindowBrightness()
     val volume = rememberMediaVolume()
+    val systemStatus = rememberPlayerSystemStatus(enabled = isFullscreen && !pip)
 
     /** 正在进行的手势;横划与纵划在第一段位移里定死,见下面的 onDrag。 */
     var gesture by remember { mutableStateOf<PlayerGesture?>(null) }
@@ -1114,6 +1128,10 @@ fun PlayerShell(
                 // 播放器现在怎么放"(倍速、清晰度、字幕、弹幕、全屏),而切集回答的是"在放
                 // 哪一条",和它左边那个标题是同一类。风格指南 §4.3 那条判据问的正是这个。
                 topBarActions()
+                PlayerStatusCluster(
+                    status = systemStatus,
+                    modifier = Modifier.padding(start = Spacing.Tight),
+                )
             }
         }
 
@@ -1275,13 +1293,223 @@ private fun accumulateNudge(current: Long?, step: Long): Long =
 
 @Composable
 internal fun Overlay(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val shape = MaterialTheme.shapes.small
     Box(
         modifier = modifier
-            .clip(MaterialTheme.shapes.small)
+            .clip(shape)
             .background(FixedColors.ScrimOnMedia)
+            .border(HudSpecularBorderWidth, HudSpecularBorderColor, shape)
             .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
     ) {
         content()
+    }
+}
+
+private val StatusClusterHorizontalPadding = 10.dp
+private val StatusClusterVerticalPadding = 5.dp
+private val StatusNetworkIconSize = 13.dp
+private val StatusIconLabelGap = 3.dp
+private val BatteryGlyphWidth = 18.dp
+private val BatteryGlyphChargingWidth = 25.dp
+private val BatteryGlyphHeight = 11.dp
+private val BatteryBodyWidth = 15.5.dp
+private val BatteryStrokeWidth = 1.15.dp
+private val BatteryBodyCorner = 2.4.dp
+private val BatteryFillInset = 2.1.dp
+private val BatteryFillCorner = 1.dp
+private val BatteryCapGap = 0.8.dp
+private val BatteryCapWidth = 1.4.dp
+private val BatteryCapHeight = 4.2.dp
+private val BatteryCapCorner = 0.8.dp
+private val BatteryBoltStart = 18.2.dp
+private val BatteryBoltWidth = 6.5.dp
+private const val LowBatteryThreshold = 15
+private const val StatusSecondaryAlpha = 0.88f
+private val ChargingAccentColor = Color(0xFF8CE99A)
+
+/**
+ * 全屏顶栏最右端的系统状态胶囊:网络类别、电量与充电闪电、当前时间(`HH:mm`)。
+ *
+ * 系统状态栏在全屏下已隐藏,此胶囊随播放器控件一同显隐;各项之间仅用 `8.dp` 间距分隔,不出现中点符号。
+ */
+@Composable
+private fun PlayerStatusCluster(
+    status: PlayerSystemStatus,
+    modifier: Modifier = Modifier,
+) {
+    val hasNetwork = status.network != NetworkKind.Unknown
+    val battery = status.battery
+    val hasTime = status.timeText.isNotEmpty()
+    if (!hasNetwork && battery == null && !hasTime) return
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        modifier = modifier
+            .clip(CircleShape)
+            .background(mediaControlContainer())
+            .border(HudSpecularBorderWidth, HudSpecularBorderColor, CircleShape)
+            .padding(
+                horizontal = StatusClusterHorizontalPadding,
+                vertical = StatusClusterVerticalPadding,
+            ),
+    ) {
+        if (hasNetwork) {
+            val isOffline = status.network == NetworkKind.Offline
+            val netColor = if (isOffline) {
+                MaterialTheme.colorScheme.error
+            } else {
+                FixedColors.OnMedia.copy(alpha = StatusSecondaryAlpha)
+            }
+            val netIcon = when (status.network) {
+                NetworkKind.Wifi -> Icons.Outlined.Wifi
+                NetworkKind.Cellular5G,
+                NetworkKind.CellularLte,
+                NetworkKind.CellularOther -> Icons.Outlined.SignalCellularAlt
+                NetworkKind.Ethernet -> Icons.Outlined.Lan
+                NetworkKind.Offline -> Icons.Outlined.WifiOff
+                NetworkKind.Unknown -> Icons.Outlined.Wifi
+            }
+            val netLabel = when (status.network) {
+                NetworkKind.Wifi -> stringResource(Res.string.player_net_wifi)
+                NetworkKind.Cellular5G -> stringResource(Res.string.player_net_5g)
+                NetworkKind.CellularLte -> stringResource(Res.string.player_net_lte)
+                NetworkKind.CellularOther -> stringResource(Res.string.player_net_cellular)
+                NetworkKind.Ethernet -> stringResource(Res.string.player_net_ethernet)
+                NetworkKind.Offline -> stringResource(Res.string.player_net_offline)
+                NetworkKind.Unknown -> ""
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(StatusIconLabelGap),
+            ) {
+                Icon(
+                    imageVector = netIcon,
+                    contentDescription = null,
+                    tint = netColor,
+                    modifier = Modifier.size(StatusNetworkIconSize),
+                )
+                Text(
+                    text = netLabel,
+                    style = MaterialTheme.typography.labelSmall.tabular,
+                    color = netColor,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+        }
+
+        if (battery != null) {
+            val isLow = !battery.isCharging && battery.percent <= LowBatteryThreshold
+            val textAndOutlineTint = if (isLow) {
+                MaterialTheme.colorScheme.error
+            } else {
+                FixedColors.OnMedia.copy(alpha = StatusSecondaryAlpha)
+            }
+            val fillTint = when {
+                battery.isCharging -> ChargingAccentColor
+                isLow -> MaterialTheme.colorScheme.error
+                else -> FixedColors.OnMedia.copy(alpha = StatusSecondaryAlpha)
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+            ) {
+                BatteryGlyph(
+                    percent = battery.percent,
+                    isCharging = battery.isCharging,
+                    outlineColor = textAndOutlineTint,
+                    fillColor = fillTint,
+                )
+                Text(
+                    text = "${battery.percent}%",
+                    style = MaterialTheme.typography.labelSmall.tabular,
+                    color = textAndOutlineTint,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+        }
+
+        if (hasTime) {
+            Text(
+                text = status.timeText,
+                style = MaterialTheme.typography.labelMedium.tabular,
+                color = FixedColors.OnMedia,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+    }
+}
+
+@Composable
+private fun BatteryGlyph(
+    percent: Int,
+    isCharging: Boolean,
+    outlineColor: Color,
+    fillColor: Color,
+) {
+    val boltPath = remember { Path() }
+    Canvas(
+        modifier = Modifier.size(
+            width = if (isCharging) BatteryGlyphChargingWidth else BatteryGlyphWidth,
+            height = BatteryGlyphHeight,
+        ),
+    ) {
+        val strokePx = BatteryStrokeWidth.toPx()
+        val bodyW = BatteryBodyWidth.toPx()
+        val bodyH = size.height
+        val cornerPx = BatteryBodyCorner.toPx()
+
+        drawRoundRect(
+            color = outlineColor,
+            topLeft = Offset(strokePx / 2f, strokePx / 2f),
+            size = Size(bodyW - strokePx, bodyH - strokePx),
+            cornerRadius = CornerRadius(cornerPx, cornerPx),
+            style = Stroke(width = strokePx),
+        )
+
+        val capW = BatteryCapWidth.toPx()
+        val capH = BatteryCapHeight.toPx()
+        val capCorner = BatteryCapCorner.toPx()
+        drawRoundRect(
+            color = outlineColor.copy(alpha = 0.75f),
+            topLeft = Offset(bodyW + BatteryCapGap.toPx(), (bodyH - capH) / 2f),
+            size = Size(capW, capH),
+            cornerRadius = CornerRadius(capCorner, capCorner),
+        )
+
+        val inset = BatteryFillInset.toPx()
+        val maxFillW = (bodyW - inset * 2f).coerceAtLeast(0f)
+        val fillH = (bodyH - inset * 2f).coerceAtLeast(0f)
+        val clamped = percent.coerceIn(0, 100)
+        if (clamped > 0 && maxFillW > 0f && fillH > 0f) {
+            val minVisiblePx = 1.5.dp.toPx().coerceAtMost(maxFillW)
+            val fillW = (maxFillW * (clamped / 100f)).coerceAtLeast(minVisiblePx)
+            val fillCorner = BatteryFillCorner.toPx()
+            drawRoundRect(
+                color = fillColor,
+                topLeft = Offset(inset, inset),
+                size = Size(fillW, fillH),
+                cornerRadius = CornerRadius(fillCorner, fillCorner),
+            )
+        }
+
+        if (isCharging) {
+            val x0 = BatteryBoltStart.toPx()
+            val w = BatteryBoltWidth.toPx()
+            val h = bodyH
+            boltPath.reset()
+            boltPath.moveTo(x0 + 0.58f * w, 0.04f * h)
+            boltPath.lineTo(x0 + 0.14f * w, 0.56f * h)
+            boltPath.lineTo(x0 + 0.46f * w, 0.56f * h)
+            boltPath.lineTo(x0 + 0.36f * w, 0.96f * h)
+            boltPath.lineTo(x0 + 0.86f * w, 0.42f * h)
+            boltPath.lineTo(x0 + 0.54f * w, 0.42f * h)
+            boltPath.close()
+            drawPath(path = boltPath, color = ChargingAccentColor)
+        }
     }
 }
 
