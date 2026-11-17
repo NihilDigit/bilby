@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -162,6 +164,85 @@ class AgentLoopTest {
         assertEquals(ChatMessage.ROLE_SYSTEM, seenRoles.first())
         // 而且只有一条:history 里也存一份的话,每轮都会再叠一条上去。
         assertEquals(1, seenRoles.count { it == ChatMessage.ROLE_SYSTEM })
+    }
+
+    @Test
+    fun `交卷时最终回答与签名一起落进历史供下一轮续接`() = runTest {
+        val toolSig = buildJsonObject {
+            put("google", buildJsonObject { put("thought_signature", JsonPrimitive("sig_tool_step0")) })
+        }
+        val finalSig = buildJsonObject {
+            put("google", buildJsonObject { put("thought_signature", JsonPrimitive("sig_answer_step1")) })
+        }
+        var turn2Received: List<ChatMessage> = emptyList()
+        var turn = 0
+        val streamer = FakeStreamer { messages ->
+            if (turn == 0) {
+                if (messages.none { it.role == ChatMessage.ROLE_TOOL }) {
+                    listOf(
+                        LlmDelta.ToolCalls(
+                            listOf(
+                                ToolCall(
+                                    id = "call_1",
+                                    function = FunctionCall("search_videos", """{"kw":"x"}"""),
+                                    extraContent = toolSig,
+                                ),
+                            ),
+                        ),
+                        LlmDelta.Done("tool_calls"),
+                    )
+                } else {
+                    listOf(
+                        LlmDelta.Text("先看这条 [[BV1]]"),
+                        LlmDelta.ExtraContent(finalSig),
+                        LlmDelta.Done("stop"),
+                    )
+                }
+            } else {
+                turn2Received = messages
+                answer("追问回答 [[BV1]]")
+            }
+        }
+        val loop = AgentLoop(streamer, ToolRegistry(listOf(FakeTool("search_videos", setOf("BV1")))), json)
+
+        var history: List<ChatMessage> = emptyList()
+        var seen: Set<String> = emptySet()
+        loop.run(
+            AgentIntent.Query("第一问"),
+            onTurnComplete = { newMessages, seenBvids, _ ->
+                history = newMessages
+                seen = seenBvids
+            },
+        ).toList()
+
+        assertEquals(
+            listOf(
+                ChatMessage.ROLE_USER,
+                ChatMessage.ROLE_ASSISTANT,
+                ChatMessage.ROLE_TOOL,
+                ChatMessage.ROLE_ASSISTANT,
+            ),
+            history.map { it.role },
+        )
+        assertEquals(toolSig, history[1].toolCalls?.single()?.extraContent)
+        assertEquals("先看这条 [[BV1]]", history[3].content)
+        assertEquals(finalSig, history[3].extraContent)
+
+        turn = 1
+        val turn2Events = loop.run(AgentIntent.Query("追问"), history = history, priorBvids = seen).toList()
+        assertEquals(listOf("BV1"), turn2Events.filterIsInstance<AgentEvent.Answer>().single().bvids)
+        assertEquals(
+            listOf(
+                ChatMessage.ROLE_SYSTEM,
+                ChatMessage.ROLE_USER,
+                ChatMessage.ROLE_ASSISTANT,
+                ChatMessage.ROLE_TOOL,
+                ChatMessage.ROLE_ASSISTANT,
+                ChatMessage.ROLE_USER,
+            ),
+            turn2Received.map { it.role },
+        )
+        assertEquals(finalSig, turn2Received[4].extraContent)
     }
 
     /** 模型回话即交卷 —— 没有 submit_answer 那层信封了,答案就是带 [[bvid]] 的散文。 */
