@@ -20,6 +20,7 @@ import dev.bilby.ui.comment.CommentUiState
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
+import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.theme.Spacing
 
 /**
@@ -73,12 +74,14 @@ fun DynamicDetailScreen(
                     .padding(top = padding.calculateTopPadding())
                     .consumeWindowInsets(PaddingValues(top = padding.calculateTopPadding())),
             ) {
+                val selectableText = !LocalPointerSource.current.isTouchLike
                 val cardView: @Composable () -> Unit = {
                     DynamicCardView(
                         card = card,
                         onAction = onAction,
                         onLike = onLike,
                         openable = false,
+                        selectableText = selectableText,
                         modifier = Modifier.padding(
                             horizontal = Spacing.Comfortable,
                             vertical = Spacing.Cozy,

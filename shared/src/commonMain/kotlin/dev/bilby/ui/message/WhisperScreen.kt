@@ -33,6 +33,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -64,6 +67,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -71,14 +75,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import dev.bilby.stringResource
 import androidx.compose.ui.semantics.onLongClick
@@ -100,9 +103,11 @@ import dev.bilby.ui.BackHandler
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.BiliRichText
+import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.EmotePickerPanel
 import dev.bilby.ui.components.EmoteToggleButton
 import dev.bilby.ui.components.LocalPointerSource
+import dev.bilby.ui.components.NeedsCopyNotice
 import dev.bilby.ui.components.VideoCover
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FirstScreenState
@@ -113,11 +118,15 @@ import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.components.SelectableTextDialog
 import dev.bilby.ui.components.PillInputField
 import dev.bilby.ui.components.insertAtCursor
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.plainTextClip
 import dev.bilby.ui.components.rememberComplementEmotePanelHeight
 import dev.bilby.ui.components.rememberReplyEmoteState
 import dev.bilby.formatDurationSeconds
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
+import kotlinx.coroutines.launch
 
 /**
  * 一个私信会话。
@@ -145,6 +154,10 @@ fun WhisperScreen(
     modifier: Modifier = Modifier,
 ) {
     val snackbar = remember { SnackbarHostState() }
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    val copiedNotice = stringResource(Res.string.comment_copied)
+    val clipLabel = stringResource(Res.string.action_copy_message)
     var viewingImage by remember { mutableStateOf<String?>(null) }
     var copyingText by remember { mutableStateOf<String?>(null) }
     Scaffold(
@@ -198,6 +211,14 @@ fun WhisperScreen(
                             onOpenArticle = onOpenArticle,
                             onOpenLink = onOpenLink,
                             onViewImage = { viewingImage = it },
+                            onCopyMessage = { messageText ->
+                                if (messageText.isNotEmpty()) {
+                                    scope.launch {
+                                        clipboard.setClipEntry(plainTextClip(clipLabel, messageText))
+                                        if (NeedsCopyNotice) snackbar.showSnackbar(copiedNotice)
+                                    }
+                                }
+                            },
                             onCopyText = { copyingText = it },
                         ),
                     )
@@ -225,7 +246,9 @@ private class BubbleActions(
     val onOpenArticle: (String) -> Unit,
     val onOpenLink: (String) -> Unit,
     val onViewImage: (String) -> Unit,
-    /** 长按文字气泡,把原文摊开来复制,做法同评论区(见 SelectableTextDialog)。 */
+    /** 单击菜单里的「复制消息」,整条写入剪贴板。 */
+    val onCopyMessage: (String) -> Unit,
+    /** 菜单里的「选择文本」,把原文摊开来自由选词复制(见 SelectableTextDialog)。 */
     val onCopyText: (String) -> Unit,
 )
 
@@ -342,7 +365,7 @@ private fun TimeSeparator(epochSeconds: Long) {
         Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = CircleShape) {
             Text(
                 text = formatChatTime(epochSeconds),
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.tabular,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair / 2),
             )
@@ -450,7 +473,6 @@ private fun PushedVideoCard(row: ChatRow.Pushed, onClick: () -> Unit) {
  */
 @Composable
 private fun ChatBubble(row: ChatRow.Bubble, actions: BubbleActions) {
-    val haptics = LocalHapticFeedback.current
     val mine = row.mine
     val content = row.message.content
     val shape = bubbleShape(mine, row.joinsPrevious, row.joinsNext)
@@ -458,6 +480,10 @@ private fun ChatBubble(row: ChatRow.Bubble, actions: BubbleActions) {
         // 图片不套气泡:图自己就是那块形状,外面再垫一层底色只是多一圈边。
         if (content is WhisperContent.Image) {
             ChatImage(content, shape, onClick = { actions.onViewImage(content.url) })
+            return@Box
+        }
+        if (content is WhisperContent.Text) {
+            TextBubble(content = content, mine = mine, shape = shape, actions = actions)
             return@Box
         }
         val secondary = if (mine) {
@@ -469,27 +495,6 @@ private fun ChatBubble(row: ChatRow.Bubble, actions: BubbleActions) {
             is WhisperContent.Video -> Modifier.clickable { actions.onOpenVideo(content.bvid) }
             is WhisperContent.Article -> Modifier.clickable { actions.onOpenArticle(content.id) }
             is WhisperContent.Link -> Modifier.clickable { actions.onOpenLink(content.url) }
-            // 文字气泡只认长按。不用 combinedClickable:它要求一个单击动作,单击时的涟漪之后
-            // 什么都不发生,读起来像按坏了。
-            is WhisperContent.Text -> {
-                val plain = content.spans.plainText()
-                Modifier
-                    .pointerInput(plain) {
-                        detectTapGestures(
-                            onLongPress = {
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                actions.onCopyText(plain)
-                            },
-                        )
-                    }
-                    .semantics {
-                        onLongClick {
-                            actions.onCopyText(plain)
-                            true
-                        }
-                    }
-            }
-
             else -> Modifier
         }
         Surface(
@@ -500,14 +505,6 @@ private fun ChatBubble(row: ChatRow.Bubble, actions: BubbleActions) {
             modifier = Modifier.clip(shape).then(tap),
         ) {
             when (content) {
-                is WhisperContent.Text -> BiliRichText(
-                    spans = content.spans,
-                    style = MaterialTheme.typography.bodyLarge,
-                    onLinkClick = actions.onOpenLink,
-                    onMentionClick = {},
-                    modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
-                )
-
                 is WhisperContent.Video -> CardBody(content.coverUrl, content.title, subtitle = null, secondary)
 
                 is WhisperContent.Article -> CardBody(
@@ -533,13 +530,104 @@ private fun ChatBubble(row: ChatRow.Bubble, actions: BubbleActions) {
                     modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
                 )
 
-                // 图片在上面单独画;撤回、提示与投稿推送是居中的行(见 buildChatRows),到不了这里。
+                // 图片与纯文本在上面单独画;撤回、提示与投稿推送是居中的行(见 buildChatRows),到不了这里。
+                is WhisperContent.Text,
                 is WhisperContent.Image,
                 is WhisperContent.Hint,
                 is WhisperContent.VideoPush,
                 WhisperContent.Withdrawn,
                 -> Unit
             }
+        }
+    }
+}
+
+/**
+ * 文本气泡:右键、键盘菜单键或触屏长按弹出 [ContextMenuBox](「复制消息」「选择文本」)。
+ *
+ * 文字气泡本身没有单击落点,所以 `onClick` 传 null,避免无动作的空涟漪;气泡内的链接由
+ * [BiliRichText] 的 `LinkAnnotation` 自己接住点击。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun TextBubble(
+    content: WhisperContent.Text,
+    mine: Boolean,
+    shape: Shape,
+    actions: BubbleActions,
+) {
+    val plain = remember(content.spans) { content.spans.plainText() }
+    val copyMessageLabel = stringResource(Res.string.action_copy_message)
+    val selectTextLabel = stringResource(Res.string.action_select_text)
+    val menuLabel = stringResource(Res.string.menu_item_actions)
+    val bubbleColor = if (mine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh
+    val bubbleContentColor = if (mine) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+
+    if (plain.isBlank()) {
+        Surface(
+            color = bubbleColor,
+            contentColor = bubbleContentColor,
+            shape = shape,
+            modifier = Modifier.clip(shape),
+        ) {
+            BiliRichText(
+                spans = content.spans,
+                style = MaterialTheme.typography.bodyLarge,
+                onLinkClick = actions.onOpenLink,
+                onMentionClick = {},
+                modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+            )
+        }
+        return
+    }
+
+    ContextMenuBox(
+        onClick = null,
+        menuLabel = menuLabel,
+        menu = { close ->
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    actions.onCopyMessage(plain)
+                },
+                text = { Text(copyMessageLabel) },
+                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                shape = menuItemShape(0, 2),
+            )
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    actions.onCopyText(plain)
+                },
+                text = { Text(selectTextLabel) },
+                leadingIcon = { Icon(Icons.Outlined.SelectAll, contentDescription = null) },
+                shape = menuItemShape(1, 2),
+            )
+        },
+    ) { openMenu ->
+        Surface(
+            color = bubbleColor,
+            contentColor = bubbleContentColor,
+            shape = shape,
+            modifier = Modifier
+                .clip(shape)
+                .pointerInput(openMenu) {
+                    detectTapGestures(onLongPress = { openMenu() })
+                }
+                .semantics {
+                    onLongClick(label = menuLabel) {
+                        openMenu()
+                        true
+                    }
+                },
+        ) {
+            BiliRichText(
+                spans = content.spans,
+                style = MaterialTheme.typography.bodyLarge,
+                onLinkClick = actions.onOpenLink,
+                onMentionClick = {},
+                modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+            )
         }
     }
 }

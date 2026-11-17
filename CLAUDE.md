@@ -76,7 +76,8 @@ none of them has gets a new route there — never a request issued around it.
 locally and do not refetch; refetching makes the number flicker twice on popular videos.
 
 **Never separate metadata with a middle dot.** Not `·`, not `•`, not any of their
-lookalikes. Use `MetaSeparator` (two spaces, in `ui/components/VideoRow.kt`). The last
+lookalikes. Use `MetaSeparator` (two spaces, in `ui/components/VideoRow.kt`) — including in
+prefixed queue source titles (`合集  …`, `收藏夹  …`, `夜间模式  …`). The last
 segment of these lines is usually the one that gets truncated — an uploader name, an IP
 region — and the dot truncates with it, leaving a dot hanging at the end of the line; on a
 narrow screen the dots also wrap before the content does. A literal dot as a *selection
@@ -155,9 +156,12 @@ queue was built has expired by the time a later entry is reached. A resolution f
 reach `maybeThrowSourceInfoRefreshError`; swallowing one leaves the player buffering forever
 with an empty log.
 
-Multi-part videos and collections are different things. Shuffle changes play order only; the
-displayed list keeps its order and the highlight scrolls, so the queue panel's position
-counter is the index in the list, not the position in the shuffled play order.
+Multi-part videos and collections are different things. Reverse and shuffle (`QueueOrder`)
+change play order only; the displayed list keeps its natural order and the highlight scrolls,
+while `QueuePagination` tracks `X / N` source position/total and boundary error latches across
+both Android and desktop (`docs/queue-redesign.md`). Peer lists open their own `QueueContext`
+variants (including `QueueContext.NightMode` over `NightMergeFeed`); `QueueContext.Custom` is
+reserved strictly for user-assembled draft or manually edited queues.
 
 Navigation 3 has no separate graph: the backstack is a `SnapshotStateList<NavKey>`, and it
 does not deduplicate. Both entry decorators index by the key, so one key appearing twice
@@ -170,27 +174,34 @@ store, and composing both at once trips `SaveableStateHolder`'s `require`. Push 
 Width decides layout, never the platform: `rememberBilbyWindowSize()` reads the window, and
 the same breakpoints apply to a phone in landscape, a tablet and a desktop window.
 
-- **Every sheet goes through `components/PaneSheet`.** Inside the video page's two-pane
+- **Every sheet goes through `components/PaneSheet`.** Inside the video/live two-pane
   layout it draws in the right column; with no column to host it and the window at least
-  expanded (840dp) it is a modal side sheet from the end edge; otherwise a bottom sheet.
+  expanded (840dp) it is a detached modal side sheet from the end edge; otherwise a bottom
+  sheet. `title`, `headerTrailing`, `subheader`, and sticky `footer` render uniformly across
+  all three modes (`skipPartiallyExpanded = true` by default so bottom actions never clip).
   Calling `ModalBottomSheet` directly skips the first two.
 - **Paged lists go through `components/PagedColumn`**, and `PagedLayout` picks one column,
   a grid (`maxWidthGridCells`: columns capped in width, count rounded up) or a staggered
   grid. Header, empty state, footer and prefetch come with it.
-- **`components/PrefetchNearEnd` is the only near-end prefetch.** It stops while the last
-  load has an error; only the retry loads again. Seven hand-copied versions without that
-  check sent 25 requests in three seconds into a -412.
+- **`components/PrefetchNearEnd` is the only near-end prefetch** (mirrored for bidirectional
+  queues by `QueuePagination`'s `errorBefore`/`errorAfter` latches in `EpisodeList`). Both stop
+  while the last load has an error; only an explicit retry loads again. Seven hand-copied
+  versions without that check sent 25 requests in three seconds into a -412.
 - **Persistent, resizable side panels use `components/SidePanelLayout`** (the space page's
   dynamics). Open state and width live in settings under a `SidePanelId`.
-- **List pages wrap themselves in `AdaptiveListContent`**: from expanded they drop the
-  readable-width cap and take a grid of cells capped at `VideoRowMaxWidth`. `AdaptiveContent`'s
-  cap is for reading pages only (article, dynamic detail, comment thread, search assistant).
+- **List pages wrap themselves in `AdaptiveListContent`**: single-column `Compact` renders
+  `VideoRow`, while multi-column wide layouts drop the readable-width cap and render vertical
+  16:10 `VideoGridCard` cells (`Dimens.VideoGridMinCellWidth`). `AdaptiveContent`'s cap is for
+  reading pages only (article, dynamic detail, comment thread, search assistant).
 - **List and detail side by side is a scene, not page state.** material3 adaptive's
   `ListDetailSceneStrategy` (set up in `BilbyApp`) joins the entries at the top of the back stack
-  tagged `listPane` / `detailPane` with the same scene key: messages and UP pushes with a whisper
-  or comment thread, settings with its pages. It does not check that a detail sits on its list,
-  so a detail is tagged only when opened from the list (`inListPane` on the key); a whisper
-  opened from a space page would otherwise get an empty left pane.
+  tagged `listPane` / `detailPane` with the same scene key (each clipped into an independent
+  `shapes.large` island separated by an `8.dp` `surfaceContainer` gap, matching `DesktopIslandFrame`
+  on non-immersive desktop routes so custom window caption buttons never shift on push/pop):
+  messages and UP pushes with a whisper or comment thread, settings with its pages. It does not
+  check that a detail sits on its list, so a detail is tagged only when opened from the list
+  (`inListPane` on the key); a whisper opened from a space page would otherwise get an empty left
+  pane.
 
 ## Modules and platforms
 
@@ -243,7 +254,12 @@ otherwise. Cover URLs arrive as `http://` and are blocked by the cleartext polic
 them to https during mapping, leaving `usesCleartextTraffic` off.
 
 kotlinx.serialization omits fields equal to their defaults, so tool schemas sent to the LLM
-need `encodeDefaults = true`.
+need `encodeDefaults = true`. Conversely, request payloads keep `explicitNulls = false` so
+provider-specific `extra_content` (`extra_content.google.thought_signature` on Gemini thinking
+models, round-tripped across `ToolCall` and `ChatMessage` in `agent/LlmProtocol.kt` &
+`agent/AgentLoop.kt` while `extra_content.google.thought == true` chunks are filtered and
+index-less parallel `tool_calls` chunks are matched by ID in `agent/LlmClient.kt`) is preserved
+verbatim for Gemini and omitted for other endpoints.
 
 `docs/ui-style-guide.md` carries the interface conventions: the design tokens, which
 component to reach for, and which alpha-only APIs this build depends on. Read it before
@@ -372,9 +388,10 @@ as an unresponsive button, so send `input keyevent KEYCODE_WAKEUP` first, and
 Gradle compilation is an exclusive resource. Parallel subagents compiling at the same time
 crash the Kotlin daemon.
 
-The assistant needs an OpenAI-compatible endpoint. Debug builds can bake one in through
-`LLM_BASE_URL` and `LLM_API_KEY` in `local.properties` (see `local.properties.example`);
-release builds leave them empty, and any build accepts them from the settings page.
+The assistant needs an OpenAI-compatible endpoint. Debug builds and un-packaged `:desktop:run`
+can read `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` from `local.properties` (see
+`local.properties.example`); release builds leave them empty, and any build accepts them (with
+`/models` discovery) from the settings page.
 
 Write tests only where they can catch something. Which part to play
 (`player/LoadResolver.kt`), WBI signing, stream selection, and the agent loop's protocol
