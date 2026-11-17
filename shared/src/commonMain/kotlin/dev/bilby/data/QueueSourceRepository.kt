@@ -6,8 +6,7 @@ import dev.bilby.getString
 import dev.bilby.offline.OfflineStatus
 import dev.bilby.offline.OfflineStore
 import dev.bilby.player.QueueItem
-import dev.bilby.resources.Res
-import dev.bilby.resources.queue_source_custom
+import dev.bilby.resources.*
 
 /**
  * 打开好的一份队列:当前视频附近的一段、来源名、目录入口,以及往两头续取用的 [feed]。
@@ -15,12 +14,7 @@ import dev.bilby.resources.queue_source_custom
  */
 class OpenedQueue(
     val items: List<QueueItem>,
-    /**
-     * 队列标题行:合集/系列、收藏夹**用它自己的名字**,其余是固定的几种说法。
-     *
-     * **不带条数,也不加"合集"「《》」这类前缀与包装。** 这一行还要并排放下找相关、缓存、
-     * 顺序三个操作,每多一截就挤掉一截名字。条数另有出处(听视频页的 `N / M`)。
-     */
+    /** 队列标题行:明确呈现来源身份(如夜间模式、UP 主投稿、合集/系列、收藏夹)。 */
     val label: String,
     /** 来源有目录页时非空,标题行可以点进去。 */
     val source: QueueSource?,
@@ -54,50 +48,16 @@ class QueueSourceRepository(
         QueueContext.Affiliation -> affiliation(bvid)
         // 从点开时那一页找起。那一页就在眼前,多给一页余量:点开之后 UP 又发了动态,
         // 这条就挪到了下一页。
-        is QueueContext.UpDynamics -> openFeed(
-            feed = dynamicVideoFeed(context.mid, context.pageOffset, maxPages = 2),
-            bvid = bvid,
-            label = UP_DYNAMICS_LABEL,
-            source = null,
-        )
+        is QueueContext.UpDynamics -> openUpDynamics(context, bvid)
         is QueueContext.Collection -> openFeed(
             feed = collectionFeed(context.mid, context.id, context.isSeason, context.page),
             bvid = bvid,
-            label = context.name,
+            label = collectionLabel(context.isSeason, context.name),
             source = QueueSource(context.mid, context.id, context.isSeason, context.name),
         )
-        is QueueContext.UpArchive -> openFeed(
-            feed = PagedFeed(context.page, SpaceRepository.ARCHIVE_PAGE_SIZE) { page ->
-                when (val r = spaceRepository.loadArchives(context.mid, page, context.order, context.keyword)) {
-                    is BiliResult.Ok -> FeedPage(
-                        items = r.value.items.map { it.toQueueItem() },
-                        hasMore = page * SpaceRepository.ARCHIVE_PAGE_SIZE < r.value.total,
-                        total = r.value.total,
-                    )
-                    else -> null.also { BiliLog.w("队列:拉取投稿第 $page 页失败 mid=${context.mid}") }
-                }
-            },
-            bvid = bvid,
-            label = upArchiveLabel(context),
-            source = null,
-        )
-        is QueueContext.FavFolder -> openFeed(
-            feed = PagedFeed(context.page, FavRepository.Paging.PAGE_SIZE) { page ->
-                when (val r = favRepository.folderContents(context.mediaId, page, context.order, context.keyword)) {
-                    // 失效稿件、音频与剧集在收藏夹页照常列出(点不动),队列里放不了,不收。
-                    is BiliResult.Ok -> FeedPage(
-                        items = r.value.items.filter { it.playable }.map {
-                            QueueItem(it.bvid, it.title, it.upName, it.coverUrl, it.durationSeconds)
-                        },
-                        hasMore = r.value.hasMore,
-                    )
-                    else -> null.also { BiliLog.w("队列:拉取收藏夹第 $page 页失败 id=${context.mediaId}") }
-                }
-            },
-            bvid = bvid,
-            label = context.title,
-            source = null,
-        )
+        is QueueContext.UpArchive -> openUpArchive(context, bvid)
+        is QueueContext.NightMode -> openNightMode(context, bvid)
+        is QueueContext.FavFolder -> openFavFolder(context, bvid)
         is QueueContext.ToView -> {
             when (val r = toViewRepository.loadList(context.asc)) {
                 // 番剧与课程不进队列,理由同收藏夹那一支。
@@ -108,7 +68,7 @@ class QueueSourceRepository(
                         },
                     ),
                     bvid = bvid,
-                    label = "稍后再看",
+                    label = getString(Res.string.tab_toview),
                     source = null,
                 )
                 else -> null.also { BiliLog.w("队列:拉取稍后再看失败") }
@@ -144,9 +104,97 @@ class QueueSourceRepository(
                 cached.map { QueueItem(it.bvid, it.title, it.upName, it.coverUrl, it.durationSeconds) },
             ),
             bvid = bvid,
-            label = "已缓存",
+            label = getString(Res.string.offline_title),
             source = null,
         )
+    }
+
+    private suspend fun openNightMode(context: QueueContext.NightMode, bvid: String): OpenedQueue? {
+        val selectedMid = context.selectedMid
+        if (selectedMid == null) {
+            if (context.ups.isEmpty()) return null
+            return openFeed(
+                feed = NightMergeFeed(spaceRepository, context.ups),
+                bvid = bvid,
+                label = getString(Res.string.queue_source_night_all),
+                source = null,
+            )
+        }
+        val selectedUp = context.ups.firstOrNull { it.mid == selectedMid }
+        val feed = PagedFeed(context.anchorPage, SpaceRepository.ARCHIVE_PAGE_SIZE) { page ->
+            when (val r = spaceRepository.loadArchives(selectedMid, page, SpaceArchiveOrder.Pubdate)) {
+                is BiliResult.Ok -> FeedPage(
+                    items = r.value.items.map { it.toQueueItem(fallbackUpName = selectedUp?.name.orEmpty()) },
+                    hasMore = page * SpaceRepository.ARCHIVE_PAGE_SIZE < r.value.total,
+                    total = r.value.total,
+                )
+                else -> null.also { BiliLog.w("队列:夜间模式拉取投稿第 $page 页失败 mid=$selectedMid") }
+            }
+        }
+        val items = feed.open(bvid) ?: return null
+        val upName = selectedUp?.name?.takeIf { it.isNotBlank() }
+            ?: items.firstOrNull { it.upName.isNotBlank() }?.upName.orEmpty()
+        val label = if (upName.isNotBlank()) {
+            getString(Res.string.queue_source_night_up, upName)
+        } else {
+            getString(Res.string.queue_source_night_all)
+        }
+        return OpenedQueue(items, label, source = null, feed = feed)
+    }
+
+    private suspend fun openUpArchive(context: QueueContext.UpArchive, bvid: String): OpenedQueue? {
+        val feed = PagedFeed(context.page, SpaceRepository.ARCHIVE_PAGE_SIZE) { page ->
+            when (val r = spaceRepository.loadArchives(context.mid, page, context.order, context.keyword)) {
+                is BiliResult.Ok -> FeedPage(
+                    items = r.value.items.map { it.toQueueItem(fallbackUpName = context.upName) },
+                    hasMore = page * SpaceRepository.ARCHIVE_PAGE_SIZE < r.value.total,
+                    total = r.value.total,
+                )
+                else -> null.also { BiliLog.w("队列:拉取投稿第 $page 页失败 mid=${context.mid}") }
+            }
+        }
+        val items = feed.open(bvid) ?: return null
+        val resolvedUpName = context.upName.ifBlank {
+            items.firstOrNull { it.upName.isNotBlank() }?.upName.orEmpty()
+        }
+        return OpenedQueue(items, upArchiveLabel(context, resolvedUpName), source = null, feed = feed)
+    }
+
+    private suspend fun openUpDynamics(context: QueueContext.UpDynamics, bvid: String): OpenedQueue? {
+        val feed = dynamicVideoFeed(context.mid, context.pageOffset, maxPages = 2, fallbackUpName = context.upName)
+        val items = feed.open(bvid) ?: return null
+        val resolvedUpName = context.upName.ifBlank {
+            items.firstOrNull { it.upName.isNotBlank() }?.upName.orEmpty()
+        }
+        val label = upDynamicsLabel(resolvedUpName)
+        return OpenedQueue(items, label, source = null, feed = feed)
+    }
+
+    private suspend fun openFavFolder(context: QueueContext.FavFolder, bvid: String): OpenedQueue? {
+        var folderTitle = context.title
+        val feed = PagedFeed(context.page, FavRepository.Paging.PAGE_SIZE) { page ->
+            when (val r = favRepository.folderContents(context.mediaId, page, context.order, context.keyword)) {
+                // 失效稿件、音频与剧集在收藏夹页照常列出(点不动),队列里放不了,不收。
+                is BiliResult.Ok -> {
+                    r.value.info?.title?.takeIf { it.isNotBlank() }?.let { folderTitle = it }
+                    FeedPage(
+                        items = r.value.items.filter { it.playable }.map {
+                            QueueItem(it.bvid, it.title, it.upName, it.coverUrl, it.durationSeconds)
+                        },
+                        hasMore = r.value.hasMore,
+                        total = if (context.keyword.isBlank()) r.value.info?.count?.takeIf { it > 0 } else null,
+                    )
+                }
+                else -> null.also { BiliLog.w("队列:拉取收藏夹第 $page 页失败 id=${context.mediaId}") }
+            }
+        }
+        val items = feed.open(bvid) ?: return null
+        val label = if (folderTitle.isNotBlank()) {
+            getString(Res.string.queue_source_fav_folder, folderTitle)
+        } else {
+            getString(Res.string.fav_folders_title)
+        }
+        return OpenedQueue(items, label, source = null, feed = feed)
     }
 
     private suspend fun openFeed(feed: QueueFeed, bvid: String, label: String, source: QueueSource?): OpenedQueue? {
@@ -154,17 +202,40 @@ class QueueSourceRepository(
         return OpenedQueue(items, label, source, feed)
     }
 
-    private fun upArchiveLabel(context: QueueContext.UpArchive): String = when {
-        context.keyword.isNotBlank() -> "投稿搜索「${context.keyword}」"
-        context.order == SpaceArchiveOrder.Click -> "UP 主投稿（最多播放）"
-        else -> "UP 主投稿"
-    }
+    private suspend fun upArchiveLabel(context: QueueContext.UpArchive, upName: String): String =
+        if (upName.isNotBlank()) {
+            when {
+                context.keyword.isNotBlank() -> getString(Res.string.queue_source_up_archive_search, upName, context.keyword)
+                context.order == SpaceArchiveOrder.Click -> getString(Res.string.queue_source_up_archive_popular, upName)
+                else -> getString(Res.string.queue_source_up_archive, upName)
+            }
+        } else {
+            when {
+                context.keyword.isNotBlank() -> getString(Res.string.queue_source_up_archive_generic_search, context.keyword)
+                context.order == SpaceArchiveOrder.Click -> getString(Res.string.queue_source_up_archive_generic_popular)
+                else -> getString(Res.string.queue_source_up_archive_generic)
+            }
+        }
 
-    private fun collectionFeed(mid: Long, id: Long, isSeason: Boolean, anchorPage: Int) =
+    private suspend fun upDynamicsLabel(upName: String): String =
+        if (upName.isNotBlank()) {
+            getString(Res.string.queue_source_up_dynamics, upName)
+        } else {
+            getString(Res.string.queue_source_up_dynamics_generic)
+        }
+
+    private suspend fun collectionLabel(isSeason: Boolean, name: String): String =
+        if (isSeason) {
+            getString(Res.string.queue_source_season, name)
+        } else {
+            getString(Res.string.queue_source_series, name)
+        }
+
+    private fun collectionFeed(mid: Long, id: Long, isSeason: Boolean, anchorPage: Int, fallbackUpName: String = "") =
         PagedFeed(anchorPage, SpaceRepository.COLLECTION_PAGE_SIZE) { page ->
             when (val r = spaceRepository.loadCollectionDetail(mid, id, isSeason, page)) {
                 is BiliResult.Ok -> FeedPage(
-                    items = r.value.items.map { it.toQueueItem() },
+                    items = r.value.items.map { it.toQueueItem(fallbackUpName = fallbackUpName) },
                     hasMore = page * SpaceRepository.COLLECTION_PAGE_SIZE < r.value.total && r.value.items.isNotEmpty(),
                     total = r.value.total,
                 )
@@ -197,15 +268,21 @@ class QueueSourceRepository(
         fromSeries(bvid, detail)?.let { return it }
         val mid = detail.up.mid
         if (mid == 0L) return null
+        val upName = detail.up.name
         if (detail.isStory) {
             return openFeed(
                 // 从最新一页找起,只翻前几页:这条接口最容易被风控,从别处点进来的动态视频
                 // 多半也是新发的。
-                feed = dynamicVideoFeed(mid, startOffset = null, maxPages = STORY_SCAN_PAGES),
+                feed = dynamicVideoFeed(mid, startOffset = null, maxPages = STORY_SCAN_PAGES, fallbackUpName = upName),
                 bvid = bvid,
-                label = UP_DYNAMICS_LABEL,
+                label = upDynamicsLabel(upName),
                 source = null,
             ) ?: null.also { BiliLog.w("队列:动态视频 bvid=$bvid 不在 UP 最近 $STORY_SCAN_PAGES 页动态里") }
+        }
+        val archiveLabel = if (upName.isNotBlank()) {
+            getString(Res.string.queue_source_up_archive, upName)
+        } else {
+            getString(Res.string.queue_source_up_archive_generic)
         }
         return openFeed(
             feed = ArchiveCursorFeed { aid, newer, includeCursor ->
@@ -215,7 +292,7 @@ class QueueSourceRepository(
                 }
             },
             bvid = bvid,
-            label = "UP 主投稿",
+            label = archiveLabel,
             source = null,
         ) ?: null.also { BiliLog.w("队列:bvid=$bvid 不在 UP 投稿里,也不属于合集或前几个系列") }
     }
@@ -241,7 +318,7 @@ class QueueSourceRepository(
         } else {
             null
         }
-        return openFeed(StaticFeed(items), bvid, detail.seasonTitle, source)
+        return openFeed(StaticFeed(items), bvid, collectionLabel(isSeason = true, detail.seasonTitle), source)
             ?: null.also { BiliLog.w("队列:合集分集里找不到当前 bvid=$bvid,数据不一致") }
     }
 
@@ -280,9 +357,9 @@ class QueueSourceRepository(
                     // 找到的那一页就是锚点。feed 会把这一页再取一次:多一次请求,换来翻页逻辑
                     // 只有 PagedFeed 一份。
                     return openFeed(
-                        feed = collectionFeed(mid, series.id, isSeason = false, anchorPage = page),
+                        feed = collectionFeed(mid, series.id, isSeason = false, anchorPage = page, fallbackUpName = detail.up.name),
                         bvid = bvid,
-                        label = series.name,
+                        label = collectionLabel(isSeason = false, series.name),
                         source = QueueSource(mid, series.id, isSeason = false, name = series.name),
                     )
                 }
@@ -297,11 +374,11 @@ class QueueSourceRepository(
     }
 
     /** 空间动态里 UP 自己发的视频(见 [SpaceDynamicItem.video]),转发与图文不进队列。 */
-    private fun dynamicVideoFeed(mid: Long, startOffset: String?, maxPages: Int) =
+    private fun dynamicVideoFeed(mid: Long, startOffset: String?, maxPages: Int, fallbackUpName: String = "") =
         DynamicVideoFeed(startOffset, maxPages) { offset ->
             when (val r = spaceRepository.loadDynamics(mid, offset)) {
                 is BiliResult.Ok -> DynamicVideoPage(
-                    items = r.value.items.mapNotNull { it.video?.toQueueItem() },
+                    items = r.value.items.mapNotNull { it.video?.toQueueItem(fallbackUpName = fallbackUpName) },
                     nextOffset = r.value.nextOffset,
                     hasMore = r.value.hasMore,
                 )
@@ -309,10 +386,10 @@ class QueueSourceRepository(
             }
         }
 
-    private fun SpaceVideoItem.toQueueItem() = QueueItem(
+    private fun SpaceVideoItem.toQueueItem(fallbackUpName: String = "") = QueueItem(
         bvid = bvid,
         title = title,
-        upName = "",
+        upName = upName.ifBlank { fallbackUpName },
         coverUrl = coverUrl,
         durationSeconds = parseDurationText(durationText),
     )
@@ -326,8 +403,6 @@ class QueueSourceRepository(
 
         /** 从别处点开动态视频时,最多翻这位 UP 的前几页动态去找它。 */
         const val STORY_SCAN_PAGES = 3
-
-        const val UP_DYNAMICS_LABEL = "UP 主动态"
     }
 }
 

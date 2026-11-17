@@ -39,6 +39,7 @@ sealed interface QueueContext {
         val order: SpaceArchiveOrder,
         val keyword: String,
         val page: Int,
+        val upName: String = "",
     ) : QueueContext
 
     /**
@@ -49,7 +50,19 @@ sealed interface QueueContext {
      *   没有页号可记,记下取那一页时用的游标,服务从这一页找起。
      */
     @Serializable
-    data class UpDynamics(val mid: Long, val pageOffset: String?) : QueueContext
+    data class UpDynamics(
+        val mid: Long,
+        val pageOffset: String?,
+        val upName: String = "",
+    ) : QueueContext
+
+    /** 夜间模式的白名单投稿列表:全部白名单按发布时间归并,或选定某一位白名单 UP 主。 */
+    @Serializable
+    data class NightMode(
+        val ups: List<WhitelistedUp>,
+        val selectedMid: Long? = null,
+        val anchorPage: Int = 1,
+    ) : QueueContext
 
     /** 收藏夹内容,带着当时的排序与夹内搜索词,理由同 [UpArchive]。 */
     @Serializable

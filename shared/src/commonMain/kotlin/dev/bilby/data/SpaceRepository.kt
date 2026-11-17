@@ -40,6 +40,7 @@ data class SpaceVideoItem(
     val danmakuCountText: String,
     /** 充电专属。合集/系列目录的接口没有已知字段,那里恒为 false。 */
     val chargingOnly: Boolean = false,
+    val upName: String = "",
 )
 
 data class SpaceProfile(
@@ -52,6 +53,7 @@ data class SpaceProfile(
     val followState: FollowState,
     /** 正在直播的房间。**只有真的在播才非空** —— 见 [SpaceLiveRoom]。 */
     val liveRoom: SpaceLiveRoom? = null,
+    val topPhotoUrl: String = "",
 )
 
 /**
@@ -94,6 +96,7 @@ data class CursorArchivePage(
     val items: List<CursorArchiveItem>,
     val hasNewer: Boolean,
     val hasOlder: Boolean,
+    val total: Int? = null,
 )
 
 /**
@@ -193,6 +196,7 @@ class SpaceRepository(private val client: BiliClient) {
                                 coverUrl = it.cover.toHttpsUrl(),
                             )
                         },
+                    topPhotoUrl = info.value.topPhoto.toHttpsUrl(),
                 )
             )
             info !is BiliResult.Ok -> info.propagateFailure()
@@ -309,6 +313,7 @@ class SpaceRepository(private val client: BiliClient) {
                 },
                 hasNewer = dto.hasPrev,
                 hasOlder = dto.hasNext,
+                total = dto.count.takeIf { it > 0 },
             )
         }
     }
@@ -411,6 +416,7 @@ class SpaceRepository(private val client: BiliClient) {
         playCountText = play.formatCount(),
         danmakuCountText = videoReview.formatCount(),
         chargingOnly = isChargingArc,
+        upName = author,
     )
 
     private fun SeasonArchiveDto.toVideoItem() = SpaceVideoItem(
@@ -464,6 +470,7 @@ internal fun DynamicItemDto.toSpaceDynamicItem(): SpaceDynamicItem? {
             playCountText = video.playCountText,
             danmakuCountText = video.danmakuCountText,
             chargingOnly = video.chargingOnly,
+            upName = card.author.name,
         ),
         listedInArchive = type == "DYNAMIC_TYPE_UGC_SEASON" ||
             modules?.moduleAuthor?.pubAction in ARCHIVE_PUB_ACTIONS,

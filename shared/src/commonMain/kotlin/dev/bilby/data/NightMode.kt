@@ -5,12 +5,14 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
 import java.util.Locale
+import kotlinx.serialization.Serializable
 
 const val DEFAULT_NIGHT_START_MINUTE: Int = 23 * 60 + 30
 const val DEFAULT_NIGHT_END_MINUTE: Int = 6 * 60
 internal const val MINUTES_PER_DAY: Int = 24 * 60
 
 /** 夜间模式下允许访问的一位 UP 主。 */
+@Serializable
 data class WhitelistedUp(
     val mid: Long,
     val name: String,
@@ -18,10 +20,11 @@ data class WhitelistedUp(
 )
 
 /**
- * 夜间模式配置与当夜临时退出截止时间。
+ * 夜间模式配置、当夜临时退出截止时间与手动开启截止时间。
  *
  * [overrideUntilEpochMillis] 记的是那一次生效窗口的结束时间戳，而不是一个"今夜暂停"布尔：
  * 下一轮窗口到来时，`overrideUntilEpochMillis <= newWindow.startEpochMillis`，旧退出自动失效。
+ * [manualUntilEpochMillis] 记的是手动开启后持续到下一次 [endMinuteOfDay] 的结束时间戳。
  */
 data class NightModePrefs(
     val enabled: Boolean = false,
@@ -29,6 +32,7 @@ data class NightModePrefs(
     val endMinuteOfDay: Int = DEFAULT_NIGHT_END_MINUTE,
     val allowedUps: List<WhitelistedUp> = emptyList(),
     val overrideUntilEpochMillis: Long = 0L,
+    val manualUntilEpochMillis: Long = 0L,
 ) {
     val allowedMids: Set<Long>
         get() = allowedUps.mapTo(HashSet()) { it.mid }
@@ -43,23 +47,41 @@ data class ActiveNightWindow(
 sealed interface NightWindowStatus {
     data object Inactive : NightWindowStatus
     data class Overridden(val window: ActiveNightWindow) : NightWindowStatus
-    data class Active(val window: ActiveNightWindow) : NightWindowStatus
+    data class Active(
+        val window: ActiveNightWindow,
+        val manual: Boolean = false,
+    ) : NightWindowStatus
 }
 
 /**
- * 按 [zoneId] 的墙上时间判定当前是否落在夜间窗口内，以及是否处于本轮临时退出状态。
+ * 计算从 [nowEpochMillis] 起下一个 [endMinuteOfDay] 时刻的时间戳（按 [zoneId] 墙上时间）。
  */
-fun evaluateNightMode(
-    prefs: NightModePrefs,
+fun computeNextNightEndEpochMillis(
+    endMinuteOfDay: Int,
     nowEpochMillis: Long,
     zoneId: ZoneId = ZoneId.systemDefault(),
-): NightWindowStatus {
-    if (!prefs.enabled) return NightWindowStatus.Inactive
-    val startMinute = prefs.startMinuteOfDay.coerceIn(0, MINUTES_PER_DAY - 1)
-    val endMinute = prefs.endMinuteOfDay.coerceIn(0, MINUTES_PER_DAY - 1)
+): Long {
+    val endMinute = endMinuteOfDay.coerceIn(0, MINUTES_PER_DAY - 1)
+    val today = Instant.ofEpochMilli(nowEpochMillis).atZone(zoneId).toLocalDate()
+    val todayEndMillis = toEpochMillis(today, endMinute, zoneId)
+    return if (nowEpochMillis < todayEndMillis) {
+        todayEndMillis
+    } else {
+        toEpochMillis(today.plusDays(1), endMinute, zoneId)
+    }
+}
+
+internal fun findCoveringNightWindow(
+    startMinuteOfDay: Int,
+    endMinuteOfDay: Int,
+    nowEpochMillis: Long,
+    zoneId: ZoneId = ZoneId.systemDefault(),
+): ActiveNightWindow? {
+    val startMinute = startMinuteOfDay.coerceIn(0, MINUTES_PER_DAY - 1)
+    val endMinute = endMinuteOfDay.coerceIn(0, MINUTES_PER_DAY - 1)
     val today = Instant.ofEpochMilli(nowEpochMillis).atZone(zoneId).toLocalDate()
 
-    val window: ActiveNightWindow = when {
+    return when {
         startMinute == endMinute -> {
             val todayBoundary = toEpochMillis(today, startMinute, zoneId)
             if (nowEpochMillis >= todayBoundary) {
@@ -72,7 +94,7 @@ fun evaluateNightMode(
         startMinute < endMinute -> {
             val start = toEpochMillis(today, startMinute, zoneId)
             val end = toEpochMillis(today, endMinute, zoneId)
-            if (nowEpochMillis in start until end) ActiveNightWindow(start, end) else return NightWindowStatus.Inactive
+            if (nowEpochMillis in start until end) ActiveNightWindow(start, end) else null
         }
 
         else -> {
@@ -86,11 +108,39 @@ fun evaluateNightMode(
                 if (nowEpochMillis in yesterdayStart until todayEnd) {
                     ActiveNightWindow(yesterdayStart, todayEnd)
                 } else {
-                    return NightWindowStatus.Inactive
+                    null
                 }
             }
         }
     }
+}
+
+/**
+ * 按 [zoneId] 的墙上时间判定当前是否落在夜间窗口内，以及是否处于手动开启或本轮临时退出状态。
+ */
+fun evaluateNightMode(
+    prefs: NightModePrefs,
+    nowEpochMillis: Long,
+    zoneId: ZoneId = ZoneId.systemDefault(),
+): NightWindowStatus {
+    val scheduled = if (prefs.enabled) {
+        findCoveringNightWindow(prefs.startMinuteOfDay, prefs.endMinuteOfDay, nowEpochMillis, zoneId)
+    } else {
+        null
+    }
+
+    if (prefs.manualUntilEpochMillis > nowEpochMillis) {
+        val effectiveEnd = maxOf(prefs.manualUntilEpochMillis, scheduled?.endEpochMillis ?: 0L)
+        return NightWindowStatus.Active(
+            window = ActiveNightWindow(
+                startEpochMillis = scheduled?.startEpochMillis ?: nowEpochMillis,
+                endEpochMillis = effectiveEnd,
+            ),
+            manual = scheduled == null || !prefs.enabled,
+        )
+    }
+
+    val window = scheduled ?: return NightWindowStatus.Inactive
 
     // 仅当覆盖截止时刻落在当前窗口起点之后时，它才属于本轮（或跨过本轮）：
     // 昨日窗口结束时的时间戳不会大于今日窗口起点，从而自动让今晚恢复生效。
@@ -99,7 +149,7 @@ fun evaluateNightMode(
     return if (overridden) {
         NightWindowStatus.Overridden(window)
     } else {
-        NightWindowStatus.Active(window)
+        NightWindowStatus.Active(window, manual = false)
     }
 }
 

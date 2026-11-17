@@ -19,6 +19,7 @@ import dev.bilby.elapsedRealtimeMillis
 import dev.bilby.getString
 import dev.bilby.getStringBlocking
 import dev.bilby.resources.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -191,8 +192,6 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         var enriching = false
         var incomplete = false
         var detached = false
-        var extendingBefore = false
-        var extendingAfter = false
         var anchorBvid = ""
         var pendingReset = false
         var snapshot: FrameSnapshot? = null
@@ -205,6 +204,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         val positionMillis: Long,
         val order: QueueOrder,
         val detached: Boolean = false,
+        val pagination: QueuePaginationSnapshot = QueuePaginationSnapshot(),
     )
 
     // 弹幕时钟逐帧调这里,所以读不经 JNI 的那一份,见 DesktopPlayer.positionMillis。
@@ -272,6 +272,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        queue.cancelExtend()
         sleepTimer.cancel()
         progressSession?.flush()
         pause()
@@ -491,6 +492,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        queue.cancelExtend()
         if (frame.enriching) {
             frame.enriching = false
             frame.incomplete = true
@@ -504,6 +506,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             positionMillis = player?.positionMillis ?: 0L,
             order = queue.order,
             detached = frame.detached,
+            pagination = queue.paginationSnapshot(),
         )
     }
 
@@ -519,6 +522,11 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             playWhenReady = false,
         )
         queue.order = snapshot.order
+        if (snapshot.detached) {
+            queue.detachToCustomQueue()
+        } else {
+            queue.restorePagination(snapshot.pagination)
+        }
         // 帧在队列换完之后才认领,理由同 Android 的 restoreFrame。
         liveFrame = frame
         publishState()
@@ -594,15 +602,16 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
                 frame.label = opened.label
                 frame.source = opened.source
                 frame.feed = opened.feed
+                queue.bindFeedMeta(
+                    offsetOfFirst = opened.feed.offsetOfFirst,
+                    total = opened.feed.total,
+                    hasBefore = opened.feed.hasBefore,
+                    hasAfter = opened.feed.hasAfter,
+                )
                 publishState()
-                extendNearEdges()
                 return@launch
             }
             if (allowReplace && opened != null && unique.isNotEmpty()) {
-                frame.pendingReset = false
-                frame.label = opened.label
-                frame.source = opened.source
-                frame.feed = opened.feed
                 replaceQueue(
                     unique,
                     0,
@@ -610,8 +619,17 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
                     startMillis = null,
                     playWhenReady = playWhenReady,
                 )
+                frame.pendingReset = false
+                frame.label = opened.label
+                frame.source = opened.source
+                frame.feed = opened.feed
+                queue.bindFeedMeta(
+                    offsetOfFirst = opened.feed.offsetOfFirst,
+                    total = opened.feed.total,
+                    hasBefore = opened.feed.hasBefore,
+                    hasAfter = opened.feed.hasAfter,
+                )
                 publishState()
-                extendNearEdges()
                 return@launch
             }
             BiliLog.w("队列补全失败或来源里没有当前视频,留在单条队列 bvid=$bvid")
@@ -642,38 +660,55 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     }
 
     private fun extendNearEdges() {
-        if (queue.size == 0) return
-        if (queue.index < EXTEND_THRESHOLD) extendQueue(before = true)
-        if (queue.size - 1 - queue.index < EXTEND_THRESHOLD) extendQueue(before = false)
+        val frame = liveFrame ?: return
+        if (frame.feed == null) return
+        val isCustom = frame.context is QueueContext.Custom
+        if (queue.shouldAutoExtendBefore(detached = frame.detached, isCustomContext = isCustom)) {
+            extendQueue(before = true)
+        }
+        if (queue.shouldAutoExtendAfter(detached = frame.detached, isCustomContext = isCustom)) {
+            extendQueue(before = false)
+        }
     }
 
     /** 往队列的一头续一段。同一头同时只有一个请求在飞,整段重复时接着往下续。 */
     private fun extendQueue(before: Boolean) {
         val frame = liveFrame ?: return
         val feed = frame.feed ?: return
-        if (before) {
-            if (frame.extendingBefore || !feed.hasBefore) return
-            frame.extendingBefore = true
-        } else {
-            if (frame.extendingAfter || !feed.hasAfter) return
-            frame.extendingAfter = true
-        }
+        if (frame.detached) return
+        if (!queue.beginExtend(before)) return
         publishState()
         val job = scope.launch {
             val loaded = try {
                 if (before) feed.loadBefore() else feed.loadAfter()
-            } finally {
-                if (before) frame.extendingBefore = false else frame.extendingAfter = false
+            } catch (t: Throwable) {
+                if (t is CancellationException) {
+                    queue.cancelExtend(before)
+                    throw t
+                }
+                BiliLog.w("队列续取异常 before=$before", t)
+                null
+            }
+            if (liveFrame !== frame || frame.feed !== feed) {
+                queue.cancelExtend(before)
+                return@launch
             }
             if (loaded == null) {
-                BiliLog.w("队列续取失败 before=$before,留待下次触发")
+                BiliLog.w("队列续取失败 before=$before,暂停自动续取等待手动重试")
+                queue.failExtend(before)
                 publishState()
                 return@launch
             }
-            if (liveFrame !== frame || frame.feed !== feed) return@launch
-            val added = queue.insert(if (before) 0 else queue.size, loaded)
+            val added = queue.completeExtend(
+                before = before,
+                freshItems = loaded,
+                feedHasBefore = feed.hasBefore,
+                feedHasAfter = feed.hasAfter,
+                feedTotal = feed.total,
+            )
             publishState()
-            if (added == 0 && loaded.isNotEmpty()) extendQueue(before)
+            val moreInDirection = if (before) queue.hasBefore else queue.hasAfter
+            if (added == 0 && loaded.isNotEmpty() && moreInDirection) extendQueue(before)
         }
         if (before) extendBeforeJob = job else extendAfterJob = job
     }
@@ -685,13 +720,12 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             extendBeforeJob?.cancel()
             extendAfterJob?.cancel()
             openGeneration++
+            queue.detachToCustomQueue()
         }
         frame.enriching = false
         frame.incomplete = false
         frame.detached = true
         frame.pendingReset = false
-        frame.extendingBefore = false
-        frame.extendingAfter = false
         frame.feed = null
         frame.source = null
         frame.label = getStringBlocking(Res.string.queue_source_custom)
@@ -714,6 +748,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             order = snap.order
         }
         if (temp.enqueue(item, playNext)) {
+            temp.detachToCustomQueue()
             detachToCustomQueue(frame)
             frame.snapshot = FrameSnapshot(
                 items = temp.items,
@@ -722,6 +757,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
                 positionMillis = snap.positionMillis,
                 order = snap.order,
                 detached = frame.detached,
+                pagination = temp.paginationSnapshot(),
             )
         }
     }
@@ -773,8 +809,6 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
-        frame.extendingBefore = false
-        frame.extendingAfter = false
         frame.detached = false
         frame.pendingReset = true
         frame.feed = null
@@ -1264,7 +1298,6 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
 
     private fun publishState() {
         val frame = liveFrame
-        val feed = frame?.feed
         _state.value = AudioPlaybackUiState(
             nowPlaying = queue.current?.let { NowPlaying(it.title, it.upName, it.coverUrl) },
             loadKey = loadedMediaId,
@@ -1277,14 +1310,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
             cloudResumeMillis = cloudResumeMillis,
             cloudResumeCid = cloudResumeCid,
             stoppedAtEnd = endHandled,
-            queue = QueueState(
-                current = queue.current,
-                items = queue.items,
-                size = queue.size,
-                // 倒序或随机播放下这个数字仍是列表里的第几条,不是播放顺序里的第几个,理由同 Android。
-                sourcePosition = feed?.offsetOfFirst?.takeIf { queue.size > 0 }?.let { it + queue.index + 1 },
-                sourceTotal = feed?.total,
-                order = queue.order,
+            queue = queue.toQueueState(
                 endMode = endMode,
                 canPrevious = canPrevious,
                 canNext = canNext,
@@ -1294,19 +1320,12 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
                 enriching = frame?.enriching == true,
                 incomplete = frame?.incomplete == true,
                 detached = frame?.detached == true,
-                canExtendBefore = feed?.hasBefore == true,
-                canExtendAfter = feed?.hasAfter == true,
-                extendingBefore = frame?.extendingBefore == true,
-                extendingAfter = frame?.extendingAfter == true,
             ),
         )
     }
 
     private companion object {
         const val TICK_MILLIS = 500L
-
-        /** 当前条离队列一头不足几条时往那头续取。与 Android 同值。 */
-        const val EXTEND_THRESHOLD = 3
 
         /** 上一条先回本 P 开头的界线,Media3 `C.DEFAULT_MAX_SEEK_TO_PREVIOUS_POSITION_MS` 同值。 */
         const val MAX_SEEK_TO_PREVIOUS_MILLIS = 3_000L

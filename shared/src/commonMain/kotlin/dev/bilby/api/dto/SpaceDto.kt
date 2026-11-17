@@ -20,6 +20,7 @@ data class SpaceUserInfoDto(
     val relation: Int = 0,
     /** 直播间。这个接口本来就带,所以空间页判断"在不在播"不需要额外一次请求。 */
     @SerialName("live_room") val liveRoom: SpaceLiveRoomDto? = null,
+    @SerialName("top_photo") val topPhoto: String = "",
 )
 
 /**

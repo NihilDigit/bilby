@@ -877,4 +877,38 @@
     <string name="night_mode_hold_idle">Hold to confirm</string>
     <string name="night_mode_hold_holding">Release resets</string>
     <string name="night_mode_hold_progress">%1$ds left</string>
+    <string name="night_mode_enter_action">Enter night mode</string>
+    <string name="night_mode_until_subtitle">Until %1$s</string>
+    <string name="night_mode_summary_manual_on">Active until %1$s  %2$d creators</string>
+
+    <!-- Queue sources and edge loading -->
+    <string name="queue_source_night_all">Night mode  All</string>
+    <string name="queue_source_night_up">Night mode  %1$s</string>
+    <string name="queue_source_up_archive">%1$s uploads</string>
+    <string name="queue_source_up_archive_popular">%1$s uploads  Most played</string>
+    <string name="queue_source_up_archive_search">%1$s uploads  “%2$s”</string>
+    <string name="queue_source_up_archive_generic">Creator uploads</string>
+    <string name="queue_source_up_archive_generic_popular">Creator uploads  Most played</string>
+    <string name="queue_source_up_archive_generic_search">Uploads  “%1$s”</string>
+    <string name="queue_source_season">Collection  %1$s</string>
+    <string name="queue_source_series">Series  %1$s</string>
+    <string name="queue_source_fav_folder">Favorites  %1$s</string>
+    <string name="queue_source_up_dynamics">%1$s posts</string>
+    <string name="queue_source_up_dynamics_generic">Creator posts</string>
+    <string name="queue_position_windowed">%1$d/%2$d of %3$d</string>
+    <string name="video_queue_show_all_count">Show all (%1$d)</string>
+    <string name="video_queue_show_all_windowed">Show all (%1$d loaded of %2$d)</string>
+    <string name="queue_edge_loading_before">Loading earlier items…</string>
+    <string name="queue_edge_loading_after">Loading more items…</string>
+    <string name="queue_edge_has_before">Load earlier items</string>
+    <string name="queue_edge_has_before_count">Load %1$d earlier items</string>
+    <string name="queue_edge_has_after">Load more items</string>
+    <string name="queue_edge_has_after_count">Load %1$d more items</string>
+    <string name="queue_edge_load_failed">Could not load</string>
+
+    <!-- Assistant model picker -->
+    <string name="settings_llm_fetch_models">Fetch models</string>
+    <string name="settings_llm_models_loading">Loading models…</string>
+    <string name="settings_llm_models_empty">No models found</string>
+    <string name="settings_llm_models_failed">Could not load models</string>
 </resources>

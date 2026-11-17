@@ -49,6 +49,7 @@ import dev.bilby.data.resumeAtMillisFor
 import dev.bilby.offline.OfflineItem
 import dev.bilby.offline.OfflineStatus
 import dev.bilby.offline.OfflineStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -508,12 +509,12 @@ class AudioPlaybackService : MediaSessionService() {
         /** 队列背后的来源,续取靠它。补全成功之前为 null。 */
         var feed: QueueFeed? = null
 
+        val pagination = QueuePagination()
+
         /** 补全在飞/补全失败,两者都表示当前停在只有一条的临时队列上。 */
         var enriching = false
         var incomplete = false
         var detached = false
-        var extendingBefore = false
-        var extendingAfter = false
         var anchorBvid = ""
         var pendingReset = false
         var snapshot: FrameSnapshot? = null
@@ -607,6 +608,7 @@ class AudioPlaybackService : MediaSessionService() {
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        frame.pagination.cancelExtend()
         // 补全被打断时快照里是临时队列,换回来时再补一次。
         if (frame.enriching) {
             frame.enriching = false
@@ -741,25 +743,37 @@ class AudioPlaybackService : MediaSessionService() {
                 frame.label = opened.label
                 frame.source = opened.source
                 frame.feed = opened.feed
+                frame.pagination.bindFeedMeta(
+                    feedOffsetOfFirst = opened.feed.offsetOfFirst,
+                    feedTotal = opened.feed.total,
+                    feedHasBefore = opened.feed.hasBefore,
+                    feedHasAfter = opened.feed.hasAfter,
+                    playlistSize = player.mediaItemCount,
+                )
                 chain.count("items", player.mediaItemCount.toLong())
                 chain.end()
                 publishQueueChange()
-                extendNearEdges()
                 return@launch
             }
             if (allowReplace && opened != null && unique.isNotEmpty()) {
-                frame.pendingReset = false
-                frame.label = opened.label
-                frame.source = opened.source
-                frame.feed = opened.feed
                 val replacement = unique.mapIndexed { idx, item ->
                     if (idx == 0) item.toMediaItem(loadNonce = nextLoadNonce()) else item.toMediaItem()
                 }
                 replaceQueue(replacement, 0, playWhenReady = player.playWhenReady)
+                frame.pendingReset = false
+                frame.label = opened.label
+                frame.source = opened.source
+                frame.feed = opened.feed
+                frame.pagination.bindFeedMeta(
+                    feedOffsetOfFirst = opened.feed.offsetOfFirst,
+                    feedTotal = opened.feed.total,
+                    feedHasBefore = opened.feed.hasBefore,
+                    feedHasAfter = opened.feed.hasAfter,
+                    playlistSize = player.mediaItemCount,
+                )
                 chain.count("items", player.mediaItemCount.toLong())
                 chain.end()
                 publishQueueChange()
-                extendNearEdges()
                 return@launch
             }
             // 宁可只有一条,也不能换上一份不含这条视频的队列:正在播的那一条会从队列里
@@ -806,51 +820,79 @@ class AudioPlaybackService : MediaSessionService() {
         return true
     }
 
-    /** 播放走到离队列任一头不足 [EXTEND_THRESHOLD] 条时往那头续取,人不必自己翻到头。 */
+    /** 仅在正序/倒序真正逼近当前播放方向的边界(距离 <= 1)且上次续取未失败时自动续取。 */
     private fun extendNearEdges() {
+        val frame = liveFrame ?: return
+        if (frame.feed == null || frame.detached || frame.context is QueueContext.Custom) return
         val count = player.mediaItemCount
         if (count == 0) return
         val index = player.currentMediaItemIndex
-        if (index < EXTEND_THRESHOLD) extendQueue(before = true)
-        if (count - 1 - index < EXTEND_THRESHOLD) extendQueue(before = false)
+        if (index !in 0 until count) return
+        val p = frame.pagination
+        when (queueOrder) {
+            QueueOrder.Forward -> {
+                if (index >= count - 2 && p.hasAfter && !p.errorAfter && !p.loadingAfter) {
+                    extendQueue(before = false)
+                }
+            }
+            QueueOrder.Reverse -> {
+                if (index <= 1 && p.hasBefore && !p.errorBefore && !p.loadingBefore) {
+                    extendQueue(before = true)
+                }
+            }
+            QueueOrder.Shuffle -> Unit
+        }
     }
 
     /**
-     * 往队列的一头续一段(docs/queue-redesign.md 决定 4)。两个调用方:播放走到一头附近
-     * ([extendNearEdges]),以及完整队列面板滚到一头(页面发 [ACTION_EXTEND_QUEUE])。
+     * 往队列的一头续一段(docs/queue-redesign.md 决定 4)。两个调用方:播放走到当前方向边界
+     * ([extendNearEdges]),以及队列面板触发续取/重试(页面发 [ACTION_EXTEND_QUEUE])。
      * 同一头同时只有一个请求在飞。
      *
      * 续回来的条目按 bvid 去掉 playlist 里已有的:来源在两次请求之间会挪(新投稿把旧的往后推),
-     * 同一条可能在相邻两页各出现一次。整段都是重复时接着往下续,否则面板停在头上不再触发。
+     * 同一条可能在相邻两页各出现一次。整段都是重复时接着往下续,失败时锁存错误态等待手动重试。
      */
     private fun extendQueue(before: Boolean) {
         val frame = liveFrame ?: return
         val feed = frame.feed ?: return
-        if (before) {
-            if (frame.extendingBefore || !feed.hasBefore) return
-            frame.extendingBefore = true
-        } else {
-            if (frame.extendingAfter || !feed.hasAfter) return
-            frame.extendingAfter = true
-        }
+        if (frame.detached) return
+        if (!frame.pagination.beginExtend(before)) return
         publishQueueChange()
         val job = scope.launch {
             val loaded = try {
                 if (before) feed.loadBefore() else feed.loadAfter()
-            } finally {
-                if (before) frame.extendingBefore = false else frame.extendingAfter = false
+            } catch (t: Throwable) {
+                if (t is CancellationException) {
+                    frame.pagination.cancelExtend(before)
+                    throw t
+                }
+                BiliLog.w("队列续取异常 before=$before", t)
+                null
+            }
+            if (liveFrame !== frame || frame.feed !== feed) {
+                frame.pagination.cancelExtend(before)
+                return@launch
             }
             if (loaded == null) {
-                BiliLog.w("队列续取失败 before=$before,留待下次触发")
+                BiliLog.w("队列续取失败 before=$before,暂停自动续取等待手动重试")
+                frame.pagination.failExtend(before)
                 publishQueueChange()
                 return@launch
             }
-            if (liveFrame !== frame || frame.feed !== feed) return@launch
             val present = (0 until player.mediaItemCount).mapTo(HashSet()) { player.getMediaItemAt(it).mediaId }
             val fresh = loaded.distinctBy { it.bvid }.filter { it.bvid !in present }.map { it.toMediaItem() }
             if (before) player.addMediaItems(0, fresh) else player.addMediaItems(player.mediaItemCount, fresh)
+            frame.pagination.completeExtend(
+                before = before,
+                addedCount = fresh.size,
+                feedHasBefore = feed.hasBefore,
+                feedHasAfter = feed.hasAfter,
+                feedTotal = feed.total,
+                newPlaylistSize = player.mediaItemCount,
+            )
             publishQueueChange()
-            if (fresh.isEmpty() && loaded.isNotEmpty()) extendQueue(before)
+            val moreInDirection = if (before) frame.pagination.hasBefore else frame.pagination.hasAfter
+            if (fresh.isEmpty() && loaded.isNotEmpty() && moreInDirection) extendQueue(before)
         }
         if (before) extendBeforeJob = job else extendAfterJob = job
     }
@@ -867,11 +909,11 @@ class AudioPlaybackService : MediaSessionService() {
         frame.incomplete = false
         frame.detached = true
         frame.pendingReset = false
-        frame.extendingBefore = false
-        frame.extendingAfter = false
         frame.feed = null
         frame.source = null
         frame.label = getStringBlocking(Res.string.queue_source_custom)
+        val size = if (liveFrame === frame) player.mediaItemCount else frame.snapshot?.items?.size ?: 0
+        frame.pagination.detachToCustom(size)
     }
 
     private fun enqueueItem(args: Bundle) {
@@ -894,6 +936,7 @@ class AudioPlaybackService : MediaSessionService() {
             if (count == 0) {
                 detachToCustomQueue(live)
                 player.setMediaItems(listOf(item.toMediaItem()))
+                live.pagination.detachToCustom(player.mediaItemCount)
                 publishQueueChange()
                 return
             }
@@ -907,6 +950,7 @@ class AudioPlaybackService : MediaSessionService() {
                 } else {
                     player.addMediaItem(count, item.toMediaItem())
                 }
+                live.pagination.detachToCustom(player.mediaItemCount)
                 publishQueueChange()
                 return
             }
@@ -931,6 +975,7 @@ class AudioPlaybackService : MediaSessionService() {
                         ?.let { player.setShuffleOrder(it) }
                 }
             }
+            live.pagination.detachToCustom(player.mediaItemCount)
             publishQueueChange()
             return
         }
@@ -959,6 +1004,7 @@ class AudioPlaybackService : MediaSessionService() {
             order = snap.order,
             detached = frame.detached,
         )
+        frame.pagination.detachToCustom(mutable.size)
     }
 
     private fun moveQueueItem(args: Bundle) {
@@ -973,6 +1019,7 @@ class AudioPlaybackService : MediaSessionService() {
         if (from == target) return
         detachToCustomQueue(live)
         player.moveMediaItem(from, target)
+        live.pagination.detachToCustom(player.mediaItemCount)
         publishQueueChange()
     }
 
@@ -1000,6 +1047,7 @@ class AudioPlaybackService : MediaSessionService() {
             player.playWhenReady = wasPlaying
         }
         player.removeMediaItem(idx)
+        live.pagination.detachToCustom(player.mediaItemCount)
         publishQueueChange()
     }
 
@@ -1016,6 +1064,7 @@ class AudioPlaybackService : MediaSessionService() {
         if (currentIdx > 0) {
             player.removeMediaItems(0, currentIdx)
         }
+        live.pagination.detachToCustom(player.mediaItemCount)
         publishQueueChange()
     }
 
@@ -1030,8 +1079,7 @@ class AudioPlaybackService : MediaSessionService() {
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
-        live.extendingBefore = false
-        live.extendingAfter = false
+        live.pagination.reset()
         live.detached = false
         live.pendingReset = true
         live.feed = null
@@ -1061,6 +1109,7 @@ class AudioPlaybackService : MediaSessionService() {
         enrichJob?.cancel()
         extendBeforeJob?.cancel()
         extendAfterJob?.cancel()
+        live.pagination.cancelExtend()
         sleepTimer.cancel()
         persistCachedProgress()
         progressSession?.flush()
@@ -2084,6 +2133,21 @@ class AudioPlaybackService : MediaSessionService() {
         player.duration.takeIf { it != C.TIME_UNSET }?.coerceAtLeast(0) ?: 0
 
     private fun publishState(loading: Boolean = false) {
+        val frame = liveFrame
+        val pagination = frame?.pagination
+        val detached = frame?.detached == true
+        val count = player.mediaItemCount
+        val currentIdx = player.currentMediaItemIndex
+        val effectivePos = if (detached) {
+            (currentIdx + 1).takeIf { count > 0 && currentIdx in 0 until count }
+        } else {
+            pagination?.sourcePositionFor(currentIdx, count)
+        }
+        val effectiveTotal = if (detached) {
+            count.takeIf { it > 0 }
+        } else {
+            pagination?.sourceTotal
+        }
         _state.value = AudioPlaybackUiState(
             nowPlaying = nowPlaying(),
             loadKey = loadedMediaId,
@@ -2099,27 +2163,28 @@ class AudioPlaybackService : MediaSessionService() {
             queue = QueueState(
                 current = currentItem(),
                 items = queueItems,
-                size = player.mediaItemCount,
+                size = count,
                 // **倒序或随机播放下这个数字仍是"列表里的第几条",不是"播放顺序里的第几个"。**
                 // 列表本身不重排(倒序与随机只改播放顺序),高亮跟着滚动 —— 那么这一格跟着列表走才
                 // 对得上眼睛看到的位置,而且切换顺序时它不会平白跳一下。
-                sourcePosition = liveFrame?.feed?.offsetOfFirst?.takeIf { player.mediaItemCount > 0 }
-                    ?.let { it + player.currentMediaItemIndex + 1 },
-                sourceTotal = liveFrame?.feed?.total,
+                sourcePosition = effectivePos,
+                sourceTotal = effectiveTotal,
                 order = queueOrder,
                 endMode = endMode,
                 canPrevious = player.hasPreviousMediaItem() || neighbourPart(-1) != null,
                 canNext = player.hasNextMediaItem() || neighbourPart(1) != null,
-                frameId = liveFrame?.id,
-                sourceLabel = liveFrame?.label.orEmpty(),
-                source = liveFrame?.source,
-                enriching = liveFrame?.enriching == true,
-                incomplete = liveFrame?.incomplete == true,
-                detached = liveFrame?.detached == true,
-                canExtendBefore = liveFrame?.feed?.hasBefore == true,
-                canExtendAfter = liveFrame?.feed?.hasAfter == true,
-                extendingBefore = liveFrame?.extendingBefore == true,
-                extendingAfter = liveFrame?.extendingAfter == true,
+                frameId = frame?.id,
+                sourceLabel = frame?.label.orEmpty(),
+                source = frame?.source,
+                enriching = frame?.enriching == true,
+                incomplete = frame?.incomplete == true,
+                detached = detached,
+                canExtendBefore = !detached && pagination?.hasBefore == true,
+                canExtendAfter = !detached && pagination?.hasAfter == true,
+                extendingBefore = !detached && pagination?.loadingBefore == true,
+                extendingAfter = !detached && pagination?.loadingAfter == true,
+                errorBefore = !detached && pagination?.errorBefore == true,
+                errorAfter = !detached && pagination?.errorAfter == true,
             ),
         )
     }
@@ -2287,7 +2352,13 @@ class AudioPlaybackService : MediaSessionService() {
             publishState(loading = true)
             // 下一条多半在这之前几十秒就解析好了(见 [resolvedItems]),现在才轮到它落地。
             adoptResolved(newPosition.mediaItem?.mediaId)
-            extendNearEdges()
+            if (oldPosition.mediaItem != null &&
+                newPosition.mediaItem != null &&
+                newPosition.mediaItem?.mediaId != oldPosition.mediaItem?.mediaId &&
+                liveFrame?.feed != null
+            ) {
+                extendNearEdges()
+            }
         }
 
         /** 画面出来了才算这次打开走完。音频先出声,但用户等的是这一帧。 */
@@ -2601,9 +2672,6 @@ class AudioPlaybackService : MediaSessionService() {
          * 一条已经删掉的视频要让人干等十几秒才等来那句"播不了"。
          */
         private const val MAX_ATTEMPTS = 3
-
-        /** 当前条离队列一头不足几条时往那头续取,见 [extendNearEdges]。 */
-        private const val EXTEND_THRESHOLD = 3
 
         /** 退避的第一档,之后每次翻倍:1s、2s。 */
         private const val RETRY_BASE_DELAY_MILLIS = 1_000L

@@ -2,7 +2,9 @@ package dev.bilby.player
 
 import dev.bilby.data.QueueOrder
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.random.Random
 
@@ -183,5 +185,110 @@ class DesktopQueueTest {
         shuffle.enqueue(item("Z"), playNext = true)
         assertEquals("Z", shuffle[shuffle.nextIndex()!!].bvid)
         assertEquals(5, shuffle.playOrder().size)
+    }
+
+    @Test
+    fun `prepend and append preserve exact sourcePosition across duplicate bvid filtering`() {
+        val queue = DesktopQueue(Random(1))
+        queue.set(items("v10", "v11", "v12"), 1) // current = v11
+        queue.bindFeedMeta(offsetOfFirst = 10, total = 50, hasBefore = true, hasAfter = true)
+
+        assertEquals(12, queue.sourcePosition)
+        val initialState = queue.toQueueState()
+        assertEquals(10, initialState.remainingBefore)
+        assertEquals(37, initialState.remainingAfter)
+        assertTrue(initialState.isWindowed)
+
+        // Prepend ["v8", "v9", "v10"] where "v10" is duplicate: only 2 fresh items inserted -> offsetOfFirst = 8
+        assertTrue(queue.beginExtend(before = true))
+        val addedBefore = queue.prepend(items("v8", "v9", "v10"), feedHasBefore = true, feedHasAfter = true, feedTotal = 50)
+        assertEquals(2, addedBefore)
+        assertEquals(8, queue.offsetOfFirst)
+        assertEquals(3, queue.index)
+        assertEquals(12, queue.sourcePosition) // 8 + 3 + 1 == 12 (no jump!)
+
+        // Reaching top edge (!feedHasBefore) snaps offsetOfFirst to 0
+        assertTrue(queue.beginExtend(before = true))
+        queue.prepend(items("v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"), feedHasBefore = false, feedHasAfter = true, feedTotal = 50)
+        assertEquals(0, queue.offsetOfFirst)
+        assertFalse(queue.hasBefore)
+        assertEquals(12, queue.sourcePosition)
+    }
+
+    @Test
+    fun `middle window resolves offsetOfFirst at tail edge and reconciles closed window total`() {
+        // Middle cursor window (offsetOfFirst = null, total = 10)
+        val queue = DesktopQueue(Random(1))
+        queue.set(items("v4", "v5", "v6"), 1)
+        queue.bindFeedMeta(offsetOfFirst = null, total = 10, hasBefore = true, hasAfter = true)
+        assertNull(queue.sourcePosition)
+        assertEquals(10, queue.sourceTotal)
+
+        // Append reaches tail (!feedHasAfter): offsetOfFirst resolves to 10 - 6 = 4
+        assertTrue(queue.beginExtend(before = false))
+        queue.append(items("v7", "v8", "v9"), feedHasBefore = true, feedHasAfter = false, feedTotal = 10)
+        assertEquals(4, queue.offsetOfFirst)
+        assertEquals(6, queue.sourcePosition) // v5 is #6 of 10
+
+        // Prepend reaches head (!feedHasBefore) with 1 filtered item (only 3 valid instead of 4):
+        // !hasBefore && !hasAfter && offsetOfFirst == 0 reconciles sourceTotal to exact playlist size (9)
+        assertTrue(queue.beginExtend(before = true))
+        queue.prepend(items("v1", "v2", "v3"), feedHasBefore = false, feedHasAfter = false, feedTotal = 10)
+        assertEquals(0, queue.offsetOfFirst)
+        assertEquals(9, queue.sourceTotal)
+        assertFalse(queue.toQueueState().isWindowed)
+    }
+
+    @Test
+    fun `errorBefore and errorAfter latch halts auto-extend until explicit retry`() {
+        val queue = DesktopQueue(Random(1))
+        queue.set(items("A", "B", "C", "D"), 2) // index = 2 (size - 2 in Forward)
+        queue.bindFeedMeta(offsetOfFirst = 0, total = 20, hasBefore = true, hasAfter = true)
+
+        assertTrue(queue.shouldAutoExtendAfter())
+        assertFalse(queue.shouldAutoExtendBefore())
+
+        // Simulate failed loadAfter
+        assertTrue(queue.beginExtend(before = false))
+        assertTrue(queue.loadingAfter)
+        queue.failExtend(before = false)
+        assertFalse(queue.loadingAfter)
+        assertTrue(queue.errorAfter)
+        assertTrue(queue.toQueueState().errorAfter)
+
+        // Error latch prevents infinite auto-extend loop
+        assertFalse(queue.shouldAutoExtendAfter())
+
+        // Explicit retry via beginExtend clears errorAfter
+        assertTrue(queue.beginExtend(before = false))
+        assertFalse(queue.errorAfter)
+        queue.append(items("E", "F"), feedHasBefore = true, feedHasAfter = true, feedTotal = 20)
+        assertFalse(queue.errorAfter)
+
+        // Reverse boundary check (only index <= 1)
+        queue.order = QueueOrder.Reverse
+        assertFalse(queue.shouldAutoExtendBefore()) // index = 2 > 1
+        queue.moveTo(1)
+        assertTrue(queue.shouldAutoExtendBefore())
+        queue.beginExtend(before = true)
+        queue.failExtend(before = true)
+        assertTrue(queue.errorBefore)
+        assertFalse(queue.shouldAutoExtendBefore())
+
+        // Shuffle never auto-extends
+        queue.order = QueueOrder.Shuffle
+        queue.moveTo(0)
+        assertFalse(queue.shouldAutoExtendBefore())
+        assertFalse(queue.shouldAutoExtendAfter())
+
+        // Detaching to custom queue clears edges and errors and pins exact 1..N
+        queue.detachToCustomQueue()
+        val detachedState = queue.toQueueState(detached = true)
+        assertFalse(detachedState.canExtendBefore)
+        assertFalse(detachedState.canExtendAfter)
+        assertFalse(detachedState.errorBefore)
+        assertFalse(detachedState.errorAfter)
+        assertEquals(1, detachedState.sourcePosition)
+        assertEquals(6, detachedState.sourceTotal)
     }
 }

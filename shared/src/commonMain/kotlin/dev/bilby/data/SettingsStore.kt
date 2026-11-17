@@ -131,8 +131,11 @@ class SettingsStore(private val store: DataStore<Preferences>) {
     suspend fun saveLlmConfig(value: LlmConfig) {
         store.edit { p ->
             p[KEY_LLM_BASE_URL] = value.baseUrl.withScheme()
-            p[KEY_LLM_API_KEY] = value.apiKey
-            p[KEY_LLM_MODEL] = value.model
+                .trimEnd('/')
+                .removeSuffix("/chat/completions")
+                .trimEnd('/')
+            p[KEY_LLM_API_KEY] = value.apiKey.trim()
+            p[KEY_LLM_MODEL] = value.model.trim()
         }
     }
 
@@ -459,7 +462,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         }
     }
 
-    /** 夜间模式设置与临时退出截止时间戳，见 [NightModePrefs]。 */
+    /** 夜间模式设置、临时退出与手动开启截止时间戳，见 [NightModePrefs]。 */
     val nightModePrefs: Flow<NightModePrefs> = store.data.map { p ->
         NightModePrefs(
             enabled = p[KEY_NIGHT_ENABLED] ?: false,
@@ -469,6 +472,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
                 .coerceIn(0, MINUTES_PER_DAY - 1),
             allowedUps = decodeNightUps(p[KEY_NIGHT_ALLOWED_UPS]),
             overrideUntilEpochMillis = (p[KEY_NIGHT_OVERRIDE_UNTIL] ?: 0L).coerceAtLeast(0L),
+            manualUntilEpochMillis = (p[KEY_NIGHT_MANUAL_UNTIL] ?: 0L).coerceAtLeast(0L),
         )
     }
 
@@ -479,10 +483,20 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         }
     }
 
-    suspend fun setNightModeSchedule(startMinute: Int, endMinute: Int) {
+    suspend fun setNightModeSchedule(
+        startMinute: Int,
+        endMinute: Int,
+        nowEpochMillis: Long = System.currentTimeMillis(),
+    ) {
         store.edit { p ->
-            p[KEY_NIGHT_START_MINUTE] = startMinute.coerceIn(0, MINUTES_PER_DAY - 1)
-            p[KEY_NIGHT_END_MINUTE] = endMinute.coerceIn(0, MINUTES_PER_DAY - 1)
+            val clampedStart = startMinute.coerceIn(0, MINUTES_PER_DAY - 1)
+            val clampedEnd = endMinute.coerceIn(0, MINUTES_PER_DAY - 1)
+            p[KEY_NIGHT_START_MINUTE] = clampedStart
+            p[KEY_NIGHT_END_MINUTE] = clampedEnd
+            val manualUntil = p[KEY_NIGHT_MANUAL_UNTIL] ?: 0L
+            if (manualUntil > nowEpochMillis) {
+                p[KEY_NIGHT_MANUAL_UNTIL] = computeNextNightEndEpochMillis(clampedEnd, nowEpochMillis)
+            }
         }
     }
 
@@ -512,7 +526,41 @@ class SettingsStore(private val store: DataStore<Preferences>) {
 
     suspend fun setNightModeOverrideUntil(epochMillis: Long) {
         store.edit { p ->
-            p[KEY_NIGHT_OVERRIDE_UNTIL] = epochMillis.coerceAtLeast(0L)
+            val clamped = epochMillis.coerceAtLeast(0L)
+            p[KEY_NIGHT_OVERRIDE_UNTIL] = clamped
+            if (clamped > 0L) p[KEY_NIGHT_MANUAL_UNTIL] = 0L
+        }
+    }
+
+    suspend fun engageNightModeManually(nowEpochMillis: Long = System.currentTimeMillis()) {
+        store.edit { p ->
+            val end = (p[KEY_NIGHT_END_MINUTE] ?: DEFAULT_NIGHT_END_MINUTE)
+                .coerceIn(0, MINUTES_PER_DAY - 1)
+            p[KEY_NIGHT_MANUAL_UNTIL] = computeNextNightEndEpochMillis(end, nowEpochMillis)
+            p[KEY_NIGHT_OVERRIDE_UNTIL] = 0L
+        }
+    }
+
+    suspend fun exitNightModeTemporarily(nowEpochMillis: Long = System.currentTimeMillis()) {
+        store.edit { p ->
+            p[KEY_NIGHT_MANUAL_UNTIL] = 0L
+            val enabled = p[KEY_NIGHT_ENABLED] ?: false
+            if (enabled) {
+                val start = (p[KEY_NIGHT_START_MINUTE] ?: DEFAULT_NIGHT_START_MINUTE)
+                    .coerceIn(0, MINUTES_PER_DAY - 1)
+                val end = (p[KEY_NIGHT_END_MINUTE] ?: DEFAULT_NIGHT_END_MINUTE)
+                    .coerceIn(0, MINUTES_PER_DAY - 1)
+                val window = findCoveringNightWindow(start, end, nowEpochMillis)
+                if (window != null) {
+                    p[KEY_NIGHT_OVERRIDE_UNTIL] = window.endEpochMillis
+                }
+            }
+        }
+    }
+
+    suspend fun clearNightModeManualUntil() {
+        store.edit { p ->
+            p[KEY_NIGHT_MANUAL_UNTIL] = 0L
         }
     }
 
@@ -654,6 +702,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_NIGHT_END_MINUTE = intPreferencesKey("night_mode_end_minute")
         private val KEY_NIGHT_ALLOWED_UPS = stringPreferencesKey("night_mode_allowed_ups")
         private val KEY_NIGHT_OVERRIDE_UNTIL = longPreferencesKey("night_mode_override_until")
+        private val KEY_NIGHT_MANUAL_UNTIL = longPreferencesKey("night_mode_manual_until_epoch_ms")
 
         /** 见 [excludedFeedMids]。 */
         const val EXCLUDED_SEPARATOR = '|'
@@ -917,7 +966,8 @@ data class LlmConfig(
     val apiKey: String,
     val model: String,
 ) {
-    val isConfigured: Boolean get() = baseUrl.isNotEmpty() && apiKey.isNotEmpty()
+    val isConfigured: Boolean
+        get() = baseUrl.isNotBlank() && apiKey.isNotBlank() && model.isNotBlank()
 }
 
 /**
@@ -927,7 +977,7 @@ data class LlmConfig(
  *
  * 本机地址补 http:自建模型(ollama、LM Studio)监听的就是 http,补成 https 反而连不上。
  */
-private fun String.withScheme(): String {
+internal fun String.withScheme(): String {
     val value = trim()
     if (value.isEmpty() || value.contains("://")) return value
     val local = value.startsWith("localhost") || value.startsWith("127.0.0.1") || value.startsWith("10.0.2.2")
