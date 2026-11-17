@@ -126,7 +126,7 @@
    - 单列窄屏（`Compact` 或窄分栏）渲染拇指友好的横排 `VideoRow`（16:10 封面 `128..176dp`、`bodyLargeEmphasized` 两行标题、发布时间 + UP 名单行、`StatRow` 图标化计数）。
    - 多列宽屏（`AdaptiveListContent` 下的 `Medium+` / `Expanded+`，最小列宽 `Dimens.VideoGridMinCellWidth = 248.dp`）渲染纵向 16:10 `VideoGridCard`（`14.dp` 封面圆角、`minLines = 2` 固定双行标题对齐同行基线、底栏 `20.dp` 头像 + 可点 UP 名 + `MetaSeparator` + 时间 + `StatRow` + `interactiveCard` 悬停底色）。
    - 窄屏行尾保留 `⋮` 溢出按钮（叠在元信息行右下角、不挤占标题宽度）；宽屏隐藏 `⋮`，统一由右键/长按 `ContextMenuBox` 弹出 `VideoCommonMenuItems`（下一条播放、加入播放队列、复制标题、复制 BV 号、分享/复制链接、查看个人空间）。
-2. **有界队列与编号引用统一走 `SegmentedListItem`**（`CompactVideoRow` 已从新调用点退役）：
+2. **有界队列与编号引用统一走 `SegmentedListItem`**：
    - 播放队列（`EpisodeList`）每项为 `SegmentedListItem`（`surfaceContainer`，项间 `SegmentedGap`），当前播放项以 `secondaryContainer` 高亮配 `bodyMediumEmphasized` 标题；播放页内联队列底部以 `ShowAllRow` 底封瓦片（上 `4.dp` / 下 `16.dp` 圆角）收口并展示总条数。
    - 搜索助理回答（`AgentAnswerView`）底部出处列表使用带 `[1]`、`[2]` `primaryContainer` 编号徽章的 `SegmentedListItem` 卡片。
 3. **订阅流无描边三层色阶连发叠卡（`BurstStackedItem`）**：

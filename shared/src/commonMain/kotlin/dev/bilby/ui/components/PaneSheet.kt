@@ -250,16 +250,6 @@ private class WheelStopsAtSheet(private val pointers: PointerSource) : NestedScr
 interface PaneSheetScope : ColumnScope {
     /** 此刻画在右栏里,而不是底部或侧边 sheet 里。 */
     val inPane: Boolean
-
-    /**
-     * 旧接口过渡桥接:统一交由面板主体容器的 `weight(1f, fill = false)` 控制伸缩,短内容自然贴合,
-     * 长列表在面板高度上限内独立滚动且不顶走底部操作栏。
-     */
-    @Deprecated(
-        message = "Use Modifier.weight(1f, fill = false) inside PaneSheet body.",
-        replaceWith = ReplaceWith("weight(1f, fill = false)"),
-    )
-    fun Modifier.bodyHeight(sheetFraction: Float): Modifier = weight(1f, fill = false)
 }
 
 private class PaneSheetScopeImpl(
