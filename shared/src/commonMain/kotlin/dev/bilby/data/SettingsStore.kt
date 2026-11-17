@@ -121,10 +121,13 @@ class SettingsStore(private val store: DataStore<Preferences>) {
 
     /** 未配置时回落到 BuildConfig(debug 版从 local.properties 注入),省去每次装机重输。 */
     val llmConfig: Flow<LlmConfig> = store.data.map { p ->
+        val baseUrl = p[KEY_LLM_BASE_URL] ?: AppBuild.llmBaseUrl.ifEmpty { DEFAULT_LLM_BASE_URL }
         LlmConfig(
-            baseUrl = p[KEY_LLM_BASE_URL] ?: AppBuild.llmBaseUrl.ifEmpty { DEFAULT_LLM_BASE_URL },
+            baseUrl = baseUrl,
             apiKey = p[KEY_LLM_API_KEY] ?: AppBuild.llmApiKey,
-            model = p[KEY_LLM_MODEL] ?: DEFAULT_LLM_MODEL,
+            model = p[KEY_LLM_MODEL] ?: AppBuild.llmModel.ifBlank {
+                if (baseUrl.isBlank() || baseUrl.contains("deepseek", ignoreCase = true)) DEFAULT_LLM_MODEL else ""
+            },
         )
     }
 

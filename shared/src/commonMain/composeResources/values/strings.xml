@@ -973,4 +973,44 @@
     <string name="settings_llm_models_loading">正在获取模型列表…</string>
     <string name="settings_llm_models_empty">未找到可用模型</string>
     <string name="settings_llm_models_failed">获取模型列表失败</string>
+
+    <!-- Wave-2 共享文案 -->
+    <string name="player_net_wifi">Wi-Fi</string>
+    <string name="player_net_5g">5G</string>
+    <string name="player_net_lte">LTE</string>
+    <string name="player_net_cellular">移动网络</string>
+    <string name="player_net_ethernet">以太网</string>
+    <string name="player_net_offline">离线</string>
+    <string name="action_copy_title">复制标题</string>
+    <string name="action_copy_avid">复制 AV 号</string>
+    <string name="action_copy_desc">复制简介</string>
+    <string name="action_copy_tag">复制标签</string>
+    <string name="action_copy_up_name">复制 UP 主昵称</string>
+    <string name="action_copy_uid">复制 UID</string>
+    <string name="action_copy_nickname">复制昵称</string>
+    <string name="action_copy_bio">复制签名</string>
+    <string name="action_copy_dynamic">复制动态正文</string>
+    <string name="action_copy_forwarded">复制转发正文</string>
+    <string name="action_copy_dynamic_link">复制动态链接</string>
+    <string name="action_copy_article_id">复制专栏号</string>
+    <string name="action_copy_full_text">复制全文</string>
+    <string name="action_copy_paragraph">复制段落</string>
+    <string name="action_copy_code">复制代码</string>
+    <string name="action_copy_answer">复制回答</string>
+    <string name="action_copy_question">复制提问</string>
+    <string name="action_copy_message">复制消息</string>
+    <string name="action_copy_live_title">复制直播间标题</string>
+    <string name="action_copy_room_id">复制房间号</string>
+    <string name="action_copy_danmaku">复制弹幕</string>
+    <string name="action_select_text">选择文本</string>
+    <string name="video_badge_repost">转载</string>
+    <string name="video_badge_original">自制</string>
+    <string name="video_copyright_no_reprint">未经作者授权，禁止转载</string>
+    <string name="action_confirm_count">确定（%1$d）</string>
+    <string name="feed_burst_expand_rest">展开其余 %1$d 条连发</string>
+    <string name="feed_live_count_badge">%1$d 直播</string>
+    <string name="night_mode_sanctuary_scheduled">静息时段  %1$s</string>
+    <string name="night_mode_sanctuary_manual">手动夜间模式生效中  至 %1$s</string>
+    <string name="collection_total_count">共 %1$d 个视频</string>
+    <string name="agent_steps_count">已检索 %1$d 步</string>
 </resources>

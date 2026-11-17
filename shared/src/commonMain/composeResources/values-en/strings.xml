@@ -911,4 +911,44 @@
     <string name="settings_llm_models_loading">Loading models…</string>
     <string name="settings_llm_models_empty">No models found</string>
     <string name="settings_llm_models_failed">Could not load models</string>
+
+    <!-- Wave-2 shared strings -->
+    <string name="player_net_wifi">Wi-Fi</string>
+    <string name="player_net_5g">5G</string>
+    <string name="player_net_lte">LTE</string>
+    <string name="player_net_cellular">Cellular</string>
+    <string name="player_net_ethernet">Ethernet</string>
+    <string name="player_net_offline">Offline</string>
+    <string name="action_copy_title">Copy title</string>
+    <string name="action_copy_avid">Copy AV ID</string>
+    <string name="action_copy_desc">Copy description</string>
+    <string name="action_copy_tag">Copy tag</string>
+    <string name="action_copy_up_name">Copy creator name</string>
+    <string name="action_copy_uid">Copy UID</string>
+    <string name="action_copy_nickname">Copy name</string>
+    <string name="action_copy_bio">Copy bio</string>
+    <string name="action_copy_dynamic">Copy post text</string>
+    <string name="action_copy_forwarded">Copy repost text</string>
+    <string name="action_copy_dynamic_link">Copy post link</string>
+    <string name="action_copy_article_id">Copy article ID</string>
+    <string name="action_copy_full_text">Copy full text</string>
+    <string name="action_copy_paragraph">Copy paragraph</string>
+    <string name="action_copy_code">Copy code</string>
+    <string name="action_copy_answer">Copy answer</string>
+    <string name="action_copy_question">Copy question</string>
+    <string name="action_copy_message">Copy message</string>
+    <string name="action_copy_live_title">Copy stream title</string>
+    <string name="action_copy_room_id">Copy room ID</string>
+    <string name="action_copy_danmaku">Copy danmaku</string>
+    <string name="action_select_text">Select text</string>
+    <string name="video_badge_repost">Repost</string>
+    <string name="video_badge_original">Original</string>
+    <string name="video_copyright_no_reprint">No reposting without author permission</string>
+    <string name="action_confirm_count">Confirm (%1$d)</string>
+    <string name="feed_burst_expand_rest">Show %1$d more uploads</string>
+    <string name="feed_live_count_badge">%1$d live</string>
+    <string name="night_mode_sanctuary_scheduled">Quiet hours  %1$s</string>
+    <string name="night_mode_sanctuary_manual">Night mode active  Until %1$s</string>
+    <string name="collection_total_count">%1$d videos</string>
+    <string name="agent_steps_count">%1$d steps searched</string>
 </resources>

@@ -1,20 +1,22 @@
 package dev.bilby.data
 
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.emptyPreferences
 import java.time.LocalDateTime
 import java.time.ZoneId
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.TemporaryFolder
 
 class NightModeTest {
-
-    @get:Rule
-    val temp = TemporaryFolder()
 
     private val utc = ZoneId.of("UTC")
 
@@ -252,7 +254,7 @@ class NightModeTest {
     @Test
     fun `SettingsStore manual engage, temporary exit, schedule sync, and LLM normalization`() = runTest {
         val zone = ZoneId.systemDefault()
-        val settings = SettingsStore(preferencesStore(temp.newFolder("datastore"), "test_settings"))
+        val settings = SettingsStore(inMemoryPreferencesStore())
 
         // 1) Manual engage with auto-schedule disabled -> Active(manual=true) -> temp exit -> Inactive
         val nowOutside = epoch(2026, 11, 16, 22, 0, zone = zone)
@@ -324,5 +326,17 @@ class NightModeTest {
         assertEquals("23:30\u201306:00", range)
         assertFalse(range.contains('\u00B7'))
         assertFalse(range.contains('\u2022'))
+    }
+
+    private fun inMemoryPreferencesStore(): DataStore<Preferences> = object : DataStore<Preferences> {
+        private val mutex = Mutex()
+        private val state = MutableStateFlow(emptyPreferences())
+        override val data: Flow<Preferences> = state
+        override suspend fun updateData(transform: suspend (t: Preferences) -> Preferences): Preferences =
+            mutex.withLock {
+                val updated = transform(state.value)
+                state.value = updated
+                updated
+            }
     }
 }

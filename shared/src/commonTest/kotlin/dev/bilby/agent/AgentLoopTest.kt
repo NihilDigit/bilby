@@ -199,7 +199,7 @@ class AgentLoopTest {
                     )
                 }
             } else {
-                turn2Received = messages
+                turn2Received = messages.toList()
                 answer("追问回答 [[BV1]]")
             }
         }
