@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -188,7 +187,6 @@ fun NightExitHoldSheet(
             }
         }
 
-        val showTitle = !inPane
         val fillsHeight = inPane || fullHeightHost
         val fraction = progress.value.coerceIn(0f, 1f)
 
@@ -202,7 +200,7 @@ fun NightExitHoldSheet(
                             .padding(horizontal = Spacing.Loose)
                             .padding(top = Spacing.Tight, bottom = Spacing.Loose),
                     ) {
-                        NightHoldHeader(showTitle = showTitle, title = title, body = body)
+                        NightHoldBody(body = body)
                         Spacer(modifier = Modifier.weight(TopStageWeight))
                         NightHoldStage(
                             fraction = fraction,
@@ -227,7 +225,7 @@ fun NightExitHoldSheet(
                             .padding(top = Spacing.Tight, bottom = Spacing.Loose),
                         verticalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
                     ) {
-                        NightHoldHeader(showTitle = showTitle, title = title, body = body)
+                        NightHoldBody(body = body)
                         NightHoldStage(
                             fraction = fraction,
                             holding = holding,
@@ -250,14 +248,13 @@ fun NightExitHoldSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .verticalScroll(rememberScrollState())
-                        .navigationBarsPadding()
                         .padding(horizontal = Spacing.Loose)
                         .padding(top = Spacing.Hair, bottom = Spacing.Loose),
                     verticalArrangement = Arrangement.spacedBy(
                         if (compact) Spacing.Comfortable else Spacing.Loose,
                     ),
                 ) {
-                    NightHoldHeader(showTitle = showTitle, title = title, body = body)
+                    NightHoldBody(body = body)
                     NightHoldStage(
                         fraction = fraction,
                         holding = holding,
@@ -277,28 +274,13 @@ fun NightExitHoldSheet(
 }
 
 @Composable
-private fun NightHoldHeader(
-    showTitle: Boolean,
-    title: String,
-    body: String?,
-) {
-    if (!showTitle && body.isNullOrBlank()) return
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
-        if (showTitle) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        }
-        if (!body.isNullOrBlank()) {
-            Text(
-                text = body,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
+private fun NightHoldBody(body: String?) {
+    if (body.isNullOrBlank()) return
+    Text(
+        text = body,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable

@@ -1,5 +1,6 @@
 package dev.bilby.desktop
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +20,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CropSquare
 import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -117,7 +119,9 @@ internal fun FrameWindowScope.WindowFrame(
             if (hosted && !compact.hasActiveButtonBounds) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(Spacing.Tight),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = FallbackCaptionTopPadding, end = Spacing.Cozy),
                 ) {
                     Spacer(
                         modifier = Modifier
@@ -280,6 +284,7 @@ private class CompactCaption(private val caption: WindowsCaption) : WindowCaptio
  * 并进内容时的圆形窗口按钮(40dp),与所在顶栏的 M3 `IconButton` 视觉圆直径、水平中线完全一致;
  * 字形仍取系统 Segoe 图标字体,关闭键悬停红底白字。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun RoundCaptionButton(
     button: WindowsCaption.Button,
@@ -290,13 +295,28 @@ private fun RoundCaptionButton(
     modifier: Modifier = Modifier,
 ) {
     val isClose = button == WindowsCaption.Button.CLOSE
-    val background = when {
-        isClose && (hovered || pressed) -> CloseRed.copy(alpha = if (pressed) 0.9f else 1f)
+    val targetBackground = when {
+        isClose && pressed -> CloseRedPressed
+        isClose && hovered -> CloseRed
         pressed -> contentColor.copy(alpha = 0.12f)
         hovered -> contentColor.copy(alpha = 0.08f)
-        else -> Color.Transparent
+        else -> contentColor.copy(alpha = 0f)
     }
-    val glyphColor = if (isClose && (hovered || pressed)) Color.White else contentColor
+    val targetGlyphColor = when {
+        isClose && pressed -> Color.White.copy(alpha = 0.85f)
+        isClose && hovered -> Color.White
+        else -> contentColor
+    }
+    val background by animateColorAsState(
+        targetValue = targetBackground,
+        animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+        label = "roundCaptionBg",
+    )
+    val glyphColor by animateColorAsState(
+        targetValue = targetGlyphColor,
+        animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+        label = "roundCaptionGlyph",
+    )
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier.size(40.dp).clip(CircleShape).background(background),
@@ -304,6 +324,8 @@ private fun RoundCaptionButton(
         CaptionGlyphIcon(button, isMaximized, glyphColor)
     }
 }
+
+private val FallbackCaptionTopPadding = 20.dp
 
 /** 与 Windows 11 标题栏按钮(46×32 epx)同高。 */
 private val TitleBarHeight = 32.dp
@@ -434,6 +456,7 @@ private fun CaptionGlyphIcon(
 }
 
 private val CloseRed = Color(0xFFC42B1C)
+private val CloseRedPressed = Color(0xFFB12618)
 
 /** 码位在 Segoe Fluent Icons(Windows 11)与 Segoe MDL2 Assets(Windows 10)里相同。 */
 private enum class CaptionGlyph(val char: Char, val fallback: ImageVector) {

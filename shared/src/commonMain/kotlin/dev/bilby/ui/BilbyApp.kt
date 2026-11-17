@@ -55,8 +55,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Subscriptions
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.outlined.Checklist
@@ -80,9 +85,7 @@ import androidx.compose.material3.ShortNavigationBarItem
 import androidx.compose.material3.WideNavigationRail
 import androidx.compose.material3.WideNavigationRailDefaults
 import androidx.compose.material3.WideNavigationRailItem
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.SnackbarDuration
@@ -135,6 +138,7 @@ import dev.bilby.api.BiliResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import dev.bilby.ui.article.ArticleScreen
 import dev.bilby.ui.article.ArticleViewModel
@@ -252,7 +256,10 @@ import dev.bilby.ui.space.SpaceViewModel
 import dev.bilby.ui.theme.Motion
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.rememberReducedMotion
+import dev.bilby.ui.theme.BilbyNightSanctuaryTheme
 import dev.bilby.ui.theme.BilbyTheme
+import dev.bilby.ui.theme.LocalIsDarkTheme
+import dev.bilby.ui.theme.tabular
 import dev.bilby.ui.update.StartupUpdatePrompt
 import dev.bilby.ui.toview.ToViewClear
 import dev.bilby.ui.toview.ToViewClearDialog
@@ -385,11 +392,22 @@ private fun BilbyApp(
         nightPrefs.startMinuteOfDay,
         nightPrefs.endMinuteOfDay,
         nightPrefs.overrideUntilEpochMillis,
+        nightPrefs.manualUntilEpochMillis,
     ) {
-        nowMillis = System.currentTimeMillis()
+        val initialNow = System.currentTimeMillis()
+        nowMillis = initialNow
+        if (nightPrefs.manualUntilEpochMillis > 0L && initialNow >= nightPrefs.manualUntilEpochMillis) {
+            container.persistScope.launch { container.settings.clearNightModeManualUntil() }
+        }
+        if (!nightPrefs.enabled && nightPrefs.manualUntilEpochMillis <= 0L) return@LaunchedEffect
         while (true) {
             delay(if (nightPrefs.enabled) NIGHT_ACTIVE_TICK_MILLIS else NIGHT_IDLE_TICK_MILLIS)
-            nowMillis = System.currentTimeMillis()
+            val now = System.currentTimeMillis()
+            nowMillis = now
+            if (nightPrefs.manualUntilEpochMillis > 0L && now >= nightPrefs.manualUntilEpochMillis) {
+                container.persistScope.launch { container.settings.clearNightModeManualUntil() }
+                if (!nightPrefs.enabled) break
+            }
         }
     }
     val nightStatus = evaluateNightMode(nightPrefs, nowMillis)
@@ -466,6 +484,9 @@ private fun BilbyApp(
         }
         if (frameDetached) return false
         return when (val ctx = video.context) {
+            is QueueContext.NightMode -> ctx.ups.isNotEmpty() &&
+                ctx.ups.all { it.mid in mids } &&
+                (ctx.selectedMid == null || ctx.selectedMid in mids)
             is QueueContext.UpArchive -> ctx.mid in mids
             is QueueContext.Collection -> ctx.mid in mids
             else -> false
@@ -519,8 +540,15 @@ private fun BilbyApp(
         pruneBackStackForNightMode(currentAllowedMids)
         pruneDraftQueueForNightMode()
         if (showNotice) {
-            snackbarScope.launch { snackbarHostState.showSnackbar(nightEnteredNotice) }
+            system.showToast(nightEnteredNotice)
         }
+    }
+
+    val enterNightModeManually: () -> Unit = {
+        container.persistScope.launch {
+            container.settings.engageNightModeManually()
+        }
+        engageNightModeNow(showNotice = true)
     }
 
     /**
@@ -563,6 +591,12 @@ private fun BilbyApp(
                         val ctx = key.context
                         when {
                             ctx is QueueContext.Offline -> pushConfirmed(key)
+                            ctx is QueueContext.NightMode -> {
+                                val allowed = ctx.ups.isNotEmpty() &&
+                                    ctx.ups.all { it.mid in mids } &&
+                                    (ctx.selectedMid == null || ctx.selectedMid in mids)
+                                if (allowed) pushConfirmed(key) else showNightBlocked(blockedUpText)
+                            }
                             ctx is QueueContext.UpArchive -> if (ctx.mid in mids) pushConfirmed(key) else showNightBlocked(blockedUpText)
                             ctx is QueueContext.Collection -> if (ctx.mid in mids) pushConfirmed(key) else showNightBlocked(blockedUpText)
                             else -> {
@@ -748,6 +782,7 @@ private fun BilbyApp(
             }
 
             previous is NightWindowStatus.Overridden -> {
+                if (nightEngaged) return@LaunchedEffect
                 engageNightModeNow(showNotice = true)
             }
 
@@ -903,7 +938,7 @@ private fun BilbyApp(
     val listDetailDirective = remember(listDetailWide) {
         PaneScaffoldDirective(
             maxHorizontalPartitions = if (listDetailWide) 2 else 1,
-            horizontalPartitionSpacerSize = 0.dp,
+            horizontalPartitionSpacerSize = if (listDetailWide) Spacing.Tight else 0.dp,
             maxVerticalPartitions = 1,
             verticalPartitionSpacerSize = 0.dp,
             defaultPanePreferredWidth = ListPaneWidth,
@@ -1065,9 +1100,19 @@ private fun BilbyApp(
             .focusRequester(rootFocusRequester)
             .focusable(),
     ) {
+    val navFramedBackdrop = LocalWindowCaption.current != null || listDetailWide
     NavDisplay(
         backStack = backStack,
         onBack = popBack,
+        modifier = Modifier
+            .fillMaxSize()
+            .then(
+                if (navFramedBackdrop) {
+                    Modifier.background(MaterialTheme.colorScheme.surfaceContainer)
+                } else {
+                    Modifier
+                },
+            ),
         sceneStrategies = listOf(listDetailStrategy),
         // **每个 NavEntry 一个 ViewModelStore。** 默认的 entryDecorators 只有
         // SaveableStateHolder 一个(反编译 navigation3-ui 1.1.5 核实过),于是 `viewModel()`
@@ -1147,25 +1192,32 @@ private fun BilbyApp(
             entry<Home> {
                 CutoutSafe {
                     if (nightEngaged) {
-                        NightModeHomeRoute(
-                            container = container,
-                            prefs = nightPrefs,
-                            hasVideoPage = hasVideoPage,
-                            onPlayDraftQueue = playDraftQueue,
-                            onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
-                            onOpenSpace = { push(Space(it)) },
-                            onOpenOffline = { push(Offline) },
-                            onOpenSettings = openSettings,
-                            onTempExit = {
-                                val activeWindow = (currentNightStatus as? NightWindowStatus.Active)?.window
-                                    ?: (evaluateNightMode(nightPrefs, System.currentTimeMillis()) as? NightWindowStatus.Active)?.window
-                                if (activeWindow != null) {
-                                    container.persistScope.launch {
-                                        container.settings.setNightModeOverrideUntil(activeWindow.endEpochMillis)
-                                    }
-                                }
-                            },
-                        )
+                        val isManualNight = when (nightStatus) {
+                            is NightWindowStatus.Active -> nightStatus.manual
+                            is NightWindowStatus.Overridden -> false
+                            NightWindowStatus.Inactive -> true
+                        }
+                        BilbyNightSanctuaryTheme {
+                            DesktopIslandFrame {
+                                NightModeHomeRoute(
+                                    container = container,
+                                    prefs = nightPrefs,
+                                    manual = isManualNight,
+                                    hasVideoPage = hasVideoPage,
+                                    onPlayDraftQueue = playDraftQueue,
+                                    onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
+                                    onOpenSpace = { push(Space(it)) },
+                                    onOpenOffline = { push(Offline) },
+                                    onOpenSettings = openSettings,
+                                    onTempExit = {
+                                        nightEngaged = false
+                                        container.persistScope.launch {
+                                            container.settings.exitNightModeTemporarily()
+                                        }
+                                    },
+                                )
+                            }
+                        }
                     } else {
                         RootTabs(
                             container = container,
@@ -1182,6 +1234,7 @@ private fun BilbyApp(
                             onOpenCoinLog = { push(CoinLog) },
                             onOpenOtherDynamics = { push(OtherDynamics) },
                             onOpenPushes = { push(MessagePushes) },
+                            onEnterNightMode = enterNightModeManually,
                             onOpenArticle = { ref -> push(ArticlePage(ref.id, ref.isRead)) },
                             onOpenHistory = { push(History) },
                             onOpenToView = { push(ToViewList) },
@@ -1206,14 +1259,18 @@ private fun BilbyApp(
                     },
                 ),
             ) {
-                CutoutSafe {
-                    SettingsRoute(
-                        container = container,
-                        onOpenSection = openSettingsSection,
-                        onBack = closeSettings,
-                        twoPane = listDetailWide,
-                        openSection = openSettingsRoot,
-                    )
+                DesktopIslandFrame(
+                    role = if (listDetailWide) DesktopPaneRole.SplitStart else DesktopPaneRole.Single,
+                ) {
+                    CutoutSafe {
+                        SettingsRoute(
+                            container = container,
+                            onOpenSection = openSettingsSection,
+                            onBack = closeSettings,
+                            twoPane = listDetailWide,
+                            openSection = openSettingsRoot,
+                        )
+                    }
                 }
             }
             // 二级子页也是详情:分栏只取最上面那条详情画进右栏,压在一级页上的子页因此仍在右栏。
@@ -1221,24 +1278,30 @@ private fun BilbyApp(
                 // 右栏的顶层页不画返回:它不是"进来的",退出设置在左栏的顶栏上。二级子页照常返回上一级。
                 val paneRoot = listDetailWide &&
                     backStack.getOrNull(backStack.indexOf(key) - 1) is Settings
-                CutoutSafe {
-                    SettingsPageRoute(
-                        container = container,
-                        section = key.section,
-                        onOpenSection = { push(SettingsPage(it)) },
-                        onOpenBlacklist = { push(Blacklist) },
-                        onBack = if (paneRoot) null else popBack,
-                    )
+                DesktopIslandFrame(
+                    role = if (listDetailWide) DesktopPaneRole.SplitEnd else DesktopPaneRole.Single,
+                ) {
+                    CutoutSafe {
+                        SettingsPageRoute(
+                            container = container,
+                            section = key.section,
+                            onOpenSection = { push(SettingsPage(it)) },
+                            onOpenBlacklist = { push(Blacklist) },
+                            onBack = if (paneRoot) null else popBack,
+                        )
+                    }
                 }
             }
             entry<History> {
-                CutoutSafe {
-                    HistoryRoute(
-                        container = container,
-                        onVideoClick = { push(Video(it)) },
-                        onUpClick = { push(Space(it)) },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame {
+                    CutoutSafe {
+                        HistoryRoute(
+                            container = container,
+                            onVideoClick = { push(Video(it)) },
+                            onUpClick = { push(Space(it)) },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<Video> { key ->
@@ -1303,15 +1366,17 @@ private fun BilbyApp(
                 )
             }
             entry<SearchResult> { key ->
-                CutoutSafe {
-                    SearchResultRoute(
-                        container = container,
-                        keyword = key.keyword,
-                        onVideoClick = { push(Video(it)) },
-                        onUserClick = { push(Space(it)) },
-                        onArticleClick = { cv -> push(ArticlePage(cv.toString(), isRead = true)) },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame {
+                    CutoutSafe {
+                        SearchResultRoute(
+                            container = container,
+                            keyword = key.keyword,
+                            onVideoClick = { push(Video(it)) },
+                            onUserClick = { push(Space(it)) },
+                            onArticleClick = { cv -> push(ArticlePage(cv.toString(), isRead = true)) },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             // 五格都分栏:私信开在右栏,回复、@、赞点开的评论详情也开在右栏。
@@ -1319,31 +1384,41 @@ private fun BilbyApp(
                 metadata = ListDetailSceneStrategy.listPane(
                     sceneKey = MessagesScene,
                     // 右栏空着时说一句它是干什么的:这里没有在加载什么,画骨架就是在假装加载。
-                    detailPlaceholder = { MessageDetailPlaceholder() },
+                    detailPlaceholder = {
+                        DesktopIslandFrame(
+                            role = if (listDetailWide) DesktopPaneRole.SplitEnd else DesktopPaneRole.Single,
+                        ) {
+                            MessageDetailPlaceholder()
+                        }
+                    },
                 ),
             ) {
-                CutoutSafe {
-                    MessagesRoute(
-                        container = container,
-                        selectedTalker = selectedTalker,
-                        onOpenWhisper = {
-                            openBesideList(Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem, inListPane = true))
-                        },
-                        onOpenSpace = { push(Space(it)) },
-                        // 通知里的 uri 是站内链接,认得出来就在应用内落地,认不出来
-                        // (活动页、会员购这类)交给浏览器 —— 同专栏正文里的链接一条路。
-                        onOpenUri = openLink,
-                        // 回复、@、被赞的评论带着评论定位,落到评论详情页;认不出定位的(被赞的是
-                        // 视频或动态)照网页地址走。native_uri 是 bilibili:// scheme,不交给浏览器。
-                        onOpenNotice = { notice ->
-                            val thread = BilbyLink.commentThreadOf(notice.nativeUri, notice.subjectId, notice.businessId)
-                            when {
-                                thread != null -> openBesideList(thread.copy(inListPane = true))
-                                notice.uri.isNotBlank() -> openLink(notice.uri)
-                            }
-                        },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame(
+                    role = if (listDetailWide) DesktopPaneRole.SplitStart else DesktopPaneRole.Single,
+                ) {
+                    CutoutSafe {
+                        MessagesRoute(
+                            container = container,
+                            selectedTalker = selectedTalker,
+                            onOpenWhisper = {
+                                openBesideList(Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem, inListPane = true))
+                            },
+                            onOpenSpace = { push(Space(it)) },
+                            // 通知里的 uri 是站内链接,认得出来就在应用内落地,认不出来
+                            // (活动页、会员购这类)交给浏览器 —— 同专栏正文里的链接一条路。
+                            onOpenUri = openLink,
+                            // 回复、@、被赞的评论带着评论定位,落到评论详情页;认不出定位的(被赞的是
+                            // 视频或动态)照网页地址走。native_uri 是 bilibili:// scheme,不交给浏览器。
+                            onOpenNotice = { notice ->
+                                val thread = BilbyLink.commentThreadOf(notice.nativeUri, notice.subjectId, notice.businessId)
+                                when {
+                                    thread != null -> openBesideList(thread.copy(inListPane = true))
+                                    notice.uri.isNotBlank() -> openLink(notice.uri)
+                                }
+                            },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<CommentThread>(metadata = { key -> listDetailMetadata(key.inListPane, MessagesScene) }) { key ->
@@ -1355,28 +1430,35 @@ private fun BilbyApp(
                     17 -> DynamicDetail(key.oid.toString())
                     else -> null
                 }
-                CutoutSafe {
-                    CommentThreadRoute(
-                        repository = container.commentRepository,
-                        settings = container.settings,
-                        oid = key.oid,
-                        type = key.type,
-                        rootRpid = key.rootRpid,
-                        targetRpid = key.targetRpid,
-                        onOpenSubject = subject?.let { { push(it) } },
-                        onUserClick = { push(Space(it)) },
-                        onOpenLink = openLink,
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                val inSplit = listDetailWide && key.inListPane && backStack.any { it is Messages || it is MessagePushes }
+                DesktopIslandFrame(
+                    role = if (inSplit) DesktopPaneRole.SplitEnd else DesktopPaneRole.Single,
+                ) {
+                    CutoutSafe {
+                        CommentThreadRoute(
+                            repository = container.commentRepository,
+                            settings = container.settings,
+                            oid = key.oid,
+                            type = key.type,
+                            rootRpid = key.rootRpid,
+                            targetRpid = key.targetRpid,
+                            onOpenSubject = subject?.let { { push(it) } },
+                            onUserClick = { push(Space(it)) },
+                            onOpenLink = openLink,
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<CoinLog> {
-                CutoutSafe {
-                    // 仓库无状态、只有一个接口,就地造一份,不进 AppContainer。
-                    CoinLogRoute(
-                        repository = remember { CoinLogRepository(container.biliClient) },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame {
+                    CutoutSafe {
+                        // 仓库无状态、只有一个接口,就地造一份,不进 AppContainer。
+                        CoinLogRoute(
+                            repository = remember { CoinLogRepository(container.biliClient) },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<MessagePushes>(
@@ -1385,116 +1467,143 @@ private fun BilbyApp(
                 metadata = ListDetailSceneStrategy.listPane(
                     sceneKey = MessagesScene,
                     detailPlaceholder = {
-                        if (pushesAwaitingFirst.value) FullScreenLoading() else MessageDetailPlaceholder()
+                        DesktopIslandFrame(
+                            role = if (listDetailWide) DesktopPaneRole.SplitEnd else DesktopPaneRole.Single,
+                        ) {
+                            if (pushesAwaitingFirst.value) FullScreenLoading() else MessageDetailPlaceholder()
+                        }
                     },
                 ),
             ) {
-                CutoutSafe {
-                    MessagePushesRoute(
-                        repository = container.messageRepository,
-                        selectedTalker = selectedTalker,
-                        autoOpenFirst = listDetailWide,
-                        onAwaitingFirstChange = { pushesAwaitingFirst.value = it },
-                        onOpenWhisper = {
-                            openBesideList(
-                                Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem, upPushes = true, inListPane = true),
-                            )
-                        },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame(
+                    role = if (listDetailWide) DesktopPaneRole.SplitStart else DesktopPaneRole.Single,
+                ) {
+                    CutoutSafe {
+                        MessagePushesRoute(
+                            repository = container.messageRepository,
+                            selectedTalker = selectedTalker,
+                            autoOpenFirst = listDetailWide,
+                            onAwaitingFirstChange = { pushesAwaitingFirst.value = it },
+                            onOpenWhisper = {
+                                openBesideList(
+                                    Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem, upPushes = true, inListPane = true),
+                                )
+                            },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<Whisper>(metadata = { key -> listDetailMetadata(key.inListPane, MessagesScene) }) { key ->
-                CutoutSafe {
-                    WhisperRoute(
-                        container = container,
-                        key = key,
-                        onOpenSpace = { push(Space(key.talkerId)) },
-                        onOpenVideo = { push(Video(it)) },
-                        // 私信里的专栏带的是 cv 号(推送的 rid、分享的 id),走旧版那套接口。
-                        onOpenArticle = { push(ArticlePage(it, isRead = true)) },
-                        onOpenLink = openLink,
-                        // 压一层,不是换掉:返回回到推送视图。不带分栏标记,宽窗口下整页是聊天。
-                        onOpenFullChat = { push(key.copy(upPushes = false, inListPane = false)) },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                val inSplit = listDetailWide && key.inListPane && backStack.any { it is Messages || it is MessagePushes }
+                DesktopIslandFrame(
+                    role = if (inSplit) DesktopPaneRole.SplitEnd else DesktopPaneRole.Single,
+                ) {
+                    CutoutSafe {
+                        WhisperRoute(
+                            container = container,
+                            key = key,
+                            onOpenSpace = { push(Space(key.talkerId)) },
+                            onOpenVideo = { push(Video(it)) },
+                            // 私信里的专栏带的是 cv 号(推送的 rid、分享的 id),走旧版那套接口。
+                            onOpenArticle = { push(ArticlePage(it, isRead = true)) },
+                            onOpenLink = openLink,
+                            // 压一层,不是换掉:返回回到推送视图。不带分栏标记,宽窗口下整页是聊天。
+                            onOpenFullChat = { push(key.copy(upPushes = false, inListPane = false)) },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<Offline> {
-                CutoutSafe {
-                    OfflineRoute(
-                        container = container,
-                        // 缓存列表里一行就是一个分 P,点哪一行就该播哪一行。**指名走
-                        // [PartRequest] 而不是路由参数**:它是这一下的意图,取走即弃,
-                        // 不该在转屏重建之后又把播放器推回这一 P(见 Destinations 的 Video)。
-                        onPlay = { item ->
-                            container.partRequest.request(item.bvid, item.cid)
-                            push(Video(item.bvid, context = QueueContext.Offline))
-                        },
-                        onListenAll = { item ->
-                            container.partRequest.request(item.bvid, item.cid)
-                            push(Video(item.bvid, listening = true, context = QueueContext.Offline))
-                        },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame {
+                    CutoutSafe {
+                        OfflineRoute(
+                            container = container,
+                            // 缓存列表里一行就是一个分 P,点哪一行就该播哪一行。**指名走
+                            // [PartRequest] 而不是路由参数**:它是这一下的意图,取走即弃,
+                            // 不该在转屏重建之后又把播放器推回这一 P(见 Destinations 的 Video)。
+                            onPlay = { item ->
+                                container.partRequest.request(item.bvid, item.cid)
+                                push(Video(item.bvid, context = QueueContext.Offline))
+                            },
+                            onListenAll = { item ->
+                                container.partRequest.request(item.bvid, item.cid)
+                                push(Video(item.bvid, listening = true, context = QueueContext.Offline))
+                            },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<ToViewList> {
-                CutoutSafe {
-                    ToViewListRoute(
-                        container = container,
-                        onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
-                        onListen = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
-                        onUpClick = { push(Space(it)) },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame {
+                    CutoutSafe {
+                        ToViewListRoute(
+                            container = container,
+                            onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
+                            onListen = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
+                            onUpClick = { push(Space(it)) },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<FavFolderContents> { key ->
-                CutoutSafe {
-                    FavFolderRoute(
-                        container = container,
-                        mediaId = key.mediaId,
-                        title = key.title,
-                        onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
-                        onListen = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
-                        onUpClick = { push(Space(it)) },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame {
+                    CutoutSafe {
+                        FavFolderRoute(
+                            container = container,
+                            mediaId = key.mediaId,
+                            title = key.title,
+                            onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
+                            onListen = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
+                            onUpClick = { push(Space(it)) },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<FavFolders> {
-                CutoutSafe {
-                    FavFoldersRoute(
-                        container = container,
-                        onOpenFolder = { push(FavFolderContents(it.id, it.title)) },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame {
+                    CutoutSafe {
+                        FavFoldersRoute(
+                            container = container,
+                            onOpenFolder = { push(FavFolderContents(it.id, it.title)) },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<Blacklist> {
-                CutoutSafe {
-                    BlacklistRoute(container = container, onBack = { backStack.removeLastOrNull() })
+                DesktopIslandFrame {
+                    CutoutSafe {
+                        BlacklistRoute(container = container, onBack = { backStack.removeLastOrNull() })
+                    }
                 }
             }
             entry<DynamicDetail> { key ->
-                CutoutSafe {
-                    DynamicDetailRoute(
-                        container = container,
-                        id = key.id,
-                        push = push,
-                        onOpenLink = openLink,
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame {
+                    CutoutSafe {
+                        DynamicDetailRoute(
+                            container = container,
+                            id = key.id,
+                            push = push,
+                            onOpenLink = openLink,
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<Followings> {
-                CutoutSafe {
-                    FollowingsRoute(
-                        container = container,
-                        onUpClick = { push(Space(it)) },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame {
+                    CutoutSafe {
+                        FollowingsRoute(
+                            container = container,
+                            onUpClick = { push(Space(it)) },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<LiveRoom> { key ->
@@ -1507,55 +1616,64 @@ private fun BilbyApp(
             }
             entry<Space> { key ->
                 val scope = rememberCoroutineScope()
-                CutoutSafe {
-                    SpaceRoute(
-                        container = container,
-                        mid = key.mid,
-                        vodOnly = nightEngaged,
-                        onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
-                        onListenUp = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
-                        onLiveClick = if (nightEngaged) null else { roomId -> push(LiveRoom(roomId)) },
-                        onCollectionClick = {
-                            push(CollectionContents(key.mid, it.id, it.isSeason, it.name))
-                        },
-                        onDynamicAction = { action ->
-                            handleDynamicAction(action, system, container, scope, push)
-                        },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame {
+                    CutoutSafe {
+                        SpaceRoute(
+                            container = container,
+                            mid = key.mid,
+                            vodOnly = nightEngaged,
+                            onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
+                            onListenUp = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
+                            onLiveClick = if (nightEngaged) null else { roomId -> push(LiveRoom(roomId)) },
+                            onCollectionClick = {
+                                push(CollectionContents(key.mid, it.id, it.isSeason, it.name))
+                            },
+                            onDynamicAction = { action ->
+                                handleDynamicAction(action, system, container, scope, push)
+                            },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<CollectionContents> { key ->
-                CutoutSafe {
-                    CollectionRoute(
-                        container = container,
-                        key = key,
-                        onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame {
+                    CutoutSafe {
+                        CollectionRoute(
+                            container = container,
+                            key = key,
+                            onVideoClick = { bvid, context -> push(Video(bvid, context = context)) },
+                            onListenAll = { bvid, context -> push(Video(bvid, listening = true, context = context)) },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<OtherDynamics> {
                 val scope = rememberCoroutineScope()
-                CutoutSafe {
-                    OtherDynamicsRoute(
-                        container = container,
-                        onAction = { action ->
-                            handleDynamicAction(action, system, container, scope, push)
-                        },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame {
+                    CutoutSafe {
+                        OtherDynamicsRoute(
+                            container = container,
+                            onAction = { action ->
+                                handleDynamicAction(action, system, container, scope, push)
+                            },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
             entry<ArticlePage> { key ->
-                CutoutSafe {
-                    ArticleRoute(
-                        container = container,
-                        key = key,
-                        onOpenLink = openLink,
-                        onUpClick = { push(Space(it)) },
-                        onBack = { backStack.removeLastOrNull() },
-                    )
+                DesktopIslandFrame {
+                    CutoutSafe {
+                        ArticleRoute(
+                            container = container,
+                            key = key,
+                            onOpenLink = openLink,
+                            onUpClick = { push(Space(it)) },
+                            onBack = { backStack.removeLastOrNull() },
+                        )
+                    }
                 }
             }
         },
@@ -1597,6 +1715,89 @@ private enum class RootTab(
     Feed(Res.string.tab_feed, Icons.Filled.Subscriptions, Icons.Outlined.Subscriptions),
     Search(Res.string.tab_search, Icons.Filled.Search, Icons.Outlined.Search),
     Profile(Res.string.tab_profile, Icons.Filled.Person, Icons.Outlined.Person),
+}
+
+private enum class DesktopPaneRole {
+    Single,
+    SplitStart,
+    SplitEnd,
+}
+
+/**
+ * 桌面与宽屏主从双栏的统一圆角内容岛外壳:
+ * - 桌面端(`LocalWindowCaption.current != null`)外框保持 `surfaceContainer` 底色与 8dp 顶栏拖拽边及四周内缩,
+ *   消除根页与压栈二级页切换时右上角窗口控制按钮 8dp 跳变;
+ * - 主从双栏(`ListDetailSceneStrategy`)下左右两栏各自裁成独立的 `shapes.large` 圆角岛,中间由 8dp 隔断露出 `surfaceContainer` 底框。
+ */
+@Composable
+private fun DesktopIslandFrame(
+    role: DesktopPaneRole = DesktopPaneRole.Single,
+    content: @Composable () -> Unit,
+) {
+    val desktopFramed = LocalWindowCaption.current != null
+    if (!desktopFramed) {
+        if (role == DesktopPaneRole.Single) {
+            content()
+        } else {
+            DesktopIslandSurface(modifier = Modifier.fillMaxSize(), content = content)
+        }
+        return
+    }
+    LocalWindowCaption.current?.Host()
+    val startInset = if (role == DesktopPaneRole.SplitEnd) 0.dp else Spacing.Tight
+    val endInset = if (role == DesktopPaneRole.SplitStart) 0.dp else Spacing.Tight
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Spacer(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(Spacing.Tight)
+                .windowDragArea(),
+        )
+        DesktopIslandSurface(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(start = startInset, end = endInset, bottom = Spacing.Tight),
+            content = content,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun DesktopIslandSurface(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val currentScheme = MaterialTheme.colorScheme
+    val islandScheme = if (LocalIsDarkTheme.current) {
+        currentScheme
+    } else {
+        remember(currentScheme) {
+            currentScheme.copy(
+                background = currentScheme.surfaceContainerLowest,
+                surface = currentScheme.surfaceContainerLowest,
+            )
+        }
+    }
+    MaterialExpressiveTheme(
+        colorScheme = islandScheme,
+        motionScheme = MaterialTheme.motionScheme,
+        typography = MaterialTheme.typography,
+        shapes = MaterialTheme.shapes,
+    ) {
+        Surface(
+            modifier = modifier,
+            shape = MaterialTheme.shapes.large,
+            color = islandScheme.surface,
+            contentColor = islandScheme.onSurface,
+            content = content,
+        )
+    }
 }
 
 /**
@@ -1647,6 +1848,7 @@ private fun RootTabs(
     onOpenOtherDynamics: () -> Unit,
     /** 订阅页标题行的「推送」:UP 主推送来的那些私信会话,见 MessagePushesScreen。 */
     onOpenPushes: () -> Unit,
+    onEnterNightMode: () -> Unit,
     onOpenArticle: (ArticleRef) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
@@ -1660,13 +1862,6 @@ private fun RootTabs(
     var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
     val windowSize = rememberBilbyWindowSize()
 
-    // 重按当前 tab 回到顶部,navigation-bar.md 的明文要求。
-    //
-    // **每个 tab 一个计数器,不共用一个。** 共用的话,在动态页连点几下再切到个人页,
-    // 个人页看到的是一个变过的计数器,会跟着滚一次它自己没被点过的。
-    //
-    // 搜索页不接:那一页是对话式的,输入在下、一轮轮结果往上滚,顶端是最早的一轮,
-    // 回到顶不是"重来一次",而是翻到最旧的地方。
     var feedScrollToTop by remember { mutableIntStateOf(0) }
     var profileScrollToTop by remember { mutableIntStateOf(0) }
     val onTabClick: (RootTab) -> Unit = { tab ->
@@ -1685,73 +1880,53 @@ private fun RootTabs(
         if (selected != target) selected = target
     }
 
-    // 键盘弹起时盖住底栏,底栏不跟着上移:navigation-bar.md 的 Placement 一节列明底栏可以被
-    // 键盘临时遮住,示例正是搜索。跟着上移的话底栏夹在输入框和键盘之间,白占一条高度。
-    // IME 退让因此只加在内容区,见 [RootTabsContent]。
-    //
-    // **三个根 tab 没有顶栏。** 标题以前和底栏标签逐字重复——底栏已经有标签 + 选中指示器,
-    // 顶栏再写一遍是纯占位;M3 对 top app bar 的定义是"显示信息与操作",标题和操作都没有时
-    // 它就是一段死高度(动态页、搜索页的普通模式正是这种情况)。真正的页级操作(设置齿轮、
-    // 搜索助理模式的"新会话")现在各自长在 `ProfileScreen`/`SearchChatScreen` 自己的内容里,
-    // 不再借用顶栏容器。子页面(播放页、个人空间、历史记录……)不受影响,那些标题是真信息
-    // (你在哪个收藏夹里),而且没有底栏兜底"这是哪一页"。
-    //
-    // 状态栏 inset 没有跟着顶栏一起丢:`ScaffoldDefaults.contentWindowInsets` 默认就是
-    // `WindowInsets.systemBarsForVisualComponents`(读 material3 1.5.0-alpha25 的 aar 核实过,
-    // 不是照文档假设),顶栏不存在时这份 inset 不会被谁消费掉,照样流进下面 `insets` 参数,
-    // 下面内容区那行 `.padding(top = insets.calculateTopPadding())` 不用改。
     if (windowSize == BilbyWindowSize.Compact) {
-        Scaffold(
-            bottomBar = {
-                // flexible 款(64dp)。baseline 的 NavigationBar 高 80dp,M3 Expressive 已标为
-                // "no longer recommended"(navigation-bar.md)。
-                ShortNavigationBar {
-                    RootTab.entries.forEach { tab ->
-                        ShortNavigationBarItem(
-                            selected = selected == tab,
-                            onClick = { onTabClick(tab) },
-                            icon = { RootTabIcon(tab, selected == tab) },
-                            label = { RootTabLabel(tab, selected == tab) },
-                        )
+        DesktopIslandFrame {
+            Scaffold(
+                bottomBar = {
+                    ShortNavigationBar {
+                        RootTab.entries.forEach { tab ->
+                            ShortNavigationBarItem(
+                                selected = selected == tab,
+                                onClick = { onTabClick(tab) },
+                                icon = { RootTabIcon(tab, selected == tab) },
+                                label = { RootTabLabel(tab, selected == tab) },
+                            )
+                        }
                     }
-                }
-            },
-        ) { insets ->
-            RootTabsContent(
-                insets = insets,
-                selected = selected,
-                feedScrollToTop = feedScrollToTop,
-                profileScrollToTop = profileScrollToTop,
-                focusSearchNonce = focusSearchNonce,
-                container = container,
-                hasVideoPage = hasVideoPage,
-                onPlayDraftQueue = onPlayDraftQueue,
-                onVideoClick = onVideoClick,
-                onVideoInContext = onVideoInContext,
-                onUserClick = onUserClick,
-                onLiveClick = onLiveClick,
-                onSettingsClick = onSettingsClick,
-                onOpenFollowings = onOpenFollowings,
-                onOpenCoinLog = onOpenCoinLog,
-                onOpenOtherDynamics = onOpenOtherDynamics,
-        onOpenPushes = onOpenPushes,
-                onOpenArticle = onOpenArticle,
-                onOpenHistory = onOpenHistory,
-                onOpenToView = onOpenToView,
-                onOpenOffline = onOpenOffline,
-                onOpenFavFolder = onOpenFavFolder,
-                onOpenFavFolders = onOpenFavFolders,
-                onOpenMessages = onOpenMessages,
-                onOpen = onOpen,
-            )
+                },
+            ) { insets ->
+                RootTabsContent(
+                    insets = insets,
+                    selected = selected,
+                    feedScrollToTop = feedScrollToTop,
+                    profileScrollToTop = profileScrollToTop,
+                    focusSearchNonce = focusSearchNonce,
+                    container = container,
+                    hasVideoPage = hasVideoPage,
+                    onPlayDraftQueue = onPlayDraftQueue,
+                    onVideoClick = onVideoClick,
+                    onVideoInContext = onVideoInContext,
+                    onUserClick = onUserClick,
+                    onLiveClick = onLiveClick,
+                    onSettingsClick = onSettingsClick,
+                    onOpenFollowings = onOpenFollowings,
+                    onOpenCoinLog = onOpenCoinLog,
+                    onOpenOtherDynamics = onOpenOtherDynamics,
+                    onOpenPushes = onOpenPushes,
+                    onEnterNightMode = onEnterNightMode,
+                    onOpenArticle = onOpenArticle,
+                    onOpenHistory = onOpenHistory,
+                    onOpenToView = onOpenToView,
+                    onOpenOffline = onOpenOffline,
+                    onOpenFavFolder = onOpenFavFolder,
+                    onOpenFavFolders = onOpenFavFolders,
+                    onOpenMessages = onOpenMessages,
+                    onOpen = onOpen,
+                )
+            }
         }
     } else {
-        // medium 起用 rail 换掉底栏:导航贴在边缘,内容拿到完整的横向空间。三个根目的地
-        // 不需要 drawer —— M3 的 navigation rail 页把 rail 作为 drawer 的优先替代。
-        //
-        // collapsed 款(WideNavigationRail 的默认态)。baseline 的 NavigationRail 已被
-        // navigation-rail.md 标为 "no longer recommended"。目的地居中:同一页对平板给的就是
-        // 这个摆法,三格顶在屏幕最上沿时握持的那只手要伸到最远处。
         LocalWindowCaption.current?.Host()
         val desktopFramed = LocalWindowCaption.current != null
         val tabsScaffold: @Composable (Modifier) -> Unit = { scaffoldModifier ->
@@ -1774,6 +1949,7 @@ private fun RootTabs(
                     onOpenCoinLog = onOpenCoinLog,
                     onOpenOtherDynamics = onOpenOtherDynamics,
                     onOpenPushes = onOpenPushes,
+                    onEnterNightMode = onEnterNightMode,
                     onOpenArticle = onOpenArticle,
                     onOpenHistory = onOpenHistory,
                     onOpenToView = onOpenToView,
@@ -1842,12 +2018,11 @@ private fun RootTabs(
                             .height(Spacing.Tight)
                             .windowDragArea(),
                     )
-                    Box(
+                    DesktopIslandSurface(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
-                            .padding(end = Spacing.Tight, bottom = Spacing.Tight)
-                            .clip(MaterialTheme.shapes.large),
+                            .padding(end = Spacing.Tight, bottom = Spacing.Tight),
                     ) {
                         tabsScaffold(Modifier.fillMaxSize())
                     }
@@ -1873,12 +2048,19 @@ private fun RootTabIcon(tab: RootTab, selected: Boolean) {
 }
 
 /**
- * 选中项的标签加粗。navigation-bar.md 的 Visual indicators 一节要求 "a bold label for
- * selected destinations",而 ShortNavigationBarItem 的 token 只有一份标签字体,不分选中态。
+ * 选中项采用 M3 Expressive `labelMediumEmphasized`,未选中为 `labelMedium`。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun RootTabLabel(tab: RootTab, selected: Boolean) {
-    Text(stringResource(tab.label), fontWeight = if (selected) FontWeight.Bold else null)
+    Text(
+        text = stringResource(tab.label),
+        style = if (selected) {
+            MaterialTheme.typography.labelMediumEmphasized
+        } else {
+            MaterialTheme.typography.labelMedium
+        },
+    )
 }
 
 @Composable
@@ -1902,6 +2084,7 @@ private fun RootTabsContent(
     onOpenOtherDynamics: () -> Unit,
     /** 订阅页标题行的「推送」:UP 主推送来的那些私信会话,见 MessagePushesScreen。 */
     onOpenPushes: () -> Unit,
+    onEnterNightMode: () -> Unit,
     onOpenArticle: (ArticleRef) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenToView: () -> Unit,
@@ -1911,11 +2094,6 @@ private fun RootTabsContent(
     onOpenMessages: () -> Unit,
     onOpen: (NavKey) -> Unit,
 ) {
-    // 只 padding 不声明消费的话,子层的 imePadding() 会再多退让一个底栏高度。消费之后子层只让出
-    // 键盘高出底栏的那一截,贴底输入栏正好停在键盘上沿,底栏留在键盘下面。
-    // 注意:这里不直接挂 imePadding()——搜索页的普通搜索输入框在顶栏,整页跟着键盘缩半屏会在
-    // 手势收起输入法的过渡帧或 inset 卡滞时把下半屏裁空;需要贴着键盘顶起的页面(如搜索助理底栏)
-    // 在各自容器上单独挂 imePadding()。
     val bottom = PaddingValues(bottom = insets.calculateBottomPadding())
     Box(
         modifier = Modifier
@@ -1924,21 +2102,6 @@ private fun RootTabsContent(
             .padding(bottom)
             .consumeWindowInsets(bottom),
     ) {
-        // **Top level**:点底栏或 rail 换根目的地。规范原文
-        // "The exiting screen quickly fades out **and then** the entering screen fades in. Since the
-        // content of top level destinations isn't necessarily related, the motion intentionally does
-        // not use grouping or persistent elements";clean fades 那条又要求
-        // "Fully fade out content before fading new content in."
-        //
-        // 所以是淡出走完再淡入(spec 里进入那一档带着 delay),不是交叉淡化,更不是原来那种
-        // 跳切 —— 跳切被单列为要避免的默认做法:"Instantly transitioning from one screen to the
-        // next offers no clues to help a user orient themselves."
-        //
-        // **不用 lateral(横滑)**:"A lateral transition pattern is not recommended for this type of
-        // navigation. It implies you can swipe between top level destinations which conflicts with
-        // other components like carousels or swipe-able list items." 这个应用里正好有那两样。
-        //
-        // 切走的 tab 整块离开组合,滚动位置之类的可保存状态由 [tabStates] 按 tab 存下,切回来还原。
         val tabStates = rememberSaveableStateHolder()
         AnimatedContent(
             targetState = selected,
@@ -1947,8 +2110,6 @@ private fun RootTabsContent(
             },
             label = "rootTab",
         ) { tab ->
-            // 限宽下放到各个 tab:订阅页宽屏是网格,要拿到 rail 右边的全部宽度,行长由格宽
-            // 管;另外两页仍是单栏,照旧限宽。
             tabStates.SaveableStateProvider(tab.name) {
             when (tab) {
                 RootTab.Feed -> FeedPane(
@@ -1959,14 +2120,13 @@ private fun RootTabsContent(
                     onLiveClick = onLiveClick,
                     onOpenFollowings = onOpenFollowings,
                     onOpenOtherDynamics = onOpenOtherDynamics,
-        onOpenPushes = onOpenPushes,
+                    onOpenPushes = onOpenPushes,
+                    onEnterNightMode = onEnterNightMode,
                     onOpenArticle = onOpenArticle,
                 )
 
-                // 不限宽:宽屏结果是格子、助理是侧栏,搜索框自己限宽(见 SearchChatScreen)。
                 RootTab.Search -> SearchPane(container, focusSearchNonce, onVideoClick, onUserClick, onOpenArticle, onOpen)
 
-                // 不限宽:宽屏每节是一排卡片,宽度换成条数(见 ProfileScreen);窄屏账号卡自己限宽。
                 RootTab.Profile -> ProfilePane(
                     container = container,
                     scrollToTop = profileScrollToTop,
@@ -1994,6 +2154,7 @@ private fun RootTabsContent(
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun BoxScope.DraftQueueOverlay(
     container: AppContainer,
@@ -2040,19 +2201,9 @@ private fun BoxScope.DraftQueueOverlay(
         }
         PaneSheet(
             onDismissRequest = { draftSheetOpen = false },
-            title = stringResource(Res.string.queue_source_custom),
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.Comfortable),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = stringResource(Res.string.queue_draft_summary, draftItems.size),
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.weight(1f),
-                )
+            title = stringResource(Res.string.queue_draft_summary, draftItems.size),
+            skipPartiallyExpanded = true,
+            headerTrailing = {
                 TextButton(
                     onClick = {
                         container.customQueueDraft.clear()
@@ -2061,15 +2212,20 @@ private fun BoxScope.DraftQueueOverlay(
                 ) {
                     Text(stringResource(Res.string.action_clear))
                 }
-                TextButton(
+                FilledTonalButton(
                     onClick = {
                         draftSheetOpen = false
                         onPlayDraftQueue(null)
                     },
+                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
                 ) {
-                    Text(stringResource(Res.string.queue_draft_play))
+                    Text(
+                        text = stringResource(Res.string.queue_draft_play),
+                        style = MaterialTheme.typography.labelLargeEmphasized,
+                    )
                 }
-            }
+            },
+        ) {
             EpisodeList(
                 rows = draftRows,
                 onSelect = { target ->
@@ -2085,12 +2241,13 @@ private fun BoxScope.DraftQueueOverlay(
                     end = Spacing.Comfortable,
                     bottom = Spacing.Loose,
                 ),
-                modifier = Modifier.fillMaxWidth().bodyHeight(0.75f),
+                modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
             )
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun DraftQueueBar(
     count: Int,
@@ -2100,9 +2257,9 @@ private fun DraftQueueBar(
 ) {
     Surface(
         onClick = onOpen,
-        shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier
             .widthIn(max = Breakpoints.VideoRowMaxWidth)
             .fillMaxWidth()
@@ -2111,7 +2268,7 @@ private fun DraftQueueBar(
         Row(
             modifier = Modifier.padding(
                 start = Spacing.Comfortable,
-                end = Spacing.Tight,
+                end = Spacing.Hair,
                 top = Spacing.Hair,
                 bottom = Spacing.Hair,
             ),
@@ -2121,22 +2278,36 @@ private fun DraftQueueBar(
             Icon(
                 imageVector = Icons.AutoMirrored.Outlined.PlaylistPlay,
                 contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(Dimens.IconInline),
             )
             Text(
                 text = stringResource(Res.string.queue_draft_summary, count),
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.labelLargeEmphasized.tabular,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = onPlay) {
-                Text(stringResource(Res.string.queue_draft_play))
+            FilledTonalButton(
+                onClick = onPlay,
+                contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = null,
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+                Text(
+                    text = stringResource(Res.string.queue_draft_play),
+                    style = MaterialTheme.typography.labelLargeEmphasized,
+                    modifier = Modifier.padding(start = Spacing.Hair),
+                )
             }
             IconButton(onClick = onClear) {
                 Icon(
                     imageVector = Icons.Filled.Close,
                     contentDescription = stringResource(Res.string.action_clear),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(Dimens.IconInline),
                 )
             }
@@ -2144,21 +2315,6 @@ private fun DraftQueueBar(
     }
 }
 
-/*
- * 三个根 pane 各自建自己的 ViewModel,**没被选中过的 tab 不建、也就不发请求**。
- *
- * 原先三个 VM 都在 NavDisplay 外面无条件创建:冷启动停在动态页时,个人页那四组请求(账号、
- * 历史、稍后再看、收藏夹)照样打出去,跟动态页自己的两组抢冷启动那几百毫秒,而用户一眼都
- * 没看见它们。
- *
- * **"建过就留着"由宿主保证,不是靠这里。** `viewModel()` 落在 Home 这个 NavEntry 的
- * ViewModelStore 上(见 NavDisplay 的 entryDecorators),store 只在 Home 出栈时清理。切走 tab
- * 只是 composable 离开组合,实例和 viewModelScope 都还在 —— 搜索助理的循环跑在 searchVm 的
- * scope 上,切 tab、压播放页都不打断它。
- *
- * 状态收集跟着下沉:三份 state 以前都在 RootTabs 顶层收,任何一个更新都要重组整个 RootTabs
- * (含底栏),现在各收各的。
- */
 @Composable
 private fun FeedPane(
     container: AppContainer,
@@ -2170,6 +2326,7 @@ private fun FeedPane(
     onOpenOtherDynamics: () -> Unit,
     /** 订阅页标题行的「推送」:UP 主推送来的那些私信会话,见 MessagePushesScreen。 */
     onOpenPushes: () -> Unit,
+    onEnterNightMode: () -> Unit,
     onOpenArticle: (ArticleRef) -> Unit,
 ) {
     val vm: FeedViewModel = viewModel(
@@ -2207,6 +2364,7 @@ private fun FeedPane(
         onOpenFollowings = onOpenFollowings,
         onOpenOtherDynamics = onOpenOtherDynamics,
         onOpenPushes = onOpenPushes,
+        onEnterNightMode = onEnterNightMode,
         onScrollPositionChanged = vm::onVisibleTopChanged,
         onLocated = vm::onLocated,
         onEnter = vm::onEnterScreen,
@@ -2844,13 +3002,19 @@ private fun listDetailMetadata(inListPane: Boolean, sceneKey: Any): Map<String, 
     if (inListPane) ListDetailSceneStrategy.detailPane(sceneKey) else emptyMap()
 
 /** 右栏没有打开任何一条时的那一句,消息页与推送页共用。 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MessageDetailPlaceholder() {
-    EmptyState(
-        stringResource(Res.string.message_detail_placeholder),
-        modifier = Modifier.fillMaxSize(),
-        icon = Icons.Outlined.Forum,
-    )
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (LocalWindowCaption.current != null) {
+            BilbyTopBar(title = "")
+        }
+        EmptyState(
+            stringResource(Res.string.message_detail_placeholder),
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            icon = Icons.Outlined.Forum,
+        )
+    }
 }
 
 /** 一个私信会话。名字由路由带,顶栏第一帧就有标题。 */
@@ -3338,6 +3502,7 @@ private fun FollowingsRoute(
 private fun NightModeHomeRoute(
     container: AppContainer,
     prefs: NightModePrefs,
+    manual: Boolean,
     hasVideoPage: Boolean,
     onPlayDraftQueue: (String?) -> Unit,
     onVideoClick: (String, QueueContext) -> Unit,
@@ -3362,6 +3527,7 @@ private fun NightModeHomeRoute(
     NightModeScreen(
         prefs = prefs,
         state = state,
+        manual = manual,
         onSelectUp = vm::selectUp,
         onLoadMore = vm::loadMore,
         onRetry = vm::retry,
@@ -3412,6 +3578,7 @@ private fun SpaceRoute(
         },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    val upName = state.profile?.name.orEmpty()
     SpaceScreen(
         state = state,
         onTabSelected = vm::onTabSelected,
@@ -3425,11 +3592,20 @@ private fun SpaceRoute(
         // 队列就是投稿栏眼前这份:排序与生效中的搜索词一起带上,页号按这条在列表里的位置算。
         onVideoClick = { item ->
             val index = state.archives.items.indexOf(item).coerceAtLeast(0)
-            onVideoClick(item.bvid, state.archives.queueContext(mid, page = index / SpaceRepository.ARCHIVE_PAGE_SIZE + 1))
+            onVideoClick(
+                item.bvid,
+                state.archives.queueContext(
+                    mid = mid,
+                    page = index / SpaceRepository.ARCHIVE_PAGE_SIZE + 1,
+                    upName = upName,
+                ),
+            )
         },
         onDynamicAction = onDynamicAction,
         onDynamicVideoClick = { item ->
-            item.video?.let { video -> onVideoClick(video.bvid, QueueContext.UpDynamics(mid, item.pageOffset)) }
+            item.video?.let { video ->
+                onVideoClick(video.bvid, QueueContext.UpDynamics(mid, item.pageOffset, upName = upName))
+            }
         },
         onLikeDynamic = vm::likeDynamic,
         onLiveClick = onLiveClick,
@@ -3442,7 +3618,9 @@ private fun SpaceRoute(
         // 听这位 UP 的投稿:挑第一条进播放页并直接以听的状态打开。**宿主只有播放页一个** ——
         // 空间页不承载听视频界面,否则又会多出一处需要单独维护的生命周期。
         onListenUp = {
-            state.archives.items.firstOrNull()?.let { onListenUp(it.bvid, state.archives.queueContext(mid, page = 1)) }
+            state.archives.items.firstOrNull()?.let {
+                onListenUp(it.bvid, state.archives.queueContext(mid = mid, page = 1, upName = upName))
+            }
         },
         onBack = onBack,
         onRetry = vm::retry,
@@ -3463,6 +3641,7 @@ private fun CollectionRoute(
     container: AppContainer,
     key: CollectionContents,
     onVideoClick: (String, QueueContext) -> Unit,
+    onListenAll: (String, QueueContext) -> Unit,
     onBack: () -> Unit,
 ) {
     val vm: CollectionViewModel = viewModel(
@@ -3485,6 +3664,11 @@ private fun CollectionRoute(
             val index = state.items.indexOf(item).coerceAtLeast(0)
             val page = index / SpaceRepository.COLLECTION_PAGE_SIZE + 1
             onVideoClick(item.bvid, QueueContext.Collection(key.mid, key.id, key.isSeason, key.name, page))
+        },
+        onListenAll = {
+            state.items.firstOrNull()?.let { first ->
+                onListenAll(first.bvid, QueueContext.Collection(key.mid, key.id, key.isSeason, key.name, page = 1))
+            }
         },
     )
 }
@@ -3883,6 +4067,9 @@ private fun VideoPane(
     )
     val panelPrefs by remember(container) { container.settings.sidePanel(SidePanelId.VideoTabs) }
         .collectAsStateWithLifecycle(initialValue = SideSheetPrefs())
+    val agentAvailable by remember(container) {
+        container.settings.llmConfig.map { it.isConfigured }
+    }.collectAsStateWithLifecycle(initialValue = false)
 
     // 评论用 aid 作 oid,要等视频详情回来才知道 —— 但**不能拿它卡住整页**。
     //
@@ -3913,7 +4100,7 @@ private fun VideoPane(
         related = related,
         commentState = commentState,
         sponsorSegments = sponsorSegments,
-        onFindRelated = if (disableDiscovery) null else vm::findRelated,
+        onFindRelated = if (disableDiscovery || !agentAvailable) null else vm::findRelated,
         onAskRelated = vm::askRelated,
         onRetryRelated = vm::retryRelated,
         cached = cached,

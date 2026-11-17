@@ -1,123 +1,129 @@
 package dev.bilby.ui.feed
 
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Article
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.MenuDefaults
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
-import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.Mail
-import androidx.compose.material.icons.outlined.VisibilityOff
-import androidx.compose.material.icons.outlined.WatchLater
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.height
-import dev.bilby.ui.CaptionDragHeight
-import dev.bilby.ui.LocalWindowCaption
-import dev.bilby.ui.rememberCaptionSlot
-import dev.bilby.ui.windowDragArea
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import dev.bilby.ui.components.Avatar
-import dev.bilby.ui.components.ListScrollbar
-import dev.bilby.ui.components.RefreshAction
-import dev.bilby.ui.components.BiliAsyncImage
-import dev.bilby.data.LiveUpBrief
-import dev.bilby.data.UpBrief
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope
 import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.Bedtime
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
-import androidx.compose.runtime.saveable.listSaver
-import dev.bilby.ui.maxWidthGridCells
+import androidx.compose.material.icons.outlined.Mail
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.PeopleAlt
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.WatchLater
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import kotlinx.coroutines.launch
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.material3.Surface
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
-import dev.bilby.ui.BilbyWindowSize
-import dev.bilby.ui.isAtLeast
-import dev.bilby.ui.rememberBilbyWindowSize
-import dev.bilby.ui.AdaptiveContent
-import dev.bilby.ui.formatRelativeTime
-import dev.bilby.ui.theme.Breakpoints
-import dev.bilby.ui.theme.Dimens
-import dev.bilby.ui.theme.Spacing
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import dev.bilby.data.LiveUpBrief
+import dev.bilby.data.UpBrief
+import dev.bilby.data.model.FeedEntry
+import dev.bilby.parseDurationSeconds
 import dev.bilby.resources.*
 import dev.bilby.stringResource
-import dev.bilby.data.model.FeedEntry
+import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.CaptionDragHeight
+import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.BilbyTooltip
+import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FirstScreenState
 import dev.bilby.ui.components.ListFooter
+import dev.bilby.ui.components.ListScrollbar
+import dev.bilby.ui.components.PrefetchNearEnd
+import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
-import dev.bilby.ui.components.fadingRightEdge
-import dev.bilby.ui.components.VideoRow
-import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.VideoCommonMenuItems
-import dev.bilby.ui.components.menuItemShape
-import dev.bilby.ui.components.videoCommonMenuItemCount
-import androidx.compose.material.icons.outlined.Person
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Dp
-import androidx.compose.material.icons.outlined.PeopleAlt
-import androidx.compose.foundation.layout.ColumnScope
+import dev.bilby.ui.components.VideoGridCard
+import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.components.chargingBadgeText
+import dev.bilby.ui.components.fadingRightEdge
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.rememberCopyAction
+import dev.bilby.ui.components.videoCommonMenuItemCount
+import dev.bilby.ui.formatRelativeTime
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.theme.BilbyTheme
+import dev.bilby.ui.theme.Breakpoints
+import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.interactiveCard
+import dev.bilby.ui.theme.tabular
+import dev.bilby.ui.windowDragArea
 import java.time.Instant
 import kotlinx.coroutines.flow.distinctUntilChanged
-import dev.bilby.ui.components.PrefetchNearEnd
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.launch
 
 data class FeedUiState(
     val items: List<FeedEntry> = emptyList(),
@@ -226,6 +232,8 @@ fun FeedScreen(
     onOpenOtherDynamics: () -> Unit = {},
     /** UP 主推送来的私信,见 FeedHeader。 */
     onOpenPushes: () -> Unit = {},
+    /** 手动立即进入夜间静息模式。 */
+    onEnterNightMode: () -> Unit = {},
     onExcludeUp: (Long, String) -> Unit = { _, _ -> },
     onScrollPositionChanged: (String) -> Unit = {},
     /** 开屏定位已经做过(或确定做不成)。见 [FeedUiState.pendingLocate]。 */
@@ -280,9 +288,23 @@ fun FeedScreen(
             onRetry = onRetry,
         ) {
             FeedList(
-                state, onRefresh, onLoadMore, onItemClick, onUpClick, onLiveClick, onExcludeUp,
-                onAddToView, onOpenFollowings, onOpenOtherDynamics, onOpenPushes, onScrollPositionChanged, onLocated,
-                scrollToTop, Modifier, contentPadding,
+                state = state,
+                onRefresh = onRefresh,
+                onLoadMore = onLoadMore,
+                onItemClick = onItemClick,
+                onUpClick = onUpClick,
+                onLiveClick = onLiveClick,
+                onExcludeUp = onExcludeUp,
+                onAddToView = onAddToView,
+                onOpenFollowings = onOpenFollowings,
+                onOpenOtherDynamics = onOpenOtherDynamics,
+                onOpenPushes = onOpenPushes,
+                onEnterNightMode = onEnterNightMode,
+                onScrollPositionChanged = onScrollPositionChanged,
+                onLocated = onLocated,
+                scrollToTop = scrollToTop,
+                modifier = Modifier,
+                contentPadding = contentPadding,
             )
         }
         SnackbarHost(
@@ -307,6 +329,7 @@ private fun FeedList(
     onOpenFollowings: () -> Unit,
     onOpenOtherDynamics: () -> Unit,
     onOpenPushes: () -> Unit,
+    onEnterNightMode: () -> Unit,
     onScrollPositionChanged: (String) -> Unit,
     onLocated: () -> Unit,
     scrollToTop: Int,
@@ -325,7 +348,9 @@ private fun FeedList(
         }
     }
     val markerIndex = state.items.indexOfReadMarker(state.readMarkerEntryId)
-    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    val windowSize = rememberBilbyWindowSize()
+    val multiColumnAllowed = windowSize.isAtLeast(BilbyWindowSize.Medium)
+    val wide = windowSize.isAtLeast(BilbyWindowSize.Expanded)
     val pinnedHeader = LocalWindowCaption.current != null
     // 那一排头像排在动态流前面,分隔线/条目在网格里的绝对下标要把它加回来。
     // 「最常访问」那一格在没人可显示时整格不画,正在直播的那一格自己也可以撑起它 ——
@@ -423,11 +448,8 @@ private fun FeedList(
             .collect { onScrollPositionChanged(it) }
     }
 
-    // **宽屏是网格,按行从左往右读。** 列表行是"封面 + 三行文字"的定宽版式,单列铺到
-    // 1400dp 之后封面还是 128dp,右边多出来的全是空白,一屏只站得下七八条。按行读的网格
-    // 在 B 站网页版和 PiliPlus 的宽屏上都是这条时间线的读法,时间序不因分列而打乱。
-    // 窄屏是固定一列,与原来的单列列表同形;两种宽度共用一个网格,开屏定位、触底预取、
-    // 位置上报都只认一套下标。
+    // Medium+ 多列网格渲染纵向 16:10 VideoGridCard,Compact 单列渲染拇指友好的横排 VideoRow;
+    // 两档保持同一棵组合树层级,跨断点拖窗口时不丢失滚动位置。
     val density = LocalDensity.current
     var actionsWidth by remember { mutableStateOf(0.dp) }
     var upsRowFits by remember { mutableStateOf(false) }
@@ -438,107 +460,105 @@ private fun FeedList(
             onRefresh = onRefresh,
             onOpenOtherDynamics = onOpenOtherDynamics,
             onOpenPushes = onOpenPushes,
+            onEnterNightMode = onEnterNightMode,
             tonal = wide,
             modifier = Modifier.onSizeChanged { actionsWidth = with(density) { it.width.toDp() } },
         )
     }
-    val feedList: @Composable (Modifier) -> Unit = { listModifier ->
-        Column(modifier = listModifier) {
-        if (pinnedHeader) {
-            FeedHeader(actions = headerActions.takeUnless { actionsInUpsRow })
-        }
-        RefreshBox(
-            refreshing = state.refreshing,
-            onRefresh = onRefresh,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-        ) {
-            LazyVerticalGrid(
-                columns = if (wide) maxWidthGridCells(Breakpoints.VideoRowMaxWidth) else GridCells.Fixed(1),
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = contentPadding,
-            ) {
-        // 首页装不下的另一半(图文、纯文字、转发、直播)的入口挂在标题行右边。**专栏不在
-        // 里面**:它是投稿,和视频一样排在首页的时间序里(见 DynamicRepository 的分流)。
-        // 宽屏一排放得下时,刷新与两个入口挪进头像那一排的右端:标题行只剩页名,头像排右边也
-        // 不再空着半屏。放不下(窄屏,或关注的人多)就维持原样:入口在标题行,「关注列表」钉住。
-        // 入口的宽度量一次记下,无论它此刻画在哪一行,判断都用同一个值,不会来回跳。
-        if (!pinnedHeader) {
-            item(key = "header", span = FullLine) {
-                FeedHeader(actions = headerActions.takeUnless { actionsInUpsRow })
-            }
-        }
-        // 「最常访问」跟着列表一起滚,不吸顶:吸顶会让它变成常驻的入口带,而这一页的主体是
-        // 动态流。
-        //
-        // **宽屏也是这一排,不挪到侧栏。** 侧栏试过一轮:十来个人长期占住一整栏,下面空着,
-        // 为了让它能关又要加开关、加设置、把标题行钉住。放在网格上方,这一排在宽屏上横铺
-        // 一千多 dp,二十个人一行站得下、不用横滚,网格也拿到整个宽度。
-        if (hasUpsRow) {
-            item(key = "frequent-ups", span = FullLine) {
-                FrequentUpsRow(
-                    ups = state.topUps,
-                    liveUps = state.liveUps,
-                    liveCount = state.liveCount,
-                    special = state.topUpsAreSpecial,
-                    onUpClick = onUpClick,
-                    onOpenLiveNow = { liveSheetOpen = true },
-                    onOpenFollowings = onOpenFollowings,
-                    trailing = headerActions.takeIf { actionsInUpsRow },
-                    trailingWidth = actionsWidth.takeIf { wide },
-                    onFitChange = { upsRowFits = it },
-                )
-            }
-        }
-        if (state.items.isEmpty()) {
-            item(key = "empty", span = FullLine) { EmptyState(stringResource(Res.string.feed_empty)) }
-        }
-        // animateItem:「不再显示这个 UP」当场生效,那一刻被摘掉的可能是连着好几条,
-        // 下面几十行硬切着往上跳一格;条目认的是 FeedEntry.id,翻页追加也走同一条动效。
-        feedDisplayNodes(
-            nodes = beforeNodes,
-            expandedBurstIds = expandedBurstIds,
-            wide = wide,
-            onExpandBurst = { expandedBurstIds = expandedBurstIds + it },
-            onCollapseBurst = collapseBurst,
-            onItemClick = onItemClick,
-            onUpClick = onUpClick,
-            onExcludeUp = onExcludeUp,
-            onAddToView = onAddToView,
-        )
-        if (markerIndex != null) {
-            // 横跨整行:分隔线前那一行没排满也照样断开,新旧两段不共用一行。
-            item(key = "read-marker", span = FullLine) { ReadMarkerDivider(Modifier.animateItem()) }
-        }
-        feedDisplayNodes(
-            nodes = fromNodes,
-            expandedBurstIds = expandedBurstIds,
-            wide = wide,
-            onExpandBurst = { expandedBurstIds = expandedBurstIds + it },
-            onCollapseBurst = collapseBurst,
-            onItemClick = onItemClick,
-            onUpClick = onUpClick,
-            onExcludeUp = onExcludeUp,
-            onAddToView = onAddToView,
-        )
-            item(key = "footer", span = FullLine) {
-                ListFooter(
-                    appending = state.appending,
-                    hasMore = state.hasMore,
-                    hasItems = state.items.isNotEmpty(),
-                )
-            }
-            }
-            ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
-        }
-        }
-    }
 
-    if (wide) {
-        feedList(modifier.fillMaxSize())
-    } else {
-        AdaptiveContent(modifier = modifier, maxWidth = Breakpoints.ReadableWidth) {
-            feedList(Modifier.fillMaxSize())
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .then(if (wide) Modifier else Modifier.widthIn(max = Breakpoints.ReadableWidth))
+                .fillMaxSize(),
+        ) {
+            val columns = if (multiColumnAllowed) {
+                (maxWidth / Dimens.VideoGridMinCellWidth).toInt().coerceAtLeast(1)
+            } else {
+                1
+            }
+            val multiColumn = columns > 1
+
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (pinnedHeader) {
+                    FeedHeader(actions = headerActions.takeUnless { actionsInUpsRow })
+                }
+                RefreshBox(
+                    refreshing = state.refreshing,
+                    onRefresh = onRefresh,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                ) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(columns),
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = contentPadding,
+                    ) {
+                        if (!pinnedHeader) {
+                            item(key = "header", span = FullLine) {
+                                FeedHeader(actions = headerActions.takeUnless { actionsInUpsRow })
+                            }
+                        }
+                        if (hasUpsRow) {
+                            item(key = "frequent-ups", span = FullLine) {
+                                FrequentUpsRow(
+                                    ups = state.topUps,
+                                    liveUps = state.liveUps,
+                                    liveCount = state.liveCount,
+                                    special = state.topUpsAreSpecial,
+                                    onUpClick = onUpClick,
+                                    onOpenLiveNow = { liveSheetOpen = true },
+                                    onOpenFollowings = onOpenFollowings,
+                                    trailing = headerActions.takeIf { actionsInUpsRow },
+                                    trailingWidth = actionsWidth.takeIf { wide },
+                                    onFitChange = { upsRowFits = it },
+                                )
+                            }
+                        }
+                        if (state.items.isEmpty()) {
+                            item(key = "empty", span = FullLine) { EmptyState(stringResource(Res.string.feed_empty)) }
+                        }
+                        feedDisplayNodes(
+                            nodes = beforeNodes,
+                            expandedBurstIds = expandedBurstIds,
+                            multiColumn = multiColumn,
+                            wide = wide,
+                            onExpandBurst = { expandedBurstIds = expandedBurstIds + it },
+                            onCollapseBurst = collapseBurst,
+                            onItemClick = onItemClick,
+                            onUpClick = onUpClick,
+                            onExcludeUp = onExcludeUp,
+                            onAddToView = onAddToView,
+                        )
+                        if (markerIndex != null) {
+                            item(key = "read-marker", span = FullLine) { ReadMarkerDivider(Modifier.animateItem()) }
+                        }
+                        feedDisplayNodes(
+                            nodes = fromNodes,
+                            expandedBurstIds = expandedBurstIds,
+                            multiColumn = multiColumn,
+                            wide = wide,
+                            onExpandBurst = { expandedBurstIds = expandedBurstIds + it },
+                            onCollapseBurst = collapseBurst,
+                            onItemClick = onItemClick,
+                            onUpClick = onUpClick,
+                            onExcludeUp = onExcludeUp,
+                            onAddToView = onAddToView,
+                        )
+                        item(key = "footer", span = FullLine) {
+                            ListFooter(
+                                appending = state.appending,
+                                hasMore = state.hasMore,
+                                hasItems = state.items.isNotEmpty(),
+                            )
+                        }
+                    }
+                    ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
+                }
+            }
         }
     }
 
@@ -556,29 +576,13 @@ private fun FeedList(
 }
 
 /**
- * 列表顶上那一行:页名,右边是「关注动态」。
+ * 列表顶上那一行:主锚点页名(`headlineSmallEmphasized`),右侧承载夜间模式、推送与关注动态入口。
  *
- * **标题跟着列表滚,不做顶栏。** 三个根页都没有顶栏,单给这一页加一条的话,底栏切过来时
- * 页面顶部的形状会变;而这一行只在开头有用,滚走之后底栏已经说明了这是哪一页。
- *
- * **入口挂在标题行上,不单占一行。** 它原先独占一行、贴右,左边整片空着;它通往的是这一页
- * 装不下的另一半,和页名放在一起读起来正是"这一页,以及它旁边那一页"。放在开头而不是列表
- * 末尾,是因为这条时间序流实际上翻不到底(见 [FeedScreen]),末尾没人到得了。
- *
- * **但不降调。** 它曾经是 onSurfaceVariant,理由抄的是 DESIGN 2.1 那句「折叠为一个不显眼的
- * 入口」—— 那正是 CLAUDE.md 点名删掉的那类发明:把入口做得更难找不是克制,是替用户决定
- * 他不该去那儿。TextButton 默认的 primary 就是一条普通入口该有的样子。
- *
- * **永远不给它红点、未读计数或带数量的角标。** 那些是 DESIGN 1.3 永不实现清单上的第一条,
- * 而这里正是它们最容易被加回来的位置 —— 「顺手显示有几条新的」听起来是信息,实际是把一条
- * 静态入口变成催人回来的提醒。
+ * **永远不给它红点、未读计数或带数量的角标。**
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun FeedHeader(
-    /**
-     * 刷新与两个入口([FeedHeaderActions])。null 时它们在头像那一排的右端(宽屏),
-     * 这一行只剩页名。
-     */
     actions: (@Composable () -> Unit)?,
 ) {
     val captionSlot = rememberCaptionSlot()
@@ -602,7 +606,7 @@ private fun FeedHeader(
         ) {
             Text(
                 text = stringResource(Res.string.feed_title),
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.headlineSmallEmphasized,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -612,29 +616,52 @@ private fun FeedHeader(
     }
 }
 
-/** 刷新、UP 主推送、关注动态。右沿的 › 落在 16dp 页边线上,见 [HeaderButtonEndInset]。 */
+/** 刷新、夜间模式、UP 主推送、关注动态。右沿的 › 落在 16dp 页边线上,见 [HeaderButtonEndInset]。 */
 @Composable
 private fun FeedHeaderActions(
     refreshing: Boolean,
     onRefresh: () -> Unit,
     onOpenOtherDynamics: () -> Unit,
     onOpenPushes: () -> Unit,
-    /**
-     * 宽屏:两个入口用 tonal 按钮。文字按钮在手机那一行里刚好;放进一千多 dp 宽、旁边一排
-     * 48dp 头像的行里,没有底色的两行小字像链接,压不住那一排头像的分量。
-     */
+    onEnterNightMode: () -> Unit,
     tonal: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val nightLabel = stringResource(Res.string.night_mode_enter_action)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(if (tonal) Spacing.Tight else 0.dp),
         modifier = modifier,
     ) {
         RefreshAction(refreshing, onRefresh)
-        // UP 主推送来的私信。**放这里,不放消息页**:推送里的视频就是这条时间线上的那些投稿,
-        // 它们在私信列表里只是把真人对话往下挤;挪到订阅页,和"我关注的人发了什么"放在一起。
-        // 同一条规矩:没有计数,没有红点。
+        if (tonal) {
+            FilledTonalButton(
+                onClick = onEnterNightMode,
+                shape = MaterialTheme.shapes.large,
+                contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
+            ) {
+                Icon(
+                    Icons.Outlined.Bedtime,
+                    contentDescription = null,
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+                Text(
+                    text = nightLabel,
+                    maxLines = 1,
+                    modifier = Modifier.padding(start = Spacing.Tight),
+                )
+            }
+        } else {
+            BilbyTooltip(text = nightLabel) {
+                IconButton(onClick = onEnterNightMode) {
+                    Icon(
+                        Icons.Outlined.Bedtime,
+                        contentDescription = nightLabel,
+                    )
+                }
+            }
+        }
+        // UP 主推送来的私信。同一条规矩:没有计数,没有红点。
         HeaderEntryButton(
             tonal = tonal,
             onClick = onOpenPushes,
@@ -655,9 +682,6 @@ private fun FeedHeaderActions(
                 modifier = Modifier.padding(start = if (tonal) Spacing.Tight else Spacing.Hair),
             )
         }
-        // 内边距写明而不取默认:箭头的右沿要落在 16dp 页边线上(见 [HeaderButtonEndInset]),
-        // 默认值跟着 alpha 版本变,对齐也就跟着变。tonal 时按钮自带底色,右沿就是底色的边,
-        // 箭头照常留内边距。
         HeaderEntryButton(
             tonal = tonal,
             onClick = onOpenOtherDynamics,
@@ -686,7 +710,7 @@ private fun FeedHeaderActions(
     }
 }
 
-/** 标题行的入口按钮:窄屏是文字按钮,宽屏是 tonal,见 [FeedHeaderActions] 的 tonal。 */
+/** 标题行的入口按钮:窄屏是文字按钮,宽屏是 `shapes.large` tonal 按钮。 */
 @Composable
 private fun HeaderEntryButton(
     tonal: Boolean,
@@ -695,13 +719,18 @@ private fun HeaderEntryButton(
     content: @Composable RowScope.() -> Unit,
 ) {
     if (tonal) {
-        FilledTonalButton(onClick = onClick, contentPadding = contentPadding, content = content)
+        FilledTonalButton(
+            onClick = onClick,
+            shape = MaterialTheme.shapes.large,
+            contentPadding = contentPadding,
+            content = content,
+        )
     } else {
         TextButton(onClick = onClick, contentPadding = contentPadding, content = content)
     }
 }
 
-/** 单条投稿行,含「不再显示」的菜单。从 [FeedList] 拆出来是因为分隔线要把 items(...) 切成两段,两段用的是同一份行 UI。 */
+/** 单条投稿卡片或行,含「不再显示」与复制标题菜单。 */
 @Composable
 private fun FeedEntryItem(
     item: FeedEntry,
@@ -709,10 +738,15 @@ private fun FeedEntryItem(
     onUpClick: (Long) -> Unit,
     onExcludeUp: (Long, String) -> Unit,
     onAddToView: (String) -> Unit,
-    /** 宽屏网格:不画 ⋮,同一份菜单由右键或长按在按下处弹出,见 [ContextMenuBox]。 */
+    multiColumn: Boolean,
     wide: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val itemModifier = if (multiColumn) {
+        modifier.padding(horizontal = GridCardHorizontalPadding, vertical = GridCardVerticalPadding)
+    } else {
+        modifier
+    }
     FeedEntryRow(
         item = item,
         rowUi = item.toRowUi(),
@@ -720,12 +754,13 @@ private fun FeedEntryItem(
         onUpClick = onUpClick,
         onExcludeUp = onExcludeUp,
         onAddToView = onAddToView,
-        wide = wide,
-        modifier = modifier,
+        multiColumn = multiColumn,
+        wide = wide || multiColumn,
+        modifier = itemModifier,
     )
 }
 
-/** 共用投稿行渲染与长按/右键/⋮ 菜单挂载;供普通条目与连发叠卡共用,避免叠卡改变行高或交互方式。 */
+/** 共用投稿条目渲染(`columns > 1` 为 [VideoGridCard],单列为 [VideoRow])与长按/右键/⋮ 菜单挂载。 */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun FeedEntryRow(
@@ -735,12 +770,14 @@ private fun FeedEntryRow(
     onUpClick: (Long) -> Unit,
     onExcludeUp: (Long, String) -> Unit,
     onAddToView: (String) -> Unit,
+    multiColumn: Boolean,
     wide: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val menu: @Composable ColumnScope.(close: () -> Unit) -> Unit = { close ->
         FeedEntryMenuItems(item, close, onUpClick, onExcludeUp, onAddToView)
     }
+    val upClickAction: (() -> Unit)? = if (item.upMid != 0L) ({ onUpClick(item.upMid) }) else null
     if (wide) {
         ContextMenuBox(
             onClick = null,
@@ -748,50 +785,62 @@ private fun FeedEntryRow(
             modifier = modifier,
             menu = menu,
         ) { openMenu ->
-            VideoRow(item = rowUi, onClick = onClick, onLongClick = openMenu)
+            if (multiColumn) {
+                VideoGridCard(
+                    ui = rowUi,
+                    onClick = onClick,
+                    onLongClick = openMenu,
+                    onUpClick = upClickAction,
+                )
+            } else {
+                VideoRow(item = rowUi, onClick = onClick, onLongClick = openMenu)
+            }
         }
         return
     }
-    // **窄屏菜单只有行尾这一个入口,不接长按。** 长按此前是并行的第二个入口,理由是"已经会用
-    // 的人不必改习惯";但长按没有任何视觉提示,而 M3 手势那一页给长按定的语义是"选中项",
-    // 留着它等于让同一个操作有一个说不通的别名。宽屏不同:那里的主要手势是右键,长按只是
-    // 没有鼠标的平板上的同一个动作。
+
     var menuOpen by remember { mutableStateOf(false) }
-    VideoRow(
-        item = rowUi,
-        onClick = onClick,
-        modifier = modifier,
-        overflow = {
-            // 菜单挂在按钮上,不挂在整行上 —— 挂在行上时 Popup 以整行为锚,菜单从行的左下角
-            // 弹出来,离按下去的那个点半屏远。
-            Box {
-                IconButton(onClick = { menuOpen = true }) {
-                    Icon(
-                        Icons.Outlined.MoreVert,
-                        contentDescription = stringResource(Res.string.feed_item_actions),
-                    )
-                }
-                // M3E 的 vertical menu:容器圆角、standard 配色(surfaceContainerLow),菜单项
-                // 自己也有形状 —— 基线菜单的项是一条通栏矩形,按下去的状态层跟着是方的。
-                DropdownMenu(
-                    expanded = menuOpen,
-                    onDismissRequest = { menuOpen = false },
-                    shape = MenuDefaults.shape,
-                    containerColor = MenuDefaults.containerColor,
-                ) {
-                    menu { menuOpen = false }
-                }
+    val overflowSlot: @Composable () -> Unit = {
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(
+                    Icons.Outlined.MoreVert,
+                    contentDescription = stringResource(Res.string.feed_item_actions),
+                )
             }
-        },
-    )
+            DropdownMenu(
+                expanded = menuOpen,
+                onDismissRequest = { menuOpen = false },
+                shape = MenuDefaults.shape,
+                containerColor = MenuDefaults.containerColor,
+            ) {
+                menu { menuOpen = false }
+            }
+        }
+    }
+    if (multiColumn) {
+        VideoGridCard(
+            ui = rowUi,
+            onClick = onClick,
+            onLongClick = { menuOpen = true },
+            onUpClick = upClickAction,
+            overflow = overflowSlot,
+            modifier = modifier,
+        )
+    } else {
+        VideoRow(
+            item = rowUi,
+            onClick = onClick,
+            onLongClick = { menuOpen = true },
+            modifier = modifier,
+            overflow = overflowSlot,
+        )
+    }
 }
 
 /**
- * 一条投稿的菜单项,⋮ 与右键共用。
- *
- * **形状按项数取。** 只有一项时它既是首项也是末项(standalone);两项时上下各取 leading /
- * trailing,中间那条边是直的 —— 两项都用 standalone 的话,两块圆角贴在一起会在中缝挤出一道
- * 空隙。专栏没有"稍后再看",所以这个菜单真的会在一项和两项之间变。
+ * 一条投稿的菜单项,⋮ 与右键共用。向 [VideoCommonMenuItems] 显式传入 `title`,
+ * 专栏条目也补充复制标题项,保证所有订阅卡片都能一键复制标题。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -804,38 +853,54 @@ private fun FeedEntryMenuItems(
 ) {
     val video = item as? FeedEntry.Video
     val videoBvid = video?.bvid.orEmpty()
-    val leadingCount = if (videoBvid.isNotEmpty()) 1 else 0
-    val commonCount = videoCommonMenuItemCount(videoBvid, item.upMid, onUpClick)
+    val articleCopyTitle = videoBvid.isEmpty() && item.title.isNotBlank()
+    val copyAction = rememberCopyAction()
+    val leadingCount = when {
+        videoBvid.isNotEmpty() -> 1
+        articleCopyTitle -> 1
+        else -> 0
+    }
+    val commonCount = videoCommonMenuItemCount(
+        bvid = videoBvid,
+        upMid = item.upMid,
+        onOpenUpSpace = onUpClick,
+        title = item.title,
+    )
     val totalCount = leadingCount + commonCount + 1
 
     if (videoBvid.isNotEmpty()) {
-        // 只进不出,和播放页那一格同一套规矩(见 [FeedViewModel.addToView])。
         DropdownMenuItem(
             onClick = {
                 close()
                 onAddToView(videoBvid)
             },
             text = { Text(stringResource(Res.string.video_action_toview_desc)) },
-            // 与播放页动作栏那一格同一个图标,认得出是同一件事。
             leadingIcon = { Icon(Icons.Outlined.WatchLater, contentDescription = null) },
+            shape = menuItemShape(0, totalCount),
+        )
+    } else if (articleCopyTitle) {
+        DropdownMenuItem(
+            onClick = {
+                close()
+                copyAction(item.title)
+            },
+            text = { Text(stringResource(Res.string.action_copy_title)) },
+            leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
             shape = menuItemShape(0, totalCount),
         )
     }
     VideoCommonMenuItems(
         bvid = videoBvid,
-        title = video?.title.orEmpty(),
+        title = item.title,
         close = close,
         upMid = item.upMid,
         onOpenUpSpace = onUpClick,
         coverUrl = video?.coverUrl.orEmpty(),
         upName = item.upName,
-        durationSeconds = video?.let { dev.bilby.parseDurationSeconds(it.durationText) } ?: 0L,
+        durationSeconds = video?.let { parseDurationSeconds(it.durationText) } ?: 0L,
         startIndex = leadingCount,
         totalCount = totalCount,
     )
-    // **当场生效,撤销在 snackbar 上**(见 [ExcludeUndo])。从前这里还隔着一个确认对话框,
-    // 理由是撤销无处可落;设置里那份名单可以逐个恢复之后,那个理由不成立了,而一个撤得回来的
-    // 操作不值得一次拦截。
     DropdownMenuItem(
         onClick = {
             close()
@@ -848,41 +913,39 @@ private fun FeedEntryMenuItems(
 }
 
 /**
- * 「以上是新内容」分隔条。DESIGN 2.1 只要求记住位置、不要红点/未读计数(4.2 节的永不实现
- * 清单),这条分界本身不随时间变化去提醒用户回来看,进屏时算一次就不再动 —— 不落在那条禁令上。
- *
- * 通栏微底色窄条(`surfaceContainer` + `shapes.small`)配向上箭头与 `onSurfaceVariant` 小字:
- * 独占一整行把新旧两段切开,同时避免 `secondaryContainer` 胶囊被误读成可点击的筛选/刷新按钮
- * (风格指南 §2.3c:不用分割线)。
+ * 「以上是新内容」分隔胶囊:居中的 `CircleShape` `surfaceContainerHigh` 标签胶囊,上下留足呼吸间距,无分割线。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ReadMarkerDivider(modifier: Modifier = Modifier) {
-    Surface(
-        shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    Box(
+        contentAlignment = Alignment.Center,
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Comfortable),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight - Spacing.Hair / 2),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         ) {
-            Icon(
-                Icons.Filled.KeyboardArrowUp,
-                contentDescription = null,
-                modifier = Modifier.size(ReadMarkerIconSize),
-            )
-            Text(
-                text = stringResource(Res.string.feed_read_marker),
-                style = MaterialTheme.typography.labelMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.KeyboardArrowUp,
+                    contentDescription = null,
+                    modifier = Modifier.size(ReadMarkerIconSize),
+                )
+                Text(
+                    text = stringResource(Res.string.feed_read_marker),
+                    style = MaterialTheme.typography.labelMediumEmphasized,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -1063,8 +1126,28 @@ private fun FrequentUpsRow(
                 }
             }
             items(shownUps, key = { it.mid }) { up ->
-                UpSlot(label = up.name, onClick = { onUpClick(up.mid) }) {
-                    Avatar(url = up.faceUrl, size = Dimens.AvatarStack)
+                UpSlot(
+                    label = up.name,
+                    emphasized = special,
+                    onClick = { onUpClick(up.mid) },
+                ) {
+                    if (special) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(Dimens.AvatarStack)
+                                .clip(CircleShape)
+                                .border(SpecialUpRingWidth, MaterialTheme.colorScheme.secondaryContainer, CircleShape)
+                                .padding(SpecialUpRingWidth),
+                        ) {
+                            Avatar(
+                                url = up.faceUrl,
+                                size = Dimens.AvatarStack - SpecialUpRingWidth * 2,
+                            )
+                        }
+                    } else {
+                        Avatar(url = up.faceUrl, size = Dimens.AvatarStack)
+                    }
                 }
             }
             if (fits) item(key = "followings") { followingsSlot(Modifier) }
@@ -1087,11 +1170,6 @@ private fun FrequentUpsRow(
 
 /**
  * 「关注列表」那一格,和头像格同形:圆里一个人群图标,下面一行字。
- *
- * 先后试过:排尾一格的圆底箭头,读起来像队尾站着一个没有脸的人;不衬底、不写字的光箭头,看不出
- * 通向哪里;写「全部」的竖胶囊,「全部」离开这一排说不清是全部什么,字又小;横排的 tonal 胶囊
- * 或文字按钮,手机上占掉三分之一排,头像只剩四个,和上面标题行的文字按钮叠着又是两套入口的
- * 样子。同形的一格只占一个人的宽度;圆里是一群人、下面写明去处,不会被读成一个人。
  */
 @Composable
 private fun FollowingsSlot(onClick: () -> Unit, modifier: Modifier = Modifier) {
@@ -1117,31 +1195,37 @@ private fun FollowingsSlot(onClick: () -> Unit, modifier: Modifier = Modifier) {
 }
 
 /**
- * 这一排里的一格:上面是 48dp 的圆,下面一行字,宽度固定,格与格之间才对得齐。
- *
- * **一行,不是两行。** 两行版的用意是长名字不被截成认不出的前四个字,实际效果是一排里有的
- * 格一行、有的两行,名字的下沿高低不齐,而这一排横着扫过去读的正是那条下沿。认人主要靠
- * 头像,名字是确认;截掉的后半截多半是「official」「Channel」这类后缀。
+ * 这一排里的一格:上面是 48dp 的圆,下面一行字,带平滑指针悬停底色与点按微缩反馈。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun UpSlot(
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    emphasized: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
-            .clip(MaterialTheme.shapes.small)
-            .clickable(onClick = onClick)
+            .interactiveCard(
+                shape = MaterialTheme.shapes.medium,
+                baseColor = Color.Transparent,
+                hoverColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            )
+            .clickable(role = Role.Button, onClick = onClick)
             .padding(vertical = Spacing.Hair, horizontal = SlotInset)
             .width(AvatarSlotWidth),
     ) {
         content()
         Text(
             text = label,
-            style = MaterialTheme.typography.labelSmall,
+            style = if (emphasized) {
+                MaterialTheme.typography.labelSmallEmphasized
+            } else {
+                MaterialTheme.typography.labelSmall
+            },
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = Spacing.Hair),
@@ -1159,6 +1243,7 @@ private val BurstIdSetSaver = listSaver<Set<String>, String>(
 private fun LazyGridScope.feedDisplayNodes(
     nodes: List<FeedDisplayNode>,
     expandedBurstIds: Set<String>,
+    multiColumn: Boolean,
     wide: Boolean,
     onExpandBurst: (String) -> Unit,
     onCollapseBurst: (String) -> Unit,
@@ -1170,7 +1255,16 @@ private fun LazyGridScope.feedDisplayNodes(
     nodes.forEach { node ->
         when (node) {
             is FeedDisplayNode.Single -> item(key = node.entry.id) {
-                FeedEntryItem(node.entry, onItemClick, onUpClick, onExcludeUp, onAddToView, wide, Modifier.animateItem())
+                FeedEntryItem(
+                    item = node.entry,
+                    onItemClick = onItemClick,
+                    onUpClick = onUpClick,
+                    onExcludeUp = onExcludeUp,
+                    onAddToView = onAddToView,
+                    multiColumn = multiColumn,
+                    wide = wide,
+                    modifier = Modifier.animateItem(),
+                )
             }
 
             is FeedDisplayNode.Burst -> {
@@ -1179,7 +1273,9 @@ private fun LazyGridScope.feedDisplayNodes(
                     item(key = node.lead.id) {
                         BurstStackedItem(
                             node = node,
+                            multiColumn = multiColumn,
                             wide = wide,
+                            onLeadClick = { onItemClick(node.lead) },
                             onExpand = { onExpandBurst(node.anchorId) },
                             onUpClick = onUpClick,
                             onExcludeUp = onExcludeUp,
@@ -1190,17 +1286,18 @@ private fun LazyGridScope.feedDisplayNodes(
                 } else {
                     gridItems(node.all, key = { it.id }) { entry ->
                         FeedEntryItem(
-                            entry,
-                            onItemClick,
-                            onUpClick,
-                            onExcludeUp,
-                            onAddToView,
-                            wide,
-                            Modifier.animateItem(),
+                            item = entry,
+                            onItemClick = onItemClick,
+                            onUpClick = onUpClick,
+                            onExcludeUp = onExcludeUp,
+                            onAddToView = onAddToView,
+                            multiColumn = multiColumn,
+                            wide = wide,
+                            modifier = Modifier.animateItem(),
                         )
                     }
                     item(key = burstCollapseKey(node.lead.id)) {
-                        if (wide) {
+                        if (multiColumn) {
                             BurstCollapseCard(
                                 upName = node.lead.upName,
                                 totalCount = node.totalCount,
@@ -1223,60 +1320,117 @@ private fun LazyGridScope.feedDisplayNodes(
 }
 
 /**
- * 连发组收起态叠卡:保持与普通 [VideoRow] 完全一致的行高，避免宽屏网格同一行其他单元格下方出现空白；
- * 三层衬底通过 [Modifier.matchParentSize] 落在外边距内侧形成卡片叠放效果。
+ * 连发组收起态的无描边三层色阶叠卡:
+ * - 前景主卡为 `surfaceContainer` `shapes.large`,中层 `surfaceContainerHigh` 下探 `+4.dp`、
+ *   底层 `surfaceContainerHighest` 下探 `+8.dp`,零 `outlineVariant` 细线描边;
+ * - 完整保留首条视频的 [chargingBadgeText] 角标,点击主卡直接起播首条视频,底部交互横条一键展开其余连发。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun BurstStackedItem(
     node: FeedDisplayNode.Burst,
+    multiColumn: Boolean,
     wide: Boolean,
+    onLeadClick: () -> Unit,
     onExpand: () -> Unit,
     onUpClick: (Long) -> Unit,
     onExcludeUp: (Long, String) -> Unit,
     onAddToView: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val rowUi = node.lead.toRowUi().copy(
-        typeBadge = stringResource(Res.string.feed_burst_stack_badge, node.totalCount),
-    )
-    Box(modifier = modifier.fillMaxWidth()) {
-        Surface(
-            shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.surfaceContainerHighest,
-            border = BorderStroke(DeckBorderWidth, MaterialTheme.colorScheme.outlineVariant),
+    val colors = MaterialTheme.colorScheme
+    val cardShape = MaterialTheme.shapes.large
+    val rowUi = node.lead.toRowUi()
+    val outerModifier = if (multiColumn) {
+        modifier
+            .fillMaxWidth()
+            .padding(horizontal = GridCardHorizontalPadding, vertical = GridCardVerticalPadding)
+    } else {
+        modifier
+            .fillMaxWidth()
+            .padding(vertical = Spacing.Hair)
+    }
+    val frontHorizontalInset = if (multiColumn) 0.dp else Spacing.Tight
+
+    Box(modifier = outerModifier) {
+        // 第三层底层衬片(+8dp)
+        Box(
             modifier = Modifier
                 .matchParentSize()
-                .padding(start = Spacing.Comfortable, end = DeckOuterEndInset, top = Spacing.Cozy, bottom = 0.dp),
-        ) {}
-        Surface(
-            shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            border = BorderStroke(DeckBorderWidth, MaterialTheme.colorScheme.outlineVariant),
-            modifier = Modifier
-                .matchParentSize()
-                .padding(start = Spacing.Cozy, end = DeckMidEndInset, top = Spacing.Tight, bottom = DeckStepOffset),
-        ) {}
-        Surface(
-            shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(DeckBorderWidth, MaterialTheme.colorScheme.outlineVariant),
-            modifier = Modifier
-                .matchParentSize()
-                .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
-        ) {}
-        FeedEntryRow(
-            item = node.lead,
-            rowUi = rowUi,
-            onClick = onExpand,
-            onUpClick = onUpClick,
-            onExcludeUp = onExcludeUp,
-            onAddToView = onAddToView,
-            wide = wide,
+                .padding(
+                    start = frontHorizontalInset + DeckBackHorizontalInset,
+                    end = frontHorizontalInset + DeckBackHorizontalInset,
+                    top = DeckBackHorizontalInset,
+                    bottom = 0.dp,
+                )
+                .clip(cardShape)
+                .background(colors.surfaceContainerHighest),
         )
+        // 第二层中层衬片(+4dp)
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .padding(
+                    start = frontHorizontalInset + DeckMidHorizontalInset,
+                    end = frontHorizontalInset + DeckMidHorizontalInset,
+                    top = DeckMidHorizontalInset,
+                    bottom = DeckLayerDrop,
+                )
+                .clip(cardShape)
+                .background(colors.surfaceContainerHigh),
+        )
+        // 第一层前景主卡(底部留出 8dp 让下两层唇边探出)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = frontHorizontalInset,
+                    end = frontHorizontalInset,
+                    bottom = DeckLayerDrop * 2,
+                )
+                .clip(cardShape)
+                .background(colors.surfaceContainer),
+        ) {
+            FeedEntryRow(
+                item = node.lead,
+                rowUi = rowUi,
+                onClick = onLeadClick,
+                onUpClick = onUpClick,
+                onExcludeUp = onExcludeUp,
+                onAddToView = onAddToView,
+                multiColumn = multiColumn,
+                wide = wide || multiColumn,
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterHorizontally),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = BurstExpandStripMinHeight)
+                    .clip(RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
+                    .clickable(role = Role.Button, onClick = onExpand)
+                    .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+            ) {
+                Text(
+                    text = stringResource(Res.string.feed_burst_expand_rest, node.rest.size),
+                    style = MaterialTheme.typography.labelMediumEmphasized.tabular,
+                    color = colors.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Icon(
+                    imageVector = Icons.Filled.ExpandMore,
+                    contentDescription = null,
+                    tint = colors.primary,
+                    modifier = Modifier.size(BurstExpandIconSize),
+                )
+            }
+        }
     }
 }
 
-/** 宽屏连发组展开后跟在最后一条之后的收起卡片，占 1 格网格单元。 */
+/** 多列网格连发组展开后跟在最后一条之后的收起卡片，占 1 格网格单元。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun BurstCollapseCard(
     upName: String,
@@ -1284,51 +1438,52 @@ private fun BurstCollapseCard(
     onCollapse: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val colors = MaterialTheme.colorScheme
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            .padding(horizontal = GridCardHorizontalPadding, vertical = GridCardVerticalPadding),
     ) {
-        Surface(
-            onClick = onCollapse,
-            shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.surfaceContainer,
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterVertically),
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = BurstCollapseCardMinHeight),
+                .heightIn(min = BurstCollapseCardMinHeight)
+                .interactiveCard(
+                    shape = MaterialTheme.shapes.large,
+                    baseColor = colors.surfaceContainerHigh,
+                    hoverColor = colors.surfaceContainerHighest,
+                )
+                .clickable(role = Role.Button, onClick = onCollapse)
+                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterVertically),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.KeyboardArrowUp,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(Dimens.IconAction),
-                )
-                Text(
-                    text = stringResource(Res.string.feed_burst_collapse_card_title),
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = stringResource(Res.string.feed_burst_collapse_card_subtitle, upName, totalCount),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            Icon(
+                imageVector = Icons.Outlined.KeyboardArrowUp,
+                contentDescription = null,
+                tint = colors.primary,
+                modifier = Modifier.size(Dimens.IconAction),
+            )
+            Text(
+                text = stringResource(Res.string.feed_burst_collapse_card_title),
+                style = MaterialTheme.typography.titleSmallEmphasized,
+                color = colors.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = stringResource(Res.string.feed_burst_collapse_card_subtitle, upName, totalCount),
+                style = MaterialTheme.typography.bodySmall.tabular,
+                color = colors.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
 
-/** 单列列表连发组展开后跟在最后一条之后的紧凑收起行。 */
+/** 单列列表连发组展开后跟在最后一条之后的胶囊收起条。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun BurstCollapseRow(
     upName: String,
@@ -1338,8 +1493,8 @@ private fun BurstCollapseRow(
 ) {
     Surface(
         onClick = onCollapse,
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
@@ -1360,7 +1515,7 @@ private fun BurstCollapseRow(
             )
             Text(
                 text = stringResource(Res.string.feed_burst_collapse_row, upName, totalCount),
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.labelLargeEmphasized.tabular,
                 color = MaterialTheme.colorScheme.primary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1374,6 +1529,13 @@ private val FullLine: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(
 
 /** 标题行入口按钮末端的内边距。行的右边距补足剩下的部分,箭头的右沿停在 16dp 页边线上。 */
 private val HeaderButtonEndInset = Spacing.Hair
+
+/** 多列网格卡片外围半间距:两张相邻卡片的悬停容器相距 12dp。 */
+private val GridCardHorizontalPadding = 6.dp
+private val GridCardVerticalPadding = 4.dp
+
+/** 特别关注头像外侧低饱和强调环宽度。 */
+private val SpecialUpRingWidth = 2.dp
 
 /** 比头像宽一点,名字多站得下一两个字。 */
 private val AvatarSlotWidth = 60.dp
@@ -1390,37 +1552,17 @@ private val SlotInset = 2.dp
  */
 private val UpSlotFaceInset = SlotInset + (AvatarSlotWidth - Dimens.AvatarStack) / 2
 
-
-/**
- * 这一排格与格之间的间距。算能站下几格时要用到,所以是个具名值而不是写在两处的字面量。
- *
- * **8dp 而不是 12dp**:360dp 的屏减去左右内边距是 336dp,按 12dp 排第五格要 348dp,差的
- * 正好是一道间距,于是那 60dp 空着谁也进不来。收到 8dp 之后 `5×60 + 4×8 = 332` 站得下。
- * 格与格之间实际看到的空隙比这个数大 —— [UpSlot] 自己还有 2dp 的左右内边距,而头像只有
- * 48dp,在 60dp 的格子里两边各留 6dp。
- */
 private val SlotGap = Spacing.Tight
 
-/**
- * 这一排最多摆几个人。
- *
- * **这是个上限,不是版式**:摆几个由屏宽和滚动决定,这个数只挡住"portal 哪天返回上百个"
- * 那种情况 —— 那时 LazyRow 仍然只组合可见的几格,但 20 个已经远超"横着拖两下"的耐心,
- * 再多的人本来就该从右边那个入口进完整名单。
- */
 private const val FrequentUpLimit = 20
 
-/** 连发叠卡各层边框宽度。 */
-private val DeckBorderWidth = 1.dp
+/** 无描边三层叠卡每层向下探出的唇边步长(+4dp 与 +8dp)。 */
+private val DeckLayerDrop = 4.dp
+private val DeckMidHorizontalInset = Spacing.Tight
+private val DeckBackHorizontalInset = Spacing.Comfortable
 
-/** 连发叠卡中层相对外层底部的错位步长。 */
-private val DeckStepOffset = 2.dp
+private val BurstExpandStripMinHeight = 40.dp
+private val BurstExpandIconSize = 18.dp
 
-/** 连发叠卡中层右侧内缩，使其右沿比前卡探出半阶。 */
-private val DeckMidEndInset = 5.dp
-
-/** 连发叠卡外层右侧内缩，使其右沿比中层再探出半阶。 */
-private val DeckOuterEndInset = 2.dp
-
-/** 宽屏连发收起卡的最小高度，接近常规视频行封面区高度。 */
-private val BurstCollapseCardMinHeight = 90.dp
+/** 多列网格连发收起卡的最小高度。 */
+private val BurstCollapseCardMinHeight = 140.dp

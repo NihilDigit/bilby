@@ -1,5 +1,18 @@
 package dev.bilby.desktop
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -9,6 +22,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import dev.bilby.ui.DesktopLanguageStore
 import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.application
@@ -18,18 +37,23 @@ import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.crossfade
 import dev.bilby.AppBuild
 import dev.bilby.AppContainer
+import dev.bilby.BiliLog
 import dev.bilby.DesktopPlatform
 import dev.bilby.data.AppearancePrefs
 import dev.bilby.ui.BilbyRoot
 import dev.bilby.ui.DesktopSystemActions
+import dev.bilby.ui.DesktopToastEvent
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.LocalSystemActions
 import dev.bilby.ui.components.SkiaAnimatedImageDecoder
 import dev.bilby.ui.player.LocalWindowFullscreen
 import dev.bilby.ui.player.LocalDesktopPip
 import dev.bilby.ui.theme.BilbyTheme
+import dev.bilby.ui.theme.Spacing
 import dev.bilby.update.DesktopAppUpdater
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.toComposeImageBitmap
@@ -37,16 +61,31 @@ import org.jetbrains.skia.Image
 import org.openani.mediamp.mpv.MpvMediampPlayer
 import java.awt.Dimension
 import java.awt.Frame
+import java.io.File
+import java.util.Properties
 import javax.swing.SwingUtilities
 import kotlin.system.exitProcess
-import java.io.File
 
 fun main(args: Array<String>) {
     exitAfterAotTraining()
+    val versionName = System.getProperty("bilby.version") ?: "0.0.0-dev"
+    val isPackaged = !System.getProperty("jpackage.app-path").isNullOrEmpty()
+    val isDebug = System.getProperty("bilby.debug")?.toBooleanStrictOrNull()
+        ?: (!isPackaged && versionName.endsWith("-dev"))
+    val devLocalProps = if (isDebug && !isPackaged) loadDevLocalProperties() else null
+    fun resolveDevLlmProp(sysKey: String, altSysKey: String, localKey: String): String {
+        if (!isDebug || isPackaged) return ""
+        return System.getProperty(sysKey)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: System.getProperty(altSysKey)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: devLocalProps?.getProperty(localKey)?.trim().orEmpty()
+    }
     AppBuild.init(
-        debug = System.getProperty("bilby.debug").toBoolean(),
-        versionName = System.getProperty("bilby.version") ?: "0.0.0-dev",
+        debug = isDebug,
+        versionName = versionName,
         applicationId = "dev.bilby.desktop",
+        llmBaseUrl = resolveDevLlmProp("bilby.llm.baseUrl", "bilby.llm.base-url", "LLM_BASE_URL"),
+        llmApiKey = resolveDevLlmProp("bilby.llm.apiKey", "bilby.llm.api-key", "LLM_API_KEY"),
+        llmModel = resolveDevLlmProp("bilby.llm.model", "bilby.llm.model", "LLM_MODEL"),
     )
     useBundledMpvRuntime()
     lateinit var container: AppContainer
@@ -139,28 +178,35 @@ fun main(args: Array<String>) {
                 },
             ) {
                 BilbyTheme(appearance) {
-                    WindowFrame(
-                        title = "Bilby",
-                        icon = appIcon,
-                        // 全屏与小窗里整个窗口都是画面。
-                        showTitleBar = !windowsFullscreen.isFullscreen && !windowsPip.active,
-                    ) {
-                        // 换语言:整棵界面拆掉一帧再建回来,等价于 Android 上换语言时 Activity 重建。
-                        // 已经组合出来的文案不会因为默认 Locale 变了而自己重取,只有重新组合才会。
-                        // 包在 SaveableStateProvider 里,拆掉时存下 rememberSaveable(返回栈、滚动位置),
-                        // 建回来时原样恢复,人还停在设置页。
-                        val saveableHolder = rememberSaveableStateHolder()
-                        val language = languageStore.language
-                        var composedLanguage by remember { mutableStateOf(language) }
-                        if (composedLanguage == language) {
-                            saveableHolder.SaveableStateProvider("root") {
-                                LinkDropTarget(onLinkDropped = { incomingLink.value = it }) {
-                                    BilbyRoot(container, incomingLink)
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        WindowFrame(
+                            title = "Bilby",
+                            icon = appIcon,
+                            // 全屏与小窗里整个窗口都是画面。
+                            showTitleBar = !windowsFullscreen.isFullscreen && !windowsPip.active,
+                        ) {
+                            // 换语言:整棵界面拆掉一帧再建回来,等价于 Android 上换语言时 Activity 重建。
+                            // 已经组合出来的文案不会因为默认 Locale 变了而自己重取,只有重新组合才会。
+                            // 包在 SaveableStateProvider 里,拆掉时存下 rememberSaveable(返回栈、滚动位置),
+                            // 建回来时原样恢复,人还停在设置页。
+                            val saveableHolder = rememberSaveableStateHolder()
+                            val language = languageStore.language
+                            var composedLanguage by remember { mutableStateOf(language) }
+                            if (composedLanguage == language) {
+                                saveableHolder.SaveableStateProvider("root") {
+                                    LinkDropTarget(onLinkDropped = { incomingLink.value = it }) {
+                                        BilbyRoot(container, incomingLink)
+                                    }
                                 }
+                            } else {
+                                SideEffect { composedLanguage = language }
                             }
-                        } else {
-                            SideEffect { composedLanguage = language }
                         }
+                        DesktopToastOverlay(
+                            toastState = systemActions.toastState,
+                            onDismiss = systemActions::dismissToast,
+                            modifier = Modifier.align(Alignment.BottomCenter),
+                        )
                     }
                 }
             }
@@ -169,6 +215,69 @@ fun main(args: Array<String>) {
     // 窗口关了、application 返回之后显式结束进程。mpv 与 JNA 留下的非守护线程会让 JVM 一直
     // 活着:实测关窗后进程还在,占着近 1GB 内存,下次启动又多一个。
     exitProcess(0)
+}
+
+private const val DesktopToastDurationMillis = 2_200L
+private val DesktopToastMaxWidth = 420.dp
+private val DesktopToastBottomMargin = 48.dp
+
+/**
+ * 桌面端轻量级非阻塞提示胶囊:不挂任何 `pointerInput` 或 `clickable`,指针点击与滚轮直接穿透到下层界面,
+ * 不抢焦点、不触发系统通知铃声或操作中心卡片。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun DesktopToastOverlay(
+    toastState: StateFlow<DesktopToastEvent?>,
+    onDismiss: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val event by toastState.collectAsState()
+    var lastShown by remember { mutableStateOf<DesktopToastEvent?>(null) }
+    if (event != null) {
+        lastShown = event
+    }
+    LaunchedEffect(event?.id) {
+        val current = event ?: return@LaunchedEffect
+        delay(DesktopToastDurationMillis)
+        onDismiss(current.id)
+    }
+    AnimatedVisibility(
+        visible = event != null,
+        enter = fadeIn(MaterialTheme.motionScheme.defaultEffectsSpec()),
+        exit = fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
+        modifier = modifier.padding(horizontal = Spacing.Loose, vertical = DesktopToastBottomMargin),
+    ) {
+        val shown = lastShown ?: return@AnimatedVisibility
+        Box(
+            modifier = Modifier
+                .widthIn(max = DesktopToastMaxWidth)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.inverseSurface)
+                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+        ) {
+            Text(
+                text = shown.message,
+                color = MaterialTheme.colorScheme.inverseOnSurface,
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+private fun loadDevLocalProperties(): Properties? {
+    val file = sequenceOf(
+        File("local.properties"),
+        File("..", "local.properties"),
+    ).firstOrNull { it.isFile } ?: return null
+    return runCatching {
+        Properties().apply {
+            file.inputStream().bufferedReader(Charsets.UTF_8).use(::load)
+        }
+    }.onFailure { BiliLog.w("读取 local.properties 失败", it) }.getOrNull()
 }
 
 /**
