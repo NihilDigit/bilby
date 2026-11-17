@@ -4,7 +4,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -68,8 +67,6 @@ import dev.bilby.resources.night_mode_go_settings
 import dev.bilby.resources.night_mode_hold_body
 import dev.bilby.resources.night_mode_hold_title
 import dev.bilby.resources.night_mode_open_space
-import dev.bilby.resources.night_mode_sanctuary_manual
-import dev.bilby.resources.night_mode_sanctuary_scheduled
 import dev.bilby.resources.night_mode_temp_exit
 import dev.bilby.resources.night_mode_until_subtitle
 import dev.bilby.resources.offline_title
@@ -100,7 +97,6 @@ import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
-import dev.bilby.ui.readableWidth
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.theme.BilbyNightSanctuaryTheme
 import dev.bilby.ui.theme.Dimens
@@ -236,18 +232,6 @@ fun NightModeScreen(
                     if (state.allowedUps.isEmpty()) {
                         Box(
                             modifier = Modifier
-                                .readableWidth()
-                                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-                        ) {
-                            NightSanctuaryHeaderCard(
-                                manual = manual,
-                                endFormatted = endFormatted,
-                                rangeFormatted = rangeFormatted,
-                                onOpenOffline = onOpenOffline,
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
                                 .weight(1f)
                                 .fillMaxWidth()
                                 .padding(Spacing.Spacious),
@@ -274,93 +258,70 @@ fun NightModeScreen(
 
                         AdaptiveListContent(
                             modifier = Modifier.weight(1f).fillMaxWidth(),
-                            maxCellWidth = Dimens.VideoGridMinCellWidth,
-                        ) {
-                            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                                val usableWidth = (maxWidth - Spacing.Tight * 2).coerceAtLeast(0.dp)
-                                val gridCols = if (multiColumnAllowed) {
-                                    (usableWidth / (Dimens.VideoGridMinCellWidth + Spacing.Hair)).toInt().coerceAtLeast(1)
-                                } else {
-                                    1
-                                }
-                                val useGrid = gridCols > 1
-                                val effectiveColumns = GridCells.Fixed(gridCols)
-                                val listPadding = if (useGrid) {
-                                    PaddingValues(
-                                        start = Spacing.Tight - GridCardOuterPadding,
-                                        end = Spacing.Tight - GridCardOuterPadding,
-                                        top = Spacing.Hair,
-                                        bottom = Spacing.Comfortable + navigationBarsBottom(),
-                                    )
-                                } else {
-                                    PaddingValues(bottom = navigationBarsBottom())
-                                }
+                        ) { columns ->
+                            val useGrid = multiColumnAllowed && columns != GridCells.Fixed(1)
+                            val effectiveColumns = if (useGrid) columns else GridCells.Fixed(1)
+                            val listPadding = if (useGrid) {
+                                PaddingValues(
+                                    start = Spacing.Tight - GridCardOuterPadding,
+                                    end = Spacing.Tight - GridCardOuterPadding,
+                                    top = Spacing.Hair,
+                                    bottom = Spacing.Comfortable + navigationBarsBottom(),
+                                )
+                            } else {
+                                PaddingValues(bottom = navigationBarsBottom())
+                            }
 
-                                RefreshBox(
-                                    refreshing = state.refreshing,
-                                    onRefresh = onRefresh,
-                                    modifier = Modifier.fillMaxSize(),
-                                ) {
-                                    PagedColumn(
-                                        layout = PagedLayout.Grid(effectiveColumns),
-                                        items = state.items,
-                                        key = { it.bvid },
-                                        loading = state.loading,
-                                        appending = state.appending,
-                                        hasMore = state.hasMore,
-                                        error = state.error?.let { stringResource(it) },
-                                        emptyText = stringResource(Res.string.night_mode_empty_videos),
-                                        onLoadMore = onLoadMore,
-                                        onRetry = onRetry,
-                                        contentPadding = listPadding,
-                                        header = {
-                                            Column(
-                                                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(
-                                                        top = Spacing.Tight,
-                                                        bottom = Spacing.Hair,
-                                                    ),
-                                            ) {
-                                                NightSanctuaryHeaderCard(
-                                                    manual = manual,
-                                                    endFormatted = endFormatted,
-                                                    rangeFormatted = rangeFormatted,
-                                                    onOpenOffline = onOpenOffline,
-                                                    modifier = Modifier.padding(
-                                                        horizontal = if (useGrid) {
-                                                            Spacing.Tight + GridCardOuterPadding
-                                                        } else {
-                                                            Spacing.Comfortable
-                                                        },
-                                                    ),
-                                                )
-                                                NightUpFilterBar(
-                                                    allowedUps = state.allowedUps,
-                                                    selectedMid = state.selectedMid,
-                                                    onSelectUp = onSelectUp,
-                                                    onOpenSpace = onOpenSpace,
-                                                    horizontalInset = if (useGrid) {
-                                                        Spacing.Tight + GridCardOuterPadding
-                                                    } else {
-                                                        Spacing.Comfortable
-                                                    },
-                                                )
-                                            }
-                                        },
-                                    ) { item ->
-                                        NightVideoCard(
-                                            item = item,
-                                            showUpName = state.selectedMid == null,
-                                            useGrid = useGrid,
-                                            wide = wide || useGrid,
-                                            onClick = { onVideoClick(item) },
-                                            onOpenSpace = onOpenSpace,
-                                            onAddToView = { onAddToView(item) },
-                                            modifier = if (useGrid) Modifier.padding(GridCardOuterPadding) else Modifier,
-                                        )
-                                    }
+                            RefreshBox(
+                                refreshing = state.refreshing,
+                                onRefresh = onRefresh,
+                                modifier = Modifier.fillMaxSize(),
+                            ) {
+                                PagedColumn(
+                                    layout = PagedLayout.Grid(effectiveColumns),
+                                    items = state.items,
+                                    key = { it.bvid },
+                                    loading = state.loading,
+                                    appending = state.appending,
+                                    hasMore = state.hasMore,
+                                    error = state.error?.let { stringResource(it) },
+                                    emptyText = stringResource(Res.string.night_mode_empty_videos),
+                                    onLoadMore = onLoadMore,
+                                    onRetry = onRetry,
+                                    contentPadding = listPadding,
+                                    header = {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(
+                                                    top = Spacing.Tight,
+                                                    bottom = Spacing.Hair,
+                                                ),
+                                        ) {
+                                            NightUpFilterBar(
+                                                allowedUps = state.allowedUps,
+                                                selectedMid = state.selectedMid,
+                                                onSelectUp = onSelectUp,
+                                                onOpenSpace = onOpenSpace,
+                                                horizontalInset = if (useGrid) {
+                                                    Spacing.Tight + GridCardOuterPadding
+                                                } else {
+                                                    Spacing.Comfortable
+                                                },
+                                            )
+                                        }
+                                    },
+                                ) { item ->
+                                    NightVideoCard(
+                                        item = item,
+                                        showUpName = state.selectedMid == null,
+                                        useGrid = useGrid,
+                                        wide = wide || useGrid,
+                                        onClick = { onVideoClick(item) },
+                                        onOpenSpace = onOpenSpace,
+                                        onAddToView = { onAddToView(item) },
+                                        modifier = if (useGrid) Modifier.padding(GridCardOuterPadding) else Modifier,
+                                    )
                                 }
                             }
                         }
@@ -380,78 +341,6 @@ fun NightModeScreen(
                 },
                 onDismiss = { showExitHoldSheet = false },
             )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun NightSanctuaryHeaderCard(
-    manual: Boolean,
-    endFormatted: String,
-    rangeFormatted: String,
-    onOpenOffline: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val label = if (manual) {
-        stringResource(Res.string.night_mode_sanctuary_manual, endFormatted)
-    } else {
-        stringResource(Res.string.night_mode_sanctuary_scheduled, rangeFormatted)
-    }
-    Surface(
-        shape = MaterialTheme.shapes.largeIncreased,
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-        ) {
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                contentColor = MaterialTheme.colorScheme.primary,
-            ) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier.size(SanctuaryBadgeSize),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Bedtime,
-                        contentDescription = null,
-                        modifier = Modifier.size(Dimens.IconInline),
-                    )
-                }
-            }
-            Text(
-                text = label,
-                style = MaterialTheme.typography.titleSmallEmphasized.tabular,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            FilledTonalButton(
-                onClick = onOpenOffline,
-                shape = CircleShape,
-                contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.DownloadForOffline,
-                    contentDescription = null,
-                    modifier = Modifier.size(Dimens.IconInline),
-                )
-                Text(
-                    text = stringResource(Res.string.offline_title),
-                    style = MaterialTheme.typography.labelLargeEmphasized,
-                    maxLines = 1,
-                    modifier = Modifier.padding(start = Spacing.Hair),
-                )
-            }
         }
     }
 }
@@ -642,5 +531,4 @@ private fun NightVideoCard(
     }
 }
 
-private val SanctuaryBadgeSize = 36.dp
 private val GridCardOuterPadding = 2.dp

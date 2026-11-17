@@ -36,6 +36,7 @@ import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.FastForward
 import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.HistoryToggleOff
 import androidx.compose.material.icons.outlined.HourglassEmpty
 import androidx.compose.material.icons.outlined.Info
@@ -52,6 +53,7 @@ import androidx.compose.material.icons.outlined.Preview
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SignalCellularAlt
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.Speed
@@ -165,6 +167,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.bilby.data.AppearancePrefs
+import dev.bilby.data.StartTab
 import dev.bilby.data.ThemeMode
 import dev.bilby.ui.AppLanguage
 import dev.bilby.ui.LocalSystemActions
@@ -220,9 +223,20 @@ private fun SettingsSubPage(
     // pinned 而不是 enterAlways:顶栏留着不动,只在内容滚起来之后换一档容器色。各页的内容
     // 都短,滚起来的那一下顶栏跟着一起走反而像页面跳了一下。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    val scrollState = rememberScrollState()
+    LaunchedEffect(scrollState.value == 0) {
+        if (scrollState.value == 0) {
+            scrollBehavior.state.contentOffset = 0f
+        }
+    }
     Scaffold(
-        topBar = { BilbyTopBar(title = title, onBack = onBack, scrollBehavior = scrollBehavior) },
-        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        containerColor = MaterialTheme.colorScheme.surface,
+        topBar = {
+            SettingsTopBarTheme {
+                BilbyTopBar(title = title, onBack = onBack, scrollBehavior = scrollBehavior)
+            }
+        },
+        modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
     ) { insets ->
         AdaptiveContent(
             modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets),
@@ -231,7 +245,7 @@ private fun SettingsSubPage(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
+                    .verticalScroll(scrollState)
                     .padding(bottom = Spacing.Spacious + navigationBarsBottom()),
             ) {
                 if (ready) content()
@@ -646,6 +660,9 @@ fun AppearanceSettingsPage(
     onModeChange: (ThemeMode) -> Unit,
     onPureBlackChange: (Boolean) -> Unit,
     onPaletteChange: (String) -> Unit,
+    onStartTabChange: (StartTab) -> Unit = {},
+    onSearchLandingChange: (Boolean) -> Unit = {},
+    onVideoGridColumnsChange: (Int) -> Unit = {},
     onLanguageChange: (AppLanguage) -> Unit,
     onBack: (() -> Unit)?,
 ) {
@@ -670,6 +687,25 @@ fun AppearanceSettingsPage(
             row { position ->
                 PaletteRow(position = position, selected = appearance.palette, onSelect = onPaletteChange)
             }
+            row { position ->
+                StartTabRow(position = position, selected = appearance.startTab, onSelect = onStartTabChange)
+            }
+            row { position ->
+                ToggleSettingRow(
+                    position = position,
+                    icon = Icons.Outlined.Search,
+                    title = stringResource(Res.string.settings_search_landing),
+                    checked = appearance.searchLanding,
+                    onCheckedChange = onSearchLandingChange,
+                )
+            }
+            row { position ->
+                VideoGridColumnsRow(
+                    position = position,
+                    selected = appearance.videoGridColumns,
+                    onSelect = onVideoGridColumnsChange,
+                )
+            }
             if (supportsLanguageSwitch) {
                 row { position ->
                     ChoiceRow(
@@ -693,6 +729,84 @@ private val ThemeMode.label: StringResource
         ThemeMode.Light -> Res.string.settings_theme_light
         ThemeMode.Dark -> Res.string.settings_theme_dark
     }
+
+private val StartTab.label: StringResource
+    get() = when (this) {
+        StartTab.Feed -> Res.string.tab_feed
+        StartTab.Search -> Res.string.tab_search
+        StartTab.Profile -> Res.string.tab_profile
+    }
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun StartTabRow(position: RowPosition, selected: StartTab, onSelect: (StartTab) -> Unit) {
+    val options = StartTab.entries
+    ControlSettingRow(
+        position = position,
+        icon = Icons.Outlined.Start,
+        title = stringResource(Res.string.settings_start_tab),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+            modifier = Modifier.fillMaxWidth().selectableGroup(),
+        ) {
+            options.forEachIndexed { index, option ->
+                ToggleButton(
+                    checked = option == selected,
+                    onCheckedChange = { onSelect(option) },
+                    shapes = when (index) {
+                        0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                        options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                        else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                    },
+                    contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                    modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
+                ) {
+                    Text(stringResource(option.label), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun VideoGridColumnsRow(position: RowPosition, selected: Int, onSelect: (Int) -> Unit) {
+    val options = AppearancePrefs.VIDEO_GRID_COLUMN_OPTIONS
+    val effective = selected.coerceIn(AppearancePrefs.MIN_VIDEO_GRID_COLUMNS, AppearancePrefs.MAX_VIDEO_GRID_COLUMNS)
+    ControlSettingRow(
+        position = position,
+        icon = Icons.Outlined.GridView,
+        title = stringResource(Res.string.settings_video_grid_columns),
+        value = stringResource(Res.string.settings_video_grid_columns_subtitle),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+            modifier = Modifier.fillMaxWidth().selectableGroup(),
+        ) {
+            options.forEachIndexed { index, count ->
+                ToggleButton(
+                    checked = count == effective,
+                    onCheckedChange = { onSelect(count) },
+                    shapes = when (index) {
+                        0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                        options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                        else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                    },
+                    contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                    modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
+                ) {
+                    Text(
+                        text = count.toString(),
+                        style = LocalTextStyle.current.tabular,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
 
 /**
  * 明暗三档,连体按钮组。写法与播放器设置面板的 ConnectedChoices 相同:各格等宽,

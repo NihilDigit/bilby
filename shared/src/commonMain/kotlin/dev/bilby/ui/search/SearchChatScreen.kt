@@ -2,9 +2,12 @@ package dev.bilby.ui.search
 
 import dev.bilby.ui.BackHandler
 import dev.bilby.ui.CaptionDragHeight
+import dev.bilby.ui.CaptionSlot
+import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.windowDragArea
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -29,10 +32,11 @@ import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -79,7 +83,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -87,7 +98,6 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import dev.bilby.resources.*
@@ -116,6 +126,7 @@ import dev.bilby.ui.components.rememberBottomFollow
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.LocalIsDarkTheme
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.rememberFlexFont
 import kotlin.math.roundToInt
 
 enum class SearchMode { Normal, Agent }
@@ -190,13 +201,16 @@ fun SearchChatScreen(
     onHistoryRemove: (String) -> Unit = {},
     onHistoryClear: () -> Unit = {},
     onSuggestionClick: (String) -> Unit = {},
+    /** 空闲态是否使用居中品牌搜索着陆页;关闭时退回经典顶栏搜索页。 */
+    searchLanding: Boolean = true,
+    /** 从搜索结果退回着陆页/初始搜索页(系统返回键或底栏再点搜索 tab)。 */
+    onBackToLanding: () -> Unit = {},
     /** 快捷键(`Ctrl+F` / `/`)请求聚焦主搜索框的计数器。 */
     focusSearchNonce: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val windowSize = rememberBilbyWindowSize()
     val wide = windowSize.isAtLeast(BilbyWindowSize.Expanded)
-    val mediumOrWider = windowSize.isAtLeast(BilbyWindowSize.Medium)
     val focusManager = LocalFocusManager.current
     // **发送要收焦点。** 历史盖在结果上的判据之一就是"光标在输入框里"(见 NormalSearch),
     // 而发送不动焦点,于是搜完之后这一屏还停在历史上。点历史、问助理同理。
@@ -216,7 +230,6 @@ fun SearchChatScreen(
             onSearch = search,
             onAskAgent = askAgent.takeIf { agentAvailable },
             wide = wide,
-            mediumOrWider = mediumOrWider,
             panelToggle = panelToggle,
             actions = resultActions,
             history = searchHistory,
@@ -230,6 +243,11 @@ fun SearchChatScreen(
             onSuggestionClick = { term ->
                 focusManager.clearFocus()
                 onSuggestionClick(term)
+            },
+            searchLanding = searchLanding,
+            onBackToLanding = {
+                focusManager.clearFocus()
+                onBackToLanding()
             },
             focusSearchNonce = focusSearchNonce,
         )
@@ -288,9 +306,25 @@ private val AgentPanelMinWidth = 320.dp
 /** 宽屏搜索栏的最大宽度。再宽,左端的放大镜和右端的清除键就隔得太远,一眼看不全。 */
 private val SearchBarMaxWidth = 720.dp
 
-/** `Medium+` 空闲态居中主视觉搜索容器的最大宽度。 */
-private val SearchHeroMaxWidth = 640.dp
-private val SearchHeroIconBoxSize = 52.dp
+/** 搜索着陆页上留白与下内容区的纵向比例(2:3),输入法弹出时整列等比压缩。 */
+private const val LandingTopWeight = 2f
+private const val LandingBottomWeight = 3f
+
+/** 品牌图标尺寸(对应 `docs/icon.svg` 108x108 画布)。 */
+private val BrandLockupIconCompact = 44.dp
+private val BrandLockupIconWide = 52.dp
+private const val BilbyIconViewport = 108f
+private const val BilbyIconCornerRadius = 24f
+private const val BilbyIconEarStrokeWidth = 8f
+private const val BilbyIconBodyPath =
+    "M39,40 H54.5 A10.5,10.5 0 0 1 54.5,61 H56.5 A11.5,11.5 0 0 1 56.5,84 H39 Z " +
+        "M56,46.1 A2.4,2.9 0 0 1 56,51.9 A2.4,2.9 0 0 1 56,46.1 Z " +
+        "M57.75,47.9 A0.85,0.85 0 0 1 56.05,47.9 A0.85,0.85 0 0 1 57.75,47.9 Z"
+private const val BilbyIconLeftEarPath = "M45,41 C43,35.5 41.5,32 41,28"
+private const val BilbyIconRightEarPath = "M56,41 C58.5,35.5 60.8,31.5 62,28"
+
+/** 着陆页内嵌搜索栏抑制标题栏槽位时使用的空槽位。 */
+private val EmptyCaptionSlot = CaptionSlot(Modifier, null)
 
 /** 搜索栏行尾那颗侧栏开关的宽度(M3 图标按钮的触控格)。 */
 private val PanelToggleWidth = 48.dp
@@ -324,11 +358,11 @@ private fun AgentTopBar(onBack: () -> Unit) {
 }
 
 /**
- * 普通搜索:搜索栏,下面是历史或结果。
+ * 普通搜索:空闲态默认展示品牌着陆页(窄宽窗口皆然),搜出查询词后切换为顶栏 + 结果列表;
+ * 若在外观设置里关闭了「搜索着陆页」,则直接退回经典顶栏空搜索页。
  *
  * **聚焦时就是 M3 search 的展开态**,建议(这里是历史)的摆法按窗口分:窄屏整块换成历史
  * (full-screen 布局),宽屏从搜索栏下方垂下一张卡,底下的结果盖一层 scrim(docked 布局)。
- * search.md 原话是紧凑窗口用前者,中等以上换后者。
  *
  * 窄屏的搜索栏随列表上滑收起、下滑露出(search.md Scroll 一节的第一种),结果多占一截屏。
  * 宽屏不收:竖向不缺那 64dp,而侧栏开关长在这一行上。
@@ -342,7 +376,6 @@ private fun NormalSearch(
     onSearch: () -> Unit,
     onAskAgent: (() -> Unit)?,
     wide: Boolean,
-    mediumOrWider: Boolean,
     panelToggle: (@Composable () -> Unit)?,
     actions: SearchResultActions,
     history: List<String>,
@@ -351,24 +384,28 @@ private fun NormalSearch(
     onHistoryClear: () -> Unit,
     suggestions: List<SearchSuggestion>,
     onSuggestionClick: (String) -> Unit,
+    searchLanding: Boolean = true,
+    onBackToLanding: () -> Unit = {},
     focusSearchNonce: Int = 0,
 ) {
     var barFocused by remember { mutableStateOf(false) }
     var panelFocused by remember { mutableStateOf(false) }
     var historyDialogOpen by remember { mutableStateOf(false) }
-    val focused = barFocused || (!wide && panelFocused) || historyDialogOpen
+    val inLanding = state.query.isEmpty() && searchLanding
+    val focused = barFocused || ((!wide || inLanding) && panelFocused) || historyDialogOpen
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val searchFocusRequester = remember { FocusRequester() }
-    LaunchedEffect(wide) {
-        if (wide) panelFocused = false
+    LaunchedEffect(wide, inLanding) {
+        if (wide && !inLanding) panelFocused = false
     }
     LaunchedEffect(focusSearchNonce) {
         if (focusSearchNonce > 0) {
             runCatching { searchFocusRequester.requestFocus() }
         }
     }
-    // 展开态(搜索栏或建议面板有焦点)时,返回先收起,不直接离开这一页。
+    // 结果态未聚焦时,系统返回先退回着陆页/初始搜索页;展开态(搜索栏或建议面板有焦点)先收起焦点。
+    BackHandler(enabled = state.query.isNotEmpty() && !focused) { onBackToLanding() }
     BackHandler(enabled = focused) { focusManager.clearFocus() }
 
     // 宽屏的助理是常驻侧栏,不要这个按钮(见 [AskAgentFab])。
@@ -409,54 +446,76 @@ private fun NormalSearch(
         else -> null
     }
 
-    // Medium+ / Expanded+ 空闲态:居中主视觉搜索区(Search Hero),顶部仅保留桌面窗口拖曳槽与侧栏开关。
-    if (mediumOrWider && state.query.isEmpty()) {
+    val bar: @Composable ((@Composable (Modifier) -> Unit)?) -> Unit = { dropdown ->
+        SearchBarRow(
+            input = input,
+            onInputChange = onInputChange,
+            onSearch = onSearch,
+            focused = focused,
+            onFocusChange = { barFocused = it },
+            onCollapse = { focusManager.clearFocus() },
+            // 宽屏与着陆页居中框不给返回箭头:前者点 scrim 收起,后者框在画面中央。
+            showBack = !wide && !inLanding,
+            wide = wide,
+            inLanding = inLanding,
+            trailing = panelToggle.takeUnless { inLanding },
+            dropdown = dropdown,
+            focusRequester = searchFocusRequester,
+        )
+    }
+    val scrollingPanel: @Composable (@Composable (Modifier) -> Unit, Boolean, Boolean) -> Unit =
+        { panel, trackFocus, applyImePadding ->
+            val focusMod = if (trackFocus) {
+                Modifier.onFocusChanged { panelFocused = it.hasFocus }
+            } else {
+                Modifier
+            }
+            val imeMod = if (applyImePadding) Modifier.imePadding() else Modifier
+            if (wide) {
+                val reserveToggle = !inLanding && panelToggle != null
+                Row(
+                    modifier = focusMod
+                        .fillMaxSize()
+                        .padding(
+                            start = Spacing.Comfortable,
+                            end = if (reserveToggle) Spacing.Hair else Spacing.Comfortable,
+                        ),
+                ) {
+                    Box(modifier = Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
+                        panel(
+                            Modifier
+                                .widthIn(max = SearchBarMaxWidth)
+                                .fillMaxSize()
+                                .then(imeMod)
+                                .verticalScroll(rememberScrollState()),
+                        )
+                    }
+                    if (reserveToggle) Spacer(Modifier.width(PanelToggleWidth))
+                }
+            } else {
+                panel(focusMod.fillMaxSize().then(imeMod).verticalScroll(rememberScrollState()))
+            }
+        }
+
+    if (inLanding) {
+        val landingPanel: (@Composable (Modifier) -> Unit)? = when {
+            typing -> suggestionDropdown
+            history.isNotEmpty() -> historyPanel
+            else -> null
+        }
         Box(modifier = Modifier.fillMaxSize()) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                HeroTopChrome(wide = wide, trailing = panelToggle)
-                BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    val viewportHeight = maxHeight
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = viewportHeight)
-                            .verticalScroll(rememberScrollState())
-                            .imePadding()
-                            .padding(horizontal = Spacing.Loose, vertical = Spacing.Comfortable),
-                    ) {
-                        Spacer(modifier = Modifier.weight(0.75f))
-                        SearchIdleHeroHeader(wide = wide)
-                        Spacer(modifier = Modifier.height(Spacing.Loose))
-                        DockedSurface(
-                            dropdown = suggestionDropdown.takeIf { typing },
-                            modifier = Modifier
-                                .widthIn(max = SearchHeroMaxWidth)
-                                .fillMaxWidth()
-                                .onFocusChanged { barFocused = it.hasFocus },
-                        ) {
-                            SearchField(
-                                value = input,
-                                onValueChange = onInputChange,
-                                placeholder = stringResource(Res.string.search_empty),
-                                onSearch = onSearch,
-                                focusRequester = searchFocusRequester,
-                            )
-                        }
-                        if (!typing && history.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(Spacing.Comfortable))
-                            Surface(
-                                shape = MaterialTheme.shapes.largeIncreased,
-                                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                                modifier = Modifier
-                                    .widthIn(max = SearchHeroMaxWidth)
-                                    .fillMaxWidth()
-                                    .onFocusChanged { panelFocused = it.hasFocus },
-                            ) {
-                                historyPanel(Modifier.fillMaxWidth())
-                            }
-                        }
-                        Spacer(modifier = Modifier.weight(1.25f))
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxSize().imePadding(),
+            ) {
+                LandingTopBar(wide = wide, trailing = panelToggle)
+                Spacer(modifier = Modifier.weight(LandingTopWeight))
+                BilbyBrandLockup(wide = wide)
+                Spacer(modifier = Modifier.height(Spacing.Loose))
+                bar(null)
+                Box(modifier = Modifier.weight(LandingBottomWeight).fillMaxWidth()) {
+                    landingPanel?.let { panel ->
+                        scrollingPanel(panel, true, false)
                     }
                 }
             }
@@ -473,50 +532,13 @@ private fun NormalSearch(
         return
     }
 
-    val bar: @Composable ((@Composable (Modifier) -> Unit)?) -> Unit = { dropdown ->
-        SearchBarRow(
-            input = input,
-            onInputChange = onInputChange,
-            onSearch = onSearch,
-            focused = focused,
-            onFocusChange = { barFocused = it },
-            onCollapse = { focusManager.clearFocus() },
-            // 宽屏不给返回箭头:docked 布局点 scrim 就收起,箭头在桌面上是多余的一格。
-            showBack = !wide,
-            wide = wide,
-            trailing = panelToggle,
-            dropdown = dropdown,
-            focusRequester = searchFocusRequester,
-        )
-    }
-    val scrollingPanel: @Composable (@Composable (Modifier) -> Unit, Boolean) -> Unit = { panel, trackFocus ->
-        val focusMod = if (trackFocus) {
-            Modifier.onFocusChanged { panelFocused = it.hasFocus }
-        } else {
-            Modifier
-        }
-        if (wide) {
-            Row(
-                modifier = focusMod
-                    .fillMaxSize()
-                    .padding(start = Spacing.Comfortable, end = if (panelToggle != null) Spacing.Hair else Spacing.Comfortable),
-            ) {
-                Box(modifier = Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
-                    panel(Modifier.widthIn(max = SearchBarMaxWidth).fillMaxSize().imePadding().verticalScroll(rememberScrollState()))
-                }
-                if (panelToggle != null) Spacer(Modifier.width(PanelToggleWidth))
-            }
-        } else {
-            panel(focusMod.fillMaxSize().imePadding().verticalScroll(rememberScrollState()))
-        }
-    }
     val body: @Composable () -> Unit = {
         when {
             // 窄屏展开态:整块换成补全或历史(full-screen 布局)。
-            !wide && focused && focusPanel != null -> scrollingPanel(focusPanel, true)
+            !wide && focused && focusPanel != null -> scrollingPanel(focusPanel, true, true)
 
             // 还没搜过时历史就是正文。
-            state.query.isEmpty() && history.isNotEmpty() -> scrollingPanel(historyPanel, false)
+            state.query.isEmpty() && history.isNotEmpty() -> scrollingPanel(historyPanel, false, true)
 
             state.query.isEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 EmptyState(
@@ -574,14 +596,18 @@ private fun NormalSearch(
     }
 }
 
+/**
+ * 着陆页顶部唯一承接桌面窗口拖曳区、窗口按钮(`— □ ×`)与宽屏助理侧栏开关的一行。
+ * 搜索框本身在画面中部,通过 `inLanding = true` 抑制 `rememberCaptionSlot()`,绝不画第二套窗口按钮。
+ */
 @Composable
-private fun HeroTopChrome(
+private fun LandingTopBar(
     wide: Boolean,
     trailing: (@Composable () -> Unit)?,
 ) {
+    if (LocalWindowCaption.current == null && trailing == null) return
     val captionSlot = rememberCaptionSlot()
     val hasTrailing = trailing != null || captionSlot.buttons != null
-    if (!captionSlot.atTop && !hasTrailing) return
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = captionSlot.modifier
@@ -605,43 +631,62 @@ private fun HeroTopChrome(
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+/**
+ * 搜索着陆页的品牌组合标志:`docs/icon.svg` 兔耳 B 字圆角图标 + Roboto Flex 排印的 `Bilby` 字标。
+ * 下方不挂任何重复说明文字。
+ */
 @Composable
-private fun SearchIdleHeroHeader(wide: Boolean) {
-    val colors = MaterialTheme.colorScheme
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+private fun BilbyBrandLockup(wide: Boolean) {
+    val wordmarkFont = rememberFlexFont(weight = 800f, width = 115f, ink = 0.1f)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(if (wide) Spacing.Comfortable else Spacing.Cozy),
     ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(SearchHeroIconBoxSize)
-                .clip(MaterialTheme.shapes.large)
-                .background(colors.secondaryContainer),
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.Search,
-                contentDescription = null,
-                tint = colors.onSecondaryContainer,
-                modifier = Modifier.size(Dimens.IconAction),
-            )
+        BilbyBrandIcon(size = if (wide) BrandLockupIconWide else BrandLockupIconCompact)
+        Text(
+            text = stringResource(Res.string.app_name),
+            fontFamily = wordmarkFont,
+            fontSize = if (wide) 40.sp else 34.sp,
+            lineHeight = if (wide) 44.sp else 38.sp,
+            letterSpacing = (-0.5).sp,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun BilbyBrandIcon(
+    size: Dp,
+    modifier: Modifier = Modifier,
+) {
+    val containerColor = MaterialTheme.colorScheme.primary
+    val contentColor = MaterialTheme.colorScheme.onPrimary
+    val bodyPath = remember {
+        PathParser().parsePathString(BilbyIconBodyPath).toPath().apply {
+            fillType = PathFillType.EvenOdd
         }
-        Text(
-            text = stringResource(Res.string.tab_search),
-            style = if (wide) {
-                MaterialTheme.typography.displaySmallEmphasized
-            } else {
-                MaterialTheme.typography.headlineMediumEmphasized
-            },
-            color = colors.onSurface,
-        )
-        Text(
-            text = stringResource(Res.string.search_empty),
-            style = MaterialTheme.typography.bodyMedium,
-            color = colors.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
+    }
+    val leftEarPath = remember { PathParser().parsePathString(BilbyIconLeftEarPath).toPath() }
+    val rightEarPath = remember { PathParser().parsePathString(BilbyIconRightEarPath).toPath() }
+    Canvas(modifier = modifier.size(size)) {
+        withTransform({
+            scale(
+                scaleX = this.size.width / BilbyIconViewport,
+                scaleY = this.size.height / BilbyIconViewport,
+                pivot = Offset.Zero,
+            )
+        }) {
+            drawRoundRect(
+                color = containerColor,
+                size = Size(BilbyIconViewport, BilbyIconViewport),
+                cornerRadius = CornerRadius(BilbyIconCornerRadius, BilbyIconCornerRadius),
+            )
+            drawPath(path = bodyPath, color = contentColor)
+            val earStroke = Stroke(width = BilbyIconEarStrokeWidth, cap = StrokeCap.Round)
+            drawPath(path = leftEarPath, color = contentColor, style = earStroke)
+            drawPath(path = rightEarPath, color = contentColor, style = earStroke)
+        }
     }
 }
 
@@ -657,12 +702,14 @@ private fun SearchBarRow(
     showBack: Boolean,
     wide: Boolean,
     trailing: (@Composable () -> Unit)?,
+    /** 着陆页中部的搜索栏不接管窗口标题栏槽位,避免与 [LandingTopBar] 重复渲染窗口按钮。 */
+    inLanding: Boolean = false,
     /** 宽屏展开态接在框下面的那一截(补全或历史),见 [DockedSurface]。 */
     dropdown: (@Composable (Modifier) -> Unit)? = null,
     focusRequester: FocusRequester? = null,
 ) {
     val back = showBack && focused
-    val captionSlot = rememberCaptionSlot()
+    val captionSlot = if (inLanding) EmptyCaptionSlot else rememberCaptionSlot()
     val hasTrailing = trailing != null || captionSlot.buttons != null
     Row(
         verticalAlignment = Alignment.Top,
@@ -672,8 +719,8 @@ private fun SearchBarRow(
                 start = if (back) Spacing.Hair else Spacing.Comfortable,
                 end = if (hasTrailing) Spacing.Hair else Spacing.Comfortable,
             )
-            // 宽屏的上边距由外层给(见 SearchChatScreen),框与侧栏卡片同一条上沿。
-            .padding(top = if (wide) 0.dp else Spacing.Tight, bottom = Spacing.Tight),
+            // 宽屏与着陆页的上边距由外层给,框与侧栏卡片同一条上沿。
+            .padding(top = if (wide || inLanding) 0.dp else Spacing.Tight, bottom = Spacing.Tight),
     ) {
         if (back) {
             val backLabel = stringResource(Res.string.action_back)
@@ -683,7 +730,7 @@ private fun SearchBarRow(
                 }
             }
         }
-        // 宽屏框居中、限宽;两侧留出的大片空白登记为窗口拖动区,侧栏开关与窗口按钮在行尾。
+        // 宽屏框居中、限宽;顶栏模式下两侧留出的大片空白登记为窗口拖动区,侧栏开关与窗口按钮在行尾。
         if (wide) {
             Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.Top) {
                 Spacer(
@@ -1270,6 +1317,20 @@ private fun previewTrace(bvid: String, title: String) = TraceItem(
     coverUrl = "https://i0.hdslb.com/bfs/archive/preview.jpg",
     upName = "某知名UP主",
 )
+
+@Preview
+@Composable
+private fun SearchChatScreenLandingPreview() {
+    BilbyTheme {
+        SearchChatScreen(
+            state = SearchChatUiState(),
+            onInputChange = {}, onSearch = {}, onAskAgent = {}, onLeaveAgent = {},
+            agentActions = PreviewAgentActions, resultActions = PreviewResultActions,
+            searchHistory = listOf("宝可梦朱紫", "Compose Multiplatform", "音速小子"),
+            agentAvailable = true,
+        )
+    }
+}
 
 @Preview
 @Composable

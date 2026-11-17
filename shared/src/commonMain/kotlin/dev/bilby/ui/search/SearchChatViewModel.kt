@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.StringResource
@@ -151,6 +152,8 @@ class SearchChatViewModel(
 
     private var suggestJob: Job? = null
 
+    private var searchResolveJob: Job? = null
+
     /**
      * 改字时顺带取补全词。防抖 200ms,照 PiliPlus `pages/search/controller.dart`:每敲一个字
      * 都发一次,打一个词就是五六个请求,前面几个的结果还没画出来就作废了。补全只在输入框里
@@ -184,6 +187,19 @@ class SearchChatViewModel(
     fun leaveAgent() = _state.update { it.copy(mode = SearchMode.Normal) }
 
     /**
+     * 重按搜索 tab 或在结果页返回:清掉当前查询、输入框及可能还在跑的补全/短链展开协程,
+     * 翻回着陆页(或空白搜索页)。助理那一屏开着的话一并退回普通模式;助理的对话不动,它有自己的会话。
+     */
+    fun backToLanding() {
+        suggestJob?.cancel()
+        suggestJob = null
+        searchResolveJob?.cancel()
+        searchResolveJob = null
+        normal.clear()
+        _state.update { it.copy(input = "", suggestions = emptyList(), mode = SearchMode.Normal) }
+    }
+
+    /**
      * 普通搜索是一次查询一份结果,不累积轮次:它就是一个搜索页。留着上一次的结果只会让人往上翻,
      * 而翻上去的东西和这次要找的无关。排序沿用上一次选的那档 —— 新起一份 NormalSearchState()
      * 会把它悄悄弹回综合。
@@ -195,6 +211,9 @@ class SearchChatViewModel(
         val query = _state.value.input.trim()
         if (query.isEmpty()) return
         suggestJob?.cancel()
+        suggestJob = null
+        searchResolveJob?.cancel()
+        searchResolveJob = null
         _state.update { it.copy(input = query, suggestions = emptyList()) }
 
         // 编号与链接直接打开,不记进历史:一条粘贴进来的链接再点一次的机会几乎没有,
@@ -205,9 +224,12 @@ class SearchChatViewModel(
         }
         val link = BilbyLink.extractUrl(query)
         if (link != null && BilbyLink.isShortLink(link)) {
-            viewModelScope.launch {
+            searchResolveJob = viewModelScope.launch {
                 val destination = runCatching { resolveShortLink(link) }
-                    .onFailure { BiliLog.w("搜索框里的短链展开失败", it) }
+                    .onFailure {
+                        if (it is CancellationException) throw it
+                        BiliLog.w("搜索框里的短链展开失败", it)
+                    }
                     .getOrNull()
                     ?.let(BilbyLink::destinationOf)
                 // 展开失败或指向站内没有的页面(番剧之类)时照常搜,至少给一页结果。

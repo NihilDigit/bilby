@@ -255,7 +255,16 @@ class SettingsStore(private val store: DataStore<Preferences>) {
                 ?: ThemeMode.System,
             pureBlack = p[KEY_PURE_BLACK] ?: false,
             palette = p[KEY_THEME_PALETTE] ?: AppearancePrefs.DYNAMIC,
+            startTab = p[KEY_START_TAB]?.let { name -> StartTab.entries.firstOrNull { it.name == name } }
+                ?: StartTab.Feed,
+            searchLanding = p[KEY_SEARCH_LANDING] ?: true,
+            videoGridColumns = (p[KEY_VIDEO_GRID_COLUMNS] ?: AppearancePrefs.DEFAULT_VIDEO_GRID_COLUMNS)
+                .coerceIn(AppearancePrefs.MIN_VIDEO_GRID_COLUMNS, AppearancePrefs.MAX_VIDEO_GRID_COLUMNS),
         )
+    }
+
+    val startTab: Flow<StartTab> = store.data.map { p ->
+        p[KEY_START_TAB]?.let { name -> StartTab.entries.firstOrNull { it.name == name } } ?: StartTab.Feed
     }
 
     suspend fun saveThemeMode(mode: ThemeMode) {
@@ -269,6 +278,19 @@ class SettingsStore(private val store: DataStore<Preferences>) {
     /** [AppearancePrefs.palette] 的取值:[AppearancePrefs.DYNAMIC] 或内置配色的名字。 */
     suspend fun saveThemePalette(palette: String) {
         store.edit { p -> p[KEY_THEME_PALETTE] = palette }
+    }
+
+    suspend fun saveStartTab(tab: StartTab) {
+        store.edit { p -> p[KEY_START_TAB] = tab.name }
+    }
+
+    suspend fun saveSearchLanding(enabled: Boolean) {
+        store.edit { p -> p[KEY_SEARCH_LANDING] = enabled }
+    }
+
+    suspend fun saveVideoGridColumns(columns: Int) {
+        val clamped = columns.coerceIn(AppearancePrefs.MIN_VIDEO_GRID_COLUMNS, AppearancePrefs.MAX_VIDEO_GRID_COLUMNS)
+        store.edit { p -> p[KEY_VIDEO_GRID_COLUMNS] = clamped }
     }
 
     /**
@@ -572,6 +594,9 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
         private val KEY_PURE_BLACK = booleanPreferencesKey("theme_pure_black")
         private val KEY_THEME_PALETTE = stringPreferencesKey("theme_palette")
+        private val KEY_START_TAB = stringPreferencesKey("start_tab")
+        private val KEY_SEARCH_LANDING = booleanPreferencesKey("search_landing")
+        private val KEY_VIDEO_GRID_COLUMNS = intPreferencesKey("video_grid_columns")
         private val KEY_SESSDATA = stringPreferencesKey("sessdata")
         private val KEY_BILI_JCT = stringPreferencesKey("bili_jct")
         private val KEY_DEDE_USER_ID = stringPreferencesKey("dede_user_id")
@@ -912,6 +937,9 @@ data class PlayerPrefs(
 /** 明暗。三档互斥;纯黑是深色之下的另一个开关,不是第四档,见 [AppearancePrefs.pureBlack]。 */
 enum class ThemeMode { System, Light, Dark }
 
+/** 冷启动时默认落到哪一栏:订阅、搜索或我的。默认保持 [Feed]。 */
+enum class StartTab { Feed, Search, Profile }
+
 data class AppearancePrefs(
     val mode: ThemeMode = ThemeMode.System,
     /**
@@ -926,9 +954,16 @@ data class AppearancePrefs(
      * 指到别的颜色上。
      */
     val palette: String = DYNAMIC,
+    val startTab: StartTab = StartTab.Feed,
+    val searchLanding: Boolean = true,
+    val videoGridColumns: Int = DEFAULT_VIDEO_GRID_COLUMNS,
 ) {
     companion object {
         const val DYNAMIC = "dynamic"
+        const val DEFAULT_VIDEO_GRID_COLUMNS = 5
+        const val MIN_VIDEO_GRID_COLUMNS = 3
+        const val MAX_VIDEO_GRID_COLUMNS = 7
+        val VIDEO_GRID_COLUMN_OPTIONS = listOf(3, 4, 5, 6, 7)
     }
 }
 
