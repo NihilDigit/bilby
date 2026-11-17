@@ -2,65 +2,74 @@ package dev.bilby.ui.fav
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Headphones
-import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Headphones as OutlinedHeadphones
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import dev.bilby.ui.components.ContextMenuBox
-import dev.bilby.ui.components.VideoCommonMenuItems
-import dev.bilby.ui.components.menuItemShape
-import dev.bilby.ui.components.videoCommonMenuItemCount
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import dev.bilby.stringResource
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.bilby.resources.*
-import org.jetbrains.compose.resources.StringResource
 import dev.bilby.api.BiliResult
 import dev.bilby.data.FavFolderDetail
 import dev.bilby.data.FavOrder
 import dev.bilby.data.FavRepository
 import dev.bilby.data.FavVideo
 import dev.bilby.formatDurationSeconds
-import dev.bilby.ui.AdaptiveContent
+import dev.bilby.resources.*
+import dev.bilby.stringResource
+import dev.bilby.ui.AdaptiveListContent
+import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.SortMenu
+import dev.bilby.ui.components.VideoCommonMenuItems
+import dev.bilby.ui.components.VideoGridCard
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.components.formatCount
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.rememberCopyAction
+import dev.bilby.ui.components.videoCommonMenuItemCount
 import dev.bilby.ui.errorTextRes
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 
 data class FavFolderUiState(
     val items: List<FavVideo> = emptyList(),
@@ -79,7 +88,7 @@ data class FavFolderUiState(
     val keyword: String = "",
     val appliedKeyword: String = "",
     val cleaning: Boolean = false,
-    /** 这个收藏夹刚被删掉。页面据此退回上一页,见 `MainActivity` 的 FavFolderRoute。 */
+    /** 这个收藏夹刚被删掉。页面据此退回上一页,见 `BilbyApp` 的 FavFolderRoute。 */
     val deleted: Boolean = false,
     val notice: FavNotice? = null,
 )
@@ -275,15 +284,16 @@ private val FavOrders = listOf(
     FavOrder.Pubtime to Res.string.fav_order_pubtime,
 )
 
+private val VideoGridMaxCellWidth = 320.dp
+
 /**
- * **snackbar 的宿主在这一页自己身上**,不在 `MainActivity` 的 `Scaffold` 上:清除失效内容的
- * 结果提示只有这一页有,为它把 `SnackbarHostState` 穿到导航层不值(同一条判断见 `MainActivity`
- * 里那段 Toast 的注释)。
+ * **snackbar 的宿主在这一页自己身上**,不在外层 `Scaffold` 上:清除失效内容的
+ * 结果提示只有这一页有,为它把 `SnackbarHostState` 穿到导航层不值。
  *
  * **行尾没有取消收藏的按钮。** 收藏夹是攒下来的东西,不像稍后再看要常常清;行尾常驻一个叉号,
- * 滑动时手指最容易碰到它。失效稿件的清理在 ⋮ 菜单的「清除失效内容」。
+ * 滑动时手指最容易碰到它。失效稿件的清理在菜单的「清除失效内容」。
  *
- * 顶栏(搜索、管理菜单)在 [FavFolderTopBar],这里是页头与列表。
+ * 顶栏(搜索、管理菜单)在 [FavFolderTopBar],这里是概览页头卡与自适应列表/网格。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -306,6 +316,7 @@ fun FavFolderScreen(
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
+    val layoutDirection = LocalLayoutDirection.current
 
     val notice = state.notice
     val noticeText = notice?.let { it.text() }
@@ -317,86 +328,152 @@ fun FavFolderScreen(
 
     val firstPlayable = state.items.firstOrNull { it.playable }
     Box(modifier = modifier.fillMaxSize()) {
-        AdaptiveContent {
-            RefreshBox(
-                refreshing = state.refreshing,
-                onRefresh = onRefresh,
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                PagedColumn(
-                    items = state.items,
-                    key = { it.aid },
-                    loading = state.loading,
-                    appending = state.appending,
-                    hasMore = state.hasMore,
-                    error = state.error?.let { stringResource(it) },
-                    // 空是因为生效中的那个关键词没搜到东西,不是因为这个收藏夹是空的。
-                    emptyText = stringResource(
-                        if (state.appliedKeyword.isBlank()) Res.string.fav_empty else Res.string.fav_empty_search,
-                    ),
-                    onLoadMore = onLoadMore,
-                    onRetry = onRetry,
-                    contentPadding = contentPadding,
-                    header = {
-                        // 页头跟着列表一起滚走,理由同空间页投稿栏的表头。
-                        FolderHeader(
-                            info = state.info,
-                            order = state.order,
-                            canListen = firstPlayable != null,
-                            onListen = { firstPlayable?.let(onListen) },
-                            onOrderChanged = onOrderChanged,
-                        )
-                    },
-                ) { item ->
-                    val hasMenu = item.playable || item.upMid != 0L
-                    if (hasMenu) {
-                        ContextMenuBox(
-                            onClick = null,
-                            menuLabel = stringResource(Res.string.menu_item_actions),
-                            menu = { close ->
-                                val bvid = if (item.playable) item.bvid else ""
-                                val leadingCount = if (item.playable) 1 else 0
-                                val totalCount = leadingCount + videoCommonMenuItemCount(bvid, item.upMid, onUpClick)
-                                if (item.playable) {
-                                    DropdownMenuItem(
-                                        onClick = {
-                                            close()
-                                            onListen(item)
-                                        },
-                                        text = { Text(stringResource(Res.string.fav_listen)) },
-                                        leadingIcon = { Icon(Icons.Outlined.OutlinedHeadphones, contentDescription = null) },
-                                        shape = menuItemShape(0, totalCount),
+        AdaptiveListContent(
+            modifier = Modifier.fillMaxSize(),
+            maxCellWidth = VideoGridMaxCellWidth,
+        ) { columns ->
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val multiColumn = columns != GridCells.Fixed(1) && maxWidth >= Dimens.VideoGridMinCellWidth * 2
+                val effectiveColumns = if (multiColumn) columns else GridCells.Fixed(1)
+                val gridPadding = if (multiColumn) {
+                    PaddingValues(
+                        start = contentPadding.calculateStartPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                        top = contentPadding.calculateTopPadding(),
+                        end = contentPadding.calculateEndPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                        bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
+                    )
+                } else {
+                    contentPadding
+                }
+
+                RefreshBox(
+                    refreshing = state.refreshing,
+                    onRefresh = onRefresh,
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    PagedColumn(
+                        layout = PagedLayout.Grid(effectiveColumns),
+                        items = state.items,
+                        key = { it.aid },
+                        loading = state.loading,
+                        appending = state.appending,
+                        hasMore = state.hasMore,
+                        error = state.error?.let { stringResource(it) },
+                        // 空是因为生效中的那个关键词没搜到东西,不是因为这个收藏夹是空的。
+                        emptyText = stringResource(
+                            if (state.appliedKeyword.isBlank()) Res.string.fav_empty else Res.string.fav_empty_search,
+                        ),
+                        onLoadMore = onLoadMore,
+                        onRetry = onRetry,
+                        contentPadding = gridPadding,
+                        header = {
+                            // 页头卡片跟着列表一起滚走,理由同空间页投稿栏的表头。
+                            FolderHeader(
+                                info = state.info,
+                                order = state.order,
+                                canListen = firstPlayable != null,
+                                onListen = { firstPlayable?.let(onListen) },
+                                onOrderChanged = onOrderChanged,
+                                modifier = Modifier.padding(
+                                    horizontal = if (multiColumn) Spacing.Tight + 2.dp else Spacing.Comfortable,
+                                    vertical = Spacing.Tight,
+                                ),
+                            )
+                        },
+                    ) { item ->
+                        val rowUi = item.toRowUi()
+                        val bvid = if (item.playable) item.bvid else ""
+                        val copyFallbackTitle = bvid.isEmpty() && !item.invalid && item.title.isNotBlank()
+                        val hasMenu = item.playable || item.upMid != 0L || copyFallbackTitle
+
+                        if (hasMenu) {
+                            val copyTitleAction = rememberCopyAction()
+                            ContextMenuBox(
+                                onClick = null,
+                                menuLabel = stringResource(Res.string.menu_item_actions),
+                                menu = { close ->
+                                    val leadingCount = (if (item.playable) 1 else 0) + (if (copyFallbackTitle) 1 else 0)
+                                    val totalCount = leadingCount + videoCommonMenuItemCount(
+                                        bvid = bvid,
+                                        upMid = item.upMid,
+                                        onOpenUpSpace = onUpClick,
+                                        title = item.title,
+                                    )
+                                    var menuIndex = 0
+                                    if (item.playable) {
+                                        val listenIdx = menuIndex++
+                                        DropdownMenuItem(
+                                            onClick = {
+                                                close()
+                                                onListen(item)
+                                            },
+                                            text = { Text(stringResource(Res.string.fav_listen)) },
+                                            leadingIcon = {
+                                                Icon(Icons.Outlined.OutlinedHeadphones, contentDescription = null)
+                                            },
+                                            shape = menuItemShape(listenIdx, totalCount),
+                                        )
+                                    }
+                                    if (copyFallbackTitle) {
+                                        val copyIdx = menuIndex++
+                                        DropdownMenuItem(
+                                            onClick = {
+                                                close()
+                                                copyTitleAction(item.title)
+                                            },
+                                            text = { Text(stringResource(Res.string.action_copy_title)) },
+                                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                                            shape = menuItemShape(copyIdx, totalCount),
+                                        )
+                                    }
+                                    VideoCommonMenuItems(
+                                        bvid = bvid,
+                                        title = item.title,
+                                        close = close,
+                                        upMid = item.upMid,
+                                        onOpenUpSpace = onUpClick,
+                                        coverUrl = item.coverUrl,
+                                        upName = item.upName,
+                                        durationSeconds = item.durationSeconds,
+                                        startIndex = leadingCount,
+                                        totalCount = totalCount,
+                                    )
+                                },
+                            ) { openMenu ->
+                                if (multiColumn) {
+                                    VideoGridCard(
+                                        ui = rowUi,
+                                        enabled = item.playable,
+                                        onClick = { if (item.playable) onItemClick(item) },
+                                        onLongClick = if (item.playable) openMenu else null,
+                                        onUpClick = if (item.upMid != 0L) ({ onUpClick(item.upMid) }) else null,
+                                        modifier = Modifier.padding(2.dp),
+                                    )
+                                } else {
+                                    VideoRow(
+                                        item = rowUi,
+                                        // 失效稿件、音频与剧集照常列出但不可点:前者悄悄隐藏会让人以为自己记错了
+                                        // 收藏过什么,后两者不在本应用的范围里(UGC-only)。
+                                        enabled = item.playable,
+                                        onClick = { if (item.playable) onItemClick(item) },
+                                        onLongClick = if (item.playable) openMenu else null,
                                     )
                                 }
-                                VideoCommonMenuItems(
-                                    bvid = bvid,
-                                    title = item.title,
-                                    close = close,
-                                    upMid = item.upMid,
-                                    onOpenUpSpace = onUpClick,
-                                    coverUrl = item.coverUrl,
-                                    upName = item.upName,
-                                    durationSeconds = item.durationSeconds,
-                                    startIndex = leadingCount,
-                                    totalCount = totalCount,
-                                )
-                            },
-                        ) { openMenu ->
-                            VideoRow(
-                                item = item.toRowUi(),
-                                // 失效稿件、音频与剧集照常列出但不可点:前者悄悄隐藏会让人以为自己记错了
-                                // 收藏过什么,后两者不在本应用的范围里(UGC-only)。
+                            }
+                        } else if (multiColumn) {
+                            VideoGridCard(
+                                ui = rowUi,
                                 enabled = item.playable,
                                 onClick = { if (item.playable) onItemClick(item) },
-                                onLongClick = if (item.playable) openMenu else null,
+                                modifier = Modifier.padding(2.dp),
+                            )
+                        } else {
+                            VideoRow(
+                                item = rowUi,
+                                enabled = item.playable,
+                                onClick = { if (item.playable) onItemClick(item) },
                             )
                         }
-                    } else {
-                        VideoRow(
-                            item = item.toRowUi(),
-                            enabled = item.playable,
-                            onClick = { if (item.playable) onItemClick(item) },
-                        )
                     }
                 }
             }
@@ -414,10 +491,11 @@ fun FavFolderScreen(
 }
 
 /**
- * 页头:简介、条数与公开性,下面一行是听收藏夹与排序。
+ * 收藏夹概览卡片:条数与公开性(等宽数字)、可选简介、听收藏夹按钮与排序下拉。
  *
  * 标题不在这里重复 —— 顶栏已经写着。简介为空时那一行不画,不给占位文案。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun FolderHeader(
     info: FavFolderDetail?,
@@ -425,51 +503,62 @@ private fun FolderHeader(
     canListen: Boolean,
     onListen: () -> Unit,
     onOrderChanged: (FavOrder) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        if (info != null) {
-            Column(
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-            ) {
-                if (info.intro.isNotBlank()) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.large,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            if (info != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
                     Text(
-                        text = info.intro,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        text = favFolderMeta(info),
+                        style = MaterialTheme.typography.titleSmallEmphasized.tabular,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    if (info.intro.isNotBlank()) {
+                        Text(
+                            text = info.intro,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilledTonalButton(
+                    onClick = onListen,
+                    enabled = canListen,
+                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
+                ) {
+                    Icon(
+                        Icons.Filled.Headphones,
+                        contentDescription = null,
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                    Text(
+                        stringResource(Res.string.fav_listen),
+                        style = MaterialTheme.typography.labelLargeEmphasized,
+                        modifier = Modifier.padding(start = Spacing.Hair + 2.dp),
                     )
                 }
-                Text(
-                    text = favFolderMeta(info),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Spacer(modifier = Modifier.weight(1f))
+                SortMenu(
+                    options = FavOrders,
+                    selected = order,
+                    onSelect = onOrderChanged,
                 )
             }
-        }
-        // 与空间页投稿栏、稍后再看同一个形状:左边听,右边排序,按文字基线对齐。
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Tight)) {
-            TextButton(
-                onClick = onListen,
-                enabled = canListen,
-                modifier = Modifier.alignByBaseline(),
-            ) {
-                Icon(
-                    Icons.Filled.Headphones,
-                    contentDescription = null,
-                    modifier = Modifier.size(Dimens.IconInline),
-                )
-                Text(
-                    stringResource(Res.string.fav_listen),
-                    modifier = Modifier.padding(start = Spacing.Tight),
-                )
-            }
-            Spacer(modifier = Modifier.weight(1f))
-            SortMenu(
-                options = FavOrders,
-                selected = order,
-                onSelect = onOrderChanged,
-                modifier = Modifier.alignByBaseline(),
-            )
         }
     }
 }

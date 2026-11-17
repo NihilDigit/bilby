@@ -6,22 +6,40 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,11 +47,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
-import dev.bilby.stringResource
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.formatDurationMillis
@@ -44,19 +65,28 @@ import dev.bilby.offline.OfflineStatus
 import dev.bilby.offline.OfflineStore
 import dev.bilby.player.isWatchedToEnd
 import dev.bilby.resources.*
+import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveListContent
+import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.EmptyState
+import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SectionHeader
+import dev.bilby.ui.components.VideoCommonMenuItems
+import dev.bilby.ui.components.VideoGridCard
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
+import dev.bilby.ui.components.chargingBadgeText
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.videoCommonMenuItemCount
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 /**
@@ -101,17 +131,18 @@ class OfflineViewModel(
     }
 }
 
+private val VideoGridMaxCellWidth = 320.dp
+
 /**
- * 缓存列表:能看、能播、能删。分两节 —— 正在缓存的在前,已缓存的在后。
+ * 缓存列表:能看、能播、能删。分两节 —— 正在缓存的在前,已缓存的在后,顶部提供统一概览控制卡。
  *
  * **在途的排在前面**,因为它们是这一页此刻唯一会变的东西,也是唯一可能需要人做点什么的
- * (失败了要重试);已缓存的是一份静止的存货。混排的话,几条在途的散在几十条已完成之间,
- * 进度要逐行去找。
+ * (失败了要重试);已缓存的是一份静止的存货。
  *
- * 复用 [VideoRow] 而不是另写一份行:风格指南 §2.7 的"一条视频在列表里的样子只有这一份"。
- * **封面底边的进度条只表示看到哪儿**,和稍后再看、历史记录同一个意思;下载进度只写在文字里。
- * 两种进度共用一条刻度的话,一行完成到 60% 的缓存和一行看到 60% 的视频长得一模一样。
+ * **封面底边的进度条只表示看到哪儿**,和稍后再看、历史记录同一个意思;正在下载的条目在行/卡底部单独画一条
+ * [LinearProgressIndicator],让两种进度语义互不混用。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun OfflineScreen(
     items: List<OfflineItem>,
@@ -123,10 +154,6 @@ fun OfflineScreen(
     onListenAll: (OfflineItem) -> Unit,
     /**
      * 已选中的条目 id,null 表示不在多选态。
-     *
-     * 不另设一个布尔:那样"空集合 + 还在多选态"是个画得出来、退不出去的组合。用 null 而不是
-     * 空集合当出口,是因为顶栏那个「多选」按钮要能在一个都没选的情况下进多选态 ——
-     * 拿"集合非空"当判据的话,这个入口无从表达。稍后再看的历史页是同一套(见 HistoryRoute)。
      */
     selectedIds: Set<String>? = null,
     onToggleSelection: (OfflineItem) -> Unit = {},
@@ -134,8 +161,12 @@ fun OfflineScreen(
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     var pendingDelete by remember { mutableStateOf<OfflineItem?>(null) }
+    val layoutDirection = LocalLayoutDirection.current
 
-    AdaptiveListContent(modifier = modifier) { columns ->
+    AdaptiveListContent(
+        modifier = modifier,
+        maxCellWidth = VideoGridMaxCellWidth,
+    ) { columns ->
         if (items.isEmpty()) {
             EmptyState(
                 message = stringResource(Res.string.offline_empty),
@@ -144,64 +175,82 @@ fun OfflineScreen(
             return@AdaptiveListContent
         }
 
-        val (completed, inFlight) = items.partition { it.status == OfflineStatus.Completed }
-        val rowScope = OfflineRowScope(
-            selectedIds = selectedIds,
-            onPlay = onPlay,
-            onRetry = onRetry,
-            onToggleSelection = onToggleSelection,
-            onDeleteRequest = { item ->
-                // **还没开始下的那条不问。** 确认框存在的理由是"删掉就要重下几百 MB",
-                // 而排队中的这条一个字节都还没下,取消它的代价是零 —— 再弹一次确认只是
-                // 让取消一批误选的条目变成点两下一条。
-                if (item.status == OfflineStatus.Queued) onDelete(item) else pendingDelete = item
-            },
-        )
-
-        LazyVerticalGrid(columns = columns, modifier = Modifier.fillMaxSize(), contentPadding = contentPadding) {
-            if (inFlight.isNotEmpty()) {
-                item(key = "header-in-flight", span = { GridItemSpan(maxLineSpan) }) {
-                    SectionHeader(
-                        title = stringResource(Res.string.offline_section_in_flight, inFlight.size),
-                        modifier = Modifier.padding(horizontal = Spacing.Comfortable).animateItem(),
-                    )
-                }
-                offlineRows(inFlight, rowScope)
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val multiColumn = columns != GridCells.Fixed(1) && maxWidth >= Dimens.VideoGridMinCellWidth * 2
+            val effectiveColumns = if (multiColumn) columns else GridCells.Fixed(1)
+            val gridPadding = if (multiColumn) {
+                PaddingValues(
+                    start = contentPadding.calculateStartPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                    top = contentPadding.calculateTopPadding(),
+                    end = contentPadding.calculateEndPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                    bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
+                )
+            } else {
+                contentPadding
             }
-            if (completed.isNotEmpty()) {
-                item(key = "header-completed", span = { GridItemSpan(maxLineSpan) }) {
-                    SectionHeader(
-                        title = stringResource(Res.string.offline_section_completed),
-                        // 标题行右端的 TextButton 自带内边距,这一侧的页边距让它来补。
-                        modifier = Modifier
-                            .padding(start = Spacing.Comfortable, end = Spacing.Tight)
-                            .animateItem(),
-                    ) {
-                        // 已用空间说的是整个缓存目录,在途的那几条也算在里面;放在这一节是因为
-                        // 它和"已缓存"是同一个问题的两个答案:存了什么、占了多少。
-                        Text(
-                            text = formatBytes(usedBytes),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            val headerHorizontalPadding = if (multiColumn) Spacing.Tight + 2.dp else Spacing.Comfortable
+
+            val (completed, inFlight) = items.partition { it.status == OfflineStatus.Completed }
+            val rowScope = OfflineRowScope(
+                selectedIds = selectedIds,
+                onPlay = onPlay,
+                onRetry = onRetry,
+                onToggleSelection = onToggleSelection,
+                onDeleteRequest = { item ->
+                    // **还没开始下的那条不问。** 确认框存在的理由是"删掉就要重下几百 MB",
+                    // 而排队中的这条一个字节都还没下,取消它的代价是零。
+                    if (item.status == OfflineStatus.Queued) onDelete(item) else pendingDelete = item
+                },
+            )
+
+            val gridState = rememberLazyGridState()
+            Box(modifier = Modifier.fillMaxSize()) {
+                LazyVerticalGrid(
+                    columns = effectiveColumns,
+                    state = gridState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = gridPadding,
+                ) {
+                    item(key = "summary-card", span = { GridItemSpan(maxLineSpan) }) {
+                        OfflineSummaryCard(
+                            completedCount = completed.size,
+                            inFlightCount = inFlight.size,
+                            usedBytes = usedBytes,
+                            canListenAll = completed.isNotEmpty() && selectedIds == null,
+                            onListenAll = { completed.firstOrNull()?.let(onListenAll) },
+                            modifier = Modifier
+                                .padding(horizontal = headerHorizontalPadding, vertical = Spacing.Tight)
+                                .animateItem(),
                         )
-                        // 多选态下不给:此刻点一行是勾选,这个按钮却会离开这一页去播放。
-                        TextButton(
-                            onClick = { onListenAll(completed.first()) },
-                            enabled = selectedIds == null,
-                        ) {
-                            Icon(
-                                Icons.Filled.Headphones,
-                                contentDescription = null,
-                                modifier = Modifier.size(Dimens.IconInline),
-                            )
-                            Text(
-                                stringResource(Res.string.offline_listen_all),
-                                modifier = Modifier.padding(start = Spacing.Tight),
-                            )
+                    }
+                    if (inFlight.isNotEmpty()) {
+                        item(key = "header-in-flight", span = { GridItemSpan(maxLineSpan) }) {
+                            ProvideTextStyle(LocalTextStyle.current.tabular) {
+                                SectionHeader(
+                                    title = stringResource(Res.string.offline_section_in_flight, inFlight.size),
+                                    modifier = Modifier
+                                        .padding(horizontal = headerHorizontalPadding)
+                                        .animateItem(),
+                                )
+                            }
                         }
+                        offlineRows(inFlight, rowScope, multiColumn)
+                    }
+                    if (completed.isNotEmpty()) {
+                        if (inFlight.isNotEmpty()) {
+                            item(key = "header-completed", span = { GridItemSpan(maxLineSpan) }) {
+                                SectionHeader(
+                                    title = stringResource(Res.string.offline_section_completed),
+                                    modifier = Modifier
+                                        .padding(horizontal = headerHorizontalPadding)
+                                        .animateItem(),
+                                )
+                            }
+                        }
+                        offlineRows(completed, rowScope, multiColumn)
                     }
                 }
-                offlineRows(completed, rowScope)
+                ListScrollbar(gridState, Modifier.align(Alignment.CenterEnd))
             }
         }
     }
@@ -227,6 +276,80 @@ fun OfflineScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun OfflineSummaryCard(
+    completedCount: Int,
+    inFlightCount: Int,
+    usedBytes: Long,
+    canListenAll: Boolean,
+    onListenAll: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val primarySummary = if (completedCount > 0) {
+        stringResource(Res.string.offline_count, completedCount) + MetaSeparator + formatBytes(usedBytes)
+    } else {
+        stringResource(Res.string.offline_section_in_flight, inFlightCount) + MetaSeparator + formatBytes(usedBytes)
+    }
+    val secondarySummary = if (completedCount > 0 && inFlightCount > 0) {
+        stringResource(Res.string.offline_section_in_flight, inFlightCount)
+    } else {
+        null
+    }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.large,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = primarySummary,
+                    style = MaterialTheme.typography.titleSmallEmphasized.tabular,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                )
+                secondarySummary?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall.tabular,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            }
+            if (completedCount > 0) {
+                FilledTonalButton(
+                    onClick = onListenAll,
+                    enabled = canListenAll,
+                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
+                ) {
+                    Icon(
+                        Icons.Filled.Headphones,
+                        contentDescription = null,
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                    Text(
+                        stringResource(Res.string.offline_listen_all),
+                        style = MaterialTheme.typography.labelLargeEmphasized,
+                        modifier = Modifier.padding(start = Spacing.Hair + 2.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
 /** 两节共用的行为,打包成一份传给 [offlineRows],免得每节各抄一遍这几个回调。 */
 private class OfflineRowScope(
     val selectedIds: Set<String>?,
@@ -236,68 +359,182 @@ private class OfflineRowScope(
     val onDeleteRequest: (OfflineItem) -> Unit,
 )
 
-private fun LazyGridScope.offlineRows(rows: List<OfflineItem>, scope: OfflineRowScope) {
+private fun LazyGridScope.offlineRows(
+    rows: List<OfflineItem>,
+    scope: OfflineRowScope,
+    multiColumn: Boolean,
+) {
     items(rows, key = { it.id }) { item ->
-        OfflineRow(item, scope, Modifier.animateItem())
+        OfflineRow(item, scope, multiColumn, Modifier.animateItem())
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun OfflineRow(item: OfflineItem, scope: OfflineRowScope, modifier: Modifier = Modifier) {
+private fun OfflineRow(
+    item: OfflineItem,
+    scope: OfflineRowScope,
+    multiColumn: Boolean,
+    modifier: Modifier = Modifier,
+) {
     val selecting = scope.selectedIds != null
     val selected = scope.selectedIds != null && item.id in scope.selectedIds
     val haptics = LocalHapticFeedback.current
-    // 选中态淡入,不是跳变:一次长按同时换掉整行底色和行尾那一格,两处一起硬切
-    // 读起来像换了一份列表。取 effects 档 —— 变的是颜色,没有任何东西在移动。
+    val rowUi = item.toRowUi()
+    // 选中态淡入,不是跳变:取 effects 档 —— 变的是颜色,没有任何东西在移动。
     val rowColor by animateColorAsState(
         targetValue = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
         animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "offline-row-selected",
     )
-    VideoRow(
-        item = item.toRowUi(),
-        // 多选态下点一行是勾选,不是播 —— 进了多选还去播放,等于长按一下就再也删不成批。
-        // 失败的那条点一下是重试,不是播:它本来就没东西可播。
-        onClick = {
-            when {
-                selecting -> scope.onToggleSelection(item)
-                item.status == OfflineStatus.Failed -> scope.onRetry(item)
-                else -> scope.onPlay(item)
-            }
-        },
-        onLongClick = {
-            // 进多选态的那一下要有触感:屏上的变化只是多出一列勾选框,而长按本身
-            // 没有任何提示。已经在多选态里时不再震 —— 那一下只是勾选,和点击等价。
-            if (!selecting) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-            scope.onToggleSelection(item)
-        },
-        // 选中的那几行要能一眼扫出来。整行染色而不是只画一个勾:勾在行尾,而人是从
-        // 左往右扫的,只靠行尾那个小方块得逐行去对。
-        modifier = modifier.background(rowColor),
-        trailing = {
-            // 删除图标和勾选框占的是同一格,所以是**换内容**而不是各自显隐:两个
-            // 48dp 的东西在同一个位置上直接对调,读起来像图标变成了方块。
-            // transitionSpec 不是组合上下文,主题里的 spec 要先在外面取出来。
-            val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
-            AnimatedContent(
-                targetState = selecting,
-                transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
-                label = "offline-row-trailing",
-            ) { inSelection ->
-                if (inSelection) {
+
+    val onCardClick: () -> Unit = {
+        when {
+            selecting -> scope.onToggleSelection(item)
+            item.status == OfflineStatus.Failed -> scope.onRetry(item)
+            else -> scope.onPlay(item)
+        }
+    }
+    val onCardLongClick: () -> Unit = {
+        if (!selecting) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        scope.onToggleSelection(item)
+    }
+
+    val trailingOrOverflow: @Composable () -> Unit = {
+        val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+        AnimatedContent(
+            targetState = selecting,
+            transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
+            label = "offline-row-trailing",
+        ) { inSelection ->
+            if (inSelection) {
+                Box(modifier = Modifier.padding(horizontal = if (multiColumn) Spacing.Tight else 0.dp)) {
                     Checkbox(checked = selected, onCheckedChange = null)
-                } else {
-                    IconButton(onClick = { scope.onDeleteRequest(item) }) {
-                        Icon(
-                            Icons.Outlined.DeleteOutline,
-                            contentDescription = stringResource(Res.string.offline_delete, item.title),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                }
+            } else {
+                IconButton(onClick = { scope.onDeleteRequest(item) }) {
+                    Icon(
+                        Icons.Outlined.DeleteOutline,
+                        contentDescription = stringResource(Res.string.offline_delete, item.title),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
-        },
-    )
+        }
+    }
+
+    val itemBody: @Composable () -> Unit = {
+        if (multiColumn) {
+            Column(
+                modifier = Modifier
+                    .padding(2.dp)
+                    .clip(MaterialTheme.shapes.large)
+                    .background(rowColor),
+            ) {
+                VideoGridCard(
+                    ui = rowUi,
+                    onClick = onCardClick,
+                    onLongClick = onCardLongClick,
+                    upAvatarUrl = item.upFaceUrl.takeIf { it.isNotBlank() },
+                    overflow = trailingOrOverflow,
+                )
+                if (item.status == OfflineStatus.Running) {
+                    RunningDownloadBar(
+                        progress = item.progress,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = Spacing.Tight, end = Spacing.Tight, bottom = Spacing.Tight),
+                    )
+                }
+            }
+        } else {
+            Column(modifier = Modifier.background(rowColor)) {
+                VideoRow(
+                    item = rowUi,
+                    onClick = onCardClick,
+                    onLongClick = onCardLongClick,
+                    trailing = { trailingOrOverflow() },
+                )
+                if (item.status == OfflineStatus.Running) {
+                    RunningDownloadBar(
+                        progress = item.progress,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Tight),
+                    )
+                }
+            }
+        }
+    }
+
+    if (selecting) {
+        Box(modifier = modifier) {
+            itemBody()
+        }
+    } else {
+        ContextMenuBox(
+            onClick = null,
+            menuLabel = stringResource(Res.string.menu_item_actions),
+            modifier = modifier,
+            menu = { close ->
+                val leadingCount = 2
+                val totalCount = leadingCount + videoCommonMenuItemCount(
+                    bvid = item.bvid,
+                    title = item.title,
+                )
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        scope.onToggleSelection(item)
+                    },
+                    text = { Text(stringResource(Res.string.action_select)) },
+                    leadingIcon = { Icon(Icons.Outlined.Checklist, contentDescription = null) },
+                    shape = menuItemShape(0, totalCount),
+                )
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        scope.onDeleteRequest(item)
+                    },
+                    text = { Text(stringResource(Res.string.action_delete)) },
+                    leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null) },
+                    shape = menuItemShape(1, totalCount),
+                )
+                VideoCommonMenuItems(
+                    bvid = item.bvid,
+                    title = item.title,
+                    close = close,
+                    coverUrl = item.coverUrl,
+                    upName = item.upName,
+                    durationSeconds = item.durationSeconds,
+                    startIndex = leadingCount,
+                    totalCount = totalCount,
+                )
+            },
+        ) { _ ->
+            itemBody()
+        }
+    }
+}
+
+@Composable
+private fun RunningDownloadBar(
+    progress: Float?,
+    modifier: Modifier = Modifier,
+) {
+    val trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+    if (progress != null) {
+        LinearProgressIndicator(
+            progress = { progress },
+            trackColor = trackColor,
+            modifier = modifier,
+        )
+    } else {
+        LinearProgressIndicator(
+            trackColor = trackColor,
+            modifier = modifier,
+        )
+    }
 }
 
 /**
@@ -341,6 +578,7 @@ fun OfflineItem.toRowUi(): VideoRowUi {
         upName = upName.takeIf { it.isNotEmpty() },
         dateText = formatRelativeTime(publishedAtEpochSeconds),
         meta = listOfNotNull(partTitle.takeIf { it.isNotBlank() }, statusText).joinToString(MetaSeparator),
+        typeBadge = chargingBadgeText(chargingOnly),
         // 只有下完的才有"看到哪儿"可言。
         progressFraction = when {
             status != OfflineStatus.Completed -> null

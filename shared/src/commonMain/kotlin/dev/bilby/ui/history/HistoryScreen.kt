@@ -6,10 +6,14 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -21,42 +25,47 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import dev.bilby.ui.components.ContextMenuBox
-import dev.bilby.ui.components.VideoCommonMenuItems
-import dev.bilby.ui.components.menuItemShape
-import dev.bilby.ui.components.videoCommonMenuItemCount
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
-import dev.bilby.resources.*
-import dev.bilby.stringResource
-import dev.bilby.appendDistinctBy
-import dev.bilby.ui.AdaptiveListContent
 import dev.bilby.api.BiliResult
+import dev.bilby.appendDistinctBy
 import dev.bilby.data.HistoryItem
 import dev.bilby.data.HistoryRepository
+import dev.bilby.formatDurationSeconds
+import dev.bilby.resources.*
+import dev.bilby.stringResource
+import dev.bilby.ui.AdaptiveListContent
+import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.RefreshBox
+import dev.bilby.ui.components.VideoCommonMenuItems
+import dev.bilby.ui.components.VideoGridCard
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
-import dev.bilby.ui.theme.BilbyTheme
-import dev.bilby.formatDurationSeconds
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.videoCommonMenuItemCount
 import dev.bilby.ui.formatRelativeTime
+import dev.bilby.ui.theme.BilbyTheme
+import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.Spacing
 import java.time.Instant
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 data class HistoryUiState(
@@ -231,15 +240,14 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
     }
 }
 
+private val VideoGridMaxCellWidth = 320.dp
 
 /**
  * @param selectedIds 已选中条目的 oid,`null` 表示不在多选态。
  *
  *   多选态和选中集合仍然是**一个**状态,不是一个布尔加一个集合 —— 后者能凑出互相矛盾的
  *   组合。但这里的空集合不能当作"不在多选态":顶栏的「选择」要在一条都还没选的时候就进入
- *   多选,那一刻集合本来就是空的。这是与 `OfflineScreen` 的偏离,那边长按是唯一入口,
- *   进入多选必然带着一条,所以"非空即多选"在那边成立。退出多选由 contextual 顶栏的返回
- *   箭头承担,空集合不是一个退不出去的状态。
+ *   多选,那一刻集合本来就是空的。退出多选由 contextual 顶栏的返回箭头承担。
  *
  *   用 oid 而不是 kid:列表本来就按 oid 去重、按 oid 作 key,选中集合跟着同一个键走。
  */
@@ -261,6 +269,7 @@ fun HistoryScreen(
 ) {
     val selecting = selectedIds != null
     val haptics = LocalHapticFeedback.current
+    val layoutDirection = LocalLayoutDirection.current
 
     // 删除失败要说出来。这条路径没有乐观更新,失败之后屏上什么都没变 —— 不给一句话的话,
     // 用户看到的是"点了删除,记录还在"。
@@ -275,117 +284,158 @@ fun HistoryScreen(
         )
     }
 
-    AdaptiveListContent(modifier = modifier) { columns ->
-        RefreshBox(
-            refreshing = state.refreshing,
-            onRefresh = onRefresh,
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            PagedColumn(
-                layout = PagedLayout.Grid(columns),
-                items = state.items,
-                key = { it.oid },
-                loading = state.loading,
-                appending = state.appending,
-                hasMore = state.hasMore,
-                error = state.error,
-                emptyText = stringResource(Res.string.history_empty),
-                onLoadMore = onLoadMore,
-                onRetry = onRetry,
-                contentPadding = contentPadding,
-            ) { item ->
-                val selected = selectedIds != null && item.oid in selectedIds
-                // 选中态淡入,不是跳变。与 OfflineScreen 同一套(那边还要在图标和勾选框之间
-                // 换内容,这一页行尾平时是空的)。
-                val rowColor by animateColorAsState(
-                    targetValue = if (selected) {
-                        MaterialTheme.colorScheme.secondaryContainer
-                    } else {
-                        Color.Transparent
-                    },
-                    animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
-                    label = "history-row-selected",
+    AdaptiveListContent(
+        modifier = modifier,
+        maxCellWidth = VideoGridMaxCellWidth,
+    ) { columns ->
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val multiColumn = columns != GridCells.Fixed(1) && maxWidth >= Dimens.VideoGridMinCellWidth * 2
+            val effectiveColumns = if (multiColumn) columns else GridCells.Fixed(1)
+            val gridPadding = if (multiColumn) {
+                PaddingValues(
+                    start = contentPadding.calculateStartPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                    top = contentPadding.calculateTopPadding() + Spacing.Hair,
+                    end = contentPadding.calculateEndPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                    bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
                 )
-                val rowContent: @Composable () -> Unit = {
-                    VideoRow(
-                        item = item.toRowUi(),
-                        // 多选态下点一行是勾选,不是打开:进了多选还去播放,等于长按一下就再也
-                        // 删不成批。
-                        onClick = { if (selecting) onToggleSelection(item) else onItemClick(item) },
-                        // 长按只是快捷方式,不是唯一入口 —— 顶栏另有一个「选择」。长按没有任何
-                        // 视觉提示,只发现得了点击的人也必须能进多选。
-                        //
-                        // 进多选态那一下给触感:屏上多出来的只是一列勾选框。已经在多选态里时不震,
-                        // 那一下和点击等价。
-                        onLongClick = {
-                            if (!selecting) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onToggleSelection(item)
+            } else {
+                contentPadding
+            }
+
+            RefreshBox(
+                refreshing = state.refreshing,
+                onRefresh = onRefresh,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                PagedColumn(
+                    layout = PagedLayout.Grid(effectiveColumns),
+                    items = state.items,
+                    key = { it.oid },
+                    loading = state.loading,
+                    appending = state.appending,
+                    hasMore = state.hasMore,
+                    error = state.error,
+                    emptyText = stringResource(Res.string.history_empty),
+                    onLoadMore = onLoadMore,
+                    onRetry = onRetry,
+                    contentPadding = gridPadding,
+                ) { item ->
+                    val rowUi = item.toRowUi()
+                    val selected = selectedIds != null && item.oid in selectedIds
+                    // 选中态淡入,不是跳变。与 OfflineScreen 同一套。
+                    val rowColor by animateColorAsState(
+                        targetValue = if (selected) {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        } else {
+                            Color.Transparent
                         },
-                        // 整行染色而不是只画一个勾:勾在行尾,而人是从左往右扫的。
-                        modifier = Modifier.background(rowColor),
-                        // onCheckedChange = null:整行已经是一个可点节点,勾选框自己再接一次
-                        // 点击会让读屏把它和这一行当成两件事。
-                        //
-                        // 平时这一格是空的,进多选时整列勾选框一起出现 —— 淡入带着宽度一起过渡,
-                        // 否则标题那一列会被瞬间挤窄一格,几十行同时重排。
-                        trailing = {
-                            // transitionSpec 不是组合上下文,主题里的 spec 要先在外面取出来。
-                            val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
-                            AnimatedContent(
-                                targetState = selecting,
-                                transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
-                                label = "history-row-trailing",
-                            ) { inSelection ->
-                                if (inSelection) Checkbox(checked = selected, onCheckedChange = null)
-                            }
-                        },
+                        animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
+                        label = "history-row-selected",
                     )
-                }
-                if (selecting) {
-                    rowContent()
-                } else {
-                    ContextMenuBox(
-                        onClick = null,
-                        menuLabel = stringResource(Res.string.menu_item_actions),
-                        menu = { close ->
-                            val canDeleteOne = !state.mutating && item.kid != 0L && onDeleteSingle != null
-                            val leadingCount = 1 + (if (canDeleteOne) 1 else 0)
-                            val totalCount = leadingCount + videoCommonMenuItemCount(item.bvid, item.upMid, onUpClick)
-                            DropdownMenuItem(
-                                onClick = {
-                                    close()
-                                    onToggleSelection(item)
+
+                    val onCardClick: () -> Unit = {
+                        if (selecting) onToggleSelection(item) else onItemClick(item)
+                    }
+                    val onCardLongClick: () -> Unit = {
+                        if (!selecting) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onToggleSelection(item)
+                    }
+
+                    val itemContent: @Composable () -> Unit = {
+                        if (multiColumn) {
+                            VideoGridCard(
+                                ui = rowUi,
+                                onClick = onCardClick,
+                                onLongClick = onCardLongClick,
+                                onUpClick = if (!selecting && item.upMid != 0L) ({ onUpClick(item.upMid) }) else null,
+                                overflow = if (selecting) {
+                                    {
+                                        Box(modifier = Modifier.padding(start = Spacing.Hair)) {
+                                            Checkbox(checked = selected, onCheckedChange = null)
+                                        }
+                                    }
+                                } else {
+                                    null
                                 },
-                                text = { Text(stringResource(Res.string.action_select)) },
-                                leadingIcon = { Icon(Icons.Outlined.Checklist, contentDescription = null) },
-                                shape = menuItemShape(0, totalCount),
+                                modifier = Modifier
+                                    .padding(2.dp)
+                                    .clip(MaterialTheme.shapes.large)
+                                    .background(rowColor),
                             )
-                            if (canDeleteOne) {
+                        } else {
+                            VideoRow(
+                                item = rowUi,
+                                onClick = onCardClick,
+                                onLongClick = onCardLongClick,
+                                // 整行染色而不是只画一个勾:勾在行尾,而人是从左往右扫的。
+                                modifier = Modifier.background(rowColor),
+                                // onCheckedChange = null:整行已经是一个可点节点,勾选框自己再接一次
+                                // 点击会让读屏把它和这一行当成两件事。
+                                trailing = {
+                                    val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+                                    AnimatedContent(
+                                        targetState = selecting,
+                                        transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
+                                        label = "history-row-trailing",
+                                    ) { inSelection ->
+                                        if (inSelection) Checkbox(checked = selected, onCheckedChange = null)
+                                    }
+                                },
+                            )
+                        }
+                    }
+
+                    if (selecting) {
+                        itemContent()
+                    } else {
+                        ContextMenuBox(
+                            onClick = null,
+                            menuLabel = stringResource(Res.string.menu_item_actions),
+                            menu = { close ->
+                                val canDeleteOne = !state.mutating && item.kid != 0L && onDeleteSingle != null
+                                val leadingCount = 1 + (if (canDeleteOne) 1 else 0)
+                                val totalCount = leadingCount + videoCommonMenuItemCount(
+                                    bvid = item.bvid,
+                                    upMid = item.upMid,
+                                    onOpenUpSpace = onUpClick,
+                                    title = item.title,
+                                )
                                 DropdownMenuItem(
                                     onClick = {
                                         close()
-                                        onDeleteSingle.invoke(item)
+                                        onToggleSelection(item)
                                     },
-                                    text = { Text(stringResource(Res.string.action_delete)) },
-                                    leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null) },
-                                    shape = menuItemShape(1, totalCount),
+                                    text = { Text(stringResource(Res.string.action_select)) },
+                                    leadingIcon = { Icon(Icons.Outlined.Checklist, contentDescription = null) },
+                                    shape = menuItemShape(0, totalCount),
                                 )
-                            }
-                            VideoCommonMenuItems(
-                                bvid = item.bvid,
-                                title = item.title,
-                                close = close,
-                                upMid = item.upMid,
-                                onOpenUpSpace = onUpClick,
-                                coverUrl = item.coverUrl,
-                                upName = item.upName,
-                                durationSeconds = item.durationSeconds,
-                                startIndex = leadingCount,
-                                totalCount = totalCount,
-                            )
-                        },
-                    ) { _ ->
-                        rowContent()
+                                if (canDeleteOne) {
+                                    DropdownMenuItem(
+                                        onClick = {
+                                            close()
+                                            onDeleteSingle.invoke(item)
+                                        },
+                                        text = { Text(stringResource(Res.string.action_delete)) },
+                                        leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null) },
+                                        shape = menuItemShape(1, totalCount),
+                                    )
+                                }
+                                VideoCommonMenuItems(
+                                    bvid = item.bvid,
+                                    title = item.title,
+                                    close = close,
+                                    upMid = item.upMid,
+                                    onOpenUpSpace = onUpClick,
+                                    coverUrl = item.coverUrl,
+                                    upName = item.upName,
+                                    durationSeconds = item.durationSeconds,
+                                    startIndex = leadingCount,
+                                    totalCount = totalCount,
+                                )
+                            },
+                        ) { _ ->
+                            itemContent()
+                        }
                     }
                 }
             }
@@ -412,7 +462,6 @@ internal fun HistoryItem.toRowUi() = VideoRowUi(
         else -> null
     },
 )
-
 
 // ---- Preview ----
 

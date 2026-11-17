@@ -1,62 +1,74 @@
 package dev.bilby.ui.toview
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Headphones as OutlinedHeadphones
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import dev.bilby.ui.components.ContextMenuBox
-import dev.bilby.ui.components.VideoCommonMenuItems
-import dev.bilby.ui.components.menuItemShape
-import dev.bilby.ui.components.videoCommonMenuItemCount
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.bilby.resources.*
-import dev.bilby.stringResource
-import org.jetbrains.compose.resources.StringResource
 import dev.bilby.api.BiliResult
 import dev.bilby.data.ToViewItem
 import dev.bilby.data.ToViewKind
 import dev.bilby.data.ToViewRepository
 import dev.bilby.formatDurationSeconds
+import dev.bilby.resources.*
+import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveListContent
+import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.RefreshBox
 import dev.bilby.ui.components.SortMenu
+import dev.bilby.ui.components.VideoCommonMenuItems
+import dev.bilby.ui.components.VideoGridCard
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.components.chargingBadgeText
 import dev.bilby.ui.components.formatCount
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.rememberCopyAction
+import dev.bilby.ui.components.videoCommonMenuItemCount
 import dev.bilby.ui.errorTextRes
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 
 data class ToViewUiState(
     val loading: Boolean = true,
@@ -222,8 +234,10 @@ class ToViewViewModel(private val repository: ToViewRepository) : ViewModel() {
     private fun notice(action: StringResource, reason: StringResource) = ToViewNotice(++eventId, action, reason)
 }
 
+private val VideoGridMaxCellWidth = 320.dp
+
 /**
- * 稍后再看。清空在顶栏的菜单里(见 MainActivity),这里是容量、听全部、排序和列表。
+ * 稍后再看。清空在顶栏的菜单里(见 BilbyApp),这里是容量概览卡、听全部、排序和响应式网格/列表。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -242,89 +256,128 @@ fun ToViewScreen(
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     val firstPlayable = state.items.firstOrNull { it.playable }
-    AdaptiveListContent(modifier = modifier) { columns ->
-        RefreshBox(
-            refreshing = state.loading && state.items.isNotEmpty(),
-            onRefresh = onRefresh,
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            PagedColumn(
-                layout = PagedLayout.Grid(columns),
-                items = state.items,
-                // 这一页的条目会被单条移出(下面那个 Close 按钮),动画认 aid。
-                key = { it.aid },
-                loading = state.loading,
-                appending = false,
-                // 一次拉满,没有下一页(见 ToViewRepository.CAPACITY)。
-                hasMore = false,
-                error = state.error?.let { stringResource(it) },
-                emptyText = stringResource(Res.string.toview_empty),
-                onLoadMore = {},
-                onRetry = onRetry,
-                contentPadding = contentPadding,
-                header = {
-                    // 容量与表头跟着列表一起滚走,不钉在顶上:钉住的两行加上顶栏占掉小半屏,
-                    // 而这一页要看的是列表。判据同空间页投稿栏的表头。
-                    Column {
-                        CapacityMeter(state.count, state.capacity)
-                        ListHeader(
+    val layoutDirection = LocalLayoutDirection.current
+
+    AdaptiveListContent(
+        modifier = modifier,
+        maxCellWidth = VideoGridMaxCellWidth,
+    ) { columns ->
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val multiColumn = columns != GridCells.Fixed(1) && maxWidth >= Dimens.VideoGridMinCellWidth * 2
+            val effectiveColumns = if (multiColumn) columns else GridCells.Fixed(1)
+            val gridPadding = if (multiColumn) {
+                PaddingValues(
+                    start = contentPadding.calculateStartPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                    top = contentPadding.calculateTopPadding(),
+                    end = contentPadding.calculateEndPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                    bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
+                )
+            } else {
+                contentPadding
+            }
+
+            RefreshBox(
+                refreshing = state.loading && state.items.isNotEmpty(),
+                onRefresh = onRefresh,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                PagedColumn(
+                    layout = PagedLayout.Grid(effectiveColumns),
+                    items = state.items,
+                    // 这一页的条目会被单条移出(下面那个 Close 按钮),动画认 aid。
+                    key = { it.aid },
+                    loading = state.loading,
+                    appending = false,
+                    // 一次拉满,没有下一页(见 ToViewRepository.CAPACITY)。
+                    hasMore = false,
+                    error = state.error?.let { stringResource(it) },
+                    emptyText = stringResource(Res.string.toview_empty),
+                    onLoadMore = {},
+                    onRetry = onRetry,
+                    contentPadding = gridPadding,
+                    header = {
+                        // 容量与控制卡跟着列表一起滚走,不钉在顶上:钉住会占掉小半屏,而这一页要看的是列表。
+                        ToViewSummaryCard(
+                            count = state.count,
+                            capacity = state.capacity,
                             asc = state.asc,
                             canListen = firstPlayable != null,
                             onListenAll = { firstPlayable?.let(onListenAll) },
                             onAscChanged = onAscChanged,
+                            modifier = Modifier.padding(
+                                horizontal = if (multiColumn) Spacing.Tight + 2.dp else Spacing.Comfortable,
+                                vertical = Spacing.Tight,
+                            ),
                         )
-                    }
-                },
-            ) { item ->
-                ContextMenuBox(
-                    onClick = null,
-                    menuLabel = stringResource(Res.string.menu_item_actions),
-                    menu = { close ->
-                        val canListenOne = item.playable && onListenItem != null
-                        val bvid = if (item.playable) item.bvid else ""
-                        val leadingCount = 1 + (if (canListenOne) 1 else 0)
-                        val totalCount = leadingCount + videoCommonMenuItemCount(bvid, item.upMid, onUpClick)
-                        DropdownMenuItem(
-                            onClick = {
-                                close()
-                                onDelete(item)
-                            },
-                            text = { Text(stringResource(Res.string.toview_remove_action)) },
-                            leadingIcon = { Icon(Icons.Outlined.Close, contentDescription = null) },
-                            shape = menuItemShape(0, totalCount),
-                        )
-                        if (canListenOne) {
+                    },
+                ) { item ->
+                    val rowUi = item.toRowUi()
+                    val copyTitleAction = rememberCopyAction()
+                    val bvid = if (item.playable) item.bvid else ""
+                    val copyFallbackTitle = bvid.isEmpty() && item.title.isNotBlank()
+
+                    ContextMenuBox(
+                        onClick = null,
+                        menuLabel = stringResource(Res.string.menu_item_actions),
+                        menu = { close ->
+                            val canListenOne = item.playable && onListenItem != null
+                            val leadingCount = 1 + (if (canListenOne) 1 else 0) + (if (copyFallbackTitle) 1 else 0)
+                            val totalCount = leadingCount + videoCommonMenuItemCount(
+                                bvid = bvid,
+                                upMid = item.upMid,
+                                onOpenUpSpace = onUpClick,
+                                title = item.title,
+                            )
+                            var menuIndex = 0
+                            val removeIdx = menuIndex++
                             DropdownMenuItem(
                                 onClick = {
                                     close()
-                                    onListenItem.invoke(item)
+                                    onDelete(item)
                                 },
-                                text = { Text(stringResource(Res.string.toview_listen_all)) },
-                                leadingIcon = { Icon(Icons.Outlined.OutlinedHeadphones, contentDescription = null) },
-                                shape = menuItemShape(1, totalCount),
+                                text = { Text(stringResource(Res.string.toview_remove_action)) },
+                                leadingIcon = { Icon(Icons.Outlined.Close, contentDescription = null) },
+                                shape = menuItemShape(removeIdx, totalCount),
                             )
-                        }
-                        VideoCommonMenuItems(
-                            bvid = bvid,
-                            title = item.title,
-                            close = close,
-                            upMid = item.upMid,
-                            onOpenUpSpace = onUpClick,
-                            coverUrl = item.coverUrl,
-                            upName = item.upName,
-                            durationSeconds = item.durationSeconds,
-                            startIndex = leadingCount,
-                            totalCount = totalCount,
-                        )
-                    },
-                ) { openMenu ->
-                    VideoRow(
-                        item = item.toRowUi(),
-                        // 剧集与课程照常列出但不可打开(UGC-only);移出按钮仍在,它们正是该清掉的那一类。
-                        enabled = item.playable,
-                        onClick = { if (item.playable) onItemClick(item) },
-                        onLongClick = if (item.playable) openMenu else null,
-                        trailing = {
+                            if (canListenOne) {
+                                val listenIdx = menuIndex++
+                                DropdownMenuItem(
+                                    onClick = {
+                                        close()
+                                        onListenItem.invoke(item)
+                                    },
+                                    text = { Text(stringResource(Res.string.toview_listen_all)) },
+                                    leadingIcon = { Icon(Icons.Outlined.OutlinedHeadphones, contentDescription = null) },
+                                    shape = menuItemShape(listenIdx, totalCount),
+                                )
+                            }
+                            if (copyFallbackTitle) {
+                                val copyIdx = menuIndex++
+                                DropdownMenuItem(
+                                    onClick = {
+                                        close()
+                                        copyTitleAction(item.title)
+                                    },
+                                    text = { Text(stringResource(Res.string.action_copy_title)) },
+                                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                                    shape = menuItemShape(copyIdx, totalCount),
+                                )
+                            }
+                            VideoCommonMenuItems(
+                                bvid = bvid,
+                                title = item.title,
+                                close = close,
+                                upMid = item.upMid,
+                                onOpenUpSpace = onUpClick,
+                                coverUrl = item.coverUrl,
+                                upName = item.upName,
+                                durationSeconds = item.durationSeconds,
+                                startIndex = leadingCount,
+                                totalCount = totalCount,
+                            )
+                        },
+                    ) { openMenu ->
+                        val removeButton: @Composable () -> Unit = {
                             // 图标用 Close 而不是 Delete:这里是"从列表里拿掉",
                             // 不是把视频删了。垃圾桶图标承诺的破坏性比实际动作大。
                             IconButton(onClick = { onDelete(item) }) {
@@ -334,8 +387,28 @@ fun ToViewScreen(
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                        },
-                    )
+                        }
+                        if (multiColumn) {
+                            VideoGridCard(
+                                ui = rowUi,
+                                // 剧集与课程照常列出但不可打开(UGC-only);移出按钮仍在,它们正是该清掉的那一类。
+                                enabled = item.playable,
+                                onClick = { if (item.playable) onItemClick(item) },
+                                onLongClick = if (item.playable) openMenu else null,
+                                onUpClick = if (item.upMid != 0L) ({ onUpClick(item.upMid) }) else null,
+                                overflow = removeButton,
+                                modifier = Modifier.padding(2.dp),
+                            )
+                        } else {
+                            VideoRow(
+                                item = rowUi,
+                                enabled = item.playable,
+                                onClick = { if (item.playable) onItemClick(item) },
+                                onLongClick = if (item.playable) openMenu else null,
+                                trailing = { removeButton() },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -347,72 +420,79 @@ private val AscOptions = listOf(
     true to Res.string.toview_order_earliest,
 )
 
-/** 表头:左边听全部,右边排序。与空间页投稿栏同一个形状,按文字基线对齐的理由也同那边。 */
+/**
+ * 稍后再看概览卡:容量等宽读数 + 容量刻度条 + 听全部按钮与排序下拉。
+ *
+ * 上限是反囤积设计的一部分,要亮给用户看,不是藏起来的实现细节(DESIGN 2.5)。
+ * 快满时转成 error 色 —— 这是少数几个用 error 色的地方,因为它确实要求用户做点什么(清一清)。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun ListHeader(
+private fun ToViewSummaryCard(
+    count: Int,
+    capacity: Int,
     asc: Boolean,
     canListen: Boolean,
     onListenAll: () -> Unit,
     onAscChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.Tight),
-    ) {
-        TextButton(
-            onClick = onListenAll,
-            enabled = canListen,
-            modifier = Modifier.alignByBaseline(),
-        ) {
-            Icon(
-                Icons.Filled.Headphones,
-                contentDescription = null,
-                modifier = Modifier.size(Dimens.IconInline),
-            )
-            Text(
-                stringResource(Res.string.toview_listen_all),
-                modifier = Modifier.padding(start = Spacing.Tight),
-            )
-        }
-        Spacer(modifier = Modifier.weight(1f))
-        SortMenu(
-            options = AscOptions,
-            selected = asc,
-            onSelect = onAscChanged,
-            modifier = Modifier.alignByBaseline(),
-        )
-    }
-}
-
-/**
- * 容量条。上限是反囤积设计的一部分,要亮给用户看,不是藏起来的实现细节(DESIGN 2.5)。
- *
- * 除了数字还画一条进度条:"87 / 100" 要读一下才知道快满了,一条快到头的进度条是扫一眼的事。
- * 快满时转成 error 色 —— 这是少数几个用 error 色的地方,因为它确实要求用户做点什么(清一清)。
- */
-@Composable
-private fun CapacityMeter(count: Int, capacity: Int, modifier: Modifier = Modifier) {
     val fraction = if (capacity > 0) (count.toFloat() / capacity).coerceIn(0f, 1f) else 0f
     val nearlyFull = fraction >= 0.9f
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.large,
+        modifier = modifier.fillMaxWidth(),
     ) {
-        Text(
-            text = stringResource(Res.string.toview_capacity, count, capacity),
-            style = MaterialTheme.typography.titleSmall,
-            color = if (nearlyFull) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-        )
-        // 这条不是等待指示,是容量刻度,所以留在 progress indicator 一侧,不换成 loading
-        // indicator:它读的是"已经占了多少",没有任何东西正在进行。
-        LinearProgressIndicator(
-            progress = { fraction },
-            color = if (nearlyFull) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                Text(
+                    text = stringResource(Res.string.toview_capacity, count, capacity),
+                    style = MaterialTheme.typography.titleSmallEmphasized.tabular,
+                    color = if (nearlyFull) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                )
+                // 这条不是等待指示,是容量刻度,所以留在 progress indicator 一侧,不换成 loading
+                // indicator:它读的是"已经占了多少",没有任何东西正在进行。
+                LinearProgressIndicator(
+                    progress = { fraction },
+                    color = if (nearlyFull) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilledTonalButton(
+                    onClick = onListenAll,
+                    enabled = canListen,
+                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
+                ) {
+                    Icon(
+                        Icons.Filled.Headphones,
+                        contentDescription = null,
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                    Text(
+                        stringResource(Res.string.toview_listen_all),
+                        style = MaterialTheme.typography.labelLargeEmphasized,
+                        modifier = Modifier.padding(start = Spacing.Hair + 2.dp),
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                SortMenu(
+                    options = AscOptions,
+                    selected = asc,
+                    onSelect = onAscChanged,
+                )
+            }
+        }
     }
 }
 

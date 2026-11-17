@@ -5,11 +5,19 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -30,12 +38,14 @@ import dev.bilby.data.TvLoginRepository
 import dev.bilby.data.TvPollStatus
 import dev.bilby.resources.*
 import dev.bilby.stringResource
-import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.CaptionDragHeight
+import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.windowDragArea
 import java.io.IOException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -58,15 +68,17 @@ sealed interface TvLoginUiState {
     data object Success : TvLoginUiState
 }
 
-private val QrSize = Dimens.QrCode
+private val QrImageSize = Dimens.QrCode
+private val QrPadSize = 240.dp
+private val LoginCardMaxWidth = 440.dp
 
 /**
- * 扫码登录。整屏只有一件事,所以内容垂直居中、不放顶栏 —— 这一页没有"返回"可去。
+ * 扫码登录欢迎卡:居中的 `surfaceContainer` `extraLarge`(28dp)圆角卡片 + 桌面端融合窗口拖动栏与控制键。
  *
- * **二维码那块不跟主题**,理由见 [QrCodeImage]。这里配合它的一点是:二维码永远画在一块
- * 白色 Surface 上,而不是直接落在主题背景上。位图自带 4 模块静区,但静区之外还是主题色;
- * 深色主题下那圈白边和黑底的硬边界会让部分扫码器把边界当成定位图形的一部分。
+ * **二维码那块不跟主题**,理由见 [QrCodeImage]:固定纯白 [FixedColors.QrBackground] 衬垫(16dp 圆角)
+ * 承托纯黑纯白二维码与自带 4 模块静区,深浅色及纯黑主题下扫码器均能稳定定位三个寻像角。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun TvLoginScreen(
     state: TvLoginUiState,
@@ -74,97 +86,160 @@ fun TvLoginScreen(
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val caption = LocalWindowCaption.current
+    caption?.Host()
+
     Scaffold(modifier = modifier) { insets ->
-        AdaptiveContent(
-            modifier = Modifier.fillMaxSize().padding(insets),
-            maxWidth = 520.dp,
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(insets),
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(Spacing.Loose),
+                    .verticalScroll(rememberScrollState())
+                    .padding(
+                        start = Spacing.Comfortable,
+                        end = Spacing.Comfortable,
+                        top = if (caption != null) CaptionDragHeight + Spacing.Comfortable else Spacing.Loose,
+                        bottom = Spacing.Loose,
+                    ),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(Spacing.Loose, Alignment.CenterVertically),
+                verticalArrangement = Arrangement.Center,
             ) {
-            Text(stringResource(Res.string.login_title), style = MaterialTheme.typography.headlineSmall)
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    shape = MaterialTheme.shapes.extraLarge,
+                    modifier = Modifier
+                        .widthIn(max = LoginCardMaxWidth)
+                        .fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.Loose, vertical = Spacing.Spacious),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(Spacing.Loose),
+                    ) {
+                        Text(
+                            text = stringResource(Res.string.login_title),
+                            style = MaterialTheme.typography.headlineSmallEmphasized,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            textAlign = TextAlign.Center,
+                        )
 
-            Box(contentAlignment = Alignment.Center) {
-                when (state) {
-                    is TvLoginUiState.WaitingScan -> QrSurface { QrCodeImage(state.url, Modifier.size(QrSize)) }
+                        Box(contentAlignment = Alignment.Center) {
+                            when (state) {
+                                is TvLoginUiState.WaitingScan -> QrSurface {
+                                    QrCodeImage(state.url, Modifier.size(QrImageSize))
+                                }
 
-                    is TvLoginUiState.ScannedUnconfirmed -> {
-                        QrSurface { QrCodeImage(state.url, Modifier.size(QrSize)) }
-                        QrOverlay {
-                            Icon(
-                                Icons.Filled.CheckCircle,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                            Text(
-                                stringResource(Res.string.login_scanned),
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        }
-                    }
+                                is TvLoginUiState.ScannedUnconfirmed -> {
+                                    QrSurface { QrCodeImage(state.url, Modifier.size(QrImageSize)) }
+                                    QrOverlay {
+                                        Icon(
+                                            Icons.Filled.CheckCircle,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                        )
+                                        Text(
+                                            stringResource(Res.string.login_scanned),
+                                            style = MaterialTheme.typography.bodyMediumEmphasized,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            textAlign = TextAlign.Center,
+                                            modifier = Modifier.padding(horizontal = Spacing.Comfortable),
+                                        )
+                                    }
+                                }
 
-                    is TvLoginUiState.Expired -> {
-                        QrPlaceholder(showSpinner = false)
-                        QrOverlay {
-                            Text(
-                                stringResource(Res.string.login_qr_expired),
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            TextButton(onClick = onRefresh) {
-                                Text(stringResource(Res.string.action_refresh))
+                                is TvLoginUiState.Expired -> {
+                                    QrPlaceholder(showSpinner = false)
+                                    QrOverlay {
+                                        Text(
+                                            stringResource(Res.string.login_qr_expired),
+                                            style = MaterialTheme.typography.bodyMediumEmphasized,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            textAlign = TextAlign.Center,
+                                        )
+                                        FilledTonalButton(onClick = onRefresh) {
+                                            Text(stringResource(Res.string.action_refresh))
+                                        }
+                                    }
+                                }
+
+                                is TvLoginUiState.Requesting,
+                                is TvLoginUiState.Failed,
+                                is TvLoginUiState.Success,
+                                -> QrPlaceholder(showSpinner = state is TvLoginUiState.Requesting)
                             }
                         }
+
+                        when (state) {
+                            is TvLoginUiState.WaitingScan ->
+                                Text(
+                                    text = stringResource(Res.string.login_hint),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                )
+
+                            is TvLoginUiState.Failed -> Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                            ) {
+                                Text(
+                                    text = state.message,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                    textAlign = TextAlign.Center,
+                                )
+                                TextButton(onClick = onRefresh) { Text(stringResource(Res.string.action_retry)) }
+                            }
+
+                            is TvLoginUiState.Success -> Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                            ) {
+                                Text(
+                                    stringResource(Res.string.login_success),
+                                    style = MaterialTheme.typography.bodyMediumEmphasized,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                FilledTonalButton(onClick = onDone) { Text(stringResource(Res.string.action_done)) }
+                            }
+
+                            else -> Unit
+                        }
                     }
-
-                    is TvLoginUiState.Requesting,
-                    is TvLoginUiState.Failed,
-                    is TvLoginUiState.Success,
-                    -> QrPlaceholder(showSpinner = state is TvLoginUiState.Requesting)
                 }
             }
 
-            when (state) {
-                is TvLoginUiState.WaitingScan ->
-                    Text(
-                        text = stringResource(Res.string.login_hint),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-
-                is TvLoginUiState.Failed -> Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+            if (caption != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.Tight, vertical = Spacing.Tight),
                 ) {
-                    Text(
-                        text = state.message,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                        textAlign = TextAlign.Center,
+                    Spacer(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(CaptionDragHeight)
+                            .windowDragArea(),
                     )
-                    TextButton(onClick = onRefresh) { Text(stringResource(Res.string.action_retry)) }
+                    caption.Buttons()
                 }
-
-                is TvLoginUiState.Success -> Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                ) {
-                    Text(stringResource(Res.string.login_success), style = MaterialTheme.typography.bodyMedium)
-                    FilledTonalButton(onClick = onDone) { Text(stringResource(Res.string.action_done)) }
-                }
-
-                else -> Unit
-            }
             }
         }
     }
 }
 
 /**
- * 二维码的白底。**固定白色,不是 surface** —— 这一块是给扫码器看的,不是给人看的,
+ * 二维码的白底(16dp 圆角 `shapes.large`,240dp 衬垫承托 220dp 码图)。
+ *
+ * **固定纯白 [FixedColors.QrBackground],不是 surface** —— 这一块是给扫码器看的,不是给人看的,
  * 跟着主题走会在深色下变成深灰底黑码,B 站客户端直接报"未成功解析到二维码"。
  * 这条踩过一次,见 [QrCodeImage] 的注释。
  */
@@ -172,8 +247,8 @@ fun TvLoginScreen(
 private fun QrSurface(content: @Composable () -> Unit) {
     Surface(
         color = FixedColors.QrBackground,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.size(QrSize),
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.size(QrPadSize),
     ) {
         Box(contentAlignment = Alignment.Center) { content() }
     }
@@ -182,9 +257,9 @@ private fun QrSurface(content: @Composable () -> Unit) {
 @Composable
 private fun QrPlaceholder(showSpinner: Boolean) {
     Surface(
-        modifier = Modifier.size(QrSize),
+        modifier = Modifier.size(QrPadSize),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = MaterialTheme.shapes.medium,
+        shape = MaterialTheme.shapes.large,
     ) {
         Box(contentAlignment = Alignment.Center) {
             // 走整块那一档不是行内那一档:等的是这张码本身,它占满了这个位置。
@@ -198,10 +273,10 @@ private fun QrPlaceholder(showSpinner: Boolean) {
 private fun QrOverlay(content: @Composable ColumnScope.() -> Unit) {
     Box(
         modifier = Modifier
-            .size(QrSize)
+            .size(QrPadSize)
             .background(
-                MaterialTheme.colorScheme.surface.copy(alpha = OverlayAlpha),
-                MaterialTheme.shapes.medium,
+                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = OverlayAlpha),
+                MaterialTheme.shapes.large,
             ),
         contentAlignment = Alignment.Center,
     ) {
@@ -213,7 +288,7 @@ private fun QrOverlay(content: @Composable ColumnScope.() -> Unit) {
     }
 }
 
-private const val OverlayAlpha = 0.92f
+private const val OverlayAlpha = 0.94f
 
 class TvLoginViewModel(private val repository: TvLoginRepository) : ViewModel() {
 
