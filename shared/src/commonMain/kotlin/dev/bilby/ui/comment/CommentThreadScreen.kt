@@ -123,9 +123,20 @@ private fun CommentThreadScreen(
     var composerOpen by rememberSaveable { mutableStateOf(false) }
     var composerTarget by rememberSaveable { mutableStateOf<Long?>(null) }
     var composerStartEmoji by rememberSaveable { mutableStateOf(false) }
+    var composerFocusNonce by remember { mutableIntStateOf(0) }
+    val useInlineComposer = rememberUseInlineCommentComposer(composerOpen)
     val drafts = rememberSaveable(saver = DraftsSaver) { mutableStateMapOf<Long, String>() }
     var sentTarget by rememberSaveable { mutableStateOf<Long?>(null) }
     var sentText by rememberSaveable { mutableStateOf("") }
+
+    val submitTo: (Long) -> Unit = { target ->
+        val textToSend = drafts[target].orEmpty()
+        if (!state.sending && textToSend.isNotBlank()) {
+            sentTarget = target
+            sentText = textToSend
+            onSend(textToSend, target)
+        }
+    }
 
     // 草稿只在发出去之后才清,判据同 CommentSection:成功计数变大了。
     var seenSentCount by rememberSaveable { mutableIntStateOf(state.sentCount) }
@@ -188,6 +199,7 @@ private fun CommentThreadScreen(
                             onReply = { comment ->
                                 composerTarget = comment.rpid.takeIf { it != root.rpid }
                                 composerStartEmoji = false
+                                composerFocusNonce++
                                 composerOpen = true
                             },
                             onLike = onLike,
@@ -202,26 +214,56 @@ private fun CommentThreadScreen(
             }
             // 楼没读出来之前没有可回复的对象,不给栏。
             if (root != null) {
-                val rootLabel = stringResource(Res.string.comment_replying_to, root.uname)
-                CommentPromptBar(
-                    draftPreview = drafts[root.rpid].orEmpty(),
-                    placeholder = rootLabel,
-                    onOpenKeyboard = {
-                        composerTarget = null
-                        composerStartEmoji = false
-                        composerOpen = true
-                    },
-                    onOpenEmoji = {
-                        composerTarget = null
-                        composerStartEmoji = true
-                        composerOpen = true
-                    },
-                )
+                if (useInlineComposer && composerOpen) {
+                    val target = composerTarget ?: root.rpid
+                    val replyName = composerTarget?.let { state.find(it)?.uname } ?: root.uname
+                    val replyLabel = stringResource(Res.string.comment_replying_to, replyName)
+                    InlineCommentComposer(
+                        targetKey = target,
+                        draft = drafts[target].orEmpty(),
+                        onDraftChange = { drafts[target] = it },
+                        replyLabel = replyLabel,
+                        onClearReply = {
+                            if (composerTarget != null) {
+                                composerTarget = null
+                                composerFocusNonce++
+                            } else {
+                                composerOpen = false
+                            }
+                        },
+                        placeholder = stringResource(Res.string.comment_input_hint),
+                        sending = state.sending,
+                        error = state.sendError?.takeIf { !state.sending && sentTarget == target }
+                            ?.let { stringResource(Res.string.comment_send_failed, it) },
+                        initialOpenEmoji = composerStartEmoji,
+                        onSend = { submitTo(target) },
+                        onDismiss = { composerOpen = false },
+                        focusRequestKey = composerFocusNonce,
+                    )
+                } else {
+                    val rootLabel = stringResource(Res.string.comment_replying_to, root.uname)
+                    CommentPromptBar(
+                        draftPreview = drafts[root.rpid].orEmpty(),
+                        placeholder = rootLabel,
+                        onOpenKeyboard = {
+                            composerTarget = null
+                            composerStartEmoji = false
+                            composerFocusNonce++
+                            composerOpen = true
+                        },
+                        onOpenEmoji = {
+                            composerTarget = null
+                            composerStartEmoji = true
+                            composerFocusNonce++
+                            composerOpen = true
+                        },
+                    )
+                }
             }
         }
     }
     val root = state.root
-    if (composerOpen && root != null) {
+    if (!useInlineComposer && composerOpen && root != null) {
         val target = composerTarget ?: root.rpid
         val draft = drafts[target].orEmpty()
         val replyName = composerTarget?.let { state.find(it)?.uname } ?: root.uname
@@ -235,13 +277,7 @@ private fun CommentThreadScreen(
             error = state.sendError?.takeIf { !state.sending && sentTarget == target }
                 ?.let { stringResource(Res.string.comment_send_failed, it) },
             initialOpenEmoji = composerStartEmoji,
-            onSend = {
-                if (!state.sending && draft.isNotBlank()) {
-                    sentTarget = target
-                    sentText = draft
-                    onSend(draft, target)
-                }
-            },
+            onSend = { submitTo(target) },
             onDismiss = { composerOpen = false },
         )
     }

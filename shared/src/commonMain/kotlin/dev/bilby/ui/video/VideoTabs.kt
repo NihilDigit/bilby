@@ -166,9 +166,9 @@ import dev.bilby.ui.player.EpisodeTarget
 import dev.bilby.ui.player.QueueEdges
 import dev.bilby.ui.player.QueueEditActions
 import dev.bilby.ui.player.QueuePlaybackControls
-import dev.bilby.ui.player.QueuePlaybackControlsRow
 import dev.bilby.ui.player.QueueRowItem
 import dev.bilby.ui.player.currentIndex
+import dev.bilby.ui.player.labelRes
 import dev.bilby.formatDurationSeconds
 import dev.bilby.agent.AgentTurnState
 import dev.bilby.data.FavFolder
@@ -217,9 +217,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import dev.bilby.BvidCodec
 import dev.bilby.data.model.plainText
 import dev.bilby.player.QueueState
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.CopyableIdPill
@@ -1140,59 +1140,81 @@ private fun FullQueueSheet(
             null
         },
         subheader = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
+            val actions = queue.editActions
+            val canEdit = actions != null && queue.rows.size > 1
+            val canClearOthers = canEdit && editing && actions?.onClearOthers != null
+            val onReset = actions?.onReset
+            val hasEditButtons = canEdit || onReset != null
+
+            FlowRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                itemVerticalAlignment = Alignment.CenterVertically,
             ) {
-                FlowRow(
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                ) {
-                    val actions = queue.editActions
-                    if (actions != null && queue.rows.size > 1) {
-                        TextButton(
-                            onClick = { editing = !editing },
-                            contentPadding = PaddingValues(horizontal = Spacing.Tight),
-                            modifier = Modifier.defaultMinSize(minWidth = 1.dp),
-                        ) {
-                            Text(stringResource(if (editing) Res.string.action_done else Res.string.queue_edit))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    QueuePlaybackControls(
+                        endMode = queue.endMode,
+                        order = queue.order,
+                        onCycleEndMode = onCycleEndMode,
+                        onCycleOrder = onCycleOrder,
+                        showOrder = queue.rows.size > 1,
+                    )
+                }
+                if (hasEditButtons) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                    ) {
+                        if (canEdit) {
+                            TextButton(
+                                onClick = { editing = !editing },
+                                contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                                modifier = Modifier.defaultMinSize(minWidth = 1.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(if (editing) Res.string.action_done else Res.string.queue_edit),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
+                            }
                         }
-                        if (editing && actions.onClearOthers != null) {
+                        if (canClearOthers) {
                             TextButton(
                                 onClick = {
-                                    actions.onClearOthers.invoke()
+                                    actions?.onClearOthers?.invoke()
                                     editing = false
                                 },
                                 contentPadding = PaddingValues(horizontal = Spacing.Tight),
                                 modifier = Modifier.defaultMinSize(minWidth = 1.dp),
                             ) {
-                                Text(stringResource(Res.string.queue_clear_others))
+                                Text(
+                                    text = stringResource(Res.string.queue_clear_others),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
+                            }
+                        }
+                        if (onReset != null) {
+                            TextButton(
+                                onClick = {
+                                    onReset()
+                                    editing = false
+                                },
+                                contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                                modifier = Modifier.defaultMinSize(minWidth = 1.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(Res.string.queue_reset),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
                             }
                         }
                     }
-                    val onReset = actions?.onReset
-                    if (onReset != null) {
-                        TextButton(
-                            onClick = {
-                                onReset()
-                                editing = false
-                            },
-                            contentPadding = PaddingValues(horizontal = Spacing.Tight),
-                            modifier = Modifier.defaultMinSize(minWidth = 1.dp),
-                        ) {
-                            Text(stringResource(Res.string.queue_reset))
-                        }
-                    }
                 }
-                QueuePlaybackControls(
-                    endMode = queue.endMode,
-                    order = queue.order,
-                    onCycleEndMode = onCycleEndMode,
-                    onCycleOrder = onCycleOrder,
-                    showOrder = queue.rows.size > 1,
-                )
             }
         },
     ) {
@@ -1434,9 +1456,9 @@ private fun UpRow(
 /**
  * 标题、元信息胶囊行和就地平滑展开的版权声明、简介与标签。
  *
- * - 标题升至 `titleLargeEmphasized`,长按/右键支持复制标题、BV 号、AV 号与自由选词;
- * - BV 号与 AV 号在收起与展开两态均提供单击即复制的 [CopyableIdPill](独立消费点按,不误触展开切换);
- * - 展开区以 `expandVertically + fadeIn` 在列表内原地生长,绝不卸载下方的播放队列。
+ * - 标题升至 `titleLargeEmphasized`,长按/右键支持复制标题、BV 号与自由选词;
+ * - BV 号在收起与展开两态均提供单击即复制的 [CopyableIdPill](独立消费点按,不误触展开切换);
+ * - 展开/收起箭头固定在元信息行末尾同一位置,展开区以 `expandVertically + fadeIn` 在列表内原地生长,不额外占用底部收起行。
  */
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -1453,10 +1475,6 @@ private fun TitleBlock(
 ) {
     val isTouch = LocalPointerSource.current.isTouchLike
     val pointerSelectsText = expanded && !isTouch
-    val resolvedAid = remember(detail.aid, detail.bvid) {
-        detail.aid.takeIf { it > 0L } ?: BvidCodec.toAid(detail.bvid).takeIf { it > 0L }
-    }
-    val avidText = resolvedAid?.let { "av$it" }.orEmpty()
 
     val copyText = rememberCopyAction()
     val copyBvid = rememberCopyAction(
@@ -1466,7 +1484,6 @@ private fun TitleBlock(
     val menuLabel = stringResource(Res.string.menu_item_actions)
     val copyTitleLabel = stringResource(Res.string.action_copy_title)
     val copyBvidLabel = stringResource(Res.string.video_bvid_copy)
-    val copyAvidLabel = stringResource(Res.string.action_copy_avid)
     val copyDescLabel = stringResource(Res.string.action_copy_desc)
     val selectTextLabel = stringResource(Res.string.action_select_text)
 
@@ -1487,7 +1504,6 @@ private fun TitleBlock(
     ) {
         val titleMenuCount = (if (detail.title.isNotBlank()) 1 else 0) +
             (if (detail.bvid.isNotBlank()) 1 else 0) +
-            (if (avidText.isNotEmpty()) 1 else 0) +
             (if (detail.title.isNotBlank()) 1 else 0)
 
         ContextMenuBox(
@@ -1516,17 +1532,6 @@ private fun TitleBlock(
                             copyBvid(detail.bvid)
                         },
                         text = { Text(copyBvidLabel) },
-                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
-                        shape = menuItemShape(cursor++, titleMenuCount),
-                    )
-                }
-                if (avidText.isNotEmpty()) {
-                    DropdownMenuItem(
-                        onClick = {
-                            close()
-                            copyText(avidText)
-                        },
-                        text = { Text(copyAvidLabel) },
                         leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
                         shape = menuItemShape(cursor++, titleMenuCount),
                     )
@@ -1568,6 +1573,7 @@ private fun TitleBlock(
                 .clickable(
                     interactionSource = null,
                     indication = null,
+                    role = Role.Button,
                     onClick = onToggle,
                 ),
         ) {
@@ -1609,21 +1615,17 @@ private fun TitleBlock(
                 if (detail.bvid.isNotBlank()) {
                     CopyableIdPill(text = detail.bvid)
                 }
-                if (avidText.isNotEmpty()) {
-                    CopyableIdPill(text = avidText)
-                }
             }
-            if (!expanded) {
-                Spacer(modifier = Modifier.width(Spacing.Hair))
-                arrow()
-            }
+            Spacer(modifier = Modifier.width(Spacing.Tight))
+            arrow()
         }
 
         val hasCopyrightNotice = detail.copyright == 1 && detail.noReprint
         val hasDescription = detail.description.isNotBlank() || detail.descriptionSpans.isNotEmpty()
+        val hasExpandedContent = hasCopyrightNotice || hasDescription || tags.isNotEmpty()
 
         AnimatedVisibility(
-            visible = expanded,
+            visible = expanded && hasExpandedContent,
             enter = expandVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) +
                 fadeIn(MaterialTheme.motionScheme.defaultEffectsSpec()),
             exit = shrinkVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) +
@@ -1725,16 +1727,6 @@ private fun TitleBlock(
                             )
                         }
                     }
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.extraSmall)
-                        .clickable(role = Role.Button, onClick = onToggle)
-                        .padding(vertical = Spacing.Hair / 2),
-                    contentAlignment = Alignment.CenterEnd,
-                ) {
-                    arrow()
                 }
             }
         }
@@ -2842,7 +2834,9 @@ private fun ShowAllRow(
 }
 
 /**
- * 队列的标题行:来源名 + 「X / N」位置胶囊,以及找相关、缓存、播放模式三个动作。
+ * 队列头部拆为上下两行:
+ * - 第一行:来源名(可点击进入合集/空间时附右尖括号,占满左侧剩余宽度) + 「X / N」位置胶囊;
+ * - 第二行:左侧播放策略开关(完播行为、播放顺序),右侧找相关与缓存紧凑动作按钮。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -2859,34 +2853,60 @@ private fun QueueHeader(
     val posText = queue.state?.takeIf { !queue.enriching }?.let { QueuePositionText(it) }
     val edgeLoading = queue.state?.let { it.loadingBefore || it.loadingAfter } == true
 
-    Layout(
-        modifier = Modifier.fillMaxWidth(),
-        content = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                modifier = Modifier
-                    .heightIn(min = Dimens.MinTouchTarget)
-                    .then(
-                        if (onTitleClick != null) {
-                            Modifier
-                                .clip(MaterialTheme.shapes.small)
-                                .clickable(role = Role.Button, onClick = onTitleClick)
-                        } else {
-                            Modifier
-                        },
+    val endLabel = stringResource(queue.endMode.labelRes())
+    val orderLabel = stringResource(queue.order.labelRes())
+    val relatedLabel = stringResource(Res.string.video_find_related)
+    val cacheLabel = stringResource(Res.string.offline_cache_action)
+    val buttonTextStyle = MaterialTheme.typography.labelLarge
+    val textMeasurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val totalLabeledWidth = remember(
+        endLabel,
+        orderLabel,
+        relatedLabel,
+        cacheLabel,
+        onFindRelated != null,
+        buttonTextStyle,
+        density,
+    ) {
+        val chromePerButton = Spacing.Tight * 2 + Dimens.IconInline + Spacing.Hair
+        fun buttonWidth(label: String): Dp = with(density) {
+            chromePerButton + textMeasurer.measure(label, buttonTextStyle).size.width.toDp()
+        }
+        buttonWidth(endLabel) +
+            buttonWidth(orderLabel) +
+            (if (onFindRelated != null) buttonWidth(relatedLabel) else 0.dp) +
+            buttonWidth(cacheLabel) +
+            Spacing.Tight
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = Dimens.MinTouchTarget),
+        ) {
+            if (onTitleClick != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = Dimens.MinTouchTarget)
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable(role = Role.Button, onClick = onTitleClick)
+                        .padding(vertical = Spacing.Tight),
+                ) {
+                    Text(
+                        text = resolvedLabel,
+                        style = MaterialTheme.typography.titleSmallEmphasized,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
-                    .padding(vertical = Spacing.Tight),
-            ) {
-                Text(
-                    text = resolvedLabel,
-                    style = MaterialTheme.typography.titleSmallEmphasized,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                if (onTitleClick != null) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = null,
@@ -2894,79 +2914,92 @@ private fun QueueHeader(
                         modifier = Modifier.size(Dimens.IconInline),
                     )
                 }
-                if (!posText.isNullOrBlank()) {
-                    QueuePositionBadge(text = posText)
-                }
-                if (edgeLoading) {
-                    LoadingSpinner()
-                }
+            } else {
+                Text(
+                    text = resolvedLabel,
+                    style = MaterialTheme.typography.titleSmallEmphasized,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(vertical = Spacing.Tight),
+                )
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!posText.isNullOrBlank()) {
+                QueuePositionBadge(text = posText)
+            }
+            if (edgeLoading) {
+                LoadingSpinner()
+            }
+        }
+
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val showActionLabels = totalLabeledWidth <= maxWidth
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = Spacing.Hair),
+            ) {
+                QueuePlaybackControls(
+                    endMode = queue.endMode,
+                    order = queue.order,
+                    onCycleEndMode = onCycleEndMode,
+                    onCycleOrder = onCycleOrder,
+                )
+                Spacer(modifier = Modifier.weight(1f))
                 if (onFindRelated != null) {
-                    IconButton(onClick = onFindRelated) {
-                        Icon(
-                            Icons.Filled.AutoAwesome,
-                            contentDescription = stringResource(Res.string.video_find_related),
-                            modifier = Modifier.size(Dimens.IconInline),
-                        )
-                    }
-                }
-                IconButton(onClick = onCache) {
-                    Icon(
-                        Icons.Outlined.DownloadForOffline,
-                        contentDescription = stringResource(Res.string.offline_cache_action),
-                        modifier = Modifier.size(Dimens.IconInline),
+                    QueueHeaderActionButton(
+                        icon = Icons.Filled.AutoAwesome,
+                        label = relatedLabel,
+                        showLabel = showActionLabels,
+                        onClick = onFindRelated,
                     )
                 }
-            }
-            QueuePlaybackControlsRow(
-                endMode = queue.endMode,
-                order = queue.order,
-                onCycleEndMode = onCycleEndMode,
-                onCycleOrder = onCycleOrder,
-            )
-        },
-    ) { measurables, constraints ->
-        val loose = constraints.copy(minWidth = 0, minHeight = 0)
-        val iconsPlaceable = measurables[1].measure(loose)
-        val controlsPlaceable = measurables[2].measure(loose)
-        val gapPx = Spacing.Tight.roundToPx()
-        val minTouchPx = Dimens.MinTouchTarget.roundToPx()
-        val minInlineTitlePx = (if (!posText.isNullOrBlank()) {
-            QueueInlineTitleWithBadgeMinWidth
-        } else {
-            QueueInlineTitleMinWidth
-        }).roundToPx()
-        val titleNaturalWidth = measurables[0].maxIntrinsicWidth(Constraints.Infinity)
-        val requiredTitleWidth = minOf(titleNaturalWidth, minInlineTitlePx)
-        val trailingInlineWidth = iconsPlaceable.width + controlsPlaceable.width
-        val singleRow = requiredTitleWidth + gapPx + trailingInlineWidth <= constraints.maxWidth
-
-        if (singleRow) {
-            val titleMaxWidth = (constraints.maxWidth - gapPx - trailingInlineWidth).coerceAtLeast(0)
-            val titlePlaceable = measurables[0].measure(loose.copy(maxWidth = titleMaxWidth))
-            val height = maxOf(minTouchPx, titlePlaceable.height, iconsPlaceable.height, controlsPlaceable.height)
-            layout(constraints.maxWidth, height) {
-                titlePlaceable.placeRelative(0, (height - titlePlaceable.height) / 2)
-                val controlsX = constraints.maxWidth - controlsPlaceable.width
-                val iconsX = controlsX - iconsPlaceable.width
-                iconsPlaceable.placeRelative(iconsX, (height - iconsPlaceable.height) / 2)
-                controlsPlaceable.placeRelative(controlsX, (height - controlsPlaceable.height) / 2)
-            }
-        } else {
-            val titleMaxWidth = (constraints.maxWidth - gapPx - iconsPlaceable.width).coerceAtLeast(0)
-            val titlePlaceable = measurables[0].measure(loose.copy(maxWidth = titleMaxWidth))
-            val row1Height = maxOf(minTouchPx, titlePlaceable.height, iconsPlaceable.height)
-            val totalHeight = row1Height + controlsPlaceable.height
-            layout(constraints.maxWidth, totalHeight) {
-                titlePlaceable.placeRelative(0, (row1Height - titlePlaceable.height) / 2)
-                iconsPlaceable.placeRelative(
-                    constraints.maxWidth - iconsPlaceable.width,
-                    (row1Height - iconsPlaceable.height) / 2,
+                QueueHeaderActionButton(
+                    icon = Icons.Outlined.DownloadForOffline,
+                    label = cacheLabel,
+                    showLabel = showActionLabels,
+                    onClick = onCache,
                 )
-                controlsPlaceable.placeRelative(
-                    (constraints.maxWidth - controlsPlaceable.width).coerceAtLeast(0),
-                    row1Height,
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueueHeaderActionButton(
+    icon: ImageVector,
+    label: String,
+    showLabel: Boolean,
+    onClick: () -> Unit,
+) {
+    if (showLabel) {
+        TextButton(
+            onClick = onClick,
+            contentPadding = PaddingValues(horizontal = Spacing.Tight),
+            modifier = Modifier.defaultMinSize(minWidth = 1.dp),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+            Text(
+                text = label,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(start = Spacing.Hair),
+            )
+        }
+    } else {
+        BilbyTooltip(text = label) {
+            IconButton(onClick = onClick) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    modifier = Modifier.size(Dimens.IconInline),
                 )
             }
         }
@@ -2998,9 +3031,6 @@ private fun QueuePositionBadge(
     }
 }
 
-/** 标题与动作按钮挤在同一行时,为长合集标题保留的最小宽度;带「X / N」位置胶囊时放宽,避免挤扁。 */
-private val QueueInlineTitleMinWidth = 84.dp
-private val QueueInlineTitleWithBadgeMinWidth = 132.dp
 private val QueueBadgeVerticalPadding = 2.dp
 private val MetadataBadgeVerticalPadding = 2.dp
 private val CopyrightIconSize = 14.dp

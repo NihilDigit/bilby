@@ -1,13 +1,23 @@
 package dev.bilby.ui.comment
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -20,16 +30,21 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.CornerSize
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.SentimentSatisfied
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -46,6 +61,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -63,17 +88,23 @@ import dev.bilby.data.LocalEmoteRepository
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.BackHandler
+import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.barsAndCutout
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.ConfigureInputDialogWindow
 import dev.bilby.ui.components.EmotePickerPanel
 import dev.bilby.ui.components.EmoteToggleButton
+import dev.bilby.ui.components.LoadingSpinner
+import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.PillInputField
 import dev.bilby.ui.components.SettledKeyboardHeightTracker
 import dev.bilby.ui.components.fullScreenDialogProperties
 import dev.bilby.ui.components.insertAtCursor
 import dev.bilby.ui.components.rememberReplyEmoteState
+import dev.bilby.ui.components.trackEditableFocus
 import dev.bilby.ui.imeTarget
 import dev.bilby.ui.screenOrientationKey
+import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.interactiveCard
@@ -424,8 +455,303 @@ internal fun CommentComposerDialog(
     }
 }
 
+/**
+ * 桌面窗口或非触屏指针模式下一律采用就地停靠的评论编辑卡片([InlineCommentComposer]),
+ * 避免全窗口模态输入浮层给左侧视频画面蒙黑遮罩;Android 触屏软键盘输入则继续走 [CommentComposerDialog]。
+ *
+ * 编辑态打开期间锁定分支,避免二合一设备先用鼠标点开输入框、再用手指点发送或表情时中途切换成模态弹窗。
+ */
+@Composable
+internal fun rememberUseInlineCommentComposer(composerOpen: Boolean): Boolean {
+    var hadWindowCaption by remember { mutableStateOf(false) }
+    if (LocalWindowCaption.current != null) hadWindowCaption = true
+    val useInline = LocalWindowCaption.current != null || hadWindowCaption || !LocalPointerSource.current.isTouchLike
+    var latched by remember { mutableStateOf(useInline) }
+    if (!composerOpen) {
+        latched = useInline
+    }
+    return if (composerOpen) latched else useInline
+}
+
+/**
+ * 桌面与键鼠模式下的内嵌停靠评论编辑卡片:直接替代列底部的 [CommentPromptBar] 原地展开,
+ * 无全窗口对话框、无跨栏遮罩。
+ *
+ * - 打开或切换回复对象时自动请求焦点;`Esc` 收起卡片,`Ctrl+Enter` / `Meta+Enter` 直接发送;
+ * - 回复具体对象时顶部显示紧凑「回复 @…」条与取消回复按钮;
+ * - 表情开关开启时在卡片内部平滑展开 `200.dp` 高的 [EmotePickerPanel]。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+internal fun InlineCommentComposer(
+    targetKey: Any,
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    replyLabel: String?,
+    onClearReply: (() -> Unit)?,
+    placeholder: String,
+    sending: Boolean,
+    error: String?,
+    initialOpenEmoji: Boolean,
+    onSend: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    focusRequestKey: Int = 0,
+    inSheetFooter: Boolean = false,
+) {
+    BackHandler(onBack = onDismiss)
+
+    val focusRequester = remember { FocusRequester() }
+    val interactionSource = remember { MutableInteractionSource() }
+    val focused by interactionSource.collectIsFocusedAsState()
+    val hasEmoteRepo = LocalEmoteRepository.current != null
+
+    var fieldValue by remember(targetKey) {
+        mutableStateOf(TextFieldValue(text = draft, selection = TextRange(draft.length)))
+    }
+    if (fieldValue.text != draft) {
+        fieldValue = TextFieldValue(
+            text = draft,
+            selection = TextRange(draft.length),
+        )
+    }
+    val updateField: (TextFieldValue) -> Unit = { next ->
+        val textChanged = next.text != fieldValue.text
+        fieldValue = next
+        if (textChanged) onDraftChange(next.text)
+    }
+
+    var emojiOpen by remember { mutableStateOf(initialOpenEmoji) }
+    LaunchedEffect(initialOpenEmoji) {
+        if (initialOpenEmoji) emojiOpen = true
+    }
+    val (emoteState, retryEmotes) = rememberReplyEmoteState(active = emojiOpen)
+    val canSend = !sending && fieldValue.text.isNotBlank()
+
+    LaunchedEffect(targetKey, focusRequestKey) {
+        focusRequester.requestFocus()
+    }
+
+    val outerModifier = if (inSheetFooter) {
+        modifier.fillMaxWidth()
+    } else {
+        modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom))
+            .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight)
+    }
+
+    val borderColor by animateColorAsState(
+        targetValue = if (focused) {
+            MaterialTheme.colorScheme.primary.copy(alpha = InlineFocusedBorderAlpha)
+        } else {
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = InlineUnfocusedBorderAlpha)
+        },
+        animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+        label = "inlineComposerBorder",
+    )
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = MaterialTheme.shapes.largeIncreased,
+        border = BorderStroke(InlineComposerBorderWidth, borderColor),
+        modifier = outerModifier.onPreviewKeyEvent { event ->
+            if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+            val bare = !event.isCtrlPressed && !event.isAltPressed && !event.isShiftPressed && !event.isMetaPressed
+            if (bare && event.key == Key.Escape) {
+                onDismiss()
+                return@onPreviewKeyEvent true
+            }
+            val submitChord = (event.isCtrlPressed || event.isMetaPressed) &&
+                !event.isAltPressed &&
+                !event.isShiftPressed
+            if (submitChord && (event.key == Key.Enter || event.key == Key.NumPadEnter)) {
+                if (canSend) onSend()
+                return@onPreviewKeyEvent true
+            }
+            false
+        },
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacing.Cozy),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            if (replyLabel != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = replyLabel,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (onClearReply != null) {
+                        val clearLabel = stringResource(Res.string.comment_reply_cancel)
+                        BilbyTooltip(text = clearLabel, anchorAbove = true) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(ReplyClearButtonSize)
+                                    .clip(CircleShape)
+                                    .clickable(role = Role.Button, onClick = onClearReply),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = clearLabel,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(ReplyClearIconSize),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Box(
+                contentAlignment = Alignment.TopStart,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (fieldValue.text.isEmpty()) {
+                    Text(
+                        text = placeholder,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = InlineMinLines,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                BasicTextField(
+                    value = fieldValue,
+                    onValueChange = updateField,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurface,
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    minLines = InlineMinLines,
+                    maxLines = MaxLines,
+                    interactionSource = interactionSource,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester)
+                        .trackEditableFocus()
+                        .semantics { contentDescription = replyLabel ?: placeholder },
+                )
+            }
+
+            if (error != null && !sending) {
+                Text(
+                    text = error,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (hasEmoteRepo) {
+                    val emoteLabel = stringResource(Res.string.emote_open)
+                    BilbyTooltip(text = emoteLabel, anchorAbove = true) {
+                        IconButton(
+                            onClick = { emojiOpen = !emojiOpen },
+                            modifier = Modifier.size(IconButtonDefaults.extraSmallContainerSize()),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.SentimentSatisfied,
+                                contentDescription = emoteLabel,
+                                tint = if (emojiOpen) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                modifier = Modifier.size(Dimens.IconInline),
+                            )
+                        }
+                    }
+                }
+                commentDraftCounter(fieldValue.text.length)?.let { counter ->
+                    Text(
+                        text = counter,
+                        style = MaterialTheme.typography.labelSmall.tabular,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(
+                    onClick = onDismiss,
+                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
+                    modifier = Modifier.heightIn(min = InlineActionButtonHeight),
+                ) {
+                    Text(
+                        text = stringResource(Res.string.action_cancel),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+                val sendLabel = stringResource(Res.string.action_send)
+                BilbyTooltip(text = sendLabel, shortcut = "Ctrl+Enter", anchorAbove = true) {
+                    Button(
+                        onClick = onSend,
+                        enabled = canSend,
+                        contentPadding = PaddingValues(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
+                        modifier = Modifier.heightIn(min = InlineActionButtonHeight),
+                    ) {
+                        if (sending) {
+                            LoadingSpinner(size = Dimens.IconInline)
+                        } else {
+                            Text(
+                                text = sendLabel,
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                        }
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = emojiOpen && hasEmoteRepo,
+                enter = expandVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) +
+                    fadeIn(MaterialTheme.motionScheme.defaultEffectsSpec()),
+                exit = shrinkVertically(MaterialTheme.motionScheme.defaultSpatialSpec()) +
+                    fadeOut(MaterialTheme.motionScheme.defaultEffectsSpec()),
+            ) {
+                EmotePickerPanel(
+                    state = emoteState,
+                    onRetry = retryEmotes,
+                    onSelect = { action ->
+                        if (action is EmoteAction.InsertText) {
+                            updateField(fieldValue.insertAtCursor(action.text))
+                            focusRequester.requestFocus()
+                        }
+                    },
+                    height = InlineEmotePanelHeight,
+                    modifier = Modifier.clip(MaterialTheme.shapes.medium),
+                )
+            }
+        }
+    }
+}
+
+private const val InlineMinLines = 2
 private const val MaxLines = 6
 private const val KeyboardResumeGraceMillis = 180L
+private const val InlineFocusedBorderAlpha = 0.6f
+private const val InlineUnfocusedBorderAlpha = 0.4f
+private val InlineComposerBorderWidth = 1.dp
+private val ReplyClearButtonSize = 24.dp
+private val ReplyClearIconSize = 16.dp
+private val InlineActionButtonHeight = 36.dp
+private val InlineEmotePanelHeight = 200.dp
 private val PromptMinHeight = 52.dp
 /** M3 `bottom-sheets.md` 宽屏输入面板的最大宽度。 */
 private val ComposerMaxWidth = 640.dp
