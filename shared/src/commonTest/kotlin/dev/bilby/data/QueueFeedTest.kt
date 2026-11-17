@@ -11,7 +11,7 @@ import org.junit.Test
 
 /**
  * 队列来源的定位与续取。钉的是几处只在特定位置才发作的边界:列表在点开之后挪了一页、
- * 当前视频落在第一页开头、游标接口两段拼接的方向。
+ * 当前视频落在第一页开头、游标接口两段拼接的方向、过滤失效条目时的偏移量稳定与夜间归并顺序。
  */
 class QueueFeedTest {
 
@@ -80,9 +80,41 @@ class QueueFeedTest {
         assertTrue(items.size - 1 - items.indexOfFirst { it.bvid == "v41" } >= QUEUE_WINDOW)
     }
 
+    @Test
+    fun `PagedFeed 往前续取遇到过滤减员页时 offsetOfFirst 按实际条数递减不跳变`() = runTest {
+        val pageItems = mapOf(
+            1 to (0 until 8).map(::item),
+            2 to (10 until 17).map(::item),
+            3 to (20 until 26).map(::item),
+            4 to (30 until 40).map(::item),
+            5 to (40 until 50).map(::item),
+        )
+        val feed = PagedFeed(anchorPage = 4, pageSize = 10) { page ->
+            val list = pageItems[page] ?: return@PagedFeed null
+            FeedPage(items = list, hasMore = page < 5, total = 50)
+        }
+
+        // 在第 4 页(起始偏移 30)打开 v35(页内下标 5,来源位置 36);fillWindow 往前拉第 3 页(6 条)后偏移应为 24。
+        val opened = feed.open("v35")!!
+        val idxAfterOpen = opened.indexOfFirst { it.bvid == "v35" }
+        assertEquals(24, feed.offsetOfFirst)
+        assertEquals(36, feed.offsetOfFirst!! + idxAfterOpen + 1)
+
+        // 再往前续第 2 页(7 条):偏移从 24 减到 17,当前项来源位置仍稳定在 36。
+        val page2 = feed.loadBefore()!!
+        val combined = page2 + opened
+        assertEquals(17, feed.offsetOfFirst)
+        assertEquals(36, feed.offsetOfFirst!! + combined.indexOfFirst { it.bvid == "v35" } + 1)
+
+        // 再往前续到第 1 页:触顶归零。
+        feed.loadBefore()!!
+        assertFalse(feed.hasBefore)
+        assertEquals(0, feed.offsetOfFirst)
+    }
+
     // 游标接口:列表按发布时间倒序,aid 越大越新。
     private val archive = (1L..200L).reversed().map { aid ->
-        CursorArchiveItem(aid, BvidCodec.fromAid(aid), "", "", 0, "")
+        CursorArchiveItem(aid, BvidCodec.fromAid(aid), "", "", 0, "测试UP")
     }
 
     private fun cursorLoad(aid: Long, newer: Boolean, includeCursor: Boolean): CursorArchivePage? {
@@ -91,11 +123,11 @@ class QueueFeedTest {
         return if (newer) {
             // 接口仍按倒序给,紧邻游标的在末尾。
             val from = (at - 20).coerceAtLeast(0)
-            CursorArchivePage(archive.subList(from, at), hasNewer = from > 0, hasOlder = true)
+            CursorArchivePage(archive.subList(from, at), hasNewer = from > 0, hasOlder = true, total = archive.size)
         } else {
             val from = if (includeCursor) at else at + 1
             val to = (from + 20).coerceAtMost(archive.size)
-            CursorArchivePage(archive.subList(from, to), hasNewer = true, hasOlder = to < archive.size)
+            CursorArchivePage(archive.subList(from, to), hasNewer = true, hasOlder = to < archive.size, total = archive.size)
         }
     }
 
@@ -111,6 +143,8 @@ class QueueFeedTest {
         assertEquals(20, aids.indexOf(100L))
         assertTrue(feed.hasBefore)
         assertTrue(feed.hasAfter)
+        assertEquals(200, feed.total)
+        assertNull(feed.offsetOfFirst)
     }
 
     @Test
@@ -121,6 +155,43 @@ class QueueFeedTest {
         val before = feed.loadBefore()!!
 
         assertEquals(BvidCodec.toAid(first.bvid) + 1, BvidCodec.toAid(before.last().bvid))
+    }
+
+    @Test
+    fun `游标触达最新或最旧边界时精确给出 offsetOfFirst 与 total`() = runTest {
+        // 1) 最新一段内打开第 5 条(aid=196):!hasBefore,offsetOfFirst 立即为 0。
+        val newestFeed = ArchiveCursorFeed(::cursorLoad)
+        val newestBvid = BvidCodec.fromAid(196)
+        val newestWindow = newestFeed.open(newestBvid)!!
+        assertFalse(newestFeed.hasBefore)
+        assertTrue(newestFeed.hasAfter)
+        assertEquals(0, newestFeed.offsetOfFirst)
+        assertEquals(200, newestFeed.total)
+        assertEquals(5, newestFeed.offsetOfFirst!! + newestWindow.indexOfFirst { it.bvid == newestBvid } + 1)
+
+        // 2) 最旧一段内打开第 198 条(aid=3):!hasAfter,offsetOfFirst = 200 - loadedSize,且往前续取保持位置不变。
+        val oldestFeed = ArchiveCursorFeed(::cursorLoad)
+        val oldestBvid = BvidCodec.fromAid(3)
+        var oldestWindow = oldestFeed.open(oldestBvid)!!
+        assertTrue(oldestFeed.hasBefore)
+        assertFalse(oldestFeed.hasAfter)
+        assertEquals(200, oldestFeed.total)
+        assertEquals(200 - oldestWindow.size, oldestFeed.offsetOfFirst)
+        assertEquals(198, oldestFeed.offsetOfFirst!! + oldestWindow.indexOfFirst { it.bvid == oldestBvid } + 1)
+
+        val prepended = oldestFeed.loadBefore()!!
+        oldestWindow = prepended + oldestWindow
+        assertEquals(200 - oldestWindow.size, oldestFeed.offsetOfFirst)
+        assertEquals(198, oldestFeed.offsetOfFirst!! + oldestWindow.indexOfFirst { it.bvid == oldestBvid } + 1)
+
+        // 3) 中间窗口往前续到顶后 offsetOfFirst 从 null 变为 0。
+        val midFeed = ArchiveCursorFeed(::cursorLoad)
+        midFeed.open(BvidCodec.fromAid(165))!!
+        assertNull(midFeed.offsetOfFirst)
+        while (midFeed.hasBefore) {
+            midFeed.loadBefore()!!
+        }
+        assertEquals(0, midFeed.offsetOfFirst)
     }
 
     @Test
@@ -164,6 +235,8 @@ class QueueFeedTest {
         val items = feed.open("v1")!!
 
         assertEquals(listOf("v1", "v2"), items.map { it.bvid })
+        assertEquals(0, feed.offsetOfFirst)
+        assertEquals(2, feed.total)
     }
 
     @Test
@@ -176,5 +249,152 @@ class QueueFeedTest {
         val items = feed.open("v1")!!
 
         assertEquals(listOf("v1", "v2", "v3"), items.map { it.bvid })
+        assertEquals(0, feed.offsetOfFirst)
+        assertEquals(3, feed.total)
+    }
+
+    @Test
+    fun `动态流从顶部命中即暴露 offsetOfFirst 为 0,翻到底后暴露 total`() = runTest {
+        val feed = DynamicVideoFeed(startOffset = null, maxPages = 2, load = dynamicPages(
+            pages = listOf((0 until 12).toList(), (12 until 24).toList(), (24 until 30).toList()),
+        ))
+
+        val opened = feed.open("v0")!!
+        assertEquals(12, opened.size)
+        assertEquals(0, feed.offsetOfFirst)
+        assertTrue(feed.hasAfter)
+        assertNull(feed.total)
+
+        val p2 = feed.loadAfter()!!
+        assertEquals(12, p2.size)
+        assertTrue(feed.hasAfter)
+        assertNull(feed.total)
+
+        val p3 = feed.loadAfter()!!
+        assertEquals(6, p3.size)
+        assertFalse(feed.hasAfter)
+        assertEquals(30, feed.total)
+
+        // 从中间游标起步时不能谎报 offsetOfFirst = 0
+        val midStartFeed = DynamicVideoFeed(startOffset = "1", maxPages = 2, load = dynamicPages(
+            pages = listOf((0 until 12).toList(), (12 until 24).toList()),
+        ))
+        midStartFeed.open("v12")!!
+        assertNull(midStartFeed.offsetOfFirst)
+    }
+
+    private fun spaceVideo(bvid: String, ts: Long, upName: String = "") = SpaceVideoItem(
+        bvid = bvid,
+        title = "Title $bvid",
+        coverUrl = "",
+        durationText = "03:20",
+        publishedAtEpochSeconds = ts,
+        playCountText = "100",
+        danmakuCountText = "10",
+        upName = upName,
+    )
+
+    @Test
+    fun `NightMergeFeed 按发布时间全局倒序归并多位 UP 主并支持分页续取`() = runTest {
+        val upA = WhitelistedUp(mid = 10L, name = "Alpha")
+        val upB = WhitelistedUp(mid = 20L, name = "Beta")
+        // 每位 UP 共 15 条,每页 10 条:Alpha 取偶数时间戳,Beta 取奇数时间戳。
+        val alphaAll = (1..15).reversed().map { i -> spaceVideo("a$i", ts = i * 20L) }
+        val betaAll = (1..15).reversed().map { i -> spaceVideo("b$i", ts = i * 20L + 10L, upName = "BetaAuthor") }
+
+        val feed = NightMergeFeed(
+            ups = listOf(upA, upB),
+            batchSize = 10,
+        ) { mid, page ->
+            val source = if (mid == 10L) alphaAll else betaAll
+            val from = (page - 1) * 10
+            SpaceArchivePage(total = source.size, items = source.drop(from).take(10))
+        }
+
+        val initial = feed.open("b15")!!
+        assertFalse(feed.hasBefore)
+        assertTrue(feed.hasAfter)
+        assertEquals(0, feed.offsetOfFirst)
+        assertEquals(30, feed.total)
+        assertEquals("b15", initial.first().bvid)
+        assertEquals("BetaAuthor", initial.first().upName)
+        // Alpha 条目接口未填 upName 时回退到白名单名字
+        assertEquals("Alpha", initial.first { it.bvid.startsWith("a") }.upName)
+
+        val all = initial.toMutableList()
+        while (feed.hasAfter) {
+            all += feed.loadAfter()!!
+        }
+        assertEquals(30, all.size)
+        assertEquals(30, feed.total)
+        // 验证全局严格按时间倒序:b15(310), a15(300), b14(290), a14(280), ..., a1(20)
+        val expected = (1..15).reversed().flatMap { i -> listOf("b$i", "a$i") }
+        assertEquals(expected, all.map { it.bvid })
+    }
+
+    @Test
+    fun `NightMergeFeed 某位 UP 续取失败时停在原处等待重试,不乱序跳过`() = runTest {
+        val upA = WhitelistedUp(mid = 10L, name = "Alpha")
+        val upB = WhitelistedUp(mid = 20L, name = "Beta")
+        val alphaPages = listOf(
+            listOf(spaceVideo("a1", 500), spaceVideo("a2", 400)),
+            listOf(spaceVideo("a3", 100)),
+        )
+        val betaPages = listOf(
+            listOf(spaceVideo("b1", 450)),
+            listOf(spaceVideo("b2", 350), spaceVideo("b3", 250)),
+        )
+        var failBetaPage2 = true
+
+        val feed = NightMergeFeed(
+            ups = listOf(upA, upB),
+            batchSize = 2,
+        ) { mid, page ->
+            if (mid == 20L && page == 2 && failBetaPage2) return@NightMergeFeed null
+            val pages = if (mid == 10L) alphaPages else betaPages
+            SpaceArchivePage(total = 3, items = pages.getOrNull(page - 1).orEmpty())
+        }
+
+        // batchSize = 2,QUEUE_WINDOW 会继续尝试拉取直到 Beta 第 2 页失败后停在已确认顺序的前两条 ["a1", "b1"]
+        val opened = feed.open("a1")!!
+        assertEquals(listOf("a1", "b1"), opened.map { it.bvid })
+        assertTrue(feed.hasAfter)
+
+        // Beta 第 2 页继续失败时 loadAfter 返回 null,绝不提前吐出 a2(400) 或 a3(100) 越过未拉到的 b2(350)
+        assertNull(feed.loadAfter())
+
+        // 恢复后重试继续严格按全局时间倒序吐出剩余条目
+        failBetaPage2 = false
+        val rest = mutableListOf<QueueItem>()
+        while (feed.hasAfter) {
+            rest += feed.loadAfter()!!
+        }
+        assertEquals(listOf("a2", "b2", "b3", "a3"), rest.map { it.bvid })
+    }
+
+    @Test
+    fun `QueueContext NightMode 与带 upName 的上下文可无损序列化往返`() {
+        val night = QueueContext.NightMode(
+            ups = listOf(WhitelistedUp(123L, "测试UP", "https://example.com/a.jpg")),
+            selectedMid = 123L,
+            anchorPage = 2,
+        )
+        assertEquals(night, decodeQueueContext(encodeQueueContext(night)))
+
+        val archive = QueueContext.UpArchive(
+            mid = 456L,
+            order = SpaceArchiveOrder.Click,
+            keyword = "刑法",
+            page = 3,
+            upName = "罗翔说刑法",
+        )
+        assertEquals(archive, decodeQueueContext(encodeQueueContext(archive)))
+
+        val dynamics = QueueContext.UpDynamics(
+            mid = 789L,
+            pageOffset = "offset_1",
+            upName = "老师好我叫何同学",
+        )
+        assertEquals(dynamics, decodeQueueContext(encodeQueueContext(dynamics)))
     }
 }

@@ -1,10 +1,12 @@
 package dev.bilby.player
 
+import dev.bilby.data.PlayEndMode
 import dev.bilby.data.QueueOrder
+import dev.bilby.data.QueueSource
 import kotlin.random.Random
 
 /**
- * 桌面的播放队列:条目、当前下标与随机顺序。
+ * 桌面的播放队列:条目、当前下标、随机顺序与分页边界状态。
  *
  * Android 的队列住在 ExoPlayer 的 playlist 里,上/下一条与随机由 Media3 回答;mpv 一次只装
  * 一条,没有 playlist 可借,这份状态只能自己存。设计文档「决定 2」给延迟 MediaSource 留的
@@ -21,6 +23,7 @@ internal class DesktopQueue(private val random: Random = Random.Default) {
 
     private val entries = mutableListOf<QueueItem>()
     private var shuffleOrder = ShuffleOrder.create(0, random)
+    private val pagination = QueuePagination()
 
     /** 当前这一条的列表下标,队列空时为 -1。 */
     var index: Int = -1
@@ -32,6 +35,16 @@ internal class DesktopQueue(private val random: Random = Random.Default) {
     val size: Int get() = entries.size
     val current: QueueItem? get() = entries.getOrNull(index)
 
+    val offsetOfFirst: Int? get() = pagination.offsetOfFirst
+    val sourceTotal: Int? get() = pagination.sourceTotal
+    val hasBefore: Boolean get() = pagination.hasBefore
+    val hasAfter: Boolean get() = pagination.hasAfter
+    val loadingBefore: Boolean get() = pagination.loadingBefore
+    val loadingAfter: Boolean get() = pagination.loadingAfter
+    val errorBefore: Boolean get() = pagination.errorBefore
+    val errorAfter: Boolean get() = pagination.errorAfter
+    val sourcePosition: Int? get() = pagination.sourcePositionFor(index, entries.size)
+
     operator fun get(at: Int): QueueItem = entries[at]
 
     /** 换一整份队列,随机顺序随之重排(同 `setMediaItems`)。 */
@@ -42,6 +55,7 @@ internal class DesktopQueue(private val random: Random = Random.Default) {
         entries.addAll(unique)
         shuffleOrder = ShuffleOrder.create(unique.size, random)
         index = if (start == null) -1 else unique.indexOfFirst { it.bvid == start.bvid }
+        pagination.reset()
     }
 
     /**
@@ -180,6 +194,145 @@ internal class DesktopQueue(private val random: Random = Random.Default) {
             QueueOrder.Reverse -> (index + 1).takeIf { it < entries.size }
             QueueOrder.Shuffle -> shuffleOrder.previous(index)
         }
+    }
+
+    fun bindFeedMeta(
+        offsetOfFirst: Int?,
+        total: Int?,
+        hasBefore: Boolean,
+        hasAfter: Boolean,
+    ) {
+        pagination.bindFeedMeta(offsetOfFirst, total, hasBefore, hasAfter, entries.size)
+    }
+
+    fun paginationSnapshot(): QueuePaginationSnapshot = pagination.snapshot()
+
+    fun restorePagination(snapshot: QueuePaginationSnapshot) {
+        pagination.restore(snapshot)
+    }
+
+    fun beginExtend(before: Boolean): Boolean = pagination.beginExtend(before)
+
+    fun cancelExtend(before: Boolean? = null) = pagination.cancelExtend(before)
+
+    fun failExtend(before: Boolean) = pagination.failExtend(before)
+
+    fun prepend(
+        items: List<QueueItem>,
+        feedHasBefore: Boolean = hasBefore,
+        feedHasAfter: Boolean = hasAfter,
+        feedTotal: Int? = sourceTotal,
+    ): Int {
+        val added = insert(0, items)
+        pagination.completeExtend(
+            before = true,
+            addedCount = added,
+            feedHasBefore = feedHasBefore,
+            feedHasAfter = feedHasAfter,
+            feedTotal = feedTotal,
+            newPlaylistSize = entries.size,
+        )
+        return added
+    }
+
+    fun append(
+        items: List<QueueItem>,
+        feedHasBefore: Boolean = hasBefore,
+        feedHasAfter: Boolean = hasAfter,
+        feedTotal: Int? = sourceTotal,
+    ): Int {
+        val added = insert(entries.size, items)
+        pagination.completeExtend(
+            before = false,
+            addedCount = added,
+            feedHasBefore = feedHasBefore,
+            feedHasAfter = feedHasAfter,
+            feedTotal = feedTotal,
+            newPlaylistSize = entries.size,
+        )
+        return added
+    }
+
+    fun completeExtend(
+        before: Boolean,
+        freshItems: List<QueueItem>,
+        feedHasBefore: Boolean,
+        feedHasAfter: Boolean,
+        feedTotal: Int?,
+    ): Int = if (before) {
+        prepend(freshItems, feedHasBefore, feedHasAfter, feedTotal)
+    } else {
+        append(freshItems, feedHasBefore, feedHasAfter, feedTotal)
+    }
+
+    fun detachToCustomQueue() {
+        pagination.detachToCustom(entries.size)
+    }
+
+    fun shouldAutoExtendBefore(detached: Boolean = false, isCustomContext: Boolean = false): Boolean =
+        !detached &&
+            !isCustomContext &&
+            order == QueueOrder.Reverse &&
+            entries.isNotEmpty() &&
+            index in 0..1 &&
+            hasBefore &&
+            !errorBefore &&
+            !loadingBefore
+
+    fun shouldAutoExtendAfter(detached: Boolean = false, isCustomContext: Boolean = false): Boolean =
+        !detached &&
+            !isCustomContext &&
+            order == QueueOrder.Forward &&
+            entries.isNotEmpty() &&
+            index >= entries.size - 2 &&
+            hasAfter &&
+            !errorAfter &&
+            !loadingAfter
+
+    fun toQueueState(
+        endMode: PlayEndMode = PlayEndMode.Continue,
+        canPrevious: Boolean = previousIndex() != null,
+        canNext: Boolean = nextIndex() != null,
+        frameId: String? = null,
+        sourceLabel: String = "",
+        source: QueueSource? = null,
+        enriching: Boolean = false,
+        incomplete: Boolean = false,
+        detached: Boolean = false,
+    ): QueueState {
+        val effectivePos = if (detached) {
+            (index + 1).takeIf { entries.isNotEmpty() && index in entries.indices }
+        } else {
+            sourcePosition
+        }
+        val effectiveTotal = if (detached) {
+            entries.size.takeIf { it > 0 }
+        } else {
+            sourceTotal
+        }
+        return QueueState(
+            current = current,
+            items = items,
+            size = size,
+            order = order,
+            endMode = endMode,
+            canPrevious = canPrevious,
+            canNext = canNext,
+            frameId = frameId,
+            sourceLabel = sourceLabel,
+            source = source,
+            enriching = enriching,
+            incomplete = incomplete,
+            detached = detached,
+            canExtendBefore = !detached && hasBefore,
+            canExtendAfter = !detached && hasAfter,
+            extendingBefore = !detached && loadingBefore,
+            extendingAfter = !detached && loadingAfter,
+            errorBefore = !detached && errorBefore,
+            errorAfter = !detached && errorAfter,
+            sourcePosition = effectivePos,
+            sourceTotal = effectiveTotal,
+        )
     }
 }
 

@@ -3,7 +3,6 @@ package dev.bilby.ui.night
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.api.BiliResult
-import dev.bilby.data.CustomQueueEntry
 import dev.bilby.data.QueueContext
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SpaceArchiveOrder
@@ -11,7 +10,6 @@ import dev.bilby.data.SpaceRepository
 import dev.bilby.data.SpaceVideoItem
 import dev.bilby.data.ToViewRepository
 import dev.bilby.data.WhitelistedUp
-import dev.bilby.parseDurationSeconds
 import dev.bilby.resources.Res
 import dev.bilby.resources.feed_toview_added
 import dev.bilby.resources.feed_toview_failed
@@ -31,7 +29,6 @@ import org.jetbrains.compose.resources.StringResource
 
 private const val BATCH_SIZE = 30
 private const val MAX_REFETCH_ROUNDS = 4
-private const val MAX_CUSTOM_QUEUE_ITEMS = 100
 
 /** 夜间模式下的一条点播投稿，附带所属白名单 UP 主信息与来源页号。 */
 data class NightVideoItem(
@@ -209,33 +206,12 @@ class NightModeViewModel(
 
     fun buildQueueContext(clicked: NightVideoItem): QueueContext {
         val current = _state.value
-        if (current.selectedMid != null) {
-            return QueueContext.UpArchive(
-                mid = clicked.up.mid,
-                order = SpaceArchiveOrder.Pubdate,
-                keyword = "",
-                page = clicked.page,
-            )
-        }
-        val list = current.items
-        val idx = list.indexOfFirst { it.bvid == clicked.bvid }.coerceAtLeast(0)
-        val window = if (list.size <= MAX_CUSTOM_QUEUE_ITEMS) {
-            list
-        } else {
-            val start = (idx - MAX_CUSTOM_QUEUE_ITEMS / 2)
-                .coerceIn(0, list.size - MAX_CUSTOM_QUEUE_ITEMS)
-            list.subList(start, start + MAX_CUSTOM_QUEUE_ITEMS)
-        }
-        val entries = window.map { item ->
-            CustomQueueEntry(
-                bvid = item.video.bvid,
-                title = item.video.title,
-                upName = item.up.name,
-                coverUrl = item.video.coverUrl,
-                durationSeconds = parseDurationSeconds(item.video.durationText),
-            )
-        }
-        return QueueContext.Custom(items = entries)
+        val ups = current.allowedUps.ifEmpty { listOf(clicked.up) }
+        return QueueContext.NightMode(
+            ups = ups,
+            selectedMid = current.selectedMid,
+            anchorPage = clicked.page,
+        )
     }
 
     private fun onAllowedUpsChanged(ups: List<WhitelistedUp>) {

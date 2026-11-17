@@ -2,12 +2,19 @@ package dev.bilby.data
 
 import java.time.LocalDateTime
 import java.time.ZoneId
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 class NightModeTest {
+
+    @get:Rule
+    val temp = TemporaryFolder()
 
     private val utc = ZoneId.of("UTC")
 
@@ -170,6 +177,128 @@ class NightModeTest {
         assertTrue(fallStatus is NightWindowStatus.Active)
         val fallWindow = (fallStatus as NightWindowStatus.Active).window
         assertEquals(7 * 60 + 30L, (fallWindow.endEpochMillis - fallWindow.startEpochMillis) / 60_000L)
+    }
+
+    @Test
+    fun `computeNextNightEndEpochMillis resolves today before endMinute and tomorrow at or after endMinute`() {
+        val endMinute = 6 * 60
+        // 02:15 -> today 06:00
+        assertEquals(
+            epoch(2026, 11, 17, 6, 0),
+            computeNextNightEndEpochMillis(endMinute, epoch(2026, 11, 17, 2, 15), utc),
+        )
+        // Exact 06:00 -> tomorrow 06:00
+        assertEquals(
+            epoch(2026, 11, 18, 6, 0),
+            computeNextNightEndEpochMillis(endMinute, epoch(2026, 11, 17, 6, 0), utc),
+        )
+        // 22:45 -> tomorrow 06:00
+        assertEquals(
+            epoch(2026, 11, 17, 6, 0),
+            computeNextNightEndEpochMillis(endMinute, epoch(2026, 11, 16, 22, 45), utc),
+        )
+    }
+
+    @Test
+    fun `manual engagement activates when schedule disabled and auto-expires at endMinute`() {
+        val engagedAt = epoch(2026, 11, 16, 22, 45)
+        val nextEnd = computeNextNightEndEpochMillis(6 * 60, engagedAt, utc)
+        val prefs = NightModePrefs(
+            enabled = false,
+            startMinuteOfDay = 23 * 60 + 30,
+            endMinuteOfDay = 6 * 60,
+            manualUntilEpochMillis = nextEnd,
+        )
+
+        val activeBeforeMidnight = evaluateNightMode(prefs, engagedAt, utc)
+        assertEquals(
+            NightWindowStatus.Active(ActiveNightWindow(engagedAt, nextEnd), manual = true),
+            activeBeforeMidnight,
+        )
+
+        val activeAfterMidnight = evaluateNightMode(prefs, epoch(2026, 11, 17, 1, 30), utc)
+        assertTrue(activeAfterMidnight is NightWindowStatus.Active && activeAfterMidnight.manual)
+
+        // Exact end boundary -> Inactive
+        assertEquals(
+            NightWindowStatus.Inactive,
+            evaluateNightMode(prefs, nextEnd, utc),
+        )
+    }
+
+    @Test
+    fun `manual engagement before scheduled window merges into scheduled window without gap`() {
+        val engagedAt = epoch(2026, 11, 16, 22, 45)
+        val endMillis = epoch(2026, 11, 17, 6, 0)
+        val prefs = NightModePrefs(
+            enabled = true,
+            startMinuteOfDay = 23 * 60 + 30,
+            endMinuteOfDay = 6 * 60,
+            manualUntilEpochMillis = endMillis,
+        )
+
+        // At 22:45 (outside schedule): manual = true
+        val earlyStatus = evaluateNightMode(prefs, engagedAt, utc) as NightWindowStatus.Active
+        assertTrue(earlyStatus.manual)
+        assertEquals(endMillis, earlyStatus.window.endEpochMillis)
+
+        // At 23:45 (inside schedule): seamlessly transitions to scheduled window (manual = false)
+        val scheduledStatus = evaluateNightMode(prefs, epoch(2026, 11, 16, 23, 45), utc) as NightWindowStatus.Active
+        assertFalse(scheduledStatus.manual)
+        assertEquals(epoch(2026, 11, 16, 23, 30), scheduledStatus.window.startEpochMillis)
+        assertEquals(endMillis, scheduledStatus.window.endEpochMillis)
+    }
+
+    @Test
+    fun `SettingsStore manual engage, temporary exit, schedule sync, and LLM normalization`() = runTest {
+        val zone = ZoneId.systemDefault()
+        val settings = SettingsStore(preferencesStore(temp.newFolder("datastore"), "test_settings"))
+
+        // 1) Manual engage with auto-schedule disabled -> Active(manual=true) -> temp exit -> Inactive
+        val nowOutside = epoch(2026, 11, 16, 22, 0, zone = zone)
+        settings.engageNightModeManually(nowOutside)
+        val manualPrefs = settings.nightModePrefs.first()
+        val manualStatus = evaluateNightMode(manualPrefs, nowOutside, zone)
+        assertTrue(manualStatus is NightWindowStatus.Active && manualStatus.manual)
+
+        // Changing endMinute while manual session is active updates manualUntilEpochMillis
+        settings.setNightModeSchedule(23 * 60 + 30, 7 * 60, nowOutside)
+        val updatedPrefs = settings.nightModePrefs.first()
+        assertEquals(
+            computeNextNightEndEpochMillis(7 * 60, nowOutside, zone),
+            updatedPrefs.manualUntilEpochMillis,
+        )
+
+        settings.exitNightModeTemporarily(nowOutside)
+        assertEquals(NightWindowStatus.Inactive, evaluateNightMode(settings.nightModePrefs.first(), nowOutside, zone))
+
+        // 2) Scheduled window active -> temp exit -> Overridden -> manual engage -> Active again
+        settings.setNightModeEnabled(true)
+        val nowInside = epoch(2026, 11, 17, 1, 0, zone = zone)
+        assertTrue(evaluateNightMode(settings.nightModePrefs.first(), nowInside, zone) is NightWindowStatus.Active)
+
+        settings.exitNightModeTemporarily(nowInside)
+        assertTrue(evaluateNightMode(settings.nightModePrefs.first(), nowInside, zone) is NightWindowStatus.Overridden)
+
+        settings.engageNightModeManually(nowInside)
+        val reEngaged = evaluateNightMode(settings.nightModePrefs.first(), nowInside, zone)
+        assertTrue(reEngaged is NightWindowStatus.Active)
+
+        // 3) LLM baseUrl normalization & model non-blank requirement
+        settings.saveLlmConfig(
+            LlmConfig(
+                baseUrl = "generativelanguage.googleapis.com/v1beta/openai/chat/completions/",
+                apiKey = " test-key ",
+                model = "",
+            ),
+        )
+        val unconfiguredModel = settings.llmConfig.first()
+        assertEquals("https://generativelanguage.googleapis.com/v1beta/openai", unconfiguredModel.baseUrl)
+        assertFalse(unconfiguredModel.isConfigured)
+
+        settings.saveLlmConfig(unconfiguredModel.copy(model = "gemini-3-flash-preview"))
+        val configured = settings.llmConfig.first()
+        assertTrue(configured.isConfigured)
     }
 
     @Test

@@ -1,7 +1,13 @@
 package dev.bilby.data
 
+import dev.bilby.BiliLog
 import dev.bilby.BvidCodec
+import dev.bilby.api.BiliResult
+import dev.bilby.parseDurationSeconds
 import dev.bilby.player.QueueItem
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 /**
  * 队列背后的那份来源。**只读当前视频附近一段,两头按需续取**(docs/queue-redesign.md 决定 4):
@@ -51,10 +57,11 @@ class PagedFeed(
     private var lastPage = 0
     private var lastHasMore = false
     private var knownTotal: Int? = null
+    private var currentOffset = 0
 
     override val hasBefore: Boolean get() = firstPage > 1
     override val hasAfter: Boolean get() = lastHasMore
-    override val offsetOfFirst: Int? get() = if (firstPage > 0) (firstPage - 1) * pageSize else null
+    override val offsetOfFirst: Int? get() = if (firstPage > 0) currentOffset else null
     override val total: Int? get() = knownTotal
 
     override suspend fun open(bvid: String): List<QueueItem>? {
@@ -66,18 +73,26 @@ class PagedFeed(
             if (loaded.items.none { it.bvid == bvid }) continue
             firstPage = page
             lastPage = page
-            lastHasMore = loaded.hasMore
-            knownTotal = loaded.total
+            lastHasMore = loaded.hasMore && loaded.items.isNotEmpty()
+            currentOffset = if (page == 1) 0 else (page - 1) * pageSize
+            knownTotal = if (page == 1 && !lastHasMore) loaded.items.size else loaded.total
             found = loaded.items
             break
         }
-        return found?.let { fillWindow(this, it, bvid) }
+        val opened = found?.let { fillWindow(this, it, bvid) } ?: return null
+        if (!hasBefore && !hasAfter) {
+            currentOffset = 0
+            knownTotal = opened.size
+        }
+        return opened
     }
 
     override suspend fun loadBefore(): List<QueueItem>? {
         if (!hasBefore) return emptyList()
         val loaded = loadPage(firstPage - 1) ?: return null
         firstPage--
+        currentOffset = if (firstPage == 1) 0 else (currentOffset - loaded.items.size).coerceAtLeast(0)
+        loaded.total?.let { knownTotal = it }
         return loaded.items
     }
 
@@ -119,9 +134,21 @@ class ArchiveCursorFeed(
     private var oldestAid = 0L
     private var newerLeft = false
     private var olderLeft = false
+    private var upstreamTotal: Int? = null
+    private var loadedSize = 0
+    private val seenAids = HashSet<Long>()
 
     override val hasBefore: Boolean get() = newerLeft
     override val hasAfter: Boolean get() = olderLeft
+    override val total: Int?
+        get() = if (!newerLeft && !olderLeft && loadedSize > 0) loadedSize else upstreamTotal
+    override val offsetOfFirst: Int?
+        get() = when {
+            loadedSize == 0 -> null
+            !newerLeft -> 0
+            !olderLeft && upstreamTotal != null -> (upstreamTotal!! - loadedSize).coerceAtLeast(0)
+            else -> null
+        }
 
     override suspend fun open(bvid: String): List<QueueItem>? {
         val aid = BvidCodec.toAid(bvid)
@@ -130,29 +157,38 @@ class ArchiveCursorFeed(
         val older = load(aid, false, true) ?: return null
         if (older.items.firstOrNull()?.bvid != bvid) return null
         val newer = load(aid, true, false)
-        val items = newer?.items.orEmpty() + older.items
+        upstreamTotal = older.total ?: newer?.total
+        seenAids.clear()
+        val items = (newer?.items.orEmpty() + older.items).filter { seenAids.add(it.aid) }
+        loadedSize = items.size
         newestAid = items.first().aid
         oldestAid = items.last().aid
         // 取更新那一段失败时仍标记为"前面还有",下次滚到头再试。
         newerLeft = if (newer == null) true else newer.hasNewer && newer.items.isNotEmpty()
-        olderLeft = older.hasOlder
+        olderLeft = older.hasOlder && older.items.isNotEmpty()
         return items.map { it.toQueueItem() }
     }
 
     override suspend fun loadBefore(): List<QueueItem>? {
         if (!newerLeft) return emptyList()
         val page = load(newestAid, true, false) ?: return null
+        page.total?.let { upstreamTotal = it }
         newerLeft = page.hasNewer && page.items.isNotEmpty()
         page.items.firstOrNull()?.let { newestAid = it.aid }
-        return page.items.map { it.toQueueItem() }
+        val fresh = page.items.filter { seenAids.add(it.aid) }
+        loadedSize += fresh.size
+        return fresh.map { it.toQueueItem() }
     }
 
     override suspend fun loadAfter(): List<QueueItem>? {
         if (!olderLeft) return emptyList()
         val page = load(oldestAid, false, false) ?: return null
+        page.total?.let { upstreamTotal = it }
         olderLeft = page.hasOlder && page.items.isNotEmpty()
         page.items.lastOrNull()?.let { oldestAid = it.aid }
-        return page.items.map { it.toQueueItem() }
+        val fresh = page.items.filter { seenAids.add(it.aid) }
+        loadedSize += fresh.size
+        return fresh.map { it.toQueueItem() }
     }
 
     private fun CursorArchiveItem.toQueueItem() = QueueItem(
@@ -185,14 +221,19 @@ class DynamicVideoFeed(
     private val maxPages: Int,
     private val load: suspend (offset: String?) -> DynamicVideoPage?,
 ) : QueueFeed {
+    private val fromTop = startOffset.isNullOrEmpty()
     private var nextOffset: String? = null
     private var more = false
+    private var matched = false
+    private var loadedCount = 0
 
     /** 同一条视频可能出现在相邻两页(翻页期间 UP 又发了动态),队列里同一个 bvid 只能有一条。 */
     private val seen = HashSet<String>()
 
     override val hasBefore: Boolean get() = false
     override val hasAfter: Boolean get() = more
+    override val offsetOfFirst: Int? get() = if (matched && fromTop) 0 else null
+    override val total: Int? get() = if (matched && fromTop && !more) loadedCount else null
 
     override suspend fun open(bvid: String): List<QueueItem>? {
         var offset = startOffset
@@ -201,7 +242,13 @@ class DynamicVideoFeed(
             val page = load(offset) ?: return null
             read += page.items.fresh()
             advance(page)
-            if (read.any { it.bvid == bvid }) return fillWindow(this, read, bvid)
+            if (read.any { it.bvid == bvid }) {
+                matched = true
+                loadedCount = read.size
+                val window = fillWindow(this, read, bvid)
+                loadedCount = window.size
+                return window
+            }
             if (!more) return null
             offset = nextOffset
         }
@@ -216,7 +263,10 @@ class DynamicVideoFeed(
             val page = load(nextOffset) ?: return null
             advance(page)
             val items = page.items.fresh()
-            if (items.isNotEmpty()) return items
+            if (items.isNotEmpty()) {
+                loadedCount += items.size
+                return items
+            }
         }
         return emptyList()
     }
@@ -230,22 +280,189 @@ class DynamicVideoFeed(
 }
 
 /**
+ * 夜间模式「全部」视图的跨 UP 归并队列:按 `publishedAtEpochSeconds` 全局倒序归并多位白名单 UP 主的投稿。
+ */
+class NightMergeFeed(
+    ups: List<WhitelistedUp>,
+    private val batchSize: Int = SpaceRepository.ARCHIVE_PAGE_SIZE,
+    private val maxOpenBatches: Int = DEFAULT_MAX_OPEN_BATCHES,
+    private val loadPage: suspend (mid: Long, page: Int) -> SpaceArchivePage?,
+) : QueueFeed {
+
+    constructor(
+        spaceRepository: SpaceRepository,
+        ups: List<WhitelistedUp>,
+    ) : this(
+        ups = ups,
+        loadPage = { mid, page ->
+            when (val r = spaceRepository.loadArchives(mid, page, SpaceArchiveOrder.Pubdate)) {
+                is BiliResult.Ok -> r.value
+                else -> null.also { BiliLog.w("队列:夜间归并拉取投稿第 $page 页失败 mid=$mid") }
+            }
+        },
+    )
+
+    private class UpCursor(
+        val up: WhitelistedUp,
+        var nextPage: Int = 1,
+        var hasMore: Boolean = true,
+        var fetchedCount: Int = 0,
+        var total: Int = 0,
+        val buffer: ArrayDeque<SpaceVideoItem> = ArrayDeque(),
+    )
+
+    private val cursors = ups.distinctBy { it.mid }.map { UpCursor(it) }
+    private val seenBvids = HashSet<String>()
+    private var openedFromTop = false
+    private var cappedFallback = false
+    private var loadedCount = 0
+
+    override val hasBefore: Boolean get() = false
+    override val hasAfter: Boolean
+        get() = !cappedFallback && cursors.any { it.buffer.isNotEmpty() || it.hasMore }
+    override val offsetOfFirst: Int? get() = if (openedFromTop) 0 else null
+    override val total: Int?
+        get() = if (openedFromTop && !hasAfter) {
+            loadedCount.takeIf { it > 0 }
+        } else {
+            cursors.sumOf { it.total }.takeIf { it > 0 }
+        }
+
+    override suspend fun open(bvid: String): List<QueueItem>? {
+        if (cursors.isEmpty()) return null
+        val collected = ArrayList<QueueItem>()
+        var batches = 0
+        while (batches < maxOpenBatches) {
+            batches += 1
+            val batch = drain(batchSize)
+            if (batch == null) {
+                if (collected.isEmpty()) return null
+                break
+            }
+            if (batch.isEmpty()) break
+            collected.addAll(batch)
+            val idx = collected.indexOfFirst { it.bvid == bvid }
+            if (idx >= 0) {
+                while (collected.size - 1 - idx < QUEUE_WINDOW && hasAfter) {
+                    val extra = drain(QUEUE_WINDOW) ?: break
+                    if (extra.isEmpty()) break
+                    collected.addAll(extra)
+                }
+                openedFromTop = true
+                loadedCount = collected.size
+                return collected
+            }
+            if (!hasAfter) break
+        }
+        if (cursors.any { it.buffer.isNotEmpty() || it.hasMore }) {
+            cappedFallback = true
+            openedFromTop = false
+            return listOf(QueueItem(bvid = bvid, title = "", upName = "", coverUrl = "", durationSeconds = 0L))
+        }
+        return null
+    }
+
+    override suspend fun loadBefore(): List<QueueItem> = emptyList()
+
+    override suspend fun loadAfter(): List<QueueItem>? {
+        if (!hasAfter) return emptyList()
+        val batch = drain(batchSize) ?: return null
+        loadedCount += batch.size
+        return batch
+    }
+
+    private suspend fun drain(targetCount: Int): List<QueueItem>? {
+        val batch = ArrayList<QueueItem>(targetCount)
+        var refetchRounds = 0
+
+        while (batch.size < targetCount) {
+            val needFetch = cursors.filter { it.buffer.isEmpty() && it.hasMore }
+            var fetchFailed = false
+            if (needFetch.isNotEmpty()) {
+                if (refetchRounds >= MAX_REFETCH_ROUNDS) break
+                refetchRounds += 1
+                val responses = coroutineScope {
+                    needFetch.map { cursor ->
+                        val requestedPage = cursor.nextPage
+                        async {
+                            Triple(
+                                cursor,
+                                requestedPage,
+                                loadPage(cursor.up.mid, requestedPage),
+                            )
+                        }
+                    }.awaitAll()
+                }
+                for ((cursor, requestedPage, page) in responses) {
+                    if (page != null) {
+                        val pageItems = page.items
+                        cursor.total = page.total
+                        cursor.fetchedCount += pageItems.size
+                        pageItems.forEach { video -> cursor.buffer.addLast(video) }
+                        if (pageItems.isNotEmpty()) {
+                            cursor.nextPage = requestedPage + 1
+                        }
+                        cursor.hasMore = pageItems.isNotEmpty() && cursor.fetchedCount < page.total
+                    } else {
+                        fetchFailed = true
+                    }
+                }
+            }
+
+            if (fetchFailed) {
+                return if (batch.isEmpty()) null else batch
+            }
+            if (cursors.any { it.buffer.isEmpty() && it.hasMore }) continue
+
+            val bestCursor = cursors
+                .filter { it.buffer.isNotEmpty() }
+                .maxByOrNull { it.buffer.first().publishedAtEpochSeconds }
+                ?: break
+
+            val video = bestCursor.buffer.removeFirst()
+            if (seenBvids.add(video.bvid)) {
+                batch.add(
+                    QueueItem(
+                        bvid = video.bvid,
+                        title = video.title,
+                        upName = video.upName.ifBlank { bestCursor.up.name },
+                        coverUrl = video.coverUrl,
+                        durationSeconds = parseDurationSeconds(video.durationText),
+                    ),
+                )
+            }
+        }
+        return batch
+    }
+
+    private companion object {
+        const val DEFAULT_MAX_OPEN_BATCHES = 10
+        const val MAX_REFETCH_ROUNDS = 4
+    }
+}
+
+/**
  * 从已读的一段出发,往两头补到 [bvid] 前后各 [QUEUE_WINDOW] 条。某一头请求失败就停在那一头,
  * 不影响另一头 —— 少几条邻居不是打不开这条视频的理由。
  */
 internal suspend fun fillWindow(feed: QueueFeed, initial: List<QueueItem>, bvid: String): List<QueueItem> {
-    var items = initial
+    var items = initial.distinctBy { it.bvid }
     var here = items.indexOfFirst { it.bvid == bvid }
+    if (here < 0) return items
     while (here < QUEUE_WINDOW && feed.hasBefore) {
         val before = feed.loadBefore() ?: break
         if (before.isEmpty()) break
-        items = before + items
-        here += before.size
+        val existing = items.mapTo(HashSet()) { it.bvid }
+        val fresh = before.distinctBy { it.bvid }.filter { it.bvid !in existing }
+        items = fresh + items
+        here += fresh.size
     }
     while (items.size - 1 - here < QUEUE_WINDOW && feed.hasAfter) {
         val after = feed.loadAfter() ?: break
         if (after.isEmpty()) break
-        items = items + after
+        val existing = items.mapTo(HashSet()) { it.bvid }
+        val fresh = after.distinctBy { it.bvid }.filter { it.bvid !in existing }
+        items = items + fresh
     }
     return items
 }

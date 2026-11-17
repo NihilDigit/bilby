@@ -66,13 +66,233 @@ data class QueueState(
     /** 那一头的续取正在飞。 */
     val extendingBefore: Boolean = false,
     val extendingAfter: Boolean = false,
+    /** 那一头最近一次续取失败，暂停自动触发，等待用户手动点击重试。 */
+    val errorBefore: Boolean = false,
+    val errorAfter: Boolean = false,
     /**
      * 当前条在整份来源里是第几条(1 起)与来源总条数。不知道时为 null,「N / M」不显示 ——
      * 队列只读了来源的一段,[size] 是已读的条数,拿它当 M 会让三千条的 UP 读成"共 40 条"。
      */
     val sourcePosition: Int? = null,
     val sourceTotal: Int? = null,
+) {
+    /** 当前播放项在已加载窗口 [items] 中的下标，未命中时为 -1。 */
+    val currentIndex: Int
+        get() = current?.let { cur -> items.indexOfFirst { it.bvid == cur.bvid } } ?: -1
+
+    val hasBefore: Boolean get() = canExtendBefore
+    val hasAfter: Boolean get() = canExtendAfter
+    val loadingBefore: Boolean get() = extendingBefore
+    val loadingAfter: Boolean get() = extendingAfter
+
+    val displayPosition: Int?
+        get() = sourcePosition ?: currentIndex.takeIf { it in items.indices }?.let { it + 1 }
+
+    val displayTotal: Int?
+        get() = sourceTotal ?: items.size.takeIf { it > 0 }
+
+    val isWindowed: Boolean
+        get() = canExtendBefore || canExtendAfter || (sourceTotal != null && sourceTotal > items.size)
+
+    val remainingBefore: Int?
+        get() {
+            val idx = currentIndex
+            return if (canExtendBefore && sourcePosition != null && idx >= 0) {
+                (sourcePosition - idx - 1).takeIf { it > 0 }
+            } else {
+                null
+            }
+        }
+
+    val remainingAfter: Int?
+        get() {
+            val idx = currentIndex
+            return if (canExtendAfter && sourceTotal != null && sourcePosition != null && idx >= 0) {
+                (sourceTotal - (sourcePosition - idx - 1 + items.size)).takeIf { it > 0 }
+            } else {
+                null
+            }
+        }
+}
+
+/**
+ * 播放引擎在 Android 与桌面端共用的队列分页边界、偏移量不变量与续取失败锁存。
+ */
+internal data class QueuePaginationSnapshot(
+    val offsetOfFirst: Int? = null,
+    val sourceTotal: Int? = null,
+    val hasBefore: Boolean = false,
+    val hasAfter: Boolean = false,
+    val errorBefore: Boolean = false,
+    val errorAfter: Boolean = false,
 )
+
+internal class QueuePagination {
+    var offsetOfFirst: Int? = null
+        private set
+    var sourceTotal: Int? = null
+        private set
+    var hasBefore: Boolean = false
+        private set
+    var hasAfter: Boolean = false
+        private set
+    var loadingBefore: Boolean = false
+        private set
+    var loadingAfter: Boolean = false
+        private set
+    var errorBefore: Boolean = false
+        private set
+    var errorAfter: Boolean = false
+        private set
+
+    fun reset() {
+        offsetOfFirst = null
+        sourceTotal = null
+        hasBefore = false
+        hasAfter = false
+        loadingBefore = false
+        loadingAfter = false
+        errorBefore = false
+        errorAfter = false
+    }
+
+    fun snapshot(): QueuePaginationSnapshot = QueuePaginationSnapshot(
+        offsetOfFirst = offsetOfFirst,
+        sourceTotal = sourceTotal,
+        hasBefore = hasBefore,
+        hasAfter = hasAfter,
+        errorBefore = errorBefore,
+        errorAfter = errorAfter,
+    )
+
+    fun restore(snapshot: QueuePaginationSnapshot) {
+        offsetOfFirst = snapshot.offsetOfFirst
+        sourceTotal = snapshot.sourceTotal
+        hasBefore = snapshot.hasBefore
+        hasAfter = snapshot.hasAfter
+        loadingBefore = false
+        loadingAfter = false
+        errorBefore = snapshot.errorBefore
+        errorAfter = snapshot.errorAfter
+    }
+
+    fun bindFeedMeta(
+        feedOffsetOfFirst: Int?,
+        feedTotal: Int?,
+        feedHasBefore: Boolean,
+        feedHasAfter: Boolean,
+        playlistSize: Int,
+    ) {
+        loadingBefore = false
+        loadingAfter = false
+        errorBefore = false
+        errorAfter = false
+        hasBefore = feedHasBefore
+        hasAfter = feedHasAfter
+        sourceTotal = feedTotal
+        offsetOfFirst = when {
+            playlistSize <= 0 -> null
+            !feedHasBefore && (feedOffsetOfFirst == 0 || feedHasAfter) -> 0
+            feedOffsetOfFirst != null -> feedOffsetOfFirst.coerceAtLeast(0)
+            !feedHasAfter && feedTotal != null && feedHasBefore -> (feedTotal - playlistSize).coerceAtLeast(0)
+            else -> null
+        }
+        reconcileClosedWindow(playlistSize)
+    }
+
+    fun beginExtend(before: Boolean): Boolean = if (before) {
+        if (loadingBefore || !hasBefore) {
+            false
+        } else {
+            loadingBefore = true
+            errorBefore = false
+            true
+        }
+    } else {
+        if (loadingAfter || !hasAfter) {
+            false
+        } else {
+            loadingAfter = true
+            errorAfter = false
+            true
+        }
+    }
+
+    fun cancelExtend(before: Boolean? = null) {
+        if (before == null || before == true) loadingBefore = false
+        if (before == null || before == false) loadingAfter = false
+    }
+
+    fun failExtend(before: Boolean) {
+        if (before) {
+            loadingBefore = false
+            errorBefore = true
+        } else {
+            loadingAfter = false
+            errorAfter = true
+        }
+    }
+
+    fun completeExtend(
+        before: Boolean,
+        addedCount: Int,
+        feedHasBefore: Boolean,
+        feedHasAfter: Boolean,
+        feedTotal: Int?,
+        newPlaylistSize: Int,
+    ) {
+        if (before) {
+            loadingBefore = false
+            errorBefore = false
+            hasBefore = feedHasBefore
+            hasAfter = feedHasAfter
+            if (feedTotal != null) sourceTotal = feedTotal
+            offsetOfFirst = when {
+                !feedHasBefore -> 0
+                offsetOfFirst != null -> (offsetOfFirst!! - addedCount).coerceAtLeast(0)
+                else -> null
+            }
+        } else {
+            loadingAfter = false
+            errorAfter = false
+            hasBefore = feedHasBefore
+            hasAfter = feedHasAfter
+            if (feedTotal != null) sourceTotal = feedTotal
+            if (!feedHasAfter && offsetOfFirst == null && sourceTotal != null) {
+                offsetOfFirst = (sourceTotal!! - newPlaylistSize).coerceAtLeast(0)
+            }
+        }
+        reconcileClosedWindow(newPlaylistSize)
+    }
+
+    fun detachToCustom(playlistSize: Int) {
+        loadingBefore = false
+        loadingAfter = false
+        errorBefore = false
+        errorAfter = false
+        hasBefore = false
+        hasAfter = false
+        offsetOfFirst = if (playlistSize > 0) 0 else null
+        sourceTotal = playlistSize.takeIf { it > 0 }
+    }
+
+    fun sourcePositionFor(currentIndex: Int, playlistSize: Int): Int? =
+        offsetOfFirst
+            ?.takeIf { playlistSize > 0 && currentIndex in 0 until playlistSize }
+            ?.let { it + currentIndex + 1 }
+
+    private fun reconcileClosedWindow(playlistSize: Int) {
+        if (!hasBefore && !hasAfter && offsetOfFirst == 0) {
+            sourceTotal = playlistSize.takeIf { it > 0 }
+        } else {
+            val offset = offsetOfFirst
+            val total = sourceTotal
+            if (offset != null && total != null && offset + playlistSize > total) {
+                sourceTotal = offset + playlistSize
+            }
+        }
+    }
+}
 
 data class AudioPlaybackUiState(
     /** 正在放什么。没打开过任何东西时为 null。 */

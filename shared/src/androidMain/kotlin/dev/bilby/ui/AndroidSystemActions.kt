@@ -1,6 +1,8 @@
 package dev.bilby.ui
 
 import android.app.Activity
+import android.os.Looper
+import android.widget.Toast
 
 /** Android 上的 [SystemActions]。持有 Activity:切语言要重建它,拉起分享面板要一个前台界面。 */
 class AndroidSystemActions(private val activity: Activity) : SystemActions {
@@ -17,4 +19,16 @@ class AndroidSystemActions(private val activity: Activity) : SystemActions {
     override val supportsLanguageSwitch: Boolean get() = true
     override fun currentLanguage(): AppLanguage = AppLanguageStore.current(activity)
     override fun applyLanguage(language: AppLanguage) = AppLanguageStore.apply(activity, language)
+
+    override fun showToast(message: String) {
+        if (message.isBlank()) return
+        val show = Runnable {
+            Toast.makeText(activity.applicationContext, message, Toast.LENGTH_SHORT).show()
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            show.run()
+        } else {
+            activity.runOnUiThread(show)
+        }
+    }
 }
