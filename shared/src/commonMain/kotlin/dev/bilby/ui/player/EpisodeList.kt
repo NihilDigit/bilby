@@ -1,15 +1,17 @@
 package dev.bilby.ui.player
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -20,28 +22,35 @@ import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.outlined.PauseCircleOutline
 import androidx.compose.material.icons.outlined.SkipNext
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -52,13 +61,16 @@ import dev.bilby.data.QueueOrder
 import dev.bilby.data.VideoPart
 import dev.bilby.formatDurationSeconds
 import dev.bilby.player.QueueItem
+import dev.bilby.player.QueueState
 import dev.bilby.resources.*
 import dev.bilby.stringResource
+import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.ListCover
 import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import org.jetbrains.compose.resources.StringResource
@@ -130,24 +142,34 @@ private fun EpisodeRow.toQueueItem(): QueueItem = QueueItem(
 )
 
 /**
+ * 统一格式化队列位置读数(`X / N`)。
+ * - 已知精确来源偏移与总数时输出 `sourcePosition / sourceTotal`;
+ * - 仅知总数的中间窗口态输出 `queue_position_windowed`(`%1$d/%2$d  共 %3$d`,不含 `·`);
+ * - 其余可定位情形回退为 `displayPosition / displayTotal`。
+ */
+@Composable
+fun QueuePositionText(queue: QueueState): String? {
+    val srcPos = queue.sourcePosition
+    val srcTotal = queue.sourceTotal
+    if (srcPos != null && srcTotal != null) {
+        return "$srcPos / $srcTotal"
+    }
+    val idx = queue.currentIndex
+    if (srcTotal != null && idx in queue.items.indices) {
+        return stringResource(Res.string.queue_position_windowed, idx + 1, queue.items.size, srcTotal)
+    }
+    val dispPos = queue.displayPosition
+    val dispTotal = queue.displayTotal
+    return if (dispPos != null && dispTotal != null) {
+        "$dispPos / $dispTotal"
+    } else {
+        null
+    }
+}
+
+/**
  * 把队列与当前这条的分 P 拼成一份切集清单。**三种形态(详情页、听视频、全屏)共用这一份**,
  * 差别只在怎么画:详情页把 [EpisodeRow.parts] 摊成一排 chip,另外两种把它摊成二级列表。
- *
- * @param queue 队列的自然顺序,就是 playlist 的顺序(随机只改播放顺序,不重排列表)。
- * @param currentBvid 队列指着的那一条。
- * @param pageBvid 页面手上这份详情属于谁。**它和 [currentBvid] 不总是同一条**:自动连播走到
- *   下一条时页面要过一会儿才跟上去(见 `MainActivity` 的 `VideoRoute`),这段窗口里详情里的
- *   分 P 属于上一条视频。
- * @param parts 页面这份详情的分 P 清单。
- * @param pageDurationSeconds 页面这份详情的时长。起播时装进队列的那一条是临时条目,时长是 0,
- *   而补全队列时它原样留着不换(换了就是重新取流,见 AudioPlaybackService.fillQueueAround),
- *   于是当前这条永远没有时长。对得上身份时拿详情里的补上。
- * @param currentCid 播放器此刻真正装着的那一 P,由调用方按 `loadKey` 对过身份。
- *
- * **对不上身份时这条轴整个不存在,而不是点了没反应。** 拿本页的 cid 去切另一条视频的分 P,
- * 服务端回 -404,而那个错误离原因很远;原先的写法是在点击处加一道 `playerHoldsThisPage()`
- * 守卫,于是那段窗口里 chip 画得出来、点下去却什么都不发生。「没有这一栏」和「有这一栏但
- * 点不动」是两种不同的正确,这里取前者。
  */
 fun buildEpisodeRows(
     queue: List<QueueItem>,
@@ -182,8 +204,7 @@ fun buildEpisodeRows(
 }
 
 /**
- * 队列两头还能不能续、正不正在续,以及续的动作(docs/queue-redesign.md 决定 4)。
- * 滚到一头就往那头续,人不必找一个"加载更多"按钮。
+ * 队列两头还能不能续、正不正在续、是否续取失败及续取动作。
  */
 class QueueEdges(
     val canLoadBefore: Boolean,
@@ -191,6 +212,10 @@ class QueueEdges(
     val loadingBefore: Boolean,
     val loadingAfter: Boolean,
     val onLoad: (before: Boolean) -> Unit,
+    val errorBefore: Boolean = false,
+    val errorAfter: Boolean = false,
+    val remainingBefore: Int? = null,
+    val remainingAfter: Int? = null,
 )
 
 /** 正在播的那一条在清单里的下标,没有则 -1。滚动定位与「N / M」都用它。 */
@@ -199,14 +224,7 @@ fun List<EpisodeRow>.currentIndex(): Int = indexOfFirst { it.isCurrent }
 /**
  * 切集清单:一列视频,正在播的那一条底下摊开它的分 P。
  *
- * **一个列表,不是两个并列的列表。** 队列和分 P 确实是两条不同的轴(不同 bvid vs 同一 bvid
- * 的不同 cid),但它们在界面上回答的是同一个问题——现在放的是哪一条,以及可以换到哪去。
- * 摆成两块时"走到第几条"和"放到第几 P"是两个高亮,人要自己在两块之间对位;摊成二级之后
- * 缩进本身就说明了分 P 属于哪一条,不会被读成"分 P 也是队列的一部分"。
- *
- * 听视频的队列 Sheet 与全屏的切集面板共用它。详情页不用:那里有整屏宽度,分 P 横排成一条
- * 可滚的 chip 带扫得更快(见 `ui/video/VideoTabs.kt` 的 `PartRow`),而横向空间正是另外两种
- * 形态没有的。
+ * 听视频的队列 Sheet、完整队列面板与全屏切集面板共用它。
  */
 @Composable
 fun EpisodeList(
@@ -223,42 +241,57 @@ fun EpisodeList(
     editActions: QueueEditActions? = null,
     /** 是否处于行内排序/移除编辑态。 */
     editing: Boolean = false,
+    errorBefore: Boolean = false,
+    errorAfter: Boolean = false,
+    remainingBefore: Int? = null,
+    remainingAfter: Int? = null,
 ) {
     val currentIndex = remember(rows) { rows.currentIndex() }
     val currentBvid = rows.getOrNull(currentIndex)?.bvid
+    val hasErrorBefore = errorBefore || (edges?.errorBefore == true)
+    val hasErrorAfter = errorAfter || (edges?.errorAfter == true)
+    val resolvedRemainingBefore = remainingBefore ?: edges?.remainingBefore
+    val resolvedRemainingAfter = remainingAfter ?: edges?.remainingAfter
+    val showBeforeEdge = edges != null && (edges.loadingBefore || hasErrorBefore || edges.canLoadBefore)
+    val showAfterEdge = edges != null && (edges.loadingAfter || hasErrorAfter || edges.canLoadAfter)
 
-    // 列表按自然顺序摆着不动,切集时让高亮那条滚到中间。随机播放不重排列表——列表跟着重排
-    // 会让人找不到刚才看的那条在哪。
-    //
-    // 居中而不是"滚到可见":队列是当前视频前后各一段,只滚到可见的话它会贴在顶或底,
-    // 看不出前后还有多少。
-    //
-    // **只在当前条换了时居中,不看条数。** 两头续取会改条数,按条数重新居中的话,人往上翻到
-    // 头、续回来一页,列表就被拽回当前条,永远翻不过去。往前插入的条目不会挪动视野:条目
-    // 按 bvid 作 key,LazyColumn 守住的是第一个可见条目,不是下标。
+    var initialCenterDone by remember(currentBvid) { mutableStateOf(currentIndex < 0) }
+    val latestShowBefore by rememberUpdatedState(showBeforeEdge)
+
+    // 列表按自然顺序摆着不动,切集时让高亮那条滚到中间。只在当前条换了时居中,不看条数。
     LaunchedEffect(currentBvid) {
-        if (currentIndex < 0) return@LaunchedEffect
-        // 展开动画期间第一帧 layoutInfo 可能是空的,等布局真的跑过一次再滚,否则滚动扑空、
-        // 居中那步被整个跳过。
-        snapshotFlow { state.layoutInfo.totalItemsCount }.first { it > 0 }
-        // 顶上那行续取进度也占一个下标。
-        val target = currentIndex + if (edges?.loadingBefore == true) 1 else 0
-        state.scrollToItem(target)
-        val info = state.layoutInfo
-        val row = info.visibleItemsInfo.firstOrNull { it.index == target } ?: return@LaunchedEffect
-        state.scrollToItem(target, -(info.viewportSize.height - row.size) / 2)
+        if (currentIndex < 0) {
+            initialCenterDone = true
+            return@LaunchedEffect
+        }
+        try {
+            snapshotFlow { state.layoutInfo.totalItemsCount }.first { it > 0 }
+            // 顶上若有续取状态行则多占一个下标。
+            val target = currentIndex + if (latestShowBefore) 1 else 0
+            state.scrollToItem(target)
+            val info = state.layoutInfo
+            val row = info.visibleItemsInfo.firstOrNull { it.index == target } ?: return@LaunchedEffect
+            state.scrollToItem(target, -(info.viewportSize.height - row.size) / 2)
+        } finally {
+            initialCenterDone = true
+        }
     }
 
     if (edges != null) {
         val latest by rememberUpdatedState(edges)
+        val latestErrBefore by rememberUpdatedState(hasErrorBefore)
+        val latestErrAfter by rememberUpdatedState(hasErrorAfter)
+        val latestCentered by rememberUpdatedState(initialCenterDone)
         LaunchedEffect(state) {
             snapshotFlow {
+                if (!latestCentered) return@snapshotFlow false to false
                 val info = state.layoutInfo
                 val visible = info.visibleItemsInfo
                 val atTop = visible.firstOrNull()?.index == 0
                 val atBottom = info.totalItemsCount > 0 && visible.lastOrNull()?.index == info.totalItemsCount - 1
-                val wantBefore = atTop && latest.canLoadBefore && !latest.loadingBefore
-                val wantAfter = atBottom && latest.canLoadAfter && !latest.loadingAfter
+                // 续取失败锁存期间严禁自动重试,防止 -412 风控紧循环(CLAUDE.md)。
+                val wantBefore = atTop && latest.canLoadBefore && !latest.loadingBefore && !latestErrBefore
+                val wantAfter = atBottom && latest.canLoadAfter && !latest.loadingAfter && !latestErrAfter
                 wantBefore to wantAfter
             }.distinctUntilChanged().collect { (wantBefore, wantAfter) ->
                 if (wantBefore) latest.onLoad(true)
@@ -275,8 +308,16 @@ fun EpisodeList(
         modifier = modifier,
         contentPadding = contentPadding,
     ) {
-        if (edges?.loadingBefore == true) {
-            item(key = "loading-before") { EdgeProgress() }
+        if (showBeforeEdge && edges != null) {
+            item(key = "edge-before") {
+                QueueEdgeRow(
+                    before = true,
+                    loading = edges.loadingBefore,
+                    error = hasErrorBefore,
+                    remainingCount = resolvedRemainingBefore,
+                    onLoad = { edges.onLoad(true) },
+                )
+            }
         }
         var segment = 0
         rows.forEachIndexed { videoIndex, row ->
@@ -307,24 +348,23 @@ fun EpisodeList(
                 )
             }
         }
-        if (edges?.loadingAfter == true) {
-            item(key = "loading-after") { EdgeProgress() }
+        if (showAfterEdge && edges != null) {
+            item(key = "edge-after") {
+                QueueEdgeRow(
+                    before = false,
+                    loading = edges.loadingAfter,
+                    error = hasErrorAfter,
+                    remainingCount = resolvedRemainingAfter,
+                    onLoad = { edges.onLoad(false) },
+                )
+            }
         }
     }
 }
 
 /**
- * 队列里的一条视频。**详情页那几条预览、完整队列、听视频、全屏面板是同一种行**:四处原先两种
- * 长相,预览是分段列表,其余三处是 `CompactVideoRow`,点「查看全部」像是换了一个 app。
- *
- * 容器色是这里唯一改掉的默认值:分段列表项默认用 `surface`,是给放在带底色的分组背景上用的;
- * 这几处底下都是 surface 一档,照默认画,未选中的条目和底色分不开。
- *
- * 选中不只靠颜色(lists.md 的 Accessibility):正在播的那条尾部另有一个播放指示,放着时跳动。
- *
- * 时长压在封面右下角,不另占一行,也就不再退回 UP 名 —— 取不到时长的条目(系列与动态两条
- * 来源的窗口条目,见 QueueSourceRepository)角上空着。这份清单里绝大多数条目是同一个 UP 的,
- * 名字印一列也读不出什么。
+ * 队列里的一条视频。当前正在播放项使用 `secondaryContainer` 容器与 `bodyMediumEmphasized` 标题强调,
+ * 封面右下角时长通过等宽数字(`tnum`)稳定对齐。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -352,18 +392,24 @@ fun QueueRowItem(
             selected = row.isCurrent,
             onClick = onClick,
             shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
-            colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+            colors = ListItemDefaults.segmentedColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                selectedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                selectedLeadingContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                selectedTrailingContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            ),
             modifier = Modifier.padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
-            // 居中,不用默认值:默认在条目高过 88dp 时把首尾元素顶到上沿(lists.md 规格表),两行标题
-            // 加一行时长就过线,播放指示于是跑到右上角,而且只在那一条变成当前项时才露出来。
             verticalAlignment = Alignment.CenterVertically,
             leadingContent = {
-                ListCover(
-                    url = row.coverUrl,
-                    width = QueueCoverWidth,
-                    cornerRadius = QueueCoverCorner,
-                    durationText = if (row.durationSeconds > 0) formatDurationSeconds(row.durationSeconds) else "",
-                )
+                ProvideTextStyle(LocalTextStyle.current.tabular) {
+                    ListCover(
+                        url = row.coverUrl,
+                        width = QueueCoverWidth,
+                        cornerRadius = QueueCoverCorner,
+                        durationText = if (row.durationSeconds > 0) formatDurationSeconds(row.durationSeconds) else "",
+                    )
+                }
             },
             trailingContent = when {
                 editing && editActions != null -> {
@@ -427,7 +473,16 @@ fun QueueRowItem(
                 else -> null
             },
         ) {
-            Text(text = row.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(
+                text = row.title,
+                style = if (row.isCurrent) {
+                    MaterialTheme.typography.bodyMediumEmphasized
+                } else {
+                    MaterialTheme.typography.bodyMedium
+                },
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
     val hasCommon = row.bvid.startsWith("BV", ignoreCase = true)
@@ -444,6 +499,7 @@ fun QueueRowItem(
                     dev.bilby.ui.components.videoCommonMenuItemCount(
                         bvid = row.bvid,
                         includeQueueActions = false,
+                        title = row.title,
                     )
                 } else {
                     0
@@ -516,14 +572,99 @@ fun QueueRowItem(
     }
 }
 
-/** 续取在飞。一行高的小圈,不占一条视频的高度:它只说"还有,在来的路上"。 */
+/**
+ * 队列边界三态透明提示行:
+ * 1. 加载中:`InlineProgress` + 正在加载前/后条目;
+ * 2. 失败态:整宽可点重试(`queue_edge_load_failed` + `action_retry`);
+ * 3. 待续取:`ExpandLess`/`ExpandMore` + 剩余条数提示,支持点击立即加载。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun EdgeProgress() {
-    Box(
-        modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.Tight),
-        contentAlignment = Alignment.Center,
-    ) {
-        CircularProgressIndicator(modifier = Modifier.size(Dimens.IconInline), strokeWidth = 2.dp)
+private fun QueueEdgeRow(
+    before: Boolean,
+    loading: Boolean,
+    error: Boolean,
+    remainingCount: Int?,
+    onLoad: () -> Unit,
+) {
+    when {
+        loading -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = Dimens.MinTouchTarget)
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                contentAlignment = Alignment.Center,
+            ) {
+                InlineProgress(
+                    text = stringResource(
+                        if (before) Res.string.queue_edge_loading_before else Res.string.queue_edge_loading_after,
+                    ),
+                )
+            }
+        }
+
+        error -> {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.medium)
+                    .clickable(role = Role.Button, onClick = onLoad)
+                    .heightIn(min = Dimens.MinTouchTarget)
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.CenterHorizontally),
+            ) {
+                Text(
+                    text = stringResource(Res.string.queue_edge_load_failed),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = stringResource(Res.string.action_retry),
+                    style = MaterialTheme.typography.labelLargeEmphasized,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+
+        else -> {
+            val label = if (before) {
+                if (remainingCount != null && remainingCount > 0) {
+                    stringResource(Res.string.queue_edge_has_before_count, remainingCount)
+                } else {
+                    stringResource(Res.string.queue_edge_has_before)
+                }
+            } else {
+                if (remainingCount != null && remainingCount > 0) {
+                    stringResource(Res.string.queue_edge_has_after_count, remainingCount)
+                } else {
+                    stringResource(Res.string.queue_edge_has_after)
+                }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.medium)
+                    .clickable(role = Role.Button, onClick = onLoad)
+                    .heightIn(min = Dimens.MinTouchTarget)
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterHorizontally),
+            ) {
+                Icon(
+                    imageVector = if (before) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMediumEmphasized.tabular,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
     }
 }
 
@@ -531,9 +672,6 @@ private fun EdgeProgress() {
  * 二级行,和视频行同在一组分段里。**只有文字**,不给封面:分 P 共用整条视频的一张封面,每行
  * 印一遍等于一列完全相同的图。封面那一格空着留位,文字因此和上面视频标题落在同一条竖线上,
  * 读得出是父子。
- *
- * 当前这一 P 只换文字颜色,不走分段的选中态:上一级已经是一块 secondaryContainer,紧挨着再来
- * 一块会让二级看起来比一级还重。这一条与 `VideoTabs.PartSheet` 的取舍相同。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -553,7 +691,11 @@ private fun PartListItem(part: EpisodePart, index: Int, count: Int, onClick: () 
             stringResource(Res.string.video_part_label, part.ordinal, part.title),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodyMedium,
+            style = (if (part.isCurrent) {
+                MaterialTheme.typography.bodyMediumEmphasized
+            } else {
+                MaterialTheme.typography.bodyMedium
+            }).tabular,
             color = if (part.isCurrent) {
                 MaterialTheme.colorScheme.primary
             } else {
@@ -585,8 +727,6 @@ fun QueueOrder.labelRes(): StringResource = when (this) {
  * 队列头部的两个播放策略开关,看视频(简介队列、完整队列、全屏切集面板)与听视频共用同一组控件:
  * - 完播行为:「播完暂停 → 连播 → 洗脑循环」三态一键轮换。
  * - 队列顺序:「正序 → 倒序 → 随机」三态一键轮换。
- *
- * 文字与图标同步报当前状态,读屏经 `stateDescription` 念当前档名。
  */
 @Composable
 fun RowScope.QueuePlaybackControls(

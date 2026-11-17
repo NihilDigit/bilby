@@ -44,6 +44,21 @@ data class VideoDetailDto(
     @SerialName("ugc_season") val ugcSeason: UgcSeasonDto? = null,
     /** 以动态形式发的视频(「发布了动态视频」)。它不在投稿列表里,见 notes/space-and-search.md 1.4.3。 */
     @SerialName("is_story") val isStory: Boolean = false,
+    /** 充电专属稿件标记。 */
+    @SerialName("is_upower_exclusive") val isUpowerExclusive: Boolean = false,
+    val rights: VideoRightsDto? = null,
+    @SerialName("argue_info") val argueInfo: VideoArgueInfoDto? = null,
+)
+
+@Serializable
+data class VideoRightsDto(
+    @SerialName("no_reprint") val noReprint: Int = 0,
+    @SerialName("is_stein_gate") val isSteinGate: Int = 0,
+)
+
+@Serializable
+data class VideoArgueInfoDto(
+    @SerialName("argue_msg") val argueMsg: String = "",
 )
 
 /**

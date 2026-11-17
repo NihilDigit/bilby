@@ -70,6 +70,12 @@ data class OfflineItem(
     val upFaceUrl: String = "",
     val description: String = "",
     val publishedAtEpochSeconds: Long = 0,
+    /** 1 = 自制, 2 = 转载; 0 表示旧索引未记录。 */
+    val copyright: Int = 0,
+    /** 是否声明禁止转载(rights.no_reprint == 1)。 */
+    val noReprint: Boolean = false,
+    /** 是否为充电专属稿件。 */
+    val chargingOnly: Boolean = false,
     val stat: OfflineStat = OfflineStat(),
     /** 实际下到的清晰度,可能低于用户选的档(选流会降级),显示的是这个。 */
     val qualityId: Int = 0,
