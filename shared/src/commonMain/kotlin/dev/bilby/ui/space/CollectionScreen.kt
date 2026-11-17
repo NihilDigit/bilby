@@ -1,23 +1,44 @@
 package dev.bilby.ui.space
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.bilby.resources.*
-import dev.bilby.stringResource
-import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.api.BiliResult
+import dev.bilby.appendDistinctBy
 import dev.bilby.data.SpaceRepository
 import dev.bilby.data.SpaceVideoItem
+import dev.bilby.resources.*
+import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveListContent
-import dev.bilby.appendDistinctBy
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
+import dev.bilby.ui.padScaffoldExceptBottom
+import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,11 +57,7 @@ data class CollectionUiState(
 )
 
 /**
- * 一个合集/系列的目录。**曾经是空间页里的一个状态**,升成独立目的地的理由见
- * [dev.bilby.ui.CollectionContents]。
- *
- * 页面身份由 (mid, id, isSeason) 三样构成,全部来自导航参数 —— 所以这里不需要"当前打开的是
- * 哪个合集"这种可变状态,也就没有了原先那条"目录被关掉后迟到的响应把它重新支起来"的路。
+ * 一个合集/系列的目录。页面身份由 (mid, id, isSeason) 三样构成,全部来自导航参数。
  */
 class CollectionViewModel(
     private val mid: Long,
@@ -92,8 +109,6 @@ class CollectionViewModel(
                         }
                         state.copy(
                             items = merged,
-                            // 空页当作到头:游标只在这一页真的带回了东西时才前进,理由同
-                            // SpaceViewModel.loadMoreArchives。
                             page = if (pageItems.isEmpty()) state.page else requestedPage + 1,
                             total = result.value.total,
                             loading = false,
@@ -121,6 +136,7 @@ private fun BiliResult<*>.errorText(): String = when (this) {
     is BiliResult.Ok -> ""
 }
 
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun CollectionScreen(
     title: String,
@@ -130,17 +146,24 @@ fun CollectionScreen(
     onRefresh: () -> Unit,
     onVideoClick: (SpaceVideoItem) -> Unit,
     modifier: Modifier = Modifier,
+    onListenAll: (() -> Unit)? = null,
 ) {
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
-        modifier = modifier,
+        modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            BilbyTopBar(title = title, onBack = onBack) {
+            BilbyTopBar(
+                title = title,
+                onBack = onBack,
+                scrollBehavior = scrollBehavior,
+            ) {
                 RefreshAction(refreshing = state.refreshing, onRefresh = onRefresh)
             }
         },
     ) { padding ->
         AdaptiveListContent(
             modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(padding),
+            maxCellWidth = Dimens.VideoGridMinCellWidth,
         ) { columns ->
             RefreshBox(
                 refreshing = state.refreshing,
@@ -158,6 +181,68 @@ fun CollectionScreen(
                     onVideoClick = onVideoClick,
                     modifier = Modifier.fillMaxSize(),
                     columns = columns,
+                    header = if (state.items.isEmpty() && state.total <= 0) null else {
+                        {
+                            CollectionSummaryCard(
+                                totalCount = state.total.takeIf { it > 0 } ?: state.items.size,
+                                canListen = state.items.isNotEmpty(),
+                                onListenAll = {
+                                    if (onListenAll != null) {
+                                        onListenAll()
+                                    } else {
+                                        state.items.firstOrNull()?.let(onVideoClick)
+                                    }
+                                },
+                            )
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun CollectionSummaryCard(
+    totalCount: Int,
+    canListen: Boolean,
+    onListenAll: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.large,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = Spacing.Tight),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = stringResource(Res.string.collection_total_count, totalCount),
+                style = MaterialTheme.typography.titleSmallEmphasized.tabular,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            FilledTonalButton(
+                onClick = onListenAll,
+                enabled = canListen,
+                contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
+            ) {
+                Icon(
+                    Icons.Filled.Headphones,
+                    contentDescription = null,
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+                Text(
+                    stringResource(Res.string.toview_listen_all),
+                    style = MaterialTheme.typography.labelLargeEmphasized,
+                    modifier = Modifier.padding(start = Spacing.Hair + 2.dp),
                 )
             }
         }
