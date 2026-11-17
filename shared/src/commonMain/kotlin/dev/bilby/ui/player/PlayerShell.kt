@@ -1103,7 +1103,7 @@ fun PlayerShell(
                         Brush.verticalGradient(listOf(ControlScrimBottom, Color.Transparent)),
                     )
                     .windowInsetsPadding(WindowInsets.barsAndCutout)
-                    .padding(end = Spacing.Comfortable, bottom = Spacing.Comfortable),
+                    .padding(end = Spacing.Tight, bottom = Spacing.Comfortable),
             ) {
                 val exitFullscreenLabel = stringResource(Res.string.player_exit_fullscreen)
                 PlayerTooltip(exitFullscreenLabel, shortcut = "Esc", anchorAbove = false) {
@@ -1124,14 +1124,14 @@ fun PlayerShell(
                     // 中间偏右。标题吃掉全部剩余宽度,动作自然被顶到边上。
                     modifier = Modifier.weight(1f),
                 )
+                PlayerStatusCluster(
+                    status = systemStatus,
+                    modifier = Modifier.padding(horizontal = Spacing.Tight),
+                )
                 // 顶栏右端的槽。**切集放这里,不放控制条** —— 控制条上的东西回答的都是"这个
                 // 播放器现在怎么放"(倍速、清晰度、字幕、弹幕、全屏),而切集回答的是"在放
                 // 哪一条",和它左边那个标题是同一类。风格指南 §4.3 那条判据问的正是这个。
                 topBarActions()
-                PlayerStatusCluster(
-                    status = systemStatus,
-                    modifier = Modifier.padding(start = Spacing.Tight),
-                )
             }
         }
 
@@ -1328,7 +1328,7 @@ private const val StatusSecondaryAlpha = 0.88f
 private val ChargingAccentColor = Color(0xFF8CE99A)
 
 /**
- * 全屏顶栏最右端的系统状态胶囊:网络类别、电量与充电闪电、当前时间(`HH:mm`)。
+ * 全屏顶栏操作按钮左侧的系统状态胶囊:当前时间(`HH:mm`)、网络类别、电量与充电闪电。
  *
  * 系统状态栏在全屏下已隐藏,此胶囊随播放器控件一同显隐;各项之间仅用 `8.dp` 间距分隔,不出现中点符号。
  */
@@ -1354,6 +1354,16 @@ private fun PlayerStatusCluster(
                 vertical = StatusClusterVerticalPadding,
             ),
     ) {
+        if (hasTime) {
+            Text(
+                text = status.timeText,
+                style = MaterialTheme.typography.labelMedium.tabular,
+                color = FixedColors.OnMedia,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+
         if (hasNetwork) {
             val isOffline = status.network == NetworkKind.Offline
             val netColor = if (isOffline) {
@@ -1429,16 +1439,6 @@ private fun PlayerStatusCluster(
                     softWrap = false,
                 )
             }
-        }
-
-        if (hasTime) {
-            Text(
-                text = status.timeText,
-                style = MaterialTheme.typography.labelMedium.tabular,
-                color = FixedColors.OnMedia,
-                maxLines = 1,
-                softWrap = false,
-            )
         }
     }
 }

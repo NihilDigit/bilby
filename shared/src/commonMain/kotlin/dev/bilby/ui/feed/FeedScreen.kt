@@ -10,7 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -31,8 +31,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Article
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Bedtime
@@ -43,11 +42,9 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PeopleAlt
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.WatchLater
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -58,7 +55,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -74,6 +70,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
@@ -250,6 +248,8 @@ fun FeedScreen(
     onToViewNoticeShown: () -> Unit = {},
     /** 每变一次就回到顶部。重按底栏上当前这一格时由 MainActivity 递增。 */
     scrollToTop: Int = 0,
+    /** 宽屏多列网格卡片的最小列宽，由「设置 → 外观」配置。 */
+    gridCardMinWidth: Dp = Dimens.VideoGridMinCellWidth,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
@@ -303,6 +303,7 @@ fun FeedScreen(
                 onScrollPositionChanged = onScrollPositionChanged,
                 onLocated = onLocated,
                 scrollToTop = scrollToTop,
+                gridCardMinWidth = gridCardMinWidth,
                 modifier = Modifier,
                 contentPadding = contentPadding,
             )
@@ -333,6 +334,7 @@ private fun FeedList(
     onScrollPositionChanged: (String) -> Unit,
     onLocated: () -> Unit,
     scrollToTop: Int,
+    gridCardMinWidth: Dp,
     modifier: Modifier,
     contentPadding: PaddingValues,
 ) {
@@ -461,7 +463,6 @@ private fun FeedList(
             onOpenOtherDynamics = onOpenOtherDynamics,
             onOpenPushes = onOpenPushes,
             onEnterNightMode = onEnterNightMode,
-            tonal = wide,
             modifier = Modifier.onSizeChanged { actionsWidth = with(density) { it.width.toDp() } },
         )
     }
@@ -475,8 +476,9 @@ private fun FeedList(
                 .then(if (wide) Modifier else Modifier.widthIn(max = Breakpoints.ReadableWidth))
                 .fillMaxSize(),
         ) {
+            val minCellWidth = gridCardMinWidth.coerceIn(180.dp, 400.dp)
             val columns = if (multiColumnAllowed) {
-                (maxWidth / Dimens.VideoGridMinCellWidth).toInt().coerceAtLeast(1)
+                (maxWidth / minCellWidth).toInt().coerceAtLeast(1)
             } else {
                 1
             }
@@ -592,7 +594,7 @@ private fun FeedHeader(
             .heightIn(min = Dimens.MinTouchTarget)
             .padding(
                 start = Spacing.Comfortable,
-                end = if (captionSlot.buttons != null) Spacing.Hair else Spacing.Comfortable - HeaderButtonEndInset,
+                end = if (captionSlot.buttons != null) Spacing.Hair else Spacing.Comfortable,
                 top = Spacing.Tight,
             ),
         verticalAlignment = Alignment.CenterVertically,
@@ -616,7 +618,10 @@ private fun FeedHeader(
     }
 }
 
-/** 刷新、夜间模式、UP 主推送、关注动态。右沿的 › 落在 16dp 页边线上,见 [HeaderButtonEndInset]。 */
+/**
+ * 顶栏右侧低强调工具簇:刷新与夜间模式统一为紧凑图标按钮(配悬浮提示),
+ * UP 主推送与关注动态合并为双段 `surfaceContainer` 胶囊(无 `secondaryContainer` 紫色底或冗余尾箭头)。
+ */
 @Composable
 private fun FeedHeaderActions(
     refreshing: Boolean,
@@ -624,111 +629,109 @@ private fun FeedHeaderActions(
     onOpenOtherDynamics: () -> Unit,
     onOpenPushes: () -> Unit,
     onEnterNightMode: () -> Unit,
-    tonal: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val nightLabel = stringResource(Res.string.night_mode_enter_action)
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(if (tonal) Spacing.Tight else 0.dp),
         modifier = modifier,
     ) {
         RefreshAction(refreshing, onRefresh)
-        if (tonal) {
-            FilledTonalButton(
-                onClick = onEnterNightMode,
-                shape = MaterialTheme.shapes.large,
-                contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
-            ) {
+        BilbyTooltip(text = nightLabel) {
+            IconButton(onClick = onEnterNightMode) {
                 Icon(
                     Icons.Outlined.Bedtime,
-                    contentDescription = null,
-                    modifier = Modifier.size(Dimens.IconInline),
-                )
-                Text(
-                    text = nightLabel,
-                    maxLines = 1,
-                    modifier = Modifier.padding(start = Spacing.Tight),
+                    contentDescription = nightLabel,
                 )
             }
-        } else {
-            BilbyTooltip(text = nightLabel) {
-                IconButton(onClick = onEnterNightMode) {
-                    Icon(
-                        Icons.Outlined.Bedtime,
-                        contentDescription = nightLabel,
-                    )
-                }
-            }
         }
-        // UP 主推送来的私信。同一条规矩:没有计数,没有红点。
-        HeaderEntryButton(
-            tonal = tonal,
-            onClick = onOpenPushes,
-            contentPadding = if (tonal) {
-                ButtonDefaults.ButtonWithIconContentPadding
-            } else {
-                PaddingValues(horizontal = Spacing.Tight, vertical = Spacing.Tight)
-            },
+        Spacer(Modifier.width(Spacing.Hair))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(HeaderCapsuleGap),
         ) {
-            Icon(
-                Icons.Outlined.Mail,
-                contentDescription = null,
-                modifier = Modifier.size(Dimens.IconInline),
+            // UP 主推送来的私信。同一条规矩:没有计数,没有红点。
+            FeedHeaderSegment(
+                icon = Icons.Outlined.Mail,
+                label = stringResource(Res.string.feed_up_pushes_entry),
+                shape = HeaderCapsuleStartShape,
+                contentPadding = PaddingValues(
+                    start = HeaderCapsuleOuterPadding,
+                    end = HeaderCapsuleInnerPadding,
+                ),
+                onClick = onOpenPushes,
             )
-            Text(
-                text = stringResource(Res.string.feed_up_pushes_entry),
-                maxLines = 1,
-                modifier = Modifier.padding(start = if (tonal) Spacing.Tight else Spacing.Hair),
-            )
-        }
-        HeaderEntryButton(
-            tonal = tonal,
-            onClick = onOpenOtherDynamics,
-            contentPadding = if (tonal) {
-                ButtonDefaults.ButtonWithIconContentPadding
-            } else {
-                PaddingValues(start = Spacing.Tight, end = HeaderButtonEndInset, top = Spacing.Tight, bottom = Spacing.Tight)
-            },
-        ) {
-            Icon(
-                Icons.AutoMirrored.Filled.Article,
-                contentDescription = null,
-                modifier = Modifier.size(Dimens.IconInline),
-            )
-            Text(
-                text = stringResource(Res.string.dynamic_other_entry),
-                maxLines = 1,
-                modifier = Modifier.padding(start = if (tonal) Spacing.Tight else Spacing.Hair, end = Spacing.Hair),
-            )
-            Icon(
-                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                modifier = Modifier.size(Dimens.IconInline),
+            FeedHeaderSegment(
+                icon = Icons.AutoMirrored.Outlined.Article,
+                label = stringResource(Res.string.dynamic_other_entry),
+                shape = HeaderCapsuleEndShape,
+                contentPadding = PaddingValues(
+                    start = HeaderCapsuleInnerPadding,
+                    end = HeaderCapsuleOuterPadding,
+                ),
+                onClick = onOpenOtherDynamics,
             )
         }
     }
 }
 
-/** 标题行的入口按钮:窄屏是文字按钮,宽屏是 `shapes.large` tonal 按钮。 */
 @Composable
-private fun HeaderEntryButton(
-    tonal: Boolean,
-    onClick: () -> Unit,
+private fun FeedHeaderSegment(
+    icon: ImageVector,
+    label: String,
+    shape: Shape,
     contentPadding: PaddingValues,
-    content: @Composable RowScope.() -> Unit,
+    onClick: () -> Unit,
 ) {
-    if (tonal) {
-        FilledTonalButton(
-            onClick = onClick,
-            shape = MaterialTheme.shapes.large,
-            contentPadding = contentPadding,
-            content = content,
+    val colorScheme = MaterialTheme.colorScheme
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(HeaderCapsuleIconGap),
+        modifier = Modifier
+            .heightIn(min = HeaderCapsuleHeight)
+            .interactiveCard(
+                shape = shape,
+                baseColor = colorScheme.surfaceContainer,
+                hoverColor = colorScheme.surfaceContainerHigh,
+            )
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(contentPadding),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(HeaderCapsuleIconSize),
         )
-    } else {
-        TextButton(onClick = onClick, contentPadding = contentPadding, content = content)
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = colorScheme.onSurface,
+            maxLines = 1,
+        )
     }
 }
+
+private val HeaderCapsuleHeight = 36.dp
+private val HeaderCapsuleOuterCorner = 18.dp
+private val HeaderCapsuleInnerCorner = 6.dp
+private val HeaderCapsuleGap = 2.dp
+private val HeaderCapsuleIconSize = 16.dp
+private val HeaderCapsuleIconGap = 6.dp
+private val HeaderCapsuleOuterPadding = 14.dp
+private val HeaderCapsuleInnerPadding = 12.dp
+private val HeaderCapsuleStartShape = RoundedCornerShape(
+    topStart = HeaderCapsuleOuterCorner,
+    bottomStart = HeaderCapsuleOuterCorner,
+    topEnd = HeaderCapsuleInnerCorner,
+    bottomEnd = HeaderCapsuleInnerCorner,
+)
+private val HeaderCapsuleEndShape = RoundedCornerShape(
+    topStart = HeaderCapsuleInnerCorner,
+    bottomStart = HeaderCapsuleInnerCorner,
+    topEnd = HeaderCapsuleOuterCorner,
+    bottomEnd = HeaderCapsuleOuterCorner,
+)
 
 /** 单条投稿卡片或行,含「不再显示」与复制标题菜单。 */
 @Composable
@@ -1157,10 +1160,10 @@ private fun FrequentUpsRow(
             if (fits) item(key = "followings") { followingsSlot(Modifier) }
         }
         if (fits && trailing != null) {
-            // 入口对着头像的中线,右沿的 › 仍在 16dp 页边线上(同标题行,见 HeaderButtonEndInset)。
+            // 入口对着头像的中线,胶囊右沿落在 16dp 页边线上。
             Box(
                 modifier = Modifier.padding(
-                    end = Spacing.Comfortable - HeaderButtonEndInset,
+                    end = Spacing.Comfortable,
                     top = Spacing.Hair + (Dimens.AvatarStack - Dimens.MinTouchTarget) / 2,
                 ),
             ) { trailing() }
@@ -1530,9 +1533,6 @@ private fun BurstCollapseRow(
 
 /** 网格里横跨整行的那几格:标题行、分隔线、页脚。 */
 private val FullLine: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
-
-/** 标题行入口按钮末端的内边距。行的右边距补足剩下的部分,箭头的右沿停在 16dp 页边线上。 */
-private val HeaderButtonEndInset = Spacing.Hair
 
 /** 多列网格卡片外围半间距:两张相邻卡片的悬停容器相距 12dp。 */
 private val GridCardHorizontalPadding = 6.dp

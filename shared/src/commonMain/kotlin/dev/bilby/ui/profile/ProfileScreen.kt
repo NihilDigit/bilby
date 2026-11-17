@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -53,7 +54,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -65,11 +65,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboard
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -95,11 +91,8 @@ import dev.bilby.offline.OfflineStore
 import dev.bilby.parseDurationSeconds
 import dev.bilby.resources.*
 import dev.bilby.stringResource
-import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.CaptionDragHeight
-import dev.bilby.ui.CaptionLeadWithDrag
-import dev.bilby.ui.LocalLiveWindowInfo
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BilbyTooltip
@@ -131,9 +124,7 @@ import dev.bilby.ui.offline.toRowUi
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.theme.BilbyTheme
-import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Dimens
-import dev.bilby.ui.theme.LocalIsDarkTheme
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.interactiveCard
 import dev.bilby.ui.theme.tabular
@@ -323,54 +314,33 @@ fun ProfileScreen(
     }
 
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
-    val caption = LocalWindowCaption.current
-    val liveWindow = LocalLiveWindowInfo.current ?: LocalWindowInfo.current
-    val density = LocalDensity.current
-    val edgeTolerancePx = with(density) { 32.dp.toPx() }
-    var rootTouchesTopRight by remember { mutableStateOf(false) }
-    var cardAtTop by remember { mutableStateOf(true) }
+    val pinnedHeader = LocalWindowCaption.current != null
 
-    Box(
+    Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(contentPadding)
-            .onGloballyPositioned { coordinates ->
-                if (!coordinates.isAttached) return@onGloballyPositioned
-                val bounds = coordinates.boundsInWindow()
-                rootTouchesTopRight = bounds.top <= edgeTolerancePx &&
-                    bounds.right >= liveWindow.containerSize.width - edgeTolerancePx
-            },
+            .padding(contentPadding),
     ) {
+        if (pinnedHeader) {
+            ProfileHeader(onSettingsClick = onSettingsClick)
+        }
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .weight(1f)
+                .fillMaxWidth()
                 .verticalScroll(scrollState),
         ) {
-            if (wide || caption != null) {
-                AccountCard(
-                    state = state,
-                    onOpenSelf = onOpenSelf,
-                    onOpenMessages = onOpenMessages,
-                    onOpenFollowings = onOpenFollowings,
-                    onOpenCoinLog = onOpenCoinLog,
-                    onSettingsClick = onSettingsClick,
-                    onRetry = onRetryAccount,
-                    onCaptionAtTopChanged = { cardAtTop = it },
-                )
-            } else {
-                AdaptiveContent(maxWidth = Breakpoints.ReadableWidth) {
-                    AccountCard(
-                        state = state,
-                        onOpenSelf = onOpenSelf,
-                        onOpenMessages = onOpenMessages,
-                        onOpenFollowings = onOpenFollowings,
-                        onOpenCoinLog = onOpenCoinLog,
-                        onSettingsClick = onSettingsClick,
-                        onRetry = onRetryAccount,
-                        onCaptionAtTopChanged = { cardAtTop = it },
-                    )
-                }
+            if (!pinnedHeader) {
+                ProfileHeader(onSettingsClick = onSettingsClick)
             }
+            AccountCard(
+                state = state,
+                onOpenSelf = onOpenSelf,
+                onOpenMessages = onOpenMessages,
+                onOpenFollowings = onOpenFollowings,
+                onOpenCoinLog = onOpenCoinLog,
+                onRetry = onRetryAccount,
+            )
 
             Spacer(Modifier.height(Spacing.Hair))
 
@@ -381,39 +351,55 @@ fun ProfileScreen(
 
             Spacer(Modifier.height(Spacing.Comfortable))
         }
-
-        // 桌面端下滚离开顶部身份卡后,右上角仍保留轻量拖动条与窗口控制按钮,保证随时可最小化/关闭窗口。
-        if (caption != null && rootTouchesTopRight && !cardAtTop && scrollState.value > 0) {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f),
-                shape = CircleShape,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = Spacing.Tight, end = Spacing.Comfortable),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(start = Spacing.Tight, end = Spacing.Hair),
-                ) {
-                    Spacer(Modifier.width(24.dp).height(CaptionDragHeight).windowDragArea(true))
-                    caption.Buttons()
-                }
-            }
-        }
     }
 }
 
-private val InlineActionsThreshold = 880.dp
+/**
+ * 个人页顶部操作条:独立于 [AccountCard] 承载设置入口及桌面端窗口拖动区与控制按钮,
+ * 避免窄/中等窗口下挤压身份卡昵称与签名的横向宽度。
+ */
+@Composable
+private fun ProfileHeader(onSettingsClick: () -> Unit) {
+    val captionSlot = rememberCaptionSlot()
+    Row(
+        modifier = captionSlot.modifier
+            .fillMaxWidth()
+            .heightIn(min = Dimens.MinTouchTarget)
+            .padding(
+                start = Spacing.Comfortable,
+                end = Spacing.Hair,
+                top = if (LocalWindowCaption.current != null) Spacing.Tight else Spacing.Hair,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(
+            modifier = Modifier
+                .weight(1f)
+                .height(CaptionDragHeight)
+                .windowDragArea(captionSlot.atTop),
+        )
+        val settingsLabel = stringResource(Res.string.settings_title)
+        BilbyTooltip(text = settingsLabel, shortcut = "Ctrl+,") {
+            IconButton(onClick = onSettingsClick) {
+                Icon(
+                    Icons.Outlined.Settings,
+                    contentDescription = settingsLabel,
+                    modifier = Modifier.size(Dimens.IconAction),
+                )
+            }
+        }
+        captionSlot.buttons?.invoke()
+    }
+}
+
 private val AccountAvatarSize = Dimens.AvatarHero
-private val AccountActionIconSize = 24.dp
-private val WideAccountActionsWidth = 396.dp
 private val AccountNameSkeletonHeight = 22.dp
 
 /**
  * 个人页主视觉身份卡:
- * - 容器色浅色取 `surfaceContainer`、深色取 `surfaceContainerLow`,配 `shapes.extraLarge`(28dp)与 `16dp` 内边距;
- * - 72dp `AvatarHero` + `headlineSmallEmphasized` 昵称 + `LevelBadge` + 一键复制 `UID` 胶囊 + 右键/长按复制菜单;
- * - 关注 / 硬币 / 消息三段式 `surfaceContainerHigh` 操作条(消息入口严格零红点、零未读角标)。
+ * - 单一整宽 `surfaceContainer` `shapes.extraLarge`(28dp)容器,身份行直接落在卡片底面上,无嵌套深灰内框;
+ * - 72dp `AvatarHero` + `headlineSmallEmphasized` 昵称 + `LevelBadge` + 一键复制 `UID` 胶囊 + 完整宽度签名 + 右侧引导箭头;
+ * - 下接关注 / 硬币 / 消息三段式 `surfaceContainerHigh` 操作条(消息入口严格零红点、零未读角标)。
  */
 @OptIn(
     ExperimentalMaterial3ExpressiveApi::class,
@@ -427,19 +413,10 @@ private fun AccountCard(
     onOpenMessages: () -> Unit,
     onOpenFollowings: () -> Unit,
     onOpenCoinLog: () -> Unit,
-    onSettingsClick: () -> Unit,
     onRetry: () -> Unit,
-    onCaptionAtTopChanged: (Boolean) -> Unit = {},
 ) {
     val account = state.account
     val colorScheme = MaterialTheme.colorScheme
-    val isDark = LocalIsDarkTheme.current
-    val cardColor = if (isDark) colorScheme.surfaceContainerLow else colorScheme.surfaceContainer
-    val hasWindowCaption = LocalWindowCaption.current != null
-    val captionSlot = rememberCaptionSlot(topInset = 32.dp)
-    LaunchedEffect(captionSlot.atTop) {
-        onCaptionAtTopChanged(captionSlot.atTop)
-    }
 
     val clipboard = LocalClipboard.current
     val copyNotice = LocalCopyNotice.current
@@ -447,6 +424,7 @@ private fun AccountCard(
     val copiedText = stringResource(Res.string.comment_copied)
     val copyNicknameLabel = stringResource(Res.string.action_copy_nickname)
     val copyUidLabel = stringResource(Res.string.action_copy_uid)
+    val copyBioLabel = stringResource(Res.string.action_copy_bio)
     val menuLabel = stringResource(Res.string.menu_item_actions)
 
     val copyValue: (String, String) -> Unit = { label, text ->
@@ -456,203 +434,177 @@ private fun AccountCard(
         }
     }
 
-    BoxWithConstraints(
-        modifier = captionSlot.modifier
+    Surface(
+        color = colorScheme.surfaceContainer,
+        contentColor = colorScheme.onSurface,
+        shape = MaterialTheme.shapes.extraLarge,
+        modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
     ) {
-        val inlineActions = maxWidth >= InlineActionsThreshold
-
-        Surface(
-            color = cardColor,
-            contentColor = colorScheme.onSurface,
-            shape = MaterialTheme.shapes.extraLarge,
-            modifier = Modifier.fillMaxWidth(),
+        Column(
+            verticalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacing.Comfortable),
         ) {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
-                modifier = Modifier.padding(Spacing.Comfortable),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                    modifier = Modifier.fillMaxWidth().heightIn(min = AccountAvatarSize),
-                ) {
-                    CaptionLeadWithDrag(
-                        dragEnabled = captionSlot.atTop,
-                        dragHeight = AccountAvatarSize,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        if (account != null) {
-                            ContextMenuBox(
-                                onClick = { onOpenSelf(account.mid) },
-                                menuLabel = menuLabel,
-                                modifier = Modifier
-                                    .then(if (hasWindowCaption) Modifier else Modifier.fillMaxWidth())
-                                    .clip(MaterialTheme.shapes.large),
-                                menu = { close ->
-                                    DropdownMenuItem(
-                                        onClick = {
-                                            close()
-                                            copyValue(copyNicknameLabel, account.name)
-                                        },
-                                        text = { Text(copyNicknameLabel) },
-                                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
-                                        shape = menuItemShape(0, 2),
-                                    )
-                                    DropdownMenuItem(
-                                        onClick = {
-                                            close()
-                                            copyValue(copyUidLabel, account.mid.toString())
-                                        },
-                                        text = { Text(copyUidLabel) },
-                                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
-                                        shape = menuItemShape(1, 2),
-                                    )
+            if (account != null) {
+                val hasBio = account.sign.isNotBlank()
+                val menuTotal = if (hasBio) 3 else 2
+                ContextMenuBox(
+                    onClick = { onOpenSelf(account.mid) },
+                    menuLabel = menuLabel,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.large),
+                    menu = { close ->
+                        DropdownMenuItem(
+                            onClick = {
+                                close()
+                                copyValue(copyNicknameLabel, account.name)
+                            },
+                            text = { Text(copyNicknameLabel) },
+                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                            shape = menuItemShape(0, menuTotal),
+                        )
+                        DropdownMenuItem(
+                            onClick = {
+                                close()
+                                copyValue(copyUidLabel, account.mid.toString())
+                            },
+                            text = { Text(copyUidLabel) },
+                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                            shape = menuItemShape(1, menuTotal),
+                        )
+                        if (hasBio) {
+                            DropdownMenuItem(
+                                onClick = {
+                                    close()
+                                    copyValue(copyBioLabel, account.sign)
                                 },
-                            ) { _ ->
+                                text = { Text(copyBioLabel) },
+                                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                                shape = menuItemShape(2, menuTotal),
+                            )
+                        }
+                    },
+                ) { _ ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = AccountAvatarSize)
+                            .padding(vertical = Spacing.Hair),
+                    ) {
+                        Avatar(url = account.faceUrl, size = AccountAvatarSize)
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.Hair + 2.dp),
+                        ) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                                itemVerticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
-                                    modifier = if (hasWindowCaption) {
-                                        Modifier.padding(end = Spacing.Tight)
-                                    } else {
-                                        Modifier.fillMaxWidth()
-                                    },
+                                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
                                 ) {
-                                    Avatar(url = account.faceUrl, size = AccountAvatarSize)
-                                    Column(
-                                        modifier = Modifier.weight(1f, fill = !hasWindowCaption),
-                                        verticalArrangement = Arrangement.spacedBy(Spacing.Hair + 2.dp),
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                                        ) {
-                                            Text(
-                                                text = account.name,
-                                                style = MaterialTheme.typography.headlineSmallEmphasized,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.weight(1f, fill = false),
-                                            )
-                                            LevelBadge(
-                                                level = account.level,
-                                                senior = account.isSeniorMember,
-                                                height = Dimens.LevelBadgeHeight,
-                                            )
-                                            Icon(
-                                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                                contentDescription = null,
-                                                tint = colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(Dimens.IconInline),
-                                            )
-                                        }
-
-                                        FlowRow(
-                                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                                            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                                            itemVerticalAlignment = Alignment.CenterVertically,
-                                        ) {
-                                            AccountUidPill(
-                                                mid = account.mid,
-                                                onCopy = { copyValue(copyUidLabel, account.mid.toString()) },
-                                            )
-                                        }
-
-                                        if (account.sign.isNotBlank()) {
-                                            Text(
-                                                text = account.sign,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = colorScheme.onSurfaceVariant,
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
-                                        }
-                                    }
+                                    Text(
+                                        text = account.name,
+                                        style = MaterialTheme.typography.headlineSmallEmphasized,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false),
+                                    )
+                                    LevelBadge(
+                                        level = account.level,
+                                        senior = account.isSeniorMember,
+                                        height = Dimens.LevelBadgeHeight,
+                                    )
                                 }
+                                AccountUidPill(
+                                    mid = account.mid,
+                                    onCopy = { copyValue(copyUidLabel, account.mid.toString()) },
+                                )
                             }
-                        } else {
-                            Box(modifier = if (hasWindowCaption) Modifier else Modifier.fillMaxWidth()) {
-                                if (state.accountError != null) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = stringResource(state.accountError),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.weight(1f, fill = false),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                        TextButton(onClick = onRetry) { Text(stringResource(Res.string.action_retry)) }
-                                    }
-                                } else {
-                                    SkeletonPulse {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
-                                        ) {
-                                            Box(Modifier.size(AccountAvatarSize).skeleton(CircleShape))
-                                            Column(
-                                                modifier = if (hasWindowCaption) {
-                                                    Modifier
-                                                } else {
-                                                    Modifier.weight(1f)
-                                                },
-                                                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                                            ) {
-                                                SkeletonLine(
-                                                    if (hasWindowCaption) Modifier.width(136.dp) else Modifier.fillMaxWidth(0.5f),
-                                                    height = AccountNameSkeletonHeight,
-                                                )
-                                                SkeletonLine(
-                                                    if (hasWindowCaption) Modifier.width(96.dp) else Modifier.fillMaxWidth(0.35f),
-                                                )
-                                                SkeletonLine(
-                                                    if (hasWindowCaption) Modifier.width(200.dp) else Modifier.fillMaxWidth(0.8f),
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
 
-                    if (inlineActions) {
-                        AccountActions(
-                            account = account,
-                            onOpenFollowings = onOpenFollowings,
-                            onOpenCoinLog = onOpenCoinLog,
-                            onOpenMessages = onOpenMessages,
-                            modifier = Modifier.width(WideAccountActionsWidth),
-                        )
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        val settingsLabel = stringResource(Res.string.settings_title)
-                        BilbyTooltip(text = settingsLabel, shortcut = "Ctrl+,") {
-                            IconButton(onClick = onSettingsClick) {
-                                Icon(
-                                    Icons.Outlined.Settings,
-                                    contentDescription = settingsLabel,
-                                    modifier = Modifier.size(AccountActionIconSize),
+                            if (hasBio) {
+                                Text(
+                                    text = account.sign,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                         }
-                        captionSlot.buttons?.invoke()
+                        Icon(
+                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(Dimens.IconInline),
+                        )
                     }
                 }
-
-                if (!inlineActions) {
-                    AccountActions(
-                        account = account,
-                        onOpenFollowings = onOpenFollowings,
-                        onOpenCoinLog = onOpenCoinLog,
-                        onOpenMessages = onOpenMessages,
-                    )
+            } else {
+                Box(
+                    contentAlignment = Alignment.CenterStart,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = AccountAvatarSize),
+                ) {
+                    if (state.accountError != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = stringResource(state.accountError),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            TextButton(onClick = onRetry) { Text(stringResource(Res.string.action_retry)) }
+                        }
+                    } else {
+                        SkeletonPulse {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Box(Modifier.size(AccountAvatarSize).skeleton(CircleShape))
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                                ) {
+                                    SkeletonLine(
+                                        Modifier.widthIn(max = 180.dp).fillMaxWidth(0.45f),
+                                        height = AccountNameSkeletonHeight,
+                                    )
+                                    SkeletonLine(
+                                        Modifier.widthIn(max = 120.dp).fillMaxWidth(0.3f),
+                                    )
+                                    SkeletonLine(
+                                        Modifier.widthIn(max = 320.dp).fillMaxWidth(0.75f),
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
+
+            AccountActions(
+                account = account,
+                onOpenFollowings = onOpenFollowings,
+                onOpenCoinLog = onOpenCoinLog,
+                onOpenMessages = onOpenMessages,
+            )
         }
     }
 }
