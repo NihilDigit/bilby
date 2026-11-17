@@ -1,14 +1,16 @@
 package dev.bilby.ui.fav
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.ColumnScope
-import dev.bilby.ui.BilbyWindowSize
-import dev.bilby.ui.components.ContextMenuBox
-import dev.bilby.ui.isAtLeast
-import dev.bilby.ui.rememberBilbyWindowSize
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
@@ -26,24 +28,32 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import dev.bilby.stringResource
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.bilby.resources.*
-import org.jetbrains.compose.resources.StringResource
 import dev.bilby.api.BiliResult
 import dev.bilby.data.FavFolderDetail
 import dev.bilby.data.FavRepository
-import dev.bilby.ui.AdaptiveContent
+import dev.bilby.resources.*
+import dev.bilby.stringResource
+import dev.bilby.ui.AdaptiveListContent
+import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.PagedColumn
+import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.RefreshBox
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.rememberCopyAction
 import dev.bilby.ui.errorTextRes
+import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.Spacing
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 
 data class FavFoldersUiState(
     val folders: List<FavFolderDetail> = emptyList(),
@@ -162,10 +172,13 @@ class FavFoldersViewModel(private val repository: FavRepository) : ViewModel() {
     }
 }
 
+private val FolderGridMaxCellWidth = 300.dp
+private val FolderGridHalfGap = 6.dp
+
 /**
- * 收藏夹列表。管理动作都在这一页:新建在顶栏,编辑和删除在每一行的菜单里。
+ * 收藏夹列表。管理动作都在这一页:新建在顶栏,编辑和删除在每一格的菜单里。
  *
- * 点一行进的是这个收藏夹的内容(`FavFolderScreen`),取消收藏在那一页做 —— 那里才看得见
+ * 点一格进的是这个收藏夹的内容(`FavFolderScreen`),取消收藏在那一页做 —— 那里才看得见
  * 是哪一条。
  */
 @Composable
@@ -184,52 +197,78 @@ fun FavFoldersScreen(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
-    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    val layoutDirection = LocalLayoutDirection.current
     Box(modifier = modifier.fillMaxSize()) {
-        AdaptiveContent {
-            RefreshBox(
-                refreshing = state.refreshing,
-                onRefresh = onRefresh,
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                PagedColumn(
-                    items = state.folders,
-                    // 新建和删除都在这一页做,删掉一行时下面几行不该硬跳一格。
-                    key = { it.id },
-                    loading = state.loading,
-                    appending = state.appending,
-                    hasMore = state.hasMore,
-                    error = state.error?.let { stringResource(it) },
-                    emptyText = stringResource(Res.string.fav_folders_empty),
-                    onLoadMore = onLoadMore,
-                    onRetry = onRetry,
-                    contentPadding = contentPadding,
-                ) { folder ->
-                    val menu: @Composable ColumnScope.(close: () -> Unit) -> Unit = { close ->
-                        FavFolderMenuItems(
-                            // 默认收藏夹删不掉,所以这里根本不给删除项 —— 让它可点再报错,等于把
-                            // 一条服务端规则做成了一次失败。
-                            deletable = !folder.isDefault,
-                            close = close,
-                            onEdit = { onEdit(folder) },
-                            onDelete = { onDelete(folder) },
-                        )
-                    }
-                    // 宽屏不画 ⋮,右键或长按弹同一份菜单,理由见 ContextMenuBox。
-                    if (wide) {
+        AdaptiveListContent(
+            modifier = Modifier.fillMaxSize(),
+            maxCellWidth = FolderGridMaxCellWidth,
+        ) { columns ->
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val multiColumn = columns != GridCells.Fixed(1) && maxWidth >= Dimens.VideoGridMinCellWidth * 2
+                val effectiveColumns = if (multiColumn) columns else GridCells.Fixed(1)
+                val gridPadding = if (multiColumn) {
+                    PaddingValues(
+                        start = contentPadding.calculateStartPadding(layoutDirection) + (Spacing.Comfortable - FolderGridHalfGap),
+                        top = contentPadding.calculateTopPadding() + Spacing.Tight,
+                        end = contentPadding.calculateEndPadding(layoutDirection) + (Spacing.Comfortable - FolderGridHalfGap),
+                        bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
+                    )
+                } else {
+                    contentPadding
+                }
+
+                RefreshBox(
+                    refreshing = state.refreshing,
+                    onRefresh = onRefresh,
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    PagedColumn(
+                        layout = PagedLayout.Grid(effectiveColumns),
+                        items = state.folders,
+                        // 新建和删除都在这一页做,删掉一格时下面几格平滑补位。
+                        key = { it.id },
+                        loading = state.loading,
+                        appending = state.appending,
+                        hasMore = state.hasMore,
+                        error = state.error?.let { stringResource(it) },
+                        emptyText = stringResource(Res.string.fav_folders_empty),
+                        onLoadMore = onLoadMore,
+                        onRetry = onRetry,
+                        contentPadding = gridPadding,
+                    ) { folder ->
+                        val menu: @Composable ColumnScope.(close: () -> Unit) -> Unit = { close ->
+                            FavFolderMenuItems(
+                                title = folder.title,
+                                // 默认收藏夹删不掉,所以这里根本不给删除项 —— 让它可点再报错,等于把
+                                // 一条服务端规则做成了一次失败。
+                                deletable = !folder.isDefault,
+                                close = close,
+                                onEdit = { onEdit(folder) },
+                                onDelete = { onDelete(folder) },
+                            )
+                        }
                         ContextMenuBox(
                             onClick = null,
                             menuLabel = stringResource(Res.string.fav_folder_actions, folder.title),
                             menu = menu,
                         ) { openMenu ->
-                            FavFolderRow(folder = folder, onClick = { onOpenFolder(folder) }, onLongClick = openMenu)
+                            if (multiColumn) {
+                                FavFolderGridCard(
+                                    folder = folder,
+                                    onClick = { onOpenFolder(folder) },
+                                    onLongClick = openMenu,
+                                    overflow = { FavFolderMenu(folder.title, menu) },
+                                    modifier = Modifier.padding(FolderGridHalfGap),
+                                )
+                            } else {
+                                FavFolderRow(
+                                    folder = folder,
+                                    onClick = { onOpenFolder(folder) },
+                                    onLongClick = openMenu,
+                                    trailing = { FavFolderMenu(folder.title, menu) },
+                                )
+                            }
                         }
-                    } else {
-                        FavFolderRow(
-                            folder = folder,
-                            onClick = { onOpenFolder(folder) },
-                            trailing = { FavFolderMenu(folder.title, menu) },
-                        )
                     }
                 }
             }
@@ -241,8 +280,7 @@ fun FavFoldersScreen(
 }
 
 /**
- * 一行的管理菜单。M3E vertical menu 的外形与带图标的项,同首页溢出菜单;项的形状按首末取
- * (理由见 `FeedScreen` 的 `FeedEntryItem`),默认收藏夹只剩一项时取 standalone。
+ * 一项的管理菜单。M3E vertical menu 的外形与带图标的项,同首页溢出菜单。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -267,10 +305,33 @@ private fun FavFolderMenu(folderTitle: String, menu: @Composable ColumnScope.(cl
     }
 }
 
-/** 编辑、删除两项,⋮ 与右键共用。 */
+/** 复制标题、编辑、删除三项,⋮ 与右键共用。 */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun FavFolderMenuItems(deletable: Boolean, close: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+private fun FavFolderMenuItems(
+    title: String,
+    deletable: Boolean,
+    close: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val copyTitle = rememberCopyAction()
+    val hasCopy = title.isNotBlank()
+    val totalCount = (if (hasCopy) 1 else 0) + 1 + (if (deletable) 1 else 0)
+    var index = 0
+    if (hasCopy) {
+        val currentIndex = index++
+        DropdownMenuItem(
+            text = { Text(stringResource(Res.string.action_copy_title)) },
+            onClick = {
+                close()
+                copyTitle(title)
+            },
+            leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+            shape = menuItemShape(currentIndex, totalCount),
+        )
+    }
+    val editIndex = index++
     DropdownMenuItem(
         text = { Text(stringResource(Res.string.fav_folder_edit_info)) },
         onClick = {
@@ -278,9 +339,10 @@ private fun FavFolderMenuItems(deletable: Boolean, close: () -> Unit, onEdit: ()
             onEdit()
         },
         leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
-        shape = if (deletable) MenuDefaults.leadingItemShape else MenuDefaults.standaloneItemShape,
+        shape = menuItemShape(editIndex, totalCount),
     )
     if (deletable) {
+        val deleteIndex = index
         DropdownMenuItem(
             text = { Text(stringResource(Res.string.fav_folder_delete_title)) },
             onClick = {
@@ -288,7 +350,7 @@ private fun FavFolderMenuItems(deletable: Boolean, close: () -> Unit, onEdit: ()
                 onDelete()
             },
             leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null) },
-            shape = MenuDefaults.trailingItemShape,
+            shape = menuItemShape(deleteIndex, totalCount),
         )
     }
 }
