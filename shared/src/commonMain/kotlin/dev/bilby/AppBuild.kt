@@ -18,6 +18,8 @@ object AppBuild {
         private set
     var llmApiKey: String = ""
         private set
+    var llmModel: String = ""
+        private set
 
     fun init(
         debug: Boolean,
@@ -25,11 +27,13 @@ object AppBuild {
         applicationId: String,
         llmBaseUrl: String = "",
         llmApiKey: String = "",
+        llmModel: String = "",
     ) {
         this.debug = debug
         this.versionName = versionName
         this.applicationId = applicationId
         this.llmBaseUrl = llmBaseUrl
         this.llmApiKey = llmApiKey
+        this.llmModel = llmModel
     }
 }

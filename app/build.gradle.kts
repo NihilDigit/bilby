@@ -81,10 +81,12 @@ android {
             versionNameSuffix = "-debug"
             buildConfigField("String", "LLM_BASE_URL", "\"${localProperties.getProperty("LLM_BASE_URL", "")}\"")
             buildConfigField("String", "LLM_API_KEY", "\"${localProperties.getProperty("LLM_API_KEY", "")}\"")
+            buildConfigField("String", "LLM_MODEL", "\"${localProperties.getProperty("LLM_MODEL", "")}\"")
         }
         release {
             buildConfigField("String", "LLM_BASE_URL", "\"\"")
             buildConfigField("String", "LLM_API_KEY", "\"\"")
+            buildConfigField("String", "LLM_MODEL", "\"\"")
             signingConfig = signingConfigs.getByName(
                 if (System.getenv("BILBY_KEYSTORE") != null) "ci" else "debug",
             )

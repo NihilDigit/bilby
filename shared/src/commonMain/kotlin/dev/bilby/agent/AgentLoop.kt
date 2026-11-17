@@ -8,9 +8,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonObject
 import java.io.IOException
 
@@ -102,6 +104,7 @@ class AgentLoop(
 
             val text = deltas.filterIsInstance<LlmDelta.Text>().joinToString("") { it.text }
             val calls = deltas.filterIsInstance<LlmDelta.ToolCalls>().flatMap { it.calls }
+            val extraContent = mergeExtraContent(deltas)
 
             // 模型每一轮只有两种可能:调工具,或者回话。**回话就是终局**,不需要再有一个
             // submit_answer 把它包一层。
@@ -115,6 +118,11 @@ class AgentLoop(
                 val answer = toAnswer(text, seenBvids, traceByBvid)
                 // 纯文字的回答是合法的(问的是问题,不是找视频),所以只要正文不空就算交卷。
                 if (answer.text.isNotBlank() || answer.sources.isNotEmpty()) {
+                    messages += ChatMessage(
+                        role = ChatMessage.ROLE_ASSISTANT,
+                        content = text,
+                        extraContent = extraContent,
+                    )
                     emit(AgentEvent.Answer(answer))
                     return@flow
                 }
@@ -132,7 +140,12 @@ class AgentLoop(
             // 正文与工具调用同在时,正文是过程解说(DESIGN 3.4 的过程直播),不是答案。
             if (text.isNotBlank()) emit(AgentEvent.Thinking(text))
 
-            messages += ChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = text.ifBlank { null }, toolCalls = calls)
+            messages += ChatMessage(
+                role = ChatMessage.ROLE_ASSISTANT,
+                content = text.ifBlank { null },
+                toolCalls = calls,
+                extraContent = extraContent,
+            )
 
             // 到限了还在调工具。撤走 tools 已经让这件事不该发生,但"不该发生"不等于
             // "不会发生" —— 模型照样能凭上一轮的记忆再发一个调用,而这正是规矩 1 存在的理由:
@@ -160,6 +173,7 @@ class AgentLoop(
             val prepared = calls.map { call ->
                 val tool = tools[call.function.name]
                 val arguments = runCatching { json.parseToJsonElement(call.function.arguments).jsonObject }
+                    .onFailure { BiliLog.w("工具 ${call.function.name} 参数解析失败", it) }
                     .getOrElse { buildJsonObject { } }
                 Triple(call, tool, arguments)
             }
@@ -214,6 +228,24 @@ class AgentLoop(
             // 会让下一轮请求被服务端拒掉(400 insufficient tool messages)。
             onTurnComplete(repairToolResponses(messages.drop(newFrom)), seenBvids, traceByBvid)
         }
+    }
+
+    private fun mergeExtraContent(deltas: List<LlmDelta>): JsonObject? {
+        val extras = deltas.filterIsInstance<LlmDelta.ExtraContent>().map { it.content }
+        if (extras.isEmpty()) return null
+        if (extras.size == 1) return extras.single()
+        val merged = LinkedHashMap<String, JsonElement>()
+        for (extra in extras) {
+            for ((key, value) in extra) {
+                val existing = merged[key]
+                merged[key] = if (existing is JsonObject && value is JsonObject) {
+                    JsonObject(existing + value)
+                } else {
+                    value
+                }
+            }
+        }
+        return JsonObject(merged)
     }
 
     /**

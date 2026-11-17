@@ -51,6 +51,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.serialization.kotlinx.json.json
@@ -83,6 +84,9 @@ class AppContainer(val platform: Platform) {
             install(ContentNegotiation) {
                 json(json)
             }
+            // 不设全局默认超时,B 站接口继续沿用 OkHttp 默认的 10s;装上插件是为了让
+            // LlmClient 按单次请求放宽思考模型的首包等待时间。
+            install(HttpTimeout)
             // 直播弹幕长连接。装在这个共享 client 上而不是另起一个:直播那条链路要的超时、
             // 代理、引擎设置跟其余请求没有区别,分开只会多一份要同步的配置。
             install(WebSockets)
