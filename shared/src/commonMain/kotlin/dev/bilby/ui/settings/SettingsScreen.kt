@@ -1,47 +1,58 @@
 package dev.bilby.ui.settings
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.Logout
-import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.Bedtime
-import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.Memory
-import androidx.compose.material.icons.outlined.PlayCircleOutline
-import androidx.compose.material.icons.outlined.Palette
-import androidx.compose.material.icons.outlined.TouchApp
-import dev.bilby.data.AppearancePrefs
-import dev.bilby.ui.theme.ThemePalette
-import dev.bilby.ui.theme.dynamicColorAvailable
-import androidx.compose.material.icons.outlined.Shield
-import androidx.compose.material.icons.outlined.SystemUpdate
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Bedtime
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.PlayCircleOutline
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.SystemUpdate
+import androidx.compose.material.icons.outlined.TouchApp
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Badge
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedListItem
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
@@ -53,36 +64,49 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.delay
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import dev.bilby.stringResource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import dev.bilby.AppBuild
-import dev.bilby.update.AvailableUpdate
-import dev.bilby.update.UpdateStatus
-import java.net.URI
-import java.net.URISyntaxException
-import dev.bilby.resources.*
+import dev.bilby.agent.LlmModelInfo
+import dev.bilby.data.AppearancePrefs
 import dev.bilby.data.CodecPreference
 import dev.bilby.data.LlmConfig
 import dev.bilby.data.NightWindowStatus
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.evaluateNightMode
+import dev.bilby.data.formatMinuteOfDay
 import dev.bilby.data.formatNightRange
-import dev.bilby.player.videoQualityLabel
+import dev.bilby.data.withScheme
+import dev.bilby.resources.*
+import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.InlineProgress
+import dev.bilby.ui.components.trackEditableFocus
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
-import dev.bilby.ui.components.BilbyTopBar
-import dev.bilby.ui.components.trackEditableFocus
-import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.theme.Breakpoints
+import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.ThemePalette
+import dev.bilby.ui.theme.dynamicColorAvailable
+import dev.bilby.ui.theme.tabular
+import dev.bilby.update.AvailableUpdate
+import dev.bilby.update.UpdateStatus
+import java.net.URI
+import java.net.URISyntaxException
+import kotlinx.coroutines.delay
 
 /**
  * 设置首页。**只放入口,没有一项设置直接躺在这里**(登出除外,见下)。
@@ -117,9 +141,10 @@ fun SettingsScreen(
     val notConfigured = stringResource(Res.string.settings_not_configured)
     val selected: (SettingsSection) -> Boolean? = { section -> if (twoPane) section == openSection else null }
     var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(state.nightMode) {
+    val nightPrefs = state.nightMode
+    LaunchedEffect(nightPrefs) {
         nowMillis = System.currentTimeMillis()
-        if (!state.nightMode.enabled) return@LaunchedEffect
+        if (!nightPrefs.enabled && nightPrefs.manualUntilEpochMillis <= 0L) return@LaunchedEffect
         while (true) {
             delay(15_000L)
             nowMillis = System.currentTimeMillis()
@@ -149,10 +174,9 @@ fun SettingsScreen(
                     .verticalScroll(rememberScrollState())
                     .padding(bottom = Spacing.Spacious + navigationBarsBottom()),
             ) {
-                // 五个去处装成一组,每个去处一块分段。
                 SettingsGroup {
                     row { position ->
-                        SettingRow(
+                        CategoryRow(
                             position = position,
                             title = stringResource(Res.string.settings_section_appearance),
                             icon = Icons.Outlined.Palette,
@@ -164,7 +188,7 @@ fun SettingsScreen(
                         )
                     }
                     row { position ->
-                        SettingRow(
+                        CategoryRow(
                             position = position,
                             title = stringResource(Res.string.settings_section_playback),
                             icon = Icons.Outlined.PlayCircleOutline,
@@ -177,7 +201,7 @@ fun SettingsScreen(
                         )
                     }
                     row { position ->
-                        SettingRow(
+                        CategoryRow(
                             position = position,
                             title = stringResource(Res.string.settings_section_gestures),
                             icon = Icons.Outlined.TouchApp,
@@ -188,7 +212,7 @@ fun SettingsScreen(
                         )
                     }
                     row { position ->
-                        SettingRow(
+                        CategoryRow(
                             position = position,
                             title = stringResource(Res.string.settings_section_agent),
                             icon = Icons.Outlined.AutoAwesome,
@@ -205,7 +229,7 @@ fun SettingsScreen(
                         )
                     }
                     row { position ->
-                        SettingRow(
+                        CategoryRow(
                             position = position,
                             title = stringResource(Res.string.settings_section_privacy),
                             icon = Icons.Outlined.Shield,
@@ -218,21 +242,36 @@ fun SettingsScreen(
                         )
                     }
                     row { position ->
-                        val nightPrefs = state.nightMode
-                        SettingRow(
+                        CategoryRow(
                             position = position,
                             title = stringResource(Res.string.settings_section_night_mode),
                             icon = Icons.Outlined.Bedtime,
                             value = state.loaded.then {
-                                if (!nightPrefs.enabled) {
-                                    stringResource(Res.string.night_mode_off)
-                                } else {
-                                    val range = formatNightRange(nightPrefs.startMinuteOfDay, nightPrefs.endMinuteOfDay)
-                                    when (evaluateNightMode(nightPrefs, nowMillis)) {
-                                        is NightWindowStatus.Overridden ->
-                                            stringResource(Res.string.night_mode_summary_paused, range)
-                                        is NightWindowStatus.Active, NightWindowStatus.Inactive ->
-                                            stringResource(Res.string.night_mode_summary_on, range, nightPrefs.allowedUps.size)
+                                val range = formatNightRange(nightPrefs.startMinuteOfDay, nightPrefs.endMinuteOfDay)
+                                when (val status = evaluateNightMode(nightPrefs, nowMillis)) {
+                                    is NightWindowStatus.Active -> if (status.manual) {
+                                        stringResource(
+                                            Res.string.night_mode_summary_manual_on,
+                                            formatMinuteOfDay(nightPrefs.endMinuteOfDay),
+                                            nightPrefs.allowedUps.size,
+                                        )
+                                    } else {
+                                        stringResource(
+                                            Res.string.night_mode_summary_on,
+                                            range,
+                                            nightPrefs.allowedUps.size,
+                                        )
+                                    }
+                                    is NightWindowStatus.Overridden ->
+                                        stringResource(Res.string.night_mode_summary_paused, range)
+                                    NightWindowStatus.Inactive -> if (!nightPrefs.enabled) {
+                                        stringResource(Res.string.night_mode_off)
+                                    } else {
+                                        stringResource(
+                                            Res.string.night_mode_summary_on,
+                                            range,
+                                            nightPrefs.allowedUps.size,
+                                        )
                                     }
                                 }
                             },
@@ -242,7 +281,7 @@ fun SettingsScreen(
                         )
                     }
                     row { position ->
-                        SettingRow(
+                        CategoryRow(
                             position = position,
                             title = stringResource(Res.string.settings_section_about),
                             icon = Icons.Outlined.Info,
@@ -257,10 +296,11 @@ fun SettingsScreen(
                 // 反而更危险:找不到的时候人会挨个点进去翻。
                 SettingsGroup(title = stringResource(Res.string.settings_section_account)) {
                     row { position ->
-                        SettingRow(
+                        CategoryRow(
                             position = position,
                             title = stringResource(Res.string.settings_logout),
                             icon = Icons.AutoMirrored.Outlined.Logout,
+                            target = RowTarget.Here,
                             onClick = { confirmingLogout = true },
                         )
                     }
@@ -285,6 +325,84 @@ fun SettingsScreen(
                     Text(stringResource(Res.string.action_cancel))
                 }
             },
+        )
+    }
+}
+
+private val CategoryIconBoxSize = 36.dp
+
+/**
+ * 设置首页一级分类入口:行首配 36dp 圆角方块色阶图标(`shapes.medium`),常态 `secondaryContainer`,
+ * 双栏选中态切为 `primaryContainer` 并将行底色抬至 `surfaceContainerHigh`。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun CategoryRow(
+    position: RowPosition,
+    icon: ImageVector,
+    title: String,
+    onClick: () -> Unit,
+    value: String? = null,
+    target: RowTarget = RowTarget.Page,
+    selected: Boolean? = null,
+) {
+    val colors = MaterialTheme.colorScheme
+    val isSelected = selected == true
+    val trailingIcon = when (target) {
+        RowTarget.Page -> Icons.AutoMirrored.Filled.KeyboardArrowRight.takeIf { selected == null }
+        RowTarget.External, RowTarget.Here -> null
+    }
+    SegmentedListItem(
+        onClick = onClick,
+        shapes = ListItemDefaults.segmentedShapes(index = position.index, count = position.count),
+        colors = ListItemDefaults.segmentedColors(
+            containerColor = if (isSelected) colors.surfaceContainerHigh else colors.surfaceContainer,
+            selectedContainerColor = if (isSelected) colors.surfaceContainerHigh else colors.surfaceContainer,
+        ),
+        modifier = Modifier.semantics { role = Role.Button },
+        leadingContent = {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(CategoryIconBoxSize)
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(if (isSelected) colors.primaryContainer else colors.secondaryContainer),
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (isSelected) colors.onPrimaryContainer else colors.onSecondaryContainer,
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+            }
+        },
+        trailingContent = trailingIcon?.let {
+            {
+                Icon(
+                    imageVector = it,
+                    contentDescription = null,
+                    tint = colors.onSurfaceVariant,
+                )
+            }
+        },
+        supportingContent = value?.let {
+            {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodyMedium.tabular,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+        },
+    ) {
+        Text(
+            text = title,
+            style = if (isSelected) {
+                MaterialTheme.typography.bodyLargeEmphasized
+            } else {
+                MaterialTheme.typography.bodyLarge
+            },
+            color = colors.onSurface,
         )
     }
 }
@@ -393,9 +511,8 @@ internal fun <T> ChoiceRow(
 /**
  * 关于页卡片里的更新按钮。
  *
- * 没有查到新版时是「检查更新」;查到之后是「新版本 X」,点开更新对话框,下载、安装、重启都在
- * 那里做,和开屏弹出的是同一个(见 [dev.bilby.ui.update.UpdateDialog])。检查中禁用。
- * 查到新版时按钮带一个角标:状态行在卡片里偏小,这是整页唯一需要用户接着动手的状态。
+ * 没有查到新版时是「检查更新」(tonal);查到新版或已就绪待重启时升级为实心主按钮(`Button`,primary),
+ * 绝不绘制红点角标(`Badge`)。点开更新对话框后下载、安装、重启都在那里完成(见 [dev.bilby.ui.update.UpdateDialog])。
  */
 @Composable
 internal fun UpdateRow(
@@ -411,7 +528,8 @@ internal fun UpdateRow(
     }
     val label = update?.let { stringResource(Res.string.update_dialog_title, it.version) }
         ?: stringResource(Res.string.settings_update)
-    FilledTonalButton(onClick = onClick ?: {}, enabled = onClick != null) {
+    val emphasize = status is UpdateStatus.Available || status is UpdateStatus.ReadyToRestart
+    val buttonContent: @Composable RowScope.() -> Unit = {
         Icon(
             imageVector = Icons.Outlined.SystemUpdate,
             contentDescription = null,
@@ -419,10 +537,11 @@ internal fun UpdateRow(
         )
         Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
         Text(label)
-        if (status is UpdateStatus.Available) {
-            Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
-            Badge()
-        }
+    }
+    if (emphasize) {
+        Button(onClick = onClick ?: {}, enabled = onClick != null, content = buttonContent)
+    } else {
+        FilledTonalButton(onClick = onClick ?: {}, enabled = onClick != null, content = buttonContent)
     }
 }
 
@@ -476,24 +595,78 @@ internal fun UpdateStatusLine(state: UpdateStatus) {
 /**
  * LLM 三项一起改。三个框在一个框里,是因为它们只有凑齐了才有意义 ——
  * 单改一项存下去,中间那个状态是"配了地址没配 key",助理照样跑不起来。
+ *
+ * - URL 通过 `isHttpUrl(baseUrl.withScheme())` 校验,省写 `https://` 同样合法。
+ * - 将接口地址改为非 DeepSeek 域名时自动清掉默认的 `deepseek-v4-flash`,且非 DeepSeek 地址绝不把
+ *   空白模型静默改回 `deepseek-v4-flash`(未填模型前禁用保存)。
+ * - 支持一键向当前地址与 key 请求 `/models`,展开可输入过滤、可点击填充的模型列表。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-internal fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (LlmConfig) -> Unit) {
+internal fun LlmDialog(
+    initial: LlmConfig,
+    onDismiss: () -> Unit,
+    onConfirm: (LlmConfig) -> Unit,
+    modelsState: LlmModelsState = LlmModelsState.Idle,
+    onFetchModels: (baseUrl: String, apiKey: String) -> Unit = { _, _ -> },
+) {
+    val sanitizedInitialModel = if (
+        initial.baseUrl.isNotBlank() &&
+        !isDeepSeekBaseUrl(initial.baseUrl) &&
+        initial.model == SettingsStore.DEFAULT_LLM_MODEL
+    ) {
+        ""
+    } else {
+        initial.model
+    }
     var baseUrl by rememberSaveable { mutableStateOf(initial.baseUrl) }
     var apiKey by rememberSaveable { mutableStateOf(initial.apiKey) }
-    var model by rememberSaveable { mutableStateOf(initial.model) }
+    var model by rememberSaveable { mutableStateOf(sanitizedInitialModel) }
     var keyVisible by remember { mutableStateOf(false) }
-    // 空着是合法的:那是"不配助理"。挡的只是填了、但填得不成形的那一种。
-    val baseUrlValid = baseUrl.isBlank() || isHttpUrl(baseUrl)
+    var pickerExpanded by rememberSaveable { mutableStateOf(false) }
+    var filterActive by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(modelsState) {
+        if (modelsState is LlmModelsState.Loaded) {
+            pickerExpanded = true
+        }
+    }
+
+    // 空着是合法的:那是"不配助理"。省掉协议头会由 withScheme() 补齐,挡的只是填得不成形的地址。
+    val baseUrlValid = baseUrl.isBlank() || isHttpUrl(baseUrl.withScheme())
+    val clearingAll = baseUrl.isBlank() && apiKey.isBlank()
+    val resolvedModel = when {
+        clearingAll -> ""
+        isDeepSeekBaseUrl(baseUrl) -> model.trim().ifBlank { SettingsStore.DEFAULT_LLM_MODEL }
+        else -> model.trim()
+    }
+    val canSave = clearingAll || (baseUrl.isNotBlank() && baseUrlValid && resolvedModel.isNotBlank())
+    val canFetchModels = baseUrl.isNotBlank() &&
+        baseUrlValid &&
+        apiKey.isNotBlank() &&
+        modelsState !is LlmModelsState.Loading
+    val loadedModels = (modelsState as? LlmModelsState.Loaded)?.models.orEmpty()
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(Res.string.settings_llm_dialog)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(Spacing.Cozy)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
                 OutlinedTextField(
                     value = baseUrl,
-                    onValueChange = { baseUrl = it },
+                    onValueChange = { nextUrl ->
+                        baseUrl = nextUrl
+                        if (nextUrl.isNotBlank() &&
+                            !isDeepSeekBaseUrl(nextUrl) &&
+                            model == SettingsStore.DEFAULT_LLM_MODEL
+                        ) {
+                            model = ""
+                            filterActive = false
+                        }
+                    },
                     label = { Text(stringResource(Res.string.settings_llm_base_url)) },
                     isError = !baseUrlValid,
                     supportingText = if (baseUrlValid) {
@@ -502,14 +675,14 @@ internal fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Ll
                         ({ Text(stringResource(Res.string.settings_url_invalid)) })
                     },
                     singleLine = true,
-                    modifier = Modifier.trackEditableFocus(),
+                    modifier = Modifier.fillMaxWidth().trackEditableFocus(),
                 )
                 OutlinedTextField(
                     value = apiKey,
                     onValueChange = { apiKey = it },
                     label = { Text(stringResource(Res.string.settings_api_key)) },
                     singleLine = true,
-                    modifier = Modifier.trackEditableFocus(),
+                    modifier = Modifier.fillMaxWidth().trackEditableFocus(),
                     // 默认遮蔽。给一个显形按钮是因为长串 key 手输时看不见就没法核对,
                     // 但默认态必须是遮住的 —— 设置页经常是当着别人的面打开的。
                     visualTransformation = if (keyVisible) {
@@ -534,22 +707,134 @@ internal fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Ll
                 )
                 OutlinedTextField(
                     value = model,
-                    onValueChange = { model = it },
+                    onValueChange = { nextModel ->
+                        model = nextModel
+                        filterActive = true
+                        if (loadedModels.isNotEmpty()) {
+                            pickerExpanded = true
+                        }
+                    },
                     label = { Text(stringResource(Res.string.settings_model)) },
                     singleLine = true,
-                    modifier = Modifier.trackEditableFocus(),
+                    trailingIcon = if (loadedModels.isNotEmpty()) {
+                        {
+                            IconButton(onClick = { pickerExpanded = !pickerExpanded }) {
+                                Icon(
+                                    imageVector = if (pickerExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                    contentDescription = null,
+                                )
+                            }
+                        }
+                    } else {
+                        null
+                    },
+                    modifier = Modifier.fillMaxWidth().trackEditableFocus(),
                 )
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    FilledTonalButton(
+                        onClick = {
+                            filterActive = false
+                            pickerExpanded = true
+                            onFetchModels(baseUrl, apiKey)
+                        },
+                        enabled = canFetchModels,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(ButtonDefaults.IconSize),
+                        )
+                        Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
+                        Text(stringResource(Res.string.settings_llm_fetch_models))
+                    }
+                }
+
+                when (modelsState) {
+                    LlmModelsState.Idle -> Unit
+
+                    LlmModelsState.Loading -> {
+                        InlineProgress(text = stringResource(Res.string.settings_llm_models_loading))
+                    }
+
+                    is LlmModelsState.Failed -> {
+                        val failedPrefix = stringResource(Res.string.settings_llm_models_failed)
+                        val detail = modelsState.message.trim()
+                        Text(
+                            text = if (detail.isNotEmpty()) "$failedPrefix: $detail" else failedPrefix,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+
+                    is LlmModelsState.Loaded -> {
+                        if (modelsState.models.isEmpty()) {
+                            Text(
+                                text = stringResource(Res.string.settings_llm_models_empty),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else if (pickerExpanded) {
+                            val filterQuery = if (filterActive) model.trim() else ""
+                            val filtered = remember(modelsState.models, filterQuery) {
+                                if (filterQuery.isEmpty()) {
+                                    modelsState.models
+                                } else {
+                                    modelsState.models.filter { item ->
+                                        item.id.contains(filterQuery, ignoreCase = true) ||
+                                            (item.displayName?.contains(filterQuery, ignoreCase = true) == true)
+                                    }
+                                }
+                            }
+                            if (filtered.isEmpty()) {
+                                Text(
+                                    text = stringResource(Res.string.settings_llm_models_empty),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            } else {
+                                Surface(
+                                    shape = MaterialTheme.shapes.medium,
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    LazyColumn(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(max = ModelPickerMaxHeight),
+                                    ) {
+                                        items(filtered, key = { it.id }) { info ->
+                                            LlmModelOptionRow(
+                                                info = info,
+                                                selected = info.id == model.trim(),
+                                                onClick = {
+                                                    model = info.id
+                                                    filterActive = false
+                                                    pickerExpanded = false
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(
-                enabled = baseUrlValid,
+                enabled = canSave,
                 onClick = {
                     onConfirm(
                         LlmConfig(
-                            baseUrl = baseUrl.trim(),
-                            apiKey = apiKey.trim(),
-                            model = model.trim().ifBlank { SettingsStore.DEFAULT_LLM_MODEL },
+                            baseUrl = if (clearingAll) "" else baseUrl.trim(),
+                            apiKey = if (clearingAll) "" else apiKey.trim(),
+                            model = resolvedModel,
                         ),
                     )
                 },
@@ -559,6 +844,71 @@ internal fun LlmDialog(initial: LlmConfig, onDismiss: () -> Unit, onConfirm: (Ll
             TextButton(onClick = onDismiss) { Text(stringResource(Res.string.action_cancel)) }
         },
     )
+}
+
+private val ModelPickerMaxHeight = 200.dp
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun LlmModelOptionRow(
+    info: LlmModelInfo,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val subtitle = info.displayName?.takeIf { it.isNotBlank() && it != info.id }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = Dimens.MinTouchTarget)
+            .clickable(role = Role.Button, onClick = onClick)
+            .background(if (selected) colors.secondaryContainer else Color.Transparent)
+            .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = info.id,
+                style = if (selected) {
+                    MaterialTheme.typography.bodyMediumEmphasized
+                } else {
+                    MaterialTheme.typography.bodyMedium
+                },
+                color = if (selected) colors.onSecondaryContainer else colors.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (selected) colors.onSecondaryContainer else colors.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (selected) {
+            Icon(
+                imageVector = Icons.Outlined.Check,
+                contentDescription = null,
+                tint = colors.onSecondaryContainer,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+        }
+    }
+}
+
+private fun isDeepSeekBaseUrl(rawUrl: String): Boolean {
+    val normalized = rawUrl.withScheme()
+    if (normalized.isEmpty()) return false
+    val host = try {
+        URI(normalized.trim()).host?.lowercase()
+    } catch (_: URISyntaxException) {
+        null
+    }
+    return host != null && (host == "deepseek.com" || host.endsWith(".deepseek.com"))
 }
 
 /**

@@ -12,17 +12,15 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material.icons.automirrored.outlined.AltRoute
-import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Api
 import androidx.compose.material.icons.outlined.Bedtime
@@ -65,16 +63,17 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Wallpaper
 import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -175,6 +174,7 @@ import dev.bilby.ui.theme.LocalIsDarkTheme
 import dev.bilby.ui.theme.PaletteSchemes
 import dev.bilby.ui.theme.ThemePalette
 import dev.bilby.ui.theme.dynamicColorAvailable
+import dev.bilby.ui.theme.tabular
 
 /**
  * 设置的二级页面。**每一页都是一整页,不是一个展开块**:展开块要么把首页撑回原来的长度,
@@ -852,8 +852,12 @@ fun AgentSettingsPage(
     onLlmChange: (LlmConfig) -> Unit,
     onSmokeTest: () -> Unit,
     onBack: (() -> Unit)?,
+    onFetchModels: ((baseUrl: String, apiKey: String) -> Unit)? = null,
+    onClearModels: (() -> Unit)? = null,
 ) {
     var editing by rememberSaveable { mutableStateOf(false) }
+    val clearModels = onClearModels ?: state.llmModelFetcher.clear
+    val fetchModels = onFetchModels ?: state.llmModelFetcher.fetch
     SettingsSubPage(stringResource(Res.string.settings_section_agent), onBack, state.loaded) {
         SettingsGroup {
             row { position ->
@@ -863,10 +867,10 @@ fun AgentSettingsPage(
                     title = stringResource(Res.string.settings_agent_config),
                     // 只说配没配,不显示遮蔽后的 key:遮蔽只挡眼睛,截图和录屏挡不住。
                     subtitle = state.llm?.let { llm ->
-                        if (llm.baseUrl.isBlank() || llm.apiKey.isBlank()) {
+                        if (!llm.isConfigured) {
                             stringResource(Res.string.settings_not_configured)
                         } else {
-                            "${llm.baseUrl}\n${llm.model.ifBlank { SettingsStore.DEFAULT_LLM_MODEL }}"
+                            "${llm.baseUrl}\n${llm.model}"
                         }
                     } ?: stringResource(Res.string.settings_loading),
                     onClick = { editing = true },
@@ -896,11 +900,17 @@ fun AgentSettingsPage(
     if (editing) {
         LlmDialog(
             initial = state.llm ?: LlmConfig("", "", SettingsStore.DEFAULT_LLM_MODEL),
-            onDismiss = { editing = false },
+            modelsState = state.llmModels,
+            onFetchModels = fetchModels,
+            onDismiss = {
+                editing = false
+                clearModels()
+            },
             // 保存也要收起对话框。原先只有取消收,按下保存之后配置存进去了、框还开着,
             // 读起来像没生效,于是再按一次。
             onConfirm = {
                 editing = false
+                clearModels()
                 onLlmChange(it)
             },
         )
@@ -1080,8 +1090,33 @@ fun AboutSettingsPage(
             // 用户点的这一次,失败要说出来,不走静默。
             onCheckUpdate = { updater?.let { scope.launch { it.check() } } },
             onOpenUpdate = { dialogUpdate = it },
-            onOpenGithub = onOpenGithub,
         )
+        Spacer(modifier = Modifier.height(Spacing.Tight))
+        SettingsGroup {
+            row { position ->
+                StaticSettingRow(
+                    position = position,
+                    icon = Icons.Outlined.Info,
+                    title = stringResource(Res.string.settings_license),
+                    trailing = {
+                        Text(
+                            text = "GPL-3.0-or-later",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                )
+            }
+            row { position ->
+                SettingRow(
+                    position = position,
+                    icon = Icons.Outlined.Code,
+                    title = stringResource(Res.string.settings_github),
+                    target = RowTarget.External,
+                    onClick = onOpenGithub,
+                )
+            }
+        }
     }
     val shown = dialogUpdate
     if (updater != null && shown != null) {
@@ -1090,23 +1125,19 @@ fun AboutSettingsPage(
 }
 
 /**
- * 关于:一张卡片,版本、许可证、更新状态与两个动作放在一起。
- *
- * 原先是四行列表:版本和许可证各占一整行却不可点,更新的状态又要另读一行副标题。
- * 这一页没有要逐项调的东西,只有"这是哪个版本、有没有新的、源码在哪",一张卡片答完。
+ * 关于页身份与更新卡片:承载版本号、更新状态及更新操作按钮,下方配合 [SettingsGroup] 分段块陈列许可证与项目仓库。
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun AboutCard(
     /** 不支持应用内更新的平台为 null,不给状态行,也不给更新按钮。 */
     update: UpdateStatus?,
     onCheckUpdate: () -> Unit,
     onOpenUpdate: (AvailableUpdate) -> Unit,
-    onOpenGithub: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     Surface(
-        shape = MaterialTheme.shapes.large,
+        shape = MaterialTheme.shapes.largeIncreased,
         color = colors.surfaceContainer,
         modifier = Modifier
             .fillMaxWidth()
@@ -1119,55 +1150,33 @@ private fun AboutCard(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .size(AboutBadgeSize)
-                        .clip(CircleShape)
+                        .clip(MaterialTheme.shapes.medium)
                         .background(colors.primaryContainer),
                 ) {
                     Icon(Icons.Outlined.Info, contentDescription = null, tint = colors.onPrimaryContainer)
                 }
                 Spacer(modifier = Modifier.width(Spacing.Comfortable))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(AppName, style = MaterialTheme.typography.titleMedium)
+                    Text(AppName, style = MaterialTheme.typography.titleLargeEmphasized)
                     Text(
                         text = "${stringResource(Res.string.settings_version)} " +
-                            "${AppBuild.versionName}(${AppBuild.applicationId})",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = colors.onSurfaceVariant,
-                    )
-                    Text(
-                        text = "${stringResource(Res.string.settings_license)} GPL-3.0-or-later",
-                        style = MaterialTheme.typography.bodyMedium,
+                            "${AppBuild.versionName} (${AppBuild.applicationId})",
+                        style = MaterialTheme.typography.bodyMedium.tabular,
                         color = colors.onSurfaceVariant,
                     )
                     if (update != null) UpdateStatusLine(update)
                 }
             }
-            Spacer(modifier = Modifier.height(Spacing.Cozy))
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-            ) {
-                if (update != null) {
+            if (update != null) {
+                Spacer(modifier = Modifier.height(Spacing.Cozy))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                ) {
                     UpdateRow(
                         status = update,
                         onCheck = onCheckUpdate,
                         onOpen = onOpenUpdate,
-                    )
-                }
-                // 这个按钮走出应用去浏览器,所以文字后面跟外链图标:与设置行的 RowTarget.External
-                // 同一个约定,箭头说的是"应用里还有一页"。
-                OutlinedButton(onClick = onOpenGithub) {
-                    Icon(
-                        imageVector = Icons.Outlined.Code,
-                        contentDescription = null,
-                        modifier = Modifier.size(ButtonDefaults.IconSize),
-                    )
-                    Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
-                    Text(stringResource(Res.string.settings_github))
-                    Spacer(modifier = Modifier.width(Spacing.Hair))
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
-                        contentDescription = null,
-                        modifier = Modifier.size(ExternalMarkSize),
                     )
                 }
             }
@@ -1178,17 +1187,11 @@ private fun AboutCard(
 /** 品牌名,不随界面语言翻译。 */
 private const val AppName = "Bilby"
 
-/** 卡片左上那个圆。装下一个 24dp 图标,四周留出一圈底色。 */
+/** 卡片左上角图标块。 */
 private val AboutBadgeSize = 48.dp
-
-/** 外链标记比按钮前置图标小一档,读作附注,不与前面的 Code 图标抢。 */
-private val ExternalMarkSize = 16.dp
 
 /** 允许列表单行高度，与 [StaticSettingRow] 保持一致。 */
 private val NightUpRowMinHeight = 56.dp
-
-/** 关注列表选择面板在底部 sheet 形态下占窗口高度的比例。 */
-private const val NightPickerSheetBodyFraction = 0.65f
 
 private enum class TimeEditTarget { Start, End }
 
@@ -1222,7 +1225,7 @@ fun NightModeSettingsPage(
     var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(prefs) {
         nowMillis = System.currentTimeMillis()
-        if (!prefs.enabled) return@LaunchedEffect
+        if (!prefs.enabled && prefs.manualUntilEpochMillis <= 0L) return@LaunchedEffect
         while (true) {
             delay(15_000L)
             nowMillis = System.currentTimeMillis()
@@ -1377,7 +1380,7 @@ fun NightModeSettingsPage(
                 val addedAny = selectedUps.any { it.mid !in currentMids }
                 runOrGate(
                     PendingNightRestrictionAction.UpdateAllowedUps(selectedUps),
-                    shouldGate = addedAny,
+                    shouldGate = addedAny && prefs.allowedUps.isNotEmpty(),
                 )
             },
             onDismiss = { showUpPicker = false },
@@ -1506,6 +1509,7 @@ private fun NightTimePickerDialog(
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun NightFollowPickerSheet(
     followPicker: NightFollowPickerState,
@@ -1519,122 +1523,149 @@ private fun NightFollowPickerSheet(
     LaunchedEffect(Unit) { onLoadFollowings() }
     var draftSelected by remember { mutableStateOf(initialAllowed.distinctBy { it.mid }) }
     val selectedMids = remember(draftSelected) { draftSelected.mapTo(HashSet()) { it.mid } }
+    var queryInput by rememberSaveable(followPicker.query) { mutableStateOf(followPicker.query) }
+    val listState = rememberLazyListState()
+    PrefetchNearEnd(
+        state = listState,
+        canLoad = followPicker.hasMore &&
+            !followPicker.loading &&
+            !followPicker.appending &&
+            followPicker.error == null,
+        onLoadMore = onLoadMoreFollowings,
+    )
 
     PaneSheet(
         onDismissRequest = onDismiss,
         title = stringResource(Res.string.night_mode_picker_title),
-        skipPartiallyExpanded = false,
-    ) {
-        if (!inPane) {
-            Text(
-                text = stringResource(Res.string.night_mode_picker_title),
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+        skipPartiallyExpanded = true,
+        subheader = {
+            SearchField(
+                value = queryInput,
+                onValueChange = { text ->
+                    queryInput = text
+                    if (text.isEmpty()) onSearchFollowings("")
+                },
+                placeholder = stringResource(Res.string.followings_search_hint),
+                onSearch = { onSearchFollowings(queryInput) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
             )
-        }
-        var queryInput by rememberSaveable(followPicker.query) { mutableStateOf(followPicker.query) }
-        SearchField(
-            value = queryInput,
-            onValueChange = { text ->
-                queryInput = text
-                if (text.isEmpty()) onSearchFollowings("")
-            },
-            placeholder = stringResource(Res.string.followings_search_hint),
-            onSearch = { onSearchFollowings(queryInput) },
-            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        )
-        val listState = rememberLazyListState()
-        PrefetchNearEnd(
-            state = listState,
-            canLoad = followPicker.hasMore &&
-                !followPicker.loading &&
-                !followPicker.appending &&
-                followPicker.error == null,
-            onLoadMore = onLoadMoreFollowings,
-        )
-        Box(modifier = Modifier.fillMaxWidth().bodyHeight(NightPickerSheetBodyFraction)) {
-            when {
-                followPicker.loading && followPicker.items.isEmpty() -> {
-                    ListSkeleton(row = { ListItemPersonSkeleton() })
+        },
+        footer = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(Res.string.action_cancel))
                 }
-
-                followPicker.error != null && followPicker.items.isEmpty() -> {
-                    FullScreenError(
-                        message = stringResource(followPicker.error),
-                        onRetry = onLoadMoreFollowings,
+                Button(onClick = { onConfirm(draftSelected) }) {
+                    Text(
+                        text = if (draftSelected.isNotEmpty()) {
+                            stringResource(Res.string.action_confirm_count, draftSelected.size)
+                        } else {
+                            stringResource(Res.string.action_confirm)
+                        },
+                        style = LocalTextStyle.current.tabular,
                     )
                 }
+            }
+        },
+    ) {
+        val colors = MaterialTheme.colorScheme
+        when {
+            followPicker.loading && followPicker.items.isEmpty() -> {
+                ListSkeleton(
+                    modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+                    row = { ListItemPersonSkeleton() },
+                )
+            }
 
-                followPicker.items.isEmpty() -> {
-                    EmptyState(
-                        message = stringResource(
-                            if (followPicker.query.isNotBlank()) {
-                                Res.string.followings_search_empty
-                            } else {
-                                Res.string.followings_empty
-                            },
-                        ),
-                    )
-                }
+            followPicker.error != null && followPicker.items.isEmpty() -> {
+                FullScreenError(
+                    message = stringResource(followPicker.error),
+                    onRetry = onLoadMoreFollowings,
+                    modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+                )
+            }
 
-                else -> {
-                    LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                        items(followPicker.items, key = { it.mid }) { up ->
-                            val checked = up.mid in selectedMids
-                            @OptIn(ExperimentalMaterial3ExpressiveApi::class)
-                            ListItem(
-                                checked = checked,
-                                onCheckedChange = { nextChecked ->
-                                    draftSelected = if (nextChecked) {
-                                        if (up.mid in selectedMids) {
-                                            draftSelected
-                                        } else {
-                                            draftSelected + WhitelistedUp(
-                                                mid = up.mid,
-                                                name = up.name,
-                                                faceUrl = up.faceUrl.toHttpsUrl(),
-                                            )
-                                        }
+            followPicker.items.isEmpty() -> {
+                EmptyState(
+                    message = stringResource(
+                        if (followPicker.query.isNotBlank()) {
+                            Res.string.followings_search_empty
+                        } else {
+                            Res.string.followings_empty
+                        },
+                    ),
+                    modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+                )
+            }
+
+            else -> {
+                LazyColumn(
+                    state = listState,
+                    contentPadding = PaddingValues(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                    verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
+                    modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+                ) {
+                    val count = followPicker.items.size
+                    itemsIndexed(followPicker.items, key = { _, up -> up.mid }) { index, up ->
+                        val checked = up.mid in selectedMids
+                        val shapes = ListItemDefaults.segmentedShapes(index = index, count = count)
+                        SegmentedListItem(
+                            checked = checked,
+                            onCheckedChange = { nextChecked ->
+                                draftSelected = if (nextChecked) {
+                                    if (up.mid in selectedMids) {
+                                        draftSelected
                                     } else {
-                                        draftSelected.filterNot { it.mid == up.mid }
+                                        draftSelected + WhitelistedUp(
+                                            mid = up.mid,
+                                            name = up.name,
+                                            faceUrl = up.faceUrl.toHttpsUrl(),
+                                        )
                                     }
+                                } else {
+                                    draftSelected.filterNot { it.mid == up.mid }
+                                }
+                            },
+                            shapes = shapes.copy(selectedShape = shapes.shape),
+                            colors = ListItemDefaults.segmentedColors(
+                                containerColor = colors.surfaceContainer,
+                                selectedContainerColor = colors.secondaryContainer,
+                                selectedContentColor = colors.onSecondaryContainer,
+                                selectedLeadingContentColor = colors.onSecondaryContainer,
+                                selectedTrailingContentColor = colors.onSecondaryContainer,
+                            ),
+                            leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarRow) },
+                            trailingContent = { Checkbox(checked = checked, onCheckedChange = null) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = up.name,
+                                style = if (checked) {
+                                    MaterialTheme.typography.bodyLargeEmphasized
+                                } else {
+                                    MaterialTheme.typography.bodyLarge
                                 },
-                                leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarRow) },
-                                trailingContent = { Checkbox(checked = checked, onCheckedChange = null) },
-                                colors = ListItemDefaults.colors(
-                                    containerColor = Color.Transparent,
-                                    selectedContainerColor = Color.Transparent,
-                                ),
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text(up.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                        item(key = "footer") {
-                            ListFooter(
-                                appending = followPicker.appending,
-                                hasMore = followPicker.hasMore,
-                                hasItems = followPicker.items.isNotEmpty(),
-                                error = followPicker.error?.let { stringResource(it) },
-                                onRetry = onLoadMoreFollowings,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
+                    item(key = "footer") {
+                        ListFooter(
+                            appending = followPicker.appending,
+                            hasMore = followPicker.hasMore,
+                            hasItems = followPicker.items.isNotEmpty(),
+                            error = followPicker.error?.let { stringResource(it) },
+                            onRetry = onLoadMoreFollowings,
+                        )
+                    }
                 }
-            }
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            TextButton(onClick = onDismiss) { Text(stringResource(Res.string.action_cancel)) }
-            TextButton(onClick = { onConfirm(draftSelected) }) {
-                Text(stringResource(Res.string.action_confirm))
             }
         }
     }

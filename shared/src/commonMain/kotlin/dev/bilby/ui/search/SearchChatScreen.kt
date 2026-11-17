@@ -24,6 +24,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import dev.bilby.data.SearchSuggestion
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.ui.draw.clip
@@ -31,6 +32,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -85,6 +87,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import dev.bilby.resources.*
@@ -111,6 +114,7 @@ import dev.bilby.ui.components.SidePanelLayout
 import dev.bilby.ui.components.SidePanelToggle
 import dev.bilby.ui.components.rememberBottomFollow
 import dev.bilby.ui.theme.BilbyTheme
+import dev.bilby.ui.theme.LocalIsDarkTheme
 import dev.bilby.ui.theme.Spacing
 import kotlin.math.roundToInt
 
@@ -190,7 +194,9 @@ fun SearchChatScreen(
     focusSearchNonce: Int = 0,
     modifier: Modifier = Modifier,
 ) {
-    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    val windowSize = rememberBilbyWindowSize()
+    val wide = windowSize.isAtLeast(BilbyWindowSize.Expanded)
+    val mediumOrWider = windowSize.isAtLeast(BilbyWindowSize.Medium)
     val focusManager = LocalFocusManager.current
     // **发送要收焦点。** 历史盖在结果上的判据之一就是"光标在输入框里"(见 NormalSearch),
     // 而发送不动焦点,于是搜完之后这一屏还停在历史上。点历史、问助理同理。
@@ -210,6 +216,7 @@ fun SearchChatScreen(
             onSearch = search,
             onAskAgent = askAgent.takeIf { agentAvailable },
             wide = wide,
+            mediumOrWider = mediumOrWider,
             panelToggle = panelToggle,
             actions = resultActions,
             history = searchHistory,
@@ -253,7 +260,14 @@ fun SearchChatScreen(
                     },
                 )
             },
-            panel = { AgentConversation(state.agent, state.agentInput, agentActions) },
+            panel = {
+                AgentConversation(
+                    state = state.agent,
+                    input = state.agentInput,
+                    actions = agentActions,
+                    inSidePanel = true,
+                )
+            },
         )
     } else if (state.mode == SearchMode.Agent && agentAvailable) {
         BackHandler { onLeaveAgent() }
@@ -273,6 +287,10 @@ private val AgentPanelMinWidth = 320.dp
 
 /** 宽屏搜索栏的最大宽度。再宽,左端的放大镜和右端的清除键就隔得太远,一眼看不全。 */
 private val SearchBarMaxWidth = 720.dp
+
+/** `Medium+` 空闲态居中主视觉搜索容器的最大宽度。 */
+private val SearchHeroMaxWidth = 640.dp
+private val SearchHeroIconBoxSize = 52.dp
 
 /** 搜索栏行尾那颗侧栏开关的宽度(M3 图标按钮的触控格)。 */
 private val PanelToggleWidth = 48.dp
@@ -315,6 +333,7 @@ private fun AgentTopBar(onBack: () -> Unit) {
  * 窄屏的搜索栏随列表上滑收起、下滑露出(search.md Scroll 一节的第一种),结果多占一截屏。
  * 宽屏不收:竖向不缺那 64dp,而侧栏开关长在这一行上。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun NormalSearch(
     state: NormalSearchState,
@@ -323,6 +342,7 @@ private fun NormalSearch(
     onSearch: () -> Unit,
     onAskAgent: (() -> Unit)?,
     wide: Boolean,
+    mediumOrWider: Boolean,
     panelToggle: (@Composable () -> Unit)?,
     actions: SearchResultActions,
     history: List<String>,
@@ -359,6 +379,100 @@ private fun NormalSearch(
     // 打字时和换了一次查询时栏一定在:前者正对着它,后者要看得见查的是什么。
     LaunchedEffect(focused, state.query) { collapsing.offsetPx = 0f }
 
+    val suggestionDropdown: @Composable (Modifier) -> Unit = { panelModifier ->
+        SuggestionPanel(
+            suggestions = suggestions,
+            onClick = onSuggestionClick,
+            onFill = { term ->
+                onInputChange(term)
+                runCatching { searchFocusRequester.requestFocus() }
+                keyboard?.show()
+            },
+            modifier = panelModifier,
+        )
+    }
+    val historyPanel: @Composable (Modifier) -> Unit = { panelModifier ->
+        SearchHistoryPanel(
+            history = history,
+            onClick = onHistoryClick,
+            onRemove = onHistoryRemove,
+            onClear = onHistoryClear,
+            onDialogOpenChange = { historyDialogOpen = it },
+            modifier = panelModifier,
+        )
+    }
+    // 聚焦时盖在结果上的那一块:正在打字而且有补全就是补全,否则是历史。
+    val typing = focused && input.isNotBlank() && suggestions.isNotEmpty()
+    val focusPanel: (@Composable (Modifier) -> Unit)? = when {
+        typing -> suggestionDropdown
+        history.isNotEmpty() -> historyPanel
+        else -> null
+    }
+
+    // Medium+ / Expanded+ 空闲态:居中主视觉搜索区(Search Hero),顶部仅保留桌面窗口拖曳槽与侧栏开关。
+    if (mediumOrWider && state.query.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                HeroTopChrome(wide = wide, trailing = panelToggle)
+                BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    val viewportHeight = maxHeight
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = viewportHeight)
+                            .verticalScroll(rememberScrollState())
+                            .imePadding()
+                            .padding(horizontal = Spacing.Loose, vertical = Spacing.Comfortable),
+                    ) {
+                        Spacer(modifier = Modifier.weight(0.75f))
+                        SearchIdleHeroHeader(wide = wide)
+                        Spacer(modifier = Modifier.height(Spacing.Loose))
+                        DockedSurface(
+                            dropdown = suggestionDropdown.takeIf { typing },
+                            modifier = Modifier
+                                .widthIn(max = SearchHeroMaxWidth)
+                                .fillMaxWidth()
+                                .onFocusChanged { barFocused = it.hasFocus },
+                        ) {
+                            SearchField(
+                                value = input,
+                                onValueChange = onInputChange,
+                                placeholder = stringResource(Res.string.search_empty),
+                                onSearch = onSearch,
+                                focusRequester = searchFocusRequester,
+                            )
+                        }
+                        if (!typing && history.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(Spacing.Comfortable))
+                            Surface(
+                                shape = MaterialTheme.shapes.largeIncreased,
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                modifier = Modifier
+                                    .widthIn(max = SearchHeroMaxWidth)
+                                    .fillMaxWidth()
+                                    .onFocusChanged { panelFocused = it.hasFocus },
+                            ) {
+                                historyPanel(Modifier.fillMaxWidth())
+                            }
+                        }
+                        Spacer(modifier = Modifier.weight(1.25f))
+                    }
+                }
+            }
+            if (!focused) {
+                askAgentFab?.let {
+                    AskAgentFab(
+                        onClick = it,
+                        expanded = true,
+                        modifier = Modifier.align(Alignment.BottomEnd),
+                    )
+                }
+            }
+        }
+        return
+    }
+
     val bar: @Composable ((@Composable (Modifier) -> Unit)?) -> Unit = { dropdown ->
         SearchBarRow(
             input = input,
@@ -375,34 +489,6 @@ private fun NormalSearch(
             focusRequester = searchFocusRequester,
         )
     }
-    val historyPanel: @Composable (Modifier) -> Unit = { panelModifier ->
-        SearchHistoryPanel(
-            history = history,
-            onClick = onHistoryClick,
-            onRemove = onHistoryRemove,
-            onClear = onHistoryClear,
-            onDialogOpenChange = { historyDialogOpen = it },
-            modifier = panelModifier,
-        )
-    }
-    // 聚焦时盖在结果上的那一块:正在打字而且有补全就是补全,否则是历史。
-    val typing = focused && input.isNotBlank() && suggestions.isNotEmpty()
-    val focusPanel: (@Composable (Modifier) -> Unit)? = when {
-        typing -> { panelModifier ->
-            SuggestionPanel(
-                suggestions = suggestions,
-                onClick = onSuggestionClick,
-                onFill = { term ->
-                    onInputChange(term)
-                    runCatching { searchFocusRequester.requestFocus() }
-                    keyboard?.show()
-                },
-                modifier = panelModifier,
-            )
-        }
-        history.isNotEmpty() -> historyPanel
-        else -> null
-    }
     val scrollingPanel: @Composable (@Composable (Modifier) -> Unit, Boolean) -> Unit = { panel, trackFocus ->
         val focusMod = if (trackFocus) {
             Modifier.onFocusChanged { panelFocused = it.hasFocus }
@@ -410,9 +496,6 @@ private fun NormalSearch(
             Modifier
         }
         if (wide) {
-            // 和搜索框同一条中线、同样宽,一眼对得上是这个框的历史与补全。照搜索栏那一行的
-            // 结构排([SearchBarRow]):行尾让出侧栏开关那一格,框在剩下那段里居中。按整个主区
-            // 居中的话,框和下面的历史各自对着不同的中线,左沿错开一截,历史看着像被收窄了。
             Row(
                 modifier = focusMod
                     .fillMaxSize()
@@ -488,6 +571,77 @@ private fun NormalSearch(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun HeroTopChrome(
+    wide: Boolean,
+    trailing: (@Composable () -> Unit)?,
+) {
+    val captionSlot = rememberCaptionSlot()
+    val hasTrailing = trailing != null || captionSlot.buttons != null
+    if (!captionSlot.atTop && !hasTrailing) return
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = captionSlot.modifier
+            .fillMaxWidth()
+            .padding(
+                start = Spacing.Comfortable,
+                end = if (hasTrailing) Spacing.Hair else Spacing.Comfortable,
+                top = if (wide) 0.dp else Spacing.Tight,
+            ),
+    ) {
+        Spacer(
+            modifier = Modifier
+                .weight(1f)
+                .height(CaptionDragHeight)
+                .windowDragArea(captionSlot.atTop),
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            trailing?.invoke()
+            captionSlot.buttons?.invoke()
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun SearchIdleHeroHeader(wide: Boolean) {
+    val colors = MaterialTheme.colorScheme
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(SearchHeroIconBoxSize)
+                .clip(MaterialTheme.shapes.large)
+                .background(colors.secondaryContainer),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Search,
+                contentDescription = null,
+                tint = colors.onSecondaryContainer,
+                modifier = Modifier.size(Dimens.IconAction),
+            )
+        }
+        Text(
+            text = stringResource(Res.string.tab_search),
+            style = if (wide) {
+                MaterialTheme.typography.displaySmallEmphasized
+            } else {
+                MaterialTheme.typography.headlineMediumEmphasized
+            },
+            color = colors.onSurface,
+        )
+        Text(
+            text = stringResource(Res.string.search_empty),
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -950,10 +1104,16 @@ private fun AgentConversation(
     input: String,
     actions: AgentActions,
     modifier: Modifier = Modifier,
+    inSidePanel: Boolean = false,
 ) {
     Column(modifier = modifier.fillMaxSize().imePadding()) {
         Box(modifier = Modifier.weight(1f)) {
-            AgentPane(state = state, onVideoClick = actions.onVideoClick, onRetry = actions.onRetry)
+            AgentPane(
+                state = state,
+                onVideoClick = actions.onVideoClick,
+                onRetry = actions.onRetry,
+                inSidePanel = inSidePanel,
+            )
         }
         InputBar(
             input = input,
@@ -972,6 +1132,7 @@ private fun AgentPane(
     state: AgentSearchState,
     onVideoClick: (String) -> Unit,
     onRetry: () -> Unit,
+    inSidePanel: Boolean = false,
 ) {
     if (state.turns.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -997,6 +1158,19 @@ private fun AgentPane(
         if (!running && follow.following) listState.animateScrollToItem(state.turns.lastIndex)
     }
 
+    val colors = MaterialTheme.colorScheme
+    val dark = LocalIsDarkTheme.current
+    val turnCardColor = when {
+        !inSidePanel -> colors.surfaceContainer
+        dark -> colors.surfaceContainerHigh
+        else -> colors.surfaceContainerLowest
+    }
+    val innerBlockColor = when {
+        !inSidePanel -> colors.surfaceContainerHigh
+        dark -> colors.surfaceContainerHighest
+        else -> colors.surfaceContainerLow
+    }
+
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().nestedScroll(follow.connection),
@@ -1004,7 +1178,13 @@ private fun AgentPane(
         verticalArrangement = Arrangement.spacedBy(Spacing.Loose),
     ) {
         items(state.turns, key = { it.id }) { turn ->
-            TurnRow(turn = turn, onVideoClick = onVideoClick, onRetry = onRetry)
+            TurnRow(
+                turn = turn,
+                onVideoClick = onVideoClick,
+                onRetry = onRetry,
+                cardColor = turnCardColor,
+                innerBlockColor = innerBlockColor,
+            )
         }
     }
 }
@@ -1014,13 +1194,21 @@ private fun TurnRow(
     turn: SearchTurn,
     onVideoClick: (String) -> Unit,
     onRetry: () -> Unit,
+    cardColor: Color = MaterialTheme.colorScheme.surfaceContainer,
+    innerBlockColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.Cozy)) {
         AgentQuestionBubble(
             text = turn.query,
             modifier = Modifier.padding(horizontal = Spacing.Comfortable),
         )
-        AgentTurnView(turn = turn.result, onVideoClick = onVideoClick, onRetry = onRetry)
+        AgentTurnView(
+            turn = turn.result,
+            onVideoClick = onVideoClick,
+            onRetry = onRetry,
+            containerColor = cardColor,
+            citationContainerColor = innerBlockColor,
+        )
     }
 }
 

@@ -13,10 +13,12 @@ import dev.bilby.data.NightModePrefs
 import dev.bilby.data.ThemeMode
 import dev.bilby.data.UpBrief
 import dev.bilby.data.WhitelistedUp
+import androidx.compose.runtime.Stable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.data.CodecPreference
 import dev.bilby.agent.LlmClient
+import dev.bilby.agent.LlmModelInfo
 import dev.bilby.data.ExcludedUp
 import dev.bilby.data.LlmConfig
 import dev.bilby.data.PlayEndMode
@@ -38,6 +40,8 @@ import org.jetbrains.compose.resources.StringResource
 data class SettingsUiState(
     val llm: LlmConfig? = null,
     val llmTest: LlmTest = LlmTest.Idle,
+    val llmModels: LlmModelsState = LlmModelsState.Idle,
+    val llmModelFetcher: LlmModelFetcher = LlmModelFetcher(),
     /**
      * DataStore 那一批值到齐了没有。**没到齐之前不画任何一行。**
      *
@@ -181,7 +185,42 @@ class SettingsViewModel(
         }
     }
 
-    private val _state = MutableStateFlow(SettingsUiState())
+    /**
+     * 拉取当前对话框所填接口地址与 key 下的可用模型清单(`GET /models`)。
+     * 结果只服务于当次编辑,不落盘,也绝不记录任何凭据。
+     */
+    fun fetchLlmModels(baseUrl: String, apiKey: String) {
+        modelsJob?.cancel()
+        _state.update { it.copy(llmModels = LlmModelsState.Loading) }
+        modelsJob = viewModelScope.launch {
+            val result = llmClient.listModels(baseUrl, apiKey)
+            _state.update {
+                it.copy(
+                    llmModels = result.fold(
+                        onSuccess = { models -> LlmModelsState.Loaded(models) },
+                        onFailure = { error -> LlmModelsState.Failed(error.message.orEmpty()) },
+                    ),
+                )
+            }
+        }
+    }
+
+    fun clearLlmModels() {
+        modelsJob?.cancel()
+        modelsJob = null
+        _state.update { it.copy(llmModels = LlmModelsState.Idle) }
+    }
+
+    private var modelsJob: Job? = null
+
+    private val _state = MutableStateFlow(
+        SettingsUiState(
+            llmModelFetcher = LlmModelFetcher(
+                fetch = ::fetchLlmModels,
+                clear = ::clearLlmModels,
+            ),
+        ),
+    )
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
     private val _followPicker = MutableStateFlow(NightFollowPickerState())
@@ -543,4 +582,27 @@ sealed interface LlmTest {
     data object Running : LlmTest
     data class Ok(val millis: Long) : LlmTest
     data class Failed(val message: String) : LlmTest
+}
+
+/** `/models` 可用模型列表的拉取状态。 */
+sealed interface LlmModelsState {
+    data object Idle : LlmModelsState
+    data object Loading : LlmModelsState
+    data class Loaded(val models: List<LlmModelInfo>) : LlmModelsState
+    data class Failed(val message: String) : LlmModelsState
+}
+
+/**
+ * 供 [AgentSettingsPage] 在未显式传入 `onFetchModels` 回调时直接触发当前 [SettingsViewModel] 的
+ * 模型列表拉取与清理,避免跨文件反射查找 ViewModel。
+ */
+@Stable
+class LlmModelFetcher(
+    val fetch: (baseUrl: String, apiKey: String) -> Unit = { _, _ -> },
+    val clear: () -> Unit = {},
+) {
+    override fun equals(other: Any?): Boolean =
+        this === other || (other is LlmModelFetcher && fetch === other.fetch && clear === other.clear)
+
+    override fun hashCode(): Int = 31 * fetch.hashCode() + clear.hashCode()
 }

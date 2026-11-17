@@ -5,73 +5,88 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.material3.Surface
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextOverflow
-import dev.bilby.resources.*
-import dev.bilby.stringResource
-import dev.bilby.agent.AgentStep
-import dev.bilby.agent.AgentTurnState
-import dev.bilby.agent.StepKind
-import dev.bilby.agent.TraceItem
-import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonSearch
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import org.jetbrains.compose.resources.StringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import dev.bilby.agent.AgentStep
+import dev.bilby.agent.AgentTurnState
+import dev.bilby.agent.StepKind
+import dev.bilby.agent.TraceItem
+import dev.bilby.resources.*
+import dev.bilby.stringResource
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.interactiveCard
+import dev.bilby.ui.theme.tabular
+import org.jetbrains.compose.resources.StringResource
 
 /**
- * 助理一轮的完整界面:过程 + 答案 + 在跑/出错/没结果。
+ * 助理一轮的完整界面:收进一张 `surfaceContainer` (`shapes.largeIncreased`) 结构卡片中,
+ * 顶部以 `surfaceContainerHigh` 胶囊展示检索步数,展开可查看实时工具轨迹与中间候选视频,下方承载回答与引用卡片。
  *
- * 搜索页的一轮对话和播放页「找相关」显示的是同一个助理的同一种输出,**容器不同不构成两份
- * 实现的理由**:一个在对话流里,一个在 sheet 里,那是外面那层的事。分成两份的那一版里,
- * 播放页少了中间结果卡片和完成标记,而这件事从任何一份代码里都看不出来。
- *
- * 过程直播是信任的来源,也是等待体验本身(DESIGN 3.4):中间结果可点,助理翻到一半用户
- * 看中了可以直接点走。答案一出现过程自动折叠,但随时能点回来。答案本身见 [AgentAnswerView]。
+ * 搜索页对话流与播放页「找相关」共用同一份实现。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun AgentTurnView(
     turn: AgentTurnState,
     onVideoClick: (String) -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainer,
+    citationContainerColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
 ) {
     var processExpanded by remember { mutableStateOf(true) }
     val hasAnswer = turn.answer != null
@@ -79,82 +94,166 @@ fun AgentTurnView(
         if (hasAnswer) processExpanded = false
     }
 
-    Column(modifier = modifier.fillMaxWidth()) {
-        if (turn.steps.isNotEmpty()) {
-            ProcessHeader(
-                expanded = processExpanded,
-                stepCount = turn.steps.size,
-                onToggle = { processExpanded = !processExpanded },
-            )
-            // 答案一到就自动折叠,折叠是这一块自己发生的事,不是换页:沿竖轴展开收起,
-            // 让"过程收到那一行标题里去了"能被看见。直接 if 掉的话几行过程会凭空消失,
-            // 用户下一次点开也不知道点开的是刚才那块。
-            AnimatedVisibility(
-                visible = processExpanded,
-                enter = expandVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
-                    fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()),
-                exit = shrinkVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
-                    fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
-            ) {
-                Column {
-                    turn.steps.forEach { step -> StepRow(step = step, onVideoClick = onVideoClick) }
+    Surface(
+        color = containerColor,
+        shape = MaterialTheme.shapes.largeIncreased,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Comfortable),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacing.Cozy),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+        ) {
+            if (turn.steps.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                    ProcessHeader(
+                        expanded = processExpanded,
+                        stepCount = turn.steps.size,
+                        running = turn.running && !hasAnswer,
+                        pillColor = citationContainerColor,
+                        onToggle = { processExpanded = !processExpanded },
+                    )
+                    AnimatedVisibility(
+                        visible = processExpanded,
+                        enter = expandVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
+                            fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()),
+                        exit = shrinkVertically(MaterialTheme.motionScheme.fastSpatialSpec()) +
+                            fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+                            turn.steps.forEach { step ->
+                                StepRow(step = step, onVideoClick = onVideoClick)
+                            }
+                        }
+                    }
                 }
             }
-        }
 
-        turn.answer?.let { answer ->
-            AgentAnswerView(
-                answer = answer,
-                onVideoClick = onVideoClick,
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-            )
-        }
-
-        when {
-            // 出错这一格用行内样式,不用 FullScreenError:两个容器都不是"一屏",一个是对话流里
-            // 的一轮,一个是半屏 sheet,居中占满只会把上下文顶开。
-            turn.error != null -> Column(
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable),
-                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-            ) {
-                Text(
-                    text = turn.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            turn.answer?.let { answer ->
+                AgentAnswerView(
+                    answer = answer,
+                    onVideoClick = onVideoClick,
+                    citationContainerColor = citationContainerColor,
                 )
-                TextButton(onClick = onRetry) { Text(stringResource(Res.string.action_retry)) }
             }
 
-            turn.running -> InlineProgress(
-                text = stringResource(Res.string.agent_running),
-                modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-            )
+            when {
+                turn.error != null -> Column(
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                ) {
+                    Text(
+                        text = turn.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    TextButton(onClick = onRetry) {
+                        Text(stringResource(Res.string.action_retry))
+                    }
+                }
 
-            !hasAnswer -> EmptyState(stringResource(Res.string.agent_no_result))
+                turn.running -> InlineProgress(
+                    text = stringResource(Res.string.agent_running),
+                    modifier = Modifier.padding(vertical = Spacing.Hair),
+                )
+
+                !hasAnswer -> Text(
+                    text = stringResource(Res.string.agent_no_result),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = Spacing.Hair),
+                )
+            }
         }
     }
 }
 
-/** 用户问的那一句,靠右的气泡。搜索页的助理和找相关的追问共用。 */
+/**
+ * 用户问的那一句,靠右的气泡。搜索页的助理和找相关的追问共用;
+ * 支持桌面指针直接划选文本,以及右键/长按弹出「复制提问 / 选择文本」。
+ */
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun AgentQuestionBubble(text: String, modifier: Modifier = Modifier) {
+    var selectingText by rememberSaveable { mutableStateOf(false) }
+    val copyQuestion = rememberCopyAction()
+    val isTouch = LocalPointerSource.current.isTouchLike
+    val copyQuestionLabel = stringResource(Res.string.action_copy_question)
+    val selectTextLabel = stringResource(Res.string.action_select_text)
+
     Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        Surface(
-            color = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            shape = MaterialTheme.shapes.large,
-            // **上限按可用宽度的比例算,不写死 280dp。** 那个数是按 360dp 宽的手机定的,平板上
-            // 一句长问句会在整屏宽度的中间断成好几行,右边留着一大片空;而窄屏上它比屏幕还宽,
-            // 等于没有上限。留出的那两成是"这一侧是我说的话"这个形状本身 —— 气泡铺满整行就
-            // 和下面助理的正文分不开了。
-            modifier = Modifier.fillMaxWidth(BubbleWidthFraction).wrapContentWidth(Alignment.End),
-        ) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
-            )
+        ContextMenuBox(
+            onClick = null,
+            menuLabel = copyQuestionLabel,
+            menu = { close ->
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        copyQuestion(text)
+                    },
+                    text = { Text(copyQuestionLabel) },
+                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                    shape = menuItemShape(0, 2),
+                )
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        selectingText = true
+                    },
+                    text = { Text(selectTextLabel) },
+                    leadingIcon = { Icon(Icons.Outlined.SelectAll, contentDescription = null) },
+                    shape = menuItemShape(1, 2),
+                )
+            },
+        ) { openMenu ->
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                shape = MaterialTheme.shapes.largeIncreased,
+                modifier = Modifier
+                    .fillMaxWidth(BubbleWidthFraction)
+                    .wrapContentWidth(Alignment.End)
+                    .then(
+                        if (isTouch) {
+                            Modifier
+                                .clip(MaterialTheme.shapes.largeIncreased)
+                                .combinedClickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = {},
+                                    onLongClickLabel = copyQuestionLabel,
+                                    onLongClick = openMenu,
+                                )
+                        } else {
+                            Modifier
+                        },
+                    ),
+            ) {
+                val bubbleText: @Composable () -> Unit = {
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+                    )
+                }
+                if (isTouch) {
+                    bubbleText()
+                } else {
+                    SelectionContainer {
+                        bubbleText()
+                    }
+                }
+            }
         }
+    }
+
+    if (selectingText && text.isNotEmpty()) {
+        SelectableTextDialog(
+            text = text,
+            onDismiss = { selectingText = false },
+        )
     }
 }
 
@@ -162,58 +261,69 @@ fun AgentQuestionBubble(text: String, modifier: Modifier = Modifier) {
 private const val BubbleWidthFraction = 0.8f
 
 /**
- * 过程那一行。折叠时写一共几步:原先写最后一步的文字,答案出来之后那一步多半是一次热评,
- * 读不出这一轮查了多少。试过同时写"见过几个候选",那个数把每次搜索的整页结果都算进去,
- * 动辄三百多,说明不了什么。
+ * 检索过程胶囊(`surfaceContainerHigh` + `CircleShape`),显示 `已检索 N 步` 并支持点击展开/收起工具轨迹。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ProcessHeader(
     expanded: Boolean,
     stepCount: Int,
+    running: Boolean,
+    pillColor: Color,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        // 一行 labelLarge 加上下 12dp 是 44dp,差 4dp 够不到触摸下限。撑的是点击区,留白没动。
-        modifier = modifier
-            .fillMaxWidth()
-            .heightIn(min = Dimens.MinTouchTarget)
-            .clickable(onClick = onToggle)
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        onClick = onToggle,
+        color = pillColor,
+        contentColor = colors.onSurfaceVariant,
+        shape = CircleShape,
+        modifier = modifier.minimumInteractiveComponentSize(),
     ) {
-        Text(
-            text = if (expanded) {
-                stringResource(Res.string.agent_process)
-            } else {
-                stringResource(Res.string.agent_process_summary, stepCount)
-            },
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Icon(
-            imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-            contentDescription = stringResource(
-                if (expanded) Res.string.agent_process_collapse else Res.string.agent_process_expand,
-            ),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(
+            modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = ProcessPillVerticalPadding),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair + ProcessPillIconGap),
+        ) {
+            Icon(
+                imageVector = if (running) Icons.Outlined.AutoAwesome else Icons.Default.Check,
+                contentDescription = null,
+                tint = if (running) colors.primary else colors.onSurfaceVariant,
+                modifier = Modifier.size(ProcessPillIconSize),
+            )
+            Text(
+                text = stringResource(Res.string.agent_steps_count, stepCount),
+                style = MaterialTheme.typography.labelMediumEmphasized.tabular,
+                color = colors.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Icon(
+                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = stringResource(
+                    if (expanded) Res.string.agent_process_collapse else Res.string.agent_process_expand,
+                ),
+                tint = colors.onSurfaceVariant,
+                modifier = Modifier.size(ProcessPillIconSize),
+            )
+        }
     }
 }
+
+private val ProcessPillVerticalPadding = 6.dp
+private val ProcessPillIconGap = 2.dp
+private val ProcessPillIconSize = 16.dp
 
 @Composable
 private fun StepRow(step: AgentStep, onVideoClick: (String) -> Unit, modifier: Modifier = Modifier) {
     Column(
-        modifier = modifier.fillMaxWidth().padding(vertical = Spacing.Hair),
+        modifier = modifier.fillMaxWidth().padding(vertical = Spacing.Hair / 2),
         verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
         // 行首是动作类型的图标,文字只写对象(见 StepKind);还在跑的那一步图标换成转圈。
         Row(
-            modifier = Modifier.padding(horizontal = Spacing.Comfortable),
+            modifier = Modifier.padding(horizontal = Spacing.Hair),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
@@ -238,7 +348,7 @@ private fun StepRow(step: AgentStep, onVideoClick: (String) -> Unit, modifier: M
         if (step.items.isNotEmpty()) {
             // 中间结果可点:助理翻到一半用户看中了可以直接点走(DESIGN 3.4)。
             LazyRow(
-                contentPadding = PaddingValues(horizontal = Spacing.Comfortable),
+                contentPadding = PaddingValues(horizontal = Spacing.Hair),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
             ) {
                 items(step.items, key = { it.bvid }) { trace ->
@@ -275,18 +385,46 @@ private fun StepKind.labelRes(): StringResource = when (this) {
     StepKind.Other -> Res.string.agent_process
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TraceCard(item: TraceItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier.width(Dimens.TraceCardWidth).clickable(onClick = onClick),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-    ) {
-        ListCover(url = item.coverUrl, width = Dimens.TraceCardWidth)
-        Text(
-            text = item.title,
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
+    ContextMenuBox(
+        onClick = null,
+        menuLabel = stringResource(Res.string.menu_item_actions),
+        modifier = modifier,
+        menu = { close ->
+            VideoCommonMenuItems(
+                bvid = item.bvid,
+                title = item.title,
+                close = close,
+                coverUrl = item.coverUrl,
+                upName = item.upName,
+            )
+        },
+    ) { openMenu ->
+        Column(
+            modifier = Modifier
+                .width(Dimens.TraceCardWidth)
+                .interactiveCard(
+                    shape = MaterialTheme.shapes.medium,
+                    baseColor = Color.Transparent,
+                    hoverColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                )
+                .combinedClickable(
+                    role = Role.Button,
+                    onClick = onClick,
+                    onLongClick = openMenu,
+                )
+                .padding(Spacing.Hair),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+        ) {
+            ListCover(url = item.coverUrl, width = Dimens.TraceCardWidth - Spacing.Tight)
+            Text(
+                text = item.title,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
