@@ -4,10 +4,12 @@ import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
 import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
@@ -23,15 +25,18 @@ import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.MotionScheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Shape
@@ -52,10 +57,13 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.round
 import dev.bilby.player.QueueItem
 import dev.bilby.resources.Res
+import dev.bilby.resources.action_copy_title
 import dev.bilby.resources.action_share
+import dev.bilby.resources.comment_copied
 import dev.bilby.resources.menu_copy_link
 import dev.bilby.resources.menu_open_space
 import dev.bilby.resources.queue_add
@@ -65,6 +73,8 @@ import dev.bilby.resources.video_bvid_copied
 import dev.bilby.resources.video_bvid_copy
 import dev.bilby.stringResource
 import dev.bilby.ui.LocalSystemActions
+import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import kotlinx.coroutines.launch
 
 /**
@@ -217,6 +227,63 @@ fun ContextMenuBox(
 }
 
 /**
+ * 复制纯文本并在需要应用自报回执的平台(桌面、Android 12L 及以下)弹出全局提示。
+ */
+@Composable
+fun rememberCopyAction(
+    clipLabel: String = "Bilby",
+    copiedMessage: String = stringResource(Res.string.comment_copied),
+): (String) -> Unit {
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    val copyNotice = LocalCopyNotice.current
+    val latestLabel by rememberUpdatedState(clipLabel)
+    val latestMessage by rememberUpdatedState(copiedMessage)
+    val latestNotice by rememberUpdatedState(copyNotice)
+    return remember(clipboard, scope) {
+        { value: String ->
+            if (value.isNotEmpty()) {
+                scope.launch {
+                    clipboard.setClipEntry(plainTextClip(latestLabel, value))
+                    if (NeedsCopyNotice) latestNotice(latestMessage)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 单击即复制的紧凑标识胶囊(BV 号、AV 号、`UID: …`),自带独立点击消费,嵌在可折叠标题块或头部行内
+ * 不会把点按冒泡给父容器。
+ */
+@Composable
+fun CopyableIdPill(
+    text: String,
+    copyValue: String = text,
+    modifier: Modifier = Modifier,
+) {
+    val copy = rememberCopyAction()
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        shape = MaterialTheme.shapes.extraSmall,
+        modifier = modifier
+            .clip(MaterialTheme.shapes.extraSmall)
+            .clickable(role = Role.Button, onClick = { copy(copyValue) }),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall.tabular,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(horizontal = Spacing.Hair, vertical = CopyablePillVerticalPadding),
+        )
+    }
+}
+
+private val CopyablePillVerticalPadding = 2.dp
+
+/**
  * M3E 纵向菜单项按位置取形状:单条取 standalone,首尾各取 leading / trailing,中间取 middle,
  * 不画任何分割线。
  */
@@ -236,10 +303,12 @@ fun videoCommonMenuItemCount(
     upMid: Long = 0L,
     onOpenUpSpace: ((Long) -> Unit)? = null,
     includeQueueActions: Boolean = true,
+    title: String? = null,
 ): Int {
     var count = 0
     if (bvid.isNotEmpty()) {
         if (includeQueueActions && LocalQueueActions.current != null) count += 2
+        if (title == null || title.isNotBlank()) count += 1
         count += 2
     }
     if (upMid != 0L && onOpenUpSpace != null) count += 1
@@ -247,13 +316,13 @@ fun videoCommonMenuItemCount(
 }
 
 /**
- * 视频列表项共用的右键/长按动作:入队操作、复制 BV 号、复制链接(或系统分享)、打开 UP 主空间。
+ * 视频列表项共用的右键/长按动作:入队操作、复制标题、复制 BV 号、复制链接(或系统分享)、打开 UP 主空间。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun VideoCommonMenuItems(
     bvid: String,
-    title: String,
+    title: String = "",
     close: () -> Unit,
     upMid: Long = 0L,
     onOpenUpSpace: ((Long) -> Unit)? = null,
@@ -262,15 +331,15 @@ fun VideoCommonMenuItems(
     durationSeconds: Long = 0L,
     includeQueueActions: Boolean = true,
     startIndex: Int = 0,
-    totalCount: Int = startIndex + videoCommonMenuItemCount(bvid, upMid, onOpenUpSpace, includeQueueActions),
+    totalCount: Int = startIndex + videoCommonMenuItemCount(bvid, upMid, onOpenUpSpace, includeQueueActions, title),
 ) {
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
-    val copyNotice = LocalCopyNotice.current
     val system = LocalSystemActions.current
     val queueActions = LocalQueueActions.current.takeIf { includeQueueActions }
-    val clipLabel = stringResource(Res.string.video_bvid_clip_label)
-    val copiedText = stringResource(Res.string.video_bvid_copied)
+    val copyTitle = rememberCopyAction()
+    val copyBvid = rememberCopyAction(
+        clipLabel = stringResource(Res.string.video_bvid_clip_label),
+        copiedMessage = stringResource(Res.string.video_bvid_copied),
+    )
 
     var cursor = startIndex
     if (bvid.isNotEmpty()) {
@@ -303,14 +372,23 @@ fun VideoCommonMenuItems(
                 shape = menuItemShape(addQueueIndex, totalCount),
             )
         }
+        if (title.isNotBlank()) {
+            val copyTitleIndex = cursor++
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    copyTitle(title)
+                },
+                text = { Text(stringResource(Res.string.action_copy_title)) },
+                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                shape = menuItemShape(copyTitleIndex, totalCount),
+            )
+        }
         val copyBvIndex = cursor++
         DropdownMenuItem(
             onClick = {
                 close()
-                scope.launch {
-                    clipboard.setClipEntry(plainTextClip(clipLabel, bvid))
-                    copyNotice(copiedText)
-                }
+                copyBvid(bvid)
             },
             text = { Text(stringResource(Res.string.video_bvid_copy)) },
             leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },

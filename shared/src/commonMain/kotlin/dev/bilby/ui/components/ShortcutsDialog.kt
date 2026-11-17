@@ -39,6 +39,7 @@ import dev.bilby.resources.shortcuts_title
 import dev.bilby.resources.shortcuts_volume
 import dev.bilby.stringResource
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import org.jetbrains.compose.resources.StringResource
 
 private data class ShortcutEntry(
@@ -75,26 +76,20 @@ private val ImageShortcuts = listOf(
 )
 
 /**
- * 快捷键面板(`F1` / `Ctrl+/`),走 [PaneSheet]:宽窗口是右侧划入的模态面板,窄窗口是底部面板。
+ * 快捷键面板(`F1` / `Ctrl+/`),走 [PaneSheet]:标题由 [PaneSheet] 在三种自适应形态下统一绘制。
  */
 @Composable
 fun ShortcutsSheet(onDismiss: () -> Unit) {
     PaneSheet(onDismissRequest = onDismiss, title = stringResource(Res.string.shortcuts_title)) {
-        val showTitle = !inPane
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .weight(1f, fill = false)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = Spacing.Comfortable)
-                .padding(bottom = Spacing.Loose),
+                .padding(horizontal = Spacing.Loose)
+                .padding(bottom = Spacing.Comfortable),
             verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
         ) {
-            if (showTitle) {
-                Text(
-                    text = stringResource(Res.string.shortcuts_title),
-                    style = MaterialTheme.typography.titleLarge,
-                )
-            }
             ShortcutSection(stringResource(Res.string.shortcuts_group_global), GlobalShortcuts)
             ShortcutSection(stringResource(Res.string.shortcuts_group_player), PlayerShortcuts)
             ShortcutSection(stringResource(Res.string.shortcuts_group_image), ImageShortcuts)
@@ -132,7 +127,7 @@ private fun ShortcutSection(title: String, entries: List<ShortcutEntry>) {
 private fun KeycapBadge(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+        style = MaterialTheme.typography.labelMedium.tabular,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
         modifier = Modifier

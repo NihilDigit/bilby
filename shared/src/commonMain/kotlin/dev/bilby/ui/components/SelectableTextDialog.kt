@@ -1,6 +1,7 @@
 package dev.bilby.ui.components
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -38,11 +39,12 @@ import kotlinx.coroutines.launch
 @Composable
 fun SelectableTextDialog(
     text: String,
-    snackbar: SnackbarHostState,
+    snackbar: SnackbarHostState? = null,
     onDismiss: () -> Unit,
 ) {
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
+    val copyNotice = LocalCopyNotice.current
     val clipLabel = stringResource(Res.string.comment_copy_clip_label)
     val copiedNotice = stringResource(Res.string.comment_copied)
 
@@ -50,14 +52,15 @@ fun SelectableTextDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(Res.string.text_select_title)) },
         text = {
-            // 长评论要能滚。**高度设上限而不是让对话框自己长**:一条几百字的评论会把
+            // 长文本要能滚。**高度设上限而不是让对话框自己长**:一条几百字的简介或评论会把
             // 确认按钮顶出屏幕,而那两个按钮是这个面板仅有的出口。
-            SelectionContainer {
-                Column(
-                    modifier = Modifier
-                        .heightIn(max = MaxBodyHeight)
-                        .verticalScroll(rememberScrollState()),
-                ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = MaxBodyHeight)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                SelectionContainer {
                     Text(text = text, style = MaterialTheme.typography.bodyLarge)
                 }
             }
@@ -67,7 +70,13 @@ fun SelectableTextDialog(
                 onClick = {
                     scope.launch {
                         clipboard.setClipEntry(plainTextClip(clipLabel, text))
-                        if (NeedsCopyNotice) snackbar.showSnackbar(copiedNotice)
+                        if (NeedsCopyNotice) {
+                            if (snackbar != null) {
+                                snackbar.showSnackbar(copiedNotice)
+                            } else {
+                                copyNotice(copiedNotice)
+                            }
+                        }
                     }
                     onDismiss()
                 },
@@ -79,4 +88,4 @@ fun SelectableTextDialog(
     )
 }
 
-private val MaxBodyHeight = 320.dp
+private val MaxBodyHeight = 420.dp

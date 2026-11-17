@@ -1,21 +1,38 @@
 package dev.bilby.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -26,9 +43,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.NonSkippableComposable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.neverEqualPolicy
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -36,38 +57,28 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import dev.bilby.resources.Res
 import dev.bilby.resources.action_back
+import dev.bilby.resources.action_close
 import dev.bilby.stringResource
 import dev.bilby.ui.BackHandler
 import dev.bilby.ui.BilbyWindowSize
+import dev.bilby.ui.CaptionDragHeight
+import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
-import dev.bilby.resources.action_close
-import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.NonSkippableComposable
-import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.neverEqualPolicy
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import dev.bilby.ui.CaptionDragHeight
-import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.windowDragArea
@@ -77,7 +88,7 @@ import dev.bilby.ui.windowDragArea
  * 分集、播放设置……)在这一栏里从右边缘划进来,盖住这一栏,不盖画面。
  *
  * 宿主状态提供在整个两栏布局上,而面板画在右栏里:播放设置是从左栏的播放器里打开的,
- * 它要能找到右栏。右栏不在组合里时(全屏)[hosted] 为 false,面板退回底部 sheet。
+ * 它要能找到右栏。右栏不在组合里时(全屏)[hosted] 为 false,面板退回底部或侧边 sheet。
  *
  * 同一时刻只有一块面板;后打开的顶掉先打开的。
  */
@@ -93,12 +104,20 @@ class SidePaneState internal constructor() {
     }
 }
 
-internal class PanePanel(
+internal class PaneSlots(
     val title: String?,
+    val modifier: Modifier,
+    val headerTrailing: (@Composable RowScope.() -> Unit)?,
+    val subheader: (@Composable ColumnScope.() -> Unit)?,
+    val footer: (@Composable ColumnScope.() -> Unit)?,
+    val content: @Composable PaneSheetScope.() -> Unit,
+)
+
+internal class PanePanel(
     val onDismiss: () -> Unit,
     /** 常驻面板,见 [PaneSheet] 的同名参数。 */
     val persistent: Boolean,
-    val content: @Composable ColumnScope.() -> Unit,
+    val slots: () -> PaneSlots,
 )
 
 val LocalSidePane = staticCompositionLocalOf<SidePaneState?> { null }
@@ -155,10 +174,12 @@ fun BoxScope.SidePaneDismissLayer(state: SidePaneState) {
     )
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun PanePanelSurface(panel: PanePanel) {
+    val slots = panel.slots()
     // 不压暗底下的简介与评论:面板盖满这一栏,底下本来就看不见;左栏的画面也不该变暗。
-    Surface(modifier = Modifier.fillMaxSize()) {
+    Surface(modifier = slots.modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             // 常驻面板的标题行归内容自己画(标题带着内容的状态,关闭在右端);这里再画一行
             // 返回箭头,就是两行标题摞在一起。
@@ -183,10 +204,10 @@ private fun PanePanelSurface(panel: PanePanel) {
                             .heightIn(min = CaptionDragHeight)
                             .windowDragArea(captionSlot.atTop),
                     ) {
-                        panel.title?.let {
+                        slots.title?.let {
                             Text(
                                 text = it,
-                                style = MaterialTheme.typography.titleMedium,
+                                style = MaterialTheme.typography.titleMediumEmphasized,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.padding(end = Spacing.Comfortable),
@@ -194,10 +215,24 @@ private fun PanePanelSurface(panel: PanePanel) {
                         }
                         Spacer(Modifier.weight(1f))
                     }
+                    if (slots.headerTrailing != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                            modifier = Modifier.padding(end = Spacing.Tight),
+                            content = slots.headerTrailing,
+                        )
+                    }
                     captionSlot.buttons?.invoke()
                 }
             }
-            panel.content(this)
+            slots.subheader?.invoke(this)
+            Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                PaneSheetScopeImpl(this, inPane = true).apply {
+                    slots.content(this)
+                }
+            }
+            SheetFooterSlot(footer = slots.footer, applyBottomInsetsWhenEmpty = false)
         }
     }
 }
@@ -213,109 +248,198 @@ private class WheelStopsAtSheet(private val pointers: PointerSource) : NestedScr
 
 /** [PaneSheet] 内容所在的作用域。 */
 interface PaneSheetScope : ColumnScope {
-    /** 此刻画在右栏里,而不是底部 sheet 里。 */
+    /** 此刻画在右栏里,而不是底部或侧边 sheet 里。 */
     val inPane: Boolean
 
     /**
-     * 列表这类要占住面板主体的内容用它定高:sheet 里是窗口高度的 [sheetFraction],
-     * 右栏里是标题行以下的全部。
+     * 旧接口过渡桥接:统一交由面板主体容器的 `weight(1f, fill = false)` 控制伸缩,短内容自然贴合,
+     * 长列表在面板高度上限内独立滚动且不顶走底部操作栏。
      */
-    fun Modifier.bodyHeight(sheetFraction: Float): Modifier
+    @Deprecated(
+        message = "Use Modifier.weight(1f, fill = false) inside PaneSheet body.",
+        replaceWith = ReplaceWith("weight(1f, fill = false)"),
+    )
+    fun Modifier.bodyHeight(sheetFraction: Float): Modifier = weight(1f, fill = false)
 }
 
-/**
- * @param fillsHeight 容器本身就是整栏高(右栏、宽屏侧边面板),主体取剩下的全部高度;
- *   为 false 时是底部 sheet,主体按窗口高度的比例定。
- */
 private class PaneSheetScopeImpl(
     column: ColumnScope,
     override val inPane: Boolean,
-    private val fillsHeight: Boolean = inPane,
-) : PaneSheetScope, ColumnScope by column {
-    override fun Modifier.bodyHeight(sheetFraction: Float): Modifier =
-        if (fillsHeight) weight(1f) else fillMaxHeight(sheetFraction)
-}
+) : PaneSheetScope, ColumnScope by column
 
 /**
- * 二级面板。两栏布局里画在右栏(见 [SidePaneState]);没有右栏可挂时,宽屏是从右边缘划进来的
- * 侧边面板([ModalSideSheet]),窄屏是只有展开一档的底部 sheet。
+ * 统一二级面板。两栏布局里画在右栏(见 [SidePaneState]);没有右栏可挂时,宽屏(`Expanded+`)是从右边缘划进来的
+ * 模态侧边面板([ModalSideSheet]),窄屏是底部 sheet([ModalBottomSheet])。
  *
- * [title] 只在右栏里显示,和返回箭头排在一行:面板盖住了整栏,不说一句就不知道这是哪里。
- * sheet 与侧边面板旁边还露着页面,打开它的那一行就是上下文,不另加标题。
+ * 标题行(`title` / `headerTrailing`)、固定副头栏(`subheader`)、弹性主体与常驻底栏(`footer`)在三种形态下
+ * 统一渲染,调用方无需再手写 `if (!inPane) Text(title)` 或自行拼装底部安全区。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @NonSkippableComposable
 @Composable
 fun PaneSheet(
     onDismissRequest: () -> Unit,
     title: String? = null,
-    /** sheet 形态下跳过半开(见 [rememberExpandedSheetState])。右栏里没有半开。 */
+    /** sheet 形态下跳过半开(见 [rememberExpandedSheetState])。带底栏/输入框或紧凑内容默认跳过。 */
     skipPartiallyExpanded: Boolean = true,
     /**
-     * 右栏里常驻:点左栏不收起,也不画返回箭头那一行,标题与关闭按钮由内容自己画。给和画面
-     * 一起看的面板用(找相关),不给看一眼就走的面板(播放设置、评论详情)——那些点回画面就
-     * 收起正好。sheet 与侧边面板两种形态不受影响。
+     * 右栏里常驻:点左栏不收起,也不画统一标题行,标题与关闭按钮由内容自己画(如找相关)。
      */
     persistent: Boolean = false,
+    modifier: Modifier = Modifier,
+    headerTrailing: (@Composable RowScope.() -> Unit)? = null,
+    subheader: (@Composable ColumnScope.() -> Unit)? = null,
+    footer: (@Composable ColumnScope.() -> Unit)? = null,
+    maxHeightFraction: Float = DefaultBottomSheetMaxHeightFraction,
     content: @Composable PaneSheetScope.() -> Unit,
 ) {
     val pane = LocalSidePane.current
     if (pane != null && pane.hosted) {
         // **右栏里的面板不在调用方的组合位置上**,调用方重组不会顺带重画它,只能靠这份状态
-        // 通知。曾经用 rememberUpdatedState,楼中楼面板一直转圈,而同一份回复早已摊进主列表:
-        // 它只在拿到另一个 lambda 实例时才通知,PaneSheet 又会在参数全等时被整个跳过,
-        // 捕获的值变了也传不过去。所以这里不跳过,且每次都写、每次都算变化。
-        val contentState = remember { mutableStateOf(content, neverEqualPolicy()) }
-        SideEffect { contentState.value = content }
+        // 通知。用 neverEqualPolicy 保证每次重组捕获到的新值都能推给右栏面板。
+        val slotsState = remember {
+            mutableStateOf(
+                PaneSlots(title, modifier, headerTrailing, subheader, footer, content),
+                neverEqualPolicy(),
+            )
+        }
+        SideEffect {
+            slotsState.value = PaneSlots(title, modifier, headerTrailing, subheader, footer, content)
+        }
         val latestDismiss by rememberUpdatedState(onDismissRequest)
         // 返回键先关面板。面板画在右栏里,不像 ModalBottomSheet 自带返回处理。
         BackHandler { latestDismiss() }
-        DisposableEffect(pane, title, persistent) {
-            val panel = PanePanel(title, { latestDismiss() }, persistent) {
-                val latestContent = contentState.value
-                PaneSheetScopeImpl(this, inPane = true).latestContent()
-            }
+        DisposableEffect(pane, persistent) {
+            val panel = PanePanel(
+                onDismiss = { latestDismiss() },
+                persistent = persistent,
+                slots = { slotsState.value },
+            )
             pane.panel = panel
             onDispose { if (pane.panel === panel) pane.panel = null }
         }
     } else if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
-        ModalSideSheet(onDismissRequest) {
-            // 不是右栏(inPane = false),高度却是整栏。
-            PaneSheetScopeImpl(this, inPane = false, fillsHeight = true).content()
-        }
+        ModalSideSheet(
+            onDismissRequest = onDismissRequest,
+            title = title,
+            persistent = persistent,
+            modifier = modifier,
+            headerTrailing = headerTrailing,
+            subheader = subheader,
+            footer = footer,
+            content = content,
+        )
     } else {
         // 用鼠标时一律不停半开。sheet 把滚动当成拖它自己:半开时往下滚先被 sheet 拿去往上挪,
         // 而滚轮没有松手那一下,sheet 不会吸附到哪一档,表现是列表滚不动。
         val pointers = LocalPointerSource.current
-        val sheetState = if (skipPartiallyExpanded || !pointers.isTouchLike) {
+        val forceExpanded = skipPartiallyExpanded || footer != null || !pointers.isTouchLike
+        val sheetState = if (forceExpanded) {
             rememberExpandedSheetState()
         } else {
             rememberBottomSheetState(SheetValue.Hidden)
         }
-        ModalBottomSheet(onDismissRequest = onDismissRequest, sheetState = sheetState) {
-            Column(modifier = Modifier.nestedScroll(remember(pointers) { WheelStopsAtSheet(pointers) })) {
-                PaneSheetScopeImpl(this, inPane = false).content()
+        val windowHeight = with(LocalDensity.current) {
+            LocalWindowInfo.current.containerSize.height.toDp()
+        }
+        val maxSheetHeight = windowHeight * maxHeightFraction.coerceIn(MinSheetHeightFraction, 1f)
+        ModalBottomSheet(
+            onDismissRequest = onDismissRequest,
+            sheetState = sheetState,
+            shape = MaterialTheme.shapes.extraLarge,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ) {
+            Column(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .heightIn(max = maxSheetHeight)
+                    .imePadding()
+                    .nestedScroll(remember(pointers) { WheelStopsAtSheet(pointers) }),
+            ) {
+                if (!persistent && (title != null || headerTrailing != null)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(
+                                start = Spacing.Loose,
+                                end = if (headerTrailing != null) Spacing.Cozy else Spacing.Loose,
+                                bottom = Spacing.Tight,
+                            ),
+                    ) {
+                        if (title != null) {
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.titleMediumEmphasized,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                        } else {
+                            Spacer(Modifier.weight(1f))
+                        }
+                        if (headerTrailing != null) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                                content = headerTrailing,
+                            )
+                        }
+                    }
+                }
+                subheader?.invoke(this)
+                Column(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
+                    PaneSheetScopeImpl(this, inPane = false).content()
+                }
+                SheetFooterSlot(footer = footer, applyBottomInsetsWhenEmpty = true)
             }
         }
     }
 }
 
-/**
- * 宽屏的模态侧边面板,底部 sheet 在大窗口里的替身。bottom-sheets.md 的 Adaptive design 一节原话:
- * "On larger expanded breakpoints, like desktop, a bottom sheet can be swapped for a side sheet
- * that shows similar content." 底部 sheet 在宽窗口里只能居中升起一块最宽 640dp 的板子,横在
- * 页面正中,离打开它的那一行隔着半个屏幕。
- *
- * 规格取 side-sheets.md 的 modal 款:容器 surfaceContainerLow,圆角 16dp(Differences from M2
- * 一节),最宽 400dp,四周离窗口边缘 16dp(Margins (when detached)),关闭按钮常驻。
- *
- * 自成一个窗口(Dialog),与 ModalBottomSheet 同。遮罩用平台对话框自带的那一层。
- *
- * 人关掉它(点遮罩、关闭按钮、Esc 或返回)时先划出去再通知调用方;调用方自己撤掉它时
- * (点了名单里的一项)直接消失,与底部 sheet 一致。
- */
 @Composable
-private fun ModalSideSheet(onDismissRequest: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+private fun SheetFooterSlot(
+    footer: (@Composable ColumnScope.() -> Unit)?,
+    applyBottomInsetsWhenEmpty: Boolean,
+) {
+    if (footer != null) {
+        // 用 surfaceContainer 色阶差承托粘性底栏,不画分割线(docs/ui-style-guide.md §2.3c)。
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .padding(horizontal = Spacing.Loose, vertical = Spacing.Cozy),
+                content = footer,
+            )
+        }
+    } else if (applyBottomInsetsWhenEmpty) {
+        Spacer(modifier = Modifier.navigationBarsPadding().imePadding())
+    }
+}
+
+/**
+ * 宽屏的模态侧边面板,底部 sheet 在大窗口里的替身(M3 `side-sheets.md` modal 款):
+ * 容器 `surfaceContainerLow`,圆角 `shapes.large`(16dp),最大宽 400dp,四周 16dp 悬浮岛边距,
+ * 背景 0.32 半透明遮罩,单行 56dp 标题栏(`[title] [headerTrailing] [Close]`),并避让系统栏、挖孔与软键盘。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ModalSideSheet(
+    onDismissRequest: () -> Unit,
+    title: String?,
+    persistent: Boolean,
+    modifier: Modifier,
+    headerTrailing: (@Composable RowScope.() -> Unit)?,
+    subheader: (@Composable ColumnScope.() -> Unit)?,
+    footer: (@Composable ColumnScope.() -> Unit)?,
+    content: @Composable PaneSheetScope.() -> Unit,
+) {
     val visibility = remember { MutableTransitionState(false).apply { targetState = true } }
     val latestDismiss by rememberUpdatedState(onDismissRequest)
     val dismiss = { visibility.targetState = false }
@@ -327,12 +451,20 @@ private fun ModalSideSheet(onDismissRequest: () -> Unit, content: @Composable Co
         LocalWindowCaption.current?.Suppress()
         DialogIntoDisplayCutout()
         Box(modifier = Modifier.fillMaxSize()) {
-            // 点在面板外面就是关掉。不画按下的波纹:这一整片是遮罩,不是一个按钮。
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(interactionSource = null, indication = null, onClick = dismiss),
-            )
+            AnimatedVisibility(
+                visibleState = visibility,
+                enter = fadeIn(MaterialTheme.motionScheme.defaultEffectsSpec()),
+                exit = fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                // 点在面板外面就是关掉。不画按下的波纹:这一整片是遮罩,不是一个按钮。
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = ModalSideSheetScrimAlpha))
+                        .clickable(interactionSource = null, indication = null, onClick = dismiss),
+                )
+            }
             AnimatedVisibility(
                 visibleState = visibility,
                 enter = slideInHorizontally(MaterialTheme.motionScheme.defaultSpatialSpec()) { it } + fadeIn(),
@@ -342,25 +474,60 @@ private fun ModalSideSheet(onDismissRequest: () -> Unit, content: @Composable Co
                 Surface(
                     shape = MaterialTheme.shapes.large,
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    modifier = Modifier
-                        .windowInsetsPadding(WindowInsets.barsAndCutout)
+                    modifier = modifier
+                        .windowInsetsPadding(WindowInsets.barsAndCutout.union(WindowInsets.ime))
                         .padding(Spacing.Comfortable)
-                        .width(ModalSideSheetWidth)
+                        .widthIn(max = ModalSideSheetMaxWidth)
+                        .fillMaxWidth()
                         .fillMaxHeight(),
                 ) {
                     Column(modifier = Modifier.fillMaxSize()) {
-                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-                            BilbyTooltip(text = stringResource(Res.string.action_close), shortcut = "Esc") {
-                                IconButton(onClick = dismiss) {
-                                    Icon(
-                                        Icons.Filled.Close,
-                                        contentDescription = stringResource(Res.string.action_close),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        if (!persistent) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = ModalSideSheetHeaderHeight)
+                                    .padding(start = Spacing.Loose, end = Spacing.Tight),
+                            ) {
+                                if (title != null) {
+                                    Text(
+                                        text = title,
+                                        style = MaterialTheme.typography.titleMediumEmphasized,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(end = Spacing.Tight),
                                     )
+                                } else {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                                if (headerTrailing != null) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                                        content = headerTrailing,
+                                    )
+                                }
+                                val closeLabel = stringResource(Res.string.action_close)
+                                BilbyTooltip(text = closeLabel, shortcut = "Esc") {
+                                    IconButton(onClick = dismiss) {
+                                        Icon(
+                                            Icons.Filled.Close,
+                                            contentDescription = closeLabel,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 }
                             }
                         }
-                        content()
+                        subheader?.invoke(this)
+                        Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                            PaneSheetScopeImpl(this, inPane = false).content()
+                        }
+                        SheetFooterSlot(footer = footer, applyBottomInsetsWhenEmpty = true)
                     }
                 }
             }
@@ -368,5 +535,10 @@ private fun ModalSideSheet(onDismissRequest: () -> Unit, content: @Composable Co
     }
 }
 
-/** modal side sheet 的最大宽度(side-sheets.md 的 measurements 表)。 */
-private val ModalSideSheetWidth = 400.dp
+private const val DefaultBottomSheetMaxHeightFraction = 0.88f
+private const val MinSheetHeightFraction = 0.4f
+private const val ModalSideSheetScrimAlpha = 0.32f
+
+/** modal side sheet 的最大宽度与标题栏高度(side-sheets.md measurements 表)。 */
+private val ModalSideSheetMaxWidth = 400.dp
+private val ModalSideSheetHeaderHeight = 56.dp

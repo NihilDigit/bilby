@@ -73,6 +73,16 @@ data class VideoDetail(
      * (见 QueueSourceRepository.affiliation)。缓存里旧的详情没有这个字段,读出来是 false。
      */
     val isStory: Boolean = false,
+    /** 1 = 自制, 2 = 转载; 0 表示未知(旧离线索引等)。 */
+    val copyright: Int = 0,
+    /** 自制稿件是否声明「未经作者授权，禁止转载」(rights.no_reprint == 1)。 */
+    val noReprint: Boolean = false,
+    /** 是否为充电专属视频(is_upower_exclusive)。 */
+    val chargingOnly: Boolean = false,
+    /** 子分区名称(tname)。 */
+    val tname: String = "",
+    /** 争议/风险提示信息(argue_info.argue_msg)。 */
+    val argueMsg: String = "",
 )
 
 data class VideoUp(val mid: Long, val name: String, val faceUrl: String)
@@ -432,6 +442,11 @@ class VideoRepository(private val client: BiliClient) {
         seasonMid = ugcSeason?.mid ?: 0L,
         seasonEpisodes = ugcSeason?.flattenEpisodes().orEmpty(),
         isStory = isStory,
+        copyright = copyright,
+        noReprint = rights?.noReprint == 1,
+        chargingOnly = isUpowerExclusive,
+        tname = tname,
+        argueMsg = argueInfo?.argueMsg.orEmpty(),
     )
 
     /**

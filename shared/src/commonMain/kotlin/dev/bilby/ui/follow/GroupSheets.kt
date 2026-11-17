@@ -1,30 +1,30 @@
 package dev.bilby.ui.follow
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
-import dev.bilby.ui.components.StaticListItem
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import dev.bilby.ui.components.PaneSheet
-import dev.bilby.ui.components.trackEditableFocus
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -33,9 +33,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.data.FollowGroup
 import dev.bilby.data.SPECIAL_GROUP_ID
@@ -44,7 +44,12 @@ import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.MetaSeparator
+import dev.bilby.ui.components.PaneSheet
+import dev.bilby.ui.components.StaticListItem
+import dev.bilby.ui.components.trackEditableFocus
+import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 
 /**
  * 分组面板打开时的那一份状态。
@@ -73,11 +78,7 @@ data class GroupPickerState(
  * 给一个人设置分组。
  *
  * **进来先读齐他当前的全部分组**,读不到就不给保存 —— 接口是覆盖式的,拿一份不完整的名单
- * 写回去会把没显示出来的那些静默摘掉(notes/relation-groups.md 1.5)。所以 [state] 在
- * loading 和 error 两种情况下都不画那份清单。
- *
- * 「特别关注」在这份清单里就是普通一行(它本来就是 tagid -10),勾选与否由
- * [GroupPickerState.special] 承载 —— 写回时它比别的分组多一条路要走,见 `FollowRepository`。
+ * 写回去会把没显示出来的那些静默摘掉(notes/relation-groups.md 1.5)。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -88,16 +89,36 @@ fun GroupPickerSheet(
     onSave: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    PaneSheet(onDismissRequest = onDismiss, skipPartiallyExpanded = false) {
-        SheetTitle(stringResource(Res.string.follow_group_picker_title, state.up.name))
+    PaneSheet(
+        onDismissRequest = onDismiss,
+        title = stringResource(Res.string.follow_group_picker_title, state.up.name),
+        skipPartiallyExpanded = true,
+        footer = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(Res.string.action_cancel))
+                }
+                Button(
+                    onClick = onSave,
+                    enabled = !state.loading && !state.saving && state.error == null,
+                ) {
+                    Text(stringResource(Res.string.action_save))
+                }
+            }
+        },
+    ) {
         when {
             state.loading -> InlineProgress(
                 stringResource(Res.string.follow_group_loading),
-                Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                Modifier.padding(horizontal = Spacing.Loose, vertical = Spacing.Comfortable),
             )
 
             state.error != null -> SheetMessage(state.error)
-            else -> LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
+            else -> LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
                 items(groups, key = { it.id }) { group ->
                     val checked =
                         if (group.id == SPECIAL_GROUP_ID) state.special else group.id in state.selected
@@ -115,7 +136,8 @@ fun GroupPickerSheet(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            "${group.name}$MetaSeparator${group.count}",
+                            text = "${group.name}$MetaSeparator${group.count}",
+                            style = LocalTextStyle.current.tabular,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -123,12 +145,6 @@ fun GroupPickerSheet(
                 }
             }
         }
-        SheetActions(
-            confirmText = stringResource(Res.string.action_save),
-            confirmEnabled = !state.loading && !state.saving && state.error == null,
-            onConfirm = onSave,
-            onDismiss = onDismiss,
-        )
     }
 }
 
@@ -137,9 +153,6 @@ fun GroupPickerSheet(
  *
  * 「特别关注」和「默认分组」在这里只显示、不带动作([FollowGroup.isBuiltIn]):它们是接口
  * 固定给的两个,改名和删除都会被拒 —— 画一个点了必然失败的按钮比不画更糟。
- *
- * @param error 上一次写操作的失败原因。写在面板里而不是弹一个提示:这一页没有别的地方能说
- *   这件事,而失败之后用户多半要就着同一个名字再试一次。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -155,10 +168,35 @@ fun GroupManagerSheet(
     var renaming by remember { mutableStateOf<FollowGroup?>(null) }
     var deleting by remember { mutableStateOf<FollowGroup?>(null) }
 
-    PaneSheet(onDismissRequest = onDismiss, skipPartiallyExpanded = false) {
-        SheetTitle(stringResource(Res.string.follow_groups_title))
+    PaneSheet(
+        onDismissRequest = onDismiss,
+        title = stringResource(Res.string.follow_groups_title),
+        skipPartiallyExpanded = true,
+        headerTrailing = {
+            TextButton(onClick = { creating = true }) {
+                Icon(
+                    imageVector = Icons.Outlined.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+                Spacer(Modifier.width(Spacing.Hair))
+                Text(stringResource(Res.string.follow_group_create))
+            }
+        },
+        footer = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilledTonalButton(onClick = onDismiss) {
+                    Text(stringResource(Res.string.action_done))
+                }
+            }
+        },
+    ) {
         if (error != null) SheetMessage(error)
-        LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
+        LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
             items(groups, key = { it.id }) { group ->
                 StaticListItem(
                     trailingContent = if (group.isBuiltIn) null else {
@@ -188,29 +226,14 @@ fun GroupManagerSheet(
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                 ) {
                     Text(
-                        "${group.name}$MetaSeparator${group.count}",
+                        text = "${group.name}$MetaSeparator${group.count}",
+                        style = LocalTextStyle.current.tabular,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
-            item(key = "create") {
-                ListItem(
-                    onClick = { creating = true },
-                    leadingContent = { Icon(Icons.Outlined.Add, contentDescription = null) },
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(Res.string.follow_group_create))
-                }
-            }
         }
-        SheetActions(
-            confirmText = stringResource(Res.string.action_done),
-            confirmEnabled = true,
-            onConfirm = onDismiss,
-            onDismiss = null,
-        )
     }
 
     if (creating) {
@@ -238,8 +261,7 @@ fun GroupManagerSheet(
     deleting?.let { group ->
         AlertDialog(
             onDismissRequest = { deleting = null },
-            // 只有标题,没有说明。删分组不动关注关系,组里的人退回默认分组 —— 那是这个动作的
-            // 常识含义,写出来等于在解释什么叫分组(拉黑那个框是另一回事,见 BlockConfirmDialog)。
+            // 只有标题,没有说明。删分组不动关注关系,组里的人退回默认分组。
             title = { Text(stringResource(Res.string.follow_group_delete_confirm_title, group.name)) },
             confirmButton = {
                 TextButton(onClick = {
@@ -274,7 +296,7 @@ private fun GroupNameDialog(
                 onValueChange = { name = it },
                 label = { Text(stringResource(Res.string.follow_group_name_hint)) },
                 singleLine = true,
-                modifier = Modifier.trackEditableFocus(),
+                modifier = Modifier.fillMaxWidth().trackEditableFocus(),
             )
         },
         confirmButton = {
@@ -290,47 +312,11 @@ private fun GroupNameDialog(
 }
 
 @Composable
-private fun SheetTitle(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleMedium,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-    )
-}
-
-@Composable
 private fun SheetMessage(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.error,
-        modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+        modifier = Modifier.padding(horizontal = Spacing.Loose, vertical = Spacing.Tight),
     )
-}
-
-/**
- * 面板底部那一排按钮。**自己补 navigationBars padding** —— sheet 铺到屏幕底边,不补的话
- * 按钮会压在手势条上。
- */
-@Composable
-private fun SheetActions(
-    confirmText: String,
-    confirmEnabled: Boolean,
-    onConfirm: () -> Unit,
-    onDismiss: (() -> Unit)?,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-        horizontalArrangement = Arrangement.End,
-    ) {
-        if (onDismiss != null) {
-            TextButton(onClick = onDismiss) { Text(stringResource(Res.string.action_cancel)) }
-        }
-        TextButton(onClick = onConfirm, enabled = confirmEnabled) { Text(confirmText) }
-    }
 }
