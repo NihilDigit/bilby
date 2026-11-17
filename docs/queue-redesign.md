@@ -1,115 +1,100 @@
-# 播放队列重做
+# 播放队列架构与续取规范
 
-2026-09-24 定稿并实施。依据：本仓库现状、B 站接口实验（事实已并入
-`notes/space-and-search.md` 1.4.3）、Media3 1.10.1 构件（javap 验证）。
+本文档记录 Bilby 播放队列的模型、来源标签、`X / N` 位置总计不变量、按需续取与失败锁存机制，Android（`AudioPlaybackService`）与桌面端（`DesktopPlaybackHost` + `DesktopQueue`）严格共用同一套规则。
 
-## 要解决的问题
+---
 
-1. **队列内容与用户所见无关。** 无合集的视频用 UP 最新投稿 25 条凑队列，老视频则是
-   「最新 24 条加这一条」。用户从收藏夹、稍后再看、UP 投稿栏（含排序、空间内搜索）点进来，
-   看到的是另一份列表。
-2. **页面与服务轮流改写对方。** 两处成因：
-   - 「页面显示哪条」有两份真相：`VideoRoute` 的 `episode` 与服务的队列当前条，靠
-     `followingQueue` 同步。后者是 `remember`，进 UP 主页时随组合销毁，回来后若队列当前条
-     不等于路由 bvid，页面从此不再跟随队列。
-   - `ACTION_OPEN_VIDEO` 身兼打开、补元数据、离页后续播、重试建队列、关弹幕输入续播五职，
-     且随 MediaController 重连重发。离开期间队列前进过，回来即被拽回旧条；队列被别的视频
-     换掉过，回来即按旧条的归属重建队列。
-3. **切换忽略分 P。** 上一条/下一条走 `seekToNextMediaItem`，自动连播由 ExoPlayer 按
-   media item 前进，没有一处先问「本视频还有下一 P 吗」。
+## 一、 同侪队列（Peer）与归属回退（Affiliation）模型
 
-## 决定
+队列的核心准则是**所见即所得**：只要用户是从一份同质列表点进某条视频，播放队列就是眼前这份列表本身（含当时的排序与筛选条件）；只有从异质聚合入口点入时，才退回视频自身的归属集合（`QueueContext.Affiliation`）。
 
-### 1. 队列即用户所见的列表
+### 1. `QueueContext` 全部分支与底层 `QueueFeed`
 
-点进去之前看到什么列表，队列就是什么列表，含排序与筛选。入口上下文
-（`data/QueueContext.kt`）：
+| 入口场景 | `QueueContext` | 底层 `QueueFeed` | 规范来源标签（`sourceLabel`，使用双空格 `MetaSeparator`） |
+|---|---|---|---|
+| 合集 / 系列目录页 | `Collection(mid, id, isSeason, name, page)` | `PagedFeed` | `合集  <标题>` / `系列  <标题>`（附 `QueueSource`，标题可点进目录页） |
+| 空间投稿栏（含排序与空间内搜索） | `UpArchive(mid, order, keyword, page, upName)` | `PagedFeed` | `<UP 名> 的投稿` / `<UP 名> 的投稿  最多播放` / `<UP 名> 的投稿  搜索「<词>」` |
+| 空间动态栏（UP 自发视频） | `UpDynamics(mid, pageOffset, upName)` | `DynamicVideoFeed` | `<UP 名> 的动态` |
+| 夜间模式（「全部」或指定白名单 UP） | `NightMode(ups, selectedMid, anchorPage)` | `NightMergeFeed`（全部）/ `PagedFeed`（单人） | `夜间模式  全部` / `夜间模式  <UP 名>` |
+| 收藏夹（含排序与夹内搜索） | `FavFolder(mediaId, title, page, order, keyword)` | `PagedFeed`（过滤失效与非 UGC 条目） | `收藏夹  <标题>` |
+| 稍后再看（支持正倒序） | `ToView(asc)` | `StaticFeed` | `稍后再看` |
+| 离线缓存列表（及离线自动回退） | `Offline` | `StaticFeed`（按 `bvid` 去重，不联网） | `离线缓存` |
+| 用户手工拼装 / 编辑脱钩队列 | `Custom(items)` | `StaticFeed` | `自定义队列` |
+| 订阅流、搜索、助理引用、历史、站内链接、找相关 | `Affiliation` | 按归属优先级解析（见下） | 命中的合集 / 系列 / 动态 / `<UP 名> 的投稿` |
 
-| 入口 | 上下文 | 来源 |
-| --- | --- | --- |
-| 合集/系列目录 | `Collection(mid, id, isSeason, name, page)` | 目录接口，按页 |
-| 空间投稿栏 | `UpArchive(mid, order, keyword, page)` | web 投稿接口，按页，带排序与生效中的搜索词 |
-| 收藏夹 | `FavFolder(mediaId, title, page)` | 收藏夹内容，按页，失效稿件不收 |
-| 稍后再看（列表页与「我的」预览） | `ToView` | 一次给全 |
-| 缓存列表 | `Offline` | 缓存库，不联网 |
-| 动态流、搜索、历史、站内跳转、分享链接、找相关 | `Affiliation` | 见下 |
+### 2. `QueueContext.Custom` 的严格边界
 
-`Affiliation` 退到**视频自身归属**：合集 → 系列（预算内扫前几个）→ UP 投稿里它前后的邻居
-→ 单条。邻居走 App 端 aid 游标接口：web 投稿接口的深页号会被服务端夹住，游标接口按 aid
-一次定位。动态视频与直播回放不在投稿列表里，游标返回 -1200，落到单条。
+`QueueContext.Custom` **仅限两处产生**：
+1. 用户通过菜单动作（「下一条播放」「加入播放队列」）在 `CustomQueueDraftStore` 中手工攒出的草稿队列；
+2. 播放过程中用户在完整队列面板对现有队列做了增删、移动或「清空其余」，由播放引擎调用 `detachToCustom` 与原来源脱钩（此时 `QueueState.detached == true`，可通过 `PlaybackCommand.ResetQueue` 重新按原 `QueueContext` 还原）。
 
-入口来源打不开（多半是离线）而本地有这条视频的完整副本时，退到缓存库。
+任何同侪列表（尤其是夜间模式「全部」视图）一律走各自的 `QueueFeed` 分页，**严禁截取前 N 条塞进 `QueueContext.Custom` 冒充静态自定义队列**。
 
-「最新 24 条加这一条」的兜底删除。
+### 3. `NightMergeFeed`（夜间模式多 UP 归并队列）
 
-### 2. 上下文随导航 key，页面只报帧
+夜间模式选「全部」时，`NightMergeFeed`（`data/QueueFeed.kt`）为每位白名单 UP 维护独立页游标，按 `publishedAtEpochSeconds` 全局倒序归并：
+- `open(bvid)` 从第 1 页起并发拉取归并，定位到目标 `bvid` 后向后补足至少 `QUEUE_WINDOW`（10）条；`offsetOfFirst` 恒为 `0`，`total` 为各白名单 UP 投稿总数之和（全部读尽后收敛为实际加载条数）。
+- 播放或面板触底时通过 `loadAfter()` 继续按批（30 条）归并更早的投稿，无人工 100 条截断。
 
-上下文由点击处写进 `Video` NavKey，随导航栈保存。页面组合时只发一条幂等命令：
+### 4. `Affiliation` 归属解析链
 
-| 命令 | 用途 |
-| --- | --- |
-| `ACTIVATE_FRAME(frameId, context, bvid)` | 这一页到了前台：新帧则按上下文打开并起播，有快照则恢复到离开时的位置，已是活帧则只核对云端进度；后两者都不起播 |
-| `RETRY_QUEUE` | 队列没建成时重试 |
-| `EXTEND_QUEUE(before)` | 完整队列面板滚到一头时续取 |
+异质列表自身不能当队列，由 `QueueSourceRepository.affiliation(bvid)` 依次探测：
+1. **所属合集（`ugc_season`）**：视频详情直接给出完整分集，构造 `StaticFeed` 并附可点击 `QueueSource`。
+2. **所属系列（`series`）**：在请求预算内（前 4 个系列、最多 8 次分页请求）扫描该 UP 的系列目录；直播回放等不进常规投稿列表的稿件由此命中。
+3. **动态视频（`detail.isStory`）**：扫描该 UP 最近数页动态中的视频条目（`DynamicVideoFeed`）。
+4. **UP 投稿邻居（`ArchiveCursorFeed`）**：调用 App 端 `aid` 双向游标接口一次定位当前稿件前后的投稿（避免大投稿量 UP 在 Web 页码接口上被深页夹断），同时读取上游总投稿数 `count`。
+5. **单条保底**：以上均未命中（或离线且本地无缓存副本）时诚实保留单条队列，绝不拼凑「最新 24 条加当前条」。
 
-元数据由服务取流时从详情补，页面不发第二遍。命令只在连上控制器时发，不跟着页面的 bvid
-重发：页内切集是队列自己走的。不带 bvid 当身份，页面无从把播放器拽走。
+---
 
-### 3. 单一队列实例，帧叠在导航栈上
+## 二、 导航帧栈与幂等会话命令
 
-服务持有队列栈（`AudioPlaybackService.frames`）：
+`QueueContext` 随视频页 `Video` `NavKey` 序列化保存。每个入栈视频页在压栈时分配唯一 `frameId`（`withNewFrame`），播放服务按 `frameId` 维护帧栈（活帧驱动当前播放器队列，挂起帧保存快照并在导航栈变化时由 `retainFrames` 清理出栈帧）：
 
-- **活帧**即 ExoPlayer playlist，仍然只有这一份活的队列。
-- **挂起帧**存快照：条目、当前条、分 P、位置、随机开关。
+| 命令 | 职责 |
+|---|---|
+| `ActivateFrame(frameId, context, bvid)` | 页面进入前台时幂等发送：新帧按上下文建队起播；挂起帧恢复离开时的条目与进度快照；已是活帧则仅核对云端进度 |
+| `RetryQueue` | 队列补全失败（`incomplete == true`）时手动重试建队 |
+| `ExtendQueue(before)` | 队列面板滚到边界或用户点击边界重试行时，向指定方向续取一页并清除该方向的错误锁存 |
+| `ResetQueue` | 将手工编辑脱钩（`detached == true`）的自定义队列重置回初始 `QueueContext` 来源 |
 
-每个视频页是一帧，帧 id 在压栈时分配（`withNewFrame`），不在构造 key 时生成：解析链接得到的
-是目的地，还不是栈上的一页。
+---
 
-**帧的先后由导航栈决定，服务只按 id 存。** 找相关替换栈顶、`pushUnique` 挪动页面都会重排
-导航栈，服务另记一份顺序就是第二份真相。MainActivity 在导航栈变化时调用
-`AudioPlaybackService.retainFrames`，不在栈上的帧连同快照丢掉。
+## 三、 `X / N` 位置与总数不变量（`QueuePagination`）
 
-| 事件 | 服务动作 |
-| --- | --- |
-| 列表页点开视频（压栈） | 活帧存为快照，按上下文建新活帧 |
-| 页内切集、切 P、连播 | 只改活帧 |
-| 视频页回到前台 | 已是活帧则保持原样；否则活帧存为快照，换上该帧快照。都不起播 |
-| 打开直播间 | 活帧存为快照，直播不是帧 |
-| 视频页出栈 | `retainFrames` 丢掉该帧；它是活帧时播放器照放，队列不再属于任何一页 |
-| 进程被杀后恢复 | 服务无此帧，按 key 里的上下文与页面保存的当前条重建 |
+队列往往只加载整份来源的一段窗口（`items.size` 只是已加载窗口长度，不是来源总长）。Android 与桌面端共用 `player/PlaybackState.kt` 中的 `QueuePagination` 维护精确的 `sourcePosition`（1 起）与 `sourceTotal`：
 
-新帧或恢复出的当前条正好是播放器正在放的那一条时，留着它只换两边，不重新取流。
+1. **各 `QueueFeed` 的起点偏移与总数**：
+   - `StaticFeed`：`offsetOfFirst = 0`，`total = items.size`。
+   - `PagedFeed`：打开时若落第 1 页则 `offsetOfFirst = 0`，深页以 `(firstPage - 1) * pageSize` 起算；向前 `loadBefore()` 时按**实际新增去重后的条数**递减偏移（抵消收藏夹过滤失效稿件带来的页长缩水），一旦抵达第 1 页立即归零。
+   - `ArchiveCursorFeed`：已触达最新投稿端（`!hasNewer`）时 `offsetOfFirst = 0`（覆盖绝大多数新近投稿点击）；已触达最早投稿端（`!hasOlder`）且已知 `total` 时 `offsetOfFirst = total - loadedSize`；仅当停在超长投稿列表中间段且两端均未触底时暂置 `offsetOfFirst = null`（不谎报位置，只展示窗口与总数）。
+   - `DynamicVideoFeed` / `NightMergeFeed`：从顶部扫入命中时 `offsetOfFirst = 0`。
+2. **闭窗自洽收敛（`reconcileClosedWindow`）**：只要 `!hasBefore && !hasAfter && offsetOfFirst == 0`，`sourceTotal` 自动收敛为当前真实 `playlistSize`，保证过滤掉失效视频后末尾永远对齐 `N / N`。
+3. **四处队列界面统一读数（`QueuePositionText(queue)`，全部套用 `.tabular`）**：
+   - `sourcePosition` 与 `sourceTotal` 均已知：显示精确 **`X / N`**。
+   - 仅知 `sourceTotal` 而处于大列表中间窗口：显示 **`i/k  共 N`**（窗口内位置 / 已加载条数 + 来源总数）。
+   - 其余情况退回已加载窗口的 `displayPosition / displayTotal`。
+   - 播放页内联头栏（`QueueHeader`）与「查看全部」底封瓦片（`ShowAllRow`）、完整队列面板（`FullQueueSheet`）、听视频唱盘区与底部抽屉（`ListenScreen`）、全屏侧滑选集面板（`EpisodePanel` 的 `PlayerSidePanelHeader`）全部共用此读数。
 
-页面只是活帧的视图：自己的帧是活帧时显示队列当前条，否则停在离开时那一条（随页面保存）。
-`episode` 与 `followingQueue` 删除。
+---
 
-### 4. 窗口与续取
+## 四、 边界按需续取与 `-412` 错误锁存
 
-打开时当前视频前后各至少 10 条（`QUEUE_WINDOW`）。分页来源整页读，不在页内再截。当前条距
-任一端不足 3 条（`EXTEND_THRESHOLD`），或完整队列面板滚到一端时，服务向该端续取一页并插入
-playlist，按 bvid 去掉已有的条目。合集详情、稍后再看、缓存库一次给全，不续取。
+1. **禁止建队后静默预拼接**：`QueueSourceRepository.open()` 已经在目标视频前后备妥 `QUEUE_WINDOW`（各 10 条）初始窗口；建队落定当下**不再**立即后台连发 `extendNearEdges()`，避免进页半秒后列表条数与序号突然跳变。
+2. **播放期仅在临近边界时按方向续取**：自动续取仅在连播推进到距当前播放方向末端不足 2 条（`Forward` 下 `index >= size - 2 && hasAfter && !errorAfter`；`Reverse` 下 `index <= 1 && hasBefore && !errorBefore`）时触发；随机模式（`Shuffle`）与脱钩自定义队列不自动续取。
+3. **续取失败锁存（`errorBefore` / `errorAfter`）防死循环**：
+   - 任一方向 `loadBefore()` / `loadAfter()` 返回 `null`（网络异常或触发 `-412` 风控）时，`QueuePagination.failExtend(before)` 立即置上 `errorBefore` 或 `errorAfter`。
+   - `EpisodeList` 的触顶/触底自动加载观察器与播放边界续取同时受 `!errorBefore` / `!errorAfter` 门控，失败后立即停手，绝不因 `loading` 复位而陷入无限重试风暴。
+   - 只有用户显式点击边界错误行发起 `ExtendQueue(before)` 时，才清除对应方向的错误锁存并重试一次。
+4. **透明化边界状态行（`EpisodeList` 的 `QueueEdgeRow`）**：
+   - 加载中：展示 18dp M3E `InlineProgress` 与「正在加载前面/后续条目…」。
+   - 失败锁存态：展示可点击的「加载失败  重试」行。
+   - 尚有未读余量态：展示带方向箭头的计数提示行（如「前面还有 12 条，点击加载」或「后面还有更多，点击加载」），支持手动点击提前展开。
 
-听视频页的「N / M」是在整份来源里的位置与来源总数，不是 playlist 下标。来源给不出总数
-（收藏夹、游标接口）时不显示。
+---
 
-### 5. 分 P 优先
+## 五、 分 P 优先与顺序/完播控制
 
-`QueuePlayer` 由 `ForwardingPlayer` 改为 `ForwardingSimpleBasePlayer`，覆写 `handleSeek`：
-
-- `COMMAND_SEEK_TO_NEXT`：有下一 P 切下一 P，否则下一条。队列末条上 `BasePlayer.seekToNext`
-  走 `ignoreSeek`，仍以 `INDEX_UNSET` 调到 `handleSeek`，末条的下一 P 因此可达。
-- `COMMAND_SEEK_TO_PREVIOUS`：播放超过 `maxSeekToPreviousPosition` 回本 P 开头；否则有上一 P
-  切上一 P，否则上一条。
-- `*_MEDIA_ITEM` 两条命令保持原义，供队列面板的「跳到某一条」使用。
-
-应用内按钮由 `seekToNextMediaItem` 改为 `seekToNext`，与通知栏、耳机线控同一条路。
-
-自动连播：当前条有下一 P 时开 `pauseAtEndOfMediaItems`，在 `END_OF_MEDIA_ITEM` 时切下一 P。
-关闭自动连播、定时器「播完这条」均按 P 计。非末条停在末尾时播放器不进 `STATE_ENDED`
-（javap 验证），收尾因此挂在 `END_OF_MEDIA_ITEM` 与 `STATE_ENDED` 两处，由 `endHandled`
-去重。
-
-## 待定
-
-- 续取阈值 3 条是估计值，按真机手感调整。
-- UP 投稿与收藏夹来源没有目录页入口，标题行点不动。
+- **分 P 与队列合一渲染**：队列与当前视频的分 P 在 `VideoScreen` 经 `buildEpisodeRows` 拼成同一份 `EpisodeList`（仅对身份匹配的当前视频展开分 P）。详情页额外保留横向分 P chip 带以便整屏快速扫读。
+- **切集优先走分 P**：`QueuePlayer`（Android `ForwardingSimpleBasePlayer`）与 `DesktopPlaybackHost` 统一覆写 `seekToNext` / `seekToPrevious`：有下一 P 先切下一 P，最后一 P 才进队列下一条；回退在播放超过阈值时回本 P 开头，否则切上一 P / 上一条。队列面板直接点选某条视频时走媒体项直跳。
+- **顺序与完播行为解耦**：`QueueOrder`（正序 `Forward` / 倒序 `Reverse` / 随机 `Shuffle`）只改变播放游走顺序，列表始终保持自然顺序且高亮跟随滚动；`PlayEndMode`（播完暂停 `Pause` / 连播 `Continue` / 洗脑循环 `RepeatOne`）与睡眠定时器「播完当前」均以单 P 为粒度精确结算。

@@ -1,6 +1,8 @@
 package dev.bilby.ui.dynamic
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,12 +18,18 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.automirrored.outlined.Comment
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.ThumbUp
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -38,7 +46,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.api.BiliConstants
 import dev.bilby.data.model.ArticleImage
@@ -46,6 +57,7 @@ import dev.bilby.data.model.DynamicAdditional
 import dev.bilby.data.model.DynamicCard
 import dev.bilby.data.model.DynamicContent
 import dev.bilby.data.model.DynamicInteraction
+import dev.bilby.data.model.plainText
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.LocalSystemActions
@@ -53,17 +65,23 @@ import dev.bilby.ui.components.BiliRichText
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.formatCount
 import dev.bilby.ui.components.BiliAsyncImage
+import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.CoverCornerRadius
 import dev.bilby.ui.components.ImageViewer
 import dev.bilby.ui.components.ListCover
 import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.components.MetaSeparator
+import dev.bilby.ui.components.SelectableTextDialog
 import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.components.chargingBadgeText
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.rememberCopyAction
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.interactiveCard
+import dev.bilby.ui.theme.tabular
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -111,6 +129,7 @@ sealed interface DynamicAction {
  * @param openable 整张卡片本身能不能点开进详情页。动态详情页顶上那一张自己已经在这页里了,传
  *   false 不再原地压栈;它里面嵌着的那条被转发的原动态照旧可点。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun DynamicCardView(
     card: DynamicCard,
@@ -121,118 +140,282 @@ fun DynamicCardView(
     onLike: ((like: Boolean) -> Unit)? = null,
     contained: Boolean = true,
     openable: Boolean = true,
+    selectableText: Boolean = false,
 ) {
     val block = blockStyle(nested)
-    // 20dp 不是随手挑的:内边距 12 时 20 − 12 = 8,正好落在 shapes.small 上,
-    // 里面那些块的圆角因此有据可依(风格指南 §1.4 的 optical roundness)。
     val cardShape = if (nested) block.shape else MaterialTheme.shapes.largeIncreased
     val openCard: (() -> Unit)? = if (openable) {
         card.primaryAction()?.let { target -> { onAction(target) } }
     } else {
         null
     }
-    Surface(
-        // 一条动态是一张 contained 卡片,**卡片自己带容器,不由调用方套一层**:关注动态页和
-        // 空间页各套过一份,底色、圆角、边距三处都对不齐,同一条动态在两页里不是一个样子。
-        color = when {
-            nested -> MaterialTheme.colorScheme.surfaceContainerHigh
-            contained -> MaterialTheme.colorScheme.surfaceContainer
-            else -> Color.Transparent
-        },
-        shape = cardShape,
-        modifier = modifier
+    val baseColor = when {
+        nested -> MaterialTheme.colorScheme.surfaceContainerHigh
+        contained -> MaterialTheme.colorScheme.surfaceContainer
+        else -> Color.Transparent
+    }
+    val hoverColor = when {
+        nested -> MaterialTheme.colorScheme.surfaceContainerHighest
+        contained -> MaterialTheme.colorScheme.surfaceContainerHigh
+        else -> MaterialTheme.colorScheme.surfaceContainerLow
+    }
+
+    val cardBody: @Composable (Modifier) -> Unit = { surfaceModifier ->
+        Surface(
+            // 一条动态是一张 contained 卡片,**卡片自己带容器,不由调用方套一层**:关注动态页和
+            // 空间页各套过一份,底色、圆角、边距三处都对不齐,同一条动态在两页里不是一个样子。
+            // openCard 非空时底色交由 interactiveCard 平滑插值,Surface 取透明避免盖住悬停色。
+            color = if (openCard != null) Color.Transparent else baseColor,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            shape = cardShape,
+            modifier = surfaceModifier,
+        ) {
+            Box {
+                Column(
+                    modifier = Modifier.padding(if (nested) Spacing.Tight else Spacing.Cozy),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                ) {
+                    if (!nested) {
+                        // 空间页(不画作者)这一行整个没有:时间挪到了底栏,见 [DynamicFooter]。
+                        if (showAuthor) {
+                            DynamicAuthorRow(card, onAction)
+                        } else if (card.tag != null) {
+                            // 不画作者行时正文从顶上开始,右上角的「置顶」会压在第一行字上:让出一小段,
+                            // 正文从角标底下开始。
+                            Spacer(modifier = Modifier.height(TagClearance))
+                        }
+                    } else if (card.author.name.isNotBlank()) {
+                        ForwardedAuthorRow(card)
+                    }
+
+                    DynamicText(card = card, onAction = onAction, selectableText = selectableText)
+
+                    // 话题不染 primary:这一页里 primary 只标"这段能点",而话题在本应用里没有落点
+                    // (没有话题页,也不该有——那是一条按热度排的池子)。染成可点色再点不动最难受。
+                    card.topic?.let {
+                        Text(
+                            text = "#$it",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    card.content?.let { DynamicContentView(it, onAction, block) }
+                    card.additional?.let {
+                        DynamicAdditionalView(
+                            additional = it,
+                            dynamicId = card.id,
+                            onAction = onAction,
+                            block = block,
+                        )
+                    }
+
+                    // 被转发的那条自己就是一张卡片,**这里不再多套一层 Surface** —— 套两层等于同一个
+                    // 边界画两遍,内层的圆角还会比外层方。源没了也要画,否则这条动态看起来像转发者
+                    // 对着空气说话。
+                    val forwarded = card.forwarded
+                    when {
+                        forwarded != null -> DynamicCardView(
+                            card = forwarded,
+                            onAction = onAction,
+                            nested = true,
+                            selectableText = selectableText,
+                        )
+
+                        card.forwardTips != null -> Surface(
+                            color = block.color,
+                            shape = block.shape,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = card.forwardTips.ifBlank { stringResource(Res.string.dynamic_origin_gone) },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(Spacing.Cozy),
+                            )
+                        }
+                    }
+
+                    // 被转发的那条不画底栏:赞和评论都落在转发它的这一条上,里外各一份会让人不知道
+                    // 自己点的是哪一条;时间外层已经有了。
+                    if (!nested) {
+                        DynamicFooter(
+                            card = card,
+                            showTime = !showAuthor,
+                            onLike = onLike,
+                            onAction = onAction,
+                        )
+                    }
+                }
+                // 「置顶」浮在卡片右上角,不进任何一行:它说的是这张卡片在这一列里的位置,不是作者行
+                // 或正文的一部分。空间页正是它最有用的地方 —— 整页按时间倒序,唯独第一条不是最新的,
+                // 没有标记就读成"这个人今天发了条三个月前的东西";它要在读正文之前被看到。
+                if (!nested) {
+                    card.tag?.let { tag ->
+                        DynamicTagChip(tag, Modifier.align(Alignment.TopEnd).padding(Spacing.Tight))
+                    }
+                }
+            }
+        }
+    }
+
+    if (nested) {
+        val nestedModifier = modifier
             .fillMaxWidth()
             .then(
                 if (openCard != null) {
-                    Modifier.clip(cardShape).clickable(onClick = openCard)
+                    Modifier
+                        .interactiveCard(
+                            shape = cardShape,
+                            baseColor = baseColor,
+                            hoverColor = hoverColor,
+                            enableScale = false,
+                        )
+                        .clickable(role = Role.Button, onClick = openCard)
                 } else {
                     Modifier
                 },
-            ),
-    ) {
-        Box {
-        Column(
-            modifier = Modifier.padding(if (nested) Spacing.Tight else Spacing.Cozy),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        ) {
-            if (!nested) {
-                // 空间页(不画作者)这一行整个没有:时间挪到了底栏,见 [DynamicFooter]。
-                if (showAuthor) {
-                    DynamicAuthorRow(card, onAction)
-                } else if (card.tag != null) {
-                    // 不画作者行时正文从顶上开始,右上角的「置顶」会压在第一行字上:让出一小段,
-                    // 正文从角标底下开始。
-                    Spacer(modifier = Modifier.height(TagClearance))
-                }
-            } else if (card.author.name.isNotBlank()) {
-                ForwardedAuthorRow(card)
-            }
+            )
+        cardBody(nestedModifier)
+        return
+    }
 
-            DynamicText(card = card, onAction = onAction)
+    val copyText = rememberCopyAction()
+    val copyLink = rememberCopyAction(copiedMessage = stringResource(Res.string.share_link_copied))
+    var selectionTarget by remember { mutableStateOf<String?>(null) }
 
-            // 话题不染 primary:这一页里 primary 只标"这段能点",而话题在本应用里没有落点
-            // (没有话题页,也不该有——那是一条按热度排的池子)。染成可点色再点不动最难受。
-            card.topic?.let {
-                Text(
-                    text = "#$it",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+    val bodyText = remember(card.text) { card.text.plainText().trim() }
+    val forwardedText = remember(card.forwarded?.text) { card.forwarded?.text?.plainText()?.trim().orEmpty() }
+    val selectableFullText = remember(bodyText, forwardedText, card.forwarded?.author?.name) {
+        buildString {
+            if (bodyText.isNotBlank()) append(bodyText)
+            if (forwardedText.isNotBlank()) {
+                if (isNotEmpty()) append("\n\n")
+                val fwdAuthor = card.forwarded?.author?.name.orEmpty()
+                if (fwdAuthor.isNotBlank()) append("@").append(fwdAuthor).append(": ")
+                append(forwardedText)
             }
-
-            card.content?.let { DynamicContentView(it, onAction, block) }
-            card.additional?.let {
-                DynamicAdditionalView(
-                    additional = it,
-                    dynamicId = card.id,
-                    onAction = onAction,
-                    block = block,
-                )
-            }
-
-            // 被转发的那条自己就是一张卡片,**这里不再多套一层 Surface** —— 套两层等于同一个
-            // 边界画两遍,内层的圆角还会比外层方。源没了也要画,否则这条动态看起来像转发者
-            // 对着空气说话。
-            val forwarded = card.forwarded
-            when {
-                forwarded != null -> DynamicCardView(card = forwarded, onAction = onAction, nested = true)
-
-                card.forwardTips != null -> Surface(
-                    color = block.color,
-                    shape = block.shape,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        text = card.forwardTips.ifBlank { stringResource(Res.string.dynamic_origin_gone) },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(Spacing.Cozy),
-                    )
-                }
-            }
-
-            // 被转发的那条不画底栏:赞和评论都落在转发它的这一条上,里外各一份会让人不知道
-            // 自己点的是哪一条;时间外层已经有了。
-            if (!nested) {
-                DynamicFooter(
-                    card = card,
-                    showTime = !showAuthor,
-                    onLike = onLike,
-                    onAction = onAction,
-                )
-            }
-        }
-        // 「置顶」浮在卡片右上角,不进任何一行:它说的是这张卡片在这一列里的位置,不是作者行
-        // 或正文的一部分。空间页正是它最有用的地方 —— 整页按时间倒序,唯独第一条不是最新的,
-        // 没有标记就读成"这个人今天发了条三个月前的东西";它要在读正文之前被看到。
-        if (!nested) {
-            card.tag?.let { tag ->
-                DynamicTagChip(tag, Modifier.align(Alignment.TopEnd).padding(Spacing.Tight))
-            }
-        }
         }
     }
+
+    val copyDynamicLabel = stringResource(Res.string.action_copy_dynamic)
+    val copyForwardedLabel = stringResource(Res.string.action_copy_forwarded)
+    val selectTextLabel = stringResource(Res.string.action_select_text)
+    val copyUpNameLabel = stringResource(Res.string.action_copy_up_name)
+    val copyUidLabel = stringResource(Res.string.action_copy_uid)
+    val copyDynamicLinkLabel = stringResource(Res.string.action_copy_dynamic_link)
+    val menuLabel = stringResource(Res.string.menu_item_actions)
+
+    val menuActions = buildList {
+        if (bodyText.isNotBlank()) {
+            add(DynamicMenuAction(copyDynamicLabel, Icons.Outlined.ContentCopy) { copyText(bodyText) })
+        }
+        if (forwardedText.isNotBlank()) {
+            add(DynamicMenuAction(copyForwardedLabel, Icons.Outlined.ContentCopy) { copyText(forwardedText) })
+        }
+        if (selectableFullText.isNotBlank()) {
+            add(DynamicMenuAction(selectTextLabel, Icons.Outlined.SelectAll) { selectionTarget = selectableFullText })
+        }
+        if (card.author.name.isNotBlank()) {
+            add(DynamicMenuAction(copyUpNameLabel, Icons.Outlined.ContentCopy) { copyText(card.author.name) })
+        }
+        if (card.author.mid != 0L) {
+            add(DynamicMenuAction(copyUidLabel, Icons.Outlined.ContentCopy) { copyText(card.author.mid.toString()) })
+        }
+        if (card.id.isNotBlank()) {
+            add(
+                DynamicMenuAction(copyDynamicLinkLabel, Icons.Outlined.Link) {
+                    copyLink("${BiliConstants.DYNAMIC_HOST}/${card.id}")
+                },
+            )
+        }
+    }
+
+    if (menuActions.isEmpty()) {
+        val plainModifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (openCard != null) {
+                    Modifier
+                        .interactiveCard(
+                            shape = cardShape,
+                            baseColor = baseColor,
+                            hoverColor = hoverColor,
+                        )
+                        .clickable(role = Role.Button, onClick = openCard)
+                } else {
+                    Modifier
+                },
+            )
+        cardBody(plainModifier)
+        return
+    }
+
+    ContextMenuBox(
+        onClick = null,
+        menuLabel = menuLabel,
+        modifier = modifier,
+        menu = { close ->
+            menuActions.forEachIndexed { index, action ->
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        action.onClick()
+                    },
+                    text = { Text(action.label) },
+                    leadingIcon = { Icon(action.icon, contentDescription = null) },
+                    shape = menuItemShape(index, menuActions.size),
+                )
+            }
+        },
+    ) { openMenu ->
+        val interactiveModifier = Modifier
+            .fillMaxWidth()
+            .then(
+                when {
+                    openCard != null -> Modifier
+                        .interactiveCard(
+                            shape = cardShape,
+                            baseColor = baseColor,
+                            hoverColor = hoverColor,
+                        )
+                        .combinedClickable(
+                            role = Role.Button,
+                            onClick = openCard,
+                            onLongClickLabel = menuLabel,
+                            onLongClick = openMenu,
+                        )
+
+                    !selectableText -> Modifier
+                        .pointerInput(openMenu) {
+                            detectTapGestures(onLongPress = { openMenu() })
+                        }
+                        .semantics {
+                            onLongClick(label = menuLabel) {
+                                openMenu()
+                                true
+                            }
+                        }
+
+                    else -> Modifier
+                },
+            )
+        cardBody(interactiveModifier)
+    }
+
+    selectionTarget?.let { target ->
+        SelectableTextDialog(
+            text = target,
+            onDismiss = { selectionTarget = null },
+        )
+    }
 }
+
+private data class DynamicMenuAction(
+    val label: String,
+    val icon: ImageVector,
+    val onClick: () -> Unit,
+)
 
 /** 不画作者行时,正文给右上角的「置顶」让出的高度:角标下沿减去卡片内边距,再减一格行距。 */
 private val TagClearance = 8.dp
@@ -285,7 +468,7 @@ private fun DynamicFooter(
             if (showTime) {
                 Text(
                     text = formatRelativeTime(card.publishedAtEpochSeconds),
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall.tabular,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -375,7 +558,7 @@ private fun ActionCell(
         if (label != null) {
             Text(
                 text = label,
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.labelMedium.tabular,
                 color = tint,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -411,7 +594,7 @@ private fun blockStyle(nested: Boolean) = BlockStyle(
     } else {
         MaterialTheme.colorScheme.surfaceContainerHigh
     },
-    shape = if (nested) MaterialTheme.shapes.extraSmall else MaterialTheme.shapes.small,
+    shape = if (nested) MaterialTheme.shapes.small else MaterialTheme.shapes.medium,
 )
 
 /**
@@ -429,29 +612,33 @@ private fun blockStyle(nested: Boolean) = BlockStyle(
  * 配图都在那边),认不出就地展开——那时摘要是仅有的一份内容。做成一行字而不是按钮:一屏
  * 十几条动态,每条顶一个 tonal 按钮会排成一列按钮墙,而风格指南 §2.4 给整屏只留一个高强调
  * 按钮。触摸区仍按 48dp 撑开。
- *
- * @param onBodyClick 非 null 时正文整段可点(被转发的那条用它退回原文)。**只罩在正文上,不罩
- *   下面那行出口**:那一行自己就是一个按钮,套在一起等于同一次点击有两个答案。正文里的链接、
- *   @提及、时间戳走的是 `LinkAnnotation`,只吃落在那一截上的点击,剩下的照旧传到这一层。
  */
 @Composable
 private fun DynamicText(
     card: DynamicCard,
     onAction: (DynamicAction) -> Unit,
+    selectableText: Boolean = false,
 ) {
     var expanded by remember(card.id) { mutableStateOf(false) }
     val collapsed = card.textIsSummary && !expanded
 
     // 正文里的链接与 @提及走 `LinkAnnotation`,只消费落在那一截上的点击;普通文字的点击照常
-    // 透传到所在卡片(外层动态卡或内层被转发卡)的容器上。
+    // 透传到所在卡片(外层动态卡或内层被转发卡)的容器上。详情页桌面端可开启文本直接划选。
     if (card.text.isNotEmpty()) {
-        BiliRichText(
-            spans = card.text,
-            style = MaterialTheme.typography.bodyLarge.copy(lineHeight = DynamicTextLineHeight),
-            onLinkClick = { onAction(DynamicAction.OpenUrl(it)) },
-            onMentionClick = { onAction(DynamicAction.OpenUser(it)) },
-            maxLines = if (collapsed) DynamicTextMaxLines else Int.MAX_VALUE,
-        )
+        val richText: @Composable () -> Unit = {
+            BiliRichText(
+                spans = card.text,
+                style = MaterialTheme.typography.bodyLarge.copy(lineHeight = DynamicTextLineHeight),
+                onLinkClick = { onAction(DynamicAction.OpenUrl(it)) },
+                onMentionClick = { onAction(DynamicAction.OpenUser(it)) },
+                maxLines = if (collapsed) DynamicTextMaxLines else Int.MAX_VALUE,
+            )
+        }
+        if (selectableText) {
+            SelectionContainer { richText() }
+        } else {
+            richText()
+        }
     }
 
     val article = card.article
@@ -495,6 +682,7 @@ private fun DynamicText(
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun DynamicAuthorRow(card: DynamicCard, onAction: (DynamicAction) -> Unit) {
     // **名字下面只有时间,没有类型名。** 以前恒定印着"图文动态""专栏动态""文字动态""转发动态",
@@ -526,13 +714,13 @@ private fun DynamicAuthorRow(card: DynamicCard, onAction: (DynamicAction) -> Uni
             Column {
                 Text(
                     text = card.author.name,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMediumEmphasized,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = meta,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall.tabular,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -609,17 +797,25 @@ private fun DynamicContentView(
     block: BlockStyle,
 ) {
     when (content) {
-        is DynamicContent.Video -> VideoRow(
-            item = VideoRowUi(
-                title = content.title,
-                coverUrl = content.coverUrl,
-                durationText = content.durationText,
-                playText = content.playCountText,
-                danmakuText = content.danmakuCountText,
-                typeBadge = chargingBadgeText(content.chargingOnly),
-            ),
-            onClick = { onAction(DynamicAction.OpenVideo(content.bvid)) },
-        )
+        is DynamicContent.Video -> Surface(
+            color = block.color,
+            shape = block.shape,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(block.shape),
+        ) {
+            VideoRow(
+                item = VideoRowUi(
+                    title = content.title,
+                    coverUrl = content.coverUrl,
+                    durationText = content.durationText,
+                    playText = content.playCountText,
+                    danmakuText = content.danmakuCountText,
+                    typeBadge = chargingBadgeText(content.chargingOnly),
+                ),
+                onClick = { onAction(DynamicAction.OpenVideo(content.bvid)) },
+            )
+        }
 
         is DynamicContent.Season -> SideBySideCard(
             title = content.title,

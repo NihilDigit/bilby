@@ -22,10 +22,12 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.SentimentSatisfied
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -72,9 +74,10 @@ import dev.bilby.ui.components.insertAtCursor
 import dev.bilby.ui.components.rememberReplyEmoteState
 import dev.bilby.ui.imeTarget
 import dev.bilby.ui.screenOrientationKey
-import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.interactiveCard
+import dev.bilby.ui.theme.tabular
 import kotlinx.coroutines.delay
 
 /**
@@ -93,12 +96,16 @@ private const val SoftLimit = 1000
 private const val CounterFrom = 800
 
 /**
- * 浏览评论时固定在列表底部的轻量触发条。
+ * 浏览评论时固定在列表底部的轻量胶囊触发条。
  *
  * **不订阅 `WindowInsets.ime`。** 真正打字在独立窗口的 [CommentComposerDialog] 里进行,
  * 软键盘弹出与退避的整个过程中列表高度恒定不变,既不触发几百条富文本评论逐帧重新布局,
  * 也不会在输入法收起后留下未刷新的空白区。
+ *
+ * @param inSheetFooter 嵌在 [dev.bilby.ui.components.PaneSheet] 的 `footer` 槽位里时传 `true`,
+ *   避免与 `SheetFooterSlot` 自带的底部安全区和外层边距重复叠加。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun CommentPromptBar(
     draftPreview: String,
@@ -106,18 +113,28 @@ internal fun CommentPromptBar(
     onOpenKeyboard: () -> Unit,
     onOpenEmoji: () -> Unit,
     modifier: Modifier = Modifier,
+    inSheetFooter: Boolean = false,
 ) {
     val hasDraft = draftPreview.isNotBlank()
     val hasEmoteRepo = LocalEmoteRepository.current != null
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier
+    val outerModifier = if (inSheetFooter) {
+        modifier.fillMaxWidth()
+    } else {
+        modifier
             .fillMaxWidth()
             .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom))
             .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight)
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = outerModifier
             .heightIn(min = PromptMinHeight)
-            .clip(MaterialTheme.shapes.largeIncreased)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh, MaterialTheme.shapes.largeIncreased)
+            .interactiveCard(
+                shape = CircleShape,
+                baseColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                hoverColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                enableScale = false,
+            )
             .clickable(role = Role.Button, onClick = onOpenKeyboard)
             .padding(
                 start = Spacing.Comfortable,
@@ -158,7 +175,7 @@ internal fun CommentPromptBar(
  * - 软键盘与表情面板切换时复用落定过的键盘高度托底,避免面板高度跳变闪烁;
  * - 退出时整个浮层直接移出组合,草稿由调用方按回复对象持久化保留。
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun CommentComposerDialog(
     draft: String,
@@ -266,12 +283,16 @@ internal fun CommentComposerDialog(
                     },
             )
 
+            val sheetShape = MaterialTheme.shapes.extraLarge.copy(
+                bottomStart = CornerSize(0.dp),
+                bottomEnd = CornerSize(0.dp),
+            )
             Surface(
-                color = MaterialTheme.colorScheme.surface,
-                shape = ComposerSheetShape,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                shape = sheetShape,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .widthIn(max = Breakpoints.ReadableWidth)
+                    .widthIn(max = ComposerMaxWidth)
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.barsAndCutout.only(WindowInsetsSides.Horizontal))
                     .pointerInput(dismissDragThresholdPx) {
@@ -307,7 +328,7 @@ internal fun CommentComposerDialog(
                         ) {
                             Text(
                                 text = headerTitle,
-                                style = MaterialTheme.typography.labelLarge,
+                                style = MaterialTheme.typography.labelLargeEmphasized,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -371,7 +392,7 @@ internal fun CommentComposerDialog(
                         commentDraftCounter(fieldValue.text.length)?.let { counter ->
                             Text(
                                 text = counter,
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.labelSmall.tabular,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.End,
                                 modifier = Modifier.fillMaxWidth().padding(end = Spacing.Comfortable),
@@ -406,6 +427,7 @@ internal fun CommentComposerDialog(
 private const val MaxLines = 6
 private const val KeyboardResumeGraceMillis = 180L
 private val PromptMinHeight = 52.dp
-private val ComposerSheetShape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+/** M3 `bottom-sheets.md` 宽屏输入面板的最大宽度。 */
+private val ComposerMaxWidth = 640.dp
 private val MinKeyboardRecognizeHeight = 120.dp
 private val DismissSwipeThreshold = 40.dp

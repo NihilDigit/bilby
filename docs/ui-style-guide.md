@@ -1,1020 +1,263 @@
 # Bilby 界面风格指南
 
-写给往这个仓库里加界面的人。只写**我们做过的判断**:token 取什么值、组件选哪个、
-以及本项目故意偏离 M3 的地方和理由。M3 文档已经说清楚的东西不复述,需要时去
-[m3.material.io](https://m3.material.io) 读原文。
+写给往这个仓库里加界面的人。只写**我们已经落地的判断**：token 取什么值、组件选哪个、多端窗口怎么排、复制与无障碍怎么接，以及本项目故意偏离 M3 的地方和理由。M3 文档已经说清楚的通用规范不复述，需要时查阅本地镜像 `m3-material-mirror/` 或 [m3.material.io](https://m3.material.io)。
 
-> **这份文档落后于代码,而且其中的结论被推翻过。**
+> **优先级：解析出来的构件 > 本地文档镜像 > 本文档。**
 >
-> 它记的是每条决定当时的理由,不是当前实现的说明。**"某个 API 存不存在、签名是什么"以
-> 解析出来的 aar 为准**(§0 有做法),"界面现在长什么样"以代码为准;两者与本文不一致时,
-> 本文是过时的那一方。
->
-> 已经被推翻过的有:播放页动作栏的 `ButtonGroup` 方案(§2.3)、"排序该低强调的判据来自
-> M3"(§2.1)、播放页用 primary tabs(§2.2)、楼中楼不给头像(§2.7b)、听视频与切集的
-> 建模(§4.3,三次)。改动与本文冲突时,改文档,别在代码里迁就它。
-
-## 0. 依赖走的是 alpha 线,expressive 可用
-
-`gradle/libs.versions.toml` 里 pin 的是 **`androidx.compose:compose-bom-alpha:2026.07.01`**,
-解析出来是 **material3 1.5.0-alpha25** + ui/foundation 1.12.0-rc01。
-稳定线的 BOM(2026.06.01)锁的是 material3 1.4.0,**Expressive 那一批在 1.4.0 上一个都用不了**。
-
-1.4.0 上实测:`MaterialExpressiveTheme` / `MotionScheme` /
-`expressiveLightColorScheme` 全是 `internal`;`ButtonGroup`、`ToggleButton`、`SplitButton`、
-`LoadingIndicator`、`WavyProgressIndicator`、`MaterialShapes`、FAB menu、Floating toolbar
-**类根本不存在**;`Shapes` 只有五个槽;`Typography` 只有 15 档基线。
-
-### 我们依赖了 alpha 的哪些 API
-
-升级或降级依赖时,先看这张表 —— 退回稳定线的话下面每一条都要改写:
-
-| API | 用在 | 退回 1.4.0 的后果 |
-|---|---|---|
-| `MaterialExpressiveTheme` | `Theme.kt` 主题入口 | internal,只能退回 `MaterialTheme`,组件拿不到 expressive 默认值 |
-| `MotionScheme.expressive()` / `MaterialTheme.motionScheme` | 全局动效唯一来源 | internal,动效要退回各处手写 `tween`/`spring` |
-| `Shapes` 的 `largeIncreased` / `extraLargeIncreased` / `extraExtraLarge` | `Shape.kt` 十档刻度 | 只有五档,中间档要在组件处写死 |
-| `Typography` 的 15 档 `*Emphasized` | `Type.kt` | 不存在,强调只能靠 `FontWeight` 手改 |
-| `ButtonGroup` + `toggleableItem`/`clickableItem` | 播放页动作栏 | 不存在,要退回手排 Row + 自己维护选中态配色和触摸目标 |
-| `LoadingIndicator` | `FullScreenLoading` / `LoadingSpinner`(§2.7d) | 不存在,退回 `CircularProgressIndicator` |
-| `PullToRefreshDefaults.LoadingIndicator` | `RefreshBox`(§2.7d) | 不存在,退回 `PullToRefreshDefaults.Indicator` 那个箭头圈 |
-| `SegmentedListItem` + `ListItemDefaults.segmentedShapes`/`segmentedColors`/`SegmentedGap` | 设置页(`ui/settings/SettingsRows.kt`,§2.8)、播放队列 | 不存在,退回 `Surface` 容器里摆透明 `ListItem`。桌面端 alpha22 只有带 `onClick`、`selected`、`checked` 的三个重载,缺无点击的那个,不可点的行因此走 `StaticSettingRow` |
-
-**全部需要 `@OptIn(ExperimentalMaterial3ExpressiveApi::class)`。** 只有这一个注解,
-`PullToRefreshDefaults.LoadingIndicator` 和它的两个配色 `loadingIndicatorColor` /
-`loadingIndicatorContainerColor` 都在同一个 marker 下面;同一个 `PullToRefreshDefaults` 上的
-`shape` 和 `containerColor` 则是 `@Deprecated`,别照着旧代码抄。
-
-### 探针在哪、怎么用
-
-`shared/src/androidHostTest/kotlin/dev/bilby/ui/M3ApiProbe.kt`,用
-`./gradlew :shared:compileAndroidHostTest` 单独编译。**升级依赖后重跑它。** 它只探 Android 端的
-alpha25;桌面端编译的是 CMP 1.12.1 对应的 alpha22,那一侧由 `:shared:compileKotlinDesktop` 把关。
-
-两条工作方式上的规矩,都是踩出来的:
-
-- **探针放 test source set,不放 main。** 探针的用途只是"这个 API 在不在",不需要进产物;
-  放 main 里意味着任何一个中间态的编译错误都会让同一棵树上的其他人停工。发生过一次。
-- **去 aar 里确认签名,不要照文档假设 API 存在。** 官网讲的是设计系统的现行版本,
-  不是当前依赖的 API 面。没有 sources jar 时(alpha 版常见)用
-  `javap -classpath <解开的 classes.jar> androidx.compose.material3.XxxKt` 看真实签名。
-
-已经这么撞过的两次:
-
-- `ShortNavigationBarItem` 必须传 `label`。这不是障碍,是规范本身要求 ——
-  M3 的 short navigation bar 要求可见标签,icon-only 是 navigation rail 那边的形态。
-- `Typography` 的默认字体参数**不叫** `defaultFontFamily`,是第一个位置参数。
+> 某个符号在当前版本里存不存在、签名是什么，以 Gradle 缓存里的 aar/jar 字节码为准（见 §0）；界面与本文档不一致时，先确认是不是新改动推翻了旧结论，并把本文档同步改掉。
 
 ---
 
-## 1. Token
+## 0. M3 Expressive 与双端编译基线
 
-### 1.1 颜色
+`gradle/libs.versions.toml` 同时面向两个 JVM 目标编译 `commonMain`：
 
-**基线色板由种子色 `#4A5C92` 生成**(`ui/theme/Color.kt`)。这个种子不是新挑的:
-`res/values/colors.xml` 里的 `ic_launcher_background` 本来就是它,`values-night` 的启动
-背景 `#121318` 正是它在 2021 版规范下算出的 dark surface。补全成完整 role 表是为了让
-**启动窗口、应用图标、Compose 主题真的是同一套色**,而不是三处各写各的。
+- **Android**：`androidx.compose:compose-bom-alpha:2026.07.01`，解析为 **material3 1.5.0-alpha25**。
+- **Desktop（Windows x64 / ARM64）**：由 mediamp 的 Skiko 锁在 **Compose Multiplatform 1.12.1**，解析为 **material3 1.5.0-alpha22**。
 
-重新生成的方法(改种子时用):
+`commonMain` 里的每一处 UI 代码都必须同时通过 `:shared:compileAndroidMain` 与 `:shared:compileKotlinDesktop`。
 
-```bash
-uv run --with materialyoucolor python - <<'PY'
-from materialyoucolor.scheme.scheme_tonal_spot import SchemeTonalSpot
-from materialyoucolor.dynamiccolor.material_dynamic_colors import MaterialDynamicColors as M
-from materialyoucolor.hct import Hct
-sch = SchemeTonalSpot(Hct.from_int(0xFF4A5C92), False, 0.0, spec_version="2021")
-print("%06X" % (M.primary.get_hct(sch).to_int() & 0xFFFFFF))
-PY
-```
+### 核心 Expressive API 依赖表
 
-`spec_version` **必须是 2021**。material3 1.4.0 实现的是 2021 版规范,用 2025 版生成的表
-会和同一台机器上 `dynamicLightColorScheme()` 的观感对不上 —— 深浅、彩度都差一档。
-
-**动态取色默认开着**,`BilbyTheme(dynamicColor = …)` 可关。判据:单用户自用的应用,
-系统色就是用户已经选过的审美,没有品牌一致性需要压过它;基线色板的作用是 Android 12
-以下和用户关掉时的兜底,不是"我们的品牌色"。
-
-**角色怎么选**,只有两条本项目的补充:
-
-- **容器填充一律用 `surfaceContainer*` 这一族,不要用 `surfaceVariant`。**
-  `surfaceVariant` 现在主要是给它的 `on` 色(`onSurfaceVariant`,低强调文字)留位置的。
-  拿它当底,深色主题下会比周围的 `surface` 亮出一大截 —— 楼中楼和助理结果卡踩过。
-- **层次靠 `surfaceContainer` 的色阶差表达,不要靠 `tonalElevation` 和阴影。**
-  M3 的说法是"less is more",阴影留给真正浮起来的东西(弹窗、sheet)。
-  输入栏、顶栏这些就是换一档 container 色。
-
-### 1.2 不跟主题的固定色(`FixedColors`)
-
-判据只有一条:**这个颜色是画给机器看的,还是压在一张我们控制不了的图片上的**。
-两种情况下"随主题反色"会直接坏掉功能,而不只是难看一点。
-
-| Token | 用在哪 | 为什么固定 |
+| API | 用途与落点 | 双端兼容注意 |
 |---|---|---|
-| `QrBackground` | 登录二维码的底 | 见 §4,最硬的一条 |
-| `ScrimOnMedia` `0x8C000000` | 封面上的时长角标、进度条底槽 | 封面是 UP 主上传的任意图片,亮的暗的都有。`0.55` 的 alpha 是算出来的:最坏情况(纯白封面)下白字对比度 4.81:1,刚过 4.5。再低在雪景/白墙封面上会散,再高遮罩本身变成一块黑斑 |
-| `OnMedia` | 压在封面、播放画面上的文字与图标 | 跟主题走会在深色下变成深灰,压在黑边上看不见 |
-| `PlayerControlScrim` | 播放器控件底色 | 全屏时画面就是背景,不存在 surface 可言 |
-| `MentionLight` / `MentionDark` | 评论里 @提及 与链接 | 见下 |
+| `MaterialExpressiveTheme` | `Theme.kt`（`BilbyTheme`、`BilbyNightSanctuaryTheme`、`PlayerTheme`） | 置上 `LocalUsingExpressiveTheme` 并注入 `MotionScheme` |
+| `MotionScheme.expressive()` / `standard()` | 全局组件弹簧动效唯一来源（播放器内层换用 `standard()` 防过冲） | 配合 `@OptIn(ExperimentalMaterial3ExpressiveApi::class)` |
+| `Shapes` 十档圆角刻度 | `Shape.kt`（含 `largeIncreased` 20dp、`extraLargeIncreased` 32dp、`extraExtraLarge` 48dp） | 收回主题槽，组件侧不写裸圆角字面量 |
+| `Typography` 15 档 `*Emphasized` | `Type.kt` 中文层级字重表（`SemiBold` / `Medium`）与 `.tabular` 等宽数字扩展 | 必须与基线 15 档同步套用中文行高与零字距 |
+| `LoadingIndicator` | `States.kt`（`FullScreenLoading`、`LoadingSpinner`、`InlineProgress`） | 替代不确定进度的 `CircularProgressIndicator` |
+| `PullToRefreshDefaults.LoadingIndicator` | `RefreshBox` 与评论区下拉刷新 | 必须传 contained 款并与手势共享同一个 `PullToRefreshState` |
+| `SegmentedListItem` + `ListItemDefaults.segmented*` | `SettingsRows.kt`、内联播放队列（`EpisodeList`）、助理编号引用卡（`AgentAnswerView`） | Desktop `alpha22` 仅有带 `onClick` / `selected` / `checked` 的三个重载，无点击静态行走 `StaticSettingRow` |
 
-**@提及色是一对值,不是一个。** 它标的是"这段是可点的",要跨动态取色保持稳定 ——
-跟着 `primary` 走的话,换张壁纸同一段文字的含义就得重新学。但**不跟动态取色 ≠ 不跟深浅色**:
-B 站原色 `#00A1D6` 在浅色 surface 上只有 2.82:1,而任何在浅色下达标的深蓝到了深色底
-就掉到 2 以下。所以沿 HCT 的 tone 轴取两档(45 / 65),色相 233、彩度 51 保持不动 ——
-**携带语义的是色相,承担可读性的是明度**。M3 对 `error` 也是这么处理的:动态取色下保持
-静态,但仍然分深浅色两套。
+### API 探针与字节码核验
 
-### 1.3 字号(`ui/theme/Type.kt`)
-
-只动行高和字距,**不动字号**。字号是组件排版的输入(按钮高度、列表行高、TabRow 的最小
-宽度都由它推),改了会让一堆 material3 组件重新流一遍布局。M3 的排版页也是这么建议的。
-
-两处偏离基线,都是中文特有的:
-
-- **字距归零。** 基线给正文留了 +0.25 ~ +0.5sp,那是给 Roboto 小写拉丁字母调的。
-  汉字本来就是等宽满格的方块,再撑开就散成一个个孤立的字。`label` 档保留正字距 ——
-  那一档实际承载的多是数字和短英文(时长、倍速、`1080P`)。
-- **小字号行高加高 2sp。** 14/20 在拉丁文下够,汉字墨迹几乎占满 em 框,同样行距看上去挤得多。
-  `bodyMedium` 20→22,`bodySmall` 16→18,`titleSmall` 20→22。
-
-**15 档 `*Emphasized` 也一并定义了**(1.5.0 才有)。它们和基线同字号、同行高,只抬一级字重——
-M3 的强调靠字重和字宽,不靠放大,放大会把行高一起改掉,列表行就跳了。同一套 CJK 调整必须
-应用到这 15 档上,否则一强调就退回 Roboto 的字距,中文会突然散开。
-
-另外全表统一 `includeFontPadding = false` + 行高按字形居中:字体自带的上下 padding 是按
-拉丁文 ascent/descent 算的,中文字形在其中偏上,不处理的话每个 `Text` 的视觉中心都比容器
-中心高一点,"图标 + 文字"一行里最明显。
-
-### 1.3b 封面的比例与圆角
-
-**封面是 16:10,不是 16:9。** B 站上传的封面原图就是 16:10(1146×717 一类),按 16:9 摆
-再 `ContentScale.Crop` 等于把上下各切掉一条 —— 而封面顶部常常正好是标题文字。PiliPlus 的
-`common/style.dart` 里 `Style.aspectRatio` 同样是 16/10,它另外留了一个
-`aspectRatio16x9` 只给播放画面的容器用。这两个比例在本项目的分工一样:
-`VideoCover` 默认 16:10,`VideoScreen` 里包播放器的那个 `Box` 是 16:9。
-
-**封面圆角 10dp,不走 `shapes` 主题槽**(`components/Media.kt` 的 `CoverCornerRadius`)。
-它是图片本身的规格,不是容器的信息密度问题;取 10 是照 PiliPlus 的 `Style.imgRadius`,
-比周围容器的 8dp 圆一点点看得出来,又不至于圆到像头像。
-
-### 1.4 形状(`ui/theme/Shape.kt`)
-
-值直接用 M3 圆角刻度,没有自作主张的数。**用哪一档由信息密度决定,不是由组件大小决定**
-(这是 M3 从 M2 换掉的判据)。Bilby 到处是信息密集的列表,所以主力是 `small`/`medium`:
-
-| 档 | 值 | 用在 |
-|---|---|---|
-| `extraSmall` | 4dp | 角标、小标签 |
-| `small` | 8dp | 列表封面缩略图、队列条目 |
-| `medium` | 12dp | 卡片、输入框、二维码占位 |
-| `large` | 16dp | 弹窗、底部 sheet、输入框(圆一点更像"能输入") |
-| `extraLarge` | 28dp | 只给听视频页那张大封面 —— 整屏唯一的主角 |
-
-另外三档来自 1.5.0 补齐的刻度:`largeIncreased` 20dp(输入框,比 large 再圆一档,
-让"这里能打字"更明显)、`extraLargeIncreased` 32dp、`extraExtraLarge` 48dp(听视频页那张大封面)。
-在 1.4.0 上这三档没有主题槽,只能在组件处写死。
-
-**嵌套时套用 optical roundness:外圆角 − 内边距 = 内圆角。** 两层用同一个半径,内层的角
-看上去反而更方。队列条目外层 8dp、内边距 8dp,所以里面的缩略图用 4dp,不是 8dp。
-
-### 1.5 间距(`ui/theme/Dimens.kt`)
-
-M3 的间距系统是 8dp 起步的线性刻度,4dp 及以下算"嵌套单位"。这里按**用途**命名而不是按
-倍数命名(`space150` 那种):倍数名在设计工具里有用,在代码里读起来只是把 `12` 换了个写法,
-不解释任何东西。
-
-`Hair 4` / `Tight 8` / `Cozy 12` / `Comfortable 16` / `Loose 24` / `Spacious 32`。
-
-**全项目不出现裸 dp 字面量**,例外只有描边宽度和图标尺寸这类由组件规格定死的数。
-
-`Dimens` 里另放反复出现的版式决定。最重要的一条是 `ListCoverWidth = 128dp`,它必须和
-**列表标题的字号一起**算:
-
-| 标题字号 | 封面宽 | 留给文字 | 一行汉字 |
-|---|---|---|---|
-| `bodyLarge` 16sp(旧) | 140dp | 360 − 32 − 140 − 12 = 176dp | 11 字 |
-| `bodyMedium` 14sp(现) | 128dp | 360 − 32 − 128 − 12 = 188dp | 13 字 |
-
-标题跟 PiliPlus 的卡片一样降到 14sp 之后,封面收窄到 128dp 反而更宽松。
-"128dp 换不来一行字"那条旧结论只在 16sp 下成立,现在已经不适用 ——
-再改这个数,把字号一起代进这道算术重做一遍。
+- 探针位于 `shared/src/androidHostTest/kotlin/dev/bilby/ui/M3ApiProbe.kt`（放 test source set，绝不放 `main`），升级依赖后跑 `:shared:compileAndroidHostTest` 与 `:shared:compileKotlinDesktop`。
+- 不要凭记忆或官网现行文档猜 alpha 签名：解开缓存里的 `classes.jar` 用 `javap` 查真实方法签名与实验注解。
 
 ---
 
-## 2. 组件选型
+## 1. 设计 Token
 
-### 2.1 四个"选一个"的控件,分工是这样的
+### 1.1 颜色、纯黑阶梯与夜间静息主题（`ui/theme/Color.kt`、`Theme.kt`）
 
-这几个长得像,选错了用户学不会规律。判据来自 M3,但落到本项目的具体位置值得记下来:
+- **基线色板由种子色 `#4A5C92` 按 `spec_version="2021"`（Tonal Spot）生成**，与 Android 启动窗口背景（浅色 `#FAF8FF`、深色 `#121318`，见 `res/values/colors.xml`）严格同源。
+- **动态取色与内置传统色板**：Android 12+ 默认开启壁纸动态取色，也可在「设置 → 外观」切换内置传统配色（Bilby、紅、山吹、若竹、浅葱、桔梗、萱草、萌黄、牡丹）。
+- **容器色阶规则**：
+  - 容器填充一律使用 `surfaceContainerLowest` ～ `surfaceContainerHighest` 族，**严禁用 `surfaceVariant` 当容器底色**（它是给低强调文字色 `onSurfaceVariant` 配对留的，深色下当底色会突兀发亮）。
+  - 层次靠 `surfaceContainer*` 的色阶差表达，不用 `tonalElevation` 染色阴影，**全应用零分割线**（见 §2.3c）。
+  - 不要用 `color.copy(alpha = 0.15f)` 兑容器底色；徽章与提示块一律成对取 `primaryContainer` / `onPrimaryContainer`、`secondaryContainer` / `onSecondaryContainer` 等角色（直播间醒目留言与大航海三档走 `FixedColors.superChatPalette` / `guardPalette` 的 HCT 成对色阶）。
+- **Oklab 纯黑容器阶梯（`ColorScheme.toPureBlack()`）**：
+  - 开启「纯黑背景」时，`background` / `surface` / `surfaceContainerLowest` 压至 `#000000`。
+  - 四档容器色（`Low` / `Container` / `High` / `Highest`）在 Oklab 空间插值重排，保留原色板色相并拉开均匀明度跨度，避免简单槽位顺移导致 `surfaceContainerLow` 陷进纯黑消失。
+- **夜间静息专属主题（`BilbyNightSanctuaryTheme` / `NightSanctuaryColorScheme`）**：
+  - `NightModeScreen` 固定包裹在 `BilbyNightSanctuaryTheme` 中，与日间外观设置解耦：即便用户白天固定使用浅色主题，进入夜间模式后始终呈现低唤醒深板岩暗房配色（`surface = #0C0E14`、`surfaceContainer = #161A24`、`surfaceContainerHigh = #1F2432`、暖石板蓝 `primary = #B8C4E8`、`onSurface = #DCE1EE`）。
+- **播放器局部主题（`PlayerTheme`）**：画面与黑底之上固定取外层配色的深色方案，且动效切回 `MotionScheme.standard()`，避免控件显隐在视频画面上回弹抢戏。
 
-| 控件 | 什么时候用 | 本项目用在 |
+### 1.2 不随主题反色的固定色（`FixedColors`）
+
+判据只有一条：**这个颜色是画给机器识别的，还是压在一张不可控的媒体画面上的**。
+
+| Token | 用途 | 固定理由 |
 |---|---|---|
-| **Connected button group** | 固定 2–5 个选项的单选:切换视图、模式**或排序** | 搜索的 普通/助理 |
-| **SortRow**(`ui/components/SortRow.kt`) | 同上,但要**低强调**:选项数可能随接口变、需要可横滚 | 评论的 最热/最新、空间投稿的 最新/最多播放、搜索结果的 综合/最多播放/最新发布 |
-| **Chip** | 动态的、上下文相关的一组,可横滚,是"当前任务的分支路径" | 分 P 那一排(条数从 1 到几百都有) |
-| **Tabs** | 同层级的内容分区 | 空间页三标签、播放页 简介/评论 |
-
-**segmented button 不再是选项。** M3 expressive(2025 年 5 月)把它标为 no longer
-recommended,替代品是 connected button group,原文见镜像的
-`pages/components/segmented-buttons.md` 与 `pages/components/button-groups.md`。
-
-**"排序该低强调"是本项目的判断,不是 M3 的。** 这一条以前写成"判据来自 M3",是错的:
-button groups 页明写 "Connected button groups help people select options, switch views,
-**or sort elements in a page**",segmented button 页对单选的定义同样把 sort 列进去,
-上限是五项。所以拿它做评论排序在规范上完全成立,要争的只有**强调档位**:
-
-- Compose 的 `ToggleButton` 默认取 `FilledButtonTokens`(查 aar 字节码核实过):未选中
-  `surfaceContainer`,选中 **`primary` 实心** + `onPrimary`。一屏几十条评论上面顶一块
-  primary 色块,比列表本身还重。
-- 要用它但不想那么响,`ToggleButtonDefaults` 里还有 `tonalToggleButtonColors` 和
-  `outlinedToggleButtonColors`,该调的是这个,不是退回没有容器的写法。
-- SortRow 的另一面代价也记下来:它照 PiliPlus 的 `SearchText`,透明底、无描边、只靠字重
-  区分选中 —— 在评论区那种密排文字里读不出"这是个能点的控件"。
-
-**排序这一条的结论仍然悬着。** 评论区重做那一轮已经落地(楼中楼见 §2.7b,暂停后画面收起
-见 §4.3b),排序没有跟着一起定。在定下来之前搜索/空间/评论三处保持现状(都是 SortRow),
-不要只改其中一处 —— 同一件事两种视觉重量,正是这一节要避免的。
-
-M3 还有两条硬规矩:chip **不能单独出现一个**(必须成组),按钮一处**不超过 3 个**。
-
-### 2.2 Primary tabs 还是 secondary tabs
-
-- **Primary**:贴在 app bar 之下,代表页面的主内容目的地 → **空间页**的 投稿/动态/合集。
-- **Secondary**:在内容区域内部再分一层 → **播放页**的 简介/评论。它们上面顶着播放器,
-  不是顶栏。
-
-这一条以前是错的(播放页也用了 `PrimaryTabRow`),两处指示条粗细一样,层级读不出来。
-
-**播放页那条 secondary 指示条做了连续跟手**:用
-`pagerState.currentPage + pagerState.currentPageOffsetFraction` 在相邻两个 Tab 的位置之间
-插值,不是只认 `selectedTabIndex` 这个整数 —— 只认整数的话,滑动 `HorizontalPager` 时指示条
-不跟手,要等翻页判定过了 50% 才追上去。宽度、高度、形状全部用 `SecondaryIndicator` 的默认值,
-**通长铺满整格没有改**:试过取 `TabPosition.contentWidth` 让它贴合文字并居中,真机上位置偏了,
-而且窄指示条本来就更像 primary 的做派。实现在 `ui/video/VideoTabs.kt` 的 `VideoTabs` 里。
-
-### 2.3 动作栏是图标叠计数的等宽四格,**不用 ButtonGroup**
-
-播放页的 点赞/投币/收藏/稍后再看:一行四格等宽,图标在上、计数在下,未选中 `outline`、
-选中 `primary`。照 PiliPlus 的 `pages/video/introduction/ugc/widgets/action_item.dart`。
-
-**这一条推翻了上一轮的 `ButtonGroup` 方案**,原因是量出来的:
-
-`ButtonGroup` 把四个动作排成横向药丸,一项分到 360 ÷ 4 ≈ 85dp,而 `"赞 12.3万"` 这样的
-标签在 `labelLarge` 下要 90dp 往上,于是它一直处在溢出态,投币和收藏被收进一个 `⋮` 菜单里。
-
-M3 button groups 页把溢出写成了组件的既定行为:
-
-> Buttons at the trailing edge of the button group can be customized to collapse into an
-> overflow menu **at smaller breakpoints**, and become visible again at larger sizes.
-
-问题在于这句话里的 "smaller breakpoints" 对 Bilby 是**常态而不是边界**:手机竖屏
-(compact,< 600dp)就是主力窗口,永远达不到"larger sizes"。所以在这里选 `ButtonGroup`
-等于选了"投币和收藏永远藏在菜单里",而它们是这一行的主要动作,不是 trailing 的次要项。
-图标叠计数把同样的信息压到 55dp 宽,四格全部露出,每格仍占满 90dp × 48dp 的触摸区。
-
-代价是 `ButtonGroup` 自带的两件事要自己写,都在 `VideoTabs.ActionItem` 里:
-选中态配色(三态:禁用 `outlineVariant` / 选中 `primary` / 常态 `outline`)、
-触摸目标(`weight(1f)` + `heightIn(min = 48.dp)`,不是靠 `IconButton` 的默认尺寸 ——
-那样计数文字会掉到触摸区外面)。
-
-判据是:**在 compact 断点上量一下最长的那个标签;如果关键动作会被折进溢出菜单,就别用它。**
-标签短、项数少的场合它仍然合适。
-
-### 2.3b 计数用图标,不拼成中文串
-
-播放量/弹幕数走 `components/StatRow`(图标 14dp + `labelSmall`,色取 `onSurfaceVariant`),
-不再拼 `"12.3万播放 · 888弹幕 · 3小时前"`。理由是宽度:"播放""弹幕"各两个汉字约 24dp,
-而列表行里一整行元信息只有一百多 dp;图标 14dp 说完同一件事,省下的宽度让日期不再被挤掉。
-图标本身就是分隔,`·` 那一串在窄屏上会先于内容换行。
-
-低强调色用 `onSurfaceVariant`,不用 `outline`:这一行是列表里优先级最低的信息,要和
-上面的 UP 主名拉开一档,但 M3 里 `outline` 是描边角色,只按约 3:1 对比校准,浅色主题下
-当小字不达 4.5:1(2026-08 审计实测 4.3:1)。文字的低强调角色就是 `onSurfaceVariant`。
-PiliPlus 的 `StatWidget` 取 outline,这一点不照抄。
-
-列表行的三行分工也照 PiliPlus 的 `video_card_h.dart`:
-**标题(2 行)/ 发布时间 + UP 名(1 行)/ 计数图标(1 行)**。时间和人名合成一行,
-是因为两者都是"这条是谁什么时候发的";拆成两行会把三行文字撑到四行,而封面高度固定,
-多出来的那行只能让行距变松、看起来更空。
-
-**稍后再看是只进不出的**。取消勾选不做任何事 —— 没有便宜的办法知道当前视频在不在列表里
-(要判断就得拉整个列表),而移除本来就该在稍后再看页面做,那里是个列表,划掉一条是自然动作。
-它走乐观更新:点了立刻切成已加入态,失败回滚并经 `BiliLog` 留一行能定位的日志。
-
-### 2.4 按钮
-
-一屏**只留一个** filled 或 tonal 按钮 —— M3 的原话是"要提升某个动作的可见度就换成
-filled/tonal,不要放多个"。本项目的分配:
-
-- 播放页:`听视频`(tonal)。播放本身由播放器承担,不占按钮名额。
-- 搜索页:`发送`(`FilledIconButton`)。
-- 播放页简介末尾:`找相关`(tonal)。它是整页唯一的关联入口,而且必须由用户显式发起,
-  所以给它一个真正的按钮,不是一行看起来像链接的字。
-- 重试、取消、清空这类:一律 `TextButton`。**一次失败不该被渲染成一个需要下决心的按钮。**
-
-### 2.3c 分区:contained list,不用分割线
-
-**全项目不画分割线**(2026-09-27)。`HorizontalDivider`、`VerticalDivider`、标签栏默认的那条
-通栏线(`divider = {}` 关掉)、引用块左侧的竖条,都不用。分区靠三样东西,按顺序取:
-
-1. **留白**。重复版式的条目(评论、队列、视频行)之间只留 gap,每条开头的头像或封面本身就
-   标出了"换了一条"。
-2. **容器**。要把一块内容和四周分开时,给它一个 surface container 色阶的底色和圆角:队列、
-   动态卡片、引用块、搜索展开后的卡片都是这样。嵌套时每进一层高一档色阶
-   (如空间页侧栏 `surfaceContainerLow` → 动态卡片 `surfaceContainer` → 转发块 `surfaceContainerHigh`)。
-3. **按需出现的底色**。固定的标题行与下面滚动的内容之间,内容没滚时不需要边界;滚上去之后
-   标题行换高一档的底色(M3 顶栏的 on-scroll 做法,见找相关 Sheet)。
-
-一处要强调的分界(首页的「以上是新内容」)用通栏微底色窄条(`surfaceContainer` + `shapes.small`)
-配向上箭头与 `onSurfaceVariant` 小字,不用线夹字也不做成可点胶囊。专栏作者
-排的分隔符画成一段空白。
-
-以下是这条规则的来历。
-
-播放页简介里三块内容依次是 动作栏 → 播放队列 → 找相关。两种分法都用上了,**判据直接来自
-M3 的 lists 与 divider 两页,不是自己拟的**:
-
-**M3 lists → Gaps & dividers** 给的是一条有方向的规则,不是二选一:
-
-> Use gaps for **contained** lists. Gaps leverage expressive shape and containment tactics.
-> Limit dividers to **uncontained or complex** lists, only when a stronger visual separation is necessary.
-> (Caution: Limit the use of dividers to uncontained lists.)
-
-也就是说 **M3 Expressive 的默认答案是 containment,分割线是列表没有容器时的退路。**
-播放队列因此装进 `Surface(surfaceContainer, shapes.large)`,条目之间只留 gap、不画线。
-PiliPlus 的 `introduction/ugc/widgets/season.dart` 是同一个做法
-(`Material(color: onInverseSurface, borderRadius: 6)`),两边对上了。
-
-**它是 contained list,不是 card。** 这个区别要守住:M3 cards 页把 card 定义为
-"content and actions on **a single topic**"、"entry points into deeper levels of detail or
-navigation",并且明确写着
-
-> **Don't force content into cards when spacing, headlines, or dividers would create a simpler visual hierarchy.**
-
-队列不是一个可以点进去的主题卡片,它就是一组条目。所以实现用 `Surface`,**不要换成 `Card`** ——
-换过去会带上 elevated/filled/outlined 三种变体的语义和整块可点的预期,都不是我们要的。
-
-分割线曾经留过几处(找相关的标题下、首页新旧分界、空间页宽屏动态之间、评论主楼之间),
-依据是 divider 页对 full-width 与 inset 的定义。它们都已换掉:一屏里只要有两三根细线,
-读起来就像表格;而那几处要表达的分界,用上面三样都说得清。
-
-三条附带的坑:
-
-- **底色不要用 `surfaceContainerLow`。** 浅色主题下它和页面的 `surface` 只差一点,
-  真机上那圈边界几乎看不出来,等于白做了一个容器。用 `surfaceContainer`。
-- **容器内的列表行底色必须透明。** `CompactVideoRow` 以前未选中态画死 `surface`,
-  放进 `surfaceContainer` 的容器里,每一条未选中的行都会变成一块比容器亮的补丁,
-  几十条排下来就是一条条横杠。现在是 `Color.Transparent`,由所在容器决定。
-- **不要往队列条目之间加分割线。** 上面那条 Caution 就是说这个;而且 divider 页还补了一句
-  "List items with repetitive formats may not require an inset divider, in which using only the
-  margin between items is acceptable" —— 队列条目正是重复版式。
-
-圆角照 optical roundness:外 `shapes.large` 16dp − 内边距 8dp = 内层条目的 `shapes.small` 8dp。
-
-### 2.4b 输入框:`SearchField`,既不是 `OutlinedTextField` 也不是 `SearchBar`
-
-**不用 `OutlinedTextField`**,三条具体理由:
-
-- 它是给表单里一列字段用的,56dp + 一圈描边,一屏一个的搜索框顶着这个规格,
-  视觉重量比它旁边的内容还大。
-- **回车不搜索。** `singleLine = true` 只是不换行,不设 `ImeAction`,键盘上那个键什么都不做。
-  而 DESIGN 2.2 快路的原话就是"输入直接回车 = 原始 B 站搜索" —— 这条以前根本没实现,
-  真机上按搜索键没有任何反应。
-- 没有清空按钮,改一次搜索词要按十几下退格。
-
-**私信的输入栏同一套语言,但不是同一个组件**(2026-09-25):填充 `surfaceContainerHigh` +
-`largeIncreased`、聚焦升一档色阶、无描边,发送键装在胶囊里、没字时不画,见
-`ui/message/WhisperScreen.kt` 的 `WhisperInput`。
-
-**评论的输入栏是例外,仍是 `OutlinedTextField`**(2026-09-13 核过):`SearchField` 是
-单行、回车即搜、带放大镜和清空的控件,评论要多行、回车是发送、不要放大镜,拿它去装两件事
-等于把一个组件做成两个。那两条输入栏补齐的是 `ImeAction.Send`、字数计数和就地失败提示,
-形状与发弹幕面板一致。
-
-**不用 material3 1.5.0 转正的 slot-based `SearchBar` / `SearchBarState`**(这一轮对着 M3
-search 页重新核过,结论不变,而且理由比原来硬)。文档对这三个入口的定义是按**位置**给的:
-
-> **Search bar** — a persistent and prominent search field **at the top of the screen**.
-> Use to search contents in a specific view.
-> **Search app bar** — use this app bar variant when search is the primary, global function.
-> **Search icon button** — use when search is a secondary action or not the main focus.
-
-Bilby 的搜索框**固定在屏幕底部**(对话式:输入在下,一轮轮结果在上面滚),三个入口一个都不是。
-再加上 `SearchBar` 自带"聚焦即展开成全屏建议列表"的行为,而 DESIGN 2.2 的结果页只有结果、
-没有建议也没有热搜。用它等于把这个 app 定死的形态换掉,而不是换一个控件。
-**这是形态问题,不是组件新旧问题,新版本转正不构成重新考虑的理由。**
-
-取的是 PiliPlus 搜索页(`pages/search/view.dart`,`border: InputBorder.none` 的裸
-TextField 挂在顶栏上)与 M3 填充式输入的折中:填充 `surfaceContainerHigh` +
-`largeIncreased` 圆角、无描边、48dp 高、带清空、`ImeAction.Search`。
-Bilby 的输入框不在顶栏里,所以需要一个能被认出来的容器,不能像 PiliPlus 那样完全裸着。
-
-**这一条说的是全局搜索入口**(搜索 tab)。页面内部的次要搜索(比如空间页只搜这位 UP 主
-自己的投稿)不适用同一形态:那不是"搜索"这个 tab 要做的事,只是当前页面内容的一个过滤
-动作。M3 对这种情况给的正好是 **search icon button**——收起时只是顶栏上一个图标,点一下
-才展开成输入框(展开后复用同一份 `SearchField` 组件,回车才发请求)。空间页投稿 tab
-是这个用法的例子,见 `ui/space/SpaceScreen.kt` 的 `BilbyTopBar` actions。
-
-### 2.5 顶栏
-
-除两页之外只用 small 这一档。`medium/large flexible` 是给"标题本身是内容"的页面用的,
-Bilby 大多数页的标题都只是个路牌,给它三行高度是浪费首屏。
-
-**「我的」与空间页用 `MediumFlexibleTopAppBar`**(2026-09-13,`components/Bars.kt` 的
-`BilbyFlexibleTopBar`,`exitUntilCollapsedScrollBehavior`):这两页的标题正是内容 —— 账号名、
-UP 名 —— 而全应用原先没有一页有 `headline` 字号的锚点,层级从这两页立起来。头像、等级、
-签名仍在下面的头部区,顶栏收起后只留名字。
-
-**子页面的小顶栏接 `pinnedScrollBehavior`**,滚动后顶栏填充色与内容分开。`BilbyTopBar` 的
-`scrollBehavior` 参数曾经加了没人传,十处子页面标题浮在内容上。
-
-顶栏统一在 `RootTabs` 那一层给,不由各页自己贴 `systemBars` padding —— 以前三个页面三种
-写法、三种留白,滚动时内容还会压到状态栏文字上。`TopAppBar` 自带 insets 处理。
-
-三个 tab 的顶栏动作:动态是 `设置`、搜索是 `新会话`、稍后再看是 `清空已看完`。
-
-动态页**没有内容相关的动作**(这一页能做的只有往下看,放刷新按钮等于把下拉刷新那套仪式
-换个位置摆回来);那里的齿轮是设置页的入口。设置**不进底部导航**:底部三格是"我要去哪",
-设置不是目的地,只能挂在某个顶栏上,而动态页是启动后的第一屏。
-
-其余页面的顶栏标题是**路牌,不是内容**。空间页曾经因此固定写"个人空间",名字归头部区;
-换弹性顶栏之后名字只在顶栏印一次,头部区不再重复。
-
-### 2.6 导航栏
-
-3 格,正好落在 M3 的 3–5 个目的地的下限上。两条要守住:
-
-- **选中用实心图标、未选中用线性图标**,不只是变色。图标形态本身就是一路状态指示,
-  只靠颜色的话色觉障碍用户看不出当前在哪一格。
-- **标签不能省。** M3 明确列为 don't。
-
-### 2.7 共享组件在 `ui/components/`
-
-新写页面前先看这里有没有现成的。已有:
-
-- `VideoRow` / `VideoRowUi` —— **一条视频在列表里的样子,只有这一份**。
-  动态、搜索、空间、稍后再看、助理答案以前各写了一份几乎一样的 Row,封面宽度、行距、
-  截断行数各差一点点,滑过去能看出接缝。参数是扁平的展示字段而不是某个 data 层模型:
-  五个调用方的模型各不相同,让 UI 组件认识其中任何一个都会把 data 层的形状焊进视图层。
-- `CompactVideoRow` —— 队列、合集分集用的矮行。出现在已经有主内容的页面里,不该和主列表
-  抢视觉重量。
-- `ListCover` / `VideoCover` / `SquareCover` / `Avatar` / `MediaBadge` ——
-  **所有 B 站图片都必须走这里**:图床有防盗链,不带 `Referer` 一律 403,部分接口还会返回
-  `//` 开头的协议相对地址。这两件事以前散在七八个 `AsyncImage` 调用点上,漏一个就是一张裂图。
-- `StatRow` —— 播放量/弹幕数/日期那一行,见 §2.3b。
-- `SeekBar` —— **播放进度条只有这一份**,播放页和听视频页共用,只换两个颜色。
-  手写而不是 `Slider`:`Slider` 的滑块是 20dp 见方的实心块,压在画面上像个跑进视频里的
-  表单控件。槽 3dp、滑块 5dp(拖动时 8dp),但整条的可点高度是 24dp ——
-  **视觉高度和触摸高度必须分开**,3dp 高的东西在手机上按不中。
-
-  **它故意不满足 M3 sliders 的一条硬性要求,别照文档把它"修"回去。** 原文是:
-
-  > Changes made with sliders must **take effect immediately**, so people can understand the
-  > effects of their selection as they're moving the slider.
-
-  拖动进度条时我们**不**逐帧 `seek`,只更新本地位置,松手才真跳一次 —— 每帧 seek 会让播放器
-  不停丢缓冲重新起播,表现是拖不动。这条要求成立的前提是"应用这个值很便宜",而视频寻址不是。
-  M3 真正要的是**即时反馈**,这一点我们照做了:拖动中播放器上浮出 `位置 / 总长` 的覆盖层、
-  听视频页左侧的时间读数实时跟着走。**这也正是它不该叫 `Slider` 的原因**——
-  它不是一个滑块控件,是一条视频进度轨。
-- `SearchField` —— **搜索输入框只有这一份**,搜索页底栏和空间页内搜索共用。见 §2.4b。
-- `SortRow` —— **排序控件只有这一份**,评论区、空间投稿、搜索结果共用。见 §2.1。
-- `LevelBadge` —— B 站 LV 徽章,手绘 `Canvas`,照 PiliPlus 的 `common/widgets/svg/level_icon.dart`
-  逐坐标移植。评论区名字后面、空间页头部共用。底色是 B 站等级色,不跟主题,见 §4.2。
-- `FullScreenLoading` / `FullScreenError` / `EmptyState` / `ListFooter` / `InlineProgress`
-- `BilbyTopBar` / `SectionHeader`
-
-- `RefreshBox` / `LoadingSpinner` —— 见 §2.7d,**等待指示只能从那四档里选**。
+| `QrBackground` (`#FFFFFF`) | 登录二维码白底衬垫 | 扫码器要求深码块配浅底加 4 模块静区，随深色反色会直接扫不出（§4.1） |
+| `ScrimOnMedia` (`0x8C000000`) | 封面时长角标、进度条底槽 | 0.55 遮罩保证纯白封面上白字对比度仍 > 4.5:1 |
+| `ScrimOnLyrics` (`0xB8000000`) | 听视频歌词页背景遮罩 | 整屏多行歌词对花封面的压暗需求高于角落角标，兼容无模糊的旧系统 |
+| `VinylBody` / `VinylGroove` / `VinylHole` | 听视频黑胶唱盘 | 唱盘是实物写照，同心纹路承担旋转可见性 |
+| `OnMedia` (`#FFFFFF`) / `PlayerControlScrim` | 播放画面与封面上的图标文字及渐变底 | 全屏画面即背景，不存在 `surface` |
+| `MentionLight` / `MentionDark` | 正文 `@提及`、站内链接、可跳时间戳 | 跨动态取色保持稳定的站内蓝语义，按深浅底分取 HCT tone 45 / 65 保证对比度 |
+| `levelBackground(level)` | `LevelBadge` 等级底色 | B 站固定身份色标 |
+
+### 1.3 中文 Expressive 排版与等宽数字（`ui/theme/Type.kt`）
+
+不动 M3 基线字号（避免破坏组件高度与最小宽度推算），针对中文与数字做四项定制：
+
+1. **中文零字距与小字号行高补偿**：正文与标题字距归零（仅 `label*` 保留正字距承载数字与短英文）；`bodyMedium`（14/22）、`bodySmall`（12/18）、`titleSmall`（14/22）各加 2sp 行高；全表关闭 `includeFontPadding` 并设 `LineHeightStyle.Alignment.Center`，消除图标与汉字同排时的基线偏高。
+2. **激活 15 档 `*Emphasized` 层级字重**：
+   - `display*Emphasized`、`headline*Emphasized`、`title*Emphasized`、`label*Emphasized` 取 `FontWeight.SemiBold`（600）；
+   - `body*Emphasized` 取 `FontWeight.Medium`（500），既让列表主标题压住次级 `onSurfaceVariant` 元信息，又避免 CJK 合成粗体糊笔。
+   - 典型锚点：专栏标题用 `headlineMediumEmphasized`（28/36）；订阅页顶栏标题、空间页 UP 名、个人页昵称、听视频曲目名、扫码欢迎卡标题用 `headlineSmallEmphasized`（24/32）；播放页主标题用 `titleLargeEmphasized`（22/28）；二级面板标题、分组卡头与空间合集卡标题用 `titleMediumEmphasized`（16/24）；视频行与网格卡标题统一用 `bodyLargeEmphasized`（16/24）；评论昵称用 `labelLargeEmphasized`。
+3. **等宽数字扩展 `TextStyle.tabular`（`fontFeatureSettings = "tnum"`）**：
+   - 凡是封面时长、播放/弹幕/点赞计数、`X / N` 队列位置、BV/AV/UID 标识胶囊、硬币流水、全屏时钟与电量百分比、倒计时读数，一律追加 `.tabular`，杜绝跳字与多行数字对不齐。
+4. **长文段落行高按篇幅单独拉宽**：不污染全局 `Typography`，评论正文取 14/24sp、动态正文取 16/26sp、专栏正文取 16/28sp。
+
+### 1.3b 封面比例、圆角与防盗链入口（`ui/components/Media.kt`）
+
+- **封面统一 16:10，播放画面容器 16:9**。B 站封面原图为 16:10，裁成 16:9 会切掉封面顶部的标题字。
+- 列表横排封面圆角 `CoverCornerRadius = 10.dp`，宽屏纵向网格卡封面圆角 `Dimens.CoverCornerGrid = 14.dp`。
+- **所有 B 站图片（封面、头像、动态与评论配图、专栏插图、行内表情、空间头图）必须走 `ui/components/Media.kt`**（`BiliAsyncImage` / `VideoCover` / `ListCover` / `SquareCover` / `Avatar`）：统一补齐防盗链 `Referer` 并把 `http://` 与 `//` 协议相对地址规范化为 `https://`。手写裸 `AsyncImage` 必出 403 裂图。
+- **头像一律走 `Avatar`（自带圆形裁切与 `ContentScale.Crop`）**，按语义取五档固定尺寸：`AvatarNested` 24dp（楼中楼）、`AvatarRow` 36dp（列表行/评论/作者栏）、`AvatarStack` 48dp（首页常访/直播环）、`AvatarHeader` 56dp、`AvatarHero` 72dp（空间头图与个人页身份卡）。
+
+### 1.4 形状刻度与悬停微交互（`ui/theme/Shape.kt`、`Motion.kt`）
+
+- 圆角按容器信息密度取 M3 十档刻度：`extraSmall` 4dp（角标、ID 胶囊）、`small` 8dp（紧凑缩略图、内嵌子块）、`medium` 12dp（代码块、引用块、动态内层附件块）、`large` 16dp（桌面内容岛、模态侧边面板、楼中楼块、分组摘要头卡、纵向网格卡悬停底）、`largeIncreased` 20dp（动态外卡、侧栏 `panelCard`、胶囊多行输入框、助理回答卡）、`extraLarge` 28dp（底部面板、评论输入浮层顶角、个人页身份卡、扫码登录卡、草稿队列浮条）、`extraExtraLarge` 48dp。
+- 嵌套圆角遵守 optical roundness（外圆角 − 内边距 ≈ 内圆角，最小保底 `4.dp`）。
+- **`Modifier.interactiveCard(shape, baseColor, hoverColor, enableScale)`**：在 `PointerEventPass.Final` 被动监听指针进入/离开与主键按下，**绝不消费事件**。桌面悬停平滑过渡底色，按下提供 `0.985f` 空间弹簧微缩（系统开启「减弱动效」时自动关闭缩放），与外层 `ContextMenuBox` 及内层 `clickable` / `combinedClickable` 无缝共存。
+
+### 1.5 间距与元信息分隔符（`ui/theme/Dimens.kt`）
+
+- 间距按语义取六档：`Hair 4.dp`、`Tight 8.dp`、`Cozy 12.dp`、`Comfortable 16.dp`、`Loose 24.dp`、`Spacious 32.dp`。除描边与固定组件几何外不写裸 `dp`。
+- **严禁用中点 `·` 或项目符号 `•` 连接元信息**。一律使用 `MetaSeparator = "  "`（两个空格，定义于 `ui/components/VideoRow.kt`）：末段文字截断或窄屏折行时不会留下悬空的孤点。队列来源前缀（`合集  …`、`收藏夹  …`、`夜间模式  …`）同样遵守此规矩。
 
 ---
 
-### 2.7b 评论区
+## 2. 组件选型与核心界面形态
 
-照 PiliPlus 的 `pages/video/reply/widgets/reply_item_grpc.dart` 重做过一轮。四条是**可读性
-的实际杠杆**,不是风格偏好:
+### 2.1 排序、筛选与列表页摘要控制卡
 
-- **行高,不是字号。** 正文用 14sp / **24sp 行高**(PiliPlus 是 `height: 1.75, fontSize: 14`)。
-  汉字墨迹几乎占满 em 框,`bodyMedium` 那档 14/22 在一条五六行的长评论里会糊成一片。
-  **不要去改 `Typography.bodyMedium`**:那一档还给列表标题、队列条目用着,它们要的是紧凑。
-- **用户名用 `onSurfaceVariant`,正文才是满对比度。** 反过来的话,一屏几十条评论里视线
-  全被每条开头的名字拽住。PiliPlus 把 `member.name` 画成 outline,低强调这层照抄,
-  色不照抄:`outline` 是描边角色,浅色主题下当小字不达 4.5:1(见 2.3b)。
-- **表情内联进文字流**,走 `InlineTextContent`。以前是正文里留着 `[doge]` 三个字、底下另起
-  一行摆一排图标 —— 读者得自己对应回去,而且同一个表情出现两次时下面那排根本对不上。
-- **楼中楼是一个容器装一组。** 每条各套一个 `Surface` 的话,三条回复就是三块圆角色块摞着,
-  比主楼还抢眼。
+- **视图/模式切换**（固定 2–5 项）：使用相连的 `ToggleButton` 组（选用 `tonalToggleButtonColors` 控制视觉重量，不用已废弃的 M2/旧版 `SegmentedButton`）。
+- **排序选择**：使用 `SortMenu`（紧凑下拉菜单）或轻量 `SortRow`，同一上下文保持统一重量。
+- **二级合集/列表页统一摘要控制卡**：`CollectionScreen`、`FavFolderScreen`、`ToViewScreen`、`OfflineScreen` 顶部统一使用 `surfaceContainer` + `shapes.large` 头卡，将 `.tabular` 容量/条数统计、「听全部」`FilledTonalButton` 与 `SortMenu` 收拢在同一容器内。
+- **动态横向筛选带**：分 P 条、视频标签（`TagToken`）、夜间模式 UP 主筛选（`NightUpFilterBar`）统一使用无描边 `CircleShape` tonal 胶囊。
 
-主楼之间**只留白,不画线**(§2.3c)。上一版画的是 inset 分割线,真机上一屏七八根细线把列表
-切成一格一格;M3 divider 页另有一句 "List items with repetitive formats may not require an inset
-divider, in which using only the margin between items is acceptable",评论正是重复版式,每条
-开头的头像已经标出了换了一个人。条间距由 `CommentRow` 的上下内边距给。
+### 2.2 Tabs 分工
 
-**所有 B 站图片必须走 `components/Media.kt`**(`BiliAsyncImage` / `ListCover` / `Avatar`)。
-评论区的配图和表情曾经直接写 `AsyncImage(model = url)`,**漏了 Referer,图床防盗链一律 403**,
-表现是评论里该有图的地方一片空白。§2.7 那条"所有 B 站图片都必须走这里"就是为这个立的,
-这次是它第二次被踩。
+- **Primary Tabs**：页面顶栏之下的主内容切换（如空间页「投稿 / 动态 / 合集」），使用 `PrimaryTabRow` 且关掉默认底线（`divider = {}`）。
+- **Secondary Tabs**：页面局部区域内的平级分页（如播放页「简介 / 评论」），使用 `SecondaryTabRow`，指示条通过 `currentPage + currentPageOffsetFraction` 与 `HorizontalPager` 连续跟手插值。
 
-**头像一律 `Avatar`,尺寸只有 `Dimens` 里那三档**(`AvatarRow` 36 / `AvatarStack` 48 /
-`AvatarHeader` 56,按用途命名)。关注列表和直播的舰长名单曾经各自手搓
-`BiliAsyncImage + clip(CircleShape)`,**漏了 `ContentScale.Crop`** —— 非正方形的头像只在
-那两处被拉长。尺寸也曾经有四档:36 和 40 分别叫 Small 和 Medium,差 4dp 谁也看不出来,
-而 48 那档不在 `Dimens` 里,被首页和「正在直播」各写了一遍,还配着一句"改那边记得改这里"。
+### 2.3 播放页五格分段动作栏（`ActionButtonsRow`）
 
-**配图点得开、能放大**(`components/ImageViewer.kt`,对应 PiliPlus 的 `GalleryViewer`)。
-两个真机上踩到的点:
+- 播放页 `UpRow`（包在 `surfaceContainer` + `shapes.large` 容器卡内，与上下区块严格对齐 `16.dp` 外边距）下方为五格等宽 M3E 分段动作栏：**点赞（长按 1500ms 触发一键三连进度填充与回弹） / 投币 / 收藏 / 稍后看 / 听视频**。
+- 选中态切换实心图标与强调容器色，计数统一用 `labelSmallEmphasized.tabular`，点击与三连完成带空间弹簧缩放反馈。
+- 点赞、投币、收藏、稍后再看全部采用**本地乐观更新**，绝不因写操作重拉整页详情导致数字二次闪烁。
 
-- `Dialog` 光给 `usePlatformDefaultWidth = false` 不够,还要 **`decorFitsSystemWindows = false`**,
-  否则窗口避开系统栏,黑底铺不满,顶端会露出底层的评论列表。铺满之后关闭按钮要自己
-  `windowInsetsPadding(systemBars)`。
-- 缩放/位移状态**按页存并在翻页时归位**。不归位的话放大着翻到下一张,下一张继承上一张的
-  缩放和位移,看起来就是"图开在了屏幕外面"。
+### 2.3b 视频条目体系、无描边三层连发叠卡与分段列表项
 
-**楼中楼是一个组件的两种形态**(`SubReplyRow` 的 `form`,2026-09-13),不再照 PiliPlus 分成
-两个 widget。分成两棵子树的那一版在点展开时整组替换,头像列从无到有把正文整体右推,
-排版跳一次。现在两态共用一棵树,以 `rpid` 为 key,展开只是高度长出来。
+1. **窄屏横排 `VideoRow` vs 宽屏纵向 `VideoGridCard`**：
+   - 单列窄屏（`Compact` 或窄分栏）渲染拇指友好的横排 `VideoRow`（16:10 封面 `128..176dp`、`bodyLargeEmphasized` 两行标题、发布时间 + UP 名单行、`StatRow` 图标化计数）。
+   - 多列宽屏（`AdaptiveListContent` 下的 `Medium+` / `Expanded+`，最小列宽 `Dimens.VideoGridMinCellWidth = 248.dp`）渲染纵向 16:10 `VideoGridCard`（`14.dp` 封面圆角、`minLines = 2` 固定双行标题对齐同行基线、底栏 `20.dp` 头像 + 可点 UP 名 + `MetaSeparator` + 时间 + `StatRow` + `interactiveCard` 悬停底色）。
+   - 窄屏行尾保留 `⋮` 溢出按钮（叠在元信息行右下角、不挤占标题宽度）；宽屏隐藏 `⋮`，统一由右键/长按 `ContextMenuBox` 弹出 `VideoCommonMenuItems`（下一条播放、加入播放队列、复制标题、复制 BV 号、分享/复制链接、查看个人空间）。
+2. **有界队列与编号引用统一走 `SegmentedListItem`**（`CompactVideoRow` 已从新调用点退役）：
+   - 播放队列（`EpisodeList`）每项为 `SegmentedListItem`（`surfaceContainer`，项间 `SegmentedGap`），当前播放项以 `secondaryContainer` 高亮配 `bodyMediumEmphasized` 标题；播放页内联队列底部以 `ShowAllRow` 底封瓦片（上 `4.dp` / 下 `16.dp` 圆角）收口并展示总条数。
+   - 搜索助理回答（`AgentAnswerView`）底部出处列表使用带 `[1]`、`[2]` `primaryContainer` 编号徽章的 `SegmentedListItem` 卡片。
+3. **订阅流无描边三层色阶连发叠卡（`BurstStackedItem`）**：
+   - 同一 UP 主连续投稿折叠为三层纯色阶叠卡：前卡 `surfaceContainer`（`shapes.large`），中层露出 `4.dp` `surfaceContainerHigh`（内缩 `8.dp`），底层露出 `8.dp` `surfaceContainerHighest`（内缩 `16.dp`），**严禁使用 `1.dp` `outlineVariant` 线框描边**。
+   - 保留首条视频的 `chargingBadgeText`（「充电专属」）；点击主卡直接播放首条视频，底部独立交互条（「展开其余 N 条连发」）负责就地展开，展开后末尾配同色阶收起条。「上次看到这里」分界条采用居中 `CircleShape` `surfaceContainerHigh` 胶囊。
+4. **层叠文件夹封面（空间合集与收藏夹）**：
+   - `CollectionsTab` 与 `FavFolderCover` 在 16:10 封面上方叠出阶梯状 `surfaceContainerHigh` 文件夹唇边，右下角配 `.tabular` 条数胶囊。
 
-- **预览态**(未展开):头像、名字、正文截 2 行,没有时间、属地和按钮。整条可点,落点是
-  打开这一组。
-- **展开态**(内联展开与面板共用):同一行加上时间与属地、配图、点赞/回复/删除;正文不限行,
-  高度用 `animateContentSize`,动作行用 `AnimatedVisibility`。缩进两级,组内每条再让出一档。
+### 2.3c 分区原则：Containment 优先，全项目零分割线
 
-**这两条推翻了上一版**:楼中楼原先不给头像、正文比主楼小一档,预览层不给头像则是再上一版
-的残留。现在正文是 `bodyMedium`
-14/22,字号与主楼相同,只把行高收一档(主楼 24,见上面那条),层级交给头像尺寸和缩进承担。
-PiliPlus 在这一级同样是 14,`replyLevel` 只改缩进和截断。
+全项目不使用 `HorizontalDivider`、`VerticalDivider`、Tab 默认底线或引用块左侧竖条。视觉分区只靠三样手段：
 
-**「查看 N 条回复」这类行整宽可点**(`fillMaxWidth` + `heightIn(min = MinTouchTarget)`)。
-原先是 `TextButton`,触摸区只有文字那一小截,而它排在一个占满宽度的容器里,右边一大片空白
-看上去同属这一行、点下去没反应。展开、查看全部、加载更多、重试取 `primary`,收起取
-`onSurfaceVariant`(判据同 §2.7c:primary 只标此刻能点进去的入口)。
+1. **留白**：重复版式的列表项（评论主楼、视频行、消息行）靠间距和行首头像/封面自然分界。
+2. **容器色阶（Containment）**：按嵌套深度逐级递进（例如侧栏 `SidePanel.panelCard()` 用 `surfaceContainer` + `shapes.largeIncreased` 20dp，内部子块升至 `surfaceContainerHigh`）。
+3. **滚动触发底色**：子页面 `BilbyTopBar` 统一接 `TopAppBarDefaults.pinnedScrollBehavior()`，未滚时与页面同色，滚过首行后切换容器色形成无痕边界。
 
-**面板里点回复,面板不关。** 输入层浮在面板之上(形态照 `ui/video/DanmakuInput.kt`),
-发完回到原来的位置和滚动偏移。原先点回复直接把面板拆掉,理由是"输入栏在面板底下打不了字"——
-那只说明底部那条常驻输入栏用不上。
+### 2.4 输入框与零重排评论输入浮层
 
-**正文里的站内链接渲染成图标 + 标题,行内**,和 PiliPlus 的 `addUrl` 一致。链接是从接口的
-`jump_url` 认出来的,不扫正文;那个字段同时装热词和真链接,分法与各字段的实测见
-`notes/comment-toview-history.md` §1.4a。落地统一交给导航层(`MainActivity` 的 `openLink`),
-评论区不判断某条链接能不能在应用内打开。
+- **搜索框（`SearchField`）**：对话式搜索页固定在屏幕底部（`surfaceContainerHigh` + `largeIncreased`、无描边、带一键清空与 `ImeAction.Search`），宽屏空闲态居中展示编辑感 Search Hero；助理回合（`AgentTurnView`）装入 `surfaceContainer` `largeIncreased` 卡片，检索过程折叠为紧凑 `surfaceContainerHigh`「已检索 N 步」胶囊。空间内搜索、收藏夹内搜索则作为顶栏折叠图标展开复用 `SearchField`。
+- **多场景胶囊输入（`PillInputField`）**：私信、直播间弹幕、评论编辑器共用同一套填充胶囊语言（聚焦升至 `surfaceContainerHighest`，无字时收起发送键，发送失败就地保留草稿并在输入框上方给出错误与重试）。
+- **评论区触发条与独立模态浮层（`CommentPromptBar` + `CommentComposerDialog`）**：
+  - 列表底部常驻 `CircleShape` `surfaceContainerHigh` 胶囊触发条（`CommentPromptBar`），**不订阅 `WindowInsets.ime`**，软键盘升降期间底层几百条富文本评论零重新测量。
+  - 点击后打开独立窗口 `CommentComposerDialog`（`surfaceContainerLow` 底色、`shapes.extraLarge` 28dp 顶角、`widthIn(max = 640.dp)`），由 `SettledKeyboardHeightTracker` 1:1 锁定软键盘与表情面板高度，切换无跳闪；草稿按回复对象 `rpid` 独立保存。
 
-**接口层缺的一块**:`ReplyPictureDto` 只解析了 `img_src`,没有 `img_width`/`img_height`,
-所以单张配图只能给一个固定 4:3 的格子裁着显示,没法像 PiliPlus 那样按原图比例定尺寸。
-补这两个字段要动 `api/dto`。
+### 2.5 顶栏、空间头图 Hero 与个人页身份卡
 
-### 2.7c 动态卡片
+- **常规页面**：使用紧凑单行 `BilbyTopBar`（路牌定位，配 `pinnedScrollBehavior`）。首页顶栏标题「订阅」采用 `headlineSmallEmphasized`，右侧动作区提供手动「进入夜间模式」（`Icons.Outlined.Bedtime`）、刷新、推送与关注动态入口；常访横条左侧 `LiveNowSlot` 采用 `2.dp` `primary` 直播光环加底部重叠 `primaryContainer`「N 直播」胶囊。
+- **个人空间全幅头图 Hero（`SpaceScreen`）**：
+  - 顶部铺开 `148.dp`（窄屏）/ `188.dp`（宽屏）`top_photo` 横幅（上覆顶栏可读性暗角，下接向 `surface` 过渡的渐变；无头图时退回柔和主题色阶渐变）。
+  - `72.dp` `AvatarHero` 带 `3.dp` `surface` 描边跨压横幅下沿，右侧基线对齐关注按钮；下方展示 `headlineSmallEmphasized` 昵称、`LevelBadge`、单击即复制的 `UID` 胶囊、`.tabular` 粉丝/投稿计数、点击就地展开的个人签名，以及高辨识度 `primaryContainer` 直播间入口卡。
+  - `SpaceTopBar` 与滚动联动：滚过头图姓名后平滑淡入迷你头像与 UP 名。
+- **「我的」页身份卡与自然比例书架（`ProfileScreen`）**：
+  - 顶部为 `shapes.extraLarge`（28dp）`AccountCard`（`72.dp` `AvatarHero`、`headlineSmallEmphasized` 昵称、`LevelBadge`、可复制 `UID` 胶囊，以及「关注 / 硬币 / 消息」三格 `surfaceContainerHigh` 入口条——**「消息」严禁画任何未读数或红点**）。
+  - 下方历史、稍后再看、收藏夹、离线缓存横架按自然 16:10 卡片比例纵向滚动（最小卡宽 `228.dp`），不将多组书架硬塞进单屏高度。
 
-一条动态是一张 **contained 卡片**(§2.3c 的默认答案),条目之间只留 gap、不画线。
-**容器归 `DynamicCardView` 自己**,调用方只给外边距 —— 关注动态页和空间页各套过一层
-`Surface`,底色、圆角、边距三处都对不齐,同一条动态在两页里不是一个样子。
+### 2.6 统一二级面板契约（`ui/components/PaneSheet.kt` & `PlayerSidePanel.kt`）
 
-**四档底色与圆角是成对的一张表**,由嵌套深度定,不是各处自己挑:
+**全应用所有二级面板一律走 `PaneSheet`，严禁直接调 `ModalBottomSheet`。** `PaneSheet` 按所在上下文自动呈现三种形态，并统一渲染标题栏（`title` + `headerTrailing`）、固定副头栏（`subheader`）、弹性主体（`Modifier.weight(1f, fill = false)`）与粘性底栏（`footer`）：
 
-| 层 | 底色 | 圆角 | 内边距 |
-|---|---|---|---|
-| 页面 | `surface` | — | 左右 16(与投稿列表的 `VideoRow` 同一条边) |
-| 卡片 | `surfaceContainer` | `largeIncreased` 20 | 12 |
-| 卡片内的块(视频、直播、预约、投票、被转发的那条) | `surfaceContainerHigh` | `small` 8 | 8 |
-| 被转发那条里面的块 | `surfaceContainerHighest` | `extraSmall` 4 | — |
+1. **双栏右栏内嵌面板（`SidePaneLayer`，`inPane == true`）**：播放页、直播间双栏布局下从右栏滑入，顶栏为 `[返回箭头] [title] [headerTrailing]`（并自动承接桌面窗口拖拽与右上角控制键）；左栏画面加透明 `SidePaneDismissLayer` 拦截点击收起面板，不压暗视频画面（`persistent = true` 的常驻面板除外）。
+2. **宽屏悬浮模态侧边面板（`Expanded+` 且无右栏宿主，`ModalSideSheet`）**：`surfaceContainerLow` 底色、`shapes.large`（16dp）圆角、最大宽 `400.dp`、四周 `16.dp` 悬浮边距、背景 `0.32f` 遮罩、自动避让 `barsAndCutout.union(ime)`，单行 `56.dp` 顶栏统一渲染 `[title] [headerTrailing] [Close]`，内部禁止出现横向滚动条（如缓存画质用 `FlowRow` 折行）。
+3. **窄屏模态底部面板（`Compact` / `Medium`，`ModalBottomSheet`）**：`surfaceContainerLow` 底色、`shapes.extraLarge`（28dp）顶角、高度上限 `maxHeightFraction`（默认 `0.88f`），内置 `WheelStopsAtSheet` 防止鼠标滚轮把面板拖停在半路。
 
-20 这个数是倒推出来的:内边距 12 时 20 − 12 = 8,块的圆角因此落在刻度上(§1.4 的 optical
-roundness)。最里面一档按公式该是 8 − 8 = 0,取 4 —— 直角套在圆角里读起来像没画完,而 4 是
-刻度上的最后一档。**底色不要用 `surfaceContainerLow`**,理由同 §2.3c,这里也踩过。
+**两条面板铁律**：
+- **带确认/保存按钮、输入框或短内容的面板必须 `skipPartiallyExpanded = true`（默认值）**，并将底部按钮或输入条放进 `footer = { ... }`（`SheetFooterSlot` 用 `surfaceContainer` 色阶承托并自动处理 `navigationBarsPadding()` 与 `imePadding()`），绝不允许停在 50% 半开态把操作按钮截出屏幕外。
+- **全屏播放器内侧滑面板走 `PlayerSidePanel` + `PlayerSidePanelHeader`**（`surfaceContainerLow`、左侧 `16.dp` 圆角、最大宽 `380.dp`、带 `.tabular` 计数徽章与关闭键）。
 
-**`primary` 在这张卡片里只标一件事:此刻能点进去的入口。** 所以整张卡片只剩两处用它 ——
-正在直播那一格的「直播中」,和正文是摘要时那行「阅读全文 / 展开」。这些以前都是 primary:
+### 2.7 全应用双模态复制与文本选择规范
 
-- 附加块的类别名(预约、投票、视频、活动):它们说的是"下面这块是什么",是块里优先级最低的
-  一行,一屏十几条动态就是十几块高亮 → `onSurfaceVariant`。
-- 话题 `#xxx`:本应用没有话题页(那是一条按热度排的池子),染成可点色再点不动最难受 →
-  `onSurfaceVariant`。
-- 「置顶」这类标记:说的是这条在这一列里的位置,不是入口 → `onSurfaceVariant`。
+Compose 的 `SelectionContainer` 若直接套在可点击卡片外层或跨 `LazyColumn` 回收行包裹，会抢走点击/长按手势，并在滚出屏幕节点销毁时引发崩溃。全应用统一实行**指针与触屏双模态复制契约**：
 
-**「置顶」是一小块带底色的标记,不是一行灰字。** 它和旁边的时间不是同一类信息:时间是这条
-动态自己的属性,置顶是这一列的排序被作者按住了 —— 灰字跟在时间后面会被读成时间的一部分
-("3天前 置顶")。底色取 `secondaryContainer` 与 `onSecondaryContainer` 成对,`extraSmall` 圆角。
-它不属于 §4.2 否掉的那种徽章(判据同 `LevelBadge`:不暗示"有新东西"、不随时间变化)。
-空间页那一支以前把它整个漏了,而整页按时间倒序时,唯独第一条不是最新的,没有标记就读成
-"这个人今天发了条三个月前的东西"。
+1. **非点击阅读块**（展开后的视频标题与简介、`DynamicDetailScreen` 顶卡正文、`ArticleScreen` 标题与段落/列表、`AgentAnswerView` 回答与提问）：
+   - 桌面指针环境（`!LocalPointerSource.current.isTouchLike`）外包 `SelectionContainer`，提供原生 I-beam 光标划选，同时保持 `BiliRichText` 内的 `LinkAnnotation`（站内链接、`@提及`、时间戳）可点；
+   - 双端同时外包 `ContextMenuBox`（桌面右键 / `Shift+F10`、触屏长按），提供一键「复制…」与「选择文本」（打开带滚动上限的 `SelectableTextDialog` 供自由选词复制原文）。
+2. **可点击列表项、卡片与胶囊**（全站 `VideoRow` / `VideoGridCard` 的 `VideoCommonMenuItems`、`CommentRow`、流内 `DynamicCardView`、`WhisperScreen` 的 `TextBubble`、`TagToken`、`UpRow`、直播间顶栏与弹幕行）：
+   - 统一通过 `ContextMenuBox` 提供结构化复制项（复制标题、复制 BV/AV 号、复制昵称、复制 UID、复制评论、复制动态正文/转发正文/动态链接、复制消息、复制弹幕）与 `SelectableTextDialog`。
+3. **高频标识与代码一键复制**：
+   - 视频页 `BV` / `AV` 号、空间页与个人页 `UID` 使用独立消费点击的 `CopyableIdPill`（折叠态与展开态均可一键复制，绝不误触外层折叠开关）。
+   - 专栏代码块（`ArticleBlock.Code`）顶部固定带语言名与一键「复制代码」图标按钮的 `surfaceContainerHigh` 工具条，下方等宽代码区支持横向滚动与直接框选。
+4. **回执去重**：统一经 `rememberCopyAction()` / `LocalCopyNotice` 触发；仅在桌面端与 Android 12L 及以下弹应用内提示（`NeedsCopyNotice`），Android 13+ 交给系统剪贴板预览浮层，不叠双份提示。
 
-**「正在直播」在全应用只有一种长相**:`LivePulse` 那三根跳条 + `primary` 的四个字。首页那一排、
-动态里的直播格、空间页头部的直播入口共用它,换个位置就换个说法的话,同一件事得重新认一遍。
-**尺寸必须由调用方给** —— `LivePulse` 是个 `Canvas`,没有固有尺寸,不给就是 0×0,编译和预览
-都不报错,真机上符号直接不存在(动态卡片的直播格这么空了一段时间)。行内那一档是
-`Dimens.LivePulseInline`。
+### 2.7b 评论、动态、专栏与设置细则
 
-**行内表情走 `ui/components/InlineEmote.kt`**,评论、动态、专栏三处共用:基准 22sp,
-**上限是这一行的行高**。装扮表情(`emoji.size == 2`)按基准翻倍是 44sp,而动态正文的行高只有
-26sp —— Compose 的 `lineHeight` 是硬定的行距,占位符比它高时不会把行撑开,而是压到上下两行的
-字上。PiliPlus 撞不上这条,Flutter 的 `WidgetSpan` 会把行撑高。
-
-### 2.7d 等待指示:四档,全部在 `ui/components/States.kt`
-
-**M3 把 loading indicator 和 progress indicator 分成两个组件,判据是进度可不可知,不是形状。**
-镜像的 `components/loading-indicator.md` 给的是一张按时长的表:200ms 以内不给指示,
-200ms–5s 用 loading indicator,超过 5s 且报得出百分比用 progress indicator;并且明写了
-**不许从 loading indicator 过渡到 determinate progress indicator**。同一页还有一句
-"It should replace most uses of the indeterminate circular progress indicator" ——
-不带百分比的转圈在 M3E 里已经不是 `CircularProgressIndicator` 了。
-
-进度不可知的那一侧,全应用只有四档,别处不要直接调 material3 的指示器:
-
-| 档 | 用什么 | 尺寸 | 用在 |
-|---|---|---|---|
-| 整块首载 | `FullScreenLoading()` | 48dp(默认) | 列表首屏、登录页的二维码位 |
-| 行内 | `LoadingSpinner()` | 24dp | 按钮里替掉图标、对话框、播放条 |
-| 行内带说明 | `InlineProgress(text)` | 24dp + 一行字 | 助理过程、个人页分段、队列加载 |
-| 列表尾部续页 | `ListFooter(appending = true)` | 24dp | 所有翻页列表 |
-| 下拉刷新 | `RefreshBox(refreshing, onRefresh)` | contained,48dp | 十一个可刷新页面 |
-
-几条踩出来的:
-
-- **下拉刷新必须走 `RefreshBox`,不能直接用 `PullToRefreshBox`。** 后者在 1.5.0-alpha25 里
-  默认的指示器仍是 expressive 之前的箭头圈(`PullToRefreshDefaults.Indicator`),而 M3E
-  恰恰把 loading indicator 定为下拉刷新的组件。这是从 aar 里读出来的,不是从文档:
-  `javap -c` 看 `PullToRefreshKt` 的默认参数,调的是 `Indicator-2poqoh4`。
-- **指示器和刷新框共用同一个 `PullToRefreshState`。** 分成两个的话指示器收不到拖拽距离,
-  手指往下拉时它一动不动,松手才突然出现。
-- **下拉用 contained 那一档**(默认 `primaryContainer` / `onPrimaryContainer`)。镜像原文:
-  容器"should be used with pull-to-refresh behavior",理由是指示器压在正文上,没有容器托底时
-  深浅两套主题里都可能撞上内容。
-- **24dp 是下限。** 镜像给的可用区间是 24–240dp,再小那个形变的形状只剩几个像素,看不出在动。
-  按钮里的转圈以前是 20dp,比它替掉的那个 24dp 图标还小,按下去时按钮会缩一下。
-- **报得出百分比的等待不在这四档里**,直接用 `LinearProgressIndicator`:更新下载
-  (`ui/update/StartupUpdate.kt`、设置页的更新行)、稍后再看的容量条。容量条那条严格说连等待
-  都不是,它读的是"已经占了多少",调用点有注释挡着,别把它换成转圈。
-- **wavy 那一档没有用。** 镜像把 flat 和 wavy 说成"use the shape that best fits the product's
-  tone",不是对错问题;wavy 的作用是"make longer processes feel less static",而这个应用不做
-  争夺注意力的动效(§4.2)。要改是产品决定,不是照规范补齐。
-
-### 2.8 设置页:一条判据,不是一张清单
-
-**设置只调整"怎么做",不调整"做不做"**(DESIGN 2 节)。往设置页加一项之前先过这一条:
-
-- 编解码策略、SponsorBlock 的类别与服务器、助理的 base URL / key / model —— 都是"怎么做",可以放。
-- 推荐流、相关推荐、自动续接 —— **一个开关都不给**。它们能被开关掉的那一刻,
-  DESIGN 1.3 的结构约束就退化成了自制力工具。
-- 画质、倍速、连播、顺序/随机 —— 留在播放页。**在那里改即是改全局默认**
-  (`playback_auto_next`/`playback_shuffled`/`player_default_quality` 都在写 DataStore),
-  所以设置页不重复放一份,也就不存在"两处能改同一件事"。
-- 定时关闭没有值得记住的默认值,不做。
-- **不给 WSOLA 开关**:它默认开且有透明回退,开关能解决的问题已经被回退覆盖。
-  设置页只**显示**当前生效的算法和回退原因。
-
-另外四条这一页特有的:
-
-- **每一组是一列分段**(`SettingsGroup`,`ui/settings/SettingsRows.kt`):每行一块
-  `SegmentedListItem`,底色 `surfaceContainer`,行间只留 `SegmentedGap`,首尾两行各带一侧
-  大圆角;组标题是 primary 的 `titleSmall`,在分段外面。裸列表落在 `surface` 上时分组只靠
-  一行标题,而同仓库的播放队列与动态卡片都是 contained,设置页不该是唯一一页没有边界的。
-  几条细则:
-  - 行的位置(第几行、共几行)由 `SettingsGroup` 数出来,调用方用 `row { position -> }`
-    登记,不手写下标。条件行(只在某平台出现、只在有数据时出现)手写下标时漏改一处,
-    组中间就会长出一块圆角。登记那一步不是 `@Composable`,条件里要读的 CompositionLocal
-    先在外面读成局部变量。
-  - 开关行整行可点,行尾的 `Switch` 只作指示。开关行的选中色与选中形状都取未选中的值:
-    `checked` 重载把开着当作选中,不改的话一组里开着的行换色换形。
-  - 每一行都有行首图标,调用方必须给(`icon` 是必填参数)。
-  - 当前值放在哪,按它的长短分。数量、倍速这类短读数放行尾(`valueAtEnd`):M3 列表把行尾
-    文字留给"价格、数量、日期"这类附加信息(lists.md 的 Trailing text),标题下面是说明文字的
-    位置,短读数压在一段说明上面时主次读反了。服务器地址、配色名这类较长的值写在标题下面
-    第二行,放行尾会把标题挤得只剩几个字。行尾没有值时放 `RowTarget`(去下一页给箭头,
-    离开应用给外链图标,弹框或当场执行的不给)。
-  - 选项少、要当场看到效果的(明暗模式)用相连的 `ToggleButton` 组直接放在行里;选项多的
-    仍然点开对话框选。
-  - 关于页不是一组行,是一张卡片(`shapes.large` + `surfaceContainer`):版本、许可证、
-    更新状态写在一处,检查更新是 `FilledTonalButton`,项目主页是 `OutlinedButton`。
-- **诊断信息显示真值,不显示配置值。** 解码器名(`c2.qti.avc.decoder`)和倍速算法都从
-  `PlayerFactory.techInfo` 这个 StateFlow 读,它跟着流走 —— 只在进页面时取一次快照,
-  回退发生后显示的就是错的。
-- **只列本机真支持的选项。** 编解码那一节按 `player/DeviceCodecs.hardwareDecodableCodecIds`
-  过滤,列一个选了也只能软解的选项等于让用户自己给自己挑一条掉帧的路。
-- **改动的生效时机要写在副标题里。** 编解码偏好影响 playurl 的 `codecid`,改完只对下一个
-  视频生效 —— 不为一个设置项打断正在看的东西,但也不能让用户以为没生效。
-
-**凭据不进 UI 也不进日志。** API key 的行永远只显示"已配置 / 未配置",不显示遮蔽后的原文:
-遮蔽只挡眼睛,截图和录屏挡不住。编辑框里默认 `PasswordVisualTransformation`,给一个显形
-按钮(长串 key 手输时看不见没法核对),但默认态必须是遮住的。`SettingsViewModel` 全文
-没有一处 `BiliLog`,新增分支时也不要加。
-
-**设置的落盘一律 `AppContainer.persistScope.launch`。** 这一页的每一次改动都可能紧跟着
-一次返回,而返回会清掉 ViewModel、连带取消 `viewModelScope`;DataStore 的 `edit` 是挂起函数,
-取消在它完成之前到达就是**改动被丢掉**。真机上复现过:勾一个类别立刻返回,再进来还是原样。
-同一条适用于播放页的"顺序/随机"和画质落盘。
-
-## 3. 无障碍
-
-- **触摸目标 48dp 见方是下限。** 踩过两处:播放页的 点赞/投币/收藏 以前是裸的
-  `Column.clickable`,横向不到 40dp;评论区的 点赞/回复/删除 三个按钮都是 32dp 见方,
-  在正文旁边一行密排着,而"删除"就在里面。现在前者用 `sizeIn(min = 48.dp)` 撑开,
-  后者用默认尺寸的 `IconButton`(自带 48dp 触摸区),视觉上仍靠 16dp 的图标保持轻。
-- **整行可选的控件用 `Modifier.selectable` / `toggleable` + `role`**,不要给 `RadioButton`
-  单独挂 `onClick`。前者让整行成为一个可选中的语义节点(读屏念"单选按钮,已选中,2 枚"),
-  后者会让读屏把控件和文字当成两件无关的东西,而且只有那个小圆点能点。
-- **`contentDescription` 的判据是"读屏会不会念重复"。** 封面、头像、导航栏图标一律传
-  `null` —— 它们旁边就是同一条信息的文字,再念一遍等于每条读两遍。真正需要描述的是
-  没有可见文字的按钮:`"移出稍后再看:${title}"`、`"取消点赞"`。
-- **返回箭头用 `Icons.AutoMirrored`。** manifest 里 `supportsRtl="true"`,RTL 下必须翻过来。
-- **不要用 `color.copy(alpha = 0.15f)` 兑容器底色。** 兑出来的对比度取决于底下是什么,
-  深色主题里经常糊成一团。容器色和文字色成对取自同一组 role(`primaryContainer` /
-  `onPrimaryContainer`)。
+- **评论区（`CommentSection.kt`）**：`NameLine` 取 `labelLargeEmphasized`（`onSurfaceVariant`），正文 14/24sp，楼中楼整组收进 `surfaceContainer` + `shapes.large`（16dp）单容器（24dp 头像、14/22sp），「查看全部 N 条回复」打开带粘性 `footer` 的 `CommentThreadSheet`。
+- **动态卡片（`DynamicCardView.kt`）**：外卡 `surfaceContainer` + `shapes.largeIncreased`（20dp，可打开态配 `interactiveCard` 悬停反馈）；内嵌视频（`DynamicContent.Video`）、直播、番剧、预约、投票与转发卡统一收进 `blockStyle`（外层内块 `surfaceContainerHigh` + `shapes.medium`，转发内层子块 `surfaceContainerHighest` + `shapes.small`）。整卡只有「直播中」与摘要「阅读全文 / 展开」两处可点入口使用 `primary`。
+- **专栏阅读（`ArticleScreen.kt`）**：`headlineMediumEmphasized` 标题、16/28sp 宽松正文行高；正文插图一律单张整宽按原比例顺序排列（长图按 16:10 裁引子，点开进 `ImageViewer` 通篇左右翻看），不压成动态九宫格。
+- **等待指示（`States.kt`）**：200ms 内不闪指示器；不确定进度统一用 M3E `LoadingIndicator` 四档（`FullScreenLoading` 48dp、`LoadingSpinner` 24dp、`InlineProgress`、`ListFooter`）与 `RefreshBox`；确定百分比（更新下载、离线缓存单行下载进度、稍后再看容量条）用 `LinearProgressIndicator`；列表首载用同构脉冲骨架屏（`Skeleton.kt`）。
+- **设置页（`SettingsScreen.kt`、`SettingsPages.kt`）**：「设置只调怎么做，不给违背产品边界的功能开关」。一级分类配 `36.dp` 圆角方形图标底托（双栏选中态切 `primaryContainer`）；各子页统一收进 `SettingsGroup`（`SegmentedListItem`）；检查更新行有新版本时升为实心 `Button`，**严禁挂 `Badge()` 红点**；API key 默认遮蔽且绝不进任何日志。
 
 ---
 
-## 4. 本项目特有的例外
+## 3. 无障碍与界面语体
 
-### 4.1 机器可读的图形永远不跟主题 —— 登录二维码
-
-踩过一次。
-
-扫码器普遍只认"深码块 + 浅底"这一种极性。深色主题下如果取 `onSurface`/`surface`,
-得到的是浅码块画在深底上,B 站客户端直接报"未成功解析到二维码"。所以:
-
-- 码块固定纯黑,底固定纯白(`FixedColors.QrBackground` / `QrCodeImage.kt` 里的前景色)。
-- **静区(四周 4 个模块宽的浅色边)是识别的一部分,不是留白。** 少了扫描器定位不到三个角。
-- 二维码永远画在一块白色 `Surface` 上,而不是直接落在主题背景上。位图自带静区,但静区
-  之外还是主题色;深色主题下那圈白边和黑底的硬边界会让部分扫码器把边界当成定位图形。
-- 绘制时关掉双线性插值、按整数倍缩放。模块边缘被平滑成灰阶会掉识别率。
-
-**消费者是机器的图形不进主题系统。** 以后加条码、NFC 提示图之类同理。
-
-### 4.1b 播放器控件的底是渐变
-
-`FixedColors.PlayerControlScrim` 铺成一整条会把画面横着切一刀 —— 硬边落在画面中间,
-比控件本身更显眼。改成自下而上的三档渐变(透明 → `PlayerControlScrim` → `0xB3000000`),
-只在最需要对比度的地方(文字所在的下缘)压到最暗。B 站与 PiliPlus 的播放器都是这个做法。
-
-全屏另有一条顶栏(返回 + 标题),同样是渐变,方向相反。它只在全屏时出现:全屏下系统栏
-是隐藏的,没有别的东西说明"在看什么"和"怎么退出";竖屏不显示,那里标题就在播放器下面第一行。
-
-**内嵌态左上角另有一个返回**(`ui/player/PlayerControls.kt` 的 `MediaBackButton`,
-视频页与直播间共用一份)。它和上面那条顶栏不是一回事:
-
-- 渐变是必需的而不是装饰。封面是 UP 主上传的任意图片,纯白封面上一个白箭头看不见 ——
-  和 §1.2 的 `ScrimOnMedia` 同一条理由。
-- **它不跟播放器控件一起自动隐藏。** 自动隐藏的是"播放器现在在做什么"那一类控件;
-  离开这一页是页面级动作,藏起来等于没有。§4.3 那条"控件归控件层"判的是**跟谁的生命周期
-  走**,不是"凡是浮在画面上的都归控件层"。
-- 加它的理由是内嵌播放画面往往就是这一页的第一屏,而这一页没有顶栏;从动态或搜索点进来
-  的人此前只剩系统返回可用。
-
-**全屏的挖孔处理写在 `FullscreenEffect` 里,不写进主题。** 进全屏时把窗口的
-`layoutInDisplayCutoutMode` 切成 `SHORT_EDGES`,退出还原;图片查看器同理,改的是它自己那个
-Dialog 的窗口。曾经在 `themes.xml` 里全局开 `shortEdges`,那会让横屏下每一页的正文都可能
-钻到挖孔底下 —— `Scaffold` 默认消费的是 `systemBars`,不含 `displayCutout`,没有谁会替它躲。
-
-### 4.1c 屏幕常亮的判据是"此刻挂着画面"
-
-`PlayerShell` 的 `keepScreenOn` 取 `isPlaying && attached`。`attached` 已经决定了挂
-`PlayerSurface` 还是画占位封面,所以这里不另开一条通道。
-
-判据是画面而不是播放状态,因为拦着屏幕不息的理由只有一个:人正在看。只出声的形态都该能息屏——
-直播的纯音频模式画面位置是一张封面,落在 `attached` 为 false 那一侧,自然不常亮;听视频更简单,
-那条分支上这个壳根本不组合。
-
-曾经只判 `isPlaying`,于是纯音频听直播时屏幕在页面开着的整段时间里都不息。
-
-### 4.1d 手动重来的入口有两个,动作只有一个
-
-失败面板(`ui/player/PlaybackFailure.kt`)是**服务放弃之后**的出口;直播控制条上的刷新是让人
-**先于服务动手**——网不好时画面往往只是卡着,还没被判成失败,那时面板不出现,而人已经想按点
-什么了。两者发的是同一条命令,共用同一对参数,不各接一条路。
-
-进行中的反馈是把图标换成转圈并让按钮按不动,不是把图标置灰:播放器控件是固定色(要压在任意
-画面上),置灰要么看不出来,要么和"这个功能不可用"撞在一起。直播间的发送按钮也是这个做法。
-
-### 4.1e 视频与直播共用控件规则
-
-控制条的渐变、系统栏避让、间距和全屏按钮在 `ui/player/PlayerControls.kt` 共用。直播也按控制条
-实际可用宽度收纳画质和弹幕入口,弹幕输入框放不下时收成按钮,点开再展开输入。直播保留刷新和
-纯音频,不提供倍速与进度跳转。
-
-设置首页单开「快捷手势」一级菜单:「双击快进/快退」(关闭后触屏整屏双击播放或暂停;鼠标双击仍然切换
-全屏)、「长按倍速」与「默认长按倍速」(1.5x–3.5x,默认 2.5x)、「横向滑动调节进度」、「纵向滑动调节
-亮度与音量」均可独立开关。
-
-长按倍速覆盖层由 `PlayerShell` 内部承载:竖屏按落点上下半区分流(偏下长按贴画面上沿并上滑锁定、
-偏上长按贴画面下沿并下滑锁定),横屏在对侧边缘显示竖向轨道(右半屏长按贴左并左滑锁定、左半屏长按贴右并
-右滑锁定),沿所贴边缘滑半幅加淡入淡出,带渐变托底与两端渐隐遮罩。
-档位为 0.5x 步进的七档预设(0.5x–3.5x):横竖屏共用同款紧凑横排胶囊按钮(`76×38dp`),
-未选中档使用 `mediaControlContainer` + `onSurfaceVariant` 与 `10.dp` 圆角,选中档通过 spatial 弹簧形变为胶囊并带状态图标
-(调速中为快进、预锁定为锁),锁定态切换为 `primaryContainer`/`onPrimaryContainer`。
-右滑/下滑增加倍率、左滑/上滑减小倍率:滑出 10dp 后按每 36dp 一档纯跟手连续换档,
-不设自动连切定时器,手指停住即保持当前档位、反向滑动即时响应。控制条上的倍速 chip 与整块播放设置面板内的倍速段统一使用连续刻度滑块
-(0.5x–3.5x,0.25x 步进)配一行五格高频快捷档(0.75x–2.0x),横屏侧栏另配无底色大号读数纵向居中。
-
-选档方向先识别再保持,沿局部轨迹跟随的参考点吸收侧向漂移,不把累计偏移当成锁定手势。
-明确转向正交轴后冻结倍率:朝选档条所在侧滑动锁定当前档位,松手前反向滑回可撤销锁定。
-操作提示与锁定回执在视频画面正中显示,复用与音量/亮度/进度相同的 `Overlay` 容器:
-滑到锁定侧时提示「松手锁定」,松手后显示「已锁定」回执并自动消失。未处于长按锁定时长按立即跳至默认长按倍速,
-未锁定松手恢复基准原速;已处于长按锁定时再次长按从当前锁定倍速起跳,若未重新锁定直接松手则解除锁定并恢复最初基准原速;
-通过设置面板改倍速会清除长按锁定态。
-
-音量和亮度浮层跟随拖拽的生命周期。直播时间线会持续改变时长,时长只在拖拽时读取,不作为
-`pointerInput` 的重启条件;监听被取消时通过 `finally` 清理浮层,覆盖没有松手回调的退出路径。
-
-### 4.2 反成瘾靠结构,所以有些"体验优化"故意不做
-
-DESIGN 1.1 的四个机制在界面层的落点,逐条都是否决过的:
-
-- **下拉刷新只在助理模式下拒绝。** 该项曾整体否决,理由是"下拉刷新是变比率奖励的标准交互"。
-  该理由对本项目不成立:变比率奖励要求每次操作都可能产生新结果,而此处刷新返回的只有关注
-  UP 主在此期间的实际投稿。助理模式例外 —— 一次下拉对应一次真实的模型请求。
-- **空态不给"去逛逛"。** 空态只说事实。任何把人推回内容池的引导都是在造推送式入口。
-  **空态和错误态各有一个图标**(`Inbox` / `ErrorOutline`,40dp,`onSurfaceVariant`),
-  这不是插图:整屏只有一行灰字时,"这里本来就是空的"和"没读到"读起来一模一样,而这两种
-  情况下用户该做的事完全不同。判据是它有没有在替内容打广告 —— 一个状态标识没有。
-- **助理答完就退场,不留"再找一批"。** 那正是变比率奖励。
-- **没有红点、没有未读计数、没有徽章。** `Badge` 组件存在,不用。
-  否掉的是红点和未读数那一类,它们说的是「有新东西,你该回来看」。**LV 徽章(`ui/components/LevelBadge.kt`)不是这一类**:它标的
-  是用户的身份属性,跟评论区/空间页有没有新内容无关,不制造"回来看看"的诱因,也不会随时间
-  自己变化去吸引重复查看。同一条判据适用于以后任何类似的"标记":问的是它有没有在暗示
-  "现在有新东西",不是它长得像不像徽章。
-
-### 4.3 两条不许重画的结构
-
-只重画,不改结构:
-
-- **听视频是播放页内的一个状态,和全屏同构**,不是导航目的地。它不离开组合、播放器不换、
-  进度不交接。
-- **播放器归 `AudioPlaybackService` 所有**,页面只连上去。UI 只读状态、发命令,
-  不 `prepare`、不 `release`。
-
-这两条是反复返工才定下来的。改播放页布局时不要顺手把 `ListenScreen` 提成一个 NavKey。
-
-**播放器三态(内嵌 / 全屏 / 听视频)都是同一个播放器的封装壳,播放器控件归控件层,
-不归页面 chrome。** 字幕轨切换第一版被放进了 `BilbyTopBar` 的 actions,理由是"顶栏有地方
-放"——但顶栏是页面装饰,三态不共享它;字幕轨和倍速、进度条是同一类东西,该跟着播放器控件
-的生命周期走。改成了浮在封面/画面右上角:听视频模式下封面占的正是播放器画面的位置,浮在
-它上面的按钮就等价于全屏时浮在画面上的控件(`BilbyPlayer.kt` 的控制条同样有一份)。
-判据是问一句:这个控件属于"这个播放器现在在做什么",还是"这个页面长什么样"——前者跟播放器
-走,后者才能放进顶栏。将来控件自动隐藏时,字幕按钮要跟着控件层一起隐藏,不是跟着顶栏。
-
-### 4.3b 切集是一份清单,三种形态共用
-
-队列(不同 bvid)和分 P(同一 bvid 的不同 cid)是两条不同的命令,但在界面上回答的是同一个
-问题:现在放的是哪一条,能换到哪去。所以它们是**一个列表**——队列每条一行,正在播的那一条
-底下摊开它的分 P。摆成并列的两块时"走到第几条"和"放到第几 P"是两个高亮,人要在两块之间
-对位。
-
-清单在 `ui/player/EpisodeList.kt`,**整个应用只在 `VideoScreen` 拼一次**,详情页、听视频、
-全屏三处都从它取数:
-
-| 形态 | 队列 | 分 P |
-|---|---|---|
-| 详情页(简介) | 播放队列卡片 | 一排可横滚的 chip,超过十条给「全部分集」面板 |
-| 听视频 | 底部队列 sheet | sheet 里的二级列表 |
-| 全屏 | 右侧划出的面板 | 面板里的二级列表 |
-
-**详情页保留 chip。** 那里有整屏宽度,一条横滚的带子扫得比二级列表快;全屏和听视频都没有
-这个横向空间。三处共用的是数据,不是画法。
-
-**分 P 只在当前那一条上存在,而且只在身份对得上时存在。** 分 P 清单来自页面手上这份详情,
-队列里其他视频要各打一次请求才知道有几 P;而自动连播走到别的视频那段窗口里,页面的详情
-还属于上一条,拿它的 cid 去切别人的分 P 会得到 -404。这两件事都判在拼清单的那一步
-(`buildEpisodeRows`),不判在点击处 —— 「没有这一栏」和「有这一栏但点不动」是两种不同的
-正确,取前者。
-
-**全屏的切集入口在顶栏右端,不在控制条上。** 判据同 §4.3:控制条上的东西回答"这个播放器
-现在怎么放"(倍速、清晰度、字幕、弹幕、全屏),切集回答"在放哪一条",和它左边那个标题
-是同一类。PiliPlus 放在底栏,这一条没照抄。
-
-**全屏面板从右边缘划出,点一条即关。** 横屏下底部 sheet 只剩一条缝;而面板挡的是画面本身,
-而全屏的全部意义就是画面。画面不缩、播放不停——缩画面会让 `PlayerSurface` 改尺寸、弹幕
-整池按新画布重编,而用户只是想换一集。全屏的返回链因此是三级:关面板 → 解锁 → 退全屏。
-
-### 4.3c 画面收起之后那块位置由快捷播放条占住
-
-画面只在**暂停**时收得走(`playerPinned = playing || fullscreen || expandedLayout`),而且只在
-评论那一边——简介那一边下半屏是队列或简介正文,收掉换来的空间没有去处。所以"暂停 + 下翻
-评论"是画面收起的唯一场合。
-
-收起不收干净:`CollapsingHeaderState.minVisiblePx` 留下一条 64dp,`ui/video/QuickPlayBar.kt`
-画在这块残留区里。留高度而不是把条浮在下面的内容上 —— 浮着会盖住评论第一行;收干净则让
-"把画面拿回来"没有入口,只能一路往回滚。
-
-条上是返回、标题、继续播放。标题必须在:这条出现时人在评论区,整屏没有第二个地方写着在看
-哪条视频。**两个落点,只有一个改播放状态**:点条本身把画面拿回来,点按钮才是接着放 ——
-在评论区里误触一下就开始外放,代价比多点一次大。
-
-### 4.3d 简介展开换掉的是下半屏的占用者
-
-播放页左栏的性质是**各组件按需吃满一屏,整栏不产生滚动条**,队列在自己那块里滚。展开态
-原先破坏了这一条:标题不限行、简介整段、标签铺开,这一块自己就可能超过一屏,而它上面没有
-可滚的容器。溢出之后 Column 给后面兄弟节点的 `maxHeight` 是 0,`UpRow` 里那枚等级徽章的
-`height(11.dp)` 被夹成 0,`aspectRatio` 在高度约束不可满足时退到按宽度算,于是横向铺满
-整行——"徽章忽然变得很大"和"简介滑不动"是同一次溢出。
-
-改法是换掉前提:展开不把这一栏撑长,而是**换掉底下那块空间的占用者**。收起是播放队列,
-展开是简介正文,两者都拿 `weight(1f)`、都在自己内部滚。标题、UP 行、动作栏两态都留着 ——
-它们高度有界,而且是这一页的身份和动作。
-
-展开指示两态都留在计数行右端。它以前展开后会移到简介末尾,理由是"收起这个动作不该离它
-作用的那段文字隔着大半屏";正文现在住在一块自己滚动的区域里,箭头跟过去就藏在滚动条底下,
-而收起是此刻唯一的出路。
+- **最小触控目标 `48.dp × 48.dp`**：紧凑图标按钮视觉尺寸可收至 16–32dp，点击热区必须补足 48dp（或整行合并为单一可点节点）。
+- **整行语义合并**：单选/多选/开关行使用 `Modifier.selectable` / `toggleable` + `Role`，不给行尾 `RadioButton` / `Switch` 单独挂二次点击。
+- **不念重复的 `contentDescription`**：旁边紧挨着同名可见文字的封面、头像、导航图标一律传 `null`；无文字纯图标按钮必须给出明确动作描述；方向性图标（返回、发送、打开）使用 `Icons.AutoMirrored`。
+- **书面语，零口语闲聊**：界面文案与确认框直陈动作本身（如「取消关注」「删除这条评论?」），不用「刷视频」「删掉」「瞟了一眼」等口语腔；助理检索过程行只写对象名，动作交由行首图标表达。
 
 ---
 
-## 5. 已知待办
+## 4. 本项目特有的结构与体验守则
 
-- **`res/values/colors.xml` 的 `launch_background` 和 `ui/theme/Color.kt` 的 surface
-  必须手工保持一致。** XML 主题读不到 Compose 的 `ColorScheme`,改一处要改另一处。
-  现在是 `#FAF8FF` / 夜间 `#121318`。
-- **空间页没有头图。** PiliPlus 的 `pages/member/widget/user_info_card.dart` 顶上有一张
-  banner,Bilby 的 `data/SpaceProfile` 目前不带 `top_photo`,补它要动 `api/dto` 和
-  `SpaceRepository`。头部区的布局已经按"将来会有一张头图"留好了结构(整块是一个 Column)。
-- ~~**列表行的封面下方有一小段空白。**~~ 这一轮改成整行 `CenterVertically` 了:
-  文字比封面高时,多出来的高度分到上下两边,不再全堆在封面底下。PiliPlus 那种让封面
-  `fillMaxHeight` 跟着内容长的做法仍然没做 —— "找相关"那种带多行推荐理由的行会把封面撑得
-  很大,要做得先把带 `note` 的行拆成另一个组件。
+### 4.1 机器可读图形不随主题：扫码登录欢迎卡（`TvLoginScreen.kt`）
 
-## 6. 动效
+扫码登录页居中呈现 `surfaceContainer` + `shapes.extraLarge`（28dp，最大宽 `440.dp`）欢迎卡片（桌面端自带顶栏拖拽与窗口控制键），内部二维码固定画在纯白 `FixedColors.QrBackground` 衬垫（`16.dp` 圆角）上：纯黑码块、四周 4 模块宽白静区、关闭双线性插值按整数倍缩放，保证深浅色与任意缩放比下一次扫出。
 
-**唯一来源是 `ui/theme/Motion.kt`**,值逐条抄自 M3 的 easing/duration token 表,注释里标了
-token 名。这一节的每条判断都能在镜像的 `styles/motion/` 两页里找到原文。
+### 4.1b–e 播放器 HUD 微高光描边与全屏系统状态胶囊（`PlayerStatusCluster`）
 
-**先分清转场和组件动效,规范自己划的界**:easing-and-duration 页顶上写着 expressive update
-之后"components and motion now use the motion physics system, which uses springs",但
-"**The easing and duration system is still used for transitions**"。所以:
+- **渐变遮罩与常驻内嵌返回键**：底栏与全屏顶栏使用平滑渐变遮罩；内嵌态左上角 `MediaBackButton` 独立常驻，不随播放控制层自动隐藏；全屏与看图器的刘海区延伸仅在各自 `FullscreenEffect` / Dialog 窗口级切 `SHORT_EDGES`，绝不写进全局主题。
+- **屏幕常亮判据**：`keepScreenOn = isPlaying && attached`，纯音频直播与听视频模式正常允许息屏。
+- **HUD 内侧微高光描边**：浮在视频画面上的深色半透明胶囊（手势倍速/进退/音量浮层、云端续播提示、跳过提示、全屏状态胶囊）统一加 `1.dp` `Color.White.copy(alpha = 0.08f)` 内侧高光边，保证在纯白雪景/高光画面上边界依然清晰。
+- **全屏右上角系统状态胶囊（`ui/player/PlayerSystemStatus.kt`）**：
+  - 仅在 `isFullscreen && !pip` 时激活监听与采样，内嵌态与小窗态**零后台广播、零轮询开销**。
+  - 胶囊内以 `8.dp` 间距（无中点）展示三项 `.tabular` 读数：**网络类型**（`Wi-Fi` / `5G` / `LTE` / `移动网络` / `以太网` / `离线`，Android 端不申请 `READ_PHONE_STATE` 权限，Windows 端通过 JDK 25 FFM 查 `iphlpapi` 路由表且对 VPN/TUN 虚拟网卡自动回退物理网卡）、**电池图标 + 电量百分比**（台式机无电池时自动隐藏整块电量指示）、以及整分唤醒对齐的 **`HH:mm` 当前时间**。
 
-| 层 | 用什么 | 在哪 |
+### 4.2 反成瘾靠结构，全应用零红点
+
+- 无推荐流、无相关视频侧栏；「找相关」仅在配置好助理模型时显示，且必须由用户显式点击发起，答完即止，不留「再找一批」。
+- 空态与错误态只陈述事实（配 `Inbox` / `ErrorOutline` 状态图标区分「本来为空」与「加载失败」），不给「去逛逛」导流入口。
+- **全应用严禁出现任何红点、未读数字或提醒类 `Badge`**：`LevelBadge`、「置顶」、「充电专属」、「转载」属于静态属性标签，不随时间制造「有新内容快回来看」的焦虑；凡属未读提醒类的标记一律不做。
+- **夜间静息模式（`NightModeScreen`）**：支持定时自动生效与首页顶栏一键手动进入（进场通过 `SystemActions.showToast` 发轻量系统级提示，桌面端为无焦点穿透胶囊浮层），期间仅展示白名单 UP 主投稿与离线缓存，临时退出或缩减时段须经 30 秒按住确认（`NightExitHoldSheet`）。
+
+### 4.3 播放页三态同构、连续自然滚动简介与快捷播放条
+
+- **听视频（`ListenScreen`）是播放页内部的状态分支，与全屏同构，绝不拆成独立导航目的地**；全局唯一播放器归 `AudioPlaybackService`（Android）与 `DesktopPlaybackHost`（桌面）所有。听视频页唱盘背后带柔和主题径向光晕，曲目名用 `headlineSmallEmphasized`，底部常驻可点按展开的 `surfaceContainerHigh` `shapes.extraLarge` 队列抽屉。
+- **暂停下翻评论时的快捷播放条（`QuickPlayBar.kt`）**：画面仅在暂停且浏览评论区时随上滑收起，顶部留驻 `64.dp` 高的 `surfaceContainer` 快捷条（`44×28.dp` 圆角封面缩略图、`titleSmallEmphasized` 单行标题、胶囊播放键、底沿 `3.dp` 进度条）；点横条本身只展开画面，点播放键才恢复出声。
+- **`IntroTab` 单列表连续自然滚动与就地平滑展开（`VideoTabs.kt`）**：
+  - 简介页自上而下是**同一条连续滚动的 `LazyColumn`**：`TitleBlock` → `UpRow` 容器卡 → 五格 `ActionButtonsRow` → 分 P 横条 → 内联播放队列预览。
+  - **展开简介时绝不隐藏或卸载下方的播放队列**。视频标签在进页加载详情时即并发预热（`loadVideoTags()`），避免展开后二次撑高跳动；点击 `TitleBlock` 时，完整精确发布时刻（`yyyy-MM-dd HH:mm` `.tabular`）、禁止转载声明、富文本简介与标签行通过 `AnimatedVisibility`（空间弹簧 `expandVertically` + `fadeIn`）**就地单段平滑展开**，自然把下方卡片往下推。
+  - `TitleBlock` 内嵌的 `CopyableIdPill`（`BV` 号与 `AV` 号）在收起与展开两态下均可直接单击复制。
+
+---
+
+## 5. 动效分工（`ui/theme/Motion.kt`）
+
+- **整屏转场用缓动与时长（`Motion` tween）**：压栈/返回走五分之一屏滑动加淡入淡出（400ms，`EmphasizedDecelerate` / `EmphasizedAccelerate`）；预测式返回通过 `SeekableTransitionState` 跟手映射 `StandardDecelerate`；根目的地切换先快速淡出再淡入（`Short3` 150ms + `Medium1` 250ms，不横滑）。开启系统「减弱动效」时转场自动退化为纯淡入淡出。
+- **组件内交互用物理弹簧（`MaterialTheme.motionScheme`）**：面板滑入、简介展开、按钮形变、卡片悬停按压（`interactiveCard`）统一取主题 `MotionScheme` 的 spatial / effects spring，不在业务代码里散写裸 `tween(300)`。
+
+---
+
+## 6. 响应式窗口与桌面悬浮岛架构
+
+布局只看窗口实时宽度（`rememberBilbyWindowSize()` 读取 `LocalWindowInfo.containerSize`），绝不按设备类型硬编码分支：
+
+| 窗口档位 | 起点 | 布局行为 |
 |---|---|---|
-| 转场(整屏) | 缓动 + 时长(tween) | `Motion.kt` |
-| 组件(控件显隐、浮层) | spring | `MaterialTheme.motionScheme` |
+| `Compact` | `< 600dp` | 底部三格导航栏，列表采用单列 `VideoRow`，二级面板走模态底部 `PaneSheet` |
+| `Medium` | `600dp` | 左侧切换 `NavigationRail`，`AdaptiveListContent` 列表切入多列纵向 `VideoGridCard` 网格 |
+| `Expanded` 及以上 | `840dp` | 播放页/直播间拆左右双栏（右栏托管内嵌 `PaneSheet`），空间页动态可开持久化可调宽侧栏（`SidePanelLayout`），无宿主二级面板走悬浮 `ModalSideSheet`，设置与消息中心启用双栏主从场景 |
 
-两边不要互串:spring 取不到 duration,拿它做转场就表达不了"退出比进入短";组件用 tween
-则丢掉 expressive 那套物理感。
-
-**四种模式各自落在哪**:
-
-- **Forward and backward**(压栈/返回,`MainActivity` 的 `NavDisplay`):滑动 + 淡入淡出,
-  两页各走五分之一屏。取的是 Android 平台默认——"Android uses a fade as screens slide.
-  This reduces the amount of motion, since the screens don't have to slide the full width"。
-  400ms(medium4)配 emphasized decelerate / accelerate。
-  **别改成走满整屏**,那是 lateral 的做法,规范明确说它不适合层级导航。
-- **Top level**(底栏或 rail 换根目的地,`RootTabs`):快速淡入淡出,且**淡出走完再淡入**
-  ("quickly fades out **and then** the entering screen fades in",clean fades 那条又要求
-  "Fully fade out content before fading new content in")。曾经是跳切,而跳切被单列为要避免的
-  默认做法。**不要换成横滑**:那会暗示可以左右滑动切 tab,和列表项、carousel 的手势打架。
-- **Lateral**(播放页 简介/评论、直播间两屏):`HorizontalPager` 的默认行为就是对的——
-  整体同向滑动、**不加淡入淡出**("Fading content as it slides makes the peer relationship and
-  swipe gesture less obvious")。所以这里没有自定义 spec。
-- **Enter and exit**(播放器控制条、全屏顶栏、锁按钮、SponsorBlock 提示):
-  **方向由它贴着哪条边决定**——"The direction a component enters is informed by their location
-  on screen, expanding away from the device edge",Android 那一档还要求沿轴展开收起而不是
-  原地淡入。所以底部控制条从下边缘展开、全屏顶栏从上边缘、跳过提示从上边缘;
-  锁按钮不贴边,走缩放 + 淡入。
-
-**减弱动效**要跟随系统:"If that setting is on, transitions should use subtle fades instead of
-intense sliding"。`rememberReducedMotion()` 读 `TRANSITION_ANIMATION_SCALE`,为 0 时转场退成
-纯淡入淡出。组件那侧不用管,Compose 的动画本来就跑在 `MotionDurationScale` 下。
-
-**骨架屏**(`ui/components/Skeleton.kt`)。transitions 页的 Stable layouts:「Use skeleton
-loaders so that UI elements are coherent and stable during a transition. Avoid content shifting
-positions or instantly popping in as it loads」。列表首屏、「我的」各节的首载都先按内容的形状
-画灰色占位,读到了淡入换掉,内容换上来时什么都不挪。
-- 占位与真实的行同尺寸同位置:视频行 `VideoRowSkeleton`、一人一行 `PersonRowSkeleton`、
-  动态卡片 `DynamicCardSkeleton`;`PagedColumn` 与 `FirstScreenState` 默认用视频行。
-- 脉动而不是扫光("a subtle pulsing animation"),一片骨架共用一个时钟(`SkeletonPulse`)。
-- 只管首载。翻页底部、下拉刷新仍是 loading indicator;形状事先说不准的整页(文章、动态详情、
-  直播间)仍是整屏一个 `FullScreenLoading`。
-
-## 7. 响应式
-
-断点值和几档最大宽度都在 `ui/theme/Dimens.kt` 的 `Breakpoints` 里,判的是**窗口**能铺多宽,
-不是设备是不是平板 —— 同一台平板分屏之后就该按 compact 排。`rememberBilbyWindowSize()` 读
-`LocalWindowInfo.containerSize`,不读 `Configuration.screenWidthDp`(后者的语义在 API 35
-全面 edge-to-edge 之后变过)。
-
-**目的是支持平板,不是重排手机。** 这条是踩出来的:上一轮按窗口宽度给了一堆分支,结果
-手机上"登出"被挤到下一行、播放控制条分成两行 —— 而手机布局本来就没有问题。判据因此收紧成
-一句:**compact 档必须和加响应式之前逐像素一致**,任何 `if (compact)` 分支都要先回答
-"手机上这样排哪里不对";答不上来就不该有这个分支。
-
-各档做什么:
-
-| 档 | 起点 | 变化 |
-|---|---|---|
-| compact | — | **一切照旧**,不因响应式改动任何东西 |
-| medium | 600dp | 底栏换 `NavigationRail`,内容开始收窄 |
-| expanded | 840dp | 列表页改网格,个人页拆双栏,播放画面收到 `MediaWidth` |
-
-**`AdaptiveContent` 只做一件事:把多出来的宽度转成两边留白。** 一栏、两栏还是沉浸式播放器
-由页面自己决定。它只留给正文类页面(专栏、动态详情、评论楼、搜索助手),行长是那里的问题。
-
-**列表页用 `AdaptiveListContent`。** expanded 起不限宽,每格不超过 `VideoRowMaxWidth`,
-窗口多宽排几列;更窄时同 `AdaptiveContent`。订阅页与空间页的网格是同一个做法,只是自己
-写了判断。单列限宽的理由在多列时不成立:每格已经限了宽,外层再限一次只会把列数压死在两列。
-
-**动态列表在宽屏是瀑布流**(空间页动态侧栏、「关注动态」页),每列不窄于
-`DynamicColumnMinWidth`。动态高矮差得太多,按行排的网格会在矮的那条下面空一大截;代价是
-读序只大致从上往下。
-
-**踩过一次的顺序问题:`fillMaxWidth().widthIn(max = …)` 的上限完全不生效。**
-`fillMaxWidth` 先把子约束定成 `min = max = 父宽`,而 `widthIn` 是
-`constraints.constrain(...)`,它要把 max 夹进 `[父宽, 父宽]` 里,夹完还是父宽。写成
-`widthIn(max).fillMaxWidth()` 才对:先夹上限,再填满被夹过的那份宽度。这条对播放画面那两处
-`widthIn` 同样适用。
-
-播放控制条按**实际可用宽度**决定要不要把倍速/画质/字幕/弹幕另起一行
-(`Breakpoints.StackedControlBar`),不按"是不是全屏":平板分屏后同样窄,竖屏视频全屏时
-也可能只有 270dp。
+- **阅读限宽 vs 列表网格**：`AdaptiveContent`（上限 `ReadableWidth = 1040.dp`）仅用于长文阅读与对话页（专栏、动态详情、评论楼、搜索对话）；所有视频与收藏集合页一律用 `AdaptiveListContent` 铺开多列网格；动态流宽屏走最小列宽 `DynamicColumnMinWidth = 400.dp` 的瀑布流。修饰符限宽牢记先写 `.widthIn(max = …)` 再写 `.fillMaxWidth()`。
+- **桌面端统一悬浮岛框架与双栏分岛（`DesktopIslandFrame` & `ListDetailSceneStrategy`）**：
+  - 在桌面窗口（`LocalWindowCaption.current != null`）下，除全屏沉浸式的播放页与直播间外，根标签页与所有压栈子页面统一包裹在 `DesktopIslandFrame` 中：外框铺 `surfaceContainer` 底托，内嵌 `8.dp` 边距的 `shapes.large`（16dp）圆角内容岛（浅色取纯白 `surfaceContainerLowest`、深色取 `surface`），既让内容岛无分割线自然浮起，又保证自绘 Win32 窗口控制按钮（`WindowsCaption.kt` / `WindowFrame.kt`，关闭键悬停采用 Fluent 2 语义红 `#C42B1C`）在压栈与返回全过程中坐标纹丝不动。
+  - `ListDetailSceneStrategy`（设置、消息中心、UP 主推送）在 `surfaceContainer` 底托上留出 `8.dp` 分栏间隙，将左栏列表（`listPane`）与右栏详情（`detailPane`）各自裁成独立的 `shapes.large` 圆角岛，零 `1.dp` 竖向分割线。

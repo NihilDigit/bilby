@@ -115,6 +115,7 @@ import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import java.time.Instant
 
 /**
@@ -419,6 +420,7 @@ fun CommentSection(
                     placeholder = rootLabel,
                     onOpenKeyboard = { openComposer(panelComment.rpid, true, false) },
                     onOpenEmoji = { openComposer(panelComment.rpid, true, true) },
+                    inSheetFooter = true,
                 )
             },
             onDelete = onDelete,
@@ -590,9 +592,21 @@ private fun CommentContextMenu(
         menuLabel = stringResource(Res.string.menu_item_actions),
         modifier = modifier,
         menu = { close ->
+            fun copyValue(value: String) {
+                if (value.isEmpty()) return
+                scope.launch {
+                    clipboard.setClipEntry(plainTextClip(clipLabel, value))
+                    if (NeedsCopyNotice) copiedNotice(copiedText)
+                }
+            }
+
+            val hasUname = comment.uname.isNotBlank()
             val hasSpace = comment.mid != 0L
             val canDelete = actions.canDelete(comment)
-            val totalCount = 3 + (if (hasSpace) 1 else 0) + (if (canDelete) 1 else 0)
+            val totalCount = 3 +
+                (if (hasUname) 1 else 0) +
+                (if (hasSpace) 2 else 0) +
+                (if (canDelete) 1 else 0)
             var idx = 0
 
             DropdownMenuItem(
@@ -607,11 +621,7 @@ private fun CommentContextMenu(
             DropdownMenuItem(
                 onClick = {
                     close()
-                    val raw = comment.message.trim()
-                    scope.launch {
-                        clipboard.setClipEntry(plainTextClip(clipLabel, raw))
-                        copiedNotice(copiedText)
-                    }
+                    copyValue(comment.message.trim())
                 },
                 text = { Text(stringResource(Res.string.menu_copy_comment)) },
                 leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
@@ -626,7 +636,27 @@ private fun CommentContextMenu(
                 leadingIcon = { Icon(Icons.Outlined.SelectAll, contentDescription = null) },
                 shape = menuItemShape(idx++, totalCount),
             )
+            if (hasUname) {
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        copyValue(comment.uname)
+                    },
+                    text = { Text(stringResource(Res.string.action_copy_nickname)) },
+                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                    shape = menuItemShape(idx++, totalCount),
+                )
+            }
             if (hasSpace) {
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        copyValue(comment.mid.toString())
+                    },
+                    text = { Text(stringResource(Res.string.action_copy_uid)) },
+                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                    shape = menuItemShape(idx++, totalCount),
+                )
                 DropdownMenuItem(
                     onClick = {
                         close()
@@ -801,6 +831,7 @@ private fun Modifier.openSpace(comment: CommentItem, onUserClick: (Long) -> Unit
  * 是正文;名字和正文一样重的话,视线会被每条开头的名字拽住。低强调的文字角色是
  * `onSurfaceVariant`,`outline` 是描边角色,浅色主题下只有 4.3:1。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun NameLine(
     comment: CommentItem,
@@ -814,7 +845,7 @@ private fun NameLine(
     ) {
         Text(
             text = comment.uname,
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelLargeEmphasized,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -963,7 +994,7 @@ private fun CommentFooter(
     ) {
         Text(
             text = commentMeta(comment),
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.tabular,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -1002,7 +1033,7 @@ private fun LikeButton(comment: CommentItem, onLike: (Long) -> Unit) {
         )
         if (comment.likeCount > 0) {
             Spacer(Modifier.width(ButtonDefaults.ExtraSmallIconSpacing))
-            Text(text = "${comment.likeCount}", style = MaterialTheme.typography.labelMedium)
+            Text(text = "${comment.likeCount}", style = MaterialTheme.typography.labelMedium.tabular)
         }
     }
 }
@@ -1098,11 +1129,10 @@ private fun SubReplies(
     val hasMore = complete == null && root.subReplyCount > root.previewReplies.size
     if (shown.isEmpty() && !hasMore) return
 
-    // 圆角取 medium 12dp,与容器内边距 12dp 相配(optical roundness:外圆角 − 内边距 ≈ 内层
-    // 圆角,里面最大的元素是圆头像)。
+    // 楼中楼容器取 large 16dp 圆角,与主列表其他 contained 块统一。
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = MaterialTheme.shapes.medium,
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Tight),
     ) {
         Column(modifier = Modifier.padding(top = Spacing.Tight, bottom = if (hasMore) 0.dp else Spacing.Hair)) {
@@ -1238,18 +1268,15 @@ private const val InlineThreadLimit = 5
 /** 楼中楼正文在容器里的左缘:容器内边距 + 头像 + 头像与文字的间距。 */
 private val SubReplyTextInset = Spacing.Cozy + Dimens.AvatarNested + Spacing.Tight
 
-/** 面板占屏高的比例。留出上面那一截是为了看得见底下还是评论区,而不是"进了一个新页面"。 */
-private const val ThreadSheetHeightFraction = 0.9f
-
 /**
- * 一楼的完整回复,底部面板形态。「查看全部 N 条回复」打开它。
+ * 一楼的完整回复,二级面板形态。「查看全部 N 条回复」打开它。
  *
  * **主楼是列表的第一条,跟着一起滚。** 上一版把主楼钉在面板顶上(最多十行)、下面画一条线,
  * 一条长主楼能占掉面板的三分之一,回复只剩下半截;而人打开面板是来读回复的,主楼读过了。
  * 回复和主楼同一个排法(36dp 头像、同样的底行):在这里回复是主角,不再是缩在容器里的附属。
  *
- * 写回复和主列表是同一套:底部一条常驻输入栏([inputBar]),默认回复这一楼,单击哪一条就回复
- * 哪一条。栏画在面板自己里面:单栏时这张 sheet 自成一个窗口,画在外面会被它盖住。
+ * 写回复和主列表是同一套:底部一条常驻输入栏([inputBar])挂在 [PaneSheet] 的粘性 `footer` 槽位里,
+ * 标题行由 [PaneSheet] 在右栏、宽屏侧边面板、窄屏底部面板三种形态下统一渲染。
  *
  * **不是一个导航目的地。** 它长在 [CommentSection] 里,页面没有换,返回键由面板
  * 自己注册的 BackHandler 接管([PaneSheet])。数据和主列表共用 `CommentViewModel.expandedReplies`,翻页仍然是
@@ -1310,31 +1337,28 @@ private fun CommentThreadSheet(
         onLoadMore = onLoadMore,
     )
 
-    // 跳过半开:一组回复就是要往下读的,停在半开只是多一次上拉。
+    // 跳过半开:一组回复就是要往下读的,停在半开只是多一次上拉;输入触发条走粘性 footer 槽位。
     PaneSheet(
         onDismissRequest = onDismiss,
         title = stringResource(Res.string.comment_thread_title),
+        skipPartiallyExpanded = true,
+        footer = { inputBar() },
     ) {
-        // 列表与输入栏一起装在面板主体的高度里:栏放在外面的话,sheet 里那九成高的列表再加一条栏,
-        // 会顶出屏幕。
-        Column(modifier = Modifier.bodyHeight(ThreadSheetHeightFraction)) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                CommentThreadList(
-                    root = root,
-                    replies = shown,
-                    loadingMore = loadingMore,
-                    failed = expanded?.error != null,
-                    actions = actions,
-                    onRetry = onLoadMore,
-                    listState = listState,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                SnackbarHost(
-                    hostState = snackbarHostState,
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                )
-            }
-            inputBar()
+        Box(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
+            CommentThreadList(
+                root = root,
+                replies = shown,
+                loadingMore = loadingMore,
+                failed = expanded?.error != null,
+                actions = actions,
+                onRetry = onLoadMore,
+                listState = listState,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
         selectionTarget?.let { target ->
             SelectableTextDialog(
