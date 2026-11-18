@@ -19,12 +19,13 @@ import java.lang.reflect.Method
  * 显卡设备失效(device removed / TDR)时主动重建窗口,避免 Skiko 在后续调整窗口尺寸时空指针崩溃。
  *
  * 驱动复位 GPU 引擎、热升级或休眠唤醒异常时,系统会将当前进程的 D3D12 设备标为失效。
- * Skiko 0.150 的 Direct3DRedrawer 不检查 HRESULT:失效后普通帧失败被吞掉,画面冻住;下一次调整窗口
- * 尺寸时 `makeDirectXSurface` 内 `GetBuffer` 失败留下空指针并直接解引用,导致整个 JVM 崩溃。
+ * Skiko 的 Direct3DRenderer 不检查 HRESULT:失效后普通帧失败被吞掉,画面冻住;下一次调整窗口
+ * 尺寸时原生交换链调整失败可能导致空指针解引用。
  *
- * 做法与 Piko 的同名类相同:从 `SkiaLayer.getRedrawer$skiko()` 取出 `Direct3DRedrawer.device`,
- * 读取第 6 个指针槽上的 `ID3D12Device`,经 FFM 调虚表第 37 项 `GetDeviceRemovedReason`。
- * 一旦返回非 0(非 `S_OK`),停止触碰该窗口画布并将 [generation] 加一,由 [BilbyWindow] 重建窗口与新设备。
+ * 在 Skiko 0.156.1 上从 `SkiaLayer.getFrameDriver$org_jetbrains_skiko_skiko()` -> `FrameDriver.getRenderer()`
+ * 取出 `Direct3DRenderer.device`,读取第 2 个指针槽(`+0x10`)上的 `ID3D12Device*`,经 FFM 调虚表第 37 项
+ * `GetDeviceRemovedReason`。一旦返回非 0(非 `S_OK`),停止触碰该窗口画布并将 [generation] 加一,由 [BilbyWindow]
+ * 重建窗口与新设备。
  */
 internal object GpuDeviceWatch {
     var generation by mutableIntStateOf(0)
@@ -37,9 +38,14 @@ internal object GpuDeviceWatch {
     private val linker = Linker.nativeLinker()
     private val getRemovedReasonDesc = FunctionDescriptor.of(JAVA_INT, ADDRESS)
 
-    private val getRedrawer: Method by lazy { SkiaLayer::class.java.getMethod("getRedrawer\$skiko") }
+    private val getFrameDriver: Method by lazy {
+        SkiaLayer::class.java.getMethod("getFrameDriver\$org_jetbrains_skiko_skiko")
+    }
+    private val getRenderer: Method by lazy {
+        Class.forName(FRAME_DRIVER).getDeclaredMethod("getRenderer").apply { isAccessible = true }
+    }
     private val deviceField: Field by lazy {
-        Class.forName(D3D_REDRAWER).getDeclaredField("device").apply { isAccessible = true }
+        Class.forName(D3D_RENDERER).getDeclaredField("device").apply { isAccessible = true }
     }
 
     fun checkLost(window: Window?): Boolean {
@@ -70,9 +76,10 @@ internal object GpuDeviceWatch {
 
     private fun removedReason(window: Window): Int? {
         val layer = findSkiaLayer(window) ?: return null
-        val redrawer = getRedrawer.invoke(layer) ?: return null
-        if (redrawer.javaClass.name != D3D_REDRAWER) return null
-        val devicePtr = deviceField.getLong(redrawer)
+        val driver = getFrameDriver.invoke(layer) ?: return null
+        val renderer = getRenderer.invoke(driver) ?: return null
+        if (renderer.javaClass.name != D3D_RENDERER) return null
+        val devicePtr = deviceField.getLong(renderer)
         if (devicePtr == 0L) return null
         val d3d12 = MemorySegment.ofAddress(devicePtr)
             .reinterpret(ADDRESS.byteSize() * (DEVICE_SLOT + 1))
@@ -93,8 +100,9 @@ internal object GpuDeviceWatch {
         return null
     }
 
-    private const val D3D_REDRAWER = "org.jetbrains.skiko.redrawer.Direct3DRedrawer"
-    private const val DEVICE_SLOT = 6
+    private const val FRAME_DRIVER = "org.jetbrains.skiko.renderer.FrameDriver"
+    private const val D3D_RENDERER = "org.jetbrains.skiko.renderer.Direct3DRenderer"
+    private const val DEVICE_SLOT = 2
     private const val GET_DEVICE_REMOVED_REASON = 37
     private const val REPORT_DEBOUNCE_MS = 3_000L
 }

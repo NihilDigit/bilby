@@ -34,7 +34,10 @@ plugins {
 android {
     // dev.bilby 归 :shared(R 类在那边),这里只生成 BuildConfig
     namespace = "dev.bilby.app"
-    compileSdk = 37
+    // Compose 1.13 要求 compileSdk 37.1
+    compileSdk {
+        version = release(37) { minorApiLevel = 1 }
+    }
 
     defaultConfig {
         applicationId = "dev.bilby"
@@ -106,6 +109,10 @@ android {
         compose = true
         buildConfig = true
     }
+}
+
+composeCompiler {
+    stabilityConfigurationFiles.add(rootProject.layout.projectDirectory.file("compose_stability.conf"))
 }
 
 // 这个模块只是 Android 的打包入口:清单、启动图标、签名与 BuildConfig。代码与界面在 :shared。

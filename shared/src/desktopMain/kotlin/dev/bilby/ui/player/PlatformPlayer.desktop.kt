@@ -3,13 +3,13 @@ package dev.bilby.ui.player
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import dev.bilby.player.BilbyMpvVideoSurface
 import dev.bilby.player.MpvPlayerHandle
 import dev.bilby.player.PlayerHandle
-import org.openani.mediamp.mpv.compose.MpvMediampPlayerSurface
 
 @Composable
 actual fun VideoSurface(player: PlayerHandle, modifier: Modifier) {
-    MpvMediampPlayerSurface((player as MpvPlayerHandle).player.mediamp, modifier)
+    BilbyMpvVideoSurface((player as MpvPlayerHandle).player, modifier)
 }
 
 private object NoPictureInPicture : PictureInPicture {

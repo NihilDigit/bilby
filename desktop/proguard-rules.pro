@@ -55,13 +55,23 @@
     *** sendPointerEvent-*(...);
 }
 
-# 显卡设备失效检测(GpuDeviceWatch)经反射取 Skiko 的 Direct3DRedrawer 及其原生设备结构指针,
-# 问 ID3D12Device::GetDeviceRemovedReason。升级 Skiko 时同步核对这两个成员仍在。
+# 显卡设备失效检测(GpuDeviceWatch)与视频表面(BilbyMpvVideoSurface)经反射取 Skiko 的
+# FrameDriver、FrameProducer、Direct3DRenderer 及其原生设备指针与 DirectContext。
+# 升级 Skiko 时同步核对这些成员仍在。
 -keepclassmembers class org.jetbrains.skiko.SkiaLayer {
-    *** getRedrawer$skiko();
+    *** getFrameDriver$org_jetbrains_skiko_skiko();
 }
--keepclassmembers class org.jetbrains.skiko.redrawer.Direct3DRedrawer {
+-keepclassmembers class org.jetbrains.skiko.renderer.FrameDriver {
+    *** getRenderer();
+    static *** access$getRenderer(org.jetbrains.skiko.renderer.FrameDriver);
+}
+-keepclassmembers class org.jetbrains.skiko.renderer.FrameProducer {
+    *** renderer;
+    *** getRenderer$org_jetbrains_skiko_skiko();
+}
+-keepclassmembers class org.jetbrains.skiko.renderer.Direct3DRenderer {
     *** device;
+    *** context;
 }
 
 # 内置 SQLite(Room 的驱动)经 JNI 调进 native,native 侧按类名与签名回找

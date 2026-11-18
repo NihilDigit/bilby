@@ -11,6 +11,7 @@ import androidx.media3.exoplayer.source.MediaPeriod
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.SinglePeriodTimeline
 import androidx.media3.exoplayer.upstream.Allocator
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +22,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.IOException
@@ -41,6 +43,9 @@ class LazyMediaSourceTest {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
     private val item = MediaItem.Builder().setMediaId("BV1xx411c7mD").build()
+    private val bandwidthMeter by lazy {
+        DefaultBandwidthMeter.Builder(RuntimeEnvironment.getApplication()).build()
+    }
 
     @Test
     fun `发布的时间线带的是自己的身份,不是内层源的`() {
@@ -48,7 +53,7 @@ class LazyMediaSourceTest {
         val source = LazyMediaSource(item, scope) { child }
         val caller = RecordingCaller()
 
-        source.prepareSource(caller, null, PlayerId.UNSET)
+        source.prepareSource(caller, PlayerId.UNSET, bandwidthMeter)
         idle()
 
         val window = caller.timeline!!.getWindow(0, Timeline.Window())
@@ -62,7 +67,7 @@ class LazyMediaSourceTest {
         val source = LazyMediaSource(item, scope) { throw IOException("取流失败") }
         val caller = RecordingCaller()
 
-        source.prepareSource(caller, null, PlayerId.UNSET)
+        source.prepareSource(caller, PlayerId.UNSET, bandwidthMeter)
         idle()
 
         // 播放器在还没有真周期时只问这一处,吞掉的话它会永远停在 BUFFERING。
@@ -75,7 +80,7 @@ class LazyMediaSourceTest {
     fun `非 IO 异常也包成 IOException 抛出`() {
         val source = LazyMediaSource(item, scope) { error("详情拿不到") }
 
-        source.prepareSource(RecordingCaller(), null, PlayerId.UNSET)
+        source.prepareSource(RecordingCaller(), PlayerId.UNSET, bandwidthMeter)
         idle()
 
         val thrown = runCatching { source.maybeThrowSourceInfoRefreshError() }.exceptionOrNull()
@@ -89,7 +94,7 @@ class LazyMediaSourceTest {
         val source = LazyMediaSource(item, scope) { child }
         val caller = RecordingCaller()
 
-        source.prepareSource(caller, null, PlayerId.UNSET)
+        source.prepareSource(caller, PlayerId.UNSET, bandwidthMeter)
         idle()
         source.releaseSource(caller)
         idle()
@@ -104,7 +109,7 @@ class LazyMediaSourceTest {
         val source = LazyMediaSource(item, scope) { gate.await() }
         val caller = RecordingCaller()
 
-        source.prepareSource(caller, null, PlayerId.UNSET)
+        source.prepareSource(caller, PlayerId.UNSET, bandwidthMeter)
         source.releaseSource(caller)
         gate.complete(child)
         idle()

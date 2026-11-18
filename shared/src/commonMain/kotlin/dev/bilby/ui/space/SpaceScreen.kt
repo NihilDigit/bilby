@@ -129,7 +129,7 @@ import dev.bilby.ui.LocalSystemActions
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BiliAsyncImage
-import dev.bilby.ui.components.BilbySplitButton
+import androidx.compose.material3.SplitButtonLayout
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.CoverAspectRatio
@@ -1758,7 +1758,7 @@ private fun SpaceFollowControl(
     val onLeading = if (following) ({ menuOpen = true }) else onToggleFollow
 
     Box {
-        BilbySplitButton(
+        SplitButtonLayout(
             leadingButton = {
                 if (following) {
                     SplitButtonDefaults.OutlinedLeadingButton(onClick = onLeading) { Text(label) }

@@ -44,7 +44,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import dev.bilby.ui.components.StaticListItem
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -613,7 +613,7 @@ private fun SpecialFollowsColumn(
                 menuLabel = stringResource(Res.string.follow_row_actions, up.name),
                 menu = menu,
             ) {
-                StaticListItem(
+                ListItem(
                     leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarRow) },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -969,7 +969,7 @@ private fun FollowingListItem(
     trailing: (@Composable () -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
-    StaticListItem(
+    ListItem(
         supportingContent = up.sign.takeIf { it.isNotBlank() }?.let { sign ->
             {
                 Text(

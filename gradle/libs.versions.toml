@@ -1,57 +1,49 @@
 [versions]
-agp = "9.3.1"
+agp = "9.5.1"
 # kotlin / ksp 同时出现在根 build.gradle.kts 的 buildscript classpath 里,改这里要同步改那边
-kotlin = "2.4.10"
-ksp = "2.3.11"
+kotlin = "2.4.21"
+ksp = "2.3.14"
 
-coreKtx = "1.19.0"
+coreKtx = "1.19.1"
 activityCompose = "1.13.0"
 lifecycle = "2.11.0"
-composeBom = "2026.07.01"
-navigation3 = "1.1.5"
+composeBom = "2026.11.00"
+navigation3 = "1.2.0"
 
-media3 = "1.10.1"
-room = "2.8.4"
-datastore = "1.2.1"
+media3 = "1.11.1"
+room = "2.8.5"
+datastore = "1.3.0"
 work = "2.12.0"
-ktor = "3.5.2"
-serialization = "1.11.0"
-coil = "3.5.0"
+ktor = "3.6.1"
+serialization = "1.13.0"
+coil = "3.6.3"
 zxing = "3.5.4"
 
 junit = "4.13.2"
 # Media3 的 MediaSource 在准备与释放的每一步上都要一个 Looper,普通 JVM 单测里没有。
-robolectric = "4.16"
+robolectric = "4.18.1"
 kotlinxCoroutines = "1.11.0"
 
-# 桌面端(:player-desktop)。停在 1.12.1:它与 mediamp 0.5.0 编译时同为 skiko 0.150.1。
-# 1.13.0-alpha01 的 skiko 0.152 删掉了 ContextHandler,DirectContext 改挂在
-# Direct3DRedrawer.context 上,mediamp 反射取 contextHandler 失败,画面全黑。
-# 1.12.1 配 material3 1.5.0-alpha22,比 Android 端 BOM 的 alpha25 旧。按 app 字节码逐条核对,
-# 差距只有两处:alpha22 没有不带 onClick 的 SegmentedListItem 重载(ProfileScreen 预览行),
-# MediumFlexibleTopAppBar 在 alpha22 仍需 ExperimentalMaterial3ExpressiveApi。
-composeMultiplatform = "1.12.1"
-# 打包插件单独用 1.13 的 alpha:release 的 AOT 缓存(buildTypes.release.aot)从这一版才有。
-# 插件只管打包、资源生成与 DSL,界面库的版本由上面的 composeMultiplatform 定;两版插件的资源
-# 生成代码逐字节相同。compose.desktop.currentOs 一类访问器跟插件版本走,所以桌面运行库在
-# 下面按坐标写,不用它们。
-composeGradlePlugin = "1.13.0-alpha01"
-# 与 composeMultiplatform 配套的几条 JetBrains 多平台线。Android 目标上它们各自重定向到
-# androidx 的同名构件,实际版本由 :app 的 BOM 与上面的 androidx 版本抬高。
-composeMultiplatformMaterial3 = "1.12.0-alpha03"
+# 桌面端与 Android 统一在 CMP 1.13.0-rc01:Android 端由 JetBrains .module 重定向到
+# androidx.compose.*:1.13.0-rc01 与 material3:1.5.0-rc01,与下方 compose-bom-beta 2026.11.00 一致;
+# 桌面端使用 Skiko 0.156.1,视频表面由 Bilby 自己的 BilbyMpvVideoSurface 经 FFM 读取
+# Direct3DRenderer 并直接调用 mediamp 0.5.3 的 MPVHandleDesktop D3D11/readback JNI,不再受制于
+# mediamp-mpv-desktop 自带表面对旧 Skiko 0.150 Direct3DRedrawer 的反射。
+composeMultiplatform = "1.13.0-rc01"
+composeGradlePlugin = "1.13.0-rc01"
+composeMultiplatformMaterial3 = "1.13.0-rc01"
 composeMultiplatformIcons = "1.7.3"
-navigation3Multiplatform = "1.1.2"
-# 列表与详情并排(ListDetailSceneStrategy)。rc01 编译于 navigation3-ui 1.1.0、Compose 1.10.0,
-# 不依赖 material3,不会顶掉上面钉住的版本。
-composeMultiplatformAdaptive = "1.3.0-rc01"
+navigation3Multiplatform = "1.2.0"
+# 列表与详情并排(ListDetailSceneStrategy),1.3.0 稳定版在 Android 与桌面端完全一致。
+composeMultiplatformAdaptive = "1.3.0"
 lifecycleMultiplatform = "2.11.0"
-sqlite = "2.6.2"
-# 桌面播放后端。它的运行时包带打过 D3D11 render API 补丁的 libmpv,见 player-desktop/build.gradle.kts。
-mediamp = "0.5.0"
-# 桌面全屏要直接调 Win32(见 desktop 的 WindowsFullscreen)。跟 mediamp 传递带进来的版本一致。
-jna = "5.13.0"
+sqlite = "2.7.1"
+# 桌面播放后端。它的运行时包带打过 D3D11 render API 补丁的 libmpv 与 mediampv.dll。
+mediamp = "0.5.3"
+# 桌面全屏与安装器检测直调 Win32(WindowsFullscreen / WindowsInstaller)。
+jna = "5.19.1"
 # 应用内差分更新只用它带的 libzstd 原生库,解码经 FFM 直调 C API(update/ZstdPatch.kt)。
-zstdJni = "1.5.7-20"
+zstdJni = "1.5.7-28"
 # Windows 的触摸与笔输入接进 Compose(desktop 的 WindowsCaption)。独立仓库 NihilDigit/compose-windows-touch。
 windowsTouch = "0.1.0"
 
@@ -68,11 +60,10 @@ androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-ru
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 
 # Compose：版本由 BOM 统一,单个依赖不写版本号。
-# 走 alpha 线是为了 material3 1.5.0：ButtonGroup / SplitButton / ToggleButton / FAB menu /
-# floating toolbar / wavy progress 在这一版转正,motion scheme 也从 experimental 毕业,
-# 稳定线的 1.4.0 里这些要么没有要么还是 experimental。
-# 2026.07.01 pin 的是 ui/foundation 1.12.0-rc01 + material3 1.5.0-alpha25 + icons 1.7.8。
-androidx-compose-bom = { module = "androidx.compose:compose-bom-alpha", version.ref = "composeBom" }
+# 走 beta 线是为了 material3 1.5.0-rc01：ButtonGroup / SplitButtonLayout / ToggleButton /
+# FAB menu / floating toolbar / wavy progress 等 M3 Expressive API,同时与 CMP 1.13.0-rc01 对齐。
+# 2026.11.00 pin 的是 ui/foundation 1.13.0-rc01 + material3 1.5.0-rc01 + icons 1.7.8 + adaptive 1.3.0。
+androidx-compose-bom = { module = "androidx.compose:compose-bom-beta", version.ref = "composeBom" }
 androidx-compose-ui = { module = "androidx.compose.ui:ui" }
 androidx-compose-ui-graphics = { module = "androidx.compose.ui:ui-graphics" }
 androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }

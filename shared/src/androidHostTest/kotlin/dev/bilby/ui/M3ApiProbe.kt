@@ -23,7 +23,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 
 /**
- * 探针:确认 material3 1.5.0-alpha25 上这些 API 真的存在、可见性够、需要哪些 opt-in。
+ * 探针:确认 material3 1.5.0-rc01 上这些 API 真的存在、可见性够、需要哪些 opt-in。
  *
  * **放在 test source set,不放 main。** 探针的用途只是"这个 API 在不在",不需要进产物;
  * 放在 main 里意味着任何一个中间态的编译错误都会让同一棵树上的其他人停工 —— 已经发生过一次。
@@ -62,7 +62,7 @@ private fun Probe() {
     // 6. 状态型按钮:选中态配色由组件维护,不用自己 if/else 调 tint
     ToggleButton(checked = false, onCheckedChange = {}) {}
     FilledTonalToggleButton(checked = true, onCheckedChange = {}) {}
-    ToggleButtonDefaults.toggleButtonColors()
+    ToggleButtonDefaults.colors()
 
     // 7. 加载指示器(1.4.0 上类不存在)
     LoadingIndicator()

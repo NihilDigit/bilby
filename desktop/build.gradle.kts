@@ -31,6 +31,10 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
+composeCompiler {
+    stabilityConfigurationFiles.add(rootProject.layout.projectDirectory.file("compose_stability.conf"))
+}
+
 // mediamp 0.5.0 把 ui-test-junit4 误放在运行时作用域,会把 junit、truth、guava、coroutines-test
 // 带进发行包。排除写在配置上而不是 mediamp 依赖上:它是 KMP 根坐标,经 available-at 跳到
 // -desktop 变体后,依赖级的 exclude 不再生效。
@@ -44,7 +48,7 @@ val releaseVersionName: String = (findProperty("bilbyVersion") as String?) ?: "0
 // x64 与 arm64 的发行包由 release.yml 各在对应架构的 runner 上构建。
 val hostArch = if (System.getProperty("os.arch") == "aarch64") "arm64" else "x64"
 val zstdClassifier = if (hostArch == "arm64") "win_aarch64" else "win_amd64"
-// 等同 compose.desktop.currentOs,但版本跟界面库走,不跟打包插件走(见 libs.versions.toml 的 composeGradlePlugin)
+// 桌面运行库按构建机架构取(也可以使用 compose.desktop.currentOs,现版本与插件同为 1.13.0-rc01)
 val composeDesktopRuntime = "org.jetbrains.compose.desktop:desktop-jvm-windows-$hostArch:${libs.versions.composeMultiplatform.get()}"
 val mpvRuntime = "org.openani.mediamp:mediamp-mpv-runtime-windows-$hostArch:${libs.versions.mediamp.get()}"
 

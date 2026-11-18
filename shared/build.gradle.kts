@@ -24,7 +24,10 @@ kotlin {
     }
     android {
         namespace = "dev.bilby"
-        compileSdk = 37
+        // Compose 1.13 要求 compileSdk 37.1
+        compileSdk {
+            version = release(37) { minorApiLevel = 1 }
+        }
         minSdk = 29
         androidResources { enable = true }
         withHostTest {
@@ -91,21 +94,14 @@ kotlin {
             if (isWindowsArm64Host) runtimeOnly(project(":sqlite-woa64"))
         }
         androidMain.dependencies {
-            // Android 目标上 Compose 各构件按 BOM 取,比 CMP 1.12.1 映射到的版本新
-            // (material3 alpha25 对 alpha22)。桌面端编译的是 CMP 那一套,两边都得过。
+            // commonMain 的 CMP 1.13.0-rc01 / navigation3 1.2.0 / adaptive 1.3.0 / lifecycle 2.11.0
+            // 在 Android 端已直接重定向到完全一致的 AndroidX 构件;此处保留 BOM 以把
+            // material-icons-extended 从 1.7.3 抬到 1.7.8,并与 :app 的 ui-tooling 对齐。
             api(project.dependencies.platform(libs.androidx.compose.bom))
-            api(libs.androidx.compose.ui)
-            api(libs.androidx.compose.material3)
             api(libs.androidx.compose.material.icons.extended)
-            api(libs.androidx.navigation3.runtime)
-            api(libs.androidx.navigation3.ui)
-            api(libs.androidx.adaptive.navigation3)
-            api(libs.androidx.lifecycle.viewmodel.navigation3)
 
             api(libs.androidx.core.ktx)
             api(libs.androidx.activity.compose)
-            api(libs.androidx.lifecycle.runtime.compose)
-            api(libs.androidx.lifecycle.viewmodel.compose)
 
             api(libs.androidx.media3.exoplayer)
             api(libs.androidx.media3.exoplayer.dash)
@@ -155,6 +151,14 @@ tasks.named<Test>("desktopTest") {
     javaLauncher = desktopJdk
     jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
+if (isWindowsArm64Host) {
+    // Robolectric 的 native runtime 与 Conscrypt 都不提供 Windows ARM64 原生库;这里的 Robolectric
+    // 单测只用 Looper、Bundle 与 MediaSession,不碰 SQLite 与 Conscrypt TLS,在 ARM64 宿主上关掉即可。
+    tasks.withType<Test>().matching { it.name == "testAndroidHostTest" }.configureEach {
+        systemProperty("robolectric.sqliteMode", "LEGACY")
+        systemProperty("robolectric.conscryptMode", "OFF")
+    }
+}
 
 // mediamp 0.5.0 把 ui-test-junit4 误放在运行时作用域,理由同 :desktop 里的同一条排除。
 configurations.configureEach {
@@ -166,13 +170,17 @@ dependencies {
     add("kspDesktop", libs.androidx.room.compiler)
 }
 
-// 这项检查拿界面库的版本对照打包插件的版本。两者有意不同(插件 1.13 alpha 只为 AOT 缓存,
-// 界面库停在 1.12.1,见 libs.versions.toml),每次构建都报一遍只会淹没真正的警告。
-compose.dependencyCompatibility {
-    enabled = false
+composeCompiler {
+    stabilityConfigurationFiles.add(rootProject.layout.projectDirectory.file("compose_stability.conf"))
 }
 
-compose.resources {
-    packageOfResClass = "dev.bilby.resources"
-    generateResClass = always
+compose {
+    dependencyCompatibility {
+        // Coil 3.6.3 传递依赖声明了 skiko 0.150.1,由 CMP 1.13.0-rc01 统一解析到 0.156.1。
+        exclude("io.coil-kt.coil3")
+    }
+    resources {
+        packageOfResClass = "dev.bilby.resources"
+        generateResClass = always
+    }
 }

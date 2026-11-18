@@ -45,7 +45,7 @@ import dev.bilby.stringResource
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.PaneSheet
-import dev.bilby.ui.components.StaticListItem
+import androidx.compose.material3.ListItem
 import dev.bilby.ui.components.trackEditableFocus
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -198,7 +198,7 @@ fun GroupManagerSheet(
         if (error != null) SheetMessage(error)
         LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
             items(groups, key = { it.id }) { group ->
-                StaticListItem(
+                ListItem(
                     trailingContent = if (group.isBuiltIn) null else {
                         {
                             Row {

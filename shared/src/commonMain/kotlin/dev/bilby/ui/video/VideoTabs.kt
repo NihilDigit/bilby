@@ -443,7 +443,7 @@ fun VideoTabs(
         ) {
         Column(modifier = Modifier.fillMaxSize()) {
         banner?.invoke()
-        val toggleColors = ToggleButtonDefaults.toggleButtonColors(
+        val toggleColors = ToggleButtonDefaults.colors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
             contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
             checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
