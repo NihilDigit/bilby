@@ -29,16 +29,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.bilby.ui.DesktopLanguageStore
+import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.window.WindowPlacement
-import androidx.compose.ui.window.application
-import coil3.ImageLoader
+import androidx.compose.ui.window.awaitApplication
 import coil3.SingletonImageLoader
-import coil3.network.okhttp.OkHttpNetworkFetcherFactory
-import coil3.request.crossfade
 import dev.bilby.AppBuild
 import dev.bilby.AppContainer
 import dev.bilby.BiliLog
 import dev.bilby.DesktopPlatform
+import dev.bilby.buildBilbyImageLoader
 import dev.bilby.data.AppearancePrefs
 import dev.bilby.ui.BilbyRoot
 import dev.bilby.ui.DesktopSystemActions
@@ -50,10 +49,12 @@ import dev.bilby.ui.player.LocalWindowFullscreen
 import dev.bilby.ui.player.LocalDesktopPip
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.SystemReducedMotion
 import dev.bilby.update.DesktopAppUpdater
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.runBlocking
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.toComposeImageBitmap
@@ -95,23 +96,24 @@ fun main(args: Array<String>) {
     container = AppContainer(platform)
 
     // Coil 3 不会自动接上网络加载器,不注册的话 http(s) 图片静默不加载,同 Android 的 BilbyApplication。
-    // 桌面端额外注册 SkiaAnimatedImageDecoder,让 GIF 与动态 WebP 按多帧动图解码渲染。
+    // 桌面端与 Android 共用 buildBilbyImageLoader 的内存/磁盘缓存与连接池配置,并挂上 SkiaAnimatedImageDecoder。
     SingletonImageLoader.setSafe { context ->
-        ImageLoader.Builder(context)
-            .components {
-                add(OkHttpNetworkFetcherFactory())
-                add(SkiaAnimatedImageDecoder.Factory())
-            }
-            .crossfade(true)
-            .build()
+        buildBilbyImageLoader(
+            context = context,
+            diskCacheDir = platform.filesDir.resolve("coil_cache"),
+            extraComponents = { add(SkiaAnimatedImageDecoder.Factory()) },
+        )
     }
+
+    SystemReducedMotion.ensureStarted()
 
     val bounds = WindowBounds(File(platform.filesDir, "window.properties"))
     // 在第一帧之前读出并设好默认 Locale,界面一起来就是选定的语言。
     val languageStore = DesktopLanguageStore(File(platform.filesDir, "language.properties"))
 
-    application {
-        val windowState = remember { bounds.initialState() }
+    runBlocking(AppMotionScale) {
+        awaitApplication {
+            val windowState = remember { bounds.initialState() }
         var fullscreen: WindowsFullscreen? = null
         var pip: WindowsPip? = null
         val quit = {
@@ -195,7 +197,7 @@ fun main(args: Array<String>) {
                             if (composedLanguage == language) {
                                 saveableHolder.SaveableStateProvider("root") {
                                     LinkDropTarget(onLinkDropped = { incomingLink.value = it }) {
-                                        BilbyRoot(container, incomingLink)
+                                        BilbyRoot(container, incomingLink, wrapTheme = false)
                                     }
                                 }
                             } else {
@@ -212,9 +214,15 @@ fun main(args: Array<String>) {
             }
         }
     }
+    }
     // 窗口关了、application 返回之后显式结束进程。mpv 与 JNA 留下的非守护线程会让 JVM 一直
     // 活着:实测关窗后进程还在,占着近 1GB 内存,下次启动又多一个。
     exitProcess(0)
+}
+
+private object AppMotionScale : MotionDurationScale {
+    override val scaleFactor: Float
+        get() = if (SystemReducedMotion.reduced) 0f else 1f
 }
 
 private const val DesktopToastDurationMillis = 2_200L

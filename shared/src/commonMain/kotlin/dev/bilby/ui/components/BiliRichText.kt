@@ -148,32 +148,41 @@ fun BiliRichText(
         }
     }
 
-    // 尺寸按 sp 给(跟着系统字号缩放),图片撑满占位符即可。判断在 inlineEmoteSize 里,
-    // 评论区共用同一处。
-    val inline = emojis.mapIndexed { index, emoji ->
-        val size = inlineEmoteSize(style, emoji.scale)
-        emojiId(index) to InlineTextContent(
-            Placeholder(size, size, PlaceholderVerticalAlign.TextCenter),
-        ) {
-            BiliAsyncImage(url = emoji.url, contentDescription = null, modifier = Modifier.fillMaxSize())
+    val inline = remember(emojis, hasVideoIcon, style.fontSize, style.lineHeight, mentionColor) {
+        if (emojis.isEmpty() && !hasVideoIcon) {
+            emptyMap()
+        } else {
+            buildMap {
+                emojis.forEachIndexed { index, emoji ->
+                    val size = inlineEmoteSize(style, emoji.scale)
+                    put(
+                        emojiId(index),
+                        InlineTextContent(
+                            Placeholder(size, size, PlaceholderVerticalAlign.TextCenter),
+                        ) {
+                            BiliAsyncImage(url = emoji.url, contentDescription = null, modifier = Modifier.fillMaxSize())
+                        },
+                    )
+                }
+                if (hasVideoIcon) {
+                    // 图标跟着字号走,不跟着表情走:它是这段文字的一部分,比正文大一圈会把行撑开。
+                    val iconSize = style.fontSize
+                    put(
+                        VideoIconId,
+                        InlineTextContent(
+                            Placeholder(iconSize, iconSize, PlaceholderVerticalAlign.TextCenter),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.OndemandVideo,
+                                contentDescription = null,
+                                tint = mentionColor,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        },
+                    )
+                }
+            }
         }
-    }.toMap() + if (!hasVideoIcon) {
-        emptyMap()
-    } else {
-        // 图标跟着字号走,不跟着表情走:它是这段文字的一部分,比正文大一圈会把行撑开。
-        val iconSize = style.fontSize
-        mapOf(
-            VideoIconId to InlineTextContent(
-                Placeholder(iconSize, iconSize, PlaceholderVerticalAlign.TextCenter),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.OndemandVideo,
-                    contentDescription = null,
-                    tint = mentionColor,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            },
-        )
     }
 
     Text(

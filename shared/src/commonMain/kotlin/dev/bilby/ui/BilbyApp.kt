@@ -36,9 +36,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -68,7 +71,6 @@ import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Forum
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenLoading
-import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.SelectAll
@@ -77,15 +79,23 @@ import androidx.compose.material.icons.outlined.Subscriptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FabPosition
+import androidx.compose.material3.FloatingToolbarDefaults
+import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ShortNavigationBar
 import androidx.compose.material3.ShortNavigationBarItem
+import androidx.compose.material3.ToggleButton
+import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.WideNavigationRail
 import androidx.compose.material3.WideNavigationRailDefaults
 import androidx.compose.material3.WideNavigationRailItem
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.SnackbarDuration
@@ -96,10 +106,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -151,6 +161,9 @@ import dev.bilby.ui.dynamic.DynamicDetailViewModel
 import dev.bilby.ui.dynamic.OtherDynamicsScreen
 import dev.bilby.ui.dynamic.OtherDynamicsViewModel
 import dev.bilby.ui.components.BilbyTopBar
+import dev.bilby.ui.components.DesktopMenuMotionTheme
+import dev.bilby.ui.components.DestructiveConfirmButton
+import dev.bilby.ui.components.menuItemShape
 import dev.bilby.BvidCodec
 import dev.bilby.ui.comment.CommentThreadRoute
 import dev.bilby.ui.comment.CommentUiState
@@ -300,12 +313,13 @@ fun BilbyRoot(
     container: AppContainer,
     incomingLink: MutableStateFlow<String?>,
     windowChrome: @Composable () -> Unit = {},
+    wrapTheme: Boolean = true,
 ) {
     // 读到之前用默认值(跟随系统、按壁纸取色):DataStore 头一次读在一两帧之内,选了别的
     // 配色的人会看到一帧默认色。不为这一帧在主线程上同步读盘。
     val appearance by container.settings.appearancePrefs
         .collectAsStateWithLifecycle(initialValue = AppearancePrefs())
-    BilbyTheme(appearance) {
+    val rootContent: @Composable () -> Unit = {
         windowChrome()
         // 导航层的提示浮在整棵树上面。放在这里而不是某个页面的 Scaffold 里:说这句话的
         // 是压栈动作,而压栈能从任何一页发起,各页面的 Scaffold 都会跟着页面一起换掉。
@@ -361,6 +375,11 @@ fun BilbyRoot(
             )
         }
     }
+    if (wrapTheme) {
+        BilbyTheme(appearance, content = rootContent)
+    } else {
+        rootContent()
+    }
 }
 
 @Composable
@@ -396,31 +415,27 @@ private fun BilbyApp(
     // 夜间模式配置在冷启动首帧内先读完再建导航树，落在生效窗口内时不闪过常规信息流。
     val nightPrefsState by container.settings.nightModePrefs.collectAsStateWithLifecycle(initialValue = null)
     val nightPrefs = nightPrefsState ?: return
-    var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(
-        nightPrefs.enabled,
-        nightPrefs.startMinuteOfDay,
-        nightPrefs.endMinuteOfDay,
-        nightPrefs.overrideUntilEpochMillis,
-        nightPrefs.manualUntilEpochMillis,
+    val nightStatus by produceState(
+        initialValue = evaluateNightMode(nightPrefs, System.currentTimeMillis()),
+        key1 = nightPrefs,
     ) {
         val initialNow = System.currentTimeMillis()
-        nowMillis = initialNow
+        value = evaluateNightMode(nightPrefs, initialNow)
         if (nightPrefs.manualUntilEpochMillis > 0L && initialNow >= nightPrefs.manualUntilEpochMillis) {
             container.persistScope.launch { container.settings.clearNightModeManualUntil() }
         }
-        if (!nightPrefs.enabled && nightPrefs.manualUntilEpochMillis <= 0L) return@LaunchedEffect
+        if (!nightPrefs.enabled && nightPrefs.manualUntilEpochMillis <= 0L) return@produceState
         while (true) {
             delay(if (nightPrefs.enabled) NIGHT_ACTIVE_TICK_MILLIS else NIGHT_IDLE_TICK_MILLIS)
             val now = System.currentTimeMillis()
-            nowMillis = now
+            val next = evaluateNightMode(nightPrefs, now)
+            if (next != value) value = next
             if (nightPrefs.manualUntilEpochMillis > 0L && now >= nightPrefs.manualUntilEpochMillis) {
                 container.persistScope.launch { container.settings.clearNightModeManualUntil() }
                 if (!nightPrefs.enabled) break
             }
         }
     }
-    val nightStatus = evaluateNightMode(nightPrefs, nowMillis)
     val allowedMids = remember(nightPrefs.allowedUps) { nightPrefs.allowedMids }
     var nightEngaged by remember { mutableStateOf(nightStatus is NightWindowStatus.Active) }
 
@@ -1219,8 +1234,9 @@ private fun BilbyApp(
             entry<Home> {
                 CutoutSafe {
                     if (nightEngaged) {
-                        val isManualNight = when (nightStatus) {
-                            is NightWindowStatus.Active -> nightStatus.manual
+                        val currentNightStatus = nightStatus
+                        val isManualNight = when (currentNightStatus) {
+                            is NightWindowStatus.Active -> currentNightStatus.manual
                             is NightWindowStatus.Overridden -> false
                             NightWindowStatus.Inactive -> true
                         }
@@ -1280,6 +1296,11 @@ private fun BilbyApp(
                 metadata = ListDetailSceneStrategy.listPane(
                     sceneKey = SettingsScene,
                     detailPlaceholder = {
+                        DesktopIslandFrame(
+                            role = if (listDetailWide) DesktopPaneRole.SplitEnd else DesktopPaneRole.Single,
+                        ) {
+                            Box(Modifier.fillMaxSize())
+                        }
                         LaunchedEffect(Unit) {
                             push(SettingsPage(if (currentNightEngaged) SettingsSection.NightMode else SettingsSection.Appearance))
                         }
@@ -1443,7 +1464,14 @@ private fun BilbyApp(
                                     notice.uri.isNotBlank() -> openLink(notice.uri)
                                 }
                             },
-                            onBack = { backStack.removeLastOrNull() },
+                            onBack = {
+                                while (backStack.size > 1 && backStack.lastOrNull() !is Messages) {
+                                    backStack.removeLastOrNull()
+                                }
+                                if (backStack.lastOrNull() is Messages) {
+                                    backStack.removeLastOrNull()
+                                }
+                            },
                         )
                     }
                 }
@@ -1516,7 +1544,14 @@ private fun BilbyApp(
                                     Whisper(it.talkerId, it.name, it.faceUrl, it.isSystem, upPushes = true, inListPane = true),
                                 )
                             },
-                            onBack = { backStack.removeLastOrNull() },
+                            onBack = {
+                                while (backStack.size > 1 && backStack.lastOrNull() !is MessagePushes) {
+                                    backStack.removeLastOrNull()
+                                }
+                                if (backStack.lastOrNull() is MessagePushes) {
+                                    backStack.removeLastOrNull()
+                                }
+                            },
                         )
                     }
                 }
@@ -2221,7 +2256,7 @@ private fun BoxScope.DraftQueueOverlay(
         if (draftItems.isEmpty() || hasVideoPage) draftSheetOpen = false
     }
     AnimatedVisibility(
-        visible = !hasVideoPage && draftItems.isNotEmpty(),
+        visible = !hasVideoPage && draftItems.isNotEmpty() && !draftSheetOpen,
         modifier = modifier.align(Alignment.BottomCenter),
     ) {
         DraftQueueBar(
@@ -2308,23 +2343,18 @@ private fun DraftQueueBar(
     onPlay: () -> Unit,
     onClear: () -> Unit,
 ) {
-    Surface(
-        onClick = onOpen,
-        shape = MaterialTheme.shapes.extraLarge,
-        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-        contentColor = MaterialTheme.colorScheme.onSurface,
+    HorizontalFloatingToolbar(
+        expanded = true,
+        colors = FloatingToolbarDefaults.standardFloatingToolbarColors(),
         modifier = Modifier
-            .widthIn(max = Breakpoints.VideoRowMaxWidth)
-            .fillMaxWidth()
+            .navigationBarsPadding()
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
     ) {
         Row(
-            modifier = Modifier.padding(
-                start = Spacing.Comfortable,
-                end = Spacing.Hair,
-                top = Spacing.Hair,
-                bottom = Spacing.Hair,
-            ),
+            modifier = Modifier
+                .clip(MaterialTheme.shapes.large)
+                .clickable(role = Role.Button, onClick = onOpen)
+                .padding(horizontal = Spacing.Tight, vertical = Spacing.Tight),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
@@ -2339,31 +2369,31 @@ private fun DraftQueueBar(
                 style = MaterialTheme.typography.labelLargeEmphasized.tabular,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
             )
-            FilledTonalButton(
-                onClick = onPlay,
-                contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.PlayArrow,
-                    contentDescription = null,
-                    modifier = Modifier.size(Dimens.IconInline),
-                )
-                Text(
-                    text = stringResource(Res.string.queue_draft_play),
-                    style = MaterialTheme.typography.labelLargeEmphasized,
-                    modifier = Modifier.padding(start = Spacing.Hair),
-                )
-            }
-            IconButton(onClick = onClear) {
-                Icon(
-                    imageVector = Icons.Filled.Close,
-                    contentDescription = stringResource(Res.string.action_clear),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(Dimens.IconInline),
-                )
-            }
+        }
+        Spacer(Modifier.width(Spacing.Tight))
+        FilledTonalButton(
+            onClick = onPlay,
+            contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = null,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+            Text(
+                text = stringResource(Res.string.queue_draft_play),
+                style = MaterialTheme.typography.labelLargeEmphasized,
+                modifier = Modifier.padding(start = Spacing.Hair),
+            )
+        }
+        IconButton(onClick = onClear) {
+            Icon(
+                imageVector = Icons.Filled.Close,
+                contentDescription = stringResource(Res.string.action_clear),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
         }
     }
 }
@@ -2811,6 +2841,7 @@ private fun rememberSettingsViewModel(container: AppContainer): SettingsViewMode
  * 离开这一页就该没有。两处偏离见 [HistoryScreen] 的说明:进入多选不只有长按一条路;
  * 删除不可撤销(服务端没有恢复接口),所以用确认对话框,不用可撤销的 Snackbar。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun HistoryRoute(
     container: AppContainer,
@@ -2851,19 +2882,11 @@ private fun HistoryRoute(
     LaunchedEffect(state.items.isEmpty()) {
         if (state.items.isEmpty()) scrollBehavior.state.contentOffset = 0f
     }
+    val layoutDirection = LocalLayoutDirection.current
+    val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            // **进出多选是换一条顶栏,不是换几个图标**,所以两条之间淡入淡出,不硬切。
-            // 硬切的表现是标题和整排动作在一帧里全变,而人只按了一下「选择」—— 读起来像
-            // 跳到了另一个页面。风格指南 §6 那张表:这是组件层的显隐,取 motionScheme 的
-            // effects 档,不是转场的 tween。
-            //
-            // **`contentKey` 认的是"在不在多选态",不是那个集合本身。** 不给的话每勾一条
-            // (集合换了个新实例)就重新淡一次,而「已选 3 项」正是要在淡不动的时候连续变。
-            // 退场那一帧 AnimatedContent 手里仍是上一个非空集合,所以 ids 在那条分支里不为 null。
-            // transitionSpec 不是组合上下文,主题里的 spec 要先在外面取出来。
-            val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
             AnimatedContent(
                 targetState = selectedIds,
                 transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
@@ -2894,58 +2917,87 @@ private fun HistoryRoute(
                                     contentDescription = stringResource(Res.string.history_more),
                                 )
                             }
-                            DropdownMenu(
-                                expanded = menuExpanded,
-                                onDismissRequest = { menuExpanded = false },
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(Res.string.history_clear_finished)) },
-                                    enabled = finished.isNotEmpty(),
-                                    onClick = {
-                                        menuExpanded = false
-                                        confirmingClearFinished = true
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(Res.string.history_clear_all)) },
-                                    enabled = state.items.isNotEmpty(),
-                                    onClick = {
-                                        menuExpanded = false
-                                        confirmingClearAll = true
-                                    },
-                                )
+                            DesktopMenuMotionTheme {
+                                DropdownMenu(
+                                    expanded = menuExpanded,
+                                    onDismissRequest = { menuExpanded = false },
+                                    shape = MenuDefaults.shape,
+                                    containerColor = MenuDefaults.containerColor,
+                                ) {
+                                    DropdownMenuItem(
+                                        onClick = {
+                                            menuExpanded = false
+                                            confirmingClearFinished = true
+                                        },
+                                        text = { Text(stringResource(Res.string.history_clear_finished)) },
+                                        shape = menuItemShape(0, 2),
+                                        enabled = finished.isNotEmpty(),
+                                    )
+                                    DropdownMenuItem(
+                                        onClick = {
+                                            menuExpanded = false
+                                            confirmingClearAll = true
+                                        },
+                                        text = { Text(stringResource(Res.string.history_clear_all)) },
+                                        shape = menuItemShape(1, 2),
+                                        enabled = state.items.isNotEmpty(),
+                                    )
+                                }
                             }
                         },
                     )
                 } else {
-                    // 多选时整条顶栏换掉,返回箭头改成"退出多选"(M3 的 contextual top app bar)。
+                    // 多选时顶栏只留退出按钮与选中计数，具体批量动作收到底部拇指区浮动工具条。
                     BilbyTopBar(
                         title = stringResource(Res.string.history_selected_count, ids.size),
                         onBack = { selectedIds = null },
                         scrollBehavior = scrollBehavior,
-                        actions = {
-                            val all = state.items.map { it.oid }.toSet()
-                            IconButton(onClick = { selectedIds = if (ids == all) emptySet() else all }) {
-                                Icon(
-                                    Icons.Outlined.SelectAll,
-                                    contentDescription = stringResource(Res.string.history_select_all),
-                                )
-                            }
-                            IconButton(
-                                onClick = { confirmingDeleteSelected = true },
-                                enabled = ids.isNotEmpty() && !state.mutating,
-                            ) {
-                                Icon(
-                                    Icons.Outlined.DeleteOutline,
-                                    contentDescription = stringResource(Res.string.action_delete),
-                                )
-                            }
-                        },
+                    )
+                }
+            }
+        },
+        floatingActionButtonPosition = FabPosition.Center,
+        floatingActionButton = {
+            AnimatedVisibility(
+                visible = selectedIds != null,
+                enter = slideInVertically { it } + fadeIn(fadeSpec),
+                exit = slideOutVertically { it } + fadeOut(fadeSpec),
+            ) {
+                val ids = selectedIds ?: emptySet()
+                val all = remember(state.items) { state.items.map { it.oid }.toSet() }
+                val allSelected = all.isNotEmpty() && ids == all
+                HorizontalFloatingToolbar(
+                    expanded = true,
+                    colors = FloatingToolbarDefaults.standardFloatingToolbarColors(),
+                ) {
+                    ToggleButton(
+                        checked = allSelected,
+                        onCheckedChange = { selectedIds = if (allSelected) emptySet() else all },
+                    ) {
+                        Icon(Icons.Outlined.SelectAll, contentDescription = null)
+                        Spacer(Modifier.width(Spacing.Hair))
+                        Text(stringResource(Res.string.history_select_all))
+                    }
+                    Spacer(Modifier.width(Spacing.Tight))
+                    DestructiveConfirmButton(
+                        text = stringResource(Res.string.action_delete),
+                        enabled = ids.isNotEmpty() && !state.mutating,
+                        onClick = { confirmingDeleteSelected = true },
                     )
                 }
             }
         },
     ) { insets ->
+        val effectivePadding = if (selectedIds != null) {
+            PaddingValues(
+                start = insets.calculateStartPadding(layoutDirection),
+                top = insets.calculateTopPadding(),
+                end = insets.calculateEndPadding(layoutDirection),
+                bottom = insets.calculateBottomPadding() + ToViewFabClearance,
+            )
+        } else {
+            insets
+        }
         HistoryScreen(
             state = state,
             onItemClick = { onVideoClick(it.bvid) },
@@ -2960,7 +3012,7 @@ private fun HistoryRoute(
             onDeleteSingle = { item -> confirmingDeleteSingle = item },
             onUpClick = onUpClick,
             onDismissMutationError = vm::dismissMutationError,
-            contentPadding = insets,
+            contentPadding = effectivePadding,
         )
     }
 
@@ -2969,6 +3021,7 @@ private fun HistoryRoute(
     confirmingDeleteSingle?.let { target ->
         HistoryConfirmDialog(
             message = stringResource(Res.string.history_delete_one_confirm),
+            confirmLabel = stringResource(Res.string.action_delete),
             onConfirm = { vm.delete(listOf(target)) },
             onDismiss = { confirmingDeleteSingle = null },
         )
@@ -2976,6 +3029,7 @@ private fun HistoryRoute(
     if (confirmingDeleteSelected) {
         HistoryConfirmDialog(
             message = stringResource(Res.string.history_delete_confirm, selected.size),
+            confirmLabel = stringResource(Res.string.action_delete),
             onConfirm = {
                 vm.delete(selected)
                 selectedIds = null
@@ -2986,6 +3040,7 @@ private fun HistoryRoute(
     if (confirmingClearFinished) {
         HistoryConfirmDialog(
             message = stringResource(Res.string.history_clear_finished_confirm, finished.size),
+            confirmLabel = stringResource(Res.string.action_clear),
             onConfirm = { vm.delete(finished) },
             onDismiss = { confirmingClearFinished = false },
         )
@@ -2993,6 +3048,7 @@ private fun HistoryRoute(
     if (confirmingClearAll) {
         HistoryConfirmDialog(
             message = stringResource(Res.string.history_clear_all_confirm),
+            confirmLabel = stringResource(Res.string.action_clear),
             onConfirm = {
                 vm.clearAll()
                 selectedIds = null
@@ -3002,17 +3058,25 @@ private fun HistoryRoute(
     }
 }
 
-/** 只有标题的确认框:陈述动作即止,不解释删除意味着什么。 */
+/** 只有标题的确认框:陈述动作即止,确认按钮用高危填充钮标出动词（删除/清空）。 */
 @Composable
-private fun HistoryConfirmDialog(message: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+private fun HistoryConfirmDialog(
+    message: String,
+    confirmLabel: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(message) },
         confirmButton = {
-            TextButton(onClick = {
-                onDismiss()
-                onConfirm()
-            }) { Text(stringResource(Res.string.action_confirm)) }
+            DestructiveConfirmButton(
+                text = confirmLabel,
+                onClick = {
+                    onDismiss()
+                    onConfirm()
+                },
+            )
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(Res.string.action_cancel)) }
@@ -3146,6 +3210,7 @@ private fun WhisperRoute(
  * 这一条有没有缓存,命中就用本地文件(见 `AudioPlaybackService.resolveStream`)。所以这里不需要
  * 一个"离线播放器",也不需要给播放页传什么标记。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun OfflineRoute(
     container: AppContainer,
@@ -3174,13 +3239,11 @@ private fun OfflineRoute(
     LaunchedEffect(items.isEmpty()) {
         if (items.isEmpty()) scrollBehavior.state.contentOffset = 0f
     }
+    val layoutDirection = LocalLayoutDirection.current
+    val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            // 淡入淡出而不是硬切,`contentKey` 认"在不在多选态" —— 判据与理由逐条同
-            // [HistoryRoute],两页的多选顶栏本来就该是同一个做法。
-            // transitionSpec 不是组合上下文,主题里的 spec 要先在外面取出来。
-            val fadeSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
             AnimatedContent(
                 targetState = selectedIds,
                 transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
@@ -3207,36 +3270,48 @@ private fun OfflineRoute(
                         },
                     )
                 } else {
-                    // 多选时整条顶栏换掉,返回箭头改成"退出多选"。这是 M3 的 contextual top app bar:
-                    // 顶栏是当前上下文里能做什么的唯一说明,多选期间那个上下文变了。
+                    // 多选时顶栏只留退出按钮与选中计数，批量操作移至底部拇指区浮动工具条。
                     BilbyTopBar(
                         title = stringResource(Res.string.offline_selected_count, ids.size),
                         onBack = { selectedIds = null },
                         scrollBehavior = scrollBehavior,
-                        actions = {
-                            val all = items.map { it.id }.toSet()
-                            IconButton(onClick = { selectedIds = if (ids == all) emptySet() else all }) {
-                                Icon(
-                                    Icons.Outlined.SelectAll,
-                                    contentDescription = stringResource(Res.string.offline_sheet_select_all),
-                                )
-                            }
-                            IconButton(
-                                enabled = selected.isNotEmpty(),
-                                onClick = {
-                                    // 一个字节都还没下的那些直接删,理由同单条(见 OfflineScreen)。
-                                    if (selected.all { it.status == OfflineStatus.Queued }) {
-                                        vm.deleteAll(selected)
-                                        selectedIds = null
-                                    } else {
-                                        confirmingBatchDelete = true
-                                    }
-                                },
-                            ) {
-                                Icon(
-                                    Icons.Outlined.DeleteOutline,
-                                    contentDescription = stringResource(Res.string.action_delete),
-                                )
+                    )
+                }
+            }
+        },
+        floatingActionButtonPosition = FabPosition.Center,
+        floatingActionButton = {
+            AnimatedVisibility(
+                visible = selectedIds != null,
+                enter = slideInVertically { it } + fadeIn(fadeSpec),
+                exit = slideOutVertically { it } + fadeOut(fadeSpec),
+            ) {
+                val ids = selectedIds ?: emptySet()
+                val all = remember(items) { items.map { it.id }.toSet() }
+                val allSelected = all.isNotEmpty() && ids == all
+                HorizontalFloatingToolbar(
+                    expanded = true,
+                    colors = FloatingToolbarDefaults.standardFloatingToolbarColors(),
+                ) {
+                    ToggleButton(
+                        checked = allSelected,
+                        onCheckedChange = { selectedIds = if (allSelected) emptySet() else all },
+                    ) {
+                        Icon(Icons.Outlined.SelectAll, contentDescription = null)
+                        Spacer(Modifier.width(Spacing.Hair))
+                        Text(stringResource(Res.string.offline_sheet_select_all))
+                    }
+                    Spacer(Modifier.width(Spacing.Tight))
+                    DestructiveConfirmButton(
+                        text = stringResource(Res.string.action_delete),
+                        enabled = selected.isNotEmpty(),
+                        onClick = {
+                            // 一个字节都还没下的那些直接删,理由同单条(见 OfflineScreen)。
+                            if (selected.all { it.status == OfflineStatus.Queued }) {
+                                vm.deleteAll(selected)
+                                selectedIds = null
+                            } else {
+                                confirmingBatchDelete = true
                             }
                         },
                     )
@@ -3244,6 +3319,16 @@ private fun OfflineRoute(
             }
         },
     ) { insets ->
+        val effectivePadding = if (selectedIds != null) {
+            PaddingValues(
+                start = insets.calculateStartPadding(layoutDirection),
+                top = insets.calculateTopPadding(),
+                end = insets.calculateEndPadding(layoutDirection),
+                bottom = insets.calculateBottomPadding() + ToViewFabClearance,
+            )
+        } else {
+            insets
+        }
         OfflineScreen(
             items = items,
             usedBytes = usedBytes,
@@ -3256,7 +3341,7 @@ private fun OfflineRoute(
                 val current = selectedIds.orEmpty()
                 selectedIds = if (item.id in current) current - item.id else current + item.id
             },
-            contentPadding = insets,
+            contentPadding = effectivePadding,
         )
     }
 
@@ -3266,11 +3351,14 @@ private fun OfflineRoute(
             title = { Text(stringResource(Res.string.offline_delete_batch_title)) },
             text = { Text(stringResource(Res.string.offline_delete_batch_message, selected.size)) },
             confirmButton = {
-                TextButton(onClick = {
-                    confirmingBatchDelete = false
-                    vm.deleteAll(selected)
-                    selectedIds = null
-                }) { Text(stringResource(Res.string.action_confirm)) }
+                DestructiveConfirmButton(
+                    text = stringResource(Res.string.action_delete),
+                    onClick = {
+                        confirmingBatchDelete = false
+                        vm.deleteAll(selected)
+                        selectedIds = null
+                    },
+                )
             },
             dismissButton = {
                 TextButton(onClick = { confirmingBatchDelete = false }) {
@@ -3808,8 +3896,7 @@ private fun DynamicDetailRoute(
     } else {
         null
     }
-    val commentState by (commentVm?.state ?: MutableStateFlow(CommentUiState()))
-        .collectAsStateWithLifecycle()
+    val commentState = commentVm?.state?.collectAsStateWithLifecycle()?.value ?: CommentUiState()
 
     DynamicDetailScreen(
         state = state,

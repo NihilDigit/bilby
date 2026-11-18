@@ -74,6 +74,9 @@ object Motion {
         /** `md.sys.motion.duration.short3`。 */
         const val Short3 = 150
 
+        /** 桌面端压栈进入时长(180–220ms 干脆区间)。 */
+        const val DesktopEnter = 220
+
         /** `md.sys.motion.duration.medium1`。 */
         const val Medium1 = 250
 
@@ -93,17 +96,19 @@ object Motion {
      * 走满是 lateral 的做法,规范明确说别拿 lateral 做层级导航("Sliding content the full width
      * of the screen is excessive for a high frequency transition")。
      *
-     * 时长取 medium4(400ms):它覆盖的是"a medium area of the screen"。进入配 emphasized
-     * decelerate、退出配 emphasized accelerate,这也是那张表给的成对用法。
+     * 触控端时长取 medium4(400ms);桌面指针端收紧为 220ms 进入 / 150ms 退出。
      */
+    private val enterMs: Int get() = if (platformUsesStandardMotion) Duration.DesktopEnter else Duration.Medium4
+    private val exitMs: Int get() = if (platformUsesStandardMotion) Duration.Short3 else Duration.Medium4
+
     val ForwardEnterSlide: FiniteAnimationSpec<IntOffset> =
-        tween(Duration.Medium4, easing = Easing.EmphasizedDecelerate)
+        tween(enterMs, easing = Easing.EmphasizedDecelerate)
     val ForwardExitSlide: FiniteAnimationSpec<IntOffset> =
-        tween(Duration.Medium4, easing = Easing.EmphasizedAccelerate)
+        tween(exitMs, easing = Easing.EmphasizedAccelerate)
     val ForwardEnterFade: FiniteAnimationSpec<Float> =
-        tween(Duration.Medium4, easing = Easing.EmphasizedDecelerate)
+        tween(enterMs, easing = Easing.EmphasizedDecelerate)
     val ForwardExitFade: FiniteAnimationSpec<Float> =
-        tween(Duration.Medium4, easing = Easing.EmphasizedAccelerate)
+        tween(exitMs, easing = Easing.EmphasizedAccelerate)
 
     /** 滑动幅度:屏宽的五分之一。"don't have to slide the full width" 落到一个具体的数。 */
     const val ForwardSlideFraction = 5
@@ -122,7 +127,11 @@ object Motion {
     val TopLevelExitFade: FiniteAnimationSpec<Float> =
         tween(Duration.Short3, easing = Easing.StandardAccelerate)
     val TopLevelEnterFade: FiniteAnimationSpec<Float> =
-        tween(Duration.Medium1, delayMillis = Duration.Short3, easing = Easing.StandardDecelerate)
+        tween(
+            durationMillis = if (platformUsesStandardMotion) Duration.DesktopEnter else Duration.Medium1,
+            delayMillis = Duration.Short3,
+            easing = Easing.StandardDecelerate,
+        )
 
     /**
      * 预测式返回。**和普通返回是同一套形状(五分之一屏的滑动加淡出),只是时间轴归手指管。**

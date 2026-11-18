@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -59,16 +60,13 @@ import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
 import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.rememberReducedMotion
 
-/** 进度条的槽高与滑块半径。由"别挡住画面"定,不走主题刻度。 */
-private val TrackHeight = 3.dp
-private val TrackHeightHover = 5.dp
-
-/**
- * 拖动时的槽高。**按下就加粗**:手指压在细线上时线被整个盖住,加粗之后露在指头两侧的那截
- * 才看得出已播到哪 —— 这是"抓住了"的反馈,和滑块放大是同一件事的两半。
- */
+/** 进度条的槽高与滑块半径。默认 4dp,悬停或拖动时因果加粗至 6dp。 */
+private val TrackHeight = 4.dp
+private val TrackHeightHover = 6.dp
 private val TrackHeightDragging = 6.dp
+private val StopDotRadius = 2.dp
 private val ThumbRadius = 5.dp
 private val ThumbRadiusDragging = 8.dp
 
@@ -96,9 +94,48 @@ private val TouchHeight = Dimens.MinTouchTarget
  * 起点是按下那一刻的当前位置。触控区有 48dp 高而槽只有 3dp,落在离滑块几毫米的地方并不
  * 是想"跳到那儿",只是想"攥住这条"。想直接跳就点(不挪动的那种,走 tap)。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun SeekBar(
     position: Long,
+    duration: Long,
+    onSeekStart: () -> Unit,
+    onSeekTo: (Long) -> Unit,
+    onSeekFinished: () -> Unit,
+    modifier: Modifier = Modifier,
+    activeColor: Color = MaterialTheme.colorScheme.primary,
+    inactiveColor: Color = MaterialTheme.colorScheme.onSurface.copy(alpha = InactiveAlpha),
+    bufferedPosition: Long = 0L,
+    bufferedColor: Color = MaterialTheme.colorScheme.onSurface.copy(alpha = BufferedAlpha),
+    timeBubble: Boolean = true,
+    wavy: Boolean = false,
+    playing: Boolean = false,
+    speed: Float = 1f,
+    segments: List<SeekBarSegment> = emptyList(),
+) {
+    SeekBar(
+        positionProvider = { position },
+        duration = duration,
+        onSeekStart = onSeekStart,
+        onSeekTo = onSeekTo,
+        onSeekFinished = onSeekFinished,
+        modifier = modifier,
+        activeColor = activeColor,
+        inactiveColor = inactiveColor,
+        bufferedPositionProvider = { bufferedPosition },
+        bufferedColor = bufferedColor,
+        timeBubble = timeBubble,
+        wavy = wavy,
+        playing = playing,
+        speed = speed,
+        segments = segments,
+    )
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun SeekBar(
+    positionProvider: () -> Long,
     duration: Long,
     onSeekStart: () -> Unit,
     onSeekTo: (Long) -> Unit,
@@ -117,10 +154,10 @@ fun SeekBar(
      * 它回答的是"往前拖到哪里不用等"。没有这一段时,网络慢和播放器卡死在画面上是同一个样子:
      * 进度不动、转圈在转,而缓冲条还在往前爬就说明流在进来。
      */
-    bufferedPosition: Long = 0L,
+    bufferedPositionProvider: () -> Long = { 0L },
     /**
      * 缓冲段的颜色。**落在底色与已播之间**:缓冲是"比底色确定、比已播次要"的第三档,而三条
-     * 线挤在 3dp 高的同一道槽里,只能靠明度分开。和未播段同一种半透明,只是更实一档。
+     * 线挤在槽里,只能靠明度分开。和未播段同一种半透明,只是更实一档。
      */
     bufferedColor: Color = MaterialTheme.colorScheme.onSurface.copy(alpha = BufferedAlpha),
     /**
@@ -130,8 +167,8 @@ fun SeekBar(
     timeBubble: Boolean = true,
     /**
      * 已播段画成一条流动的波浪(M3 Expressive 的 wavy progress 那种)。**只在放着的时候起伏**:
-     * 暂停、拖动时振幅收到 0,拉平成直线 —— 波浪说的是"声音正在往前走",停着时还在波动就是
-     * 在撒谎,拖的时候晃着也对不准。
+     * 暂停、拖动或减弱动效开启时振幅收到 0,拉平成直线 —— 波浪说的是"声音正在往前走",停着时
+     * 还在波动就是在撒谎,拖的时候晃着也对不准。
      *
      * 听视频页用:那一页没有画面,进度条是整屏唯一在动的东西。视频播放器不用,画面本身就在动。
      */
@@ -142,15 +179,10 @@ fun SeekBar(
     speed: Float = 1f,
     /**
      * 会被自动跳过的片段(SponsorBlock)。**只染色,不可交互。**
-     *
-     * 在进度条上多加一种手势会和拖动、点击跳转打架;而"这一段我不想跳"的正确入口是设置里
-     * 关掉那个类别,不是每次现场决定 —— 现场决定等于把一个一次性配置变成反复出现的打断。
-     *
-     * 染色解决的是另一件事:跳过本身有事后提示,但**跳之前看不到哪儿有段、有多长**,
-     * 于是播放器忽然往前一跳这件事只能靠事后解释。染上之后它是可预期的。
      */
     segments: List<SeekBarSegment> = emptyList(),
 ) {
+    val reducedMotion = rememberReducedMotion()
     var dragging by remember { mutableStateOf(false) }
     var hoverX by remember { mutableStateOf<Float?>(null) }
     // 两个量走同一个 spatial 弹簧:它们是"按住了"这一个反馈的两面,节奏对不上会看出来。
@@ -169,14 +201,14 @@ fun SeekBar(
         label = "seek-track",
     )
     val waveAmplitude by animateDpAsState(
-        targetValue = if (wavy && playing && !dragging) WaveAmplitude else 0.dp,
+        targetValue = if (wavy && playing && !dragging && !reducedMotion) WaveAmplitude else 0.dp,
         animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "seek-wave",
     )
     // 相位只在波浪实际在动(播放中或振幅尚未收回到平直)时才挂入组合:无限动画只要在组合里就会每帧唤醒
     // 主线程,暂停落稳后不该继续空转。**只在画的时候读**(下面 Canvas 里),读在这里的话整条进度条
     // 每一帧都要重组一遍。
-    val wavePhase: State<Float> = if (wavy && ((playing && !dragging) || waveAmplitude > 0.1.dp)) {
+    val wavePhase: State<Float> = if (wavy && !reducedMotion && ((playing && !dragging) || waveAmplitude > 0.1.dp)) {
         rememberInfiniteTransition(label = "seek-wave-phase").animateFloat(
             initialValue = 0f,
             targetValue = (2 * PI).toFloat(),
@@ -197,13 +229,16 @@ fun SeekBar(
         val usable = widthPx - insetPx * 2
         return if (usable <= 0f) 0f else ((this - insetPx) / usable).coerceIn(0f, 1f)
     }
-    val fraction = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
-    // 拖动起点要的是按下那一刻的读数:pointerInput 里捕获的是启动时的值,经 state 取新的。
-    val latestFraction by rememberUpdatedState(fraction)
+    val latestPositionProvider by rememberUpdatedState(positionProvider)
+    val latestBufferedProvider by rememberUpdatedState(bufferedPositionProvider)
+    fun currentFraction(): Float =
+        if (duration > 0) (latestPositionProvider().toFloat() / duration).coerceIn(0f, 1f) else 0f
+    fun currentBufferedFraction(): Float =
+        if (duration > 0) (latestBufferedProvider().toFloat() / duration).coerceIn(0f, 1f) else 0f
+
     val isTouchLike by rememberUpdatedState(LocalPointerSource.current.isTouchLike)
-    val bufferedFraction =
-        if (duration > 0) (bufferedPosition.toFloat() / duration).coerceIn(0f, 1f) else 0f
     val label = stringResource(Res.string.player_progress)
+    val wavePath = remember { Path() }
 
     Box(
         modifier = modifier
@@ -232,11 +267,9 @@ fun SeekBar(
                 }
             }
             // 手写的进度轨没有任何自带语义:读屏在这里既读不出播到哪了,也没有可用的动作。
-            // progressBarRangeInfo 给出位置,setProgress 让读屏的"调整"手势能真的跳转 ——
-            // 拖拽手势对读屏用户是不存在的。
             .semantics {
                 contentDescription = label
-                progressBarRangeInfo = ProgressBarRangeInfo(current = fraction, range = 0f..1f)
+                progressBarRangeInfo = ProgressBarRangeInfo(current = currentFraction(), range = 0f..1f)
                 setProgress { target ->
                     if (duration <= 0) {
                         false
@@ -258,7 +291,7 @@ fun SeekBar(
                         relativeMode = isTouchLike
                         onSeekStart()
                         if (relativeMode) {
-                            dragFraction = latestFraction
+                            dragFraction = currentFraction()
                         } else {
                             onSeekTo(offset.x.toFraction().toPosition(duration))
                         }
@@ -298,6 +331,8 @@ fun SeekBar(
         contentAlignment = Alignment.Center,
     ) {
         Canvas(modifier = Modifier.fillMaxWidth().height(ThumbRadiusDragging * 2)) {
+            val fraction = currentFraction()
+            val bufferedFraction = currentBufferedFraction()
             val trackY = size.height / 2
             val trackPx = trackHeight.toPx()
             val start = insetPx
@@ -352,21 +387,20 @@ fun SeekBar(
                 val amp = waveAmplitude.toPx()
                 if (amp > 0.1f) {
                     // 正弦波,波长固定、随相位平移。起点振幅从 0 渐起:左端贴着槽的起点,不从
-                    // 半空里冒出来。
+                    // 半空里冒出来。复用 Remembered Path 避免 60fps 帧分配。
                     val wavelength = WaveLength.toPx()
                     val endX = x(fraction)
-                    val path = Path().apply {
-                        moveTo(x(0f), trackY)
-                        var px = x(0f)
-                        while (px < endX) {
-                            px = (px + WaveStepPx).coerceAtMost(endX)
-                            val ramp = ((px - x(0f)) / wavelength).coerceIn(0f, 1f)
-                            val y = trackY + amp * ramp *
-                                sin((px / wavelength) * 2f * PI.toFloat() - wavePhase.value)
-                            lineTo(px, y)
-                        }
+                    wavePath.rewind()
+                    wavePath.moveTo(x(0f), trackY)
+                    var px = x(0f)
+                    while (px < endX) {
+                        px = (px + WaveStepPx).coerceAtMost(endX)
+                        val ramp = ((px - x(0f)) / wavelength).coerceIn(0f, 1f)
+                        val y = trackY + amp * ramp *
+                            sin((px / wavelength) * 2f * PI.toFloat() - wavePhase.value)
+                        wavePath.lineTo(px, y)
                     }
-                    drawPath(path, activeColor, style = Stroke(width = trackPx, cap = StrokeCap.Round))
+                    drawPath(wavePath, activeColor, style = Stroke(width = trackPx, cap = StrokeCap.Round))
                 } else {
                     drawLine(
                         color = activeColor,
@@ -376,6 +410,14 @@ fun SeekBar(
                         cap = StrokeCap.Round,
                     )
                 }
+            }
+            // M3E 轨道末端 4dp 止点，提示进度终点边界。
+            if (duration > 0 && fraction < 0.995f) {
+                drawCircle(
+                    color = activeColor,
+                    radius = StopDotRadius.toPx(),
+                    center = Offset(x(1f), trackY),
+                )
             }
             drawCircle(
                 color = activeColor,
@@ -389,10 +431,11 @@ fun SeekBar(
         // 鼠标悬停但未按住时预览光标处时间(及所在跳过段落名称),用 inverseSurface 与按住态主色区分。
         val currentHoverX = hoverX
         if (timeBubble && duration > 0 && (dragging || currentHoverX != null)) {
+            val fraction = currentFraction()
             val gapPx = with(density) { (BubbleGap + ThumbRadiusDragging).roundToPx() }
             val previewing = !dragging && currentHoverX != null
             val targetFraction = if (dragging) fraction else currentHoverX!!.toFraction()
-            val targetMillis = if (dragging) position else targetFraction.toPosition(duration)
+            val targetMillis = if (dragging) latestPositionProvider() else targetFraction.toPosition(duration)
             val segmentLabel = if (previewing) {
                 segments.firstOrNull { targetMillis in it.startMillis..it.endMillis }
                     ?.label

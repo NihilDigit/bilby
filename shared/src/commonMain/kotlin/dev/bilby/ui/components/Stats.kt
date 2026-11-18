@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 
 /**
  * 播放量 / 弹幕数这类计数,图标 + 数字成对出现。
@@ -57,7 +58,7 @@ fun StatRow(
             // 而那上面的字幕框说的是字幕 —— 同一个符号在一屏里说两件事。
             danmakuText?.let { Stat(BilbyIcons.DanmakuCount, stringResource(Res.string.stat_danmaku), it) }
             dateText?.let {
-                Text(text = it, style = MaterialTheme.typography.labelSmall, color = color)
+                Text(text = it, style = MaterialTheme.typography.labelSmall.tabular, color = color)
             }
         }
     }
@@ -72,7 +73,7 @@ private fun Stat(icon: ImageVector, label: String, value: String) {
         // contentDescription 给的是"播放"而不是 null:这里没有可见的中文标签,
         // 读屏只念一个数字说明不了它是什么。
         Icon(icon, contentDescription = label, modifier = Modifier.size(StatIconSize))
-        Text(text = value, style = MaterialTheme.typography.labelSmall)
+        Text(text = value, style = MaterialTheme.typography.labelSmall.tabular)
     }
 }
 

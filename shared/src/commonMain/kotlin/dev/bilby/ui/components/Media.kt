@@ -36,6 +36,7 @@ import dev.bilby.stringResource
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 
 private val BiliRefererHeaders = NetworkHeaders.Builder()
     .add("Referer", "https://www.bilibili.com")
@@ -221,7 +222,7 @@ private val BadgeInset = 6.dp
 fun MediaBadge(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
-        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium).tabular,
         color = FixedColors.OnMedia,
         modifier = modifier
             .background(FixedColors.ScrimOnMedia, MaterialTheme.shapes.extraSmall)

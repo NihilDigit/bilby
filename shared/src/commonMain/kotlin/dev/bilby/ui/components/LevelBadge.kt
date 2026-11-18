@@ -87,32 +87,38 @@ private object LevelCanvas {
     private const val BlockTop = 48f
     private val CornerR = CornerRadius(27f)
 
+    private val bodyNormalPath: Path by lazy { buildBodyPath(ExtendR.takeIf { false } ?: TotalR) }
+    private val bodyExtendPath: Path by lazy { buildBodyPath(ExtendR) }
+    private val notchNormalPath: Path by lazy { buildNotchPath(TotalR) }
+    private val notchExtendPath: Path by lazy { buildNotchPath(ExtendR) }
+
+    private fun buildBodyPath(right: Float): Path = Path().apply {
+        addRoundRect(
+            RoundRect(
+                Rect(0f, BlockTop, right, TotalB),
+                topLeft = CornerR,
+                topRight = CornerRadius.Zero,
+                bottomLeft = CornerR,
+                bottomRight = CornerR,
+            ),
+        )
+    }
+
+    private fun buildNotchPath(right: Float): Path = Path().apply {
+        addRoundRect(
+            RoundRect(
+                Rect(576f, 0f, right, BlockTop + 1f),
+                topLeft = CornerR,
+                topRight = CornerR,
+                bottomLeft = CornerRadius.Zero,
+                bottomRight = CornerRadius.Zero,
+            ),
+        )
+    }
+
     fun DrawScope.drawBack(color: Color, bolt: Boolean, boltPainter: VectorPainter?) {
-        val right = if (bolt) ExtendR else TotalR
-        val body = Path().apply {
-            addRoundRect(
-                RoundRect(
-                    Rect(0f, BlockTop, right, TotalB),
-                    topLeft = CornerR,
-                    topRight = CornerRadius.Zero,
-                    bottomLeft = CornerR,
-                    bottomRight = CornerR,
-                ),
-            )
-        }
-        val notch = Path().apply {
-            addRoundRect(
-                RoundRect(
-                    Rect(576f, 0f, right, BlockTop + 1f),
-                    topLeft = CornerR,
-                    topRight = CornerR,
-                    bottomLeft = CornerRadius.Zero,
-                    bottomRight = CornerRadius.Zero,
-                ),
-            )
-        }
-        drawPath(body, color)
-        drawPath(notch, color)
+        drawPath(if (bolt) bodyExtendPath else bodyNormalPath, color)
+        drawPath(if (bolt) notchExtendPath else notchNormalPath, color)
 
         // 闪电只在硬核会员时画,大致落在延长出来的那一截右侧,不是像素级对齐(见类头注释)。
         if (bolt && boltPainter != null) {
@@ -253,21 +259,25 @@ private object LevelCanvas {
         addRoundRect(RoundRect(Rect(l, t, r, b), tl, tr, br, bl))
     }
 
-    fun DrawScope.drawDigit(digit: Int, color: Color) {
-        val path = if (digit == 1) {
-            draw1()
-        } else {
-            val bits = bitsOf(digit)
-            segments(
-                a = bits and 0x40 != 0,
-                b = bits and 0x20 != 0,
-                c = bits and 0x10 != 0,
-                d = bits and 0x08 != 0,
-                e = bits and 0x04 != 0,
-                f = bits and 0x02 != 0,
-                g = bits and 0x01 != 0,
-            )
+    private val digitPaths: Array<Path> by lazy {
+        Array(10) { digit ->
+            if (digit == 1) draw1() else buildDigitPath(bitsOf(digit))
         }
+    }
+    private val fallbackDigitPath: Path by lazy { buildDigitPath(bitsOf(-1)) }
+
+    private fun buildDigitPath(bits: Int): Path = segments(
+        a = bits and 0x40 != 0,
+        b = bits and 0x20 != 0,
+        c = bits and 0x10 != 0,
+        d = bits and 0x08 != 0,
+        e = bits and 0x04 != 0,
+        f = bits and 0x02 != 0,
+        g = bits and 0x01 != 0,
+    )
+
+    fun DrawScope.drawDigit(digit: Int, color: Color) {
+        val path = digitPaths.getOrElse(digit) { fallbackDigitPath }
         drawPath(path, color)
     }
 }

@@ -84,6 +84,7 @@ fun <T> PagedColumn(
     showEndMarker: Boolean = true,
     /** 首屏读取中的一行占位,见 [FirstScreenState]。默认是视频行。 */
     skeletonRow: @Composable () -> Unit = { VideoRowSkeleton() },
+    contentType: (T) -> Any? = { null },
     itemContent: @Composable (T) -> Unit,
 ) {
     FirstScreenState(
@@ -124,17 +125,17 @@ fun <T> PagedColumn(
                         contentPadding = contentPadding,
                     ) {
                         if (header != null) {
-                            item(key = "header", span = { GridItemSpan(maxLineSpan) }) { header() }
+                            item(key = "header", contentType = "header", span = { GridItemSpan(maxLineSpan) }) { header() }
                         }
                         if (items.isEmpty()) {
-                            item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
+                            item(key = "empty", contentType = "empty", span = { GridItemSpan(maxLineSpan) }) {
                                 ViewportEmptyState(emptyText, state.layoutInfo.viewportSize.height)
                             }
                         }
-                        items(items, key = key) { item ->
+                        items(items, key = key, contentType = contentType) { item ->
                             Box(modifier = Modifier.animateItem()) { itemContent(item) }
                         }
-                        item(key = "footer", span = { GridItemSpan(maxLineSpan) }) { footer() }
+                        item(key = "footer", contentType = "footer", span = { GridItemSpan(maxLineSpan) }) { footer() }
                     }
                     ListScrollbar(state, Modifier.align(Alignment.CenterEnd))
                 }
@@ -153,17 +154,17 @@ fun <T> PagedColumn(
                         verticalItemSpacing = layout.spacing,
                     ) {
                         if (header != null) {
-                            item(key = "header", span = StaggeredGridItemSpan.FullLine) { header() }
+                            item(key = "header", contentType = "header", span = StaggeredGridItemSpan.FullLine) { header() }
                         }
                         if (items.isEmpty()) {
-                            item(key = "empty", span = StaggeredGridItemSpan.FullLine) {
+                            item(key = "empty", contentType = "empty", span = StaggeredGridItemSpan.FullLine) {
                                 ViewportEmptyState(emptyText, state.layoutInfo.viewportSize.height)
                             }
                         }
-                        items(items, key = key) { item ->
+                        items(items, key = key, contentType = contentType) { item ->
                             Box(modifier = Modifier.animateItem()) { itemContent(item) }
                         }
-                        item(key = "footer", span = StaggeredGridItemSpan.FullLine) { footer() }
+                        item(key = "footer", contentType = "footer", span = StaggeredGridItemSpan.FullLine) { footer() }
                     }
                     ListScrollbar(state, Modifier.align(Alignment.CenterEnd))
                 }

@@ -2,7 +2,6 @@ package dev.bilby.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.widthIn
@@ -10,8 +9,13 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.WindowInfo
@@ -62,6 +66,31 @@ private fun bilbyWindowSize(width: Dp): BilbyWindowSize = when {
 }
 
 fun BilbyWindowSize.isAtLeast(other: BilbyWindowSize): Boolean = ordinal >= other.ordinal
+
+val BilbyWindowSize.isMedium: Boolean get() = this == BilbyWindowSize.Medium
+
+val BilbyWindowSize.isExpanded: Boolean get() = isAtLeast(BilbyWindowSize.Expanded)
+
+private val CompactHeightBreakpoint = 480.dp
+
+/** 窗口高度是否属于紧凑横屏（`< 480dp`）：典型手机横屏（如 `720x360dp`）下，竖排播放器会把下方页签压扁，需要切换为双栏媒体布局。 */
+@Composable
+fun rememberIsHeightCompact(): Boolean {
+    val heightPx = LocalWindowInfo.current.containerSize.height
+    val heightDp = with(LocalDensity.current) { heightPx.toDp() }
+    return heightDp < CompactHeightBreakpoint
+}
+
+@get:Composable
+val BilbyWindowSize.isHeightCompact: Boolean
+    get() = rememberIsHeightCompact()
+
+fun BilbyWindowSize.useTwoPaneMediaLayout(isHeightCompact: Boolean): Boolean =
+    isExpanded || (isMedium && isHeightCompact)
+
+@get:Composable
+val BilbyWindowSize.useTwoPaneMediaLayout: Boolean
+    get() = isExpanded || (isMedium && isHeightCompact)
 
 /**
  * 每列不超过 [maxCellWidth],列数取满足这一点的最小值,余宽均分。
@@ -207,6 +236,7 @@ fun rememberVideoGridColumnCount(
 
 /**
  * 视频网格列表通用自适应容器：保持单一组合树，向 [content] 传入按当前显示器全宽折算出的列数。
+ * 用单遍 [onSizeChanged] 替代 `BoxWithConstraints`，避免弹出菜单/弹层跨越 `SubcomposeLayout`。
  */
 @Composable
 fun AdaptiveVideoGridContent(
@@ -214,9 +244,17 @@ fun AdaptiveVideoGridContent(
     configuredColumns: Int = LocalVideoGridColumns.current,
     content: @Composable BoxScope.(columnCount: Int) -> Unit,
 ) {
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+    val density = LocalDensity.current
+    val fallbackWidthPx = LocalWindowInfo.current.containerSize.width
+    var measuredWidthPx by remember { mutableIntStateOf(0) }
+    val widthDp = with(density) { (if (measuredWidthPx > 0) measuredWidthPx else fallbackWidthPx).toDp() }
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .onSizeChanged { if (measuredWidthPx != it.width) measuredWidthPx = it.width },
+    ) {
         val columnCount = rememberVideoGridColumnCount(
-            availableWidth = maxWidth,
+            availableWidth = widthDp,
             configuredColumns = configuredColumns,
         )
         content(columnCount)

@@ -1,6 +1,7 @@
 package dev.bilby.ui.components
 
 import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -19,13 +20,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.LoadingIndicatorDefaults
+import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
-import androidx.compose.material3.pulltorefresh.pullToRefresh
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
+import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,6 +46,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.rememberReducedMotion
 
 /**
  * 加载 / 出错 / 空 / 到底 —— 四个列表页以前各写了一份,文案和间距都差一点。收敛到这里,
@@ -161,26 +164,21 @@ private sealed interface Phase {
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun FullScreenLoading(modifier: Modifier = Modifier) {
+    val reducedMotion = rememberReducedMotion()
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        if (rememberLoadingVisible()) LoadingIndicator()
+        if (rememberLoadingVisible()) {
+            if (reducedMotion) {
+                StaticLoadingToken(size = FullScreenLoadingSize, color = LoadingIndicatorDefaults.indicatorColor)
+            } else {
+                LoadingIndicator()
+            }
+        }
     }
 }
 
 /**
- * 下拉刷新。**必须走这里,不要直接用 `PullToRefreshBox`** —— 它默认那个指示器仍是
- * M3 Expressive 之前的箭头圈(`PullToRefreshDefaults.Indicator`),整个 app 十几处下拉
- * 会各自长成旧样子,而 M3E 恰恰把 loading indicator 定为下拉刷新的组件。
- *
- * 指示器和 [PullToRefreshBox] 共用同一个 state:分成两个的话指示器收不到拖拽距离,
- * 手指往下拉时它一动不动,松手才突然出现。
- *
- * 用 contained 那一档(默认色就是 primaryContainer / onPrimaryContainer):指示器压在列表
- * 内容上,没有容器托底时深浅两套主题里都可能撞上正文。
- *
- * **只有手指能拉**,见 [PointerSource]。最近一次输入是鼠标时刷新手势整个关掉,不是把下拉量
- * 吃掉:关掉之后到顶多出来的那一截照常往外传,外层可收起的页头照样能被滚轮展开。
- * 用手写的 `pullToRefresh` 而不是 [PullToRefreshBox],是因为后者在桌面端编译的 material3
- * alpha22 里不给 enabled 开关。
+ * 下拉刷新。统一经此封装挂载 M3E [PullToRefreshBox] 与 `PullToRefreshDefaults.LoadingIndicator`,
+ * 仅在触摸/触控笔输入时启用下拉手势,鼠标场景改由顶栏 [RefreshAction] 触发。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -191,21 +189,21 @@ fun RefreshBox(
     content: @Composable BoxScope.() -> Unit,
 ) {
     val state = rememberPullToRefreshState()
-    Box(
-        modifier.pullToRefresh(
-            state = state,
-            isRefreshing = refreshing,
-            enabled = LocalPointerSource.current.isTouchLike,
-            onRefresh = onRefresh,
-        ),
-    ) {
-        content()
-        PullToRefreshDefaults.LoadingIndicator(
-            state = state,
-            isRefreshing = refreshing,
-            modifier = Modifier.align(Alignment.TopCenter),
-        )
-    }
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = onRefresh,
+        modifier = modifier,
+        state = state,
+        enabled = LocalPointerSource.current.isTouchLike,
+        indicator = {
+            PullToRefreshDefaults.LoadingIndicator(
+                state = state,
+                isRefreshing = refreshing,
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
+        },
+        content = content,
+    )
 }
 
 /**
@@ -246,7 +244,43 @@ fun LoadingSpinner(
     size: Dp = InlineSpinnerSize,
     color: Color = LoadingIndicatorDefaults.indicatorColor,
 ) {
-    LoadingIndicator(modifier = modifier.size(size), color = color)
+    if (rememberReducedMotion()) {
+        StaticLoadingToken(size = size, color = color, modifier = modifier)
+    } else {
+        LoadingIndicator(modifier = modifier.size(size), color = color)
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun StaticLoadingToken(size: Dp, color: Color, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(size)
+            .background(color = color, shape = MaterialShapes.Cookie9Sided.toShape()),
+    )
+}
+
+/** 空态与错误态图标背后完全静止的 `Cookie9Sided` 色块底托，不使用任何空闲呼吸循环。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun StateBackdropIcon(icon: ImageVector) {
+    Box(
+        modifier = Modifier
+            .size(StateBackdropSize)
+            .background(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = MaterialShapes.Cookie9Sided.toShape(),
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(StateIconSize),
+        )
+    }
 }
 
 /**
@@ -263,12 +297,7 @@ fun FullScreenError(message: String, onRetry: () -> Unit, modifier: Modifier = M
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(Spacing.Cozy, Alignment.CenterVertically),
     ) {
-        Icon(
-            imageVector = Icons.Outlined.ErrorOutline,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(StateIconSize),
-        )
+        StateBackdropIcon(Icons.Outlined.ErrorOutline)
         Text(
             text = message,
             style = MaterialTheme.typography.bodyMedium,
@@ -302,12 +331,7 @@ fun EmptyState(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(StateIconSize),
-            )
+            StateBackdropIcon(icon)
             Text(
                 text = message,
                 style = MaterialTheme.typography.bodyMedium,
@@ -397,8 +421,10 @@ fun InlineProgress(text: String, modifier: Modifier = Modifier) {
     }
 }
 
-/** 空态与错误态的状态图标。比正文大一档,但远小于插图——它是标识不是画面。 */
-private val StateIconSize = 40.dp
+/** 空态与错误态的状态图标及其静止多边形容器底托尺寸。 */
+private val StateIconSize = 36.dp
+private val StateBackdropSize = 72.dp
+private val FullScreenLoadingSize = 48.dp
 
 /**
  * 行内转圈的尺寸。默认 48dp 在一行文字旁边太大,24dp 是 loading indicator 规格里的下限,

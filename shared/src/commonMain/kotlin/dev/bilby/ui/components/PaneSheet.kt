@@ -73,14 +73,13 @@ import dev.bilby.resources.action_back
 import dev.bilby.resources.action_close
 import dev.bilby.stringResource
 import dev.bilby.ui.BackHandler
-import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.barsAndCutout
-import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.useTwoPaneMediaLayout
 import dev.bilby.ui.windowDragArea
 
 /**
@@ -308,7 +307,7 @@ fun PaneSheet(
             pane.panel = panel
             onDispose { if (pane.panel === panel) pane.panel = null }
         }
-    } else if (rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)) {
+    } else if (rememberBilbyWindowSize().useTwoPaneMediaLayout) {
         ModalSideSheet(
             onDismissRequest = onDismissRequest,
             title = title,
@@ -338,12 +337,14 @@ fun PaneSheet(
             sheetState = sheetState,
             shape = MaterialTheme.shapes.extraLarge,
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            contentWindowInsets = { WindowInsets(0) },
         ) {
             Column(
                 modifier = modifier
                     .fillMaxWidth()
                     .heightIn(max = maxSheetHeight)
                     .imePadding()
+                    .trackPointerSource(pointers)
                     .nestedScroll(remember(pointers) { WheelStopsAtSheet(pointers) }),
             ) {
                 if (!persistent && (title != null || headerTrailing != null)) {
@@ -437,10 +438,11 @@ private fun ModalSideSheet(
     LaunchedEffect(visibility.isIdle, visibility.currentState) {
         if (visibility.isIdle && !visibility.currentState && !visibility.targetState) latestDismiss()
     }
+    val pointers = LocalPointerSource.current
     Dialog(onDismissRequest = dismiss, properties = fullScreenDialogProperties()) {
         LocalWindowCaption.current?.Suppress()
         DialogIntoDisplayCutout()
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize().trackPointerSource(pointers)) {
             AnimatedVisibility(
                 visibleState = visibility,
                 enter = fadeIn(MaterialTheme.motionScheme.defaultEffectsSpec()),

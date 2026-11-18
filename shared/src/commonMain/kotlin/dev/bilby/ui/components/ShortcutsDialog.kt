@@ -8,10 +8,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import dev.bilby.resources.Res
 import dev.bilby.resources.shortcuts_back
@@ -97,26 +99,32 @@ fun ShortcutsSheet(onDismiss: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ShortcutSection(title: String, entries: List<ShortcutEntry>) {
+    val itemColors = ListItemDefaults.segmentedColors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    )
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
         SectionHeader(title = title)
-        entries.forEach { entry ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-            ) {
-                Text(
-                    text = stringResource(entry.label),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-                    entry.keys.forEach { keycap ->
-                        KeycapBadge(keycap)
-                    }
+        Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
+            entries.forEachIndexed { index, entry ->
+                SegmentedListItem(
+                    shapes = ListItemDefaults.segmentedShapes(index = index, count = entries.size),
+                    colors = itemColors,
+                    trailingContent = {
+                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+                            entry.keys.forEach { keycap ->
+                                KeycapBadge(keycap)
+                            }
+                        }
+                    },
+                ) {
+                    Text(
+                        text = stringResource(entry.label),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
                 }
             }
         }

@@ -1,5 +1,6 @@
 package dev.bilby.ui.components
 
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -9,16 +10,23 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material3.ButtonGroup
+import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ToggleButton
+import androidx.compose.material3.ToggleButtonDefaults
+import androidx.compose.material3.ToggleButtonSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,6 +35,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import dev.bilby.stringResource
 import dev.bilby.ui.theme.Dimens
 import org.jetbrains.compose.resources.StringResource
@@ -51,19 +61,18 @@ fun <T> SortRow(
     modifier: Modifier = Modifier,
 ) {
     Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        SortMenu(options = options, selected = selected, onSelect = onSelect)
+        SortMenu(
+            options = options,
+            selected = selected,
+            onSelect = onSelect,
+            preferButtonGroup = true,
+        )
     }
 }
 
 /**
- * 排序下拉:按钮上写当前那一档,点开是全部选项。
- *
- * **代替原来那一排平铺的文字。** 平铺时每一档都占着宽度,选项一多(搜索三档)就挤,而且
- * 未选中的几档一直在眼前 —— 排序不常换,常驻展示的只该是"现在按什么排"。收成一颗 text
- * button 之后它只占一个词的宽度,选中态也不必再靠字重和颜色两个通道去区分。
- *
- * 菜单取 M3E vertical menu 的外形(MenuDefaults 的 shape 与容器色),与首页溢出菜单同一套;
- * 选中项的标记与读屏状态同全应用的菜单([menuSelectedMark]、[selectedSemantics])。
+ * 排序选择器:选项不超过 3 档且调用处允许展开([preferButtonGroup])时,直接展示 M3E 1-tap 互连
+ * `ButtonGroup` + `ToggleButton`;超过 3 档或在紧凑顶栏内时收成下拉菜单。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -72,7 +81,64 @@ fun <T> SortMenu(
     selected: T,
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
+    preferButtonGroup: Boolean = false,
 ) {
+    if (preferButtonGroup && options.size in 2..3) {
+        val colors = ToggleButtonDefaults.colors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+            checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        )
+        ButtonGroup(
+            overflowIndicator = { menuState -> ButtonGroupDefaults.OverflowIndicator(menuState) },
+            modifier = modifier.selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+        ) {
+            options.forEachIndexed { index, (value, label) ->
+                val isSelected = value == selected
+                customItem(
+                    buttonGroupContent = {
+                        val interactionSource = remember { MutableInteractionSource() }
+                        val shapes = when (index) {
+                            0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                            options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                            else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                        }
+                        ToggleButton(
+                            checked = isSelected,
+                            onCheckedChange = { if (!isSelected) onSelect(value) },
+                            shapes = shapes,
+                            colors = colors,
+                            interactionSource = interactionSource,
+                            modifier = Modifier
+                                .animateWidth(interactionSource)
+                                .semantics { role = Role.RadioButton },
+                            contentPadding = ToggleButtonDefaults.contentPaddingFor(
+                                buttonSize = ToggleButtonSize.ExtraSmall,
+                                hasStartIcon = false,
+                                hasEndIcon = false,
+                            ),
+                        ) {
+                            Text(stringResource(label), maxLines = 1, softWrap = false)
+                        }
+                    },
+                    menuContent = { state ->
+                        DropdownMenuItem(
+                            text = { Text(stringResource(label)) },
+                            onClick = {
+                                state.dismiss()
+                                onSelect(value)
+                            },
+                            trailingIcon = if (isSelected) menuSelectedMark else null,
+                            modifier = Modifier.selectedSemantics(isSelected),
+                        )
+                    },
+                )
+            }
+        }
+        return
+    }
     var open by remember { mutableStateOf(false) }
     val selectedLabel = options.firstOrNull { it.first == selected }?.second ?: return
     Box(modifier = modifier) {
@@ -87,23 +153,26 @@ fun <T> SortMenu(
                 modifier = Modifier.size(Dimens.IconInline),
             )
         }
-        DropdownMenu(
-            expanded = open,
-            onDismissRequest = { open = false },
-            shape = MenuDefaults.shape,
-            containerColor = MenuDefaults.containerColor,
-        ) {
-            options.forEach { (value, label) ->
-                val isSelected = value == selected
-                DropdownMenuItem(
-                    text = { Text(stringResource(label)) },
-                    onClick = {
-                        open = false
-                        onSelect(value)
-                    },
-                    trailingIcon = if (isSelected) menuSelectedMark else null,
-                    modifier = Modifier.selectedSemantics(isSelected),
-                )
+        DesktopMenuMotionTheme {
+            DropdownMenu(
+                expanded = open,
+                onDismissRequest = { open = false },
+                shape = MenuDefaults.shape,
+                containerColor = MenuDefaults.containerColor,
+            ) {
+                options.forEachIndexed { index, (value, label) ->
+                    val isSelected = value == selected
+                    DropdownMenuItem(
+                        onClick = {
+                            open = false
+                            onSelect(value)
+                        },
+                        text = { Text(stringResource(label)) },
+                        shape = menuItemShape(index, options.size),
+                        trailingContent = if (isSelected) menuSelectedMark else null,
+                        modifier = Modifier.selectedSemantics(isSelected),
+                    )
+                }
             }
         }
     }

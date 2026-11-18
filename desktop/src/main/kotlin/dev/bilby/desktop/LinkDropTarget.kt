@@ -1,7 +1,7 @@
 package dev.bilby.desktop
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -50,7 +51,7 @@ internal fun extractIncomingLink(raw: String): String? = BilbyLink.extractIncomi
 /**
  * 窗口级链接拖放区:从浏览器地址栏、网页正文或聊天窗口拖入站内链接或 BV / av 号即可直接跳转。
  */
-@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun LinkDropTarget(
     onLinkDropped: (String) -> Unit,
@@ -59,7 +60,7 @@ internal fun LinkDropTarget(
     val currentOnLinkDropped by rememberUpdatedState(onLinkDropped)
     var hovering by remember { mutableStateOf(false) }
     val reducedMotion = SystemReducedMotion.reduced
-    val fadeMs = if (reducedMotion) 0 else 120
+    val fadeSpec = if (reducedMotion) snap<Float>() else MaterialTheme.motionScheme.fastEffectsSpec()
 
     val target = remember {
         object : DragAndDropTarget {
@@ -108,8 +109,8 @@ internal fun LinkDropTarget(
         content()
         AnimatedVisibility(
             visible = hovering,
-            enter = fadeIn(tween(fadeMs)),
-            exit = fadeOut(tween(fadeMs)),
+            enter = fadeIn(fadeSpec),
+            exit = fadeOut(fadeSpec),
             modifier = Modifier.fillMaxSize(),
         ) {
             Box(

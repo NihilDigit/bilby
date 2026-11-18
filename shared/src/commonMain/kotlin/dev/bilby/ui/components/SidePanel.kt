@@ -9,7 +9,6 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -30,14 +29,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDragHandle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
@@ -88,7 +90,13 @@ fun SidePanelLayout(
     main: @Composable () -> Unit,
     panel: @Composable () -> Unit,
 ) {
-    BoxWithConstraints(modifier = modifier) {
+    val density = LocalDensity.current
+    val fallbackWidthPx = LocalWindowInfo.current.containerSize.width
+    var measuredWidthPx by remember { mutableIntStateOf(0) }
+    val maxWidth = with(density) { (if (measuredWidthPx > 0) measuredWidthPx else fallbackWidthPx).toDp() }
+    Box(
+        modifier = modifier.onSizeChanged { if (measuredWidthPx != it.width) measuredWidthPx = it.width },
+    ) {
         // 拖过的宽度留在这里,松手才交给设置保存,每帧写盘没有必要。松手后也不清掉:
         // 清掉的话在设置写回来之前会先退回旧宽度,侧栏弹一下。
         var draggingWidth by remember { mutableStateOf<Dp?>(null) }

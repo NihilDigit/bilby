@@ -94,6 +94,7 @@ fun rememberCaptionSlot(topInset: Dp = 28.dp): CaptionSlot {
     val density = LocalDensity.current
     val insetPx = with(density) { topInset.toPx() }
     val edgeTolerancePx = with(density) { CaptionEdgeTolerance.toPx() }
+    val narrowWindow = liveWindow.containerSize.width < with(density) { CaptionCompactWindowWidth.toPx() }
     var touches by remember { mutableStateOf(false) }
     var atTop by remember { mutableStateOf(false) }
     val modifier = Modifier.onGloballyPositioned { coordinates ->
@@ -108,8 +109,9 @@ fun rememberCaptionSlot(topInset: Dp = 28.dp): CaptionSlot {
         buttons = if (touches) {
             {
                 // 按钮前固定留出一段可拖动空白:操作区按钮紧凑时无需去别处找缝隙拖窗口。
-                // 定高与按钮一致,不用 fillMaxHeight,避免在未定高的行里撑高整列。
-                Spacer(Modifier.width(CaptionDragGap).height(CaptionDragHeight).windowDragArea())
+                // 窄窗口收紧间距，为顶栏标题与返回/操作按钮让出空间。
+                val gapWidth = if (narrowWindow) CaptionDragGapNarrow else CaptionDragGap
+                Spacer(Modifier.width(gapWidth).height(CaptionDragHeight).windowDragArea())
                 caption.Buttons()
             }
         } else {
@@ -123,6 +125,8 @@ private val NoCaptionSlot = CaptionSlot(Modifier, null)
 
 private val CaptionEdgeTolerance = 32.dp
 private val CaptionDragGap = 32.dp
+private val CaptionDragGapNarrow = 8.dp
+private val CaptionCompactWindowWidth = 600.dp
 val CaptionDragHeight = 40.dp
 
 /**

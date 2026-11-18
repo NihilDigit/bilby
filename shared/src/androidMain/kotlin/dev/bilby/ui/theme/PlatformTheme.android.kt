@@ -1,11 +1,18 @@
 package dev.bilby.ui.theme
 
+import android.database.ContentObserver
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -16,6 +23,8 @@ actual val NoFontPadding: PlatformTextStyle? = PlatformTextStyle(includeFontPadd
 
 actual val CjkFontFamily: FontFamily = FontFamily.Default
 
+actual val platformUsesStandardMotion: Boolean = false
+
 @Composable
 internal actual fun dynamicColorSchemes(): PaletteSchemes {
     val context = LocalContext.current
@@ -24,24 +33,40 @@ internal actual fun dynamicColorSchemes(): PaletteSchemes {
 
 /**
  * Android 上"减弱动效"表现为动画缩放被调到 0(开发者选项里的三个缩放,或无障碍的"移除动画")。
- * 读 `TRANSITION_ANIMATION_SCALE`:它管的正是窗口/页面级转场,和这里要退化的东西对得上。
- *
- * **组件那一侧不用自己处理。** Compose 的动画跑在 `AndroidUiDispatcher` 的
- * `MotionDurationScale` 下,那个值读的就是系统的动画时长缩放,关掉动画时所有 spring 自动
- * 变成瞬时。这里补的是另一个设置项,两者可以分别为 0。
+ * 读 `TRANSITION_ANIMATION_SCALE` 并监听系统设置变更:应用处于后台时用户改动无障碍开关，
+ * 回到前台即可实时响应退化。
  */
 @Composable
 actual fun rememberReducedMotion(): Boolean {
     val context = LocalContext.current
-    // 进程存活期间当它不变:这个开关在系统设置里,改完基本都会重进应用;为它挂一个
-    // ContentObserver,换来的是每次重组都要读一次 Settings。
-    return remember(context) {
-        runCatching {
-            Settings.Global.getFloat(
-                context.contentResolver,
-                Settings.Global.TRANSITION_ANIMATION_SCALE,
-                1f,
-            ) == 0f
+    val resolver = remember(context) { context.contentResolver }
+    fun readReduced(): Boolean = runCatching {
+        Settings.Global.getFloat(
+            resolver,
+            Settings.Global.TRANSITION_ANIMATION_SCALE,
+            1f,
+        ) == 0f
+    }.getOrDefault(false)
+
+    var reduced by remember(resolver) { mutableStateOf(readReduced()) }
+    DisposableEffect(resolver) {
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                val next = readReduced()
+                if (reduced != next) reduced = next
+            }
+        }
+        val registered = runCatching {
+            resolver.registerContentObserver(
+                Settings.Global.getUriFor(Settings.Global.TRANSITION_ANIMATION_SCALE),
+                false,
+                observer,
+            )
+            true
         }.getOrDefault(false)
+        onDispose {
+            if (registered) runCatching { resolver.unregisterContentObserver(observer) }
+        }
     }
+    return reduced
 }

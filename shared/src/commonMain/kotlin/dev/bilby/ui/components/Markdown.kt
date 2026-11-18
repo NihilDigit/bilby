@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
@@ -69,24 +71,31 @@ fun MarkdownText(
     val blocks = remember(text, stopAtHeadings) { parseMarkdown(text).upTo(stopAtHeadings) }
     val codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest
     val citationColor = MaterialTheme.colorScheme.primary
-    fun List<MdSpan>.toAnnotated() = toAnnotated(codeBackground, citationColor, onCitationClick)
+    val hasCitationClick = onCitationClick != null
+    val currentCitationClick by rememberUpdatedState(onCitationClick)
+    val citationHandler: ((Int) -> Unit)? = remember(hasCitationClick) {
+        if (hasCitationClick) { index -> currentCitationClick?.invoke(index) } else null
+    }
+    val annotatedBlocks = remember(blocks, codeBackground, citationColor, citationHandler) {
+        blocks.map { it to it.spans.toAnnotated(codeBackground, citationColor, citationHandler) }
+    }
     // 块间距 8dp。**行高抬到 24 之后 4dp 不够了**:行内间距(24 − 14 ≈ 10dp 分摊到上下)已经
     // 超过块间距,于是同一段里的换行看起来比段与段之间还开,一段答案读不出分了几段。
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
-        blocks.forEach { block ->
+        annotatedBlocks.forEach { (block, annotated) ->
             when (block) {
                 is MdBlock.Paragraph -> Text(
-                    text = block.spans.toAnnotated(),
+                    text = annotated,
                     style = style,
                 )
 
                 // 助理答案里的 `#` 只是分节,不是页面标题 —— 按标题层级去渲染会让一段回答
                 // 看起来像一篇文档。三级都收在正文量级里,只拉开字重。
                 is MdBlock.Heading -> Text(
-                    text = block.spans.toAnnotated(),
+                    text = annotated,
                     style = when (block.level) {
                         1 -> MaterialTheme.typography.titleSmall
                         2 -> MaterialTheme.typography.labelLarge
@@ -100,7 +109,7 @@ fun MarkdownText(
                 is MdBlock.ListItem -> Row(modifier = Modifier.padding(start = Spacing.Tight)) {
                     Text(text = block.marker, style = style)
                     Text(
-                        text = block.spans.toAnnotated(),
+                        text = annotated,
                         style = style,
                         modifier = Modifier.padding(start = Spacing.Hair),
                     )

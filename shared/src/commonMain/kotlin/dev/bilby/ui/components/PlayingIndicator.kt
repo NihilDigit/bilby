@@ -7,16 +7,20 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.util.lerp
+import dev.bilby.ui.theme.rememberReducedMotion
 
 /**
  * 「在放」的符号:队列里正在播的那一条、以及全应用的「正在直播」。**静止时就是 Material 的
@@ -35,6 +39,7 @@ import androidx.compose.ui.util.lerp
  *   一帧;动与不动本身就是信息。系统关掉动画时 Compose 的无限动画直接停在终值,不另做判断。
  * @param contentDescription 为 null 时不进读屏:直播格旁边已经写着字,再念一遍是重复。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun PlayingIndicator(
     active: Boolean,
@@ -42,11 +47,16 @@ fun PlayingIndicator(
     color: Color = LocalContentColor.current,
     contentDescription: String? = null,
 ) {
+    val reducedMotion = rememberReducedMotion()
     // 在原高与跳动高度之间按活跃度插值,不让弹簧去追一个每帧都在变的目标 —— 那样起伏会被抹平。
-    // 静止落稳后撤掉无限动画:rememberInfiniteTransition 只要还在组合里就会每个 vsync 挂一次
+    // 静止落稳或减弱动效开启时撤掉无限动画:rememberInfiniteTransition 只要还在组合里就会每个 vsync 挂一次
     // withFrameNanos,暂停或播完停在详情页时会持续驱动桌面端渲染链路按屏幕刷新率空转。
-    val activeness by animateFloatAsState(if (active) 1f else 0f, label = "playingActive")
-    val animating = active || activeness > 0.001f
+    val activeness by animateFloatAsState(
+        targetValue = if (active && !reducedMotion) 1f else 0f,
+        animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+        label = "playingActive",
+    )
+    val animating = !reducedMotion && (active || activeness > 0.001f)
     val bouncing = if (animating) {
         val transition = rememberInfiniteTransition(label = "playing")
         // 每根在图标原本的高度和另一个高度之间往返,**从原高起跳**:五根各自从同一个最矮值起跳的话,
@@ -69,16 +79,19 @@ fun PlayingIndicator(
     }
     Canvas(modifier = modifier.then(semantics)) {
         val unit = size.width / IconViewport
+        val barWidth = IconBarWidth * unit
+        val radius = CornerRadius(barWidth / 2f, barWidth / 2f)
         IconBarHeights.forEachIndexed { index, restHeight ->
             val height = if (bouncing != null) {
                 lerp(restHeight, bouncing[index].value, activeness) * unit
             } else {
                 restHeight * unit
             }
-            drawRect(
+            drawRoundRect(
                 color = color,
                 topLeft = Offset(x = IconBarLefts[index] * unit, y = IconCenter * unit - height / 2),
-                size = Size(IconBarWidth * unit, height),
+                size = Size(barWidth, height),
+                cornerRadius = radius,
             )
         }
     }

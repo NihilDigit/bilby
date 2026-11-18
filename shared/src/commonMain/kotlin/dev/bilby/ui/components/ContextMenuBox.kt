@@ -107,6 +107,25 @@ private object DesktopMenuMotionScheme : MotionScheme {
 }
 
 /**
+ * 在非触摸输入下为 `DropdownMenu` 套用 [DesktopMenuMotionScheme]（去掉 0.8 -> 1.0 缩放弹簧，只保留 80ms 淡入淡出）。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun DesktopMenuMotionTheme(content: @Composable () -> Unit) {
+    if (LocalPointerSource.current.isTouchLike) {
+        content()
+    } else {
+        MaterialExpressiveTheme(
+            colorScheme = MaterialTheme.colorScheme,
+            motionScheme = DesktopMenuMotionScheme,
+            typography = MaterialTheme.typography,
+            shapes = MaterialTheme.shapes,
+            content = content,
+        )
+    }
+}
+
+/**
  * 右键或长按在按下的位置弹出 [menu]。给宽屏网格里的行用,替掉行尾那颗 ⋮:每格一颗时整屏是
  * 一列列竖排的点,而宽屏上右键本来就是弹菜单的通用手势,不需要一个看得见的入口去提示它。
  * 窄屏仍画 ⋮,那里没有鼠标。
@@ -182,8 +201,7 @@ fun ContextMenuBox(
             // 零尺寸的锚点放在按下的位置,DropdownMenu 贴着它展开。外形同 ⋮ 弹出的那份
             // (M3E vertical menu),两个入口弹的是同一个菜单。
             Box(modifier = Modifier.offset { at.round() }) {
-                val isTouch = LocalPointerSource.current.isTouchLike
-                val menuPopup: @Composable () -> Unit = {
+                DesktopMenuMotionTheme {
                     val focusManager = LocalFocusManager.current
                     DropdownMenu(
                         expanded = true,
@@ -209,17 +227,6 @@ fun ContextMenuBox(
                     ) {
                         menu { menuAt = null }
                     }
-                }
-                if (isTouch) {
-                    menuPopup()
-                } else {
-                    MaterialExpressiveTheme(
-                        colorScheme = MaterialTheme.colorScheme,
-                        motionScheme = DesktopMenuMotionScheme,
-                        typography = MaterialTheme.typography,
-                        shapes = MaterialTheme.shapes,
-                        content = menuPopup,
-                    )
                 }
             }
         }

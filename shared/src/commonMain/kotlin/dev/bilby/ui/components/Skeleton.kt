@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.rememberReducedMotion
 
 /**
  * 骨架屏:内容还在读时,先按内容的形状画几块灰色占位,读到了再淡入换掉。
@@ -64,13 +65,17 @@ private val LocalSkeletonAlpha = compositionLocalOf<State<Float>?> { null }
  */
 @Composable
 fun SkeletonPulse(content: @Composable () -> Unit) {
-    val transition = rememberInfiniteTransition(label = "skeleton")
-    val alpha = transition.animateFloat(
-        initialValue = SkeletonAlphaHigh,
-        targetValue = SkeletonAlphaLow,
-        animationSpec = infiniteRepeatable(tween(SkeletonPulseMillis), RepeatMode.Reverse),
-        label = "skeleton-alpha",
-    )
+    val alpha = if (rememberReducedMotion()) {
+        null
+    } else {
+        val transition = rememberInfiniteTransition(label = "skeleton")
+        transition.animateFloat(
+            initialValue = SkeletonAlphaHigh,
+            targetValue = SkeletonAlphaLow,
+            animationSpec = infiniteRepeatable(tween(SkeletonPulseMillis), RepeatMode.Reverse),
+            label = "skeleton-alpha",
+        )
+    }
     CompositionLocalProvider(LocalSkeletonAlpha provides alpha, content = content)
 }
 

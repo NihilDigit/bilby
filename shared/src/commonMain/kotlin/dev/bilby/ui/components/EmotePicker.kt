@@ -244,12 +244,18 @@ private fun EmoteTabsContent(
             ) {
                 LazyRow(
                     state = tabRowState,
-                    modifier = Modifier.padding(bottom = bottomInset),
+                    modifier = Modifier
+                        .verticalWheelScrollsRow(tabRowState)
+                        .padding(bottom = bottomInset),
                     contentPadding = PaddingValues(horizontal = Spacing.Tight, vertical = Spacing.Hair),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    itemsIndexed(tabs, key = { _, tab -> tab.id }) { index, tab ->
+                    itemsIndexed(
+                        items = tabs,
+                        key = { _, tab -> tab.id },
+                        contentType = { _, _ -> "emote-tab" },
+                    ) { index, tab ->
                         val selected = pagerState.currentPage == index
                         val containerColor = if (selected) {
                             MaterialTheme.colorScheme.secondaryContainer
@@ -317,7 +323,7 @@ private fun EmoteGrid(
         horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
         verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
-        items(tab.items, key = { it.key }) { item ->
+        items(tab.items, key = { it.key }, contentType = { tab.kind }) { item ->
             when (tab.kind) {
                 EmoteTabKind.Kaomoji -> KaomojiCell(item, onSelect)
                 EmoteTabKind.SmallImage -> SmallEmoteCell(item, onSelect)

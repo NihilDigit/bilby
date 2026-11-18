@@ -18,6 +18,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -139,13 +140,23 @@ fun VideoRow(
             ) {
                 // bodyLargeEmphasized(16sp/24 Medium)。字号与两行行高预算不变,字重升至 Medium
                 // 让主标题明确领跑底下的 onSurfaceVariant 元信息。标题不给溢出按钮让位,见 [TitleOverflowGutter]。
-                Text(
-                    text = highlightedTitle(item.title, item.titleHighlights),
-                    modifier = Modifier.padding(end = if (overflow != null) TitleOverflowGutter else 0.dp),
-                    style = MaterialTheme.typography.bodyLargeEmphasized,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (item.titleHighlights.isEmpty()) {
+                    Text(
+                        text = item.title,
+                        modifier = Modifier.padding(end = if (overflow != null) TitleOverflowGutter else 0.dp),
+                        style = MaterialTheme.typography.bodyLargeEmphasized,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                } else {
+                    Text(
+                        text = highlightedTitle(item.title, item.titleHighlights),
+                        modifier = Modifier.padding(end = if (overflow != null) TitleOverflowGutter else 0.dp),
+                        style = MaterialTheme.typography.bodyLargeEmphasized,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 // 标题以下的几行让出按钮那一格。它们本来右边就是空的:元信息是几个 14dp 图标
                 // 加几个数字,时间和 UP 名合起来也占不满一行。
                 // 上边距是标题与这一块之间的最小间隔:文字撑满封面高度时 SpaceBetween 分不出
@@ -269,10 +280,14 @@ fun listCoverWidthFor(rowWidth: Dp): Dp =
 @Composable
 private fun highlightedTitle(title: String, highlights: List<IntRange>): AnnotatedString {
     val color = MaterialTheme.colorScheme.primary
-    return buildAnnotatedString {
-        append(title)
-        highlights.forEach { range ->
-            if (range.last < title.length) addStyle(SpanStyle(color = color), range.first, range.last + 1)
+    return remember(title, highlights, color) {
+        buildAnnotatedString {
+            append(title)
+            highlights.forEach { range ->
+                if (range.first >= 0 && range.last < title.length) {
+                    addStyle(SpanStyle(color = color), range.first, range.last + 1)
+                }
+            }
         }
     }
 }
@@ -401,15 +416,27 @@ fun VideoGridCard(
             )
         }
 
-        Text(
-            text = highlightedTitle(ui.title, ui.titleHighlights),
-            style = MaterialTheme.typography.bodyLargeEmphasized,
-            color = MaterialTheme.colorScheme.onSurface,
-            minLines = 2,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = Spacing.Tight),
-        )
+        if (ui.titleHighlights.isEmpty()) {
+            Text(
+                text = ui.title,
+                style = MaterialTheme.typography.bodyLargeEmphasized,
+                color = MaterialTheme.colorScheme.onSurface,
+                minLines = 2,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = Spacing.Tight),
+            )
+        } else {
+            Text(
+                text = highlightedTitle(ui.title, ui.titleHighlights),
+                style = MaterialTheme.typography.bodyLargeEmphasized,
+                color = MaterialTheme.colorScheme.onSurface,
+                minLines = 2,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = Spacing.Tight),
+            )
+        }
 
         Layout(
             modifier = Modifier

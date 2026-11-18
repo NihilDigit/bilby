@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -347,11 +348,18 @@ private fun StepRow(step: AgentStep, onVideoClick: (String) -> Unit, modifier: M
 
         if (step.items.isNotEmpty()) {
             // 中间结果可点:助理翻到一半用户看中了可以直接点走(DESIGN 3.4)。
+            val traceRowState = rememberLazyListState()
             LazyRow(
+                state = traceRowState,
+                modifier = Modifier.verticalWheelScrollsRow(traceRowState),
                 contentPadding = PaddingValues(horizontal = Spacing.Hair),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
             ) {
-                items(step.items, key = { it.bvid }) { trace ->
+                items(
+                    items = step.items,
+                    key = { it.bvid },
+                    contentType = { "trace-card" },
+                ) { trace ->
                     TraceCard(item = trace, onClick = { onVideoClick(trace.bvid) })
                 }
             }

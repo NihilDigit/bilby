@@ -246,8 +246,12 @@ private class CompactCaption(private val caption: WindowsCaption) : WindowCaptio
                     contentColor = color,
                     modifier = Modifier.onGloballyPositioned { coordinates ->
                         if (!coordinates.isAttached) return@onGloballyPositioned
-                        buttons[key] = (buttons[key] ?: emptyMap()) + (button to coordinates.boundsInWindow())
-                        publish()
+                        val bounds = coordinates.boundsInWindow()
+                        val current = buttons[key]
+                        if (current?.get(button) != bounds) {
+                            buttons[key] = (current ?: emptyMap()) + (button to bounds)
+                            publish()
+                        }
                     },
                 )
             }
@@ -255,12 +259,16 @@ private class CompactCaption(private val caption: WindowsCaption) : WindowCaptio
     }
 
     override fun setDragArea(key: Any, bounds: Rect?) {
-        if (bounds == null) dragAreas.remove(key) else dragAreas[key] = bounds
+        val normalized = bounds?.takeUnless { it.isEmpty }
+        if (dragAreas[key] == normalized) return
+        if (normalized == null) dragAreas.remove(key) else dragAreas[key] = normalized
         publish()
     }
 
     fun setFallbackDrag(bounds: Rect?) {
-        fallbackDrag = bounds?.takeUnless { it.isEmpty }
+        val normalized = bounds?.takeUnless { it.isEmpty }
+        if (fallbackDrag == normalized) return
+        fallbackDrag = normalized
         publish()
     }
 

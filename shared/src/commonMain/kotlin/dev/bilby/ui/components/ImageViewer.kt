@@ -76,6 +76,7 @@ import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.pow
@@ -135,7 +136,8 @@ fun ImageViewer(
         val scope = rememberCoroutineScope()
         val systemActions = LocalSystemActions.current
         val supportsImageActions = systemActions.supportsImageActions
-        val isTouchLike = LocalPointerSource.current.isTouchLike
+        val pointerSource = LocalPointerSource.current
+        val isTouchLike = pointerSource.isTouchLike
         val zoomActions = remember { ImageZoomActions() }
 
         var notice by remember { mutableStateOf<Pair<String, Int>?>(null) }
@@ -187,6 +189,7 @@ fun ImageViewer(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
+                .trackPointerSource(pointerSource)
                 .focusRequester(focusRequester)
                 .focusable()
                 .onKeyEvent { event ->
@@ -370,7 +373,7 @@ fun ImageViewer(
             if (urls.size > 1) {
                 Text(
                     text = "${pagerState.currentPage + 1} / ${urls.size}",
-                    style = MaterialTheme.typography.labelLarge,
+                    style = MaterialTheme.typography.labelLarge.tabular,
                     color = FixedColors.OnMedia,
                     modifier = Modifier
                         .align(Alignment.TopCenter)

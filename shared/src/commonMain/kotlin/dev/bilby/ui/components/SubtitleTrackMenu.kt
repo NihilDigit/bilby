@@ -5,8 +5,10 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -25,7 +27,7 @@ import dev.bilby.stringResource
  * 只管菜单内容,不管触发它的按钮长什么样:两处的按钮外观差得远(控制条上是图标+可选文字,
  * 封面上是浮在图片上的圆按钮),硬凑成一个组件只会得到一个到处是 if 的壳。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun SubtitleTrackMenu(
     expanded: Boolean,
@@ -34,22 +36,32 @@ fun SubtitleTrackMenu(
     currentLan: String,
     onSelect: (String) -> Unit,
 ) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismissRequest) {
-        val offSelected = currentLan.isEmpty()
-        DropdownMenuItem(
-            text = { Text(stringResource(Res.string.player_subtitle_off)) },
-            onClick = { onDismissRequest(); onSelect("") },
-            trailingIcon = if (offSelected) menuSelectedMark else null,
-            modifier = Modifier.selectedSemantics(offSelected),
-        )
-        tracks.forEach { track ->
-            val trackSelected = track.lan == currentLan
+    val totalCount = 1 + tracks.size
+    DesktopMenuMotionTheme {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = onDismissRequest,
+            shape = MenuDefaults.shape,
+            containerColor = MenuDefaults.containerColor,
+        ) {
+            val offSelected = currentLan.isEmpty()
             DropdownMenuItem(
-                text = { Text(track.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                onClick = { onDismissRequest(); onSelect(track.lan) },
-                trailingIcon = if (trackSelected) menuSelectedMark else null,
-                modifier = Modifier.selectedSemantics(trackSelected),
+                onClick = { onDismissRequest(); onSelect("") },
+                text = { Text(stringResource(Res.string.player_subtitle_off)) },
+                shape = menuItemShape(0, totalCount),
+                trailingContent = if (offSelected) menuSelectedMark else null,
+                modifier = Modifier.selectedSemantics(offSelected),
             )
+            tracks.forEachIndexed { index, track ->
+                val trackSelected = track.lan == currentLan
+                DropdownMenuItem(
+                    onClick = { onDismissRequest(); onSelect(track.lan) },
+                    text = { Text(track.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    shape = menuItemShape(index + 1, totalCount),
+                    trailingContent = if (trackSelected) menuSelectedMark else null,
+                    modifier = Modifier.selectedSemantics(trackSelected),
+                )
+            }
         }
     }
 }

@@ -62,9 +62,8 @@ fun BilbyTheme(
 
     MaterialExpressiveTheme(
         colorScheme = colorScheme,
-        // expressive 而不是 standard:两者的区别是弹性和时长,expressive 的 spatial spec
-        // 回弹更明显。Bilby 的动效只出现在展开/折叠和选中态上,回弹是"这一下生效了"的反馈。
-        motionScheme = MotionScheme.expressive(),
+        // 触控端取 expressive(回弹确认感),桌面端取 standard(指针交互干脆直达,不过冲)。
+        motionScheme = if (platformUsesStandardMotion) MotionScheme.standard() else MotionScheme.expressive(),
         typography = BilbyTypography,
         shapes = BilbyShapes,
     ) {
@@ -126,7 +125,7 @@ private fun ColorScheme.toPureBlack(): ColorScheme = copy(
 fun BilbyNightSanctuaryTheme(content: @Composable () -> Unit) {
     MaterialExpressiveTheme(
         colorScheme = NightSanctuaryColorScheme,
-        motionScheme = MotionScheme.expressive(),
+        motionScheme = if (platformUsesStandardMotion) MotionScheme.standard() else MotionScheme.expressive(),
         typography = BilbyTypography,
         shapes = BilbyShapes,
     ) {

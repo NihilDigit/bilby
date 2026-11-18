@@ -41,7 +41,7 @@ object SystemReducedMotion {
         )
     }
 
-    internal fun ensureStarted() {
+    fun ensureStarted() {
         if (!isWindows || !started.compareAndSet(false, true)) return
         refresh()
         KeyboardFocusManager.getCurrentKeyboardFocusManager().addPropertyChangeListener("activeWindow") { event ->

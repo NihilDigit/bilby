@@ -27,6 +27,11 @@ expect val NoFontPadding: PlatformTextStyle?
 expect val CjkFontFamily: FontFamily
 
 /**
+ * 桌面等精确指针平台使用 M3 `MotionScheme.standard()`,触控平台使用 `MotionScheme.expressive()`。
+ */
+expect val platformUsesStandardMotion: Boolean
+
+/**
  * 系统的"减弱动效"开着没有。
  *
  * 规范把它列为"好的转场"第一条:"Most platforms have a reduced animation setting... If that setting

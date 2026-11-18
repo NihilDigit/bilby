@@ -13,10 +13,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MediumFlexibleTopAppBar
 import androidx.compose.material3.Text
@@ -28,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,12 +39,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import dev.bilby.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
 import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import dev.bilby.ui.windowDragArea
 
 /**
@@ -121,13 +127,18 @@ private fun SmallTopBar(
                     .windowDragArea(dragTitleArea),
             ) {
                 if (subtitle == null) {
-                    Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        text = title,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
                 } else {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
                             text = subtitle,
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelMedium.tabular,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -194,12 +205,17 @@ fun BilbyFlexibleTopBar(
                     .heightIn(min = CaptionDragHeight)
                     .windowDragArea(captionSlot.atTop),
             ) {
-                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    text = title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
             }
         },
         subtitle = subtitle?.let {
             {
-                Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(it, style = LocalTextStyle.current.tabular, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         },
         navigationIcon = {
@@ -335,5 +351,28 @@ fun TrailingEntry(
                 modifier = Modifier.size(Dimens.IconInline),
             )
         }
+    }
+}
+
+/**
+ * 不可逆破坏性确认动作（如删除缓存/历史记录、清空列表）的高危实心确认按钮。
+ */
+@Composable
+fun DestructiveConfirmButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.error,
+            contentColor = MaterialTheme.colorScheme.onError,
+        ),
+    ) {
+        Text(text)
     }
 }
