@@ -39,9 +39,11 @@ import dev.bilby.BiliLog
 import dev.bilby.DesktopPlatform
 import dev.bilby.buildBilbyImageLoader
 import dev.bilby.data.AppearancePrefs
+import dev.bilby.ui.AppFullscreenController
 import dev.bilby.ui.BilbyRoot
 import dev.bilby.ui.DesktopSystemActions
 import dev.bilby.ui.DesktopToastEvent
+import dev.bilby.ui.LocalAppFullscreen
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.LocalSystemActions
 import dev.bilby.ui.components.SkiaAnimatedImageDecoder
@@ -146,6 +148,25 @@ fun main(args: Array<String>) {
                     normalMinimumSize = normalMinimumSize,
                 ).also { pip = it }
             }
+            var appFullscreen by remember { mutableStateOf(false) }
+            var playerFullscreen by remember { mutableStateOf(false) }
+            val desiredFullscreen = appFullscreen || playerFullscreen
+            LaunchedEffect(desiredFullscreen, windowsPip.active) {
+                if (windowsPip.active) return@LaunchedEffect
+                if (desiredFullscreen) {
+                    windowsFullscreen.enter(maximized = windowState.placement == WindowPlacement.Maximized)
+                } else {
+                    windowsFullscreen.exit()
+                }
+            }
+            val appFullscreenController = remember {
+                object : AppFullscreenController {
+                    override val isFullscreen: Boolean get() = appFullscreen
+                    override fun setFullscreen(fullscreen: Boolean) {
+                        appFullscreen = fullscreen
+                    }
+                }
+            }
             PixelAlignedContentEffect(window)
             WindowsSmtcEffect(window, platform.playback)
             val systemActions = remember { DesktopSystemActions(languageStore, container.biliClient) }
@@ -170,14 +191,8 @@ fun main(args: Array<String>) {
                 LocalSystemActions provides systemActions,
                 LocalPlaybackHost provides platform.playback,
                 LocalDesktopPip provides windowsPip,
-                // 最大化着进去的,出来还是最大化,见 WindowsFullscreen。
-                LocalWindowFullscreen provides { on ->
-                    if (on) {
-                        windowsFullscreen.enter(maximized = windowState.placement == WindowPlacement.Maximized)
-                    } else {
-                        windowsFullscreen.exit()
-                    }
-                },
+                LocalAppFullscreen provides appFullscreenController,
+                LocalWindowFullscreen provides { on -> playerFullscreen = on },
             ) {
                 BilbyTheme(appearance) {
                     Box(modifier = Modifier.fillMaxSize()) {

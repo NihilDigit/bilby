@@ -38,6 +38,7 @@ import dev.bilby.resources.shortcuts_seek_long
 import dev.bilby.resources.shortcuts_seek_percent
 import dev.bilby.resources.shortcuts_seek_short
 import dev.bilby.resources.shortcuts_title
+import dev.bilby.resources.shortcuts_toggle_rail
 import dev.bilby.resources.shortcuts_volume
 import dev.bilby.stringResource
 import dev.bilby.ui.theme.Spacing
@@ -51,10 +52,12 @@ private data class ShortcutEntry(
 
 private val GlobalShortcuts = listOf(
     ShortcutEntry(Res.string.shortcuts_nav_tabs, listOf("Ctrl + 1 / 2 / 3")),
+    ShortcutEntry(Res.string.shortcuts_toggle_rail, listOf("Ctrl + B")),
     ShortcutEntry(Res.string.shortcuts_search_focus, listOf("Ctrl + F", "/")),
     ShortcutEntry(Res.string.shortcuts_open_settings, listOf("Ctrl + ,")),
     ShortcutEntry(Res.string.shortcuts_refresh, listOf("F5", "Ctrl + R")),
     ShortcutEntry(Res.string.shortcuts_paste_link, listOf("Ctrl + V")),
+    ShortcutEntry(Res.string.shortcuts_fullscreen, listOf("F11", "Alt + Enter")),
     ShortcutEntry(Res.string.shortcuts_back, listOf("Alt + ←", "Esc")),
     ShortcutEntry(Res.string.shortcuts_help, listOf("F1", "Ctrl + /")),
 )

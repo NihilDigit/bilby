@@ -1,6 +1,7 @@
 package dev.bilby.ui.video
 
 import dev.bilby.ui.BackHandler
+import dev.bilby.ui.DesktopIslandFrame
 import dev.bilby.ui.DesktopIslandSurface
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.LocalSystemActions
@@ -740,39 +741,41 @@ fun VideoScreen(
             )
         }
         val baseListenModifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.horizontalCutout)
-        if (nightBanner == null) {
-            renderListen(baseListenModifier)
-        } else if (LocalWindowCaption.current == null) {
-            Column(modifier = baseListenModifier) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .windowInsetsPadding(WindowInsets.barsAndCutout.only(WindowInsetsSides.Top))
-                        .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-                ) {
-                    nightBanner()
+        DesktopIslandFrame {
+            if (nightBanner == null) {
+                renderListen(baseListenModifier)
+            } else if (LocalWindowCaption.current == null) {
+                Column(modifier = baseListenModifier) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .windowInsetsPadding(WindowInsets.barsAndCutout.only(WindowInsetsSides.Top))
+                            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                    ) {
+                        nightBanner()
+                    }
+                    renderListen(
+                        Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .consumeWindowInsets(WindowInsets.barsAndCutout.only(WindowInsetsSides.Top)),
+                    )
                 }
-                renderListen(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .consumeWindowInsets(WindowInsets.barsAndCutout.only(WindowInsetsSides.Top)),
-                )
-            }
-        } else {
-            Box(modifier = baseListenModifier) {
-                renderListen(Modifier.fillMaxSize())
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth()
-                        .padding(
-                            top = NightListenDesktopBannerTopOffset,
-                            start = Spacing.Comfortable,
-                            end = Spacing.Comfortable,
-                        ),
-                ) {
-                    nightBanner()
+            } else {
+                Box(modifier = baseListenModifier) {
+                    renderListen(Modifier.fillMaxSize())
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .fillMaxWidth()
+                            .padding(
+                                top = NightListenDesktopBannerTopOffset,
+                                start = Spacing.Comfortable,
+                                end = Spacing.Comfortable,
+                            ),
+                    ) {
+                        nightBanner()
+                    }
                 }
             }
         }

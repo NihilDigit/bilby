@@ -234,14 +234,6 @@ private fun CommentThreadScreen(
                         draft = drafts[target].orEmpty(),
                         onDraftChange = { drafts[target] = it },
                         replyLabel = replyLabel,
-                        onClearReply = {
-                            if (composerTarget != null) {
-                                composerTarget = null
-                                composerFocusNonce++
-                            } else {
-                                composerOpen = false
-                            }
-                        },
                         placeholder = stringResource(Res.string.comment_input_hint),
                         sending = state.sending,
                         error = state.sendError?.takeIf { !state.sending && sentTarget == target }

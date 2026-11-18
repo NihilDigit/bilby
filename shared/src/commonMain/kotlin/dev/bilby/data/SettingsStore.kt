@@ -261,6 +261,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
             predictiveBack = p[KEY_PREDICTIVE_BACK] ?: true,
             videoGridColumns = (p[KEY_VIDEO_GRID_COLUMNS] ?: AppearancePrefs.DEFAULT_VIDEO_GRID_COLUMNS)
                 .coerceIn(AppearancePrefs.MIN_VIDEO_GRID_COLUMNS, AppearancePrefs.MAX_VIDEO_GRID_COLUMNS),
+            sidebarCollapsed = p[KEY_SIDEBAR_COLLAPSED] ?: false,
         )
     }
 
@@ -296,6 +297,10 @@ class SettingsStore(private val store: DataStore<Preferences>) {
     suspend fun saveVideoGridColumns(columns: Int) {
         val clamped = columns.coerceIn(AppearancePrefs.MIN_VIDEO_GRID_COLUMNS, AppearancePrefs.MAX_VIDEO_GRID_COLUMNS)
         store.edit { p -> p[KEY_VIDEO_GRID_COLUMNS] = clamped }
+    }
+
+    suspend fun saveSidebarCollapsed(collapsed: Boolean) {
+        store.edit { p -> p[KEY_SIDEBAR_COLLAPSED] = collapsed }
     }
 
     /**
@@ -603,6 +608,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_SEARCH_LANDING = booleanPreferencesKey("search_landing")
         private val KEY_PREDICTIVE_BACK = booleanPreferencesKey("predictive_back")
         private val KEY_VIDEO_GRID_COLUMNS = intPreferencesKey("video_grid_columns")
+        private val KEY_SIDEBAR_COLLAPSED = booleanPreferencesKey("sidebar_collapsed")
         private val KEY_SESSDATA = stringPreferencesKey("sessdata")
         private val KEY_BILI_JCT = stringPreferencesKey("bili_jct")
         private val KEY_DEDE_USER_ID = stringPreferencesKey("dede_user_id")
@@ -964,6 +970,7 @@ data class AppearancePrefs(
     val searchLanding: Boolean = true,
     val predictiveBack: Boolean = true,
     val videoGridColumns: Int = DEFAULT_VIDEO_GRID_COLUMNS,
+    val sidebarCollapsed: Boolean = false,
 ) {
     companion object {
         const val DYNAMIC = "dynamic"

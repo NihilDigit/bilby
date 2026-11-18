@@ -63,7 +63,11 @@ internal actual fun FullscreenEffect(
 ) {
     val setFullscreen = LocalWindowFullscreen.current
     DisposableEffect(isFullscreen) {
-        setFullscreen(isFullscreen)
-        onDispose { if (isFullscreen) setFullscreen(false) }
+        if (isFullscreen) {
+            setFullscreen(true)
+            onDispose { setFullscreen(false) }
+        } else {
+            onDispose {}
+        }
     }
 }

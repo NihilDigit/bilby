@@ -309,6 +309,8 @@ fun ProfileScreen(
     onRetryFavFolders: () -> Unit,
     /** 每变一次就回到顶部。重按底栏上当前这一格时由 MainActivity 递增。 */
     scrollToTop: Int = 0,
+    /** `< 600dp` 底栏形态展示账号身份卡与快捷动作；`>= 600dp` 侧边导航栏常驻账号，页内仅作「媒体库」货架。 */
+    showAccountHeader: Boolean = true,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
@@ -323,6 +325,7 @@ fun ProfileScreen(
 
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
     val pinnedHeader = LocalWindowCaption.current != null
+    val headerTitle = stringResource(if (showAccountHeader) Res.string.tab_profile else Res.string.tab_library)
 
     Column(
         modifier = modifier
@@ -330,7 +333,7 @@ fun ProfileScreen(
             .padding(contentPadding),
     ) {
         if (pinnedHeader) {
-            ProfileHeader()
+            ProfileHeader(title = headerTitle)
         }
         Column(
             modifier = Modifier
@@ -339,20 +342,22 @@ fun ProfileScreen(
                 .verticalScroll(scrollState),
         ) {
             if (!pinnedHeader) {
-                ProfileHeader()
+                ProfileHeader(title = headerTitle)
             }
-            AccountCard(
-                state = state,
-                wide = wide,
-                onOpenSelf = onOpenSelf,
-                onOpenMessages = onOpenMessages,
-                onOpenFollowings = onOpenFollowings,
-                onOpenCoinLog = onOpenCoinLog,
-                onSettingsClick = onSettingsClick,
-                onRetry = onRetryAccount,
-            )
+            if (showAccountHeader) {
+                AccountCard(
+                    state = state,
+                    wide = wide,
+                    onOpenSelf = onOpenSelf,
+                    onOpenMessages = onOpenMessages,
+                    onOpenFollowings = onOpenFollowings,
+                    onOpenCoinLog = onOpenCoinLog,
+                    onSettingsClick = onSettingsClick,
+                    onRetry = onRetryAccount,
+                )
 
-            Spacer(Modifier.height(Spacing.Hair))
+                Spacer(Modifier.height(Spacing.Hair))
+            }
 
             HistorySection(state.history, wide, onVideoClick, onOpenHistory, onRetryHistory)
             ToViewSection(state.toView, wide, onToViewItemClick, onOpenToView, onRetryToView)
@@ -366,11 +371,11 @@ fun ProfileScreen(
 
 /**
  * 个人页顶栏:与订阅页 [FeedHeader] 保持一致的轻量结构——左侧页面标题加桌面拖动区，
- * 右侧仅保留窗口控制按钮，设置入口已下沉至账户快捷动作胶囊中。
+ * 右侧仅保留窗口控制按钮。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun ProfileHeader() {
+private fun ProfileHeader(title: String) {
     val captionSlot = rememberCaptionSlot()
     Row(
         modifier = captionSlot.modifier
@@ -391,7 +396,7 @@ private fun ProfileHeader() {
                 .windowDragArea(captionSlot.atTop),
         ) {
             Text(
-                text = stringResource(Res.string.tab_profile),
+                text = title,
                 style = MaterialTheme.typography.headlineSmallEmphasized,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -404,31 +409,15 @@ private fun ProfileHeader() {
 private val AccountAvatarSize = 56.dp
 private val AccountNameSkeletonHeight = 20.dp
 
-/**
- * 个人页轻量身份头与快捷动作胶囊：
- * - 去除整宽深灰外框卡片与嵌套底板，直接落在页面背景之上以对齐订阅页视觉重量；
- * - 宽屏下身份信息居左、[关注 · 硬币 · 消息 · 设置] 四段动作胶囊靠右单行并列；
- *   窄屏下四段胶囊落在身份行正下方。
- */
-@OptIn(
-    ExperimentalMaterial3ExpressiveApi::class,
-    ExperimentalLayoutApi::class,
-    ExperimentalFoundationApi::class,
-)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AccountCard(
-    state: ProfileUiState,
-    wide: Boolean,
+internal fun AccountIdentityContextMenu(
+    account: AccountInfo,
     onOpenSelf: (Long) -> Unit,
-    onOpenMessages: () -> Unit,
-    onOpenFollowings: () -> Unit,
-    onOpenCoinLog: () -> Unit,
-    onSettingsClick: () -> Unit,
-    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+    shape: Shape = MaterialTheme.shapes.large,
+    content: @Composable (onCopyUid: () -> Unit) -> Unit,
 ) {
-    val account = state.account
-    val colorScheme = MaterialTheme.colorScheme
-
     val clipboard = LocalClipboard.current
     val copyNotice = LocalCopyNotice.current
     val scope = rememberCoroutineScope()
@@ -445,49 +434,81 @@ private fun AccountCard(
         }
     }
 
+    val hasBio = account.sign.isNotBlank()
+    val menuTotal = if (hasBio) 3 else 2
+    ContextMenuBox(
+        onClick = { onOpenSelf(account.mid) },
+        menuLabel = menuLabel,
+        modifier = modifier.clip(shape),
+        menu = { close ->
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    copyValue(copyNicknameLabel, account.name)
+                },
+                text = { Text(copyNicknameLabel) },
+                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                shape = menuItemShape(0, menuTotal),
+            )
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    copyValue(copyUidLabel, account.mid.toString())
+                },
+                text = { Text(copyUidLabel) },
+                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                shape = menuItemShape(1, menuTotal),
+            )
+            if (hasBio) {
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        copyValue(copyBioLabel, account.sign)
+                    },
+                    text = { Text(copyBioLabel) },
+                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                    shape = menuItemShape(2, menuTotal),
+                )
+            }
+        },
+    ) { _ ->
+        content { copyValue(copyUidLabel, account.mid.toString()) }
+    }
+}
+
+/**
+ * 个人页轻量身份头与快捷动作胶囊：
+ * - 去除整宽深灰外框卡片与嵌套底板，直接落在页面背景之上以对齐订阅页视觉重量；
+ * - 宽屏下身份信息居左、[关注 · 硬币 · 消息 · 设置] 四段动作胶囊靠右单行并列；
+ *   窄屏下四段胶囊落在身份行正下方。
+ */
+@OptIn(
+    ExperimentalMaterial3ExpressiveApi::class,
+    ExperimentalLayoutApi::class,
+)
+@Composable
+private fun AccountCard(
+    state: ProfileUiState,
+    wide: Boolean,
+    onOpenSelf: (Long) -> Unit,
+    onOpenMessages: () -> Unit,
+    onOpenFollowings: () -> Unit,
+    onOpenCoinLog: () -> Unit,
+    onSettingsClick: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    val account = state.account
+    val colorScheme = MaterialTheme.colorScheme
+
     val identityBlock: @Composable (Modifier) -> Unit = { blockModifier ->
         Box(modifier = blockModifier) {
             if (account != null) {
                 val hasBio = account.sign.isNotBlank()
-                val menuTotal = if (hasBio) 3 else 2
-                ContextMenuBox(
-                    onClick = { onOpenSelf(account.mid) },
-                    menuLabel = menuLabel,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.large),
-                    menu = { close ->
-                        DropdownMenuItem(
-                            onClick = {
-                                close()
-                                copyValue(copyNicknameLabel, account.name)
-                            },
-                            text = { Text(copyNicknameLabel) },
-                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
-                            shape = menuItemShape(0, menuTotal),
-                        )
-                        DropdownMenuItem(
-                            onClick = {
-                                close()
-                                copyValue(copyUidLabel, account.mid.toString())
-                            },
-                            text = { Text(copyUidLabel) },
-                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
-                            shape = menuItemShape(1, menuTotal),
-                        )
-                        if (hasBio) {
-                            DropdownMenuItem(
-                                onClick = {
-                                    close()
-                                    copyValue(copyBioLabel, account.sign)
-                                },
-                                text = { Text(copyBioLabel) },
-                                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
-                                shape = menuItemShape(2, menuTotal),
-                            )
-                        }
-                    },
-                ) { _ ->
+                AccountIdentityContextMenu(
+                    account = account,
+                    onOpenSelf = onOpenSelf,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { onCopyUid ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
@@ -525,7 +546,7 @@ private fun AccountCard(
                                 }
                                 AccountUidPill(
                                     mid = account.mid,
-                                    onCopy = { copyValue(copyUidLabel, account.mid.toString()) },
+                                    onCopy = onCopyUid,
                                 )
                             }
 
@@ -650,7 +671,7 @@ private fun AccountCard(
 }
 
 @Composable
-private fun AccountUidPill(
+internal fun AccountUidPill(
     mid: Long,
     onCopy: () -> Unit,
     modifier: Modifier = Modifier,
@@ -936,7 +957,7 @@ private val SegmentIconSize = 18.dp
 private val SegmentCoinSize = 16.dp
 private val SegmentMinHeight = 48.dp
 
-private fun formatSegmentValue(value: Double): String = when {
+internal fun formatSegmentValue(value: Double): String = when {
     value >= 999_950 -> "%.1fM".format(value / 1_000_000)
     value >= 1_000 -> "%.1fK".format(value / 1_000)
     value % 1.0 == 0.0 -> value.toLong().toString()
@@ -1126,10 +1147,10 @@ private fun ShelfTitle(
     }
 }
 
-private val CarouselPreferredWidthCompact = 256.dp
-private val CarouselPreferredWidthWide = 284.dp
-private val CarouselHeightCompact = 160.dp
-private val CarouselHeightWide = 178.dp
+private val CarouselPreferredWidthCompact = 196.dp
+private val CarouselPreferredWidthWide = 216.dp
+private val CarouselHeightCompact = 122.dp
+private val CarouselHeightWide = 135.dp
 
 /**
  * M3 Expressive 货架旋转木马：常规态走渐进遮罩 `HorizontalMultiBrowseCarousel`，
@@ -1176,7 +1197,7 @@ private fun <T> ProfileCarousel(
 }
 
 /**
- * 旋转木马视频卡：16:10 满幅封面 + 28dp `extraLarge` 遮罩裁剪，随尾端缩窄平滑淡出底部文字，
+ * 旋转木马视频卡：16:10 满幅封面 + 20dp `largeIncreased` 遮罩裁剪，随尾端缩窄平滑淡出底部文字，
  * 保证窄预览条只留纯净封面与角标；全幅与宽窄屏均挂载右键/长按操作菜单。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalFoundationApi::class)
@@ -1191,7 +1212,7 @@ private fun CarouselItemScope.CarouselVideoCard(
     enabled: Boolean = true,
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    val cardShape = MaterialTheme.shapes.extraLarge
+    val cardShape = MaterialTheme.shapes.largeIncreased
     val cardContent: @Composable (openMenu: (() -> Unit)?) -> Unit = { openMenu ->
         Box(
             modifier = Modifier
@@ -1221,7 +1242,7 @@ private fun CarouselItemScope.CarouselVideoCard(
                     text = item.typeBadge,
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(Spacing.Cozy),
+                        .padding(Spacing.Tight),
                 )
             }
             if (item.durationText.isNotEmpty()) {
@@ -1229,7 +1250,7 @@ private fun CarouselItemScope.CarouselVideoCard(
                     text = item.durationText,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(Spacing.Cozy),
+                        .padding(Spacing.Tight),
                 )
             }
             Box(
@@ -1242,15 +1263,17 @@ private fun CarouselItemScope.CarouselVideoCard(
                     }
                     .background(
                         Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, FixedColors.ScrimOnMedia),
+                            0f to Color.Transparent,
+                            0.38f to FixedColors.ScrimOnMedia.copy(alpha = 0.68f),
+                            1f to FixedColors.ScrimOnMedia,
                         ),
                     )
-                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+                    .padding(start = Spacing.Cozy, end = Spacing.Cozy, top = Spacing.Comfortable, bottom = Spacing.Tight),
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
                         text = item.title,
-                        style = MaterialTheme.typography.titleSmallEmphasized,
+                        style = MaterialTheme.typography.bodyMediumEmphasized,
                         color = FixedColors.OnMedia,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -1318,7 +1341,7 @@ private fun CarouselSkeleton(wide: Boolean) {
                     modifier = Modifier
                         .width(itemWidth)
                         .height(height)
-                        .skeleton(MaterialTheme.shapes.extraLarge),
+                        .skeleton(MaterialTheme.shapes.largeIncreased),
                 )
             }
         }

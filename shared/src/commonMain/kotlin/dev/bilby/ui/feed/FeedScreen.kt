@@ -40,6 +40,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Fullscreen
+import androidx.compose.material.icons.outlined.FullscreenExit
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Mail
 import androidx.compose.material.icons.outlined.MoreVert
@@ -98,6 +100,7 @@ import dev.bilby.data.LiveUpBrief
 import dev.bilby.data.UpBrief
 import dev.bilby.data.model.FeedEntry
 import dev.bilby.parseDurationSeconds
+import dev.bilby.ui.LocalAppFullscreen
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.BilbyWindowSize
@@ -478,24 +481,36 @@ private fun FeedList(
     var actionsWidth by remember { mutableStateOf(0.dp) }
     var upsRowFits by remember { mutableStateOf(false) }
     val actionsInUpsRow = wide && hasUpsRow && upsRowFits
+    val isTouch = LocalPointerSource.current.isTouchLike
+    val appFullscreen = LocalAppFullscreen.current
     val upsTrailingActions: @Composable () -> Unit = {
         FeedHeaderActions(
             onOpenOtherDynamics = onOpenOtherDynamics,
             onOpenPushes = onOpenPushes,
+            includeNavActions = true,
+            includeFullscreen = false,
             includeRefresh = false,
             refreshing = state.refreshing,
             onRefresh = onRefresh,
             modifier = Modifier.onSizeChanged { actionsWidth = with(density) { it.width.toDp() } },
         )
     }
-    val headerActions: @Composable () -> Unit = {
-        FeedHeaderActions(
-            onOpenOtherDynamics = onOpenOtherDynamics,
-            onOpenPushes = onOpenPushes,
-            includeRefresh = !LocalPointerSource.current.isTouchLike,
-            refreshing = state.refreshing,
-            onRefresh = onRefresh,
-        )
+    val showHeaderFullscreen = appFullscreen != null
+    val showHeaderRefresh = !isTouch
+    val headerActions: (@Composable () -> Unit)? = if (!actionsInUpsRow || showHeaderFullscreen || showHeaderRefresh) {
+        {
+            FeedHeaderActions(
+                onOpenOtherDynamics = onOpenOtherDynamics,
+                onOpenPushes = onOpenPushes,
+                includeNavActions = !actionsInUpsRow,
+                includeFullscreen = showHeaderFullscreen,
+                includeRefresh = showHeaderRefresh,
+                refreshing = state.refreshing,
+                onRefresh = onRefresh,
+            )
+        }
+    } else {
+        null
     }
 
     Box(
@@ -521,10 +536,7 @@ private fun FeedList(
             Column(modifier = Modifier.fillMaxSize()) {
                 if (pinnedHeader) {
                     FeedHeader(
-                        refreshing = state.refreshing,
-                        onRefresh = onRefresh,
-                        showStandaloneRefresh = actionsInUpsRow,
-                        actions = headerActions.takeUnless { actionsInUpsRow },
+                        actions = headerActions,
                     )
                 }
                 RefreshBox(
@@ -541,10 +553,7 @@ private fun FeedList(
                         if (!pinnedHeader) {
                             item(key = "header", span = FullLine, contentType = "header") {
                                 FeedHeader(
-                                    refreshing = state.refreshing,
-                                    onRefresh = onRefresh,
-                                    showStandaloneRefresh = actionsInUpsRow,
-                                    actions = headerActions.takeUnless { actionsInUpsRow },
+                                    actions = headerActions,
                                 )
                             }
                         }
@@ -636,14 +645,9 @@ private fun FeedList(
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun FeedHeader(
-    refreshing: Boolean,
-    onRefresh: () -> Unit,
-    showStandaloneRefresh: Boolean,
     actions: (@Composable () -> Unit)?,
 ) {
     val captionSlot = rememberCaptionSlot()
-    val showRefresh = showStandaloneRefresh && !LocalPointerSource.current.isTouchLike
-    val refreshLabel = stringResource(Res.string.action_refresh)
     Row(
         modifier = captionSlot.modifier
             .fillMaxWidth()
@@ -662,18 +666,6 @@ private fun FeedHeader(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.windowDragArea(captionSlot.atTop),
         )
-        if (showRefresh) {
-            Spacer(Modifier.width(Spacing.Tight))
-            BilbyTooltip(text = refreshLabel, shortcut = "F5") {
-                FeedToolbarTile(
-                    icon = Icons.Filled.Refresh,
-                    label = null,
-                    contentDescription = refreshLabel,
-                    loading = refreshing,
-                    onClick = onRefresh,
-                )
-            }
-        }
         Spacer(
             modifier = Modifier
                 .weight(1f)
@@ -686,22 +678,29 @@ private fun FeedHeader(
 }
 
 /**
- * 推送与关注动态（及桌面端刷新）入口：收口进 M3E [ButtonGroup]（`animateWidth` 弹性伸缩 + 窄屏自动折叠溢出菜单），
- * 内层延续 `32.dp` 高、`10.dp` 小圆角的轻量 `surfaceContainerLow` 方案 C 视觉。
+ * 推送、关注动态、桌面全屏与刷新入口：收口进 M3E [ButtonGroup]（`animateWidth` 弹性伸缩 + 窄屏自动折叠溢出菜单），
+ * 内层延续 `32.dp` 高、`10.dp` 小圆角的轻量 `surfaceContainerLow` 方案 C 视觉，刷新按钮始终处于最右侧。
  */
 @Composable
 private fun FeedHeaderActions(
     onOpenOtherDynamics: () -> Unit,
     onOpenPushes: () -> Unit,
+    includeNavActions: Boolean,
+    includeFullscreen: Boolean,
     includeRefresh: Boolean,
     refreshing: Boolean,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val appFullscreen = LocalAppFullscreen.current
     val refreshLabel = stringResource(Res.string.action_refresh)
     val pushesLabel = stringResource(Res.string.feed_up_pushes_entry)
     val dynamicsLabel = stringResource(Res.string.dynamic_other_entry)
+    val isWindowFullscreen = appFullscreen?.isFullscreen == true
+    val fullscreenLabel = stringResource(
+        if (isWindowFullscreen) Res.string.player_exit_fullscreen else Res.string.player_fullscreen,
+    )
     ButtonGroup(
         overflowIndicator = { menuState ->
             ButtonGroupDefaults.OverflowIndicator(
@@ -716,6 +715,85 @@ private fun FeedHeaderActions(
         horizontalArrangement = Arrangement.spacedBy(HeaderTileGap),
         modifier = modifier,
     ) {
+        if (includeNavActions) {
+            // UP 主推送来的私信。同一条规矩:没有计数,没有红点。
+            customItem(
+                buttonGroupContent = {
+                    val interactionSource = remember { MutableInteractionSource() }
+                    FeedToolbarTile(
+                        icon = Icons.Outlined.Mail,
+                        label = pushesLabel,
+                        interactionSource = interactionSource,
+                        modifier = Modifier.animateWidth(interactionSource),
+                        onClick = onOpenPushes,
+                    )
+                },
+                menuContent = { menuState ->
+                    DropdownMenuItem(
+                        text = { Text(pushesLabel) },
+                        leadingIcon = { Icon(Icons.Outlined.Mail, contentDescription = null) },
+                        onClick = {
+                            menuState.dismiss()
+                            onOpenPushes()
+                        },
+                    )
+                },
+            )
+            customItem(
+                buttonGroupContent = {
+                    val interactionSource = remember { MutableInteractionSource() }
+                    FeedToolbarTile(
+                        icon = Icons.AutoMirrored.Outlined.Article,
+                        label = dynamicsLabel,
+                        interactionSource = interactionSource,
+                        modifier = Modifier.animateWidth(interactionSource),
+                        onClick = onOpenOtherDynamics,
+                    )
+                },
+                menuContent = { menuState ->
+                    DropdownMenuItem(
+                        text = { Text(dynamicsLabel) },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Article, contentDescription = null) },
+                        onClick = {
+                            menuState.dismiss()
+                            onOpenOtherDynamics()
+                        },
+                    )
+                },
+            )
+        }
+        if (includeFullscreen && appFullscreen != null) {
+            val fullscreenIcon = if (isWindowFullscreen) {
+                Icons.Outlined.FullscreenExit
+            } else {
+                Icons.Outlined.Fullscreen
+            }
+            customItem(
+                buttonGroupContent = {
+                    val interactionSource = remember { MutableInteractionSource() }
+                    BilbyTooltip(text = fullscreenLabel, shortcut = "F11") {
+                        FeedToolbarTile(
+                            icon = fullscreenIcon,
+                            label = null,
+                            contentDescription = fullscreenLabel,
+                            interactionSource = interactionSource,
+                            modifier = Modifier.animateWidth(interactionSource),
+                            onClick = { appFullscreen.toggle() },
+                        )
+                    }
+                },
+                menuContent = { menuState ->
+                    DropdownMenuItem(
+                        text = { Text(fullscreenLabel) },
+                        leadingIcon = { Icon(fullscreenIcon, contentDescription = null) },
+                        onClick = {
+                            menuState.dismiss()
+                            appFullscreen.toggle()
+                        },
+                    )
+                },
+            )
+        }
         if (includeRefresh) {
             customItem(
                 buttonGroupContent = {
@@ -745,51 +823,6 @@ private fun FeedHeaderActions(
                 },
             )
         }
-        // UP 主推送来的私信。同一条规矩:没有计数,没有红点。
-        customItem(
-            buttonGroupContent = {
-                val interactionSource = remember { MutableInteractionSource() }
-                FeedToolbarTile(
-                    icon = Icons.Outlined.Mail,
-                    label = pushesLabel,
-                    interactionSource = interactionSource,
-                    modifier = Modifier.animateWidth(interactionSource),
-                    onClick = onOpenPushes,
-                )
-            },
-            menuContent = { menuState ->
-                DropdownMenuItem(
-                    text = { Text(pushesLabel) },
-                    leadingIcon = { Icon(Icons.Outlined.Mail, contentDescription = null) },
-                    onClick = {
-                        menuState.dismiss()
-                        onOpenPushes()
-                    },
-                )
-            },
-        )
-        customItem(
-            buttonGroupContent = {
-                val interactionSource = remember { MutableInteractionSource() }
-                FeedToolbarTile(
-                    icon = Icons.AutoMirrored.Outlined.Article,
-                    label = dynamicsLabel,
-                    interactionSource = interactionSource,
-                    modifier = Modifier.animateWidth(interactionSource),
-                    onClick = onOpenOtherDynamics,
-                )
-            },
-            menuContent = { menuState ->
-                DropdownMenuItem(
-                    text = { Text(dynamicsLabel) },
-                    leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Article, contentDescription = null) },
-                    onClick = {
-                        menuState.dismiss()
-                        onOpenOtherDynamics()
-                    },
-                )
-            },
-        )
     }
 }
 

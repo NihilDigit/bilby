@@ -123,7 +123,7 @@ private fun SmallTopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = CaptionDragHeight)
+                    .heightIn(min = SmallTopBarDragHeight)
                     .windowDragArea(dragTitleArea),
             ) {
                 if (subtitle == null) {
@@ -376,3 +376,5 @@ fun DestructiveConfirmButton(
         Text(text)
     }
 }
+
+private val SmallTopBarDragHeight = 56.dp

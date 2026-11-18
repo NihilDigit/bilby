@@ -599,6 +599,9 @@
     <string name="fav_clean_failed">Could not remove: %1$s</string>
 
     <string name="tab_profile">Me</string>
+    <string name="tab_library">Library</string>
+    <string name="rail_expand">Expand navigation rail</string>
+    <string name="rail_collapse">Collapse navigation rail</string>
     <string name="profile_logout">Log out</string>
     <string name="profile_favorites_empty">No favourite folders yet</string>
     <string name="coin_failed">Could not give coins: %1$s</string>
@@ -816,7 +819,8 @@
     <string name="shortcuts_title">Keyboard shortcuts</string>
     <string name="shortcuts_group_global">Navigation</string>
     <string name="shortcuts_group_player">Playback</string>
-    <string name="shortcuts_nav_tabs">Switch Feed / Search / Profile</string>
+    <string name="shortcuts_nav_tabs">Switch Feed / Search / Me or Library</string>
+    <string name="shortcuts_toggle_rail">Expand / collapse navigation rail</string>
     <string name="shortcuts_search_focus">Focus search field</string>
     <string name="shortcuts_open_settings">Open settings</string>
     <string name="shortcuts_refresh">Refresh current page</string>

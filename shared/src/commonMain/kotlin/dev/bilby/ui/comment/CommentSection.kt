@@ -48,12 +48,9 @@ import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ButtonGroup
-import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalToggleButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -83,6 +80,7 @@ import dev.bilby.ui.components.LocalCopyNotice
 import dev.bilby.ui.components.NeedsCopyNotice
 import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.components.RefreshAction
+import dev.bilby.ui.components.SortMenu
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.components.plainTextClip
 import kotlinx.coroutines.launch
@@ -445,14 +443,6 @@ fun CommentSection(
                 draft = drafts[composerTarget].orEmpty(),
                 onDraftChange = { drafts[composerTarget] = it },
                 replyLabel = replyLabel,
-                onClearReply = if (composerTarget != CommentToVideo) {
-                    {
-                        composerTarget = CommentToVideo
-                        composerFocusNonce++
-                    }
-                } else {
-                    null
-                },
                 placeholder = stringResource(Res.string.comment_input_hint),
                 sending = state.sending,
                 error = sendError?.takeIf { !state.sending && sentTarget == composerTarget },
@@ -493,14 +483,6 @@ fun CommentSection(
                         draft = drafts[activeTarget].orEmpty(),
                         onDraftChange = { drafts[activeTarget] = it },
                         replyLabel = replyLabel,
-                        onClearReply = {
-                            if (activeTarget != panelComment.rpid) {
-                                composerTarget = panelComment.rpid
-                                composerFocusNonce++
-                            } else {
-                                composerOpen = false
-                            }
-                        },
                         placeholder = stringResource(Res.string.comment_input_hint),
                         sending = state.sending,
                         error = sendError?.takeIf { !state.sending && sentTarget == activeTarget },
@@ -631,8 +613,7 @@ private fun findUname(state: CommentUiState, rpid: Long): String? {
     return null
 }
 
-/** 最热 / 最新 1-tap 互斥切换，采用 M3E 连接式 [ButtonGroup] + [FilledTonalToggleButton]。 */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+/** 最热 / 最新轻量文字下拉排序，刷新按钮固定在最右侧。 */
 @Composable
 private fun SortBar(
     sort: CommentSort,
@@ -651,53 +632,17 @@ private fun SortBar(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
-        horizontalArrangement = Arrangement.End,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.End),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        SortMenu(
+            options = options,
+            selected = sort,
+            onSelect = onSort,
+            preferButtonGroup = false,
+        )
         if (refreshEnabled) {
             RefreshAction(refreshing = refreshing, onRefresh = onRefresh)
-            Spacer(Modifier.width(Spacing.Tight))
-        }
-        ButtonGroup(
-            overflowIndicator = { menuState -> ButtonGroupDefaults.OverflowIndicator(menuState) },
-            horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
-        ) {
-            options.forEachIndexed { index, (optionSort, labelRes) ->
-                customItem(
-                    buttonGroupContent = {
-                        val interactionSource = remember { MutableInteractionSource() }
-                        val selected = optionSort == sort
-                        val label = stringResource(labelRes)
-                        val shapes = if (index == 0) {
-                            ButtonGroupDefaults.connectedLeadingButtonShapes()
-                        } else {
-                            ButtonGroupDefaults.connectedTrailingButtonShapes()
-                        }
-                        FilledTonalToggleButton(
-                            checked = selected,
-                            onCheckedChange = { if (!selected) onSort(optionSort) },
-                            shapes = shapes,
-                            interactionSource = interactionSource,
-                            contentPadding = PaddingValues(horizontal = Spacing.Cozy),
-                            modifier = Modifier
-                                .animateWidth(interactionSource)
-                                .semantics { role = Role.RadioButton },
-                        ) {
-                            Text(text = label, maxLines = 1, softWrap = false)
-                        }
-                    },
-                    menuContent = { menuState ->
-                        val label = stringResource(labelRes)
-                        DropdownMenuItem(
-                            text = { Text(label) },
-                            onClick = {
-                                menuState.dismiss()
-                                onSort(optionSort)
-                            },
-                        )
-                    },
-                )
-            }
         }
     }
 }

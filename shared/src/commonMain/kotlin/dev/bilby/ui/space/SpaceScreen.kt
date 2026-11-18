@@ -47,7 +47,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -1265,26 +1264,11 @@ private fun SpaceTopBar(
             }
         },
         actions = {
-            val refreshLabel = stringResource(Res.string.action_refresh)
             val closeLabel = stringResource(Res.string.space_search_close)
             val searchLabel = stringResource(Res.string.space_search_hint)
             val shareLabel = stringResource(Res.string.action_share)
             val toggleLabel = stringResource(Res.string.space_dynamics_sheet_toggle)
             AppBarRow(maxItemCount = SpaceTopBarMaxActions) {
-                customItem(
-                    appbarContent = { RefreshAction(refreshing = refreshing, onRefresh = onRefresh) },
-                    menuContent = { menuState ->
-                        DropdownMenuItem(
-                            text = { Text(refreshLabel) },
-                            leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
-                            enabled = !refreshing,
-                            onClick = {
-                                menuState.dismiss()
-                                onRefresh()
-                            },
-                        )
-                    },
-                )
                 if (searching) {
                     clickableItem(
                         onClick = onCloseSearch,
@@ -1327,6 +1311,7 @@ private fun SpaceTopBar(
                     )
                 }
             }
+            RefreshAction(refreshing = refreshing, onRefresh = onRefresh)
             captionSlot.buttons?.invoke()
         },
     )
@@ -2416,7 +2401,7 @@ internal fun VideoListTab(
 
 private val SpaceTabIndicatorMinWidth = 24.dp
 private val SpaceTitleRevealOffset = 6.dp
-private const val SpaceTopBarMaxActions = 3
+private const val SpaceTopBarMaxActions = 2
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 private object SpaceDesktopMenuMotionScheme : MotionScheme {

@@ -807,6 +807,7 @@ fun PlayerShell(
                             levelHintNonce++
                         }
                         Key.F -> onFullscreenChange(!isFullscreen)
+                        Key.F11 -> if (isFullscreen) onFullscreenChange(false) else return@onKeyEvent false
                         Key.D -> {
                             val toggle = onToggleDanmaku ?: return@onKeyEvent false
                             toggle()

@@ -215,16 +215,16 @@ fun NightModeScreen(
                             Text(stringResource(Res.string.night_mode_temp_exit))
                         }
                         if (state.allowedUps.isNotEmpty()) {
-                            RefreshAction(
-                                refreshing = state.refreshing,
-                                onRefresh = onRefresh,
-                            )
                             val settingsLabel = stringResource(Res.string.settings_title)
                             BilbyTooltip(text = settingsLabel, shortcut = "Ctrl+,") {
                                 IconButton(onClick = onOpenSettings) {
                                     Icon(Icons.Outlined.Settings, contentDescription = settingsLabel)
                                 }
                             }
+                            RefreshAction(
+                                refreshing = state.refreshing,
+                                onRefresh = onRefresh,
+                            )
                         }
                     },
                 )

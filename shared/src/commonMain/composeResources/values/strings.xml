@@ -687,6 +687,9 @@
 
     <!-- 个人页 -->
     <string name="tab_profile">我的</string>
+    <string name="tab_library">媒体库</string>
+    <string name="rail_expand">展开导航栏</string>
+    <string name="rail_collapse">收起导航栏</string>
     <string name="profile_logout">登出</string>
     <string name="profile_favorites_empty">还没有收藏夹</string>
     <!-- 直播 -->
@@ -882,7 +885,8 @@
     <string name="shortcuts_title">快捷键</string>
     <string name="shortcuts_group_global">全局与导航</string>
     <string name="shortcuts_group_player">播放控制</string>
-    <string name="shortcuts_nav_tabs">切换订阅 / 搜索 / 我的</string>
+    <string name="shortcuts_nav_tabs">切换订阅 / 搜索 / 我的或媒体库</string>
+    <string name="shortcuts_toggle_rail">展开 / 收起导航栏</string>
     <string name="shortcuts_search_focus">聚焦搜索框</string>
     <string name="shortcuts_open_settings">打开设置</string>
     <string name="shortcuts_refresh">刷新当前页面</string>

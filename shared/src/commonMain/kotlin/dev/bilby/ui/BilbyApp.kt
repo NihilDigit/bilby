@@ -27,6 +27,7 @@ import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalClipboard
@@ -47,35 +48,49 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.MenuOpen
 import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Subscriptions
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Forum
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenLoading
+import androidx.compose.material.icons.outlined.Mail
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.PeopleAlt
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Subscriptions
+import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -84,6 +99,7 @@ import androidx.compose.material3.FloatingToolbarDefaults
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.ModalWideNavigationRail
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ShortNavigationBar
@@ -93,6 +109,24 @@ import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.WideNavigationRail
 import androidx.compose.material3.WideNavigationRailDefaults
 import androidx.compose.material3.WideNavigationRailItem
+import androidx.compose.material3.WideNavigationRailValue
+import androidx.compose.material3.rememberWideNavigationRailState
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import dev.bilby.data.AccountInfo
+import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.BilbyTooltip
+import dev.bilby.ui.components.CoinGlyph
+import dev.bilby.ui.components.LevelBadge
+import dev.bilby.ui.components.MetaSeparator
+import dev.bilby.ui.components.SkeletonLine
+import dev.bilby.ui.components.SkeletonPulse
+import dev.bilby.ui.components.skeleton
+import dev.bilby.ui.profile.AccountIdentityContextMenu
+import dev.bilby.ui.profile.AccountUidPill
+import dev.bilby.ui.profile.ProfileUiState
+import dev.bilby.ui.profile.formatSegmentValue
+import dev.bilby.ui.theme.tabular
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
@@ -364,6 +398,7 @@ fun BilbyRoot(
                     incomingLink = incomingLink,
                     snackbarHostState = snackbarHostState,
                     predictiveBack = appearance.predictiveBack,
+                    sidebarCollapsed = appearance.sidebarCollapsed,
                 )
             }
             SnackbarHost(
@@ -396,6 +431,7 @@ private fun BilbyApp(
     incomingLink: MutableStateFlow<String?>,
     snackbarHostState: SnackbarHostState,
     predictiveBack: Boolean = true,
+    sidebarCollapsed: Boolean = false,
 ) {
     // DataStore 第一帧是异步的:null 表示还没读出来,此时什么都不画,
     // 否则已登录用户每次冷启动都会闪一下登录页。
@@ -1020,12 +1056,19 @@ private fun BilbyApp(
 
     val editableFocus = LocalEditableFocusTracker.current
     val pageRefresh = LocalPageRefreshRegistry.current
+    val appFullscreen = LocalAppFullscreen.current
     val triggerBack = rememberBackTrigger()
     val clipboard = LocalClipboard.current
     val rootFocusRequester = remember { FocusRequester() }
     var shortcutsOpen by remember { mutableStateOf(false) }
     var rootTabRequest by remember { mutableStateOf<Pair<RootTab, Int>?>(null) }
     var focusSearchNonce by remember { mutableIntStateOf(0) }
+    var railToggleNonce by remember { mutableIntStateOf(0) }
+    val currentWindowSize by rememberUpdatedState(rememberBilbyWindowSize())
+
+    BackHandler(enabled = appFullscreen?.isFullscreen == true && backStack.size == 1) {
+        appFullscreen?.setFullscreen(false)
+    }
 
     LaunchedEffect(Unit) {
         if (!editableFocus.isEditableFocused) {
@@ -1062,6 +1105,14 @@ private fun BilbyApp(
                 // Ctrl+, 打开设置
                 if (ctrl && !event.isShiftPressed && event.key == Key.Comma) {
                     if (backStack.none { it is Settings }) openSettings()
+                    return@onPreviewKeyEvent true
+                }
+                // Ctrl+B 展开/收起侧边导航栏（仅 >= 600dp 首页有效）
+                if (ctrl && !event.isShiftPressed && event.key == Key.B &&
+                    backStack.lastOrNull() is Home && !currentNightEngaged &&
+                    currentWindowSize != BilbyWindowSize.Compact
+                ) {
+                    railToggleNonce++
                     return@onPreviewKeyEvent true
                 }
                 // Ctrl+1/2/3 切换三个根目的地(播放与直播中不切走页面)
@@ -1120,6 +1171,21 @@ private fun BilbyApp(
                         }
                     }
                     return@onPreviewKeyEvent true
+                }
+                false
+            }
+            .onKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                val controller = appFullscreen ?: return@onKeyEvent false
+                val bare = !event.isCtrlPressed && !event.isAltPressed && !event.isShiftPressed && !event.isMetaPressed
+                val alt = event.isAltPressed && !event.isCtrlPressed && !event.isMetaPressed && !event.isShiftPressed
+                if (bare && event.key == Key.F11) {
+                    controller.toggle()
+                    return@onKeyEvent true
+                }
+                if (alt && !editableFocus.isEditableFocused && (event.key == Key.Enter || event.key == Key.NumPadEnter)) {
+                    controller.toggle()
+                    return@onKeyEvent true
                 }
                 false
             }
@@ -1267,6 +1333,13 @@ private fun BilbyApp(
                             hasVideoPage = hasVideoPage,
                             tabRequest = rootTabRequest,
                             focusSearchNonce = focusSearchNonce,
+                            sidebarCollapsed = sidebarCollapsed,
+                            railToggleNonce = railToggleNonce,
+                            onSidebarCollapsedChange = { collapsed ->
+                                container.persistScope.launch {
+                                    container.settings.saveSidebarCollapsed(collapsed)
+                                }
+                            },
                             onPlayDraftQueue = playDraftQueue,
                             onVideoClick = { push(Video(it)) },
                             onVideoInContext = { bvid, context -> push(Video(bvid, context = context)) },
@@ -1770,13 +1843,32 @@ private fun BilbyApp(
  * 图标形态本身就是一路状态指示,只靠颜色的话色觉障碍用户看不出当前在哪一格。
  */
 private enum class RootTab(
-    val label: StringResource,
-    val selectedIcon: ImageVector,
-    val unselectedIcon: ImageVector,
+    private val label: StringResource,
+    private val selectedIcon: ImageVector,
+    private val unselectedIcon: ImageVector,
+    private val railLabel: StringResource = label,
+    private val railSelectedIcon: ImageVector = selectedIcon,
+    private val railUnselectedIcon: ImageVector = unselectedIcon,
 ) {
     Feed(Res.string.tab_feed, Icons.Filled.Subscriptions, Icons.Outlined.Subscriptions),
     Search(Res.string.tab_search, Icons.Filled.Search, Icons.Outlined.Search),
-    Profile(Res.string.tab_profile, Icons.Filled.Person, Icons.Outlined.Person),
+    Profile(
+        label = Res.string.tab_profile,
+        selectedIcon = Icons.Filled.Person,
+        unselectedIcon = Icons.Outlined.Person,
+        railLabel = Res.string.tab_library,
+        railSelectedIcon = Icons.Filled.VideoLibrary,
+        railUnselectedIcon = Icons.Outlined.VideoLibrary,
+    ),
+    ;
+
+    fun labelRes(sideRail: Boolean): StringResource = if (sideRail) railLabel else label
+
+    fun icon(selected: Boolean, sideRail: Boolean): ImageVector = if (sideRail) {
+        if (selected) railSelectedIcon else railUnselectedIcon
+    } else {
+        if (selected) selectedIcon else unselectedIcon
+    }
 }
 
 internal enum class DesktopPaneRole {
@@ -1892,6 +1984,9 @@ private fun RootTabs(
     hasVideoPage: Boolean,
     tabRequest: Pair<RootTab, Int>? = null,
     focusSearchNonce: Int = 0,
+    sidebarCollapsed: Boolean = false,
+    railToggleNonce: Int = 0,
+    onSidebarCollapsedChange: (Boolean) -> Unit = {},
     onPlayDraftQueue: (String?) -> Unit,
     onVideoClick: (String) -> Unit,
     /**
@@ -1956,6 +2051,22 @@ private fun RootTabs(
         if (selected != target) selected = target
     }
     val currentSelected = selected ?: return
+    val profileVm: ProfileViewModel = viewModel(
+        key = "root-profile",
+        factory = viewModelFactory {
+            initializer {
+                ProfileViewModel(
+                    container.accountRepository,
+                    container.historyRepository,
+                    container.toViewRepository,
+                    container.favRepository,
+                    container.offlineDownloader,
+                    container.offlineStore,
+                )
+            }
+        },
+    )
+    val profileState by profileVm.state.collectAsStateWithLifecycle()
 
     if (windowSize == BilbyWindowSize.Compact) {
         DesktopIslandFrame {
@@ -1966,8 +2077,8 @@ private fun RootTabs(
                             ShortNavigationBarItem(
                                 selected = currentSelected == tab,
                                 onClick = { onTabClick(tab) },
-                                icon = { RootTabIcon(tab, currentSelected == tab) },
-                                label = { RootTabLabel(tab, currentSelected == tab) },
+                                icon = { RootTabIcon(tab, currentSelected == tab, sideRail = false) },
+                                label = { RootTabLabel(tab, currentSelected == tab, sideRail = false) },
                             )
                         }
                     }
@@ -1976,6 +2087,8 @@ private fun RootTabs(
                 RootTabsContent(
                     insets = insets,
                     selected = currentSelected,
+                    showAccountHeader = true,
+                    profileVm = profileVm,
                     feedScrollToTop = feedScrollToTop,
                     profileScrollToTop = profileScrollToTop,
                     focusSearchNonce = focusSearchNonce,
@@ -2007,11 +2120,16 @@ private fun RootTabs(
     } else {
         LocalWindowCaption.current?.Host()
         val desktopFramed = LocalWindowCaption.current != null
+        val isHeightCompact = rememberIsHeightCompact()
+        val widthDp = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() }
+        val canDockExpand = widthDp >= ExpandedSidebarMinWidth && !isHeightCompact
         val tabsScaffold: @Composable (Modifier) -> Unit = { scaffoldModifier ->
             Scaffold(modifier = scaffoldModifier) { insets ->
                 RootTabsContent(
                     insets = insets,
                     selected = currentSelected,
+                    showAccountHeader = false,
+                    profileVm = profileVm,
                     feedScrollToTop = feedScrollToTop,
                     profileScrollToTop = profileScrollToTop,
                     focusSearchNonce = focusSearchNonce,
@@ -2040,7 +2158,7 @@ private fun RootTabs(
                 )
             }
         }
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .then(
@@ -2051,63 +2169,603 @@ private fun RootTabs(
                     },
                 ),
         ) {
-            Box(modifier = Modifier.fillMaxHeight()) {
-                WideNavigationRail(
-                    modifier = Modifier.fillMaxHeight(),
-                    arrangement = Arrangement.Center,
-                    colors = if (desktopFramed) {
-                        WideNavigationRailDefaults.colors(containerColor = Color.Transparent)
-                    } else {
-                        WideNavigationRailDefaults.colors()
-                    },
-                ) {
-                    RootTab.entries.forEach { tab ->
-                        WideNavigationRailItem(
-                            selected = currentSelected == tab,
-                            onClick = { onTabClick(tab) },
-                            icon = { RootTabIcon(tab, currentSelected == tab) },
-                            label = { RootTabLabel(tab, currentSelected == tab) },
-                            railExpanded = false,
-                        )
-                    }
-                }
-                if (desktopFramed) {
-                    Spacer(
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .width(80.dp)
-                            .height(72.dp)
-                            .windowDragArea(),
-                    )
-                    Spacer(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .width(80.dp)
-                            .height(72.dp)
-                            .windowDragArea(),
-                    )
-                }
-            }
             if (desktopFramed) {
-                // 桌面端外框深底圆角内容岛:侧栏与外框同色通顶,右侧主内容盛在 16dp 圆角岛内,零分隔线。
-                Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                    Spacer(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(Spacing.Tight)
-                            .windowDragArea(),
-                    )
+                // 顶部 8dp 通栏拖拽边覆盖左侧导航轨与右侧内容岛，避免与内部控件抢命中。
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(Spacing.Tight)
+                        .windowDragArea(),
+                )
+            }
+            Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                RootNavigationRail(
+                    selected = currentSelected,
+                    canDockExpand = canDockExpand,
+                    isHeightCompact = isHeightCompact,
+                    desktopFramed = desktopFramed,
+                    sidebarCollapsed = sidebarCollapsed,
+                    railToggleNonce = railToggleNonce,
+                    profileState = profileState,
+                    onTabClick = onTabClick,
+                    onSidebarCollapsedChange = onSidebarCollapsedChange,
+                    onOpenSelf = onUserClick,
+                    onRetryAccount = profileVm::retryAccount,
+                    onOpenFollowings = onOpenFollowings,
+                    onOpenCoinLog = onOpenCoinLog,
+                    onOpenMessages = onOpenMessages,
+                    onSettingsClick = onSettingsClick,
+                )
+                if (desktopFramed) {
                     DesktopIslandSurface(
                         modifier = Modifier
                             .weight(1f)
-                            .fillMaxWidth()
+                            .fillMaxHeight()
                             .padding(end = Spacing.Tight, bottom = Spacing.Tight),
                     ) {
                         tabsScaffold(Modifier.fillMaxSize())
                     }
+                } else {
+                    tabsScaffold(Modifier.weight(1f))
                 }
-            } else {
-                tabsScaffold(Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+private val ExpandedSidebarMinWidth = 1000.dp
+private val ExpandedRailMaxWidth = 248.dp
+private val ExpandedRailContentWidth = 236.dp
+private val RailAvatarSize = 40.dp
+private val RailUtilityIconSize = 20.dp
+private val RailUtilityCoinSize = 18.dp
+private val RailUtilityRowMinHeight = 44.dp
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun RootNavigationRail(
+    selected: RootTab,
+    canDockExpand: Boolean,
+    isHeightCompact: Boolean,
+    desktopFramed: Boolean,
+    sidebarCollapsed: Boolean,
+    railToggleNonce: Int,
+    profileState: ProfileUiState,
+    onTabClick: (RootTab) -> Unit,
+    onSidebarCollapsedChange: (Boolean) -> Unit,
+    onOpenSelf: (Long) -> Unit,
+    onRetryAccount: () -> Unit,
+    onOpenFollowings: () -> Unit,
+    onOpenCoinLog: () -> Unit,
+    onOpenMessages: () -> Unit,
+    onSettingsClick: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val railColors = if (desktopFramed) {
+        WideNavigationRailDefaults.colors(
+            containerColor = Color.Transparent,
+            modalContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        )
+    } else {
+        WideNavigationRailDefaults.colors()
+    }
+    val railInsets = if (desktopFramed) WindowInsets(0) else WideNavigationRailDefaults.windowInsets
+    val bottomPadding = if (desktopFramed) Spacing.Tight else Spacing.Cozy
+    val contentPadding = PaddingValues(
+        top = if (isHeightCompact) Spacing.Tight else Spacing.Cozy,
+        bottom = bottomPadding,
+    )
+
+    if (canDockExpand) {
+        val dockedState = rememberWideNavigationRailState(
+            initialValue = if (sidebarCollapsed) WideNavigationRailValue.Collapsed else WideNavigationRailValue.Expanded,
+        )
+        LaunchedEffect(sidebarCollapsed) {
+            if (sidebarCollapsed) dockedState.collapse() else dockedState.expand()
+        }
+        val currentCollapsed by rememberUpdatedState(sidebarCollapsed)
+        LaunchedEffect(railToggleNonce) {
+            if (railToggleNonce > 0) onSidebarCollapsedChange(!currentCollapsed)
+        }
+        val expanded = dockedState.targetValue == WideNavigationRailValue.Expanded
+        WideNavigationRail(
+            state = dockedState,
+            colors = railColors,
+            windowInsets = railInsets,
+            arrangement = Arrangement.Top,
+            contentPadding = contentPadding,
+            modifier = Modifier
+                .fillMaxHeight()
+                .widthIn(max = ExpandedRailMaxWidth),
+        ) {
+            RootRailBody(
+                expanded = expanded,
+                isModalDrawer = false,
+                isHeightCompact = isHeightCompact,
+                desktopFramed = desktopFramed,
+                selected = selected,
+                profileState = profileState,
+                onToggleRail = { onSidebarCollapsedChange(!sidebarCollapsed) },
+                onCollapseModal = {},
+                onTabClick = onTabClick,
+                onOpenSelf = onOpenSelf,
+                onRetryAccount = onRetryAccount,
+                onOpenFollowings = onOpenFollowings,
+                onOpenCoinLog = onOpenCoinLog,
+                onOpenMessages = onOpenMessages,
+                onSettingsClick = onSettingsClick,
+            )
+        }
+    } else {
+        val modalState = rememberWideNavigationRailState(WideNavigationRailValue.Collapsed)
+        LaunchedEffect(railToggleNonce) {
+            if (railToggleNonce > 0) modalState.toggle()
+        }
+        val expanded = modalState.targetValue == WideNavigationRailValue.Expanded
+        val collapseModal: () -> Unit = {
+            if (modalState.targetValue == WideNavigationRailValue.Expanded) {
+                scope.launch { modalState.collapse() }
+            }
+        }
+        ModalWideNavigationRail(
+            state = modalState,
+            hideOnCollapse = false,
+            colors = railColors,
+            windowInsets = railInsets,
+            arrangement = Arrangement.Top,
+            contentPadding = contentPadding,
+            modifier = Modifier
+                .fillMaxHeight()
+                .widthIn(max = ExpandedRailMaxWidth),
+        ) {
+            RootRailBody(
+                expanded = expanded,
+                isModalDrawer = expanded,
+                isHeightCompact = isHeightCompact,
+                desktopFramed = desktopFramed,
+                selected = selected,
+                profileState = profileState,
+                onToggleRail = { scope.launch { modalState.toggle() } },
+                onCollapseModal = collapseModal,
+                onTabClick = onTabClick,
+                onOpenSelf = onOpenSelf,
+                onRetryAccount = onRetryAccount,
+                onOpenFollowings = onOpenFollowings,
+                onOpenCoinLog = onOpenCoinLog,
+                onOpenMessages = onOpenMessages,
+                onSettingsClick = onSettingsClick,
+            )
+        }
+    }
+}
+
+@Composable
+private fun RootRailBody(
+    expanded: Boolean,
+    isModalDrawer: Boolean,
+    isHeightCompact: Boolean,
+    desktopFramed: Boolean,
+    selected: RootTab,
+    profileState: ProfileUiState,
+    onToggleRail: () -> Unit,
+    onCollapseModal: () -> Unit,
+    onTabClick: (RootTab) -> Unit,
+    onOpenSelf: (Long) -> Unit,
+    onRetryAccount: () -> Unit,
+    onOpenFollowings: () -> Unit,
+    onOpenCoinLog: () -> Unit,
+    onOpenMessages: () -> Unit,
+    onSettingsClick: () -> Unit,
+) {
+    val toggleLabel = stringResource(if (expanded) Res.string.rail_collapse else Res.string.rail_expand)
+    val cutoutColor = when {
+        isModalDrawer -> MaterialTheme.colorScheme.surfaceContainerLow
+        desktopFramed -> MaterialTheme.colorScheme.surfaceContainer
+        else -> MaterialTheme.colorScheme.surface
+    }
+    val bodyWidthModifier = if (expanded) Modifier.width(ExpandedRailContentWidth) else Modifier
+    val horizontalAlignment = if (expanded) Alignment.Start else Alignment.CenterHorizontally
+    val sectionGap = if (isHeightCompact) Spacing.Hair else Spacing.Tight
+
+    BoxWithConstraints(modifier = Modifier.fillMaxHeight()) {
+        val minBodyHeight = if (constraints.hasBoundedHeight) maxHeight else 0.dp
+        Column(
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = horizontalAlignment,
+            modifier = bodyWidthModifier
+                .verticalScroll(rememberScrollState())
+                .heightIn(min = minBodyHeight),
+        ) {
+            Column(
+                horizontalAlignment = horizontalAlignment,
+                modifier = if (expanded) Modifier.fillMaxWidth() else Modifier,
+            ) {
+                if (expanded) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.Tight),
+                    ) {
+                        BilbyTooltip(text = toggleLabel, shortcut = "Ctrl+B") {
+                            IconButton(onClick = onToggleRail) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Outlined.MenuOpen,
+                                    contentDescription = toggleLabel,
+                                )
+                            }
+                        }
+                        if (desktopFramed && !isModalDrawer) {
+                            Spacer(Modifier.weight(1f).height(Dimens.MinTouchTarget).windowDragArea())
+                        }
+                    }
+                } else {
+                    BilbyTooltip(text = toggleLabel, shortcut = "Ctrl+B") {
+                        IconButton(onClick = onToggleRail) {
+                            Icon(
+                                imageVector = Icons.Outlined.Menu,
+                                contentDescription = toggleLabel,
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(sectionGap))
+
+                RootRailAccountHeader(
+                    state = profileState,
+                    expanded = expanded,
+                    onOpenSelf = { mid ->
+                        onCollapseModal()
+                        onOpenSelf(mid)
+                    },
+                    onRetry = onRetryAccount,
+                )
+
+                Spacer(Modifier.height(if (isHeightCompact) Spacing.Tight else Spacing.Cozy))
+
+                RootTab.entries.forEach { tab ->
+                    WideNavigationRailItem(
+                        selected = selected == tab,
+                        onClick = {
+                            onTabClick(tab)
+                            onCollapseModal()
+                        },
+                        icon = { RootTabIcon(tab, selected == tab, sideRail = true) },
+                        label = { RootTabLabel(tab, selected == tab, sideRail = true) },
+                        railExpanded = expanded,
+                    )
+                }
+            }
+
+            Column(
+                horizontalAlignment = horizontalAlignment,
+                verticalArrangement = Arrangement.spacedBy(if (isHeightCompact) 0.dp else Spacing.Hair),
+                modifier = if (expanded) {
+                    Modifier.fillMaxWidth().padding(horizontal = Spacing.Cozy)
+                } else {
+                    Modifier.padding(top = Spacing.Tight)
+                },
+            ) {
+                RootRailUtilitySection(
+                    account = profileState.account,
+                    expanded = expanded,
+                    cutoutColor = cutoutColor,
+                    onOpenFollowings = {
+                        onCollapseModal()
+                        onOpenFollowings()
+                    },
+                    onOpenCoinLog = {
+                        onCollapseModal()
+                        onOpenCoinLog()
+                    },
+                    onOpenMessages = {
+                        onCollapseModal()
+                        onOpenMessages()
+                    },
+                    onSettingsClick = {
+                        onCollapseModal()
+                        onSettingsClick()
+                    },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun RootRailAccountHeader(
+    state: ProfileUiState,
+    expanded: Boolean,
+    onOpenSelf: (Long) -> Unit,
+    onRetry: () -> Unit,
+) {
+    val account = state.account
+    val colorScheme = MaterialTheme.colorScheme
+    if (expanded) {
+        Surface(
+            color = colorScheme.surfaceContainerHigh,
+            shape = MaterialTheme.shapes.large,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Cozy),
+        ) {
+            when {
+                account != null -> {
+                    AccountIdentityContextMenu(
+                        account = account,
+                        onOpenSelf = onOpenSelf,
+                        shape = MaterialTheme.shapes.large,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { onCopyUid ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(Spacing.Cozy),
+                        ) {
+                            Avatar(url = account.faceUrl, size = RailAvatarSize)
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                            ) {
+                                Text(
+                                    text = account.name,
+                                    style = MaterialTheme.typography.titleSmallEmphasized,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                                ) {
+                                    LevelBadge(
+                                        level = account.level,
+                                        senior = account.isSeniorMember,
+                                        height = Dimens.LevelBadgeHeight,
+                                    )
+                                    AccountUidPill(mid = account.mid, onCopy = onCopyUid)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                state.accountError != null -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+                    ) {
+                        Text(
+                            text = stringResource(state.accountError),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = onRetry) {
+                            Text(stringResource(Res.string.action_retry))
+                        }
+                    }
+                }
+
+                else -> {
+                    SkeletonPulse {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(Spacing.Cozy),
+                        ) {
+                            Box(Modifier.size(RailAvatarSize).skeleton(CircleShape))
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                            ) {
+                                SkeletonLine(Modifier.fillMaxWidth(0.75f), height = 14.dp)
+                                SkeletonLine(Modifier.fillMaxWidth(0.5f), height = 12.dp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        when {
+            account != null -> {
+                BilbyTooltip(text = "${account.name}${MetaSeparator}UID: ${account.mid}") {
+                    AccountIdentityContextMenu(
+                        account = account,
+                        onOpenSelf = onOpenSelf,
+                        shape = CircleShape,
+                        modifier = Modifier.size(Dimens.MinTouchTarget),
+                    ) { _ ->
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            Avatar(url = account.faceUrl, size = RailAvatarSize)
+                        }
+                    }
+                }
+            }
+
+            state.accountError != null -> {
+                val retryText = stringResource(Res.string.action_retry)
+                BilbyTooltip(text = "${stringResource(state.accountError)}$MetaSeparator$retryText") {
+                    IconButton(onClick = onRetry) {
+                        Icon(
+                            imageVector = Icons.Outlined.AccountCircle,
+                            contentDescription = retryText,
+                            tint = colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            else -> {
+                SkeletonPulse {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.size(Dimens.MinTouchTarget),
+                    ) {
+                        Box(Modifier.size(RailAvatarSize).skeleton(CircleShape))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RootRailUtilitySection(
+    account: AccountInfo?,
+    expanded: Boolean,
+    cutoutColor: Color,
+    onOpenFollowings: () -> Unit,
+    onOpenCoinLog: () -> Unit,
+    onOpenMessages: () -> Unit,
+    onSettingsClick: () -> Unit,
+) {
+    val followingLabel = stringResource(Res.string.profile_following)
+    val coinsLabel = stringResource(Res.string.profile_coins)
+    val messagesLabel = stringResource(Res.string.message_title)
+    val settingsLabel = stringResource(Res.string.settings_title)
+    val followingValue = account?.following?.let { formatSegmentValue(it.toDouble()) }
+    val coinsValue = account?.let { formatSegmentValue(it.coins) }
+    val tint = MaterialTheme.colorScheme.onSurfaceVariant
+
+    RootRailUtilityItem(
+        expanded = expanded,
+        label = followingLabel,
+        value = followingValue,
+        tooltip = followingValue?.let { "$followingLabel$MetaSeparator$it" } ?: followingLabel,
+        onClick = onOpenFollowings,
+        icon = {
+            Icon(
+                imageVector = Icons.Outlined.PeopleAlt,
+                contentDescription = if (expanded) null else followingLabel,
+                tint = tint,
+                modifier = Modifier.size(RailUtilityIconSize),
+            )
+        },
+    )
+    RootRailUtilityItem(
+        expanded = expanded,
+        label = coinsLabel,
+        value = coinsValue,
+        tooltip = coinsValue?.let { "$coinsLabel$MetaSeparator$it" } ?: coinsLabel,
+        onClick = onOpenCoinLog,
+        icon = {
+            CoinGlyph(
+                tint = tint,
+                filled = false,
+                cutout = cutoutColor,
+                size = RailUtilityCoinSize,
+            )
+        },
+    )
+    RootRailUtilityItem(
+        expanded = expanded,
+        label = messagesLabel,
+        value = null,
+        tooltip = messagesLabel,
+        onClick = onOpenMessages,
+        icon = {
+            Icon(
+                imageVector = Icons.Outlined.Mail,
+                contentDescription = if (expanded) null else messagesLabel,
+                tint = tint,
+                modifier = Modifier.size(RailUtilityIconSize),
+            )
+        },
+    )
+    RootRailUtilityItem(
+        expanded = expanded,
+        label = settingsLabel,
+        value = null,
+        tooltip = settingsLabel,
+        shortcut = "Ctrl+,",
+        onClick = onSettingsClick,
+        icon = {
+            Icon(
+                imageVector = Icons.Outlined.Settings,
+                contentDescription = if (expanded) null else settingsLabel,
+                tint = tint,
+                modifier = Modifier.size(RailUtilityIconSize),
+            )
+        },
+    )
+}
+
+@Composable
+private fun RootRailUtilityItem(
+    expanded: Boolean,
+    label: String,
+    value: String?,
+    tooltip: String,
+    shortcut: String? = null,
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit,
+) {
+    if (expanded) {
+        val rowContent: @Composable () -> Unit = {
+            Surface(
+                onClick = onClick,
+                color = Color.Transparent,
+                shape = CircleShape,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = RailUtilityRowMinHeight),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+                ) {
+                    icon()
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (value != null) {
+                        Text(
+                            text = value,
+                            style = MaterialTheme.typography.labelMedium.tabular,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
+                }
+            }
+        }
+        if (shortcut != null) {
+            BilbyTooltip(text = tooltip, shortcut = shortcut, anchorAbove = true) {
+                rowContent()
+            }
+        } else {
+            rowContent()
+        }
+    } else {
+        BilbyTooltip(text = tooltip, shortcut = shortcut, anchorAbove = true) {
+            IconButton(
+                onClick = onClick,
+                modifier = Modifier.size(Dimens.MinTouchTarget),
+            ) {
+                icon()
             }
         }
     }
@@ -2118,9 +2776,9 @@ private fun RootTabs(
  * 这条迟早只剩一处成立。
  */
 @Composable
-private fun RootTabIcon(tab: RootTab, selected: Boolean) {
+private fun RootTabIcon(tab: RootTab, selected: Boolean, sideRail: Boolean) {
     Icon(
-        imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
+        imageVector = tab.icon(selected = selected, sideRail = sideRail),
         // 标签就在图标旁边,读屏再念一遍图标等于每格念两次。
         contentDescription = null,
     )
@@ -2131,14 +2789,16 @@ private fun RootTabIcon(tab: RootTab, selected: Boolean) {
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun RootTabLabel(tab: RootTab, selected: Boolean) {
+private fun RootTabLabel(tab: RootTab, selected: Boolean, sideRail: Boolean) {
     Text(
-        text = stringResource(tab.label),
+        text = stringResource(tab.labelRes(sideRail = sideRail)),
         style = if (selected) {
             MaterialTheme.typography.labelMediumEmphasized
         } else {
             MaterialTheme.typography.labelMedium
         },
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
     )
 }
 
@@ -2146,6 +2806,8 @@ private fun RootTabLabel(tab: RootTab, selected: Boolean) {
 private fun RootTabsContent(
     insets: PaddingValues,
     selected: RootTab,
+    showAccountHeader: Boolean,
+    profileVm: ProfileViewModel,
     /** 每变一次就回到顶部。计数器而不是布尔:连按两下要滚两次,而布尔第二下没有变化。 */
     feedScrollToTop: Int,
     profileScrollToTop: Int,
@@ -2217,7 +2879,9 @@ private fun RootTabsContent(
 
                 RootTab.Profile -> ProfilePane(
                     container = container,
+                    vm = profileVm,
                     scrollToTop = profileScrollToTop,
+                    showAccountHeader = showAccountHeader,
                     onVideoClick = onVideoClick,
                     onVideoInContext = onVideoInContext,
                     onUserClick = onUserClick,
@@ -2603,7 +3267,9 @@ private fun SearchResultRoute(
 @Composable
 private fun ProfilePane(
     container: AppContainer,
+    vm: ProfileViewModel,
     scrollToTop: Int,
+    showAccountHeader: Boolean,
     onVideoClick: (String) -> Unit,
     onVideoInContext: (String, QueueContext) -> Unit,
     onUserClick: (Long) -> Unit,
@@ -2617,21 +3283,6 @@ private fun ProfilePane(
     onOpenCoinLog: () -> Unit,
     onSettingsClick: () -> Unit,
 ) {
-    val vm: ProfileViewModel = viewModel(
-        key = "root-profile",
-        factory = viewModelFactory {
-            initializer {
-                ProfileViewModel(
-                    container.accountRepository,
-                    container.historyRepository,
-                    container.toViewRepository,
-                    container.favRepository,
-                    container.offlineDownloader,
-                    container.offlineStore,
-                )
-            }
-        },
-    )
     val state by vm.state.collectAsStateWithLifecycle()
 
     // 重新进入这一页时整个重取。挂在"进组合"上而不是底栏那次点击上:从历史记录、稍后再看
@@ -2646,6 +3297,7 @@ private fun ProfilePane(
     ProfileScreen(
         state = state,
         scrollToTop = scrollToTop,
+        showAccountHeader = showAccountHeader,
         onVideoClick = onVideoClick,
         // 预览按列表页的默认排序(最近添加在前)取,队列跟着同一个方向。
         onToViewItemClick = { onVideoInContext(it, QueueContext.ToView()) },
@@ -2899,7 +3551,6 @@ private fun HistoryRoute(
                         onBack = onBack,
                         scrollBehavior = scrollBehavior,
                         actions = {
-                            RefreshAction(state.refreshing, vm::refresh)
                             IconButton(
                                 onClick = { selectedIds = emptySet() },
                                 enabled = state.items.isNotEmpty() && !state.mutating,
@@ -2944,6 +3595,7 @@ private fun HistoryRoute(
                                     )
                                 }
                             }
+                            RefreshAction(state.refreshing, vm::refresh)
                         },
                     )
                 } else {
@@ -3429,7 +4081,6 @@ private fun ToViewListRoute(
                 onBack = onBack,
                 scrollBehavior = scrollBehavior,
             ) {
-                RefreshAction(refreshing = state.loading && state.items.isNotEmpty(), onRefresh = vm::refresh)
                 IconButton(
                     onClick = { confirmingClear = ToViewClear.Invalid },
                     enabled = !state.clearing && state.items.isNotEmpty(),
@@ -3439,6 +4090,7 @@ private fun ToViewListRoute(
                         contentDescription = stringResource(Res.string.toview_clear_invalid),
                     )
                 }
+                RefreshAction(refreshing = state.loading && state.items.isNotEmpty(), onRefresh = vm::refresh)
             }
         },
         floatingActionButton = {
@@ -3615,7 +4267,6 @@ private fun FollowingsRoute(
                 },
                 actions = {
                     if (wide) return@BilbyTopBar
-                    RefreshAction(state.refreshing, vm::refresh)
                     // 排序放顶栏右端,省下列表上方单独一行。仍是 SortMenu 那颗写着当前档位的
                     // 下拉,不换成一个图标:图标读不出现在按什么排。
                     if (state.canSort) {
@@ -3625,6 +4276,7 @@ private fun FollowingsRoute(
                             onSelect = vm::selectOrder,
                         )
                     }
+                    RefreshAction(state.refreshing, vm::refresh)
                 },
             )
         },
@@ -3956,10 +4608,10 @@ private fun FavFoldersRoute(
             ) {
                 // 新建是这一页的页级操作,放顶栏。它原先是右下角的 FAB:FAB 要让开列表最后一行,
                 // 而一个不常用的操作不值得常驻在内容上面。
-                RefreshAction(state.refreshing, vm::refresh)
                 IconButton(onClick = vm.manager::startCreate) {
                     Icon(Icons.Outlined.Add, contentDescription = stringResource(Res.string.fav_folder_create))
                 }
+                RefreshAction(state.refreshing, vm::refresh)
             }
         },
     ) { insets ->

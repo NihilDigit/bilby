@@ -102,7 +102,6 @@ fun FavFolderTopBar(
     }
 
     val barActions: @Composable RowScope.() -> Unit = {
-        val refreshLabel = stringResource(Res.string.action_refresh)
         val searchLabel = stringResource(Res.string.fav_search)
         val closeLabel = stringResource(Res.string.fav_search_close)
         val actionsLabel = stringResource(Res.string.fav_folder_actions, folder?.title.orEmpty())
@@ -111,7 +110,7 @@ fun FavFolderTopBar(
         val deleteLabel = stringResource(Res.string.fav_folder_delete_title)
         val appBarRowContent: @Composable () -> Unit = {
             AppBarRow(
-                maxItemCount = 3,
+                maxItemCount = 2,
                 overflowIndicator = { menuState ->
                     BilbyTooltip(text = actionsLabel) {
                         IconButton(onClick = { menuState.show() }) {
@@ -120,19 +119,6 @@ fun FavFolderTopBar(
                     }
                 },
             ) {
-                customItem(
-                    appbarContent = { RefreshAction(refreshing, onRefresh) },
-                    menuContent = { menuState ->
-                        DropdownMenuItem(
-                            text = { Text(refreshLabel) },
-                            onClick = {
-                                menuState.dismiss()
-                                onRefresh()
-                            },
-                            enabled = !refreshing,
-                        )
-                    },
-                )
                 if (searching) {
                     customItem(
                         appbarContent = {
@@ -260,6 +246,7 @@ fun FavFolderTopBar(
                 content = appBarRowContent,
             )
         }
+        RefreshAction(refreshing, onRefresh)
         captionSlot.buttons?.invoke()
     }
 

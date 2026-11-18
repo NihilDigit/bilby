@@ -38,7 +38,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.SentimentSatisfied
 import androidx.compose.material3.Button
@@ -480,7 +479,7 @@ internal fun rememberUseInlineCommentComposer(composerOpen: Boolean): Boolean {
  * 无全窗口对话框、无跨栏遮罩。
  *
  * - 打开或切换回复对象时自动请求焦点;`Esc` 收起卡片,`Ctrl+Enter` / `Meta+Enter` 直接发送;
- * - 回复具体对象时顶部显示紧凑「回复 @…」条与取消回复按钮;
+ * - 回复具体对象时顶部显示紧凑「回复 @…」上下文提示,底栏统一由「取消」/「发送」收起或提交;
  * - 表情开关开启时在卡片内部平滑展开 `200.dp` 高的 [EmotePickerPanel]。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -490,7 +489,6 @@ internal fun InlineCommentComposer(
     draft: String,
     onDraftChange: (String) -> Unit,
     replyLabel: String?,
-    onClearReply: (() -> Unit)?,
     placeholder: String,
     sending: Boolean,
     error: String?,
@@ -581,44 +579,14 @@ internal fun InlineCommentComposer(
             verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
             if (replyLabel != null) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                Text(
+                    text = replyLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        text = replyLabel,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (onClearReply != null) {
-                        val clearLabel = stringResource(Res.string.comment_reply_cancel)
-                        BilbyTooltip(text = clearLabel, anchorAbove = true) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .sizeIn(minWidth = Dimens.MinTouchTarget, minHeight = Dimens.MinTouchTarget)
-                                    .clip(CircleShape)
-                                    .clickable(role = Role.Button, onClick = onClearReply),
-                            ) {
-                                Box(
-                                    contentAlignment = Alignment.Center,
-                                    modifier = Modifier.size(ReplyClearButtonSize),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Close,
-                                        contentDescription = clearLabel,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(ReplyClearIconSize),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
+                )
             }
 
             Box(
@@ -773,8 +741,6 @@ private const val KeyboardResumeGraceMillis = 180L
 private const val InlineFocusedBorderAlpha = 0.6f
 private const val InlineUnfocusedBorderAlpha = 0.4f
 private val InlineComposerBorderWidth = 1.dp
-private val ReplyClearButtonSize = 24.dp
-private val ReplyClearIconSize = 16.dp
 private val InlineActionButtonHeight = 36.dp
 private val InlineEmotePanelHeight = 200.dp
 private val PromptMinHeight = 52.dp

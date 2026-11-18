@@ -163,9 +163,9 @@ Android 与桌面端已统一到同一代 Compose 与 Material 3 API 表面（�
   - 顶部铺开 `148.dp`（窄屏）/ `188.dp`（宽屏）`top_photo` 横幅（上覆顶栏可读性暗角，下接向 `surface` 过渡的渐变；无头图时退回柔和主题色阶渐变）。
   - `72.dp` `AvatarHero` 带 `3.dp` `surface` 描边跨压横幅下沿，右侧基线对齐关注按钮；下方展示 `headlineSmallEmphasized` 昵称、`LevelBadge`、单击即复制的 `UID` 胶囊、`.tabular` 粉丝/投稿计数、点击就地展开的个人签名，以及 `primaryContainer` 直播间入口卡。
   - `SpaceTopBar` 与滚动联动：滚过头图姓名后平滑淡入迷你头像与 UP 名。宽屏下投稿页签工具条与标签行并排（`showControls = !wide`），绝不出现双份「听全部 / 排序」按钮。
-- **「我的」页身份卡与 M3E 书架旋转木马（`ProfileScreen`）**：
-  - 顶部为 `shapes.extraLarge`（28dp）身份区（`72.dp` `AvatarHero`、`headlineSmallEmphasized` 昵称、`LevelBadge`、可复制 `UID` 胶囊）与四段式 `ButtonGroup`（「关注 / 硬币 / 消息 / 设置」——**「消息」严禁画任何未读数或红点**）。
-  - 下方历史、稍后再看、收藏夹、离线缓存书架统一采用 **`ProfileCarousel`（基于 `HorizontalMultiBrowseCarousel` + `shapes.extraLarge` `maskClip` 与竖向滚轮横向浏览驱动）**，减弱动效时退回等宽 `HorizontalUncontainedCarousel`。
+- **「我的 / 媒体库」页身份卡与 M3E 书架旋转木马（`ProfileScreen`）**：
+  - `< 600dp` 底栏形态保留「我的」顶栏、身份卡（`56.dp` 头像、`titleLargeEmphasized` 昵称、`LevelBadge`、可复制 `UID` 胶囊）与四段式 `ButtonGroup`（「关注 / 硬币 / 消息 / 设置」——**「消息」严禁画任何未读数或红点**）；`>= 600dp` 侧边导航栏常驻账号卡与四项入口，本页改称「媒体库」并直接从四节书架起排。
+  - 下方历史、稍后再看、收藏夹、离线缓存书架统一采用 **`ProfileCarousel`（基于 `HorizontalMultiBrowseCarousel` + `shapes.largeIncreased` 20dp `maskClip` 与竖向滚轮横向浏览驱动）**，减弱动效时退回等宽 `HorizontalUncontainedCarousel`。
 
 ### 2.6 统一二级面板契约（`ui/components/PaneSheet.kt` & `PlayerSidePanel.kt`）
 
@@ -262,9 +262,9 @@ Compose 的 `SelectionContainer` 若直接套在可点击卡片外层或跨 `Laz
 
 | 窗口档位 | 断点条件 | 布局行为 |
 |---|---|---|
-| `Compact` | `< 600dp` | 底部三格导航栏，列表采用单列 `VideoRow`，二级面板走模态底部 `PaneSheet` |
-| `Medium` | `600dp .. < 840dp` | 左侧切换 `NavigationRail`，`AdaptiveVideoGridContent` 切入多列纵向 `VideoGridCard` 网格；当高度 `< 480dp`（`useTwoPaneMediaLayout`）时，播放页/直播间/听视频切入双栏，二级面板升为 `ModalSideSheet` |
-| `Expanded+` | `≥ 840dp` | 播放页/直播间/听视频拆左右双栏（右栏托管内嵌 `PaneSheet`），空间页动态可开持久化可调宽侧栏（`SidePanelLayout`），无宿主二级面板走悬浮 `ModalSideSheet`，设置与消息中心启用双栏主从场景 |
+| `Compact` | `< 600dp` | 底部三格导航栏（「订阅 / 搜索 / 我的」），列表采用单列 `VideoRow`，二级面板走模态底部 `PaneSheet` |
+| `Medium` | `600dp .. < 840dp` | 左侧切换折叠态 `ModalWideNavigationRail`（第三格「媒体库」+ 账号头像与快捷入口，`≡` 或 `Ctrl+B` 展开抽屉），`AdaptiveVideoGridContent` 切入多列纵向 `VideoGridCard` 网格；当高度 `< 480dp`（`useTwoPaneMediaLayout`）时，播放页/直播间/听视频切入双栏，二级面板升为 `ModalSideSheet` |
+| `Expanded+` | `≥ 840dp`（常驻展开 `≥ 1000dp` 且高度 `≥ 480dp`） | 宽屏 `≥ 1000dp` 且非紧凑高度时侧边栏默认常驻展开 `WideNavigationRail`（`236–248dp`，`≡` / `Ctrl+B` 可折叠并持久化），内含紧凑账号身份卡与底部「关注 / 硬币 / 消息 / 设置」；播放页/直播间/听视频拆左右双栏（右栏托管内嵌 `PaneSheet`），空间页动态可开持久化可调宽侧栏（`SidePanelLayout`），无宿主二级面板走悬浮 `ModalSideSheet`，设置与消息中心启用双栏主从场景 |
 
 - **阅读限宽 vs 列表网格**：`AdaptiveContent`（上限 `ReadableWidth = 1040.dp`）仅用于长文阅读与对话页（专栏、动态详情、评论楼、搜索对话）；视频与合集网格页一律用 `AdaptiveVideoGridContent` / `rememberVideoGridColumnCount`（按显示器全宽设定列数比例折算）；非视频列表页走 `AdaptiveListContent`；动态流宽屏走最小列宽 `DynamicColumnMinWidth = 400.dp` 的瀑布流。修饰符限宽牢记先写 `.widthIn(max = …)` 再写 `.fillMaxWidth()`。
 - **双栏与页面零冗余双入口**：双栏场景下左栏与右栏不重复放置同一功能的入口或胶囊（例如 `ListenScreen` 双栏隐藏左侧重复来源胶囊、`NightModeScreen` 空态不重复放置顶栏设置图标、`SpaceScreen` 宽屏将排序/听全部收归标签行、`BilbyApp` 设置/消息双栏自动保持唯一焦点）。
