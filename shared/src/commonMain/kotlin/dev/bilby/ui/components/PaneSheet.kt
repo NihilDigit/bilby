@@ -280,6 +280,7 @@ fun PaneSheet(
     subheader: (@Composable ColumnScope.() -> Unit)? = null,
     footer: (@Composable ColumnScope.() -> Unit)? = null,
     maxHeightFraction: Float = DefaultBottomSheetMaxHeightFraction,
+    applyBottomInsetsWhenEmpty: Boolean = true,
     content: @Composable PaneSheetScope.() -> Unit,
 ) {
     val pane = LocalSidePane.current
@@ -316,6 +317,7 @@ fun PaneSheet(
             headerTrailing = headerTrailing,
             subheader = subheader,
             footer = footer,
+            applyBottomInsetsWhenEmpty = applyBottomInsetsWhenEmpty,
             content = content,
         )
     } else {
@@ -383,7 +385,7 @@ fun PaneSheet(
                 Column(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
                     PaneSheetScopeImpl(this, inPane = false).content()
                 }
-                SheetFooterSlot(footer = footer, applyBottomInsetsWhenEmpty = true)
+                SheetFooterSlot(footer = footer, applyBottomInsetsWhenEmpty = applyBottomInsetsWhenEmpty)
             }
         }
     }
@@ -429,6 +431,7 @@ private fun ModalSideSheet(
     headerTrailing: (@Composable RowScope.() -> Unit)?,
     subheader: (@Composable ColumnScope.() -> Unit)?,
     footer: (@Composable ColumnScope.() -> Unit)?,
+    applyBottomInsetsWhenEmpty: Boolean,
     content: @Composable PaneSheetScope.() -> Unit,
 ) {
     val visibility = remember { MutableTransitionState(false).apply { targetState = true } }
@@ -519,7 +522,7 @@ private fun ModalSideSheet(
                         Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
                             PaneSheetScopeImpl(this, inPane = false).content()
                         }
-                        SheetFooterSlot(footer = footer, applyBottomInsetsWhenEmpty = true)
+                        SheetFooterSlot(footer = footer, applyBottomInsetsWhenEmpty = applyBottomInsetsWhenEmpty)
                     }
                 }
             }

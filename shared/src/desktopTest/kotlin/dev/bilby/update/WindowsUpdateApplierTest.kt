@@ -249,4 +249,56 @@ class WindowsUpdateApplierTest {
         assertTrue("重启后的应用不应继承 applier.log 句柄导致无法删除", Files.deleteIfExists(applierLog))
         waitForFile(done)
     }
+
+    @Test
+    fun recoverKeepsJournalAndOldBackupWhenTargetIsLockedAndSucceedsOnRetry() {
+        installed("app/a.jar", "a 2")
+        val oldBackup = installed("app/a.jar.old", "a 1")
+        installed("app/Bilby.cfg", "cfg 2")
+        installed("app/Bilby.cfg.old", "cfg 1")
+        journal.writeText("staging\t${staging.absolutePath}\n~\tapp\\a.jar\n~\tapp\\Bilby.cfg\n")
+
+        FileInputStream(install.resolve("app/a.jar")).use {
+            assertEquals(1, run(mode = "recover"))
+            assertTrue("部分回滚失败时必须保留事务日志以便重试", journal.isFile)
+            assertTrue("部分回滚失败时必须保留剩余 .old 备份", oldBackup.isFile)
+            assertEquals("a 1", oldBackup.readText())
+            assertFalse("回滚未完成时不应拉起半残旧版", started.isFile)
+            assertTrue(failed.isFile)
+        }
+
+        // 释放文件锁后再次执行 recover,应补完剩余条目并删掉日志、正常拉起旧版。
+        assertEquals(1, run(mode = "recover"))
+        assertEquals("a 1", text("app/a.jar"))
+        assertEquals("cfg 1", text("app/Bilby.cfg"))
+        assertNoLeftovers()
+        waitForFile(started)
+        assertTrue("恢复完成后应拉起应用", started.isFile)
+    }
+
+    @Test
+    fun concurrentPatchFailsFastWhileInstallLockIsHeldWithoutTouchingLeftovers() {
+        standardUpdate()
+        val existingOld = installed("app/a.jar.old", "old sentinel")
+        val existingNew = installed("app/a.jar.new", "new sentinel")
+        val lockFile = install.resolve(".bilby-update.lock").toPath()
+
+        FileChannel.open(
+            lockFile,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.READ,
+            StandardOpenOption.WRITE,
+        ).use { ch ->
+            ch.lock().use {
+                assertEquals(1, run(mode = "patch"))
+                assertTrue("持锁期间并发更新不应删除 .old 文件", existingOld.isFile)
+                assertEquals("old sentinel", existingOld.readText())
+                assertTrue("持锁期间并发更新不应删除 .new 文件", existingNew.isFile)
+                assertEquals("new sentinel", existingNew.readText())
+                assertFalse("持锁失败不应创建事务日志", journal.exists())
+                assertFalse("并发更新持锁期间不应抢先拉起应用", started.isFile)
+                assertEquals("a 1", text("app/a.jar"))
+            }
+        }
+    }
 }

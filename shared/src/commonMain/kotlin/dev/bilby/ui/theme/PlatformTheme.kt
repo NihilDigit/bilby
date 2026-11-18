@@ -37,6 +37,13 @@ expect val platformUsesStandardMotion: Boolean
  * 规范把它列为"好的转场"第一条:"Most platforms have a reduced animation setting... If that setting
  * is on, transitions should **use subtle fades instead of intense sliding or scaling animations**
  * and disable decorative effects"。各平台的读法见 actual。
+ *
+ * 默认直接读由 [BilbyTheme] 在主题根统一提供的 [LocalReducedMotion]，避免每个卡片或骨架项
+ * 各自注册系统监听；仅在脱离主题根的独立预览或测试里回退到 [rememberPlatformReducedMotion]。
  */
 @Composable
-expect fun rememberReducedMotion(): Boolean
+fun rememberReducedMotion(): Boolean =
+    LocalReducedMotion.current ?: rememberPlatformReducedMotion()
+
+@Composable
+internal expect fun rememberPlatformReducedMotion(): Boolean

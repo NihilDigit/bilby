@@ -9,6 +9,7 @@ import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.Color
@@ -22,6 +23,9 @@ import dev.bilby.data.ThemeMode
  * 而不是让每个用到的地方自己 `if (isSystemInDarkTheme())`。取值理由见 [FixedColors]。
  */
 val LocalMentionColor = staticCompositionLocalOf { FixedColors.MentionLight }
+
+/** 主题根提供的系统「减弱动效」开关，避免列表卡片各自注册 Android ContentObserver。 */
+internal val LocalReducedMotion = compositionLocalOf<Boolean?> { null }
 
 /**
  * 主题入口走 [MaterialExpressiveTheme]。
@@ -59,6 +63,7 @@ fun BilbyTheme(
     }
     val schemes = resolveSchemes(appearance)
     val colorScheme = if (darkTheme) schemes.dark else schemes.light
+    val reducedMotion = LocalReducedMotion.current ?: rememberPlatformReducedMotion()
 
     MaterialExpressiveTheme(
         colorScheme = colorScheme,
@@ -71,6 +76,7 @@ fun BilbyTheme(
             LocalMentionColor provides if (darkTheme) FixedColors.MentionDark else FixedColors.MentionLight,
             LocalPlayerColorScheme provides schemes.dark,
             LocalIsDarkTheme provides darkTheme,
+            LocalReducedMotion provides reducedMotion,
         ) {
             // MaterialTheme 只给配色方案,不设 LocalContentColor —— 它的默认值是纯黑,
             // 真正把内容色设成 onSurface 的是 Surface。没有这层的话,任何没被 Scaffold
@@ -123,6 +129,7 @@ private fun ColorScheme.toPureBlack(): ColorScheme = copy(
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun BilbyNightSanctuaryTheme(content: @Composable () -> Unit) {
+    val reducedMotion = LocalReducedMotion.current ?: rememberPlatformReducedMotion()
     MaterialExpressiveTheme(
         colorScheme = NightSanctuaryColorScheme,
         motionScheme = if (platformUsesStandardMotion) MotionScheme.standard() else MotionScheme.expressive(),
@@ -133,6 +140,7 @@ fun BilbyNightSanctuaryTheme(content: @Composable () -> Unit) {
             LocalMentionColor provides FixedColors.MentionDark,
             LocalPlayerColorScheme provides NightSanctuaryColorScheme,
             LocalIsDarkTheme provides true,
+            LocalReducedMotion provides reducedMotion,
         ) {
             Surface(
                 color = NightSanctuaryColorScheme.surface,

@@ -28,7 +28,7 @@ actual val platformUsesStandardMotion: Boolean = true
 
 /** 读取并跟随 Windows 的「设置 → 辅助功能 → 视觉效果 → 动画效果」开关,见 [SystemReducedMotion]。 */
 @Composable
-actual fun rememberReducedMotion(): Boolean {
+internal actual fun rememberPlatformReducedMotion(): Boolean {
     SystemReducedMotion.ensureStarted()
     return SystemReducedMotion.reduced
 }

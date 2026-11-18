@@ -6,6 +6,7 @@ import dev.bilby.ui.DesktopIslandSurface
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.LocalSystemActions
 import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.RegisterPlayerFullscreenExit
 import dev.bilby.ui.rememberNotificationPermissionRequest
 import dev.bilby.player.PlaybackCommand
 import dev.bilby.player.PlayerHandle
@@ -266,6 +267,7 @@ fun VideoScreen(
     val system = LocalSystemActions.current
     var controller by remember { mutableStateOf<PlayerHandle?>(null) }
     var fullscreen by rememberSaveable { mutableStateOf(false) }
+    RegisterPlayerFullscreenExit(isFullscreen = fullscreen, onExit = { fullscreen = false })
 
     val currentOnAuthorResolved by rememberUpdatedState(onAuthorResolved)
     LaunchedEffect(state.detail?.bvid, state.detail?.up?.mid, state.detail?.staff, bvid) {

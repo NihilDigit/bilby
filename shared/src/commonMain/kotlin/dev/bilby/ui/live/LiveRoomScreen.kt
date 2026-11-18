@@ -5,6 +5,7 @@ import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.CaptionLeadWithDrag
 import dev.bilby.ui.DesktopIslandSurface
 import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.RegisterPlayerFullscreenExit
 import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.windowDragArea
 import androidx.compose.foundation.background
@@ -279,6 +280,10 @@ fun LiveRoomScreen(
 ) {
     var fullscreen by remember { mutableStateOf(false) }
     var locked by remember { mutableStateOf(false) }
+    RegisterPlayerFullscreenExit(isFullscreen = fullscreen, onExit = {
+        fullscreen = false
+        locked = false
+    })
     var settingsOpen by remember { mutableStateOf(false) }
     var settingsOnly by remember { mutableStateOf<PlayerSettingsSection?>(null) }
     // 服务端给的是从低到高,面板里反过来:上手就该看见最好的那档。

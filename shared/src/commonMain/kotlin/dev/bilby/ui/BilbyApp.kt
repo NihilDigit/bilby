@@ -27,7 +27,6 @@ import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalClipboard
@@ -1088,6 +1087,12 @@ private fun BilbyApp(
                     shortcutsOpen = !shortcutsOpen
                     return@onPreviewKeyEvent true
                 }
+                // F11 窗口级全屏（即使输入框或播放器聚焦也统一切换窗口全屏/退出所有全屏）
+                if (bare && event.key == Key.F11) {
+                    val controller = appFullscreen ?: return@onPreviewKeyEvent false
+                    controller.toggleWindowFullscreen()
+                    return@onPreviewKeyEvent true
+                }
                 // Ctrl+, 打开设置
                 if (ctrl && !event.isShiftPressed && event.key == Key.Comma) {
                     if (backStack.none { it is Settings }) openSettings()
@@ -1125,6 +1130,12 @@ private fun BilbyApp(
                 // 以下动作在输入框聚焦时一律放行给文本编辑
                 if (editableFocus.isEditableFocused) return@onPreviewKeyEvent false
 
+                // Alt+Enter 窗口级全屏
+                if (alt && !event.isShiftPressed && (event.key == Key.Enter || event.key == Key.NumPadEnter)) {
+                    val controller = appFullscreen ?: return@onPreviewKeyEvent false
+                    controller.toggleWindowFullscreen()
+                    return@onPreviewKeyEvent true
+                }
                 // Alt+← 浏览器式返回
                 if (alt && !event.isShiftPressed && event.key == Key.DirectionLeft) {
                     triggerBack()
@@ -1149,21 +1160,6 @@ private fun BilbyApp(
                         }
                     }
                     return@onPreviewKeyEvent true
-                }
-                false
-            }
-            .onKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
-                val controller = appFullscreen ?: return@onKeyEvent false
-                val bare = !event.isCtrlPressed && !event.isAltPressed && !event.isShiftPressed && !event.isMetaPressed
-                val alt = event.isAltPressed && !event.isCtrlPressed && !event.isMetaPressed && !event.isShiftPressed
-                if (bare && event.key == Key.F11) {
-                    controller.toggle()
-                    return@onKeyEvent true
-                }
-                if (alt && !editableFocus.isEditableFocused && (event.key == Key.Enter || event.key == Key.NumPadEnter)) {
-                    controller.toggle()
-                    return@onKeyEvent true
                 }
                 false
             }

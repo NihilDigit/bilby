@@ -37,7 +37,7 @@ internal actual fun dynamicColorSchemes(): PaletteSchemes {
  * 回到前台即可实时响应退化。
  */
 @Composable
-actual fun rememberReducedMotion(): Boolean {
+internal actual fun rememberPlatformReducedMotion(): Boolean {
     val context = LocalContext.current
     val resolver = remember(context) { context.contentResolver }
     fun readReduced(): Boolean = runCatching {

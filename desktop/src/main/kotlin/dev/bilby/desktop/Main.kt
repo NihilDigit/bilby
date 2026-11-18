@@ -150,6 +150,7 @@ fun main(args: Array<String>) {
             }
             var appFullscreen by remember { mutableStateOf(false) }
             var playerFullscreen by remember { mutableStateOf(false) }
+            val playerExitCallbacks = remember { LinkedHashSet<() -> Unit>() }
             val desiredFullscreen = appFullscreen || playerFullscreen
             LaunchedEffect(desiredFullscreen, windowsPip.active) {
                 if (windowsPip.active) return@LaunchedEffect
@@ -162,8 +163,19 @@ fun main(args: Array<String>) {
             val appFullscreenController = remember {
                 object : AppFullscreenController {
                     override val isFullscreen: Boolean get() = appFullscreen
+                    override val isAnyFullscreen: Boolean
+                        get() = appFullscreen || playerFullscreen || playerExitCallbacks.isNotEmpty()
                     override fun setFullscreen(fullscreen: Boolean) {
                         appFullscreen = fullscreen
+                    }
+                    override fun exitAll() {
+                        appFullscreen = false
+                        playerFullscreen = false
+                        playerExitCallbacks.toList().forEach { it() }
+                    }
+                    override fun registerPlayerFullscreenExit(onExit: () -> Unit): () -> Unit {
+                        playerExitCallbacks.add(onExit)
+                        return { playerExitCallbacks.remove(onExit) }
                     }
                 }
             }

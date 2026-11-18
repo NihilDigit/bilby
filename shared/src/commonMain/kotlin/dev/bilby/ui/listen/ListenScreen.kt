@@ -987,6 +987,7 @@ fun ListenScreen(
         PaneSheet(
             onDismissRequest = { commentsOpen = false },
             title = stringResource(Res.string.video_tab_comment),
+            applyBottomInsetsWhenEmpty = false,
         ) {
             comments(Modifier.fillMaxWidth().weight(1f, fill = false))
         }

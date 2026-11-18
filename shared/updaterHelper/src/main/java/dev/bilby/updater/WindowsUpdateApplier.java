@@ -46,6 +46,7 @@ import java.util.Set;
  */
 public final class WindowsUpdateApplier {
     private static final String JOURNAL_FILE = ".bilby-update.journal";
+    private static final String LOCK_FILE = ".bilby-update.lock";
     private static final long[] RETRY_DELAYS_MS = {100L, 300L, 1000L, 2000L, 4000L};
     private static final DateTimeFormatter LOG_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
     private static final List<String> SANITIZED_ENV_KEYS = List.of(
@@ -79,6 +80,26 @@ public final class WindowsUpdateApplier {
     @FunctionalInterface
     private interface IoAction {
         void run() throws Exception;
+    }
+
+    private static final class IncompleteRollbackException extends IOException {
+        IncompleteRollbackException(String message) {
+            super(message);
+        }
+
+        IncompleteRollbackException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    private static final class LockUnavailableException extends IOException {
+        LockUnavailableException(String message) {
+            super(message);
+        }
+
+        LockUnavailableException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
     private WindowsUpdateApplier(Properties props) throws IOException {
@@ -144,22 +165,55 @@ public final class WindowsUpdateApplier {
         writeLog("app exited");
 
         int exitCode = 0;
+        boolean allowRelaunch = true;
+        Path lockPath = installDir.resolve(LOCK_FILE);
         try {
-            if ("recover".equals(mode)) {
-                boolean shouldRelaunch = restoreJournal();
-                if (!shouldRelaunch) {
-                    return 0;
-                }
-            } else {
-                assertStagedFiles();
-                if ("patch".equals(mode)) {
-                    installPatch();
-                } else {
-                    installMsi();
-                }
-                writeLog("update applied");
-                removeStagedUpdate();
+            Files.createDirectories(installDir);
+            FileChannel lockChannel;
+            try {
+                lockChannel = FileChannel.open(
+                    lockPath,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.READ,
+                    StandardOpenOption.WRITE
+                );
+            } catch (IOException e) {
+                throw new LockUnavailableException("could not open exclusive update lock on " + lockPath, e);
             }
+            try (FileChannel channel = lockChannel) {
+                FileLock installLock;
+                try {
+                    installLock = channel.tryLock();
+                } catch (OverlappingFileLockException | IOException e) {
+                    throw new LockUnavailableException("could not acquire exclusive update lock on " + lockPath, e);
+                }
+                if (installLock == null) {
+                    throw new LockUnavailableException("could not acquire exclusive update lock on " + lockPath);
+                }
+                try (FileLock ignored = installLock) {
+                    if ("recover".equals(mode)) {
+                        boolean shouldRelaunch = restoreJournal();
+                        if (!shouldRelaunch) {
+                            return 0;
+                        }
+                    } else {
+                        assertStagedFiles();
+                        if ("patch".equals(mode)) {
+                            installPatch();
+                        } else {
+                            installMsi();
+                        }
+                        writeLog("update applied");
+                        removeStagedUpdate();
+                    }
+                }
+            }
+        } catch (LockUnavailableException | IncompleteRollbackException e) {
+            String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            writeLog("update failed: " + msg);
+            exitCode = 1;
+            allowRelaunch = false;
+            setFailed(msg);
         } catch (Throwable e) {
             String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
             writeLog("update failed: " + msg);
@@ -167,7 +221,7 @@ public final class WindowsUpdateApplier {
             setFailed(msg);
         }
 
-        if (!startApp()) {
+        if (allowRelaunch && !startApp()) {
             exitCode = 1;
         }
         return exitCode;
@@ -312,15 +366,6 @@ public final class WindowsUpdateApplier {
         }
         assertStagedSetMatches(staged);
 
-        List<SwapEntry> entries = new ArrayList<>(staged.size());
-        for (StagedItem item : staged) {
-            Path target = resolveConfined(installDir, item.relative());
-            removeIfPresent(siblingWithSuffix(target, ".new"));
-            removeIfPresent(siblingWithSuffix(target, ".old"));
-            entries.add(new SwapEntry(item.file(), item.relative(), target, Files.exists(target, LinkOption.NOFOLLOW_LINKS)));
-        }
-        entries.sort(Comparator.comparingInt(WindowsUpdateApplier::swapRank));
-
         Files.createDirectories(installDir);
         FileChannel journalChannel = FileChannel.open(
             journalPath,
@@ -329,12 +374,28 @@ public final class WindowsUpdateApplier {
             StandardOpenOption.WRITE
         );
         FileLock journalLock = null;
+        List<SwapEntry> entries = new ArrayList<>(staged.size());
+        boolean journalWritten = false;
         try {
-            journalLock = journalChannel.tryLock();
+            try {
+                journalLock = journalChannel.tryLock();
+            } catch (OverlappingFileLockException e) {
+                journalLock = null;
+            }
             if (journalLock == null) {
                 throw new IOException("could not acquire exclusive lock on " + journalPath);
             }
+
+            for (StagedItem item : staged) {
+                Path target = resolveConfined(installDir, item.relative());
+                removeIfPresent(siblingWithSuffix(target, ".new"));
+                removeIfPresent(siblingWithSuffix(target, ".old"));
+                entries.add(new SwapEntry(item.file(), item.relative(), target, Files.exists(target, LinkOption.NOFOLLOW_LINKS)));
+            }
+            entries.sort(Comparator.comparingInt(WindowsUpdateApplier::swapRank));
+
             writeJournalEntries(journalChannel, entries);
+            journalWritten = true;
 
             for (SwapEntry entry : entries) {
                 Path target = entry.target();
@@ -373,6 +434,14 @@ public final class WindowsUpdateApplier {
                 writeLog("replaced " + target);
             }
         } catch (Throwable err) {
+            if (!journalWritten) {
+                closeQuietly(journalLock, journalChannel);
+                try {
+                    removeIfPresent(journalPath);
+                } catch (Exception ignored) {
+                }
+                throw err;
+            }
             writeLog("patch failed, rolling back: " + err);
             List<JournalEntry> rollbackEntries = entries.stream()
                 .map(e -> new JournalEntry(e.relative(), e.existed()))
@@ -384,10 +453,12 @@ public final class WindowsUpdateApplier {
                     removeIfPresent(journalPath);
                 } catch (Exception ignored) {
                 }
+                throw err;
             } else {
                 writeLog("rollback incomplete, journal kept");
+                String msg = err.getMessage() != null ? err.getMessage() : err.getClass().getSimpleName();
+                throw new IncompleteRollbackException("patch failed and rollback incomplete; keeping journal for retry: " + msg, err);
             }
-            throw err;
         }
 
         closeQuietly(journalLock, journalChannel);
@@ -437,14 +508,14 @@ public final class WindowsUpdateApplier {
             writeLog("rolling back an interrupted update of " + entries.size() + " files");
             boolean restored = undoJournal(entries);
             closeQuietly(lock, channel);
-            // Always drop journal after recovery attempt to avoid an unbreakable relaunch recovery loop.
+            if (!restored) {
+                writeLog("rollback incomplete, journal kept");
+                throw new IncompleteRollbackException("Rollback incomplete; keeping journal for retry");
+            }
             try {
                 removeIfPresent(journalPath);
             } catch (Exception e) {
                 writeLog("could not remove journal after recovery: " + e.getMessage());
-            }
-            if (!restored) {
-                throw new IOException("interrupted update could not be fully rolled back");
             }
             throw new IOException("the update was interrupted and has been rolled back");
         } finally {
