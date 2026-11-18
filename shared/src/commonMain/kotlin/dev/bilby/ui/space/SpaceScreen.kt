@@ -176,11 +176,11 @@ import dev.bilby.ui.follow.GroupPickerController
 import dev.bilby.ui.follow.GroupPickerSheet
 import dev.bilby.ui.follow.GroupPickerState
 import dev.bilby.ui.isAtLeast
-import dev.bilby.ui.maxWidthGridCells
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.rememberCaptionSlot
+import dev.bilby.ui.rememberVideoGridColumnCount
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
@@ -737,12 +737,11 @@ class SpaceViewModel(
 
 // ---------------- UI ----------------
 
-private val HeroBannerCompactHeight = 148.dp
-private val HeroBannerExpandedHeight = 188.dp
+private val HeroBannerCompactHeight = 120.dp
+private val HeroBannerExpandedHeight = 132.dp
 private val TopBarStandardHeight = 64.dp
 private val AvatarRingWidth = 3.dp
 private val AvatarBannerOverlap = 34.dp
-private val CollectionCardMinWidth = 172.dp
 private val CollectionGridHalfGap = 6.dp
 private val FolderLipHeight = 6.dp
 private val FolderLipGap = 2.dp
@@ -813,8 +812,8 @@ fun SpaceScreen(
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     val searching = searchOpen || state.archives.appliedKeyword.isNotBlank()
 
-    // 单栏下头图直接顶到屏幕/窗口上沿,顶栏透明叠在头图渐变遮罩上;双栏下顶栏横跨主区与侧栏。
-    val overlayHero = !wide && state.profile != null
+    // 无论窄屏还是横屏/桌面宽屏，非搜索态有档案数据时一律让头图顶到最上沿，顶栏透明沉浸叠放其上。
+    val overlayHero = !searching && state.profile != null
     val collapseFraction = headerScroll.collapsedFraction
     val archiveTotal = state.archives.total.takeIf {
         state.archivesAvailable == true && state.archives.appliedKeyword.isBlank() && it > 0
@@ -864,12 +863,11 @@ fun SpaceScreen(
             }
         }
 
-        val bannerHeight = if (wide) {
-            HeroBannerExpandedHeight
-        } else if (overlayHero) {
-            (topInset - TopBarStandardHeight).coerceAtLeast(0.dp) + HeroBannerCompactHeight
+        val baseBannerHeight = if (wide) HeroBannerExpandedHeight else HeroBannerCompactHeight
+        val bannerHeight = if (overlayHero) {
+            (topInset - TopBarStandardHeight).coerceAtLeast(0.dp) + baseBannerHeight
         } else {
-            HeroBannerCompactHeight
+            baseBannerHeight
         }
 
         val header: @Composable (Modifier) -> Unit = { paneModifier ->
@@ -888,11 +886,7 @@ fun SpaceScreen(
             }
         }
 
-        val listColumns = if (windowSize.isAtLeast(BilbyWindowSize.Medium)) {
-            maxWidthGridCells(Breakpoints.VideoRowMaxWidth)
-        } else {
-            GridCells.Fixed(1)
-        }
+        val listColumns = GridCells.Fixed(1)
 
         val profileGate: @Composable (@Composable () -> Unit) -> Unit = { content ->
             when {
@@ -1043,6 +1037,25 @@ fun SpaceScreen(
             }
         }
 
+        val containerModifier = if (overlayHero) {
+            val horizontalHandled = PaddingValues(
+                start = insets.calculateStartPadding(layoutDirection),
+                end = insets.calculateEndPadding(layoutDirection),
+            )
+            Modifier
+                .fillMaxSize()
+                .padding(horizontalHandled)
+                .consumeWindowInsets(
+                    PaddingValues(
+                        start = horizontalHandled.calculateStartPadding(layoutDirection),
+                        top = topInset,
+                        end = horizontalHandled.calculateEndPadding(layoutDirection),
+                    ),
+                )
+        } else {
+            Modifier.fillMaxSize().padScaffoldExceptBottom(insets)
+        }
+
         if (wide) {
             SidePanelLayout(
                 prefs = state.dynamicsSheet,
@@ -1054,29 +1067,19 @@ fun SpaceScreen(
                 onWidthChange = onDynamicsSheetWidthChange,
                 defaultWidth = DynamicsPanelDefaultWidth,
                 minWidth = DynamicsPanelMinWidth,
-                modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(insets),
+                modifier = containerModifier,
                 main = { Column(modifier = Modifier.fillMaxSize(), content = mainColumn) },
-                panel = { profileGate { dynamicsList(Modifier.fillMaxSize()) } },
+                panel = {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = if (overlayHero) topInset else 0.dp),
+                    ) {
+                        profileGate { dynamicsList(Modifier.fillMaxSize()) }
+                    }
+                },
             )
         } else {
-            val containerModifier = if (overlayHero) {
-                val horizontalHandled = PaddingValues(
-                    start = insets.calculateStartPadding(layoutDirection),
-                    end = insets.calculateEndPadding(layoutDirection),
-                )
-                Modifier
-                    .fillMaxSize()
-                    .padding(horizontalHandled)
-                    .consumeWindowInsets(
-                        PaddingValues(
-                            start = horizontalHandled.calculateStartPadding(layoutDirection),
-                            top = topInset,
-                            end = horizontalHandled.calculateEndPadding(layoutDirection),
-                        ),
-                    )
-            } else {
-                Modifier.fillMaxSize().padScaffoldExceptBottom(insets)
-            }
             AdaptiveContent(
                 modifier = containerModifier,
                 maxWidth = Breakpoints.ReadableWidth,
@@ -1305,15 +1308,16 @@ private fun SpaceHeader(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
                     )
-                    // 顶缘主题同向渐变遮罩:兼顾浅色与深色主题下顶栏图标与系统状态栏对比度
-                    val topScrimAlpha = if (overlayTopBar) 0.78f else 0.26f
+                    // 顶缘主题同向渐变遮罩:兼顾浅色与深色主题下顶栏图标与窗口按钮对比度
+                    val topScrimAlpha = if (overlayTopBar) 0.84f else 0.26f
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .background(
                                 Brush.verticalGradient(
                                     0f to colorScheme.surface.copy(alpha = topScrimAlpha),
-                                    0.42f to Color.Transparent,
+                                    0.46f to colorScheme.surface.copy(alpha = if (overlayTopBar) 0.36f else 0.08f),
+                                    0.72f to Color.Transparent,
                                 ),
                             ),
                     )
@@ -1922,10 +1926,7 @@ private fun CollectionsTab(
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val usableWidth = (maxWidth - Spacing.Comfortable * 2).coerceAtLeast(0.dp)
-        val gridCols = ((usableWidth + Spacing.Cozy) / (CollectionCardMinWidth + Spacing.Cozy))
-            .toInt()
-            .coerceAtLeast(1)
+        val gridCols = rememberVideoGridColumnCount(maxWidth)
         PagedColumn(
             items = state.items,
             key = { "${it.isSeason}-${it.id}" },
@@ -2181,14 +2182,8 @@ internal fun VideoListTab(
     header: (@Composable () -> Unit)? = null,
     @Suppress("UNUSED_PARAMETER") columns: GridCells = GridCells.Fixed(1),
 ) {
-    val multiColumnAllowed = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Medium)
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val usableWidth = (maxWidth - Spacing.Tight * 2).coerceAtLeast(0.dp)
-        val gridCols = if (multiColumnAllowed) {
-            (usableWidth / (Dimens.VideoGridMinCellWidth + Spacing.Hair)).toInt().coerceAtLeast(1)
-        } else {
-            1
-        }
+        val gridCols = rememberVideoGridColumnCount(maxWidth)
         val useGrid = gridCols > 1
         val effectiveColumns = if (useGrid) GridCells.Fixed(gridCols) else GridCells.Fixed(1)
         val contentPadding = if (useGrid) {

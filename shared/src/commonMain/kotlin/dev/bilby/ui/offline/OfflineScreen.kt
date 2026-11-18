@@ -66,7 +66,7 @@ import dev.bilby.offline.OfflineStore
 import dev.bilby.player.isWatchedToEnd
 import dev.bilby.resources.*
 import dev.bilby.stringResource
-import dev.bilby.ui.AdaptiveListContent
+import dev.bilby.ui.AdaptiveVideoGridContent
 import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.ListScrollbar
@@ -131,8 +131,6 @@ class OfflineViewModel(
     }
 }
 
-private val VideoGridMaxCellWidth = 320.dp
-
 /**
  * 缓存列表:能看、能播、能删。分两节 —— 正在缓存的在前,已缓存的在后,顶部提供统一概览控制卡。
  *
@@ -163,95 +161,90 @@ fun OfflineScreen(
     var pendingDelete by remember { mutableStateOf<OfflineItem?>(null) }
     val layoutDirection = LocalLayoutDirection.current
 
-    AdaptiveListContent(
-        modifier = modifier,
-        maxCellWidth = VideoGridMaxCellWidth,
-    ) { columns ->
+    AdaptiveVideoGridContent(modifier = modifier) { columnCount ->
         if (items.isEmpty()) {
             EmptyState(
                 message = stringResource(Res.string.offline_empty),
                 modifier = Modifier.fillMaxSize().padding(contentPadding),
             )
-            return@AdaptiveListContent
+            return@AdaptiveVideoGridContent
         }
 
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val multiColumn = columns != GridCells.Fixed(1) && maxWidth >= Dimens.VideoGridMinCellWidth * 2
-            val effectiveColumns = if (multiColumn) columns else GridCells.Fixed(1)
-            val gridPadding = if (multiColumn) {
-                PaddingValues(
-                    start = contentPadding.calculateStartPadding(layoutDirection) + (Spacing.Tight - 2.dp),
-                    top = contentPadding.calculateTopPadding(),
-                    end = contentPadding.calculateEndPadding(layoutDirection) + (Spacing.Tight - 2.dp),
-                    bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
-                )
-            } else {
-                contentPadding
-            }
-            val headerHorizontalPadding = if (multiColumn) Spacing.Tight + 2.dp else Spacing.Comfortable
-
-            val (completed, inFlight) = items.partition { it.status == OfflineStatus.Completed }
-            val rowScope = OfflineRowScope(
-                selectedIds = selectedIds,
-                onPlay = onPlay,
-                onRetry = onRetry,
-                onToggleSelection = onToggleSelection,
-                onDeleteRequest = { item ->
-                    // **还没开始下的那条不问。** 确认框存在的理由是"删掉就要重下几百 MB",
-                    // 而排队中的这条一个字节都还没下,取消它的代价是零。
-                    if (item.status == OfflineStatus.Queued) onDelete(item) else pendingDelete = item
-                },
+        val multiColumn = columnCount > 1
+        val effectiveColumns = GridCells.Fixed(columnCount)
+        val gridPadding = if (multiColumn) {
+            PaddingValues(
+                start = contentPadding.calculateStartPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                top = contentPadding.calculateTopPadding(),
+                end = contentPadding.calculateEndPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
             )
+        } else {
+            contentPadding
+        }
+        val headerHorizontalPadding = if (multiColumn) Spacing.Tight + 2.dp else Spacing.Comfortable
 
-            val gridState = rememberLazyGridState()
-            Box(modifier = Modifier.fillMaxSize()) {
-                LazyVerticalGrid(
-                    columns = effectiveColumns,
-                    state = gridState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = gridPadding,
-                ) {
-                    item(key = "summary-card", span = { GridItemSpan(maxLineSpan) }) {
-                        OfflineSummaryCard(
-                            completedCount = completed.size,
-                            inFlightCount = inFlight.size,
-                            usedBytes = usedBytes,
-                            canListenAll = completed.isNotEmpty() && selectedIds == null,
-                            onListenAll = { completed.firstOrNull()?.let(onListenAll) },
-                            modifier = Modifier
-                                .padding(horizontal = headerHorizontalPadding, vertical = Spacing.Tight)
-                                .animateItem(),
-                        )
-                    }
-                    if (inFlight.isNotEmpty()) {
-                        item(key = "header-in-flight", span = { GridItemSpan(maxLineSpan) }) {
-                            ProvideTextStyle(LocalTextStyle.current.tabular) {
-                                SectionHeader(
-                                    title = stringResource(Res.string.offline_section_in_flight, inFlight.size),
-                                    modifier = Modifier
-                                        .padding(horizontal = headerHorizontalPadding)
-                                        .animateItem(),
-                                )
-                            }
-                        }
-                        offlineRows(inFlight, rowScope, multiColumn)
-                    }
-                    if (completed.isNotEmpty()) {
-                        if (inFlight.isNotEmpty()) {
-                            item(key = "header-completed", span = { GridItemSpan(maxLineSpan) }) {
-                                SectionHeader(
-                                    title = stringResource(Res.string.offline_section_completed),
-                                    modifier = Modifier
-                                        .padding(horizontal = headerHorizontalPadding)
-                                        .animateItem(),
-                                )
-                            }
-                        }
-                        offlineRows(completed, rowScope, multiColumn)
-                    }
+        val (completed, inFlight) = items.partition { it.status == OfflineStatus.Completed }
+        val rowScope = OfflineRowScope(
+            selectedIds = selectedIds,
+            onPlay = onPlay,
+            onRetry = onRetry,
+            onToggleSelection = onToggleSelection,
+            onDeleteRequest = { item ->
+                // **还没开始下的那条不问。** 确认框存在的理由是"删掉就要重下几百 MB",
+                // 而排队中的这条一个字节都还没下,取消它的代价是零。
+                if (item.status == OfflineStatus.Queued) onDelete(item) else pendingDelete = item
+            },
+        )
+
+        val gridState = rememberLazyGridState()
+        Box(modifier = Modifier.fillMaxSize()) {
+            LazyVerticalGrid(
+                columns = effectiveColumns,
+                state = gridState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = gridPadding,
+            ) {
+                item(key = "summary-card", span = { GridItemSpan(maxLineSpan) }) {
+                    OfflineSummaryCard(
+                        completedCount = completed.size,
+                        inFlightCount = inFlight.size,
+                        usedBytes = usedBytes,
+                        canListenAll = completed.isNotEmpty() && selectedIds == null,
+                        onListenAll = { completed.firstOrNull()?.let(onListenAll) },
+                        modifier = Modifier
+                            .padding(horizontal = headerHorizontalPadding, vertical = Spacing.Tight)
+                            .animateItem(),
+                    )
                 }
-                ListScrollbar(gridState, Modifier.align(Alignment.CenterEnd))
+                if (inFlight.isNotEmpty()) {
+                    item(key = "header-in-flight", span = { GridItemSpan(maxLineSpan) }) {
+                        ProvideTextStyle(LocalTextStyle.current.tabular) {
+                            SectionHeader(
+                                title = stringResource(Res.string.offline_section_in_flight, inFlight.size),
+                                modifier = Modifier
+                                    .padding(horizontal = headerHorizontalPadding)
+                                    .animateItem(),
+                            )
+                        }
+                    }
+                    offlineRows(inFlight, rowScope, multiColumn)
+                }
+                if (completed.isNotEmpty()) {
+                    if (inFlight.isNotEmpty()) {
+                        item(key = "header-completed", span = { GridItemSpan(maxLineSpan) }) {
+                            SectionHeader(
+                                title = stringResource(Res.string.offline_section_completed),
+                                modifier = Modifier
+                                    .padding(horizontal = headerHorizontalPadding)
+                                    .animateItem(),
+                            )
+                        }
+                    }
+                    offlineRows(completed, rowScope, multiColumn)
+                }
             }
+            ListScrollbar(gridState, Modifier.align(Alignment.CenterEnd))
         }
     }
 

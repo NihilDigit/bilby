@@ -1,4 +1,6 @@
 <resources>
+    <string name="app_name">Bilby</string>
+
     <!-- 导航。 -->
     <string name="nav_already_here">已在当前页面</string>
 
@@ -407,6 +409,10 @@
     <string name="player_speed_release_to_lock">松手锁定</string>
     <string name="player_speed_locked">已锁定 %1$s</string>
     <string name="player_speed_lock_action">锁定当前倍速</string>
+    <string name="player_speed_decrease">减速 0.05x</string>
+    <string name="player_speed_increase">加速 0.05x</string>
+    <string name="player_speed_reset">恢复 1x</string>
+    <string name="player_speed_default">默认倍速</string>
 
     <!-- 播放器手势的浮层。百分比与秒数都由手势实时填。 -->
     <string name="player_brightness">亮度 %1$d%%</string>
@@ -502,6 +508,12 @@
     <string name="settings_theme_system">跟随系统</string>
     <string name="settings_theme_light">浅色</string>
     <string name="settings_theme_dark">深色</string>
+    <string name="settings_start_tab">默认启动页</string>
+    <string name="settings_search_landing">搜索着陆页</string>
+    <string name="settings_predictive_back">预测性返回手势</string>
+    <string name="settings_predictive_back_subtitle">侧滑返回时实时预览上一页过渡动画</string>
+    <string name="settings_video_grid_columns">每行视频数</string>
+    <string name="settings_video_grid_columns_subtitle">按当前屏幕全宽计算，窗口缩窄时自动折算</string>
     <string name="settings_pure_black">纯黑背景</string>
     <string name="settings_pure_black_subtitle">深色时页面底色为纯黑</string>
     <string name="settings_theme_palette">配色</string>

@@ -84,6 +84,7 @@ import dev.bilby.ui.components.verticalWheelScrollsRow
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.rememberBilbyWindowSize
+import dev.bilby.ui.rememberVideoGridColumnCount
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.interactiveCard
@@ -406,17 +407,10 @@ private fun VideoResults(
     bottomPadding: Dp,
 ) {
     val videos = state.videos
-    val windowSize = rememberBilbyWindowSize()
-    val multiColumnAllowed = windowSize.isAtLeast(BilbyWindowSize.Medium)
-    val wideWindow = windowSize.isAtLeast(BilbyWindowSize.Expanded)
+    val wideWindow = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val usableWidth = (maxWidth - Spacing.Tight * 2).coerceAtLeast(0.dp)
-        val gridCols = if (multiColumnAllowed) {
-            (usableWidth / (Dimens.VideoGridMinCellWidth + Spacing.Hair)).toInt().coerceAtLeast(1)
-        } else {
-            1
-        }
+        val gridCols = rememberVideoGridColumnCount(maxWidth)
         val useGrid = gridCols > 1
         val effectiveLayout = if (useGrid) {
             PagedLayout.Grid(GridCells.Fixed(gridCols))

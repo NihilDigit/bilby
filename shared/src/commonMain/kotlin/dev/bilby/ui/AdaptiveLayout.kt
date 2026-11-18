@@ -2,6 +2,7 @@ package dev.bilby.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.widthIn
@@ -16,7 +17,10 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.WindowInfo
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import dev.bilby.data.AppearancePrefs
 import dev.bilby.ui.theme.Breakpoints
+import dev.bilby.ui.theme.Spacing
 import kotlin.math.ceil
 
 /**
@@ -145,5 +149,76 @@ fun AdaptiveContent(
             modifier = Modifier.widthIn(max = maxWidth).fillMaxSize(),
             content = content,
         )
+    }
+}
+
+/** 当前设备/显示器全宽（dp），供多列视频网格按全屏列数比例折算。 */
+@Composable
+expect fun rememberDisplayWidthDp(): Dp
+
+/** 全局设定的「全屏每行视频数」（3–7，默认 5），由 [BilbyRoot] 从设置注入。 */
+val LocalVideoGridColumns = compositionLocalOf { AppearancePrefs.DEFAULT_VIDEO_GRID_COLUMNS }
+
+/** 多列网格卡片的最小可用宽度下限，避免小窗或横屏手机出现过窄卡片。 */
+private val MinVideoGridCellWidth = 164.dp
+
+/**
+ * 纯函数计算：根据容器可用宽度、当前显示器全宽与「全屏每行视频数」折算列数。
+ * 向上取整（`ceil(configured * available / display)`），避免半屏时 5 列硬折半变成 2 张过宽卡片，
+ * 并受 [minCellWidth] 上限保护。
+ */
+internal fun calculateVideoGridColumnCount(
+    availableWidth: Dp,
+    displayWidth: Dp,
+    configuredColumns: Int,
+    minCellWidth: Dp = MinVideoGridCellWidth,
+    spacing: Dp = Spacing.Tight,
+): Int {
+    val target = configuredColumns.coerceIn(
+        AppearancePrefs.MIN_VIDEO_GRID_COLUMNS,
+        AppearancePrefs.MAX_VIDEO_GRID_COLUMNS,
+    )
+    if (availableWidth <= 0.dp) return 1
+    val safeDisplayWidth = displayWidth.coerceAtLeast(availableWidth)
+    val proportional = ceil(target * (availableWidth / safeDisplayWidth)).toInt().coerceIn(1, target)
+    val maxByMinWidth = ((availableWidth + spacing) / (minCellWidth + spacing)).toInt().coerceAtLeast(1)
+    return minOf(proportional, maxByMinWidth)
+}
+
+/**
+ * 为所有视频网格页提供统一的列数计算：
+ * - `Compact`（< 600dp）：固定 1 列横排；
+ * - `Medium` 及以上：结合显示器全宽与 [LocalVideoGridColumns] 比例折算列数。
+ */
+@Composable
+fun rememberVideoGridColumnCount(
+    availableWidth: Dp,
+    configuredColumns: Int = LocalVideoGridColumns.current,
+): Int {
+    val multiColumnAllowed = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Medium)
+    if (!multiColumnAllowed) return 1
+    val displayWidth = rememberDisplayWidthDp()
+    return calculateVideoGridColumnCount(
+        availableWidth = availableWidth,
+        displayWidth = displayWidth,
+        configuredColumns = configuredColumns,
+    )
+}
+
+/**
+ * 视频网格列表通用自适应容器：保持单一组合树，向 [content] 传入按当前显示器全宽折算出的列数。
+ */
+@Composable
+fun AdaptiveVideoGridContent(
+    modifier: Modifier = Modifier,
+    configuredColumns: Int = LocalVideoGridColumns.current,
+    content: @Composable BoxScope.(columnCount: Int) -> Unit,
+) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val columnCount = rememberVideoGridColumnCount(
+            availableWidth = maxWidth,
+            configuredColumns = configuredColumns,
+        )
+        content(columnCount)
     }
 }

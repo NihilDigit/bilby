@@ -45,7 +45,7 @@ import dev.bilby.data.HistoryRepository
 import dev.bilby.formatDurationSeconds
 import dev.bilby.resources.*
 import dev.bilby.stringResource
-import dev.bilby.ui.AdaptiveListContent
+import dev.bilby.ui.AdaptiveVideoGridContent
 import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
@@ -240,8 +240,6 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
     }
 }
 
-private val VideoGridMaxCellWidth = 320.dp
-
 /**
  * @param selectedIds 已选中条目的 oid,`null` 表示不在多选态。
  *
@@ -284,29 +282,25 @@ fun HistoryScreen(
         )
     }
 
-    AdaptiveListContent(
-        modifier = modifier,
-        maxCellWidth = VideoGridMaxCellWidth,
-    ) { columns ->
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val multiColumn = columns != GridCells.Fixed(1) && maxWidth >= Dimens.VideoGridMinCellWidth * 2
-            val effectiveColumns = if (multiColumn) columns else GridCells.Fixed(1)
-            val gridPadding = if (multiColumn) {
-                PaddingValues(
-                    start = contentPadding.calculateStartPadding(layoutDirection) + (Spacing.Tight - 2.dp),
-                    top = contentPadding.calculateTopPadding() + Spacing.Hair,
-                    end = contentPadding.calculateEndPadding(layoutDirection) + (Spacing.Tight - 2.dp),
-                    bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
-                )
-            } else {
-                contentPadding
-            }
+    AdaptiveVideoGridContent(modifier = modifier) { columnCount ->
+        val multiColumn = columnCount > 1
+        val effectiveColumns = GridCells.Fixed(columnCount)
+        val gridPadding = if (multiColumn) {
+            PaddingValues(
+                start = contentPadding.calculateStartPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                top = contentPadding.calculateTopPadding() + Spacing.Hair,
+                end = contentPadding.calculateEndPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
+            )
+        } else {
+            contentPadding
+        }
 
-            RefreshBox(
-                refreshing = state.refreshing,
-                onRefresh = onRefresh,
-                modifier = Modifier.fillMaxSize(),
-            ) {
+        RefreshBox(
+            refreshing = state.refreshing,
+            onRefresh = onRefresh,
+            modifier = Modifier.fillMaxSize(),
+        ) {
                 PagedColumn(
                     layout = PagedLayout.Grid(effectiveColumns),
                     items = state.items,
@@ -441,7 +435,6 @@ fun HistoryScreen(
             }
         }
     }
-}
 
 /** internal(不是 private):个人页的历史记录预览区也要用同一份映射,见 ui/profile/ProfileScreen.kt。 */
 @Composable

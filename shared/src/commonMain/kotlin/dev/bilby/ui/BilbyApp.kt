@@ -114,9 +114,11 @@ import dev.bilby.stringResource
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.bilby.data.AppearancePrefs
+import dev.bilby.data.StartTab
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.navigation3.runtime.NavEntryDecorator
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
@@ -138,6 +140,7 @@ import dev.bilby.api.BiliResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import dev.bilby.ui.article.ArticleScreen
@@ -340,8 +343,14 @@ fun BilbyRoot(
                 LocalCopyNotice provides copyNotice,
                 LocalSystemActions provides systemActions,
                 LocalEmoteRepository provides container.emoteRepository,
+                LocalVideoGridColumns provides appearance.videoGridColumns,
             ) {
-                BilbyApp(container, incomingLink, snackbarHostState)
+                BilbyApp(
+                    container = container,
+                    incomingLink = incomingLink,
+                    snackbarHostState = snackbarHostState,
+                    predictiveBack = appearance.predictiveBack,
+                )
             }
             SnackbarHost(
                 hostState = snackbarHostState,
@@ -367,6 +376,7 @@ private fun BilbyApp(
     container: AppContainer,
     incomingLink: MutableStateFlow<String?>,
     snackbarHostState: SnackbarHostState,
+    predictiveBack: Boolean = true,
 ) {
     // DataStore 第一帧是异步的:null 表示还没读出来,此时什么都不画,
     // 否则已登录用户每次冷启动都会闪一下登录页。
@@ -934,11 +944,12 @@ private fun BilbyApp(
     // 返回用 PopLatest,一次出一条。默认的 PopUntilScaffoldValueChange 在两栏时出栈不改变
     // 分栏形态,会把整组一次退光,设置里从二级子页返回就退出了设置。
     val pushesAwaitingFirst = remember { mutableStateOf(false) }
+    val desktopFramed = LocalWindowCaption.current != null
     val listDetailWide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
-    val listDetailDirective = remember(listDetailWide) {
+    val listDetailDirective = remember(listDetailWide, desktopFramed) {
         PaneScaffoldDirective(
             maxHorizontalPartitions = if (listDetailWide) 2 else 1,
-            horizontalPartitionSpacerSize = if (listDetailWide) Spacing.Tight else 0.dp,
+            horizontalPartitionSpacerSize = if (desktopFramed && listDetailWide) Spacing.Tight else 0.dp,
             maxVerticalPartitions = 1,
             verticalPartitionSpacerSize = 0.dp,
             defaultPanePreferredWidth = ListPaneWidth,
@@ -1100,7 +1111,22 @@ private fun BilbyApp(
             .focusRequester(rootFocusRequester)
             .focusable(),
     ) {
-    val navFramedBackdrop = LocalWindowCaption.current != null || listDetailWide
+    val navFramedBackdrop = LocalWindowCaption.current != null
+    val predictiveBackToggleDecorator = remember(backStack) {
+        NavEntryDecorator<NavKey>(
+            decorate = { entry ->
+                // 关闭预测性返回时由标准 BackHandler 兜底拦截页级返回，跳过系统手势实时缩放预览，
+                // 松手后触发 popTransitionSpec；页面内部先注册的 BackHandler 仍优先响应。
+                val currentPredictiveBack by rememberUpdatedState(predictiveBack)
+                val currentPopBack by rememberUpdatedState(popBack)
+                BackHandler(enabled = !currentPredictiveBack && backStack.size > 1) {
+                    currentPopBack()
+                }
+                entry.Content()
+            },
+            onPop = {},
+        )
+    }
     NavDisplay(
         backStack = backStack,
         onBack = popBack,
@@ -1130,6 +1156,7 @@ private fun BilbyApp(
         entryDecorators = listOf(
             rememberSaveableStateHolderNavEntryDecorator(),
             rememberViewModelStoreNavEntryDecorator(),
+            predictiveBackToggleDecorator,
         ),
         // **Forward and backward**,取 Android 平台默认。transitions 页原文:
         // "**Android** uses a fade as screens slide. This reduces the amount of motion, since the
@@ -1717,7 +1744,7 @@ private enum class RootTab(
     Profile(Res.string.tab_profile, Icons.Filled.Person, Icons.Outlined.Person),
 }
 
-private enum class DesktopPaneRole {
+internal enum class DesktopPaneRole {
     Single,
     SplitStart,
     SplitEnd,
@@ -1730,17 +1757,13 @@ private enum class DesktopPaneRole {
  * - 主从双栏(`ListDetailSceneStrategy`)下左右两栏各自裁成独立的 `shapes.large` 圆角岛,中间由 8dp 隔断露出 `surfaceContainer` 底框。
  */
 @Composable
-private fun DesktopIslandFrame(
+internal fun DesktopIslandFrame(
     role: DesktopPaneRole = DesktopPaneRole.Single,
     content: @Composable () -> Unit,
 ) {
     val desktopFramed = LocalWindowCaption.current != null
     if (!desktopFramed) {
-        if (role == DesktopPaneRole.Single) {
-            content()
-        } else {
-            DesktopIslandSurface(modifier = Modifier.fillMaxSize(), content = content)
-        }
+        content()
         return
     }
     LocalWindowCaption.current?.Host()
@@ -1769,7 +1792,7 @@ private fun DesktopIslandFrame(
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun DesktopIslandSurface(
+internal fun DesktopIslandSurface(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
@@ -1859,17 +1882,34 @@ private fun RootTabs(
     /** 搜索框里的编号或链接直接打开的那一页,可以是任何一种目的地。 */
     onOpen: (NavKey) -> Unit,
 ) {
-    var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
+    val persistedStartTab by container.settings.startTab.collectAsStateWithLifecycle(initialValue = null)
+    var selected by rememberSaveable { mutableStateOf<RootTab?>(null) }
+    var appliedStartTab by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(persistedStartTab) {
+        val tab = persistedStartTab ?: return@LaunchedEffect
+        // 仅在冷启动首次初始化时按设置落点，避免用户在设置页改完「默认启动页」后立刻把当前标签切走。
+        if (!appliedStartTab) {
+            appliedStartTab = true
+            if (selected == null) {
+                selected = when (tab) {
+                    StartTab.Feed -> RootTab.Feed
+                    StartTab.Search -> RootTab.Search
+                    StartTab.Profile -> RootTab.Profile
+                }
+            }
+        }
+    }
     val windowSize = rememberBilbyWindowSize()
 
     var feedScrollToTop by remember { mutableIntStateOf(0) }
     var profileScrollToTop by remember { mutableIntStateOf(0) }
+    var searchHomeClicks by remember { mutableIntStateOf(0) }
     val onTabClick: (RootTab) -> Unit = { tab ->
         if (selected == tab) {
             when (tab) {
                 RootTab.Feed -> feedScrollToTop++
                 RootTab.Profile -> profileScrollToTop++
-                RootTab.Search -> Unit
+                RootTab.Search -> searchHomeClicks++
             }
         } else {
             selected = tab
@@ -1877,8 +1917,10 @@ private fun RootTabs(
     }
     LaunchedEffect(tabRequest?.second) {
         val target = tabRequest?.first ?: return@LaunchedEffect
+        appliedStartTab = true
         if (selected != target) selected = target
     }
+    val currentSelected = selected ?: return
 
     if (windowSize == BilbyWindowSize.Compact) {
         DesktopIslandFrame {
@@ -1887,10 +1929,10 @@ private fun RootTabs(
                     ShortNavigationBar {
                         RootTab.entries.forEach { tab ->
                             ShortNavigationBarItem(
-                                selected = selected == tab,
+                                selected = currentSelected == tab,
                                 onClick = { onTabClick(tab) },
-                                icon = { RootTabIcon(tab, selected == tab) },
-                                label = { RootTabLabel(tab, selected == tab) },
+                                icon = { RootTabIcon(tab, currentSelected == tab) },
+                                label = { RootTabLabel(tab, currentSelected == tab) },
                             )
                         }
                     }
@@ -1898,10 +1940,11 @@ private fun RootTabs(
             ) { insets ->
                 RootTabsContent(
                     insets = insets,
-                    selected = selected,
+                    selected = currentSelected,
                     feedScrollToTop = feedScrollToTop,
                     profileScrollToTop = profileScrollToTop,
                     focusSearchNonce = focusSearchNonce,
+                    searchHomeClicks = searchHomeClicks,
                     container = container,
                     hasVideoPage = hasVideoPage,
                     onPlayDraftQueue = onPlayDraftQueue,
@@ -1933,10 +1976,11 @@ private fun RootTabs(
             Scaffold(modifier = scaffoldModifier) { insets ->
                 RootTabsContent(
                     insets = insets,
-                    selected = selected,
+                    selected = currentSelected,
                     feedScrollToTop = feedScrollToTop,
                     profileScrollToTop = profileScrollToTop,
                     focusSearchNonce = focusSearchNonce,
+                    searchHomeClicks = searchHomeClicks,
                     container = container,
                     hasVideoPage = hasVideoPage,
                     onPlayDraftQueue = onPlayDraftQueue,
@@ -1984,10 +2028,10 @@ private fun RootTabs(
                 ) {
                     RootTab.entries.forEach { tab ->
                         WideNavigationRailItem(
-                            selected = selected == tab,
+                            selected = currentSelected == tab,
                             onClick = { onTabClick(tab) },
-                            icon = { RootTabIcon(tab, selected == tab) },
-                            label = { RootTabLabel(tab, selected == tab) },
+                            icon = { RootTabIcon(tab, currentSelected == tab) },
+                            label = { RootTabLabel(tab, currentSelected == tab) },
                             railExpanded = false,
                         )
                     }
@@ -2071,6 +2115,7 @@ private fun RootTabsContent(
     feedScrollToTop: Int,
     profileScrollToTop: Int,
     focusSearchNonce: Int,
+    searchHomeClicks: Int,
     container: AppContainer,
     hasVideoPage: Boolean,
     onPlayDraftQueue: (String?) -> Unit,
@@ -2125,7 +2170,15 @@ private fun RootTabsContent(
                     onOpenArticle = onOpenArticle,
                 )
 
-                RootTab.Search -> SearchPane(container, focusSearchNonce, onVideoClick, onUserClick, onOpenArticle, onOpen)
+                RootTab.Search -> SearchPane(
+                    container = container,
+                    focusSearchNonce = focusSearchNonce,
+                    searchHomeClicks = searchHomeClicks,
+                    onVideoClick = onVideoClick,
+                    onUserClick = onUserClick,
+                    onOpenArticle = onOpenArticle,
+                    onOpen = onOpen,
+                )
 
                 RootTab.Profile -> ProfilePane(
                     container = container,
@@ -2379,6 +2432,7 @@ private fun FeedPane(
 private fun SearchPane(
     container: AppContainer,
     focusSearchNonce: Int,
+    searchHomeClicks: Int,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onOpenArticle: (ArticleRef) -> Unit,
@@ -2397,12 +2451,22 @@ private fun SearchPane(
             }
         },
     )
+    var lastHomeClick by remember { mutableIntStateOf(searchHomeClicks) }
+    LaunchedEffect(searchHomeClicks) {
+        if (searchHomeClicks != lastHomeClick) {
+            lastHomeClick = searchHomeClicks
+            vm.backToLanding()
+        }
+    }
     val currentOnOpen by rememberUpdatedState(onOpen)
     LaunchedEffect(vm) { vm.open.collect { currentOnOpen(it) } }
     val state by vm.state.collectAsStateWithLifecycle()
     val history by vm.searchHistory.collectAsStateWithLifecycle()
     val agentAvailable by vm.agentAvailable.collectAsStateWithLifecycle()
     val agentPanel by vm.agentPanel.collectAsStateWithLifecycle()
+    val searchLanding by remember(container.settings) {
+        container.settings.appearancePrefs.map { it.searchLanding }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = true)
     RegisterPageRefresh(refreshing = state.normal.videos.loading && state.normal.videos.items.isNotEmpty(), onRefresh = vm::refresh)
     SearchChatScreen(
         state = state,
@@ -2412,6 +2476,8 @@ private fun SearchPane(
         onHistoryRemove = vm::removeSearchHistory,
         onHistoryClear = vm::clearSearchHistory,
         onSuggestionClick = vm::searchSuggestion,
+        searchLanding = searchLanding,
+        onBackToLanding = vm::backToLanding,
         onInputChange = vm::onInputChange,
         onSearch = vm::search,
         onAskAgent = vm::askAgent,
@@ -2626,6 +2692,10 @@ private fun SettingsPageRoute(
             onModeChange = vm::setThemeMode,
             onPureBlackChange = vm::setPureBlack,
             onPaletteChange = vm::setThemePalette,
+            onStartTabChange = vm::setStartTab,
+            onSearchLandingChange = vm::setSearchLanding,
+            onPredictiveBackChange = vm::setPredictiveBack,
+            onVideoGridColumnsChange = vm::setVideoGridColumns,
             onLanguageChange = system::applyLanguage,
             onBack = onBack,
         )

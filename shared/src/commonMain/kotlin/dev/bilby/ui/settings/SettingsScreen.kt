@@ -47,6 +47,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -72,6 +73,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -91,6 +93,7 @@ import dev.bilby.data.withScheme
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveContent
+import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.trackEditableFocus
@@ -154,14 +157,23 @@ fun SettingsScreen(
     // pinned 而不是 enterAlways:顶栏留着不动,内容滚起来之后只换一档容器色。这一页的入口
     // 不满一屏,顶栏跟着一起走反而像页面自己跳了一下。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    val scrollState = rememberScrollState()
+    LaunchedEffect(scrollState.value == 0) {
+        if (scrollState.value == 0) {
+            scrollBehavior.state.contentOffset = 0f
+        }
+    }
     Scaffold(
         modifier = modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
+        containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
-            BilbyTopBar(
-                title = stringResource(Res.string.settings_title),
-                onBack = onBack,
-                scrollBehavior = scrollBehavior,
-            )
+            SettingsTopBarTheme {
+                BilbyTopBar(
+                    title = stringResource(Res.string.settings_title),
+                    onBack = onBack,
+                    scrollBehavior = scrollBehavior,
+                )
+            }
         },
     ) { insets ->
         AdaptiveContent(
@@ -171,7 +183,7 @@ fun SettingsScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
+                    .verticalScroll(scrollState)
                     .padding(bottom = Spacing.Spacious + navigationBarsBottom()),
             ) {
                 SettingsGroup {
@@ -332,8 +344,32 @@ fun SettingsScreen(
 private val CategoryIconBoxSize = 36.dp
 
 /**
+ * 设置页顶栏专用局部色阶:未滚时保持与所在圆角内容岛完全一致的 `surface`,滚动后切换至 `surfaceContainerLow`,
+ * 避免与双栏 8dp `surfaceContainer` 分栏缝及组内 `surfaceContainer` 分段卡片撞色融成一片。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+internal fun SettingsTopBarTheme(content: @Composable () -> Unit) {
+    if (LocalWindowCaption.current == null) {
+        content()
+        return
+    }
+    val currentScheme = MaterialTheme.colorScheme
+    val topBarScheme = remember(currentScheme) {
+        currentScheme.copy(surfaceContainer = currentScheme.surfaceContainerLow)
+    }
+    MaterialExpressiveTheme(
+        colorScheme = topBarScheme,
+        motionScheme = MaterialTheme.motionScheme,
+        typography = MaterialTheme.typography,
+        shapes = MaterialTheme.shapes,
+        content = content,
+    )
+}
+
+/**
  * 设置首页一级分类入口:行首配 36dp 圆角方块色阶图标(`shapes.medium`),常态 `secondaryContainer`,
- * 双栏选中态切为 `primaryContainer` 并将行底色抬至 `surfaceContainerHigh`。
+ * 双栏选中态整行切为 `secondaryContainer`、图标底托升为实心 `primary`/`onPrimary`、标题升为 `titleMediumEmphasized`。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -356,22 +392,27 @@ private fun CategoryRow(
         onClick = onClick,
         shapes = ListItemDefaults.segmentedShapes(index = position.index, count = position.count),
         colors = ListItemDefaults.segmentedColors(
-            containerColor = if (isSelected) colors.surfaceContainerHigh else colors.surfaceContainer,
-            selectedContainerColor = if (isSelected) colors.surfaceContainerHigh else colors.surfaceContainer,
+            containerColor = if (isSelected) colors.secondaryContainer else colors.surfaceContainer,
+            selectedContainerColor = if (isSelected) colors.secondaryContainer else colors.surfaceContainer,
         ),
-        modifier = Modifier.semantics { role = Role.Button },
+        modifier = Modifier.semantics {
+            role = Role.Button
+            if (selected != null) {
+                this.selected = isSelected
+            }
+        },
         leadingContent = {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .size(CategoryIconBoxSize)
                     .clip(MaterialTheme.shapes.medium)
-                    .background(if (isSelected) colors.primaryContainer else colors.secondaryContainer),
+                    .background(if (isSelected) colors.primary else colors.secondaryContainer),
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = if (isSelected) colors.onPrimaryContainer else colors.onSecondaryContainer,
+                    tint = if (isSelected) colors.onPrimary else colors.onSecondaryContainer,
                     modifier = Modifier.size(Dimens.IconInline),
                 )
             }
@@ -390,7 +431,7 @@ private fun CategoryRow(
                 Text(
                     text = it,
                     style = MaterialTheme.typography.bodyMedium.tabular,
-                    color = colors.onSurfaceVariant,
+                    color = if (isSelected) colors.onSecondaryContainer else colors.onSurfaceVariant,
                 )
             }
         },
@@ -398,11 +439,11 @@ private fun CategoryRow(
         Text(
             text = title,
             style = if (isSelected) {
-                MaterialTheme.typography.bodyLargeEmphasized
+                MaterialTheme.typography.titleMediumEmphasized
             } else {
                 MaterialTheme.typography.bodyLarge
             },
-            color = colors.onSurface,
+            color = if (isSelected) colors.onSecondaryContainer else colors.onSurface,
         )
     }
 }

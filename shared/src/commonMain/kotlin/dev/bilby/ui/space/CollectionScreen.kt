@@ -161,43 +161,37 @@ fun CollectionScreen(
             }
         },
     ) { padding ->
-        AdaptiveListContent(
+        RefreshBox(
+            refreshing = state.refreshing,
+            onRefresh = onRefresh,
             modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(padding),
-            maxCellWidth = Dimens.VideoGridMinCellWidth,
-        ) { columns ->
-            RefreshBox(
-                refreshing = state.refreshing,
-                onRefresh = onRefresh,
+        ) {
+            VideoListTab(
+                items = state.items,
+                appending = state.appending,
+                hasMore = state.hasMore,
+                loading = state.loading,
+                error = state.error,
+                emptyText = stringResource(Res.string.space_empty_collection_detail),
+                onLoadMore = onLoadMore,
+                onVideoClick = onVideoClick,
                 modifier = Modifier.fillMaxSize(),
-            ) {
-                VideoListTab(
-                    items = state.items,
-                    appending = state.appending,
-                    hasMore = state.hasMore,
-                    loading = state.loading,
-                    error = state.error,
-                    emptyText = stringResource(Res.string.space_empty_collection_detail),
-                    onLoadMore = onLoadMore,
-                    onVideoClick = onVideoClick,
-                    modifier = Modifier.fillMaxSize(),
-                    columns = columns,
-                    header = if (state.items.isEmpty() && state.total <= 0) null else {
-                        {
-                            CollectionSummaryCard(
-                                totalCount = state.total.takeIf { it > 0 } ?: state.items.size,
-                                canListen = state.items.isNotEmpty(),
-                                onListenAll = {
-                                    if (onListenAll != null) {
-                                        onListenAll()
-                                    } else {
-                                        state.items.firstOrNull()?.let(onVideoClick)
-                                    }
-                                },
-                            )
-                        }
-                    },
-                )
-            }
+                header = if (state.items.isEmpty() && state.total <= 0) null else {
+                    {
+                        CollectionSummaryCard(
+                            totalCount = state.total.takeIf { it > 0 } ?: state.items.size,
+                            canListen = state.items.isNotEmpty(),
+                            onListenAll = {
+                                if (onListenAll != null) {
+                                    onListenAll()
+                                } else {
+                                    state.items.firstOrNull()?.let(onVideoClick)
+                                }
+                            },
+                        )
+                    }
+                },
+            )
         }
     }
 }

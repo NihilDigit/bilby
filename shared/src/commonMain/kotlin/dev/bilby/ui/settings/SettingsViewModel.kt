@@ -10,6 +10,7 @@ import dev.bilby.data.HistoryRepository
 import dev.bilby.data.AppearancePrefs
 import dev.bilby.data.MINUTES_PER_DAY
 import dev.bilby.data.NightModePrefs
+import dev.bilby.data.StartTab
 import dev.bilby.data.ThemeMode
 import dev.bilby.data.UpBrief
 import dev.bilby.data.WhitelistedUp
@@ -429,6 +430,27 @@ class SettingsViewModel(
     fun setThemePalette(palette: String) {
         _state.update { it.copy(appearance = it.appearance.copy(palette = palette)) }
         persist { settings.saveThemePalette(palette) }
+    }
+
+    fun setStartTab(tab: StartTab) {
+        _state.update { it.copy(appearance = it.appearance.copy(startTab = tab)) }
+        persist { settings.saveStartTab(tab) }
+    }
+
+    fun setSearchLanding(enabled: Boolean) {
+        _state.update { it.copy(appearance = it.appearance.copy(searchLanding = enabled)) }
+        persist { settings.saveSearchLanding(enabled) }
+    }
+
+    fun setPredictiveBack(enabled: Boolean) {
+        _state.update { it.copy(appearance = it.appearance.copy(predictiveBack = enabled)) }
+        persist { settings.savePredictiveBack(enabled) }
+    }
+
+    fun setVideoGridColumns(columns: Int) {
+        val clamped = columns.coerceIn(AppearancePrefs.MIN_VIDEO_GRID_COLUMNS, AppearancePrefs.MAX_VIDEO_GRID_COLUMNS)
+        _state.update { it.copy(appearance = it.appearance.copy(videoGridColumns = clamped)) }
+        persist { settings.saveVideoGridColumns(clamped) }
     }
 
     fun setOfflineConcurrency(value: Int) {

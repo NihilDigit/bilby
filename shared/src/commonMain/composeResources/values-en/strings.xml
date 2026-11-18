@@ -1,4 +1,5 @@
 <resources>
+    <string name="app_name">Bilby</string>
     <string name="action_back">Back</string>
     <string name="action_cancel">Cancel</string>
     <string name="nav_already_here">Already on this page</string>
@@ -346,6 +347,10 @@
     <string name="player_speed_release_to_lock">Release to lock</string>
     <string name="player_speed_locked">Locked at %1$s</string>
     <string name="player_speed_lock_action">Lock current speed</string>
+    <string name="player_speed_decrease">Decrease 0.05x</string>
+    <string name="player_speed_increase">Increase 0.05x</string>
+    <string name="player_speed_reset">Reset 1x</string>
+    <string name="player_speed_default">Default speed</string>
 
     <string name="listen_title">Listen</string>
     <string name="listen_not_playing">Nothing playing</string>
@@ -419,6 +424,12 @@
     <string name="settings_theme_system">System</string>
     <string name="settings_theme_light">Light</string>
     <string name="settings_theme_dark">Dark</string>
+    <string name="settings_start_tab">Start page</string>
+    <string name="settings_search_landing">Search landing page</string>
+    <string name="settings_predictive_back">Predictive back gesture</string>
+    <string name="settings_predictive_back_subtitle">Preview the previous screen while swiping back</string>
+    <string name="settings_video_grid_columns">Videos per row</string>
+    <string name="settings_video_grid_columns_subtitle">Based on full screen width; scales down in narrower windows</string>
     <string name="settings_pure_black">Pure black</string>
     <string name="settings_pure_black_subtitle">Black background in dark theme</string>
     <string name="settings_theme_palette">Color</string>

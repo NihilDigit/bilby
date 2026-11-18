@@ -44,7 +44,7 @@ import dev.bilby.data.FavVideo
 import dev.bilby.formatDurationSeconds
 import dev.bilby.resources.*
 import dev.bilby.stringResource
-import dev.bilby.ui.AdaptiveListContent
+import dev.bilby.ui.AdaptiveVideoGridContent
 import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
@@ -284,8 +284,6 @@ private val FavOrders = listOf(
     FavOrder.Pubtime to Res.string.fav_order_pubtime,
 )
 
-private val VideoGridMaxCellWidth = 320.dp
-
 /**
  * **snackbar 的宿主在这一页自己身上**,不在外层 `Scaffold` 上:清除失效内容的
  * 结果提示只有这一页有,为它把 `SnackbarHostState` 穿到导航层不值。
@@ -328,29 +326,25 @@ fun FavFolderScreen(
 
     val firstPlayable = state.items.firstOrNull { it.playable }
     Box(modifier = modifier.fillMaxSize()) {
-        AdaptiveListContent(
-            modifier = Modifier.fillMaxSize(),
-            maxCellWidth = VideoGridMaxCellWidth,
-        ) { columns ->
-            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                val multiColumn = columns != GridCells.Fixed(1) && maxWidth >= Dimens.VideoGridMinCellWidth * 2
-                val effectiveColumns = if (multiColumn) columns else GridCells.Fixed(1)
-                val gridPadding = if (multiColumn) {
-                    PaddingValues(
-                        start = contentPadding.calculateStartPadding(layoutDirection) + (Spacing.Tight - 2.dp),
-                        top = contentPadding.calculateTopPadding(),
-                        end = contentPadding.calculateEndPadding(layoutDirection) + (Spacing.Tight - 2.dp),
-                        bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
-                    )
-                } else {
-                    contentPadding
-                }
+        AdaptiveVideoGridContent(modifier = Modifier.fillMaxSize()) { columnCount ->
+            val multiColumn = columnCount > 1
+            val effectiveColumns = GridCells.Fixed(columnCount)
+            val gridPadding = if (multiColumn) {
+                PaddingValues(
+                    start = contentPadding.calculateStartPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                    top = contentPadding.calculateTopPadding(),
+                    end = contentPadding.calculateEndPadding(layoutDirection) + (Spacing.Tight - 2.dp),
+                    bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
+                )
+            } else {
+                contentPadding
+            }
 
-                RefreshBox(
-                    refreshing = state.refreshing,
-                    onRefresh = onRefresh,
-                    modifier = Modifier.fillMaxSize(),
-                ) {
+            RefreshBox(
+                refreshing = state.refreshing,
+                onRefresh = onRefresh,
+                modifier = Modifier.fillMaxSize(),
+            ) {
                     PagedColumn(
                         layout = PagedLayout.Grid(effectiveColumns),
                         items = state.items,
@@ -477,7 +471,6 @@ fun FavFolderScreen(
                     }
                 }
             }
-        }
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier
