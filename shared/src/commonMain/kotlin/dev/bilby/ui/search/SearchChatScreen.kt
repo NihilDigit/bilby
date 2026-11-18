@@ -31,7 +31,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -61,7 +60,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import dev.bilby.ui.components.PillInputField
-import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
@@ -275,6 +274,11 @@ fun SearchChatScreen(
             minWidth = AgentPanelMinWidth,
             // 侧栏卡片与搜索栏同一条上沿。
             modifier = modifier.fillMaxSize().padding(top = Spacing.Tight),
+            headerActions = {
+                if (state.agent.turns.isNotEmpty()) {
+                    NewSessionIconButton(onClick = agentActions.onNewSession)
+                }
+            },
             main = {
                 normalSearch(
                     // 宽屏侧栏已展开时，其标题栏自带关闭按钮，仅在关闭态渲染顶栏开关。
@@ -301,7 +305,10 @@ fun SearchChatScreen(
     } else if (state.mode == SearchMode.Agent && agentAvailable) {
         BackHandler { onLeaveAgent() }
         Column(modifier = modifier.fillMaxSize()) {
-            AgentTopBar(onBack = onLeaveAgent)
+            AgentTopBar(
+                onBack = onLeaveAgent,
+                onNewSession = agentActions.onNewSession.takeIf { state.agent.turns.isNotEmpty() },
+            )
             AgentConversation(state.agent, state.agentInput, agentActions, modifier = Modifier.weight(1f))
         }
     } else {
@@ -333,10 +340,27 @@ private val EmptyCaptionSlot = CaptionSlot(Modifier, null)
 /** 搜索栏行尾那颗侧栏开关的宽度(M3 图标按钮的触控格)。 */
 private val PanelToggleWidth = 48.dp
 
+@Composable
+private fun NewSessionIconButton(onClick: () -> Unit) {
+    val label = stringResource(Res.string.search_new_session)
+    BilbyTooltip(text = label) {
+        IconButton(onClick = onClick) {
+            Icon(
+                imageVector = Icons.Outlined.Add,
+                contentDescription = label,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 /** 窄屏助理那一屏的顶栏:返回和栏名。返回回到搜索结果,助理的对话留着。 */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun AgentTopBar(onBack: () -> Unit) {
+private fun AgentTopBar(
+    onBack: () -> Unit,
+    onNewSession: (() -> Unit)? = null,
+) {
     val captionSlot = rememberCaptionSlot()
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -358,6 +382,7 @@ private fun AgentTopBar(onBack: () -> Unit) {
                 .padding(start = Spacing.Hair)
                 .windowDragArea(captionSlot.atTop),
         )
+        onNewSession?.let { NewSessionIconButton(onClick = it) }
         captionSlot.buttons?.invoke()
     }
 }
@@ -1208,32 +1233,6 @@ private fun AgentConversation(
                 onRetry = actions.onRetry,
                 inSidePanel = inSidePanel,
             )
-        }
-        if (state.turns.isNotEmpty()) {
-            // 新会话会清空上下文，与输入框内的「+」附件隐喻分离，使用显式带文字的按钮置于输入栏上方。
-            Row(
-                horizontalArrangement = Arrangement.End,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = Spacing.Cozy),
-            ) {
-                FilledTonalButton(
-                    onClick = actions.onNewSession,
-                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
-                    modifier = Modifier.heightIn(min = Dimens.MinTouchTarget),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Add,
-                        contentDescription = null,
-                        modifier = Modifier.size(Dimens.IconInline),
-                    )
-                    Spacer(Modifier.width(Spacing.Hair))
-                    Text(
-                        text = stringResource(Res.string.search_new_session),
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                }
-            }
         }
         InputBar(
             input = input,

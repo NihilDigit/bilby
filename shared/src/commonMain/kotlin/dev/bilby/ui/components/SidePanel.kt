@@ -11,6 +11,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -87,6 +88,7 @@ fun SidePanelLayout(
     minWidth: Dp,
     modifier: Modifier = Modifier,
     ready: Boolean = true,
+    headerActions: @Composable RowScope.() -> Unit = {},
     main: @Composable () -> Unit,
     panel: @Composable () -> Unit,
 ) {
@@ -146,6 +148,7 @@ fun SidePanelLayout(
                                 modifier = captionSlot.modifier.padding(end = Spacing.Hair),
                             ) {
                                 PaneTitle(title, Modifier.weight(1f).windowDragArea(captionSlot.atTop))
+                                headerActions()
                                 BilbyTooltip(text = closeDescription) {
                                     IconButton(onClick = { onOpenChange(false) }) {
                                         Icon(
