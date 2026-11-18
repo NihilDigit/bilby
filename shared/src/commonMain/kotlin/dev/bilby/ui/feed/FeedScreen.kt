@@ -496,7 +496,7 @@ private fun FeedList(
         )
     }
     val showHeaderFullscreen = appFullscreen != null
-    val showHeaderRefresh = !isTouch
+    val showHeaderRefresh = appFullscreen != null || LocalWindowCaption.current != null || !isTouch
     val headerActions: (@Composable () -> Unit)? = if (!actionsInUpsRow || showHeaderFullscreen || showHeaderRefresh) {
         {
             FeedHeaderActions(

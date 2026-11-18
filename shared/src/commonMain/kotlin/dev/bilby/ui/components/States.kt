@@ -45,6 +45,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
+import dev.bilby.ui.LocalAppFullscreen
+import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.rememberReducedMotion
 
@@ -216,7 +218,10 @@ fun RefreshBox(
 @Composable
 fun RefreshAction(refreshing: Boolean, onRefresh: () -> Unit) {
     RegisterPageRefresh(refreshing = refreshing, onRefresh = onRefresh)
-    if (LocalPointerSource.current.isTouchLike) return
+    if (LocalPointerSource.current.isTouchLike &&
+        LocalAppFullscreen.current == null &&
+        LocalWindowCaption.current == null
+    ) return
     if (refreshing) {
         Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) { LoadingSpinner() }
     } else {

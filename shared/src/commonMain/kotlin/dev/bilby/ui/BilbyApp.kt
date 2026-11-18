@@ -48,7 +48,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -62,7 +61,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.MenuOpen
 import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Person
@@ -82,7 +80,6 @@ import androidx.compose.material.icons.outlined.Forum
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenLoading
 import androidx.compose.material.icons.outlined.Mail
-import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PeopleAlt
 import androidx.compose.material.icons.outlined.Person
@@ -99,34 +96,27 @@ import androidx.compose.material3.FloatingToolbarDefaults
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
-import androidx.compose.material3.ModalWideNavigationRail
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.NavigationRailDefaults
 import androidx.compose.material3.ShortNavigationBar
 import androidx.compose.material3.ShortNavigationBarItem
 import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.ToggleButtonDefaults
-import androidx.compose.material3.WideNavigationRail
-import androidx.compose.material3.WideNavigationRailDefaults
 import androidx.compose.material3.WideNavigationRailItem
-import androidx.compose.material3.WideNavigationRailValue
-import androidx.compose.material3.rememberWideNavigationRailState
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import dev.bilby.data.AccountInfo
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.CoinGlyph
-import dev.bilby.ui.components.LevelBadge
 import dev.bilby.ui.components.MetaSeparator
-import dev.bilby.ui.components.SkeletonLine
 import dev.bilby.ui.components.SkeletonPulse
 import dev.bilby.ui.components.skeleton
 import dev.bilby.ui.profile.AccountIdentityContextMenu
-import dev.bilby.ui.profile.AccountUidPill
 import dev.bilby.ui.profile.ProfileUiState
 import dev.bilby.ui.profile.formatSegmentValue
-import dev.bilby.ui.theme.tabular
+import dev.bilby.ui.theme.interactiveCard
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
@@ -398,7 +388,6 @@ fun BilbyRoot(
                     incomingLink = incomingLink,
                     snackbarHostState = snackbarHostState,
                     predictiveBack = appearance.predictiveBack,
-                    sidebarCollapsed = appearance.sidebarCollapsed,
                 )
             }
             SnackbarHost(
@@ -431,7 +420,6 @@ private fun BilbyApp(
     incomingLink: MutableStateFlow<String?>,
     snackbarHostState: SnackbarHostState,
     predictiveBack: Boolean = true,
-    sidebarCollapsed: Boolean = false,
 ) {
     // DataStore 第一帧是异步的:null 表示还没读出来,此时什么都不画,
     // 否则已登录用户每次冷启动都会闪一下登录页。
@@ -1063,8 +1051,6 @@ private fun BilbyApp(
     var shortcutsOpen by remember { mutableStateOf(false) }
     var rootTabRequest by remember { mutableStateOf<Pair<RootTab, Int>?>(null) }
     var focusSearchNonce by remember { mutableIntStateOf(0) }
-    var railToggleNonce by remember { mutableIntStateOf(0) }
-    val currentWindowSize by rememberUpdatedState(rememberBilbyWindowSize())
 
     BackHandler(enabled = appFullscreen?.isFullscreen == true && backStack.size == 1) {
         appFullscreen?.setFullscreen(false)
@@ -1105,14 +1091,6 @@ private fun BilbyApp(
                 // Ctrl+, 打开设置
                 if (ctrl && !event.isShiftPressed && event.key == Key.Comma) {
                     if (backStack.none { it is Settings }) openSettings()
-                    return@onPreviewKeyEvent true
-                }
-                // Ctrl+B 展开/收起侧边导航栏（仅 >= 600dp 首页有效）
-                if (ctrl && !event.isShiftPressed && event.key == Key.B &&
-                    backStack.lastOrNull() is Home && !currentNightEngaged &&
-                    currentWindowSize != BilbyWindowSize.Compact
-                ) {
-                    railToggleNonce++
                     return@onPreviewKeyEvent true
                 }
                 // Ctrl+1/2/3 切换三个根目的地(播放与直播中不切走页面)
@@ -1333,13 +1311,6 @@ private fun BilbyApp(
                             hasVideoPage = hasVideoPage,
                             tabRequest = rootTabRequest,
                             focusSearchNonce = focusSearchNonce,
-                            sidebarCollapsed = sidebarCollapsed,
-                            railToggleNonce = railToggleNonce,
-                            onSidebarCollapsedChange = { collapsed ->
-                                container.persistScope.launch {
-                                    container.settings.saveSidebarCollapsed(collapsed)
-                                }
-                            },
                             onPlayDraftQueue = playDraftQueue,
                             onVideoClick = { push(Video(it)) },
                             onVideoInContext = { bvid, context -> push(Video(bvid, context = context)) },
@@ -1984,9 +1955,6 @@ private fun RootTabs(
     hasVideoPage: Boolean,
     tabRequest: Pair<RootTab, Int>? = null,
     focusSearchNonce: Int = 0,
-    sidebarCollapsed: Boolean = false,
-    railToggleNonce: Int = 0,
-    onSidebarCollapsedChange: (Boolean) -> Unit = {},
     onPlayDraftQueue: (String?) -> Unit,
     onVideoClick: (String) -> Unit,
     /**
@@ -2121,8 +2089,6 @@ private fun RootTabs(
         LocalWindowCaption.current?.Host()
         val desktopFramed = LocalWindowCaption.current != null
         val isHeightCompact = rememberIsHeightCompact()
-        val widthDp = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() }
-        val canDockExpand = widthDp >= ExpandedSidebarMinWidth && !isHeightCompact
         val tabsScaffold: @Composable (Modifier) -> Unit = { scaffoldModifier ->
             Scaffold(modifier = scaffoldModifier) { insets ->
                 RootTabsContent(
@@ -2181,14 +2147,10 @@ private fun RootTabs(
             Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 RootNavigationRail(
                     selected = currentSelected,
-                    canDockExpand = canDockExpand,
                     isHeightCompact = isHeightCompact,
                     desktopFramed = desktopFramed,
-                    sidebarCollapsed = sidebarCollapsed,
-                    railToggleNonce = railToggleNonce,
                     profileState = profileState,
                     onTabClick = onTabClick,
-                    onSidebarCollapsedChange = onSidebarCollapsedChange,
                     onOpenSelf = onUserClick,
                     onRetryAccount = profileVm::retryAccount,
                     onOpenFollowings = onOpenFollowings,
@@ -2213,142 +2175,20 @@ private fun RootTabs(
     }
 }
 
-private val ExpandedSidebarMinWidth = 1000.dp
-private val ExpandedRailMaxWidth = 248.dp
-private val ExpandedRailContentWidth = 236.dp
+private val SlimRailWidth = 80.dp
 private val RailAvatarSize = 40.dp
+private val RailUtilityVisualSize = 40.dp
 private val RailUtilityIconSize = 20.dp
 private val RailUtilityCoinSize = 18.dp
-private val RailUtilityRowMinHeight = 44.dp
+private val RailCompactHeightThresholdDesktop = 500.dp
+private val RailCompactHeightThresholdInset = 540.dp
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun RootNavigationRail(
     selected: RootTab,
-    canDockExpand: Boolean,
     isHeightCompact: Boolean,
     desktopFramed: Boolean,
-    sidebarCollapsed: Boolean,
-    railToggleNonce: Int,
     profileState: ProfileUiState,
-    onTabClick: (RootTab) -> Unit,
-    onSidebarCollapsedChange: (Boolean) -> Unit,
-    onOpenSelf: (Long) -> Unit,
-    onRetryAccount: () -> Unit,
-    onOpenFollowings: () -> Unit,
-    onOpenCoinLog: () -> Unit,
-    onOpenMessages: () -> Unit,
-    onSettingsClick: () -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    val railColors = if (desktopFramed) {
-        WideNavigationRailDefaults.colors(
-            containerColor = Color.Transparent,
-            modalContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        )
-    } else {
-        WideNavigationRailDefaults.colors()
-    }
-    val railInsets = if (desktopFramed) WindowInsets(0) else WideNavigationRailDefaults.windowInsets
-    val bottomPadding = if (desktopFramed) Spacing.Tight else Spacing.Cozy
-    val contentPadding = PaddingValues(
-        top = if (isHeightCompact) Spacing.Tight else Spacing.Cozy,
-        bottom = bottomPadding,
-    )
-
-    if (canDockExpand) {
-        val dockedState = rememberWideNavigationRailState(
-            initialValue = if (sidebarCollapsed) WideNavigationRailValue.Collapsed else WideNavigationRailValue.Expanded,
-        )
-        LaunchedEffect(sidebarCollapsed) {
-            if (sidebarCollapsed) dockedState.collapse() else dockedState.expand()
-        }
-        val currentCollapsed by rememberUpdatedState(sidebarCollapsed)
-        LaunchedEffect(railToggleNonce) {
-            if (railToggleNonce > 0) onSidebarCollapsedChange(!currentCollapsed)
-        }
-        val expanded = dockedState.targetValue == WideNavigationRailValue.Expanded
-        WideNavigationRail(
-            state = dockedState,
-            colors = railColors,
-            windowInsets = railInsets,
-            arrangement = Arrangement.Top,
-            contentPadding = contentPadding,
-            modifier = Modifier
-                .fillMaxHeight()
-                .widthIn(max = ExpandedRailMaxWidth),
-        ) {
-            RootRailBody(
-                expanded = expanded,
-                isModalDrawer = false,
-                isHeightCompact = isHeightCompact,
-                desktopFramed = desktopFramed,
-                selected = selected,
-                profileState = profileState,
-                onToggleRail = { onSidebarCollapsedChange(!sidebarCollapsed) },
-                onCollapseModal = {},
-                onTabClick = onTabClick,
-                onOpenSelf = onOpenSelf,
-                onRetryAccount = onRetryAccount,
-                onOpenFollowings = onOpenFollowings,
-                onOpenCoinLog = onOpenCoinLog,
-                onOpenMessages = onOpenMessages,
-                onSettingsClick = onSettingsClick,
-            )
-        }
-    } else {
-        val modalState = rememberWideNavigationRailState(WideNavigationRailValue.Collapsed)
-        LaunchedEffect(railToggleNonce) {
-            if (railToggleNonce > 0) modalState.toggle()
-        }
-        val expanded = modalState.targetValue == WideNavigationRailValue.Expanded
-        val collapseModal: () -> Unit = {
-            if (modalState.targetValue == WideNavigationRailValue.Expanded) {
-                scope.launch { modalState.collapse() }
-            }
-        }
-        ModalWideNavigationRail(
-            state = modalState,
-            hideOnCollapse = false,
-            colors = railColors,
-            windowInsets = railInsets,
-            arrangement = Arrangement.Top,
-            contentPadding = contentPadding,
-            modifier = Modifier
-                .fillMaxHeight()
-                .widthIn(max = ExpandedRailMaxWidth),
-        ) {
-            RootRailBody(
-                expanded = expanded,
-                isModalDrawer = expanded,
-                isHeightCompact = isHeightCompact,
-                desktopFramed = desktopFramed,
-                selected = selected,
-                profileState = profileState,
-                onToggleRail = { scope.launch { modalState.toggle() } },
-                onCollapseModal = collapseModal,
-                onTabClick = onTabClick,
-                onOpenSelf = onOpenSelf,
-                onRetryAccount = onRetryAccount,
-                onOpenFollowings = onOpenFollowings,
-                onOpenCoinLog = onOpenCoinLog,
-                onOpenMessages = onOpenMessages,
-                onSettingsClick = onSettingsClick,
-            )
-        }
-    }
-}
-
-@Composable
-private fun RootRailBody(
-    expanded: Boolean,
-    isModalDrawer: Boolean,
-    isHeightCompact: Boolean,
-    desktopFramed: Boolean,
-    selected: RootTab,
-    profileState: ProfileUiState,
-    onToggleRail: () -> Unit,
-    onCollapseModal: () -> Unit,
     onTabClick: (RootTab) -> Unit,
     onOpenSelf: (Long) -> Unit,
     onRetryAccount: () -> Unit,
@@ -2357,266 +2197,151 @@ private fun RootRailBody(
     onOpenMessages: () -> Unit,
     onSettingsClick: () -> Unit,
 ) {
-    val toggleLabel = stringResource(if (expanded) Res.string.rail_collapse else Res.string.rail_expand)
-    val cutoutColor = when {
-        isModalDrawer -> MaterialTheme.colorScheme.surfaceContainerLow
-        desktopFramed -> MaterialTheme.colorScheme.surfaceContainer
-        else -> MaterialTheme.colorScheme.surface
+    val containerHeightDp = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
+    val compactHeightThreshold = if (desktopFramed) {
+        RailCompactHeightThresholdDesktop
+    } else {
+        RailCompactHeightThresholdInset
     }
-    val bodyWidthModifier = if (expanded) Modifier.width(ExpandedRailContentWidth) else Modifier
-    val horizontalAlignment = if (expanded) Alignment.Start else Alignment.CenterHorizontally
-    val sectionGap = if (isHeightCompact) Spacing.Hair else Spacing.Tight
+    val compactRailLayout = isHeightCompact || containerHeightDp < compactHeightThreshold
+    val railInsets = if (desktopFramed) WindowInsets(0) else NavigationRailDefaults.windowInsets
+    val cutoutColor = if (desktopFramed) {
+        MaterialTheme.colorScheme.surfaceContainer
+    } else {
+        NavigationRailDefaults.ContainerColor
+    }
+    val verticalInset = if (compactRailLayout) Spacing.Hair else Spacing.Cozy
+    val scrollModifier = if (compactRailLayout) {
+        Modifier.verticalScroll(rememberScrollState())
+    } else {
+        Modifier
+    }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxHeight()) {
-        val minBodyHeight = if (constraints.hasBoundedHeight) maxHeight else 0.dp
+    Surface(
+        color = if (desktopFramed) Color.Transparent else NavigationRailDefaults.ContainerColor,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(SlimRailWidth),
+    ) {
         Column(
-            verticalArrangement = Arrangement.SpaceBetween,
-            horizontalAlignment = horizontalAlignment,
-            modifier = bodyWidthModifier
-                .verticalScroll(rememberScrollState())
-                .heightIn(min = minBodyHeight),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(railInsets)
+                .then(scrollModifier)
+                .padding(top = verticalInset, bottom = verticalInset),
         ) {
-            Column(
-                horizontalAlignment = horizontalAlignment,
-                modifier = if (expanded) Modifier.fillMaxWidth() else Modifier,
-            ) {
-                if (expanded) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = Spacing.Tight),
-                    ) {
-                        BilbyTooltip(text = toggleLabel, shortcut = "Ctrl+B") {
-                            IconButton(onClick = onToggleRail) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Outlined.MenuOpen,
-                                    contentDescription = toggleLabel,
-                                )
-                            }
-                        }
-                        if (desktopFramed && !isModalDrawer) {
-                            Spacer(Modifier.weight(1f).height(Dimens.MinTouchTarget).windowDragArea())
-                        }
-                    }
-                } else {
-                    BilbyTooltip(text = toggleLabel, shortcut = "Ctrl+B") {
-                        IconButton(onClick = onToggleRail) {
-                            Icon(
-                                imageVector = Icons.Outlined.Menu,
-                                contentDescription = toggleLabel,
-                            )
-                        }
-                    }
-                }
+            RootRailAccountHeader(
+                state = profileState,
+                onOpenSelf = onOpenSelf,
+                onRetry = onRetryAccount,
+            )
 
-                Spacer(Modifier.height(sectionGap))
-
-                RootRailAccountHeader(
-                    state = profileState,
-                    expanded = expanded,
-                    onOpenSelf = { mid ->
-                        onCollapseModal()
-                        onOpenSelf(mid)
-                    },
-                    onRetry = onRetryAccount,
+            if (compactRailLayout) {
+                Spacer(Modifier.height(Spacing.Tight))
+            } else {
+                Spacer(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .then(if (desktopFramed) Modifier.windowDragArea() else Modifier),
                 )
+            }
 
-                Spacer(Modifier.height(if (isHeightCompact) Spacing.Tight else Spacing.Cozy))
-
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(if (compactRailLayout) Spacing.Hair else Spacing.Tight),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 RootTab.entries.forEach { tab ->
                     WideNavigationRailItem(
                         selected = selected == tab,
-                        onClick = {
-                            onTabClick(tab)
-                            onCollapseModal()
-                        },
+                        onClick = { onTabClick(tab) },
                         icon = { RootTabIcon(tab, selected == tab, sideRail = true) },
                         label = { RootTabLabel(tab, selected == tab, sideRail = true) },
-                        railExpanded = expanded,
+                        railExpanded = false,
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
             }
 
-            Column(
-                horizontalAlignment = horizontalAlignment,
-                verticalArrangement = Arrangement.spacedBy(if (isHeightCompact) 0.dp else Spacing.Hair),
-                modifier = if (expanded) {
-                    Modifier.fillMaxWidth().padding(horizontal = Spacing.Cozy)
-                } else {
-                    Modifier.padding(top = Spacing.Tight)
-                },
-            ) {
-                RootRailUtilitySection(
-                    account = profileState.account,
-                    expanded = expanded,
-                    cutoutColor = cutoutColor,
-                    onOpenFollowings = {
-                        onCollapseModal()
-                        onOpenFollowings()
-                    },
-                    onOpenCoinLog = {
-                        onCollapseModal()
-                        onOpenCoinLog()
-                    },
-                    onOpenMessages = {
-                        onCollapseModal()
-                        onOpenMessages()
-                    },
-                    onSettingsClick = {
-                        onCollapseModal()
-                        onSettingsClick()
-                    },
+            if (compactRailLayout) {
+                Spacer(Modifier.height(Spacing.Tight))
+            } else {
+                Spacer(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .then(if (desktopFramed) Modifier.windowDragArea() else Modifier),
                 )
             }
+
+            RootRailUtilitySection(
+                account = profileState.account,
+                cutoutColor = cutoutColor,
+                onOpenFollowings = onOpenFollowings,
+                onOpenCoinLog = onOpenCoinLog,
+                onOpenMessages = onOpenMessages,
+                onSettingsClick = onSettingsClick,
+            )
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun RootRailAccountHeader(
     state: ProfileUiState,
-    expanded: Boolean,
     onOpenSelf: (Long) -> Unit,
     onRetry: () -> Unit,
 ) {
     val account = state.account
     val colorScheme = MaterialTheme.colorScheme
-    if (expanded) {
-        Surface(
-            color = colorScheme.surfaceContainerHigh,
-            shape = MaterialTheme.shapes.large,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.Cozy),
-        ) {
-            when {
-                account != null -> {
-                    AccountIdentityContextMenu(
-                        account = account,
-                        onOpenSelf = onOpenSelf,
-                        shape = MaterialTheme.shapes.large,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { onCopyUid ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(Spacing.Cozy),
-                        ) {
-                            Avatar(url = account.faceUrl, size = RailAvatarSize)
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                            ) {
-                                Text(
-                                    text = account.name,
-                                    style = MaterialTheme.typography.titleSmallEmphasized,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                                ) {
-                                    LevelBadge(
-                                        level = account.level,
-                                        senior = account.isSeniorMember,
-                                        height = Dimens.LevelBadgeHeight,
-                                    )
-                                    AccountUidPill(mid = account.mid, onCopy = onCopyUid)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                state.accountError != null -> {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+    when {
+        account != null -> {
+            BilbyTooltip(text = "${account.name}${MetaSeparator}UID: ${account.mid}") {
+                AccountIdentityContextMenu(
+                    account = account,
+                    onOpenSelf = onOpenSelf,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .size(Dimens.MinTouchTarget)
+                        .interactiveCard(
+                            shape = CircleShape,
+                            baseColor = Color.Transparent,
+                            hoverColor = colorScheme.surfaceContainerHigh,
+                        ),
+                ) { _ ->
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.fillMaxSize(),
                     ) {
-                        Text(
-                            text = stringResource(state.accountError),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = onRetry) {
-                            Text(stringResource(Res.string.action_retry))
-                        }
-                    }
-                }
-
-                else -> {
-                    SkeletonPulse {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(Spacing.Cozy),
-                        ) {
-                            Box(Modifier.size(RailAvatarSize).skeleton(CircleShape))
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                            ) {
-                                SkeletonLine(Modifier.fillMaxWidth(0.75f), height = 14.dp)
-                                SkeletonLine(Modifier.fillMaxWidth(0.5f), height = 12.dp)
-                            }
-                        }
+                        Avatar(url = account.faceUrl, size = RailAvatarSize)
                     }
                 }
             }
         }
-    } else {
-        when {
-            account != null -> {
-                BilbyTooltip(text = "${account.name}${MetaSeparator}UID: ${account.mid}") {
-                    AccountIdentityContextMenu(
-                        account = account,
-                        onOpenSelf = onOpenSelf,
-                        shape = CircleShape,
-                        modifier = Modifier.size(Dimens.MinTouchTarget),
-                    ) { _ ->
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier.fillMaxSize(),
-                        ) {
-                            Avatar(url = account.faceUrl, size = RailAvatarSize)
-                        }
-                    }
+
+        state.accountError != null -> {
+            val retryText = stringResource(Res.string.action_retry)
+            BilbyTooltip(text = "${stringResource(state.accountError)}$MetaSeparator$retryText") {
+                IconButton(onClick = onRetry) {
+                    Icon(
+                        imageVector = Icons.Outlined.AccountCircle,
+                        contentDescription = retryText,
+                        tint = colorScheme.onSurfaceVariant,
+                    )
                 }
             }
+        }
 
-            state.accountError != null -> {
-                val retryText = stringResource(Res.string.action_retry)
-                BilbyTooltip(text = "${stringResource(state.accountError)}$MetaSeparator$retryText") {
-                    IconButton(onClick = onRetry) {
-                        Icon(
-                            imageVector = Icons.Outlined.AccountCircle,
-                            contentDescription = retryText,
-                            tint = colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-
-            else -> {
-                SkeletonPulse {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.size(Dimens.MinTouchTarget),
-                    ) {
-                        Box(Modifier.size(RailAvatarSize).skeleton(CircleShape))
-                    }
+        else -> {
+            SkeletonPulse {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.size(Dimens.MinTouchTarget),
+                ) {
+                    Box(Modifier.size(RailAvatarSize).skeleton(CircleShape))
                 }
             }
         }
@@ -2626,7 +2351,6 @@ private fun RootRailAccountHeader(
 @Composable
 private fun RootRailUtilitySection(
     account: AccountInfo?,
-    expanded: Boolean,
     cutoutColor: Color,
     onOpenFollowings: () -> Unit,
     onOpenCoinLog: () -> Unit,
@@ -2641,129 +2365,88 @@ private fun RootRailUtilitySection(
     val coinsValue = account?.let { formatSegmentValue(it.coins) }
     val tint = MaterialTheme.colorScheme.onSurfaceVariant
 
-    RootRailUtilityItem(
-        expanded = expanded,
-        label = followingLabel,
-        value = followingValue,
-        tooltip = followingValue?.let { "$followingLabel$MetaSeparator$it" } ?: followingLabel,
-        onClick = onOpenFollowings,
-        icon = {
-            Icon(
-                imageVector = Icons.Outlined.PeopleAlt,
-                contentDescription = if (expanded) null else followingLabel,
-                tint = tint,
-                modifier = Modifier.size(RailUtilityIconSize),
-            )
-        },
-    )
-    RootRailUtilityItem(
-        expanded = expanded,
-        label = coinsLabel,
-        value = coinsValue,
-        tooltip = coinsValue?.let { "$coinsLabel$MetaSeparator$it" } ?: coinsLabel,
-        onClick = onOpenCoinLog,
-        icon = {
-            CoinGlyph(
-                tint = tint,
-                filled = false,
-                cutout = cutoutColor,
-                size = RailUtilityCoinSize,
-            )
-        },
-    )
-    RootRailUtilityItem(
-        expanded = expanded,
-        label = messagesLabel,
-        value = null,
-        tooltip = messagesLabel,
-        onClick = onOpenMessages,
-        icon = {
-            Icon(
-                imageVector = Icons.Outlined.Mail,
-                contentDescription = if (expanded) null else messagesLabel,
-                tint = tint,
-                modifier = Modifier.size(RailUtilityIconSize),
-            )
-        },
-    )
-    RootRailUtilityItem(
-        expanded = expanded,
-        label = settingsLabel,
-        value = null,
-        tooltip = settingsLabel,
-        shortcut = "Ctrl+,",
-        onClick = onSettingsClick,
-        icon = {
-            Icon(
-                imageVector = Icons.Outlined.Settings,
-                contentDescription = if (expanded) null else settingsLabel,
-                tint = tint,
-                modifier = Modifier.size(RailUtilityIconSize),
-            )
-        },
-    )
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        RootRailUtilityItem(
+            label = followingLabel,
+            tooltip = followingValue?.let { "$it $followingLabel" } ?: followingLabel,
+            onClick = onOpenFollowings,
+            icon = {
+                Icon(
+                    imageVector = Icons.Outlined.PeopleAlt,
+                    contentDescription = followingLabel,
+                    tint = tint,
+                    modifier = Modifier.size(RailUtilityIconSize),
+                )
+            },
+        )
+        RootRailUtilityItem(
+            label = coinsLabel,
+            tooltip = coinsValue?.let { "$it $coinsLabel" } ?: coinsLabel,
+            onClick = onOpenCoinLog,
+            icon = {
+                CoinGlyph(
+                    tint = tint,
+                    filled = false,
+                    cutout = cutoutColor,
+                    size = RailUtilityCoinSize,
+                )
+            },
+        )
+        RootRailUtilityItem(
+            label = messagesLabel,
+            tooltip = messagesLabel,
+            onClick = onOpenMessages,
+            icon = {
+                Icon(
+                    imageVector = Icons.Outlined.Mail,
+                    contentDescription = messagesLabel,
+                    tint = tint,
+                    modifier = Modifier.size(RailUtilityIconSize),
+                )
+            },
+        )
+        RootRailUtilityItem(
+            label = settingsLabel,
+            tooltip = settingsLabel,
+            shortcut = "Ctrl+,",
+            onClick = onSettingsClick,
+            icon = {
+                Icon(
+                    imageVector = Icons.Outlined.Settings,
+                    contentDescription = settingsLabel,
+                    tint = tint,
+                    modifier = Modifier.size(RailUtilityIconSize),
+                )
+            },
+        )
+    }
 }
 
 @Composable
 private fun RootRailUtilityItem(
-    expanded: Boolean,
     label: String,
-    value: String?,
     tooltip: String,
     shortcut: String? = null,
     onClick: () -> Unit,
     icon: @Composable () -> Unit,
 ) {
-    if (expanded) {
-        val rowContent: @Composable () -> Unit = {
-            Surface(
-                onClick = onClick,
-                color = Color.Transparent,
-                shape = CircleShape,
+    BilbyTooltip(text = tooltip, shortcut = shortcut, anchorAbove = true) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(Dimens.MinTouchTarget)
+                .clip(CircleShape)
+                .clickable(role = Role.Button, onClickLabel = label, onClick = onClick),
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = RailUtilityRowMinHeight),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
-                ) {
-                    icon()
-                    Text(
-                        text = label,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (value != null) {
-                        Text(
-                            text = value,
-                            style = MaterialTheme.typography.labelMedium.tabular,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            softWrap = false,
-                        )
-                    }
-                }
-            }
-        }
-        if (shortcut != null) {
-            BilbyTooltip(text = tooltip, shortcut = shortcut, anchorAbove = true) {
-                rowContent()
-            }
-        } else {
-            rowContent()
-        }
-    } else {
-        BilbyTooltip(text = tooltip, shortcut = shortcut, anchorAbove = true) {
-            IconButton(
-                onClick = onClick,
-                modifier = Modifier.size(Dimens.MinTouchTarget),
+                    .size(RailUtilityVisualSize)
+                    .interactiveCard(
+                        shape = CircleShape,
+                        baseColor = Color.Transparent,
+                        hoverColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    ),
             ) {
                 icon()
             }

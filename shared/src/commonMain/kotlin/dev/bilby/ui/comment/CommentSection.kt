@@ -89,10 +89,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import dev.bilby.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -811,44 +813,105 @@ private fun CommentRow(
     threadAuthorMid: Long = 0L,
     replies: (@Composable () -> Unit)? = null,
 ) {
+    CommentEntry(
+        comment = comment,
+        actions = actions,
+        avatarSize = Dimens.AvatarRow,
+        avatarGap = Spacing.Cozy,
+        bodyStyle = CommentBodyStyle,
+        pinned = pinned,
+        threadAuthorMid = threadAuthorMid,
+        headerEndInset = RootHeaderEndInset,
+        hoverColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        cardShape = MaterialTheme.shapes.medium,
+        contentPadding = PaddingValues(
+            start = Spacing.Comfortable,
+            end = Spacing.Comfortable,
+            top = Spacing.Cozy,
+            bottom = Spacing.Tight,
+        ),
+        modifier = modifier,
+        replies = replies,
+    )
+}
+
+@Composable
+private fun CommentEntry(
+    comment: CommentItem,
+    actions: CommentRowActions,
+    avatarSize: Dp,
+    avatarGap: Dp,
+    bodyStyle: TextStyle,
+    pinned: Boolean,
+    threadAuthorMid: Long,
+    headerEndInset: Dp,
+    hoverColor: Color,
+    cardShape: Shape,
+    contentPadding: PaddingValues,
+    modifier: Modifier = Modifier,
+    replies: (@Composable () -> Unit)? = null,
+) {
     var viewerIndex by remember { mutableStateOf<Int?>(null) }
 
-    // 上 12、下 4:底行按钮的触摸区比图标高出 8dp,视觉上已经留了一截,再加 4 与下一条的
-    // 12 合起来,两条评论之间是 24dp 左右的空白 —— 这就是没有分割线之后的分隔。
-    //
-    // 内边距在点击之后:涟漪铺满整条,贴着屏幕两边,而不是缩在内容那一块里。
     CommentContextMenu(comment = comment, actions = actions, modifier = modifier) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .interactiveCard(
-                    shape = MaterialTheme.shapes.medium,
+                    shape = cardShape,
                     baseColor = Color.Transparent,
-                    hoverColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                    hoverColor = hoverColor,
                     enableScale = false,
                 )
                 .replyOnClick(comment, actions)
-                .padding(start = Spacing.Comfortable, end = Spacing.Comfortable, top = Spacing.Tight, bottom = Spacing.Hair),
+                .padding(contentPadding),
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = Dimens.MinTouchTarget)
-                    .openSpace(comment, actions.onUserClick),
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Avatar(url = comment.avatarUrl, size = Dimens.AvatarRow)
-                NameLine(comment = comment, modifier = Modifier.weight(1f)) {
-                    CommentTags(comment, pinned = pinned, threadAuthorMid = threadAuthorMid)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(avatarGap),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(MaterialTheme.shapes.small)
+                        .openSpace(comment, actions.onUserClick),
+                ) {
+                    Avatar(url = comment.avatarUrl, size = avatarSize)
+                    Column(modifier = Modifier.weight(1f)) {
+                        NameLine(comment = comment) {
+                            CommentTags(comment, pinned = pinned, threadAuthorMid = threadAuthorMid)
+                        }
+                        val meta = commentMeta(comment)
+                        if (meta.isNotEmpty()) {
+                            Text(
+                                text = meta,
+                                style = MaterialTheme.typography.labelSmall.tabular,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                 }
+                CommentHeaderActions(
+                    comment = comment,
+                    actions = actions,
+                    endInset = headerEndInset,
+                )
             }
-            Column(modifier = Modifier.padding(start = Dimens.AvatarRow + Spacing.Cozy)) {
+            Column(
+                modifier = Modifier.padding(
+                    start = avatarSize + avatarGap,
+                    top = Spacing.Hair,
+                ),
+            ) {
                 CommentText(
                     message = comment.message,
                     emotes = comment.emotes,
                     mentions = comment.mentions,
-                    style = CommentBodyStyle,
+                    style = bodyStyle,
                     links = comment.links,
                     onSeek = actions.onSeek,
                     onUserClick = actions.onUserClick,
@@ -861,8 +924,11 @@ private fun CommentRow(
                         modifier = Modifier.padding(top = Spacing.Tight),
                     )
                 }
-                CommentFooter(comment = comment, actions = actions, endInset = RootFooterEndInset)
-                replies?.invoke()
+                if (replies != null) {
+                    Box(modifier = Modifier.padding(top = Spacing.Tight)) {
+                        replies()
+                    }
+                }
             }
         }
     }
@@ -1035,48 +1101,30 @@ private fun PictureGrid(urls: List<String>, onClick: (Int) -> Unit, modifier: Mo
 private const val SinglePictureWidthFraction = 0.7f
 
 /**
- * 正文下面那一行:左边时间与属地,右边点赞与删除。主楼、楼中楼、面板里的回复共用。
- *
- * **时间打头,不是按钮打头。** 这一行从按钮开始的话,图标带着按钮自己的内边距,比正文左缘
- * 缩进一截;时间是文字,天然贴着正文左缘。点赞落在行尾,和 PiliPlus 一样
- * (`reply_item_grpc.dart` 的 `buttonAction`)。
+ * 头部右侧的点赞与删除操作。主楼、楼中楼、面板里的回复共用。
  *
  * **没有回复按钮**:单击整条就是回复(见 [replyOnClick])。
  *
- * 按钮取 XS 档,**视觉 32、触摸 48**:material 组件自己补足 48dp 的触摸区(icon-buttons 页
- * "Extra small and small icon buttons must have a target size of 48x48dp or larger"),
- * 这一行因此仍是 48dp 高,多出来的上下各 8dp 正好是它和正文、和下一条之间的留白。
+ * 按钮保留完整的 `48.dp` 触摸热区,外层通过 [compactTouchHeight] 收敛布局占位到 [HeaderActionsVisualHeight],
+ * 避免把「头像 + 名字/元信息」36dp 高的头部行撑出额外空白。
  */
 @Composable
-private fun CommentFooter(
+private fun CommentHeaderActions(
     comment: CommentItem,
     actions: CommentRowActions,
     modifier: Modifier = Modifier,
-    /** 右端再往里收多少。主楼传 [RootFooterEndInset],见那里。 */
+    /** 右端再往里收多少。主楼传 [RootHeaderEndInset],见那里。 */
     endInset: Dp = 0.dp,
 ) {
     Row(
         modifier = modifier
-            .tuckUp(FooterTuck)
-            .fillMaxWidth()
-            .padding(end = endInset),
+            .compactTouchHeight(HeaderActionsVisualHeight)
+            .padding(end = endInset)
+            .offset(x = HeaderTrailingNudge),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = commentMeta(comment),
-            style = MaterialTheme.typography.labelSmall.tabular,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Row(
-            modifier = Modifier.offset(x = FooterTrailingNudge),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            LikeButton(comment = comment, onLike = actions.onLike)
-            if (actions.canDelete(comment)) DeleteButton(onDelete = { actions.onDelete(comment.rpid) })
-        }
+        LikeButton(comment = comment, onLike = actions.onLike)
+        if (actions.canDelete(comment)) DeleteButton(onDelete = { actions.onDelete(comment.rpid) })
     }
 }
 
@@ -1163,29 +1211,23 @@ private fun CommentDeleteConfirmDialog(
  * 容器的内边距(12dp),两级各自贴着自己的右缘时,点赞一上一下错开这么多,一屏看下来是锯齿。
  * 对齐到楼中楼那一条而不是反过来:楼中楼的点赞再往右就贴到容器边上了。
  */
-private val RootFooterEndInset = Spacing.Cozy
+private val RootHeaderEndInset = Spacing.Cozy
 
 /**
  * 尾部按钮右移这一截,图标的右缘才对得上页边距:按钮的内边距是透明的,不挪的话点赞图标
  * 比上面正文的右缘缩进一个内边距。
  */
-private val FooterTrailingNudge = Spacing.Tight
+private val HeaderTrailingNudge = Spacing.Tight
+
+private val HeaderActionsVisualHeight = 36.dp
 
 /**
- * 底行往上压进正文的高度。这一行的高度是点赞按钮 48dp 的触摸区撑的,图标只有 32dp,正文与
- * "时间  属地"之间因此空出一大截。压上去的这 8dp 落在正文最后一行字形下方的行距里,不盖字;
- * 按钮的触摸区照旧是 48dp。
+ * 照常测量(保留 48dp 触摸热区),对外只报出 [targetHeight],并居中摆在头部行里。
  */
-private val FooterTuck = Spacing.Tight
-
-/**
- * 往上压 [amount]:照常测量,对外报的高度少这一截,摆的时候上移同样多,于是盖住上一个兄弟的
- * 底边。不用 `offset`:它只挪画的位置不挪量出来的尺寸,上移之后底下会空出同样高的一条。
- */
-private fun Modifier.tuckUp(amount: Dp): Modifier = layout { measurable, constraints ->
+private fun Modifier.compactTouchHeight(targetHeight: Dp): Modifier = layout { measurable, constraints ->
     val placeable = measurable.measure(constraints)
-    val tuck = amount.roundToPx().coerceAtMost(placeable.height)
-    layout(placeable.width, placeable.height - tuck) { placeable.place(0, -tuck) }
+    val height = targetHeight.roundToPx().coerceAtMost(placeable.height)
+    layout(placeable.width, height) { placeable.place(0, (height - placeable.height) / 2) }
 }
 
 /**
@@ -1222,9 +1264,9 @@ private fun SubReplies(
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = MaterialTheme.shapes.large,
-        modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Tight),
+        modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Hair),
     ) {
-        Column(modifier = Modifier.padding(top = Spacing.Tight, bottom = if (hasMore) 0.dp else Spacing.Hair)) {
+        Column(modifier = Modifier.padding(top = Spacing.Hair, bottom = if (hasMore) 0.dp else Spacing.Hair)) {
             shown.forEach { sub ->
                 // **按 rpid 给每条一个稳定身份。** 重新拉过的那一份和主楼自带的几条是两个列表
                 // 对象,开头几条是同一批回复;不给 key 的话一旦有条被删或者服务端换了顺序,
@@ -1258,73 +1300,19 @@ private fun SubReplyRow(
     rootAuthorMid: Long,
     actions: CommentRowActions,
 ) {
-    var viewerIndex by remember { mutableStateOf<Int?>(null) }
-
-    // 左右 12dp、上 4dp:容器顶上另有 8dp,底行按钮的触摸区又带着 8dp 的留白,
-    // 条与条之间因此是 12dp 左右。上一版左右只有 8dp,文字贴着容器边。
-    CommentContextMenu(comment = comment, actions = actions) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .interactiveCard(
-                    shape = MaterialTheme.shapes.small,
-                    baseColor = Color.Transparent,
-                    hoverColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    enableScale = false,
-                )
-                .replyOnClick(comment, actions)
-                .padding(start = Spacing.Cozy, end = Spacing.Cozy, top = Spacing.Hair),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = Dimens.MinTouchTarget)
-                    .openSpace(comment, actions.onUserClick),
-            ) {
-                Avatar(url = comment.avatarUrl, size = Dimens.AvatarNested)
-                NameLine(comment = comment, modifier = Modifier.weight(1f)) {
-                    CommentTags(comment, pinned = false, threadAuthorMid = rootAuthorMid)
-                }
-            }
-            Column(modifier = Modifier.padding(start = Dimens.AvatarNested + Spacing.Tight)) {
-                // 回复楼中楼时正文开头自带一截"回复 @某某 :",那是发送方写进 message 的字面文本
-                // (见 CommentRepository.postComment),原样留着 —— 它就是这条的正文,而剥掉它要去猜
-                // 那一截到底有多长,名字改过就会剥错。
-                CommentText(
-                    message = comment.message,
-                    emotes = comment.emotes,
-                    mentions = comment.mentions,
-                    style = SubReplyBodyStyle,
-                    links = comment.links,
-                    onSeek = actions.onSeek,
-                    onUserClick = actions.onUserClick,
-                    onOpenLink = actions.onOpenLink,
-                )
-                // 配图在每一级都画。一条只发了张图的回复不画的话渲染成一行空白,看起来像接口少给了
-                // 内容。PiliPlus 在每一级都画 `ImageGridView`。
-                if (comment.pictureUrls.isNotEmpty()) {
-                    PictureGrid(
-                        urls = comment.pictureUrls,
-                        onClick = { index -> viewerIndex = index },
-                        modifier = Modifier.padding(top = Spacing.Tight),
-                    )
-                }
-                // 和主楼共用同一行,不另写一份小号的:点赞在两级走的是同一个 `x/v2/reply/action`
-                // (notes §1.7),长得不一样只会让人以为这里的点赞是另一回事。
-                CommentFooter(comment = comment, actions = actions)
-            }
-        }
-    }
-
-    viewerIndex?.let { index ->
-        ImageViewer(
-            urls = comment.pictureUrls,
-            initialIndex = index,
-            onDismiss = { viewerIndex = null },
-        )
-    }
+    CommentEntry(
+        comment = comment,
+        actions = actions,
+        avatarSize = Dimens.AvatarNested,
+        avatarGap = Spacing.Tight,
+        bodyStyle = SubReplyBodyStyle,
+        pinned = false,
+        threadAuthorMid = rootAuthorMid,
+        headerEndInset = 0.dp,
+        hoverColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        cardShape = MaterialTheme.shapes.small,
+        contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+    )
 }
 
 /**
