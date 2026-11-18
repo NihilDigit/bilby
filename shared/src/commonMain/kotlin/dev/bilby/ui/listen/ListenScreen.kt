@@ -1701,7 +1701,7 @@ private fun SleepTimerDialog(
 ) {
     PaneSheet(
         onDismissRequest = onDismiss,
-        title = stringResource(Res.string.sleep_timer_off),
+        title = null,
     ) {
         SleepTimerStandaloneContent(
             sleepTimer = sleepTimer,

@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -40,7 +41,6 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
@@ -53,7 +53,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -65,11 +64,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboard
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -95,11 +90,8 @@ import dev.bilby.offline.OfflineStore
 import dev.bilby.parseDurationSeconds
 import dev.bilby.resources.*
 import dev.bilby.stringResource
-import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.CaptionDragHeight
-import dev.bilby.ui.CaptionLeadWithDrag
-import dev.bilby.ui.LocalLiveWindowInfo
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.BilbyTooltip
@@ -130,10 +122,9 @@ import dev.bilby.ui.offline.formatBytes
 import dev.bilby.ui.offline.toRowUi
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.rememberCaptionSlot
+import dev.bilby.ui.rememberVideoGridColumnCount
 import dev.bilby.ui.theme.BilbyTheme
-import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Dimens
-import dev.bilby.ui.theme.LocalIsDarkTheme
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.interactiveCard
 import dev.bilby.ui.theme.tabular
@@ -323,54 +314,35 @@ fun ProfileScreen(
     }
 
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
-    val caption = LocalWindowCaption.current
-    val liveWindow = LocalLiveWindowInfo.current ?: LocalWindowInfo.current
-    val density = LocalDensity.current
-    val edgeTolerancePx = with(density) { 32.dp.toPx() }
-    var rootTouchesTopRight by remember { mutableStateOf(false) }
-    var cardAtTop by remember { mutableStateOf(true) }
+    val pinnedHeader = LocalWindowCaption.current != null
 
-    Box(
+    Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(contentPadding)
-            .onGloballyPositioned { coordinates ->
-                if (!coordinates.isAttached) return@onGloballyPositioned
-                val bounds = coordinates.boundsInWindow()
-                rootTouchesTopRight = bounds.top <= edgeTolerancePx &&
-                    bounds.right >= liveWindow.containerSize.width - edgeTolerancePx
-            },
+            .padding(contentPadding),
     ) {
+        if (pinnedHeader) {
+            ProfileHeader()
+        }
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .weight(1f)
+                .fillMaxWidth()
                 .verticalScroll(scrollState),
         ) {
-            if (wide || caption != null) {
-                AccountCard(
-                    state = state,
-                    onOpenSelf = onOpenSelf,
-                    onOpenMessages = onOpenMessages,
-                    onOpenFollowings = onOpenFollowings,
-                    onOpenCoinLog = onOpenCoinLog,
-                    onSettingsClick = onSettingsClick,
-                    onRetry = onRetryAccount,
-                    onCaptionAtTopChanged = { cardAtTop = it },
-                )
-            } else {
-                AdaptiveContent(maxWidth = Breakpoints.ReadableWidth) {
-                    AccountCard(
-                        state = state,
-                        onOpenSelf = onOpenSelf,
-                        onOpenMessages = onOpenMessages,
-                        onOpenFollowings = onOpenFollowings,
-                        onOpenCoinLog = onOpenCoinLog,
-                        onSettingsClick = onSettingsClick,
-                        onRetry = onRetryAccount,
-                        onCaptionAtTopChanged = { cardAtTop = it },
-                    )
-                }
+            if (!pinnedHeader) {
+                ProfileHeader()
             }
+            AccountCard(
+                state = state,
+                wide = wide,
+                onOpenSelf = onOpenSelf,
+                onOpenMessages = onOpenMessages,
+                onOpenFollowings = onOpenFollowings,
+                onOpenCoinLog = onOpenCoinLog,
+                onSettingsClick = onSettingsClick,
+                onRetry = onRetryAccount,
+            )
 
             Spacer(Modifier.height(Spacing.Hair))
 
@@ -381,39 +353,54 @@ fun ProfileScreen(
 
             Spacer(Modifier.height(Spacing.Comfortable))
         }
-
-        // 桌面端下滚离开顶部身份卡后,右上角仍保留轻量拖动条与窗口控制按钮,保证随时可最小化/关闭窗口。
-        if (caption != null && rootTouchesTopRight && !cardAtTop && scrollState.value > 0) {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f),
-                shape = CircleShape,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = Spacing.Tight, end = Spacing.Comfortable),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(start = Spacing.Tight, end = Spacing.Hair),
-                ) {
-                    Spacer(Modifier.width(24.dp).height(CaptionDragHeight).windowDragArea(true))
-                    caption.Buttons()
-                }
-            }
-        }
     }
 }
 
-private val InlineActionsThreshold = 880.dp
-private val AccountAvatarSize = Dimens.AvatarHero
-private val AccountActionIconSize = 24.dp
-private val WideAccountActionsWidth = 396.dp
-private val AccountNameSkeletonHeight = 22.dp
+/**
+ * 个人页顶栏:与订阅页 [FeedHeader] 保持一致的轻量结构——左侧页面标题加桌面拖动区，
+ * 右侧仅保留窗口控制按钮，设置入口已下沉至账户快捷动作胶囊中。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ProfileHeader() {
+    val captionSlot = rememberCaptionSlot()
+    Row(
+        modifier = captionSlot.modifier
+            .fillMaxWidth()
+            .heightIn(min = Dimens.MinTouchTarget)
+            .padding(
+                start = Spacing.Comfortable,
+                end = if (captionSlot.buttons != null) Spacing.Hair else Spacing.Comfortable,
+                top = Spacing.Tight,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .weight(1f)
+                .height(CaptionDragHeight)
+                .windowDragArea(captionSlot.atTop),
+        ) {
+            Text(
+                text = stringResource(Res.string.tab_profile),
+                style = MaterialTheme.typography.headlineSmallEmphasized,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        captionSlot.buttons?.invoke()
+    }
+}
+
+private val AccountAvatarSize = 56.dp
+private val AccountNameSkeletonHeight = 20.dp
 
 /**
- * 个人页主视觉身份卡:
- * - 容器色浅色取 `surfaceContainer`、深色取 `surfaceContainerLow`,配 `shapes.extraLarge`(28dp)与 `16dp` 内边距;
- * - 72dp `AvatarHero` + `headlineSmallEmphasized` 昵称 + `LevelBadge` + 一键复制 `UID` 胶囊 + 右键/长按复制菜单;
- * - 关注 / 硬币 / 消息三段式 `surfaceContainerHigh` 操作条(消息入口严格零红点、零未读角标)。
+ * 个人页轻量身份头与快捷动作胶囊：
+ * - 去除整宽深灰外框卡片与嵌套底板，直接落在页面背景之上以对齐订阅页视觉重量；
+ * - 宽屏下身份信息居左、[关注 · 硬币 · 消息 · 设置] 四段动作胶囊靠右单行并列；
+ *   窄屏下四段胶囊落在身份行正下方。
  */
 @OptIn(
     ExperimentalMaterial3ExpressiveApi::class,
@@ -423,23 +410,16 @@ private val AccountNameSkeletonHeight = 22.dp
 @Composable
 private fun AccountCard(
     state: ProfileUiState,
+    wide: Boolean,
     onOpenSelf: (Long) -> Unit,
     onOpenMessages: () -> Unit,
     onOpenFollowings: () -> Unit,
     onOpenCoinLog: () -> Unit,
     onSettingsClick: () -> Unit,
     onRetry: () -> Unit,
-    onCaptionAtTopChanged: (Boolean) -> Unit = {},
 ) {
     val account = state.account
     val colorScheme = MaterialTheme.colorScheme
-    val isDark = LocalIsDarkTheme.current
-    val cardColor = if (isDark) colorScheme.surfaceContainerLow else colorScheme.surfaceContainer
-    val hasWindowCaption = LocalWindowCaption.current != null
-    val captionSlot = rememberCaptionSlot(topInset = 32.dp)
-    LaunchedEffect(captionSlot.atTop) {
-        onCaptionAtTopChanged(captionSlot.atTop)
-    }
 
     val clipboard = LocalClipboard.current
     val copyNotice = LocalCopyNotice.current
@@ -447,6 +427,7 @@ private fun AccountCard(
     val copiedText = stringResource(Res.string.comment_copied)
     val copyNicknameLabel = stringResource(Res.string.action_copy_nickname)
     val copyUidLabel = stringResource(Res.string.action_copy_uid)
+    val copyBioLabel = stringResource(Res.string.action_copy_bio)
     val menuLabel = stringResource(Res.string.menu_item_actions)
 
     val copyValue: (String, String) -> Unit = { label, text ->
@@ -456,202 +437,202 @@ private fun AccountCard(
         }
     }
 
-    BoxWithConstraints(
-        modifier = captionSlot.modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
-    ) {
-        val inlineActions = maxWidth >= InlineActionsThreshold
-
-        Surface(
-            color = cardColor,
-            contentColor = colorScheme.onSurface,
-            shape = MaterialTheme.shapes.extraLarge,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
-                modifier = Modifier.padding(Spacing.Comfortable),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                    modifier = Modifier.fillMaxWidth().heightIn(min = AccountAvatarSize),
-                ) {
-                    CaptionLeadWithDrag(
-                        dragEnabled = captionSlot.atTop,
-                        dragHeight = AccountAvatarSize,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        if (account != null) {
-                            ContextMenuBox(
-                                onClick = { onOpenSelf(account.mid) },
-                                menuLabel = menuLabel,
-                                modifier = Modifier
-                                    .then(if (hasWindowCaption) Modifier else Modifier.fillMaxWidth())
-                                    .clip(MaterialTheme.shapes.large),
-                                menu = { close ->
-                                    DropdownMenuItem(
-                                        onClick = {
-                                            close()
-                                            copyValue(copyNicknameLabel, account.name)
-                                        },
-                                        text = { Text(copyNicknameLabel) },
-                                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
-                                        shape = menuItemShape(0, 2),
-                                    )
-                                    DropdownMenuItem(
-                                        onClick = {
-                                            close()
-                                            copyValue(copyUidLabel, account.mid.toString())
-                                        },
-                                        text = { Text(copyUidLabel) },
-                                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
-                                        shape = menuItemShape(1, 2),
-                                    )
+    val identityBlock: @Composable (Modifier) -> Unit = { blockModifier ->
+        Box(modifier = blockModifier) {
+            if (account != null) {
+                val hasBio = account.sign.isNotBlank()
+                val menuTotal = if (hasBio) 3 else 2
+                ContextMenuBox(
+                    onClick = { onOpenSelf(account.mid) },
+                    menuLabel = menuLabel,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.large),
+                    menu = { close ->
+                        DropdownMenuItem(
+                            onClick = {
+                                close()
+                                copyValue(copyNicknameLabel, account.name)
+                            },
+                            text = { Text(copyNicknameLabel) },
+                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                            shape = menuItemShape(0, menuTotal),
+                        )
+                        DropdownMenuItem(
+                            onClick = {
+                                close()
+                                copyValue(copyUidLabel, account.mid.toString())
+                            },
+                            text = { Text(copyUidLabel) },
+                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                            shape = menuItemShape(1, menuTotal),
+                        )
+                        if (hasBio) {
+                            DropdownMenuItem(
+                                onClick = {
+                                    close()
+                                    copyValue(copyBioLabel, account.sign)
                                 },
-                            ) { _ ->
+                                text = { Text(copyBioLabel) },
+                                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
+                                shape = menuItemShape(2, menuTotal),
+                            )
+                        }
+                    },
+                ) { _ ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = AccountAvatarSize)
+                            .padding(horizontal = Spacing.Tight, vertical = Spacing.Tight),
+                    ) {
+                        Avatar(url = account.faceUrl, size = AccountAvatarSize)
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                        ) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                                itemVerticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
-                                    modifier = if (hasWindowCaption) {
-                                        Modifier.padding(end = Spacing.Tight)
-                                    } else {
-                                        Modifier.fillMaxWidth()
-                                    },
+                                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
                                 ) {
-                                    Avatar(url = account.faceUrl, size = AccountAvatarSize)
-                                    Column(
-                                        modifier = Modifier.weight(1f, fill = !hasWindowCaption),
-                                        verticalArrangement = Arrangement.spacedBy(Spacing.Hair + 2.dp),
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                                        ) {
-                                            Text(
-                                                text = account.name,
-                                                style = MaterialTheme.typography.headlineSmallEmphasized,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.weight(1f, fill = false),
-                                            )
-                                            LevelBadge(
-                                                level = account.level,
-                                                senior = account.isSeniorMember,
-                                                height = Dimens.LevelBadgeHeight,
-                                            )
-                                            Icon(
-                                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                                contentDescription = null,
-                                                tint = colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(Dimens.IconInline),
-                                            )
-                                        }
-
-                                        FlowRow(
-                                            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                                            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                                            itemVerticalAlignment = Alignment.CenterVertically,
-                                        ) {
-                                            AccountUidPill(
-                                                mid = account.mid,
-                                                onCopy = { copyValue(copyUidLabel, account.mid.toString()) },
-                                            )
-                                        }
-
-                                        if (account.sign.isNotBlank()) {
-                                            Text(
-                                                text = account.sign,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = colorScheme.onSurfaceVariant,
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
-                                        }
-                                    }
+                                    Text(
+                                        text = account.name,
+                                        style = MaterialTheme.typography.titleLargeEmphasized,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false),
+                                    )
+                                    LevelBadge(
+                                        level = account.level,
+                                        senior = account.isSeniorMember,
+                                        height = Dimens.LevelBadgeHeight,
+                                    )
                                 }
+                                AccountUidPill(
+                                    mid = account.mid,
+                                    onCopy = { copyValue(copyUidLabel, account.mid.toString()) },
+                                )
                             }
-                        } else {
-                            Box(modifier = if (hasWindowCaption) Modifier else Modifier.fillMaxWidth()) {
-                                if (state.accountError != null) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = stringResource(state.accountError),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.weight(1f, fill = false),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                        TextButton(onClick = onRetry) { Text(stringResource(Res.string.action_retry)) }
-                                    }
-                                } else {
-                                    SkeletonPulse {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
-                                        ) {
-                                            Box(Modifier.size(AccountAvatarSize).skeleton(CircleShape))
-                                            Column(
-                                                modifier = if (hasWindowCaption) {
-                                                    Modifier
-                                                } else {
-                                                    Modifier.weight(1f)
-                                                },
-                                                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                                            ) {
-                                                SkeletonLine(
-                                                    if (hasWindowCaption) Modifier.width(136.dp) else Modifier.fillMaxWidth(0.5f),
-                                                    height = AccountNameSkeletonHeight,
-                                                )
-                                                SkeletonLine(
-                                                    if (hasWindowCaption) Modifier.width(96.dp) else Modifier.fillMaxWidth(0.35f),
-                                                )
-                                                SkeletonLine(
-                                                    if (hasWindowCaption) Modifier.width(200.dp) else Modifier.fillMaxWidth(0.8f),
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
 
-                    if (inlineActions) {
-                        AccountActions(
-                            account = account,
-                            onOpenFollowings = onOpenFollowings,
-                            onOpenCoinLog = onOpenCoinLog,
-                            onOpenMessages = onOpenMessages,
-                            modifier = Modifier.width(WideAccountActionsWidth),
-                        )
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        val settingsLabel = stringResource(Res.string.settings_title)
-                        BilbyTooltip(text = settingsLabel, shortcut = "Ctrl+,") {
-                            IconButton(onClick = onSettingsClick) {
-                                Icon(
-                                    Icons.Outlined.Settings,
-                                    contentDescription = settingsLabel,
-                                    modifier = Modifier.size(AccountActionIconSize),
+                            if (hasBio) {
+                                Text(
+                                    text = account.sign,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colorScheme.onSurfaceVariant,
+                                    maxLines = if (wide) 1 else 2,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                         }
-                        captionSlot.buttons?.invoke()
+                        Icon(
+                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(Dimens.IconInline),
+                        )
                     }
                 }
-
-                if (!inlineActions) {
-                    AccountActions(
-                        account = account,
-                        onOpenFollowings = onOpenFollowings,
-                        onOpenCoinLog = onOpenCoinLog,
-                        onOpenMessages = onOpenMessages,
-                    )
+            } else {
+                Box(
+                    contentAlignment = Alignment.CenterStart,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = AccountAvatarSize)
+                        .padding(horizontal = Spacing.Tight, vertical = Spacing.Tight),
+                ) {
+                    if (state.accountError != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = stringResource(state.accountError),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            TextButton(onClick = onRetry) { Text(stringResource(Res.string.action_retry)) }
+                        }
+                    } else {
+                        SkeletonPulse {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Box(Modifier.size(AccountAvatarSize).skeleton(CircleShape))
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                                ) {
+                                    SkeletonLine(
+                                        Modifier.widthIn(max = 180.dp).fillMaxWidth(0.45f),
+                                        height = AccountNameSkeletonHeight,
+                                    )
+                                    SkeletonLine(
+                                        Modifier.widthIn(max = 260.dp).fillMaxWidth(0.65f),
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
+            }
+        }
+    }
+
+    if (wide) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+        ) {
+            identityBlock(Modifier.weight(1f))
+            AccountActions(
+                account = account,
+                compact = false,
+                fillWidth = false,
+                onOpenFollowings = onOpenFollowings,
+                onOpenCoinLog = onOpenCoinLog,
+                onOpenMessages = onOpenMessages,
+                onSettingsClick = onSettingsClick,
+                modifier = Modifier.padding(end = Spacing.Tight),
+            )
+        }
+    } else {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
+        ) {
+            identityBlock(Modifier.fillMaxWidth())
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Tight),
+            ) {
+                AccountActions(
+                    account = account,
+                    compact = maxWidth < AccountActionsStackedBreakpoint,
+                    fillWidth = true,
+                    onOpenFollowings = onOpenFollowings,
+                    onOpenCoinLog = onOpenCoinLog,
+                    onOpenMessages = onOpenMessages,
+                    onSettingsClick = onSettingsClick,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
     }
@@ -664,12 +645,17 @@ private fun AccountUidPill(
     modifier: Modifier = Modifier,
 ) {
     val copyUidLabel = stringResource(Res.string.action_copy_uid)
+    val shape = MaterialTheme.shapes.extraSmall
+    // 不走带 onClick 的 Surface 重载：后者会自动注入 48dp 最小触控框，在窄屏换行后把上下撑出大段空白；
+    // 行级已由外层 ContextMenuBox 提供点按与复制菜单，此处保持紧凑行高并通过 Role.Button 暴露语义。
     Surface(
-        onClick = onCopy,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = MaterialTheme.colorScheme.surfaceContainer,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        shape = MaterialTheme.shapes.extraSmall,
-        modifier = modifier.semantics { contentDescription = "$copyUidLabel $mid" },
+        shape = shape,
+        modifier = modifier
+            .clip(shape)
+            .clickable(role = Role.Button, onClick = onCopy)
+            .semantics { contentDescription = "$copyUidLabel $mid" },
     ) {
         Text(
             text = "UID: $mid",
@@ -682,17 +668,21 @@ private fun AccountUidPill(
 }
 
 /**
- * 账号卡底下的三段式操作条:关注、硬币、消息。
- * 消息入口严格不带任何未读计数或红点(DESIGN 1.3)。
+ * 账户快捷动作四段胶囊：关注、硬币、消息、设置。
+ * 视觉密度对齐订阅页顶栏胶囊（`surfaceContainer` / `surfaceContainerHigh`），消息入口保持零红点、零未读角标。
  */
 @Composable
 private fun AccountActions(
     account: AccountInfo?,
+    compact: Boolean,
+    fillWidth: Boolean,
     onOpenFollowings: () -> Unit,
     onOpenCoinLog: () -> Unit,
     onOpenMessages: () -> Unit,
+    onSettingsClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val settingsLabel = stringResource(Res.string.settings_title)
     val segments = listOf(
         AccountSegmentSpec(
             icon = { tint, _ ->
@@ -732,19 +722,48 @@ private fun AccountActions(
             value = null,
             label = stringResource(Res.string.message_title),
             onClick = onOpenMessages,
-            weight = MessagesSegmentWeight,
+        ),
+        AccountSegmentSpec(
+            icon = { tint, _ ->
+                Icon(
+                    Icons.Outlined.Settings,
+                    contentDescription = null,
+                    tint = tint,
+                    modifier = Modifier.size(SegmentIconSize),
+                )
+            },
+            value = null,
+            label = settingsLabel,
+            tooltip = settingsLabel,
+            tooltipShortcut = "Ctrl+,",
+            onClick = onSettingsClick,
         ),
     )
     Row(
         horizontalArrangement = Arrangement.spacedBy(SegmentGap),
-        modifier = modifier.fillMaxWidth().height(IntrinsicSize.Min),
+        modifier = modifier.height(IntrinsicSize.Min),
     ) {
         segments.forEachIndexed { index, segment ->
-            AccountSegment(
-                spec = segment,
-                shape = segmentShape(index, segments.size),
-                modifier = Modifier.weight(segment.weight).fillMaxHeight(),
-            )
+            val segModifier = (if (fillWidth) Modifier.weight(1f) else Modifier).fillMaxHeight()
+            val itemContent: @Composable () -> Unit = {
+                AccountSegment(
+                    spec = segment,
+                    compact = compact,
+                    shape = segmentShape(index, segments.size),
+                    modifier = if (fillWidth) Modifier.fillMaxSize() else segModifier,
+                )
+            }
+            if (segment.tooltip != null) {
+                Box(modifier = segModifier) {
+                    BilbyTooltip(text = segment.tooltip, shortcut = segment.tooltipShortcut) {
+                        itemContent()
+                    }
+                }
+            } else {
+                Box(modifier = segModifier) {
+                    itemContent()
+                }
+            }
         }
     }
 }
@@ -753,46 +772,82 @@ private class AccountSegmentSpec(
     val icon: @Composable (tint: Color, cutout: Color) -> Unit,
     val value: String?,
     val label: String,
+    val tooltip: String? = null,
+    val tooltipShortcut: String? = null,
     val onClick: () -> Unit,
-    val weight: Float = 1f,
 )
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun AccountSegment(spec: AccountSegmentSpec, shape: Shape, modifier: Modifier = Modifier) {
+private fun AccountSegment(
+    spec: AccountSegmentSpec,
+    compact: Boolean,
+    shape: Shape,
+    modifier: Modifier = Modifier,
+) {
     val colorScheme = MaterialTheme.colorScheme
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair + 2.dp, Alignment.CenterHorizontally),
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier
-            .interactiveCard(
-                shape = shape,
-                baseColor = colorScheme.surfaceContainerHigh,
-                hoverColor = colorScheme.surfaceContainerHighest,
-            )
-            .clickable(role = Role.Button, onClick = spec.onClick)
-            .heightIn(min = SegmentMinHeight)
-            .padding(horizontal = Spacing.Tight),
-    ) {
-        spec.icon(colorScheme.onSurfaceVariant, colorScheme.surfaceContainerHigh)
-        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-            spec.value?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.titleSmallEmphasized.tabular,
-                    color = colorScheme.onSurface,
-                    maxLines = 1,
-                    modifier = Modifier.alignByBaseline(),
-                )
+    val cardModifier = modifier
+        .interactiveCard(
+            shape = shape,
+            baseColor = colorScheme.surfaceContainer,
+            hoverColor = colorScheme.surfaceContainerHigh,
+        )
+        .clickable(role = Role.Button, onClick = spec.onClick)
+        .heightIn(min = SegmentMinHeight)
+    if (compact) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically),
+            modifier = cardModifier.padding(horizontal = Spacing.Hair, vertical = Spacing.Tight),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+            ) {
+                spec.icon(colorScheme.onSurfaceVariant, colorScheme.surfaceContainer)
+                spec.value?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelLargeEmphasized.tabular,
+                        color = colorScheme.onSurface,
+                        maxLines = 1,
+                    )
+                }
             }
             Text(
                 text = spec.label,
-                style = MaterialTheme.typography.labelMediumEmphasized,
+                style = MaterialTheme.typography.labelSmall,
                 color = colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.alignByBaseline(),
             )
+        }
+    } else {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = cardModifier.padding(horizontal = Spacing.Cozy),
+        ) {
+            spec.icon(colorScheme.onSurfaceVariant, colorScheme.surfaceContainer)
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+                spec.value?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelLargeEmphasized.tabular,
+                        color = colorScheme.onSurface,
+                        maxLines = 1,
+                        modifier = Modifier.alignByBaseline(),
+                    )
+                }
+                Text(
+                    text = spec.label,
+                    style = MaterialTheme.typography.labelLargeEmphasized,
+                    color = colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.alignByBaseline(),
+                )
+            }
         }
     }
 }
@@ -803,12 +858,12 @@ private fun segmentShape(index: Int, count: Int): Shape {
     return RoundedCornerShape(topStart = start, bottomStart = start, topEnd = end, bottomEnd = end)
 }
 
+private val AccountActionsStackedBreakpoint = 480.dp
 private val SegmentOuterCorner = 16.dp
 private val SegmentInnerCorner = 4.dp
 private val SegmentGap = 2.dp
-private val SegmentIconSize = 22.dp
-private val SegmentCoinSize = 19.dp
-private const val MessagesSegmentWeight = 0.92f
+private val SegmentIconSize = 18.dp
+private val SegmentCoinSize = 16.dp
 private val SegmentMinHeight = 48.dp
 
 private fun formatSegmentValue(value: Double): String = when {
@@ -1099,8 +1154,8 @@ private fun ShelfTitle(
 @Composable
 private fun <T> Shelf(items: List<T>, card: @Composable (item: T, modifier: Modifier) -> Unit) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val available = (maxWidth - Spacing.Comfortable * 2).coerceAtLeast(ShelfCardMinWidth)
-        val columns = shelfColumns(available)
+        val available = (maxWidth - Spacing.Comfortable * 2).coerceAtLeast(1.dp)
+        val columns = rememberVideoGridColumnCount(maxWidth).coerceAtLeast(1)
         val cardWidth = (available - ShelfGap * (columns - 1)) / columns
         val rowState = rememberLazyListState()
         LazyRow(
@@ -1114,10 +1169,6 @@ private fun <T> Shelf(items: List<T>, card: @Composable (item: T, modifier: Modi
     }
 }
 
-private fun shelfColumns(width: Dp): Int =
-    ((width + ShelfGap) / (ShelfCardMinWidth + ShelfGap)).toInt().coerceAtLeast(1)
-
-private val ShelfCardMinWidth = 228.dp
 private val ShelfGap = Spacing.Cozy
 
 /**

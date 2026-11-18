@@ -1,6 +1,5 @@
 package dev.bilby.ui.feed
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -65,6 +64,8 @@ fun LiveNowSlot(
     val faces = liveUps.take(MaxStackedFaces)
     val totalLiveCount = count.coerceAtLeast(liveUps.size)
     val colors = MaterialTheme.colorScheme
+    // 胶囊自身带上下 LiveBadgeVerticalPadding，从外层上下边距扣掉同等高度，使「N 直播」文字底边与右侧 UP 名字完全齐平。
+    val outerSlotGap = (Spacing.Hair - LiveBadgeVerticalPadding).coerceAtLeast(0.dp)
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -75,57 +76,60 @@ fun LiveNowSlot(
                 hoverColor = colors.surfaceContainerLow,
             )
             .clickable(role = Role.Button, onClick = onClick)
-            .padding(vertical = Spacing.Hair, horizontal = LiveSlotInset)
+            .padding(
+                start = LiveSlotInset,
+                end = LiveSlotInset,
+                top = Spacing.Hair,
+                bottom = outerSlotGap,
+            )
             .width(liveSlotWidth(faces.size)),
     ) {
-        Box(
-            contentAlignment = Alignment.TopCenter,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(FrontFaceSize + LiveBadgeOverlapDrop),
-        ) {
-            LiveRingCapsule(faces = faces)
+        LiveRingCapsule(faces = faces)
 
-            Surface(
-                shape = CircleShape,
-                color = colors.primaryContainer,
-                contentColor = colors.onPrimaryContainer,
-                border = BorderStroke(BadgeHaloBorder, colors.surface),
-                modifier = Modifier.align(Alignment.BottomCenter),
+        Surface(
+            shape = CircleShape,
+            color = colors.primaryContainer,
+            contentColor = colors.onPrimaryContainer,
+            modifier = Modifier.padding(top = outerSlotGap),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                modifier = Modifier.padding(
+                    horizontal = LiveBadgeHorizontalPadding,
+                    vertical = LiveBadgeVerticalPadding,
+                ),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                    modifier = Modifier.padding(horizontal = LiveBadgeHorizontalPadding, vertical = LiveBadgeVerticalPadding),
-                ) {
-                    PlayingIndicator(
-                        active = true,
-                        color = colors.onPrimaryContainer,
-                        modifier = Modifier.size(LiveSlotPulseSize),
-                    )
-                    Text(
-                        text = stringResource(Res.string.feed_live_count_badge, totalLiveCount),
-                        style = MaterialTheme.typography.labelSmallEmphasized.tabular,
-                        color = colors.onPrimaryContainer,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                PlayingIndicator(
+                    active = true,
+                    color = colors.onPrimaryContainer,
+                    modifier = Modifier.size(LiveSlotPulseSize),
+                )
+                Text(
+                    text = stringResource(Res.string.feed_live_count_badge, totalLiveCount),
+                    style = MaterialTheme.typography.labelSmallEmphasized.tabular,
+                    color = colors.onPrimaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
 }
 
 /**
- * 2dp `primary` 描边的胶囊头像框:外高与右侧 [Dimens.AvatarStack](48dp)严格齐平,
- * 内部至多叠三张等尺寸圆头像,前一张压后一张并以底色描边切开相邻边缘。
+ * 2dp `primary` 描边的胶囊头像框:外高与右侧 [Dimens.AvatarStack](48dp) 严格齐平，
+ * 内部至多叠三张等尺寸圆头像，前一张压后一张并以底色描边切开相邻边缘。
  */
 @Composable
-private fun LiveRingCapsule(faces: List<LiveUpBrief>) {
+private fun LiveRingCapsule(
+    faces: List<LiveUpBrief>,
+    modifier: Modifier = Modifier,
+) {
     val colors = MaterialTheme.colorScheme
     Box(
         contentAlignment = Alignment.CenterStart,
-        modifier = Modifier
+        modifier = modifier
             .size(width = capsuleWidth(faces.size), height = FrontFaceSize)
             .clip(CircleShape)
             .background(colors.surfaceContainerLow)
@@ -216,10 +220,8 @@ private val InnerAvatarSize = FrontFaceSize - LiveRingInnerInset * 2
 private val AvatarOverlapStep = 22.dp
 private val FaceSeparatorWidth = 1.5.dp
 
-private val BadgeHaloBorder = 1.5.dp
-private val LiveBadgeOverlapDrop = 16.dp
 private val LiveBadgeHorizontalPadding = 7.dp
-private val LiveBadgeVerticalPadding = 1.5.dp
+private val LiveBadgeVerticalPadding = 2.dp
 private val LiveSlotPulseSize = 11.dp
 private val LivePulseSizeInList = 14.dp
 
