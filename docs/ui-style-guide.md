@@ -124,14 +124,13 @@
 
 1. **窄屏横排 `VideoRow` vs 宽屏纵向 `VideoGridCard`**：
    - 单列窄屏（`Compact` 或窄分栏）渲染拇指友好的横排 `VideoRow`（16:10 封面 `128..176dp`、`bodyLargeEmphasized` 两行标题、发布时间 + UP 名单行、`StatRow` 图标化计数）。
-   - 多列宽屏（`AdaptiveListContent` 下的 `Medium+` / `Expanded+`，最小列宽 `Dimens.VideoGridMinCellWidth = 248.dp`）渲染纵向 16:10 `VideoGridCard`（`14.dp` 封面圆角、`minLines = 2` 固定双行标题对齐同行基线、底栏 `20.dp` 头像 + 可点 UP 名 + `MetaSeparator` + 时间 + `StatRow` + `interactiveCard` 悬停底色）。
+   - 多列宽屏（`AdaptiveVideoGridContent` / `rememberVideoGridColumnCount` 下的 `Medium+`）按「设置 → 外观 → 每行视频数」（默认 5，3–7 可调）结合显示器全宽比例折算列数并渲染纵向 16:10 `VideoGridCard`（`14.dp` 封面圆角、`minLines = 2` 固定双行标题对齐同行基线、底栏 `20.dp` 头像 + 可点 UP 名 + `MetaSeparator` + 时间 + `StatRow` + `interactiveCard` 悬停底色）。
    - 窄屏行尾保留 `⋮` 溢出按钮（叠在元信息行右下角、不挤占标题宽度）；宽屏隐藏 `⋮`，统一由右键/长按 `ContextMenuBox` 弹出 `VideoCommonMenuItems`（下一条播放、加入播放队列、复制标题、复制 BV 号、分享/复制链接、查看个人空间）。
 2. **有界队列与编号引用统一走 `SegmentedListItem`**：
    - 播放队列（`EpisodeList`）每项为 `SegmentedListItem`（`surfaceContainer`，项间 `SegmentedGap`），当前播放项以 `secondaryContainer` 高亮配 `bodyMediumEmphasized` 标题；播放页内联队列底部以 `ShowAllRow` 底封瓦片（上 `4.dp` / 下 `16.dp` 圆角）收口并展示总条数。
    - 搜索助理回答（`AgentAnswerView`）底部出处列表使用带 `[1]`、`[2]` `primaryContainer` 编号徽章的 `SegmentedListItem` 卡片。
 3. **订阅流无描边三层色阶连发叠卡（`BurstStackedItem`）**：
-   - 同一 UP 主连续投稿折叠为三层纯色阶叠卡：前卡 `surfaceContainer`（`shapes.large`），中层露出 `4.dp` `surfaceContainerHigh`（内缩 `8.dp`），底层露出 `8.dp` `surfaceContainerHighest`（内缩 `16.dp`），**严禁使用 `1.dp` `outlineVariant` 线框描边**。
-   - 保留首条视频的 `chargingBadgeText`（「充电专属」）；点击主卡直接播放首条视频，底部独立交互条（「展开其余 N 条连发」）负责就地展开，展开后末尾配同色阶收起条。「上次看到这里」分界条采用居中 `CircleShape` `surfaceContainerHigh` 胶囊。
+   - 同一 UP 主连续投稿折叠为三层纯色阶叠卡：保持与普通视频行/卡片一致的紧凑高度不另占底部横条，以 `surfaceContainerLow` / `surfaceContainerHigh` / `surfaceContainerHighest` 轻错位叠放（零 `outlineVariant` 细线描边），封面角标标明「连发 N 条」（保留充电角标），点击直接就地展开，展开后末尾配同色阶收起卡片/条。「上次看到这里」分界条沿用满宽 `surfaceContainer` `shapes.medium` 提示条配主色向上箭头。
 4. **层叠文件夹封面（空间合集与收藏夹）**：
    - `CollectionsTab` 与 `FavFolderCover` 在 16:10 封面上方叠出阶梯状 `surfaceContainerHigh` 文件夹唇边，右下角配 `.tabular` 条数胶囊。
 
@@ -236,7 +235,7 @@ Compose 的 `SelectionContainer` 若直接套在可点击卡片外层或跨 `Laz
 - **`IntroTab` 单列表连续自然滚动与就地平滑展开（`VideoTabs.kt`）**：
   - 简介页自上而下是**同一条连续滚动的 `LazyColumn`**：`TitleBlock` → `UpRow` 容器卡 → 五格 `ActionButtonsRow` → 分 P 横条 → 内联播放队列预览。
   - **展开简介时绝不隐藏或卸载下方的播放队列**。视频标签在进页加载详情时即并发预热（`loadVideoTags()`），避免展开后二次撑高跳动；点击 `TitleBlock` 时，完整精确发布时刻（`yyyy-MM-dd HH:mm` `.tabular`）、禁止转载声明、富文本简介与标签行通过 `AnimatedVisibility`（空间弹簧 `expandVertically` + `fadeIn`）**就地单段平滑展开**，自然把下方卡片往下推。
-  - `TitleBlock` 内嵌的 `CopyableIdPill`（`BV` 号与 `AV` 号）在收起与展开两态下均可直接单击复制。
+  - `TitleBlock` 内嵌的 `CopyableIdPill`（`BV` 号）在收起与展开两态下均可直接单击复制；桌面端或非触屏指针模式下发表评论采用右栏底部就地停靠的 `InlineCommentComposer` 编辑卡，不再弹出居中白底模态框。
 
 ---
 
@@ -254,10 +253,12 @@ Compose 的 `SelectionContainer` 若直接套在可点击卡片外层或跨 `Laz
 | 窗口档位 | 起点 | 布局行为 |
 |---|---|---|
 | `Compact` | `< 600dp` | 底部三格导航栏，列表采用单列 `VideoRow`，二级面板走模态底部 `PaneSheet` |
-| `Medium` | `600dp` | 左侧切换 `NavigationRail`，`AdaptiveListContent` 列表切入多列纵向 `VideoGridCard` 网格 |
+| `Medium` | `600dp` | 左侧切换 `NavigationRail`，`AdaptiveVideoGridContent` 视频列表按全宽设定列数比例切入多列纵向 `VideoGridCard` 网格 |
 | `Expanded` 及以上 | `840dp` | 播放页/直播间拆左右双栏（右栏托管内嵌 `PaneSheet`），空间页动态可开持久化可调宽侧栏（`SidePanelLayout`），无宿主二级面板走悬浮 `ModalSideSheet`，设置与消息中心启用双栏主从场景 |
 
-- **阅读限宽 vs 列表网格**：`AdaptiveContent`（上限 `ReadableWidth = 1040.dp`）仅用于长文阅读与对话页（专栏、动态详情、评论楼、搜索对话）；所有视频与收藏集合页一律用 `AdaptiveListContent` 铺开多列网格；动态流宽屏走最小列宽 `DynamicColumnMinWidth = 400.dp` 的瀑布流。修饰符限宽牢记先写 `.widthIn(max = …)` 再写 `.fillMaxWidth()`。
+- **阅读限宽 vs 列表网格**：`AdaptiveContent`（上限 `ReadableWidth = 1040.dp`）仅用于长文阅读与对话页（专栏、动态详情、评论楼、搜索对话）；视频与合集网格页一律用 `AdaptiveVideoGridContent` / `rememberVideoGridColumnCount`（按显示器全宽设定列数比例折算）；非视频列表页走 `AdaptiveListContent`；动态流宽屏走最小列宽 `DynamicColumnMinWidth = 400.dp` 的瀑布流。修饰符限宽牢记先写 `.widthIn(max = …)` 再写 `.fillMaxWidth()`。
 - **桌面端统一悬浮岛框架与双栏分岛（`DesktopIslandFrame` & `ListDetailSceneStrategy`）**：
-  - 在桌面窗口（`LocalWindowCaption.current != null`）下，除全屏沉浸式的播放页与直播间外，根标签页与所有压栈子页面统一包裹在 `DesktopIslandFrame` 中：外框铺 `surfaceContainer` 底托，内嵌 `8.dp` 边距的 `shapes.large`（16dp）圆角内容岛（浅色取纯白 `surfaceContainerLowest`、深色取 `surface`），既让内容岛无分割线自然浮起，又保证自绘 Win32 窗口控制按钮（`WindowsCaption.kt` / `WindowFrame.kt`，关闭键悬停采用 Fluent 2 语义红 `#C42B1C`）在压栈与返回全过程中坐标纹丝不动。
-  - `ListDetailSceneStrategy`（设置、消息中心、UP 主推送）在 `surfaceContainer` 底托上留出 `8.dp` 分栏间隙，将左栏列表（`listPane`）与右栏详情（`detailPane`）各自裁成独立的 `shapes.large` 圆角岛，零 `1.dp` 竖向分割线。
+  - 在桌面窗口（`LocalWindowCaption.current != null`）下，除全屏沉浸态外，根标签页、压栈子页面以及宽屏双栏播放页（`VideoScreen`）与直播间（`LiveRoomScreen`）统一走内容岛架构：外框铺 `surfaceContainer` 底托与 `8.dp` 顶栏拖拽边及四周间隙；宽屏双栏播放页与直播间左侧整个播放器与右侧详情/聊天区（`DesktopIslandSurface`）分别收在独立的 `shapes.large`（16dp）圆角岛内并留出 `8.dp` 分栏间隙，与 `Home` 及 `ListDetailSceneStrategy` 保持一致（`WindowsCaption.kt` / `WindowFrame.kt` 关闭键悬停采用 Fluent 2 语义红 `#C42B1C`，切页全程窗口按钮坐标纹丝不动）。
+  - 在移动端（`LocalWindowCaption.current == null`）退回标准 M3 全出血 `surface` 页面与 `0.dp` 分栏间距；横屏双栏播放页与直播间由右侧详情/聊天面板的 `surface` 底色托底并裁去左侧黑色播放器右缘（`topEnd`/`bottomEnd` `shapes.large` 16dp），使右侧内容区自然包住视频画面。
+  - **播放器控件与输入模式分化**：触屏模式保留画面正中 `CenterPlayButton`；键鼠模式（`!LocalPointerSource.current.isTouchLike`）隐藏正中暂停按钮以免遮挡视频，改为底部控制栏最左端的 `ControlBarPlayButton`（具备 M3E 圆形↔圆角方块形变与 `primary`/`primaryContainer` 强调色）。倍速面板支持 ±0.05x 精细步进、连续无挡点滑杆与 2×4 常用预设；全屏底栏与顶栏常驻 `PlayerSettingsButton`，中间段在窄宽或大字号下优先折叠 chip 以保右侧关键开关不溢出。
+  - **订阅页顶栏、搜索着陆页、个人页与导航交互**：订阅页在「订阅」标题旁紧邻放置方案 C 小圆角刷新钮（`32.dp`、`10.dp` 圆角，`surfaceContainerLow` 配淡描边，仅键鼠模式显示），工具条移除夜间模式图标并将「推送」「关注动态」统一为同款方案 C 小圆角轻量按钮组（窄屏自动下沉）；搜索着陆页采用纯粹扁平四色几何 `Bilby` 字标；个人页顶部保留「我的」标题，移除右上角孤立设置图标，改以轻量无外框身份行并将「设置」并入四段式快捷动作胶囊（关注/硬币/消息/设置）；外观设置提供「预测性返回手势」开关。

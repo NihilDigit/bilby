@@ -189,19 +189,21 @@ the same breakpoints apply to a phone in landscape, a tablet and a desktop windo
   versions without that check sent 25 requests in three seconds into a -412.
 - **Persistent, resizable side panels use `components/SidePanelLayout`** (the space page's
   dynamics). Open state and width live in settings under a `SidePanelId`.
-- **List pages wrap themselves in `AdaptiveListContent`**: single-column `Compact` renders
-  `VideoRow`, while multi-column wide layouts drop the readable-width cap and render vertical
-  16:10 `VideoGridCard` cells (`Dimens.VideoGridMinCellWidth`). `AdaptiveContent`'s cap is for
-  reading pages only (article, dynamic detail, comment thread, search assistant).
+- **Video grid pages wrap themselves in `AdaptiveVideoGridContent`** (or `rememberVideoGridColumnCount`):
+  single-column `Compact` renders `VideoRow`, while `Medium+` scales proportionally from the
+  full-screen "Videos per row" setting (`LocalVideoGridColumns`, default 5) using
+  `rememberDisplayWidthDp()` and renders vertical 16:10 `VideoGridCard` cells. General
+  non-video list pages use `AdaptiveListContent`; `AdaptiveContent`'s cap is for reading pages
+  only (article, dynamic detail, comment thread, search assistant).
 - **List and detail side by side is a scene, not page state.** material3 adaptive's
   `ListDetailSceneStrategy` (set up in `BilbyApp`) joins the entries at the top of the back stack
-  tagged `listPane` / `detailPane` with the same scene key (each clipped into an independent
-  `shapes.large` island separated by an `8.dp` `surfaceContainer` gap, matching `DesktopIslandFrame`
-  on non-immersive desktop routes so custom window caption buttons never shift on push/pop):
-  messages and UP pushes with a whisper or comment thread, settings with its pages. It does not
-  check that a detail sits on its list, so a detail is tagged only when opened from the list
-  (`inListPane` on the key); a whisper opened from a space page would otherwise get an empty left
-  pane.
+  tagged `listPane` / `detailPane` with the same scene key (on desktop `LocalWindowCaption.current != null`,
+  each is clipped into an independent `shapes.large` island separated by an `8.dp` `surfaceContainer`
+  gap matching `DesktopIslandFrame`; on mobile/Android, panes render full-bleed standard M3 surfaces
+  with `0.dp` partition spacing): messages and UP pushes with a whisper or comment thread, settings
+  with its pages. It does not check that a detail sits on its list, so a detail is tagged only when
+  opened from the list (`inListPane` on the key); a whisper opened from a space page would otherwise
+  get an empty left pane.
 
 ## Modules and platforms
 
