@@ -1,5 +1,5 @@
 # Bilby 桌面端 release 的 ProGuard 规则。只做裁剪:不优化、不混淆(理由见 build.gradle.kts)。
-# Bilby 自己的代码不按名字查找类或成员(见 CLAUDE.md);下面保留的都是依赖里按名字反射、
+# Bilby 自己的代码不按名字查找类或成员(见 AGENTS.md);下面保留的都是依赖里按名字反射、
 # 经 JNI 回调或经 ServiceLoader 装载的东西,裁掉它们不会编译失败,只会在运行到那一步时崩。
 -dontobfuscate
 

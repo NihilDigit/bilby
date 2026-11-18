@@ -1,38 +1,43 @@
 # Bilby 界面风格指南
 
-写给往这个仓库里加界面的人。只写**我们已经落地的判断**：token 取什么值、组件选哪个、多端窗口怎么排、复制与无障碍怎么接，以及本项目故意偏离 M3 的地方和理由。M3 文档已经说清楚的通用规范不复述，需要时查阅本地镜像 `m3-material-mirror/` 或 [m3.material.io](https://m3.material.io)。
+写给往这个仓库里加界面的人。只写**已经落地的判断**：token 取什么值、组件选哪个、多端窗口怎么排、动效与无障碍怎么接，以及本项目故意偏离 M3 的地方和理由。M3 通用规范不复述，需要时查阅本地镜像 `m3-material-mirror/` 或 [m3.material.io](https://m3.material.io)。
 
-> **优先级：解析出来的构件 > 本地文档镜像 > 本文档。**
+> **优先级：解析出来的构件（`javap`） > 本地文档镜像 / `rtx` > 本文档。**
 >
 > 某个符号在当前版本里存不存在、签名是什么，以 Gradle 缓存里的 aar/jar 字节码为准（见 §0）；界面与本文档不一致时，先确认是不是新改动推翻了旧结论，并把本文档同步改掉。
 
 ---
 
-## 0. M3 Expressive 与双端编译基线
+## 0. M3 Expressive 与双端统一编译基线
 
-`gradle/libs.versions.toml` 同时面向两个 JVM 目标编译 `commonMain`：
+Android 与桌面端已统一到同一代 Compose 与 Material 3 API 表面（移除旧 `M3Compat` 分支）：
 
-- **Android**：`androidx.compose:compose-bom-alpha:2026.07.01`，解析为 **material3 1.5.0-alpha25**。
-- **Desktop（Windows x64 / ARM64）**：由 mediamp 的 Skiko 锁在 **Compose Multiplatform 1.12.1**，解析为 **material3 1.5.0-alpha22**。
+- **Android**：`androidx.compose:compose-bom-beta:2026.11.00`，解析为 `ui/foundation 1.13.0-rc01` + **material3 `1.5.0-rc01`** + `navigation3 1.2.0` + `adaptive 1.3.0`。
+- **Desktop（Windows x64 / ARM64）**：**Compose Multiplatform `1.13.0-rc01`**（Skiko `0.156.1`），同样解析为 **material3 `1.5.0-rc01`** + `navigation3 1.2.0` + `adaptive 1.3.0`。
+- **编译器稳定性**：`compose_stability.conf` 为不可变领域模型、`java.time.*`、`kotlinx.coroutines.flow.*`、`StringResource` 与只读 `List`/`Set`/`Map` 快照提供稳定标记。
 
 `commonMain` 里的每一处 UI 代码都必须同时通过 `:shared:compileAndroidMain` 与 `:shared:compileKotlinDesktop`。
 
 ### 核心 Expressive API 依赖表
 
-| API | 用途与落点 | 双端兼容注意 |
+| API | 用途与落点 | 双端兼容与动效注意 |
 |---|---|---|
 | `MaterialExpressiveTheme` | `Theme.kt`（`BilbyTheme`、`BilbyNightSanctuaryTheme`、`PlayerTheme`） | 置上 `LocalUsingExpressiveTheme` 并注入 `MotionScheme` |
-| `MotionScheme.expressive()` / `standard()` | 全局组件弹簧动效唯一来源（播放器内层换用 `standard()` 防过冲） | 配合 `@OptIn(ExperimentalMaterial3ExpressiveApi::class)` |
+| `MotionScheme.expressive()` / `standard()` | 触控端用 `expressive()`，桌面端（`platformUsesStandardMotion`）与播放器内层用 `standard()` | 桌面入口配 `AppMotionScale` 跟随系统「减弱动效」 |
 | `Shapes` 十档圆角刻度 | `Shape.kt`（含 `largeIncreased` 20dp、`extraLargeIncreased` 32dp、`extraExtraLarge` 48dp） | 收回主题槽，组件侧不写裸圆角字面量 |
 | `Typography` 15 档 `*Emphasized` | `Type.kt` 中文层级字重表（`SemiBold` / `Medium`）与 `.tabular` 等宽数字扩展 | 必须与基线 15 档同步套用中文行高与零字距 |
-| `LoadingIndicator` | `States.kt`（`FullScreenLoading`、`LoadingSpinner`、`InlineProgress`） | 替代不确定进度的 `CircularProgressIndicator` |
-| `PullToRefreshDefaults.LoadingIndicator` | `RefreshBox` 与评论区下拉刷新 | 必须传 contained 款并与手势共享同一个 `PullToRefreshState` |
-| `SegmentedListItem` + `ListItemDefaults.segmented*` | `SettingsRows.kt`、内联播放队列（`EpisodeList`）、助理编号引用卡（`AgentAnswerView`） | Desktop `alpha22` 仅有带 `onClick` / `selected` / `checked` 的三个重载，无点击静态行走 `StaticSettingRow` |
+| `ButtonGroup` + `ToggleButton` | 2–5 项单选切换（`SortRow`、`CommentSection`、播放/听视频/直播分栏、个人页四段动作条、设置选项） | 配 `ButtonGroupDefaults.connected*ButtonShapes()` |
+| `SplitButtonLayout` | 「听全部」主动作 + 队列加入选项菜单（`CollectionScreen`、`OfflineScreen`、`SpaceScreen`） | `TonalLeadingButton` + `TonalTrailingButton` |
+| `HorizontalFloatingToolbar` | 多选批量操作底栏（历史/稍后看/离线/收藏夹）、`ArticleScreen` 阅读工具条、`DraftQueueBar` | 居底悬浮，避免挤占顶栏 |
+| `HorizontalMultiBrowseCarousel` | `BilbyCarousel` / `ProfileCarousel`（个人页历史、稍后看、收藏夹、离线书架） | `rememberReducedMotion()` 时退回 `HorizontalUncontainedCarousel` |
+| `LoadingIndicator` | `States.kt`（`FullScreenLoading`、`LoadingSpinner`、`InlineProgress`） | 减弱动效下退回静止 `StaticLoadingToken`（`Cookie9Sided`） |
+| `PullToRefreshBox` + `PullToRefreshDefaults.LoadingIndicator` | `RefreshBox` 与评论区下拉刷新 | 仅触控/触控笔启用手势，与手势共享同一个 `PullToRefreshState` |
+| `SegmentedListItem` + `ListItemDefaults.segmented*` | `SettingsRows.kt`、内联播放队列（`EpisodeList`）、`LiveNowSheet`、助理编号引用卡 | 双端 API 一致，使用 `SegmentedGap` |
 
 ### API 探针与字节码核验
 
 - 探针位于 `shared/src/androidHostTest/kotlin/dev/bilby/ui/M3ApiProbe.kt`（放 test source set，绝不放 `main`），升级依赖后跑 `:shared:compileAndroidHostTest` 与 `:shared:compileKotlinDesktop`。
-- 不要凭记忆或官网现行文档猜 alpha 签名：解开缓存里的 `classes.jar` 用 `javap` 查真实方法签名与实验注解。
+- 不要凭记忆猜签名：解开缓存里的 `classes.jar` 用 `javap` 查真实方法签名与实验注解。
 
 ---
 
@@ -89,7 +94,7 @@
 
 ### 1.4 形状刻度与悬停微交互（`ui/theme/Shape.kt`、`Motion.kt`）
 
-- 圆角按容器信息密度取 M3 十档刻度：`extraSmall` 4dp（角标、ID 胶囊）、`small` 8dp（紧凑缩略图、内嵌子块）、`medium` 12dp（代码块、引用块、动态内层附件块）、`large` 16dp（桌面内容岛、模态侧边面板、楼中楼块、分组摘要头卡、纵向网格卡悬停底）、`largeIncreased` 20dp（动态外卡、侧栏 `panelCard`、胶囊多行输入框、助理回答卡）、`extraLarge` 28dp（底部面板、评论输入浮层顶角、个人页身份卡、扫码登录卡、草稿队列浮条）、`extraExtraLarge` 48dp。
+- 圆角按容器信息密度取 M3 十档刻度：`extraSmall` 4dp（角标、ID 胶囊）、`small` 8dp（紧凑缩略图、内嵌子块）、`medium` 12dp（代码块、引用块、动态内层附件块）、`large` 16dp（桌面内容岛、模态侧边面板、楼中楼块、分组摘要头卡、纵向网格卡悬停底）、`largeIncreased` 20dp（动态外卡、侧栏 `panelCard`、胶囊多行输入框、助理回答卡）、`extraLarge` 28dp（底部面板、评论输入浮层顶角、个人页身份卡、轮播卡片、扫码登录卡）、`extraExtraLarge` 48dp。
 - 嵌套圆角遵守 optical roundness（外圆角 − 内边距 ≈ 内圆角，最小保底 `4.dp`）。
 - **`Modifier.interactiveCard(shape, baseColor, hoverColor, enableScale)`**：在 `PointerEventPass.Final` 被动监听指针进入/离开与主键按下，**绝不消费事件**。桌面悬停平滑过渡底色，按下提供 `0.985f` 空间弹簧微缩（系统开启「减弱动效」时自动关闭缩放），与外层 `ContextMenuBox` 及内层 `clickable` / `combinedClickable` 无缝共存。
 
@@ -102,21 +107,23 @@
 
 ## 2. 组件选型与核心界面形态
 
-### 2.1 排序、筛选与列表页摘要控制卡
+### 2.1 排序、筛选、分裂按钮与浮动工具条
 
-- **视图/模式切换**（固定 2–5 项）：使用相连的 `ToggleButton` 组（选用 `tonalToggleButtonColors` 控制视觉重量，不用已废弃的 M2/旧版 `SegmentedButton`）。
-- **排序选择**：使用 `SortMenu`（紧凑下拉菜单）或轻量 `SortRow`，同一上下文保持统一重量。
-- **二级合集/列表页统一摘要控制卡**：`CollectionScreen`、`FavFolderScreen`、`ToViewScreen`、`OfflineScreen` 顶部统一使用 `surfaceContainer` + `shapes.large` 头卡，将 `.tabular` 容量/条数统计、「听全部」`FilledTonalButton` 与 `SortMenu` 收拢在同一容器内。
+- **视图/模式切换**（固定 2–5 项）：使用 `ButtonGroup` +相连的 `ToggleButton` / `FilledTonalToggleButton`（配 `ButtonGroupDefaults.connected*ButtonShapes()` 与 `ConnectedSpaceBetween`，不用已废弃的 M2 `SegmentedButton`）。
+- **排序选择**：使用 `SortRow`；选项 ≤ 3 档且调用处传 `preferButtonGroup = true` 时直接展开为 1-tap `ButtonGroup`，超过 3 档或在紧凑顶栏内收成 `SortMenu`。
+- **「听全部」复合入口**：`CollectionScreen`、`OfflineScreen`、`SpaceScreen` 使用 `SplitButtonLayout`（`TonalLeadingButton` 直接启动听全部，`TonalTrailingButton` 展开加入队列选项菜单）。
+- **二级合集/列表页统一摘要控制卡**：`CollectionScreen`、`FavFolderScreen`、`ToViewScreen`、`OfflineScreen` 顶部统一使用 `surfaceContainer` + `shapes.large` 头卡，将 `.tabular` 容量/条数统计、操作钮与排序收拢在同一容器内。
+- **底部浮动工具条（`HorizontalFloatingToolbar`）**：用于历史/稍后再看/离线/收藏夹多选批量操作底栏、`ArticleScreen` 阅读底栏（大纲/回顶/浏览器打开）与 `DraftQueueBar`。多选进入后顶栏只保留退出与计数，批量动作统一落到底部拇指区。
 - **动态横向筛选带**：分 P 条、视频标签（`TagToken`）、夜间模式 UP 主筛选（`NightUpFilterBar`）统一使用无描边 `CircleShape` tonal 胶囊。
 
 ### 2.2 Tabs 分工
 
-- **Primary Tabs**：页面顶栏之下的主内容切换（如空间页「投稿 / 动态 / 合集」），使用 `PrimaryTabRow` 且关掉默认底线（`divider = {}`）。
+- **Primary Tabs**：页面顶栏之下的主内容切换（如空间页「投稿 / 动态 / 合集」），使用 `PrimaryTabRow` / `PrimaryScrollableTabRow` 且关掉默认底线（`divider = {}`）。
 - **Secondary Tabs**：页面局部区域内的平级分页（如播放页「简介 / 评论」），使用 `SecondaryTabRow`，指示条通过 `currentPage + currentPageOffsetFraction` 与 `HorizontalPager` 连续跟手插值。
 
 ### 2.3 播放页五格分段动作栏（`ActionButtonsRow`）
 
-- 播放页 `UpRow`（包在 `surfaceContainer` + `shapes.large` 容器卡内，与上下区块严格对齐 `16.dp` 外边距）下方为五格等宽 M3E 分段动作栏：**点赞（长按 1500ms 触发一键三连进度填充与回弹） / 投币 / 收藏 / 稍后看 / 听视频**。
+- 播放页 `UpRow`（包在 `surfaceContainer` + `shapes.large` 容器卡内，与上下区块严格对齐 `16.dp` 外边距）下方为五格等宽动作栏：**点赞（长按 1500ms 触发一键三连进度填充与回弹） / 投币 / 收藏 / 稍后看 / 听视频**。
 - 选中态切换实心图标与强调容器色，计数统一用 `labelSmallEmphasized.tabular`，点击与三连完成带空间弹簧缩放反馈。
 - 点赞、投币、收藏、稍后再看全部采用**本地乐观更新**，绝不因写操作重拉整页详情导致数字二次闪烁。
 
@@ -125,12 +132,11 @@
 1. **窄屏横排 `VideoRow` vs 宽屏纵向 `VideoGridCard`**：
    - 单列窄屏（`Compact` 或窄分栏）渲染拇指友好的横排 `VideoRow`（16:10 封面 `128..176dp`、`bodyLargeEmphasized` 两行标题、发布时间 + UP 名单行、`StatRow` 图标化计数）。
    - 多列宽屏（`AdaptiveVideoGridContent` / `rememberVideoGridColumnCount` 下的 `Medium+`）按「设置 → 外观 → 每行视频数」（默认 5，3–7 可调）结合显示器全宽比例折算列数并渲染纵向 16:10 `VideoGridCard`（`14.dp` 封面圆角、`minLines = 2` 固定双行标题对齐同行基线、底栏 `20.dp` 头像 + 可点 UP 名 + `MetaSeparator` + 时间 + `StatRow` + `interactiveCard` 悬停底色）。
-   - 窄屏行尾保留 `⋮` 溢出按钮（叠在元信息行右下角、不挤占标题宽度）；宽屏隐藏 `⋮`，统一由右键/长按 `ContextMenuBox` 弹出 `VideoCommonMenuItems`（下一条播放、加入播放队列、复制标题、复制 BV 号、分享/复制链接、查看个人空间）。
+   - 窄屏行尾保留 `⋮` 溢出按钮；宽屏隐藏 `⋮`，统一由右键/长按 `ContextMenuBox` 弹出 `VideoCommonMenuItems`。
 2. **有界队列与编号引用统一走 `SegmentedListItem`**：
-   - 播放队列（`EpisodeList`）每项为 `SegmentedListItem`（`surfaceContainer`，项间 `SegmentedGap`），当前播放项以 `secondaryContainer` 高亮配 `bodyMediumEmphasized` 标题；播放页内联队列底部以 `ShowAllRow` 底封瓦片（上 `4.dp` / 下 `16.dp` 圆角）收口并展示总条数。
-   - 搜索助理回答（`AgentAnswerView`）底部出处列表使用带 `[1]`、`[2]` `primaryContainer` 编号徽章的 `SegmentedListItem` 卡片。
+   - 播放队列（`EpisodeList`）、`LiveNowSheet`、设置子组（`SettingsGroup`）与搜索助理出处列表（`AgentAnswerView`）统一采用 `SegmentedListItem`（`surfaceContainer`，项间 `SegmentedGap`），当前播放项以 `secondaryContainer` 高亮配 `bodyMediumEmphasized` 标题。
 3. **订阅流无描边三层色阶连发叠卡（`BurstStackedItem`）**：
-   - 同一 UP 主连续投稿折叠为三层纯色阶叠卡：保持与普通视频行/卡片一致的紧凑高度不另占底部横条，以 `surfaceContainerLow` / `surfaceContainerHigh` / `surfaceContainerHighest` 轻错位叠放（零 `outlineVariant` 细线描边），封面角标标明「连发 N 条」（保留充电角标），点击直接就地展开，展开后末尾配同色阶收起卡片/条。「上次看到这里」分界条沿用满宽 `surfaceContainer` `shapes.medium` 提示条配主色向上箭头。
+   - 同一 UP 主连续投稿折叠为三层纯色阶叠卡：保持与普通视频行/卡片一致的紧凑高度不另占底部横条，以 `surfaceContainerLow` / `surfaceContainerHigh` / `surfaceContainerHighest` 轻错位叠放（零描边），封面角标标明「连发 N 条」（保留充电角标），点击直接就地展开，展开后末尾配同色阶收起卡片/条。「上次看到这里」分界条沿用满宽 `surfaceContainer` `shapes.medium` 提示条配主色向上箭头。
 4. **层叠文件夹封面（空间合集与收藏夹）**：
    - `CollectionsTab` 与 `FavFolderCover` 在 16:10 封面上方叠出阶梯状 `surfaceContainerHigh` 文件夹唇边，右下角配 `.tabular` 条数胶囊。
 
@@ -150,24 +156,24 @@
   - 列表底部常驻 `CircleShape` `surfaceContainerHigh` 胶囊触发条（`CommentPromptBar`），**不订阅 `WindowInsets.ime`**，软键盘升降期间底层几百条富文本评论零重新测量。
   - 点击后打开独立窗口 `CommentComposerDialog`（`surfaceContainerLow` 底色、`shapes.extraLarge` 28dp 顶角、`widthIn(max = 640.dp)`），由 `SettledKeyboardHeightTracker` 1:1 锁定软键盘与表情面板高度，切换无跳闪；草稿按回复对象 `rpid` 独立保存。
 
-### 2.5 顶栏、空间头图 Hero 与个人页身份卡
+### 2.5 顶栏、空间头图 Hero 与个人页书架
 
-- **常规页面**：使用紧凑单行 `BilbyTopBar`（路牌定位，配 `pinnedScrollBehavior`）。首页顶栏标题「订阅」采用 `headlineSmallEmphasized`，右侧动作区提供手动「进入夜间模式」（`Icons.Outlined.Bedtime`）、刷新、推送与关注动态入口；常访横条左侧 `LiveNowSlot` 采用 `2.dp` `primary` 直播光环加底部重叠 `primaryContainer`「N 直播」胶囊。
+- **常规页面**：使用紧凑单行 `BilbyTopBar`（路牌定位，配 `pinnedScrollBehavior`）。首页顶栏标题「订阅」采用 `headlineSmallEmphasized`，右侧动作区提供「推送」「关注动态」入口（键鼠模式旁置刷新钮）；常访横条左侧 `LiveNowSlot` 采用 `2.dp` `primary` 直播光环胶囊加底部重叠 `primaryContainer`「N 直播」胶囊。
 - **个人空间全幅头图 Hero（`SpaceScreen`）**：
   - 顶部铺开 `148.dp`（窄屏）/ `188.dp`（宽屏）`top_photo` 横幅（上覆顶栏可读性暗角，下接向 `surface` 过渡的渐变；无头图时退回柔和主题色阶渐变）。
-  - `72.dp` `AvatarHero` 带 `3.dp` `surface` 描边跨压横幅下沿，右侧基线对齐关注按钮；下方展示 `headlineSmallEmphasized` 昵称、`LevelBadge`、单击即复制的 `UID` 胶囊、`.tabular` 粉丝/投稿计数、点击就地展开的个人签名，以及高辨识度 `primaryContainer` 直播间入口卡。
-  - `SpaceTopBar` 与滚动联动：滚过头图姓名后平滑淡入迷你头像与 UP 名。
-- **「我的」页身份卡与自然比例书架（`ProfileScreen`）**：
-  - 顶部为 `shapes.extraLarge`（28dp）`AccountCard`（`72.dp` `AvatarHero`、`headlineSmallEmphasized` 昵称、`LevelBadge`、可复制 `UID` 胶囊，以及「关注 / 硬币 / 消息」三格 `surfaceContainerHigh` 入口条——**「消息」严禁画任何未读数或红点**）。
-  - 下方历史、稍后再看、收藏夹、离线缓存横架按自然 16:10 卡片比例纵向滚动（最小卡宽 `228.dp`），不将多组书架硬塞进单屏高度。
+  - `72.dp` `AvatarHero` 带 `3.dp` `surface` 描边跨压横幅下沿，右侧基线对齐关注按钮；下方展示 `headlineSmallEmphasized` 昵称、`LevelBadge`、单击即复制的 `UID` 胶囊、`.tabular` 粉丝/投稿计数、点击就地展开的个人签名，以及 `primaryContainer` 直播间入口卡。
+  - `SpaceTopBar` 与滚动联动：滚过头图姓名后平滑淡入迷你头像与 UP 名。宽屏下投稿页签工具条与标签行并排（`showControls = !wide`），绝不出现双份「听全部 / 排序」按钮。
+- **「我的」页身份卡与 M3E 书架旋转木马（`ProfileScreen`）**：
+  - 顶部为 `shapes.extraLarge`（28dp）身份区（`72.dp` `AvatarHero`、`headlineSmallEmphasized` 昵称、`LevelBadge`、可复制 `UID` 胶囊）与四段式 `ButtonGroup`（「关注 / 硬币 / 消息 / 设置」——**「消息」严禁画任何未读数或红点**）。
+  - 下方历史、稍后再看、收藏夹、离线缓存书架统一采用 **`ProfileCarousel`（基于 `HorizontalMultiBrowseCarousel` + `shapes.extraLarge` `maskClip` 与竖向滚轮横向浏览驱动）**，减弱动效时退回等宽 `HorizontalUncontainedCarousel`。
 
 ### 2.6 统一二级面板契约（`ui/components/PaneSheet.kt` & `PlayerSidePanel.kt`）
 
 **全应用所有二级面板一律走 `PaneSheet`，严禁直接调 `ModalBottomSheet`。** `PaneSheet` 按所在上下文自动呈现三种形态，并统一渲染标题栏（`title` + `headerTrailing`）、固定副头栏（`subheader`）、弹性主体（`Modifier.weight(1f, fill = false)`）与粘性底栏（`footer`）：
 
 1. **双栏右栏内嵌面板（`SidePaneLayer`，`inPane == true`）**：播放页、直播间双栏布局下从右栏滑入，顶栏为 `[返回箭头] [title] [headerTrailing]`（并自动承接桌面窗口拖拽与右上角控制键）；左栏画面加透明 `SidePaneDismissLayer` 拦截点击收起面板，不压暗视频画面（`persistent = true` 的常驻面板除外）。
-2. **宽屏悬浮模态侧边面板（`Expanded+` 且无右栏宿主，`ModalSideSheet`）**：`surfaceContainerLow` 底色、`shapes.large`（16dp）圆角、最大宽 `400.dp`、四周 `16.dp` 悬浮边距、背景 `0.32f` 遮罩、自动避让 `barsAndCutout.union(ime)`，单行 `56.dp` 顶栏统一渲染 `[title] [headerTrailing] [Close]`，内部禁止出现横向滚动条（如缓存画质用 `FlowRow` 折行）。
-3. **窄屏模态底部面板（`Compact` / `Medium`，`ModalBottomSheet`）**：`surfaceContainerLow` 底色、`shapes.extraLarge`（28dp）顶角、高度上限 `maxHeightFraction`（默认 `0.88f`），内置 `WheelStopsAtSheet` 防止鼠标滚轮把面板拖停在半路。
+2. **宽屏与紧凑高度横屏悬浮模态侧边面板（`rememberBilbyWindowSize().useTwoPaneMediaLayout`，即 `Expanded+` 或 `Medium` 且高度 `< 480dp`，`ModalSideSheet`）**：`surfaceContainerLow` 底色、`shapes.large`（16dp）圆角、最大宽 `400.dp`、四周 `16.dp` 悬浮边距、背景 `0.32f` 遮罩、自动避让 `barsAndCutout.union(ime)`，单行 `56.dp` 顶栏统一渲染 `[title] [headerTrailing] [Close]`，内部禁止出现横向滚动条（如缓存画质用 `FlowRow` 折行）。
+3. **其余窄屏模态底部面板（`ModalBottomSheet`）**：`surfaceContainerLow` 底色、`shapes.extraLarge`（28dp）顶角、高度上限 `maxHeightFraction`（默认 `0.88f`），内置 `WheelStopsAtSheet` 防止鼠标滚轮把面板拖停在半路。
 
 **两条面板铁律**：
 - **带确认/保存按钮、输入框或短内容的面板必须 `skipPartiallyExpanded = true`（默认值）**，并将底部按钮或输入条放进 `footer = { ... }`（`SheetFooterSlot` 用 `surfaceContainer` 色阶承托并自动处理 `navigationBarsPadding()` 与 `imePadding()`），绝不允许停在 50% 半开态把操作按钮截出屏幕外。
@@ -187,12 +193,13 @@ Compose 的 `SelectionContainer` 若直接套在可点击卡片外层或跨 `Laz
    - 专栏代码块（`ArticleBlock.Code`）顶部固定带语言名与一键「复制代码」图标按钮的 `surfaceContainerHigh` 工具条，下方等宽代码区支持横向滚动与直接框选。
 4. **回执去重**：统一经 `rememberCopyAction()` / `LocalCopyNotice` 触发；仅在桌面端与 Android 12L 及以下弹应用内提示（`NeedsCopyNotice`），Android 13+ 交给系统剪贴板预览浮层，不叠双份提示。
 
-### 2.7b 评论、动态、专栏与设置细则
+### 2.7b 评论、动态、专栏、状态与破坏性确认细则
 
 - **评论区（`CommentSection.kt`）**：`NameLine` 取 `labelLargeEmphasized`（`onSurfaceVariant`），正文 14/24sp，楼中楼整组收进 `surfaceContainer` + `shapes.large`（16dp）单容器（24dp 头像、14/22sp），「查看全部 N 条回复」打开带粘性 `footer` 的 `CommentThreadSheet`。
 - **动态卡片（`DynamicCardView.kt`）**：外卡 `surfaceContainer` + `shapes.largeIncreased`（20dp，可打开态配 `interactiveCard` 悬停反馈）；内嵌视频（`DynamicContent.Video`）、直播、番剧、预约、投票与转发卡统一收进 `blockStyle`（外层内块 `surfaceContainerHigh` + `shapes.medium`，转发内层子块 `surfaceContainerHighest` + `shapes.small`）。整卡只有「直播中」与摘要「阅读全文 / 展开」两处可点入口使用 `primary`。
 - **专栏阅读（`ArticleScreen.kt`）**：`headlineMediumEmphasized` 标题、16/28sp 宽松正文行高；正文插图一律单张整宽按原比例顺序排列（长图按 16:10 裁引子，点开进 `ImageViewer` 通篇左右翻看），不压成动态九宫格。
-- **等待指示（`States.kt`）**：200ms 内不闪指示器；不确定进度统一用 M3E `LoadingIndicator` 四档（`FullScreenLoading` 48dp、`LoadingSpinner` 24dp、`InlineProgress`、`ListFooter`）与 `RefreshBox`；确定百分比（更新下载、离线缓存单行下载进度、稍后再看容量条）用 `LinearProgressIndicator`；列表首载用同构脉冲骨架屏（`Skeleton.kt`）。
+- **等待指示与静止空态（`States.kt`）**：200ms 内不闪指示器；不确定进度统一用 M3E `LoadingIndicator`（`FullScreenLoading` 48dp、`LoadingSpinner` 24dp、`InlineProgress`、`ListFooter`，减弱动效退回静止 `StaticLoadingToken`）与 `RefreshBox`；确定百分比用 `LinearProgressIndicator`；列表首载用同构脉冲骨架屏（`Skeleton.kt`）。空态与错误态采用完全静止的 `StateBackdropIcon`（`Cookie9Sided` 色块底托），禁止任何空闲呼吸动画。
+- **不可逆破坏性确认（`DestructiveConfirmButton`）**：删除缓存/历史/评论、清空列表或移出分组等不可逆操作确认钮统一使用 `DestructiveConfirmButton`（`colorScheme.error` / `onError`），不用低辨识度纯文字按钮。
 - **设置页（`SettingsScreen.kt`、`SettingsPages.kt`）**：「设置只调怎么做，不给违背产品边界的功能开关」。一级分类配 `36.dp` 圆角方形图标底托（双栏选中态切 `primaryContainer`）；各子页统一收进 `SettingsGroup`（`SegmentedListItem`）；检查更新行有新版本时升为实心 `Button`，**严禁挂 `Badge()` 红点**；API key 默认遮蔽且绝不进任何日志。
 
 ---
@@ -224,41 +231,44 @@ Compose 的 `SelectionContainer` 若直接套在可点击卡片外层或跨 `Laz
 ### 4.2 反成瘾靠结构，全应用零红点
 
 - 无推荐流、无相关视频侧栏；「找相关」仅在配置好助理模型时显示，且必须由用户显式点击发起，答完即止，不留「再找一批」。
-- 空态与错误态只陈述事实（配 `Inbox` / `ErrorOutline` 状态图标区分「本来为空」与「加载失败」），不给「去逛逛」导流入口。
+- 空态与错误态只陈述事实（静态 `StateBackdropIcon` 配 `Inbox` / `ErrorOutline` 区分「本来为空」与「加载失败」），不给「去逛逛」导流入口。
 - **全应用严禁出现任何红点、未读数字或提醒类 `Badge`**：`LevelBadge`、「置顶」、「充电专属」、「转载」属于静态属性标签，不随时间制造「有新内容快回来看」的焦虑；凡属未读提醒类的标记一律不做。
-- **夜间静息模式（`NightModeScreen`）**：支持定时自动生效与首页顶栏一键手动进入（进场通过 `SystemActions.showToast` 发轻量系统级提示，桌面端为无焦点穿透胶囊浮层），期间仅展示白名单 UP 主投稿与离线缓存，临时退出或缩减时段须经 30 秒按住确认（`NightExitHoldSheet`）。
+- **夜间静息模式（`NightModeScreen`）**：支持定时自动生效与首页顶栏/设置手动进入（进场通过 `SystemActions.showToast` 发轻量系统级提示，桌面端为无焦点穿透胶囊浮层），期间仅展示白名单 UP 主投稿与离线缓存，头卡光环保持完全静止；临时退出或缩减时段须经 30 秒按住确认（100% 圆形 `NightExitHoldSheet` / `NightHoldDial`）。
 
-### 4.3 播放页三态同构、连续自然滚动简介与快捷播放条
+### 4.3 播放页三态同构、听视频唱盘与快捷播放条
 
-- **听视频（`ListenScreen`）是播放页内部的状态分支，与全屏同构，绝不拆成独立导航目的地**；全局唯一播放器归 `AudioPlaybackService`（Android）与 `DesktopPlaybackHost`（桌面）所有。听视频页唱盘背后带柔和主题径向光晕，曲目名用 `headlineSmallEmphasized`，底部常驻可点按展开的 `surfaceContainerHigh` `shapes.extraLarge` 队列抽屉。
+- **听视频（`ListenScreen`）是播放页内部的状态分支，与全屏同构，绝不拆成独立导航目的地**；全局唯一播放器归 `AudioPlaybackService`（Android）与 `DesktopPlaybackHost`（桌面）所有。
+  - `DiscView` 保持 **100% `CircleShape` 真黑胶唱片**（静态径向光晕，禁止改为多边形或空闲呼吸动画）；转动惯性仅在播放或减速收尾时驱动，暂停落稳后立即停止帧回调。
+  - 双栏模式且右侧队列可见时，左侧 `DiscView` 隐藏重复来源胶囊（`showSourcePill = !(expandedWindow && hasQueue)`）。
 - **暂停下翻评论时的快捷播放条（`QuickPlayBar.kt`）**：画面仅在暂停且浏览评论区时随上滑收起，顶部留驻 `64.dp` 高的 `surfaceContainer` 快捷条（`44×28.dp` 圆角封面缩略图、`titleSmallEmphasized` 单行标题、胶囊播放键、底沿 `3.dp` 进度条）；点横条本身只展开画面，点播放键才恢复出声。
 - **`IntroTab` 单列表连续自然滚动与就地平滑展开（`VideoTabs.kt`）**：
   - 简介页自上而下是**同一条连续滚动的 `LazyColumn`**：`TitleBlock` → `UpRow` 容器卡 → 五格 `ActionButtonsRow` → 分 P 横条 → 内联播放队列预览。
   - **展开简介时绝不隐藏或卸载下方的播放队列**。视频标签在进页加载详情时即并发预热（`loadVideoTags()`），避免展开后二次撑高跳动；点击 `TitleBlock` 时，完整精确发布时刻（`yyyy-MM-dd HH:mm` `.tabular`）、禁止转载声明、富文本简介与标签行通过 `AnimatedVisibility`（空间弹簧 `expandVertically` + `fadeIn`）**就地单段平滑展开**，自然把下方卡片往下推。
-  - `TitleBlock` 内嵌的 `CopyableIdPill`（`BV` 号）在收起与展开两态下均可直接单击复制；桌面端或非触屏指针模式下发表评论采用右栏底部就地停靠的 `InlineCommentComposer` 编辑卡，不再弹出居中白底模态框。
+  - 桌面端或非触屏指针模式下发表评论采用右栏底部就地停靠的 `InlineCommentComposer` 编辑卡，不再弹出居中白底模态框。
 
 ---
 
-## 5. 动效分工（`ui/theme/Motion.kt`）
+## 5. 动效分工与因果约束（`ui/theme/Motion.kt`）
 
-- **整屏转场用缓动与时长（`Motion` tween）**：压栈/返回走五分之一屏滑动加淡入淡出（400ms，`EmphasizedDecelerate` / `EmphasizedAccelerate`）；预测式返回通过 `SeekableTransitionState` 跟手映射 `StandardDecelerate`；根目的地切换先快速淡出再淡入（`Short3` 150ms + `Medium1` 250ms，不横滑）。开启系统「减弱动效」时转场自动退化为纯淡入淡出。
-- **组件内交互用物理弹簧（`MaterialTheme.motionScheme`）**：面板滑入、简介展开、按钮形变、卡片悬停按压（`interactiveCard`）统一取主题 `MotionScheme` 的 spatial / effects spring，不在业务代码里散写裸 `tween(300)`。
+- **整屏转场用缓动与时长（`Motion` tween）**：压栈/返回走五分之一屏滑动加淡入淡出（触控端 `Medium4` 400ms `EmphasizedDecelerate` / `EmphasizedAccelerate`；桌面指针端收紧为 `DesktopEnter` 220ms 进入 / `Short3` 150ms 退出）；预测式返回通过 `SeekableTransitionState` 跟手映射 `StandardDecelerate`；根目的地切换先快速淡出再淡入（`Short3` 150ms + `Medium1`/`DesktopEnter`，不横滑）。开启系统「减弱动效」时转场自动退化为纯淡入淡出。
+- **组件内交互用物理弹簧（`MaterialTheme.motionScheme`）**：面板滑入、简介展开、按钮形变、卡片悬停按压（`interactiveCard`）统一取主题 `MotionScheme` 的 spatial / effects spring，不在业务代码里散写裸 `tween(300)`。触控端取 `MotionScheme.expressive()`，桌面端取 `MotionScheme.standard()`（并与 `Main.kt` 的 `AppMotionScale` 联动跟随 Windows 系统动画开关）。
+- **严格禁止空闲/环境呼吸循环**：连续循环动画（`rememberInfiniteTransition` / `infiniteRepeatable`）只允许用于**真实活跃态**——加载中的 `SkeletonPulse`、播放中/直播中的 `PlayingIndicator`、播放中的 `SeekBar` 波浪相位——且**全部必须以 `!rememberReducedMotion()` 门控**，静止或暂停后必须撤出组合，不得让桌面端持续按刷新率空转。空态、夜间头卡、静态标识或暂停唱盘严禁挂载空闲呼吸循环。
 
 ---
 
 ## 6. 响应式窗口与桌面悬浮岛架构
 
-布局只看窗口实时宽度（`rememberBilbyWindowSize()` 读取 `LocalWindowInfo.containerSize`），绝不按设备类型硬编码分支：
+布局只看窗口实时尺寸（`rememberBilbyWindowSize()` / `rememberIsHeightCompact()` 读取 `LocalWindowInfo.containerSize`），绝不按设备类型硬编码分支：
 
-| 窗口档位 | 起点 | 布局行为 |
+| 窗口档位 | 断点条件 | 布局行为 |
 |---|---|---|
 | `Compact` | `< 600dp` | 底部三格导航栏，列表采用单列 `VideoRow`，二级面板走模态底部 `PaneSheet` |
-| `Medium` | `600dp` | 左侧切换 `NavigationRail`，`AdaptiveVideoGridContent` 视频列表按全宽设定列数比例切入多列纵向 `VideoGridCard` 网格 |
-| `Expanded` 及以上 | `840dp` | 播放页/直播间拆左右双栏（右栏托管内嵌 `PaneSheet`），空间页动态可开持久化可调宽侧栏（`SidePanelLayout`），无宿主二级面板走悬浮 `ModalSideSheet`，设置与消息中心启用双栏主从场景 |
+| `Medium` | `600dp .. < 840dp` | 左侧切换 `NavigationRail`，`AdaptiveVideoGridContent` 切入多列纵向 `VideoGridCard` 网格；当高度 `< 480dp`（`useTwoPaneMediaLayout`）时，播放页/直播间/听视频切入双栏，二级面板升为 `ModalSideSheet` |
+| `Expanded+` | `≥ 840dp` | 播放页/直播间/听视频拆左右双栏（右栏托管内嵌 `PaneSheet`），空间页动态可开持久化可调宽侧栏（`SidePanelLayout`），无宿主二级面板走悬浮 `ModalSideSheet`，设置与消息中心启用双栏主从场景 |
 
 - **阅读限宽 vs 列表网格**：`AdaptiveContent`（上限 `ReadableWidth = 1040.dp`）仅用于长文阅读与对话页（专栏、动态详情、评论楼、搜索对话）；视频与合集网格页一律用 `AdaptiveVideoGridContent` / `rememberVideoGridColumnCount`（按显示器全宽设定列数比例折算）；非视频列表页走 `AdaptiveListContent`；动态流宽屏走最小列宽 `DynamicColumnMinWidth = 400.dp` 的瀑布流。修饰符限宽牢记先写 `.widthIn(max = …)` 再写 `.fillMaxWidth()`。
+- **双栏与页面零冗余双入口**：双栏场景下左栏与右栏不重复放置同一功能的入口或胶囊（例如 `ListenScreen` 双栏隐藏左侧重复来源胶囊、`NightModeScreen` 空态不重复放置顶栏设置图标、`SpaceScreen` 宽屏将排序/听全部收归标签行、`BilbyApp` 设置/消息双栏自动保持唯一焦点）。
 - **桌面端统一悬浮岛框架与双栏分岛（`DesktopIslandFrame` & `ListDetailSceneStrategy`）**：
-  - 在桌面窗口（`LocalWindowCaption.current != null`）下，除全屏沉浸态外，根标签页、压栈子页面以及宽屏双栏播放页（`VideoScreen`）与直播间（`LiveRoomScreen`）统一走内容岛架构：外框铺 `surfaceContainer` 底托与 `8.dp` 顶栏拖拽边及四周间隙；宽屏双栏播放页与直播间左侧整个播放器与右侧详情/聊天区（`DesktopIslandSurface`）分别收在独立的 `shapes.large`（16dp）圆角岛内并留出 `8.dp` 分栏间隙，与 `Home` 及 `ListDetailSceneStrategy` 保持一致（`WindowsCaption.kt` / `WindowFrame.kt` 关闭键悬停采用 Fluent 2 语义红 `#C42B1C`，切页全程窗口按钮坐标纹丝不动）。
-  - 在移动端（`LocalWindowCaption.current == null`）退回标准 M3 全出血 `surface` 页面与 `0.dp` 分栏间距；横屏双栏播放页与直播间由右侧详情/聊天面板的 `surface` 底色托底并裁去左侧黑色播放器右缘（`topEnd`/`bottomEnd` `shapes.large` 16dp），使右侧内容区自然包住视频画面。
-  - **播放器控件与输入模式分化**：触屏模式保留画面正中 `CenterPlayButton`；键鼠模式（`!LocalPointerSource.current.isTouchLike`）隐藏正中暂停按钮以免遮挡视频，改为底部控制栏最左端的 `ControlBarPlayButton`（具备 M3E 圆形↔圆角方块形变与 `primary`/`primaryContainer` 强调色）。倍速面板支持 ±0.05x 精细步进、连续无挡点滑杆与 2×4 常用预设；全屏底栏与顶栏常驻 `PlayerSettingsButton`，中间段在窄宽或大字号下优先折叠 chip 以保右侧关键开关不溢出。
-  - **订阅页顶栏、搜索着陆页、个人页与导航交互**：订阅页在「订阅」标题旁紧邻放置方案 C 小圆角刷新钮（`32.dp`、`10.dp` 圆角，`surfaceContainerLow` 配淡描边，仅键鼠模式显示），工具条移除夜间模式图标并将「推送」「关注动态」统一为同款方案 C 小圆角轻量按钮组（窄屏自动下沉）；搜索着陆页采用纯粹扁平四色几何 `Bilby` 字标；个人页顶部保留「我的」标题，移除右上角孤立设置图标，改以轻量无外框身份行并将「设置」并入四段式快捷动作胶囊（关注/硬币/消息/设置）；外观设置提供「预测性返回手势」开关。
+  - 在桌面窗口（`LocalWindowCaption.current != null`）下，除全屏沉浸态外，根标签页、压栈子页面以及双栏播放页（`VideoScreen`）与直播间（`LiveRoomScreen`）统一走内容岛架构：外框铺 `surfaceContainer` 底托与 `8.dp` 顶栏拖拽边及四周间隙；双栏播放页、直播间与 `ListDetailSceneStrategy` 左右两栏分别收在独立的 `shapes.large`（16dp）`DesktopIslandSurface` 圆角岛内并留出 `8.dp` 分栏间隙（`WindowsCaption.kt` / `WindowFrame.kt` 关闭键悬停采用 Fluent 2 语义红 `#C42B1C`，切页全程窗口按钮坐标纹丝不动）。
+  - 在移动端（`LocalWindowCaption.current == null`）退回标准 M3 全出血 `surface` 页面与 `0.dp` 分栏间距；横屏双栏播放页与直播间由右侧详情/聊天面板的 `surface` 底色托底并裁去左侧黑色播放器右缘（`topEnd`/`bottomEnd` `shapes.large` 16dp）。
+- **播放器控件与输入模式分化**：触屏模式保留画面正中 `CenterPlayButton`；键鼠模式（`!LocalPointerSource.current.isTouchLike`）隐藏正中暂停按钮以免遮挡视频，改为底部控制栏最左端的 `ControlBarPlayButton`（具备 M3E 圆形↔圆角方块形变与 `primary`/`primaryContainer` 强调色），桌面端弹出菜单采用无过冲的 `snap()` / 短淡入动效主题。
