@@ -15,29 +15,13 @@
 <img alt="Material 3 Expressive" src="https://img.shields.io/badge/Material%203%20Expressive-4A5C92?style=flat-square&logo=materialdesign&logoColor=white">
 </p>
 
-Bilby is a bilibili client for Android and Windows (`x64` and `ARM64`).
+Bilby is a lightweight, high-performance bilibili client for Android and Windows (`x64` and `ARM64`).
 
-Built with Kotlin Multiplatform and Compose Multiplatform, both platforms share the interface and
-business logic, following Material 3 Expressive and a five-tier window-size adaptive layout: compact
-windows use a bottom navigation bar and modal bottom sheets, while medium and wider windows switch to
-a slim navigation rail, rounded desktop content islands, and resizable or two-pane side panels.
-
-- **Android**: Jetpack Compose interface with a Media3 background playback service, system media
-  controls, edge-to-edge display, and predictive back.
-- **Windows**: Compose Multiplatform on Azul Zulu 25, with a D3D11→D3D12 shared-texture video ring
-  for zero-copy compositing and GPU reset recovery, native Win32 caption and Snap Layouts
-  integration, SMTC media controls, `F11` / `Alt+Enter` fullscreen and picture-in-picture, and
-  pure-Java zstd delta and full in-app updates.
-
-The interface keeps distractions down: what you see comes from the creators you follow and from your
-own searches, with no recommendation feed, no persistent related videos, and no unread badges.
+Built around Material Design with a responsive layout, it is tailored for both mouse and keyboard on desktop and touch on mobile. There is no recommendation feed, no persistent related videos, and no unread badges—everything shown comes from creators you follow and your own searches.
 
 ## Feed and library
 
-The home feed shows video uploads, posts, and articles from creators you follow in chronological
-order, with currently live creators at the top and no recommendation stream. The library organises
-history, watch later, favourites, and offline cache into horizontal carousels, while Night Mode
-restricts the view during scheduled hours to whitelisted creators and offline content.
+Shows videos, posts, and articles from creators you follow in chronological order, with no recommendation feed. The library brings together history, watch later, favourites, and offline cache, with an optional Night Mode whitelist.
 
 <p align="center">
   <picture>
@@ -63,10 +47,7 @@ restricts the view during scheduled hours to whitelisted creators and offline co
 
 ## Agent search
 
-Connect any OpenAI-compatible endpoint. The assistant runs multi-step searches across the site and
-reads video descriptions and top comments to select cited candidates, carrying only the current
-request without injecting watch history. On wide windows, the assistant opens as a persistent side
-panel alongside standard search results.
+With an OpenAI-compatible endpoint configured, the assistant searches across bilibili and reads descriptions and top comments to filter candidate videos, opening alongside standard search results on wide screens.
 
 <p align="center">
   <picture>
@@ -92,10 +73,7 @@ panel alongside standard search results.
 
 ## Playback and related search
 
-Playback brings collections, multi-part videos, watch later, and manually assembled drafts into a
-single finite queue, with danmaku and SponsorBlock segment skipping. There is no persistent
-related-videos rail: "Find related" runs a one-shot search from an explicit tap, docking as a
-right-hand pane on wide windows and opening as a modal bottom sheet on compact windows.
+Collections, multi-part videos, and watch later play in a unified queue with danmaku and segment skipping. Playback has no persistent related-videos rail; tapping "Find related" runs a one-shot search from the current video.
 
 <p align="center">
   <picture>
@@ -121,9 +99,7 @@ right-hand pane on wide windows and opening as a modal bottom sheet on compact w
 
 ## Listening
 
-Listening mode switches in place inside the player without reloading the stream or interrupting the
-queue, integrating with Android system media controls (screen-off playback, lock screen, and headset
-buttons) and Windows SMTC. Subtitles follow line by line with tap-to-seek, alongside a sleep timer.
+Switch seamlessly between watching and listening without reloading, with background playback and system media controls. Subtitles follow line by line with tap-to-seek, alongside a sleep timer.
 
 <p align="center">
   <picture>
@@ -156,18 +132,13 @@ buttons) and Windows SMTC. Subtitles follow line by line with tap-to-seek, along
 
 ## Install
 
-Download a build from [Releases](https://github.com/NihilDigit/bilby/releases/latest). Every
-binary is built by GitHub Actions from the source in this repository.
+Download from [Releases](https://github.com/NihilDigit/bilby/releases/latest). Every package is built from source by GitHub Actions.
 
-- **Android**: requires Android 10 or later. Pick the APK for your device's architecture, or
-  `universal` if you are not sure.
-- **Windows**: requires 64-bit Windows 10 or later, with separate builds for `x64` and `ARM64`
-  (pick `arm64` on Snapdragon and other ARM devices).
-  - `.msi`: installs into your user profile, needs no administrator rights, and updates in
-    the app afterwards.
-  - `.zip`: portable; unzip it and run `Bilby.exe`.
-- **Agent setup (optional)**: agent search needs an OpenAI-compatible endpoint. Enter the API
-  address and key under Settings → Assistant; everything else works without it.
+- **Android**: Android 10+, pick the APK for your architecture (`universal` if unsure).
+- **Windows**: 64-bit Windows 10+, with separate `x64` and `ARM64` builds (pick `arm64` on Snapdragon and other ARM devices).
+  - `.msi`: installs into your user profile without administrator rights and supports in-app updates.
+  - `.zip`: portable build; extract and run `Bilby.exe`.
+- **Agent setup (optional)**: enter an OpenAI-compatible API address and key under Settings → Assistant; everything else works without it.
 
 ## Contributing
 
