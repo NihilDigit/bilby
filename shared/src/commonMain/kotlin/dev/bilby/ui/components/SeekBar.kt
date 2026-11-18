@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -90,6 +91,10 @@ private val TouchHeight = Dimens.MinTouchTarget
  *
  * 拖拽中只回调 [onSeekTo] 不真 seek,由调用方在 [onSeekFinished] 时一次完成:
  * 每帧 seek 会让播放器不停丢缓冲重新起播,表现为拖不动。
+ *
+ * **拖动是相对位移,不是绝对落点。** 手指落在哪儿,滑块不跳过去 —— 它按手指挪了多少走多少,
+ * 起点是按下那一刻的当前位置。触控区有 48dp 高而槽只有 3dp,落在离滑块几毫米的地方并不
+ * 是想"跳到那儿",只是想"攥住这条"。想直接跳就点(不挪动的那种,走 tap)。
  */
 @Composable
 fun SeekBar(
@@ -193,6 +198,8 @@ fun SeekBar(
         return if (usable <= 0f) 0f else ((this - insetPx) / usable).coerceIn(0f, 1f)
     }
     val fraction = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+    // 拖动起点要的是按下那一刻的读数:pointerInput 里捕获的是启动时的值,经 state 取新的。
+    val latestFraction by rememberUpdatedState(fraction)
     val bufferedFraction =
         if (duration > 0) (bufferedPosition.toFloat() / duration).coerceIn(0f, 1f) else 0f
     val label = stringResource(Res.string.player_progress)
@@ -242,11 +249,14 @@ fun SeekBar(
             }
             .pointerInput(duration) {
                 if (duration <= 0) return@pointerInput
+                var dragStartFraction = 0f
+                var accumulatedX = 0f
                 detectHorizontalDragGestures(
-                    onDragStart = { offset ->
+                    onDragStart = {
                         dragging = true
+                        dragStartFraction = latestFraction
+                        accumulatedX = 0f
                         onSeekStart()
-                        onSeekTo(offset.x.toFraction().toPosition(duration))
                     },
                     onDragEnd = {
                         dragging = false
@@ -256,8 +266,13 @@ fun SeekBar(
                         dragging = false
                         onSeekFinished()
                     },
-                    onHorizontalDrag = { change, _ ->
-                        onSeekTo(change.position.x.toFraction().toPosition(duration))
+                    onHorizontalDrag = { _, dragAmount ->
+                        accumulatedX += dragAmount
+                        val usable = widthPx - insetPx * 2
+                        if (usable > 0f) {
+                            val target = dragStartFraction + accumulatedX / usable
+                            onSeekTo(target.coerceIn(0f, 1f).toPosition(duration))
+                        }
                     },
                 )
             }
