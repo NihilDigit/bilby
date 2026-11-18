@@ -1,24 +1,30 @@
 package dev.bilby.ui.search
 
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -27,18 +33,23 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.FilledTonalToggleButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Tab
+import androidx.compose.material3.TabIndicatorScope
+import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.ToggleButtonShapes
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,10 +60,13 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp as dpLerp
 import dev.bilby.data.SearchArticle
 import dev.bilby.data.SearchUser
 import dev.bilby.data.SearchVideo
@@ -63,6 +77,7 @@ import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.CoverAspectRatio
+import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.PersonRowSkeleton
@@ -85,6 +100,7 @@ import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.rememberVideoGridColumnCount
+import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.interactiveCard
@@ -96,6 +112,7 @@ import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.StringResource
 
 /** 结果区的全部动作。搜索 tab 和标签结果页各自接到自己的 ViewModel 上。 */
+@Stable
 class SearchResultActions(
     val onTabSelected: (SearchTab) -> Unit,
     val onOrderChange: (SearchOrder) -> Unit,
@@ -145,6 +162,7 @@ private val UserOrders = SearchUserOrder.entries.map { it to it.labelRes }
  *
  * **三栏可以左右划**,和空间页、播放页的简介/评论一样由 pager 承载;标签行和 pager 双向同步。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun SearchResults(
     state: NormalSearchState,
@@ -171,60 +189,113 @@ internal fun SearchResults(
 
     val selectTab: (Int) -> Unit = { index -> scope.launch { pagerState.animateScrollToPage(index) } }
     val currentPageTab = tabs[pagerState.currentPage]
+    val density = LocalDensity.current
+    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    var containerWidth by remember { mutableStateOf(0.dp) }
+    val resolvedWidth = if (containerWidth > 0.dp) {
+        containerWidth
+    } else if (wide) {
+        Breakpoints.Expanded
+    } else {
+        Breakpoints.Medium - 1.dp
+    }
+    val joined = resolvedWidth >= JoinedHeaderMinWidth
 
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        // 够宽时栏名和筛选并成一行:栏名按字宽靠左,筛选在右端,和视频页宽屏的简介/评论同一种
-        // 标签栏。窄了就是通栏标签,筛选下到每一页顶上。按这一块的实际宽度判,不按窗口:宽屏
-        // 上助理侧栏打开时主区可以只剩四百多 dp。
-        val joined = maxWidth >= JoinedHeaderMinWidth
-        Column(modifier = Modifier.fillMaxSize()) {
-            if (joined) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    PrimaryScrollableTabRow(
-                        selectedTabIndex = pagerState.currentPage,
-                        edgePadding = 0.dp,
-                        divider = {},
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        tabs.forEachIndexed { index, tab ->
-                            Tab(
-                                selected = pagerState.currentPage == index,
-                                onClick = { selectTab(index) },
-                                text = { Text(stringResource(tab.labelRes)) },
-                            )
-                        }
-                    }
-                    FilterChips(
-                        tab = currentPageTab,
-                        state = state,
-                        actions = actions,
-                        modifier = Modifier.padding(end = Spacing.Comfortable),
+    val tabItems: @Composable () -> Unit = {
+        tabs.forEachIndexed { index, tab ->
+            val selected = pagerState.currentPage == index
+            Tab(
+                selected = selected,
+                onClick = { selectTab(index) },
+                text = {
+                    Text(
+                        text = stringResource(tab.labelRes),
+                        style = if (selected) {
+                            MaterialTheme.typography.titleSmallEmphasized
+                        } else {
+                            MaterialTheme.typography.titleSmall
+                        },
                     )
-                }
-            } else {
-                // 不要默认那条通栏分割线,理由同空间页的标签栏。
-                PrimaryTabRow(selectedTabIndex = pagerState.currentPage, divider = {}) {
-                    tabs.forEachIndexed { index, tab ->
-                        Tab(
-                            selected = pagerState.currentPage == index,
-                            onClick = { selectTab(index) },
-                            text = { Text(stringResource(tab.labelRes)) },
-                        )
-                    }
-                }
-            }
-            HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).touchOnlyPaging()) { page ->
-                ResultPage(
-                    tab = tabs[page],
-                    state = state,
-                    actions = actions,
-                    layout = PagedLayout.Grid(columns),
-                    showFilters = !joined,
-                    bottomPadding = bottomPadding,
-                )
-            }
+                },
+            )
         }
     }
+    val tabIndicator: @Composable TabIndicatorScope.() -> Unit = {
+        SearchPagerTabIndicator(pagerState = pagerState)
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .onSizeChanged { containerWidth = with(density) { it.width.toDp() } },
+    ) {
+        if (joined) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PrimaryScrollableTabRow(
+                    selectedTabIndex = pagerState.currentPage,
+                    edgePadding = 0.dp,
+                    indicator = tabIndicator,
+                    divider = {},
+                    tabs = tabItems,
+                    modifier = Modifier.weight(1f),
+                )
+                FilterChips(
+                    tab = currentPageTab,
+                    state = state,
+                    actions = actions,
+                    modifier = Modifier.padding(end = Spacing.Comfortable),
+                )
+            }
+        } else {
+            // 不要默认那条通栏分割线,理由同空间页的标签栏。
+            PrimaryTabRow(
+                selectedTabIndex = pagerState.currentPage,
+                indicator = tabIndicator,
+                divider = {},
+                tabs = tabItems,
+            )
+        }
+        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).touchOnlyPaging()) { page ->
+            ResultPage(
+                tab = tabs[page],
+                state = state,
+                actions = actions,
+                layout = PagedLayout.Grid(columns),
+                showFilters = !joined,
+                bottomPadding = bottomPadding,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TabIndicatorScope.SearchPagerTabIndicator(pagerState: PagerState) {
+    TabRowDefaults.PrimaryIndicator(
+        width = Dp.Unspecified,
+        modifier = Modifier.tabIndicatorLayout { measurable, constraints, tabPositions ->
+            if (tabPositions.isEmpty()) {
+                layout(0, 0) {}
+            } else {
+                val pos = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
+                    .coerceIn(0f, tabPositions.lastIndex.toFloat())
+                val low = pos.toInt().coerceIn(0, tabPositions.lastIndex)
+                val high = (low + 1).coerceAtMost(tabPositions.lastIndex)
+                val frac = pos - low
+                val lowWidth = tabPositions[low].contentWidth.coerceAtLeast(SearchTabIndicatorMinWidth)
+                val highWidth = tabPositions[high].contentWidth.coerceAtLeast(SearchTabIndicatorMinWidth)
+                val lowX = tabPositions[low].left + (tabPositions[low].width - lowWidth) / 2
+                val highX = tabPositions[high].left + (tabPositions[high].width - highWidth) / 2
+                val indicatorWidth = dpLerp(lowWidth, highWidth, frac).roundToPx()
+                val indicatorX = dpLerp(lowX, highX, frac).roundToPx()
+                val placeable = measurable.measure(
+                    constraints.copy(minWidth = indicatorWidth, maxWidth = indicatorWidth),
+                )
+                layout(constraints.maxWidth, constraints.maxHeight) {
+                    placeable.placeRelative(indicatorX, constraints.maxHeight - placeable.height)
+                }
+            }
+        },
+    )
 }
 
 /** 栏名与筛选并成一行所需的宽度:三个标签的最小宽加上视频栏的四枚筛选 chip。 */
@@ -266,6 +337,7 @@ private fun FilterChips(
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun <T> MenuChip(
     options: List<Pair<T, StringResource>>,
@@ -275,36 +347,55 @@ private fun <T> MenuChip(
 ) {
     var open by remember { mutableStateOf(false) }
     val selectedLabel = options.firstOrNull { it.first == selected }?.second ?: return
+    val active = selected != default
+    val motionScheme = if (LocalPointerSource.current.isTouchLike) {
+        MaterialTheme.motionScheme
+    } else {
+        SearchDesktopMenuMotionScheme
+    }
     Box {
-        FilterChip(
-            selected = selected != default,
-            onClick = { open = true },
-            label = { Text(stringResource(selectedLabel)) },
-            trailingIcon = {
-                Icon(
-                    Icons.Filled.ArrowDropDown,
-                    contentDescription = null,
-                    modifier = Modifier.size(FilterChipDefaults.IconSize),
-                )
-            },
-        )
-        DropdownMenu(
-            expanded = open,
-            onDismissRequest = { open = false },
-            shape = MenuDefaults.shape,
-            containerColor = MenuDefaults.containerColor,
+        FilledTonalToggleButton(
+            checked = active,
+            onCheckedChange = { open = true },
+            shapes = ToggleButtonShapes(
+                shape = CircleShape,
+                pressedShape = MaterialTheme.shapes.small,
+                checkedShape = MaterialTheme.shapes.medium,
+            ),
+            contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
         ) {
-            options.forEach { (value, label) ->
-                val isSelected = value == selected
-                DropdownMenuItem(
-                    text = { Text(stringResource(label)) },
-                    onClick = {
-                        open = false
-                        onSelect(value)
-                    },
-                    trailingIcon = if (isSelected) menuSelectedMark else null,
-                    modifier = Modifier.selectedSemantics(isSelected),
-                )
+            Text(
+                text = stringResource(selectedLabel),
+                maxLines = 1,
+                softWrap = false,
+            )
+            Spacer(Modifier.width(Spacing.Hair))
+            Icon(
+                Icons.Filled.ArrowDropDown,
+                contentDescription = null,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+        }
+        MaterialExpressiveTheme(motionScheme = motionScheme) {
+            DropdownMenu(
+                expanded = open,
+                onDismissRequest = { open = false },
+                shape = MenuDefaults.shape,
+                containerColor = MenuDefaults.containerColor,
+            ) {
+                options.forEachIndexed { index, (value, label) ->
+                    val isSelected = value == selected
+                    DropdownMenuItem(
+                        onClick = {
+                            open = false
+                            onSelect(value)
+                        },
+                        text = { Text(stringResource(label)) },
+                        shape = menuItemShape(index, options.size),
+                        trailingContent = if (isSelected) menuSelectedMark else null,
+                        modifier = Modifier.selectedSemantics(isSelected),
+                    )
+                }
             }
         }
     }
@@ -408,26 +499,38 @@ private fun VideoResults(
 ) {
     val videos = state.videos
     val wideWindow = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    val density = LocalDensity.current
+    var containerWidth by remember { mutableStateOf(0.dp) }
+    val resolvedWidth = if (containerWidth > 0.dp) {
+        containerWidth
+    } else if (wideWindow) {
+        Breakpoints.Expanded
+    } else {
+        Breakpoints.Medium - 1.dp
+    }
+    val gridCols = rememberVideoGridColumnCount(resolvedWidth)
+    val useGrid = gridCols > 1
+    val effectiveLayout = if (useGrid) {
+        PagedLayout.Grid(GridCells.Fixed(gridCols))
+    } else {
+        PagedLayout.SingleColumn
+    }
+    val effectivePadding = if (useGrid) {
+        PaddingValues(
+            start = Spacing.Tight - GridCellOuterPadding,
+            end = Spacing.Tight - GridCellOuterPadding,
+            top = Spacing.Hair,
+            bottom = bottomPadding + Spacing.Comfortable + navigationBarsBottom(),
+        )
+    } else {
+        contentPadding
+    }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val gridCols = rememberVideoGridColumnCount(maxWidth)
-        val useGrid = gridCols > 1
-        val effectiveLayout = if (useGrid) {
-            PagedLayout.Grid(GridCells.Fixed(gridCols))
-        } else {
-            PagedLayout.SingleColumn
-        }
-        val effectivePadding = if (useGrid) {
-            PaddingValues(
-                start = Spacing.Tight - GridCellOuterPadding,
-                end = Spacing.Tight - GridCellOuterPadding,
-                top = Spacing.Hair,
-                bottom = bottomPadding + Spacing.Comfortable + navigationBarsBottom(),
-            )
-        } else {
-            contentPadding
-        }
-
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onSizeChanged { containerWidth = with(density) { it.width.toDp() } },
+    ) {
         PagedColumn(
             layout = effectiveLayout,
             items = videos.items,
@@ -460,7 +563,12 @@ private fun VideoResults(
                 { VideoRowSkeleton() }
             },
         ) { video ->
-            val rowUi = video.toRowUi()
+            val dateText = formatDate(video.publishedAtEpochSeconds)
+            val playText = formatCount(video.playCount)
+            val danmakuText = formatCount(video.danmakuCount)
+            val rowUi = remember(video, dateText, playText, danmakuText) {
+                video.toRowUi(dateText = dateText, playText = playText, danmakuText = danmakuText)
+            }
             val menu: @Composable ColumnScope.(close: () -> Unit) -> Unit = { close ->
                 VideoCommonMenuItems(
                     bvid = video.bvid,
@@ -577,8 +685,13 @@ private fun ArticleResultRow(
             )
         },
     ) { openMenu ->
+        val articleBadge = stringResource(Res.string.feed_article_badge)
+        val viewsMeta = stringResource(Res.string.search_article_views, formatCount(article.viewCount))
+        val rowUi = remember(article, articleBadge, viewsMeta) {
+            article.toRowUi(articleBadge = articleBadge, viewsMeta = viewsMeta)
+        }
         VideoRow(
-            item = article.toRowUi(),
+            item = rowUi,
             onClick = onClick,
             onLongClick = openMenu,
         )
@@ -667,16 +780,19 @@ private fun UserResultRow(user: SearchUser, onClick: () -> Unit) {
     }
 }
 
-@Composable
-private fun SearchVideo.toRowUi() = VideoRowUi(
+private fun SearchVideo.toRowUi(
+    dateText: String?,
+    playText: String?,
+    danmakuText: String?,
+) = VideoRowUi(
     title = title,
     coverUrl = coverUrl,
     durationText = durationText,
     upName = upName,
     // 搜索结果里发布时间是判据之一(教程类尤其看新旧),和动态、空间保持同一行形态。
-    dateText = formatDate(publishedAtEpochSeconds),
-    playText = formatCount(playCount),
-    danmakuText = formatCount(danmakuCount),
+    dateText = dateText,
+    playText = playText,
+    danmakuText = danmakuText,
     titleHighlights = titleHighlights,
 )
 
@@ -684,17 +800,31 @@ private fun SearchVideo.toRowUi() = VideoRowUi(
  * 专栏与视频同一种行([VideoRow]),封面角标写「文章」,和首页那条专栏的写法一致;
  * 接口不给作者名,UP 名那一格换成分区。摘要放在最后一行。
  */
-@Composable
-private fun SearchArticle.toRowUi() = VideoRowUi(
+private fun SearchArticle.toRowUi(
+    articleBadge: String,
+    viewsMeta: String,
+) = VideoRowUi(
     title = title,
     coverUrl = coverUrl,
-    durationText = stringResource(Res.string.feed_article_badge),
+    durationText = articleBadge,
     upName = categoryName.takeIf { it.isNotBlank() },
     dateText = formatDate(publishedAtEpochSeconds),
-    meta = stringResource(Res.string.search_article_views, formatCount(viewCount)),
+    meta = viewsMeta,
     note = summary.takeIf { it.isNotBlank() },
     titleHighlights = titleHighlights,
 )
+
+private val SearchTabIndicatorMinWidth = 24.dp
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+private object SearchDesktopMenuMotionScheme : MotionScheme {
+    override fun <T> defaultSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> fastSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> slowSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> defaultEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
+    override fun <T> fastEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
+    override fun <T> slowEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
+}
 
 private val DateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 

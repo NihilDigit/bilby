@@ -8,9 +8,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.data.CommentSort
@@ -34,6 +41,7 @@ import dev.bilby.ui.theme.Spacing
  * (见 [dev.bilby.data.model.DynamicInteraction])。**这里不写任何按动态类型选评论区的判断** ——
  * 那张对照表不存在,写出来就是发明。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DynamicDetailScreen(
     state: DynamicDetailUiState,
@@ -53,15 +61,23 @@ fun DynamicDetailScreen(
     onDeleteComment: (id: Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    var scrollToCommentsTick by remember { mutableIntStateOf(0) }
     Scaffold(
-        modifier = modifier,
-        topBar = { BilbyTopBar(title = stringResource(Res.string.dynamic_detail_title), onBack = onBack) },
+        modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        topBar = {
+            BilbyTopBar(
+                title = stringResource(Res.string.dynamic_detail_title),
+                onBack = onBack,
+                scrollBehavior = scrollBehavior,
+            )
+        },
     ) { padding ->
         val card = state.card
         when {
             card == null && state.loading -> FullScreenLoading(Modifier.padding(padding))
             card == null -> FullScreenError(
-                state.error.orEmpty(),
+                state.errorRes?.let { stringResource(it) } ?: state.error.orEmpty(),
                 onRetry,
                 Modifier.padding(padding),
             )
@@ -75,6 +91,7 @@ fun DynamicDetailScreen(
                     .consumeWindowInsets(PaddingValues(top = padding.calculateTopPadding())),
             ) {
                 val selectableText = !LocalPointerSource.current.isTouchLike
+                val hasComments = card.interaction?.hasComments == true
                 val cardView: @Composable () -> Unit = {
                     DynamicCardView(
                         card = card,
@@ -82,6 +99,11 @@ fun DynamicDetailScreen(
                         onLike = onLike,
                         openable = false,
                         selectableText = selectableText,
+                        onCommentClick = if (hasComments) {
+                            { scrollToCommentsTick++ }
+                        } else {
+                            null
+                        },
                         modifier = Modifier.padding(
                             horizontal = Spacing.Comfortable,
                             vertical = Spacing.Cozy,
@@ -90,7 +112,7 @@ fun DynamicDetailScreen(
                 }
                 // 评论区关掉或者服务端没给身份时,这一页就只有这条动态。**不画一个空评论区**:
                 // 那会让人以为是没读到,而实际上这里本来就没有可读的东西。
-                if (card.interaction?.hasComments == true) {
+                if (hasComments) {
                     CommentSection(
                         onOpenLink = onOpenLink,
                         state = commentState,
@@ -103,6 +125,7 @@ fun DynamicDetailScreen(
                         onDelete = onDeleteComment,
                         onUserClick = { onAction(DynamicAction.OpenUser(it)) },
                         header = cardView,
+                        scrollToCommentsTick = scrollToCommentsTick,
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {

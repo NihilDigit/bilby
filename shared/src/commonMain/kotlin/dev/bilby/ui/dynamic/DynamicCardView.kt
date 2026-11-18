@@ -5,7 +5,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.unit.min
@@ -35,7 +34,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.carousel.HorizontalUncontainedCarousel
+import androidx.compose.material3.carousel.rememberCarouselState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +49,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
@@ -77,6 +81,7 @@ import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.components.chargingBadgeText
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.components.rememberCopyAction
+import dev.bilby.ui.components.verticalWheelScrollsRow
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -85,6 +90,7 @@ import dev.bilby.ui.theme.tabular
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 
 /**
  * 这条动态被点开时要去哪儿。**用一个密封类型而不是七个回调**:调用方只需要认识"要去的地方",
@@ -141,6 +147,7 @@ fun DynamicCardView(
     contained: Boolean = true,
     openable: Boolean = true,
     selectableText: Boolean = false,
+    onCommentClick: (() -> Unit)? = null,
 ) {
     val block = blockStyle(nested)
     val cardShape = if (nested) block.shape else MaterialTheme.shapes.largeIncreased
@@ -243,7 +250,7 @@ fun DynamicCardView(
                             card = card,
                             showTime = !showAuthor,
                             onLike = onLike,
-                            onAction = onAction,
+                            onCommentClick = onCommentClick,
                         )
                     }
                 }
@@ -306,28 +313,43 @@ fun DynamicCardView(
     val copyDynamicLinkLabel = stringResource(Res.string.action_copy_dynamic_link)
     val menuLabel = stringResource(Res.string.menu_item_actions)
 
-    val menuActions = buildList {
-        if (bodyText.isNotBlank()) {
-            add(DynamicMenuAction(copyDynamicLabel, Icons.Outlined.ContentCopy) { copyText(bodyText) })
-        }
-        if (forwardedText.isNotBlank()) {
-            add(DynamicMenuAction(copyForwardedLabel, Icons.Outlined.ContentCopy) { copyText(forwardedText) })
-        }
-        if (selectableFullText.isNotBlank()) {
-            add(DynamicMenuAction(selectTextLabel, Icons.Outlined.SelectAll) { selectionTarget = selectableFullText })
-        }
-        if (card.author.name.isNotBlank()) {
-            add(DynamicMenuAction(copyUpNameLabel, Icons.Outlined.ContentCopy) { copyText(card.author.name) })
-        }
-        if (card.author.mid != 0L) {
-            add(DynamicMenuAction(copyUidLabel, Icons.Outlined.ContentCopy) { copyText(card.author.mid.toString()) })
-        }
-        if (card.id.isNotBlank()) {
-            add(
-                DynamicMenuAction(copyDynamicLinkLabel, Icons.Outlined.Link) {
-                    copyLink("${BiliConstants.DYNAMIC_HOST}/${card.id}")
-                },
-            )
+    val menuActions = remember(
+        bodyText,
+        forwardedText,
+        selectableFullText,
+        card.author.name,
+        card.author.mid,
+        card.id,
+        copyDynamicLabel,
+        copyForwardedLabel,
+        selectTextLabel,
+        copyUpNameLabel,
+        copyUidLabel,
+        copyDynamicLinkLabel,
+    ) {
+        buildList {
+            if (bodyText.isNotBlank()) {
+                add(DynamicMenuAction(copyDynamicLabel, Icons.Outlined.ContentCopy) { copyText(bodyText) })
+            }
+            if (forwardedText.isNotBlank()) {
+                add(DynamicMenuAction(copyForwardedLabel, Icons.Outlined.ContentCopy) { copyText(forwardedText) })
+            }
+            if (selectableFullText.isNotBlank()) {
+                add(DynamicMenuAction(selectTextLabel, Icons.Outlined.SelectAll) { selectionTarget = selectableFullText })
+            }
+            if (card.author.name.isNotBlank()) {
+                add(DynamicMenuAction(copyUpNameLabel, Icons.Outlined.ContentCopy) { copyText(card.author.name) })
+            }
+            if (card.author.mid != 0L) {
+                add(DynamicMenuAction(copyUidLabel, Icons.Outlined.ContentCopy) { copyText(card.author.mid.toString()) })
+            }
+            if (card.id.isNotBlank()) {
+                add(
+                    DynamicMenuAction(copyDynamicLinkLabel, Icons.Outlined.Link) {
+                        copyLink("${BiliConstants.DYNAMIC_HOST}/${card.id}")
+                    },
+                )
+            }
         }
     }
 
@@ -456,7 +478,7 @@ private fun DynamicFooter(
     card: DynamicCard,
     showTime: Boolean,
     onLike: ((like: Boolean) -> Unit)?,
-    onAction: (DynamicAction) -> Unit,
+    onCommentClick: (() -> Unit)?,
 ) {
     val interaction = card.interaction?.takeIf { onLike != null }
     if (!showTime && interaction == null) return
@@ -474,19 +496,18 @@ private fun DynamicFooter(
             }
         }
         if (interaction != null && onLike != null) {
-            DynamicActions(card, interaction, onLike, onAction)
+            DynamicActions(interaction, onLike, onCommentClick)
         }
     }
 }
 
 @Composable
 private fun DynamicActions(
-    card: DynamicCard,
     interaction: DynamicInteraction,
     onLike: (like: Boolean) -> Unit,
-    onAction: (DynamicAction) -> Unit,
+    onCommentClick: (() -> Unit)?,
 ) {
-    Row {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         ActionCell(
             selected = interaction.liked,
             icon = if (interaction.liked) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp,
@@ -496,14 +517,39 @@ private fun DynamicActions(
             label = interaction.likeCount.takeIf { it > 0 }?.let { formatCount(it) },
             onClick = { onLike(!interaction.liked) },
         )
-        val openTarget = card.primaryAction()
-        ActionCell(
-            selected = false,
-            icon = Icons.AutoMirrored.Outlined.Comment,
-            contentDescription = stringResource(Res.string.dynamic_action_comment),
-            label = interaction.commentCount.takeIf { it > 0 }?.let { formatCount(it) },
-            onClick = { openTarget?.let(onAction) },
-        )
+        val commentLabel = interaction.commentCount.takeIf { it > 0 }?.let { formatCount(it) }
+        if (onCommentClick != null) {
+            ActionCell(
+                selected = false,
+                icon = Icons.AutoMirrored.Outlined.Comment,
+                contentDescription = stringResource(Res.string.dynamic_action_comment),
+                label = commentLabel,
+                onClick = onCommentClick,
+            )
+        } else if (commentLabel != null) {
+            // 信息流卡片本身已整卡可点打开详情，此处仅作静态计数展示，避免重复触发同一跳转。
+            Row(
+                modifier = Modifier
+                    .heightIn(min = Dimens.MinTouchTarget)
+                    .padding(horizontal = Spacing.Tight),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Outlined.Comment,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+                Text(
+                    text = commentLabel,
+                    style = MaterialTheme.typography.labelMedium.tabular,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
     }
 }
 
@@ -652,6 +698,7 @@ private fun DynamicText(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .heightIn(min = Dimens.MinTouchTarget)
+            .widthIn(min = Dimens.MinTouchTarget)
             .clip(MaterialTheme.shapes.small)
             .clickable(role = Role.Button) {
                 if (article != null) {
@@ -969,11 +1016,23 @@ private fun SideBySideCard(
     leadingLabel: @Composable () -> Unit = {},
 ) {
     Surface(
-        color = block.color,
+        color = if (onClick != null) Color.Transparent else block.color,
         shape = block.shape,
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clip(block.shape).clickable(role = Role.Button, onClick = onClick) else Modifier),
+            .then(
+                if (onClick != null) {
+                    Modifier
+                        .interactiveCard(
+                            shape = block.shape,
+                            baseColor = block.color,
+                            hoverColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        )
+                        .clickable(role = Role.Button, onClick = onClick)
+                } else {
+                    Modifier
+                },
+            ),
     ) {
         Row(
             modifier = Modifier.padding(Spacing.Tight),
@@ -1045,8 +1104,18 @@ private fun ReserveRow(
     onAction: (DynamicAction) -> Unit,
 ) {
     val system = LocalSystemActions.current
-    val nowSeconds = System.currentTimeMillis() / 1000
-    val started = reserve.startAtEpochSeconds?.let { it <= nowSeconds } ?: false
+    var nowSeconds by remember(reserve.startAtEpochSeconds) { mutableStateOf(System.currentTimeMillis() / 1000) }
+    val startEpoch = reserve.startAtEpochSeconds
+    LaunchedEffect(startEpoch) {
+        if (startEpoch != null && startEpoch > nowSeconds) {
+            val waitSeconds = startEpoch - nowSeconds
+            if (waitSeconds <= 86_400L) {
+                delay(waitSeconds * 1_000L + 100L)
+                nowSeconds = System.currentTimeMillis() / 1000
+            }
+        }
+    }
+    val started = startEpoch?.let { it <= nowSeconds } ?: false
     val open: (() -> Unit)? = when {
         reserve.isLive && reserve.upMid != 0L -> {
             { onAction(DynamicAction.OpenLiveOfUser(reserve.upMid)) }
@@ -1059,11 +1128,23 @@ private fun ReserveRow(
         else -> null
     }
     Surface(
-        color = block.color,
+        color = if (open != null) Color.Transparent else block.color,
         shape = block.shape,
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (open != null) Modifier.clip(block.shape).clickable(role = Role.Button, onClick = open) else Modifier),
+            .then(
+                if (open != null) {
+                    Modifier
+                        .interactiveCard(
+                            shape = block.shape,
+                            baseColor = block.color,
+                            hoverColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        )
+                        .clickable(role = Role.Button, onClick = open)
+                } else {
+                    Modifier
+                },
+            ),
     ) {
         Column(
             modifier = Modifier.padding(Spacing.Cozy),
@@ -1119,7 +1200,7 @@ private fun AdditionalRow(label: String, title: String, description: String, blo
             if (description.isNotBlank()) {
                 Text(
                     text = description,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall.tabular,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -1147,54 +1228,97 @@ private fun DynamicImageGrid(images: List<ArticleImage>) {
             onDismiss = { viewerIndex = null },
         )
     }
+    val density = LocalDensity.current
+    var containerWidth by remember { mutableStateOf(0.dp) }
+    val resolvedWidth = if (containerWidth > 0.dp) containerWidth else SingleImageMaxSide
+    val pictureLabel = stringResource(Res.string.comment_picture)
     // **配图有尺寸上限,不跟卡片一起变宽**,照网页端空间页的做法。卡片在宽屏上有上千 dp,
     // 按宽度等分的话三张图各有三百多 dp 见方,一条动态占满一屏;看清细节是看图器的事,
     // 列表里的图只需认得出是什么。上限都选在手机宽度用不满的位置,窄屏排法基本不变。
-    BoxWithConstraints {
-        // 单张按原图比例铺开,不占九宫格里的一格 —— 一张图配一段话是最常见的一种图文动态,
-        // 按三列排会把它缩到三分之一宽,内容基本看不清。多张才成"一组图",那时才是方格。
-        if (images.size == 1) {
-            val image = images.first()
-            val ratio = when {
-                image.isLongImage || image.width <= 0 || image.height <= 0 -> 16f / 10f
-                else -> image.width.toFloat() / image.height
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .onSizeChanged { containerWidth = with(density) { it.width.toDp() } },
+    ) {
+        when {
+            // 单张按原图比例铺开,不占九宫格里的一格 —— 一张图配一段话是最常见的一种图文动态,
+            // 按三列排会把它缩到三分之一宽,内容基本看不清。
+            images.size == 1 -> {
+                val image = images.first()
+                val ratio = when {
+                    image.isLongImage || image.width <= 0 || image.height <= 0 -> 16f / 10f
+                    else -> image.width.toFloat() / image.height
+                }
+                // 长边不超过上限:横图受宽度约束,竖图受高度约束,换算回宽度统一给出。
+                val width = min(resolvedWidth, min(SingleImageMaxSide, SingleImageMaxSide * ratio))
+                BiliAsyncImage(
+                    url = image.url,
+                    contentDescription = pictureLabel,
+                    modifier = Modifier
+                        .width(width)
+                        .clip(RoundedCornerShape(CoverCornerRadius))
+                        .aspectRatio(ratio)
+                        .clickable(role = Role.Button) { viewerIndex = 0 },
+                )
             }
-            // 长边不超过上限:横图受宽度约束,竖图受高度约束,换算回宽度统一给出。
-            val width = min(maxWidth, min(SingleImageMaxSide, SingleImageMaxSide * ratio))
-            BiliAsyncImage(
-                url = image.url,
-                contentDescription = null,
-                modifier = Modifier
-                    .width(width)
-                    .clip(RoundedCornerShape(CoverCornerRadius))
-                    .aspectRatio(ratio)
-                    .clickable(role = Role.Button) { viewerIndex = 0 },
-            )
-            return@BoxWithConstraints
-        }
-        val cellSize = min((maxWidth - Spacing.Hair * (columns - 1)) / columns, GridImageMaxSide)
-        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-            // **下标按行号算,不用 `images.indexOf(image)` 反查。** 同一条动态里重复配同一张图时
-            // (九宫格拼图、同一张表情图铺几格)`indexOf` 把每一格都指回第一次出现的那个下标,
-            // 点第三张打开的是第一张。评论区的 `PictureGrid` 是同一处坑。
-            images.chunked(columns).forEachIndexed { rowIndex, row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
-                    row.forEachIndexed { columnIndex, image ->
-                        val index = rowIndex * columns + columnIndex
-                        BiliAsyncImage(
-                            url = image.url,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(cellSize)
-                                .clip(RoundedCornerShape(CoverCornerRadius))
-                                .clickable(role = Role.Button) { viewerIndex = index },
-                        )
+
+            // 4 张及以上配图升级为 M3E HorizontalUncontainedCarousel，支持桌面端滚轮横滑并保留各图比例。
+            images.size >= 4 -> {
+                val carouselState = rememberCarouselState { images.size }
+                val itemWidth = min(CarouselImageItemWidth, resolvedWidth * 0.65f)
+                HorizontalUncontainedCarousel(
+                    state = carouselState,
+                    itemWidth = itemWidth,
+                    itemSpacing = Spacing.Tight,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalWheelScrollsRow(carouselState),
+                ) { index ->
+                    val image = images[index]
+                    val ratio = when {
+                        image.isLongImage -> 3f / 4f
+                        image.width <= 0 || image.height <= 0 -> 1f
+                        else -> (image.width.toFloat() / image.height).coerceIn(0.65f, 1.6f)
+                    }
+                    BiliAsyncImage(
+                        url = image.url,
+                        contentDescription = "$pictureLabel ${index + 1}/${images.size}",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(ratio)
+                            .maskClip(MaterialTheme.shapes.medium)
+                            .clickable(role = Role.Button) { viewerIndex = index },
+                    )
+                }
+            }
+
+            else -> {
+                val cellSize = min((resolvedWidth - Spacing.Hair * (columns - 1)) / columns, GridImageMaxSide)
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+                    // **下标按行号算,不用 `images.indexOf(image)` 反查。** 同一条动态里重复配同一张图时
+                    // `indexOf` 把每一格都指回第一次出现的那个下标,点第三张打开的是第一张。
+                    images.chunked(columns).forEachIndexed { rowIndex, row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+                            row.forEachIndexed { columnIndex, image ->
+                                val index = rowIndex * columns + columnIndex
+                                BiliAsyncImage(
+                                    url = image.url,
+                                    contentDescription = "$pictureLabel ${index + 1}/${images.size}",
+                                    modifier = Modifier
+                                        .size(cellSize)
+                                        .clip(RoundedCornerShape(CoverCornerRadius))
+                                        .clickable(role = Role.Button) { viewerIndex = index },
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
     }
 }
+
+private val CarouselImageItemWidth = 168.dp
 
 /**
  * 多图方格一格的边长上限。手机上两列时一格约 162dp,取 160 让窄屏几乎不受影响;

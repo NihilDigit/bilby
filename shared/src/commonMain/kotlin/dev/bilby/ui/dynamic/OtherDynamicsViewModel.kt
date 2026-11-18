@@ -1,5 +1,6 @@
 package dev.bilby.ui.dynamic
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+@Immutable
 data class OtherDynamicsUiState(
     val items: List<DynamicCard> = emptyList(),
     val loading: Boolean = false,

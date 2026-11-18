@@ -27,12 +27,15 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import dev.bilby.data.SearchSuggestion
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.minimumInteractiveComponentSize
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.Arrangement
@@ -72,18 +75,26 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -112,6 +123,7 @@ import dev.bilby.agent.TraceItem
 import dev.bilby.data.SearchVideo
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.KeepScrolledToBottom
+import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SidePanelLayout
 import dev.bilby.ui.components.SidePanelToggle
@@ -119,17 +131,20 @@ import dev.bilby.ui.components.rememberBottomFollow
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.LocalIsDarkTheme
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.interactiveCard
 import dev.bilby.ui.theme.rememberFlexFont
 import kotlin.math.roundToInt
 
 enum class SearchMode { Normal, Agent }
 
 /** 助理的一轮对话。普通搜索没有"轮"这个概念,见 [NormalSearchState]。 */
+@Immutable
 data class SearchTurn(val id: Long, val query: String, val result: AgentTurnState)
 
 // NormalSearchState 与它的状态机搬去了 NormalSearchController.kt:标签结果页要的是同一套。
 
 /** 助理的状态:一段可以追问下去的对话。 */
+@Immutable
 data class AgentSearchState(val turns: List<SearchTurn> = emptyList())
 
 /**
@@ -137,6 +152,7 @@ data class AgentSearchState(val turns: List<SearchTurn> = emptyList())
  * 两边都读不下去 —— 一个是可翻页的列表,另一个是带工具轨迹的对话,本来就不同构。
  * 切换模式只是换显示哪一份,两份都留着。
  */
+@Immutable
 data class SearchChatUiState(
     /** 窄屏显示哪一种。宽屏两种同时在屏,不看它。 */
     val mode: SearchMode = SearchMode.Normal,
@@ -151,6 +167,7 @@ data class SearchChatUiState(
 )
 
 /** 助理那一侧的全部动作。 */
+@Stable
 class AgentActions(
     val onInputChange: (String) -> Unit,
     val onSend: () -> Unit,
@@ -260,10 +277,11 @@ fun SearchChatScreen(
             modifier = modifier.fillMaxSize().padding(top = Spacing.Tight),
             main = {
                 normalSearch(
-                    agentPanel?.takeIf { agentAvailable }?.let { prefs ->
+                    // 宽屏侧栏已展开时，其标题栏自带关闭按钮，仅在关闭态渲染顶栏开关。
+                    agentPanel?.takeIf { agentAvailable && !it.open }?.let {
                         {
                             SidePanelToggle(
-                                open = prefs.open,
+                                open = false,
                                 onOpenChange = onAgentPanelOpenChange,
                                 description = stringResource(Res.string.search_agent_panel_toggle),
                             )
@@ -316,6 +334,7 @@ private val EmptyCaptionSlot = CaptionSlot(Modifier, null)
 private val PanelToggleWidth = 48.dp
 
 /** 窄屏助理那一屏的顶栏:返回和栏名。返回回到搜索结果,助理的对话留着。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun AgentTopBar(onBack: () -> Unit) {
     val captionSlot = rememberCaptionSlot()
@@ -333,7 +352,7 @@ private fun AgentTopBar(onBack: () -> Unit) {
         }
         Text(
             stringResource(Res.string.search_mode_agent),
-            style = MaterialTheme.typography.titleLarge,
+            style = MaterialTheme.typography.titleLargeEmphasized,
             modifier = Modifier
                 .weight(1f)
                 .padding(start = Spacing.Hair)
@@ -399,12 +418,18 @@ private fun NormalSearch(
     val fab = askAgentFab != null
 
     val collapsing = remember { CollapsingBar() }
+    val fabExpanded by remember { derivedStateOf { collapsing.offsetPx == 0f } }
     // 打字时和换了一次查询时栏一定在:前者正对着它,后者要看得见查的是什么。
     LaunchedEffect(focused, state.query) { collapsing.offsetPx = 0f }
+
+    // 聚焦时盖在结果上的那一块:正在打字而且有补全就是补全,否则是历史。
+    val typing = focused && input.isNotBlank() && suggestions.isNotEmpty()
+    var highlightedSuggestion by remember(suggestions, typing) { mutableIntStateOf(-1) }
 
     val suggestionDropdown: @Composable (Modifier) -> Unit = { panelModifier ->
         SuggestionPanel(
             suggestions = suggestions,
+            highlightedIndex = highlightedSuggestion,
             onClick = onSuggestionClick,
             onFill = { term ->
                 onInputChange(term)
@@ -424,12 +449,39 @@ private fun NormalSearch(
             modifier = panelModifier,
         )
     }
-    // 聚焦时盖在结果上的那一块:正在打字而且有补全就是补全,否则是历史。
-    val typing = focused && input.isNotBlank() && suggestions.isNotEmpty()
     val focusPanel: (@Composable (Modifier) -> Unit)? = when {
         typing -> suggestionDropdown
         history.isNotEmpty() -> historyPanel
         else -> null
+    }
+
+    val fieldKeyModifier = Modifier.onPreviewKeyEvent { event ->
+        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+        when (event.key) {
+            Key.Escape -> {
+                focusManager.clearFocus()
+                true
+            }
+            Key.DirectionDown -> if (typing) {
+                highlightedSuggestion = (highlightedSuggestion + 1).coerceAtMost(suggestions.lastIndex)
+                true
+            } else {
+                false
+            }
+            Key.DirectionUp -> if (typing) {
+                highlightedSuggestion = if (highlightedSuggestion <= 0) -1 else highlightedSuggestion - 1
+                true
+            } else {
+                false
+            }
+            Key.Enter, Key.NumPadEnter -> if (typing && highlightedSuggestion in suggestions.indices) {
+                onSuggestionClick(suggestions[highlightedSuggestion].term)
+                true
+            } else {
+                false
+            }
+            else -> false
+        }
     }
 
     val bar: @Composable ((@Composable (Modifier) -> Unit)?) -> Unit = { dropdown ->
@@ -447,6 +499,7 @@ private fun NormalSearch(
             trailing = panelToggle.takeUnless { inLanding },
             dropdown = dropdown,
             focusRequester = searchFocusRequester,
+            fieldModifier = fieldKeyModifier,
         )
     }
     val scrollingPanel: @Composable (@Composable (Modifier) -> Unit, Boolean, Boolean) -> Unit =
@@ -572,7 +625,7 @@ private fun NormalSearch(
                     askAgentFab?.let {
                         AskAgentFab(
                             onClick = it,
-                            expanded = collapsing.offsetPx == 0f,
+                            expanded = fabExpanded,
                             modifier = Modifier.align(Alignment.BottomEnd),
                         )
                     }
@@ -678,6 +731,7 @@ private fun SearchBarRow(
     /** 宽屏展开态接在框下面的那一截(补全或历史),见 [DockedSurface]。 */
     dropdown: (@Composable (Modifier) -> Unit)? = null,
     focusRequester: FocusRequester? = null,
+    fieldModifier: Modifier = Modifier,
 ) {
     val back = showBack && focused
     val captionSlot = if (inLanding) EmptyCaptionSlot else rememberCaptionSlot()
@@ -724,6 +778,7 @@ private fun SearchBarRow(
                         // 回车即搜。DESIGN 2.2 的快路原话是"输入直接回车 = 原始 B 站搜索"。
                         onSearch = onSearch,
                         focusRequester = focusRequester,
+                        modifier = fieldModifier,
                     )
                 }
                 Spacer(
@@ -745,6 +800,7 @@ private fun SearchBarRow(
                         placeholder = stringResource(Res.string.search_empty),
                         onSearch = onSearch,
                         focusRequester = focusRequester,
+                        modifier = fieldModifier,
                     )
                 }
             }
@@ -816,9 +872,11 @@ private val AskAgentFabClearance = 88.dp
  * **不是热搜。** 这里列的每一条都从用户正在敲的字延伸出来,换一个字就换一批;热搜是不管你
  * 敲了什么都推给你的那一份,不做(DESIGN 2.2)。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SuggestionPanel(
     suggestions: List<SearchSuggestion>,
+    highlightedIndex: Int,
     onClick: (String) -> Unit,
     onFill: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -826,27 +884,40 @@ private fun SuggestionPanel(
     val title = stringResource(Res.string.search_suggestions)
     val highlight = MaterialTheme.colorScheme.primary
     Column(
+        verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
         modifier = modifier
-            .padding(vertical = Spacing.Tight)
+            .padding(horizontal = Spacing.Tight, vertical = Spacing.Tight)
             // 列表一换,读屏要念出来(search.md Accessibility 的 Autosuggest 一节)。
             .semantics { paneTitle = title; liveRegion = LiveRegionMode.Polite },
     ) {
-        suggestions.forEach { suggestion ->
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = SuggestionRowHeight)
-                    .focusProperties { canFocus = false }
-                    .clickable(role = Role.Button) { onClick(suggestion.term) }
-                    .padding(start = Spacing.Comfortable, end = Spacing.Hair),
+        suggestions.forEachIndexed { index, suggestion ->
+            val selected = index == highlightedIndex
+            SegmentedListItem(
+                selected = selected,
+                onClick = { onClick(suggestion.term) },
+                shapes = ListItemDefaults.segmentedShapes(index = index, count = suggestions.size),
+                colors = ListItemDefaults.segmentedColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                    selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                ),
+                leadingContent = {
+                    Icon(
+                        Icons.Outlined.Search,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                trailingContent = {
+                    IconButton(onClick = { onFill(suggestion.term) }) {
+                        Icon(
+                            imageVector = Icons.Outlined.NorthWest,
+                            contentDescription = stringResource(Res.string.search_suggestion_fill, suggestion.term),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(Dimens.IconInline),
+                        )
+                    }
+                },
             ) {
-                Icon(
-                    Icons.Outlined.Search,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 Text(
                     text = buildAnnotatedString {
                         append(suggestion.text)
@@ -859,19 +930,7 @@ private fun SuggestionPanel(
                     style = MaterialTheme.typography.bodyLarge,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
                 )
-                IconButton(
-                    onClick = { onFill(suggestion.term) },
-                    modifier = Modifier.focusProperties { canFocus = false },
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.NorthWest,
-                        contentDescription = stringResource(Res.string.search_suggestion_fill, suggestion.term),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(Dimens.IconInline),
-                    )
-                }
             }
         }
     }
@@ -890,10 +949,15 @@ private fun OpenUidRow(mid: Long, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.secondaryContainer,
+        color = Color.Transparent,
         modifier = Modifier
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight)
-            .fillMaxWidth(),
+            .fillMaxWidth()
+            .interactiveCard(
+                shape = MaterialTheme.shapes.large,
+                baseColor = MaterialTheme.colorScheme.secondaryContainer,
+                hoverColor = MaterialTheme.colorScheme.primaryContainer,
+            ),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -1042,15 +1106,23 @@ private fun SearchHistoryPanel(
             onDismissRequest = { confirmingClear = false },
             title = { Text(stringResource(Res.string.search_history_clear_title)) },
             confirmButton = {
-                TextButton(onClick = {
-                    confirmingClear = false
-                    editing = false
-                    onClear()
-                }) { Text(stringResource(Res.string.action_clear)) }
+                Button(
+                    onClick = {
+                        confirmingClear = false
+                        editing = false
+                        onClear()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                ) {
+                    Text(stringResource(Res.string.action_clear))
+                }
             },
             dismissButton = {
                 TextButton(onClick = { confirmingClear = false }) {
-                    Text(stringResource(Res.string.follow_unfollow_keep))
+                    Text(stringResource(Res.string.action_cancel))
                 }
             },
         )
@@ -1069,11 +1141,15 @@ private fun HistoryChip(
 ) {
     Surface(
         shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        color = Color.Transparent,
         modifier = Modifier
             // 视觉 32dp,触控撑到 48dp(风格指南 §3)。
             .minimumInteractiveComponentSize()
-            .clip(MaterialTheme.shapes.small)
+            .interactiveCard(
+                shape = MaterialTheme.shapes.small,
+                baseColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                hoverColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            )
             .combinedClickable(
                 role = Role.Button,
                 onClick = onClick,
@@ -1124,7 +1200,7 @@ private fun AgentConversation(
     modifier: Modifier = Modifier,
     inSidePanel: Boolean = false,
 ) {
-    Column(modifier = modifier.fillMaxSize().imePadding()) {
+    Column(modifier = modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) {
             AgentPane(
                 state = state,
@@ -1133,13 +1209,39 @@ private fun AgentConversation(
                 inSidePanel = inSidePanel,
             )
         }
+        if (state.turns.isNotEmpty()) {
+            // 新会话会清空上下文，与输入框内的「+」附件隐喻分离，使用显式带文字的按钮置于输入栏上方。
+            Row(
+                horizontalArrangement = Arrangement.End,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Cozy),
+            ) {
+                FilledTonalButton(
+                    onClick = actions.onNewSession,
+                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
+                    modifier = Modifier.heightIn(min = Dimens.MinTouchTarget),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                    Spacer(Modifier.width(Spacing.Hair))
+                    Text(
+                        text = stringResource(Res.string.search_new_session),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+            }
+        }
         InputBar(
             input = input,
             onInputChange = actions.onInputChange,
             onSend = actions.onSend,
-            // 开新会话是清空助理上下文的唯一入口(DESIGN 3.1:会话必须由用户显式开启)。
-            onNewSession = actions.onNewSession,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (inSidePanel) Modifier else Modifier.imePadding()),
         )
     }
 }
@@ -1189,21 +1291,28 @@ private fun AgentPane(
         else -> colors.surfaceContainerLow
     }
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize().nestedScroll(follow.connection),
-        contentPadding = PaddingValues(vertical = Spacing.Cozy),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Loose),
-    ) {
-        items(state.turns, key = { it.id }) { turn ->
-            TurnRow(
-                turn = turn,
-                onVideoClick = onVideoClick,
-                onRetry = onRetry,
-                cardColor = turnCardColor,
-                innerBlockColor = innerBlockColor,
-            )
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize().nestedScroll(follow.connection),
+            contentPadding = PaddingValues(vertical = Spacing.Cozy),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Loose),
+        ) {
+            items(
+                items = state.turns,
+                key = { it.id },
+                contentType = { "agent-turn" },
+            ) { turn ->
+                TurnRow(
+                    turn = turn,
+                    onVideoClick = onVideoClick,
+                    onRetry = onRetry,
+                    cardColor = turnCardColor,
+                    innerBlockColor = innerBlockColor,
+                )
+            }
         }
+        ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
     }
 }
 
@@ -1245,7 +1354,6 @@ private fun InputBar(
     input: String,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
-    onNewSession: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     PillInputField(
@@ -1258,12 +1366,6 @@ private fun InputBar(
         // 发出去就是新的一轮,上一轮还在跑会被取消(见 SearchChatViewModel.runAgent),不必锁住框。
         sending = false,
         onSend = onSend,
-        // 新会话:把助理上下文清掉的**动作**。普通搜索没有会话,这个按钮只长在这里。
-        leading = {
-            IconButton(onClick = onNewSession) {
-                Icon(Icons.Filled.Add, contentDescription = stringResource(Res.string.search_new_session))
-            }
-        },
         modifier = modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
     )
 }

@@ -17,34 +17,50 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
+import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.OpenInBrowser
 import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FloatingToolbarDefaults
+import androidx.compose.material3.FloatingToolbarExitDirection
+import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
@@ -78,7 +94,9 @@ import dev.bilby.ui.components.FullScreenError
 import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.ImageViewer
 import dev.bilby.ui.components.ListCover
+import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.LocalPointerSource
+import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.components.SelectableTextDialog
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.components.rememberCopyAction
@@ -86,7 +104,9 @@ import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.interactiveCard
 import dev.bilby.ui.theme.tabular
+import kotlinx.coroutines.launch
 
 /**
  * 专栏阅读页。
@@ -97,6 +117,7 @@ import dev.bilby.ui.theme.tabular
  * 正文用 `LazyColumn` 而不是 `Column + verticalScroll`:一篇长专栏有上百段、几十张图,
  * 全部一次性组合会在进页面那一下卡住,而图片全都活着还会把内存吃满。
  */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun ArticleScreen(
     state: ArticleUiState,
@@ -110,48 +131,110 @@ fun ArticleScreen(
     // pinned 而不是 enterAlways:一篇专栏是一口气读下去的,顶栏往上滑走再滑回来,视线要在
     // 正文和一条时隐时现的横条之间分心。滚起来只换一档容器色,正文和顶栏之间才有边界。
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    val article = state.article
+    val showFloatingToolbar = remember(article) {
+        article != null && (
+            article.blocks.any { it is ArticleBlock.Heading } ||
+                article.blocks.size >= LongArticleBlockCount
+            )
+    }
+    val listState = rememberLazyListState()
+    val readingProgress by remember(listState) {
+        derivedStateOf {
+            val layout = listState.layoutInfo
+            val total = layout.totalItemsCount
+            val visible = layout.visibleItemsInfo
+            if (total <= 1 || visible.isEmpty()) {
+                0f
+            } else {
+                val lastVisible = visible.last()
+                val reachedEnd = lastVisible.index >= total - 1 &&
+                    lastVisible.offset + lastVisible.size <= layout.viewportEndOffset
+                if (reachedEnd) {
+                    1f
+                } else {
+                    val first = visible.first()
+                    val itemFraction = if (first.size > 0) {
+                        (-first.offset).coerceAtLeast(0).toFloat() / first.size.toFloat()
+                    } else {
+                        0f
+                    }
+                    ((first.index + itemFraction) / (total - 1).coerceAtLeast(1)).coerceIn(0f, 1f)
+                }
+            }
+        }
+    }
+
     Scaffold(
         modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            BilbyTopBar(
-                title = stringResource(Res.string.article_title),
-                onBack = onBack,
-                scrollBehavior = scrollBehavior,
-                actions = {
-                    // 站内读得到时它仍然有用:图表类专栏在网页上是可横向拖的,我们这里只有一张图。
-                    state.article?.webUrl?.let { url ->
-                        IconButton(onClick = { system.openInBrowser(url) }) {
-                            Icon(
-                                Icons.Outlined.OpenInBrowser,
-                                contentDescription = stringResource(Res.string.article_open_in_browser),
-                            )
+            Column {
+                BilbyTopBar(
+                    title = stringResource(Res.string.article_title),
+                    onBack = onBack,
+                    scrollBehavior = scrollBehavior,
+                    actions = {
+                        // 长文或带标题大纲时由底部浮动工具栏承载打开浏览器，避免同屏双锚点。
+                        if (!showFloatingToolbar) {
+                            article?.webUrl?.let { url ->
+                                IconButton(onClick = { system.openInBrowser(url) }) {
+                                    Icon(
+                                        Icons.Outlined.OpenInBrowser,
+                                        contentDescription = stringResource(Res.string.article_open_in_browser),
+                                    )
+                                }
+                            }
                         }
-                    }
-                },
-            )
+                    },
+                )
+                if (article != null) {
+                    LinearProgressIndicator(
+                        progress = { readingProgress },
+                        trackColor = Color.Transparent,
+                        gapSize = 0.dp,
+                        drawStopIndicator = {},
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(ReadingProgressHeight),
+                    )
+                }
+            }
         },
     ) { padding ->
-        val article = state.article
         when {
             state.loading && article == null -> FullScreenLoading(Modifier.padding(padding))
             article == null -> FullScreenError(
-                state.error.orEmpty(),
+                state.errorRes?.let { stringResource(it) } ?: state.error.orEmpty(),
                 onRetry,
                 Modifier.padding(padding),
             )
 
             else -> AdaptiveContent(modifier = Modifier.padScaffoldExceptBottom(padding)) {
-                ArticleBody(article, onLinkClick, onMentionClick)
+                ArticleBody(
+                    article = article,
+                    listState = listState,
+                    showFloatingToolbar = showFloatingToolbar,
+                    onLinkClick = onLinkClick,
+                    onMentionClick = onMentionClick,
+                    onOpenInBrowser = article.webUrl?.let { url -> { system.openInBrowser(url) } },
+                )
             }
         }
     }
 }
 
+@Immutable
+private data class ArticleHeadingEntry(val listIndex: Int, val title: String)
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ArticleBody(
     article: Article,
+    listState: LazyListState,
+    showFloatingToolbar: Boolean,
     onLinkClick: (String) -> Unit,
     onMentionClick: (Long) -> Unit,
+    onOpenInBrowser: (() -> Unit)?,
 ) {
     // 全篇的图收成一张名单,点开谁都能左右翻到相邻的图 —— 一段一个 viewer 的话,翻到段尾
     // 就停住了,而读者的预期是"这篇文章里的图"。
@@ -159,56 +242,161 @@ private fun ArticleBody(
         article.blocks.filterIsInstance<ArticleBlock.Images>().flatMap { it.images }.map { it.url }
     }
     val fullText = remember(article) { article.plainFullText() }
+    val headerItemCount = 1 + if (article.blockedMessage != null) 1 else 0
+    val headings = remember(article.blocks, headerItemCount) {
+        article.blocks.mapIndexedNotNull { idx, block ->
+            if (block is ArticleBlock.Heading) {
+                val title = block.spans.plainText().trim()
+                if (title.isNotEmpty()) ArticleHeadingEntry(headerItemCount + idx, title) else null
+            } else {
+                null
+            }
+        }
+    }
     val isTouchLike = LocalPointerSource.current.isTouchLike
     var viewerIndex by remember(article) { mutableStateOf<Int?>(null) }
     var selectionTarget by remember(article) { mutableStateOf<String?>(null) }
+    var outlineOpen by remember(article) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val toolbarScrollBehavior = FloatingToolbarDefaults.exitAlwaysScrollBehavior(
+        exitDirection = FloatingToolbarExitDirection.Bottom,
+    )
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = Spacing.Spacious + navigationBarsBottom()),
-        // 段间距比列表那档松一档:段落之间没有别的分隔物,靠的就是这道空白。12dp 在一页
-        // 密排汉字里读不出"这里换了一段"。
-        verticalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .then(if (showFloatingToolbar) Modifier.nestedScroll(toolbarScrollBehavior) else Modifier),
     ) {
-        item(key = "header") {
-            ArticleHeader(
-                article = article,
-                fullText = fullText,
-                isTouchLike = isTouchLike,
-                onMentionClick = onMentionClick,
-            )
-        }
-        article.blockedMessage?.let { message ->
-            item(key = "blocked") {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                bottom = (if (showFloatingToolbar) Spacing.Spacious * 2 else Spacing.Spacious) + navigationBarsBottom(),
+            ),
+            // 段间距比列表那档松一档:段落之间没有别的分隔物,靠的就是这道空白。12dp 在一页
+            // 密排汉字里读不出"这里换了一段"。
+            verticalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
+        ) {
+            item(key = "header", contentType = "header") {
+                ArticleHeader(
+                    article = article,
+                    fullText = fullText,
+                    isTouchLike = isTouchLike,
+                    onMentionClick = onMentionClick,
+                )
+            }
+            article.blockedMessage?.let { message ->
+                item(key = "blocked", contentType = "blocked") {
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable),
+                    )
+                }
+            }
+            // 使用索引+类型复合键避免重复空行或重复配图引起 LazyColumn 键冲突。
+            itemsIndexed(
+                items = article.blocks,
+                key = { idx, block -> "$idx:${block::class.simpleName}" },
+                contentType = { _, block -> block::class },
+            ) { _, block ->
+                ArticleBlockView(
+                    block = block,
+                    isTouchLike = isTouchLike,
+                    onLinkClick = onLinkClick,
+                    onMentionClick = onMentionClick,
+                    onImageClick = { url -> viewerIndex = images.indexOf(url).takeIf { it >= 0 } },
+                    onSelectText = { selectionTarget = it },
+                )
+            }
+            // 收尾。一篇短专栏读完之后下面是一整屏空白,没有它就分不清"读完了"和"还没加载完"。
+            item(key = "end", contentType = "end") {
                 Text(
-                    text = message,
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = stringResource(Res.string.article_end),
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.Loose),
                 )
             }
         }
-        // 不给 items 指定 key:段落没有自己的 id,而同一篇里内容完全相同的段落(用来分隔的
-        // 空行、重复出现的图)很常见,拿内容当 key 会让 LazyColumn 抛 key 重复。
-        items(article.blocks) { block ->
-            ArticleBlockView(
-                block = block,
-                isTouchLike = isTouchLike,
-                onLinkClick = onLinkClick,
-                onMentionClick = onMentionClick,
-                onImageClick = { url -> viewerIndex = images.indexOf(url).takeIf { it >= 0 } },
-                onSelectText = { selectionTarget = it },
-            )
+        ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
+
+        if (showFloatingToolbar) {
+            HorizontalFloatingToolbar(
+                expanded = true,
+                scrollBehavior = toolbarScrollBehavior,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = Spacing.Comfortable),
+            ) {
+                if (headings.isNotEmpty()) {
+                    BilbyTooltip(text = OutlineTitle, anchorAbove = true) {
+                        IconButton(onClick = { outlineOpen = true }) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Outlined.FormatListBulleted,
+                                contentDescription = OutlineTitle,
+                            )
+                        }
+                    }
+                }
+                BilbyTooltip(text = ScrollToTopLabel, anchorAbove = true) {
+                    IconButton(onClick = { scope.launch { listState.animateScrollToItem(0) } }) {
+                        Icon(
+                            imageVector = Icons.Outlined.ArrowUpward,
+                            contentDescription = ScrollToTopLabel,
+                        )
+                    }
+                }
+                if (onOpenInBrowser != null) {
+                    val browserLabel = stringResource(Res.string.article_open_in_browser)
+                    BilbyTooltip(text = browserLabel, anchorAbove = true) {
+                        IconButton(onClick = onOpenInBrowser) {
+                            Icon(
+                                imageVector = Icons.Outlined.OpenInBrowser,
+                                contentDescription = browserLabel,
+                            )
+                        }
+                    }
+                }
+            }
         }
-        // 收尾。一篇短专栏读完之后下面是一整屏空白,没有它就分不清"读完了"和"还没加载完"。
-        item(key = "end") {
-            Text(
-                text = stringResource(Res.string.article_end),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(top = Spacing.Loose),
-            )
+    }
+
+    if (outlineOpen && headings.isNotEmpty()) {
+        PaneSheet(
+            onDismissRequest = { outlineOpen = false },
+            title = OutlineTitle,
+            skipPartiallyExpanded = true,
+        ) {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+                verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
+                contentPadding = PaddingValues(vertical = Spacing.Hair),
+            ) {
+                itemsIndexed(headings, key = { _, entry -> entry.listIndex }) { index, entry ->
+                    SegmentedListItem(
+                        onClick = {
+                            outlineOpen = false
+                            scope.launch { listState.animateScrollToItem(entry.listIndex) }
+                        },
+                        shapes = ListItemDefaults.segmentedShapes(index = index, count = headings.size),
+                        colors = ListItemDefaults.segmentedColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = entry.title,
+                            style = MaterialTheme.typography.bodyLargeEmphasized,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -244,21 +432,32 @@ private fun ArticleHeader(
         }.orEmpty()
     }
 
-    val menuActions = buildList {
-        if (article.title.isNotBlank()) {
-            add(ArticleMenuAction(copyTitleLabel, Icons.Outlined.ContentCopy) { copy(article.title) })
-        }
-        if (article.authorName.isNotBlank()) {
-            add(ArticleMenuAction(copyUpNameLabel, Icons.Outlined.ContentCopy) { copy(article.authorName) })
-        }
-        if (article.authorMid != 0L) {
-            add(ArticleMenuAction(copyUidLabel, Icons.Outlined.ContentCopy) { copy(article.authorMid.toString()) })
-        }
-        if (articleIdValue.isNotBlank()) {
-            add(ArticleMenuAction(copyArticleIdLabel, Icons.Outlined.ContentCopy) { copy(articleIdValue) })
-        }
-        if (fullText.isNotBlank()) {
-            add(ArticleMenuAction(copyFullTextLabel, Icons.Outlined.ContentCopy) { copy(fullText) })
+    val menuActions = remember(
+        article,
+        fullText,
+        articleIdValue,
+        copyTitleLabel,
+        copyUpNameLabel,
+        copyUidLabel,
+        copyArticleIdLabel,
+        copyFullTextLabel,
+    ) {
+        buildList {
+            if (article.title.isNotBlank()) {
+                add(ArticleMenuAction(copyTitleLabel, Icons.Outlined.ContentCopy) { copy(article.title) })
+            }
+            if (article.authorName.isNotBlank()) {
+                add(ArticleMenuAction(copyUpNameLabel, Icons.Outlined.ContentCopy) { copy(article.authorName) })
+            }
+            if (article.authorMid != 0L) {
+                add(ArticleMenuAction(copyUidLabel, Icons.Outlined.ContentCopy) { copy(article.authorMid.toString()) })
+            }
+            if (articleIdValue.isNotBlank()) {
+                add(ArticleMenuAction(copyArticleIdLabel, Icons.Outlined.ContentCopy) { copy(articleIdValue) })
+            }
+            if (fullText.isNotBlank()) {
+                add(ArticleMenuAction(copyFullTextLabel, Icons.Outlined.ContentCopy) { copy(fullText) })
+            }
         }
     }
 
@@ -701,20 +900,22 @@ private fun Article.plainFullText(): String = buildList {
  */
 @Composable
 private fun ArticleImages(images: List<ArticleImage>, onImageClick: (String) -> Unit) {
+    val pictureLabel = stringResource(Res.string.comment_picture)
     Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Comfortable),
         verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
-        images.forEach { image ->
+        images.forEachIndexed { index, image ->
             // 长图按 16:10 裁一个可点的引子,点开在看图器里完整看。整幅铺开的话,一张 1:8 的
             // 长图要滚半天才见到下一段。
             val ratio = when {
                 image.isLongImage || image.width <= 0 || image.height <= 0 -> 16f / 10f
                 else -> image.width.toFloat() / image.height
             }
+            val desc = if (images.size == 1) pictureLabel else "$pictureLabel ${index + 1}/${images.size}"
             BiliAsyncImage(
                 url = image.url,
-                contentDescription = null,
+                contentDescription = desc,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(CoverCornerRadius))
@@ -727,16 +928,26 @@ private fun ArticleImages(images: List<ArticleImage>, onImageClick: (String) -> 
 
 @Composable
 private fun ArticleLinkCard(card: ArticleBlock.LinkCard, onLinkClick: (String) -> Unit) {
+    val clickable = card.destinationUrl.isNotEmpty()
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = if (clickable) Color.Transparent else MaterialTheme.colorScheme.surfaceContainer,
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.Comfortable)
-            .clickable(
-                role = Role.Button,
-                enabled = card.destinationUrl.isNotEmpty(),
-            ) { onLinkClick(card.destinationUrl) },
+            .then(
+                if (clickable) {
+                    Modifier
+                        .interactiveCard(
+                            shape = MaterialTheme.shapes.medium,
+                            baseColor = MaterialTheme.colorScheme.surfaceContainer,
+                            hoverColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        )
+                        .clickable(role = Role.Button) { onLinkClick(card.destinationUrl) }
+                } else {
+                    Modifier
+                },
+            ),
     ) {
         Row(
             modifier = Modifier.padding(Spacing.Tight),
@@ -790,3 +1001,7 @@ private val ArticleBreakHeight = 32.dp
  * 同样不去改 `Typography.bodyLarge` —— 行高按这段文字有多长定,不按字号定。
  */
 private val BodyLineHeight = 28.sp
+private val ReadingProgressHeight = 2.dp
+private const val LongArticleBlockCount = 12
+private const val OutlineTitle = "目录"
+private const val ScrollToTopLabel = "回到顶部"

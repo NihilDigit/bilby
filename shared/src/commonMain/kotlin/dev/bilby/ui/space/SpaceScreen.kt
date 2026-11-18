@@ -1,6 +1,9 @@
 package dev.bilby.ui.space
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -8,7 +11,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -26,12 +28,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -42,11 +47,13 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material3.AppBarRow
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -54,19 +61,25 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SplitButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
+import androidx.compose.material3.TabIndicatorScope
+import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -78,14 +91,21 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -98,6 +118,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp as dpLerp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
@@ -207,6 +228,7 @@ enum class SpaceTab(val label: StringResource) {
     Collections(Res.string.space_tab_collections),
 }
 
+@Immutable
 data class SpaceUiState(
     val loading: Boolean = true, // 首次加载 profile
     /** 失败说哪一句,存的是资源 id。映射与理由见 [dev.bilby.ui.errorTextRes]。 */
@@ -237,6 +259,7 @@ data class SpaceUiState(
     val dynamicsSheet: SideSheetPrefs? = null,
 )
 
+@Immutable
 data class SpaceArchiveTabState(
     val order: SpaceArchiveOrder = SpaceArchiveOrder.Pubdate,
     /** 输入框里的字。**还没生效**,回车/点确认才会被抄进 [appliedKeyword]。 */
@@ -263,6 +286,7 @@ data class SpaceArchiveTabState(
 fun SpaceArchiveTabState.queueContext(mid: Long, page: Int, upName: String = "") =
     QueueContext.UpArchive(mid = mid, order = order, keyword = appliedKeyword, page = page, upName = upName)
 
+@Immutable
 data class SpaceListTabState(
     val items: List<SpaceDynamicItem> = emptyList(),
     val nextOffset: String? = null,
@@ -272,6 +296,7 @@ data class SpaceListTabState(
     val error: StringResource? = null,
 )
 
+@Immutable
 data class SpaceCollectionsTabState(
     val items: List<SpaceCollectionItem> = emptyList(),
     val page: Int = 1,
@@ -814,7 +839,6 @@ fun SpaceScreen(
 
     // 无论窄屏还是横屏/桌面宽屏，非搜索态有档案数据时一律让头图顶到最上沿，顶栏透明沉浸叠放其上。
     val overlayHero = !searching && state.profile != null
-    val collapseFraction = headerScroll.collapsedFraction
     val archiveTotal = state.archives.total.takeIf {
         state.archivesAvailable == true && state.archives.appliedKeyword.isBlank() && it > 0
     }
@@ -824,7 +848,7 @@ fun SpaceScreen(
         topBar = {
             SpaceTopBar(
                 profile = state.profile,
-                collapseFraction = collapseFraction,
+                collapseFraction = { headerScroll.collapsedFraction },
                 overlayHero = overlayHero,
                 searching = searching,
                 keyword = state.archives.keyword,
@@ -947,6 +971,9 @@ fun SpaceScreen(
                     }
                 }
                 val selectedIndex = pagerState.currentPage.coerceIn(tabs.indices)
+                val tabIndicator: @Composable TabIndicatorScope.() -> Unit = {
+                    SpacePagerTabIndicator(pagerState = pagerState)
+                }
                 if (wide) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -957,6 +984,7 @@ fun SpaceScreen(
                             PrimaryScrollableTabRow(
                                 selectedTabIndex = selectedIndex,
                                 edgePadding = 0.dp,
+                                indicator = tabIndicator,
                                 divider = {},
                                 tabs = tabItems,
                                 modifier = Modifier.weight(1f),
@@ -974,6 +1002,7 @@ fun SpaceScreen(
                 } else {
                     PrimaryTabRow(
                         selectedTabIndex = selectedIndex,
+                        indicator = tabIndicator,
                         divider = {},
                         tabs = tabItems,
                     )
@@ -1103,11 +1132,41 @@ fun SpaceScreen(
 /**
  * 空间页顶栏:随头图收起进度平滑填充底色,并在头图区名字滚过顶栏后淡入小头像与昵称。
  */
+@Composable
+private fun TabIndicatorScope.SpacePagerTabIndicator(pagerState: PagerState) {
+    TabRowDefaults.PrimaryIndicator(
+        width = Dp.Unspecified,
+        modifier = Modifier.tabIndicatorLayout { measurable, constraints, tabPositions ->
+            if (tabPositions.isEmpty()) {
+                layout(0, 0) {}
+            } else {
+                val pos = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
+                    .coerceIn(0f, tabPositions.lastIndex.toFloat())
+                val low = pos.toInt().coerceIn(0, tabPositions.lastIndex)
+                val high = (low + 1).coerceAtMost(tabPositions.lastIndex)
+                val frac = pos - low
+                val lowWidth = tabPositions[low].contentWidth.coerceAtLeast(SpaceTabIndicatorMinWidth)
+                val highWidth = tabPositions[high].contentWidth.coerceAtLeast(SpaceTabIndicatorMinWidth)
+                val lowX = tabPositions[low].left + (tabPositions[low].width - lowWidth) / 2
+                val highX = tabPositions[high].left + (tabPositions[high].width - highWidth) / 2
+                val indicatorWidth = dpLerp(lowWidth, highWidth, frac).roundToPx()
+                val indicatorX = dpLerp(lowX, highX, frac).roundToPx()
+                val placeable = measurable.measure(
+                    constraints.copy(minWidth = indicatorWidth, maxWidth = indicatorWidth),
+                )
+                layout(constraints.maxWidth, constraints.maxHeight) {
+                    placeable.placeRelative(indicatorX, constraints.maxHeight - placeable.height)
+                }
+            }
+        },
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SpaceTopBar(
     profile: SpaceProfile?,
-    collapseFraction: Float,
+    collapseFraction: () -> Float,
     overlayHero: Boolean,
     searching: Boolean,
     keyword: String,
@@ -1128,16 +1187,20 @@ private fun SpaceTopBar(
     val captionSlot = rememberCaptionSlot()
     val colorScheme = MaterialTheme.colorScheme
 
-    val barFillFraction = if (searching) 1f else ((collapseFraction - 0.15f) / 0.7f).coerceIn(0f, 1f)
     val baseColor = if (overlayHero) colorScheme.surfaceContainer.copy(alpha = 0f) else colorScheme.surface
-    val containerColor = lerp(baseColor, colorScheme.surfaceContainer, barFillFraction)
-    val titleReveal = ((collapseFraction - 0.55f) / 0.30f).coerceIn(0f, 1f)
+    val scrolledContainer = colorScheme.surfaceContainer
+    val titleRevealed by remember(searching) {
+        derivedStateOf { !searching && ((collapseFraction() - 0.55f) / 0.30f).coerceIn(0f, 1f) > 0f }
+    }
 
     TopAppBar(
-        modifier = captionSlot.modifier,
+        modifier = captionSlot.modifier.drawBehind {
+            val fill = if (searching) 1f else ((collapseFraction() - 0.15f) / 0.7f).coerceIn(0f, 1f)
+            drawRect(lerp(baseColor, scrolledContainer, fill))
+        },
         colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = containerColor,
-            scrolledContainerColor = colorScheme.surfaceContainer,
+            containerColor = Color.Transparent,
+            scrolledContainerColor = Color.Transparent,
         ),
         title = {
             if (searching) {
@@ -1147,6 +1210,14 @@ private fun SpaceTopBar(
                     placeholder = stringResource(Res.string.space_search_hint),
                     onSearch = onSearch,
                     focusRequester = focusRequester,
+                    modifier = Modifier.onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                            onCloseSearch()
+                            true
+                        } else {
+                            false
+                        }
+                    },
                 )
                 LaunchedEffect(Unit) {
                     if (keyword.isEmpty()) focusRequester.requestFocus()
@@ -1160,13 +1231,14 @@ private fun SpaceTopBar(
                         .heightIn(min = CaptionDragHeight)
                         .windowDragArea(captionSlot.atTop),
                 ) {
-                    if (profile != null && titleReveal > 0f) {
+                    if (profile != null && titleRevealed) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
                             modifier = Modifier.graphicsLayer {
+                                val titleReveal = ((collapseFraction() - 0.55f) / 0.30f).coerceIn(0f, 1f)
                                 alpha = titleReveal
-                                translationY = (1f - titleReveal) * 6.dp.toPx()
+                                translationY = (1f - titleReveal) * SpaceTitleRevealOffset.toPx()
                             },
                         ) {
                             Avatar(url = profile.faceUrl, size = Dimens.AvatarNested)
@@ -1193,45 +1265,67 @@ private fun SpaceTopBar(
             }
         },
         actions = {
-            RefreshAction(refreshing = refreshing, onRefresh = onRefresh)
-            if (searching) {
-                val closeLabel = stringResource(Res.string.space_search_close)
-                BilbyTooltip(text = closeLabel) {
-                    IconButton(onClick = onCloseSearch) {
-                        Icon(
-                            Icons.Filled.Close,
-                            contentDescription = closeLabel,
+            val refreshLabel = stringResource(Res.string.action_refresh)
+            val closeLabel = stringResource(Res.string.space_search_close)
+            val searchLabel = stringResource(Res.string.space_search_hint)
+            val shareLabel = stringResource(Res.string.action_share)
+            val toggleLabel = stringResource(Res.string.space_dynamics_sheet_toggle)
+            AppBarRow(maxItemCount = SpaceTopBarMaxActions) {
+                customItem(
+                    appbarContent = { RefreshAction(refreshing = refreshing, onRefresh = onRefresh) },
+                    menuContent = { menuState ->
+                        DropdownMenuItem(
+                            text = { Text(refreshLabel) },
+                            leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
+                            enabled = !refreshing,
+                            onClick = {
+                                menuState.dismiss()
+                                onRefresh()
+                            },
                         )
-                    }
-                }
-            } else {
-                if (canSearch) {
-                    val searchLabel = stringResource(Res.string.space_search_hint)
-                    BilbyTooltip(text = searchLabel) {
-                        IconButton(onClick = onOpenSearch) {
-                            Icon(
-                                Icons.Filled.Search,
-                                contentDescription = searchLabel,
-                            )
-                        }
-                    }
-                }
-                val shareLabel = stringResource(Res.string.action_share)
-                BilbyTooltip(text = shareLabel) {
-                    IconButton(onClick = onShare) {
-                        Icon(
-                            imageVector = Icons.Filled.Share,
-                            contentDescription = shareLabel,
-                        )
-                    }
-                }
-            }
-            if (dynamicsSheetOpen != null) {
-                SidePanelToggle(
-                    open = dynamicsSheetOpen,
-                    onOpenChange = onDynamicsSheetOpenChange,
-                    description = stringResource(Res.string.space_dynamics_sheet_toggle),
+                    },
                 )
+                if (searching) {
+                    clickableItem(
+                        onClick = onCloseSearch,
+                        icon = { Icon(Icons.Filled.Close, contentDescription = closeLabel) },
+                        label = closeLabel,
+                    )
+                } else {
+                    if (canSearch) {
+                        clickableItem(
+                            onClick = onOpenSearch,
+                            icon = { Icon(Icons.Filled.Search, contentDescription = searchLabel) },
+                            label = searchLabel,
+                        )
+                    }
+                    clickableItem(
+                        onClick = onShare,
+                        icon = { Icon(Icons.Filled.Share, contentDescription = shareLabel) },
+                        label = shareLabel,
+                    )
+                }
+                // 侧栏已展开时其自有标题栏已带关闭按钮，仅在关闭态提供顶栏入口。
+                if (dynamicsSheetOpen == false) {
+                    customItem(
+                        appbarContent = {
+                            SidePanelToggle(
+                                open = false,
+                                onOpenChange = onDynamicsSheetOpenChange,
+                                description = toggleLabel,
+                            )
+                        },
+                        menuContent = { menuState ->
+                            DropdownMenuItem(
+                                text = { Text(toggleLabel) },
+                                onClick = {
+                                    menuState.dismiss()
+                                    onDynamicsSheetOpenChange(true)
+                                },
+                            )
+                        },
+                    )
+                }
             }
             captionSlot.buttons?.invoke()
         },
@@ -1288,13 +1382,15 @@ private fun SpaceHeader(
     ) {
         // 1. 头图 + 跨底边头像与关注控制栏
         Box(modifier = Modifier.fillMaxWidth()) {
-            val fallbackGradient = Brush.verticalGradient(
-                colors = listOf(
-                    colorScheme.primaryContainer.copy(alpha = 0.45f),
-                    colorScheme.surfaceContainer,
-                    colorScheme.surface,
-                ),
-            )
+            val fallbackGradient = remember(colorScheme) {
+                Brush.verticalGradient(
+                    colors = listOf(
+                        colorScheme.primaryContainer.copy(alpha = 0.45f),
+                        colorScheme.surfaceContainer,
+                        colorScheme.surface,
+                    ),
+                )
+            }
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1309,29 +1405,31 @@ private fun SpaceHeader(
                         modifier = Modifier.fillMaxSize(),
                     )
                     // 顶缘主题同向渐变遮罩:兼顾浅色与深色主题下顶栏图标与窗口按钮对比度
-                    val topScrimAlpha = if (overlayTopBar) 0.84f else 0.26f
+                    val topScrimGradient = remember(colorScheme, overlayTopBar) {
+                        val topScrimAlpha = if (overlayTopBar) 0.84f else 0.26f
+                        Brush.verticalGradient(
+                            0f to colorScheme.surface.copy(alpha = topScrimAlpha),
+                            0.46f to colorScheme.surface.copy(alpha = if (overlayTopBar) 0.36f else 0.08f),
+                            0.72f to Color.Transparent,
+                        )
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    0f to colorScheme.surface.copy(alpha = topScrimAlpha),
-                                    0.46f to colorScheme.surface.copy(alpha = if (overlayTopBar) 0.36f else 0.08f),
-                                    0.72f to Color.Transparent,
-                                ),
-                            ),
+                            .background(topScrimGradient),
                     )
                     // 底缘平滑汇入页面 surface,消除头图硬切线
+                    val bottomScrimGradient = remember(colorScheme) {
+                        Brush.verticalGradient(
+                            0.42f to Color.Transparent,
+                            0.78f to colorScheme.surface.copy(alpha = 0.72f),
+                            1f to colorScheme.surface,
+                        )
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    0.42f to Color.Transparent,
-                                    0.78f to colorScheme.surface.copy(alpha = 0.72f),
-                                    1f to colorScheme.surface,
-                                ),
-                            ),
+                            .background(bottomScrimGradient),
                     )
                 }
             }
@@ -1516,31 +1614,34 @@ private fun SpaceHeader(
                             }
                         }
                         if (bioHasOverflow || bioExpanded) {
-                            Icon(
-                                imageVector = if (bioExpanded) {
-                                    Icons.Filled.KeyboardArrowUp
-                                } else {
-                                    Icons.Filled.KeyboardArrowDown
-                                },
-                                contentDescription = if (bioExpanded) {
-                                    stringResource(Res.string.feed_burst_collapse)
-                                } else {
-                                    null
-                                },
-                                tint = colorScheme.onSurfaceVariant,
+                            val bioToggleLabel = stringResource(
+                                if (bioExpanded) Res.string.feed_burst_collapse else Res.string.dynamic_text_expand,
+                            )
+                            Box(
+                                contentAlignment = Alignment.Center,
                                 modifier = Modifier
+                                    .sizeIn(minWidth = Dimens.MinTouchTarget, minHeight = Dimens.MinTouchTarget)
                                     .then(
                                         if (pointerSelectsBio) {
                                             Modifier
                                                 .clip(CircleShape)
-                                                .clickable(role = Role.Button) { bioExpanded = false }
+                                                .clickable(role = Role.Button) { bioExpanded = !bioExpanded }
                                         } else {
                                             Modifier
                                         },
-                                    )
-                                    .padding(2.dp)
-                                    .size(Dimens.IconInline),
-                            )
+                                    ),
+                            ) {
+                                Icon(
+                                    imageVector = if (bioExpanded) {
+                                        Icons.Filled.KeyboardArrowUp
+                                    } else {
+                                        Icons.Filled.KeyboardArrowDown
+                                    },
+                                    contentDescription = bioToggleLabel,
+                                    tint = colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(Dimens.IconInline),
+                                )
+                            }
                         }
                     }
                 }
@@ -1602,28 +1703,30 @@ private fun SpaceStatsRow(
 
     val followerNum = formatCount(followerCount)
     val followerFull = stringResource(Res.string.space_followers, followerNum)
-    val followerAnnotated = buildAnnotatedString {
-        val idx = followerFull.indexOf(followerNum)
-        if (idx >= 0) {
-            val prefix = followerFull.substring(0, idx)
-            val suffix = followerFull.substring(idx + followerNum.length)
-            if (prefix.isNotEmpty()) {
-                withStyle(labelStyle.toSpanStyle().copy(color = colorScheme.onSurfaceVariant)) {
-                    append(prefix)
+    val followerAnnotated = remember(followerFull, followerNum, labelStyle, numberStyle, colorScheme) {
+        buildAnnotatedString {
+            val idx = followerFull.indexOf(followerNum)
+            if (idx >= 0) {
+                val prefix = followerFull.substring(0, idx)
+                val suffix = followerFull.substring(idx + followerNum.length)
+                if (prefix.isNotEmpty()) {
+                    withStyle(labelStyle.toSpanStyle().copy(color = colorScheme.onSurfaceVariant)) {
+                        append(prefix)
+                    }
                 }
-            }
-            withStyle(numberStyle.toSpanStyle().copy(color = colorScheme.onSurface)) {
-                append(followerNum)
-            }
-            if (suffix.isNotEmpty()) {
-                val paddedSuffix = if (suffix.startsWith(" ")) suffix else " $suffix"
-                withStyle(labelStyle.toSpanStyle().copy(color = colorScheme.onSurfaceVariant)) {
-                    append(paddedSuffix)
+                withStyle(numberStyle.toSpanStyle().copy(color = colorScheme.onSurface)) {
+                    append(followerNum)
                 }
-            }
-        } else {
-            withStyle(numberStyle.toSpanStyle().copy(color = colorScheme.onSurface)) {
-                append(followerFull)
+                if (suffix.isNotEmpty()) {
+                    val paddedSuffix = if (suffix.startsWith(" ")) suffix else " $suffix"
+                    withStyle(labelStyle.toSpanStyle().copy(color = colorScheme.onSurfaceVariant)) {
+                        append(paddedSuffix)
+                    }
+                }
+            } else {
+                withStyle(numberStyle.toSpanStyle().copy(color = colorScheme.onSurface)) {
+                    append(followerFull)
+                }
             }
         }
     }
@@ -1637,8 +1740,8 @@ private fun SpaceStatsRow(
         if (archiveCount != null && archiveCount > 0) {
             val archiveNum = formatCount(archiveCount.toLong())
             val archiveLabel = stringResource(Res.string.space_tab_archives)
-            Text(
-                text = buildAnnotatedString {
+            val archiveAnnotated = remember(archiveNum, archiveLabel, labelStyle, numberStyle, colorScheme) {
+                buildAnnotatedString {
                     withStyle(numberStyle.toSpanStyle().copy(color = colorScheme.onSurface)) {
                         append(archiveNum)
                     }
@@ -1646,7 +1749,10 @@ private fun SpaceStatsRow(
                         append(" ")
                         append(archiveLabel)
                     }
-                },
+                }
+            }
+            Text(
+                text = archiveAnnotated,
                 maxLines = 1,
             )
         }
@@ -1706,15 +1812,15 @@ private fun SpaceLiveRoomCard(
             modifier = Modifier.weight(1f),
         )
         Surface(
-            color = colorScheme.surface.copy(alpha = 0.36f),
-            contentColor = colorScheme.onPrimaryContainer,
+            color = colorScheme.primary,
+            contentColor = colorScheme.onPrimary,
             shape = CircleShape,
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                 contentDescription = null,
-                tint = colorScheme.onPrimaryContainer,
-                modifier = Modifier.padding(Spacing.Hair + 2.dp).size(16.dp),
+                tint = colorScheme.onPrimary,
+                modifier = Modifier.padding(Spacing.Hair + Spacing.Hair / 2).size(Dimens.IconInline),
             )
         }
     }
@@ -1755,7 +1861,13 @@ private fun SpaceFollowControl(
             else -> Res.string.follow_none
         },
     )
-    val onLeading = if (following) ({ menuOpen = true }) else onToggleFollow
+    // 已关注时主按钮直达分组设置，尾部仅保留取消关注与拉黑，消除重复菜单项。
+    val onLeading = if (following) onOpenGroupPicker else onToggleFollow
+    val motionScheme = if (LocalPointerSource.current.isTouchLike) {
+        MaterialTheme.motionScheme
+    } else {
+        SpaceDesktopMenuMotionScheme
+    }
 
     Box {
         SplitButtonLayout(
@@ -1783,30 +1895,29 @@ private fun SpaceFollowControl(
                 }
             },
         )
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            if (following) {
+        MaterialExpressiveTheme(motionScheme = motionScheme) {
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                val totalItems = if (following) 2 else 1
+                var itemIndex = 0
+                if (following) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(Res.string.follow_unfollow_confirm_title)) },
+                        shape = menuItemShape(itemIndex++, totalItems),
+                        onClick = {
+                            menuOpen = false
+                            confirmingUnfollow = true
+                        },
+                    )
+                }
                 DropdownMenuItem(
-                    text = { Text(stringResource(Res.string.follow_set_groups)) },
+                    text = { Text(stringResource(Res.string.blacklist_block)) },
+                    shape = menuItemShape(itemIndex, totalItems),
                     onClick = {
                         menuOpen = false
-                        onOpenGroupPicker()
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(Res.string.follow_unfollow_confirm_title)) },
-                    onClick = {
-                        menuOpen = false
-                        confirmingUnfollow = true
+                        confirmingBlock = true
                     },
                 )
             }
-            DropdownMenuItem(
-                text = { Text(stringResource(Res.string.blacklist_block)) },
-                onClick = {
-                    menuOpen = false
-                    confirmingBlock = true
-                },
-            )
         }
     }
 
@@ -1925,8 +2036,23 @@ private fun CollectionsTab(
     @Suppress("UNUSED_PARAMETER") columns: GridCells,
     modifier: Modifier = Modifier,
 ) {
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val gridCols = rememberVideoGridColumnCount(maxWidth)
+    val density = LocalDensity.current
+    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    var containerWidth by remember { mutableStateOf(0.dp) }
+    val resolvedWidth = if (containerWidth > 0.dp) {
+        containerWidth
+    } else if (wide) {
+        Breakpoints.Expanded
+    } else {
+        Breakpoints.Medium - 1.dp
+    }
+    val gridCols = rememberVideoGridColumnCount(resolvedWidth)
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .onSizeChanged { containerWidth = with(density) { it.width.toDp() } },
+    ) {
         PagedColumn(
             items = state.items,
             key = { "${it.isSeason}-${it.id}" },
@@ -1991,11 +2117,13 @@ private fun CollectionFolderCard(
             )
         },
     ) { openMenu ->
+        val shapes = MaterialTheme.shapes
+        val lipShape = shapes.small.copy(bottomStart = CornerSize(0.dp), bottomEnd = CornerSize(0.dp))
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .interactiveCard(
-                    shape = MaterialTheme.shapes.large,
+                    shape = shapes.largeIncreased,
                     baseColor = colorScheme.surfaceContainer,
                     hoverColor = lerp(colorScheme.surfaceContainer, colorScheme.surfaceContainerHigh, 0.6f),
                 )
@@ -2012,17 +2140,17 @@ private fun CollectionFolderCard(
                     .padding(horizontal = Spacing.Cozy)
                     .fillMaxWidth()
                     .height(FolderLipHeight)
-                    .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                    .clip(lipShape)
                     .background(colorScheme.surfaceContainerHigh),
             )
             Spacer(modifier = Modifier.height(FolderLipGap))
 
-            // 16:10 封面与右下角「合集  24」/「系列  12」计数胶囊
+            // 16:10 封面与右下角「合集  24」/「系列  12」计数胶囊（外 largeIncreased 20dp - 8dp 内边距 = medium 12dp 光学同心）
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(CoverAspectRatio)
-                    .clip(RoundedCornerShape(CoverCornerRadius))
+                    .clip(shapes.medium)
                     .background(colorScheme.surfaceContainerHigh),
                 contentAlignment = Alignment.Center,
             ) {
@@ -2051,9 +2179,9 @@ private fun CollectionFolderCard(
                     maxLines = 1,
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(6.dp)
-                        .background(FixedColors.ScrimOnMedia, MaterialTheme.shapes.extraSmall)
-                        .padding(horizontal = Spacing.Hair + 2.dp, vertical = 2.dp),
+                        .padding(Spacing.Hair + Spacing.Hair / 2)
+                        .background(FixedColors.ScrimOnMedia, shapes.extraSmall)
+                        .padding(horizontal = Spacing.Hair + Spacing.Hair / 2, vertical = Spacing.Hair / 2),
                 )
             }
 
@@ -2064,18 +2192,24 @@ private fun CollectionFolderCard(
                 minLines = 2,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = Spacing.Tight, start = 2.dp, end = 2.dp, bottom = 2.dp),
+                modifier = Modifier.padding(
+                    top = Spacing.Tight,
+                    start = Spacing.Hair / 2,
+                    end = Spacing.Hair / 2,
+                    bottom = Spacing.Hair / 2,
+                ),
             )
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun CollectionFolderSkeleton(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(MaterialTheme.shapes.large)
+            .clip(MaterialTheme.shapes.largeIncreased)
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .padding(Spacing.Tight),
         verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
@@ -2182,21 +2316,35 @@ internal fun VideoListTab(
     header: (@Composable () -> Unit)? = null,
     @Suppress("UNUSED_PARAMETER") columns: GridCells = GridCells.Fixed(1),
 ) {
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        val gridCols = rememberVideoGridColumnCount(maxWidth)
-        val useGrid = gridCols > 1
-        val effectiveColumns = if (useGrid) GridCells.Fixed(gridCols) else GridCells.Fixed(1)
-        val contentPadding = if (useGrid) {
-            PaddingValues(
-                start = Spacing.Tight - 2.dp,
-                end = Spacing.Tight - 2.dp,
-                top = Spacing.Hair,
-                bottom = Spacing.Comfortable + navigationBarsBottom(),
-            )
-        } else {
-            PaddingValues(bottom = navigationBarsBottom())
-        }
+    val density = LocalDensity.current
+    val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    var containerWidth by remember { mutableStateOf(0.dp) }
+    val resolvedWidth = if (containerWidth > 0.dp) {
+        containerWidth
+    } else if (wide) {
+        Breakpoints.Expanded
+    } else {
+        Breakpoints.Medium - 1.dp
+    }
+    val gridCols = rememberVideoGridColumnCount(resolvedWidth)
+    val useGrid = gridCols > 1
+    val effectiveColumns = if (useGrid) GridCells.Fixed(gridCols) else GridCells.Fixed(1)
+    val contentPadding = if (useGrid) {
+        PaddingValues(
+            start = Spacing.Tight - Spacing.Hair / 2,
+            end = Spacing.Tight - Spacing.Hair / 2,
+            top = Spacing.Hair,
+            bottom = Spacing.Comfortable + navigationBarsBottom(),
+        )
+    } else {
+        PaddingValues(bottom = navigationBarsBottom())
+    }
 
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .onSizeChanged { containerWidth = with(density) { it.width.toDp() } },
+    ) {
         PagedColumn(
             items = items,
             key = { it.bvid },
@@ -2214,22 +2362,25 @@ internal fun VideoListTab(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = if (useGrid) Spacing.Tight + 2.dp else Spacing.Comfortable),
+                            .padding(horizontal = if (useGrid) Spacing.Tight + Spacing.Hair / 2 else Spacing.Comfortable),
                     ) {
                         headerContent()
                     }
                 }
             },
         ) { item ->
-            val rowUi = VideoRowUi(
-                title = item.title,
-                coverUrl = item.coverUrl,
-                durationText = item.durationText,
-                dateText = formatDate(item.publishedAtEpochSeconds),
-                playText = item.playCountText,
-                danmakuText = item.danmakuCountText,
-                typeBadge = chargingBadgeText(item.chargingOnly),
-            )
+            val typeBadge = chargingBadgeText(item.chargingOnly)
+            val rowUi = remember(item, typeBadge) {
+                VideoRowUi(
+                    title = item.title,
+                    coverUrl = item.coverUrl,
+                    durationText = item.durationText,
+                    dateText = formatDate(item.publishedAtEpochSeconds),
+                    playText = item.playCountText,
+                    danmakuText = item.danmakuCountText,
+                    typeBadge = typeBadge,
+                )
+            }
             ContextMenuBox(
                 onClick = null,
                 menuLabel = stringResource(Res.string.menu_item_actions),
@@ -2249,7 +2400,7 @@ internal fun VideoListTab(
                         ui = rowUi,
                         onClick = { onVideoClick(item) },
                         onLongClick = openMenu,
-                        modifier = Modifier.padding(2.dp),
+                        modifier = Modifier.padding(Spacing.Hair / 2),
                     )
                 } else {
                     VideoRow(
@@ -2261,6 +2412,20 @@ internal fun VideoListTab(
             }
         }
     }
+}
+
+private val SpaceTabIndicatorMinWidth = 24.dp
+private val SpaceTitleRevealOffset = 6.dp
+private const val SpaceTopBarMaxActions = 3
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+private object SpaceDesktopMenuMotionScheme : MotionScheme {
+    override fun <T> defaultSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> fastSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> slowSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> defaultEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
+    override fun <T> fastEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
+    override fun <T> slowEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
 }
 
 private val DateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")

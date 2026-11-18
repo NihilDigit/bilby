@@ -1,21 +1,26 @@
 package dev.bilby.ui.dynamic
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
 import dev.bilby.api.BiliResult
 import dev.bilby.data.DynamicRepository
 import dev.bilby.data.model.DynamicCard
+import dev.bilby.ui.errorTextRes
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 
+@Immutable
 data class DynamicDetailUiState(
     val card: DynamicCard? = null,
     val loading: Boolean = false,
     val error: String? = null,
+    val errorRes: StringResource? = null,
 )
 
 /**
@@ -42,7 +47,7 @@ class DynamicDetailViewModel(
     }
 
     fun retry() {
-        _state.update { it.copy(loading = true, error = null) }
+        _state.update { it.copy(loading = true, error = null, errorRes = null) }
         load()
     }
 
@@ -62,11 +67,16 @@ class DynamicDetailViewModel(
         viewModelScope.launch {
             when (val result = repository.loadDetail(id)) {
                 is BiliResult.Ok -> _state.update {
-                    it.copy(card = result.value, loading = false, error = null)
+                    it.copy(card = result.value, loading = false, error = null, errorRes = null)
                 }
 
-                is BiliResult.ApiError -> setError("${result.message}(${result.code})")
-                is BiliResult.Failure -> setError(result.cause.message ?: "网络错误")
+                else -> _state.update {
+                    it.copy(
+                        loading = false,
+                        error = null,
+                        errorRes = result.errorTextRes("动态详情"),
+                    )
+                }
             }
         }
     }
@@ -84,6 +94,4 @@ class DynamicDetailViewModel(
             ),
         )
     }
-
-    private fun setError(message: String) = _state.update { it.copy(loading = false, error = message) }
 }

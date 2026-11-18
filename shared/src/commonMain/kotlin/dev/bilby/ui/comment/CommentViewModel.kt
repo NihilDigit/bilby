@@ -1,5 +1,6 @@
 package dev.bilby.ui.comment
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.api.BiliResult
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
+@Immutable
 data class CommentUiState(
     val myMid: Long? = null, // 非空且与某条评论 mid 相同时,该评论可删除
     val topComment: CommentItem? = null,
@@ -53,6 +55,7 @@ data class CommentUiState(
     val expandedReplies: Map<Long, ExpandedReplies> = emptyMap(),
 )
 
+@Immutable
 data class ExpandedReplies(
     val items: List<CommentItem>,
     val loadingMore: Boolean = false,

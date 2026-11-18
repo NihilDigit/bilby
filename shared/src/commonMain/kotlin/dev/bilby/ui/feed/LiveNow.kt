@@ -15,13 +15,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -181,10 +181,12 @@ fun LiveNowSheet(
                 .fillMaxWidth()
                 .weight(1f, fill = false),
             contentPadding = PaddingValues(vertical = Spacing.Hair),
+            verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
         ) {
-            items(liveUps, key = { it.mid }) { up ->
-                ListItem(
+            itemsIndexed(liveUps, key = { _, up -> up.mid }) { index, up ->
+                SegmentedListItem(
                     onClick = { onLiveClick(up.roomId) },
+                    shapes = ListItemDefaults.segmentedShapes(index = index, count = liveUps.size),
                     supportingContent = up.roomTitle.takeIf { it.isNotEmpty() }?.let { title ->
                         { Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis) }
                     },
@@ -196,7 +198,9 @@ fun LiveNowSheet(
                             modifier = Modifier.size(LivePulseSizeInList),
                         )
                     },
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    colors = ListItemDefaults.segmentedColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    ),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(

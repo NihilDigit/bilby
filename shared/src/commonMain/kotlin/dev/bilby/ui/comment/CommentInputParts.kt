@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
@@ -42,9 +43,11 @@ import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.SentimentSatisfied
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.FilledTonalIconToggleButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.IconToggleButtonShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -93,7 +96,6 @@ import dev.bilby.ui.barsAndCutout
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.ConfigureInputDialogWindow
 import dev.bilby.ui.components.EmotePickerPanel
-import dev.bilby.ui.components.EmoteToggleButton
 import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.PillInputField
@@ -402,7 +404,7 @@ internal fun CommentComposerDialog(
                                 .focusRequester(focusRequester)
                                 .semantics { contentDescription = headerTitle },
                             trailing = {
-                                EmoteToggleButton(
+                                CommentEmoteToggleButton(
                                     open = emojiOpen,
                                     onToggle = {
                                         if (emojiOpen) {
@@ -598,16 +600,21 @@ internal fun InlineCommentComposer(
                             Box(
                                 contentAlignment = Alignment.Center,
                                 modifier = Modifier
-                                    .size(ReplyClearButtonSize)
+                                    .sizeIn(minWidth = Dimens.MinTouchTarget, minHeight = Dimens.MinTouchTarget)
                                     .clip(CircleShape)
                                     .clickable(role = Role.Button, onClick = onClearReply),
                             ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Close,
-                                    contentDescription = clearLabel,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(ReplyClearIconSize),
-                                )
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.size(ReplyClearButtonSize),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Close,
+                                        contentDescription = clearLabel,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(ReplyClearIconSize),
+                                    )
+                                }
                             }
                         }
                     }
@@ -660,24 +667,10 @@ internal fun InlineCommentComposer(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (hasEmoteRepo) {
-                    val emoteLabel = stringResource(Res.string.emote_open)
-                    BilbyTooltip(text = emoteLabel, anchorAbove = true) {
-                        IconButton(
-                            onClick = { emojiOpen = !emojiOpen },
-                            modifier = Modifier.size(IconButtonDefaults.extraSmallContainerSize()),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.SentimentSatisfied,
-                                contentDescription = emoteLabel,
-                                tint = if (emojiOpen) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                                modifier = Modifier.size(Dimens.IconInline),
-                            )
-                        }
-                    }
+                    CommentEmoteToggleButton(
+                        open = emojiOpen,
+                        onToggle = { emojiOpen = !emojiOpen },
+                    )
                 }
                 commentDraftCounter(fieldValue.text.length)?.let { counter ->
                     Text(
@@ -738,6 +731,38 @@ internal fun InlineCommentComposer(
                     modifier = Modifier.clip(MaterialTheme.shapes.medium),
                 )
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun CommentEmoteToggleButton(
+    open: Boolean,
+    onToggle: () -> Unit,
+) {
+    val emoteLabel = stringResource(Res.string.emote_open)
+    BilbyTooltip(text = emoteLabel, anchorAbove = true) {
+        FilledTonalIconToggleButton(
+            checked = open,
+            onCheckedChange = { onToggle() },
+            shapes = IconToggleButtonShapes(
+                shape = CircleShape,
+                pressedShape = MaterialTheme.shapes.small,
+                checkedShape = MaterialTheme.shapes.medium,
+            ),
+            colors = IconButtonDefaults.filledTonalIconToggleButtonColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                checkedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                checkedContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            ),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.SentimentSatisfied,
+                contentDescription = emoteLabel,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
         }
     }
 }

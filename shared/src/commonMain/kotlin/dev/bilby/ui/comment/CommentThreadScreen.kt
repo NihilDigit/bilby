@@ -15,6 +15,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -190,11 +191,15 @@ private fun CommentThreadScreen(
                 skeleton = { ListSkeleton(row = { PersonRowSkeleton(avatarSize = Dimens.AvatarRow) }) },
             ) {
                 if (root != null) {
-                    ThreadContent(
-                        state = state,
-                        root = root,
-                        onLoadMore = onLoadMore,
-                        actions = CommentRowActions(
+                    val rowActions = remember(
+                        state.myMid,
+                        root.rpid,
+                        onLike,
+                        onDelete,
+                        onUserClick,
+                        onOpenLink,
+                    ) {
+                        CommentRowActions(
                             myMid = state.myMid,
                             onReply = { comment ->
                                 composerTarget = comment.rpid.takeIf { it != root.rpid }
@@ -208,7 +213,13 @@ private fun CommentThreadScreen(
                             onUserClick = onUserClick,
                             onOpenLink = onOpenLink,
                             onSelectText = { selectionTarget = it },
-                        ),
+                        )
+                    }
+                    ThreadContent(
+                        state = state,
+                        root = root,
+                        onLoadMore = onLoadMore,
+                        actions = rowActions,
                     )
                 }
             }
@@ -347,6 +358,7 @@ private const val ThreadHeaderRows = 2
 /** 高亮停多久再淡出。够找到它,又不至于一直占着那一条。 */
 private const val HighlightHoldMillis = 1500L
 
+@Immutable
 data class CommentThreadUiState(
     val root: CommentItem? = null,
     val replies: List<CommentItem> = emptyList(),

@@ -14,6 +14,7 @@ import androidx.compose.material3.Button
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,7 +33,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -48,9 +48,12 @@ import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ButtonGroup
+import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalToggleButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -65,6 +68,7 @@ import androidx.compose.material3.pulltorefresh.pullToRefresh
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -74,11 +78,11 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalClipboard
 import dev.bilby.ui.components.ContextMenuBox
+import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.LocalCopyNotice
 import dev.bilby.ui.components.NeedsCopyNotice
 import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.components.RefreshAction
-import dev.bilby.ui.components.SortMenu
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.components.plainTextClip
 import kotlinx.coroutines.launch
@@ -89,6 +93,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import dev.bilby.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -109,12 +115,13 @@ import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SelectableTextDialog
-import dev.bilby.ui.components.SortRow
 import dev.bilby.ui.components.rememberLoadingVisible
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.interactiveCard
+import dev.bilby.ui.theme.rememberReducedMotion
 import dev.bilby.ui.theme.tabular
 import java.time.Instant
 
@@ -163,9 +170,15 @@ fun CommentSection(
      * 就是评论。默认 null,播放页不受影响 —— 它的正文在另一个 tab 里,不进这个列表。
      */
     header: (@Composable () -> Unit)? = null,
+    scrollToCommentsTick: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
+    LaunchedEffect(scrollToCommentsTick) {
+        if (scrollToCommentsTick > 0) {
+            listState.animateScrollToItem(if (header != null) 1 else 0)
+        }
+    }
 
     // **snackbar 的宿主在评论区自己身上**,不从导航层穿进来 —— 同一条判断见 `FavFolderScreen`
     // 那处注释。这里还多一层理由:评论区是播放页 tab 里的一块,它上面那半屏是播放器,
@@ -275,21 +288,23 @@ fun CommentSection(
     )
 
     val scope = rememberCoroutineScope()
-    val rowActions = CommentRowActions(
-        myMid = state.myMid,
-        onReply = { comment ->
-            openComposer(comment.rpid, false, false)
-        },
-        onLike = onLike,
-        onDelete = onDelete,
-        onSeek = onSeek,
-        onUserClick = onUserClick,
-        onOpenLink = onOpenLink,
-        onSelectText = { selectionTarget = it },
-        onCopiedNotice = { msg ->
-            if (NeedsCopyNotice) scope.launch { snackbarHostState.showSnackbar(msg) }
-        },
-    )
+    val rowActions = remember(state.myMid, onLike, onDelete, onSeek, onUserClick, onOpenLink) {
+        CommentRowActions(
+            myMid = state.myMid,
+            onReply = { comment ->
+                openComposer(comment.rpid, false, false)
+            },
+            onLike = onLike,
+            onDelete = onDelete,
+            onSeek = onSeek,
+            onUserClick = onUserClick,
+            onOpenLink = onOpenLink,
+            onSelectText = { selectionTarget = it },
+            onCopiedNotice = { msg ->
+                if (NeedsCopyNotice) scope.launch { snackbarHostState.showSnackbar(msg) }
+            },
+        )
+    }
 
     val sendError = state.sendError?.let { stringResource(Res.string.comment_send_failed, it) }
 
@@ -319,8 +334,8 @@ fun CommentSection(
                 // 底部不让导航栏:下面是输入栏,由它去让。
                 contentPadding = PaddingValues(bottom = Spacing.Tight),
             ) {
-                header?.let { item(key = "header") { it() } }
-                item(key = "sort-bar") {
+                header?.let { item(key = "header", contentType = "header") { it() } }
+                item(key = "sort-bar", contentType = "sort-bar") {
                     SortBar(
                         sort = state.sort,
                         onSort = onSort,
@@ -336,7 +351,7 @@ fun CommentSection(
                 // margin between items is acceptable",评论正是重复版式,而每条开头的头像本身
                 // 就标出了"换了一个人"。条间距由 [CommentRow] 的上下内边距给。
                 state.topComment?.let { top ->
-                    item(key = "top-${top.rpid}") {
+                    item(key = "top-${top.rpid}", contentType = "comment-row") {
                         CommentRow(
                             comment = top,
                             actions = rowActions,
@@ -355,10 +370,16 @@ fun CommentSection(
 
                 // 出错时不叠空态:一次失败不等于"这条视频没人评论",两句话一起出现只会互相拆台。
                 if (!state.loading && state.error == null && state.items.isEmpty() && state.topComment == null) {
-                    item(key = "empty") { EmptyState(stringResource(Res.string.comment_empty)) }
+                    item(key = "empty", contentType = "empty") {
+                        EmptyState(stringResource(Res.string.comment_empty))
+                    }
                 }
 
-                items(state.items, key = { comment -> comment.rpid }) { comment ->
+                items(
+                    items = state.items,
+                    key = { comment -> comment.rpid },
+                    contentType = { "comment-row" },
+                ) { comment ->
                     CommentRow(
                         comment = comment,
                         actions = rowActions,
@@ -373,7 +394,7 @@ fun CommentSection(
                     }
                 }
 
-                item(key = "footer") {
+                item(key = "footer", contentType = "footer") {
                     if (state.loading) {
                         // 位置照占,指示器等够 200ms 才出现(见 [rememberLoadingVisible])——评论
                         // 常常一开口就到,画了也只够抽一下。位置留着是为了那一下不把列表顶一跳。
@@ -391,6 +412,7 @@ fun CommentSection(
                     }
                 }
             }
+            ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
             // LoadingIndicator 档,不是旧的箭头圈:判据和默认配色见 docs/ui-style-guide.md §2.7d。
             PullToRefreshDefaults.LoadingIndicator(
                 state = pullState,
@@ -576,6 +598,7 @@ internal fun settleCommentSubmission(
  * 一条评论能做的几件事。主列表、楼中楼、详情面板三处共用同一份,不在每一层把七个回调
  * 逐个往下传。
  */
+@Stable
 internal class CommentRowActions(
     /** 非空且与某条评论的 mid 相同时,那一条可删除。 */
     val myMid: Long?,
@@ -608,7 +631,8 @@ private fun findUname(state: CommentUiState, rpid: Long): String? {
     return null
 }
 
-/** 最热 / 最新是排序,风格指南 §2.1 把排序划给 SortRow;segmented button 留给切换视图。 */
+/** 最热 / 最新 1-tap 互斥切换，采用 M3E 连接式 [ButtonGroup] + [FilledTonalToggleButton]。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SortBar(
     sort: CommentSort,
@@ -617,26 +641,63 @@ private fun SortBar(
     refreshing: Boolean = false,
     onRefresh: () -> Unit = {},
 ) {
-    val options = listOf(
-        CommentSort.HOT to Res.string.comment_sort_hot,
-        CommentSort.TIME to Res.string.comment_sort_time,
-    )
-    // 左右只垫 Tight:下拉按钮自带内边距,再垫一档页边距,▾ 就离右缘比正文远一截。
-    if (!refreshEnabled) {
-        SortRow(
-            options = options,
-            selected = sort,
-            onSelect = onSort,
-            modifier = Modifier.padding(horizontal = Spacing.Tight),
+    val options = remember {
+        listOf(
+            CommentSort.HOT to Res.string.comment_sort_hot,
+            CommentSort.TIME to Res.string.comment_sort_time,
         )
-    } else {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Tight),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Hair),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (refreshEnabled) {
             RefreshAction(refreshing = refreshing, onRefresh = onRefresh)
-            SortMenu(options = options, selected = sort, onSelect = onSort)
+            Spacer(Modifier.width(Spacing.Tight))
+        }
+        ButtonGroup(
+            overflowIndicator = { menuState -> ButtonGroupDefaults.OverflowIndicator(menuState) },
+            horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+        ) {
+            options.forEachIndexed { index, (optionSort, labelRes) ->
+                customItem(
+                    buttonGroupContent = {
+                        val interactionSource = remember { MutableInteractionSource() }
+                        val selected = optionSort == sort
+                        val label = stringResource(labelRes)
+                        val shapes = if (index == 0) {
+                            ButtonGroupDefaults.connectedLeadingButtonShapes()
+                        } else {
+                            ButtonGroupDefaults.connectedTrailingButtonShapes()
+                        }
+                        FilledTonalToggleButton(
+                            checked = selected,
+                            onCheckedChange = { if (!selected) onSort(optionSort) },
+                            shapes = shapes,
+                            interactionSource = interactionSource,
+                            contentPadding = PaddingValues(horizontal = Spacing.Cozy),
+                            modifier = Modifier
+                                .animateWidth(interactionSource)
+                                .semantics { role = Role.RadioButton },
+                        ) {
+                            Text(text = label, maxLines = 1, softWrap = false)
+                        }
+                    },
+                    menuContent = { menuState ->
+                        val label = stringResource(labelRes)
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = {
+                                menuState.dismiss()
+                                onSort(optionSort)
+                            },
+                        )
+                    },
+                )
+            }
         }
     }
 }
@@ -754,20 +815,12 @@ private fun CommentContextMenu(
     }
 
     if (confirmingDelete) {
-        AlertDialog(
-            onDismissRequest = { confirmingDelete = false },
-            title = { Text(stringResource(Res.string.comment_delete_confirm)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmingDelete = false
-                    actions.onDelete(comment.rpid)
-                }) { Text(stringResource(Res.string.action_delete)) }
+        CommentDeleteConfirmDialog(
+            onConfirm = {
+                confirmingDelete = false
+                actions.onDelete(comment.rpid)
             },
-            dismissButton = {
-                TextButton(onClick = { confirmingDelete = false }) {
-                    Text(stringResource(Res.string.action_cancel))
-                }
-            },
+            onDismiss = { confirmingDelete = false },
         )
     }
 }
@@ -820,31 +873,32 @@ private fun CommentRow(
     //
     // 内边距在点击之后:涟漪铺满整条,贴着屏幕两边,而不是缩在内容那一块里。
     CommentContextMenu(comment = comment, actions = actions, modifier = modifier) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .interactiveCard(
+                    shape = MaterialTheme.shapes.medium,
+                    baseColor = Color.Transparent,
+                    hoverColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                    enableScale = false,
+                )
                 .replyOnClick(comment, actions)
-                .padding(start = Spacing.Comfortable, end = Spacing.Comfortable, top = Spacing.Cozy, bottom = Spacing.Hair),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                .padding(start = Spacing.Comfortable, end = Spacing.Comfortable, top = Spacing.Tight, bottom = Spacing.Hair),
         ) {
-            // 头像本身仍是 36dp,热区往下补到 48dp:这一列的高度由右边那一整条评论决定,
-            // 往下扩不挤走任何东西。对齐取 TopCenter 而不是默认的居中,否则头像会跟着下沉 6dp。
-            Box(
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
                 modifier = Modifier
+                    .fillMaxWidth()
                     .heightIn(min = Dimens.MinTouchTarget)
                     .openSpace(comment, actions.onUserClick),
-                contentAlignment = Alignment.TopCenter,
             ) {
                 Avatar(url = comment.avatarUrl, size = Dimens.AvatarRow)
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                // **头部只有名字这一行。** 时间与属地在正文下面,和点赞排成一行(见 [CommentFooter])。
-                // 名字那一行只有 16dp 高,单独按不中;去空间的主要落点是左边的头像(热区补到 48dp),
-                // 名字是附带的第二个落点。
-                NameLine(comment = comment, modifier = Modifier.openSpace(comment, actions.onUserClick)) {
+                NameLine(comment = comment, modifier = Modifier.weight(1f)) {
                     CommentTags(comment, pinned = pinned, threadAuthorMid = threadAuthorMid)
                 }
-                Spacer(Modifier.height(Spacing.Hair))
+            }
+            Column(modifier = Modifier.padding(start = Dimens.AvatarRow + Spacing.Cozy)) {
                 CommentText(
                     message = comment.message,
                     emotes = comment.emotes,
@@ -995,10 +1049,11 @@ private val GridSpacing = 4.dp
  */
 @Composable
 private fun PictureGrid(urls: List<String>, onClick: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val pictureLabel = stringResource(Res.string.comment_picture)
     if (urls.size == 1) {
         BiliAsyncImage(
             url = urls[0],
-            contentDescription = stringResource(Res.string.comment_picture),
+            contentDescription = pictureLabel,
             modifier = modifier
                 .fillMaxWidth(SinglePictureWidthFraction)
                 .aspectRatio(4f / 3f)
@@ -1017,7 +1072,7 @@ private fun PictureGrid(urls: List<String>, onClick: (Int) -> Unit, modifier: Mo
                 row.forEach { (index, url) ->
                     BiliAsyncImage(
                         url = url,
-                        contentDescription = stringResource(Res.string.comment_picture),
+                        contentDescription = "$pictureLabel ${index + 1}/${urls.size}",
                         modifier = Modifier
                             .weight(1f)
                             .aspectRatio(1f)
@@ -1112,7 +1167,7 @@ private fun LikeButton(comment: CommentItem, onLike: (Long) -> Unit) {
 @Composable
 private fun DeleteButton(onDelete: () -> Unit) {
     var confirming by remember { mutableStateOf(false) }
-    IconButton(onClick = { confirming = true }, modifier = Modifier.size(IconButtonDefaults.extraSmallContainerSize())) {
+    IconButton(onClick = { confirming = true }) {
         Icon(
             Icons.Outlined.Delete,
             contentDescription = stringResource(Res.string.comment_delete),
@@ -1121,22 +1176,41 @@ private fun DeleteButton(onDelete: () -> Unit) {
         )
     }
     if (confirming) {
-        AlertDialog(
-            onDismissRequest = { confirming = false },
-            title = { Text(stringResource(Res.string.comment_delete_confirm)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirming = false
-                    onDelete()
-                }) { Text(stringResource(Res.string.action_delete)) }
+        CommentDeleteConfirmDialog(
+            onConfirm = {
+                confirming = false
+                onDelete()
             },
-            dismissButton = {
-                TextButton(onClick = { confirming = false }) {
-                    Text(stringResource(Res.string.action_cancel))
-                }
-            },
+            onDismiss = { confirming = false },
         )
     }
+}
+
+@Composable
+private fun CommentDeleteConfirmDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(Res.string.comment_delete_confirm)) },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError,
+                ),
+            ) {
+                Text(stringResource(Res.string.action_delete))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(Res.string.action_cancel))
+            }
+        },
+    )
 }
 
 /**
@@ -1244,26 +1318,32 @@ private fun SubReplyRow(
     // 左右 12dp、上 4dp:容器顶上另有 8dp,底行按钮的触摸区又带着 8dp 的留白,
     // 条与条之间因此是 12dp 左右。上一版左右只有 8dp,文字贴着容器边。
     CommentContextMenu(comment = comment, actions = actions) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .interactiveCard(
+                    shape = MaterialTheme.shapes.small,
+                    baseColor = Color.Transparent,
+                    hoverColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    enableScale = false,
+                )
                 .replyOnClick(comment, actions)
                 .padding(start = Spacing.Cozy, end = Spacing.Cozy, top = Spacing.Hair),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            Box(
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
                 modifier = Modifier
+                    .fillMaxWidth()
                     .heightIn(min = Dimens.MinTouchTarget)
                     .openSpace(comment, actions.onUserClick),
-                contentAlignment = Alignment.TopCenter,
             ) {
                 Avatar(url = comment.avatarUrl, size = Dimens.AvatarNested)
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                NameLine(comment = comment, modifier = Modifier.openSpace(comment, actions.onUserClick)) {
+                NameLine(comment = comment, modifier = Modifier.weight(1f)) {
                     CommentTags(comment, pinned = false, threadAuthorMid = rootAuthorMid)
                 }
-                Spacer(Modifier.height(Spacing.Hair))
+            }
+            Column(modifier = Modifier.padding(start = Dimens.AvatarNested + Spacing.Tight)) {
                 // 回复楼中楼时正文开头自带一截"回复 @某某 :",那是发送方写进 message 的字面文本
                 // (见 CommentRepository.postComment),原样留着 —— 它就是这条的正文,而剥掉它要去猜
                 // 那一截到底有多长,名字改过就会剥错。
@@ -1382,19 +1462,21 @@ private fun CommentThreadSheet(
     val scope = rememberCoroutineScope()
     var selectionTarget by remember { mutableStateOf<String?>(null) }
 
-    val actions = CommentRowActions(
-        myMid = myMid,
-        onReply = { comment -> onCompose(comment.rpid) },
-        onLike = onLike,
-        onDelete = onDelete,
-        onSeek = onSeek,
-        onUserClick = onUserClick,
-        onOpenLink = onOpenLink,
-        onSelectText = { selectionTarget = it },
-        onCopiedNotice = { msg ->
-            if (NeedsCopyNotice) scope.launch { snackbarHostState.showSnackbar(msg) }
-        },
-    )
+    val actions = remember(myMid, onCompose, onLike, onDelete, onSeek, onUserClick, onOpenLink) {
+        CommentRowActions(
+            myMid = myMid,
+            onReply = { comment -> onCompose(comment.rpid) },
+            onLike = onLike,
+            onDelete = onDelete,
+            onSeek = onSeek,
+            onUserClick = onUserClick,
+            onOpenLink = onOpenLink,
+            onSelectText = { selectionTarget = it },
+            onCopiedNotice = { msg ->
+                if (NeedsCopyNotice) scope.launch { snackbarHostState.showSnackbar(msg) }
+            },
+        )
+    }
 
     val shown = expanded?.items?.takeIf { it.isNotEmpty() } ?: root.previewReplies
     val hasMore = expanded?.hasMore == true
@@ -1463,76 +1545,83 @@ internal fun CommentThreadList(
     highlightRpid: Long? = null,
     contentPadding: PaddingValues = PaddingValues(bottom = Spacing.Tight),
 ) {
-    LazyColumn(
-        state = listState,
-        modifier = modifier,
-        contentPadding = contentPadding,
-    ) {
-        item(key = "root") {
-            CommentRow(
-                comment = root,
-                actions = actions,
-                modifier = Modifier.flashBackground(highlightRpid == root.rpid),
-            )
-        }
-        item(key = "replies-header") {
-            // 主楼与回复之间的分界。不画线:这里要说的是"下面是几条回复",
-            // 一句话比一根线说得清楚。
-            Text(
-                text = stringResource(Res.string.comment_thread_replies, root.subReplyCount),
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(
-                    start = Spacing.Comfortable,
-                    end = Spacing.Comfortable,
-                    top = Spacing.Tight,
-                    bottom = Spacing.Hair,
-                ),
-            )
-        }
-        items(replies, key = { sub -> sub.rpid }) { sub ->
-            CommentRow(
-                comment = sub,
-                actions = actions,
-                threadAuthorMid = root.mid,
-                modifier = Modifier
-                    .animateItem()
-                    .flashBackground(highlightRpid == sub.rpid),
-            )
-        }
-        item(key = "thread-footer") {
-            // 三种结局各有各的出口:失败必须说出来,否则看起来就是"翻到这里就没有了"。
-            when {
-                loadingMore -> Box(
-                    modifier = Modifier.fillMaxWidth().padding(Spacing.Comfortable),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    LoadingSpinner()
-                }
+    Box(modifier = modifier) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = contentPadding,
+        ) {
+            item(key = "root", contentType = "root-comment") {
+                CommentRow(
+                    comment = root,
+                    actions = actions,
+                    modifier = Modifier.flashBackground(highlightRpid == root.rpid),
+                )
+            }
+            item(key = "replies-header", contentType = "replies-header") {
+                // 主楼与回复之间的分界。不画线:这里要说的是"下面是几条回复",
+                // 一句话比一根线说得清楚。
+                Text(
+                    text = stringResource(Res.string.comment_thread_replies, root.subReplyCount),
+                    style = MaterialTheme.typography.titleSmallEmphasized.tabular,
+                    modifier = Modifier.padding(
+                        start = Spacing.Comfortable,
+                        end = Spacing.Comfortable,
+                        top = Spacing.Tight,
+                        bottom = Spacing.Hair,
+                    ),
+                )
+            }
+            items(
+                items = replies,
+                key = { sub -> sub.rpid },
+                contentType = { "sub-reply" },
+            ) { sub ->
+                CommentRow(
+                    comment = sub,
+                    actions = actions,
+                    threadAuthorMid = root.mid,
+                    modifier = Modifier
+                        .animateItem()
+                        .flashBackground(highlightRpid == sub.rpid),
+                )
+            }
+            item(key = "thread-footer", contentType = "thread-footer") {
+                // 三种结局各有各的出口:失败必须说出来,否则看起来就是"翻到这里就没有了"。
+                when {
+                    loadingMore -> Box(
+                        modifier = Modifier.fillMaxWidth().padding(Spacing.Comfortable),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        LoadingSpinner()
+                    }
 
-                failed -> Box(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    TextButton(onClick = onRetry) {
+                    failed -> Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        TextButton(onClick = onRetry) {
+                            Text(
+                                stringResource(Res.string.comment_replies_failed) + "  " +
+                                    stringResource(Res.string.action_retry),
+                            )
+                        }
+                    }
+
+                    else -> Box(
+                        modifier = Modifier.fillMaxWidth().padding(Spacing.Comfortable),
+                        contentAlignment = Alignment.Center,
+                    ) {
                         Text(
-                            stringResource(Res.string.comment_replies_failed) + "  " +
-                                stringResource(Res.string.action_retry),
+                            text = stringResource(Res.string.comment_no_more_replies),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
-
-                else -> Box(
-                    modifier = Modifier.fillMaxWidth().padding(Spacing.Comfortable),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = stringResource(Res.string.comment_no_more_replies),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
             }
         }
+        ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
     }
 }
 
@@ -1543,21 +1632,31 @@ internal fun CommentThreadList(
  * 在一屏评论里扫一眼就找得到,而它淡掉之后这一条和别的回复长得一样,不留一个常驻的标记。
  * 透明度只在淡入淡出的过程里用,停住时是 0 或 1,不是兑出来的一个常驻底色(风格指南 §3)。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun Modifier.flashBackground(active: Boolean): Modifier {
+    val reducedMotion = rememberReducedMotion()
     val alpha = remember { Animatable(0f) }
-    LaunchedEffect(active) {
-        alpha.animateTo(
-            targetValue = if (active) 1f else 0f,
-            animationSpec = tween(if (active) FlashInMillis else FlashOutMillis),
-        )
+    val enterSpec = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+    val exitSpec = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+    LaunchedEffect(active, reducedMotion) {
+        if (reducedMotion) {
+            alpha.snapTo(if (active) 1f else 0f)
+        } else {
+            alpha.animateTo(
+                targetValue = if (active) 1f else 0f,
+                animationSpec = if (active) enterSpec else exitSpec,
+            )
+        }
     }
     val color = MaterialTheme.colorScheme.secondaryContainer
-    return drawBehind { drawRect(color.copy(alpha = alpha.value)) }
+    return drawBehind {
+        val current = alpha.value
+        if (current > 0f) {
+            drawRect(color.copy(alpha = current))
+        }
+    }
 }
-
-private const val FlashInMillis = 200
-private const val FlashOutMillis = 900
 
 /**
  * "UP 主""楼主""置顶"这类标记。容器色和文字色成对取自同一组 role,不再用

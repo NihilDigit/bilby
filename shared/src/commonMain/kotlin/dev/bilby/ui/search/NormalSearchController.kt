@@ -1,5 +1,6 @@
 package dev.bilby.ui.search
 
+import androidx.compose.runtime.Immutable
 import dev.bilby.resources.*
 import org.jetbrains.compose.resources.StringResource
 import dev.bilby.api.BiliResult
@@ -94,6 +95,7 @@ enum class SearchUserOrder(val apiValue: String, val ascending: Boolean, val lab
 }
 
 /** 一栏结果的翻页状态。三栏各一份,互不牵连:一栏失败或还在飞不挡另一栏。 */
+@Immutable
 data class SearchListState<T>(
     val items: List<T> = emptyList(),
     val loading: Boolean = false,
@@ -108,6 +110,7 @@ data class SearchListState<T>(
  * 普通搜索的状态:**一次查询一份结果**,不留历史。它就是一个搜索页,上一次搜了什么
  * 和这一次无关。
  */
+@Immutable
 data class NormalSearchState(
     val query: String = "",
     val tab: SearchTab = SearchTab.Video,
@@ -372,11 +375,11 @@ private class Pager<T>(
  * [dev.bilby.BiliLog],这里不再打第二遍。
  */
 private fun apiErrorText(error: BiliResult.ApiError): String = when (error.code) {
-    CODE_NOT_LOGGED_IN -> "登录已过期,重新登录后再搜"
-    CODE_RATE_LIMITED -> "请求太频繁,过一会儿再试"
+    CODE_NOT_LOGGED_IN -> "登录已过期，重新登录后再搜"
+    CODE_RATE_LIMITED -> "请求太频繁，过一会儿再试"
     // 验证码这一步还没有做(要一个 WebView 跑极验),只能说清是什么拦住了。
-    CODE_RISK_CHALLENGE -> "B 站要求验证身份,稍后再试"
-    else -> "服务暂时不可用,稍后重试"
+    CODE_RISK_CHALLENGE -> "B 站要求验证身份，稍后再试"
+    else -> "服务暂时不可用，稍后重试"
 }
 
 /**
@@ -384,4 +387,4 @@ private fun apiErrorText(error: BiliResult.ApiError): String = when (error.code)
  * 用户自己能处理的,剩下的(解析不了返回体一类)他做什么都没用,只能说清没成功。
  */
 private fun failureText(cause: Throwable): String =
-    if (cause is IOException) "网络不通,检查网络后重试" else "搜索没能完成,稍后重试"
+    if (cause is IOException) "网络不通，检查网络后重试" else "搜索没能完成，稍后重试"

@@ -1,5 +1,6 @@
 package dev.bilby.ui.feed
 
+import androidx.compose.runtime.Immutable
 import dev.bilby.data.model.FeedEntry
 import kotlin.math.abs
 
@@ -7,19 +8,22 @@ internal const val BURST_MIN_COUNT = 3
 internal const val BURST_MAX_INDEX_GAP = 6
 internal const val BURST_MAX_TIME_GAP_SECONDS = 6L * 3600L
 
+@Immutable
 internal sealed interface FeedDisplayNode {
     val anchorId: String
 
+    @Immutable
     data class Single(val entry: FeedEntry) : FeedDisplayNode {
         override val anchorId: String get() = entry.id
     }
 
+    @Immutable
     data class Burst(
         val lead: FeedEntry.Video,
         val rest: List<FeedEntry.Video>,
     ) : FeedDisplayNode {
         override val anchorId: String get() = lead.id
-        val all: List<FeedEntry.Video> get() = listOf(lead) + rest
+        val all: List<FeedEntry.Video> = listOf(lead) + rest
         val totalCount: Int get() = 1 + rest.size
     }
 }
