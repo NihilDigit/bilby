@@ -15,49 +15,121 @@
 <img alt="Material 3 Expressive" src="https://img.shields.io/badge/Material%203%20Expressive-4A5C92?style=flat-square&logo=materialdesign&logoColor=white">
 </p>
 
-Bilby 是一款面向 Android 与 Windows 的 bilibili 客户端。
+Bilby 是一款面向 Android 与 Windows（x64 与 ARM64）的 bilibili 客户端。
 
-基于 Kotlin Multiplatform 构建，两端共用界面与业务代码，界面遵循 Material 3 Expressive 设计规范：
-- **Android**：原生高性能实现，界面基于 Jetpack Compose，播放基于 Media3。
-- **Windows**：基于 Compose Multiplatform 的 GPU 加速界面，视频画面直通显存，零拷贝合成。
+基于 Kotlin Multiplatform 与 Compose Multiplatform 构建，两端共用界面与业务代码，遵循 Material 3 Expressive 设计规范与五档窗口尺寸自适应布局：窄窗口采用底部导航栏与模态底部面板，中宽及以上窗口切换为精简侧边导航栏、桌面圆角内容岛，以及可调宽或双栏侧边面板。
 
-界面注重减少干扰，内容来自关注与主动检索。
+- **Android**：界面基于 Jetpack Compose，后台播放服务基于 Media3，接入系统媒体控制、全面屏边到边显示与预测式返回。
+- **Windows**：运行于 Azul Zulu 25，通过 D3D11→D3D12 共享纹理环实现视频画面零拷贝合成与显卡重置恢复；集成原生 Win32 标题栏与贴靠布局、SMTC 系统媒体控制、`F11` / `Alt+Enter` 全屏与小窗播放，以及纯 Java 实现的 zstd 差分与全量应用内更新。
 
-> 当前提供实验性的 Windows 支持。
+界面注重减少干扰，内容来自关注与主动检索，不设推荐流、常驻相关视频与未读红点。
 
-## 动态与播放
+## 订阅与媒体库
 
-首页展示已关注 UP 主的动态，不提供推荐流。播放页提供「找相关」操作，支持基于当前视频单次检索候选内容。
+首页按时间展示已关注 UP 主的视频投稿、图文动态与专栏，顶部列出正在直播的关注对象，不提供推荐流。「媒体库」（窄窗口下为「我的」）以横向轮播归集历史记录、稍后再看、收藏夹与离线缓存；夜间模式在设定时段内仅展示白名单 UP 主投稿与离线内容。
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/feed.jpg" width="240" height="528" alt="首页：关注动态">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/video.jpg" width="240" height="528" alt="播放页与播放队列">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/in-video.jpg" width="240" height="528" alt="点按后 Agent 基于当前视频检索">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" type="image/avif" srcset="docs/screenshots/feed-wide-dark.avif">
+    <source media="(prefers-color-scheme: light)" type="image/avif" srcset="docs/screenshots/feed-wide-light.avif">
+    <img src="docs/screenshots/feed-wide-light.avif" width="760" alt="宽窗口首页：关注订阅网格与精简侧边导航栏">
+  </picture>
 </p>
 
-## 听视频
-
-在 Android 上与系统媒体控制自然衔接，支持息屏后台、锁屏与耳机线控。听视频随切随播，无需重新加载；字幕逐句跟随，点句即可跳转。
-
 <p align="center">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/listen.jpg" width="240" height="528" alt="听视频界面">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/lyrics.jpg" width="240" height="528" alt="逐句字幕">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/sleep-timer.jpg" width="240" height="528" alt="定时关闭">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" type="image/avif" srcset="docs/screenshots/library-wide-dark.avif">
+    <source media="(prefers-color-scheme: light)" type="image/avif" srcset="docs/screenshots/library-wide-light.avif">
+    <img src="docs/screenshots/library-wide-light.avif" width="536" alt="宽窗口媒体库：历史记录、稍后再看与收藏夹轮播">
+  </picture>
+  &nbsp;&nbsp;
+  <picture>
+    <source media="(prefers-color-scheme: dark)" type="image/avif" srcset="docs/screenshots/feed-compact-dark.avif">
+    <source media="(prefers-color-scheme: light)" type="image/avif" srcset="docs/screenshots/feed-compact-light.avif">
+    <img src="docs/screenshots/feed-compact-light.avif" width="176" alt="窄窗口首页：单列关注流与底部导航栏">
+  </picture>
 </p>
 
 ## Agent 检索
 
-支持接入 OpenAI 兼容端点。Agent 检索全站，结合简介与热评筛选候选。
+支持接入兼容 OpenAI 协议的端点。助理在全站执行多步检索，结合视频简介与热评筛选候选内容并附带出处；请求上下文仅包含当前提问，不注入观看历史。宽窗口下助理可作为常驻侧边面板与常规搜索结果并排对照。
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-running.jpg" width="240" height="528" alt="Agent 检索过程">
-<img src="https://raw.githubusercontent.com/NihilDigit/bilby/main/docs/screenshots/agent-answer.jpg" width="240" height="528" alt="Agent 返回的候选视频">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" type="image/avif" srcset="docs/screenshots/agent-wide-dark.avif">
+    <source media="(prefers-color-scheme: light)" type="image/avif" srcset="docs/screenshots/agent-wide-light.avif">
+    <img src="docs/screenshots/agent-wide-light.avif" width="760" alt="宽窗口搜索：常规搜索结果与常驻助理侧边面板">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" type="image/avif" srcset="docs/screenshots/agent-running-compact-dark.avif">
+    <source media="(prefers-color-scheme: light)" type="image/avif" srcset="docs/screenshots/agent-running-compact-light.avif">
+    <img src="docs/screenshots/agent-running-compact-light.avif" width="260" alt="窄窗口：Agent 多步检索过程">
+  </picture>
+  &nbsp;&nbsp;
+  <picture>
+    <source media="(prefers-color-scheme: dark)" type="image/avif" srcset="docs/screenshots/agent-answer-compact-dark.avif">
+    <source media="(prefers-color-scheme: light)" type="image/avif" srcset="docs/screenshots/agent-answer-compact-light.avif">
+    <img src="docs/screenshots/agent-answer-compact-light.avif" width="260" alt="窄窗口：Agent 返回的整理结论与候选视频">
+  </picture>
+</p>
+
+## 播放与找相关
+
+播放页将合集、多 P 选集、稍后再看与手动编排草稿收归统一的有界队列，支持弹幕与 SponsorBlock 片段跳过。不设常驻相关视频栏；「找相关」由用户显式点按发起，基于当前视频单次检索候选，在宽窗口停靠为右侧分栏，在窄窗口呈现为模态底部面板。
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" type="image/avif" srcset="docs/screenshots/video-wide-dark.avif">
+    <source media="(prefers-color-scheme: light)" type="image/avif" srcset="docs/screenshots/video-wide-light.avif">
+    <img src="docs/screenshots/video-wide-light.avif" width="760" alt="宽窗口播放页：双栏播放画面与队列">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" type="image/avif" srcset="docs/screenshots/in-video-wide-dark.avif">
+    <source media="(prefers-color-scheme: light)" type="image/avif" srcset="docs/screenshots/in-video-wide-light.avif">
+    <img src="docs/screenshots/in-video-wide-light.avif" width="536" alt="宽窗口找相关：右侧分栏检索结果">
+  </picture>
+  &nbsp;&nbsp;
+  <picture>
+    <source media="(prefers-color-scheme: dark)" type="image/avif" srcset="docs/screenshots/in-video-compact-dark.avif">
+    <source media="(prefers-color-scheme: light)" type="image/avif" srcset="docs/screenshots/in-video-compact-light.avif">
+    <img src="docs/screenshots/in-video-compact-light.avif" width="176" alt="窄窗口找相关：模态底部面板检索结果">
+  </picture>
+</p>
+
+## 听视频
+
+听视频作为播放页内状态直接切换，无需重新加载，保持当前进度与播放队列不断开；在 Android 上接入系统媒体控制（支持息屏后台、锁屏与耳机线控），在 Windows 上接入 SMTC 系统媒体控制。字幕逐句同步跟随并支持点句跳转，提供定时关闭。
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" type="image/avif" srcset="docs/screenshots/listen-wide-dark.avif">
+    <source media="(prefers-color-scheme: light)" type="image/avif" srcset="docs/screenshots/listen-wide-light.avif">
+    <img src="docs/screenshots/listen-wide-light.avif" width="760" alt="宽窗口听视频：双栏唱盘控制与播放队列">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" type="image/avif" srcset="docs/screenshots/lyrics-compact-dark.avif">
+    <source media="(prefers-color-scheme: light)" type="image/avif" srcset="docs/screenshots/lyrics-compact-light.avif">
+    <img src="docs/screenshots/lyrics-compact-light.avif" width="260" alt="窄窗口听视频：逐句同步字幕">
+  </picture>
+  &nbsp;&nbsp;
+  <picture>
+    <source media="(prefers-color-scheme: dark)" type="image/avif" srcset="docs/screenshots/sleep-timer-compact-dark.avif">
+    <source media="(prefers-color-scheme: light)" type="image/avif" srcset="docs/screenshots/sleep-timer-compact-light.avif">
+    <img src="docs/screenshots/sleep-timer-compact-light.avif" width="260" alt="窄窗口听视频：定时关闭">
+  </picture>
 </p>
 
 ## 计划中
 
-- [ ] 打磨界面细节，优化响应式布局
-- [ ] Windows 原生行为优化
 - [ ] Windows：高级弹幕渲染性能优化
 - [ ] 过滤低质量评论和动态
 - [ ] 架构整理、数据流精简与注释清理
@@ -91,3 +163,7 @@ Bilby 是一款面向 Android 与 Windows 的 bilibili 客户端。
 
 - 遵循 [GPL-3.0-or-later](LICENSE) 开源。
 - 客户端底层接口交互（WBI 签名、AppSign、设备指纹、TV 扫码登录、playurl 参数、数据上报与写操作）移植自 [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus)（GPL-3.0），感谢该项目的开发者。
+
+## 友情链接
+
+- [LINUX DO](https://linux.do/)
