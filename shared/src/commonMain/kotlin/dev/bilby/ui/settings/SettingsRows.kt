@@ -1,13 +1,14 @@
 package dev.bilby.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -27,17 +28,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 
 /*
  * 设置页的行与分组。
@@ -191,7 +191,7 @@ internal fun SettingRow(
     }
     val endValue = value.takeIf { valueAtEnd }
     val trailing: (@Composable () -> Unit)? = when {
-        endValue != null -> { { Text(endValue, style = MaterialTheme.typography.labelLarge) } }
+        endValue != null -> { { Text(endValue, style = MaterialTheme.typography.labelLarge.tabular) } }
         trailingIcon != null -> { { Icon(imageVector = trailingIcon, contentDescription = null) } }
         else -> null
     }
@@ -261,10 +261,7 @@ internal fun ToggleSettingRow(
                         modifier = if (loading) Modifier.alpha(0f) else Modifier,
                     )
                     if (loading) {
-                        CircularProgressIndicator(
-                            strokeWidth = LoadingStrokeWidth,
-                            modifier = Modifier.size(LoadingIndicatorSize),
-                        )
+                        LoadingSpinner(size = LoadingIndicatorSize)
                     }
                 }
             }
@@ -292,8 +289,7 @@ private fun SegmentedTile(position: RowPosition, content: @Composable () -> Unit
 }
 
 /**
- * 不可点的一行,排法照 SegmentedListItem:内边距取它的 ContentPadding,行首元素与文字之间、
- * 文字与行尾之间都是 12dp,一行起高 56dp。这样它夹在可点的行中间时,文字和行高都对得齐。
+ * 不可点的一行，直接使用静态 `SegmentedListItem` 重载与相邻可点行对齐圆角、内边距和行高。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -304,37 +300,20 @@ internal fun StaticSettingRow(
     subtitle: String? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
-    val colors = MaterialTheme.colorScheme
-    SegmentedTile(position) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = StaticRowMinHeight)
-                .padding(ListItemDefaults.ContentPadding),
-        ) {
-            Icon(imageVector = icon, contentDescription = null, tint = colors.onSurfaceVariant)
-            Spacer(modifier = Modifier.width(Spacing.Cozy))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = title, style = MaterialTheme.typography.bodyLarge, color = colors.onSurface)
-                if (subtitle != null) {
-                    Text(text = subtitle, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
-                }
-            }
-            if (trailing != null) {
-                Spacer(modifier = Modifier.width(Spacing.Cozy))
-                trailing()
-            }
-        }
+    SegmentedListItem(
+        shapes = ListItemDefaults.segmentedShapes(index = position.index, count = position.count),
+        colors = settingsRowColors(),
+        leadingContent = { Icon(imageVector = icon, contentDescription = null) },
+        supportingContent = subtitle?.let { { Text(it) } },
+        trailingContent = trailing,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(title)
     }
 }
 
-/** 单行列表项的规格高度,与 SegmentedListItem 的最小高度一致。 */
-private val StaticRowMinHeight = 56.dp
-
-/** 开关位置上那个转圈。比开关的滑块略大,读得出是在等,又不比开关宽。 */
+/** 开关位置上的加载指示器尺寸。比开关的滑块略大,读得出是在等,又不比开关宽。 */
 private val LoadingIndicatorSize = 20.dp
-private val LoadingStrokeWidth = 2.dp
 
 /**
  * 控件直接摆在行里的一行:标题、可选的一行当前值,下面是控件本身(明暗那组连体按钮、配色色板)。

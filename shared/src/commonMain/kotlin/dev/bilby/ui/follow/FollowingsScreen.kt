@@ -1,93 +1,109 @@
 package dev.bilby.ui.follow
 
-import androidx.compose.foundation.clickable
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.ButtonGroup
+import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialExpressiveTheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.MotionScheme
+import androidx.compose.material3.SegmentedListItem
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.ToggleButton
+import androidx.compose.material3.ToggleButtonDefaults
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import dev.bilby.data.DEFAULT_GROUP_ID
-import dev.bilby.data.FollowGroup
-import dev.bilby.data.FollowOrder
-import dev.bilby.data.RelationRepository
-import dev.bilby.data.SPECIAL_GROUP_ID
-import dev.bilby.ui.components.MetaSeparator
-import dev.bilby.ui.components.SearchField
-import dev.bilby.ui.components.UnfollowConfirmDialog
-import androidx.compose.material3.Surface
-import dev.bilby.ui.components.fadingRightEdge
-import dev.bilby.ui.theme.Spacing
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.offset
-import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import dev.bilby.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
-import dev.bilby.appendDistinctBy
-import dev.bilby.resources.*
-import dev.bilby.ui.AdaptiveListContent
-import dev.bilby.ui.BilbyWindowSize
-import dev.bilby.ui.isAtLeast
-import dev.bilby.ui.rememberBilbyWindowSize
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.fillMaxHeight
-import dev.bilby.ui.components.ContextMenuBox
-import dev.bilby.ui.components.PaneTitle
-import dev.bilby.ui.components.RefreshAction
-import dev.bilby.ui.components.SortMenu
-import androidx.compose.foundation.layout.height
 import dev.bilby.api.BiliResult
 import dev.bilby.api.map
+import dev.bilby.appendDistinctBy
+import dev.bilby.data.FollowGroup
+import dev.bilby.data.FollowOrder
 import dev.bilby.data.FollowRepository
 import dev.bilby.data.FollowingsPage
+import dev.bilby.data.RelationRepository
+import dev.bilby.data.SPECIAL_GROUP_ID
 import dev.bilby.data.UpBrief
+import dev.bilby.resources.*
+import dev.bilby.stringResource
+import dev.bilby.ui.AdaptiveListContent
+import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.BilbyTooltip
+import dev.bilby.ui.components.ContextMenuBox
+import dev.bilby.ui.components.ListItemPersonSkeleton
+import dev.bilby.ui.components.LocalPointerSource
+import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
-import dev.bilby.ui.components.ListItemPersonSkeleton
+import dev.bilby.ui.components.PaneTitle
+import dev.bilby.ui.components.RefreshAction
 import dev.bilby.ui.components.RefreshBox
+import dev.bilby.ui.components.SearchField
+import dev.bilby.ui.components.UnfollowConfirmDialog
+import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.verticalWheelScrollsRow
+import dev.bilby.ui.components.fadingRightEdge
+import dev.bilby.ui.errorTextRes
+import dev.bilby.ui.isAtLeast
+import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 
 /**
  * 这一页在看谁。**分组和排序是两件事**:分组决定"取哪一批人",排序决定"这批人怎么排"。
@@ -102,6 +118,7 @@ sealed interface FollowSource {
     data class Group(val group: FollowGroup) : FollowSource
 }
 
+@Immutable
 data class FollowingsUiState(
     val items: List<UpBrief> = emptyList(),
     val groups: List<FollowGroup> = emptyList(),
@@ -114,7 +131,7 @@ data class FollowingsUiState(
     /** 分组管理面板开着没有。 */
     val managingGroups: Boolean = false,
     /** 上一次分组读写的失败原因,显示在对应的面板里。 */
-    val groupError: String? = null,
+    val groupError: StringResource? = null,
     /** 非空时正在给某个人设置分组。 */
     val picker: GroupPickerState? = null,
     // false 而不是 true:loadMore 的并发守卫现在直接读这个字段(见 FollowingsViewModel),
@@ -123,18 +140,19 @@ data class FollowingsUiState(
     val appending: Boolean = false,
     val refreshing: Boolean = false,
     val hasMore: Boolean = true,
-    val error: String? = null,
+    val error: StringResource? = null,
     /** 宽屏左栏的特别关注,与主列表各翻各的页。 */
     val special: SpecialFollowsState = SpecialFollowsState(),
 )
 
 /** 左栏只在宽屏出现,所以不随页面一起加载,等左栏第一次画出来再取(见 [FollowingsViewModel.ensureSpecial])。 */
+@Immutable
 data class SpecialFollowsState(
     val items: List<UpBrief> = emptyList(),
     val loading: Boolean = false,
     val appending: Boolean = false,
     val hasMore: Boolean = true,
-    val error: String? = null,
+    val error: StringResource? = null,
     /** 第一页取到过。之后条目为空就是真的没有,左栏收起。 */
     val loaded: Boolean = false,
 )
@@ -205,15 +223,13 @@ class FollowingsViewModel(
             _state.update { it.copy(groupError = null) }
             when (val result = action()) {
                 is BiliResult.Ok -> groupPicker.loadGroups()
-                is BiliResult.ApiError -> groupFail("${result.message}(${result.code})")
-                is BiliResult.Failure -> groupFail(result.cause.message ?: "网络错误")
+                else -> groupFail(result.errorTextRes("分组操作"))
             }
         }
     }
 
-    private fun groupFail(message: String) {
-        BiliLog.w("分组操作失败: $message")
-        _state.update { it.copy(groupError = message) }
+    private fun groupFail(error: StringResource) {
+        _state.update { it.copy(groupError = error) }
     }
 
     fun openGroupPicker(up: UpBrief) = groupPicker.open(up)
@@ -343,8 +359,7 @@ class FollowingsViewModel(
                         }
                     }
 
-                    is BiliResult.ApiError -> if (gen == generation) fail("${result.message}(${result.code})")
-                    is BiliResult.Failure -> if (gen == generation) fail(result.cause.message ?: "网络错误")
+                    else -> if (gen == generation) fail(result.errorTextRes("关注列表"))
                 }
             } finally {
                 if (gen == generation) _state.update { it.copy(loading = false, appending = false, refreshing = false) }
@@ -417,15 +432,13 @@ class FollowingsViewModel(
                     }
                 }
 
-                is BiliResult.ApiError -> failSpecial("${result.message}(${result.code})")
-                is BiliResult.Failure -> failSpecial(result.cause.message ?: "网络错误")
+                else -> failSpecial(result.errorTextRes("特别关注列表"))
             }
         }
     }
 
-    private fun failSpecial(message: String) {
-        BiliLog.w("取特别关注失败: $message")
-        _state.update { it.copy(special = it.special.copy(loading = false, appending = false, error = message)) }
+    private fun failSpecial(error: StringResource) {
+        _state.update { it.copy(special = it.special.copy(loading = false, appending = false, error = error)) }
     }
 
     /**
@@ -444,9 +457,8 @@ class FollowingsViewModel(
         else -> repository.followings(page, state.order)
     }
 
-    private fun fail(message: String) {
-        BiliLog.w("取关注列表失败: $message")
-        _state.update { it.copy(loading = false, appending = false, refreshing = false, error = message) }
+    private fun fail(error: StringResource) {
+        _state.update { it.copy(loading = false, appending = false, refreshing = false, error = error) }
     }
 }
 
@@ -485,20 +497,29 @@ fun FollowingsScreen(
         (specialGroup.count > 0 || state.special.items.isNotEmpty())
     if (showSpecial) LaunchedEffect(Unit) { onEnsureSpecial() }
 
-    val rowActions: (UpBrief) -> FollowRowActions = { up ->
-        FollowRowActions(
-            onClick = { onUpClick(up.mid) },
-            onSetGroups = { onOpenGroupPicker(up) },
-            onUnfollow = { onUnfollow(up.mid) },
-            onBlock = { onBlock(up.mid) },
-        )
+    val rowActionsFactory: (UpBrief) -> FollowRowActions = remember(
+        onUpClick,
+        onOpenGroupPicker,
+        onUnfollow,
+        onBlock,
+    ) {
+        { up ->
+            FollowRowActions(
+                onClick = { onUpClick(up.mid) },
+                onSetGroups = { onOpenGroupPicker(up) },
+                onUnfollow = { onUnfollow(up.mid) },
+                onBlock = { onBlock(up.mid) },
+            )
+        }
     }
 
-    if (wide) {
-        // 宽屏:搜索在顶栏(见 FollowingsRoute),这里是一条常驻的筛选行加两列名单。
-        // contentPadding 的顶部是顶栏高度,由外层让开,两列名单只留底部。
-        val listPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding())
-        Column(modifier = modifier.fillMaxSize().padding(top = contentPadding.calculateTopPadding())) {
+    val listPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding())
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .then(if (wide) Modifier.padding(top = contentPadding.calculateTopPadding()) else Modifier),
+    ) {
+        if (wide) {
             WideFilterRow(
                 state = state,
                 showSpecial = showSpecial,
@@ -507,43 +528,35 @@ fun FollowingsScreen(
                 onSelectOrder = onSelectOrder,
                 onRefresh = onRefresh,
             )
-            Row(modifier = Modifier.weight(1f)) {
-                if (showSpecial) {
-                    SpecialFollowsColumn(
-                        state = state.special,
-                        onLoadMore = onLoadMoreSpecial,
-                        rowActions = rowActions,
-                        contentPadding = listPadding,
-                        modifier = Modifier.width(SpecialColumnWidth).fillMaxHeight(),
-                    )
-                }
-                FollowingsGrid(
-                    state = state,
-                    wide = true,
-                    onLoadMore = onLoadMore,
-                    onRetry = onRetry,
-                    onRefresh = onRefresh,
-                    rowActions = rowActions,
+        }
+        Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            if (showSpecial) {
+                SpecialFollowsColumn(
+                    state = state.special,
+                    onLoadMore = onLoadMoreSpecial,
+                    rowActions = rowActionsFactory,
                     contentPadding = listPadding,
-                    header = null,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.width(SpecialColumnWidth).fillMaxHeight(),
                 )
             }
+            FollowingsGrid(
+                state = state,
+                wide = wide,
+                onLoadMore = onLoadMore,
+                onRetry = onRetry,
+                onRefresh = onRefresh,
+                rowActions = rowActionsFactory,
+                contentPadding = if (wide) listPadding else contentPadding,
+                header = if (wide) {
+                    null
+                } else {
+                    {
+                        FollowingsControls(state, onSelectSource, onSearch, onOpenGroupManager)
+                    }
+                },
+                modifier = Modifier.weight(1f),
+            )
         }
-    } else {
-        FollowingsGrid(
-            state = state,
-            wide = false,
-            onLoadMore = onLoadMore,
-            onRetry = onRetry,
-            onRefresh = onRefresh,
-            rowActions = rowActions,
-            contentPadding = contentPadding,
-            header = {
-                FollowingsControls(state, onSelectSource, onSearch, onOpenGroupManager)
-            },
-            modifier = modifier,
-        )
     }
 
     if (state.managingGroups) {
@@ -571,6 +584,7 @@ fun FollowingsScreen(
 private val SpecialColumnWidth = 280.dp
 
 /** 一行上的四个动作,主网格和左栏共用。 */
+@Immutable
 private class FollowRowActions(
     val onClick: () -> Unit,
     val onSetGroups: () -> Unit,
@@ -582,6 +596,7 @@ private class FollowRowActions(
  * 宽屏左侧常驻的特别关注。**只有头像和名字**:这一栏是去这几个人空间的捷径,签名要读就在右边。
  * 不能拖宽、不能关:它回答的是"我最在意的几个人",不是一块可选的辅助内容。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SpecialFollowsColumn(
     state: SpecialFollowsState,
@@ -597,7 +612,7 @@ private fun SpecialFollowsColumn(
         loading = state.loading,
         appending = state.appending,
         hasMore = state.hasMore,
-        error = state.error,
+        error = state.error?.let { stringResource(it) },
         // 取回来是空的时候整栏收起(见 FollowingsScreen),空态轮不到显示。
         emptyText = "",
         onLoadMore = onLoadMore,
@@ -606,16 +621,24 @@ private fun SpecialFollowsColumn(
         contentPadding = contentPadding,
         modifier = modifier,
     ) { up ->
-        val actions = rowActions(up)
+        val actions = remember(up, rowActions) { rowActions(up) }
         FollowActionHost(up, actions) { menu ->
             ContextMenuBox(
-                onClick = actions.onClick,
+                onClick = null,
                 menuLabel = stringResource(Res.string.follow_row_actions, up.name),
                 menu = menu,
-            ) {
-                ListItem(
+            ) { openMenu ->
+                SegmentedListItem(
+                    onClick = actions.onClick,
+                    onLongClick = openMenu,
+                    shapes = ListItemDefaults.segmentedShapes(index = 0, count = 1),
+                    colors = ListItemDefaults.segmentedColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    ),
                     leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarRow) },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair / 2),
                 ) {
                     Text(
                         up.name,
@@ -655,7 +678,7 @@ private fun FollowingsGrid(
                 loading = state.loading,
                 appending = state.appending,
                 hasMore = state.hasMore,
-                error = state.error,
+                error = state.error?.let { stringResource(it) },
                 emptyText = stringResource(
                     if (state.query.isBlank()) Res.string.followings_empty else Res.string.followings_search_empty,
                 ),
@@ -664,7 +687,8 @@ private fun FollowingsGrid(
                 contentPadding = contentPadding,
                 header = header,
             ) { up ->
-                FollowingRow(up, rowActions(up), menuInRow = !wide)
+                val actions = remember(up, rowActions) { rowActions(up) }
+                FollowingRow(up, actions, menuInRow = !wide)
             }
         }
     }
@@ -742,6 +766,7 @@ fun FollowingsSearchField(query: String, onSearch: (String) -> Unit, modifier: M
  *
  * 常驻而不跟着滚:窄屏跟着滚是为了省竖向空间,宽屏多占一行的代价小,筛选随时够得着更有用。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun WideFilterRow(
     state: FollowingsUiState,
@@ -767,7 +792,62 @@ private fun WideFilterRow(
             modifier = Modifier.weight(1f),
         )
         if (state.canSort) {
-            SortMenu(options = FollowOrderOptions, selected = state.order, onSelect = onSelectOrder)
+            val sortColors = ToggleButtonDefaults.colors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            val interactionSources = remember { List(FollowOrderOptions.size) { MutableInteractionSource() } }
+            val orderLabels = FollowOrderOptions.map { (_, labelRes) -> stringResource(labelRes) }
+            ButtonGroup(
+                overflowIndicator = { menuState ->
+                    IconButton(onClick = { menuState.show() }) {
+                        Icon(
+                            Icons.Outlined.MoreHoriz,
+                            contentDescription = stringResource(Res.string.menu_item_actions),
+                        )
+                    }
+                },
+                horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+                modifier = Modifier.padding(end = Spacing.Tight),
+            ) {
+                FollowOrderOptions.forEachIndexed { index, (option, _) ->
+                    val label = orderLabels[index]
+                    val interactionSource = interactionSources[index]
+                    customItem(
+                        buttonGroupContent = {
+                            ToggleButton(
+                                checked = state.order == option,
+                                onCheckedChange = { if (it) onSelectOrder(option) },
+                                shapes = if (index == 0) {
+                                    ButtonGroupDefaults.connectedLeadingButtonShapes()
+                                } else {
+                                    ButtonGroupDefaults.connectedTrailingButtonShapes()
+                                },
+                                colors = sortColors,
+                                contentPadding = PaddingValues(horizontal = Spacing.Cozy),
+                                interactionSource = interactionSource,
+                                modifier = Modifier
+                                    .animateWidth(interactionSource)
+                                    .semantics { role = Role.RadioButton },
+                            ) {
+                                Text(label, maxLines = 1, softWrap = false)
+                            }
+                        },
+                        menuContent = { menuState ->
+                            DropdownMenuItem(
+                                onClick = {
+                                    menuState.dismiss()
+                                    onSelectOrder(option)
+                                },
+                                text = { Text(label) },
+                                shape = menuItemShape(index, FollowOrderOptions.size),
+                            )
+                        },
+                    )
+                }
+            }
         }
         RefreshAction(state.refreshing, onRefresh)
     }
@@ -793,38 +873,30 @@ private fun GroupChipRow(
     onOpenGroupManager: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 分组可以有任意多个(用户自己在 B 站建),所以这一排横滚 —— 与首页那排头像不同,
-    // 那一排后面藏着入口,这一排藏的是并列的筛选项,滚到哪里都不影响别的东西。
-    //
-    // **管理分组的按钮不跟着横滚。** 它不是一个筛选项,混进那一排之后既会被滚出
-    // 视野,也会被读成"还有一个叫管理分组的分组"。
+    val chipScroll = rememberScrollState()
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 右边沿渐隐,和动态页那排头像共用一份(见 [fadingRightEdge])。这一排的右端
-        // 钉着「管理分组」,滚动时被它切一半的是一枚圆角芯片。
-        //
-        // 渐隐挂在 horizontalScroll 之前:它作用于"这一排量出来的那个视口",挂在滚动之后
-        // 会跟着内容一起滚,渐变落在某一枚芯片上不动了。
         Row(
             modifier = Modifier
                 .weight(1f, fill = !packed)
                 .fadingRightEdge()
-                .horizontalScroll(rememberScrollState())
+                .verticalWheelScrollsRow(chipScroll)
+                .horizontalScroll(chipScroll)
                 .padding(horizontal = Spacing.Comfortable),
             horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
         ) {
-            // 芯片视觉高度 32dp,触控区要撑到 48dp:material3 的 Chip 不像 IconButton
-            // 那样自带这层强制(查 1.5.0-alpha25 的 aar 核实过,ChipKt 里没有引用)。
-            // 芯片本身的样子不变,长高的是它占的那格。
             FilterChip(
                 selected = state.source is FollowSource.All && state.query.isBlank(),
                 onClick = { onSelectSource(FollowSource.All) },
                 // 人数的写法同分组芯片;总数还没读到时只写名字。
                 label = {
                     val name = stringResource(Res.string.followings_all)
-                    Text(state.total?.let { "$name$MetaSeparator$it" } ?: name)
+                    Text(
+                        text = state.total?.let { "$name$MetaSeparator$it" } ?: name,
+                        style = LocalTextStyle.current.tabular,
+                    )
                 },
                 modifier = Modifier.minimumInteractiveComponentSize(),
             )
@@ -836,16 +908,24 @@ private fun GroupChipRow(
                     selected = selected,
                     onClick = { onSelectSource(FollowSource.Group(group)) },
                     // 分组名是用户自己起的,原样显示;人数跟在后面,不用中点分隔(见 MetaSeparator)。
-                    label = { Text("${group.name}$MetaSeparator${group.count}") },
+                    label = {
+                        Text(
+                            text = "${group.name}$MetaSeparator${group.count}",
+                            style = LocalTextStyle.current.tabular,
+                        )
+                    },
                     modifier = Modifier.minimumInteractiveComponentSize(),
                 )
             }
         }
-        IconButton(onClick = onOpenGroupManager) {
-            Icon(
-                Icons.Outlined.Tune,
-                contentDescription = stringResource(Res.string.follow_groups_manage),
-            )
+        val manageLabel = stringResource(Res.string.follow_groups_manage)
+        BilbyTooltip(text = manageLabel) {
+            IconButton(onClick = onOpenGroupManager) {
+                Icon(
+                    Icons.Outlined.Tune,
+                    contentDescription = manageLabel,
+                )
+            }
         }
     }
 }
@@ -862,27 +942,21 @@ val FollowingsSearchFieldMaxWidth = 640.dp
  *
  * 名字后面按需跟「特别关注」「互相关注」两枚标记。特别关注不画星:星在播放页是收藏,同一个
  * 字形在两处说两件事。
- *
- * **网格里不画 ⋮**([menuInRow] 为 false),同一份菜单改由右键和长按弹出:每格一颗时整屏是
- * 一列列竖排的点。三个动作在 UP 空间页头都有,这里只是捷径,所以可以没有常驻的入口。
  */
 @Composable
 private fun FollowingRow(up: UpBrief, actions: FollowRowActions, menuInRow: Boolean) {
     FollowActionHost(up, actions) { menu ->
-        if (menuInRow) {
+        ContextMenuBox(
+            onClick = null,
+            menuLabel = stringResource(Res.string.follow_row_actions, up.name),
+            menu = menu,
+        ) { openMenu ->
             FollowingListItem(
-                up,
-                trailing = { RowMenuButton(up, menu) },
-                modifier = Modifier.clickable(role = Role.Button, onClick = actions.onClick),
-            )
-        } else {
-            ContextMenuBox(
+                up = up,
                 onClick = actions.onClick,
-                menuLabel = stringResource(Res.string.follow_row_actions, up.name),
-                menu = menu,
-            ) {
-                FollowingListItem(up, trailing = null)
-            }
+                onLongClick = openMenu,
+                trailing = if (menuInRow) ({ RowMenuButton(up, menu) }) else null,
+            )
         }
     }
 }
@@ -892,30 +966,58 @@ private fun FollowingRow(up: UpBrief, actions: FollowRowActions, menuInRow: Bool
 @Composable
 private fun RowMenuButton(up: UpBrief, menu: @Composable ColumnScope.(close: () -> Unit) -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
+    val actionsLabel = stringResource(Res.string.follow_row_actions, up.name)
+    val isTouch = LocalPointerSource.current.isTouchLike
     // 往右挪到和上面「管理分组」那颗图标同一条竖线上:那颗按钮离右缘 Tight,ListItem 的
     // 行尾内边距是 16(查 1.5.0-alpha25 ListItemKt 的 ListItemEndPadding),两者差这么多。
     Box(modifier = Modifier.offset(x = ListItemEndPadding - Spacing.Tight)) {
-        IconButton(onClick = { menuOpen = true }) {
-            Icon(
-                Icons.Outlined.MoreVert,
-                contentDescription = stringResource(Res.string.follow_row_actions, up.name),
+        BilbyTooltip(text = actionsLabel) {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(
+                    Icons.Outlined.MoreVert,
+                    contentDescription = actionsLabel,
+                )
+            }
+        }
+        val popup: @Composable () -> Unit = {
+            DropdownMenu(
+                expanded = menuOpen,
+                onDismissRequest = { menuOpen = false },
+                shape = MenuDefaults.shape,
+                containerColor = MenuDefaults.containerColor,
+            ) {
+                menu { menuOpen = false }
+            }
+        }
+        if (isTouch) {
+            popup()
+        } else {
+            MaterialExpressiveTheme(
+                colorScheme = MaterialTheme.colorScheme,
+                motionScheme = FollowDesktopMenuMotionScheme,
+                typography = MaterialTheme.typography,
+                shapes = MaterialTheme.shapes,
+                content = popup,
             )
         }
-        DropdownMenu(
-            expanded = menuOpen,
-            onDismissRequest = { menuOpen = false },
-            shape = MenuDefaults.shape,
-            containerColor = MenuDefaults.containerColor,
-        ) {
-            menu { menuOpen = false }
-        }
     }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+private object FollowDesktopMenuMotionScheme : MotionScheme {
+    override fun <T> defaultSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> fastSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> slowSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> defaultEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
+    override fun <T> fastEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
+    override fun <T> slowEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
 }
 
 /**
  * 分组、取关、拉黑三项菜单,连同后两项的确认框。菜单挂在哪(⋮ 还是右键)由 [content] 决定;
  * 确认框放在这里而不是菜单里,是因为点完菜单项菜单就关了,确认框要比它活得久。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun FollowActionHost(
     up: UpBrief,
@@ -931,6 +1033,7 @@ private fun FollowActionHost(
                 close()
                 actions.onSetGroups()
             },
+            shape = menuItemShape(0, 3),
         )
         DropdownMenuItem(
             text = { Text(stringResource(Res.string.follow_unfollow_confirm_title)) },
@@ -938,13 +1041,20 @@ private fun FollowActionHost(
                 close()
                 confirmingUnfollow = true
             },
+            shape = menuItemShape(1, 3),
         )
         DropdownMenuItem(
-            text = { Text(stringResource(Res.string.blacklist_block)) },
+            text = {
+                Text(
+                    stringResource(Res.string.blacklist_block),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            },
             onClick = {
                 close()
                 confirmingBlock = true
             },
+            shape = menuItemShape(2, 3),
         )
     }
     if (confirmingBlock) {
@@ -963,13 +1073,22 @@ private fun FollowActionHost(
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun FollowingListItem(
     up: UpBrief,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
     trailing: (@Composable () -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
-    ListItem(
+    SegmentedListItem(
+        onClick = onClick,
+        onLongClick = onLongClick,
+        shapes = ListItemDefaults.segmentedShapes(index = 0, count = 1),
+        colors = ListItemDefaults.segmentedColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
         supportingContent = up.sign.takeIf { it.isNotBlank() }?.let { sign ->
             {
                 Text(
@@ -983,7 +1102,9 @@ private fun FollowingListItem(
         },
         leadingContent = { Avatar(url = up.faceUrl, size = Dimens.AvatarRow) },
         trailingContent = trailing,
-        modifier = Modifier.fillMaxWidth().then(modifier),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair / 2),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,

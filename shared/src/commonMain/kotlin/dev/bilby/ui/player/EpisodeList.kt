@@ -757,11 +757,13 @@ fun RowScope.QueuePlaybackControls(
     showOrder: Boolean = true,
 ) {
     val endLabel = stringResource(endMode.labelRes())
+    val endInteraction = remember { MutableInteractionSource() }
+    val orderLabel = stringResource(order.labelRes())
+    val orderInteraction = remember { MutableInteractionSource() }
     ButtonGroup(
         overflowIndicator = {},
         horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
-        val endInteraction = remember { MutableInteractionSource() }
         customItem(
             buttonGroupContent = {
                 TextButton(
@@ -795,8 +797,6 @@ fun RowScope.QueuePlaybackControls(
             menuContent = {},
         )
         if (showOrder) {
-            val orderLabel = stringResource(order.labelRes())
-            val orderInteraction = remember { MutableInteractionSource() }
             customItem(
                 buttonGroupContent = {
                     TextButton(

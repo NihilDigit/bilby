@@ -61,6 +61,7 @@ fun FavFolderCover(
     private: Boolean = false,
     count: Int? = null,
     showLip: Boolean = true,
+    privateBadgeDescription: String? = stringResource(Res.string.fav_folder_private),
 ) {
     val colorScheme = MaterialTheme.colorScheme
     Column(modifier = modifier) {
@@ -110,8 +111,7 @@ fun FavFolderCover(
                     if (private) {
                         Icon(
                             Icons.Outlined.Lock,
-                            // 这把锁没有旁边的文字替它说,读屏要念出来。
-                            contentDescription = stringResource(Res.string.fav_folder_private),
+                            contentDescription = privateBadgeDescription,
                             tint = FixedColors.OnMedia,
                             modifier = Modifier.size(LockIconSize),
                         )
@@ -172,6 +172,7 @@ fun FavFolderRow(
             url = folder.coverUrl,
             private = !folder.isPublic,
             count = folder.count,
+            privateBadgeDescription = null,
             modifier = Modifier.width(Dimens.ListCoverWidth),
         )
         Column(
@@ -243,6 +244,7 @@ fun FavFolderGridCard(
             modifier = Modifier.fillMaxWidth(),
             private = !folder.isPublic,
             count = folder.count,
+            privateBadgeDescription = null,
         )
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -298,6 +300,7 @@ fun FavFolderCard(folder: FavFolderDetail, onClick: () -> Unit, modifier: Modifi
             modifier = Modifier.fillMaxWidth(),
             private = !folder.isPublic,
             count = folder.count,
+            privateBadgeDescription = null,
         )
         Text(
             text = folder.title,

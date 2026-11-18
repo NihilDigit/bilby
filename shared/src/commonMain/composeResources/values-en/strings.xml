@@ -154,6 +154,8 @@
     <string name="toview_clear_invalid">Clear unavailable</string>
     <string name="toview_clear_invalid_confirm">Clear unavailable videos?</string>
     <string name="toview_listen_all">Listen</string>
+    <string name="listen_start_random">Start from random</string>
+    <string name="listen_more_options">More listen options</string>
     <string name="toview_order_recent">Recent</string>
     <string name="toview_order_earliest">Earliest</string>
     <string name="toview_refresh_failed">Could not refresh: %1$s</string>
@@ -402,6 +404,9 @@
     <string name="login_scanned">Scanned — confirm on your phone</string>
     <string name="login_qr_expired">QR code expired</string>
     <string name="login_success">Signed in</string>
+    <string name="login_qr_fetch_failed">Could not fetch QR code. Try again later</string>
+    <string name="login_incomplete">Sign-in did not complete. Scan again</string>
+    <string name="login_network_unavailable">Network unavailable. Check your connection and try again</string>
 
     <string name="settings_title">Settings</string>
     <!-- Account info and sign-out moved to the Profile tab; these two strings stay because
@@ -922,6 +927,7 @@
     <string name="settings_llm_models_loading">Loading models…</string>
     <string name="settings_llm_models_empty">No models found</string>
     <string name="settings_llm_models_failed">Could not load models</string>
+    <string name="settings_llm_models_toggle">Toggle model list</string>
 
     <!-- Wave-2 shared strings -->
     <string name="player_net_wifi">Wi-Fi</string>

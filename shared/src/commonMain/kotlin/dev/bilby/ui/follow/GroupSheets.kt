@@ -1,6 +1,7 @@
 package dev.bilby.ui.follow
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -8,48 +9,57 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedListItem
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import dev.bilby.data.FollowGroup
 import dev.bilby.data.SPECIAL_GROUP_ID
 import dev.bilby.data.UpBrief
 import dev.bilby.resources.*
 import dev.bilby.stringResource
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.PaneSheet
-import androidx.compose.material3.ListItem
 import dev.bilby.ui.components.trackEditableFocus
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.tabular
+import org.jetbrains.compose.resources.StringResource
 
 /**
  * 分组面板打开时的那一份状态。
@@ -59,6 +69,7 @@ import dev.bilby.ui.theme.tabular
  *
  * [special] 就是 tagid 为 -10 的那个分组,和别的分组一样跟着这一份提交,不单独走接口。
  */
+@Immutable
 data class GroupPickerState(
     val up: UpBrief,
     val selected: Set<Long> = emptySet(),
@@ -71,7 +82,7 @@ data class GroupPickerState(
     val original: Set<Long> = emptySet(),
     val loading: Boolean = true,
     val saving: Boolean = false,
-    val error: String? = null,
+    val error: StringResource? = null,
 )
 
 /**
@@ -80,7 +91,7 @@ data class GroupPickerState(
  * **进来先读齐他当前的全部分组**,读不到就不给保存 —— 接口是覆盖式的,拿一份不完整的名单
  * 写回去会把没显示出来的那些静默摘掉(notes/relation-groups.md 1.5)。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun GroupPickerSheet(
     state: GroupPickerState,
@@ -117,23 +128,29 @@ fun GroupPickerSheet(
                 Modifier.padding(horizontal = Spacing.Loose, vertical = Spacing.Comfortable),
             )
 
-            state.error != null -> SheetMessage(state.error)
-            else -> LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
-                items(groups, key = { it.id }) { group ->
+            state.error != null -> SheetMessage(stringResource(state.error))
+            else -> LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+                    .padding(horizontal = Spacing.Comfortable),
+            ) {
+                itemsIndexed(groups, key = { _, it -> it.id }) { index, group ->
                     val checked =
                         if (group.id == SPECIAL_GROUP_ID) state.special else group.id in state.selected
-                    @OptIn(ExperimentalMaterial3ExpressiveApi::class)
-                    ListItem(
+                    SegmentedListItem(
                         checked = checked,
                         onCheckedChange = { onToggle(group.id) },
                         enabled = !state.saving,
-                        trailingContent = { Checkbox(checked = checked, onCheckedChange = null) },
-                        colors = ListItemDefaults.colors(
-                            containerColor = Color.Transparent,
-                            selectedContainerColor = Color.Transparent,
-                            disabledContainerColor = Color.Transparent,
+                        shapes = ListItemDefaults.segmentedShapes(index = index, count = groups.size),
+                        colors = ListItemDefaults.segmentedColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
                         ),
-                        modifier = Modifier.fillMaxWidth(),
+                        trailingContent = { Checkbox(checked = checked, onCheckedChange = null) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
                     ) {
                         Text(
                             text = "${group.name}$MetaSeparator${group.count}",
@@ -153,19 +170,21 @@ fun GroupPickerSheet(
  *
  * 「特别关注」和「默认分组」在这里只显示、不带动作([FollowGroup.isBuiltIn]):它们是接口
  * 固定给的两个,改名和删除都会被拒 —— 画一个点了必然失败的按钮比不画更糟。
+ * 新建与改名均在面板内就地展开输入行,不弹窗叠弹窗。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun GroupManagerSheet(
     groups: List<FollowGroup>,
-    error: String?,
+    error: StringResource?,
     onCreate: (String) -> Unit,
     onRename: (Long, String) -> Unit,
     onDelete: (Long) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var creating by remember { mutableStateOf(false) }
-    var renaming by remember { mutableStateOf<FollowGroup?>(null) }
+    var draftName by remember { mutableStateOf("") }
+    var renamingId by remember { mutableStateOf<Long?>(null) }
     var deleting by remember { mutableStateOf<FollowGroup?>(null) }
 
     PaneSheet(
@@ -173,7 +192,13 @@ fun GroupManagerSheet(
         title = stringResource(Res.string.follow_groups_title),
         skipPartiallyExpanded = true,
         headerTrailing = {
-            TextButton(onClick = { creating = true }) {
+            TextButton(
+                onClick = {
+                    renamingId = null
+                    draftName = ""
+                    creating = true
+                },
+            ) {
                 Icon(
                     imageVector = Icons.Outlined.Add,
                     contentDescription = null,
@@ -195,79 +220,121 @@ fun GroupManagerSheet(
             }
         },
     ) {
-        if (error != null) SheetMessage(error)
-        LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
-            items(groups, key = { it.id }) { group ->
-                ListItem(
-                    trailingContent = if (group.isBuiltIn) null else {
-                        {
-                            Row {
-                                IconButton(onClick = { renaming = group }) {
-                                    Icon(
-                                        Icons.Outlined.Edit,
-                                        contentDescription = stringResource(
-                                            Res.string.follow_group_rename_action,
-                                            group.name,
-                                        ),
-                                    )
-                                }
-                                IconButton(onClick = { deleting = group }) {
-                                    Icon(
-                                        Icons.Outlined.Delete,
-                                        contentDescription = stringResource(
-                                            Res.string.follow_group_delete_action,
-                                            group.name,
-                                        ),
-                                    )
+        if (error != null) SheetMessage(stringResource(error))
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = false)
+                .padding(horizontal = Spacing.Comfortable),
+        ) {
+            if (creating) {
+                item(key = "inline-create-group") {
+                    InlineGroupNameRow(
+                        value = draftName,
+                        onValueChange = { draftName = it },
+                        onSave = {
+                            val trimmed = draftName.trim()
+                            if (trimmed.isNotEmpty()) {
+                                creating = false
+                                draftName = ""
+                                onCreate(trimmed)
+                            }
+                        },
+                        onCancel = {
+                            creating = false
+                            draftName = ""
+                        },
+                        modifier = Modifier.padding(bottom = Spacing.Tight),
+                    )
+                }
+            }
+            itemsIndexed(groups, key = { _, it -> it.id }) { index, group ->
+                if (renamingId == group.id) {
+                    InlineGroupNameRow(
+                        value = draftName,
+                        onValueChange = { draftName = it },
+                        onSave = {
+                            val trimmed = draftName.trim()
+                            if (trimmed.isNotEmpty()) {
+                                renamingId = null
+                                draftName = ""
+                                onRename(group.id, trimmed)
+                            }
+                        },
+                        onCancel = {
+                            renamingId = null
+                            draftName = ""
+                        },
+                        modifier = Modifier.padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
+                    )
+                } else {
+                    SegmentedListItem(
+                        shapes = ListItemDefaults.segmentedShapes(index = index, count = groups.size),
+                        colors = ListItemDefaults.segmentedColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
+                        trailingContent = if (group.isBuiltIn) null else {
+                            {
+                                Row {
+                                    val renameLabel = stringResource(Res.string.follow_group_rename_action, group.name)
+                                    val deleteLabel = stringResource(Res.string.follow_group_delete_action, group.name)
+                                    BilbyTooltip(text = renameLabel) {
+                                        IconButton(
+                                            onClick = {
+                                                creating = false
+                                                draftName = group.name
+                                                renamingId = group.id
+                                            },
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.Edit,
+                                                contentDescription = renameLabel,
+                                            )
+                                        }
+                                    }
+                                    BilbyTooltip(text = deleteLabel) {
+                                        IconButton(onClick = { deleting = group }) {
+                                            Icon(
+                                                Icons.Outlined.Delete,
+                                                contentDescription = deleteLabel,
+                                            )
+                                        }
+                                    }
                                 }
                             }
-                        }
-                    },
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                ) {
-                    Text(
-                        text = "${group.name}$MetaSeparator${group.count}",
-                        style = LocalTextStyle.current.tabular,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                        },
+                    ) {
+                        Text(
+                            text = "${group.name}$MetaSeparator${group.count}",
+                            style = LocalTextStyle.current.tabular,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
     }
 
-    if (creating) {
-        GroupNameDialog(
-            title = stringResource(Res.string.follow_group_create),
-            initial = "",
-            onConfirm = {
-                creating = false
-                onCreate(it)
-            },
-            onDismiss = { creating = false },
-        )
-    }
-    renaming?.let { group ->
-        GroupNameDialog(
-            title = stringResource(Res.string.follow_group_rename),
-            initial = group.name,
-            onConfirm = {
-                renaming = null
-                onRename(group.id, it)
-            },
-            onDismiss = { renaming = null },
-        )
-    }
     deleting?.let { group ->
         AlertDialog(
             onDismissRequest = { deleting = null },
             // 只有标题,没有说明。删分组不动关注关系,组里的人退回默认分组。
             title = { Text(stringResource(Res.string.follow_group_delete_confirm_title, group.name)) },
             confirmButton = {
-                TextButton(onClick = {
-                    deleting = null
-                    onDelete(group.id)
-                }) { Text(stringResource(Res.string.action_delete)) }
+                Button(
+                    onClick = {
+                        deleting = null
+                        onDelete(group.id)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                ) { Text(stringResource(Res.string.action_delete)) }
             },
             dismissButton = {
                 TextButton(onClick = { deleting = null }) {
@@ -278,45 +345,64 @@ fun GroupManagerSheet(
     }
 }
 
-/** 新建和改名共用一个输入框:两者的区别只有标题和初值。 */
 @Composable
-private fun GroupNameDialog(
-    title: String,
-    initial: String,
-    onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit,
+private fun InlineGroupNameRow(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    var name by remember { mutableStateOf(initial) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = MaterialTheme.shapes.large,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
             OutlinedTextField(
-                value = name,
-                onValueChange = { name = it },
+                value = value,
+                onValueChange = onValueChange,
                 label = { Text(stringResource(Res.string.follow_group_name_hint)) },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth().trackEditableFocus(),
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester)
+                    .trackEditableFocus(),
             )
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onConfirm(name.trim()) },
-                enabled = name.isNotBlank(),
-            ) { Text(stringResource(Res.string.action_save)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(Res.string.action_cancel)) }
-        },
-    )
+            val saveLabel = stringResource(Res.string.action_save)
+            val cancelLabel = stringResource(Res.string.action_cancel)
+            BilbyTooltip(text = saveLabel) {
+                IconButton(onClick = onSave, enabled = value.isNotBlank()) {
+                    Icon(Icons.Outlined.Check, contentDescription = saveLabel)
+                }
+            }
+            BilbyTooltip(text = cancelLabel) {
+                IconButton(onClick = onCancel) {
+                    Icon(Icons.Outlined.Close, contentDescription = cancelLabel)
+                }
+            }
+        }
+    }
 }
 
 @Composable
 private fun SheetMessage(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.error,
-        modifier = Modifier.padding(horizontal = Spacing.Loose, vertical = Spacing.Tight),
-    )
+    Box(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(horizontal = Spacing.Loose, vertical = Spacing.Tight),
+        )
+    }
 }

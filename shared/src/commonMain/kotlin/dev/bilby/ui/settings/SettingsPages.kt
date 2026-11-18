@@ -6,12 +6,12 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -43,6 +43,7 @@ import androidx.compose.material.icons.outlined.HourglassEmpty
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.MusicOff
 import androidx.compose.material.icons.outlined.NetworkCheck
 import androidx.compose.material.icons.outlined.Paid
@@ -68,15 +69,19 @@ import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalToggleButtonDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedListItem
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -84,12 +89,14 @@ import androidx.compose.material3.TimeInput
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.TimePickerDialog
 import androidx.compose.material3.ToggleButton
+import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -126,6 +133,7 @@ import dev.bilby.player.audioQualityLabel
 import dev.bilby.player.DEFAULT_AUDIO_QUALITY_OPTIONS
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FullScreenError
@@ -135,6 +143,7 @@ import dev.bilby.ui.components.ListSkeleton
 import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.components.SearchField
+import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.night.NightExitHoldSheet
 import dev.bilby.ui.player.formatSpeed
 import dev.bilby.ui.player.labelRes
@@ -146,7 +155,6 @@ import dev.bilby.ui.video.CATEGORY_LABELS
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.size
 import org.jetbrains.compose.resources.StringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -162,11 +170,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import dev.bilby.data.AppearancePrefs
 import dev.bilby.data.StartTab
 import dev.bilby.data.ThemeMode
@@ -753,29 +765,59 @@ private val StartTab.label: StringResource
 @Composable
 private fun StartTabRow(position: RowPosition, selected: StartTab, onSelect: (StartTab) -> Unit) {
     val options = StartTab.entries
+    val interactionSources = remember(options.size) { List(options.size) { MutableInteractionSource() } }
+    val tonalColors = FilledTonalToggleButtonDefaults.colors()
     ControlSettingRow(
         position = position,
         icon = Icons.Outlined.Start,
         title = stringResource(Res.string.settings_start_tab),
     ) {
-        Row(
+        val labels = options.map { stringResource(it.label) }
+        ButtonGroup(
+            overflowIndicator = { menuState ->
+                IconButton(onClick = { menuState.show() }) {
+                    Icon(
+                        Icons.Outlined.MoreHoriz,
+                        contentDescription = stringResource(Res.string.menu_item_actions),
+                    )
+                }
+            },
             horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
             modifier = Modifier.fillMaxWidth().selectableGroup(),
         ) {
             options.forEachIndexed { index, option ->
-                ToggleButton(
-                    checked = option == selected,
-                    onCheckedChange = { onSelect(option) },
-                    shapes = when (index) {
-                        0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
-                        options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
-                        else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                val label = labels[index]
+                val interactionSource = interactionSources[index]
+                val itemModifier = Modifier.weight(1f).animateWidth(interactionSource)
+                customItem(
+                    buttonGroupContent = {
+                        ToggleButton(
+                            checked = option == selected,
+                            onCheckedChange = { onSelect(option) },
+                            shapes = when (index) {
+                                0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                                options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                                else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                            },
+                            colors = tonalColors,
+                            contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                            interactionSource = interactionSource,
+                            modifier = itemModifier.semantics { role = Role.RadioButton },
+                        ) {
+                            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     },
-                    contentPadding = PaddingValues(horizontal = Spacing.Tight),
-                    modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
-                ) {
-                    Text(stringResource(option.label), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
+                    menuContent = { menuState ->
+                        DropdownMenuItem(
+                            onClick = {
+                                menuState.dismiss()
+                                onSelect(option)
+                            },
+                            text = { Text(label) },
+                            shape = menuItemShape(index, options.size),
+                        )
+                    },
+                )
             }
         }
     }
@@ -784,8 +826,9 @@ private fun StartTabRow(position: RowPosition, selected: StartTab, onSelect: (St
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun VideoGridColumnsRow(position: RowPosition, selected: Int, onSelect: (Int) -> Unit) {
-    val options = AppearancePrefs.VIDEO_GRID_COLUMN_OPTIONS
-    val effective = selected.coerceIn(AppearancePrefs.MIN_VIDEO_GRID_COLUMNS, AppearancePrefs.MAX_VIDEO_GRID_COLUMNS)
+    val min = AppearancePrefs.MIN_VIDEO_GRID_COLUMNS
+    val max = AppearancePrefs.MAX_VIDEO_GRID_COLUMNS
+    val effective = selected.coerceIn(min, max)
     ControlSettingRow(
         position = position,
         icon = Icons.Outlined.GridView,
@@ -793,68 +836,91 @@ private fun VideoGridColumnsRow(position: RowPosition, selected: Int, onSelect: 
         value = stringResource(Res.string.settings_video_grid_columns_subtitle),
     ) {
         Row(
-            horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
-            modifier = Modifier.fillMaxWidth().selectableGroup(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            options.forEachIndexed { index, count ->
-                ToggleButton(
-                    checked = count == effective,
-                    onCheckedChange = { onSelect(count) },
-                    shapes = when (index) {
-                        0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
-                        options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
-                        else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
-                    },
-                    contentPadding = PaddingValues(horizontal = Spacing.Tight),
-                    modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
-                ) {
-                    Text(
-                        text = count.toString(),
-                        style = LocalTextStyle.current.tabular,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
+            Slider(
+                value = effective.toFloat(),
+                onValueChange = { raw ->
+                    val snapped = raw.roundToInt().coerceIn(min, max)
+                    if (snapped != effective) onSelect(snapped)
+                },
+                valueRange = min.toFloat()..max.toFloat(),
+                steps = (max - min - 1).coerceAtLeast(0),
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = effective.toString(),
+                style = MaterialTheme.typography.titleMediumEmphasized.tabular,
+                color = MaterialTheme.colorScheme.primary,
+            )
         }
     }
 }
 
 /**
- * 明暗三档,连体按钮组。写法与播放器设置面板的 ConnectedChoices 相同:各格等宽,
- * 内边距收小,读屏按单选念。
+ * 明暗三档，连体按钮组。写法与播放器设置面板的 ConnectedChoices 相同：各格等宽，
+ * 内边距收小，读屏按单选念，并在按压时提供弹性宽度缩放。
  *
- * 用默认的实心配色,不换 tonal:风格指南 §2.1 嫌实心太响说的是压在几十条评论上的排序,
- * 这里一页只有这一组,选中哪一档正需要一眼看出来。
+ * 用默认的实心配色，不换 tonal：这里一页只有这一组，选中哪一档正需要一眼看出来。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ThemeModeRow(position: RowPosition, selected: ThemeMode, onSelect: (ThemeMode) -> Unit) {
     val options = ThemeMode.entries
+    val interactionSources = remember(options.size) { List(options.size) { MutableInteractionSource() } }
     ControlSettingRow(
         position = position,
         icon = Icons.Outlined.DarkMode,
         title = stringResource(Res.string.settings_theme_mode),
     ) {
-        Row(
+        val labels = options.map { stringResource(it.label) }
+        ButtonGroup(
+            overflowIndicator = { menuState ->
+                IconButton(onClick = { menuState.show() }) {
+                    Icon(
+                        Icons.Outlined.MoreHoriz,
+                        contentDescription = stringResource(Res.string.menu_item_actions),
+                    )
+                }
+            },
             horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
             modifier = Modifier.fillMaxWidth().selectableGroup(),
         ) {
             options.forEachIndexed { index, option ->
-                ToggleButton(
-                    checked = option == selected,
-                    onCheckedChange = { onSelect(option) },
-                    shapes = when (index) {
-                        0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
-                        options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
-                        else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                val label = labels[index]
+                val interactionSource = interactionSources[index]
+                val itemModifier = Modifier.weight(1f).animateWidth(interactionSource)
+                customItem(
+                    buttonGroupContent = {
+                        ToggleButton(
+                            checked = option == selected,
+                            onCheckedChange = { onSelect(option) },
+                            shapes = when (index) {
+                                0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                                options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                                else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                            },
+                            // 默认左右各 16dp，窄屏上三格平分之后「跟随系统」放不下。
+                            contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                            interactionSource = interactionSource,
+                            modifier = itemModifier.semantics { role = Role.RadioButton },
+                        ) {
+                            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     },
-                    // 默认左右各 16dp,窄屏上三格平分之后「跟随系统」放不下。
-                    contentPadding = PaddingValues(horizontal = Spacing.Tight),
-                    modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
-                ) {
-                    Text(stringResource(option.label), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
+                    menuContent = { menuState ->
+                        DropdownMenuItem(
+                            onClick = {
+                                menuState.dismiss()
+                                onSelect(option)
+                            },
+                            text = { Text(label) },
+                            shape = menuItemShape(index, options.size),
+                        )
+                    },
+                )
             }
         }
     }
@@ -889,17 +955,20 @@ private fun PaletteRow(position: RowPosition, selected: String, onSelect: (Strin
         title = stringResource(Res.string.settings_theme_palette),
         value = paletteLabel(selected),
     ) {
-        // **每行格数按行数平均分,不按"放得下几格"放满。** 放满时十格在手机上排成 6 + 4,第二行
-        // 缺一截,读起来像漏了两格。先算这个宽度下最少要几行,再把十格平均摊到这几行上(手机
-        // 5 + 5,宽屏一行 10);每行格数相同,两端对齐之后上下两行的色块也是对齐的。
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val fit = (maxWidth / SwatchTouchSize).toInt().coerceAtLeast(1)
-            val rows = (swatches.size + fit - 1) / fit
-            val perRow = (swatches.size + rows - 1) / rows
+        // **每行格数按行数平均分，不按"放得下几格"放满。** 放满时十格在手机上排成 6 + 4，第二行
+        // 缺一截；按实际测量宽度计算行数后再均分到各行，消除 BoxWithConstraints 子组合开销。
+        var rowWidthPx by remember { mutableIntStateOf(0) }
+        val rowWidthDp = with(LocalDensity.current) { rowWidthPx.toDp() }
+        val fit = if (rowWidthPx > 0) (rowWidthDp / SwatchTouchSize).toInt().coerceAtLeast(1) else 5
+        val rows = (swatches.size + fit - 1) / fit
+        val perRow = (swatches.size + rows - 1) / rows
         FlowRow(
             maxItemsInEachRow = perRow,
             horizontalArrangement = if (rows > 1) Arrangement.SpaceBetween else Arrangement.Start,
-            modifier = Modifier.fillMaxWidth().selectableGroup(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onSizeChanged { if (it.width != rowWidthPx) rowWidthPx = it.width }
+                .selectableGroup(),
         ) {
             swatches.forEach { swatch ->
                 val scheme = if (dark) swatch.schemes.dark else swatch.schemes.light
@@ -913,7 +982,6 @@ private fun PaletteRow(position: RowPosition, selected: String, onSelect: (Strin
                 )
             }
         }
-        }
     }
 }
 
@@ -925,7 +993,7 @@ private class Swatch(
     val idleIcon: ImageVector? = null,
 )
 
-/** 一格色块。色块本身不写名字,读屏靠 contentDescription 念出来。 */
+/** 一格色块。色块本身不写名字，读屏靠 contentDescription、桌面悬停靠 BilbyTooltip。 */
 @Composable
 private fun ColorSwatch(
     color: Color,
@@ -935,25 +1003,27 @@ private fun ColorSwatch(
     idleIcon: ImageVector?,
     onClick: () -> Unit,
 ) {
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(SwatchTouchSize)
-            .clip(CircleShape)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
-            .semantics { contentDescription = label },
-    ) {
+    BilbyTooltip(text = label) {
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
-                .size(SwatchSize)
+                .size(SwatchTouchSize)
                 .clip(CircleShape)
-                .background(color),
+                .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+                .semantics { contentDescription = label },
         ) {
-            val icon = if (selected) Icons.Outlined.Check else idleIcon
-            // 勾取这一套的 onPrimary:它就是为压在 primary 上设计的,不必再按亮度猜黑白。
-            if (icon != null) {
-                Icon(icon, contentDescription = null, tint = onColor, modifier = Modifier.size(Dimens.IconInline))
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(SwatchSize)
+                    .clip(CircleShape)
+                    .background(color),
+            ) {
+                val icon = if (selected) Icons.Outlined.Check else idleIcon
+                // 勾取这一套的 onPrimary：它就是为压在 primary 上设计的，不必再按亮度猜黑白。
+                if (icon != null) {
+                    Icon(icon, contentDescription = null, tint = onColor, modifier = Modifier.size(Dimens.IconInline))
+                }
             }
         }
     }
@@ -1184,10 +1254,16 @@ fun ExcludedFeedPage(
             title = { Text(stringResource(Res.string.settings_feed_clear_excluded)) },
             text = { Text(stringResource(Res.string.settings_feed_clear_excluded_message)) },
             confirmButton = {
-                TextButton(onClick = {
-                    confirmingClearAll = false
-                    onClearAll()
-                }) { Text(stringResource(Res.string.settings_feed_clear_excluded)) }
+                Button(
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                    onClick = {
+                        confirmingClearAll = false
+                        onClearAll()
+                    },
+                ) { Text(stringResource(Res.string.settings_feed_clear_excluded)) }
             },
             dismissButton = {
                 TextButton(onClick = { confirmingClearAll = false }) {
@@ -1316,9 +1392,6 @@ private const val AppName = "Bilby"
 /** 卡片左上角图标块。 */
 private val AboutBadgeSize = 48.dp
 
-/** 允许列表单行高度，与 [StaticSettingRow] 保持一致。 */
-private val NightUpRowMinHeight = 56.dp
-
 private enum class TimeEditTarget { Start, End }
 
 private sealed interface PendingNightRestrictionAction {
@@ -1348,16 +1421,6 @@ fun NightModeSettingsPage(
     onBack: (() -> Unit)?,
 ) {
     val prefs = state.nightMode
-    var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(prefs) {
-        nowMillis = System.currentTimeMillis()
-        if (!prefs.enabled && prefs.manualUntilEpochMillis <= 0L) return@LaunchedEffect
-        while (true) {
-            delay(15_000L)
-            nowMillis = System.currentTimeMillis()
-        }
-    }
-    val status = evaluateNightMode(prefs, nowMillis)
     var unlocked by rememberSaveable { mutableStateOf(false) }
     var editingTimeTarget by rememberSaveable { mutableStateOf<TimeEditTarget?>(null) }
     var showUpPicker by rememberSaveable { mutableStateOf(false) }
@@ -1380,34 +1443,17 @@ fun NightModeSettingsPage(
     }
 
     SettingsSubPage(stringResource(Res.string.settings_section_night_mode), onBack, state.loaded) {
-        SettingsGroup {
-            row { position ->
-                ToggleSettingRow(
-                    position = position,
-                    icon = Icons.Outlined.Bedtime,
-                    title = stringResource(Res.string.night_mode_enable),
-                    subtitle = stringResource(Res.string.night_mode_enable_subtitle),
-                    checked = prefs.enabled,
-                    onCheckedChange = { enabled ->
-                        if (enabled) {
-                            onEnabledChange(true)
-                        } else {
-                            runOrGate(PendingNightRestrictionAction.Disable, shouldGate = true)
-                        }
-                    },
-                )
-            }
-            if (status is NightWindowStatus.Overridden) {
-                row { position ->
-                    SettingRow(
-                        position = position,
-                        icon = Icons.Outlined.Restore,
-                        title = stringResource(Res.string.night_mode_resume_now),
-                        onClick = onClearOverride,
-                    )
+        NightModeToggleGroup(
+            prefs = prefs,
+            onEnabledChange = { enabled ->
+                if (enabled) {
+                    onEnabledChange(true)
+                } else {
+                    runOrGate(PendingNightRestrictionAction.Disable, shouldGate = true)
                 }
-            }
-        }
+            },
+            onClearOverride = onClearOverride,
+        )
         SettingsGroup(title = stringResource(Res.string.night_mode_schedule_group)) {
             row { position ->
                 SettingRow(
@@ -1526,6 +1572,46 @@ fun NightModeSettingsPage(
     }
 }
 
+@Composable
+private fun NightModeToggleGroup(
+    prefs: dev.bilby.data.NightModePrefs,
+    onEnabledChange: (Boolean) -> Unit,
+    onClearOverride: () -> Unit,
+) {
+    var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(prefs) {
+        nowMillis = System.currentTimeMillis()
+        if (!prefs.enabled && prefs.manualUntilEpochMillis <= 0L) return@LaunchedEffect
+        while (true) {
+            delay(15_000L)
+            nowMillis = System.currentTimeMillis()
+        }
+    }
+    val status = evaluateNightMode(prefs, nowMillis)
+    SettingsGroup {
+        row { position ->
+            ToggleSettingRow(
+                position = position,
+                icon = Icons.Outlined.Bedtime,
+                title = stringResource(Res.string.night_mode_enable),
+                subtitle = stringResource(Res.string.night_mode_enable_subtitle),
+                checked = prefs.enabled,
+                onCheckedChange = onEnabledChange,
+            )
+        }
+        if (status is NightWindowStatus.Overridden) {
+            row { position ->
+                SettingRow(
+                    position = position,
+                    icon = Icons.Outlined.Restore,
+                    title = stringResource(Res.string.night_mode_resume_now),
+                    onClick = onClearOverride,
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun AllowedUpRow(
@@ -1534,18 +1620,13 @@ private fun AllowedUpRow(
     onRemove: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    Surface(
-        shape = ListItemDefaults.segmentedShapes(index = position.index, count = position.count).shape,
-        color = colors.surfaceContainer,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = NightUpRowMinHeight)
-                .padding(ListItemDefaults.ContentPadding),
-        ) {
+    SegmentedListItem(
+        shapes = ListItemDefaults.segmentedShapes(index = position.index, count = position.count),
+        colors = ListItemDefaults.segmentedColors(
+            containerColor = colors.surfaceContainer,
+            selectedContainerColor = colors.surfaceContainer,
+        ),
+        leadingContent = {
             if (up.faceUrl.isNotEmpty()) {
                 Avatar(url = up.faceUrl, size = Dimens.AvatarRow)
             } else {
@@ -1560,20 +1641,19 @@ private fun AllowedUpRow(
                     )
                 }
             }
-            Spacer(modifier = Modifier.width(Spacing.Cozy))
-            Text(
-                text = up.name,
-                style = MaterialTheme.typography.bodyLarge,
-                color = colors.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Spacer(modifier = Modifier.width(Spacing.Cozy))
+        },
+        trailingContent = {
             TextButton(onClick = onRemove) {
                 Text(stringResource(Res.string.night_mode_remove_up))
             }
-        }
+        },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            text = up.name,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -1590,7 +1670,8 @@ private fun NightTimePickerDialog(
         initialMinute = clamped % 60,
         is24Hour = true,
     )
-    var showDial by rememberSaveable { mutableStateOf(true) }
+    val compactHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() } < 480.dp
+    var showDial by rememberSaveable { mutableStateOf(!compactHeight) }
 
     TimePickerDialog(
         onDismissRequest = onDismiss,
@@ -1605,11 +1686,13 @@ private fun NightTimePickerDialog(
             val toggleLabel = stringResource(
                 if (showDial) Res.string.night_mode_time_input else Res.string.night_mode_time_dial,
             )
-            IconButton(onClick = { showDial = !showDial }) {
-                Icon(
-                    imageVector = if (showDial) Icons.Outlined.Keyboard else Icons.Outlined.Schedule,
-                    contentDescription = toggleLabel,
-                )
+            BilbyTooltip(text = toggleLabel) {
+                IconButton(onClick = { showDial = !showDial }) {
+                    Icon(
+                        imageVector = if (showDial) Icons.Outlined.Keyboard else Icons.Outlined.Schedule,
+                        contentDescription = toggleLabel,
+                    )
+                }
             }
         },
         confirmButton = {
@@ -1627,10 +1710,12 @@ private fun NightTimePickerDialog(
             }
         },
     ) {
-        if (showDial) {
-            TimePicker(state = pickerState)
-        } else {
-            TimeInput(state = pickerState)
+        Box(modifier = Modifier.verticalScroll(rememberScrollState())) {
+            if (showDial) {
+                TimePicker(state = pickerState)
+            } else {
+                TimeInput(state = pickerState)
+            }
         }
     }
 }

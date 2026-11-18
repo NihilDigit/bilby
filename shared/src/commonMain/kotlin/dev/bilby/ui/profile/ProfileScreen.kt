@@ -2,12 +2,13 @@ package dev.bilby.ui.profile
 
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -15,7 +16,6 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,9 +25,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,24 +32,33 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Mail
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.PeopleAlt
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
-import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.carousel.CarouselItemScope
+import androidx.compose.material3.carousel.HorizontalMultiBrowseCarousel
+import androidx.compose.material3.carousel.HorizontalUncontainedCarousel
+import androidx.compose.material3.carousel.rememberCarouselState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -61,16 +67,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -94,15 +103,13 @@ import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.CoinGlyph
 import dev.bilby.ui.components.ContextMenuBox
-import dev.bilby.ui.components.CoverAspectRatio
-import dev.bilby.ui.components.CoverCornerRadius
-import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.components.LevelBadge
-import dev.bilby.ui.components.ListCover
 import dev.bilby.ui.components.LocalCopyNotice
+import dev.bilby.ui.components.MediaBadge
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SkeletonLine
 import dev.bilby.ui.components.SkeletonPulse
@@ -114,7 +121,6 @@ import dev.bilby.ui.components.plainTextClip
 import dev.bilby.ui.components.skeleton
 import dev.bilby.ui.components.verticalWheelScrollsRow
 import dev.bilby.ui.errorTextRes
-import dev.bilby.ui.fav.FavFolderCover
 import dev.bilby.ui.fav.favFolderMeta
 import dev.bilby.ui.history.toRowUi
 import dev.bilby.ui.isAtLeast
@@ -122,11 +128,12 @@ import dev.bilby.ui.offline.formatBytes
 import dev.bilby.ui.offline.toRowUi
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.rememberCaptionSlot
-import dev.bilby.ui.rememberVideoGridColumnCount
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.interactiveCard
+import dev.bilby.ui.theme.rememberReducedMotion
 import dev.bilby.ui.theme.tabular
 import dev.bilby.ui.toview.toRowUi
 import dev.bilby.ui.windowDragArea
@@ -140,6 +147,7 @@ import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.StringResource
 
 /** 历史记录 / 稍后再看 / 收藏夹三个预览区共用的形状:各自独立加载、独立失败。 */
+@Immutable
 data class ProfilePreviewState<T>(
     val loading: Boolean = true,
     /** 失败说哪一句,存的是资源 id。见 [dev.bilby.ui.errorTextRes]。 */
@@ -147,6 +155,7 @@ data class ProfilePreviewState<T>(
     val items: List<T> = emptyList(),
 )
 
+@Immutable
 data class ProfileUiState(
     val accountLoading: Boolean = true,
     val accountError: StringResource? = null,
@@ -265,7 +274,6 @@ class ProfileViewModel(
     }
 }
 
-private const val PreviewCount = 3
 private const val ShelfMaxCount = 10
 
 /**
@@ -618,14 +626,17 @@ private fun AccountCard(
                 .padding(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
         ) {
             identityBlock(Modifier.fillMaxWidth())
-            BoxWithConstraints(
+            val density = LocalDensity.current
+            var actionsWidth by remember { mutableStateOf(0.dp) }
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = Spacing.Tight),
+                    .padding(horizontal = Spacing.Tight)
+                    .onSizeChanged { with(density) { actionsWidth = it.width.toDp() } },
             ) {
                 AccountActions(
                     account = account,
-                    compact = maxWidth < AccountActionsStackedBreakpoint,
+                    compact = actionsWidth in 1.dp..<AccountActionsStackedBreakpoint,
                     fillWidth = true,
                     onOpenFollowings = onOpenFollowings,
                     onOpenCoinLog = onOpenCoinLog,
@@ -671,6 +682,7 @@ private fun AccountUidPill(
  * 账户快捷动作四段胶囊：关注、硬币、消息、设置。
  * 视觉密度对齐订阅页顶栏胶囊（`surfaceContainer` / `surfaceContainerHigh`），消息入口保持零红点、零未读角标。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun AccountActions(
     account: AccountInfo?,
@@ -682,92 +694,144 @@ private fun AccountActions(
     onSettingsClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val followingLabel = stringResource(Res.string.profile_following)
+    val coinsLabel = stringResource(Res.string.profile_coins)
+    val messagesLabel = stringResource(Res.string.message_title)
     val settingsLabel = stringResource(Res.string.settings_title)
-    val segments = listOf(
-        AccountSegmentSpec(
-            icon = { tint, _ ->
+    val segments = remember(
+        account,
+        followingLabel,
+        coinsLabel,
+        messagesLabel,
+        settingsLabel,
+        onOpenFollowings,
+        onOpenCoinLog,
+        onOpenMessages,
+        onSettingsClick,
+    ) {
+        listOf(
+            AccountSegmentSpec(
+                icon = { tint, _ ->
+                    Icon(
+                        Icons.Outlined.PeopleAlt,
+                        contentDescription = null,
+                        tint = tint,
+                        modifier = Modifier.size(SegmentIconSize),
+                    )
+                },
+                value = account?.following?.let { formatSegmentValue(it.toDouble()) },
+                label = followingLabel,
+                onClick = onOpenFollowings,
+            ),
+            AccountSegmentSpec(
+                icon = { tint, cutout ->
+                    CoinGlyph(
+                        tint = tint,
+                        filled = false,
+                        cutout = cutout,
+                        size = SegmentCoinSize,
+                    )
+                },
+                value = account?.let { formatSegmentValue(it.coins) },
+                label = coinsLabel,
+                onClick = onOpenCoinLog,
+            ),
+            AccountSegmentSpec(
+                icon = { tint, _ ->
+                    Icon(
+                        Icons.Outlined.Mail,
+                        contentDescription = null,
+                        tint = tint,
+                        modifier = Modifier.size(SegmentIconSize),
+                    )
+                },
+                value = null,
+                label = messagesLabel,
+                onClick = onOpenMessages,
+            ),
+            AccountSegmentSpec(
+                icon = { tint, _ ->
+                    Icon(
+                        Icons.Outlined.Settings,
+                        contentDescription = null,
+                        tint = tint,
+                        modifier = Modifier.size(SegmentIconSize),
+                    )
+                },
+                value = null,
+                label = settingsLabel,
+                tooltip = settingsLabel,
+                tooltipShortcut = "Ctrl+,",
+                onClick = onSettingsClick,
+            ),
+        )
+    }
+    val interactionSources = remember { List(4) { MutableInteractionSource() } }
+    ButtonGroup(
+        overflowIndicator = { menuState ->
+            IconButton(onClick = { menuState.show() }) {
                 Icon(
-                    Icons.Outlined.PeopleAlt,
-                    contentDescription = null,
-                    tint = tint,
-                    modifier = Modifier.size(SegmentIconSize),
+                    Icons.Outlined.MoreHoriz,
+                    contentDescription = stringResource(Res.string.menu_item_actions),
                 )
-            },
-            value = account?.following?.let { formatSegmentValue(it.toDouble()) },
-            label = stringResource(Res.string.profile_following),
-            onClick = onOpenFollowings,
-        ),
-        AccountSegmentSpec(
-            icon = { tint, cutout ->
-                CoinGlyph(
-                    tint = tint,
-                    filled = false,
-                    cutout = cutout,
-                    size = SegmentCoinSize,
-                )
-            },
-            value = account?.let { formatSegmentValue(it.coins) },
-            label = stringResource(Res.string.profile_coins),
-            onClick = onOpenCoinLog,
-        ),
-        AccountSegmentSpec(
-            icon = { tint, _ ->
-                Icon(
-                    Icons.Outlined.Mail,
-                    contentDescription = null,
-                    tint = tint,
-                    modifier = Modifier.size(SegmentIconSize),
-                )
-            },
-            value = null,
-            label = stringResource(Res.string.message_title),
-            onClick = onOpenMessages,
-        ),
-        AccountSegmentSpec(
-            icon = { tint, _ ->
-                Icon(
-                    Icons.Outlined.Settings,
-                    contentDescription = null,
-                    tint = tint,
-                    modifier = Modifier.size(SegmentIconSize),
-                )
-            },
-            value = null,
-            label = settingsLabel,
-            tooltip = settingsLabel,
-            tooltipShortcut = "Ctrl+,",
-            onClick = onSettingsClick,
-        ),
-    )
-    Row(
+            }
+        },
         horizontalArrangement = Arrangement.spacedBy(SegmentGap),
         modifier = modifier.height(IntrinsicSize.Min),
     ) {
         segments.forEachIndexed { index, segment ->
-            val segModifier = (if (fillWidth) Modifier.weight(1f) else Modifier).fillMaxHeight()
-            val itemContent: @Composable () -> Unit = {
-                AccountSegment(
-                    spec = segment,
-                    compact = compact,
-                    shape = segmentShape(index, segments.size),
-                    modifier = if (fillWidth) Modifier.fillMaxSize() else segModifier,
-                )
-            }
-            if (segment.tooltip != null) {
-                Box(modifier = segModifier) {
-                    BilbyTooltip(text = segment.tooltip, shortcut = segment.tooltipShortcut) {
-                        itemContent()
+            val interactionSource = interactionSources[index]
+            val segModifier = (if (fillWidth) Modifier.weight(1f) else Modifier)
+                .animateWidth(interactionSource)
+                .fillMaxHeight()
+            customItem(
+                buttonGroupContent = {
+                    val itemContent: @Composable () -> Unit = {
+                        AccountSegment(
+                            spec = segment,
+                            compact = compact,
+                            shape = segmentShape(index, segments.size),
+                            interactionSource = interactionSource,
+                            modifier = if (fillWidth) Modifier.fillMaxSize() else segModifier,
+                        )
                     }
-                }
-            } else {
-                Box(modifier = segModifier) {
-                    itemContent()
-                }
-            }
+                    if (segment.tooltip != null) {
+                        Box(modifier = segModifier) {
+                            BilbyTooltip(text = segment.tooltip, shortcut = segment.tooltipShortcut) {
+                                itemContent()
+                            }
+                        }
+                    } else {
+                        Box(modifier = segModifier) {
+                            itemContent()
+                        }
+                    }
+                },
+                menuContent = { menuState ->
+                    DropdownMenuItem(
+                        onClick = {
+                            menuState.dismiss()
+                            segment.onClick()
+                        },
+                        text = {
+                            Text(
+                                text = if (segment.value != null) {
+                                    "${segment.label}$MetaSeparator${segment.value}"
+                                } else {
+                                    segment.label
+                                },
+                                style = MaterialTheme.typography.bodyMedium.tabular,
+                            )
+                        },
+                        shape = menuItemShape(index, segments.size),
+                    )
+                },
+            )
         }
     }
 }
 
+@Immutable
 private class AccountSegmentSpec(
     val icon: @Composable (tint: Color, cutout: Color) -> Unit,
     val value: String?,
@@ -783,6 +847,7 @@ private fun AccountSegment(
     spec: AccountSegmentSpec,
     compact: Boolean,
     shape: Shape,
+    interactionSource: MutableInteractionSource,
     modifier: Modifier = Modifier,
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -792,7 +857,12 @@ private fun AccountSegment(
             baseColor = colorScheme.surfaceContainer,
             hoverColor = colorScheme.surfaceContainerHigh,
         )
-        .clickable(role = Role.Button, onClick = spec.onClick)
+        .clickable(
+            interactionSource = interactionSource,
+            indication = LocalIndication.current,
+            role = Role.Button,
+            onClick = spec.onClick,
+        )
         .heightIn(min = SegmentMinHeight)
     if (compact) {
         Column(
@@ -873,7 +943,7 @@ private fun formatSegmentValue(value: Double): String = when {
     else -> "%.1f".format(value)
 }
 
-/** 历史记录预览:最近 [PreviewCount] 条,点标题进完整的历史记录页。 */
+/** 历史记录预览：最近 [ShelfMaxCount] 条，M3E 多浏览旋转木马，点标题进完整的历史记录页。 */
 @Composable
 private fun HistorySection(
     state: ProfilePreviewState<HistoryItem>,
@@ -891,27 +961,18 @@ private fun HistorySection(
         onOpen = onOpen,
         onRetry = onRetry,
         wide = wide,
-        shelfCard = { item, cardModifier ->
-            ShelfVideoCard(
-                item = item.toRowUi(),
-                bvid = item.bvid,
-                upName = item.upName,
-                durationSeconds = item.durationSeconds.toLong(),
-                onClick = { onVideoClick(item.bvid) },
-                modifier = cardModifier,
-            )
-        },
-    ) { item, index, count ->
-        PreviewRow(
+    ) { item ->
+        CarouselVideoCard(
             item = item.toRowUi(),
-            index = index,
-            count = count,
+            bvid = item.bvid,
+            upName = item.upName,
+            durationSeconds = item.durationSeconds.toLong(),
             onClick = { onVideoClick(item.bvid) },
         )
     }
 }
 
-/** 稍后再看预览:同上,点标题进完整的稍后再看列表。 */
+/** 稍后再看预览：同上，点标题进完整的稍后再看列表。 */
 @Composable
 private fun ToViewSection(
     state: ProfilePreviewState<ToViewItem>,
@@ -930,79 +991,17 @@ private fun ToViewSection(
         onRetry = onRetry,
         hideWhenEmpty = true,
         wide = wide,
-        shelfCard = { item, cardModifier ->
-            ShelfVideoCard(
-                item = item.toRowUi(),
-                bvid = if (item.playable) item.bvid else "",
-                upName = item.upName,
-                durationSeconds = item.durationSeconds,
-                enabled = item.playable,
-                onClick = { if (item.playable) onVideoClick(item.bvid) },
-                modifier = cardModifier,
-            )
-        },
-    ) { item, index, count ->
-        PreviewRow(
+    ) { item ->
+        CarouselVideoCard(
             item = item.toRowUi(),
-            index = index,
-            count = count,
+            bvid = if (item.playable) item.bvid else "",
+            upName = item.upName,
+            durationSeconds = item.durationSeconds,
             enabled = item.playable,
             onClick = { if (item.playable) onVideoClick(item.bvid) },
         )
     }
 }
-
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun PreviewRow(
-    item: VideoRowUi,
-    index: Int,
-    count: Int,
-    onClick: () -> Unit,
-    enabled: Boolean = true,
-) {
-    SegmentedListItem(
-        onClick = onClick,
-        enabled = enabled,
-        shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
-        colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        modifier = Modifier.padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
-        verticalAlignment = Alignment.CenterVertically,
-        leadingContent = {
-            ProvideTextStyle(LocalTextStyle.current.tabular) {
-                ListCover(
-                    url = item.coverUrl,
-                    durationText = item.durationText,
-                    progressFraction = item.progressFraction,
-                    width = PreviewCoverWidth,
-                    cornerRadius = PreviewCoverCorner,
-                    typeBadge = item.typeBadge,
-                )
-            }
-        },
-        supportingContent = item.meta?.let { meta ->
-            {
-                Text(
-                    meta,
-                    style = MaterialTheme.typography.labelSmall.tabular,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        },
-    ) {
-        Text(
-            item.title,
-            style = MaterialTheme.typography.bodyMediumEmphasized,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-private val PreviewCoverWidth = 96.dp
-private val PreviewCoverCorner = 8.dp
 
 /**
  * 缓存预览。一条都没有时整节不画。
@@ -1017,34 +1016,21 @@ private fun OfflineSection(
     modifier: Modifier = Modifier,
 ) {
     if (items.isEmpty()) return
-    val recent = items.sortedByDescending { it.createdAtMillis }
-    val preview = recent.take(PreviewCount)
+    val recent = remember(items) {
+        items.sortedByDescending { it.createdAtMillis }.take(ShelfMaxCount)
+    }
     val summary = stringResource(Res.string.offline_count, items.size) + MetaSeparator + formatBytes(usedBytes)
     Column(modifier = modifier.padding(bottom = Spacing.Comfortable)) {
         ShelfTitle(stringResource(Res.string.offline_title), meta = summary, onSeeAll = onOpen)
-        if (wide) {
-            Shelf(recent.take(ShelfMaxCount)) { item, cardModifier ->
-                val rowUi = item.toRowUi()
-                ShelfVideoCard(
-                    item = rowUi,
-                    bvid = item.bvid,
-                    upName = item.upName,
-                    durationSeconds = parseDurationSeconds(rowUi.durationText),
-                    onClick = { onItemClick(item) },
-                    modifier = cardModifier,
-                )
-            }
-            return@Column
-        }
-        Column(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
-            preview.forEachIndexed { index, item ->
-                PreviewRow(
-                    item = item.toRowUi(),
-                    index = index,
-                    count = preview.size,
-                    onClick = { onItemClick(item) },
-                )
-            }
+        ProfileCarousel(items = recent, wide = wide) { item ->
+            val rowUi = item.toRowUi()
+            CarouselVideoCard(
+                item = rowUi,
+                bvid = item.bvid,
+                upName = item.upName,
+                durationSeconds = parseDurationSeconds(rowUi.durationText),
+                onClick = { onItemClick(item) },
+            )
         }
     }
 }
@@ -1058,27 +1044,19 @@ private fun <T> PreviewSection(
     onRetry: () -> Unit,
     hideWhenEmpty: Boolean = false,
     wide: Boolean,
-    shelfCard: @Composable (item: T, modifier: Modifier) -> Unit,
     modifier: Modifier = Modifier,
-    itemRow: @Composable (item: T, index: Int, count: Int) -> Unit,
+    carouselCard: @Composable CarouselItemScope.(item: T) -> Unit,
 ) {
     if (hideWhenEmpty && !state.loading && state.error == null && state.items.isEmpty()) return
     Column(modifier = modifier.padding(bottom = Spacing.Comfortable)) {
         ShelfTitle(title, onSeeAll = onOpen.takeIf { state.items.isNotEmpty() })
         SectionBody(
-            state,
-            onRetry,
-            emptyText,
-            skeleton = { if (wide) ShelfLoading() else PreviewRowsSkeleton() },
+            state = state,
+            onRetry = onRetry,
+            emptyText = emptyText,
+            skeleton = { CarouselSkeleton(wide = wide) },
         ) { items ->
-            if (wide) {
-                Shelf(items, shelfCard)
-                return@SectionBody
-            }
-            val preview = items.take(PreviewCount)
-            Column(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
-                preview.forEachIndexed { index, item -> itemRow(item, index, preview.size) }
-            }
+            ProfileCarousel(items = items, wide = wide, itemContent = carouselCard)
         }
     }
 }
@@ -1148,35 +1126,62 @@ private fun ShelfTitle(
     }
 }
 
+private val CarouselPreferredWidthCompact = 256.dp
+private val CarouselPreferredWidthWide = 284.dp
+private val CarouselHeightCompact = 160.dp
+private val CarouselHeightWide = 178.dp
+
 /**
- * 宽屏货架:按 `228.dp` 最小卡片宽度自然排布 16:10 封面卡片,移除高度反向压缩逻辑。
+ * M3 Expressive 货架旋转木马：常规态走渐进遮罩 `HorizontalMultiBrowseCarousel`，
+ * 减弱动态模式下回退等宽 `HorizontalUncontainedCarousel`；滚轮纵向滚动无缝映射横向浏览。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun <T> Shelf(items: List<T>, card: @Composable (item: T, modifier: Modifier) -> Unit) {
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val available = (maxWidth - Spacing.Comfortable * 2).coerceAtLeast(1.dp)
-        val columns = rememberVideoGridColumnCount(maxWidth).coerceAtLeast(1)
-        val cardWidth = (available - ShelfGap * (columns - 1)) / columns
-        val rowState = rememberLazyListState()
-        LazyRow(
-            state = rowState,
-            contentPadding = PaddingValues(horizontal = Spacing.Comfortable),
-            horizontalArrangement = Arrangement.spacedBy(ShelfGap),
-            modifier = Modifier.verticalWheelScrollsRow(rowState),
-        ) {
-            items(items) { card(it, Modifier.width(cardWidth)) }
+private fun <T> ProfileCarousel(
+    items: List<T>,
+    wide: Boolean,
+    modifier: Modifier = Modifier,
+    itemContent: @Composable CarouselItemScope.(item: T) -> Unit,
+) {
+    val carouselState = rememberCarouselState { items.size }
+    val reducedMotion = rememberReducedMotion()
+    val preferredWidth = if (wide) CarouselPreferredWidthWide else CarouselPreferredWidthCompact
+    val cardHeight = if (wide) CarouselHeightWide else CarouselHeightCompact
+    val carouselModifier = modifier
+        .fillMaxWidth()
+        .height(cardHeight)
+        .verticalWheelScrollsRow(carouselState)
+    val padding = PaddingValues(horizontal = Spacing.Comfortable)
+    if (reducedMotion) {
+        HorizontalUncontainedCarousel(
+            state = carouselState,
+            itemWidth = preferredWidth,
+            modifier = carouselModifier,
+            itemSpacing = Spacing.Tight,
+            contentPadding = padding,
+        ) { index ->
+            items.getOrNull(index)?.let { itemContent(it) }
+        }
+    } else {
+        HorizontalMultiBrowseCarousel(
+            state = carouselState,
+            preferredItemWidth = preferredWidth,
+            modifier = carouselModifier,
+            itemSpacing = Spacing.Tight,
+            contentPadding = padding,
+        ) { index ->
+            items.getOrNull(index)?.let { itemContent(it) }
         }
     }
 }
 
-private val ShelfGap = Spacing.Cozy
-
 /**
- * 货架视频卡:16:10 封面 + 两行强调标题 + 等宽状态文案,带悬停色阶抬升与右键/长按复制入队菜单。
+ * 旋转木马视频卡：16:10 满幅封面 + 28dp `extraLarge` 遮罩裁剪，随尾端缩窄平滑淡出底部文字，
+ * 保证窄预览条只留纯净封面与角标；全幅与宽窄屏均挂载右键/长按操作菜单。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalFoundationApi::class)
 @Composable
-private fun ShelfVideoCard(
+private fun CarouselItemScope.CarouselVideoCard(
     item: VideoRowUi,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1186,56 +1191,84 @@ private fun ShelfVideoCard(
     enabled: Boolean = true,
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val cardShape = MaterialTheme.shapes.extraLarge
     val cardContent: @Composable (openMenu: (() -> Unit)?) -> Unit = { openMenu ->
-        Column(
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .interactiveCard(
-                    shape = MaterialTheme.shapes.large,
-                    baseColor = colorScheme.surfaceContainer,
-                    hoverColor = if (enabled) {
-                        lerp(colorScheme.surfaceContainer, colorScheme.surfaceContainerHigh, 0.65f)
-                    } else {
-                        colorScheme.surfaceContainer
-                    },
-                    enableScale = enabled,
-                )
+                .fillMaxSize()
+                .maskClip(cardShape)
+                .background(colorScheme.surfaceContainerHigh)
                 .combinedClickable(
                     enabled = enabled,
                     role = Role.Button,
                     onClick = onClick,
                     onLongClick = openMenu,
                 )
-                .alpha(if (enabled) 1f else DisabledShelfAlpha)
-                .padding(Spacing.Tight),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Hair + 2.dp),
+                .alpha(if (enabled) 1f else DisabledShelfAlpha),
         ) {
             ProvideTextStyle(LocalTextStyle.current.tabular) {
                 VideoCover(
                     url = item.coverUrl,
-                    durationText = item.durationText,
+                    durationText = "",
                     progressFraction = item.progressFraction,
-                    cornerRadius = Dimens.CoverCornerGrid,
-                    typeBadge = item.typeBadge,
-                    modifier = Modifier.fillMaxWidth(),
+                    cornerRadius = 0.dp,
+                    typeBadge = "",
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
-            Text(
-                text = item.title,
-                style = MaterialTheme.typography.bodyMediumEmphasized,
-                color = colorScheme.onSurface,
-                minLines = 2,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            item.meta?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.labelSmall.tabular,
-                    color = colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+            if (item.typeBadge.isNotEmpty()) {
+                MediaBadge(
+                    text = item.typeBadge,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(Spacing.Cozy),
                 )
+            }
+            if (item.durationText.isNotEmpty()) {
+                MediaBadge(
+                    text = item.durationText,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(Spacing.Cozy),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        val ratio = carouselItemDrawInfo.size / carouselItemDrawInfo.maxSize.coerceAtLeast(1f)
+                        alpha = ((ratio - 0.52f) / 0.48f).coerceIn(0f, 1f)
+                    }
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, FixedColors.ScrimOnMedia),
+                        ),
+                    )
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = item.title,
+                        style = MaterialTheme.typography.titleSmallEmphasized,
+                        color = FixedColors.OnMedia,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    item.meta?.let { meta ->
+                        Text(
+                            text = meta,
+                            style = MaterialTheme.typography.labelSmall.tabular,
+                            color = FixedColors.OnMedia.copy(alpha = 0.86f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.graphicsLayer {
+                                val ratio = carouselItemDrawInfo.size / carouselItemDrawInfo.maxSize.coerceAtLeast(1f)
+                                alpha = ((ratio - 0.68f) / 0.32f).coerceIn(0f, 1f)
+                            },
+                        )
+                    }
+                }
             }
         }
     }
@@ -1244,7 +1277,7 @@ private fun ShelfVideoCard(
         ContextMenuBox(
             onClick = null,
             menuLabel = stringResource(Res.string.menu_item_actions),
-            modifier = modifier,
+            modifier = modifier.fillMaxSize(),
             menu = { close ->
                 VideoCommonMenuItems(
                     bvid = bvid,
@@ -1259,7 +1292,7 @@ private fun ShelfVideoCard(
             cardContent(openMenu)
         }
     } else {
-        Box(modifier = modifier) {
+        Box(modifier = modifier.fillMaxSize()) {
             cardContent(null)
         }
     }
@@ -1268,44 +1301,31 @@ private fun ShelfVideoCard(
 private const val DisabledShelfAlpha = 0.38f
 
 @Composable
-private fun ShelfLoading() {
-    FullScreenLoading(Modifier.fillMaxWidth().height(ShelfLoadingHeight))
-}
-
-private val ShelfLoadingHeight = 200.dp
-
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun PreviewRowsSkeleton() {
+private fun CarouselSkeleton(wide: Boolean) {
+    val width = if (wide) CarouselPreferredWidthWide else CarouselPreferredWidthCompact
+    val height = if (wide) CarouselHeightWide else CarouselHeightCompact
     SkeletonPulse {
-        Column(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
-            repeat(PreviewCount) { index ->
-                SegmentedListItem(
-                    onClick = {},
-                    enabled = false,
-                    shapes = ListItemDefaults.segmentedShapes(index = index, count = PreviewCount),
-                    colors = ListItemDefaults.segmentedColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    ),
-                    modifier = Modifier.padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
-                    verticalAlignment = Alignment.CenterVertically,
-                    leadingContent = {
-                        Box(
-                            Modifier
-                                .width(PreviewCoverWidth)
-                                .aspectRatio(CoverAspectRatio)
-                                .skeleton(RoundedCornerShape(PreviewCoverCorner)),
-                        )
-                    },
-                    supportingContent = { SkeletonLine(Modifier.fillMaxWidth(0.4f).padding(top = Spacing.Hair)) },
-                ) {
-                    SkeletonLine(Modifier.fillMaxWidth(0.85f))
-                }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clipToBounds()
+                .padding(horizontal = Spacing.Comfortable),
+        ) {
+            repeat(CarouselSkeletonCount) { index ->
+                val itemWidth = if (index == CarouselSkeletonCount - 1) width * 0.35f else width
+                Box(
+                    modifier = Modifier
+                        .width(itemWidth)
+                        .height(height)
+                        .skeleton(MaterialTheme.shapes.extraLarge),
+                )
             }
         }
     }
 }
+
+private const val CarouselSkeletonCount = 3
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -1344,7 +1364,7 @@ private sealed interface SectionPhase {
 }
 
 /**
- * 收藏夹概览:宽屏走等宽自然货架卡片,窄屏多个收藏夹走横滑卡片、仅单个时走分段横排卡片。
+ * 收藏夹概览：采用 M3E 多浏览旋转木马统一承载宽窄屏，保留收藏夹封面、隐私锁与条数角标。
  */
 @Composable
 private fun FavFoldersSection(
@@ -1358,52 +1378,27 @@ private fun FavFoldersSection(
     Column(modifier = modifier.padding(bottom = Spacing.Comfortable)) {
         ShelfTitle(stringResource(Res.string.fav_folders_title), onSeeAll = onOpen)
         SectionBody(
-            state,
-            onRetry,
-            stringResource(Res.string.profile_favorites_empty),
-            skeleton = { if (wide) ShelfLoading() else FolderCardsSkeleton() },
+            state = state,
+            onRetry = onRetry,
+            emptyText = stringResource(Res.string.profile_favorites_empty),
+            skeleton = { CarouselSkeleton(wide = wide) },
         ) { folders ->
-            if (wide) {
-                Shelf(folders.take(ShelfMaxCount)) { folder, cardModifier ->
-                    ProfileFavFolderCard(
-                        folder = folder,
-                        onClick = { onOpenFolder(folder) },
-                        modifier = cardModifier,
-                    )
-                }
-                return@SectionBody
-            }
-            val only = folders.singleOrNull()
-            if (only != null) {
-                Box(modifier = Modifier.padding(horizontal = Spacing.Comfortable)) {
-                    SingleFolderRow(only, onClick = { onOpenFolder(only) })
-                }
-                return@SectionBody
-            }
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = Spacing.Comfortable),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-            ) {
-                items(folders, key = { it.id }) { folder ->
-                    ProfileFavFolderCard(
-                        folder = folder,
-                        onClick = { onOpenFolder(folder) },
-                        modifier = Modifier.width(CompactFolderCardWidth),
-                    )
-                }
+            ProfileCarousel(items = folders, wide = wide) { folder ->
+                CarouselFavFolderCard(
+                    folder = folder,
+                    onClick = { onOpenFolder(folder) },
+                )
             }
         }
     }
 }
 
-private val CompactFolderCardWidth = Dimens.ListCoverWidth + Spacing.Tight * 3
-
 /**
- * 个人页收藏夹卡片:带悬停容器反馈、强调标题、等宽视频条数与右键/长按复制标题动作。
+ * 旋转木马收藏夹卡：`extraLarge` 28dp 遮罩裁剪、右键/长按复制标题与随宽度渐显元信息。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalFoundationApi::class)
 @Composable
-private fun ProfileFavFolderCard(
+private fun CarouselItemScope.CarouselFavFolderCard(
     folder: FavFolderDetail,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1414,11 +1409,12 @@ private fun ProfileFavFolderCard(
     val scope = rememberCoroutineScope()
     val copyTitleLabel = stringResource(Res.string.action_copy_title)
     val copiedText = stringResource(Res.string.comment_copied)
+    val cardShape = MaterialTheme.shapes.extraLarge
 
     ContextMenuBox(
         onClick = null,
         menuLabel = stringResource(Res.string.menu_item_actions),
-        modifier = modifier,
+        modifier = modifier.fillMaxSize(),
         menu = { close ->
             DropdownMenuItem(
                 onClick = {
@@ -1434,111 +1430,90 @@ private fun ProfileFavFolderCard(
             )
         },
     ) { openMenu ->
-        Column(
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .interactiveCard(
-                    shape = MaterialTheme.shapes.large,
-                    baseColor = colorScheme.surfaceContainer,
-                    hoverColor = lerp(colorScheme.surfaceContainer, colorScheme.surfaceContainerHigh, 0.65f),
-                )
+                .fillMaxSize()
+                .maskClip(cardShape)
+                .background(colorScheme.surfaceContainerHigh)
                 .combinedClickable(
                     role = Role.Button,
                     onClick = onClick,
                     onLongClick = openMenu,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (folder.coverUrl.isNotEmpty()) {
+                BiliAsyncImage(
+                    url = folder.coverUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
                 )
-                .padding(Spacing.Tight),
-            verticalArrangement = Arrangement.spacedBy(Spacing.Hair + 2.dp),
-        ) {
-            FavFolderCover(
-                url = folder.coverUrl,
-                modifier = Modifier.fillMaxWidth(),
-                private = !folder.isPublic,
-            )
-            Text(
-                text = folder.title,
-                style = MaterialTheme.typography.bodyMediumEmphasized,
-                color = colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = stringResource(Res.string.fav_folder_count, folder.count),
-                style = MaterialTheme.typography.labelSmall.tabular,
-                color = colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-private fun SingleFolderRow(folder: FavFolderDetail, onClick: () -> Unit) {
-    SegmentedListItem(
-        onClick = onClick,
-        shapes = ListItemDefaults.segmentedShapes(index = 0, count = 1),
-        colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        verticalAlignment = Alignment.CenterVertically,
-        leadingContent = {
-            FavFolderCover(
-                url = folder.coverUrl,
-                private = !folder.isPublic,
-                modifier = Modifier.width(PreviewCoverWidth),
-            )
-        },
-        supportingContent = {
-            Text(
-                favFolderMeta(folder),
-                style = MaterialTheme.typography.labelSmall.tabular,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-        },
-    ) {
-        Text(
-            folder.title,
-            style = MaterialTheme.typography.bodyMediumEmphasized,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-@Composable
-private fun FolderCardsSkeleton() {
-    SkeletonPulse {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-            modifier = Modifier
-                .fillMaxWidth()
-                .clipToBounds()
-                .padding(horizontal = Spacing.Comfortable),
-        ) {
-            repeat(FolderSkeletonCount) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            } else {
+                Icon(
+                    imageVector = Icons.Outlined.Folder,
+                    contentDescription = null,
+                    tint = colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(36.dp),
+                )
+            }
+            if (!folder.isPublic) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
                     modifier = Modifier
-                        .width(CompactFolderCardWidth)
-                        .clip(MaterialTheme.shapes.large)
-                        .background(MaterialTheme.colorScheme.surfaceContainer)
-                        .padding(Spacing.Tight),
+                        .align(Alignment.TopStart)
+                        .padding(Spacing.Cozy)
+                        .background(FixedColors.ScrimOnMedia, CircleShape)
+                        .padding(horizontal = Spacing.Tight, vertical = 3.dp),
                 ) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(CoverAspectRatio)
-                            .skeleton(RoundedCornerShape(CoverCornerRadius)),
+                    Icon(
+                        imageVector = Icons.Outlined.Lock,
+                        contentDescription = null,
+                        tint = FixedColors.OnMedia,
+                        modifier = Modifier.size(12.dp),
                     )
-                    SkeletonLine(Modifier.fillMaxWidth(0.7f))
-                    SkeletonLine(Modifier.fillMaxWidth(0.4f))
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        val ratio = carouselItemDrawInfo.size / carouselItemDrawInfo.maxSize.coerceAtLeast(1f)
+                        alpha = ((ratio - 0.52f) / 0.48f).coerceIn(0f, 1f)
+                    }
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, FixedColors.ScrimOnMedia),
+                        ),
+                    )
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = folder.title,
+                        style = MaterialTheme.typography.titleSmallEmphasized,
+                        color = FixedColors.OnMedia,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = favFolderMeta(folder),
+                        style = MaterialTheme.typography.labelSmall.tabular,
+                        color = FixedColors.OnMedia.copy(alpha = 0.86f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.graphicsLayer {
+                            val ratio = carouselItemDrawInfo.size / carouselItemDrawInfo.maxSize.coerceAtLeast(1f)
+                            alpha = ((ratio - 0.68f) / 0.32f).coerceIn(0f, 1f)
+                        },
+                    )
                 }
             }
         }
     }
 }
-
-private const val FolderSkeletonCount = 3
 
 @Composable
 private fun InlineSectionError(message: String, onRetry: () -> Unit) {

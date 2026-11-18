@@ -1023,7 +1023,7 @@ fun PlayerShell(
                     onStart = {
                         controlsVisible = false
                         gesture = null
-                        dragPosition = null
+                        progress.dragPositionMillis = null
                         keepAwake()
                     },
                 ),

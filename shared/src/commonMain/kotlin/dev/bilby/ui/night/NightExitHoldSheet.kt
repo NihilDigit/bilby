@@ -2,17 +2,15 @@ package dev.bilby.ui.night
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -40,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -65,6 +64,8 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.isOutOfBounds
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.lifecycle.Lifecycle
@@ -93,6 +94,7 @@ import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.rememberClockFont
+import dev.bilby.ui.theme.rememberReducedMotion
 import kotlinx.coroutines.isActive
 import kotlin.math.PI
 import kotlin.math.ceil
@@ -152,8 +154,10 @@ fun NightExitHoldSheet(
         val progress = remember { Animatable(0f) }
         val currentOnCompleted by rememberUpdatedState(onCompleted)
         val haptic = LocalHapticFeedback.current
+        val reducedMotion = rememberReducedMotion()
+        val rewindSpec = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
 
-        LaunchedEffect(holding, completed) {
+        LaunchedEffect(holding, completed, reducedMotion) {
             if (completed) return@LaunchedEffect
             if (holding) {
                 // 松手重按必须重新连续按满 30 秒，与「松开即重置」一致。
@@ -180,19 +184,41 @@ fun NightExitHoldSheet(
                     }
                 }
             } else if (progress.value > 0f) {
-                progress.animateTo(
-                    targetValue = 0f,
-                    animationSpec = tween(durationMillis = RewindDurationMillis, easing = FastOutSlowInEasing),
-                )
+                if (reducedMotion) {
+                    progress.snapTo(0f)
+                } else {
+                    progress.animateTo(
+                        targetValue = 0f,
+                        animationSpec = rewindSpec,
+                    )
+                }
             }
         }
 
         val fillsHeight = inPane || fullHeightHost
-        val fraction = progress.value.coerceIn(0f, 1f)
+        val fractionProvider = remember(progress) { { progress.value.coerceIn(0f, 1f) } }
+        val hasProgress by remember(progress) { derivedStateOf { progress.value > 0.001f } }
+        val remainingSeconds by remember(progress, holding) {
+            derivedStateOf {
+                val f = progress.value.coerceIn(0f, 1f)
+                if (!holding && f <= 0f) {
+                    HoldDurationSeconds
+                } else {
+                    ceil((1f - f) * HoldDurationSeconds).toInt().coerceIn(0, HoldDurationSeconds)
+                }
+            }
+        }
+        val density = LocalDensity.current
+        var stageHeight by remember { mutableStateOf(0.dp) }
+        val scrollState = rememberScrollState()
 
         if (fillsHeight) {
-            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                val enoughHeight = maxHeight >= FullHeightStageThreshold
+            val enoughHeight = stageHeight == 0.dp || stageHeight >= FullHeightStageThreshold
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onSizeChanged { with(density) { stageHeight = it.height.toDp() } },
+            ) {
                 if (enoughHeight) {
                     Column(
                         modifier = Modifier
@@ -203,7 +229,9 @@ fun NightExitHoldSheet(
                         NightHoldBody(body = body)
                         Spacer(modifier = Modifier.weight(TopStageWeight))
                         NightHoldStage(
-                            fraction = fraction,
+                            fractionProvider = fractionProvider,
+                            hasProgress = hasProgress,
+                            remainingSeconds = remainingSeconds,
                             holding = holding,
                             completed = completed,
                             compact = false,
@@ -220,14 +248,16 @@ fun NightExitHoldSheet(
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
+                            .verticalScroll(scrollState)
                             .padding(horizontal = Spacing.Loose)
                             .padding(top = Spacing.Tight, bottom = Spacing.Loose),
                         verticalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
                     ) {
                         NightHoldBody(body = body)
                         NightHoldStage(
-                            fraction = fraction,
+                            fractionProvider = fractionProvider,
+                            hasProgress = hasProgress,
+                            remainingSeconds = remainingSeconds,
                             holding = holding,
                             completed = completed,
                             compact = true,
@@ -242,12 +272,16 @@ fun NightExitHoldSheet(
                 }
             }
         } else {
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                val compact = maxHeight < CompactSheetThreshold
+            val compact = stageHeight > 0.dp && stageHeight < CompactSheetThreshold
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { with(density) { stageHeight = it.height.toDp() } },
+            ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
+                        .verticalScroll(scrollState)
                         .padding(horizontal = Spacing.Loose)
                         .padding(top = Spacing.Hair, bottom = Spacing.Loose),
                     verticalArrangement = Arrangement.spacedBy(
@@ -256,7 +290,9 @@ fun NightExitHoldSheet(
                 ) {
                     NightHoldBody(body = body)
                     NightHoldStage(
-                        fraction = fraction,
+                        fractionProvider = fractionProvider,
+                        hasProgress = hasProgress,
+                        remainingSeconds = remainingSeconds,
                         holding = holding,
                         completed = completed,
                         compact = compact,
@@ -285,7 +321,9 @@ private fun NightHoldBody(body: String?) {
 
 @Composable
 private fun NightHoldStage(
-    fraction: Float,
+    fractionProvider: () -> Float,
+    hasProgress: Boolean,
+    remainingSeconds: Int,
     holding: Boolean,
     completed: Boolean,
     compact: Boolean,
@@ -294,19 +332,14 @@ private fun NightHoldStage(
     onHeldKeyChange: (Key?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val remainingSeconds = if (!holding && fraction <= 0f) {
-        HoldDurationSeconds
-    } else {
-        ceil((1f - fraction) * HoldDurationSeconds).toInt().coerceIn(0, HoldDurationSeconds)
-    }
-
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(if (compact) Spacing.Comfortable else Spacing.Loose),
         modifier = modifier.fillMaxWidth(),
     ) {
         NightHoldDial(
-            fraction = fraction,
+            fractionProvider = fractionProvider,
+            hasProgress = hasProgress,
             remainingSeconds = remainingSeconds,
             holding = holding,
             completed = completed,
@@ -314,7 +347,8 @@ private fun NightHoldStage(
             onPressDelta = onPressDelta,
         )
         NightHoldPad(
-            fraction = fraction,
+            fractionProvider = fractionProvider,
+            hasProgress = hasProgress,
             remainingSeconds = remainingSeconds,
             holding = holding,
             completed = completed,
@@ -332,7 +366,8 @@ private fun NightHoldStage(
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun NightHoldDial(
-    fraction: Float,
+    fractionProvider: () -> Float,
+    hasProgress: Boolean,
     remainingSeconds: Int,
     holding: Boolean,
     completed: Boolean,
@@ -341,7 +376,8 @@ private fun NightHoldDial(
 ) {
     val colors = MaterialTheme.colorScheme
     val motion = MaterialTheme.motionScheme
-    val active = holding || completed || fraction > 0f
+    val reducedMotion = rememberReducedMotion()
+    val active = holding || completed || hasProgress
 
     val dialSize = if (compact) DialSizeCompact else DialSizeRegular
     val readoutSize = if (compact) DialReadoutCompact else DialReadoutRegular
@@ -396,6 +432,7 @@ private fun NightHoldDial(
             .holdPointer(completed = completed, onPressDelta = onPressDelta),
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
+            val fraction = fractionProvider()
             val center = Offset(size.width / 2f, size.height / 2f)
             val outerRadius = size.minDimension / 2f - OuterMargin.toPx()
 
@@ -405,6 +442,20 @@ private fun NightHoldDial(
             val minorStroke = MinorTickWidth.toPx()
             val pulseMax = TickPulseOffset.toPx()
             val elapsed = fraction * HoldDurationSeconds
+
+            // Causal 5-second milestone outer pulse ring only while holding and motion enabled.
+            if (holding && !reducedMotion && elapsed >= MajorTickInterval) {
+                val intoBucket = elapsed % MajorTickInterval
+                if (intoBucket in 0f..0.7f) {
+                    val pulseT = (intoBucket / 0.7f).coerceIn(0f, 1f)
+                    drawCircle(
+                        color = primaryColor.copy(alpha = (1f - pulseT) * 0.28f),
+                        radius = outerRadius + pulseT * 4.dp.toPx(),
+                        center = center,
+                        style = Stroke(width = 1.5.dp.toPx()),
+                    )
+                }
+            }
 
             for (index in 0 until HoldDurationSeconds) {
                 val major = index % MajorTickInterval == 0
@@ -417,7 +468,7 @@ private fun NightHoldDial(
                 val tickColor = lerp(inactiveTickColor, primaryColor, lit)
 
                 val waveWindow = (elapsed - index + TickWaveLead) / TickWaveSpan
-                val pulse = if (holding && waveWindow in 0f..1f) {
+                val pulse = if (holding && !reducedMotion && waveWindow in 0f..1f) {
                     sin(waveWindow * PI).toFloat() * pulseMax
                 } else {
                     0f
@@ -520,7 +571,8 @@ private fun NightHoldDial(
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun NightHoldPad(
-    fraction: Float,
+    fractionProvider: () -> Float,
+    hasProgress: Boolean,
     remainingSeconds: Int,
     holding: Boolean,
     completed: Boolean,
@@ -531,6 +583,7 @@ private fun NightHoldPad(
     val colors = MaterialTheme.colorScheme
     val motion = MaterialTheme.motionScheme
     val engaged = holding || completed
+    var focused by remember { mutableStateOf(false) }
     val latestHeldKey by rememberUpdatedState(heldKey)
     val latestOnHeldKeyChange by rememberUpdatedState(onHeldKeyChange)
 
@@ -568,6 +621,7 @@ private fun NightHoldPad(
         shape = shape,
         color = containerColor,
         contentColor = contentColor,
+        border = if (focused && !engaged) BorderStroke(2.dp, colors.primary) else null,
         modifier = Modifier
             .widthIn(max = HoldPadMaxWidth)
             .fillMaxWidth()
@@ -579,13 +633,14 @@ private fun NightHoldPad(
             .clip(shape)
             .semantics(mergeDescendants = true) {
                 role = Role.Button
-                stateDescription = if (holding || fraction > 0f) a11yProgress else idleLabel
+                stateDescription = if (holding || hasProgress) a11yProgress else idleLabel
                 progressBarRangeInfo = ProgressBarRangeInfo(
-                    current = fraction,
+                    current = fractionProvider(),
                     range = 0f..1f,
                 )
             }
             .onFocusChanged { focusState ->
+                focused = focusState.isFocused
                 if (!focusState.isFocused && latestHeldKey != null) {
                     latestOnHeldKeyChange(null)
                 }
@@ -668,7 +723,6 @@ private fun Modifier.holdPointer(
 private const val HoldDurationMillis = 30_000L
 private const val HoldDurationSeconds = 30
 private const val MilestoneStepSeconds = 10
-private const val RewindDurationMillis = 320
 
 private const val DegreesPerSecond = 360.0 / HoldDurationSeconds
 private const val MajorTickInterval = 5

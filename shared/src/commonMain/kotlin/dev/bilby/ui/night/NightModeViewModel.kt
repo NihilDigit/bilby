@@ -1,5 +1,6 @@
 package dev.bilby.ui.night
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.api.BiliResult
@@ -31,6 +32,7 @@ private const val BATCH_SIZE = 30
 private const val MAX_REFETCH_ROUNDS = 4
 
 /** 夜间模式下的一条点播投稿，附带所属白名单 UP 主信息与来源页号。 */
+@Immutable
 data class NightVideoItem(
     val up: WhitelistedUp,
     val video: SpaceVideoItem,
@@ -39,11 +41,13 @@ data class NightVideoItem(
     val bvid: String get() = video.bvid
 }
 
+@Immutable
 data class NightToViewNotice(
     val id: Long,
     val message: StringResource,
 )
 
+@Immutable
 data class NightModeUiState(
     val allowedUps: List<WhitelistedUp> = emptyList(),
     val selectedMid: Long? = null,

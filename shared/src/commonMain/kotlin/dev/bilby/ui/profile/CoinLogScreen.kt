@@ -20,10 +20,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -151,7 +154,8 @@ private fun CoinLogRow(entry: CoinLogEntry) {
         shape = MaterialTheme.shapes.large,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(CardCellInset),
+            .padding(CardCellInset)
+            .semantics(mergeDescendants = true) {},
     ) {
         Row(
             modifier = Modifier
@@ -219,9 +223,11 @@ private fun formatDelta(delta: Double): String {
 
 @Composable
 private fun coinLogTime(text: String): String {
-    val epoch = runCatching {
-        LocalDateTime.parse(text, ServerTimeFormat).atZone(ServerZone).toEpochSecond()
-    }.getOrNull() ?: return text
+    val epoch = remember(text) {
+        runCatching {
+            LocalDateTime.parse(text, ServerTimeFormat).atZone(ServerZone).toEpochSecond()
+        }.getOrNull()
+    } ?: return text
     return formatRelativeTime(epoch)
 }
 
@@ -272,6 +278,7 @@ private val TimeLineHeight = 10.dp
 private val DeltaWidth = 48.dp
 private val DeltaHeight = 28.dp
 
+@Immutable
 data class CoinLogUiState(
     val items: List<CoinLogEntry> = emptyList(),
     val loading: Boolean = true,

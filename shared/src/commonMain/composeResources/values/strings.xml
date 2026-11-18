@@ -171,18 +171,20 @@
     <string name="toview_capacity">已用 %1$d / %2$d</string>
     <string name="toview_finished">已看完</string>
     <string name="toview_progress">看到 %1$s</string>
-    <string name="toview_remove">移出稍后再看:%1$s</string>
+    <string name="toview_remove">移出稍后再看：%1$s</string>
     <string name="toview_removed">已移出稍后再看</string>
     <string name="toview_clear_finished_confirm">清空已看完的 %1$d 条?</string>
     <string name="toview_clear_invalid">清空已失效</string>
     <string name="toview_clear_invalid_confirm">清空已失效的视频?</string>
     <string name="toview_listen_all">听全部</string>
+    <string name="listen_start_random">随机选择一条开始</string>
+    <string name="listen_more_options">更多播放方式</string>
     <string name="toview_order_recent">最近添加</string>
     <string name="toview_order_earliest">最早添加</string>
-    <string name="toview_refresh_failed">刷新失败:%1$s</string>
-    <string name="toview_remove_failed">移出失败:%1$s</string>
-    <string name="toview_undo_failed">撤销失败:%1$s</string>
-    <string name="toview_clear_failed">清空失败:%1$s</string>
+    <string name="toview_refresh_failed">刷新失败：%1$s</string>
+    <string name="toview_remove_failed">移出失败：%1$s</string>
+    <string name="toview_undo_failed">撤销失败：%1$s</string>
+    <string name="toview_clear_failed">清空失败：%1$s</string>
     <string name="media_kind_audio">音频</string>
     <string name="media_kind_ogv">剧集</string>
     <string name="media_kind_course">课程</string>
@@ -201,16 +203,16 @@
     <string name="history_delete_failed">删除失败</string>
     <string name="settings_default_quality_wifi">WiFi 默认画质</string>
     <string name="settings_default_quality_metered">计费网络默认画质</string>
-    <string name="settings_default_quality_metered_subtitle">按系统的流量计费标记判断,手机热点和按量计费的 WiFi 也算</string>
+    <string name="settings_default_quality_metered_subtitle">按系统的流量计费标记判断，手机热点和按量计费的 WiFi 也算</string>
     <string name="settings_default_audio_wifi">WiFi 默认音质</string>
     <string name="settings_default_audio_metered">计费网络默认音质</string>
     <string name="settings_default_live_quality_wifi">WiFi 默认直播画质</string>
     <string name="settings_default_live_quality_metered">计费网络默认直播画质</string>
     <string name="settings_pick_updates_default">播放页切换改为默认</string>
-    <string name="settings_pick_updates_default_subtitle">关闭时,播放页切换画质与音质只对本次播放生效</string>
+    <string name="settings_pick_updates_default_subtitle">关闭时，播放页切换画质与音质只对本次播放生效</string>
     <string name="settings_pause_history">暂停记录观看历史</string>
-    <string name="settings_pause_history_subtitle">暂停后不再记录新的观看历史,已有记录和播放进度不受影响</string>
-    <string name="settings_pause_history_failed">读取失败,点击重试</string>
+    <string name="settings_pause_history_subtitle">暂停后不再记录新的观看历史，已有记录和播放进度不受影响</string>
+    <string name="settings_pause_history_failed">读取失败，点击重试</string>
     <string name="history_finished">已看完</string>
     <string name="history_progress">看到 %1$s</string>
 
@@ -261,8 +263,8 @@
     <string name="space_followers">%1$s粉丝</string>
     <!-- 下两条只作读屏的 contentDescription:LevelBadge 是 Canvas,读屏读不到画出来的数字。不推翻上一行——显示给人的部分仍不进字符串。 -->
     <string name="level_badge">等级 %1$d</string>
-    <string name="level_badge_senior">等级 %1$d,硬核会员</string>
-    <string name="space_no_sign">这个人很懒,什么都没写</string>
+    <string name="level_badge_senior">等级 %1$d，硬核会员</string>
+    <string name="space_no_sign">这个人很懒，什么都没写</string>
     <string name="space_listen_up">听投稿</string>
     <string name="space_order_pubdate">最新</string>
     <string name="space_order_click">最多播放</string>
@@ -319,7 +321,7 @@
     <string name="video_parts_expand">全部 %1$d 集</string>
     <string name="video_find_related">找相关</string>
     <string name="video_queue_loading">加载队列…</string>
-    <string name="video_queue_incomplete">队列没建全,只有当前这条</string>
+    <string name="video_queue_incomplete">队列没建全，只有当前这条</string>
     <string name="video_queue_show_all">查看全部</string>
     <string name="video_queue_now_playing">正在播放</string>
     <string name="video_queue_paused">已暂停</string>
@@ -332,7 +334,7 @@
     <string name="offline_sheet_select_all">全选</string>
     <string name="offline_selected_count">已选 %1$d 项</string>
     <string name="offline_delete_batch_title">删除选中的缓存?</string>
-    <string name="offline_delete_batch_message">共 %1$d 项,文件将从本机移除,重新缓存需再次下载。</string>
+    <string name="offline_delete_batch_message">共 %1$d 项，文件将从本机移除，重新缓存需再次下载。</string>
     <string name="action_delete">删除</string>
     <string name="offline_sheet_select_none">全不选</string>
     <string name="offline_sheet_confirm">缓存 %1$d 条</string>
@@ -347,9 +349,9 @@
     <string name="offline_section_in_flight">正在缓存(%1$d)</string>
     <string name="offline_section_completed">已缓存</string>
     <string name="offline_listen_all">听全部</string>
-    <string name="offline_delete">删除缓存:%1$s</string>
+    <string name="offline_delete">删除缓存：%1$s</string>
     <string name="offline_delete_confirm_title">删除这条缓存?</string>
-    <string name="offline_delete_confirm_message">文件将从本机移除,重新缓存需再次下载。</string>
+    <string name="offline_delete_confirm_message">文件将从本机移除，重新缓存需再次下载。</string>
     <string name="offline_notification_channel">离线缓存</string>
     <string name="offline_notification_title">正在缓存视频</string>
     <string name="offline_notification_queued">还有 %1$d 条</string>
@@ -362,11 +364,11 @@
 
     <!-- 投币 / 收藏对话框 -->
     <string name="action_confirm">确认</string>
-    <string name="coin_maxed">已投 2 枚,不能再投</string>
+    <string name="coin_maxed">已投 2 枚，不能再投</string>
     <string name="coin_count">%1$d 枚</string>
     <string name="coin_also_like">同时点赞</string>
     <string name="coin_warning">投币不可撤销</string>
-    <string name="coin_failed">投币失败:%1$s</string>
+    <string name="coin_failed">投币失败：%1$s</string>
     <string name="fav_dialog_title">收藏到</string>
 
     <!-- 找相关的 sheet。把手上一行既是标题也是状态 -->
@@ -427,11 +429,11 @@
     <string name="listen_queue">播放队列</string>
     <!-- 队列把手收起时露出的那一行,见 ListenScreen.kt 的 QueueSheetContent。 -->
     <string name="listen_queue_title">播放队列</string>
-    <string name="listen_retrying">%1$s,重试中…</string>
+    <string name="listen_retrying">%1$s，重试中…</string>
 
     <!-- 播放失败的原因。摆在界面上,不悄悄跳到下一条。 -->
-    <string name="playback_error_stream">取流失败:%1$s</string>
-    <string name="playback_error_network">网络错误,取流失败</string>
+    <string name="playback_error_stream">取流失败：%1$s</string>
+    <string name="playback_error_network">网络错误，取流失败</string>
     <string name="playback_error_detail">读取视频信息失败</string>
     <string name="playback_error_decode">播放失败(%1$d)</string>
     <string name="playback_error_open">无法打开视频</string>
@@ -482,16 +484,19 @@
     <!-- 登录 -->
     <string name="login_title">扫码登录</string>
     <string name="login_hint">用 B 站 App 扫码登录</string>
-    <string name="login_scanned">已扫描,请在手机上确认</string>
+    <string name="login_scanned">已扫描，请在手机上确认</string>
     <string name="login_qr_expired">二维码已过期</string>
     <string name="login_success">登录成功</string>
+    <string name="login_qr_fetch_failed">二维码没有取到，稍后重试</string>
+    <string name="login_incomplete">登录没有完成，重新扫一次</string>
+    <string name="login_network_unavailable">网络不通，检查网络后重试</string>
 
     <!-- 设置 -->
     <string name="settings_title">设置</string>
     <!-- 账号信息与登出的入口已经搬到「我的」页,这两条字符串仍在:登出的二次确认对话框
          (ProfileScreen)复用它们,同一个动作的文案不该有两份。 -->
     <string name="settings_logout">登出</string>
-    <string name="settings_logout_message">清除本机凭据并停止播放,重新登录需要再扫一次码</string>
+    <string name="settings_logout_message">清除本机凭据并停止播放，重新登录需要再扫一次码</string>
     <string name="settings_section_agent">助理</string>
     <string name="settings_llm_base_url">接口地址</string>
     <string name="settings_llm_dialog">助理接口</string>
@@ -532,7 +537,7 @@
     <string name="theme_palette_moegi">萌黄</string>
     <string name="theme_palette_botan">牡丹</string>
     <string name="settings_offline_concurrency">同时下载</string>
-    <string name="settings_offline_concurrency_subtitle">调大可加快批量缓存,代价是并发请求增多,更易触发风控</string>
+    <string name="settings_offline_concurrency_subtitle">调大可加快批量缓存，代价是并发请求增多，更易触发风控</string>
     <string name="settings_offline_concurrency_value">%1$d 条</string>
     <string name="settings_danmakus_archive">补全本场醒目留言</string>
     <string name="settings_danmakus_archive_subtitle">进直播间时向 danmakus.com 查询本场早前的醒目留言。会把主播的 UID 发给这个站外服务，不含你的账号信息；关闭后不再发出这个请求</string>
@@ -593,7 +598,7 @@
     <string name="settings_update_available">发现新版本 %1$s</string>
     <string name="settings_update_downloading">下载中 %1$d%%</string>
     <string name="settings_update_ready">%1$s 已下载</string>
-    <string name="settings_update_failed">检查失败:%1$s</string>
+    <string name="settings_update_failed">检查失败：%1$s</string>
 
     <!-- 开屏那一次更新提示 -->
     <string name="update_dialog_title">新版本 %1$s</string>
@@ -608,14 +613,14 @@
     <string name="update_installing">等待安装</string>
     <string name="update_open_page">前往下载页</string>
     <string name="update_view_in_browser">在浏览器中查看</string>
-    <string name="update_failed_network">网络不通,检查网络后重试</string>
-    <string name="update_failed_check">检查更新未完成,稍后重试</string>
-    <string name="update_failed_download">下载未完成,稍后重试</string>
-    <string name="update_failed_checksum">安装包校验未通过,请从下载页获取</string>
+    <string name="update_failed_network">网络不通，检查网络后重试</string>
+    <string name="update_failed_check">检查更新未完成，稍后重试</string>
+    <string name="update_failed_download">下载未完成，稍后重试</string>
+    <string name="update_failed_checksum">安装包校验未通过，请从下载页获取</string>
     <string name="update_failed_launch">无法启动安装</string>
     <string name="update_install_cancelled">已取消安装</string>
     <string name="update_install_failed">安装未完成</string>
-    <string name="update_previous_failed">上次更新未完成,当前版本未受影响</string>
+    <string name="update_previous_failed">上次更新未完成，当前版本未受影响</string>
 
     <string name="settings_license">许可证</string>
     <string name="settings_github">项目 GitHub</string>
@@ -651,7 +656,7 @@
     <string name="blacklist_blocked_at">拉黑于 %1$s</string>
     <string name="blacklist_block">拉黑</string>
     <string name="blacklist_block_confirm_title">拉黑「%1$s」</string>
-    <string name="blacklist_block_confirm_message">将解除关注和合集订阅,对方无法与你互动或查看你的空间。</string>
+    <string name="blacklist_block_confirm_message">将解除关注和合集订阅，对方无法与你互动或查看你的空间。</string>
     <string name="fav_folders_title">收藏夹</string>
     <string name="fav_folders_empty">还没有收藏夹</string>
     <string name="fav_folder_create">新建收藏夹</string>
@@ -678,7 +683,7 @@
     <string name="fav_clean_invalid">清除失效内容</string>
     <string name="fav_clean_invalid_confirm">清除失效内容?</string>
     <string name="fav_clean_done">已清除失效内容</string>
-    <string name="fav_clean_failed">清除失败:%1$s</string>
+    <string name="fav_clean_failed">清除失败：%1$s</string>
 
     <!-- 个人页 -->
     <string name="tab_profile">我的</string>
@@ -728,7 +733,7 @@
     <string name="settings_double_tap_seek">双击快进/快退</string>
     <string name="settings_double_tap_seek_subtitle">关闭后，双击画面任意位置播放或暂停</string>
     <string name="settings_auto_next">自动播放下一条</string>
-    <string name="settings_auto_next_subtitle">一条播完后接着放队列里的下一条。关闭后播完即停,手动切换不受影响</string>
+    <string name="settings_auto_next_subtitle">一条播完后接着放队列里的下一条。关闭后播完即停，手动切换不受影响</string>
     <string name="settings_pbp_outro_completion">按热度判定完播</string>
     <string name="settings_pbp_outro_completion_subtitle">进入片尾低热度段落时即视为已看完</string>
     <string name="player_vote_tag">投票</string>
@@ -754,8 +759,8 @@
     <string name="settings_sponsorblock_group_promo">推广</string>
     <string name="settings_sponsorblock_group_structure">结构片段</string>
     <string name="settings_sponsorblock_group_content">内容片段</string>
-    <string name="settings_sponsorblock_enabled_count">已选 %1$d 类,共 %2$d 类</string>
-    <string name="settings_sponsorblock_server_subtitle">第三方社区服务,可在服务不可用或域名变更时替换</string>
+    <string name="settings_sponsorblock_enabled_count">已选 %1$d 类，共 %2$d 类</string>
+    <string name="settings_sponsorblock_server_subtitle">第三方社区服务，可在服务不可用或域名变更时替换</string>
     <string name="settings_sponsorblock_section_server">服务器</string>
     <string name="dynamic_origin_gone">源动态已不可见</string>
     <string name="settings_section_account">账号</string>
@@ -831,7 +836,7 @@
     <!-- 评论详情页 -->
     <string name="comment_thread_title">评论详情</string>
     <string name="comment_thread_open_subject">查看原内容</string>
-    <string name="comment_thread_target_missing">未找到这条评论,可能已被删除</string>
+    <string name="comment_thread_target_missing">未找到这条评论，可能已被删除</string>
     <string name="message_empty_pushes">没有 UP 主推送</string>
     <!-- 系统会话的名字。接口给了名字时用接口的,没给时用这几个 -->
     <string name="whisper_system_live">主播小助手</string>
@@ -850,7 +855,7 @@
     <string name="error_network">网络不可用</string>
     <string name="error_login_expired">登录已过期</string>
     <string name="error_refused">请求被拒绝</string>
-    <string name="error_rate_limited">请求过于频繁,请稍后再试</string>
+    <string name="error_rate_limited">请求过于频繁，请稍后再试</string>
 
     <!-- 取关确认 -->
     <string name="follow_unfollow_confirm_named">取消关注 %1$s？</string>
@@ -985,6 +990,7 @@
     <string name="settings_llm_models_loading">正在获取模型列表…</string>
     <string name="settings_llm_models_empty">未找到可用模型</string>
     <string name="settings_llm_models_failed">获取模型列表失败</string>
+    <string name="settings_llm_models_toggle">展开或收起模型列表</string>
 
     <!-- Wave-2 共享文案 -->
     <string name="player_net_wifi">Wi-Fi</string>

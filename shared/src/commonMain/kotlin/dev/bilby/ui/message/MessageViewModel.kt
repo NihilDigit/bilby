@@ -1,5 +1,6 @@
 package dev.bilby.ui.message
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import org.jetbrains.compose.resources.StringResource
@@ -31,6 +32,7 @@ enum class MessageTab { Whispers, Replies, Mentions, Likes, Notices }
  * [cursor] 为 null 有两种含义,由 [loaded] 区分:还没拉过,或者已经到底了。合成一个字段的话,
  * 到底之后每次滑到底部都会重新拉第一页。
  */
+@Immutable
 data class MessageListState<T, C>(
     val items: List<T> = emptyList(),
     val loading: Boolean = false,
@@ -51,6 +53,7 @@ data class MessageListState<T, C>(
     val hasMore: Boolean get() = !loaded || cursor != null
 }
 
+@Immutable
 data class MessageUiState(
     val tab: MessageTab = MessageTab.Whispers,
     /** 游标是上一页最后一个会话的微秒时间戳,见 [MessageRepository.sessions]。 */

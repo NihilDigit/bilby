@@ -14,6 +14,7 @@ import dev.bilby.data.StartTab
 import dev.bilby.data.ThemeMode
 import dev.bilby.data.UpBrief
 import dev.bilby.data.WhitelistedUp
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -38,6 +39,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.StringResource
 
+@Immutable
 data class SettingsUiState(
     val llm: LlmConfig? = null,
     val llmTest: LlmTest = LlmTest.Idle,
@@ -88,6 +90,7 @@ data class SettingsUiState(
 )
 
 /** 夜间模式“添加 UP 主”选择面板的关注列表分页状态。 */
+@Immutable
 data class NightFollowPickerState(
     val items: List<UpBrief> = emptyList(),
     val query: String = "",

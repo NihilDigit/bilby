@@ -1958,6 +1958,12 @@ private fun ActionButtonsRow(
         label = "tripleHoldProgress",
     )
 
+    val likeInteraction = remember { MutableInteractionSource() }
+    val coinInteraction = remember { MutableInteractionSource() }
+    val favInteraction = remember { MutableInteractionSource() }
+    val toViewInteraction = remember { MutableInteractionSource() }
+    val listenInteraction = remember { MutableInteractionSource() }
+
     // 使用 M3E ButtonGroup + animateWidth 承载五格分段操作：按住或点击任一项时该格弹性舒展，
     // 邻格轻微让位，同时保留 5 项全露出的图标+计数结构与手势长按三连。
     ButtonGroup(
@@ -1965,12 +1971,6 @@ private fun ActionButtonsRow(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
     ) {
-        val likeInteraction = remember { MutableInteractionSource() }
-        val coinInteraction = remember { MutableInteractionSource() }
-        val favInteraction = remember { MutableInteractionSource() }
-        val toViewInteraction = remember { MutableInteractionSource() }
-        val listenInteraction = remember { MutableInteractionSource() }
-
         // 长按三连挂在点赞上,这是 B 站的老手势;不另开一格,那一排已经有五个动作了。
         customItem(
             buttonGroupContent = {

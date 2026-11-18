@@ -1,11 +1,12 @@
 package dev.bilby.ui.toview
 
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,19 +19,37 @@ import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Headphones as OutlinedHeadphones
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material3.ButtonGroup
+import androidx.compose.material3.ButtonGroupDefaults
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.SplitButtonDefaults
+import androidx.compose.material3.SplitButtonLayout
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ToggleButton
+import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -43,11 +62,11 @@ import dev.bilby.formatDurationSeconds
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveVideoGridContent
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.RefreshBox
-import dev.bilby.ui.components.SortMenu
 import dev.bilby.ui.components.VideoCommonMenuItems
 import dev.bilby.ui.components.VideoGridCard
 import dev.bilby.ui.components.VideoRow
@@ -70,6 +89,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.StringResource
 
+@Immutable
 data class ToViewUiState(
     val loading: Boolean = true,
     /** 首屏失败说哪一句,存资源 id(见 [dev.bilby.ui.errorTextRes])。列表已有内容时的失败走 [notice]。 */
@@ -253,7 +273,8 @@ fun ToViewScreen(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
 ) {
-    val firstPlayable = state.items.firstOrNull { it.playable }
+    val firstPlayable = remember(state.items) { state.items.firstOrNull { it.playable } }
+    val playableItems = remember(state.items) { state.items.filter { it.playable } }
     val layoutDirection = LocalLayoutDirection.current
 
     AdaptiveVideoGridContent(modifier = modifier) { columnCount ->
@@ -297,6 +318,7 @@ fun ToViewScreen(
                             asc = state.asc,
                             canListen = firstPlayable != null,
                             onListenAll = { firstPlayable?.let(onListenAll) },
+                            onListenRandom = { playableItems.randomOrNull()?.let(onListenAll) },
                             onAscChanged = onAscChanged,
                             modifier = Modifier.padding(
                                 horizontal = if (multiColumn) Spacing.Tight + 2.dp else Spacing.Comfortable,
@@ -340,7 +362,7 @@ fun ToViewScreen(
                                         close()
                                         onListenItem.invoke(item)
                                     },
-                                    text = { Text(stringResource(Res.string.toview_listen_all)) },
+                                    text = { Text(stringResource(Res.string.video_action_listen)) },
                                     leadingIcon = { Icon(Icons.Outlined.OutlinedHeadphones, contentDescription = null) },
                                     shape = menuItemShape(listenIdx, totalCount),
                                 )
@@ -374,12 +396,15 @@ fun ToViewScreen(
                         val removeButton: @Composable () -> Unit = {
                             // 图标用 Close 而不是 Delete:这里是"从列表里拿掉",
                             // 不是把视频删了。垃圾桶图标承诺的破坏性比实际动作大。
-                            IconButton(onClick = { onDelete(item) }) {
-                                Icon(
-                                    Icons.Outlined.Close,
-                                    contentDescription = stringResource(Res.string.toview_remove, item.title),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                            val removeLabel = stringResource(Res.string.toview_remove, item.title)
+                            BilbyTooltip(text = removeLabel) {
+                                IconButton(onClick = { onDelete(item) }) {
+                                    Icon(
+                                        Icons.Outlined.Close,
+                                        contentDescription = removeLabel,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                         }
                         if (multiColumn) {
@@ -419,7 +444,7 @@ private val AscOptions = listOf(
  * 上限是反囤积设计的一部分,要亮给用户看,不是藏起来的实现细节(DESIGN 2.5)。
  * 快满时转成 error 色 —— 这是少数几个用 error 色的地方,因为它确实要求用户做点什么(清一清)。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun ToViewSummaryCard(
     count: Int,
@@ -427,11 +452,13 @@ private fun ToViewSummaryCard(
     asc: Boolean,
     canListen: Boolean,
     onListenAll: () -> Unit,
+    onListenRandom: () -> Unit,
     onAscChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val fraction = if (capacity > 0) (count.toFloat() / capacity).coerceIn(0f, 1f) else 0f
     val nearlyFull = fraction >= 0.9f
+    var listenMenuOpen by remember { mutableStateOf(false) }
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = MaterialTheme.shapes.large,
@@ -458,32 +485,118 @@ private fun ToViewSummaryCard(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                itemVerticalAlignment = Alignment.CenterVertically,
             ) {
-                FilledTonalButton(
-                    onClick = onListenAll,
-                    enabled = canListen,
-                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
-                ) {
-                    Icon(
-                        Icons.Filled.Headphones,
-                        contentDescription = null,
-                        modifier = Modifier.size(Dimens.IconInline),
+                Box {
+                    val moreOptionsLabel = stringResource(Res.string.listen_more_options)
+                    SplitButtonLayout(
+                        leadingButton = {
+                            SplitButtonDefaults.TonalLeadingButton(
+                                onClick = onListenAll,
+                                enabled = canListen,
+                            ) {
+                                Icon(
+                                    Icons.Filled.Headphones,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(Dimens.IconInline),
+                                )
+                                Text(
+                                    stringResource(Res.string.toview_listen_all),
+                                    style = MaterialTheme.typography.labelLargeEmphasized,
+                                    modifier = Modifier.padding(start = Spacing.Hair + 2.dp),
+                                )
+                            }
+                        },
+                        trailingButton = {
+                            SplitButtonDefaults.TonalTrailingButton(
+                                checked = listenMenuOpen,
+                                onCheckedChange = { listenMenuOpen = it },
+                                enabled = canListen,
+                                modifier = Modifier.semantics { contentDescription = moreOptionsLabel },
+                            ) {
+                                Icon(
+                                    Icons.Outlined.KeyboardArrowDown,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(SplitButtonDefaults.TrailingIconSize),
+                                )
+                            }
+                        },
                     )
-                    Text(
-                        stringResource(Res.string.toview_listen_all),
-                        style = MaterialTheme.typography.labelLargeEmphasized,
-                        modifier = Modifier.padding(start = Spacing.Hair + 2.dp),
-                    )
+                    DropdownMenu(
+                        expanded = listenMenuOpen,
+                        onDismissRequest = { listenMenuOpen = false },
+                        shape = MenuDefaults.shape,
+                        containerColor = MenuDefaults.containerColor,
+                    ) {
+                        DropdownMenuItem(
+                            onClick = {
+                                listenMenuOpen = false
+                                onListenRandom()
+                            },
+                            text = { Text(stringResource(Res.string.listen_start_random)) },
+                            shape = menuItemShape(0, 1),
+                        )
+                    }
                 }
-                Spacer(modifier = Modifier.weight(1f))
-                SortMenu(
-                    options = AscOptions,
-                    selected = asc,
-                    onSelect = onAscChanged,
+
+                val sortColors = ToggleButtonDefaults.colors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
+                val interactionSources = remember { List(AscOptions.size) { MutableInteractionSource() } }
+                val labels = AscOptions.map { (_, labelRes) -> stringResource(labelRes) }
+                ButtonGroup(
+                    overflowIndicator = { menuState ->
+                        IconButton(onClick = { menuState.show() }) {
+                            Icon(
+                                Icons.Outlined.MoreHoriz,
+                                contentDescription = stringResource(Res.string.menu_item_actions),
+                            )
+                        }
+                    },
+                    horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+                ) {
+                    AscOptions.forEachIndexed { index, (optionAsc, _) ->
+                        val label = labels[index]
+                        val interactionSource = interactionSources[index]
+                        customItem(
+                            buttonGroupContent = {
+                                ToggleButton(
+                                    checked = asc == optionAsc,
+                                    onCheckedChange = { if (it) onAscChanged(optionAsc) },
+                                    shapes = when (index) {
+                                        0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                                        else -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                                    },
+                                    colors = sortColors,
+                                    contentPadding = PaddingValues(horizontal = Spacing.Cozy),
+                                    interactionSource = interactionSource,
+                                    modifier = Modifier
+                                        .animateWidth(interactionSource)
+                                        .semantics { role = Role.RadioButton },
+                                ) {
+                                    Text(label, maxLines = 1, softWrap = false)
+                                }
+                            },
+                            menuContent = { menuState ->
+                                DropdownMenuItem(
+                                    onClick = {
+                                        menuState.dismiss()
+                                        onAscChanged(optionAsc)
+                                    },
+                                    text = { Text(label) },
+                                    shape = menuItemShape(index, AscOptions.size),
+                                )
+                            },
+                        )
+                    }
+                }
             }
         }
     }

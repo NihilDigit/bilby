@@ -763,13 +763,14 @@ private fun <T> ConnectedChoices(
     onSelect: (T) -> Unit,
     label: (T) -> String,
 ) {
+    val interactionSources = remember(options.size) { List(options.size) { MutableInteractionSource() } }
     ButtonGroup(
         overflowIndicator = {},
         modifier = Modifier.fillMaxWidth().selectableGroup(),
         horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
     ) {
         options.forEachIndexed { index, option ->
-            val interactionSource = remember { MutableInteractionSource() }
+            val interactionSource = interactionSources[index]
             customItem(
                 buttonGroupContent = {
                     ToggleButton(

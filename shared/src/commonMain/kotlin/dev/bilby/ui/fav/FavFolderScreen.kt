@@ -2,11 +2,10 @@ package dev.bilby.ui.fav
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,21 +17,31 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Headphones as OutlinedHeadphones
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SplitButtonDefaults
+import androidx.compose.material3.SplitButtonLayout
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -71,6 +80,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.StringResource
 
+@Immutable
 data class FavFolderUiState(
     val items: List<FavVideo> = emptyList(),
     // false 而不是 true:loadMore 的并发守卫现在直接读这个字段(见 FavFolderViewModel),
@@ -98,6 +108,7 @@ data class FavFolderUiState(
  *
  * @param reason 失败原因的资源 id(见 [dev.bilby.ui.errorTextRes]),成功类的提示为 null。
  */
+@Immutable
 data class FavNotice(val id: Long, val kind: FavNoticeKind, val reason: StringResource? = null)
 
 enum class FavNoticeKind { CleanDone, CleanFailed }
@@ -324,7 +335,8 @@ fun FavFolderScreen(
         onNoticeShown(notice)
     }
 
-    val firstPlayable = state.items.firstOrNull { it.playable }
+    val firstPlayable = remember(state.items) { state.items.firstOrNull { it.playable } }
+    val playableItems = remember(state.items) { state.items.filter { it.playable } }
     Box(modifier = modifier.fillMaxSize()) {
         AdaptiveVideoGridContent(modifier = Modifier.fillMaxSize()) { columnCount ->
             val multiColumn = columnCount > 1
@@ -367,6 +379,7 @@ fun FavFolderScreen(
                                 order = state.order,
                                 canListen = firstPlayable != null,
                                 onListen = { firstPlayable?.let(onListen) },
+                                onListenRandom = { playableItems.randomOrNull()?.let(onListen) },
                                 onOrderChanged = onOrderChanged,
                                 modifier = Modifier.padding(
                                     horizontal = if (multiColumn) Spacing.Tight + 2.dp else Spacing.Comfortable,
@@ -488,16 +501,18 @@ fun FavFolderScreen(
  *
  * 标题不在这里重复 —— 顶栏已经写着。简介为空时那一行不画,不给占位文案。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun FolderHeader(
     info: FavFolderDetail?,
     order: FavOrder,
     canListen: Boolean,
     onListen: () -> Unit,
+    onListenRandom: () -> Unit,
     onOrderChanged: (FavOrder) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var listenMenuOpen by remember { mutableStateOf(false) }
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = MaterialTheme.shapes.large,
@@ -525,27 +540,63 @@ private fun FolderHeader(
                     }
                 }
             }
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                itemVerticalAlignment = Alignment.CenterVertically,
             ) {
-                FilledTonalButton(
-                    onClick = onListen,
-                    enabled = canListen,
-                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
-                ) {
-                    Icon(
-                        Icons.Filled.Headphones,
-                        contentDescription = null,
-                        modifier = Modifier.size(Dimens.IconInline),
+                Box {
+                    val moreOptionsLabel = stringResource(Res.string.listen_more_options)
+                    SplitButtonLayout(
+                        leadingButton = {
+                            SplitButtonDefaults.TonalLeadingButton(
+                                onClick = onListen,
+                                enabled = canListen,
+                            ) {
+                                Icon(
+                                    Icons.Filled.Headphones,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(Dimens.IconInline),
+                                )
+                                Text(
+                                    stringResource(Res.string.fav_listen),
+                                    style = MaterialTheme.typography.labelLargeEmphasized,
+                                    modifier = Modifier.padding(start = Spacing.Hair + 2.dp),
+                                )
+                            }
+                        },
+                        trailingButton = {
+                            SplitButtonDefaults.TonalTrailingButton(
+                                checked = listenMenuOpen,
+                                onCheckedChange = { listenMenuOpen = it },
+                                enabled = canListen,
+                                modifier = Modifier.semantics { contentDescription = moreOptionsLabel },
+                            ) {
+                                Icon(
+                                    Icons.Outlined.KeyboardArrowDown,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(SplitButtonDefaults.TrailingIconSize),
+                                )
+                            }
+                        },
                     )
-                    Text(
-                        stringResource(Res.string.fav_listen),
-                        style = MaterialTheme.typography.labelLargeEmphasized,
-                        modifier = Modifier.padding(start = Spacing.Hair + 2.dp),
-                    )
+                    DropdownMenu(
+                        expanded = listenMenuOpen,
+                        onDismissRequest = { listenMenuOpen = false },
+                        shape = MenuDefaults.shape,
+                        containerColor = MenuDefaults.containerColor,
+                    ) {
+                        DropdownMenuItem(
+                            onClick = {
+                                listenMenuOpen = false
+                                onListenRandom()
+                            },
+                            text = { Text(stringResource(Res.string.listen_start_random)) },
+                            shape = menuItemShape(0, 1),
+                        )
+                    }
                 }
-                Spacer(modifier = Modifier.weight(1f))
                 SortMenu(
                     options = FavOrders,
                     selected = order,

@@ -1,6 +1,7 @@
 package dev.bilby.ui.update
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -10,6 +11,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -20,6 +22,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import dev.bilby.AppBuild
@@ -31,6 +40,7 @@ import dev.bilby.ui.components.MarkdownText
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.offline.formatBytes
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import dev.bilby.update.AppUpdateService
 import dev.bilby.update.AvailableUpdate
 import dev.bilby.update.UpdateFailure
@@ -80,7 +90,7 @@ fun StartupUpdatePrompt(updater: AppUpdateService, settings: SettingsStore, pers
  *
  * @param onIgnore 非 null 即开屏弹出的那一版。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun UpdateDialog(
     updater: AppUpdateService,
@@ -90,6 +100,10 @@ fun UpdateDialog(
 ) {
     val system = LocalSystemActions.current
     val scope = rememberCoroutineScope()
+    val compactHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() } < 480.dp
+    val notesMaxHeight = if (compactHeight) NotesMaxHeightCompact else NotesMaxHeight
+    val notesScroll = rememberScrollState()
+    val notesSurfaceColor = MaterialTheme.colorScheme.surfaceContainerHighest
     // 状态属于别的版本(比如已经又查了一次)时,按这一版可下载处理。
     val status = updater.status.takeIf { it.concerns(update) } ?: UpdateStatus.Available(update)
     val busy = status is UpdateStatus.Downloading || status is UpdateStatus.Installing
@@ -110,7 +124,7 @@ fun UpdateDialog(
                 Text(
                     text = stringResource(Res.string.update_dialog_current, AppBuild.versionName) +
                         (if (update.downloadSize > 0) MetaSeparator + formatBytes(update.downloadSize) else ""),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium.tabular,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -122,14 +136,40 @@ fun UpdateDialog(
                 // 标题下面时,滚到一半看不出边在哪。按 Markdown 渲染:release note 本来就是
                 // Markdown 写的,当纯文本画出来满屏是 `**` 和 `-`。
                 Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    color = notesSurfaceColor,
                     shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Column(
                         modifier = Modifier
-                            .heightIn(max = NotesMaxHeight)
-                            .verticalScroll(rememberScrollState())
+                            .heightIn(max = notesMaxHeight)
+                            .drawWithContent {
+                                drawContent()
+                                val fadePx = 20.dp.toPx()
+                                if (notesScroll.canScrollBackward) {
+                                    drawRect(
+                                        brush = Brush.verticalGradient(
+                                            colors = listOf(notesSurfaceColor, Color.Transparent),
+                                            startY = 0f,
+                                            endY = fadePx,
+                                        ),
+                                        topLeft = Offset.Zero,
+                                        size = Size(size.width, fadePx),
+                                    )
+                                }
+                                if (notesScroll.canScrollForward) {
+                                    drawRect(
+                                        brush = Brush.verticalGradient(
+                                            colors = listOf(Color.Transparent, notesSurfaceColor),
+                                            startY = size.height - fadePx,
+                                            endY = size.height,
+                                        ),
+                                        topLeft = Offset(0f, size.height - fadePx),
+                                        size = Size(size.width, fadePx),
+                                    )
+                                }
+                            }
+                            .verticalScroll(notesScroll)
                             .padding(Spacing.Cozy),
                     ) {
                         MarkdownText(
@@ -138,32 +178,37 @@ fun UpdateDialog(
                         )
                     }
                 }
-                when (status) {
-                    // 下面写已下多少、共多少:只有一根条的话,慢网下它几秒不动,看不出是卡了还是在走。
-                    is UpdateStatus.Downloading -> Column(
-                        modifier = Modifier.padding(top = Spacing.Cozy),
-                        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                    ) {
-                        LinearWavyProgressIndicator(
-                            progress = { status.progress },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        if (update.downloadSize > 0) {
-                            Text(
-                                text = formatBytes((update.downloadSize * status.progress).toLong()) +
-                                    " / " + formatBytes(update.downloadSize),
-                                style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = Spacing.Cozy)
+                        .heightIn(min = StatusSlotMinHeight),
+                ) {
+                    when (status) {
+                        // 下面写已下多少、共多少:只有一根条的话,慢网下它几秒不动,看不出是卡了还是在走。
+                        is UpdateStatus.Downloading -> Column(
+                            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                        ) {
+                            LinearWavyProgressIndicator(
+                                progress = { status.progress },
+                                modifier = Modifier.fillMaxWidth(),
                             )
+                            if (update.downloadSize > 0) {
+                                Text(
+                                    text = formatBytes((update.downloadSize * status.progress).toLong()) +
+                                        " / " + formatBytes(update.downloadSize),
+                                    style = MaterialTheme.typography.labelMedium.tabular,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
+                        is UpdateStatus.Failed -> Text(
+                            text = stringResource(status.reason.message),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        else -> Unit
                     }
-                    is UpdateStatus.Failed -> Text(
-                        text = stringResource(status.reason.message),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(top = Spacing.Cozy),
-                    )
-                    else -> Unit
                 }
             }
         },
@@ -220,6 +265,8 @@ private fun UpdateStatus.concerns(update: AvailableUpdate): Boolean = when (this
 
 /** 更新说明最多占这么高,再长就在里面滚。再高按钮会被顶出屏幕。 */
 private val NotesMaxHeight = 380.dp
+private val NotesMaxHeightCompact = 180.dp
+private val StatusSlotMinHeight = 20.dp
 
 /** 宽窗口里对话框的上限,同 Piko:再宽一行字就太长。 */
 private val DialogMaxWidth = 560.dp

@@ -5,12 +5,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -21,6 +24,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.components.LoadingSpinner
@@ -126,12 +130,14 @@ fun FavFolderEditorDialog(state: FavFolderEditorState, actions: FavFolderEditorA
                     selected = state.isPublic == false,
                     onSelect = { actions.onPrivacyChange(false) },
                 )
-                state.error?.let {
-                    Text(
-                        text = stringResource(it),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
+                Box(modifier = Modifier.fillMaxWidth().heightIn(min = ErrorSlotMinHeight)) {
+                    state.error?.let {
+                        Text(
+                            text = stringResource(it),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
         }
@@ -158,6 +164,7 @@ private fun PrivacyOption(label: String, selected: Boolean, onSelect: () -> Unit
  * 删除收藏夹的确认。删除不可逆,所以拦在动作前面 —— 这一点和列表里的取消收藏正相反,
  * 那个走的是撤销(见 `FavFolderViewModel.remove`)。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FavFolderDeleteDialog(state: FavFolderDeletion, actions: FavFolderDeletionActions) {
     AlertDialog(
@@ -166,17 +173,26 @@ fun FavFolderDeleteDialog(state: FavFolderDeletion, actions: FavFolderDeletionAc
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
                 Text(stringResource(Res.string.fav_folder_delete_message, state.folder.title, state.folder.count))
-                state.error?.let {
-                    Text(
-                        text = stringResource(it),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
+                Box(modifier = Modifier.fillMaxWidth().heightIn(min = ErrorSlotMinHeight)) {
+                    state.error?.let {
+                        Text(
+                            text = stringResource(it),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = actions.onConfirm, enabled = !state.deleting) {
+            Button(
+                onClick = actions.onConfirm,
+                enabled = !state.deleting,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError,
+                ),
+            ) {
                 Text(stringResource(Res.string.fav_folder_delete_confirm))
             }
         },
@@ -187,3 +203,5 @@ fun FavFolderDeleteDialog(state: FavFolderDeletion, actions: FavFolderDeletionAc
         },
     )
 }
+
+private val ErrorSlotMinHeight = 20.dp

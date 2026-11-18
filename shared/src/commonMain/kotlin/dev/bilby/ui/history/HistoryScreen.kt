@@ -5,9 +5,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
@@ -20,19 +18,24 @@ import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -56,9 +59,9 @@ import dev.bilby.ui.components.VideoRow
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.components.videoCommonMenuItemCount
+import dev.bilby.ui.errorTextRes
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.BilbyTheme
-import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import java.time.Instant
 import kotlinx.coroutines.Job
@@ -67,7 +70,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 
+@Immutable
 data class HistoryUiState(
     val items: List<HistoryItem> = emptyList(),
     val cursorMax: Long = 0L,
@@ -76,14 +81,14 @@ data class HistoryUiState(
     val appending: Boolean = false,
     val refreshing: Boolean = false,
     val hasMore: Boolean = true,
-    val error: String? = null,
+    val error: StringResource? = null,
     /** 删除或清空正在飞。顶栏的那几个入口据此禁用,避免同一批记录被删两次。 */
     val mutating: Boolean = false,
     /**
      * 删除失败的原因。**不并进 [error]**:那一个归翻页用,写进去会让整页退成"重试"
      * 状态,而重试按钮做的是再拉一页,跟刚才失败的删除没有关系。
      */
-    val mutationError: String? = null,
+    val mutationError: StringResource? = null,
 )
 
 /**
@@ -159,7 +164,7 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
                         }
                     }
 
-                    else -> if (gen == generation) _state.update { it.copy(error = result.errorText()) }
+                    else -> if (gen == generation) _state.update { it.copy(error = result.errorTextRes("历史记录列表")) }
                 }
             } finally {
                 // 按当前 generation 释放:被 refresh 取消的旧一代不该把刷新刚置上的
@@ -191,7 +196,7 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
                     it.copy(mutating = false, items = it.items.filterNot { item -> item.oid in removedOids })
                 }
 
-                else -> _state.update { it.copy(mutating = false, mutationError = result.errorText()) }
+                else -> _state.update { it.copy(mutating = false, mutationError = result.errorTextRes("删除历史记录")) }
             }
         }
     }
@@ -215,7 +220,7 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
                     )
                 }
 
-                else -> _state.update { it.copy(mutating = false, mutationError = result.errorText()) }
+                else -> _state.update { it.copy(mutating = false, mutationError = result.errorTextRes("清空历史记录")) }
             }
         }
     }
@@ -232,12 +237,6 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
         loadJob?.cancel()
         _state.update { it.copy(loading = false, appending = false, refreshing = false) }
     }
-
-    private fun BiliResult<*>.errorText(): String = when (this) {
-        is BiliResult.ApiError -> "$message($code)"
-        is BiliResult.Failure -> cause.message ?: "网络错误"
-        is BiliResult.Ok -> ""
-    }
 }
 
 /**
@@ -249,7 +248,7 @@ class HistoryViewModel(private val repository: HistoryRepository) : ViewModel() 
  *
  *   用 oid 而不是 kid:列表本来就按 oid 去重、按 oid 作 key,选中集合跟着同一个键走。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun HistoryScreen(
     state: HistoryUiState,
@@ -271,13 +270,13 @@ fun HistoryScreen(
 
     // 删除失败要说出来。这条路径没有乐观更新,失败之后屏上什么都没变 —— 不给一句话的话,
     // 用户看到的是"点了删除,记录还在"。
-    state.mutationError?.let { message ->
+    state.mutationError?.let { messageRes ->
         AlertDialog(
             onDismissRequest = onDismissMutationError,
             title = { Text(stringResource(Res.string.history_delete_failed)) },
-            text = { Text(message) },
+            text = { Text(stringResource(messageRes)) },
             confirmButton = {
-                TextButton(onClick = onDismissMutationError) { Text(stringResource(Res.string.action_confirm)) }
+                TextButton(onClick = onDismissMutationError) { Text(stringResource(Res.string.action_close)) }
             },
         )
     }
@@ -308,17 +307,17 @@ fun HistoryScreen(
                     loading = state.loading,
                     appending = state.appending,
                     hasMore = state.hasMore,
-                    error = state.error,
+                    error = state.error?.let { stringResource(it) },
                     emptyText = stringResource(Res.string.history_empty),
                     onLoadMore = onLoadMore,
                     onRetry = onRetry,
                     contentPadding = gridPadding,
                 ) { item ->
                     val rowUi = item.toRowUi()
-                    val selected = selectedIds != null && item.oid in selectedIds
+                    val isSelected = selectedIds != null && item.oid in selectedIds
                     // 选中态淡入,不是跳变。与 OfflineScreen 同一套。
                     val rowColor by animateColorAsState(
-                        targetValue = if (selected) {
+                        targetValue = if (isSelected) {
                             MaterialTheme.colorScheme.secondaryContainer
                         } else {
                             Color.Transparent
@@ -336,6 +335,11 @@ fun HistoryScreen(
                     }
 
                     val itemContent: @Composable () -> Unit = {
+                        val selectionModifier = if (selecting) {
+                            Modifier.semantics { this.selected = isSelected }
+                        } else {
+                            Modifier
+                        }
                         if (multiColumn) {
                             VideoGridCard(
                                 ui = rowUi,
@@ -345,7 +349,7 @@ fun HistoryScreen(
                                 overflow = if (selecting) {
                                     {
                                         Box(modifier = Modifier.padding(start = Spacing.Hair)) {
-                                            Checkbox(checked = selected, onCheckedChange = null)
+                                            Checkbox(checked = isSelected, onCheckedChange = null)
                                         }
                                     }
                                 } else {
@@ -354,7 +358,8 @@ fun HistoryScreen(
                                 modifier = Modifier
                                     .padding(2.dp)
                                     .clip(MaterialTheme.shapes.large)
-                                    .background(rowColor),
+                                    .drawBehind { drawRect(rowColor) }
+                                    .then(selectionModifier),
                             )
                         } else {
                             VideoRow(
@@ -362,7 +367,9 @@ fun HistoryScreen(
                                 onClick = onCardClick,
                                 onLongClick = onCardLongClick,
                                 // 整行染色而不是只画一个勾:勾在行尾,而人是从左往右扫的。
-                                modifier = Modifier.background(rowColor),
+                                modifier = Modifier
+                                    .drawBehind { drawRect(rowColor) }
+                                    .then(selectionModifier),
                                 // onCheckedChange = null:整行已经是一个可点节点,勾选框自己再接一次
                                 // 点击会让读屏把它和这一行当成两件事。
                                 trailing = {
@@ -372,7 +379,7 @@ fun HistoryScreen(
                                         transitionSpec = { fadeIn(fadeSpec) togetherWith fadeOut(fadeSpec) },
                                         label = "history-row-trailing",
                                     ) { inSelection ->
-                                        if (inSelection) Checkbox(checked = selected, onCheckedChange = null)
+                                        if (inSelection) Checkbox(checked = isSelected, onCheckedChange = null)
                                     }
                                 },
                             )

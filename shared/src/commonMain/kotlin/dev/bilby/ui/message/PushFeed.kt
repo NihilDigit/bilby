@@ -1,18 +1,21 @@
 package dev.bilby.ui.message
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.dp
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.BiliRichText
+import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.VideoCover
 import dev.bilby.ui.components.listCoverWidthFor
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -22,13 +25,16 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import dev.bilby.data.WhisperContent
@@ -44,6 +50,7 @@ import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
@@ -59,6 +66,7 @@ import java.time.format.DateTimeFormatter
  *
  * 会话里夹着的文字消息不在这里:顶栏右端进完整对话,那里是正常的聊天。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PushFeedScreen(
     state: WhisperUiState,
@@ -72,20 +80,25 @@ internal fun PushFeedScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
-        modifier = modifier,
+        modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             WhisperTopBar(
                 name = state.name,
                 faceUrl = state.faceUrl,
                 onOpenSpace = if (state.isSystem) null else onOpenSpace,
                 onBack = onBack,
+                scrollBehavior = scrollBehavior,
             ) {
-                IconButton(onClick = onOpenFullChat) {
-                    Icon(
-                        Icons.AutoMirrored.Outlined.Chat,
-                        contentDescription = stringResource(Res.string.whisper_open_full_chat),
-                    )
+                val fullChatLabel = stringResource(Res.string.whisper_open_full_chat)
+                BilbyTooltip(text = fullChatLabel) {
+                    IconButton(onClick = onOpenFullChat) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.Chat,
+                            contentDescription = fullChatLabel,
+                        )
+                    }
                 }
             }
         },
@@ -116,6 +129,7 @@ internal fun PushFeedScreen(
     }
 }
 
+@Immutable
 private class PushItem(val push: WhisperContent.VideoPush, val seqno: Long, val timeSeconds: Long)
 
 /**
@@ -144,7 +158,7 @@ private fun PushRow(item: PushItem, onClick: () -> Unit, onOpenLink: (String) ->
                 Text(text = push.title, style = MaterialTheme.typography.bodyLarge)
                 Text(
                     text = formatChatTime(item.timeSeconds),
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelSmall.tabular,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 // UP 主附的那句话是引用,用一个有底色的块认,不用左侧竖条(风格指南 §2.3c)。
@@ -205,44 +219,49 @@ private fun PushGrid(
     }
     val monthPattern = stringResource(Res.string.push_feed_month)
     val monthYearPattern = stringResource(Res.string.push_feed_month_year)
+    val monthFormatter = remember(monthPattern) { DateTimeFormatter.ofPattern(monthPattern) }
+    val monthYearFormatter = remember(monthYearPattern) { DateTimeFormatter.ofPattern(monthYearPattern) }
     val thisYear = remember { LocalDate.now(zone).year }
-    LazyVerticalGrid(
-        columns = columns,
-        state = gridState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = navigationBarsBottom()),
-    ) {
-        sections.forEach { (month, items) ->
-            // 月份吸顶:往下翻的时候始终知道翻到了哪一段,不必回头找日期。今年的省掉年份,
-            // 同 formatChatTime。
-            stickyHeader(key = "month-$month") {
-                Surface(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = month.format(
-                            DateTimeFormatter.ofPattern(if (month.year == thisYear) monthPattern else monthYearPattern),
-                        ),
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(
-                            start = Spacing.Comfortable,
-                            end = Spacing.Comfortable,
-                            top = Spacing.Cozy,
-                            bottom = Spacing.Tight,
-                        ),
-                    )
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            columns = columns,
+            state = gridState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = navigationBarsBottom()),
+        ) {
+            sections.forEach { (month, items) ->
+                // 月份吸顶:往下翻的时候始终知道翻到了哪一段,不必回头找日期。今年的省掉年份,
+                // 同 formatChatTime。
+                stickyHeader(key = "month-$month", contentType = "month") {
+                    Surface(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = month.format(
+                                if (month.year == thisYear) monthFormatter else monthYearFormatter,
+                            ),
+                            style = MaterialTheme.typography.titleSmall.tabular,
+                            modifier = Modifier.padding(
+                                start = Spacing.Comfortable,
+                                end = Spacing.Comfortable,
+                                top = Spacing.Cozy,
+                                bottom = Spacing.Tight,
+                            ),
+                        )
+                    }
+                }
+                items(items, key = { it.seqno }, contentType = { "push" }) { item ->
+                    PushRow(item, onClick = { onOpenVideo(item.push.bvid) }, onOpenLink = onOpenLink)
                 }
             }
-            items(items, key = { it.seqno }) { item ->
-                PushRow(item, onClick = { onOpenVideo(item.push.bvid) }, onOpenLink = onOpenLink)
+            item(key = "older", contentType = "footer", span = { GridItemSpan(maxLineSpan) }) {
+                ListFooter(
+                    appending = state.loadingOlder,
+                    hasMore = state.hasOlder,
+                    hasItems = pushes.isNotEmpty(),
+                    error = state.olderError?.let { stringResource(it) },
+                    onRetry = onLoadOlder,
+                )
             }
         }
-        item(key = "older", span = { GridItemSpan(maxLineSpan) }) {
-            ListFooter(
-                appending = state.loadingOlder,
-                hasMore = state.hasOlder,
-                hasItems = pushes.isNotEmpty(),
-                error = state.olderError?.let { stringResource(it) },
-                onRetry = onLoadOlder,
-            )
-        }
+        ListScrollbar(gridState, Modifier.align(Alignment.CenterEnd))
     }
 }

@@ -1,7 +1,9 @@
 package dev.bilby.ui.fav
 
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
@@ -19,15 +21,20 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -38,7 +45,9 @@ import dev.bilby.data.FavRepository
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveListContent
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.ContextMenuBox
+import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.RefreshBox
@@ -55,6 +64,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.StringResource
 
+@Immutable
 data class FavFoldersUiState(
     val folders: List<FavFolderDetail> = emptyList(),
     val loading: Boolean = true,
@@ -198,76 +208,81 @@ fun FavFoldersScreen(
     contentPadding: PaddingValues = PaddingValues(),
 ) {
     val layoutDirection = LocalLayoutDirection.current
-    Box(modifier = modifier.fillMaxSize()) {
+    val density = LocalDensity.current
+    var listWidth by remember { mutableStateOf(0.dp) }
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .onSizeChanged { with(density) { listWidth = it.width.toDp() } },
+    ) {
         AdaptiveListContent(
             modifier = Modifier.fillMaxSize(),
             maxCellWidth = FolderGridMaxCellWidth,
         ) { columns ->
-            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                val multiColumn = columns != GridCells.Fixed(1) && maxWidth >= Dimens.VideoGridMinCellWidth * 2
-                val effectiveColumns = if (multiColumn) columns else GridCells.Fixed(1)
-                val gridPadding = if (multiColumn) {
-                    PaddingValues(
-                        start = contentPadding.calculateStartPadding(layoutDirection) + (Spacing.Comfortable - FolderGridHalfGap),
-                        top = contentPadding.calculateTopPadding() + Spacing.Tight,
-                        end = contentPadding.calculateEndPadding(layoutDirection) + (Spacing.Comfortable - FolderGridHalfGap),
-                        bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
-                    )
-                } else {
-                    contentPadding
-                }
+            val multiColumn = columns != GridCells.Fixed(1) &&
+                (listWidth == 0.dp || listWidth >= Dimens.VideoGridMinCellWidth * 2)
+            val effectiveColumns = if (multiColumn) columns else GridCells.Fixed(1)
+            val gridPadding = if (multiColumn) {
+                PaddingValues(
+                    start = contentPadding.calculateStartPadding(layoutDirection) + (Spacing.Comfortable - FolderGridHalfGap),
+                    top = contentPadding.calculateTopPadding() + Spacing.Tight,
+                    end = contentPadding.calculateEndPadding(layoutDirection) + (Spacing.Comfortable - FolderGridHalfGap),
+                    bottom = contentPadding.calculateBottomPadding() + Spacing.Comfortable,
+                )
+            } else {
+                contentPadding
+            }
 
-                RefreshBox(
-                    refreshing = state.refreshing,
-                    onRefresh = onRefresh,
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    PagedColumn(
-                        layout = PagedLayout.Grid(effectiveColumns),
-                        items = state.folders,
-                        // 新建和删除都在这一页做,删掉一格时下面几格平滑补位。
-                        key = { it.id },
-                        loading = state.loading,
-                        appending = state.appending,
-                        hasMore = state.hasMore,
-                        error = state.error?.let { stringResource(it) },
-                        emptyText = stringResource(Res.string.fav_folders_empty),
-                        onLoadMore = onLoadMore,
-                        onRetry = onRetry,
-                        contentPadding = gridPadding,
-                    ) { folder ->
-                        val menu: @Composable ColumnScope.(close: () -> Unit) -> Unit = { close ->
-                            FavFolderMenuItems(
-                                title = folder.title,
-                                // 默认收藏夹删不掉,所以这里根本不给删除项 —— 让它可点再报错,等于把
-                                // 一条服务端规则做成了一次失败。
-                                deletable = !folder.isDefault,
-                                close = close,
-                                onEdit = { onEdit(folder) },
-                                onDelete = { onDelete(folder) },
+            RefreshBox(
+                refreshing = state.refreshing,
+                onRefresh = onRefresh,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                PagedColumn(
+                    layout = PagedLayout.Grid(effectiveColumns),
+                    items = state.folders,
+                    // 新建和删除都在这一页做,删掉一格时下面几格平滑补位。
+                    key = { it.id },
+                    loading = state.loading,
+                    appending = state.appending,
+                    hasMore = state.hasMore,
+                    error = state.error?.let { stringResource(it) },
+                    emptyText = stringResource(Res.string.fav_folders_empty),
+                    onLoadMore = onLoadMore,
+                    onRetry = onRetry,
+                    contentPadding = gridPadding,
+                ) { folder ->
+                    val menu: @Composable ColumnScope.(close: () -> Unit) -> Unit = { close ->
+                        FavFolderMenuItems(
+                            title = folder.title,
+                            // 默认收藏夹删不掉,所以这里根本不给删除项 —— 让它可点再报错,等于把
+                            // 一条服务端规则做成了一次失败。
+                            deletable = !folder.isDefault,
+                            close = close,
+                            onEdit = { onEdit(folder) },
+                            onDelete = { onDelete(folder) },
+                        )
+                    }
+                    ContextMenuBox(
+                        onClick = null,
+                        menuLabel = stringResource(Res.string.fav_folder_actions, folder.title),
+                        menu = menu,
+                    ) { openMenu ->
+                        if (multiColumn) {
+                            FavFolderGridCard(
+                                folder = folder,
+                                onClick = { onOpenFolder(folder) },
+                                onLongClick = openMenu,
+                                overflow = { FavFolderMenu(folder.title, menu) },
+                                modifier = Modifier.padding(FolderGridHalfGap),
                             )
-                        }
-                        ContextMenuBox(
-                            onClick = null,
-                            menuLabel = stringResource(Res.string.fav_folder_actions, folder.title),
-                            menu = menu,
-                        ) { openMenu ->
-                            if (multiColumn) {
-                                FavFolderGridCard(
-                                    folder = folder,
-                                    onClick = { onOpenFolder(folder) },
-                                    onLongClick = openMenu,
-                                    overflow = { FavFolderMenu(folder.title, menu) },
-                                    modifier = Modifier.padding(FolderGridHalfGap),
-                                )
-                            } else {
-                                FavFolderRow(
-                                    folder = folder,
-                                    onClick = { onOpenFolder(folder) },
-                                    onLongClick = openMenu,
-                                    trailing = { FavFolderMenu(folder.title, menu) },
-                                )
-                            }
+                        } else {
+                            FavFolderRow(
+                                folder = folder,
+                                onClick = { onOpenFolder(folder) },
+                                onLongClick = openMenu,
+                                trailing = { FavFolderMenu(folder.title, menu) },
+                            )
                         }
                     }
                 }
@@ -286,23 +301,50 @@ fun FavFoldersScreen(
 @Composable
 private fun FavFolderMenu(folderTitle: String, menu: @Composable ColumnScope.(close: () -> Unit) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
+    val actionsLabel = stringResource(Res.string.fav_folder_actions, folderTitle)
+    val isTouch = LocalPointerSource.current.isTouchLike
     Box {
-        IconButton(onClick = { expanded = true }) {
-            Icon(
-                Icons.Outlined.MoreVert,
-                contentDescription = stringResource(Res.string.fav_folder_actions, folderTitle),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        BilbyTooltip(text = actionsLabel) {
+            IconButton(onClick = { expanded = true }) {
+                Icon(
+                    Icons.Outlined.MoreVert,
+                    contentDescription = actionsLabel,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        val popup: @Composable () -> Unit = {
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                shape = MenuDefaults.shape,
+                containerColor = MenuDefaults.containerColor,
+            ) {
+                menu { expanded = false }
+            }
+        }
+        if (isTouch) {
+            popup()
+        } else {
+            MaterialExpressiveTheme(
+                colorScheme = MaterialTheme.colorScheme,
+                motionScheme = FavFoldersDesktopMenuMotionScheme,
+                typography = MaterialTheme.typography,
+                shapes = MaterialTheme.shapes,
+                content = popup,
             )
         }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            shape = MenuDefaults.shape,
-            containerColor = MenuDefaults.containerColor,
-        ) {
-            menu { expanded = false }
-        }
     }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+private object FavFoldersDesktopMenuMotionScheme : MotionScheme {
+    override fun <T> defaultSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> fastSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> slowSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> defaultEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
+    override fun <T> fastEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
+    override fun <T> slowEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
 }
 
 /** 复制标题、编辑、删除三项,⋮ 与右键共用。 */

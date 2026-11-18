@@ -1,21 +1,20 @@
 package dev.bilby.ui.settings
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
@@ -40,11 +39,12 @@ import androidx.compose.material.icons.outlined.TouchApp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialExpressiveTheme
@@ -53,7 +53,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedListItem
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
@@ -84,6 +83,7 @@ import dev.bilby.agent.LlmModelInfo
 import dev.bilby.data.AppearancePrefs
 import dev.bilby.data.CodecPreference
 import dev.bilby.data.LlmConfig
+import dev.bilby.data.NightModePrefs
 import dev.bilby.data.NightWindowStatus
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.evaluateNightMode
@@ -94,8 +94,10 @@ import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveContent
 import dev.bilby.ui.LocalWindowCaption
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.InlineProgress
+import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.components.trackEditableFocus
 import dev.bilby.ui.navigationBarsBottom
 import dev.bilby.ui.padScaffoldExceptBottom
@@ -129,6 +131,7 @@ import kotlinx.coroutines.delay
  * 范围仍然是定死的(DESIGN 2 节):设置只调整**怎么做**,不调整**做不做**。推荐流、相关
  * 推荐一个开关都不给 —— 它们能被开关掉的那一刻,DESIGN 1.3 的结构约束就退化成了自制力工具。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     state: SettingsUiState,
@@ -143,16 +146,6 @@ fun SettingsScreen(
     var confirmingLogout by rememberSaveable { mutableStateOf(false) }
     val notConfigured = stringResource(Res.string.settings_not_configured)
     val selected: (SettingsSection) -> Boolean? = { section -> if (twoPane) section == openSection else null }
-    var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    val nightPrefs = state.nightMode
-    LaunchedEffect(nightPrefs) {
-        nowMillis = System.currentTimeMillis()
-        if (!nightPrefs.enabled && nightPrefs.manualUntilEpochMillis <= 0L) return@LaunchedEffect
-        while (true) {
-            delay(15_000L)
-            nowMillis = System.currentTimeMillis()
-        }
-    }
 
     // pinned 而不是 enterAlways:顶栏留着不动,内容滚起来之后只换一档容器色。这一页的入口
     // 不满一屏,顶栏跟着一起走反而像页面自己跳了一下。
@@ -254,42 +247,12 @@ fun SettingsScreen(
                         )
                     }
                     row { position ->
-                        CategoryRow(
+                        NightModeCategoryRow(
                             position = position,
-                            title = stringResource(Res.string.settings_section_night_mode),
-                            icon = Icons.Outlined.Bedtime,
-                            value = state.loaded.then {
-                                val range = formatNightRange(nightPrefs.startMinuteOfDay, nightPrefs.endMinuteOfDay)
-                                when (val status = evaluateNightMode(nightPrefs, nowMillis)) {
-                                    is NightWindowStatus.Active -> if (status.manual) {
-                                        stringResource(
-                                            Res.string.night_mode_summary_manual_on,
-                                            formatMinuteOfDay(nightPrefs.endMinuteOfDay),
-                                            nightPrefs.allowedUps.size,
-                                        )
-                                    } else {
-                                        stringResource(
-                                            Res.string.night_mode_summary_on,
-                                            range,
-                                            nightPrefs.allowedUps.size,
-                                        )
-                                    }
-                                    is NightWindowStatus.Overridden ->
-                                        stringResource(Res.string.night_mode_summary_paused, range)
-                                    NightWindowStatus.Inactive -> if (!nightPrefs.enabled) {
-                                        stringResource(Res.string.night_mode_off)
-                                    } else {
-                                        stringResource(
-                                            Res.string.night_mode_summary_on,
-                                            range,
-                                            nightPrefs.allowedUps.size,
-                                        )
-                                    }
-                                }
-                            },
-                            target = RowTarget.Page,
-                            onClick = { onOpenSection(SettingsSection.NightMode) },
+                            loaded = state.loaded,
+                            nightPrefs = state.nightMode,
                             selected = selected(SettingsSection.NightMode),
+                            onClick = { onOpenSection(SettingsSection.NightMode) },
                         )
                     }
                     row { position ->
@@ -327,10 +290,16 @@ fun SettingsScreen(
             title = { Text(stringResource(Res.string.settings_logout)) },
             text = { Text(stringResource(Res.string.settings_logout_message)) },
             confirmButton = {
-                TextButton(onClick = {
-                    confirmingLogout = false
-                    onLogout()
-                }) { Text(stringResource(Res.string.settings_logout)) }
+                Button(
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                    onClick = {
+                        confirmingLogout = false
+                        onLogout()
+                    },
+                ) { Text(stringResource(Res.string.settings_logout)) }
             },
             dismissButton = {
                 TextButton(onClick = { confirmingLogout = false }) {
@@ -339,6 +308,64 @@ fun SettingsScreen(
             },
         )
     }
+}
+
+@Composable
+private fun NightModeCategoryRow(
+    position: RowPosition,
+    loaded: Boolean,
+    nightPrefs: NightModePrefs,
+    selected: Boolean?,
+    onClick: () -> Unit,
+) {
+    var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(loaded, nightPrefs) {
+        nowMillis = System.currentTimeMillis()
+        if (!loaded || (!nightPrefs.enabled && nightPrefs.manualUntilEpochMillis <= 0L)) {
+            return@LaunchedEffect
+        }
+        while (true) {
+            delay(15_000L)
+            nowMillis = System.currentTimeMillis()
+        }
+    }
+    CategoryRow(
+        position = position,
+        title = stringResource(Res.string.settings_section_night_mode),
+        icon = Icons.Outlined.Bedtime,
+        value = loaded.then {
+            val range = formatNightRange(nightPrefs.startMinuteOfDay, nightPrefs.endMinuteOfDay)
+            when (val status = evaluateNightMode(nightPrefs, nowMillis)) {
+                is NightWindowStatus.Active -> if (status.manual) {
+                    stringResource(
+                        Res.string.night_mode_summary_manual_on,
+                        formatMinuteOfDay(nightPrefs.endMinuteOfDay),
+                        nightPrefs.allowedUps.size,
+                    )
+                } else {
+                    stringResource(
+                        Res.string.night_mode_summary_on,
+                        range,
+                        nightPrefs.allowedUps.size,
+                    )
+                }
+                is NightWindowStatus.Overridden ->
+                    stringResource(Res.string.night_mode_summary_paused, range)
+                NightWindowStatus.Inactive -> if (!nightPrefs.enabled) {
+                    stringResource(Res.string.night_mode_off)
+                } else {
+                    stringResource(
+                        Res.string.night_mode_summary_on,
+                        range,
+                        nightPrefs.allowedUps.size,
+                    )
+                }
+            }
+        },
+        target = RowTarget.Page,
+        onClick = onClick,
+        selected = selected,
+    )
 }
 
 private val CategoryIconBoxSize = 36.dp
@@ -620,11 +647,11 @@ internal fun UpdateStatusLine(state: UpdateStatus) {
             stringResource(Res.string.update_installing) to colors.onSurfaceVariant
         is UpdateStatus.Failed -> stringResource(state.reason.message) to colors.error
     }
-    Text(text = text, style = MaterialTheme.typography.bodySmall, color = color)
+    Text(text = text, style = MaterialTheme.typography.bodySmall.tabular, color = color)
     // 下载是这一页唯一有真实百分比的等待,所以给 determinate 而不是转圈。状态行里
     // 那个数字精确,但一串跳动的数字看不出走得快还是慢,而这正是等待时要判断的事。
     if (state is UpdateStatus.Downloading) {
-        LinearProgressIndicator(
+        LinearWavyProgressIndicator(
             progress = { state.progress },
             modifier = Modifier
                 .fillMaxWidth()
@@ -688,256 +715,270 @@ internal fun LlmDialog(
         modelsState !is LlmModelsState.Loading
     val loadedModels = (modelsState as? LlmModelsState.Loaded)?.models.orEmpty()
 
-    AlertDialog(
+    val filterQuery = if (filterActive) model.trim() else ""
+    val filtered = remember(loadedModels, filterQuery) {
+        if (filterQuery.isEmpty()) {
+            loadedModels
+        } else {
+            loadedModels.filter { item ->
+                item.id.contains(filterQuery, ignoreCase = true) ||
+                    (item.displayName?.contains(filterQuery, ignoreCase = true) == true)
+            }
+        }
+    }
+
+    PaneSheet(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(Res.string.settings_llm_dialog)) },
-        text = {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
-                modifier = Modifier.verticalScroll(rememberScrollState()),
+        title = stringResource(Res.string.settings_llm_dialog),
+        skipPartiallyExpanded = true,
+        footer = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                OutlinedTextField(
-                    value = baseUrl,
-                    onValueChange = { nextUrl ->
-                        baseUrl = nextUrl
-                        if (nextUrl.isNotBlank() &&
-                            !isDeepSeekBaseUrl(nextUrl) &&
-                            model == SettingsStore.DEFAULT_LLM_MODEL
-                        ) {
-                            model = ""
-                            filterActive = false
-                        }
+                TextButton(onClick = onDismiss) { Text(stringResource(Res.string.action_cancel)) }
+                Button(
+                    enabled = canSave,
+                    onClick = {
+                        onConfirm(
+                            LlmConfig(
+                                baseUrl = if (clearingAll) "" else baseUrl.trim(),
+                                apiKey = if (clearingAll) "" else apiKey.trim(),
+                                model = resolvedModel,
+                            ),
+                        )
                     },
-                    label = { Text(stringResource(Res.string.settings_llm_base_url)) },
-                    isError = !baseUrlValid,
-                    supportingText = if (baseUrlValid) {
-                        null
-                    } else {
-                        ({ Text(stringResource(Res.string.settings_url_invalid)) })
-                    },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().trackEditableFocus(),
-                )
-                OutlinedTextField(
-                    value = apiKey,
-                    onValueChange = { apiKey = it },
-                    label = { Text(stringResource(Res.string.settings_api_key)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().trackEditableFocus(),
-                    // 默认遮蔽。给一个显形按钮是因为长串 key 手输时看不见就没法核对,
-                    // 但默认态必须是遮住的 —— 设置页经常是当着别人的面打开的。
-                    visualTransformation = if (keyVisible) {
-                        VisualTransformation.None
-                    } else {
-                        PasswordVisualTransformation()
-                    },
-                    trailingIcon = {
-                        IconButton(onClick = { keyVisible = !keyVisible }) {
-                            Icon(
-                                imageVector = if (keyVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                contentDescription = stringResource(
-                                    if (keyVisible) {
-                                        Res.string.settings_key_hide
-                                    } else {
-                                        Res.string.settings_key_show
-                                    },
-                                ),
-                            )
-                        }
-                    },
-                )
-                OutlinedTextField(
-                    value = model,
-                    onValueChange = { nextModel ->
-                        model = nextModel
-                        filterActive = true
-                        if (loadedModels.isNotEmpty()) {
-                            pickerExpanded = true
-                        }
-                    },
-                    label = { Text(stringResource(Res.string.settings_model)) },
-                    singleLine = true,
-                    trailingIcon = if (loadedModels.isNotEmpty()) {
-                        {
-                            IconButton(onClick = { pickerExpanded = !pickerExpanded }) {
-                                Icon(
-                                    imageVector = if (pickerExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                                    contentDescription = null,
-                                )
-                            }
-                        }
-                    } else {
-                        null
-                    },
-                    modifier = Modifier.fillMaxWidth().trackEditableFocus(),
-                )
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(stringResource(Res.string.action_save)) }
+            }
+        },
+    ) {
+        LazyColumn(
+            contentPadding = PaddingValues(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
+            modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+        ) {
+            item(key = "llm-fields") {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Tight),
                 ) {
-                    FilledTonalButton(
-                        onClick = {
-                            filterActive = false
-                            pickerExpanded = true
-                            onFetchModels(baseUrl, apiKey)
+                    OutlinedTextField(
+                        value = baseUrl,
+                        onValueChange = { nextUrl ->
+                            baseUrl = nextUrl
+                            if (nextUrl.isNotBlank() &&
+                                !isDeepSeekBaseUrl(nextUrl) &&
+                                model == SettingsStore.DEFAULT_LLM_MODEL
+                            ) {
+                                model = ""
+                                filterActive = false
+                            }
                         },
-                        enabled = canFetchModels,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Refresh,
-                            contentDescription = null,
-                            modifier = Modifier.size(ButtonDefaults.IconSize),
-                        )
-                        Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
-                        Text(stringResource(Res.string.settings_llm_fetch_models))
-                    }
-                }
-
-                when (modelsState) {
-                    LlmModelsState.Idle -> Unit
-
-                    LlmModelsState.Loading -> {
-                        InlineProgress(text = stringResource(Res.string.settings_llm_models_loading))
-                    }
-
-                    is LlmModelsState.Failed -> {
-                        val failedPrefix = stringResource(Res.string.settings_llm_models_failed)
-                        val detail = modelsState.message.trim()
-                        Text(
-                            text = if (detail.isNotEmpty()) "$failedPrefix: $detail" else failedPrefix,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-
-                    is LlmModelsState.Loaded -> {
-                        if (modelsState.models.isEmpty()) {
-                            Text(
-                                text = stringResource(Res.string.settings_llm_models_empty),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        } else if (pickerExpanded) {
-                            val filterQuery = if (filterActive) model.trim() else ""
-                            val filtered = remember(modelsState.models, filterQuery) {
-                                if (filterQuery.isEmpty()) {
-                                    modelsState.models
+                        label = { Text(stringResource(Res.string.settings_llm_base_url)) },
+                        isError = !baseUrlValid,
+                        supportingText = {
+                            Text(if (baseUrlValid) "" else stringResource(Res.string.settings_url_invalid))
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().trackEditableFocus(),
+                    )
+                    OutlinedTextField(
+                        value = apiKey,
+                        onValueChange = { apiKey = it },
+                        label = { Text(stringResource(Res.string.settings_api_key)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().trackEditableFocus(),
+                        // 默认遮蔽。给一个显形按钮是因为长串 key 手输时看不见就没法核对,
+                        // 但默认态必须是遮住的 —— 设置页经常是当着别人的面打开的。
+                        visualTransformation = if (keyVisible) {
+                            VisualTransformation.None
+                        } else {
+                            PasswordVisualTransformation()
+                        },
+                        trailingIcon = {
+                            val toggleDescription = stringResource(
+                                if (keyVisible) {
+                                    Res.string.settings_key_hide
                                 } else {
-                                    modelsState.models.filter { item ->
-                                        item.id.contains(filterQuery, ignoreCase = true) ||
-                                            (item.displayName?.contains(filterQuery, ignoreCase = true) == true)
+                                    Res.string.settings_key_show
+                                },
+                            )
+                            BilbyTooltip(text = toggleDescription) {
+                                IconButton(onClick = { keyVisible = !keyVisible }) {
+                                    Icon(
+                                        imageVector = if (keyVisible) {
+                                            Icons.Filled.VisibilityOff
+                                        } else {
+                                            Icons.Filled.Visibility
+                                        },
+                                        contentDescription = toggleDescription,
+                                    )
+                                }
+                            }
+                        },
+                    )
+                    OutlinedTextField(
+                        value = model,
+                        onValueChange = { nextModel ->
+                            model = nextModel
+                            filterActive = true
+                            if (loadedModels.isNotEmpty()) {
+                                pickerExpanded = true
+                            }
+                        },
+                        label = { Text(stringResource(Res.string.settings_model)) },
+                        singleLine = true,
+                        trailingIcon = if (loadedModels.isNotEmpty()) {
+                            {
+                                val modelsToggleLabel = stringResource(Res.string.settings_llm_models_toggle)
+                                BilbyTooltip(text = modelsToggleLabel) {
+                                    IconButton(onClick = { pickerExpanded = !pickerExpanded }) {
+                                        Icon(
+                                            imageVector = if (pickerExpanded) {
+                                                Icons.Filled.ExpandLess
+                                            } else {
+                                                Icons.Filled.ExpandMore
+                                            },
+                                            contentDescription = modelsToggleLabel,
+                                        )
                                     }
                                 }
                             }
-                            if (filtered.isEmpty()) {
+                        } else {
+                            null
+                        },
+                        modifier = Modifier.fillMaxWidth().trackEditableFocus(),
+                    )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        FilledTonalButton(
+                            onClick = {
+                                filterActive = false
+                                pickerExpanded = true
+                                onFetchModels(baseUrl, apiKey)
+                            },
+                            enabled = canFetchModels,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(ButtonDefaults.IconSize),
+                            )
+                            Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
+                            Text(stringResource(Res.string.settings_llm_fetch_models))
+                        }
+                    }
+
+                    when (modelsState) {
+                        LlmModelsState.Idle -> Unit
+
+                        LlmModelsState.Loading -> {
+                            InlineProgress(text = stringResource(Res.string.settings_llm_models_loading))
+                        }
+
+                        is LlmModelsState.Failed -> {
+                            val failedPrefix = stringResource(Res.string.settings_llm_models_failed)
+                            val detail = modelsState.message.trim()
+                            Text(
+                                text = if (detail.isNotEmpty()) "$failedPrefix: $detail" else failedPrefix,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+
+                        is LlmModelsState.Loaded -> {
+                            if (modelsState.models.isEmpty() || (pickerExpanded && filtered.isEmpty())) {
                                 Text(
                                     text = stringResource(Res.string.settings_llm_models_empty),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                            } else {
-                                Surface(
-                                    shape = MaterialTheme.shapes.medium,
-                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    LazyColumn(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .heightIn(max = ModelPickerMaxHeight),
-                                    ) {
-                                        items(filtered, key = { it.id }) { info ->
-                                            LlmModelOptionRow(
-                                                info = info,
-                                                selected = info.id == model.trim(),
-                                                onClick = {
-                                                    model = info.id
-                                                    filterActive = false
-                                                    pickerExpanded = false
-                                                },
-                                            )
-                                        }
-                                    }
-                                }
                             }
                         }
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = canSave,
-                onClick = {
-                    onConfirm(
-                        LlmConfig(
-                            baseUrl = if (clearingAll) "" else baseUrl.trim(),
-                            apiKey = if (clearingAll) "" else apiKey.trim(),
-                            model = resolvedModel,
-                        ),
-                    )
-                },
-            ) { Text(stringResource(Res.string.action_save)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(Res.string.action_cancel)) }
-        },
-    )
-}
 
-private val ModelPickerMaxHeight = 200.dp
+            if (modelsState is LlmModelsState.Loaded && pickerExpanded && filtered.isNotEmpty()) {
+                val selectedModelId = model.trim()
+                itemsIndexed(filtered, key = { _, info -> info.id }) { index, info ->
+                    LlmModelOptionRow(
+                        info = info,
+                        index = index,
+                        count = filtered.size,
+                        selected = info.id == selectedModelId,
+                        onClick = {
+                            model = info.id
+                            filterActive = false
+                            pickerExpanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun LlmModelOptionRow(
     info: LlmModelInfo,
+    index: Int,
+    count: Int,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     val subtitle = info.displayName?.takeIf { it.isNotBlank() && it != info.id }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = Dimens.MinTouchTarget)
-            .clickable(role = Role.Button, onClick = onClick)
-            .background(if (selected) colors.secondaryContainer else Color.Transparent)
-            .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = info.id,
-                style = if (selected) {
-                    MaterialTheme.typography.bodyMediumEmphasized
-                } else {
-                    MaterialTheme.typography.bodyMedium
-                },
-                color = if (selected) colors.onSecondaryContainer else colors.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (subtitle != null) {
+    val shapes = ListItemDefaults.segmentedShapes(index = index, count = count)
+    SegmentedListItem(
+        selected = selected,
+        onClick = onClick,
+        shapes = shapes.copy(selectedShape = shapes.shape),
+        colors = ListItemDefaults.segmentedColors(
+            containerColor = colors.surfaceContainerHigh,
+            selectedContainerColor = colors.secondaryContainer,
+            selectedContentColor = colors.onSecondaryContainer,
+            selectedLeadingContentColor = colors.onSecondaryContainer,
+            selectedTrailingContentColor = colors.onSecondaryContainer,
+        ),
+        supportingContent = subtitle?.let {
+            {
                 Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (selected) colors.onSecondaryContainer else colors.onSurfaceVariant,
+                    text = it,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-        }
-        if (selected) {
-            Icon(
-                imageVector = Icons.Outlined.Check,
-                contentDescription = null,
-                tint = colors.onSecondaryContainer,
-                modifier = Modifier.size(Dimens.IconInline),
-            )
-        }
+        },
+        trailingContent = if (selected) {
+            {
+                Icon(
+                    imageVector = Icons.Outlined.Check,
+                    contentDescription = null,
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+            }
+        } else {
+            null
+        },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            text = info.id,
+            style = if (selected) {
+                MaterialTheme.typography.bodyMediumEmphasized
+            } else {
+                MaterialTheme.typography.bodyMedium
+            },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -961,6 +1002,7 @@ private fun isDeepSeekBaseUrl(rawUrl: String): Boolean {
  * 校验只挡形态不对的输入,保存按钮跟着一起禁掉 —— 存进去一个不成形的地址,症状要等到下一次
  * 播放时才以"跳过没生效"的样子出现,那时没人会想到是这里。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun UrlFieldDialog(
     title: String,
@@ -982,19 +1024,16 @@ internal fun UrlFieldDialog(
                 label = { Text(label) },
                 placeholder = { Text(placeholder) },
                 isError = !valid,
-                // 错误态配一句说明,不只是把框描红:M3 的 text fields 页把两者算一件事,
-                // 而一个只变红的框说不出它嫌哪里不对。没有错误时传 null,那一行不占高度。
-                supportingText = if (valid) {
-                    null
-                } else {
-                    ({ Text(stringResource(Res.string.settings_url_invalid)) })
+                // 固定预留一行辅助文字高度，避免输入合法/非法切换时对话框高度跳动。
+                supportingText = {
+                    Text(if (valid) "" else stringResource(Res.string.settings_url_invalid))
                 },
                 singleLine = true,
                 modifier = Modifier.trackEditableFocus(),
             )
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(value.trim()) }, enabled = valid) {
+            Button(onClick = { onConfirm(value.trim()) }, enabled = valid) {
                 Text(stringResource(Res.string.action_save))
             }
         },

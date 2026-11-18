@@ -1522,7 +1522,6 @@ private fun PlaybackControls(
                                 checked = speedSheetOpen || speed != 1f,
                                 onCheckedChange = { speedSheetOpen = true },
                                 interactionSource = speedInteraction,
-                                shapes = ToggleButtonDefaults.shapes(),
                                 colors = pillToggleColors,
                                 contentPadding = PaddingValues(horizontal = Spacing.Tight),
                                 modifier = Modifier
@@ -1669,7 +1668,7 @@ private fun BoundSleepTimerButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val itemRemainingMillis = if (sleepTimer.mode is SleepTimerMode.AfterCurrent) {
+    val itemRemainingMillis = if (sleepTimer.mode is SleepTimerMode.EndOfItem) {
         computeItemRemainingMillis(progress.positionMillis, progress.durationMillis, speed)
     } else {
         null
@@ -1681,7 +1680,6 @@ private fun BoundSleepTimerButton(
             checked = label != null,
             onCheckedChange = { onClick() },
             interactionSource = interactionSource,
-            shapes = ToggleButtonDefaults.shapes(),
             colors = colors,
             contentPadding = PaddingValues(horizontal = Spacing.Tight),
             modifier = modifier

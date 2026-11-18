@@ -5,10 +5,8 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -28,21 +26,29 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.material3.SplitButtonDefaults
+import androidx.compose.material3.SplitButtonLayout
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,10 +56,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -67,6 +77,7 @@ import dev.bilby.player.isWatchedToEnd
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.AdaptiveVideoGridContent
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.ListScrollbar
@@ -140,7 +151,7 @@ class OfflineViewModel(
  * **封面底边的进度条只表示看到哪儿**,和稍后再看、历史记录同一个意思;正在下载的条目在行/卡底部单独画一条
  * [LinearProgressIndicator],让两种进度语义互不混用。
  */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun OfflineScreen(
     items: List<OfflineItem>,
@@ -184,18 +195,20 @@ fun OfflineScreen(
         }
         val headerHorizontalPadding = if (multiColumn) Spacing.Tight + 2.dp else Spacing.Comfortable
 
-        val (completed, inFlight) = items.partition { it.status == OfflineStatus.Completed }
-        val rowScope = OfflineRowScope(
-            selectedIds = selectedIds,
-            onPlay = onPlay,
-            onRetry = onRetry,
-            onToggleSelection = onToggleSelection,
-            onDeleteRequest = { item ->
-                // **还没开始下的那条不问。** 确认框存在的理由是"删掉就要重下几百 MB",
-                // 而排队中的这条一个字节都还没下,取消它的代价是零。
-                if (item.status == OfflineStatus.Queued) onDelete(item) else pendingDelete = item
-            },
-        )
+        val (completed, inFlight) = remember(items) { items.partition { it.status == OfflineStatus.Completed } }
+        val rowScope = remember(selectedIds, onPlay, onRetry, onToggleSelection, onDelete) {
+            OfflineRowScope(
+                selectedIds = selectedIds,
+                onPlay = onPlay,
+                onRetry = onRetry,
+                onToggleSelection = onToggleSelection,
+                onDeleteRequest = { item ->
+                    // **还没开始下的那条不问。** 确认框存在的理由是"删掉就要重下几百 MB",
+                    // 而排队中的这条一个字节都还没下,取消它的代价是零。
+                    if (item.status == OfflineStatus.Queued) onDelete(item) else pendingDelete = item
+                },
+            )
+        }
 
         val gridState = rememberLazyGridState()
         Box(modifier = Modifier.fillMaxSize()) {
@@ -212,6 +225,7 @@ fun OfflineScreen(
                         usedBytes = usedBytes,
                         canListenAll = completed.isNotEmpty() && selectedIds == null,
                         onListenAll = { completed.firstOrNull()?.let(onListenAll) },
+                        onListenRandom = { completed.randomOrNull()?.let(onListenAll) },
                         modifier = Modifier
                             .padding(horizontal = headerHorizontalPadding, vertical = Spacing.Tight)
                             .animateItem(),
@@ -255,10 +269,16 @@ fun OfflineScreen(
             title = { Text(stringResource(Res.string.offline_delete_confirm_title)) },
             text = { Text(stringResource(Res.string.offline_delete_confirm_message)) },
             confirmButton = {
-                TextButton(onClick = {
-                    pendingDelete = null
-                    onDelete(target)
-                }) { Text(stringResource(Res.string.action_confirm)) }
+                Button(
+                    onClick = {
+                        pendingDelete = null
+                        onDelete(target)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                ) { Text(stringResource(Res.string.action_delete)) }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) {
@@ -277,6 +297,7 @@ private fun OfflineSummaryCard(
     usedBytes: Long,
     canListenAll: Boolean,
     onListenAll: () -> Unit,
+    onListenRandom: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val primarySummary = if (completedCount > 0) {
@@ -289,6 +310,7 @@ private fun OfflineSummaryCard(
     } else {
         null
     }
+    var listenMenuOpen by remember { mutableStateOf(false) }
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -322,21 +344,56 @@ private fun OfflineSummaryCard(
                 }
             }
             if (completedCount > 0) {
-                FilledTonalButton(
-                    onClick = onListenAll,
-                    enabled = canListenAll,
-                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
-                ) {
-                    Icon(
-                        Icons.Filled.Headphones,
-                        contentDescription = null,
-                        modifier = Modifier.size(Dimens.IconInline),
+                Box {
+                    val moreOptionsLabel = stringResource(Res.string.listen_more_options)
+                    SplitButtonLayout(
+                        leadingButton = {
+                            SplitButtonDefaults.TonalLeadingButton(
+                                onClick = onListenAll,
+                                enabled = canListenAll,
+                            ) {
+                                Icon(
+                                    Icons.Filled.Headphones,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(Dimens.IconInline),
+                                )
+                                Text(
+                                    stringResource(Res.string.offline_listen_all),
+                                    style = MaterialTheme.typography.labelLargeEmphasized,
+                                    modifier = Modifier.padding(start = Spacing.Hair + 2.dp),
+                                )
+                            }
+                        },
+                        trailingButton = {
+                            SplitButtonDefaults.TonalTrailingButton(
+                                checked = listenMenuOpen,
+                                onCheckedChange = { listenMenuOpen = it },
+                                enabled = canListenAll,
+                                modifier = Modifier.semantics { contentDescription = moreOptionsLabel },
+                            ) {
+                                Icon(
+                                    Icons.Outlined.KeyboardArrowDown,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(SplitButtonDefaults.TrailingIconSize),
+                                )
+                            }
+                        },
                     )
-                    Text(
-                        stringResource(Res.string.offline_listen_all),
-                        style = MaterialTheme.typography.labelLargeEmphasized,
-                        modifier = Modifier.padding(start = Spacing.Hair + 2.dp),
-                    )
+                    DropdownMenu(
+                        expanded = listenMenuOpen,
+                        onDismissRequest = { listenMenuOpen = false },
+                        shape = MenuDefaults.shape,
+                        containerColor = MenuDefaults.containerColor,
+                    ) {
+                        DropdownMenuItem(
+                            onClick = {
+                                listenMenuOpen = false
+                                onListenRandom()
+                            },
+                            text = { Text(stringResource(Res.string.listen_start_random)) },
+                            shape = menuItemShape(0, 1),
+                        )
+                    }
                 }
             }
         }
@@ -344,6 +401,7 @@ private fun OfflineSummaryCard(
 }
 
 /** 两节共用的行为,打包成一份传给 [offlineRows],免得每节各抄一遍这几个回调。 */
+@Stable
 private class OfflineRowScope(
     val selectedIds: Set<String>?,
     val onPlay: (OfflineItem) -> Unit,
@@ -371,12 +429,12 @@ private fun OfflineRow(
     modifier: Modifier = Modifier,
 ) {
     val selecting = scope.selectedIds != null
-    val selected = scope.selectedIds != null && item.id in scope.selectedIds
+    val isSelected = scope.selectedIds != null && item.id in scope.selectedIds
     val haptics = LocalHapticFeedback.current
     val rowUi = item.toRowUi()
     // 选中态淡入,不是跳变:取 effects 档 —— 变的是颜色,没有任何东西在移动。
     val rowColor by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+        targetValue = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
         animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "offline-row-selected",
     )
@@ -402,27 +460,36 @@ private fun OfflineRow(
         ) { inSelection ->
             if (inSelection) {
                 Box(modifier = Modifier.padding(horizontal = if (multiColumn) Spacing.Tight else 0.dp)) {
-                    Checkbox(checked = selected, onCheckedChange = null)
+                    Checkbox(checked = isSelected, onCheckedChange = null)
                 }
             } else {
-                IconButton(onClick = { scope.onDeleteRequest(item) }) {
-                    Icon(
-                        Icons.Outlined.DeleteOutline,
-                        contentDescription = stringResource(Res.string.offline_delete, item.title),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                val deleteLabel = stringResource(Res.string.offline_delete, item.title)
+                BilbyTooltip(text = deleteLabel) {
+                    IconButton(onClick = { scope.onDeleteRequest(item) }) {
+                        Icon(
+                            Icons.Outlined.DeleteOutline,
+                            contentDescription = deleteLabel,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
     }
 
+    val selectionModifier = if (selecting) {
+        Modifier.semantics { this.selected = isSelected }
+    } else {
+        Modifier
+    }
     val itemBody: @Composable () -> Unit = {
         if (multiColumn) {
             Column(
                 modifier = Modifier
                     .padding(2.dp)
                     .clip(MaterialTheme.shapes.large)
-                    .background(rowColor),
+                    .drawBehind { drawRect(rowColor) }
+                    .then(selectionModifier),
             ) {
                 VideoGridCard(
                     ui = rowUi,
@@ -433,7 +500,8 @@ private fun OfflineRow(
                 )
                 if (item.status == OfflineStatus.Running) {
                     RunningDownloadBar(
-                        progress = item.progress,
+                        progressProvider = { item.progress },
+                        determinate = item.progress != null,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(start = Spacing.Tight, end = Spacing.Tight, bottom = Spacing.Tight),
@@ -441,7 +509,11 @@ private fun OfflineRow(
                 }
             }
         } else {
-            Column(modifier = Modifier.background(rowColor)) {
+            Column(
+                modifier = Modifier
+                    .drawBehind { drawRect(rowColor) }
+                    .then(selectionModifier),
+            ) {
                 VideoRow(
                     item = rowUi,
                     onClick = onCardClick,
@@ -450,7 +522,8 @@ private fun OfflineRow(
                 )
                 if (item.status == OfflineStatus.Running) {
                     RunningDownloadBar(
-                        progress = item.progress,
+                        progressProvider = { item.progress },
+                        determinate = item.progress != null,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(start = Spacing.Comfortable, end = Spacing.Comfortable, bottom = Spacing.Tight),
@@ -512,13 +585,14 @@ private fun OfflineRow(
 
 @Composable
 private fun RunningDownloadBar(
-    progress: Float?,
+    progressProvider: () -> Float?,
+    determinate: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
-    if (progress != null) {
+    if (determinate) {
         LinearProgressIndicator(
-            progress = { progress },
+            progress = { progressProvider() ?: 0f },
             trackColor = trackColor,
             modifier = modifier,
         )

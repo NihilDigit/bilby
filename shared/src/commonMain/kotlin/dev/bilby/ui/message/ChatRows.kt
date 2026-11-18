@@ -1,6 +1,7 @@
 package dev.bilby.ui.message
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.data.WhisperContent
@@ -120,18 +121,20 @@ private const val TimeGapSeconds = 5 * 60
  */
 @Composable
 internal fun formatChatTime(epochSeconds: Long): String {
-    val zone = ZoneId.systemDefault()
+    val zone = remember { ZoneId.systemDefault() }
+    val today = remember(zone) { LocalDate.now(zone) }
     val time = Instant.ofEpochSecond(epochSeconds).atZone(zone)
     val date = time.toLocalDate()
-    val today = LocalDate.now(zone)
     val clock = time.format(ClockFormatter)
+    val yearPattern = stringResource(Res.string.whisper_time_pattern_year)
+    val fullPattern = stringResource(Res.string.whisper_time_pattern_full)
+    val yearFormatter = remember(yearPattern) { DateTimeFormatter.ofPattern(yearPattern) }
+    val fullFormatter = remember(fullPattern) { DateTimeFormatter.ofPattern(fullPattern) }
     return when {
         date == today -> clock
         date == today.minusDays(1) -> stringResource(Res.string.whisper_time_yesterday, clock)
-        date.year == today.year ->
-            time.format(DateTimeFormatter.ofPattern(stringResource(Res.string.whisper_time_pattern_year)))
-
-        else -> time.format(DateTimeFormatter.ofPattern(stringResource(Res.string.whisper_time_pattern_full)))
+        date.year == today.year -> time.format(yearFormatter)
+        else -> time.format(fullFormatter)
     }
 }
 

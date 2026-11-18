@@ -1,11 +1,15 @@
 package dev.bilby.ui.follow
 
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.material3.ListItem
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Modifier
 import dev.bilby.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -22,20 +26,25 @@ import dev.bilby.ui.components.Avatar
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.ListItemPersonSkeleton
+import dev.bilby.ui.errorTextRes
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 
+@Immutable
 data class BlacklistUiState(
     val users: List<BlockedUser> = emptyList(),
     val loading: Boolean = false,
     val appending: Boolean = false,
     val hasMore: Boolean = true,
-    val error: String? = null,
+    val error: StringResource? = null,
 )
 
 /**
@@ -77,8 +86,10 @@ class BlacklistViewModel(private val repository: RelationRepository) : ViewModel
                     }
                 }
 
-                is BiliResult.ApiError -> fail("${result.message}(${result.code})")
-                is BiliResult.Failure -> fail(result.cause.message ?: "网络错误")
+                else -> {
+                    val err = result.errorTextRes("取黑名单")
+                    _state.update { it.copy(loading = false, appending = false, error = err) }
+                }
             }
         }
     }
@@ -104,11 +115,6 @@ class BlacklistViewModel(private val repository: RelationRepository) : ViewModel
             }
         }
     }
-
-    private fun fail(message: String) {
-        BiliLog.w("取黑名单失败: $message")
-        _state.update { it.copy(loading = false, appending = false, error = message) }
-    }
 }
 
 @Composable
@@ -129,7 +135,7 @@ fun BlacklistScreen(
             loading = state.loading,
             appending = state.appending,
             hasMore = state.hasMore,
-            error = state.error,
+            error = state.error?.let { stringResource(it) },
             emptyText = stringResource(Res.string.blacklist_empty),
             onLoadMore = onLoadMore,
             onRetry = onRetry,
@@ -146,13 +152,17 @@ fun BlacklistScreen(
  *
  * 副标题是拉黑时间。名单按时间倒序下发,没有这一行读者就分不出哪些是刚拉的、哪些是几年前的。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun BlockedRow(user: BlockedUser, onUnblock: () -> Unit) {
-    ListItem(
+    SegmentedListItem(
+        shapes = ListItemDefaults.segmentedShapes(index = 0, count = 1),
+        colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair / 2),
         supportingContent = {
             Text(
                 stringResource(Res.string.blacklist_blocked_at, formatRelativeTime(user.blockedAt)),
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodySmall.tabular,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },

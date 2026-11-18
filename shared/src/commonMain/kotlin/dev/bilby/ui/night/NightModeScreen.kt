@@ -1,10 +1,12 @@
 package dev.bilby.ui.night
 
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -31,8 +33,10 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -51,6 +55,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -84,6 +91,7 @@ import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.BilbyTopBar
 import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.EmptyState
+import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.PagedColumn
 import dev.bilby.ui.components.PagedLayout
 import dev.bilby.ui.components.RefreshAction
@@ -95,6 +103,7 @@ import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.components.chargingBadgeText
 import dev.bilby.ui.components.fadingRightEdge
 import dev.bilby.ui.components.menuItemShape
+import dev.bilby.ui.components.verticalWheelScrollsRow
 import dev.bilby.ui.components.videoCommonMenuItemCount
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.isAtLeast
@@ -210,17 +219,11 @@ fun NightModeScreen(
                                 refreshing = state.refreshing,
                                 onRefresh = onRefresh,
                             )
-                        }
-                        val offlineLabel = stringResource(Res.string.offline_title)
-                        BilbyTooltip(text = offlineLabel) {
-                            IconButton(onClick = onOpenOffline) {
-                                Icon(Icons.Outlined.DownloadForOffline, contentDescription = offlineLabel)
-                            }
-                        }
-                        val settingsLabel = stringResource(Res.string.settings_title)
-                        BilbyTooltip(text = settingsLabel, shortcut = "Ctrl+,") {
-                            IconButton(onClick = onOpenSettings) {
-                                Icon(Icons.Outlined.Settings, contentDescription = settingsLabel)
+                            val settingsLabel = stringResource(Res.string.settings_title)
+                            BilbyTooltip(text = settingsLabel, shortcut = "Ctrl+,") {
+                                IconButton(onClick = onOpenSettings) {
+                                    Icon(Icons.Outlined.Settings, contentDescription = settingsLabel)
+                                }
                             }
                         }
                     },
@@ -400,14 +403,27 @@ private fun NightSanctuaryHeaderCard(
                 .fillMaxWidth()
                 .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
         ) {
+            val badgeHaloColor = MaterialTheme.colorScheme.primary
             Surface(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                contentColor = MaterialTheme.colorScheme.primary,
+                contentColor = badgeHaloColor,
             ) {
+                // Static calm nocturnal radial halo behind the circular moon badge (no idle animation loop).
                 Box(
                     contentAlignment = Alignment.Center,
-                    modifier = Modifier.size(SanctuaryBadgeSize),
+                    modifier = Modifier
+                        .size(SanctuaryBadgeSize)
+                        .drawBehind {
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    colors = listOf(
+                                        badgeHaloColor.copy(alpha = 0.22f),
+                                        Color.Transparent,
+                                    ),
+                                ),
+                            )
+                        },
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.Bedtime,
@@ -460,6 +476,7 @@ private fun NightUpFilterBar(
         selectedContainerColor = colors.secondaryContainer,
         selectedLabelColor = colors.onSecondaryContainer,
     )
+    val chipScrollState = rememberScrollState()
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth(),
@@ -470,7 +487,8 @@ private fun NightUpFilterBar(
             modifier = Modifier
                 .weight(1f)
                 .fadingRightEdge()
-                .horizontalScroll(rememberScrollState())
+                .verticalWheelScrollsRow(chipScrollState)
+                .horizontalScroll(chipScrollState)
                 .padding(horizontal = horizontalInset),
         ) {
             if (allowedUps.size > 1) {
@@ -567,68 +585,80 @@ private fun NightVideoCard(
         )
     }
 
-    if (wide) {
-        ContextMenuBox(
-            onClick = null,
-            menuLabel = stringResource(Res.string.menu_item_actions),
-            modifier = modifier,
-            menu = menuItems,
-        ) { openMenu ->
-            if (useGrid) {
-                VideoGridCard(
-                    ui = ui,
-                    onClick = onClick,
-                    onLongClick = openMenu,
-                    onUpClick = if (showUpName) ({ onOpenSpace(item.up.mid) }) else null,
-                )
-            } else {
-                VideoRow(
-                    item = ui,
-                    onClick = onClick,
-                    onLongClick = openMenu,
-                )
+    var menuOpen by remember { mutableStateOf(false) }
+    val isTouch = LocalPointerSource.current.isTouchLike
+    val actionsLabel = stringResource(Res.string.menu_item_actions)
+    val overflowSlot: (@Composable () -> Unit)? = if (wide) {
+        null
+    } else {
+        {
+            Box {
+                BilbyTooltip(text = actionsLabel) {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(
+                            Icons.Outlined.MoreVert,
+                            contentDescription = actionsLabel,
+                        )
+                    }
+                }
+                val popup: @Composable () -> Unit = {
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                        shape = MenuDefaults.shape,
+                        containerColor = MenuDefaults.containerColor,
+                    ) {
+                        menuItems { menuOpen = false }
+                    }
+                }
+                if (isTouch) {
+                    popup()
+                } else {
+                    MaterialExpressiveTheme(
+                        colorScheme = MaterialTheme.colorScheme,
+                        motionScheme = NightDesktopMenuMotionScheme,
+                        typography = MaterialTheme.typography,
+                        shapes = MaterialTheme.shapes,
+                        content = popup,
+                    )
+                }
             }
         }
-        return
     }
 
-    var menuOpen by remember { mutableStateOf(false) }
-    val overflowSlot: @Composable () -> Unit = {
-        Box {
-            IconButton(onClick = { menuOpen = true }) {
-                Icon(
-                    Icons.Outlined.MoreVert,
-                    contentDescription = stringResource(Res.string.menu_item_actions),
-                )
-            }
-            DropdownMenu(
-                expanded = menuOpen,
-                onDismissRequest = { menuOpen = false },
-                shape = MenuDefaults.shape,
-                containerColor = MenuDefaults.containerColor,
-            ) {
-                menuItems { menuOpen = false }
-            }
+    ContextMenuBox(
+        onClick = null,
+        menuLabel = actionsLabel,
+        modifier = modifier,
+        menu = menuItems,
+    ) { openMenu ->
+        if (useGrid) {
+            VideoGridCard(
+                ui = ui,
+                onClick = onClick,
+                onLongClick = openMenu,
+                onUpClick = if (showUpName) ({ onOpenSpace(item.up.mid) }) else null,
+                overflow = overflowSlot,
+            )
+        } else {
+            VideoRow(
+                item = ui,
+                onClick = onClick,
+                onLongClick = openMenu,
+                overflow = overflowSlot,
+            )
         }
     }
-    if (useGrid) {
-        VideoGridCard(
-            ui = ui,
-            onClick = onClick,
-            onLongClick = { menuOpen = true },
-            onUpClick = if (showUpName) ({ onOpenSpace(item.up.mid) }) else null,
-            overflow = overflowSlot,
-            modifier = modifier,
-        )
-    } else {
-        VideoRow(
-            item = ui,
-            onClick = onClick,
-            onLongClick = { menuOpen = true },
-            overflow = overflowSlot,
-            modifier = modifier,
-        )
-    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+private object NightDesktopMenuMotionScheme : MotionScheme {
+    override fun <T> defaultSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> fastSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> slowSpatialSpec(): FiniteAnimationSpec<T> = snap()
+    override fun <T> defaultEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
+    override fun <T> fastEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
+    override fun <T> slowEffectsSpec(): FiniteAnimationSpec<T> = tween(80)
 }
 
 private val SanctuaryBadgeSize = 36.dp

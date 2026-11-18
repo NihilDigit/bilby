@@ -8,12 +8,14 @@ import dev.bilby.data.FollowRepository
 import dev.bilby.data.RelationRepository
 import dev.bilby.data.SPECIAL_GROUP_ID
 import dev.bilby.data.UpBrief
+import dev.bilby.ui.errorTextRes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 
 /**
  * 「设置某人的分组」这件事的全部状态与写回逻辑。**关注列表页和空间页共用这一份。**
@@ -75,14 +77,10 @@ class GroupPickerController(
                         loading = false,
                     )
 
-                    is BiliResult.ApiError ->
-                        picker.copy(loading = false, error = "${result.message}(${result.code})")
-
-                    is BiliResult.Failure ->
-                        picker.copy(loading = false, error = result.cause.message ?: "网络错误")
+                    else ->
+                        picker.copy(loading = false, error = result.errorTextRes("读取关注分组"))
                 }
             }
-            if (result !is BiliResult.Ok) BiliLog.w("取某人的分组失败: $result")
         }
     }
 
@@ -128,8 +126,7 @@ class GroupPickerController(
                     onSaved()
                 }
 
-                is BiliResult.ApiError -> fail(picker, "${result.message}(${result.code})")
-                is BiliResult.Failure -> fail(picker, result.cause.message ?: "网络错误")
+                else -> fail(picker, result.errorTextRes("设置关注分组"))
             }
         }
     }
@@ -149,12 +146,11 @@ class GroupPickerController(
         }
     }
 
-    private fun fail(picker: GroupPickerState, message: String) {
-        BiliLog.w("设置分组失败: $message")
+    private fun fail(picker: GroupPickerState, errorRes: StringResource) {
         _picker.update { current ->
             // 面板已经关掉或换了个人时,这次失败不该再写回去。
             if (current == null || current.up.mid != picker.up.mid) current
-            else current.copy(saving = false, error = message)
+            else current.copy(saving = false, error = errorRes)
         }
     }
 }

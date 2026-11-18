@@ -1,5 +1,7 @@
 package dev.bilby.ui.login
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -26,8 +29,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -40,11 +49,11 @@ import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.LocalWindowCaption
-import dev.bilby.ui.components.FullScreenLoading
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.rememberReducedMotion
 import dev.bilby.ui.windowDragArea
 import java.io.IOException
 import kotlinx.coroutines.Job
@@ -54,17 +63,19 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.StringResource
 
 /**
  * TV 扫码登录,现在是唯一的登录入口(见 [TvLoginRepository])。一次扫码同时拿到
  * cookie(供所有读接口用)和 access_key(供点赞/投币等 app 端写接口用)。
  */
+@Immutable
 sealed interface TvLoginUiState {
     data object Requesting : TvLoginUiState // 正在申请二维码
     data class WaitingScan(val url: String) : TvLoginUiState
     data class ScannedUnconfirmed(val url: String) : TvLoginUiState
     data object Expired : TvLoginUiState
-    data class Failed(val message: String) : TvLoginUiState
+    data class Failed(val message: StringResource) : TvLoginUiState
     data object Success : TvLoginUiState
 }
 
@@ -131,18 +142,14 @@ fun TvLoginScreen(
 
                         Box(contentAlignment = Alignment.Center) {
                             when (state) {
-                                is TvLoginUiState.WaitingScan -> QrSurface {
+                                is TvLoginUiState.WaitingScan -> QrSurface(showViewfinder = true) {
                                     QrCodeImage(state.url, Modifier.size(QrImageSize))
                                 }
 
                                 is TvLoginUiState.ScannedUnconfirmed -> {
                                     QrSurface { QrCodeImage(state.url, Modifier.size(QrImageSize)) }
                                     QrOverlay {
-                                        Icon(
-                                            Icons.Filled.CheckCircle,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                        )
+                                        ScannedCheckBadge()
                                         Text(
                                             stringResource(Res.string.login_scanned),
                                             style = MaterialTheme.typography.bodyMediumEmphasized,
@@ -171,7 +178,10 @@ fun TvLoginScreen(
                                 is TvLoginUiState.Requesting,
                                 is TvLoginUiState.Failed,
                                 is TvLoginUiState.Success,
-                                -> QrPlaceholder(showSpinner = state is TvLoginUiState.Requesting)
+                                -> QrPlaceholder(
+                                    showSpinner = state is TvLoginUiState.Requesting,
+                                    showSuccessCheck = state is TvLoginUiState.Success,
+                                )
                             }
                         }
 
@@ -189,7 +199,7 @@ fun TvLoginScreen(
                                 verticalArrangement = Arrangement.spacedBy(Spacing.Cozy),
                             ) {
                                 Text(
-                                    text = state.message,
+                                    text = stringResource(state.message),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.error,
                                     textAlign = TextAlign.Center,
@@ -244,18 +254,61 @@ fun TvLoginScreen(
  * 这条踩过一次,见 [QrCodeImage] 的注释。
  */
 @Composable
-private fun QrSurface(content: @Composable () -> Unit) {
-    Surface(
-        color = FixedColors.QrBackground,
-        shape = MaterialTheme.shapes.large,
-        modifier = Modifier.size(QrPadSize),
-    ) {
-        Box(contentAlignment = Alignment.Center) { content() }
+private fun QrSurface(
+    showViewfinder: Boolean = false,
+    content: @Composable () -> Unit,
+) {
+    val reducedMotion = rememberReducedMotion()
+    val cornerProgress by animateFloatAsState(
+        targetValue = if (showViewfinder) 1f else 0f,
+        animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
+        label = "qr_viewfinder",
+    )
+    val bracketAlpha = if (reducedMotion) (if (showViewfinder) 1f else 0f) else cornerProgress
+    val bracketColor = MaterialTheme.colorScheme.primary
+
+    Box(modifier = Modifier.size(QrPadSize), contentAlignment = Alignment.Center) {
+        Surface(
+            color = FixedColors.QrBackground,
+            shape = MaterialTheme.shapes.large,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Box(contentAlignment = Alignment.Center) { content() }
+        }
+        // Causal corner viewfinder brackets when ready for scanning (no idle scan-beam sweep).
+        if (bracketAlpha > 0.01f) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val inset = 8.dp.toPx()
+                val leg = 18.dp.toPx()
+                val strokeWidth = 2.5.dp.toPx()
+                val color = bracketColor.copy(alpha = bracketAlpha * 0.55f)
+                val left = inset
+                val top = inset
+                val right = size.width - inset
+                val bottom = size.height - inset
+                // Top-left
+                drawLine(color, Offset(left, top + leg), Offset(left, top), strokeWidth, StrokeCap.Round)
+                drawLine(color, Offset(left, top), Offset(left + leg, top), strokeWidth, StrokeCap.Round)
+                // Top-right
+                drawLine(color, Offset(right - leg, top), Offset(right, top), strokeWidth, StrokeCap.Round)
+                drawLine(color, Offset(right, top), Offset(right, top + leg), strokeWidth, StrokeCap.Round)
+                // Bottom-left
+                drawLine(color, Offset(left, bottom - leg), Offset(left, bottom), strokeWidth, StrokeCap.Round)
+                drawLine(color, Offset(left, bottom), Offset(left + leg, bottom), strokeWidth, StrokeCap.Round)
+                // Bottom-right
+                drawLine(color, Offset(right - leg, bottom), Offset(right, bottom), strokeWidth, StrokeCap.Round)
+                drawLine(color, Offset(right, bottom), Offset(right, bottom - leg), strokeWidth, StrokeCap.Round)
+            }
+        }
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun QrPlaceholder(showSpinner: Boolean) {
+private fun QrPlaceholder(
+    showSpinner: Boolean,
+    showSuccessCheck: Boolean = false,
+) {
     Surface(
         modifier = Modifier.size(QrPadSize),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -263,8 +316,52 @@ private fun QrPlaceholder(showSpinner: Boolean) {
     ) {
         Box(contentAlignment = Alignment.Center) {
             // 走整块那一档不是行内那一档:等的是这张码本身,它占满了这个位置。
-            if (showSpinner) FullScreenLoading()
+            when {
+                showSpinner -> ContainedLoadingIndicator()
+                showSuccessCheck -> ScannedCheckBadge()
+            }
         }
+    }
+}
+
+@Composable
+private fun ScannedCheckBadge() {
+    val reducedMotion = rememberReducedMotion()
+    val sweep by animateFloatAsState(
+        targetValue = 360f,
+        animationSpec = MaterialTheme.motionScheme.defaultSpatialSpec(),
+        label = "qr_check_ring",
+    )
+    val ringColor = MaterialTheme.colorScheme.primary
+    Box(modifier = Modifier.size(56.dp), contentAlignment = Alignment.Center) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val strokePx = 3.dp.toPx()
+            val arcSize = Size(size.width - strokePx, size.height - strokePx)
+            drawArc(
+                color = ringColor.copy(alpha = 0.2f),
+                startAngle = 0f,
+                sweepAngle = 360f,
+                useCenter = false,
+                topLeft = Offset(strokePx / 2f, strokePx / 2f),
+                size = arcSize,
+                style = Stroke(width = strokePx),
+            )
+            drawArc(
+                color = ringColor,
+                startAngle = -90f,
+                sweepAngle = if (reducedMotion) 360f else sweep,
+                useCenter = false,
+                topLeft = Offset(strokePx / 2f, strokePx / 2f),
+                size = arcSize,
+                style = Stroke(width = strokePx, cap = StrokeCap.Round),
+            )
+        }
+        Icon(
+            imageVector = Icons.Filled.CheckCircle,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(32.dp),
+        )
     }
 }
 
@@ -308,7 +405,7 @@ class TvLoginViewModel(private val repository: TvLoginRepository) : ViewModel() 
             _state.value = TvLoginUiState.Requesting
             when (val qr = repository.requestQrCode()) {
                 is BiliResult.Ok -> pollUntilSettled(qr.value.authCode, qr.value.url)
-                is BiliResult.ApiError -> _state.value = TvLoginUiState.Failed(SERVER_REFUSED)
+                is BiliResult.ApiError -> _state.value = TvLoginUiState.Failed(Res.string.login_qr_fetch_failed)
                 is BiliResult.Failure -> _state.value = TvLoginUiState.Failed(networkText(qr.cause))
             }
         }
@@ -338,7 +435,7 @@ class TvLoginViewModel(private val repository: TvLoginRepository) : ViewModel() 
                 // 轮询期间的网络抖动不该让用户重新扫码,继续轮到超时为止。
                 is BiliResult.Failure -> Unit
                 is BiliResult.ApiError -> {
-                    _state.value = TvLoginUiState.Failed(POLL_REFUSED)
+                    _state.value = TvLoginUiState.Failed(Res.string.login_incomplete)
                     return
                 }
             }
@@ -348,23 +445,11 @@ class TvLoginViewModel(private val repository: TvLoginRepository) : ViewModel() 
 }
 
 /**
- * 失败时屏幕上说的话。
- *
- * **接口的 message 和错误码都不上屏。** 登录是新手必经的第一屏,而「网络错误: Unable to
- * resolve host」这样一行既说不出哪里出了问题,也说不出该做什么。原文和错误码
- * [TvLoginRepository] 每条分支都已经写进 [dev.bilby.BiliLog],这里不再打第二遍。
- */
-private const val SERVER_REFUSED = "二维码没有取到,稍后重试"
-
-/** 扫过之后接口才拒绝,当前这个码已经作废,所以说的是重新扫,不是等。 */
-private const val POLL_REFUSED = "登录没有完成,重新扫一次"
-
-/**
  * [IOException] 一族(DNS 解析不了、连不上、超时、证书)是用户自己能处理的;
  * 剩下的他做什么都没用,只能说清没成功。
  */
-private fun networkText(cause: Throwable): String =
-    if (cause is IOException) "网络不通,检查网络后重试" else SERVER_REFUSED
+private fun networkText(cause: Throwable): StringResource =
+    if (cause is IOException) Res.string.login_network_unavailable else Res.string.login_qr_fetch_failed
 
 private const val PreviewUrl = "https://passport.bilibili.com/x/passport-tv-login/h5/qrcode/auth?auth_code=demo"
 

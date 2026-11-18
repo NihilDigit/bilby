@@ -52,6 +52,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.Scaffold
@@ -61,7 +62,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -77,13 +81,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import dev.bilby.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
@@ -92,7 +99,6 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import dev.bilby.resources.*
@@ -100,12 +106,16 @@ import dev.bilby.data.EmoteAction
 import dev.bilby.data.WhisperContent
 import dev.bilby.data.model.plainText
 import dev.bilby.ui.BackHandler
+import dev.bilby.ui.CaptionLeadWithDrag
+import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.BiliRichText
 import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.EmotePickerPanel
 import dev.bilby.ui.components.EmoteToggleButton
+import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.LocalPointerSource
 import dev.bilby.ui.components.NeedsCopyNotice
 import dev.bilby.ui.components.VideoCover
@@ -122,6 +132,7 @@ import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.components.plainTextClip
 import dev.bilby.ui.components.rememberComplementEmotePanelHeight
 import dev.bilby.ui.components.rememberReplyEmoteState
+import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.formatDurationSeconds
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
@@ -136,6 +147,7 @@ import kotlinx.coroutines.launch
  *
  * 输入栏与评论区、直播间是同一个形状(风格指南 §2.7)。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WhisperScreen(
     state: WhisperUiState,
@@ -160,8 +172,26 @@ fun WhisperScreen(
     val clipLabel = stringResource(Res.string.action_copy_message)
     var viewingImage by remember { mutableStateOf<String?>(null) }
     var copyingText by remember { mutableStateOf<String?>(null) }
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    val bubbleActions = remember(onOpenVideo, onOpenArticle, onOpenLink, copiedNotice, clipLabel) {
+        BubbleActions(
+            onOpenVideo = onOpenVideo,
+            onOpenArticle = onOpenArticle,
+            onOpenLink = onOpenLink,
+            onViewImage = { viewingImage = it },
+            onCopyMessage = { messageText ->
+                if (messageText.isNotEmpty()) {
+                    scope.launch {
+                        clipboard.setClipEntry(plainTextClip(clipLabel, messageText))
+                        if (NeedsCopyNotice) snackbar.showSnackbar(copiedNotice)
+                    }
+                }
+            },
+            onCopyText = { copyingText = it },
+        )
+    }
     Scaffold(
-        modifier = modifier,
+        modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             // **顶栏放头像,而且整块可点。** 会话页原先只有一行名字,于是从私信根本走不到
@@ -172,6 +202,7 @@ fun WhisperScreen(
                 faceUrl = state.faceUrl,
                 onOpenSpace = if (state.isSystem) null else onOpenSpace,
                 onBack = onBack,
+                scrollBehavior = scrollBehavior,
             )
         },
     ) { insets ->
@@ -206,21 +237,7 @@ fun WhisperScreen(
                     MessageList(
                         state = state,
                         onLoadOlder = onLoadOlder,
-                        actions = BubbleActions(
-                            onOpenVideo = onOpenVideo,
-                            onOpenArticle = onOpenArticle,
-                            onOpenLink = onOpenLink,
-                            onViewImage = { viewingImage = it },
-                            onCopyMessage = { messageText ->
-                                if (messageText.isNotEmpty()) {
-                                    scope.launch {
-                                        clipboard.setClipEntry(plainTextClip(clipLabel, messageText))
-                                        if (NeedsCopyNotice) snackbar.showSnackbar(copiedNotice)
-                                    }
-                                }
-                            },
-                            onCopyText = { copyingText = it },
-                        ),
+                        actions = bubbleActions,
                     )
                 }
             }
@@ -241,6 +258,7 @@ fun WhisperScreen(
 }
 
 /** 气泡上的几种去处,打包成一份往下传,免得每一层签名里都排一列回调。 */
+@Immutable
 private class BubbleActions(
     val onOpenVideo: (String) -> Unit,
     val onOpenArticle: (String) -> Unit,
@@ -285,45 +303,53 @@ private fun MessageList(state: WhisperUiState, onLoadOlder: () -> Unit, actions:
         seenNewest = newest
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-    CompositionLocalProvider(LocalChatSizes provides ChatSizes.of(maxWidth)) {
-    LazyColumn(
-        state = listState,
-        reverseLayout = true,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+    val density = LocalDensity.current
+    var areaWidth by remember { mutableStateOf(0.dp) }
+    val chatSizes = remember(areaWidth) { ChatSizes.of(areaWidth) }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onSizeChanged { with(density) { areaWidth = it.width.toDp() } },
     ) {
-        items(rows, key = { it.key }, contentType = { it::class }) { row ->
-            when (row) {
-                is ChatRow.Time -> TimeSeparator(row.epochSeconds)
-                is ChatRow.Caption -> CaptionLine(row)
-                is ChatRow.Pushed -> MessageLine(mine = false, avatarUrl = state.faceUrl, showsAvatar = true) {
-                    PushedVideoCard(row, onClick = { actions.onOpenVideo(row.push.bvid) })
+        CompositionLocalProvider(LocalChatSizes provides chatSizes) {
+            LazyColumn(
+                state = listState,
+                reverseLayout = true,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+            ) {
+                items(rows, key = { it.key }, contentType = { it::class }) { row ->
+                    when (row) {
+                        is ChatRow.Time -> TimeSeparator(row.epochSeconds)
+                        is ChatRow.Caption -> CaptionLine(row)
+                        is ChatRow.Pushed -> MessageLine(mine = false, avatarUrl = state.faceUrl, showsAvatar = true) {
+                            PushedVideoCard(row, onClick = { actions.onOpenVideo(row.push.bvid) })
+                        }
+                        is ChatRow.Bubble -> MessageLine(
+                            mine = row.mine,
+                            avatarUrl = state.faceUrl,
+                            showsAvatar = !row.joinsPrevious,
+                            topGap = if (row.joinsPrevious) GroupedGap else Spacing.Tight,
+                        ) {
+                            ChatBubble(row, actions)
+                        }
+                    }
                 }
-                is ChatRow.Bubble -> MessageLine(
-                    mine = row.mine,
-                    avatarUrl = state.faceUrl,
-                    showsAvatar = !row.joinsPrevious,
-                    topGap = if (row.joinsPrevious) GroupedGap else Spacing.Tight,
-                ) {
-                    ChatBubble(row, actions)
+                if (state.loadingOlder) {
+                    item(key = "older", contentType = "older") {
+                        Box(modifier = Modifier.fillMaxWidth().padding(Spacing.Tight), contentAlignment = Alignment.Center) {
+                            LoadingSpinner()
+                        }
+                    }
+                }
+                state.olderError?.let { error ->
+                    item(key = "older-error", contentType = "older-error") {
+                        InlineError(message = stringResource(error), onRetry = onLoadOlder)
+                    }
                 }
             }
         }
-        if (state.loadingOlder) {
-            item(key = "older", contentType = "older") {
-                Box(modifier = Modifier.fillMaxWidth().padding(Spacing.Tight), contentAlignment = Alignment.Center) {
-                    LoadingSpinner()
-                }
-            }
-        }
-        state.olderError?.let { error ->
-            item(key = "older-error", contentType = "older-error") {
-                InlineError(message = stringResource(error), onRetry = onLoadOlder)
-            }
-        }
-    }
-    }
+        ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
     }
 }
 
@@ -755,45 +781,68 @@ private fun NoticeBody(content: WhisperContent.Notice, secondary: Color, onOpenL
  * 不复用 [BilbyTopBar]:那一个的标题槽是一行文字,而这里要的是"这是谁"——头像在这个位置
  * 承担的正是识别,而名字可能是"哔哩哔哩客服"这种一眼扫过去分不清的。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun WhisperTopBar(
     name: String,
     faceUrl: String,
     onOpenSpace: (() -> Unit)?,
     onBack: () -> Unit,
+    scrollBehavior: TopAppBarScrollBehavior? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
+    LocalWindowCaption.current?.Host()
+    val captionSlot = rememberCaptionSlot()
+    val displayName = name.ifBlank { stringResource(Res.string.whisper_system_account) }
+    val openSpaceLabel = stringResource(Res.string.comment_open_space, displayName)
+    val backLabel = stringResource(Res.string.action_back)
     TopAppBar(
-        actions = actions,
+        modifier = captionSlot.modifier,
+        scrollBehavior = scrollBehavior,
+        actions = {
+            actions()
+            captionSlot.buttons?.invoke()
+        },
         title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                modifier = Modifier.then(
-                    if (onOpenSpace == null) {
-                        Modifier
-                    } else {
-                        Modifier
-                            .clip(MaterialTheme.shapes.small)
-                            .clickable(onClick = onOpenSpace)
-                            .padding(end = Spacing.Tight)
-                    },
-                ),
+            CaptionLeadWithDrag(
+                dragEnabled = captionSlot.atTop,
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Avatar(url = faceUrl, size = Dimens.AvatarRow)
-                Text(
-                    text = name.ifBlank { stringResource(Res.string.whisper_system_account) },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    modifier = Modifier.then(
+                        if (onOpenSpace == null) {
+                            Modifier
+                        } else {
+                            Modifier
+                                .clip(MaterialTheme.shapes.small)
+                                .clickable(
+                                    role = Role.Button,
+                                    onClickLabel = openSpaceLabel,
+                                    onClick = onOpenSpace,
+                                )
+                                .padding(end = Spacing.Tight)
+                        },
+                    ),
+                ) {
+                    Avatar(url = faceUrl, size = Dimens.AvatarRow)
+                    Text(
+                        text = displayName,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         },
         navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(Res.string.action_back),
-                )
+            BilbyTooltip(text = backLabel, shortcut = "Alt+←") {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = backLabel,
+                    )
+                }
             }
         },
     )

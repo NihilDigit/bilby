@@ -1,5 +1,6 @@
 package dev.bilby.ui.message
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.StringResource
 
+@Immutable
 data class WhisperUiState(
     val name: String = "",
     val faceUrl: String = "",
@@ -56,6 +58,7 @@ data class WhisperUiState(
  * 私信被拒的理由是人要读的 —— "对方主动回复或关注你前，最多发送1条消息"、"对方设置了隐私"
  * —— 读了才知道下一步是等、改,还是算了。网络这类没有原话的失败才落到资源 id。
  */
+@Immutable
 data class SendError(val serverMessage: String?, val fallback: StringResource)
 
 /**

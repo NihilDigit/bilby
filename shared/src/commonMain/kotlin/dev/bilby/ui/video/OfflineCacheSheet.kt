@@ -34,6 +34,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import dev.bilby.data.QualityOption
 import dev.bilby.offline.CachedIndex
 import dev.bilby.offline.OfflineRequest
@@ -182,7 +183,6 @@ fun OfflineCacheSheet(
                         FilledTonalToggleButton(
                             checked = quality == option.quality,
                             onCheckedChange = { quality = option.quality },
-                            shapes = ToggleButtonDefaults.shapes(),
                             modifier = Modifier.semantics { role = Role.RadioButton },
                         ) {
                             Text(option.label, maxLines = 1, softWrap = false)

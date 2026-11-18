@@ -1,9 +1,7 @@
 package dev.bilby.ui.message
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,11 +10,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -36,6 +39,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.resources.*
 import org.jetbrains.compose.resources.StringResource
+import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.ui.readableWidth
 import dev.bilby.data.Notice
@@ -57,6 +61,7 @@ import dev.bilby.ui.components.SquareCover
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
+import dev.bilby.ui.theme.tabular
 import kotlinx.coroutines.launch
 
 /**
@@ -71,6 +76,7 @@ import kotlinx.coroutines.launch
  * 标签用 **primary**:它们紧贴顶栏,代表这一页的主内容分区 —— 与空间页那三个同一档,
  * 而不是播放页那种"在内容区里再分一层"的 secondary。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MessageScreen(
     state: MessageUiState,
@@ -113,20 +119,22 @@ fun MessageScreen(
     Scaffold(
         modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            BilbyTopBar(
-                title = stringResource(Res.string.message_title),
-                onBack = onBack,
-                scrollBehavior = scrollBehavior,
-            ) {
-                // 刷新按钮跟着当前这一格走:五格各有自己的 refreshing/onRefresh,顶栏只有一个入口。
-                val tabRefreshing = when (state.tab) {
-                    MessageTab.Whispers -> state.whispers.refreshing
-                    MessageTab.Replies -> state.replies.refreshing
-                    MessageTab.Mentions -> state.mentions.refreshing
-                    MessageTab.Likes -> state.likes.refreshing
-                    MessageTab.Notices -> state.notices.refreshing
+            MessageIslandTopBarTheme {
+                BilbyTopBar(
+                    title = stringResource(Res.string.message_title),
+                    onBack = onBack,
+                    scrollBehavior = scrollBehavior,
+                ) {
+                    // 刷新按钮跟着当前这一格走:五格各有自己的 refreshing/onRefresh,顶栏只有一个入口。
+                    val tabRefreshing = when (state.tab) {
+                        MessageTab.Whispers -> state.whispers.refreshing
+                        MessageTab.Replies -> state.replies.refreshing
+                        MessageTab.Mentions -> state.mentions.refreshing
+                        MessageTab.Likes -> state.likes.refreshing
+                        MessageTab.Notices -> state.notices.refreshing
+                    }
+                    RefreshAction(refreshing = tabRefreshing, onRefresh = { onRefresh(state.tab) })
                 }
-                RefreshAction(refreshing = tabRefreshing, onRefresh = { onRefresh(state.tab) })
             }
         },
     ) { insets ->
@@ -178,6 +186,26 @@ fun MessageScreen(
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+internal fun MessageIslandTopBarTheme(content: @Composable () -> Unit) {
+    if (LocalWindowCaption.current == null) {
+        content()
+        return
+    }
+    val currentScheme = MaterialTheme.colorScheme
+    val topBarScheme = remember(currentScheme) {
+        currentScheme.copy(surfaceContainer = currentScheme.surfaceContainerLow)
+    }
+    MaterialExpressiveTheme(
+        colorScheme = topBarScheme,
+        motionScheme = MaterialTheme.motionScheme,
+        typography = MaterialTheme.typography,
+        shapes = MaterialTheme.shapes,
+        content = content,
+    )
 }
 
 /** 只有文字的标签高度,同 M3 tabs 规格(与 text 重载一致)。 */
@@ -265,6 +293,7 @@ internal fun ConversationRow(
 }
 
 /** 会话列表一行的骨架:左边一个 48dp 的圆,右边名字加时间、一行摘要。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SessionRowLayout(
     leading: @Composable () -> Unit,
@@ -274,32 +303,16 @@ private fun SessionRowLayout(
     onClick: () -> Unit,
     selected: Boolean,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-            .clickable(onClick = onClick)
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        leading()
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.Hair / 2)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    text = time,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = Spacing.Tight),
-                )
-            }
+    SegmentedListItem(
+        selected = selected,
+        onClick = onClick,
+        shapes = ListItemDefaults.segmentedShapes(index = 0, count = 1),
+        colors = ListItemDefaults.segmentedColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+        ),
+        leadingContent = leading,
+        supportingContent = {
             Text(
                 // 摘要只有一行,换行符会让第二行整个被截掉,读到的只是第一行。
                 text = preview.replace('\n', ' '),
@@ -307,6 +320,25 @@ private fun SessionRowLayout(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+            )
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair / 2),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = time,
+                style = MaterialTheme.typography.labelSmall.tabular,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = Spacing.Tight),
             )
         }
     }
@@ -387,22 +419,12 @@ private fun NoticeList(
  * 整行点开通知指向的地方;没有去处的不给点击 —— 一个按下去有涟漪、然后什么都不发生的行
  * 读起来像坏了。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun NoticeRow(notice: Notice, onOpenSpace: (Long) -> Unit, onOpenNotice: (Notice) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                if (notice.uri.isBlank() && notice.nativeUri.isBlank()) {
-                    Modifier
-                } else {
-                    Modifier.clickable { onOpenNotice(notice) }
-                },
-            )
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Comfortable),
-    ) {
-        val spaceLabel = stringResource(Res.string.comment_open_space, notice.name)
+    val hasTarget = notice.uri.isNotBlank() || notice.nativeUri.isNotBlank()
+    val spaceLabel = stringResource(Res.string.comment_open_space, notice.name)
+    val leading: @Composable () -> Unit = {
         Avatar(
             url = notice.avatarUrl,
             size = Dimens.AvatarStack,
@@ -415,7 +437,14 @@ private fun NoticeRow(notice: Notice, onOpenSpace: (Long) -> Unit, onOpenNotice:
                     .clickable(onClickLabel = spaceLabel, role = Role.Button) { onOpenSpace(notice.actorMid) }
             },
         )
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
+    }
+    val trailing: (@Composable () -> Unit)? = if (notice.imageUrl.isNotBlank()) {
+        { SquareCover(url = notice.imageUrl, size = Dimens.AvatarStack) }
+    } else {
+        null
+    }
+    val body: @Composable () -> Unit = {
+        Column(verticalArrangement = Arrangement.spacedBy(Spacing.Hair)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = if (notice.actorCount > 1) {
@@ -430,7 +459,7 @@ private fun NoticeRow(notice: Notice, onOpenSpace: (Long) -> Unit, onOpenNotice:
                 )
                 Text(
                     text = formatRelativeTime(notice.timeSeconds),
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelSmall.tabular,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = Spacing.Tight),
                 )
@@ -452,7 +481,7 @@ private fun NoticeRow(notice: Notice, onOpenSpace: (Long) -> Unit, onOpenNotice:
             }
             notice.quoted?.let { quoted ->
                 Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     shape = MaterialTheme.shapes.small,
                     modifier = Modifier.padding(top = Spacing.Hair),
                 ) {
@@ -467,9 +496,33 @@ private fun NoticeRow(notice: Notice, onOpenSpace: (Long) -> Unit, onOpenNotice:
                 }
             }
         }
-        if (notice.imageUrl.isNotBlank()) {
-            SquareCover(url = notice.imageUrl, size = Dimens.AvatarStack)
-        }
+    }
+    val shapes = ListItemDefaults.segmentedShapes(index = 0, count = 1)
+    val colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+    val rowModifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair / 2)
+    if (hasTarget) {
+        SegmentedListItem(
+            onClick = { onOpenNotice(notice) },
+            shapes = shapes,
+            colors = colors,
+            verticalAlignment = Alignment.Top,
+            leadingContent = leading,
+            trailingContent = trailing,
+            modifier = rowModifier,
+            content = body,
+        )
+    } else {
+        SegmentedListItem(
+            shapes = shapes,
+            colors = colors,
+            verticalAlignment = Alignment.Top,
+            leadingContent = leading,
+            trailingContent = trailing,
+            modifier = rowModifier,
+            content = body,
+        )
     }
 }
 
@@ -521,13 +574,26 @@ private fun SysNoticeList(
  * `MessageRepository` 的 sysNoticeSpans),整行不可点 —— 一条通知可能带两三个链接,整行点开
  * 哪一个都是猜。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SysNoticeRow(notice: SysNotice, onOpenUri: (String) -> Unit) {
-    Column(
+    SegmentedListItem(
+        shapes = ListItemDefaults.segmentedShapes(index = 0, count = 1),
+        colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        verticalAlignment = Alignment.Top,
+        supportingContent = {
+            BiliRichText(
+                spans = notice.content,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                onLinkClick = onOpenUri,
+                // 系统通知的正文里没有 @。
+                onMentionClick = {},
+            )
+        },
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+            .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair / 2),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -540,18 +606,10 @@ private fun SysNoticeRow(notice: SysNotice, onOpenUri: (String) -> Unit) {
             // 系统通知给的是拼好的时间字符串,不是时间戳,所以这里不折成"3 小时前"。
             Text(
                 text = notice.timeText,
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.tabular,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = Spacing.Tight),
             )
         }
-        BiliRichText(
-            spans = notice.content,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            onLinkClick = onOpenUri,
-            // 系统通知的正文里没有 @。
-            onMentionClick = {},
-        )
     }
 }
