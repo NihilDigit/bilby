@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.compile.JavaCompile
+import org.gradle.jvm.tasks.Jar
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 
@@ -138,6 +140,34 @@ kotlin {
             runtimeOnly("org.jetbrains.compose.desktop:desktop-jvm-$testOs-$testArch:${libs.versions.composeMultiplatform.get()}")
         }
     }
+}
+
+// Windows 应用内更新器:纯 java.base 单类打包为独立可执行 jar 并以 .bin 资源名放进 desktopMain 类路径,
+// 既彻底消除运行期释放 .ps1 调 powershell.exe -ExecutionPolicy Bypass,又避免 ProGuard 过滤嵌套 .jar。
+val compileWindowsUpdateApplier = tasks.register<JavaCompile>("compileWindowsUpdateApplier") {
+    source = fileTree("updaterHelper/src/main/java") { include("**/*.java") }
+    classpath = files()
+    destinationDirectory.set(layout.buildDirectory.dir("updaterHelper/classes"))
+    javaCompiler.set(javaToolchains.compilerFor { languageVersion = JavaLanguageVersion.of(25) })
+    options.encoding = "UTF-8"
+    options.release.set(21)
+}
+val packageWindowsUpdateApplier = tasks.register<Jar>("packageWindowsUpdateApplier") {
+    dependsOn(compileWindowsUpdateApplier)
+    from(compileWindowsUpdateApplier.map { it.destinationDirectory })
+    manifest {
+        attributes("Main-Class" to "dev.bilby.updater.WindowsUpdateApplier")
+    }
+    destinationDirectory.set(layout.buildDirectory.dir("updaterHelper/resources/update"))
+    archiveFileName.set("bilby-update-applier.bin")
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+}
+kotlin.sourceSets.named("desktopMain") {
+    resources.srcDir(layout.buildDirectory.dir("updaterHelper/resources"))
+}
+tasks.matching { it.name == "desktopProcessResources" || it.name == "assembleDesktopMainResources" }.configureEach {
+    dependsOn(packageWindowsUpdateApplier)
 }
 
 // 桌面目标的编译与单测用 JDK 25:差分解码经 FFM(java.lang.foreign)直调 libzstd,它在 JDK 22 转正,

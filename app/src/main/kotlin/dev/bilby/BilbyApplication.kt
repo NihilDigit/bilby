@@ -5,8 +5,6 @@ import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import coil3.gif.AnimatedImageDecoder
-import coil3.network.okhttp.OkHttpNetworkFetcherFactory
-import coil3.request.crossfade
 import coil3.util.DebugLogger
 import dev.bilby.app.BuildConfig
 
@@ -34,12 +32,10 @@ class BilbyApplication : Application(), AppContainerOwner, SingletonImageLoader.
      * 动图解码器同理:显式挂上 [AnimatedImageDecoder] (API 28+ ImageDecoder,同时支持 GIF 与动态 WebP)。
      */
     override fun newImageLoader(context: PlatformContext): ImageLoader =
-        ImageLoader.Builder(context)
-            .components {
-                add(OkHttpNetworkFetcherFactory())
-                add(AnimatedImageDecoder.Factory())
-            }
-            .crossfade(true)
-            .apply { if (BuildConfig.DEBUG) logger(DebugLogger()) }
-            .build()
+        buildBilbyImageLoader(
+            context = context,
+            diskCacheDir = cacheDir.resolve("coil_cache"),
+            extraComponents = { add(AnimatedImageDecoder.Factory()) },
+            configure = { if (BuildConfig.DEBUG) logger(DebugLogger()) },
+        )
 }

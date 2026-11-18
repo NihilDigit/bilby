@@ -25,14 +25,17 @@ import java.io.File
  * @param updater 应用内更新。实现在 :desktop 里:它要读安装包启动器写的属性、在退出时拉起
  *   更新脚本,这些都是打包入口的事。
  */
+internal fun desktopDataDir(): File =
+    (System.getenv("APPDATA")?.let(::File) ?: File(System.getProperty("user.home")))
+        .resolve(if (System.getenv("APPDATA") != null) "Bilby" else ".bilby")
+        .apply { mkdirs() }
+
 class DesktopPlatform(
     container: () -> AppContainer,
     override val updater: AppUpdateService?,
 ) : Platform {
 
-    private val dataDir: File = (System.getenv("APPDATA")?.let(::File) ?: File(System.getProperty("user.home")))
-        .resolve(if (System.getenv("APPDATA") != null) "Bilby" else ".bilby")
-        .apply { mkdirs() }
+    private val dataDir: File = desktopDataDir()
 
     override val filesDir: File get() = dataDir
     override val preferencesDir: File get() = File(dataDir, "datastore")
