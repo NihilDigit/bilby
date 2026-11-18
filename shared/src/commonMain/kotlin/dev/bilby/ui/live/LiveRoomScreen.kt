@@ -3,6 +3,7 @@ package dev.bilby.ui.live
 import dev.bilby.ui.BackHandler
 import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.CaptionLeadWithDrag
+import dev.bilby.ui.DesktopIslandSurface
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.windowDragArea
@@ -46,6 +47,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -92,6 +94,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -134,9 +137,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import dev.bilby.ui.player.PlayerTooltip
 import dev.bilby.ui.video.LiveSettingsContent
 import dev.bilby.ui.video.PlayerSettingsButton
-import dev.bilby.ui.video.DanmakuSettingsButton
 import dev.bilby.ui.player.ControlBarDanmaku
 import dev.bilby.ui.player.ControlBarDanmakuField
+import dev.bilby.ui.player.ControlBarPlayButton
 import dev.bilby.ui.video.PlayerSettingsHost
 import dev.bilby.ui.video.PlayerSettingsSection
 import dev.bilby.live.LiveMessage
@@ -345,6 +348,10 @@ fun LiveRoomScreen(
                                 )
                             }
                         }
+                        PlayerSettingsButton {
+                            settingsOnly = null
+                            settingsOpen = true
+                        }
                     },
                     embeddedTopActions = {
                         OnlineRankLabel(state.onlineRank)
@@ -398,6 +405,11 @@ fun LiveRoomScreen(
                         LiveControlBar(
                             isFullscreen = isFullscreen,
                             largePlayer = isFullscreen || expandedLayout,
+                            playWhenReady = playWhenReady,
+                            onTogglePlayPause = {
+                                actions.togglePlayPause()
+                                keepControlsAwake()
+                            },
                             danmakuField = if (isFullscreen) {
                                 ControlBarDanmaku(
                                     draft = danmakuDraft,
@@ -443,6 +455,7 @@ fun LiveRoomScreen(
                     },
                     // 外壳与内容的排法同播放页,见 PlayerSettingsHost。
                     panel = {
+                        if (settingsOpen) setMenuOpen(true)
                         val close = {
                             settingsOpen = false
                             setMenuOpen(false)
@@ -532,48 +545,114 @@ fun LiveRoomScreen(
             val panelWidth = (draggingWidth ?: panelPrefs?.widthDp?.dp ?: defaultPanelWidth)
                 .coerceIn(minPanelWidth, maxPanelWidth)
 
-            Row(modifier = Modifier.fillMaxSize()) {
-                Box(Modifier.weight(1f).fillMaxHeight()) {
-                    playerPane(Modifier.fillMaxSize())
-                    SidePaneDismissLayer(sidePane)
-                    if (!immersive && LocalWindowCaption.current != null) {
-                        Spacer(
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .fillMaxWidth()
-                                .padding(start = 64.dp, end = 200.dp)
-                                .height(CaptionDragHeight)
-                                .windowDragArea(!locked && !sidePane.isOpen),
-                        )
-                    }
-                }
-                if (!immersive) {
-                    // 左边挨着的是画面,不是屏幕边缘,所以不躲 start 那一侧。底下要躲:输入框贴着底边。
+            val desktopFramed = !immersive && LocalWindowCaption.current != null
+            val frameBezel = if (desktopFramed) Spacing.Tight else 0.dp
+            val leftPlayerShape = when {
+                immersive -> RectangleShape
+                desktopFramed -> MaterialTheme.shapes.large
+                else -> MaterialTheme.shapes.large.copy(
+                    topStart = CornerSize(0.dp),
+                    bottomStart = CornerSize(0.dp),
+                )
+            }
+            // 桌面端对齐详情页与首页内容岛：outer surfaceContainer 底框 + 8dp 顶栏拖拽边及四周间隙，
+            // 左右两栏分别收在 shapes.large(16dp) 圆角岛内；移动端保持全出血 MD3（仅横屏右缘包裹 16dp 圆角）。
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        when {
+                            immersive -> Color.Black
+                            desktopFramed -> MaterialTheme.colorScheme.surfaceContainer
+                            else -> MaterialTheme.colorScheme.surface
+                        },
+                    ),
+            ) {
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(frameBezel)
+                        .then(
+                            if (desktopFramed) {
+                                Modifier.windowDragArea(!locked && !sidePane.isOpen)
+                            } else {
+                                Modifier
+                            },
+                        ),
+                )
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(start = frameBezel, end = frameBezel, bottom = frameBezel),
+                ) {
                     Box(
                         Modifier
-                            .width(panelWidth)
+                            .weight(1f)
                             .fillMaxHeight()
-                            .windowInsetsPadding(
-                                WindowInsets.barsAndCutout
-                                    .only(WindowInsetsSides.End + WindowInsetsSides.Vertical),
-                            ),
+                            .clip(leftPlayerShape),
                     ) {
-                        CompositionLocalProvider(
-                            LocalWindowCaption provides LocalWindowCaption.current.takeIf { !sidePane.isOpen },
-                        ) {
-                            infoPane(Modifier.fillMaxSize())
+                        playerPane(Modifier.fillMaxSize())
+                        SidePaneDismissLayer(sidePane)
+                        if (desktopFramed) {
+                            Spacer(
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .fillMaxWidth()
+                                    .padding(start = 64.dp, end = 200.dp)
+                                    .height(CaptionDragHeight)
+                                    .windowDragArea(!locked && !sidePane.isOpen),
+                            )
                         }
-                        SidePaneLayer(sidePane)
-                        SplitPaneResizeHandle(
-                            onDrag = { deltaDp ->
-                                draggingWidth = ((draggingWidth ?: panelWidth) - deltaDp)
-                                    .coerceIn(minPanelWidth, maxPanelWidth)
-                            },
-                            onDragStopped = {
-                                draggingWidth?.let { onPanelWidthChange(it.value) }
-                            },
-                            modifier = Modifier.align(Alignment.CenterStart),
-                        )
+                    }
+                    if (!immersive) {
+                        if (desktopFramed) {
+                            Spacer(Modifier.width(Spacing.Tight))
+                        }
+                        val rightContent: @Composable () -> Unit = {
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .windowInsetsPadding(
+                                        WindowInsets.barsAndCutout
+                                            .only(WindowInsetsSides.End + WindowInsetsSides.Vertical),
+                                    ),
+                            ) {
+                                CompositionLocalProvider(
+                                    LocalWindowCaption provides LocalWindowCaption.current.takeIf { !sidePane.isOpen },
+                                ) {
+                                    infoPane(Modifier.fillMaxSize())
+                                }
+                                SidePaneLayer(sidePane)
+                                SplitPaneResizeHandle(
+                                    onDrag = { deltaDp ->
+                                        draggingWidth = ((draggingWidth ?: panelWidth) - deltaDp)
+                                            .coerceIn(minPanelWidth, maxPanelWidth)
+                                    },
+                                    onDragStopped = {
+                                        draggingWidth?.let { onPanelWidthChange(it.value) }
+                                    },
+                                    modifier = Modifier.align(Alignment.CenterStart),
+                                )
+                            }
+                        }
+                        if (desktopFramed) {
+                            DesktopIslandSurface(
+                                modifier = Modifier
+                                    .width(panelWidth)
+                                    .fillMaxHeight(),
+                                content = rightContent,
+                            )
+                        } else {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surface,
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .width(panelWidth)
+                                    .fillMaxHeight(),
+                                content = rightContent,
+                            )
+                        }
                     }
                 }
             }
@@ -694,6 +773,8 @@ private fun LiveControlBar(
     isFullscreen: Boolean,
     /** 全屏,或双栏里的大画面。这时 chip、弹幕开关与只管弹幕的 ⚙ 都上到控制条,同播放页。 */
     largePlayer: Boolean,
+    playWhenReady: Boolean,
+    onTogglePlayPause: () -> Unit,
     /** 全屏时这一行里的弹幕输入框;双栏时输入框在右栏聊天底下,这里是 null。 */
     danmakuField: ControlBarDanmaku?,
     danmakuFocusNonce: Int = 0,
@@ -715,7 +796,8 @@ private fun LiveControlBar(
     /** 小窗:只留刷新与人数。弹幕、画质、纯音频、设置、全屏都藏起来,理由同播放页的控制条。 */
     pip: Boolean = false,
 ) {
-    // 播放键不在这里:画面正中那颗(PlayerShell 的 CenterPlayButton)是视频和直播共用的。
+    // 触屏走正中播放键；键鼠模式下将形变+强调色播放键置于最左端，不遮挡直播画面。
+    val isTouchLike = LocalPointerSource.current.isTouchLike
     BoxWithConstraints(Modifier.playerControlBar(isFullscreen)) {
         val wide = largePlayer && maxWidth >= Breakpoints.StackedControlBar
         val roomy = maxWidth >= InlineDanmakuBarMinWidth
@@ -728,6 +810,12 @@ private fun LiveControlBar(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
         ) {
+            if (!pip && !isTouchLike) {
+                ControlBarPlayButton(
+                    isPlaying = playWhenReady,
+                    onClick = onTogglePlayPause,
+                )
+            }
             // 取流中把图标换成转圈,而不是把图标置灰:置灰压在任意画面上要么看不出来,要么和
             // "这个功能不可用"撞在一起。发弹幕那个按钮是同一个做法。
             if (reloading) {
@@ -767,8 +855,8 @@ private fun LiveControlBar(
                     error = danmakuField.error,
                     onSend = danmakuField.onSend,
                     onFocusChange = { focused ->
+                        composing = focused
                         onDanmakuFieldFocusChange(focused)
-                        if (!focused) composing = false
                     },
                     autoFocus = !roomy,
                     focusRequestNonce = danmakuFocusNonce,
@@ -801,13 +889,8 @@ private fun LiveControlBar(
                 }
             }
             if (roomy || !composing) LiveAudioOnlyButton(onlyAudio, onOnlyAudioChange, isFullscreen)
-            if (wide) {
-                DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-                DanmakuSettingsButton { onOpenSettings(PlayerSettingsSection.Danmaku) }
-            } else {
-                if (isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-                PlayerSettingsButton { onOpenSettings(null) }
-            }
+            if (wide || isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
+            PlayerSettingsButton { onOpenSettings(null) }
             FullscreenButton(isFullscreen, onFullscreenToggle)
         }
     }

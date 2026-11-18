@@ -22,7 +22,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.material.icons.filled.Pause
@@ -40,6 +39,8 @@ import dev.bilby.formatDurationMillis
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -105,7 +106,9 @@ internal fun Modifier.playerControlBar(isFullscreen: Boolean): Modifier =
                 listOf(Color.Transparent, FixedColors.PlayerControlScrim, ControlScrimBottom),
             ),
         )
-        .windowInsetsPadding(WindowInsets.barsAndCutout)
+        .windowInsetsPadding(
+            if (isFullscreen) WindowInsets.barsAndCutout.union(WindowInsets.ime) else WindowInsets.barsAndCutout,
+        )
         .padding(
             start = if (isFullscreen) Spacing.Comfortable else Spacing.Tight,
             end = if (isFullscreen) Spacing.Comfortable else Spacing.Tight,
@@ -274,73 +277,96 @@ internal sealed interface PlayerHud {
     data class Level(val icon: ImageVector, val label: String, val value: Float) : PlayerHud
 }
 
+/**
+ * 横划进退时的中央胶囊指示器：与音量/亮度边栏、长按倍速胶囊统一走 `CircleShape` + `ScrimOnMedia` +
+ * 高光微描边体系，底部进度轨也采用相同的 `4dp` 圆形胶囊轨与 `primary` 强调色。
+ */
 @Composable
 internal fun PlayerHudOverlay(hud: PlayerHud.Seek, modifier: Modifier = Modifier) {
-    Overlay(modifier = modifier) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-        ) {
-            if (hud.cancelArmed) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                ) {
-                    Icon(
-                        Icons.Filled.Close,
-                        contentDescription = null,
-                        tint = FixedColors.OnMedia,
-                        modifier = Modifier.size(HintIconSize),
-                    )
-                    Text(
-                        stringResource(Res.string.player_seek_release_to_cancel),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = FixedColors.OnMedia,
-                    )
-                }
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        modifier = modifier
+            .clip(CircleShape)
+            .background(FixedColors.ScrimOnMedia)
+            .border(HudSpecularBorderWidth, HudSpecularBorderColor, CircleShape)
+            .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+    ) {
+        if (hud.cancelArmed) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = null,
+                    tint = FixedColors.OnMedia,
+                    modifier = Modifier.size(HintIconSize),
+                )
+                Text(
+                    stringResource(Res.string.player_seek_release_to_cancel),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = FixedColors.OnMedia,
+                )
+            }
+        } else {
+            val readoutFont = rememberClockFont()
+            val seconds = kotlin.math.abs(hud.deltaMillis) / 1000
+            val progress = if (hud.durationMillis > 0) {
+                (hud.targetMillis.toFloat() / hud.durationMillis).coerceIn(0f, 1f)
             } else {
-                // 目标时间大写,总时长小一号跟在后面:拖的时候要读的是"到哪了"。
-                // 瘦高的读数(ClockAxes),同定时倒计时与进度条气泡。
-                // 等宽数字:秒数每跳一下,不等宽的话整行左右抖。
-                val readoutFont = rememberClockFont()
+                0f
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            ) {
+                Icon(
+                    imageVector = if (hud.deltaMillis >= 0) Icons.Filled.FastForward else Icons.Filled.FastRewind,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(LevelEdgeIconSize),
+                )
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(
                         formatDurationMillis(hud.targetMillis),
-                        style = MaterialTheme.typography.headlineSmall.copy(fontFamily = readoutFont).tabular,
+                        style = MaterialTheme.typography.titleLarge.copy(fontFamily = readoutFont).tabular,
                         color = FixedColors.OnMedia,
                     )
                     Text(
                         " / ${formatDurationMillis(hud.durationMillis)}",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = readoutFont).tabular,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = readoutFont).tabular,
                         color = FixedColors.OnMedia.copy(alpha = SecondaryTextAlpha),
-                        modifier = Modifier.padding(bottom = Spacing.Hair / 2),
+                        modifier = Modifier.padding(bottom = 2.dp),
                     )
                 }
-                // 挪了多少。起手那一刻是 0,不写"快进 0 秒"。
-                val seconds = kotlin.math.abs(hud.deltaMillis) / 1000
                 if (seconds > 0) {
+                    val sign = if (hud.deltaMillis > 0) "+" else "−"
                     Text(
-                        stringResource(
-                            if (hud.deltaMillis > 0) Res.string.player_seek_forward else Res.string.player_seek_backward,
-                            seconds,
-                        ),
-                        style = MaterialTheme.typography.labelLarge.tabular,
+                        "$sign${seconds}s",
+                        style = MaterialTheme.typography.labelMedium.tabular,
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
             }
-            LinearProgressIndicator(
-                progress = {
-                    if (hud.durationMillis > 0) {
-                        (hud.targetMillis.toFloat() / hud.durationMillis).coerceIn(0f, 1f)
-                    } else {
-                        0f
-                    }
-                },
-                gapSize = 0.dp,
-                drawStopIndicator = {},
-                modifier = Modifier.width(SeekBarHudWidth).padding(top = Spacing.Hair),
-            )
+            Box(
+                contentAlignment = Alignment.CenterStart,
+                modifier = Modifier
+                    .width(SeekBarHudWidth)
+                    .height(LevelEdgeTrackWidth)
+                    .clip(CircleShape)
+                    .background(FixedColors.OnMedia.copy(alpha = LevelEdgeTrackBgAlpha)),
+            ) {
+                if (progress > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(progress)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary),
+                    )
+                }
+            }
         }
     }
 }
@@ -401,52 +427,45 @@ internal fun PlayerLevelEdgeBar(
 }
 
 /**
- * 双击快进快退的反馈:**落在点下去的那一侧**,贴着那条边画一块半圆,里面写累计了多少秒。
- *
- * 在正中写"快进 10 秒"说不清是哪一边:人点的是左四分之一还是右四分之一,反馈就该在那儿亮。
- * 连着双击时秒数累加(见 [PlayerShell] 的 seekNudgeMillis),连点三下看到的是 30 秒,
- * 不是三次一模一样的 10 秒。
+ * 双击与键盘方向键快进/快退胶囊提示：与音量/亮度条、长按倍速胶囊使用同一套深色玻璃胶囊语言，
+ * 贴合触发那一侧边缘轻量浮出，不再铺满 30% 画面半圆。
  */
 @Composable
 internal fun DoubleTapSeekHint(deltaMillis: Long, modifier: Modifier = Modifier) {
     val forward = deltaMillis >= 0
-    val shape = if (forward) {
-        RoundedCornerShape(topStartPercent = 50, bottomStartPercent = 50)
-    } else {
-        RoundedCornerShape(topEndPercent = 50, bottomEndPercent = 50)
-    }
-    // 尺寸与贴哪条边归调用方(见 [DoubleTapArcFraction]):它套在 AnimatedVisibility 里,
-    // 对齐得挂在外面那一层上,道理同 [PlayerHudOverlay]。
-    Box(
-        contentAlignment = Alignment.Center,
+    val seconds = kotlin.math.abs(deltaMillis) / 1000
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
         modifier = modifier
-            .fillMaxSize()
-            .clip(shape)
-            .background(FixedColors.OnMedia.copy(alpha = DoubleTapArcAlpha)),
+            .clip(CircleShape)
+            .background(FixedColors.ScrimOnMedia)
+            .border(HudSpecularBorderWidth, HudSpecularBorderColor, CircleShape)
+            .padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                if (forward) Icons.Filled.FastForward else Icons.Filled.FastRewind,
-                contentDescription = null,
-                tint = FixedColors.OnMedia,
-                modifier = Modifier.size(HintIconSize),
-            )
-            Text(
-                stringResource(
-                    if (forward) Res.string.player_seek_forward else Res.string.player_seek_backward,
-                    kotlin.math.abs(deltaMillis) / 1000,
-                ),
-                style = MaterialTheme.typography.labelLarge.tabular,
-                color = FixedColors.OnMedia,
-            )
-        }
+        Icon(
+            imageVector = if (forward) Icons.Filled.FastForward else Icons.Filled.FastRewind,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(LevelEdgeIconSize),
+        )
+        Text(
+            text = stringResource(
+                if (forward) Res.string.player_seek_forward else Res.string.player_seek_backward,
+                seconds,
+            ),
+            style = MaterialTheme.typography.labelLarge.tabular,
+            color = FixedColors.OnMedia,
+            maxLines = 1,
+            softWrap = false,
+        )
     }
 }
 
 /** 比正文大一档,和 titleMedium 的行高对得上。 */
 internal val HintIconSize = 22.dp
 
-private val SeekBarHudWidth = 180.dp
+private val SeekBarHudWidth = 172.dp
 private val LevelEdgePillWidth = 36.dp
 private val LevelEdgeTrackWidth = 4.dp
 private val LevelEdgeTrackHeightCompact = 72.dp
@@ -454,9 +473,6 @@ private val LevelEdgeTrackHeightLarge = 104.dp
 private val LevelEdgeIconSize = 18.dp
 private const val LevelEdgeTrackBgAlpha = 0.24f
 
-/** 双击那块半圆占画面宽度的比例。比双击判定区(四分之一)略宽,落点一定在它里面。 */
-internal const val DoubleTapArcFraction = 0.3f
-private const val DoubleTapArcAlpha = 0.16f
 private const val SecondaryTextAlpha = 0.7f
 
 /**
@@ -819,6 +835,71 @@ internal fun CenterPlayButton(
         }
     }
 }
+
+/**
+ * 键鼠模式下控制条最左端的播放/暂停按钮：不遮挡视频正中，沿用 M3E 形变与强调色语言。
+ * 暂停态为圆形主色强调按钮，播放态形变为略宽的圆角方块与 tonal 强调底色。
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+internal fun ControlBarPlayButton(
+    isPlaying: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val height = ControlBarPlayHeight
+    val width by animateDpAsState(
+        targetValue = if (isPlaying) height * ControlBarPlayingWidthRatio else height,
+        animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+        label = "control-bar-play-width",
+    )
+    val corner by animateDpAsState(
+        targetValue = if (isPlaying) height * ControlBarPlayingCornerRatio else height / 2,
+        animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+        label = "control-bar-play-corner",
+    )
+    val colors = MaterialTheme.colorScheme
+    val container by animateColorAsState(
+        targetValue = if (isPlaying) colors.primaryContainer else colors.primary,
+        animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+        label = "control-bar-play-container",
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (isPlaying) colors.onPrimaryContainer else colors.onPrimary,
+        animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+        label = "control-bar-play-content",
+    )
+    val label = stringResource(if (isPlaying) Res.string.player_pause else Res.string.player_play)
+    PlayerTooltip(label, shortcut = "Space") {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = modifier
+                .sizeIn(minWidth = Dimens.MinTouchTarget, minHeight = Dimens.MinTouchTarget)
+                .pointerHoverIcon(PointerIcon.Hand),
+        ) {
+            Surface(
+                onClick = onClick,
+                shape = RoundedCornerShape(corner),
+                color = container,
+                contentColor = contentColor,
+                modifier = Modifier.size(width = width, height = height),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = label,
+                        modifier = Modifier.size(ControlBarPlayIconSize),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private val ControlBarPlayHeight = 34.dp
+private val ControlBarPlayIconSize = 20.dp
+private const val ControlBarPlayingWidthRatio = 1.24f
+private const val ControlBarPlayingCornerRatio = 0.29f
 
 /**
  * 内嵌时 56dp:360dp 宽的屏上画面约 202dp 高,顶上返回键占 56、底下一行控制条约 68,

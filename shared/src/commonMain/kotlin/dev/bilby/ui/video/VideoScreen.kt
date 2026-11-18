@@ -1,6 +1,7 @@
 package dev.bilby.ui.video
 
 import dev.bilby.ui.BackHandler
+import dev.bilby.ui.DesktopIslandSurface
 import dev.bilby.ui.LocalPlaybackHost
 import dev.bilby.ui.LocalSystemActions
 import dev.bilby.ui.LocalWindowCaption
@@ -33,9 +34,13 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.shape.CornerSize
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -1302,59 +1307,122 @@ fun VideoScreen(
             val panelWidth = (draggingWidth ?: panelPrefs?.widthDp?.dp ?: defaultPanelWidth)
                 .coerceIn(minPanelWidth, maxPanelWidth)
 
-            Row(modifier = Modifier.fillMaxSize()) {
-                // **左栏整列都是播放器**,画面按比例居中在里面,四周是它自己的黑底。
-                //
-                // 原先这里给的是 `fillMaxWidth().aspectRatio(16:9)`,于是画面只有左栏宽度的
-                // 九分之十六那么高,在更高的列里垂直居中——上下各露出一条页面底色。那条白带
-                // 才是"横屏不沉浸"的真身,和根容器的 inset 无关。
-                Box(Modifier.weight(1f).fillMaxHeight()) {
-                    playerPane(Modifier.fillMaxSize())
-                    SidePaneDismissLayer(sidePane)
-                    // 桌面双栏下左栏顶边在左上返回键与右上画中画/分享键之间的空白作为窗口拖动带(照 Piko)。
-                    if (!immersive && LocalWindowCaption.current != null) {
-                        Spacer(
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .fillMaxWidth()
-                                .padding(start = 64.dp, end = 120.dp)
-                                .height(CaptionDragHeight)
-                                .windowDragArea(!locked && !speedController.active && !sidePane.isOpen),
-                        )
-                    }
-                }
-                // 文字这一栏躲开状态栏与刘海,**但不躲 start 那一侧**:它的左边挨着的是播放器,
-                // 不是屏幕边缘,垫了就在画面和简介之间劈出一道缝。
-                //
-                // **也不躲底部,同竖排。** 列表铺到屏幕底边,手势条的高度由列表自己的底部留白和
-                // 评论区的 FAB 各自让(它们量的是 navigationBars)。这一栏替它们躲掉的话 inset 被
-                // 消费成 0,列表在手势条上方就被切断,滑到底也碰不到屏幕下沿。
-                if (!immersive) {
+            val desktopFramed = !immersive && LocalWindowCaption.current != null
+            val frameBezel = if (desktopFramed) Spacing.Tight else 0.dp
+            val leftPlayerShape = when {
+                immersive -> RectangleShape
+                desktopFramed -> MaterialTheme.shapes.large
+                else -> MaterialTheme.shapes.large.copy(
+                    topStart = CornerSize(0.dp),
+                    bottomStart = CornerSize(0.dp),
+                )
+            }
+            // 桌面端对齐首页导航与 ListDetail 内容岛：outer surfaceContainer 底框 + 8dp 顶栏拖拽边及四周间隙，
+            // 左右两栏分别收在 shapes.large(16dp) 圆角岛内；移动端保持全出血 MD3（仅横屏右缘包裹 16dp 圆角）。
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        when {
+                            immersive -> Color.Black
+                            desktopFramed -> MaterialTheme.colorScheme.surfaceContainer
+                            else -> MaterialTheme.colorScheme.surface
+                        },
+                    ),
+            ) {
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(frameBezel)
+                        .then(
+                            if (desktopFramed) {
+                                Modifier.windowDragArea(!locked && !speedController.active && !sidePane.isOpen)
+                            } else {
+                                Modifier
+                            },
+                        ),
+                )
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(start = frameBezel, end = frameBezel, bottom = frameBezel),
+                ) {
+                    // **左栏整列都是播放器**,画面按比例居中在里面,四周是它自己的黑底。
                     Box(
                         Modifier
-                            .width(panelWidth)
+                            .weight(1f)
                             .fillMaxHeight()
-                            .windowInsetsPadding(
-                                safeInsets.only(WindowInsetsSides.End + WindowInsetsSides.Top),
-                            ),
+                            .clip(leftPlayerShape),
                     ) {
-                        // 右栏二级面板盖上来时撤下底层标签栏的拖动区与按钮登记,交由面板顶栏接管。
-                        CompositionLocalProvider(
-                            LocalWindowCaption provides LocalWindowCaption.current.takeIf { !sidePane.isOpen },
-                        ) {
-                            tabsPane(Modifier.fillMaxSize())
+                        playerPane(Modifier.fillMaxSize())
+                        SidePaneDismissLayer(sidePane)
+                        // 桌面双栏下左栏顶边在左上返回键与右上画中画/分享键之间的空白作为窗口拖动带(照 Piko)。
+                        if (desktopFramed) {
+                            Spacer(
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .fillMaxWidth()
+                                    .padding(start = 64.dp, end = 120.dp)
+                                    .height(CaptionDragHeight)
+                                    .windowDragArea(!locked && !speedController.active && !sidePane.isOpen),
+                            )
                         }
-                        SidePaneLayer(sidePane)
-                        SplitPaneResizeHandle(
-                            onDrag = { deltaDp ->
-                                draggingWidth = ((draggingWidth ?: panelWidth) - deltaDp)
-                                    .coerceIn(minPanelWidth, maxPanelWidth)
-                            },
-                            onDragStopped = {
-                                draggingWidth?.let { onPanelWidthChange(it.value) }
-                            },
-                            modifier = Modifier.align(Alignment.CenterStart),
-                        )
+                    }
+                    // 文字这一栏躲开状态栏与刘海,**但不躲 start 那一侧**:它的左边挨着的是播放器,
+                    // 不是屏幕边缘,垫了就在画面和简介之间劈出一道缝。
+                    //
+                    // **也不躲底部,同竖排。** 列表铺到屏幕底边,手势条的高度由列表自己的底部留白和
+                    // 评论区的 FAB 各自让(它们量的是 navigationBars)。这一栏替它们躲掉的话 inset 被
+                    // 消费成 0,列表在手势条上方就被切断,滑到底也碰不到屏幕下沿。
+                    if (!immersive) {
+                        if (desktopFramed) {
+                            Spacer(Modifier.width(Spacing.Tight))
+                        }
+                        val rightContent: @Composable () -> Unit = {
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .windowInsetsPadding(
+                                        safeInsets.only(WindowInsetsSides.End + WindowInsetsSides.Top),
+                                    ),
+                            ) {
+                                // 右栏二级面板盖上来时撤下底层标签栏的拖动区与按钮登记,交由面板顶栏接管。
+                                CompositionLocalProvider(
+                                    LocalWindowCaption provides LocalWindowCaption.current.takeIf { !sidePane.isOpen },
+                                ) {
+                                    tabsPane(Modifier.fillMaxSize())
+                                }
+                                SidePaneLayer(sidePane)
+                                SplitPaneResizeHandle(
+                                    onDrag = { deltaDp ->
+                                        draggingWidth = ((draggingWidth ?: panelWidth) - deltaDp)
+                                            .coerceIn(minPanelWidth, maxPanelWidth)
+                                    },
+                                    onDragStopped = {
+                                        draggingWidth?.let { onPanelWidthChange(it.value) }
+                                    },
+                                    modifier = Modifier.align(Alignment.CenterStart),
+                                )
+                            }
+                        }
+                        if (desktopFramed) {
+                            DesktopIslandSurface(
+                                modifier = Modifier
+                                    .width(panelWidth)
+                                    .fillMaxHeight(),
+                                content = rightContent,
+                            )
+                        } else {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surface,
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .width(panelWidth)
+                                    .fillMaxHeight(),
+                                content = rightContent,
+                            )
+                        }
                     }
                 }
             }

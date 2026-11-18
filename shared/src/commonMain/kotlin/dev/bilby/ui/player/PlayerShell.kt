@@ -53,7 +53,9 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -65,6 +67,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,11 +83,13 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -151,9 +156,12 @@ data class PlayerGestureOptions(
 class PlayerShellScope internal constructor(
     private val box: BoxScope,
     val isPlaying: Boolean,
+    val playWhenReady: Boolean,
     val isFullscreen: Boolean,
     val locked: Boolean,
     val controlsVisible: Boolean,
+    val canPrevious: Boolean,
+    val canNext: Boolean,
     /** 显示用位置:拖拽中是拖到的目标,否则是播放器当前位置。 */
     val positionMillis: Long,
     /** 已缓冲到哪儿,画在进度条上。拖拽中不跟着拖走 —— 它说的是流,不是手指。 */
@@ -176,6 +184,10 @@ class PlayerShellScope internal constructor(
 
     fun togglePlayPause() = actions.togglePlayPause()
 
+    fun seekToPrevious() = actions.seekToPrevious()
+
+    fun seekToNext() = actions.seekToNext()
+
     /** 进度条按下:先暂停,松手时按 [onSeekFinished] 决定要不要恢复。 */
     fun onSeekStart() = actions.seekStart()
 
@@ -191,6 +203,8 @@ internal class PlayerShellActions(
     val keepAwake: () -> Unit,
     val setMenuOpen: (Boolean) -> Unit,
     val togglePlayPause: () -> Unit,
+    val seekToPrevious: () -> Unit,
+    val seekToNext: () -> Unit,
     val seekStart: () -> Unit,
     val seekTo: (Long) -> Unit,
     val seekFinished: () -> Unit,
@@ -396,7 +410,10 @@ fun PlayerShell(
     // 手势的反馈只有画面正中那个浮层,而横屏时手指往往正压在它上面。触感补的是"这一下认了"
     // 这件事:长按真的进了加速、锁真的合上了、拖到取消区了。
     val haptics = LocalHapticFeedback.current
+    val focusManager = LocalFocusManager.current
+    val latestMenuOpen by rememberUpdatedState(menuOpen)
     val playback = LocalPlaybackHost.current
+    val playbackState by playback.state.collectAsStateWithLifecycle()
     val brightness = rememberWindowBrightness()
     val volume = rememberMediaVolume()
     val systemStatus = rememberPlayerSystemStatus(enabled = isFullscreen && !pip)
@@ -577,6 +594,14 @@ fun PlayerShell(
         keepAwake = keepAwake,
         setMenuOpen = { menuOpen = it },
         togglePlayPause = togglePlayPause,
+        seekToPrevious = {
+            player.seekToPrevious()
+            keepAwake()
+        },
+        seekToNext = {
+            player.seekToNext()
+            keepAwake()
+        },
         seekStart = {
             resumeAfterDrag = player.isPlaying
             player.pause()
@@ -633,9 +658,12 @@ fun PlayerShell(
         val scope = PlayerShellScope(
             box = this,
             isPlaying = isPlaying,
+            playWhenReady = playWhenReady,
             isFullscreen = isFullscreen,
             locked = locked,
             controlsVisible = controlsVisible,
+            canPrevious = playbackState.queue?.canPrevious == true,
+            canNext = playbackState.queue?.canNext == true,
             positionMillis = displayPosition,
             bufferedPositionMillis = bufferedPosition,
             controlBarHeight = controlBarHeight,
@@ -795,6 +823,11 @@ fun PlayerShell(
                     }
                     detectTapGestures(
                         onTap = {
+                            if (latestMenuOpen) {
+                                focusManager.clearFocus()
+                                keepAwake()
+                                return@detectTapGestures
+                            }
                             if (pointerSource.isTouchLike) {
                                 controlsVisible = !controlsVisible
                             } else {
@@ -1061,17 +1094,25 @@ fun PlayerShell(
             shownLevelHud?.let { PlayerLevelEdgeBar(hud = it, large = largePlayer && !pip) }
         }
 
-        // 双击:贴着点下去的那一侧。方向在退场时也要留住,否则淡出那几帧会跳到另一边。
+        // 双击与方向键快进/快退胶囊：与音量/亮度边栏同样按方向贴靠左右两侧边缘，进出滑移节奏一致。
         var shownNudge by remember { mutableStateOf(0L) }
         seekNudgeMillis?.let { shownNudge = it }
+        val nudgeForward = shownNudge >= 0
+        val nudgeInsetSide = if (nudgeForward) WindowInsetsSides.End else WindowInsetsSides.Start
         AnimatedVisibility(
             visible = seekNudgeMillis != null,
-            enter = fadeIn(effectsSpec),
-            exit = fadeOut(effectsSpec),
+            enter = slideInHorizontally(spatialOffsetSpec) { if (nudgeForward) it / 2 else -it / 2 } + fadeIn(effectsSpec),
+            exit = slideOutHorizontally(spatialOffsetSpec) { if (nudgeForward) it / 2 else -it / 2 } + fadeOut(effectsSpec),
             modifier = Modifier
-                .align(if (shownNudge >= 0) Alignment.CenterEnd else Alignment.CenterStart)
-                .fillMaxHeight()
-                .fillMaxWidth(DoubleTapArcFraction),
+                .align(if (nudgeForward) Alignment.CenterEnd else Alignment.CenterStart)
+                .then(
+                    if (isFullscreen) {
+                        Modifier.windowInsetsPadding(WindowInsets.barsAndCutout.only(nudgeInsetSide))
+                    } else {
+                        Modifier
+                    },
+                )
+                .padding(horizontal = Spacing.Comfortable),
         ) {
             DoubleTapSeekHint(shownNudge)
         }
@@ -1103,7 +1144,7 @@ fun PlayerShell(
                         Brush.verticalGradient(listOf(ControlScrimBottom, Color.Transparent)),
                     )
                     .windowInsetsPadding(WindowInsets.barsAndCutout)
-                    .padding(end = Spacing.Comfortable, bottom = Spacing.Comfortable),
+                    .padding(end = Spacing.Tight, bottom = Spacing.Comfortable),
             ) {
                 val exitFullscreenLabel = stringResource(Res.string.player_exit_fullscreen)
                 PlayerTooltip(exitFullscreenLabel, shortcut = "Esc", anchorAbove = false) {
@@ -1124,14 +1165,14 @@ fun PlayerShell(
                     // 中间偏右。标题吃掉全部剩余宽度,动作自然被顶到边上。
                     modifier = Modifier.weight(1f),
                 )
+                PlayerStatusCluster(
+                    status = systemStatus,
+                    modifier = Modifier.padding(horizontal = Spacing.Tight),
+                )
                 // 顶栏右端的槽。**切集放这里,不放控制条** —— 控制条上的东西回答的都是"这个
                 // 播放器现在怎么放"(倍速、清晰度、字幕、弹幕、全屏),而切集回答的是"在放
                 // 哪一条",和它左边那个标题是同一类。风格指南 §4.3 那条判据问的正是这个。
                 topBarActions()
-                PlayerStatusCluster(
-                    status = systemStatus,
-                    modifier = Modifier.padding(start = Spacing.Tight),
-                )
             }
         }
 
@@ -1239,23 +1280,45 @@ fun PlayerShell(
         //
         // **横划进退读数在屏时让开。** 两者都在正中,播放键画在读数之后,控件还没收起时开始横划,
         // 暂停那个方块就压在进退读数上。手势进行中没有人要去点播放键,松手后读数淡出、它再回来。
+        // 触屏模式保留正中播放键；键鼠模式下播放键已移至底部控制条最左端，不再遮挡视频正中，
+        // 仅在加载缓冲时于正中保留轻量化指示器。
         AnimatedVisibility(
-            // Android 小窗里不画:那里的播放键是系统给的。桌面小窗照画,和平时同一颗。
+            // Android 小窗里不画:那里的播放键是系统给的。桌面小窗在触屏模式下照画，键鼠模式走底栏左端播放键。
             visible = (!pip || pipWindow != null) && seekHud == null &&
                 speedController?.active != true &&
-                ((controlsVisible && !locked) || loadingVisible || flashVisible),
+                if (pointerSource.isTouchLike) {
+                    (controlsVisible && !locked) || loadingVisible || flashVisible
+                } else {
+                    loadingVisible
+                },
             enter = scaleIn(scaleSpec, initialScale = CenterButtonEnterScale) + fadeIn(effectsSpec),
             exit = scaleOut(scaleSpec, targetScale = CenterButtonEnterScale) + fadeOut(effectsSpec),
             modifier = Modifier.align(Alignment.Center).hoverable(controlsHover),
         ) {
-            CenterPlayButton(
-                isPlaying = playWhenReady,
-                loading = loadingVisible,
-                large = isFullscreen && !pip,
-                onClick = {
-                    togglePlayPause()
-                },
-            )
+            if (pointerSource.isTouchLike) {
+                CenterPlayButton(
+                    isPlaying = playWhenReady,
+                    loading = loadingVisible,
+                    large = isFullscreen && !pip,
+                    onClick = {
+                        togglePlayPause()
+                    },
+                )
+            } else {
+                Surface(
+                    shape = CircleShape,
+                    color = mediaControlContainer(),
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(if (isFullscreen && !pip) 56.dp else 44.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        LoadingIndicator(
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(if (isFullscreen && !pip) 40.dp else 32.dp),
+                        )
+                    }
+                }
+            }
         }
 
         // 控制条贴着下边缘,所以从下边缘进出,幅度同顶栏:滑半个栏高加淡入。
@@ -1328,7 +1391,7 @@ private const val StatusSecondaryAlpha = 0.88f
 private val ChargingAccentColor = Color(0xFF8CE99A)
 
 /**
- * 全屏顶栏最右端的系统状态胶囊:网络类别、电量与充电闪电、当前时间(`HH:mm`)。
+ * 全屏顶栏操作按钮左侧的系统状态胶囊:当前时间(`HH:mm`)、网络类别、电量与充电闪电。
  *
  * 系统状态栏在全屏下已隐藏,此胶囊随播放器控件一同显隐;各项之间仅用 `8.dp` 间距分隔,不出现中点符号。
  */
@@ -1354,6 +1417,16 @@ private fun PlayerStatusCluster(
                 vertical = StatusClusterVerticalPadding,
             ),
     ) {
+        if (hasTime) {
+            Text(
+                text = status.timeText,
+                style = MaterialTheme.typography.labelMedium.tabular,
+                color = FixedColors.OnMedia,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+
         if (hasNetwork) {
             val isOffline = status.network == NetworkKind.Offline
             val netColor = if (isOffline) {
@@ -1429,16 +1502,6 @@ private fun PlayerStatusCluster(
                     softWrap = false,
                 )
             }
-        }
-
-        if (hasTime) {
-            Text(
-                text = status.timeText,
-                style = MaterialTheme.typography.labelMedium.tabular,
-                color = FixedColors.OnMedia,
-                maxLines = 1,
-                softWrap = false,
-            )
         }
     }
 }

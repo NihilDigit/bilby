@@ -15,23 +15,32 @@ import dev.bilby.ui.player.PlayerIconButton
 import dev.bilby.ui.player.PlayerSidePanel
 import dev.bilby.ui.player.PlayerSidePanelHeader
 import dev.bilby.ui.player.PlayerTooltip
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ToggleButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -42,8 +51,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import dev.bilby.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
@@ -56,6 +67,7 @@ import dev.bilby.player.audioQualityLabel
 import dev.bilby.resources.*
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.rememberClockFont
 import dev.bilby.ui.theme.tabular
 import dev.bilby.ui.player.SleepTimerCompactSection
 import dev.bilby.ui.player.SleepTimerStandaloneContent
@@ -109,10 +121,11 @@ internal fun PlayerSettingsContent(
     /** 宿主是整屏高的横屏右侧栏:单开倍速时铺开大号读数舞台填满纵向空间,竖屏底部面板不受影响。 */
     fullHeightHost: Boolean = false,
 ) {
-    if (only == PlayerSettingsSection.Speed && fullHeightHost) {
+    if (only == PlayerSettingsSection.Speed) {
         ExpandedSpeedPanel(
             speed = speed,
             onSpeedChange = onSpeedChange,
+            fillHeight = fullHeightHost,
             modifier = modifier,
         )
         return
@@ -280,18 +293,131 @@ private fun playerSettingsTitle(only: PlayerSettingsSection?): String = stringRe
 )
 
 /**
- * 横屏侧栏单独打开倍速时的整高排布。
- *
- * 不套大块容器卡片、也不加多余的 tonal 按钮抢视觉重心:用安静的无底色大号等宽读数配连续滑块与五格快捷档,
- * 借助上下弹性留白在侧栏纵向空间里自然居中,消除顶部挤成一条、底下大片死白的失衡感。
+ * 单独打开倍速时的 M3E 精调面板：
+ * 顶层 tonal 卡片承载大号等宽读数、±0.05x 步进微调按钮、一键复位 1x 与连续无挡点滑杆，
+ * 下方配两行四列常用快捷倍速；兼顾整高侧栏居中排布与底部弹出面板自适应滚动。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ExpandedSpeedPanel(
     speed: Float,
     onSpeedChange: (Float) -> Unit,
+    fillHeight: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val hundredths = speedHundredths(speed)
+    val isDefault = abs(speed - 1f) < 0.005f
+    val lessLabel = stringResource(Res.string.player_speed_decrease)
+    val moreLabel = stringResource(Res.string.player_speed_increase)
+    val resetLabel = stringResource(Res.string.player_speed_reset)
+    val defaultLabel = stringResource(Res.string.player_speed_default)
+
+    val panelBody: @Composable () -> Unit = {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Comfortable),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    FilledTonalIconButton(
+                        onClick = { onSpeedChange(stepFineSpeed(speed, -1)) },
+                        enabled = hundredths > SpeedMinHundredths,
+                        shapes = IconButtonDefaults.shapes(),
+                        modifier = Modifier.semantics { contentDescription = lessLabel },
+                    ) {
+                        Icon(Icons.Filled.Remove, contentDescription = null)
+                    }
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(
+                                text = speedNumber(hundredths),
+                                style = TextStyle(
+                                    fontFamily = rememberClockFont(),
+                                    fontSize = MaterialTheme.typography.displayMedium.fontSize,
+                                    lineHeight = MaterialTheme.typography.displayMedium.lineHeight,
+                                    fontFeatureSettings = "tnum",
+                                ),
+                                color = if (isDefault) {
+                                    MaterialTheme.colorScheme.onSurface
+                                } else {
+                                    MaterialTheme.colorScheme.primary
+                                },
+                                maxLines = 1,
+                                modifier = Modifier.alignByBaseline(),
+                            )
+                            Text(
+                                text = "x",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                modifier = Modifier.alignByBaseline().padding(start = 2.dp),
+                            )
+                        }
+                        if (isDefault) {
+                            Text(
+                                text = defaultLabel,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = Spacing.Hair),
+                            )
+                        } else {
+                            TextButton(
+                                onClick = { onSpeedChange(1f) },
+                                contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = 0.dp),
+                                modifier = Modifier.height(SpeedResetActionHeight),
+                            ) {
+                                Text(resetLabel, style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
+                    FilledTonalIconButton(
+                        onClick = { onSpeedChange(stepFineSpeed(speed, 1)) },
+                        enabled = hundredths < SpeedMaxHundredths,
+                        shapes = IconButtonDefaults.shapes(),
+                        modifier = Modifier.semantics { contentDescription = moreLabel },
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(Spacing.Cozy))
+                FineSpeedSlider(
+                    speed = speed,
+                    onSpeedChange = onSpeedChange,
+                    showTicks = true,
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(Spacing.Comfortable))
+        SpeedPresetGrid(speed = speed, onSpeedChange = onSpeedChange)
+    }
+
+    if (!fillHeight) {
+        Column(
+            modifier = modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+        ) {
+            panelBody()
+            Spacer(modifier = Modifier.height(Spacing.Cozy))
+        }
+        return
+    }
+
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
@@ -303,92 +429,20 @@ private fun ExpandedSpeedPanel(
             }
             return@BoxWithConstraints
         }
-        val clamped = speed.coerceIn(SpeedSliderRange.start, SpeedSliderRange.endInclusive)
-        val isDefault = abs(speed - 1f) < 0.01f
-
-        Column(modifier = Modifier.fillMaxSize()) {
-            Spacer(modifier = Modifier.weight(0.8f))
-
-            Row(
-                verticalAlignment = Alignment.Bottom,
-                modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .clip(MaterialTheme.shapes.medium)
-                    .then(
-                        if (!isDefault) {
-                            Modifier.clickable(role = Role.Button) { onSpeedChange(1f) }
-                        } else {
-                            Modifier
-                        },
-                    )
-                    .padding(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
-            ) {
-                Text(
-                    text = speedNumber(speedHundredths(speed)),
-                    style = MaterialTheme.typography.displaySmall.copy(fontFeatureSettings = "tnum"),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    modifier = Modifier.alignByBaseline(),
-                )
-                Text(
-                    text = "x",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    modifier = Modifier.alignByBaseline().padding(start = 2.dp),
-                )
-            }
-
-            Spacer(modifier = Modifier.height(Spacing.Loose))
-
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Slider(
-                    value = clamped,
-                    onValueChange = { raw ->
-                        val stepped = ((raw / SpeedSliderStep).roundToInt() * SpeedSliderStep)
-                            .coerceIn(SpeedSliderRange.start, SpeedSliderRange.endInclusive)
-                        if (abs(stepped - speed) >= 0.01f) onSpeedChange(stepped)
-                    },
-                    valueRange = SpeedSliderRange,
-                    steps = SpeedSliderSteps,
-                )
-                Row(
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.Hair),
-                ) {
-                    SpeedScaleTicks.forEach { tick ->
-                        val active = abs(tick - speed) < 0.01f
-                        Text(
-                            text = formatSpeed(tick),
-                            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
-                            color = if (active) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(Spacing.Comfortable))
-
-            ConnectedChoices(
-                options = SpeedQuickPresets,
-                selected = { abs(it - speed) < 0.01f },
-                onSelect = onSpeedChange,
-                label = ::formatSpeed,
-            )
-
-            Spacer(modifier = Modifier.weight(1.2f))
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Spacer(modifier = Modifier.weight(0.75f))
+            panelBody()
+            Spacer(modifier = Modifier.weight(1.1f))
         }
     }
 }
 
 /**
- * 倍速(竖屏面板与整块设置面板内的紧凑节):连续刻度滑块(0.5x–3.5x,0.25x 步进)配一行五格高频快捷档。
+ * 倍速(整块播放设置面板内的紧凑节): 行内 ±0.05x 微调、连续精调滑杆与 2×4 快捷预设，与单独面板共用精调能力。
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -397,36 +451,145 @@ private fun SpeedSection(
     onSpeedChange: (Float) -> Unit,
     titled: Boolean,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    val hundredths = speedHundredths(speed)
+    val isDefault = abs(speed - 1f) < 0.005f
+    val lessLabel = stringResource(Res.string.player_speed_decrease)
+    val moreLabel = stringResource(Res.string.player_speed_increase)
+    val resetLabel = stringResource(Res.string.player_speed_reset)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = if (titled) Spacing.Cozy else Spacing.Hair, bottom = Spacing.Hair),
+    ) {
         if (titled) {
-            SectionTitle(stringResource(Res.string.player_speed), Modifier.weight(1f))
+            Text(
+                stringResource(Res.string.player_speed),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
         } else {
             Spacer(Modifier.weight(1f))
         }
+        if (!isDefault) {
+            TextButton(
+                onClick = { onSpeedChange(1f) },
+                contentPadding = PaddingValues(horizontal = Spacing.Tight, vertical = 0.dp),
+                modifier = Modifier.height(SpeedCompactStepperSize),
+            ) {
+                Text(resetLabel, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        FilledTonalIconButton(
+            onClick = { onSpeedChange(stepFineSpeed(speed, -1)) },
+            enabled = hundredths > SpeedMinHundredths,
+            shapes = IconButtonDefaults.shapes(),
+            modifier = Modifier
+                .size(SpeedCompactStepperSize)
+                .semantics { contentDescription = lessLabel },
+        ) {
+            Icon(Icons.Filled.Remove, contentDescription = null, modifier = Modifier.size(Dimens.IconInline))
+        }
         Text(
             formatSpeed(speed),
-            style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = if (titled) Modifier else Modifier.padding(top = Spacing.Hair),
+            style = MaterialTheme.typography.titleSmall.tabular,
+            color = if (isDefault) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = Spacing.Tight),
         )
+        FilledTonalIconButton(
+            onClick = { onSpeedChange(stepFineSpeed(speed, 1)) },
+            enabled = hundredths < SpeedMaxHundredths,
+            shapes = IconButtonDefaults.shapes(),
+            modifier = Modifier
+                .size(SpeedCompactStepperSize)
+                .semantics { contentDescription = moreLabel },
+        ) {
+            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(Dimens.IconInline))
+        }
     }
-    val sliderValue = speed.coerceIn(SpeedSliderRange.start, SpeedSliderRange.endInclusive)
-    Slider(
-        value = sliderValue,
-        onValueChange = { raw ->
-            val stepped = ((raw / SpeedSliderStep).roundToInt() * SpeedSliderStep)
-                .coerceIn(SpeedSliderRange.start, SpeedSliderRange.endInclusive)
-            if (abs(stepped - speed) >= 0.01f) onSpeedChange(stepped)
-        },
-        valueRange = SpeedSliderRange,
-        steps = SpeedSliderSteps,
-    )
-    ConnectedChoices(
-        options = SpeedQuickPresets,
-        selected = { abs(it - speed) < 0.01f },
-        onSelect = onSpeedChange,
-        label = ::formatSpeed,
-    )
+    FineSpeedSlider(speed = speed, onSpeedChange = onSpeedChange, showTicks = false)
+    SpeedPresetGrid(speed = speed, onSpeedChange = onSpeedChange)
+}
+
+@Composable
+private fun FineSpeedSlider(
+    speed: Float,
+    onSpeedChange: (Float) -> Unit,
+    showTicks: Boolean,
+) {
+    val clamped = speed.coerceIn(SpeedSliderRange.start, SpeedSliderRange.endInclusive)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // 连续轨道不画密集刻度点，拖动时以 0.05x 精度实时吸附。
+        Slider(
+            value = clamped,
+            onValueChange = { raw ->
+                val snapped = snapFineSpeed(raw)
+                if (abs(snapped - speed) >= 0.005f) onSpeedChange(snapped)
+            },
+            valueRange = SpeedSliderRange,
+        )
+        if (showTicks) {
+            Row(
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Hair),
+            ) {
+                SpeedScaleTicks.forEach { tick ->
+                    val active = abs(tick - speed) < 0.01f
+                    Text(
+                        text = formatSpeed(tick),
+                        style = MaterialTheme.typography.labelSmall.tabular,
+                        color = if (active) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier
+                            .clip(MaterialTheme.shapes.extraSmall)
+                            .clickable(role = Role.Button) { onSpeedChange(tick) }
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun SpeedPresetGrid(
+    speed: Float,
+    onSpeedChange: (Float) -> Unit,
+) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        SpeedQuickPresets.chunked(SpeedPresetColumns).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                row.forEach { preset ->
+                    ToggleButton(
+                        checked = abs(preset - speed) < 0.01f,
+                        onCheckedChange = { onSpeedChange(preset) },
+                        contentPadding = PaddingValues(horizontal = Spacing.Hair),
+                        modifier = Modifier
+                            .weight(1f)
+                            .widthIn(min = 0.dp)
+                            .semantics { role = Role.RadioButton },
+                    ) {
+                        Text(
+                            formatSpeed(preset),
+                            style = MaterialTheme.typography.labelLarge.tabular,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -613,12 +776,28 @@ private fun <T> ConnectedChoices(
     }
 }
 
-private val SpeedQuickPresets = listOf(0.75f, 1f, 1.25f, 1.5f, 2f)
-private val SpeedScaleTicks = listOf(0.5f, 1f, 1.5f, 2f, 2.5f, 3f, 3.5f)
-private val SpeedSliderRange = 0.5f..3.5f
-private const val SpeedSliderStep = 0.25f
-private const val SpeedSliderSteps = 11
-private val CompactFallbackHeight = 220.dp
+private val SpeedQuickPresets = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 2.5f, 3f)
+private const val SpeedPresetColumns = 4
+private val SpeedScaleTicks = listOf(0.25f, 0.5f, 1f, 1.5f, 2f, 2.5f, 3f, 3.5f)
+private val SpeedSliderRange = 0.25f..3.5f
+private const val SpeedMinHundredths = 25
+private const val SpeedMaxHundredths = 350
+private const val SpeedFineStepHundredths = 5
+private val SpeedCompactStepperSize = 32.dp
+private val SpeedResetActionHeight = 28.dp
+private val CompactFallbackHeight = 260.dp
+
+private fun snapFineSpeed(raw: Float): Float {
+    val hundredths = ((raw * 100f / SpeedFineStepHundredths).roundToInt() * SpeedFineStepHundredths)
+        .coerceIn(SpeedMinHundredths, SpeedMaxHundredths)
+    return hundredths / 100f
+}
+
+private fun stepFineSpeed(current: Float, deltaSteps: Int): Float {
+    val base = speedHundredths(current)
+    val snapped = ((base.toFloat() / SpeedFineStepHundredths).roundToInt() + deltaSteps) * SpeedFineStepHundredths
+    return snapped.coerceIn(SpeedMinHundredths, SpeedMaxHundredths) / 100f
+}
 
 /**
  * 滚动弹幕显示区域的四档。存的是连续值(见 `SettingsStore.saveDanmakuScrollShowArea`),选中判定

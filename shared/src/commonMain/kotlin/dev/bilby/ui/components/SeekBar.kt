@@ -200,6 +200,7 @@ fun SeekBar(
     val fraction = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
     // 拖动起点要的是按下那一刻的读数:pointerInput 里捕获的是启动时的值,经 state 取新的。
     val latestFraction by rememberUpdatedState(fraction)
+    val isTouchLike by rememberUpdatedState(LocalPointerSource.current.isTouchLike)
     val bufferedFraction =
         if (duration > 0) (bufferedPosition.toFloat() / duration).coerceIn(0f, 1f) else 0f
     val label = stringResource(Res.string.player_progress)
@@ -249,14 +250,18 @@ fun SeekBar(
             }
             .pointerInput(duration) {
                 if (duration <= 0) return@pointerInput
-                var dragStartFraction = 0f
-                var accumulatedX = 0f
+                var dragFraction = 0f
+                var relativeMode = true
                 detectHorizontalDragGestures(
-                    onDragStart = {
+                    onDragStart = { offset ->
                         dragging = true
-                        dragStartFraction = latestFraction
-                        accumulatedX = 0f
+                        relativeMode = isTouchLike
                         onSeekStart()
+                        if (relativeMode) {
+                            dragFraction = latestFraction
+                        } else {
+                            onSeekTo(offset.x.toFraction().toPosition(duration))
+                        }
                     },
                     onDragEnd = {
                         dragging = false
@@ -266,12 +271,16 @@ fun SeekBar(
                         dragging = false
                         onSeekFinished()
                     },
-                    onHorizontalDrag = { _, dragAmount ->
-                        accumulatedX += dragAmount
-                        val usable = widthPx - insetPx * 2
-                        if (usable > 0f) {
-                            val target = dragStartFraction + accumulatedX / usable
-                            onSeekTo(target.coerceIn(0f, 1f).toPosition(duration))
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        if (relativeMode) {
+                            val usable = widthPx - insetPx * 2
+                            if (usable > 0f) {
+                                dragFraction = (dragFraction + dragAmount / usable).coerceIn(0f, 1f)
+                                onSeekTo(dragFraction.toPosition(duration))
+                            }
+                        } else {
+                            onSeekTo(change.position.x.toFraction().toPosition(duration))
                         }
                     },
                 )
