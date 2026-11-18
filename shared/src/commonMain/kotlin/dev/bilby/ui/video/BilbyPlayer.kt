@@ -5,7 +5,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -17,7 +16,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Edit
@@ -40,7 +38,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.bilby.player.PlayerHandle
 import dev.bilby.player.SleepTimerMode
@@ -84,6 +86,7 @@ import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.isAtLeast
 import dev.bilby.ui.rememberBilbyWindowSize
 import dev.bilby.ui.player.PlayerDanmakuLayer
+import dev.bilby.ui.player.PlayerProgressState
 import dev.bilby.ui.components.SeekBar
 import dev.bilby.ui.components.SeekBarSegment
 import dev.bilby.ui.theme.Breakpoints
@@ -230,8 +233,11 @@ fun BilbyPlayer(
     /** 是否在播放器画面内渲染长按倍速覆盖层;竖屏单栏内嵌时由外层画在画面下方,传 false。 */
     showSpeedOverlay: Boolean = true,
 ) {
-    /** 两栏布局:内嵌画面占整窗高度,控制条按全屏的尺寸排。 */
-    val twoPane = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    /** 两栏布局(含紧凑高度横屏):内嵌画面占整窗高度,控制条按全屏的尺寸排。 */
+    val windowSize = rememberBilbyWindowSize()
+    val isHeightCompact = LocalWindowInfo.current.containerSize.height < with(LocalDensity.current) { 480.dp.roundToPx() }
+    val twoPane = windowSize.isAtLeast(BilbyWindowSize.Expanded) ||
+        (windowSize == BilbyWindowSize.Medium && isHeightCompact)
     /** 播放设置面板开着没有。见 [PlayerSettingsContent]。 */
     var settingsOpen by remember { mutableStateOf(false) }
     // 开的是哪一段。关面板时不清:退场动画里内容要保持原样,下次打开会重新赋值。
@@ -301,41 +307,17 @@ fun BilbyPlayer(
             //
             // 二分查找,不逐帧线性扫:见 SubtitleCue.kt 上的注释。落在两句之间的空档里时是 null,
             // 什么都不画——句间停顿本来就没有字幕在念。
-            val cue = remember(subtitleCues, positionMillis) { subtitleCues.cueAt(positionMillis) }
-            // 让开控制条那一下要跟着控制条一起动。控制条自己是 spring 展开的([PlayerShell]),
-            // 字幕原先是硬切:点一下画面,控制条缓缓升起,而字幕已经在上一帧跳到了新位置。
-            // 用 spatial 那一档 —— 这是位移,不是透明度。
             val subtitleBottomTarget = if (controlsVisible && !locked) {
                 maxOf(SubtitleBottomWithControls, controlBarHeight + SubtitleControlsGap)
             } else {
                 SubtitleBottomBare
             }
-            val subtitleBottom by animateDpAsState(
-                targetValue = subtitleBottomTarget,
-                animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
-                label = "subtitle-bottom",
+            SubtitleOverlayLayer(
+                subtitleCues = subtitleCues,
+                progress = progressState,
+                subtitleBottomTarget = subtitleBottomTarget,
+                modifier = Modifier.align(Alignment.BottomCenter),
             )
-            cue?.let {
-                val subtitleShape = RoundedCornerShape(6.dp)
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = subtitleBottom)
-                        .padding(horizontal = Spacing.Loose),
-                ) {
-                    Text(
-                        it.text,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = FixedColors.OnMedia,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier
-                            .clip(subtitleShape)
-                            .background(FixedColors.ScrimOnMedia)
-                            .border(HudSpecularBorderWidth, HudSpecularBorderColor, subtitleShape)
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                    )
-                }
-            }
             if (matchesCurrentPage && danmakuPrefs.enabled && !pip && !locked && danmakuVotes.isNotEmpty()) {
                 val hasSubtitles = subtitleCues.isNotEmpty()
                 val voteBottom by animateDpAsState(
@@ -346,9 +328,9 @@ fun BilbyPlayer(
                 )
                 DanmakuVoteOverlay(
                     votes = danmakuVotes,
-                    positionMillis = positionMillis,
+                    positionMillis = { progressState.displayPositionMillis },
                     cid = danmakuCid,
-                    onVote = { voteId, optionIdx -> onVoteDanmaku(voteId, optionIdx, positionMillis) },
+                    onVote = onVoteDanmaku,
                     uiState = voteUiState,
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -371,12 +353,9 @@ fun BilbyPlayer(
             }
         },
         controlBar = {
-            val itemRemainingMillis = computeItemRemainingMillis(positionMillis, durationMillis, speed)
             PlayerControlBar(
                 segments = seekBarSegments,
-                position = positionMillis,
-                bufferedPosition = bufferedPositionMillis,
-                duration = durationMillis,
+                progress = progressState,
                 speed = speed,
                 qualities = qualities,
                 currentQuality = currentQuality,
@@ -385,7 +364,6 @@ fun BilbyPlayer(
                 audioOptions = audioOptions,
                 currentAudio = currentAudio,
                 sleepTimer = sleepTimer,
-                itemRemainingMillis = itemRemainingMillis,
                 hasSleepTimer = onSleepTimer != null,
                 isFullscreen = isFullscreen,
                 largePlayer = isFullscreen || twoPane,
@@ -422,8 +400,12 @@ fun BilbyPlayer(
                 settingsOpen = false
                 setMenuOpen(false)
             }
-            val itemRemainingMillis = computeItemRemainingMillis(positionMillis, durationMillis, speed)
             val settings: @Composable () -> Unit = {
+                val itemRemainingMillis = computeItemRemainingMillis(
+                    progressState.displayPositionMillis,
+                    progressState.durationMillis,
+                    speed,
+                )
                 PlayerSettingsContent(
                     speed = speed,
                     onSpeedChange = { speedController.applySpeed(it) },
@@ -453,6 +435,42 @@ fun BilbyPlayer(
 
 }
 
+@Composable
+private fun SubtitleOverlayLayer(
+    subtitleCues: List<SubtitleCue>,
+    progress: PlayerProgressState,
+    subtitleBottomTarget: Dp,
+    modifier: Modifier = Modifier,
+) {
+    val posMillis = progress.displayPositionMillis
+    val cue = remember(subtitleCues, posMillis) { subtitleCues.cueAt(posMillis) }
+    val subtitleBottom by animateDpAsState(
+        targetValue = subtitleBottomTarget,
+        animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+        label = "subtitle-bottom",
+    )
+    cue?.let {
+        val subtitleShape = MaterialTheme.shapes.small
+        Box(
+            modifier = modifier
+                .padding(bottom = subtitleBottom)
+                .padding(horizontal = Spacing.Loose),
+        ) {
+            Text(
+                it.text,
+                style = MaterialTheme.typography.bodyLarge,
+                color = FixedColors.OnMedia,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .clip(subtitleShape)
+                    .background(FixedColors.ScrimOnMedia)
+                    .border(HudSpecularBorderWidth, HudSpecularBorderColor, subtitleShape)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
 /**
  * 底部控制条。播放键不在这里,在画面正中(见 PlayerShell 的 CenterPlayButton)。
  *
@@ -473,9 +491,7 @@ fun BilbyPlayer(
 @Composable
 private fun PlayerControlBar(
     segments: List<SeekBarSegment>,
-    position: Long,
-    bufferedPosition: Long,
-    duration: Long,
+    progress: PlayerProgressState,
     speed: Float,
     qualities: List<QualityOption>,
     currentQuality: Int,
@@ -484,7 +500,6 @@ private fun PlayerControlBar(
     audioOptions: List<Int>,
     currentAudio: Int,
     sleepTimer: SleepTimerState,
-    itemRemainingMillis: Long?,
     hasSleepTimer: Boolean,
     isFullscreen: Boolean,
     /** 全屏,或双栏里那块占满整列高度的内嵌画面。只有这时才考虑宽排法。 */
@@ -513,15 +528,18 @@ private fun PlayerControlBar(
     pip: Boolean = false,
 ) {
     val container = Modifier.playerControlBar(isFullscreen)
+    val density = LocalDensity.current
+    var barWidth by remember { mutableStateOf(0.dp) }
+    var middleWidth by remember { mutableStateOf(0.dp) }
 
     val seekBar: @Composable (Modifier) -> Unit = { modifier ->
-        SeekBar(
-            position,
-            duration,
-            onSeekStart,
-            onSeekTo,
-            onSeekFinished,
-            modifier
+        BoundSeekBar(
+            progress = progress,
+            onSeekStart = onSeekStart,
+            onSeekTo = onSeekTo,
+            onSeekFinished = onSeekFinished,
+            segments = segments,
+            modifier = modifier
                 // **全屏时让开系统返回手势的那一条。** 全屏横屏下进度条两端就是屏幕左右边缘,
                 // 从边缘起手往里拖进度会被系统读成返回。内嵌不让:那时两端离屏幕边缘本来就只有
                 // 这条控制条的内边距,再收一截就短得难拖。
@@ -534,16 +552,15 @@ private fun PlayerControlBar(
                         Modifier
                     },
                 ),
-            bufferedPosition = bufferedPosition,
-            segments = segments,
         )
     }
 
     val isTouchLike = LocalPointerSource.current.isTouchLike
-    BoxWithConstraints(modifier = container) {
+    Box(
+        modifier = container.onSizeChanged { barWidth = with(density) { it.width.toDp() } },
+    ) {
         // 堆叠:全屏或双栏里占满整列的内嵌画面,进度条才值得独占一行。宽一档(≥480)再摆 chip。
         val stacked = largePlayer && !pip
-        val barWidth = maxWidth
         val wide = stacked && barWidth >= Breakpoints.StackedControlBar
         val roomy = barWidth >= InlineDanmakuBarMinWidth
         var composing by remember { mutableStateOf(false) }
@@ -555,12 +572,13 @@ private fun PlayerControlBar(
                 if (!isTouchLike) {
                     ControlBarPlayButton(isPlaying = playWhenReady, onClick = onTogglePlayPause)
                 }
-                TimeLabel(
-                    position,
+                BoundTimeLabel(
+                    progress = progress,
+                    isDuration = false,
                     modifier = Modifier.padding(start = if (isTouchLike) Spacing.Tight else Spacing.Hair),
                 )
                 seekBar(Modifier.weight(1f))
-                TimeLabel(duration, secondary = true, modifier = Modifier.padding(end = Spacing.Tight))
+                BoundTimeLabel(progress = progress, isDuration = true, secondary = true, modifier = Modifier.padding(end = Spacing.Tight))
             }
         } else if (!stacked) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -585,12 +603,13 @@ private fun PlayerControlBar(
                     if (!isTouchLike) {
                         ControlBarPlayButton(isPlaying = playWhenReady, onClick = onTogglePlayPause)
                     }
-                    TimeLabel(
-                        position,
+                    BoundTimeLabel(
+                        progress = progress,
+                        isDuration = false,
                         modifier = Modifier.padding(start = if (isTouchLike) Spacing.Tight else Spacing.Hair),
                     )
                     seekBar(Modifier.weight(1f))
-                    TimeLabel(duration, secondary = true, modifier = Modifier.padding(end = Spacing.Hair))
+                    BoundTimeLabel(progress = progress, isDuration = true, secondary = true, modifier = Modifier.padding(end = Spacing.Hair))
                     if (danmakuField != null) {
                         val label = stringResource(Res.string.danmaku_send)
                         PlayerTooltip(label, shortcut = "Enter") {
@@ -606,9 +625,10 @@ private fun PlayerControlBar(
                 // 全屏没有标签行,弹幕开关只能在这里;内嵌时它在标签行那枚胶囊里。
                 if (isFullscreen) DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
                 if (hasSleepTimer && sleepTimer.mode != SleepTimerMode.Off && !composing) {
-                    ActiveSleepTimerChip(
+                    BoundActiveSleepTimerChip(
                         sleepTimer = sleepTimer,
-                        itemRemainingMillis = itemRemainingMillis,
+                        progress = progress,
+                        speed = speed,
                         showLabel = barWidth >= Breakpoints.StackedControlBar,
                         onClick = { onOpenSettings(PlayerSettingsSection.SleepTimer) },
                     )
@@ -660,15 +680,19 @@ private fun PlayerControlBar(
                                 end = Spacing.Tight,
                             ),
                         ) {
-                            TimeLabel(position, large = true)
-                            TimeLabel(duration, large = true, secondary = true, prefix = " / ")
+                            BoundTimeLabel(progress = progress, isDuration = false, large = true)
+                            BoundTimeLabel(progress = progress, isDuration = true, large = true, secondary = true, prefix = " / ")
                         }
                         PlayerVolumeControl()
                     }
                     // 中间段(弹幕输入框 + 档位 chip)装进 weight(1f) 容器,保证右侧的弹幕开关、
                     // 设置按钮、全屏按钮由外层 Row 优先测量,任何字号/屏幕宽度下都不会被挤出屏幕。
-                    BoxWithConstraints(modifier = Modifier.weight(1f)) {
-                        val showChips = wide && !composing && maxWidth >= if (showField) 420.dp else 240.dp
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .onSizeChanged { middleWidth = with(density) { it.width.toDp() } },
+                    ) {
+                        val showChips = wide && !composing && middleWidth >= if (showField) 420.dp else 240.dp
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth(),
@@ -703,7 +727,7 @@ private fun PlayerControlBar(
                                     subtitleLabel = subtitleTracks.firstOrNull { it.lan == currentSubtitleLan }?.displayName,
                                     hasSubtitles = subtitleTracks.isNotEmpty(),
                                     sleepTimer = sleepTimer,
-                                    itemRemainingMillis = itemRemainingMillis,
+                                    progress = progress,
                                     hasSleepTimer = hasSleepTimer,
                                     showSleepLabel = barWidth >= Breakpoints.Medium,
                                     onOpenSection = onOpenSettings,
@@ -721,9 +745,10 @@ private fun PlayerControlBar(
                     val sleepActive = !wide && hasSleepTimer && sleepTimer.mode != SleepTimerMode.Off && !composing
                     val canFitSleepChip = barWidth >= Breakpoints.DynamicColumnMinWidth || danmakuField == null
                     if (sleepActive && canFitSleepChip) {
-                        ActiveSleepTimerChip(
+                        BoundActiveSleepTimerChip(
                             sleepTimer = sleepTimer,
-                            itemRemainingMillis = itemRemainingMillis,
+                            progress = progress,
+                            speed = speed,
                             showLabel = false,
                             onClick = { onOpenSettings(PlayerSettingsSection.SleepTimer) },
                         )
@@ -736,18 +761,42 @@ private fun PlayerControlBar(
     }
 }
 
+/** 隔离高频率进度条重绘，外层 [PlayerControlBar] 不会因播放位置变化而每 200ms/60fps 重组。 */
+@Composable
+private fun BoundSeekBar(
+    progress: PlayerProgressState,
+    onSeekStart: () -> Unit,
+    onSeekTo: (Long) -> Unit,
+    onSeekFinished: () -> Unit,
+    segments: List<SeekBarSegment>,
+    modifier: Modifier = Modifier,
+) {
+    SeekBar(
+        position = progress.displayPositionMillis,
+        duration = progress.durationMillis,
+        onSeekStart = onSeekStart,
+        onSeekTo = onSeekTo,
+        onSeekFinished = onSeekFinished,
+        modifier = modifier,
+        bufferedPosition = progress.bufferedPositionMillis,
+        segments = segments,
+    )
+}
+
 /**
  * 读数。当前位置用 onSurface,总时长用 onSurfaceVariant:两级明度,一眼先读到"现在在哪"。
  * 数字取等宽(`tnum`):秒数每跳一下,等宽之外的数字会让整行左右抖。
  */
 @Composable
-private fun TimeLabel(
-    millis: Long,
+private fun BoundTimeLabel(
+    progress: PlayerProgressState,
+    isDuration: Boolean,
     modifier: Modifier = Modifier,
     large: Boolean = false,
     secondary: Boolean = false,
     prefix: String = "",
 ) {
+    val millis = if (isDuration) progress.durationMillis else progress.displayPositionMillis
     Text(
         text = prefix + formatDurationMillis(millis),
         style = (if (large) MaterialTheme.typography.labelLarge else MaterialTheme.typography.labelMedium).tabular,
@@ -770,7 +819,7 @@ private fun SettingChips(
     subtitleLabel: String?,
     hasSubtitles: Boolean,
     sleepTimer: SleepTimerState,
-    itemRemainingMillis: Long?,
+    progress: PlayerProgressState,
     hasSleepTimer: Boolean,
     showSleepLabel: Boolean,
     onOpenSection: (PlayerSettingsSection) -> Unit,
@@ -818,32 +867,60 @@ private fun SettingChips(
         }
     }
     if (hasSleepTimer) {
-        val description = stringResource(Res.string.sleep_timer_off)
-        val activeLabel = sleepTimerLabel(sleepTimer, itemRemainingMillis)
-        val label = activeLabel?.takeIf { showSleepLabel }
-        PlayerTooltip(description) {
-            ControlButton(
-                expanded = activeLabel != null,
-                onClick = { onOpenSection(PlayerSettingsSection.SleepTimer) },
-                label = label,
-                icon = { tint ->
-                    if (label == null) {
-                        Icon(Icons.Filled.Bedtime, description, tint = tint, modifier = Modifier.size(ChipIconSize))
-                    }
-                },
-            )
-        }
+        BoundSettingSleepTimerChip(
+            sleepTimer = sleepTimer,
+            progress = progress,
+            speed = speed,
+            showSleepLabel = showSleepLabel,
+            onClick = { onOpenSection(PlayerSettingsSection.SleepTimer) },
+        )
+    }
+}
+
+@Composable
+private fun BoundSettingSleepTimerChip(
+    sleepTimer: SleepTimerState,
+    progress: PlayerProgressState,
+    speed: Float,
+    showSleepLabel: Boolean,
+    onClick: () -> Unit,
+) {
+    val description = stringResource(Res.string.sleep_timer_off)
+    val itemRemainingMillis = if (sleepTimer.mode == SleepTimerMode.EndOfItem) {
+        computeItemRemainingMillis(progress.displayPositionMillis, progress.durationMillis, speed)
+    } else {
+        null
+    }
+    val activeLabel = sleepTimerLabel(sleepTimer, itemRemainingMillis)
+    val label = activeLabel?.takeIf { showSleepLabel }
+    PlayerTooltip(description) {
+        ControlButton(
+            expanded = activeLabel != null,
+            onClick = onClick,
+            label = label,
+            icon = { tint ->
+                if (label == null) {
+                    Icon(Icons.Filled.Bedtime, description, tint = tint, modifier = Modifier.size(ChipIconSize))
+                }
+            },
+        )
     }
 }
 
 /** 窄控制条在定时激活时露出的紧凑提示 chip,没开定时时不占窄条位置;点它直达定时面板。 */
 @Composable
-private fun ActiveSleepTimerChip(
+private fun BoundActiveSleepTimerChip(
     sleepTimer: SleepTimerState,
-    itemRemainingMillis: Long?,
+    progress: PlayerProgressState,
+    speed: Float,
     showLabel: Boolean,
     onClick: () -> Unit,
 ) {
+    val itemRemainingMillis = if (sleepTimer.mode == SleepTimerMode.EndOfItem) {
+        computeItemRemainingMillis(progress.displayPositionMillis, progress.durationMillis, speed)
+    } else {
+        null
+    }
     val activeLabel = sleepTimerLabel(sleepTimer, itemRemainingMillis) ?: return
     val label = activeLabel.takeIf { showLabel }
     val description = stringResource(Res.string.sleep_timer_off)

@@ -1,13 +1,16 @@
 package dev.bilby.ui.video
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.ExperimentalMaterial3Api
 import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.components.BilbyIcons
@@ -45,10 +48,13 @@ import androidx.compose.material3.ToggleButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import dev.bilby.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -418,16 +424,19 @@ private fun ExpandedSpeedPanel(
         return
     }
 
-    BoxWithConstraints(
+    val density = LocalDensity.current
+    var panelHeight by remember { mutableStateOf(CompactFallbackHeight) }
+    Box(
         modifier = modifier
             .fillMaxSize()
+            .onSizeChanged { panelHeight = with(density) { it.height.toDp() } }
             .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
     ) {
-        if (maxHeight < CompactFallbackHeight) {
+        if (panelHeight < CompactFallbackHeight) {
             PanelColumn(Modifier) {
                 SpeedSection(speed = speed, onSpeedChange = onSpeedChange, titled = false)
             }
-            return@BoxWithConstraints
+            return@Box
         }
         Column(
             modifier = Modifier
@@ -485,9 +494,7 @@ private fun SpeedSection(
             onClick = { onSpeedChange(stepFineSpeed(speed, -1)) },
             enabled = hundredths > SpeedMinHundredths,
             shapes = IconButtonDefaults.shapes(),
-            modifier = Modifier
-                .size(SpeedCompactStepperSize)
-                .semantics { contentDescription = lessLabel },
+            modifier = Modifier.semantics { contentDescription = lessLabel },
         ) {
             Icon(Icons.Filled.Remove, contentDescription = null, modifier = Modifier.size(Dimens.IconInline))
         }
@@ -501,9 +508,7 @@ private fun SpeedSection(
             onClick = { onSpeedChange(stepFineSpeed(speed, 1)) },
             enabled = hundredths < SpeedMaxHundredths,
             shapes = IconButtonDefaults.shapes(),
-            modifier = Modifier
-                .size(SpeedCompactStepperSize)
-                .semantics { contentDescription = moreLabel },
+            modifier = Modifier.semantics { contentDescription = moreLabel },
         ) {
             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(Dimens.IconInline))
         }
@@ -679,8 +684,12 @@ private fun DanmakuSettingsSection(prefs: DanmakuPrefs, editor: DanmakuPrefsEdit
 
     SectionTitle(stringResource(Res.string.settings_danmaku_show_area))
     SectionNote(stringResource(Res.string.settings_danmaku_show_area_subtitle))
-    val areaLabels = DanmakuShowAreaSteps.associateWith {
-        stringResource(Res.string.settings_danmaku_show_area_value, (it * 100).roundToInt())
+    val areaLabel25 = stringResource(Res.string.settings_danmaku_show_area_value, 25)
+    val areaLabel50 = stringResource(Res.string.settings_danmaku_show_area_value, 50)
+    val areaLabel75 = stringResource(Res.string.settings_danmaku_show_area_value, 75)
+    val areaLabel100 = stringResource(Res.string.settings_danmaku_show_area_value, 100)
+    val areaLabels = remember(areaLabel25, areaLabel50, areaLabel75, areaLabel100) {
+        mapOf(0.25f to areaLabel25, 0.5f to areaLabel50, 0.75f to areaLabel75, 1f to areaLabel100)
     }
     ConnectedChoices(
         options = DanmakuShowAreaSteps,
@@ -754,24 +763,35 @@ private fun <T> ConnectedChoices(
     onSelect: (T) -> Unit,
     label: (T) -> String,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
+    ButtonGroup(
+        overflowIndicator = {},
+        modifier = Modifier.fillMaxWidth().selectableGroup(),
         horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
     ) {
         options.forEachIndexed { index, option ->
-            ToggleButton(
-                checked = selected(option),
-                onCheckedChange = { onSelect(option) },
-                shapes = when (index) {
-                    0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
-                    options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
-                    else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+            val interactionSource = remember { MutableInteractionSource() }
+            customItem(
+                buttonGroupContent = {
+                    ToggleButton(
+                        checked = selected(option),
+                        onCheckedChange = { onSelect(option) },
+                        shapes = when (index) {
+                            0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                            options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                            else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                        },
+                        contentPadding = PaddingValues(horizontal = Spacing.Hair),
+                        interactionSource = interactionSource,
+                        modifier = Modifier
+                            .weight(1f)
+                            .animateWidth(interactionSource)
+                            .semantics { role = Role.RadioButton },
+                    ) {
+                        Text(label(option), maxLines = 1, softWrap = false)
+                    }
                 },
-                contentPadding = PaddingValues(horizontal = Spacing.Hair),
-                modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
-            ) {
-                Text(label(option), maxLines = 1, softWrap = false)
-            }
+                menuContent = {},
+            )
         }
     }
 }
@@ -827,7 +847,10 @@ private fun <T> ChoiceGrid(
     label: (T) -> String,
     columns: Int = GridColumns,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        modifier = Modifier.selectableGroup(),
+    ) {
         options.chunked(columns).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
                 row.forEach { option ->

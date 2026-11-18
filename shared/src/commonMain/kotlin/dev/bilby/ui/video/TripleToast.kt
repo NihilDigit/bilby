@@ -45,6 +45,7 @@ fun TripleToast(outcome: TripleOutcome?, modifier: Modifier = Modifier) {
     val likeLabel = stringResource(Res.string.video_action_like)
     val coinLabel = stringResource(Res.string.video_action_coin)
     val favLabel = stringResource(Res.string.video_action_favorite)
+    val errorFallback = outcome?.errorRes?.let { stringResource(it) }
 
     // key 用 seq 而不是整个 outcome:连按两次得到相等的结果时,不带序号的 key 认成同一个值,
     // 第二次什么都不会弹。
@@ -53,6 +54,7 @@ fun TripleToast(outcome: TripleOutcome?, modifier: Modifier = Modifier) {
         val result = current.result
         shown = when {
             current.error != null -> current.error
+            errorFallback != null -> errorFallback
             result == null -> noneLabel
             result.liked && result.coined && result.favored -> allLabel
             result.allFailed -> noneLabel

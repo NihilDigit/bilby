@@ -45,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.movableContentOf
@@ -60,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import dev.bilby.stringResource
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -367,7 +369,7 @@ fun VideoScreen(
      * 输入层里的草稿。**按 bvid 存**:连播走到下一条时这一页并不重建(见 VideoViewModel 的
      * switchTo),不带 key 的话上一条没发出去的半句话会跟到下一条视频上。
      */
-    var danmakuDraft by rememberSaveable(bvid) { mutableStateOf("") }
+    val danmakuDraftState = rememberSaveable(bvid) { mutableStateOf("") }
 
     /**
      * 这条弹幕属于哪一刻。**在打开输入层那一刻取值,之后不再动** —— 弹幕是发给人按下"发弹幕"
@@ -382,14 +384,21 @@ fun VideoScreen(
      * 它同时是"这一刻能不能切 P"的唯一判据:身份对不上时当前那条的 `parts` 是空的,
      * 于是 chip 那一排和二级列表一并不出现,而不是画出来点不动。
      */
-    val episodeRows = buildEpisodeRows(
-        queue = audioState.queue?.items.orEmpty(),
-        currentBvid = audioState.queue?.current?.bvid,
-        pageBvid = state.detail?.bvid,
-        parts = state.detail?.pages.orEmpty(),
-        pageDurationSeconds = state.detail?.durationSeconds ?: 0L,
-        currentCid = currentCid,
-    )
+    val queueItems = audioState.queue?.items
+    val currentQueueBvid = audioState.queue?.current?.bvid
+    val detailBvid = state.detail?.bvid
+    val detailPages = state.detail?.pages
+    val detailDuration = state.detail?.durationSeconds ?: 0L
+    val episodeRows = remember(queueItems, currentQueueBvid, detailBvid, detailPages, detailDuration, currentCid) {
+        buildEpisodeRows(
+            queue = queueItems.orEmpty(),
+            currentBvid = currentQueueBvid,
+            pageBvid = detailBvid,
+            parts = detailPages.orEmpty(),
+            pageDurationSeconds = detailDuration,
+            currentCid = currentCid,
+        )
+    }
 
 
     /** 发一条自定义命令的简写。 */
@@ -511,7 +520,7 @@ fun VideoScreen(
     // 发出去了就关面板并清草稿。**清草稿只在这里**:失败时留着,人改一个字就能再发一次。
     LaunchedEffect(danmakuSend) {
         if (danmakuSend is DanmakuSend.Sent) {
-            danmakuDraft = ""
+            danmakuDraftState.value = ""
             // 控制条里的输入框发送后会放掉焦点,也经 closeDanmakuInput 退出;这里先退的话那一下
             // 就落在 else 上,只收掉发送状态。
             if (danmakuInputOpen) closeDanmakuInput() else onDanmakuSendConsumed()
@@ -791,7 +800,10 @@ fun VideoScreen(
     // 结果仍存在 ViewModel 里,关掉再开看到的是上一次的回答。
     var relatedOpen by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val expandedLayout = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    val windowSize = rememberBilbyWindowSize()
+    val isHeightCompact = LocalWindowInfo.current.containerSize.height < with(LocalDensity.current) { 480.dp.roundToPx() }
+    val expandedLayout = windowSize.isAtLeast(BilbyWindowSize.Expanded) ||
+        (windowSize == BilbyWindowSize.Medium && isHeightCompact)
 
     /*
      * **暂停之后画面跟着页面滚走,播放中钉在页顶。**
@@ -1008,15 +1020,16 @@ fun VideoScreen(
                     // 全屏与双栏的控制条是宽排法,弹幕直接在那一行里写;这时标签行上不再有胶囊。
                     controlBarDanmaku = if (fullscreen || expandedLayout) {
                         ControlBarDanmaku(
-                            draft = danmakuDraft,
-                            onDraftChange = { danmakuDraft = it },
+                            draft = { danmakuDraftState.value },
+                            onDraftChange = { danmakuDraftState.value = it },
                             maxLength = DanmakuMaxLength,
                             sending = danmakuSend is DanmakuSend.Sending,
-                            error = (danmakuSend as? DanmakuSend.Failed)?.let {
-                                stringResource(Res.string.danmaku_send_failed, it.message)
+                            error = (danmakuSend as? DanmakuSend.Failed)?.let { failed ->
+                                val msg = failed.message ?: failed.messageRes?.let { stringResource(it) }.orEmpty()
+                                stringResource(Res.string.danmaku_send_failed, msg)
                             },
                             // 时间点取开始写的那一刻,同胶囊。
-                            onSend = { onSendDanmaku(danmakuDraft, currentCid, danmakuProgress) },
+                            onSend = { onSendDanmaku(danmakuDraftState.value, currentCid, danmakuProgress) },
                             // 开始写与写完,和胶囊走同一对出入口(见 openDanmakuInput)。
                             onComposingChange = { composing ->
                                 if (composing) openDanmakuInput() else if (danmakuInputOpen) closeDanmakuInput()
@@ -1139,22 +1152,24 @@ fun VideoScreen(
             // 叠在一起。竖排那一份挂在整页那一层(见下面 rootBox 里那处),锚在屏幕的下
             // 四分之一,落在简介/评论上方,拇指够得着又不压任何控件。
             // 小窗里一条都不画:那几百 dp 宽的窗口里一条提示就盖掉半个画面,而且点不到。
-            if (!inPip) Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-                modifier = Modifier.align(Alignment.TopCenter).padding(Spacing.Comfortable),
-            ) {
-                if (fullscreen) {
-                    CloudResumeHint(
-                        positionMillis = cloudResumeMillis,
-                        onJump = jumpToCloudResume,
-                        onDismiss = { dismissedResumeMillis = it },
-                    )
+            if (!inPip) PlayerTheme {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                    modifier = Modifier.align(Alignment.TopCenter).padding(Spacing.Comfortable),
+                ) {
+                    if (fullscreen) {
+                        CloudResumeHint(
+                            positionMillis = cloudResumeMillis,
+                            onJump = jumpToCloudResume,
+                            onDismiss = { dismissedResumeMillis = it },
+                        )
+                    }
+                    SkipToast(skippedCategory)
+                    // 三连的回执和跳过提示摞在同一列:两条都是"刚刚发生了一件事",
+                    // 各挑一个位置的话同时出现时会互相盖住。
+                    TripleToast(tripleOutcome)
                 }
-                SkipToast(skippedCategory)
-                // 三连的回执和跳过提示摞在同一列:两条都是"刚刚发生了一件事",
-                // 各挑一个位置的话同时出现时会互相盖住。
-                TripleToast(tripleOutcome)
             }
 
             // 切集面板。挂在画面这个 Box 里,所以它盖住的正好是画面,而不是整页 ——
@@ -1187,6 +1202,7 @@ fun VideoScreen(
     val playerPane = remember { movableContentOf { paneModifier: Modifier -> latestPlayerPane(paneModifier) } }
 
     // 简介与评论。竖排时在画面下面、拿剩下的高度;横排时是右边那个 secondary pane。
+    val commentsRefreshEnabled by remember(playerScroll) { derivedStateOf { playerScroll.offsetPx == 0f } }
     val tabsPaneContent: @Composable (Modifier) -> Unit = { paneModifier ->
         state.detail?.let { detail ->
             VideoTabs(
@@ -1199,7 +1215,7 @@ fun VideoScreen(
                 commentTotal = commentState.total,
                 comments = { commentModifier ->
                     // 画面收起着的时候下滑先把它拉回来,那一下不该被读成刷新。
-                    commentsPane(commentModifier, playerScroll.offsetPx == 0f)
+                    commentsPane(commentModifier, commentsRefreshEnabled)
                 },
                 // 点闪光:没问过就发起检索,问过就只是把 sheet 再打开 —— 再点一次重跑
                 // 会把已有结果冲掉,而用户此刻多半只是想再看一眼。
@@ -1212,14 +1228,14 @@ fun VideoScreen(
                 onListen = { onListeningChange(true) },
                 danmakuInput = DanmakuInput(
                     open = danmakuInputOpen,
-                    draft = danmakuDraft,
-                    onDraftChange = { danmakuDraft = it },
+                    draft = { danmakuDraftState.value },
+                    onDraftChange = { danmakuDraftState.value = it },
                     send = danmakuSend,
                     onOpen = openDanmakuInput,
                     onClose = closeDanmakuInput,
                     onSend = {
                         onSendDanmaku(
-                            danmakuDraft,
+                            danmakuDraftState.value,
                             // 页面这条视频的那一 P。发弹幕的 bvid 由 ViewModel 带,两者必须是
                             // 同一条内容 —— 直接读 audioState 的话,换一集那一瞬发出去的是
                             // 新 bvid 配上一条的 cid。
@@ -1492,7 +1508,7 @@ fun VideoScreen(
                         // 展开不用在这里做:放起来之后 playerPinned 变真,
                         // 上面那个 LaunchedEffect(playerPinned) 会把画面收回来。
                     },
-                    visibility = playerScroll.collapsedFraction,
+                    visibility = { playerScroll.collapsedFraction },
                     coverUrl = state.detail?.coverUrl.orEmpty(),
                     modifier = Modifier.align(Alignment.TopCenter),
                 )
@@ -1567,7 +1583,7 @@ fun VideoScreen(
         // 当前这条视频摊成分 P,别的队列项各占一行。**分 P 清单只有当前这条有** —— 它来自
         // 已经在手上的这份详情,而队列里其他视频要各打一次详情请求才知道有几 P,不值得在
         // 打开面板时先发十几个请求去换一个多数视频用不上的选项。
-        val partsByBvid = episodeRows.associate { it.bvid to it.parts }
+        val partsByBvid = remember(episodeRows) { episodeRows.associate { it.bvid to it.parts } }
         val currentDetail = state.detail
         val targets = audioState.queue?.items.orEmpty().flatMap { item ->
             val parts = partsByBvid[item.bvid].orEmpty()

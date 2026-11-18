@@ -8,9 +8,9 @@ import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.rememberCaptionSlot
 import dev.bilby.ui.windowDragArea
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -39,10 +39,12 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material3.ButtonGroup
+import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.SegmentedListItem
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -63,6 +65,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.HeadsetOff
 import androidx.compose.material.icons.filled.HighQuality
@@ -74,11 +77,11 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ToggleButton
+import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -95,7 +98,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.clickable
@@ -119,11 +131,14 @@ import androidx.compose.material3.IconToggleButton
 import dev.bilby.ui.components.BilbyIcons
 import dev.bilby.ui.components.EmotePickerPanel
 import dev.bilby.ui.components.EmoteToggleButton
+import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.LocalPointerSource
+import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.components.insertAtCursor
 import dev.bilby.ui.components.rememberComplementEmotePanelHeight
 import dev.bilby.ui.components.rememberLiveEmoteState
 import dev.bilby.ui.components.touchOnlyPaging
+import dev.bilby.ui.components.verticalWheelScrollsRow
 import dev.bilby.ui.components.LocalSidePane
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SidePaneDismissLayer
@@ -267,7 +282,9 @@ fun LiveRoomScreen(
     var settingsOpen by remember { mutableStateOf(false) }
     var settingsOnly by remember { mutableStateOf<PlayerSettingsSection?>(null) }
     // 服务端给的是从低到高,面板里反过来:上手就该看见最好的那档。
-    val qualityOptions = state.qualities.sortedDescending().map { QualityOption(it, stringResource(qualityLabel(it))) }
+    val sortedQualities = remember(state.qualities) { state.qualities.sortedDescending() }
+    val qualityOptions = sortedQualities.map { QualityOption(it, stringResource(qualityLabel(it))) }
+    val sendErrorText = state.sendError ?: state.sendErrorRes?.let { stringResource(it) }
     val system = LocalSystemActions.current
     // 画中画借全屏的布局,不借全屏的行为(转屏、藏系统栏、返回键),理由同播放页。
     val inPip = rememberIsInPipMode()
@@ -284,16 +301,22 @@ fun LiveRoomScreen(
     }
 
     // 和播放页同一条规则(见 VideoScreen 里那段"状态栏那一条填黑"):不垫页面底色,改在画面
-    // 上方补一条黑边;宽屏下状态栏整条收起来。下面的 Tab 自己躲左右和底部。
-    val expandedLayout = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
+    // 上方补一条黑边;宽屏或紧凑高度横屏切换两栏布局。下面的 Tab 自己躲左右和底部。
+    val windowSize = rememberBilbyWindowSize()
+    val density = LocalDensity.current
+    val containerHeightPx = LocalWindowInfo.current.containerSize.height
+    val isHeightCompact = containerHeightPx > 0 && containerHeightPx < with(density) { 480.dp.roundToPx() }
+    val expandedLayout = windowSize.isAtLeast(BilbyWindowSize.Expanded) ||
+        (windowSize == BilbyWindowSize.Medium && isHeightCompact)
 
     // 弹幕草稿归页面:底部发言栏与全屏控制条里的输入框是同一句话的两个位置,进出全屏不丢。
-    var danmakuDraft by rememberSaveable { mutableStateOf("") }
+    // 以 State 传递,避免打字触发 LiveRoomScreen / LiveRoomTabs 重组。
+    val danmakuDraftState = rememberSaveable { mutableStateOf("") }
     var danmakuFocusNonce by remember { mutableStateOf(0) }
     val bottomDanmakuFocusRequester = remember { FocusRequester() }
     val sendDanmakuDraft: () -> Unit = {
-        onSendDanmaku(danmakuDraft)
-        danmakuDraft = ""
+        onSendDanmaku(danmakuDraftState.value)
+        danmakuDraftState.value = ""
     }
 
     // 画面这一块在两种排法里是同一份,只是外面的尺寸不同,见下面的 Row / Column。
@@ -412,11 +435,11 @@ fun LiveRoomScreen(
                             },
                             danmakuField = if (isFullscreen) {
                                 ControlBarDanmaku(
-                                    draft = danmakuDraft,
-                                    onDraftChange = { danmakuDraft = it },
+                                    draft = { danmakuDraftState.value },
+                                    onDraftChange = { danmakuDraftState.value = it },
                                     maxLength = LiveDanmakuMaxLength,
                                     sending = state.sendingDanmaku,
-                                    error = state.sendError?.let { stringResource(Res.string.danmaku_send_failed, it) },
+                                    error = sendErrorText?.let { stringResource(Res.string.danmaku_send_failed, it) },
                                     onSend = sendDanmakuDraft,
                                 )
                             } else {
@@ -514,8 +537,9 @@ fun LiveRoomScreen(
                 state = state,
                 roomId = roomId,
                 onLoadMoreGuards = onLoadMoreGuards,
-                danmakuDraft = danmakuDraft,
-                onDanmakuDraftChange = { danmakuDraft = it },
+                danmakuDraft = { danmakuDraftState.value },
+                onDanmakuDraftChange = { danmakuDraftState.value = it },
+                sendErrorText = sendErrorText,
                 onSendDanmaku = sendDanmakuDraft,
                 onSendEmoticon = onSendEmoticon,
                 // 双栏时开关在画面的控制条上,发言栏左端不再放一枚。
@@ -537,11 +561,17 @@ fun LiveRoomScreen(
         // 播放设置这类二级面板画在右栏里,不挡画面(见 [SidePaneState])。
         val sidePane = rememberSidePaneState()
         CompositionLocalProvider(LocalSidePane provides sidePane) {
-        BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        var containerWidth by remember { mutableStateOf(0.dp) }
+        val effectiveWidth = if (containerWidth > 0.dp) containerWidth else Breakpoints.Expanded
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .onSizeChanged { containerWidth = with(density) { it.width.toDp() } },
+        ) {
             var draggingWidth by remember { mutableStateOf<Dp?>(null) }
             val minPanelWidth = 320.dp
-            val maxPanelWidth = (maxWidth - 440.dp).coerceAtLeast(minPanelWidth)
-            val defaultPanelWidth = (maxWidth / 3).coerceIn(minPanelWidth, 440.dp)
+            val maxPanelWidth = (effectiveWidth - 440.dp).coerceAtLeast(minPanelWidth)
+            val defaultPanelWidth = (effectiveWidth / 3).coerceIn(minPanelWidth, 440.dp)
             val panelWidth = (draggingWidth ?: panelPrefs?.widthDp?.dp ?: defaultPanelWidth)
                 .coerceIn(minPanelWidth, maxPanelWidth)
 
@@ -798,9 +828,15 @@ private fun LiveControlBar(
 ) {
     // 触屏走正中播放键；键鼠模式下将形变+强调色播放键置于最左端，不遮挡直播画面。
     val isTouchLike = LocalPointerSource.current.isTouchLike
-    BoxWithConstraints(Modifier.playerControlBar(isFullscreen)) {
-        val wide = largePlayer && maxWidth >= Breakpoints.StackedControlBar
-        val roomy = maxWidth >= InlineDanmakuBarMinWidth
+    val density = LocalDensity.current
+    var barWidth by remember { mutableStateOf(0.dp) }
+    Box(
+        Modifier
+            .playerControlBar(isFullscreen)
+            .onSizeChanged { barWidth = with(density) { it.width.toDp() } },
+    ) {
+        val wide = largePlayer && barWidth >= Breakpoints.StackedControlBar
+        val roomy = barWidth >= InlineDanmakuBarMinWidth
         var composing by remember { mutableStateOf(false) }
         LaunchedEffect(danmakuFocusNonce) {
             if (danmakuFocusNonce > 0 && danmakuField != null) composing = true
@@ -837,7 +873,7 @@ private fun LiveControlBar(
             // 会在这一句到货的那一刻横着跳一下。
             if (!composing || roomy || pip) Text(
                 text = watched,
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.labelMedium.tabular,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -958,11 +994,22 @@ private fun LiveAnchorRow(
     val copyRoomIdLabel = stringResource(Res.string.action_copy_room_id)
     val menuLabel = stringResource(Res.string.menu_item_actions)
 
-    val anchorMenuItems = buildList {
-        if (state.title.isNotBlank()) add(copyTitleLabel to state.title)
-        if (state.anchorName.isNotBlank()) add(copyUpNameLabel to state.anchorName)
-        if (state.anchorMid != 0L) add(copyUidLabel to state.anchorMid.toString())
-        if (roomId > 0L) add(copyRoomIdLabel to roomId.toString())
+    val anchorMenuItems = remember(
+        state.title,
+        state.anchorName,
+        state.anchorMid,
+        roomId,
+        copyTitleLabel,
+        copyUpNameLabel,
+        copyUidLabel,
+        copyRoomIdLabel,
+    ) {
+        buildList {
+            if (state.title.isNotBlank()) add(copyTitleLabel to state.title)
+            if (state.anchorName.isNotBlank()) add(copyUpNameLabel to state.anchorName)
+            if (state.anchorMid != 0L) add(copyUidLabel to state.anchorMid.toString())
+            if (roomId > 0L) add(copyRoomIdLabel to roomId.toString())
+        }
     }
 
     val anchorIdentity: @Composable (Modifier, Dp) -> Unit = { outerModifier, endPadding ->
@@ -970,7 +1017,9 @@ private fun LiveAnchorRow(
             // mid 要到房间信息回来才有,那之前整行不跳转空间,但右键/长按仍可复制房间号等信息。
             onClick = if (state.anchorMid != 0L) ({ onUserClick(state.anchorMid) }) else null,
             menuLabel = menuLabel,
-            modifier = outerModifier,
+            modifier = outerModifier.then(
+                if (state.anchorMid != 0L) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier,
+            ),
             menu = { close ->
                 anchorMenuItems.forEachIndexed { idx, (label, value) ->
                     DropdownMenuItem(
@@ -1082,13 +1131,15 @@ private fun LiveAnchorRow(
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun LiveRoomTabs(
     state: LiveRoomUiState,
     roomId: Long,
     onLoadMoreGuards: () -> Unit,
-    danmakuDraft: String,
+    danmakuDraft: () -> String,
     onDanmakuDraftChange: (String) -> Unit,
+    sendErrorText: String?,
     onSendDanmaku: () -> Unit,
     onSendEmoticon: (String) -> Unit,
     showDanmakuToggle: Boolean,
@@ -1100,29 +1151,54 @@ private fun LiveRoomTabs(
 ) {
     val pager = rememberPagerState(pageCount = { 3 })
     val scope = rememberCoroutineScope()
+    val tabLabels = listOf(
+        stringResource(Res.string.live_tab_chat),
+        stringResource(Res.string.live_tab_super_chat),
+        stringResource(Res.string.live_tab_guard),
+    )
+    val tabColors = ToggleButtonDefaults.colors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+        checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+    )
     Column(modifier = modifier) {
-        SecondaryTabRow(selectedTabIndex = pager.currentPage, divider = {}) {
-            // 点标签要真的翻页。原来两个 onClick 都是空的,只有左右滑动能换页 ——
-            // 一个看得见、按得动、什么都不发生的标签,比没有标签更糟。
-            //
-            // **「醒目留言」这一格不带条数。** 一个会自己变大的数字说的是"有新东西,回来看",
-            // 正是风格指南 §4.2 否掉的那类注意力标记。PiliPlus 在聊天区右上角挂了一个
-            // `SC(n)` 的胶囊,这一处不照抄。
-            Tab(
-                selected = pager.currentPage == 0,
-                onClick = { scope.launch { pager.animateScrollToPage(0) } },
-                text = { Text(stringResource(Res.string.live_tab_chat)) },
-            )
-            Tab(
-                selected = pager.currentPage == 1,
-                onClick = { scope.launch { pager.animateScrollToPage(1) } },
-                text = { Text(stringResource(Res.string.live_tab_super_chat)) },
-            )
-            Tab(
-                selected = pager.currentPage == 2,
-                onClick = { scope.launch { pager.animateScrollToPage(2) } },
-                text = { Text(stringResource(Res.string.live_tab_guard)) },
-            )
+        // M3E connected ButtonGroup + ToggleButton：零红点/计数注意力标记。
+        ButtonGroup(
+            overflowIndicator = {},
+            horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight)
+                .selectableGroup(),
+        ) {
+            tabLabels.forEachIndexed { index, label ->
+                customItem(
+                    buttonGroupContent = {
+                        val interactionSource = remember { MutableInteractionSource() }
+                        ToggleButton(
+                            checked = pager.currentPage == index,
+                            onCheckedChange = { scope.launch { pager.animateScrollToPage(index) } },
+                            interactionSource = interactionSource,
+                            shapes = when (index) {
+                                0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                                tabLabels.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                                else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                            },
+                            colors = tabColors,
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = Spacing.Cozy),
+                            modifier = Modifier
+                                .weight(1f)
+                                .animateWidth(interactionSource)
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .semantics { role = Role.Tab },
+                        ) {
+                            Text(text = label, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                        }
+                    },
+                    menuContent = {},
+                )
+            }
         }
         // weight 而不是 fillMaxSize:在 Column 里 fillMaxSize 会让 pager 从 tab 栏下面
         // 再要一整屏,底部被推出可视区。
@@ -1154,10 +1230,10 @@ private fun LiveRoomTabs(
         // "在这儿说话",和评论区是同一个形状。直播也没什么好暂停的。
         LiveDanmakuInput(
             roomId = roomId,
-            text = danmakuDraft,
+            draft = danmakuDraft,
             onTextChange = onDanmakuDraftChange,
             sending = state.sendingDanmaku,
-            error = state.sendError,
+            error = sendErrorText,
             // 未开播时不给输入:此刻画面是一张封面,服务端也会拒。
             enabled = state.isLive,
             onSend = onSendDanmaku,
@@ -1183,7 +1259,7 @@ private fun OnlineRankLabel(count: Int) {
     if (count <= 0) return
     Text(
         text = stringResource(Res.string.live_online_rank, formatCount(count.toLong())),
-        style = MaterialTheme.typography.labelMedium,
+        style = MaterialTheme.typography.labelMedium.tabular,
         color = FixedColors.OnMedia,
         modifier = Modifier.padding(end = Spacing.Hair),
     )
@@ -1200,6 +1276,7 @@ private fun OnlineRankLabel(count: Int) {
  * **只放生效中的那些。** 过期的进不来,否则这一栏会一直长;要看本场早前的切到那一屏。
  * 点一个 chip 在这一栏下方**原地展开完整卡片**(再点同一枚或点卡片外收起),不切走当前正在看的聊天。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SuperChatStrip(
     superChats: List<LiveMessage.SuperChat>,
@@ -1209,13 +1286,16 @@ private fun SuperChatStrip(
     onUserClick: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 秒表在这一层,重组范围就是这一栏。只在有醒目留言时启动计时,空房零唤醒。
+    // 仅在下一条 SC 到期时唤醒过滤，不在未展开卡片时每秒重组整栏。
     var nowSeconds by remember { mutableStateOf(System.currentTimeMillis() / 1000) }
-    LaunchedEffect(superChats.isNotEmpty()) {
-        if (superChats.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(superChats) {
         nowSeconds = System.currentTimeMillis() / 1000
         while (true) {
-            delay(1_000)
+            val nextExpiry = superChats.asSequence()
+                .map { it.endTimeSeconds }
+                .filter { it > nowSeconds }
+                .minOrNull() ?: break
+            delay(((nextExpiry - nowSeconds).coerceAtLeast(1L)) * 1_000L + 100L)
             nowSeconds = System.currentTimeMillis() / 1000
         }
     }
@@ -1229,8 +1309,14 @@ private fun SuperChatStrip(
     }
     BackHandler(enabled = expandedId != null, onBack = onDismissExpand)
     if (live.isEmpty()) return
-    val dark = MaterialTheme.colorScheme.surface.luminance() < DarkSurfaceLuminance
+    val surfaceColor = MaterialTheme.colorScheme.surface
+    val dark = surfaceColor.luminance() < DarkSurfaceLuminance
+    val stripScrimColor = remember(surfaceColor) { surfaceColor.copy(alpha = StripScrimAlpha) }
+    val stripFadeBrush = remember(stripScrimColor) {
+        Brush.verticalGradient(listOf(stripScrimColor, Color.Transparent))
+    }
     val expandedSc = live.firstOrNull { it.id == expandedId }
+    val stripRowState = rememberLazyListState()
     // 托一层底。chip 本身是不透明的,乱的是**缝**:聊天正文从 chip 之间和两端穿出来,和金额
     // 混在一行里读不出哪几个字是一起的。底色压住那些缝,这一栏就成了一件东西。
     //
@@ -1241,10 +1327,13 @@ private fun SuperChatStrip(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = StripScrimAlpha)),
+                .background(stripScrimColor),
         ) {
             LazyRow(
-                modifier = Modifier.fillMaxWidth(),
+                state = stripRowState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalWheelScrollsRow(stripRowState),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
                     horizontal = Spacing.Comfortable,
                     vertical = Spacing.Tight,
@@ -1252,7 +1341,7 @@ private fun SuperChatStrip(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                items(live, key = { it.id }) { sc ->
+                items(live, key = { it.id }, contentType = { "sc-chip" }) { sc ->
                     SuperChatChip(
                         sc = sc,
                         palette = FixedColors.superChatPalette(sc.priceYuan, dark),
@@ -1273,7 +1362,7 @@ private fun SuperChatStrip(
                 ) {
                     SuperChatSummaryCard(
                         sc = expandedSc,
-                        remainingSeconds = expandedSc.endTimeSeconds - nowSeconds,
+                        endTimeSeconds = expandedSc.endTimeSeconds,
                         onUserClick = onUserClick,
                         onCardClick = onDismissExpand,
                     )
@@ -1286,14 +1375,7 @@ private fun SuperChatStrip(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(StripFadeHeight)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            MaterialTheme.colorScheme.surface.copy(alpha = StripScrimAlpha),
-                            Color.Transparent,
-                        ),
-                    ),
-                ),
+                .background(stripFadeBrush),
         )
     }
 }
@@ -1313,6 +1395,7 @@ private val StripFadeHeight = 12.dp
  *
  * 底色与文字色成对取自该档位的 [FixedColors.SuperChatPalette];展开态加一圈同色描边标出当前看的是哪枚。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SuperChatChip(
     sc: LiveMessage.SuperChat,
@@ -1326,6 +1409,7 @@ private fun SuperChatChip(
         color = palette.container,
         contentColor = palette.onContainer,
         border = if (selected) BorderStroke(SelectedChipBorderWidth, palette.onContainer) else null,
+        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
     ) {
         Row(
             modifier = Modifier
@@ -1337,8 +1421,7 @@ private fun SuperChatChip(
             Avatar(url = sc.senderFace, size = Dimens.AvatarNested)
             Text(
                 text = stringResource(Res.string.live_super_chat_price, sc.priceYuan),
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.labelLargeEmphasized.tabular,
                 color = palette.onContainer,
             )
         }
@@ -1352,8 +1435,7 @@ private val SelectedChipBorderWidth = 1.5.dp
  * 此刻仍在有效期内的醒目留言,按到期时间从近到远排 —— 这一屏读的是"还剩多久",最快消失的
  * 那条该在最上面。进房前发出的那些由 `getMessageList` 补上(见 `LiveRoomViewModel`)。
  *
- * **到期由本地这只秒表判,列表按它过滤。** 到期时刻是服务端定的,但没有一条命令通知"这条到点
- * 了",所以本地每秒对一次表。撤回是另一回事,那个有命令([LiveMessage.SuperChatRemoved])。
+ * **到期分两层计时**:外层只在下一条 SC 过期时刻唤醒重新分组,倒计时读数归每张卡的叶子组件自己每秒更新。
  */
 @Composable
 private fun SuperChatPane(
@@ -1363,13 +1445,14 @@ private fun SuperChatPane(
     onUserClick: (Long) -> Unit,
 ) {
     var nowSeconds by remember { mutableStateOf(System.currentTimeMillis() / 1000) }
-    val hasActive = remember(sessionSuperChats, nowSeconds) {
-        sessionSuperChats.any { it.endTimeSeconds > nowSeconds }
-    }
-    LaunchedEffect(hasActive) {
-        if (!hasActive) return@LaunchedEffect
+    LaunchedEffect(sessionSuperChats) {
+        nowSeconds = System.currentTimeMillis() / 1000
         while (true) {
-            delay(1_000)
+            val nextExpiry = sessionSuperChats.asSequence()
+                .map { it.endTimeSeconds }
+                .filter { it > nowSeconds }
+                .minOrNull() ?: break
+            delay(((nextExpiry - nowSeconds).coerceAtLeast(1L)) * 1_000L + 100L)
             nowSeconds = System.currentTimeMillis() / 1000
         }
     }
@@ -1399,51 +1482,54 @@ private fun SuperChatPane(
         return
     }
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(Spacing.Comfortable),
-        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
-    ) {
-        items(live, key = { superChatKey(it) }) { sc ->
-            SuperChatSummaryCard(
-                sc = sc,
-                remainingSeconds = sc.endTimeSeconds - nowSeconds,
-                onUserClick = onUserClick,
-            )
-        }
-
-        // 本场早前那一节。**只在拿到内容时才出现**:拿不到(没开开关、这位主播没被收录、
-        // 这一场没在录、任何一步失败)就是没有这一节,不解释也不报错。
-        if (earlier.isNotEmpty()) {
-            item(key = "earlier-header") {
-                Text(
-                    text = stringResource(Res.string.live_super_chat_earlier),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = Spacing.Tight),
-                )
-            }
-            items(earlier, key = { superChatKey(it) }) { sc ->
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(Spacing.Comfortable),
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        ) {
+            items(live, key = { superChatKey(it) }, contentType = { "sc-live" }) { sc ->
                 SuperChatSummaryCard(
                     sc = sc,
-                    remainingSeconds = null,
+                    endTimeSeconds = sc.endTimeSeconds,
                     onUserClick = onUserClick,
                 )
             }
-            if (hasArchive) {
-                item(key = "earlier-source") {
-                    // 站外来的东西要说一句从哪来。**只在真有站外内容时说** —— 开关关着时这一节
-                    // 里全是你在场期间过期的那些,标 danmakus 就是句假话(见 hasArchive)。
+
+            // 本场早前那一节。**只在拿到内容时才出现**:拿不到(没开开关、这位主播没被收录、
+            // 这一场没在录、任何一步失败)就是没有这一节,不解释也不报错。
+            if (earlier.isNotEmpty()) {
+                item(key = "earlier-header", contentType = "earlier-header") {
                     Text(
-                        text = stringResource(Res.string.live_super_chat_source),
-                        style = MaterialTheme.typography.labelSmall,
+                        text = stringResource(Res.string.live_super_chat_earlier),
+                        style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = Spacing.Tight),
+                        modifier = Modifier.padding(top = Spacing.Tight),
                     )
+                }
+                items(earlier, key = { superChatKey(it) }, contentType = { "sc-earlier" }) { sc ->
+                    SuperChatSummaryCard(
+                        sc = sc,
+                        endTimeSeconds = null,
+                        onUserClick = onUserClick,
+                    )
+                }
+                if (hasArchive) {
+                    item(key = "earlier-source", contentType = "earlier-source") {
+                        // 站外来的东西要说一句从哪来。**只在真有站外内容时说** —— 开关关着时这一节
+                        // 里全是你在场期间过期的那些,标 danmakus 就是句假话(见 hasArchive)。
+                        Text(
+                            text = stringResource(Res.string.live_super_chat_source),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = Spacing.Tight),
+                        )
+                    }
                 }
             }
         }
+        ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
     }
 }
 
@@ -1461,8 +1547,8 @@ private fun SuperChatPane(
 @Composable
 private fun SuperChatSummaryCard(
     sc: LiveMessage.SuperChat,
-    /** 剩余时间。**null 表示这一条早过期了**(本场早前那一节),那时不画倒计时。 */
-    remainingSeconds: Long?,
+    /** 到期时间戳(秒)。**null 表示这一条早过期了**(本场早前那一节),那时不画倒计时。 */
+    endTimeSeconds: Long?,
     onUserClick: (Long) -> Unit,
     onCardClick: (() -> Unit)? = null,
 ) {
@@ -1473,15 +1559,27 @@ private fun SuperChatSummaryCard(
     val menuLabel = stringResource(Res.string.menu_item_actions)
     val dark = MaterialTheme.colorScheme.surface.luminance() < DarkSurfaceLuminance
     val palette = FixedColors.superChatPalette(sc.priceYuan, dark)
-    val scMenuItems = buildList {
-        if (sc.message.isNotBlank()) add(copyDanmakuLabel to sc.message)
-        if (sc.senderName.isNotBlank()) add(copyNicknameLabel to sc.senderName)
-        if (sc.senderMid != 0L) add(copyUidLabel to sc.senderMid.toString())
+    val scMenuItems = remember(
+        sc.message,
+        sc.senderName,
+        sc.senderMid,
+        copyDanmakuLabel,
+        copyNicknameLabel,
+        copyUidLabel,
+    ) {
+        buildList {
+            if (sc.message.isNotBlank()) add(copyDanmakuLabel to sc.message)
+            if (sc.senderName.isNotBlank()) add(copyNicknameLabel to sc.senderName)
+            if (sc.senderMid != 0L) add(copyUidLabel to sc.senderMid.toString())
+        }
     }
     ContextMenuBox(
         onClick = onCardClick,
         menuLabel = menuLabel,
-        modifier = Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .then(if (onCardClick != null) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
         menu = { close ->
             scMenuItems.forEachIndexed { idx, (label, value) ->
                 DropdownMenuItem(
@@ -1536,8 +1634,7 @@ private fun SuperChatSummaryCard(
                     )
                     Text(
                         text = stringResource(Res.string.live_super_chat_price, sc.priceYuan),
-                        style = MaterialTheme.typography.labelLarge.tabular,
-                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.labelLargeEmphasized.tabular,
                         color = palette.onContainer,
                     )
                 }
@@ -1546,19 +1643,29 @@ private fun SuperChatSummaryCard(
                     style = MaterialTheme.typography.bodyMediumEmphasized,
                     color = palette.onContainer,
                 )
-                remainingSeconds?.let {
-                    Text(
-                        text = stringResource(Res.string.live_super_chat_remaining, formatRemaining(it)),
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            // **等宽数字。** 不加这一句,秒数每跳一下宽度就变一次,整行跟着抖。
-                            fontFeatureSettings = TabularFigures,
-                        ),
-                        color = palette.onContainer,
-                    )
+                endTimeSeconds?.let { expiry ->
+                    SuperChatCountdown(endTimeSeconds = expiry, contentColor = palette.onContainer)
                 }
             }
         }
     }
+}
+
+@Composable
+private fun SuperChatCountdown(endTimeSeconds: Long, contentColor: Color) {
+    var nowSeconds by remember(endTimeSeconds) { mutableStateOf(System.currentTimeMillis() / 1000) }
+    LaunchedEffect(endTimeSeconds) {
+        nowSeconds = System.currentTimeMillis() / 1000
+        while (endTimeSeconds > nowSeconds) {
+            delay(1_000L)
+            nowSeconds = System.currentTimeMillis() / 1000
+        }
+    }
+    Text(
+        text = stringResource(Res.string.live_super_chat_remaining, formatRemaining(endTimeSeconds - nowSeconds)),
+        style = MaterialTheme.typography.labelMedium.tabular,
+        color = contentColor,
+    )
 }
 
 /**
@@ -1605,9 +1712,6 @@ private fun formatRemaining(seconds: Long): String {
     return "${safe / 60}:${(safe % 60).toString().padStart(2, '0')}"
 }
 
-/** OpenType 的等宽数字特性。数字会变的地方都该开,否则每变一次布局抖一次。 */
-private const val TabularFigures = "tnum"
-
 /**
  * 消息流。
  *
@@ -1621,6 +1725,7 @@ private const val TabularFigures = "tnum"
  * 非零之间变化时整条列表要跳一次高度;窄屏上一次只露得出一张半卡片,而横滚压在一条本来就要
  * 竖滚的列表上面。现在它在流里出现一次(不会错过),完整清单在旁边那一屏。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ChatPane(
     feed: List<LiveFeedItem>,
@@ -1692,8 +1797,13 @@ private fun ChatPane(
                 // 只靠间距。
                 verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
             ) {
-                items(feed, key = { it.id }) { item -> LiveFeedRow(item, onUserClick) }
+                items(
+                    feed,
+                    key = { it.id },
+                    contentType = { it::class.simpleName },
+                ) { item -> LiveFeedRow(item, onUserClick) }
             }
+            ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
             if (expandedScId != null) {
                 // 展开卡片外侧的透明点击区:点聊天区任意位置即收起卡片,不打断看弹幕。
                 Box(
@@ -1723,8 +1833,8 @@ private fun ChatPane(
             // 上面跟着新消息走的那处不能用动画,理由见那段注释。
             androidx.compose.animation.AnimatedVisibility(
                 visible = !following && feed.isNotEmpty(),
-                enter = fadeIn(),
-                exit = fadeOut(),
+                enter = fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()),
+                exit = fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = Spacing.Tight),
             ) {
                 Surface(
@@ -1779,7 +1889,7 @@ private fun ChatPane(
 @Composable
 private fun LiveDanmakuInput(
     roomId: Long,
-    text: String,
+    draft: () -> String,
     onTextChange: (String) -> Unit,
     sending: Boolean,
     error: String?,
@@ -1807,6 +1917,7 @@ private fun LiveDanmakuInput(
     BackHandler(enabled = emojiOpen) { emojiOpen = false }
     val (emoteState, retryEmotes) = rememberLiveEmoteState(roomId = roomId, active = emojiOpen)
 
+    val text = draft()
     var fieldValue by remember {
         mutableStateOf(TextFieldValue(text = text, selection = TextRange(text.length)))
     }
@@ -1855,14 +1966,28 @@ private fun LiveDanmakuInput(
                 onSend = send,
                 enabled = enabled,
                 maxLines = 1,
-                fieldModifier = Modifier.focusRequester(focusRequester),
+                fieldModifier = Modifier
+                    .focusRequester(focusRequester)
+                    .onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                            keyboard?.hide()
+                            focusManager.clearFocus()
+                            true
+                        } else {
+                            false
+                        }
+                    },
                 onFocusChange = { focused ->
                     if (focused && emojiOpen) emojiOpen = false
                 },
                 leading = if (showDanmakuToggle) {
                     {
                         // 开与关换的是字形,不只是颜色,同视频页那枚。
-                        IconToggleButton(checked = danmakuEnabled, onCheckedChange = onDanmakuEnabledChange) {
+                        IconToggleButton(
+                            checked = danmakuEnabled,
+                            onCheckedChange = onDanmakuEnabledChange,
+                            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                        ) {
                             Icon(
                                 imageVector = if (danmakuEnabled) BilbyIcons.Danmaku else BilbyIcons.DanmakuOff,
                                 contentDescription = stringResource(Res.string.danmaku_show),
@@ -1894,7 +2019,10 @@ private fun LiveDanmakuInput(
                         },
                     )
                     if (focused) {
-                        IconButton(onClick = { focusManager.clearFocus() }) {
+                        IconButton(
+                            onClick = { focusManager.clearFocus() },
+                            modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                        ) {
                             Icon(
                                 imageVector = Icons.Filled.Close,
                                 contentDescription = stringResource(Res.string.action_cancel),
@@ -1935,14 +2063,12 @@ private const val LiveDanmakuMaxLength = 40
 @Composable
 private fun GuardPane(guards: LiveGuardsState, onLoadMore: () -> Unit, onUserClick: (Long) -> Unit) {
     val listState = rememberLazyListState()
-    // 触底再拉下一页。分页是接口给的(page/page_size),不一次拉完 —— 大主播的大航海是几千人。
-    LaunchedEffect(listState, guards.items.size) {
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
-            .collect { last ->
-                val total = guards.items.size
-                if (last != null && total > 0 && last >= total - GUARD_PREFETCH) onLoadMore()
-            }
-    }
+    // 触底再拉下一页，携带 guards.error == null 误差门闩，防止 -412 等失败时无限重发。
+    PrefetchNearEnd(
+        state = listState,
+        canLoad = guards.hasMore && !guards.loading && guards.error == null,
+        onLoadMore = onLoadMore,
+    )
     // 首屏失败给整屏错误,空列表给空态 —— 原来两种情况都只是一片什么都没有的白。
     if (guards.items.isEmpty()) {
         when {
@@ -1969,47 +2095,53 @@ private fun GuardPane(guards: LiveGuardsState, onLoadMore: () -> Unit, onUserCli
     val count = guards.items.size
     // M3 Expressive segmented list(见 m3-material-mirror/pages/components/lists.md):
     // 每行一块 surfaceContainer 分段,组内行间留 SegmentedGap,首尾两行各带 16dp 外圆角、中间 4dp 内圆角。
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(Spacing.Comfortable),
-        verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
-    ) {
-        itemsIndexed(guards.items, key = { _, it -> it.uid }) { index, guard ->
-            SegmentedListItem(
-                onClick = { onUserClick(guard.uid) },
-                shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
-                colors = itemColors,
-                leadingContent = {
-                    Avatar(url = guard.face, size = Dimens.AvatarRow)
-                },
-                trailingContent = {
-                    GuardLevelBadge(guardLevel = guard.guardLevel)
-                },
-                content = {
-                    Text(
-                        text = guard.username,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                },
-            )
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(Spacing.Comfortable),
+            verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
+        ) {
+            itemsIndexed(
+                guards.items,
+                key = { _, it -> it.uid },
+                contentType = { _, _ -> "guard" },
+            ) { index, guard ->
+                SegmentedListItem(
+                    onClick = { onUserClick(guard.uid) },
+                    shapes = ListItemDefaults.segmentedShapes(index = index, count = count),
+                    colors = itemColors,
+                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                    leadingContent = {
+                        Avatar(url = guard.face, size = Dimens.AvatarRow)
+                    },
+                    trailingContent = {
+                        GuardLevelBadge(guardLevel = guard.guardLevel)
+                    },
+                    content = {
+                        Text(
+                            text = guard.username,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                )
+            }
+            item(key = "footer", contentType = "footer") {
+                // 翻页失败不清列表,只在底下加一行重试。
+                ListFooter(
+                    appending = guards.loading,
+                    hasMore = true,
+                    hasItems = true,
+                    error = guards.error?.let { stringResource(it) },
+                    onRetry = onLoadMore,
+                )
+            }
         }
-        item(key = "footer") {
-            // 翻页失败不清列表,只在底下加一行重试。
-            ListFooter(
-                appending = guards.loading,
-                hasMore = true,
-                hasItems = true,
-                error = guards.error?.let { stringResource(it) },
-                onRetry = onLoadMore,
-            )
-        }
+        ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
     }
 }
-
-private const val GUARD_PREFETCH = 5
 
 /** 档位号到档名。取值见 PiliPlus `api.dart` 对 `getRoomPlayInfo` 的注释。 */
 private fun qualityLabel(qn: Int): StringResource = when (qn) {

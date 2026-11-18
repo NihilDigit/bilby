@@ -26,7 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -113,7 +113,7 @@ fun BoxScope.PlayerSidePanel(
     ) {
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainerLow,
-            shape = RoundedCornerShape(topStart = PanelCornerRadius, bottomStart = PanelCornerRadius),
+            shape = MaterialTheme.shapes.large.copy(topEnd = CornerSize(0.dp), bottomEnd = CornerSize(0.dp)),
             modifier = Modifier
                 .fillMaxHeight()
                 .widthIn(max = PanelMaxWidth)
@@ -215,6 +215,5 @@ private val PanelMaxWidth = 380.dp
 /** 窄款。一列档名("高清 1080P+"这类)加两侧内边距,放得下就够。 */
 private val NarrowPanelWidth = 240.dp
 
-private val PanelCornerRadius = 16.dp
 private val PanelHeaderHeight = 56.dp
 private val BadgeVerticalPadding = 2.dp

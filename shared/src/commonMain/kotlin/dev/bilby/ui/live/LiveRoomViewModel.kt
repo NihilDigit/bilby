@@ -1,10 +1,13 @@
 package dev.bilby.ui.live
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
 import dev.bilby.api.BiliResult
 import dev.bilby.api.toHttpsUrl
+import dev.bilby.resources.Res
+import dev.bilby.resources.error_network
 import org.jetbrains.compose.resources.StringResource
 import dev.bilby.ui.errorTextRes
 import dev.bilby.api.dto.LiveGuardItemDto
@@ -46,10 +49,12 @@ import kotlinx.coroutines.launch
  *
  * [id] 兼作 `LazyColumn` 的 key,所以必须在一场直播内唯一。
  */
+@Immutable
 sealed interface LiveFeedItem {
     val id: String
 
     /** 一条弹幕。和画面上飘过的那条是同一条消息的两种呈现,所以共用 id,不各自编号。 */
+    @Immutable
     data class Danmaku(
         override val id: String,
         val mid: Long,
@@ -71,6 +76,7 @@ sealed interface LiveFeedItem {
      * 记录,抹掉一条会让上下文断开(旁边的弹幕常常正在回应它)。汇总屏那份直接移除,那里说的是
      * "此刻还有效的留言"。
      */
+    @Immutable
     data class SuperChat(
         val message: LiveMessage.SuperChat,
         val removed: Boolean = false,
@@ -86,6 +92,7 @@ sealed interface LiveFeedItem {
      *
      * [id] 不带时间戳:去重正是靠"同一个人同一档只有一行"。
      */
+    @Immutable
     data class Guard(
         val mid: Long,
         val name: String,
@@ -102,6 +109,7 @@ sealed interface LiveFeedItem {
      * 系统提示。文案由渲染层按 [kind] 从 `strings.xml` 取,只有超管那两条用服务端的原话
      * ([message]) —— 那句话是"图片内容不适宜,请立即调整"这种具体指示,本地改写只会丢信息。
      */
+    @Immutable
     data class Notice(
         override val id: String,
         val kind: Kind,
@@ -116,6 +124,7 @@ sealed interface LiveFeedItem {
     }
 }
 
+@Immutable
 data class LiveGuardsState(
     val items: List<LiveGuardItemDto> = emptyList(),
     /** 已经拉到第几页。0 表示还没拉过。 */
@@ -125,6 +134,7 @@ data class LiveGuardsState(
     val error: StringResource? = null,
 )
 
+@Immutable
 data class LiveRoomUiState(
     val loading: Boolean = true,
     /** 失败说哪一句,存的是资源 id。映射与理由见 [dev.bilby.ui.errorTextRes]。 */
@@ -186,6 +196,7 @@ data class LiveRoomUiState(
      * 说这句话,而失败的常见原因(等级不够、房间禁言、被风控)都需要人读一眼才知道下一步。
      */
     val sendError: String? = null,
+    val sendErrorRes: StringResource? = null,
     /** 主播的关注态。null = 还没查到(或主播 mid 还不知道),那时不画关注按钮。 */
     val followState: FollowState? = null,
 )
@@ -767,14 +778,17 @@ class LiveRoomViewModel(
     fun sendDanmaku(text: String) {
         val message = text.trim()
         if (message.isEmpty() || _state.value.sendingDanmaku || !_state.value.isLive) return
-        _state.update { it.copy(sendingDanmaku = true, sendError = null) }
+        _state.update { it.copy(sendingDanmaku = true, sendError = null, sendErrorRes = null) }
         viewModelScope.launch {
-            val error = when (val result = repository.sendDanmaku(roomId, message)) {
-                is BiliResult.Ok -> null
-                is BiliResult.ApiError -> "${result.message}(${result.code})"
-                is BiliResult.Failure -> result.cause.message ?: "网络错误"
+            val result = repository.sendDanmaku(roomId, message)
+            val (error, errorRes) = when (result) {
+                is BiliResult.Ok -> null to null
+                is BiliResult.ApiError -> "${result.message}(${result.code})" to null
+                is BiliResult.Failure -> result.cause.message.let { msg ->
+                    msg to if (msg == null) Res.string.error_network else null
+                }
             }
-            _state.update { it.copy(sendingDanmaku = false, sendError = error) }
+            _state.update { it.copy(sendingDanmaku = false, sendError = error, sendErrorRes = errorRes) }
         }
     }
 
@@ -782,14 +796,17 @@ class LiveRoomViewModel(
     fun sendEmoticon(emoticonUnique: String) {
         val key = emoticonUnique.trim()
         if (key.isEmpty() || _state.value.sendingDanmaku || !_state.value.isLive) return
-        _state.update { it.copy(sendingDanmaku = true, sendError = null) }
+        _state.update { it.copy(sendingDanmaku = true, sendError = null, sendErrorRes = null) }
         viewModelScope.launch {
-            val error = when (val result = repository.sendEmoticon(roomId, key)) {
-                is BiliResult.Ok -> null
-                is BiliResult.ApiError -> "${result.message}(${result.code})"
-                is BiliResult.Failure -> result.cause.message ?: "网络错误"
+            val result = repository.sendEmoticon(roomId, key)
+            val (error, errorRes) = when (result) {
+                is BiliResult.Ok -> null to null
+                is BiliResult.ApiError -> "${result.message}(${result.code})" to null
+                is BiliResult.Failure -> result.cause.message.let { msg ->
+                    msg to if (msg == null) Res.string.error_network else null
+                }
             }
-            _state.update { it.copy(sendingDanmaku = false, sendError = error) }
+            _state.update { it.copy(sendingDanmaku = false, sendError = error, sendErrorRes = errorRes) }
         }
     }
 

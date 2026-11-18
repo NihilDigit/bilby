@@ -1,9 +1,13 @@
 package dev.bilby.ui.video
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
 import dev.bilby.BvidCodec
+import dev.bilby.resources.Res
+import dev.bilby.resources.error_network
+import dev.bilby.ui.errorTextResFor
 import dev.bilby.agent.AgentTurnState
 import dev.bilby.agent.reduce
 import dev.bilby.agent.AgentIntent
@@ -74,6 +78,7 @@ import kotlinx.coroutines.launch
  * [PlaybackHost.state]。播放器和队列只有一份,页面是壳(DESIGN 2.4b);
  * 页面再存一份就等于承认有两个真相,而"页面说 A、播放器在放 E"正是那样来的。
  */
+@Immutable
 data class VideoUiState(
     val detail: VideoDetail? = null,
     val loading: Boolean = true,
@@ -85,11 +90,12 @@ data class VideoUiState(
  * 一次投币的进展。[Succeeded] 单独建模而不是回到 [Idle]:面板要靠它区分"还没投"和
  * "投完了可以关了",两者都是"此刻没有请求在飞"。
  */
+@Immutable
 sealed interface CoinAttempt {
     data object Idle : CoinAttempt
     data object Running : CoinAttempt
     data object Succeeded : CoinAttempt
-    data class Failed(val message: String) : CoinAttempt
+    data class Failed(val message: String? = null, val messageRes: StringResource? = null) : CoinAttempt
 }
 
 /**
@@ -101,17 +107,24 @@ sealed interface CoinAttempt {
  * [seq] 让同样的结果连着发生两次也能各弹一次提示:数据类相等的两个值在 `LaunchedEffect`
  * 的 key 上是同一个,不带序号的话第二次长按什么都不会出现。
  */
-data class TripleOutcome(val seq: Long, val result: TripleResult?, val error: String?)
+@Immutable
+data class TripleOutcome(
+    val seq: Long,
+    val result: TripleResult?,
+    val error: String?,
+    val errorRes: StringResource? = null,
+)
 
 /**
  * 发弹幕这一次的进展。与 [CoinAttempt] 同形,理由也一样:[Sent] 是"发出去了,面板可以关了",
  * 和 [Idle] 的"此刻没有请求在飞"不是一回事。
  */
+@Immutable
 sealed interface DanmakuSend {
     data object Idle : DanmakuSend
     data object Sending : DanmakuSend
     data object Sent : DanmakuSend
-    data class Failed(val message: String) : DanmakuSend
+    data class Failed(val message: String? = null, val messageRes: StringResource? = null) : DanmakuSend
 }
 
 /** 弹幕只发白字,见 [dev.bilby.danmaku.DanmakuRepository.post]。 */
@@ -478,7 +491,11 @@ class VideoViewModel(
                 }
 
                 is BiliResult.Failure -> ifCurrent(startGeneration) {
-                    _danmakuSend.value = DanmakuSend.Failed(result.cause.message ?: "网络错误")
+                    val causeMsg = result.cause.message
+                    _danmakuSend.value = DanmakuSend.Failed(
+                        message = causeMsg,
+                        messageRes = if (causeMsg == null) errorTextResFor(result.cause) else null,
+                    )
                 }
             }
         }
@@ -1209,7 +1226,11 @@ class VideoViewModel(
                 is BiliResult.Failure -> {
                     BiliLog.w("投币异常: ${result.cause}")
                     ifCurrent(startGeneration) {
-                        _coinAttempt.value = CoinAttempt.Failed(result.cause.message ?: "网络错误")
+                        val causeMsg = result.cause.message
+                        _coinAttempt.value = CoinAttempt.Failed(
+                            message = causeMsg,
+                            messageRes = if (causeMsg == null) Res.string.error_network else null,
+                        )
                     }
                 }
             }
@@ -1259,7 +1280,13 @@ class VideoViewModel(
 
                 is BiliResult.Failure -> {
                     BiliLog.w("三连异常: ${result.cause}")
-                    TripleOutcome(++tripleSeq, null, result.cause.message ?: "网络错误")
+                    val causeMsg = result.cause.message
+                    TripleOutcome(
+                        seq = ++tripleSeq,
+                        result = null,
+                        error = causeMsg,
+                        errorRes = if (causeMsg == null) Res.string.error_network else null,
+                    )
                 }
             }
             ifCurrent(startGeneration) { _tripleOutcome.value = outcome }

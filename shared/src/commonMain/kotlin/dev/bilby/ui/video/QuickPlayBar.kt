@@ -25,9 +25,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
@@ -71,13 +76,15 @@ fun QuickPlayBar(
     /** 点按钮:接着放(或从头放),并把画面拿回来。 */
     onPlay: () -> Unit,
     /** 收起进度,0 是完全展开、1 是收到底。见 `CollapsingHeaderState.collapsedFraction`。 */
-    visibility: Float,
+    visibility: () -> Float,
     modifier: Modifier = Modifier,
-    /** 可选的视频封面地址;非空时在标题左侧展示 `44x28.dp`(`4.dp` 圆角)缩略图。 */
+    /** 可选的视频封面地址;非空时在标题左侧展示 `44x27.5.dp`(`4.dp` 圆角)缩略图。 */
     coverUrl: String = "",
 ) {
+    val isShown by remember { derivedStateOf { visibility() > 0f } }
     // 完全展开时整条不进组合:它此刻既看不见也不该接触摸,而画面正占着这块位置。
-    if (visibility <= 0f) return
+    if (!isShown) return
+    val isInteractive by remember { derivedStateOf { visibility() > 0.5f } }
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -86,15 +93,19 @@ fun QuickPlayBar(
             .height(QuickPlayBarHeight)
             // 淡入而不是滑入:它出现的位置就是画面正在退出的那块,两个东西一起动会看不出
             // 谁是谁。透明度跟着手指走,松手停在哪就是哪,和画面的收起量始终对得上。
-            .alpha(visibility)
-            .clickable(onClick = onExpand),
+            .graphicsLayer { alpha = visibility().coerceIn(0f, 1f) }
+            .clickable(enabled = isInteractive, onClick = onExpand)
+            .then(if (isInteractive) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
     ) {
         Box(modifier = Modifier.fillMaxWidth().height(QuickPlayBarHeight)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxSize().padding(end = Spacing.Cozy),
             ) {
-                IconButton(onClick = onBack) {
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
+                ) {
                     Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = stringResource(Res.string.action_back),
@@ -124,8 +135,8 @@ fun QuickPlayBar(
                         shape = CircleShape,
                         pressedShape = MaterialTheme.shapes.small,
                     ),
-                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = 0.dp),
-                    modifier = Modifier.height(PlayPillHeight),
+                    contentPadding = PaddingValues(horizontal = Spacing.Cozy, vertical = Spacing.Hair),
+                    modifier = Modifier.pointerHoverIcon(PointerIcon.Hand),
                 ) {
                     Icon(
                         imageVector = if (finished) Icons.Filled.Replay else Icons.Filled.PlayArrow,
@@ -182,16 +193,14 @@ fun QuickPlayBar(
     onBack = onBack,
     onExpand = onExpand,
     onPlay = onPlay,
-    visibility = visibility,
+    visibility = { visibility },
     modifier = modifier,
     coverUrl = coverUrl,
 )
 
 private val CoverThumbWidth = 44.dp
-private val CoverThumbHeight = 28.dp
-private val CoverThumbAspectRatio = CoverThumbWidth / CoverThumbHeight
+private const val CoverThumbAspectRatio = 16f / 10f
 private val CoverThumbCorner = 4.dp
-private val PlayPillHeight = 36.dp
 private val PlayPillIconSize = 18.dp
 private val ProgressLineHeight = 3.dp
 

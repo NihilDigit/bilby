@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.TextAutoSize
+import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -40,6 +42,7 @@ import dev.bilby.resources.sleep_timer_off
 import dev.bilby.stringResource
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.rememberClockFont
+import dev.bilby.ui.theme.tabular
 
 /** 倍速折算的除数下限。倍速滑到极小值时不让剩余时长炸成天文数字。 */
 private const val MinSpeedForEstimate = 0.1f
@@ -130,29 +133,40 @@ fun SleepTimerStandaloneContent(
         )
 
         Spacer(modifier = Modifier.height(Spacing.Hair))
-        SleepPresets.chunked(SleepPresetColumns).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
-                row.forEach { minutes ->
-                    ToggleButton(
-                        checked = (mode as? SleepTimerMode.After)?.minutes == minutes,
-                        onCheckedChange = { choose(SleepTimerMode.After(minutes)) },
-                        modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
-                    ) {
-                        Text(
-                            stringResource(Res.string.sleep_timer_minutes, minutes),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+        Column(
+            verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier.selectableGroup(),
+        ) {
+            SleepPresets.chunked(SleepPresetColumns).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
+                    row.forEachIndexed { idx, minutes ->
+                        ToggleButton(
+                            checked = (mode as? SleepTimerMode.After)?.minutes == minutes,
+                            onCheckedChange = { choose(SleepTimerMode.After(minutes)) },
+                            shapes = when (idx) {
+                                0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                                row.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                                else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                            },
+                            modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
+                        ) {
+                            Text(
+                                stringResource(Res.string.sleep_timer_minutes, minutes),
+                                style = MaterialTheme.typography.labelLarge.tabular,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
             }
-        }
-        ToggleButton(
-            checked = mode == SleepTimerMode.EndOfItem,
-            onCheckedChange = { choose(SleepTimerMode.EndOfItem) },
-            modifier = Modifier.fillMaxWidth().semantics { role = Role.RadioButton },
-        ) {
-            Text(stringResource(Res.string.sleep_timer_end_of_item_option), maxLines = 1)
+            ToggleButton(
+                checked = mode == SleepTimerMode.EndOfItem,
+                onCheckedChange = { choose(SleepTimerMode.EndOfItem) },
+                modifier = Modifier.fillMaxWidth().semantics { role = Role.RadioButton },
+            ) {
+                Text(stringResource(Res.string.sleep_timer_end_of_item_option), maxLines = 1)
+            }
         }
     }
 }
@@ -203,14 +217,14 @@ fun SleepTimerCompactSection(
                     shapes = IconButtonDefaults.shapes(),
                     modifier = Modifier.semantics { contentDescription = less },
                 ) {
-                    Text("−1", style = MaterialTheme.typography.labelLarge)
+                    Text("−1", style = MaterialTheme.typography.labelLarge.tabular)
                 }
                 FilledTonalIconButton(
                     onClick = { onAdjust(1) },
                     shapes = IconButtonDefaults.shapes(),
                     modifier = Modifier.semantics { contentDescription = more },
                 ) {
-                    Text("+1", style = MaterialTheme.typography.labelLarge)
+                    Text("+1", style = MaterialTheme.typography.labelLarge.tabular)
                 }
             }
             Spacer(modifier = Modifier.weight(1f))
@@ -219,18 +233,27 @@ fun SleepTimerCompactSection(
             }
         }
     }
-    Column(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+        modifier = Modifier.selectableGroup(),
+    ) {
         SleepPresets.chunked(SleepPresetColumns).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
-                row.forEach { minutes ->
+            Row(horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
+                row.forEachIndexed { idx, minutes ->
                     val checked = (mode as? SleepTimerMode.After)?.minutes == minutes
                     ToggleButton(
                         checked = checked,
                         onCheckedChange = { on -> onSet(if (on) SleepTimerMode.After(minutes) else SleepTimerMode.Off) },
-                        modifier = Modifier.weight(1f),
+                        shapes = when (idx) {
+                            0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                            row.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                            else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                        },
+                        modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
                     ) {
                         Text(
                             stringResource(Res.string.sleep_timer_minutes, minutes),
+                            style = MaterialTheme.typography.labelLarge.tabular,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -242,7 +265,7 @@ fun SleepTimerCompactSection(
         ToggleButton(
             checked = endChecked,
             onCheckedChange = { on -> onSet(if (on) SleepTimerMode.EndOfItem else SleepTimerMode.Off) },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().semantics { role = Role.RadioButton },
         ) {
             Text(stringResource(Res.string.sleep_timer_end_of_item_option), maxLines = 1)
         }
@@ -312,7 +335,7 @@ fun SleepClock(
                     shapes = IconButtonDefaults.shapes(),
                     modifier = Modifier.semantics { contentDescription = less },
                 ) {
-                    Text("−1", style = MaterialTheme.typography.labelLarge)
+                    Text("−1", style = MaterialTheme.typography.labelLarge.tabular)
                 }
                 FilledTonalIconButton(
                     onClick = { onAdjust(1) },
@@ -320,7 +343,7 @@ fun SleepClock(
                     shapes = IconButtonDefaults.shapes(),
                     modifier = Modifier.semantics { contentDescription = more },
                 ) {
-                    Text("+1", style = MaterialTheme.typography.labelLarge)
+                    Text("+1", style = MaterialTheme.typography.labelLarge.tabular)
                 }
             }
             TextButton(onClick = onCancel, enabled = mode != SleepTimerMode.Off) {

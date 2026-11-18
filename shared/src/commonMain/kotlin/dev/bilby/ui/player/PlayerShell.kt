@@ -1,6 +1,7 @@
 package dev.bilby.ui.player
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -61,6 +62,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -148,6 +150,19 @@ data class PlayerGestureOptions(
 )
 
 /**
+ * 隔离播放器高频时间刻度([positionMillis]、[bufferedPositionMillis]、[durationMillis])与拖拽目标，
+ * 避免 200ms 轮询与 60fps 拖拽触发外层 [PlayerShell] 全树重组。
+ */
+@Stable
+class PlayerProgressState {
+    var positionMillis by mutableLongStateOf(0L)
+    var bufferedPositionMillis by mutableLongStateOf(0L)
+    var durationMillis by mutableLongStateOf(0L)
+    var dragPositionMillis by mutableStateOf<Long?>(null)
+    val displayPositionMillis: Long get() = dragPositionMillis ?: positionMillis
+}
+
+/**
  * 外壳交给内容层的东西:壳知道、而 slot 又必须知道的那些。
  *
  * 它同时是 [BoxScope],所以 slot 里可以直接用 `align()` 摆位置。
@@ -162,19 +177,23 @@ class PlayerShellScope internal constructor(
     val controlsVisible: Boolean,
     val canPrevious: Boolean,
     val canNext: Boolean,
-    /** 显示用位置:拖拽中是拖到的目标,否则是播放器当前位置。 */
-    val positionMillis: Long,
-    /** 已缓冲到哪儿,画在进度条上。拖拽中不跟着拖走 —— 它说的是流,不是手指。 */
-    val bufferedPositionMillis: Long,
+    val progressState: PlayerProgressState,
     /**
      * 底部控制条实测的高度。overlay 层要让开控制条的东西(字幕)按它抬,不再猜档位 ——
      * 一行与两行排法差着五十来 dp,常量只按得了一种。收起着时保留上一次的高度。
      */
     val controlBarHeight: Dp,
-    val durationMillis: Long,
     val speed: Float,
     internal val actions: PlayerShellActions,
 ) : BoxScope by box {
+
+    /** 显示用位置:拖拽中是拖到的目标,否则是播放器当前位置。 */
+    val positionMillis: Long get() = progressState.displayPositionMillis
+
+    /** 已缓冲到哪儿,画在进度条上。拖拽中不跟着拖走 —— 它说的是流,不是手指。 */
+    val bufferedPositionMillis: Long get() = progressState.bufferedPositionMillis
+
+    val durationMillis: Long get() = progressState.durationMillis
 
     /** 有交互发生,自动隐藏重新计时。控制条里每个按钮都该调它。 */
     fun keepControlsAwake() = actions.keepAwake()
@@ -385,10 +404,8 @@ fun PlayerShell(
     // 接着听。听视频不受影响:那条分支上这个壳根本不会被组合。
     KeepScreenOn(isPlaying && attached)
 
-    var position by remember { mutableLongStateOf(0L) }
-    var bufferedPosition by remember { mutableLongStateOf(0L) }
-    var duration by remember { mutableLongStateOf(0L) }
-    var dragPosition by remember { mutableStateOf<Long?>(null) }
+    val progress = remember { PlayerProgressState() }
+    val isSeeking by remember { derivedStateOf { progress.dragPositionMillis != null } }
     var resumeAfterDrag by remember { mutableStateOf(false) }
     var controlBarHeight by remember(isFullscreen, pip) { mutableStateOf(0.dp) }
     val density = LocalDensity.current
@@ -528,13 +545,13 @@ fun PlayerShell(
     }
 
     val pollInterval =
-        if (controlsVisible || dragPosition != null) POSITION_POLL_ACTIVE_MILLIS
+        if (controlsVisible || isSeeking) POSITION_POLL_ACTIVE_MILLIS
         else POSITION_POLL_IDLE_MILLIS
     LaunchedEffect(player, pollInterval) {
         while (true) {
-            if (dragPosition == null) position = player.currentPosition
-            bufferedPosition = player.bufferedPosition
-            duration = player.duration.coerceAtLeast(0)
+            if (progress.dragPositionMillis == null) progress.positionMillis = player.currentPosition
+            progress.bufferedPositionMillis = player.bufferedPosition
+            progress.durationMillis = player.duration.coerceAtLeast(0)
             if (attached) videoAspect = player.videoSize.displayAspect()
             delay(pollInterval)
         }
@@ -553,9 +570,9 @@ fun PlayerShell(
     }
     // 进画中画那一刻把控件收起;出来之后照常点一下再唤出。
     LaunchedEffect(pip) { if (pip) controlsVisible = false }
-    LaunchedEffect(controlsVisible, isPlaying, dragPosition, menuOpen, hoveringControls) {
+    LaunchedEffect(controlsVisible, isPlaying, isSeeking, menuOpen, hoveringControls) {
         // 暂停时控件常驻:此时用户多半正要点什么,把它藏掉只会逼人再点一次。
-        if (controlsVisible && isPlaying && dragPosition == null && !menuOpen && !hoveringControls) {
+        if (controlsVisible && isPlaying && !isSeeking && !menuOpen && !hoveringControls) {
             lastInteractionMillis[0] = elapsedRealtimeMillis()
             while (true) {
                 val elapsed = (elapsedRealtimeMillis() - lastInteractionMillis[0]).coerceAtLeast(0L)
@@ -577,8 +594,6 @@ fun PlayerShell(
         fullBleed = fullBleed,
         hideStatusBar = hideStatusBar,
     )
-
-    val displayPosition = dragPosition ?: position
 
     val togglePlayPause = {
         // 看 playWhenReady,和中央播放键画出来的形态同一个判据:缓冲中键上画的是"暂停",
@@ -606,12 +621,12 @@ fun PlayerShell(
             resumeAfterDrag = player.isPlaying
             player.pause()
         },
-        seekTo = { dragPosition = it },
+        seekTo = { progress.dragPositionMillis = it },
         seekFinished = {
-            dragPosition?.let { target ->
+            progress.dragPositionMillis?.let { target ->
                 player.seekTo(target)
-                position = target
-                dragPosition = null
+                progress.positionMillis = target
+                progress.dragPositionMillis = null
                 if (resumeAfterDrag) player.play()
             }
             keepAwake()
@@ -621,6 +636,18 @@ fun PlayerShell(
             keepAwake()
         },
     )
+
+    var wereControlsVisible by remember { mutableStateOf(controlsVisible) }
+    var wasMenuOpen by remember { mutableStateOf(menuOpen) }
+    LaunchedEffect(controlsVisible, menuOpen) {
+        val hidControls = wereControlsVisible && !controlsVisible
+        val closedMenu = wasMenuOpen && !menuOpen
+        wereControlsVisible = controlsVisible
+        wasMenuOpen = menuOpen
+        if ((hidControls || closedMenu) && !editableFocus.isEditableFocused && speedController?.active != true) {
+            focusRequester.requestFocus()
+        }
+    }
 
     // 壳里的一切(控件、菜单、手势提示,以及调用方塞进来的 overlay 与控制条)都按深色主题取色,
     // 见 [PlayerTheme]。
@@ -638,18 +665,28 @@ fun PlayerShell(
             // 光标移进菜单对这个 Box 来说也是一次离开。
             .pointerInput(locked, speedController) {
                 awaitPointerEventScope {
+                    var lastMousePos: Offset? = null
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
-                        if (locked || speedController?.active == true || event.changes.firstOrNull()?.type != PointerType.Mouse) continue
+                        val firstChange = event.changes.firstOrNull()
+                        if (locked || speedController?.active == true || firstChange?.type != PointerType.Mouse) continue
                         when (event.type) {
                             PointerEventType.Move -> {
+                                if (firstChange.position == lastMousePos) continue
+                                lastMousePos = firstChange.position
                                 if (!controlsVisible) controlsVisible = true
                                 keepAwake()
                             }
                             PointerEventType.Exit -> {
-                                if (isPlaying && !menuOpen && dragPosition == null) controlsVisible = false
+                                lastMousePos = null
+                                if (!pointerSource.isTouchLike && isPlaying && !menuOpen && progress.dragPositionMillis == null) {
+                                    controlsVisible = false
+                                }
                             }
-                            PointerEventType.Press -> focusRequester.requestFocus()
+                            PointerEventType.Press -> {
+                                lastMousePos = firstChange.position
+                                focusRequester.requestFocus()
+                            }
                         }
                     }
                 }
@@ -664,10 +701,8 @@ fun PlayerShell(
             controlsVisible = controlsVisible,
             canPrevious = playbackState.queue?.canPrevious == true,
             canNext = playbackState.queue?.canNext == true,
-            positionMillis = displayPosition,
-            bufferedPositionMillis = bufferedPosition,
+            progressState = progress,
             controlBarHeight = controlBarHeight,
-            durationMillis = duration,
             speed = userSpeed,
             actions = actions,
         )
@@ -741,10 +776,11 @@ fun PlayerShell(
                     if (event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return@onKeyEvent false
                     val digit = event.key.digitIndex()
                     if (digit != null) {
-                        if (event.isShiftPressed || !gestures.seek || duration <= 0L) return@onKeyEvent false
-                        val target = (duration * digit / 10L).coerceIn(0L, duration)
+                        val dur = progress.durationMillis
+                        if (event.isShiftPressed || !gestures.seek || dur <= 0L) return@onKeyEvent false
+                        val target = (dur * digit / 10L).coerceIn(0L, dur)
                         player.seekTo(target)
-                        position = target
+                        progress.positionMillis = target
                         keepAwake()
                         return@onKeyEvent true
                     }
@@ -907,20 +943,20 @@ fun PlayerShell(
                                 // 拖拽期间只动本地位置,松手才真 seek:每帧 seek 会让播放器不停丢
                                 // 缓冲重新起播,表现为拖不动。和进度条的处理是同一套。
                                 if (gesture is PlayerGesture.Seek && seekCancelArmed != true) {
-                                    dragPosition?.let { target ->
+                                    progress.dragPositionMillis?.let { target ->
                                         player.seekTo(target)
-                                        position = target
+                                        progress.positionMillis = target
                                     }
                                 }
                                 gesture = null
-                                dragPosition = null
+                                progress.dragPositionMillis = null
                                 seekCancelArmed = null
                                 keepAwake()
                             },
                             onDragCancel = {
                                 dragging = false
                                 gesture = null
-                                dragPosition = null
+                                progress.dragPositionMillis = null
                                 seekCancelArmed = null
                             },
                         ) { change, delta ->
@@ -953,10 +989,11 @@ fun PlayerShell(
                                     // 整屏宽对应多长:按时长的四分之一取,夹在 1 到 5 分钟之间。
                                     // 定长(比如恒定 2 分钟)在长视频里要划很多次;按整段时长又会让
                                     // 长视频一格几十秒,微调不了。
-                                    val span = (duration / 4).coerceIn(60_000L, 300_000L)
+                                    val dur = progress.durationMillis
+                                    val span = (dur / 4).coerceIn(60_000L, 300_000L)
                                     val target = current.startPositionMillis +
                                         (accumulated.x / width * span).toLong()
-                                    dragPosition = target.coerceIn(0L, duration.coerceAtLeast(0L))
+                                    progress.dragPositionMillis = target.coerceIn(0L, dur.coerceAtLeast(0L))
                                 }
 
                                 is PlayerGesture.Adjust -> {
@@ -974,7 +1011,7 @@ fun PlayerShell(
                     } finally {
                         dragging = false
                         gesture = null
-                        dragPosition = null
+                        progress.dragPositionMillis = null
                         seekCancelArmed = null
                     }
                 }
@@ -1015,32 +1052,13 @@ fun PlayerShell(
         // 双击在落点那一侧;倍速提示归贴边或画面下方的选档覆盖层显示。
         val largePlayer = rememberLargePlayer(isFullscreen)
         val currentGesture = gesture
-        val seekHud: PlayerHud.Seek? =
-            // 只认画面上的横划。拖进度条时读数在手指上方的气泡里(见 SeekBar 的 timeBubble),
-            // 这里再亮一个框就是同一个时间印两遍。
-            if (dragPosition != null && currentGesture is PlayerGesture.Seek) {
-                PlayerHud.Seek(
-                    targetMillis = displayPosition,
-                    durationMillis = duration,
-                    deltaMillis = displayPosition - currentGesture.startPositionMillis,
-                    cancelArmed = seekCancelArmed == true,
-                )
-            } else {
-                null
-            }
-        // 退场的那几帧里读数已经是 null 了,而那时框还在屏上,总得有东西可画 —— 留住最后一份
-        // 非空的内容,和 [dev.bilby.ui.video.TripleToast] 里的 `shown` 是同一个写法。
-        var shownSeekHud by remember { mutableStateOf<PlayerHud.Seek?>(null) }
-        if (seekHud != null) shownSeekHud = seekHud
-
-        AnimatedVisibility(
-            visible = seekHud != null,
-            enter = fadeIn(effectsSpec),
-            exit = fadeOut(effectsSpec),
+        SeekHudLayer(
+            gesture = currentGesture,
+            progress = progress,
+            seekCancelArmed = seekCancelArmed,
+            effectsSpec = effectsSpec,
             modifier = Modifier.align(Alignment.Center),
-        ) {
-            shownSeekHud?.let { PlayerHudOverlay(it) }
-        }
+        )
 
         val levelHud: PlayerHud.Level? = when ((currentGesture as? PlayerGesture.Adjust)?.kind) {
             VerticalAdjust.Brightness -> {
@@ -1284,7 +1302,7 @@ fun PlayerShell(
         // 仅在加载缓冲时于正中保留轻量化指示器。
         AnimatedVisibility(
             // Android 小窗里不画:那里的播放键是系统给的。桌面小窗在触屏模式下照画，键鼠模式走底栏左端播放键。
-            visible = (!pip || pipWindow != null) && seekHud == null &&
+            visible = (!pip || pipWindow != null) && currentGesture !is PlayerGesture.Seek &&
                 speedController?.active != true &&
                 if (pointerSource.isTouchLike) {
                     (controlsVisible && !locked) || loadingVisible || flashVisible
@@ -1622,6 +1640,43 @@ private const val VOLUME_STEP = 0.05f
 private const val HINT_VISIBLE_MILLIS = 700L
 
 /** 控件在屏上、或者正在拖:这个读数是用户此刻盯着的东西。见取值处的说明。 */
+/**
+ * 单独的横划 seek 浮层叶子：仅此函数在 60fps 拖拽时读取 [PlayerProgressState]，
+ * 外层 [PlayerShell] 与画面/弹幕/控制条不会随拖拽位置重组。
+ */
+@Composable
+private fun SeekHudLayer(
+    gesture: PlayerGesture?,
+    progress: PlayerProgressState,
+    seekCancelArmed: Boolean?,
+    effectsSpec: FiniteAnimationSpec<Float>,
+    modifier: Modifier = Modifier,
+) {
+    val dragPos = progress.dragPositionMillis
+    val seekHud: PlayerHud.Seek? =
+        if (dragPos != null && gesture is PlayerGesture.Seek) {
+            PlayerHud.Seek(
+                targetMillis = dragPos,
+                durationMillis = progress.durationMillis,
+                deltaMillis = dragPos - gesture.startPositionMillis,
+                cancelArmed = seekCancelArmed == true,
+            )
+        } else {
+            null
+        }
+    var shownSeekHud by remember { mutableStateOf<PlayerHud.Seek?>(null) }
+    if (seekHud != null) shownSeekHud = seekHud
+
+    AnimatedVisibility(
+        visible = seekHud != null,
+        enter = fadeIn(effectsSpec),
+        exit = fadeOut(effectsSpec),
+        modifier = modifier,
+    ) {
+        shownSeekHud?.let { PlayerHudOverlay(it) }
+    }
+}
+
 private const val POSITION_POLL_ACTIVE_MILLIS = 200L
 
 /** 控件收起(含息屏只出声):没人看,只要下次唤出时是对的就行。 */

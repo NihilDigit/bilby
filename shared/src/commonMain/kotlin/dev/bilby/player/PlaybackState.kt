@@ -1,5 +1,6 @@
 package dev.bilby.player
 
+import androidx.compose.runtime.Immutable
 import dev.bilby.data.PlayEndMode
 import dev.bilby.data.PlayInfo
 import dev.bilby.data.QueueOrder
@@ -12,6 +13,7 @@ fun liveMediaId(roomId: Long): String = "live:$roomId"
  * 通知栏、锁屏与播放页共用的展示信息。**哪种源都有**,所以它挂在状态顶层而不是队列上 ——
  * 队列曾经兼任元数据来源,那正是直播这类"不是队列"的源塞不进来的原因。
  */
+@Immutable
 data class NowPlaying(
     val title: String,
     /** 视频是 UP 名,直播是主播名。 */
@@ -23,6 +25,7 @@ data class NowPlaying(
  * 队列那一部分的状态。**打开过任何东西之后总是非空** —— 直播也是队列里的一条(设计文档
  * 「决定 5」),只是那份队列只有一条、上下一条都按不动。
  */
+@Immutable
 data class QueueState(
     /** 队列当前这一条。 */
     val current: QueueItem? = null,
@@ -294,6 +297,7 @@ internal class QueuePagination {
     }
 }
 
+@Immutable
 data class AudioPlaybackUiState(
     /** 正在放什么。没打开过任何东西时为 null。 */
     val nowPlaying: NowPlaying? = null,

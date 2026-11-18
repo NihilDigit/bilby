@@ -8,18 +8,20 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.ListItem
+import androidx.compose.material3.FilledTonalToggleButton
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -28,7 +30,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import dev.bilby.data.QualityOption
 import dev.bilby.offline.CachedIndex
@@ -172,13 +176,17 @@ fun OfflineCacheSheet(
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
                     verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                    modifier = Modifier.selectableGroup(),
                 ) {
                     options.forEach { option ->
-                        FilterChip(
-                            selected = quality == option.quality,
-                            onClick = { quality = option.quality },
-                            label = { Text(option.label) },
-                        )
+                        FilledTonalToggleButton(
+                            checked = quality == option.quality,
+                            onCheckedChange = { quality = option.quality },
+                            shapes = ToggleButtonDefaults.shapes(),
+                            modifier = Modifier.semantics { role = Role.RadioButton },
+                        ) {
+                            Text(option.label, maxLines = 1, softWrap = false)
+                        }
                     }
                 }
             }
@@ -204,7 +212,11 @@ fun OfflineCacheSheet(
             contentPadding = PaddingValues(horizontal = Spacing.Tight),
             modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
         ) {
-            items(targets, key = { it.key }) { target ->
+            itemsIndexed(
+                targets,
+                key = { _, target -> target.key },
+                contentType = { _, _ -> "target" },
+            ) { index, target ->
                 val enabled = target.isSelectable(cached)
                 val checked = selected[target.key] == true
                 // 状态行只在有话说时出现。失败的那条也要说:它可勾,但人得知道这是在重下一条
@@ -216,9 +228,10 @@ fun OfflineCacheSheet(
                     else -> null
                 }
                 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
-                ListItem(
+                SegmentedListItem(
                     checked = checked,
                     onCheckedChange = { selected[target.key] = it },
+                    shapes = ListItemDefaults.segmentedShapes(index = index, count = targets.size),
                     enabled = enabled,
                     supportingContent = if (status != null) {
                         { Text(stringResource(status)) }
@@ -228,14 +241,16 @@ fun OfflineCacheSheet(
                     leadingContent = {
                         Checkbox(checked = checked || !enabled, enabled = enabled, onCheckedChange = null)
                     },
-                    // sheet 自己就是容器,行底色跟着它走 —— 画死 surface 会在容器里留下一条条
-                    // 比容器亮的补丁(风格指南 §2.3c 的第二个坑)。
-                    colors = ListItemDefaults.colors(
-                        containerColor = Color.Transparent,
-                        selectedContainerColor = Color.Transparent,
-                        disabledContainerColor = Color.Transparent,
+                    colors = ListItemDefaults.segmentedColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        selectedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        selectedLeadingContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        selectedSupportingContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                     ),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = if (index == 0) 0.dp else ListItemDefaults.SegmentedGap),
                 ) {
                     // 分 P 行显示的是这一 P 的名字。整条视频的标题不再重复印在每一行上 ——
                     // 它们紧挨着,而用户正是从这条视频点进来的。

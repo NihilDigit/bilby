@@ -1,8 +1,28 @@
 package dev.bilby.ui.video
 
+import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.touchOnlyPaging
 import dev.bilby.ui.components.trackEditableFocus
+import dev.bilby.ui.components.verticalWheelScrollsRow
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.material3.ButtonGroup
+import androidx.compose.material3.carousel.HorizontalUncontainedCarousel
+import androidx.compose.material3.carousel.rememberCarouselState
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.Stable
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.layout.onSizeChanged
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.FilledIconButton
@@ -127,13 +147,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ListItemDefaults
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -244,6 +260,7 @@ import dev.bilby.ui.theme.tabular
  * [started] 是这一页自己的事(用户点过没有,决定再点一次是重新检索还是只打开面板)。每一轮长什么样
  * 全在 [RelatedTurn.result] 里,和搜索页是同一份 [AgentTurnState]。
  */
+@Immutable
 data class RelatedState(
     val started: Boolean = false,
     val turns: List<RelatedTurn> = emptyList(),
@@ -252,12 +269,14 @@ data class RelatedState(
 }
 
 /** @param question 用户的追问;第一轮(找相关本身)没有提问,为 null。 */
+@Immutable
 data class RelatedTurn(val id: Long, val question: String?, val result: AgentTurnState)
 
 /**
  * 播放队列(DESIGN 2.4b):合集分集或该 UP 的其他投稿,同时也是「听视频」要播的队列本身。
  * currentBvid 驱动列表里的高亮,[order] 驱动「正序 / 倒序 / 随机」按钮的文案。
  */
+@Immutable
 data class QueueUiState(
     /**
      * 这份队列摊出来的切集清单,**三种形态(详情页、听视频、全屏)共用同一份**,构造点只有
@@ -404,10 +423,14 @@ fun VideoTabs(
          */
         if (!showDanmakuCapsule) {
             val captionSlot = rememberCaptionSlot()
-            BoxWithConstraints(
-                modifier = captionSlot.modifier.fillMaxWidth(),
+            val density = LocalDensity.current
+            var stripWidth by remember { mutableStateOf(0.dp) }
+            Box(
+                modifier = captionSlot.modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { stripWidth = with(density) { it.width.toDp() } },
             ) {
-                val leadingInset = ((maxWidth - Breakpoints.ReadableWidth) / 2).coerceAtLeast(0.dp)
+                val leadingInset = ((stripWidth - Breakpoints.ReadableWidth) / 2).coerceAtLeast(0.dp)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -458,8 +481,14 @@ fun VideoTabs(
             // 写弹幕时视图切换退场,胶囊铺满整行:这时要的是输入的宽度,切页可以等写完。
             AnimatedVisibility(
                 visible = !danmakuInput.open,
-                enter = expandHorizontally(expandFrom = Alignment.Start) + fadeIn(),
-                exit = shrinkHorizontally(shrinkTowards = Alignment.Start) + fadeOut(),
+                enter = expandHorizontally(
+                    animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+                    expandFrom = Alignment.Start,
+                ) + fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()),
+                exit = shrinkHorizontally(
+                    animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+                    shrinkTowards = Alignment.Start,
+                ) + fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
             ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
             Row(horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
@@ -492,8 +521,9 @@ fun VideoTabs(
         }
         // 发送失败的原因就在胶囊底下一行,草稿留在胶囊里,改一个字再按发送就是重试。
         (danmakuInput.send as? DanmakuSend.Failed)?.takeIf { danmakuInput.open && showDanmakuCapsule }?.let { failed ->
+            val msg = failed.message ?: failed.messageRes?.let { stringResource(it) }.orEmpty()
             Text(
-                text = stringResource(Res.string.danmaku_send_failed, failed.message),
+                text = stringResource(Res.string.danmaku_send_failed, msg),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(horizontal = Spacing.Comfortable),
@@ -652,10 +682,11 @@ private fun CompactPrimaryTabStrip(
  *
  * 开关输入层归调用方(VideoScreen 的 openDanmakuInput / closeDanmakuInput),这里只报时机。
  */
+@Stable
 class DanmakuInput(
     /** 此刻是不是在写。 */
     val open: Boolean,
-    val draft: String,
+    val draft: () -> String,
     val onDraftChange: (String) -> Unit,
     val send: DanmakuSend,
     val onOpen: () -> Unit,
@@ -697,7 +728,8 @@ private fun DanmakuCapsule(
     val sending = input.send is DanmakuSend.Sending
     val hint = stringResource(Res.string.danmaku_input_hint)
     val stillOpen by rememberUpdatedState(input.open)
-    val canSend = input.draft.isNotBlank() && !sending
+    val draftText = input.draft()
+    val canSend = draftText.isNotBlank() && !sending
 
     LaunchedEffect(input.open) {
         if (input.open) {
@@ -723,8 +755,14 @@ private fun DanmakuCapsule(
         Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
             AnimatedVisibility(
                 visible = !input.open,
-                enter = expandHorizontally(expandFrom = Alignment.Start) + fadeIn(),
-                exit = shrinkHorizontally(shrinkTowards = Alignment.Start) + fadeOut(),
+                enter = expandHorizontally(
+                    animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+                    expandFrom = Alignment.Start,
+                ) + fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()),
+                exit = shrinkHorizontally(
+                    animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+                    shrinkTowards = Alignment.Start,
+                ) + fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
             ) {
                 DanmakuToggle(enabled = enabled, onEnabledChange = onEnabledChange)
             }
@@ -735,7 +773,7 @@ private fun DanmakuCapsule(
                         .padding(start = Spacing.Comfortable),
                     contentAlignment = Alignment.CenterStart,
                 ) {
-                    if (input.draft.isEmpty()) {
+                    if (draftText.isEmpty()) {
                         Text(
                             text = hint,
                             style = MaterialTheme.typography.bodyMedium,
@@ -745,7 +783,7 @@ private fun DanmakuCapsule(
                     }
                     var wasFocused by remember { mutableStateOf(false) }
                     BasicTextField(
-                        value = input.draft,
+                        value = draftText,
                         onValueChange = { if (it.length <= DanmakuMaxLength) input.onDraftChange(it) },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
@@ -756,6 +794,16 @@ private fun DanmakuCapsule(
                             .fillMaxWidth()
                             .focusRequester(focusRequester)
                             .trackEditableFocus()
+                            .onPreviewKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                                    keyboard?.hide()
+                                    focusManager.clearFocus()
+                                    input.onClose()
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
                             // 放掉焦点就是退出输入。判"曾经拿到过":刚进组合的那一帧焦点还没到,
                             // 那一下的 false 不能当成放掉。
                             .onFocusChanged { state ->
@@ -765,18 +813,20 @@ private fun DanmakuCapsule(
                             .semantics { contentDescription = hint },
                     )
                 }
-                if (input.draft.length >= CounterFrom) {
+                if (draftText.length >= CounterFrom) {
                     Text(
-                        text = stringResource(Res.string.danmaku_length_counter, input.draft.length, DanmakuMaxLength),
-                        style = MaterialTheme.typography.labelSmall,
+                        text = stringResource(Res.string.danmaku_length_counter, draftText.length, DanmakuMaxLength),
+                        style = MaterialTheme.typography.labelSmall.tabular,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = Spacing.Hair),
                     )
                 }
                 AnimatedVisibility(
                     visible = canSend || sending,
-                    enter = scaleIn() + fadeIn(),
-                    exit = scaleOut() + fadeOut(),
+                    enter = scaleIn(MaterialTheme.motionScheme.fastSpatialSpec()) +
+                        fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()),
+                    exit = scaleOut(MaterialTheme.motionScheme.fastSpatialSpec()) +
+                        fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
                 ) {
                     // 胶囊里唯一的强调:填充的发送键,和胶囊同一个圆。
                     FilledIconButton(
@@ -818,7 +868,7 @@ private fun DanmakuCapsule(
                     CapsuleRipple(sendSource, RoundedCornerShape(topEndPercent = 50, bottomEndPercent = 50))
                     Text(
                         // 草稿还在就把它亮出来:写了一半退出去,胶囊上看得见那半句。
-                        text = input.draft.ifEmpty { hint },
+                        text = draftText.ifEmpty { hint },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -970,104 +1020,103 @@ private fun IntroTab(
     //
     // 窗口是当前项前后各 [InlineQueueRadius] 条。当前项在队列两头时窗口往里挪,始终凑满,
     // 打开最后一集看到的是最后几集。
-    val shownRows = queue.rows.inlineWindow(queue.rows.currentIndex())
+    val shownRows = remember(queue.rows) { queue.rows.inlineWindow(queue.rows.currentIndex()) }
+    val fullIndexByBvid = remember(queue.rows) {
+        queue.rows.withIndex().associate { (i, r) -> r.bvid to i }
+    }
+    val introListState = rememberLazyListState()
 
-    /*
-     * **整页一个列表,和评论页一样滚、一样收画面。**
-     *
-     * 这一栏曾经整体不滚,队列占满剩下的高度、在自己的视口里滚,好让当前项居中、前后各摊开
-     * 25 条。由那个前提派生出一串补丁:简介页不许收画面,简介正文被挤进面板,找相关的 sheet
-     * 要从这里回报投币行的窗口坐标,队列自带一份居中逻辑。
-     * 当前项改为排在队列段的第一条、此前的条目收成一行之后,队列不再需要自己的视口。
-     *
-     * 块与块之间的间距写在各自的 bottom padding 上,不用 `verticalArrangement`:队列那一段
-     * 的条与条之间是 2dp 的缝,一个统一的 spacedBy 给不出两种间距。
-     */
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-    ) {
-        item(key = "title") {
-            TitleBlock(
-                detail = detail,
-                tags = videoTags,
-                expanded = infoExpanded,
-                onToggle = {
-                    infoExpanded = !infoExpanded
-                    // 标签到这一刻才拉,理由见 VideoViewModel.loadVideoTags。
-                    if (infoExpanded) onLoadTags()
-                },
-                onTagClick = onTagClick,
-                onOpenLink = onOpenLink,
-                onMentionClick = onUpClick,
-                onSeek = onSeek,
-                modifier = Modifier.padding(bottom = IntroBlockGap),
-            )
-        }
-
-        item(key = "up") {
-            Box(modifier = Modifier.padding(bottom = IntroBlockGap)) {
-                UpRow(
-                    mid = detail.up.mid,
-                    faceUrl = detail.up.faceUrl,
-                    name = detail.up.name,
-                    upCard = upCard,
-                    onUpClick = onUpClick,
-                    staff = detail.staff,
-                    staffFollowed = staffFollowed,
-                    onFollowStaff = onFollowStaff,
-                    followState = followState,
-                    onToggleFollow = onToggleFollow,
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = introListState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+        ) {
+            item(key = "title", contentType = "title") {
+                TitleBlock(
+                    detail = detail,
+                    tags = videoTags,
+                    expanded = infoExpanded,
+                    onToggle = {
+                        infoExpanded = !infoExpanded
+                        // 标签到这一刻才拉,理由见 VideoViewModel.loadVideoTags。
+                        if (infoExpanded) onLoadTags()
+                    },
+                    onTagClick = onTagClick,
+                    onOpenLink = onOpenLink,
+                    onMentionClick = onUpClick,
+                    onSeek = onSeek,
+                    modifier = Modifier.padding(bottom = IntroBlockGap),
                 )
             }
-        }
 
-        item(key = "actions") {
-            ActionButtonsRow(
-                modifier = Modifier.padding(bottom = BeforeSectionHeaderGap),
-                stat = detail.stat,
-                maxCoins = detail.maxCoins,
-                relation = relation,
-                favFolders = favFolders,
-                addedToView = addedToView,
-                onLike = onLike,
-                onTriple = onTriple,
-                onToggleToView = onToggleToView,
-                onCoin = onCoin,
-                coinAttempt = coinAttempt,
-                onCoinDialogClosed = onCoinDialogClosed,
-                onOpenFavPicker = onOpenFavPicker,
-                onFavConfirm = onFavConfirm,
-                onListen = onListen,
-            )
-        }
+            item(key = "up", contentType = "up") {
+                Box(modifier = Modifier.padding(bottom = IntroBlockGap)) {
+                    UpRow(
+                        mid = detail.up.mid,
+                        faceUrl = detail.up.faceUrl,
+                        name = detail.up.name,
+                        upCard = upCard,
+                        onUpClick = onUpClick,
+                        staff = detail.staff,
+                        staffFollowed = staffFollowed,
+                        onFollowStaff = onFollowStaff,
+                        followState = followState,
+                        onToggleFollow = onToggleFollow,
+                    )
+                }
+            }
 
-        // 分 P 来自切集清单里当前那一条,不再另从详情取一遍。清单已经把"这一刻能不能切 P"
-        // 判过了(见 buildEpisodeRows):对不上身份时它是空的,这一排因此整个不出现。
-        //
-        // 合集的分集不在这里另排一行 chip:它们就是下面的播放队列。
-        if (currentParts.isNotEmpty()) {
-            partItems(
-                parts = currentParts,
+            item(key = "actions", contentType = "actions") {
+                ActionButtonsRow(
+                    modifier = Modifier.padding(bottom = BeforeSectionHeaderGap),
+                    stat = detail.stat,
+                    maxCoins = detail.maxCoins,
+                    relation = relation,
+                    favFolders = favFolders,
+                    addedToView = addedToView,
+                    onLike = onLike,
+                    onTriple = onTriple,
+                    onToggleToView = onToggleToView,
+                    onCoin = onCoin,
+                    coinAttempt = coinAttempt,
+                    onCoinDialogClosed = onCoinDialogClosed,
+                    onOpenFavPicker = onOpenFavPicker,
+                    onFavConfirm = onFavConfirm,
+                    onListen = onListen,
+                )
+            }
+
+            // 分 P 来自切集清单里当前那一条,不再另从详情取一遍。清单已经把"这一刻能不能切 P"
+            // 判过了(见 buildEpisodeRows):对不上身份时它是空的,这一排因此整个不出现。
+            //
+            // 合集的分集不在这里另排一行 chip:它们就是下面的播放队列。
+            if (currentParts.isNotEmpty()) {
+                partItems(
+                    parts = currentParts,
+                    playing = playing,
+                    onOpenAll = { partSheetOpen = true },
+                    onSelect = onSelectEpisode,
+                )
+            }
+
+            queueItems(
+                queue = queue,
+                upMid = detail.up.mid,
                 playing = playing,
-                onOpenAll = { partSheetOpen = true },
-                onSelect = onSelectEpisode,
+                shownRows = shownRows,
+                fullIndexByBvid = fullIndexByBvid,
+                onOpenFullQueue = { fullQueueOpen = true },
+                onOpenQueueSource = onOpenQueueSource,
+                onSelectEpisode = onSelectEpisode,
+                onCycleEndMode = onCycleEndMode,
+                onCycleOrder = onCycleOrder,
+                onFindRelated = onFindRelated,
+                onCache = onCache,
+                onRetryQueue = onRetryQueue,
             )
         }
-
-        queueItems(
-            queue = queue,
-            playing = playing,
-            shownRows = shownRows,
-            onOpenFullQueue = { fullQueueOpen = true },
-            onOpenQueueSource = onOpenQueueSource,
-            onSelectEpisode = onSelectEpisode,
-            onCycleEndMode = onCycleEndMode,
-            onCycleOrder = onCycleOrder,
-            onFindRelated = onFindRelated,
-            onCache = onCache,
-            onRetryQueue = onRetryQueue,
-        )
+        ListScrollbar(introListState, Modifier.align(Alignment.CenterEnd))
     }
 
     if (partSheetOpen && currentParts.isNotEmpty()) {
@@ -1357,8 +1406,10 @@ private fun UpRow(
                     }
                 }
             } else {
+                val staffState = rememberLazyListState()
                 LazyRow(
-                    modifier = Modifier.weight(1f),
+                    state = staffState,
+                    modifier = Modifier.weight(1f).verticalWheelScrollsRow(staffState),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
                 ) {
                     items(participants, key = { "${it.mid}-${it.name}" }) { participant ->
@@ -1492,7 +1543,7 @@ private fun TitleBlock(
     val arrow: @Composable () -> Unit = {
         Icon(
             imageVector = if (expanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
-            contentDescription = stringResource(Res.string.video_intro_open),
+            contentDescription = stringResource(if (expanded) Res.string.action_close else Res.string.video_intro_open),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(Dimens.IconInline),
         )
@@ -1879,6 +1930,7 @@ private fun ActionButtonsRow(
 
     /** 手指此刻按在点赞那一格上没有。见 [ActionItem] 的 `onHoldingChange`。 */
     var holdingLike by remember { mutableStateOf(false) }
+    var tripleBurstSeq by remember { mutableIntStateOf(0) }
 
     /**
      * 按住点赞时那圈进度环画到哪儿了。**长满的那一刻正是三连成立的那一刻。**
@@ -1906,92 +1958,134 @@ private fun ActionButtonsRow(
         label = "tripleHoldProgress",
     )
 
-    // **一排分段的格子**,和下面的队列同一种外形:格与格之间留缝,整排首尾大圆角、中间小圆角。
-    // 格子曾经没有底色,图标和计数在格内居中,最左最右两格离页边各空出半格,这一排看上去缩在
-    // 中间,和上下贴着页边距的标题、队列对不齐。有了底色,格子的外沿就是页边距。
-    Row(
+    // 使用 M3E ButtonGroup + animateWidth 承载五格分段操作：按住或点击任一项时该格弹性舒展，
+    // 邻格轻微让位，同时保留 5 项全露出的图标+计数结构与手势长按三连。
+    ButtonGroup(
+        overflowIndicator = {},
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(ActionSegmentGap),
+        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
     ) {
+        val likeInteraction = remember { MutableInteractionSource() }
+        val coinInteraction = remember { MutableInteractionSource() }
+        val favInteraction = remember { MutableInteractionSource() }
+        val toViewInteraction = remember { MutableInteractionSource() }
+        val listenInteraction = remember { MutableInteractionSource() }
+
         // 长按三连挂在点赞上,这是 B 站的老手势;不另开一格,那一排已经有五个动作了。
-        ActionItem(
-            modifier = Modifier.weight(1f),
-            shape = horizontalSegmentShape(index = 0, count = ActionCount),
-            selected = relation?.liked == true,
-            enabled = relation != null,
-            label = formatCount(stat.like),
-            contentDescription = stringResource(
-                if (relation?.liked == true) Res.string.video_action_unlike else Res.string.video_action_like,
-            ),
-            selectedIcon = Icons.Filled.ThumbUp,
-            icon = Icons.Outlined.ThumbUp,
-            onClick = onLike,
-            onLongClick = onTriple,
-            longClickLabel = stringResource(Res.string.video_triple),
-            onHoldingChange = { holdingLike = it },
-            holdProgress = holdProgress,
+        customItem(
+            buttonGroupContent = {
+                ActionItem(
+                    modifier = Modifier.weight(1f).animateWidth(likeInteraction),
+                    interactionSource = likeInteraction,
+                    shape = horizontalSegmentShape(index = 0, count = ActionCount),
+                    selected = relation?.liked == true,
+                    enabled = relation != null,
+                    label = formatCount(stat.like),
+                    contentDescription = stringResource(
+                        if (relation?.liked == true) Res.string.video_action_unlike else Res.string.video_action_like,
+                    ),
+                    selectedIcon = Icons.Filled.ThumbUp,
+                    icon = Icons.Outlined.ThumbUp,
+                    onClick = onLike,
+                    onLongClick = {
+                        tripleBurstSeq += 1
+                        onTriple()
+                    },
+                    longClickLabel = stringResource(Res.string.video_triple),
+                    onHoldingChange = { holdingLike = it },
+                    holdProgress = holdProgress,
+                    burstSeq = tripleBurstSeq,
+                )
+            },
+            menuContent = {},
         )
         // 投币点下去是弹框(问投几枚)而不是直接投,但"已投币"是一个实实在在的可显示状态,
         // 所以它和点赞用同一种表达,区别只在点击后发生什么。
-        ActionItem(
-            modifier = Modifier.weight(1f),
-            shape = horizontalSegmentShape(index = 1, count = ActionCount),
-            selected = (relation?.coined ?: 0) > 0,
-            enabled = relation != null,
-            label = formatCount(stat.coin),
-            contentDescription = stringResource(Res.string.video_action_coin),
-            // 硬币这一格不走 Material 图标,自己画一个圆加一个 B,见 [CoinGlyph]。
-            glyph = { tint, container ->
-                CoinGlyph(tint = tint, filled = (relation?.coined ?: 0) > 0, cutout = container)
+        customItem(
+            buttonGroupContent = {
+                ActionItem(
+                    modifier = Modifier.weight(1f).animateWidth(coinInteraction),
+                    interactionSource = coinInteraction,
+                    shape = horizontalSegmentShape(index = 1, count = ActionCount),
+                    selected = (relation?.coined ?: 0) > 0,
+                    enabled = relation != null,
+                    label = formatCount(stat.coin),
+                    contentDescription = stringResource(Res.string.video_action_coin),
+                    // 硬币这一格不走 Material 图标,自己画一个圆加一个 B,见 [CoinGlyph]。
+                    glyph = { tint, container ->
+                        CoinGlyph(tint = tint, filled = (relation?.coined ?: 0) > 0, cutout = container)
+                    },
+                    onClick = { showCoinDialog = true },
+                    holdProgress = holdProgress,
+                    burstSeq = tripleBurstSeq,
+                )
             },
-            onClick = { showCoinDialog = true },
-            holdProgress = holdProgress,
+            menuContent = {},
         )
-        ActionItem(
-            modifier = Modifier.weight(1f),
-            shape = horizontalSegmentShape(index = 2, count = ActionCount),
-            selected = relation?.favored == true,
-            enabled = relation != null,
-            label = formatCount(stat.favorite),
-            contentDescription = stringResource(Res.string.video_action_favorite),
-            selectedIcon = Icons.Filled.Star,
-            icon = Icons.Outlined.StarBorder,
-            iconSize = ActionStarSize,
-            onClick = {
-                awaitingFavFolders = true
-                onOpenFavPicker()
+        customItem(
+            buttonGroupContent = {
+                ActionItem(
+                    modifier = Modifier.weight(1f).animateWidth(favInteraction),
+                    interactionSource = favInteraction,
+                    shape = horizontalSegmentShape(index = 2, count = ActionCount),
+                    selected = relation?.favored == true,
+                    enabled = relation != null,
+                    label = formatCount(stat.favorite),
+                    contentDescription = stringResource(Res.string.video_action_favorite),
+                    selectedIcon = Icons.Filled.Star,
+                    icon = Icons.Outlined.StarBorder,
+                    iconSize = ActionStarSize,
+                    onClick = {
+                        awaitingFavFolders = true
+                        onOpenFavPicker()
+                    },
+                    holdProgress = holdProgress,
+                    burstSeq = tripleBurstSeq,
+                )
             },
-            holdProgress = holdProgress,
+            menuContent = {},
         )
         // 稍后再看:在这一页里是个 toggle,进页面时总是未加入态(见 VideoViewModel.addedToView)。
-        ActionItem(
-            modifier = Modifier.weight(1f),
-            shape = horizontalSegmentShape(index = 3, count = ActionCount),
-            selected = addedToView,
-            enabled = true,
-            label = stringResource(
-                if (addedToView) Res.string.video_action_toview_added else Res.string.video_action_toview,
-            ),
-            contentDescription = stringResource(Res.string.video_action_toview_desc),
-            selectedIcon = Icons.Filled.WatchLater,
-            icon = Icons.Outlined.WatchLater,
-            onClick = onToggleToView,
+        customItem(
+            buttonGroupContent = {
+                ActionItem(
+                    modifier = Modifier.weight(1f).animateWidth(toViewInteraction),
+                    interactionSource = toViewInteraction,
+                    shape = horizontalSegmentShape(index = 3, count = ActionCount),
+                    selected = addedToView,
+                    enabled = true,
+                    label = stringResource(
+                        if (addedToView) Res.string.video_action_toview_added else Res.string.video_action_toview,
+                    ),
+                    contentDescription = stringResource(Res.string.video_action_toview_desc),
+                    selectedIcon = Icons.Filled.WatchLater,
+                    icon = Icons.Outlined.WatchLater,
+                    onClick = onToggleToView,
+                )
+            },
+            menuContent = {},
         )
         // 听视频挨着稍后再看:这两件事是同一类决定——**这条视频我打算怎么消费**(现在只听、
         // 还是回头再看),而左边三个是对内容表态。它原先在画面底部那条控制条上,那里全是
         // "播放器现在怎么放"(倍速、清晰度、字幕、弹幕),听视频混在里面读不出它会换掉整页形态。
         //
         // 没有选中态:它不是开关,点下去就切到听视频那一屏了。
-        ActionItem(
-            modifier = Modifier.weight(1f),
-            shape = horizontalSegmentShape(index = 4, count = ActionCount),
-            selected = false,
-            enabled = true,
-            label = stringResource(Res.string.video_action_listen),
-            contentDescription = stringResource(Res.string.video_action_listen),
-            selectedIcon = Icons.Filled.Headphones,
-            icon = Icons.Filled.Headphones,
-            onClick = onListen,
+        customItem(
+            buttonGroupContent = {
+                ActionItem(
+                    modifier = Modifier.weight(1f).animateWidth(listenInteraction),
+                    interactionSource = listenInteraction,
+                    shape = horizontalSegmentShape(index = 4, count = ActionCount),
+                    selected = false,
+                    enabled = true,
+                    label = stringResource(Res.string.video_action_listen),
+                    contentDescription = stringResource(Res.string.video_action_listen),
+                    selectedIcon = Icons.Filled.Headphones,
+                    icon = Icons.Filled.Headphones,
+                    onClick = onListen,
+                )
+            },
+            menuContent = {},
         )
         // 评论数只在 tab 标题上出现一次:同一个数字在同屏显示两遍没有信息量。
     }
@@ -2047,6 +2141,7 @@ private fun ActionItem(
     /** 这一格在整排里的外形,见 [horizontalSegmentShape]。 */
     shape: Shape,
     modifier: Modifier = Modifier,
+    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     /** 未选中的字形。传 [glyph] 的那一格不用它。 */
     icon: ImageVector? = null,
     /** 选中的字形。同上。 */
@@ -2071,6 +2166,8 @@ private fun ActionItem(
     onHoldingChange: (Boolean) -> Unit = {},
     /** 这一格上那圈进度环画到哪儿了。0 就是不画,见 [ActionButtonsRow]。 */
     holdProgress: Float = 0f,
+    /** 仅在三连满 1.5s 触发的那一刻递增，驱动一次性的因果完成辐射圈，随后立即归零。 */
+    burstSeq: Int = 0,
     /**
      * 自己画这一格的字形,不走 [icon]/[selectedIcon]。硬币那一格用它 —— 圆里的 B 是一个
      * 真字,交给字体画比自己描点靠谱(见 [CoinGlyph])。
@@ -2120,6 +2217,15 @@ private fun ActionItem(
         label = "actionItemScale",
     )
 
+    val burstProgress = remember { Animatable(0f) }
+    LaunchedEffect(burstSeq) {
+        if (burstSeq <= 0 || reducedMotion) return@LaunchedEffect
+        burstProgress.snapTo(0f)
+        burstProgress.animateTo(1f, tween(durationMillis = TripleBurstMillis, easing = FastOutSlowInEasing))
+        burstProgress.snapTo(0f)
+    }
+    val mergedContentDescription = if (label == contentDescription) label else "$contentDescription $label"
+
     WithHoldTimeout(holdable) {
     Column(
         modifier = modifier
@@ -2146,6 +2252,8 @@ private fun ActionItem(
                 }
             }
             .combinedClickable(
+                interactionSource = interactionSource,
+                indication = ripple(),
                 enabled = enabled,
                 onClick = {
                     val heldMillis = elapsedRealtimeMillis() - pressedAtMillis
@@ -2154,26 +2262,58 @@ private fun ActionItem(
                 onLongClick = onLongClick,
                 onLongClickLabel = longClickLabel,
             )
+            .then(if (enabled) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier)
+            .semantics(mergeDescendants = true) { this.contentDescription = mergedContentDescription }
             .heightIn(min = Dimens.MinTouchTarget)
             .padding(vertical = Spacing.Tight),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         val ring = MaterialTheme.colorScheme.primary
+        val burstColor = MaterialTheme.colorScheme.tertiary
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier.size(ActionIconBox).drawBehind {
-                if (holdProgress <= 0f) return@drawBehind
-                val inset = HoldRingInset.toPx()
-                drawArc(
-                    color = ring,
-                    startAngle = -90f,
-                    sweepAngle = 360f * holdProgress,
-                    useCenter = false,
-                    topLeft = Offset(-inset, -inset),
-                    size = Size(size.width + inset * 2, size.height + inset * 2),
-                    style = Stroke(width = HoldRingStroke.toPx(), cap = StrokeCap.Round),
-                )
+                if (holdProgress > 0f) {
+                    val inset = HoldRingInset.toPx()
+                    val strokePx = HoldRingStroke.toPx() + (1.5.dp.toPx() * holdProgress)
+                    drawArc(
+                        color = ring,
+                        startAngle = -90f,
+                        sweepAngle = 360f * holdProgress,
+                        useCenter = false,
+                        topLeft = Offset(-inset, -inset),
+                        size = Size(size.width + inset * 2, size.height + inset * 2),
+                        style = Stroke(width = strokePx, cap = StrokeCap.Round),
+                    )
+                }
+                val burst = burstProgress.value
+                if (burst > 0f && burst < 1f) {
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    val baseRadius = size.minDimension / 2f + HoldRingInset.toPx()
+                    val fade = (1f - burst).coerceIn(0f, 1f)
+                    val expandPx = 10.dp.toPx() * burst
+                    drawCircle(
+                        color = ring.copy(alpha = fade * 0.72f),
+                        radius = baseRadius + expandPx,
+                        center = center,
+                        style = Stroke(width = 2.dp.toPx() * fade),
+                    )
+                    val rayInner = baseRadius + expandPx * 0.35f
+                    val rayOuter = baseRadius + expandPx + 3.dp.toPx() * fade
+                    for (i in 0 until 6) {
+                        val rad = (i * 60.0) * (PI / 180.0)
+                        val dx = cos(rad).toFloat()
+                        val dy = sin(rad).toFloat()
+                        drawLine(
+                            color = burstColor.copy(alpha = fade * 0.85f),
+                            start = Offset(center.x + dx * rayInner, center.y + dy * rayInner),
+                            end = Offset(center.x + dx * rayOuter, center.y + dy * rayOuter),
+                            strokeWidth = 1.5.dp.toPx(),
+                            cap = StrokeCap.Round,
+                        )
+                    }
+                }
             },
         ) {
             val vector = if (selected) selectedIcon else icon
@@ -2181,7 +2321,7 @@ private fun ActionItem(
                 glyph != null -> glyph(tint, container)
                 vector != null -> Icon(
                     imageVector = vector,
-                    contentDescription = contentDescription,
+                    contentDescription = null,
                     tint = tint,
                     modifier = Modifier.size(iconSize),
                 )
@@ -2252,6 +2392,7 @@ private val HoldRingStroke = 2.dp
  * 花掉一枚币。一秒半同时给了那圈环足够的时间被看清 —— 环走完就是三连成立,松手什么都不发生。
  */
 private const val TripleHoldMillis = 1_500
+private const val TripleBurstMillis = 380
 
 /**
  * 按到多久还算"点一下"。
@@ -2314,8 +2455,11 @@ private fun CoinDialog(
                     //
                     // 失败之后这句换成失败原因,不两句并排:两句都是 error 色,读起来分不清
                     // 哪句在说刚才那一次。警告在重投之前还会再出现一遍(错误清掉之后)。
+                    val failedMessage = (attempt as? CoinAttempt.Failed)?.let { failed ->
+                        failed.message ?: failed.messageRes?.let { stringResource(it) }
+                    }
                     Text(
-                        text = (attempt as? CoinAttempt.Failed)?.message
+                        text = failedMessage
                             ?.let { stringResource(Res.string.coin_failed, it) }
                             ?: stringResource(Res.string.coin_warning),
                         style = MaterialTheme.typography.bodySmall,
@@ -2412,7 +2556,7 @@ private fun FavPickerSheet(
             contentPadding = PaddingValues(horizontal = Spacing.Loose, vertical = Spacing.Tight),
             modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
         ) {
-            items(favFolders, key = { it.id }) { folder ->
+            items(favFolders, key = { it.id }, contentType = { "folder" }) { folder ->
                 ToggleRow(
                     checked = selected[folder.id] ?: folder.containsThis,
                     onToggle = { checked -> selected[folder.id] = checked },
@@ -2431,13 +2575,14 @@ private fun FavPickerSheet(
  * 颜色。做过一版竖排、和队列同一种列表,多 P 视频的简介页因此长出一大截;横排只占一行高。
  * 横滑还保留了"相邻切换最快、看得出当前是第几 P"这两样,chip 时代留它的理由仍然成立。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 private fun LazyListScope.partItems(
     parts: List<EpisodePart>,
     playing: Boolean,
     onOpenAll: () -> Unit,
     onSelect: (EpisodeTarget) -> Unit,
 ) {
-    item(key = "parts-header") {
+    item(key = "parts-header", contentType = "parts-header") {
         SectionHeader(title = stringResource(Res.string.video_parts)) {
             // 内边距与队列标题行的「顺序/随机」同一档,两节标题行右端的字才对得齐。
             TextButton(onClick = onOpenAll, contentPadding = PaddingValues(horizontal = Spacing.Tight)) {
@@ -2448,35 +2593,46 @@ private fun LazyListScope.partItems(
             }
         }
     }
-    item(key = "parts-row") {
+    item(key = "parts-row", contentType = "parts-row") {
         // 停在当前 P 的前一格:左边露出一格,看得出前面还有。**跟着当前 P 滚,不只在首次组合时
         // 定位**:这一行组合出来时播放器常常还没报出 cid,那一刻找不到当前 P;只定一次初始位置的
         // 话它就永远停在开头。切 P 时同理要跟过去。
-        val rowState = rememberLazyListState()
         val currentIndex = parts.indexOfFirst { it.isCurrent }
+        val carouselState = rememberCarouselState(initialItem = currentIndex.coerceAtLeast(0)) { parts.size }
         LaunchedEffect(currentIndex) {
-            if (currentIndex >= 0) rowState.animateScrollToItem((currentIndex - 1).coerceAtLeast(0))
+            if (currentIndex >= 0) carouselState.animateScrollToItem((currentIndex - 1).coerceAtLeast(0))
         }
-        LazyRow(
-            state = rowState,
-            horizontalArrangement = Arrangement.spacedBy(ActionSegmentGap),
-            modifier = Modifier.padding(bottom = BeforeSectionHeaderGap),
-        ) {
-            itemsIndexed(parts, key = { _, part -> part.cid }) { index, part ->
-                PartCard(
-                    part = part,
-                    playing = playing,
-                    shape = horizontalSegmentShape(index = index, count = parts.size),
-                    onClick = { onSelect(EpisodeTarget.Part(part.cid)) },
-                )
-            }
+        HorizontalUncontainedCarousel(
+            state = carouselState,
+            itemWidth = PartCardWidth,
+            itemSpacing = ActionSegmentGap,
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalWheelScrollsRow(carouselState)
+                .padding(bottom = BeforeSectionHeaderGap),
+        ) { index ->
+            val part = parts[index]
+            val shape = horizontalSegmentShape(index = index, count = parts.size)
+            PartCard(
+                part = part,
+                playing = playing,
+                shape = shape,
+                modifier = Modifier.fillMaxWidth().maskClip(shape),
+                onClick = { onSelect(EpisodeTarget.Part(part.cid)) },
+            )
         }
     }
 }
 
 /** 横排里的一格:编号标记接两行标题,当前那格右下角浮一枚播放指示。 */
 @Composable
-private fun PartCard(part: EpisodePart, playing: Boolean, shape: Shape, onClick: () -> Unit) {
+private fun PartCard(
+    part: EpisodePart,
+    playing: Boolean,
+    shape: Shape,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val selected = part.isCurrent
     Surface(
         onClick = onClick,
@@ -2491,7 +2647,7 @@ private fun PartCard(part: EpisodePart, playing: Boolean, shape: Shape, onClick:
         } else {
             MaterialTheme.colorScheme.onSurface
         },
-        modifier = Modifier.width(PartCardWidth).semantics { this.selected = selected },
+        modifier = modifier.semantics { this.selected = selected },
     ) {
         Box(modifier = Modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight)) {
             // **编号嵌在标题第一行的行首**,标题紧跟在它后面,折行后第二行从格子左边缘开始。
@@ -2499,7 +2655,7 @@ private fun PartCard(part: EpisodePart, playing: Boolean, shape: Shape, onClick:
             //
             // 占位宽度按这一格的编号现量:P1 和 P12 不一样宽,写死一个宽度要么留空要么挤字。
             val tagText = stringResource(Res.string.video_part_ordinal, part.ordinal)
-            val tagStyle = MaterialTheme.typography.labelSmall
+            val tagStyle = MaterialTheme.typography.labelSmall.tabular
             val measurer = rememberTextMeasurer()
             val density = LocalDensity.current
             val placeholder = remember(tagText, tagStyle, density) {
@@ -2578,7 +2734,7 @@ private fun PartOrdinalTag(ordinal: Int, selected: Boolean) {
     ) {
         Text(
             text = stringResource(Res.string.video_part_ordinal, ordinal),
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.tabular,
             modifier = Modifier.padding(horizontal = PartTagPadding, vertical = PartTagPadding / 4),
         )
     }
@@ -2615,7 +2771,12 @@ private fun PartListItem(part: EpisodePart, playing: Boolean, index: Int, count:
             null
         },
     ) {
-        Text(text = part.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(
+            text = part.title,
+            style = if (part.isCurrent) MaterialTheme.typography.bodyMediumEmphasized else MaterialTheme.typography.bodyMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -2650,24 +2811,31 @@ private fun PartSheet(
         skipPartiallyExpanded = true,
         headerTrailing = { QueuePositionBadge(text = badgeText) },
     ) {
-        LazyColumn(
-            state = listState,
-            contentPadding = PaddingValues(
-                start = Spacing.Comfortable,
-                end = Spacing.Comfortable,
-                bottom = Spacing.Loose,
-            ),
-            modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
-        ) {
-            itemsIndexed(parts, key = { _, part -> part.cid }) { index, part ->
-                PartListItem(
-                    part = part,
-                    playing = playing,
-                    index = index,
-                    count = parts.size,
-                    onClick = { onPick(part) },
-                )
+        Box(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
+            LazyColumn(
+                state = listState,
+                contentPadding = PaddingValues(
+                    start = Spacing.Comfortable,
+                    end = Spacing.Comfortable,
+                    bottom = Spacing.Loose,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                itemsIndexed(
+                    parts,
+                    key = { _, part -> part.cid },
+                    contentType = { _, _ -> "part" },
+                ) { index, part ->
+                    PartListItem(
+                        part = part,
+                        playing = playing,
+                        index = index,
+                        count = parts.size,
+                        onClick = { onPick(part) },
+                    )
+                }
             }
+            ListScrollbar(listState, Modifier.align(Alignment.CenterEnd))
         }
     }
 }
@@ -2685,9 +2853,11 @@ private fun PartSheet(
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 private fun LazyListScope.queueItems(
     queue: QueueUiState,
+    upMid: Long,
     playing: Boolean,
     /** 摊开的那部分,当前项前后各若干条。 */
     shownRows: List<EpisodeRow>,
+    fullIndexByBvid: Map<String, Int>,
     onOpenFullQueue: () -> Unit,
     onOpenQueueSource: (QueueSource) -> Unit,
     onSelectEpisode: (EpisodeTarget) -> Unit,
@@ -2699,9 +2869,10 @@ private fun LazyListScope.queueItems(
 ) {
     if (!queue.enriching && !queue.incomplete && queue.rows.isEmpty()) return
 
-    item(key = "queue-header") {
+    item(key = "queue-header", contentType = "queue-header") {
         QueueHeader(
             queue = queue,
+            upMid = upMid,
             onOpenQueueSource = onOpenQueueSource,
             onCycleEndMode = onCycleEndMode,
             onCycleOrder = onCycleOrder,
@@ -2711,14 +2882,14 @@ private fun LazyListScope.queueItems(
     }
 
     when {
-        queue.enriching -> item(key = "queue-status") {
+        queue.enriching -> item(key = "queue-status", contentType = "queue-status") {
             InlineProgress(
                 stringResource(Res.string.video_queue_loading),
                 Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
             )
         }
 
-        queue.incomplete -> item(key = "queue-status") {
+        queue.incomplete -> item(key = "queue-status", contentType = "queue-status") {
             Row(
                 modifier = Modifier.padding(start = Spacing.Comfortable),
                 verticalAlignment = Alignment.CenterVertically,
@@ -2740,10 +2911,13 @@ private fun LazyListScope.queueItems(
         }
 
         else -> {
-            val fullIndexByBvid = queue.rows.withIndex().associate { (i, r) -> r.bvid to i }
             val showAllShown = queue.rows.isNotEmpty()
             val segmentedTotal = if (showAllShown) shownRows.size + 1 else shownRows.size
-            itemsIndexed(shownRows, key = { _, row -> row.bvid }) { index, row ->
+            itemsIndexed(
+                shownRows,
+                key = { _, row -> row.bvid },
+                contentType = { _, _ -> "queue-row" },
+            ) { index, row ->
                 QueueRowItem(
                     row = row,
                     playing = playing,
@@ -2756,7 +2930,7 @@ private fun LazyListScope.queueItems(
                 )
             }
             if (showAllShown) {
-                item(key = "queue-show-all") {
+                item(key = "queue-show-all", contentType = "queue-show-all") {
                     ShowAllRow(
                         queue = queue,
                         hasPrecedingRows = shownRows.isNotEmpty(),
@@ -2842,13 +3016,17 @@ private fun ShowAllRow(
 @Composable
 private fun QueueHeader(
     queue: QueueUiState,
+    upMid: Long,
     onOpenQueueSource: (QueueSource) -> Unit,
     onCycleEndMode: () -> Unit,
     onCycleOrder: () -> Unit,
     onFindRelated: (() -> Unit)?,
     onCache: () -> Unit,
 ) {
-    val onTitleClick = queue.source?.let { source -> { onOpenQueueSource(source) } }
+    // Same-UP fallback queue (`id <= 0L && mid == upMid`) duplicates `UpRow` right above; suppress redundant click affordance.
+    val onTitleClick = queue.source
+        ?.takeUnless { it.id <= 0L && it.mid == upMid }
+        ?.let { source -> { onOpenQueueSource(source) } }
     val resolvedLabel = queue.sourceLabel.ifBlank { stringResource(Res.string.listen_queue_title) }
     val posText = queue.state?.takeIf { !queue.enriching }?.let { QueuePositionText(it) }
     val edgeLoading = queue.state?.let { it.loadingBefore || it.loadingAfter } == true
@@ -2879,6 +3057,8 @@ private fun QueueHeader(
             buttonWidth(cacheLabel) +
             Spacing.Tight
     }
+    var rowWidth by remember { mutableStateOf(0.dp) }
+    val showActionLabels = rowWidth > 0.dp && totalLabeledWidth <= rowWidth
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -2896,6 +3076,7 @@ private fun QueueHeader(
                         .weight(1f)
                         .heightIn(min = Dimens.MinTouchTarget)
                         .clip(MaterialTheme.shapes.small)
+                        .pointerHoverIcon(PointerIcon.Hand)
                         .clickable(role = Role.Button, onClick = onTitleClick)
                         .padding(vertical = Spacing.Tight),
                 ) {
@@ -2934,8 +3115,11 @@ private fun QueueHeader(
             }
         }
 
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val showActionLabels = totalLabeledWidth <= maxWidth
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .onSizeChanged { rowWidth = with(density) { it.width.toDp() } },
+        ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -3039,15 +3223,21 @@ private const val ActionPressScale = 0.95f
 private const val ActionPopScale = 1.06f
 private const val ActionPopMillis = 140L
 
+private val DateFormatter: java.time.format.DateTimeFormatter =
+    java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd")
+
+private val FullTimestampFormatter: java.time.format.DateTimeFormatter =
+    java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
 private fun formatDate(epochSeconds: Long): String =
     java.time.Instant.ofEpochSecond(epochSeconds)
         .atZone(java.time.ZoneId.systemDefault())
-        .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"))
+        .format(DateFormatter)
 
 private fun formatFullTimestamp(epochSeconds: Long): String =
     java.time.Instant.ofEpochSecond(epochSeconds)
         .atZone(java.time.ZoneId.systemDefault())
-        .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+        .format(FullTimestampFormatter)
 
 /** 联合投稿一排里每一格的宽度。约五个汉字的名字放得下,再长截断。 */
 private val StaffCellWidth = 72.dp

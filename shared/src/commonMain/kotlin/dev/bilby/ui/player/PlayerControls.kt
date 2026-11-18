@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Close
@@ -68,6 +70,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -546,7 +549,7 @@ internal fun PlayerIconButton(
                 MaterialTheme.colorScheme.onSurface
             },
         ),
-        modifier = modifier,
+        modifier = modifier.then(if (enabled) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
     ) {
         Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(iconSize))
     }
@@ -556,20 +559,48 @@ internal fun PlayerIconButton(
  * 控制条上的一枚 chip:图标,可选地跟一段文字(当前倍速、当前清晰度)。容器是 M3E 的 XS 按钮
  * 那一档高(32dp),触控仍撑到 48dp。选中(菜单开着、开关打开)时换成 primaryContainer。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun ControlButton(
     expanded: Boolean,
     onClick: () -> Unit,
     label: String?,
+    modifier: Modifier = Modifier,
+    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     icon: @Composable (Color) -> Unit,
 ) {
-    val container = if (expanded) MaterialTheme.colorScheme.primaryContainer else mediaControlContainer()
+    val pressed by interactionSource.collectIsPressedAsState()
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val corner by animateDpAsState(
+        targetValue = if (pressed) 10.dp else ControlChipHeight / 2,
+        animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+        label = "control-btn-corner",
+    )
+    val baseContainer = if (expanded) MaterialTheme.colorScheme.primaryContainer else mediaControlContainer()
+    val targetContainer = if (hovered && !expanded) {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f).compositeOver(baseContainer)
+    } else {
+        baseContainer
+    }
+    val container by animateColorAsState(
+        targetValue = targetContainer,
+        animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+        label = "control-btn-bg",
+    )
     val tint = if (expanded) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+    val chipShape = RoundedCornerShape(corner)
     Box(
         contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .clip(CircleShape)
-            .clickable(role = Role.Button, onClick = onClick)
+        modifier = modifier
+            .clip(chipShape)
+            .hoverable(interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .pointerHoverIcon(PointerIcon.Hand)
             // 宽度也吃触控下限:没有文字的那几个只有图标宽,挨着排时按下去经常是隔壁那个。
             .sizeIn(minWidth = Dimens.MinTouchTarget, minHeight = Dimens.MinTouchTarget),
     ) {
@@ -578,11 +609,11 @@ internal fun ControlButton(
             horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
             modifier = Modifier
                 .height(ControlChipHeight)
-                .clip(CircleShape)
+                .clip(chipShape)
                 .background(container)
                 .then(
                     if (!expanded) {
-                        Modifier.border(HudSpecularBorderWidth, HudSpecularBorderColor, CircleShape)
+                        Modifier.border(HudSpecularBorderWidth, HudSpecularBorderColor, chipShape)
                     } else {
                         Modifier
                     },
@@ -695,7 +726,8 @@ internal fun PlayerVolumeControl(
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size(ControlChipHeight)
+                        .widthIn(min = if (surfaceTone || expanded) ControlChipHeight else 40.dp)
+                        .height(ControlChipHeight)
                         .clip(CircleShape)
                         .clickable(role = Role.Button) { playback.toggleSoftwareMute() }
                         .pointerHoverIcon(PointerIcon.Hand),

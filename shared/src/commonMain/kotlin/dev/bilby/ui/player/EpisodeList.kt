@@ -1,6 +1,7 @@
 package dev.bilby.ui.player
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -28,6 +29,8 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.outlined.PauseCircleOutline
 import androidx.compose.material.icons.outlined.SkipNext
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -40,7 +43,9 @@ import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +55,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -66,6 +73,7 @@ import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.ListCover
+import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.PlayingIndicator
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.theme.Dimens
@@ -95,6 +103,7 @@ sealed interface EpisodeTarget {
 }
 
 /** 二级条目:当前这条视频的一个分 P。 */
+@Immutable
 data class EpisodePart(
     val cid: Long,
     /** 展示用的 P 号,来自详情的 `page`,不是列表下标。 */
@@ -113,6 +122,7 @@ data class EpisodePart(
  *
  * 单 P 视频的 [parts] 同样是空:一个只有 P1 的二级列表是纯噪声。
  */
+@Immutable
 data class EpisodeRow(
     val bvid: String,
     val title: String,
@@ -124,6 +134,7 @@ data class EpisodeRow(
 )
 
 /** 队列交互式编辑操作，由拥有活帧队列或待播草稿的页面传入。 */
+@Stable
 data class QueueEditActions(
     val onMove: (bvid: String, toIndex: Int) -> Unit,
     val onRemove: (bvid: String) -> Unit,
@@ -206,6 +217,7 @@ fun buildEpisodeRows(
 /**
  * 队列两头还能不能续、正不正在续、是否续取失败及续取动作。
  */
+@Stable
 class QueueEdges(
     val canLoadBefore: Boolean,
     val canLoadAfter: Boolean,
@@ -303,62 +315,69 @@ fun EpisodeList(
     // 视频与分 P 摊平成一组分段:分 P 是当前那条的内部结构,排在同一组里,首尾圆角才落在
     // 整份清单的两头,而不是分 P 前后各断开一次。
     val segmentCount = rows.size + rows.sumOf { it.parts.size }
-    LazyColumn(
-        state = state,
-        modifier = modifier,
-        contentPadding = contentPadding,
-    ) {
-        if (showBeforeEdge && edges != null) {
-            item(key = "edge-before") {
-                QueueEdgeRow(
-                    before = true,
-                    loading = edges.loadingBefore,
-                    error = hasErrorBefore,
-                    remainingCount = resolvedRemainingBefore,
-                    onLoad = { edges.onLoad(true) },
-                )
+    Box(modifier = modifier) {
+        LazyColumn(
+            state = state,
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = contentPadding,
+        ) {
+            if (showBeforeEdge && edges != null) {
+                item(key = "edge-before", contentType = "edge") {
+                    QueueEdgeRow(
+                        before = true,
+                        loading = edges.loadingBefore,
+                        error = hasErrorBefore,
+                        remainingCount = resolvedRemainingBefore,
+                        onLoad = { edges.onLoad(true) },
+                    )
+                }
+            }
+            var segment = 0
+            rows.forEachIndexed { videoIndex, row ->
+                val rowSegment = segment++
+                item(key = row.bvid, contentType = "video") {
+                    QueueRowItem(
+                        row = row,
+                        playing = playing,
+                        index = rowSegment,
+                        count = segmentCount,
+                        onClick = { onSelect(EpisodeTarget.Video(row.bvid)) },
+                        videoIndex = videoIndex,
+                        videoCount = rows.size,
+                        editActions = editActions,
+                        editing = editing,
+                    )
+                }
+                // 二级:当前这条的分 P。**key 带上 bvid**,否则连播走到另一条多 P 视频时,
+                // 两组分 P 的 cid 都是 Long,复用会把上一条的选中态带过来。
+                val firstPartSegment = segment
+                segment += row.parts.size
+                itemsIndexed(
+                    row.parts,
+                    key = { _, part -> "${row.bvid}-${part.cid}" },
+                    contentType = { _, _ -> "part" },
+                ) { i, part ->
+                    PartListItem(
+                        part = part,
+                        index = firstPartSegment + i,
+                        count = segmentCount,
+                        onClick = { onSelect(EpisodeTarget.Part(part.cid)) },
+                    )
+                }
+            }
+            if (showAfterEdge && edges != null) {
+                item(key = "edge-after", contentType = "edge") {
+                    QueueEdgeRow(
+                        before = false,
+                        loading = edges.loadingAfter,
+                        error = hasErrorAfter,
+                        remainingCount = resolvedRemainingAfter,
+                        onLoad = { edges.onLoad(false) },
+                    )
+                }
             }
         }
-        var segment = 0
-        rows.forEachIndexed { videoIndex, row ->
-            val rowSegment = segment++
-            item(key = row.bvid) {
-                QueueRowItem(
-                    row = row,
-                    playing = playing,
-                    index = rowSegment,
-                    count = segmentCount,
-                    onClick = { onSelect(EpisodeTarget.Video(row.bvid)) },
-                    videoIndex = videoIndex,
-                    videoCount = rows.size,
-                    editActions = editActions,
-                    editing = editing,
-                )
-            }
-            // 二级:当前这条的分 P。**key 带上 bvid**,否则连播走到另一条多 P 视频时,
-            // 两组分 P 的 cid 都是 Long,复用会把上一条的选中态带过来。
-            val firstPartSegment = segment
-            segment += row.parts.size
-            itemsIndexed(row.parts, key = { _, part -> "${row.bvid}-${part.cid}" }) { i, part ->
-                PartListItem(
-                    part = part,
-                    index = firstPartSegment + i,
-                    count = segmentCount,
-                    onClick = { onSelect(EpisodeTarget.Part(part.cid)) },
-                )
-            }
-        }
-        if (showAfterEdge && edges != null) {
-            item(key = "edge-after") {
-                QueueEdgeRow(
-                    before = false,
-                    loading = edges.loadingAfter,
-                    error = hasErrorAfter,
-                    remainingCount = resolvedRemainingAfter,
-                    onLoad = { edges.onLoad(false) },
-                )
-            }
-        }
+        ListScrollbar(state, Modifier.align(Alignment.CenterEnd))
     }
 }
 
@@ -728,6 +747,7 @@ fun QueueOrder.labelRes(): StringResource = when (this) {
  * - 完播行为:「播完暂停 → 连播 → 洗脑循环」三态一键轮换。
  * - 队列顺序:「正序 → 倒序 → 随机」三态一键轮换。
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun RowScope.QueuePlaybackControls(
     endMode: PlayEndMode,
@@ -737,52 +757,77 @@ fun RowScope.QueuePlaybackControls(
     showOrder: Boolean = true,
 ) {
     val endLabel = stringResource(endMode.labelRes())
-    TextButton(
-        onClick = onCycleEndMode,
-        contentPadding = PaddingValues(horizontal = Spacing.Tight),
-        modifier = Modifier
-            .defaultMinSize(minWidth = 1.dp)
-            .semantics { stateDescription = endLabel },
+    ButtonGroup(
+        overflowIndicator = {},
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
     ) {
-        Icon(
-            imageVector = when (endMode) {
-                PlayEndMode.Pause -> Icons.Outlined.PauseCircleOutline
-                PlayEndMode.Continue -> Icons.Outlined.SkipNext
-                PlayEndMode.RepeatOne -> Icons.Filled.RepeatOne
+        val endInteraction = remember { MutableInteractionSource() }
+        customItem(
+            buttonGroupContent = {
+                TextButton(
+                    onClick = onCycleEndMode,
+                    shapes = ButtonDefaults.shapes(),
+                    interactionSource = endInteraction,
+                    contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                    modifier = Modifier
+                        .animateWidth(endInteraction)
+                        .defaultMinSize(minWidth = 1.dp)
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .semantics { stateDescription = endLabel },
+                ) {
+                    Icon(
+                        imageVector = when (endMode) {
+                            PlayEndMode.Pause -> Icons.Outlined.PauseCircleOutline
+                            PlayEndMode.Continue -> Icons.Outlined.SkipNext
+                            PlayEndMode.RepeatOne -> Icons.Filled.RepeatOne
+                        },
+                        contentDescription = null,
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                    Text(
+                        text = endLabel,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(start = Spacing.Hair),
+                    )
+                }
             },
-            contentDescription = null,
-            modifier = Modifier.size(Dimens.IconInline),
+            menuContent = {},
         )
-        Text(
-            text = endLabel,
-            maxLines = 1,
-            softWrap = false,
-            modifier = Modifier.padding(start = Spacing.Hair),
-        )
-    }
-    if (showOrder) {
-        val orderLabel = stringResource(order.labelRes())
-        TextButton(
-            onClick = onCycleOrder,
-            contentPadding = PaddingValues(horizontal = Spacing.Tight),
-            modifier = Modifier
-                .defaultMinSize(minWidth = 1.dp)
-                .semantics { stateDescription = orderLabel },
-        ) {
-            Icon(
-                imageVector = when (order) {
-                    QueueOrder.Forward -> Icons.Filled.ArrowDownward
-                    QueueOrder.Reverse -> Icons.Filled.ArrowUpward
-                    QueueOrder.Shuffle -> Icons.Filled.Shuffle
+        if (showOrder) {
+            val orderLabel = stringResource(order.labelRes())
+            val orderInteraction = remember { MutableInteractionSource() }
+            customItem(
+                buttonGroupContent = {
+                    TextButton(
+                        onClick = onCycleOrder,
+                        shapes = ButtonDefaults.shapes(),
+                        interactionSource = orderInteraction,
+                        contentPadding = PaddingValues(horizontal = Spacing.Tight),
+                        modifier = Modifier
+                            .animateWidth(orderInteraction)
+                            .defaultMinSize(minWidth = 1.dp)
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .semantics { stateDescription = orderLabel },
+                    ) {
+                        Icon(
+                            imageVector = when (order) {
+                                QueueOrder.Forward -> Icons.Filled.ArrowDownward
+                                QueueOrder.Reverse -> Icons.Filled.ArrowUpward
+                                QueueOrder.Shuffle -> Icons.Filled.Shuffle
+                            },
+                            contentDescription = null,
+                            modifier = Modifier.size(Dimens.IconInline),
+                        )
+                        Text(
+                            text = orderLabel,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(start = Spacing.Hair),
+                        )
+                    }
                 },
-                contentDescription = null,
-                modifier = Modifier.size(Dimens.IconInline),
-            )
-            Text(
-                text = orderLabel,
-                maxLines = 1,
-                softWrap = false,
-                modifier = Modifier.padding(start = Spacing.Hair),
+                menuContent = {},
             )
         }
     }

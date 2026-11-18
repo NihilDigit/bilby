@@ -17,7 +17,6 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -69,6 +68,7 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -82,6 +82,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import dev.bilby.resources.*
 import dev.bilby.stringResource
@@ -562,14 +563,13 @@ private fun SpeedDial(
                 if (owned) controller.cancel()
             }
         }
-    val animatedPosition by animateFloatAsState(
+    val animatedPositionState = animateFloatAsState(
         targetValue = selection.position,
         animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
         label = "speed-blocks",
     )
-    val position = if (controller.dragging) selection.position else animatedPosition
-    BoxWithConstraints(input) {
-        val center = with(density) { if (vertical) maxHeight.toPx() / 2 else maxWidth.toPx() / 2 }
+    var containerSize by remember { mutableStateOf(IntSize.Zero) }
+    Box(input.onSizeChanged { containerSize = it }) {
         val width = if (vertical) SpeedDialSize.BlockWidth else SpeedDialSize.HorizontalBlockWidth
         val height = SpeedDialSize.BlockHeight
         val widthPx = with(density) { width.toPx() }
@@ -605,10 +605,12 @@ private fun SpeedDial(
             )
             Box(
                 Modifier.offset {
-                    val along = center + (index - position) * stepPx
+                    val pos = if (controller.dragging) selection.position else animatedPositionState.value
+                    val center = if (vertical) containerSize.height / 2f else containerSize.width / 2f
+                    val along = center + (index - pos) * stepPx
                     IntOffset(
-                        (if (vertical) (constraints.maxWidth - widthPx) / 2 else along - widthPx / 2).roundToInt(),
-                        (if (vertical) along - heightPx / 2 else (constraints.maxHeight - heightPx) / 2).roundToInt(),
+                        (if (vertical) (containerSize.width - widthPx) / 2 else along - widthPx / 2).roundToInt(),
+                        (if (vertical) along - heightPx / 2 else (containerSize.height - heightPx) / 2).roundToInt(),
                     )
                 }.size(width, height)
                     .clip(RoundedCornerShape(corner))

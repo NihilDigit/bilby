@@ -13,15 +13,13 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -36,6 +34,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -44,7 +43,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -56,6 +59,7 @@ import dev.bilby.resources.player_vote_count
 import dev.bilby.resources.player_vote_tag
 import dev.bilby.stringResource
 import dev.bilby.ui.components.formatCount
+import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import kotlin.math.roundToInt
@@ -86,16 +90,21 @@ fun rememberDanmakuVoteUiState(cid: Long): DanmakuVoteUiState =
 @Composable
 fun DanmakuVoteOverlay(
     votes: List<DanmakuVote>,
-    positionMillis: Long,
+    positionMillis: () -> Long,
     cid: Long,
-    onVote: (voteId: Long, optionIdx: Int) -> Unit,
+    onVote: (voteId: Long, optionIdx: Int, positionMillis: Long) -> Unit,
     uiState: DanmakuVoteUiState = rememberDanmakuVoteUiState(cid),
     modifier: Modifier = Modifier,
 ) {
-    val activeVote = votes.lastOrNull { vote ->
-        if (uiState.dismissedVoteIds[vote.voteId] == true) return@lastOrNull false
-        val end = maxOf(vote.endMillis, uiState.lingerUntilMillis[vote.voteId] ?: 0L)
-        positionMillis in vote.startMillis..end
+    val activeVote by remember(votes, uiState) {
+        derivedStateOf {
+            val pos = positionMillis()
+            votes.lastOrNull { vote ->
+                if (uiState.dismissedVoteIds[vote.voteId] == true) return@lastOrNull false
+                val end = maxOf(vote.endMillis, uiState.lingerUntilMillis[vote.voteId] ?: 0L)
+                pos in vote.startMillis..end
+            }
+        }
     }
 
     // 退场动画期间保留最后一条非空投票,避免缩回途中内容突然变空。
@@ -118,8 +127,9 @@ fun DanmakuVoteOverlay(
             vote = vote,
             onSelectOption = { optionIdx ->
                 // 临近窗口末尾点下投票时,再留一段结果展示时间,不让比例条刚画出来就立刻退场。
-                uiState.lingerUntilMillis[vote.voteId] = positionMillis + VOTE_RESULT_LINGER_MILLIS
-                onVote(vote.voteId, optionIdx)
+                val currentPos = positionMillis()
+                uiState.lingerUntilMillis[vote.voteId] = currentPos + VOTE_RESULT_LINGER_MILLIS
+                onVote(vote.voteId, optionIdx, currentPos)
             },
             onDismiss = { uiState.dismissedVoteIds[vote.voteId] = true },
         )
@@ -186,9 +196,10 @@ private fun DanmakuVoteCard(
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(VoteCloseHitSize)
+                    .sizeIn(minWidth = Dimens.MinTouchTarget, minHeight = Dimens.MinTouchTarget)
                     .clip(CircleShape)
-                    .clickable(onClick = onDismiss),
+                    .clickable(onClick = onDismiss)
+                    .pointerHoverIcon(PointerIcon.Hand),
             ) {
                 Icon(
                     imageVector = Icons.Filled.Close,
@@ -228,12 +239,11 @@ private fun DanmakuVoteOptionRow(
     fraction: Float,
     onClick: () -> Unit,
 ) {
-    val animatedFraction by animateFloatAsState(
+    val animatedFractionState = animateFloatAsState(
         targetValue = if (hasVoted) fraction.coerceIn(0f, 1f) else 0f,
         animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "vote-option-bar",
     )
-    val clampedFraction = animatedFraction.coerceIn(0f, 1f)
     val barColor = if (selected) {
         MaterialTheme.colorScheme.primary.copy(alpha = 0.52f)
     } else {
@@ -242,28 +252,32 @@ private fun DanmakuVoteOptionRow(
     val trackColor = if (hasVoted) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.13f)
 
     Box(
+        contentAlignment = Alignment.CenterStart,
         modifier = Modifier
             .fillMaxWidth()
-            .height(IntrinsicSize.Min)
             .heightIn(min = VoteOptionMinHeight)
             .clip(MaterialTheme.shapes.small)
             .background(trackColor)
+            .drawBehind {
+                val frac = animatedFractionState.value.coerceIn(0f, 1f)
+                if (hasVoted && frac > 0f) {
+                    drawRect(
+                        color = barColor,
+                        size = Size(size.width * frac, size.height),
+                    )
+                }
+            }
             .then(
-                if (!hasVoted) Modifier.clickable(onClick = onClick) else Modifier,
+                if (!hasVoted) {
+                    Modifier.clickable(onClick = onClick).pointerHoverIcon(PointerIcon.Hand)
+                } else {
+                    Modifier
+                },
             ),
     ) {
-        if (hasVoted && clampedFraction > 0f) {
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .fillMaxWidth(clampedFraction)
-                    .background(barColor),
-            )
-        }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
-                .fillMaxHeight()
                 .fillMaxWidth()
                 .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
         ) {
@@ -302,8 +316,7 @@ private fun DanmakuVoteOptionRow(
 
 private val VoteCardMinWidth = 192.dp
 private val VoteCardMaxWidth = 240.dp
-private val VoteOptionMinHeight = 34.dp
-private val VoteCloseHitSize = 28.dp
+private val VoteOptionMinHeight = Dimens.MinTouchTarget
 private val VoteCloseIconSize = 16.dp
 private val VoteCheckIconSize = 14.dp
 private val VoteTagVerticalPad = 1.dp

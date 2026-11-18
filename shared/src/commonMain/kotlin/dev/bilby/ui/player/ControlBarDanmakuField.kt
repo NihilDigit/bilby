@@ -5,10 +5,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,11 +31,21 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
@@ -54,8 +65,9 @@ import dev.bilby.ui.theme.Spacing
 internal val InlineDanmakuBarMinWidth = 720.dp
 
 /** 控制条里发弹幕要的全部状态,见 [ControlBarDanmakuField]。 */
+@Stable
 class ControlBarDanmaku(
-    val draft: String,
+    val draft: () -> String,
     val onDraftChange: (String) -> Unit,
     val maxLength: Int,
     val sending: Boolean,
@@ -81,7 +93,7 @@ class ControlBarDanmaku(
  */
 @Composable
 internal fun ControlBarDanmakuField(
-    draft: String,
+    draft: () -> String,
     onDraftChange: (String) -> Unit,
     maxLength: Int,
     sending: Boolean,
@@ -92,8 +104,9 @@ internal fun ControlBarDanmakuField(
     autoFocus: Boolean = false,
     focusRequestNonce: Int = 0,
 ) {
+    val draftText = draft()
     val hint = stringResource(Res.string.danmaku_input_hint)
-    val canSend = draft.isNotBlank() && !sending
+    val canSend = draftText.isNotBlank() && !sending
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -121,9 +134,9 @@ internal fun ControlBarDanmakuField(
             onSend()
         }
     }
-    LaunchedEffect(sendPending, sending, draft, error) {
+    LaunchedEffect(sendPending, sending, draftText, error) {
         if (!sendPending) return@LaunchedEffect
-        if (!sending && draft.isEmpty()) {
+        if (!sending && draftText.isEmpty()) {
             sendPending = false
             keyboard?.hide()
             focusManager.clearFocus()
@@ -134,17 +147,26 @@ internal fun ControlBarDanmakuField(
 
     // 外层撑到触摸下限,画出来的胶囊与旁边的 chip 同高。
     Box(modifier = modifier.sizeIn(minHeight = Dimens.MinTouchTarget), contentAlignment = Alignment.Center) {
+        val pillBg = mediaControlContainer()
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(ControlChipHeight)
-                .clip(CircleShape)
-                .background(mediaControlContainer())
+                .heightIn(min = Dimens.MinTouchTarget)
+                .drawBehind {
+                    val h = ControlChipHeight.toPx()
+                    val top = (size.height - h) / 2f
+                    drawRoundRect(
+                        color = pillBg,
+                        topLeft = Offset(0f, top),
+                        size = Size(size.width, h),
+                        cornerRadius = CornerRadius(h / 2f, h / 2f),
+                    )
+                }
                 .padding(start = Spacing.Cozy),
         ) {
             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                if (draft.isEmpty()) {
+                if (draftText.isEmpty()) {
                     Text(
                         text = hint,
                         style = MaterialTheme.typography.bodyMedium,
@@ -153,7 +175,7 @@ internal fun ControlBarDanmakuField(
                     )
                 }
                 BasicTextField(
-                    value = draft,
+                    value = draftText,
                     onValueChange = { if (it.length <= maxLength) onDraftChange(it) },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
@@ -164,6 +186,16 @@ internal fun ControlBarDanmakuField(
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
                         .trackEditableFocus()
+                        .onPreviewKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                                keyboard?.hide()
+                                focusManager.clearFocus()
+                                onFocusChange(false)
+                                true
+                            } else {
+                                false
+                            }
+                        }
                         // 刚进组合的那一帧焦点还没到,初始 false 不能当成"放掉焦点",否则点「发弹幕」
                         // 展开的那一帧就会立刻把 composing 重置回 false。
                         .onFocusChanged { state ->
@@ -188,14 +220,16 @@ internal fun ControlBarDanmakuField(
                     )
                 }
             }
-            if (autoFocus && draft.isEmpty() && !sending) {
+            if (autoFocus && draftText.isEmpty() && !sending) {
                 IconButton(
                     onClick = {
                         keyboard?.hide()
                         focusManager.clearFocus()
                         onFocusChange(false)
                     },
-                    modifier = Modifier.size(ControlChipHeight),
+                    modifier = Modifier
+                        .size(Dimens.MinTouchTarget)
+                        .pointerHoverIcon(PointerIcon.Hand),
                 ) {
                     Icon(
                         Icons.Filled.Close,
@@ -204,7 +238,13 @@ internal fun ControlBarDanmakuField(
                     )
                 }
             } else {
-                IconButton(onClick = submit, enabled = canSend, modifier = Modifier.size(ControlChipHeight)) {
+                IconButton(
+                    onClick = submit,
+                    enabled = canSend,
+                    modifier = Modifier
+                        .size(Dimens.MinTouchTarget)
+                        .then(if (canSend) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
+                ) {
                     if (sending) {
                         LoadingSpinner()
                     } else {

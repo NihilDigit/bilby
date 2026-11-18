@@ -32,6 +32,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import dev.bilby.stringResource
@@ -135,9 +137,12 @@ private fun DanmakuRow(item: LiveFeedItem.Danmaku, onUserClick: (Long) -> Unit, 
 
     val medalInline = rememberMedalInline(item.medal)
     val inlineMatches = remember(item.text, item.emote, item.inlineEmotes) {
-        if (item.emote != null) emptyList() else findEmotes(item.text, item.inlineEmotes)
+        if (item.emote != null) emptyList() else findLiveEmotes(item.text, item.inlineEmotes)
     }
     val emoteInline = rememberEmoteInline(style, item.emote, inlineMatches)
+    val inlineContent = remember(medalInline, emoteInline) {
+        if (emoteInline.isEmpty()) medalInline else medalInline + emoteInline
+    }
     val text = remember(item, inlineMatches, nameColor, bodyColor) {
         buildAnnotatedString {
             appendMedal(item.medal)
@@ -219,7 +224,7 @@ private fun DanmakuRow(item: LiveFeedItem.Danmaku, onUserClick: (Long) -> Unit, 
             Text(
                 text = text,
                 style = style,
-                inlineContent = if (emoteInline.isEmpty()) medalInline else medalInline + emoteInline,
+                inlineContent = inlineContent,
                 modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
             )
         }
@@ -305,8 +310,7 @@ private fun SuperChatRow(item: LiveFeedItem.SuperChat, onUserClick: (Long) -> Un
                     )
                     Text(
                         text = stringResource(Res.string.live_super_chat_price, sc.priceYuan),
-                        style = MaterialTheme.typography.labelLarge.tabular,
-                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.labelLargeEmphasized.tabular,
                         color = palette.onContainer,
                     )
                 }
@@ -347,7 +351,8 @@ private fun GuardRow(item: LiveFeedItem.Guard, onUserClick: (Long) -> Unit, modi
         modifier = modifier
             .fillMaxWidth()
             .minimumInteractiveComponentSize()
-            .clip(MaterialTheme.shapes.small),
+            .clip(MaterialTheme.shapes.small)
+            .then(if (item.mid != 0L) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
         menu = { close ->
             val menuItems = buildList {
                 if (item.name.isNotBlank()) add(copyNicknameLabel to item.name)
@@ -383,8 +388,7 @@ private fun GuardRow(item: LiveFeedItem.Guard, onUserClick: (Long) -> Unit, modi
                 ) {
                     Text(
                         text = level,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.labelSmallEmphasized,
                         color = palette.onContainer,
                         modifier = Modifier.padding(horizontal = Spacing.Hair, vertical = 2.dp),
                     )
@@ -413,6 +417,7 @@ internal fun guardLevelLabel(guardLevel: Int): String = stringResource(
 )
 
 /** 大航海列表页行尾的舰种色调胶囊(总督金、提督紫、舰长蓝)。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun GuardLevelBadge(guardLevel: Int, modifier: Modifier = Modifier) {
     val dark = MaterialTheme.colorScheme.surface.luminance() < DarkSurfaceLuminance
@@ -425,8 +430,7 @@ internal fun GuardLevelBadge(guardLevel: Int, modifier: Modifier = Modifier) {
     ) {
         Text(
             text = guardLevelLabel(guardLevel),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.labelMediumEmphasized,
             color = palette.onContainer,
             modifier = Modifier.padding(horizontal = Spacing.Tight, vertical = Spacing.Hair),
         )
@@ -533,7 +537,7 @@ private fun rememberMedalInline(medal: LiveFanMedal?): Map<String, InlineTextCon
             ),
         )
     }
-    val content = remember(label, medal.backgroundArgb) {
+    val content = remember(label, medal.backgroundArgb, density) {
         val measured = measurer.measure(label, labelStyle)
         // 先在像素上加内边距再换成 sp:TextUnit 之间没有加法,而占位符只收 sp。
         val width = with(density) { (measured.size.width + (MedalHPadding * 2).roundToPx()).toSp() }
@@ -552,7 +556,7 @@ private fun rememberMedalInline(medal: LiveFanMedal?): Map<String, InlineTextCon
             }
         }
     }
-    return mapOf(MedalInlineTag to content)
+    return remember(content) { mapOf(MedalInlineTag to content) }
 }
 
 /**
@@ -660,7 +664,11 @@ internal fun SenderRow(
     modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = modifier.clickable(role = Role.Button, onClick = onClick),
+        modifier = modifier
+            .minimumInteractiveComponentSize()
+            .clip(MaterialTheme.shapes.small)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(role = Role.Button, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
     ) {
@@ -673,6 +681,18 @@ internal fun SenderRow(
             overflow = TextOverflow.Ellipsis,
         )
     }
+}
+
+private val BracketEmoteRegex = Regex("\\[[^\\[\\]]+\\]")
+
+private fun findLiveEmotes(text: String, emotes: Map<String, LiveEmote>): List<LiveEmoteMatch> {
+    if (emotes.isEmpty()) return emptyList()
+    if (emotes.keys.all { it.startsWith('[') && it.endsWith(']') }) {
+        return BracketEmoteRegex.findAll(text).mapNotNull { match ->
+            emotes[match.value]?.let { LiveEmoteMatch(match.range.first, match.range.last + 1, it) }
+        }.toList()
+    }
+    return findEmotes(text, emotes)
 }
 
 // 勋章那一块的四个数,全部照 PiliPlus 的 MedalWidget(见 rememberMedalInline)。
