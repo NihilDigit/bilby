@@ -128,6 +128,7 @@ internal fun BilbyMpvVideoSurface(
     ) {
         // 订阅 mpv 新帧通知以触发重绘
         frameTick.longValue
+        rendererGeneration
         if (controller.isTeardownStarted()) return@Canvas
 
         val width = size.width.toInt()
@@ -338,9 +339,18 @@ private class BilbySurfaceController(private val player: DesktopPlayer) {
 
     private var activeMode: SurfaceMode? = null
     private var hintedShimPtr = 0L
+    private var renderContextRequested = false
     private var released = false
 
     private enum class SurfaceMode { RING, READBACK }
+
+    private fun ensureRenderContext(): Boolean {
+        if (renderContextRequested) return true
+        // mediamp 0.5.3 不在构造时自动创建 D3D11 render context; 必须在 hint consumer 设备后显式初始化
+        val created = player.mediamp.createRenderContext()
+        if (created) renderContextRequested = true
+        return created
+    }
 
     fun attachRenderUpdateListener(onUpdate: () -> Unit): Boolean =
         MediampAccess.setRenderUpdateListener(player.mediamp, onUpdate)
@@ -360,6 +370,7 @@ private class BilbySurfaceController(private val player: DesktopPlayer) {
                 nSetConsumerDeviceHintD3D11(handlePtr, shimPtr)
                 hintedShimPtr = shimPtr
             }
+            if (!ensureRenderContext()) return false
             val useRing = nCanShareFramesD3D11(handlePtr, shimPtr)
             val configured = if (useRing) {
                 switchTo(SurfaceMode.RING)
@@ -373,6 +384,7 @@ private class BilbySurfaceController(private val player: DesktopPlayer) {
         }
 
         // OpenGL / ANGLE / Software 等非 Direct3D 渲染器统一走 readback
+        if (!ensureRenderContext()) return false
         switchTo(SurfaceMode.READBACK)
         val configured = readbackConsumer.requestSurface(width, height)
         if (configured) shim.closeRetired()
@@ -507,7 +519,7 @@ private class D3D11RingConsumer(private val handlePtr: Long) {
         }
         val source = wrappedSurfaces.getOrNull(index) ?: return cachedFrame
         val blit = blitSurface ?: return cachedFrame
-        blit.notifyContentWillChange(ContentChangeMode.DISCARD)
+        source.notifyContentWillChange(ContentChangeMode.DISCARD)
         source.draw(blit.canvas, 0, 0, null)
         cachedFrame?.close()
         cachedFrame = blit.makeImageSnapshot()
