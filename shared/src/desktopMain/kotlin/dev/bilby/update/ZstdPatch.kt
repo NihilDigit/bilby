@@ -16,16 +16,19 @@ import java.lang.invoke.MethodHandle
 /**
  * 还原差分包里的 zstd 帧:以本机旧文件为前缀(zstd --patch-from 的对端),经 FFM 直调 libzstd 的 C API。
  *
- * 不用 zstd-jni 的 ZstdDecompressCtx:它的 win_aarch64 原生库只导出 ZSTD_* C 函数,一个 JNI 方法都没有。
- * zstd-jni 在 JDK 22 以上改走 jar 里 META-INF/versions/22 的 FFM 绑定,而那套绑定只覆盖了一部分类,
- * ZstdDecompressCtx 与 ZstdInputStreamNoFinalizer.setDict 仍调 JNI,在 ARM64 上抛 UnsatisfiedLinkError。
- * x64 的库两样都导出,两个架构因此走同一条路;zstd-jni 只负责把库加载进进程,
+ * 不用 zstd-jni 的 ZstdDecompressCtx:它的 loadDict(byte[]) 按值拷贝,对百兆旧包多占一整份内存;
+ * 这里用 ZSTD_DCtx_loadDictionary_advanced(ZSTD_dlm_byRef, ZSTD_dct_rawContent) 按引用挂入前缀——
+ * 与 ZSTD_DCtx_refPrefix 同源(单帧解码下等价),且在 zstd-jni 1.5.7-28+ Linux 符号导出白名单内
+ * (该版本起 Linux 的 libzstd-jni.so 隐藏了 ZSTD_DCtx_refPrefix)。zstd-jni 只负责把库加载进进程,
  * Native.load 认 ZstdNativePath,发行包里指向安装目录的那一份(见 DesktopAppUpdater.useBundledZstd)。
  *
  * 一次性解码(ZSTD_decompressDCtx)不受 windowLogMax 限制,CI 为大文件自动加大窗口压出的帧
  * 也不必另设参数,ARM64 上实测 160MB 的文件可以还原。
  */
 internal object ZstdPatch {
+    private const val ZSTD_DLM_BY_REF = 1
+    private const val ZSTD_DCT_RAW_CONTENT = 1
+
     private class Functions(private val lookup: SymbolLookup) {
         private val linker = Linker.nativeLinker()
 
@@ -34,7 +37,10 @@ internal object ZstdPatch {
 
         val createDCtx = function("ZSTD_createDCtx", FunctionDescriptor.of(ADDRESS))
         val freeDCtx = function("ZSTD_freeDCtx", FunctionDescriptor.of(JAVA_LONG, ADDRESS))
-        val refPrefix = function("ZSTD_DCtx_refPrefix", FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG))
+        val loadDictionaryAdvanced = function(
+            "ZSTD_DCtx_loadDictionary_advanced",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG, JAVA_INT, JAVA_INT),
+        )
         val decompressDCtx = function(
             "ZSTD_decompressDCtx",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS, JAVA_LONG),
@@ -64,7 +70,15 @@ internal object ZstdPatch {
                 if (base != null) {
                     // 前缀只被引用不被复制,解码结束前段内存要一直有效,所以随 arena 一起释放。
                     val prefix = arena.copyOf(base)
-                    f.requireOk(f.refPrefix.invokeWithArguments(ctx, prefix, base.size.toLong()) as Long)
+                    f.requireOk(
+                        f.loadDictionaryAdvanced.invokeWithArguments(
+                            ctx,
+                            prefix,
+                            base.size.toLong(),
+                            ZSTD_DLM_BY_REF,
+                            ZSTD_DCT_RAW_CONTENT,
+                        ) as Long,
+                    )
                 }
                 val source = arena.copyOf(frame)
                 val target = arena.allocate(size.toLong().coerceAtLeast(1))
