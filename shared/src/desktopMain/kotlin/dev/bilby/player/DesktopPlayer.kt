@@ -11,7 +11,10 @@ import kotlin.coroutines.CoroutineContext
  * 它的 `handle` 是 internal,但构造参数 `configureOptions` 会在初始化前同步交出同一个
  * [MPVHandle] 实例,在那里留下引用即可,不用反射。
  */
-class DesktopPlayer(parentCoroutineContext: CoroutineContext) : AutoCloseable {
+class DesktopPlayer(
+    parentCoroutineContext: CoroutineContext,
+    silentAudioOutput: Boolean = false,
+) : AutoCloseable {
     val mpv: MPVHandle
 
     val mediamp: MpvMediampPlayer
@@ -25,6 +28,10 @@ class DesktopPlayer(parentCoroutineContext: CoroutineContext) : AutoCloseable {
             configureOptions = { captured = it },
         )
         mpv = checkNotNull(captured) { "mediamp did not hand out its MPVHandle during construction" }
+        if (silentAudioOutput) {
+            mpv.setPropertyString("ao", "null")
+            mpv.setPropertyString("mute", "yes")
+        }
     }
 
     suspend fun open(source: StreamSource, playWhenReady: Boolean = true, startPositionMillis: Long = 0L) {

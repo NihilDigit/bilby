@@ -41,6 +41,7 @@ data class AccountInfo(
 class AccountRepository(
     private val client: BiliClient,
     private val spaceRepository: SpaceRepository,
+    private val transform: (AccountInfo) -> AccountInfo = { it },
 ) {
 
     suspend fun loadInfo(): BiliResult<AccountInfo> {
@@ -67,7 +68,7 @@ class AccountRepository(
                     }
                 }
             }
-            BiliResult.Ok(nav.value.toDomain(sign.await(), following.await()))
+            BiliResult.Ok(transform(nav.value.toDomain(sign.await(), following.await())))
         }
     }
 

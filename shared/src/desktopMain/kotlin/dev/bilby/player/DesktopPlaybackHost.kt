@@ -52,7 +52,10 @@ import org.openani.mediamp.PlaybackException
  *
  * @param container 取仓库用。平台对象先于容器创建,所以这里拿的是一个延后求值的入口。
  */
-class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackHost {
+class DesktopPlaybackHost(
+    private val container: () -> AppContainer,
+    private val silentAudioOutput: Boolean = false,
+) : PlaybackHost {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Swing)
 
@@ -245,7 +248,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     private fun applyAudioToPlayer() {
         val mpv = player?.mpv ?: return
         mpv.setPropertyDouble("volume", _softwareVolume.value * 100.0)
-        mpv.setPropertyString("mute", if (_softwareMuted.value) "yes" else "no")
+        mpv.setPropertyString("mute", if (_softwareMuted.value || silentAudioOutput) "yes" else "no")
     }
 
     private fun schedulePersistAudio() {
@@ -313,7 +316,7 @@ class DesktopPlaybackHost(private val container: () -> AppContainer) : PlaybackH
     override fun connect(onConnected: (PlayerHandle) -> Unit): PlayerConnection {
         ensurePrefsLoaded()
         val handle = handle ?: run {
-            val created = DesktopPlayer(scope.coroutineContext)
+            val created = DesktopPlayer(scope.coroutineContext, silentAudioOutput = silentAudioOutput)
             player = created
             applyAudioToPlayer()
             watchEnded(created)

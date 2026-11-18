@@ -57,12 +57,15 @@ class HeartbeatReporter(
     private val pending: PendingHeartbeatStore,
     /** 排一次补发。实现是一个要求联网的 WorkManager 任务,见 [dev.bilby.offline.HeartbeatFlushWorker]。 */
     private val scheduleFlush: () -> Unit,
+    private val enabled: Boolean = true,
 ) {
 
     init {
         // 上次进程里记下、还没补发完的那些。WorkManager 自己会把排过的任务带过进程重启,这一句
         // 兜的是"记下了、还没来得及排"那一瞬被杀的情形。
-        scope.launch { if (pending.snapshot().isNotEmpty()) scheduleFlush() }
+        if (enabled) {
+            scope.launch { if (pending.snapshot().isNotEmpty()) scheduleFlush() }
+        }
     }
 
     /**
@@ -87,7 +90,7 @@ class HeartbeatReporter(
         isFinished: Boolean,
         onConfirmed: suspend () -> Unit = {},
     ) {
-        if (playedTimeSeconds == 0L) return
+        if (!enabled || playedTimeSeconds == 0L) return
         val sentAtMillis = System.currentTimeMillis()
         // 完播报的是 -1,服务端那边归零,所以本地也记 0。
         val reportedMillis = if (isFinished) 0L else playedTimeSeconds * 1000
@@ -125,6 +128,7 @@ class HeartbeatReporter(
      * 这个偏差。
      */
     suspend fun flushPending(): Boolean {
+        if (!enabled) return true
         for (entry in pending.snapshot().sortedBy { it.queuedAtMillis }) {
             val form = formOf(entry.aid, entry.cid, entry.playedTimeSeconds, entry.finished)
             when (val result = client.postAction(HEARTBEAT_URL, form)) {

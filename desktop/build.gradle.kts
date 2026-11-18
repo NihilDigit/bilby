@@ -3,6 +3,10 @@ import java.nio.file.attribute.FileTime
 import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import javax.inject.Inject
+import org.apache.tools.ant.types.Commandline
+import org.gradle.api.tasks.options.Option
+import org.gradle.process.ExecOperations
 import org.jetbrains.compose.desktop.application.dsl.AotMode
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.compose.desktop.application.tasks.AbstractCheckNativeDistributionRuntime
@@ -58,6 +62,24 @@ dependencies {
     implementation(libs.jna.platform)
     implementation(libs.windows.touch)
     runtimeOnly(composeDesktopRuntime)
+}
+
+// 开发者专用的隐蔽虚拟桌面截图工具链:完全隔离在独立 sourceSet 里,不进 :desktop:jar 与任何发行包。
+val screenshot by sourceSets.creating {
+    kotlin.srcDir("src/screenshot/kotlin")
+    resources.srcDir("src/screenshot/resources")
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+configurations.named(screenshot.implementationConfigurationName) {
+    extendsFrom(configurations.implementation.get())
+}
+configurations.named(screenshot.runtimeOnlyConfigurationName) {
+    extendsFrom(configurations.runtimeOnly.get())
+}
+kotlin {
+    target.compilations.getByName("screenshot")
+        .associateWith(target.compilations.getByName("main"))
 }
 
 // mpv 与 FFmpeg 的 DLL(约 55MB)解开放进应用资源目录,不走类路径。mediamp 的运行时包原本
@@ -321,4 +343,104 @@ tasks.register<UpdateArtifactsTask>("packageReleaseUpdate") {
     version = releaseVersionName
     artifactPrefix = "bilby-windows-$hostArch-$releaseVersionName"
     outputDir = layout.buildDirectory.dir("compose/binaries/main-release/update")
+}
+
+abstract class CaptureScreenshotsTask : DefaultTask() {
+    @get:Inject
+    abstract val execOperations: ExecOperations
+
+    @get:InputFile
+    abstract val launcherSource: RegularFileProperty
+
+    @get:InputDirectory
+    abstract val appResourcesDir: DirectoryProperty
+
+    @get:InputFiles
+    @get:Classpath
+    abstract val screenshotClasspath: ConfigurableFileCollection
+
+    @get:Input
+    abstract val javaExePath: Property<String>
+
+    @get:Input
+    abstract val javawExePath: Property<String>
+
+    @get:Input
+    abstract val workingDirectoryPath: Property<String>
+
+    @get:Input
+    abstract val versionName: Property<String>
+
+    @get:Optional
+    @get:Input
+    @get:Option(option = "args", description = "CLI arguments passed to HiddenDesktopLauncher / ScreenshotMain")
+    abstract val cliArgs: Property<String>
+
+    @get:OutputFile
+    abstract val argFile: RegularFileProperty
+
+    @TaskAction
+    fun run() {
+        val resolvedArgFile = argFile.get().asFile
+        resolvedArgFile.parentFile.mkdirs()
+
+        val cp = screenshotClasspath.files
+            .filter { it.exists() }
+            .joinToString(File.pathSeparator) { it.invariantSeparatorsPath }
+
+        fun quoteArgFile(value: String): String =
+            "\"${value.replace("\\", "/").replace("\"", "\\\"")}\""
+
+        val lines = listOf(
+            "--enable-native-access=ALL-UNNAMED",
+            "-XX:+ExplicitGCInvokesConcurrent",
+            "-Dsun.java2d.uiScale=2.0",
+            "-Dskiko.renderApi=SOFTWARE_FAST",
+            "-Dcompose.application.resources.dir=${quoteArgFile(appResourcesDir.get().asFile.absolutePath)}",
+            "-Dbilby.version=${versionName.get()}",
+            "-Dbilby.debug=true",
+            "-cp",
+            quoteArgFile(cp),
+            "dev.bilby.desktop.screenshot.ScreenshotMainKt",
+        )
+        resolvedArgFile.writeText(lines.joinToString(System.lineSeparator()), Charsets.UTF_8)
+
+        val parsedCliArgs = Commandline.translateCommandline(cliArgs.orNull.orEmpty()).toList()
+        val command = buildList {
+            add(javaExePath.get())
+            add("--enable-native-access=ALL-UNNAMED")
+            add(launcherSource.get().asFile.absolutePath)
+            add("--java-exe")
+            add(javawExePath.get())
+            add("--arg-file")
+            add(resolvedArgFile.absolutePath)
+            add("--work-dir")
+            add(workingDirectoryPath.get())
+            add("--desktop-name")
+            add("BilbyShot")
+            addAll(parsedCliArgs)
+        }
+        execOperations.exec {
+            workingDir(workingDirectoryPath.get())
+            commandLine(command)
+        }
+    }
+}
+
+tasks.register<CaptureScreenshotsTask>("captureScreenshots") {
+    group = "verification"
+    description = "Captures Light/Dark HiDPI screenshots inside an isolated hidden Win32 desktop."
+    dependsOn(bundledAppResources, screenshot.classesTaskName)
+    launcherSource = rootProject.layout.projectDirectory.file("tools/screenshot/HiddenDesktopLauncher.java")
+    appResourcesDir = layout.buildDirectory.dir("appResources/common")
+    screenshotClasspath.from(screenshot.runtimeClasspath)
+    val javaExe = packagingLauncher.map { it.executablePath.asFile }
+    javaExePath = javaExe.map { it.absolutePath }
+    javawExePath = javaExe.map { file ->
+        val javaw = file.parentFile.resolve("javaw.exe")
+        if (javaw.isFile) javaw.absolutePath else file.absolutePath
+    }
+    workingDirectoryPath = rootProject.projectDir.absolutePath
+    versionName = releaseVersionName
+    argFile = layout.buildDirectory.file("screenshot/jvm.args")
 }

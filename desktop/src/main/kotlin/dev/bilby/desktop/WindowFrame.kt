@@ -79,10 +79,13 @@ internal fun FrameWindowScope.WindowFrame(
     title: String,
     icon: Painter?,
     showTitleBar: Boolean,
+    forceActiveCaption: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     // 在组合时就接管:此时窗口已有 HWND 而尚未显示,首帧就是去掉系统标题栏后的布局。
-    val caption = remember(window) { WindowsCaption(window).takeIf { it.install() } }
+    val caption = remember(window, forceActiveCaption) {
+        WindowsCaption(window, forceActiveAppearance = forceActiveCaption).takeIf { it.install() }
+    }
     val dark = LocalIsDarkTheme.current
     // 用 DisposableEffect 而不是 LaunchedEffect:前者在组合提交时同步执行,赶在窗口首次显示之前;
     // 后者要等下一帧,窗口会先闪一下浅色边框。

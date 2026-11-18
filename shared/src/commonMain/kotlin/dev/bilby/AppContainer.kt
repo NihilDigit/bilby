@@ -66,7 +66,11 @@ interface AppContainerOwner {
  * 手写 DI。单人单 module,依赖图小到一屏能看完,不预付框架成本;
  * 膨胀到看不完时再换 Koin(DESIGN 4 节)。
  */
-class AppContainer(val platform: Platform) {
+class AppContainer(
+    val platform: Platform,
+    private val reportHeartbeats: Boolean = true,
+    private val accountTransform: (dev.bilby.data.AccountInfo) -> dev.bilby.data.AccountInfo = { it },
+) {
 
     val json = Json {
         ignoreUnknownKeys = true
@@ -173,7 +177,9 @@ class AppContainer(val platform: Platform) {
     val messageRepository: MessageRepository by lazy { MessageRepository(biliClient) }
 
     /** 个人页头部的账号身份(头像/名字/等级/签名),来自 `x/web-interface/nav` + `SpaceRepository`。 */
-    val accountRepository: AccountRepository by lazy { AccountRepository(biliClient, spaceRepository) }
+    val accountRepository: AccountRepository by lazy {
+        AccountRepository(biliClient, spaceRepository, accountTransform)
+    }
 
     val followRepository: FollowRepository by lazy { FollowRepository(biliClient, settings) }
 
@@ -248,6 +254,7 @@ class AppContainer(val platform: Platform) {
             offlineStore = offlineStore,
             pending = PendingHeartbeatStore(java.io.File(platform.filesDir, "pending-heartbeats.json"), json),
             scheduleFlush = platform::scheduleHeartbeatFlush,
+            enabled = reportHeartbeats,
         )
     }
 

@@ -65,7 +65,10 @@ import java.util.concurrent.ConcurrentHashMap
  * ProGuard 裁剪,它们必须保留,否则接管悄悄失败、退回系统标题栏(Piko 踩过);目前规则整体保留
  * dev.bilby.**。
  */
-internal class WindowsCaption(private val window: ComposeWindow) {
+internal class WindowsCaption(
+    private val window: ComposeWindow,
+    private val forceActiveAppearance: Boolean = false,
+) {
     enum class Button { MINIMIZE, MAXIMIZE, CLOSE }
 
     /** 标题栏拖动区与按钮在 Compose 根坐标系里的位置,单位为像素,即 Skiko 画布的客户区坐标。 */
@@ -98,7 +101,7 @@ internal class WindowsCaption(private val window: ComposeWindow) {
      * 按系统的激活状态显示,取自 WM_NCACTIVATE,与系统标题栏变灰的时机一致。不用 AWT 的焦点:
      * 后台进程新开的窗口在自己线程里是激活的,AWT 报告已获得焦点,系统却没有把它放到前台。
      */
-    var isActive: Boolean by mutableStateOf(false)
+    var isActive: Boolean by mutableStateOf(forceActiveAppearance)
         private set
 
     private val arena = Arena.ofAuto()
@@ -220,7 +223,7 @@ internal class WindowsCaption(private val window: ComposeWindow) {
                         return 0
                     }
                 }
-                WM_NCACTIVATE -> isActive = wParam != 0L
+                WM_NCACTIVATE -> isActive = forceActiveAppearance || wParam != 0L
                 WM_SETTINGCHANGE -> SystemReducedMotion.onSystemSettingChange()
                 WM_ENTERSIZEMOVE -> isSizing = true
                 WM_EXITSIZEMOVE -> isSizing = false

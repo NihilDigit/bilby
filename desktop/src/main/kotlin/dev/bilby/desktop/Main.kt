@@ -247,7 +247,7 @@ fun main(args: Array<String>) {
     exitProcess(0)
 }
 
-private object AppMotionScale : MotionDurationScale {
+internal object AppMotionScale : MotionDurationScale {
     override val scaleFactor: Float
         get() = if (SystemReducedMotion.reduced) 0f else 1f
 }
@@ -262,7 +262,7 @@ private val DesktopToastBottomMargin = 48.dp
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun DesktopToastOverlay(
+internal fun DesktopToastOverlay(
     toastState: StateFlow<DesktopToastEvent?>,
     onDismiss: (Long) -> Unit,
     modifier: Modifier = Modifier,
@@ -303,7 +303,7 @@ private fun DesktopToastOverlay(
     }
 }
 
-private fun loadDevLocalProperties(): Properties? {
+internal fun loadDevLocalProperties(): Properties? {
     val file = sequenceOf(
         File("local.properties"),
         File("..", "local.properties"),
@@ -322,13 +322,13 @@ private fun loadDevLocalProperties(): Properties? {
  * 同步做,不放后台线程:它必须赶在第一个播放器创建之前,而播放器在打开视频页时才建,放后台
  * 就得另加一道等待。加载的是本地 DLL,耗时在一两百毫秒量级。
  */
-private fun useBundledMpvRuntime() {
+internal fun useBundledMpvRuntime() {
     val dir = System.getProperty("compose.application.resources.dir")?.let { File(it, "mpv") } ?: return
     if (!dir.resolve("mediampv.dll").isFile) return
     MpvMediampPlayer.prepareLibraries(dir.absolutePath, extractRuntimeLibrary = false)
 }
 
-private val appIcon: Painter? by lazy {
+internal val appIcon: Painter? by lazy {
     val bytes = object {}.javaClass.getResourceAsStream("/app-icon.png")?.use { it.readBytes() } ?: return@lazy null
     BitmapPainter(Image.makeFromEncoded(bytes).toComposeImageBitmap())
 }

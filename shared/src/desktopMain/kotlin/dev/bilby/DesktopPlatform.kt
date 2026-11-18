@@ -33,6 +33,7 @@ internal fun desktopDataDir(): File =
 class DesktopPlatform(
     container: () -> AppContainer,
     override val updater: AppUpdateService?,
+    silentAudioOutput: Boolean = false,
 ) : Platform {
 
     private val dataDir: File = desktopDataDir()
@@ -51,7 +52,7 @@ class DesktopPlatform(
         override fun isMetered(): Boolean = false
     }
 
-    override val playback: DesktopPlaybackHost = DesktopPlaybackHost(container)
+    override val playback: DesktopPlaybackHost = DesktopPlaybackHost(container, silentAudioOutput = silentAudioOutput)
 
     override fun databaseBuilder(): RoomDatabase.Builder<BilbyDatabase> =
         Room.databaseBuilder<BilbyDatabase>(name = File(dataDir, "bilby.db").absolutePath)

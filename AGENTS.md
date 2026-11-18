@@ -81,6 +81,7 @@ Gradle compilation is an **exclusive resource** — never run parallel Gradle bu
 ./gradlew :shared:testAndroidHostTest :shared:desktopTest             # unit tests, both targets
 ./gradlew :shared:desktopTest --tests "dev.bilby.data.QueueFeedTest"  # single test class
 ./gradlew :desktop:run                                                # run desktop app
+./gradlew :desktop:captureScreenshots --args="--scenes=all --redact-account"  # hidden-desktop screenshots (see tools/screenshot/README.md)
 ./gradlew :desktop:packageReleaseMsi :desktop:packageReleaseUpdate    # MSI + update assets
 java -Xverify:all desktop/package/VerifyClasses.java desktop/build/compose/binaries/main-release/app/Bilby/app
 ```
