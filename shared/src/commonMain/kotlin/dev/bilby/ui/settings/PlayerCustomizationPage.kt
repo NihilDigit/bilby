@@ -37,6 +37,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
@@ -390,7 +391,7 @@ fun PlayerCustomizationPage(
     val activeLayout = layoutPrefs.layoutFor(layoutMode)
 
     var selection by remember {
-        mutableStateOf<PreviewSelection>(PreviewSelection.CenterSlot(CenterSlotPosition.InnerLeft))
+        mutableStateOf<PreviewSelection?>(PreviewSelection.CenterSlot(CenterSlotPosition.InnerLeft))
     }
     var listenSection by rememberSaveable { mutableStateOf(ListenEditorSection.SideSlot) }
     var selectedListenSlot by rememberSaveable { mutableStateOf(CenterSlotPosition.InnerLeft) }
@@ -409,22 +410,16 @@ fun PlayerCustomizationPage(
         activeLayout.bottomBar.size,
     ) {
         dragState.pruneBarBounds(activeLayout.topBar.size, activeLayout.bottomBar.size)
-        val current = selection
+        val current = selection ?: return@LaunchedEffect
         if (!layoutPrefs.showCenterControlsOnTouch && current is PreviewSelection.CenterSlot) {
-            selection = if (activeLayout.bottomBar.isNotEmpty()) {
-                PreviewSelection.PanelItem(PlayerBarSlot.Bottom, 0)
-            } else {
-                PreviewSelection.PanelItem(PlayerBarSlot.Top, 0)
-            }
+            selection = null
         } else if (current is PreviewSelection.PanelItem) {
             val size = activeLayout.itemsFor(current.bar).size
             if (current.index !in 0 until size) {
                 selection = if (size > 0) {
                     PreviewSelection.PanelItem(current.bar, (size - 1).coerceAtLeast(0))
-                } else if (layoutPrefs.showCenterControlsOnTouch) {
-                    PreviewSelection.CenterSlot(CenterSlotPosition.Center)
                 } else {
-                    PreviewSelection.PanelItem(PlayerBarSlot.Bottom, 0)
+                    null
                 }
             }
         }
@@ -577,15 +572,6 @@ fun PlayerCustomizationPage(
                                 onFinishDrag = finishDrag,
                             )
 
-                            SelectionInspectorStrip(
-                                layoutMode = layoutMode,
-                                layout = activeLayout,
-                                layoutPrefs = layoutPrefs,
-                                selection = selection,
-                                onSelect = { selection = it },
-                                onUpdateLayout = onUpdateLayout,
-                            )
-
                             ControlPaletteTray(
                                 layout = activeLayout,
                                 isFullscreen = editingFullscreen,
@@ -631,6 +617,19 @@ fun PlayerCustomizationPage(
                                     selection = PreviewSelection.PanelItem(PlayerBarSlot.Bottom, nextIdx)
                                 },
                             )
+
+                            val activeSelection = selection
+                            if (activeSelection != null) {
+                                SelectionInspectorStrip(
+                                    layoutMode = layoutMode,
+                                    layout = activeLayout,
+                                    layoutPrefs = layoutPrefs,
+                                    selection = activeSelection,
+                                    onSelect = { selection = it },
+                                    onDismiss = { selection = null },
+                                    onUpdateLayout = onUpdateLayout,
+                                )
+                            }
 
                             PresetChipsRow(
                                 current = layoutPrefs,
@@ -1595,7 +1594,7 @@ private fun PlayerPreviewCanvas(
     isFullscreen: Boolean,
     showCenterControls: Boolean,
     seekButtonSeconds: Int,
-    selection: PreviewSelection,
+    selection: PreviewSelection?,
     dragState: PlayerEditorDragState,
     dropTarget: DropTarget?,
     onSelect: (PreviewSelection) -> Unit,
@@ -1616,75 +1615,33 @@ private fun PlayerPreviewCanvas(
     val hoveredCenterSlot = (dropTarget as? DropTarget.CenterSlot)?.position
 
     PlayerTheme {
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
-                .onGloballyPositioned { coords ->
-                    if (coords.isAttached) dragState.previewCanvasBounds = coords.boundsInWindow()
-                }
-                .clip(MaterialTheme.shapes.large)
-                .background(
-                    Brush.linearGradient(
-                        listOf(Color(0xFF151922), Color(0xFF202634), Color(0xFF12151C)),
-                    ),
-                )
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), MaterialTheme.shapes.large),
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            val density = previewDensityFor(maxWidth)
-            val availableBarWidth = (maxWidth - density.barHorizontalPadding * 2).coerceAtLeast(120.dp)
-
-            // 顶栏预览（支持直接拖拽重排、跨栏放置与实时插入指示线）
-            PreviewControlBar(
-                bar = PlayerBarSlot.Top,
-                items = layout.topBar,
-                isFullscreen = isFullscreen,
-                seekButtonSeconds = seekButtonSeconds,
-                sampleStatus = sampleStatus,
-                density = density,
-                availableWidth = availableBarWidth,
-                selection = selection,
-                activePlaced = activePlaced,
-                dropIndex = topBarDropIndex,
-                dragState = dragState,
-                onSelect = onSelect,
-                onFinishDrag = onFinishDrag,
-                onBarBounds = { dragState.topBarBounds = it },
+            BoxWithConstraints(
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
+                    .widthIn(max = 560.dp)
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(ControlScrimBottom, Color.Transparent)))
-                    .padding(horizontal = density.barHorizontalPadding, vertical = Spacing.Hair),
-            )
-
-            // 中央控件簇预览（触控中央控件开启时显示，含虚线圆框占位与拖放高亮）
-            if (showCenterControls) {
-                PreviewCenterCluster(
-                    config = layout.center,
-                    density = density,
-                    selectedSlot = (selection as? PreviewSelection.CenterSlot)?.position,
-                    dropTargetSlot = hoveredCenterSlot,
-                    onSelectSlot = { onSelect(PreviewSelection.CenterSlot(it)) },
-                    onSlotBounds = { pos, rect -> dragState.centerSlotBounds[pos] = rect },
-                    modifier = Modifier.align(Alignment.Center),
-                )
-            }
-
-            // 底栏预览（支持直接拖拽重排、跨栏放置与实时插入指示线）
-            Column(
-                verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, ControlScrimBottom)))
-                    .padding(horizontal = density.barHorizontalPadding, vertical = Spacing.Hair),
+                    .aspectRatio(16f / 9f)
+                    .onGloballyPositioned { coords ->
+                        if (coords.isAttached) dragState.previewCanvasBounds = coords.boundsInWindow()
+                    }
+                    .clip(MaterialTheme.shapes.large)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(Color(0xFF151922), Color(0xFF202634), Color(0xFF12151C)),
+                        ),
+                    )
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), MaterialTheme.shapes.large),
             ) {
-                if (isFullscreen) {
-                    PreviewSeekTrack(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Hair))
-                }
+                val density = previewDensityFor(maxWidth)
+                val availableBarWidth = (maxWidth - density.barHorizontalPadding * 2).coerceAtLeast(120.dp)
+
+                // 顶栏预览（支持直接拖拽重排、跨栏放置与实时插入指示线）
                 PreviewControlBar(
-                    bar = PlayerBarSlot.Bottom,
-                    items = layout.bottomBar,
+                    bar = PlayerBarSlot.Top,
+                    items = layout.topBar,
                     isFullscreen = isFullscreen,
                     seekButtonSeconds = seekButtonSeconds,
                     sampleStatus = sampleStatus,
@@ -1692,13 +1649,61 @@ private fun PlayerPreviewCanvas(
                     availableWidth = availableBarWidth,
                     selection = selection,
                     activePlaced = activePlaced,
-                    dropIndex = bottomBarDropIndex,
+                    dropIndex = topBarDropIndex,
                     dragState = dragState,
                     onSelect = onSelect,
                     onFinishDrag = onFinishDrag,
-                    onBarBounds = { dragState.bottomBarBounds = it },
-                    modifier = Modifier.fillMaxWidth(),
+                    onBarBounds = { dragState.topBarBounds = it },
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .background(Brush.verticalGradient(listOf(ControlScrimBottom, Color.Transparent)))
+                        .padding(horizontal = density.barHorizontalPadding, vertical = Spacing.Hair),
                 )
+
+                // 中央控件簇预览（触控中央控件开启时显示，含虚线圆框占位与拖放高亮）
+                if (showCenterControls) {
+                    PreviewCenterCluster(
+                        config = layout.center,
+                        density = density,
+                        selectedSlot = (selection as? PreviewSelection.CenterSlot)?.position,
+                        dropTargetSlot = hoveredCenterSlot,
+                        onSelectSlot = { onSelect(PreviewSelection.CenterSlot(it)) },
+                        onSlotBounds = { pos, rect -> dragState.centerSlotBounds[pos] = rect },
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+
+                // 底栏预览（支持直接拖拽重排、跨栏放置与实时插入指示线）
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(Spacing.Hair),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, ControlScrimBottom)))
+                        .padding(horizontal = density.barHorizontalPadding, vertical = Spacing.Hair),
+                ) {
+                    if (isFullscreen) {
+                        PreviewSeekTrack(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Hair))
+                    }
+                    PreviewControlBar(
+                        bar = PlayerBarSlot.Bottom,
+                        items = layout.bottomBar,
+                        isFullscreen = isFullscreen,
+                        seekButtonSeconds = seekButtonSeconds,
+                        sampleStatus = sampleStatus,
+                        density = density,
+                        availableWidth = availableBarWidth,
+                        selection = selection,
+                        activePlaced = activePlaced,
+                        dropIndex = bottomBarDropIndex,
+                        dragState = dragState,
+                        onSelect = onSelect,
+                        onFinishDrag = onFinishDrag,
+                        onBarBounds = { dragState.bottomBarBounds = it },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         }
     }
@@ -1713,7 +1718,7 @@ private fun PreviewControlBar(
     sampleStatus: PlayerSystemStatus,
     density: PreviewDensity,
     availableWidth: Dp,
-    selection: PreviewSelection,
+    selection: PreviewSelection?,
     activePlaced: DragPayload.PlacedBarItem?,
     dropIndex: Int?,
     dragState: PlayerEditorDragState,
@@ -2851,6 +2856,7 @@ private fun SelectionInspectorStrip(
     layoutPrefs: PlayerLayoutPrefs,
     selection: PreviewSelection,
     onSelect: (PreviewSelection) -> Unit,
+    onDismiss: () -> Unit,
     onUpdateLayout: ((PlayerLayoutPrefs) -> PlayerLayoutPrefs) -> Unit,
 ) {
     if (selection is PreviewSelection.PanelItem &&
@@ -3033,6 +3039,16 @@ private fun SelectionInspectorStrip(
                                     modifier = Modifier.size(18.dp),
                                 )
                             }
+                            IconButton(
+                                onClick = onDismiss,
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = stringResource(Res.string.action_close),
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
                         }
                         if (supportsBg && !inlineBgSwitch) {
                             val control = item as PlayerPanelItem.Control
@@ -3084,20 +3100,38 @@ private fun SelectionInspectorStrip(
 
             is PreviewSelection.CenterSlot -> {
                 if (selection.position == CenterSlotPosition.Center) {
-                    PlainToggleRow(
-                        icon = Icons.Filled.PlayArrow,
-                        title = stringResource(Res.string.player_custom_show_center_play),
-                        subtitle = stringResource(Res.string.player_custom_show_center_play_subtitle),
-                        checked = layout.center.showCenterPlay,
-                        onCheckedChange = { show ->
-                            onUpdateLayout { prefs ->
-                                prefs.updateLayout(layoutMode) {
-                                    it.withCenterPlay(show, layoutMode.isFullscreen)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = Spacing.Comfortable, end = Spacing.Tight, top = Spacing.Cozy, bottom = Spacing.Cozy),
+                    ) {
+                        PlainToggleRow(
+                            icon = Icons.Filled.PlayArrow,
+                            title = stringResource(Res.string.player_custom_show_center_play),
+                            subtitle = stringResource(Res.string.player_custom_show_center_play_subtitle),
+                            checked = layout.center.showCenterPlay,
+                            onCheckedChange = { show ->
+                                onUpdateLayout { prefs ->
+                                    prefs.updateLayout(layoutMode) {
+                                        it.withCenterPlay(show, layoutMode.isFullscreen)
+                                    }
                                 }
-                            }
-                        },
-                        modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-                    )
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = stringResource(Res.string.action_close),
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
                 } else {
                     val slot = layout.center.slot(selection.position)
                     val currentSeconds = slot.action.seekSecondsOrNull() ?: layoutPrefs.seekButtonSeconds
@@ -3158,6 +3192,16 @@ private fun SelectionInspectorStrip(
                                         maxLines = 1,
                                     )
                                 }
+                            }
+                            IconButton(
+                                onClick = onDismiss,
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = stringResource(Res.string.action_close),
+                                    modifier = Modifier.size(18.dp),
+                                )
                             }
                         }
 
