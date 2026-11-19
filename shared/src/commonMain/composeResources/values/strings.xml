@@ -1121,4 +1121,15 @@
     <string name="player_custom_sync_double_tap">双击步进与快进按钮同步</string>
     <string name="player_custom_sync_double_tap_subtitle">取消勾选后可单独指定双击快进秒数</string>
     <string name="player_custom_double_tap_seconds">双击步进秒数</string>
+    <string name="player_custom_form_listen">听视频</string>
+    <string name="player_custom_listen_preview_hint">点选画布中的封面、控制键或快捷项以调整</string>
+    <string name="player_custom_listen_cover_title">封面样式</string>
+    <string name="player_custom_listen_cover_vinyl">黑胶唱片</string>
+    <string name="player_custom_listen_cover_static">静态封面</string>
+    <string name="player_custom_listen_cover_static_hint">关闭唱片持续旋转动画以降低功耗</string>
+    <string name="player_custom_listen_side_title">播放键两侧按钮</string>
+    <string name="player_custom_listen_side_episode">上一集  下一集</string>
+    <string name="player_custom_listen_side_seek">快退  快进 ±%1$d 秒</string>
+    <string name="player_custom_listen_side_none">无</string>
+    <string name="player_custom_listen_chips_title">快捷项显示</string>
 </resources>

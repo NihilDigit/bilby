@@ -194,4 +194,62 @@ class PlayerLayoutPrefsTest {
         assertFalse(movedSettings.canRemoveBarItem(PlayerBarSlot.Bottom, fullscreenIdx, isFullscreen = true))
         assertFalse(movedSettings.canRemoveBarItem(PlayerBarSlot.Top, 0, isFullscreen = true))
     }
+
+    @Test
+    fun listenLayoutDefaultsAndSanitizeDeduplicateChips() {
+        val defaults = PlayerLayoutPrefs.Default.listen
+        assertEquals(ListenCoverStyle.VinylDisc, defaults.coverStyle)
+        assertEquals(ListenSideAction.Episode, defaults.sideAction)
+        assertEquals(ListenQuickChip.entries, defaults.visibleChips)
+
+        val dirty = ListenLayoutConfig(
+            coverStyle = ListenCoverStyle.StaticCover,
+            sideAction = ListenSideAction.SeekDelta,
+            visibleChips = listOf(
+                ListenQuickChip.Speed,
+                ListenQuickChip.Quality,
+                ListenQuickChip.Speed,
+                ListenQuickChip.Subtitle,
+                ListenQuickChip.Quality,
+            ),
+        )
+        val clean = PlayerLayoutPrefs.Default.copy(listen = dirty).sanitize().listen
+        assertEquals(ListenCoverStyle.StaticCover, clean.coverStyle)
+        assertEquals(ListenSideAction.SeekDelta, clean.sideAction)
+        assertEquals(
+            listOf(ListenQuickChip.Speed, ListenQuickChip.Quality, ListenQuickChip.Subtitle),
+            clean.visibleChips,
+        )
+
+        val toggledOff = clean.toggleChip(ListenQuickChip.Quality, visible = false)
+        assertFalse(toggledOff.hasChip(ListenQuickChip.Quality))
+        val toggledOn = toggledOff.toggleChip(ListenQuickChip.SleepTimer, visible = true)
+        assertTrue(toggledOn.hasChip(ListenQuickChip.SleepTimer))
+    }
+
+    @Test
+    fun decodeLegacyJsonWithoutListenFieldFallsBackToListenDefault() {
+        val legacyJson = """
+            {
+              "version": 1,
+              "seekButtonSeconds": 20,
+              "doubleTapSeekSeconds": 10,
+              "syncDoubleTapWithSeekButton": false
+            }
+        """.trimIndent()
+        val decoded = decodePlayerLayoutPrefs(legacyJson)
+        assertEquals(20, decoded.seekButtonSeconds)
+        assertEquals(10, decoded.doubleTapSeekSeconds)
+        assertFalse(decoded.syncDoubleTapWithSeekButton)
+        assertEquals(ListenLayoutConfig.Default, decoded.listen)
+
+        val customized = decoded.updateListen {
+            it.copy(
+                coverStyle = ListenCoverStyle.StaticCover,
+                sideAction = ListenSideAction.None,
+                visibleChips = listOf(ListenQuickChip.Speed, ListenQuickChip.SleepTimer),
+            )
+        }
+        assertEquals(customized, decodePlayerLayoutPrefs(encodePlayerLayoutPrefs(customized)))
+    }
 }

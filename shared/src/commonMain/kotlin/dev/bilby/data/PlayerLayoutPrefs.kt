@@ -428,6 +428,58 @@ data class PlayerFormFactorLayout(
     }
 }
 
+@Serializable
+enum class ListenCoverStyle {
+    VinylDisc,
+    StaticCover,
+}
+
+@Serializable
+enum class ListenSideAction {
+    Episode,
+    SeekDelta,
+    None,
+}
+
+@Serializable
+enum class ListenQuickChip {
+    Speed,
+    SleepTimer,
+    Quality,
+    Subtitle,
+}
+
+@Immutable
+@Serializable
+data class ListenLayoutConfig(
+    val coverStyle: ListenCoverStyle = ListenCoverStyle.VinylDisc,
+    val sideAction: ListenSideAction = ListenSideAction.Episode,
+    val visibleChips: List<ListenQuickChip> = ListenQuickChip.entries,
+) {
+    fun hasChip(chip: ListenQuickChip): Boolean = chip in visibleChips
+
+    fun toggleChip(chip: ListenQuickChip, visible: Boolean): ListenLayoutConfig {
+        val updated = if (visible) {
+            if (chip in visibleChips) visibleChips else visibleChips + chip
+        } else {
+            visibleChips.filterNot { it == chip }
+        }
+        return copy(visibleChips = updated).sanitize()
+    }
+
+    fun sanitize(): ListenLayoutConfig = copy(
+        visibleChips = visibleChips.distinct(),
+    )
+
+    companion object {
+        val Default = ListenLayoutConfig(
+            coverStyle = ListenCoverStyle.VinylDisc,
+            sideAction = ListenSideAction.Episode,
+            visibleChips = ListenQuickChip.entries,
+        )
+    }
+}
+
 enum class PlayerLayoutPreset {
     Default,
     Minimal,
@@ -445,6 +497,7 @@ data class PlayerLayoutPrefs(
     val seekButtonSeconds: Int = DEFAULT_SEEK_SECONDS,
     val doubleTapSeekSeconds: Int = DEFAULT_DOUBLE_TAP_SEEK_SECONDS,
     val syncDoubleTapWithSeekButton: Boolean = true,
+    val listen: ListenLayoutConfig = ListenLayoutConfig.Default,
 ) {
     val effectiveDoubleTapSeekSeconds: Int
         get() = (if (syncDoubleTapWithSeekButton) seekButtonSeconds else doubleTapSeekSeconds)
@@ -470,6 +523,10 @@ data class PlayerLayoutPrefs(
         return updated.sanitize()
     }
 
+    fun updateListen(
+        transform: (ListenLayoutConfig) -> ListenLayoutConfig,
+    ): PlayerLayoutPrefs = copy(listen = transform(listen)).sanitize()
+
     fun sanitize(): PlayerLayoutPrefs = copy(
         version = PLAYER_LAYOUT_PREFS_VERSION,
         touchEmbedded = touchEmbedded.sanitize(isFullscreen = false),
@@ -478,6 +535,7 @@ data class PlayerLayoutPrefs(
         pointerFullscreen = pointerFullscreen.sanitize(isFullscreen = true),
         seekButtonSeconds = seekButtonSeconds.coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS),
         doubleTapSeekSeconds = doubleTapSeekSeconds.coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS),
+        listen = listen.sanitize(),
     )
 
     companion object {
@@ -591,6 +649,7 @@ data class PlayerLayoutPrefs(
             seekButtonSeconds = DEFAULT_SEEK_SECONDS,
             doubleTapSeekSeconds = DEFAULT_DOUBLE_TAP_SEEK_SECONDS,
             syncDoubleTapWithSeekButton = true,
+            listen = ListenLayoutConfig.Default,
         ).sanitize()
 
         val Minimal = PlayerLayoutPrefs(
@@ -650,6 +709,7 @@ data class PlayerLayoutPrefs(
             seekButtonSeconds = DEFAULT_SEEK_SECONDS,
             doubleTapSeekSeconds = DEFAULT_DOUBLE_TAP_SEEK_SECONDS,
             syncDoubleTapWithSeekButton = true,
+            listen = ListenLayoutConfig.Default,
         ).sanitize()
 
         private val PodcastTouchCenter = CenterClusterConfig(
@@ -737,6 +797,11 @@ data class PlayerLayoutPrefs(
             seekButtonSeconds = 15,
             doubleTapSeekSeconds = 15,
             syncDoubleTapWithSeekButton = true,
+            listen = ListenLayoutConfig(
+                coverStyle = ListenCoverStyle.VinylDisc,
+                sideAction = ListenSideAction.SeekDelta,
+                visibleChips = ListenQuickChip.entries,
+            ),
         ).sanitize()
 
         fun preset(preset: PlayerLayoutPreset): PlayerLayoutPrefs = when (preset) {

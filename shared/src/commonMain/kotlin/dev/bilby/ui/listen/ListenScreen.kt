@@ -41,6 +41,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import dev.bilby.resources.video_tab_comment
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
@@ -164,7 +167,13 @@ import androidx.compose.ui.input.key.type
 import dev.bilby.ui.components.LocalEditableFocusTracker
 import dev.bilby.ui.player.PlayerVolumeControl
 import dev.bilby.ui.video.PlayerSettingsContent
+import dev.bilby.data.ListenCoverStyle
+import dev.bilby.data.ListenQuickChip
+import dev.bilby.data.ListenSideAction
+import dev.bilby.data.MAX_SEEK_SECONDS
+import dev.bilby.data.MIN_SEEK_SECONDS
 import dev.bilby.data.QueueSource
+import dev.bilby.ui.player.LocalPlayerLayoutPrefs
 import dev.bilby.ui.components.InlineProgress
 import dev.bilby.ui.components.SectionHeader
 import dev.bilby.ui.video.QueueUiState
@@ -582,8 +591,30 @@ fun ListenScreen(
     var resumeAfterDrag by remember { mutableStateOf(false) }
     var speed by remember { mutableStateOf(1f) }
     var sleepSheetOpen by remember { mutableStateOf(false) }
+    var audioSheetOpen by remember { mutableStateOf(false) }
     val playback = LocalPlaybackHost.current
     val windowVisible = LocalWindowVisible.current
+    val layoutPrefs = LocalPlayerLayoutPrefs.current
+    val listenLayout = layoutPrefs.listen
+    val seekButtonSeconds = layoutPrefs.seekButtonSeconds.coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS)
+    val audioOptions = state.playInfo?.streams?.audioOptions.orEmpty()
+    val currentAudio = state.playInfo?.streams?.audioId ?: 0
+
+    val seekBySeconds: (Int) -> Unit = { deltaSeconds ->
+        val activePlayer = player
+        if (activePlayer != null) {
+            val currentDur = progress.durationMillis
+            val deltaMillis = deltaSeconds * 1000L
+            val basePos = progress.displayPositionMillis
+            val target = if (currentDur > 0L) {
+                (basePos + deltaMillis).coerceIn(0L, currentDur)
+            } else {
+                (basePos + deltaMillis).coerceAtLeast(0L)
+            }
+            activePlayer.seekTo(target)
+            progress.positionMillis = target
+        }
+    }
 
     // Media3 的 Player 没有位置回调,只能轮询;和 BilbyPlayer 一致的 500ms 间隔。
     // 写入 ListenProgressState，仅由最末端读数/进度条叶子读取，避免顶层每 500ms 或拖动时 60fps 重组。
@@ -735,12 +766,26 @@ fun ListenScreen(
                         }
                     }
                 }
-                SubtitleBarButton(
-                    tracks = subtitleTracks,
-                    currentLan = subtitleLan,
-                    lyricsShown = showLyrics,
-                    onSelect = onSelectSubtitle,
-                )
+                if (listenLayout.hasChip(ListenQuickChip.Quality) && audioOptions.size > 1) {
+                    val audioLabel = stringResource(Res.string.player_custom_ctrl_audio)
+                    BilbyTooltip(text = audioLabel) {
+                        IconButton(onClick = { audioSheetOpen = true }) {
+                            Icon(
+                                Icons.Filled.GraphicEq,
+                                contentDescription = audioLabel,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                if (listenLayout.hasChip(ListenQuickChip.Subtitle) || showLyrics) {
+                    SubtitleBarButton(
+                        tracks = subtitleTracks,
+                        currentLan = subtitleLan,
+                        lyricsShown = showLyrics,
+                        onSelect = onSelectSubtitle,
+                    )
+                }
             }
             if (showLyrics && item != null) {
                 LyricsHeader(item = item, onBack = onBack, trailing = barActions)
@@ -835,6 +880,7 @@ fun ListenScreen(
                         DiscView(
                             state = state,
                             queue = queue,
+                            coverStyle = listenLayout.coverStyle,
                             onOpenQueueSource = onOpenQueueSource,
                             // 有队列时队列头已独占展示来源胶囊，单栏与双栏均隐藏唱片下方的重复胶囊。
                             showSourcePill = !hasQueue,
@@ -891,13 +937,18 @@ fun ListenScreen(
                     hasNext = state.queue.canNext,
                     sleepTimer = sleepTimer,
                     progress = progress,
+                    sideAction = listenLayout.sideAction,
+                    seekButtonSeconds = seekButtonSeconds,
+                    visibleChips = listenLayout.visibleChips,
                     onPlayPause = { if (player.playWhenReady) player.pause() else player.playOrReplay(playback) },
                     onPrevious = onPrevious,
                     onNext = onNext,
+                    onSeekBackward = { seekBySeconds(-seekButtonSeconds) },
+                    onSeekForward = { seekBySeconds(seekButtonSeconds) },
                     onSpeedChange = { player.setPlaybackSpeed(it) },
                     onOpenSleepTimer = { sleepSheetOpen = true },
-                    audioOptions = state.playInfo?.streams?.audioOptions.orEmpty(),
-                    currentAudio = state.playInfo?.streams?.audioId ?: 0,
+                    audioOptions = audioOptions,
+                    currentAudio = currentAudio,
                     onAudioChange = onAudioQualityChange,
                 )
 
@@ -1015,6 +1066,28 @@ fun ListenScreen(
             onDismiss = { sleepSheetOpen = false },
         )
     }
+
+    if (audioSheetOpen && audioOptions.size > 1) {
+        PaneSheet(
+            onDismissRequest = { audioSheetOpen = false },
+            title = stringResource(Res.string.player_custom_ctrl_audio),
+        ) {
+            PlayerSettingsContent(
+                speed = speed,
+                onSpeedChange = { player?.setPlaybackSpeed(it) },
+                qualities = emptyList(),
+                currentQuality = 0,
+                onQualityChange = {},
+                subtitleTracks = emptyList(),
+                currentSubtitleLan = "",
+                onSubtitleTrackChange = {},
+                audioOptions = audioOptions,
+                currentAudio = currentAudio,
+                onAudioChange = onAudioQualityChange,
+                only = PlayerSettingsSection.Audio,
+            )
+        }
+    }
 }
 
 private const val DiscHaloAlpha = 0.11f
@@ -1036,6 +1109,7 @@ private val SheetDragHandleHeight = 4.dp
 private fun DiscView(
     state: AudioPlaybackUiState,
     queue: QueueUiState,
+    coverStyle: ListenCoverStyle,
     onOpenQueueSource: (QueueSource) -> Unit,
     showSourcePill: Boolean,
     speed: Float,
@@ -1050,12 +1124,7 @@ private fun DiscView(
     modifier: Modifier = Modifier,
 ) {
     val item = state.queue?.current ?: return
-    val reducedMotion = rememberReducedMotion()
-    val windowVisible = LocalWindowVisible.current
     val density = LocalDensity.current
-    val haloColor = MaterialTheme.colorScheme.primary.copy(alpha = DiscHaloAlpha)
-    val scrubArcColor = MaterialTheme.colorScheme.primary
-    val cancelArcColor = MaterialTheme.colorScheme.error
     val copyTitle = rememberCopyAction()
     val copyBvid = rememberCopyAction(
         clipLabel = stringResource(Res.string.video_bvid_clip_label),
@@ -1073,254 +1142,38 @@ private fun DiscView(
                 // 底边不留:标题和 UP 名下面紧接着就是大数字(排在这一块外面)。
                 .padding(start = Spacing.Loose, end = Spacing.Loose, top = Spacing.Comfortable),
         ) {
-            var discAreaMinDp by remember { mutableStateOf(0.dp) }
+            var artBoxWidthDp by remember { mutableStateOf(0.dp) }
+            var artBoxHeightDp by remember { mutableStateOf(0.dp) }
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
                     .onSizeChanged { size ->
-                        discAreaMinDp = with(density) { minOf(size.width, size.height).toDp() }
+                        artBoxWidthDp = with(density) { size.width.toDp() }
+                        artBoxHeightDp = with(density) { size.height.toDp() }
                     },
                 contentAlignment = Alignment.BottomCenter,
             ) {
-                val discSize = discAreaMinDp * DiscSizeFraction
-
-                var discAngle by remember { mutableFloatStateOf(0f) }
-                var discOmega by remember { mutableFloatStateOf(0f) }
-                var scrubTurn by remember { mutableFloatStateOf(0f) }
-                var scrubStartAngle by remember { mutableFloatStateOf(0f) }
-                val scope = rememberCoroutineScope()
-                var discGesture by remember { mutableStateOf(false) }
-                val isScrubbing by remember(progress) { derivedStateOf { progress.isScrubbing } }
-                val isCancelArmed by remember(progress) { derivedStateOf { progress.scrubCancelArmed } }
-
-                val barScrub = remember { BarScrub() }
-                LaunchedEffect(progress) {
-                    snapshotFlow {
-                        Triple(progress.isScrubbing, progress.displayPositionMillis, progress.durationMillis)
-                    }.collect { (scrub, pos, dur) ->
-                        if (scrub && !discGesture) {
-                            if (!barScrub.active) {
-                                barScrub.active = true
-                                barScrub.baseAngle = discAngle
-                            }
-                            if (dur > 0L) {
-                                val turn = (pos - barScrub.restPosition).toFloat() / dur * 360f
-                                discAngle = barScrub.baseAngle + turn
-                            }
-                        } else if (!scrub) {
-                            barScrub.active = false
-                            barScrub.restPosition = pos
-                        }
-                    }
-                }
-                // 真实唱机转动惯性：播放启动平稳加速、暂停阻尼滑停至静止，reducedMotion 或窗口不可见时暂停并保留当前角度。
-                LaunchedEffect(state.isPlaying, speed, isScrubbing, reducedMotion, windowVisible) {
-                    if (reducedMotion || isScrubbing || !windowVisible) {
-                        discOmega = 0f
-                        return@LaunchedEffect
-                    }
-                    val targetOmega = if (state.isPlaying) {
-                        360f / (DiscRotationPeriodMillis / 1000f) * speed.coerceAtLeast(0.1f)
-                    } else {
-                        0f
-                    }
-                    if (targetOmega == 0f && kotlin.math.abs(discOmega) < 0.05f) {
-                        discOmega = 0f
-                        return@LaunchedEffect
-                    }
-                    var lastNanos = 0L
-                    while (true) {
-                        val frameNanos = withFrameNanos { it }
-                        if (lastNanos == 0L) {
-                            lastNanos = frameNanos
-                            delay(DiscFrameDelayMillis)
-                            continue
-                        }
-                        val elapsedNanos = frameNanos - lastNanos
-                        if (elapsedNanos < DiscMinFrameIntervalNanos) {
-                            delay(DiscFrameDelayMillis)
-                            continue
-                        }
-                        val dt = (elapsedNanos / 1_000_000_000f).coerceIn(0f, 0.1f)
-                        lastNanos = frameNanos
-                        val rate = if (targetOmega > discOmega) 7.5f else 4.0f
-                        val alpha = 1f - exp(-rate * dt)
-                        discOmega += (targetOmega - discOmega) * alpha
-                        discAngle = (discAngle + discOmega * dt) % 360f
-                        if (targetOmega == 0f && kotlin.math.abs(discOmega) < 0.05f) {
-                            discOmega = 0f
-                            break
-                        }
-                        delay(DiscFrameDelayMillis)
-                    }
-                }
-
-                val cancelReturnSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
-                if (discSize > 0.dp) Box(
-                    modifier = Modifier
-                        .size(discSize)
-                        // 静态盘体托底微光（无呼吸动画）。
-                        .drawBehind {
-                            val r = size.minDimension / 2f
-                            val c = Offset(size.width / 2f, size.height / 2f)
-                            val haloRadius = r * DiscHaloRadiusRatio
-                            if (haloRadius > 0f) {
-                                drawCircle(
-                                    brush = Brush.radialGradient(
-                                        colors = listOf(
-                                            haloColor,
-                                            haloColor.copy(alpha = DiscHaloAlpha * 0.36f),
-                                            Color.Transparent,
-                                        ),
-                                        center = c,
-                                        radius = haloRadius,
-                                    ),
-                                    radius = haloRadius,
-                                    center = c,
-                                )
-                            }
-                        }
-                        .pointerInput(Unit) {
-                            awaitEachGesture {
-                                val down = awaitFirstDown(requireUnconsumed = false)
-                                val dur = progress.durationMillis
-                                if (dur <= 0L) return@awaitEachGesture
-                                val center = Offset(size.width / 2f, size.height / 2f)
-                                if ((down.position - center).getDistance() > minOf(size.width, size.height) / 2f) {
-                                    return@awaitEachGesture
-                                }
-                                val first = awaitTouchSlopOrCancellation(down.id) { change, _ ->
-                                    change.consume()
-                                } ?: return@awaitEachGesture
-                                val startPosition = progress.displayPositionMillis
-                                var lastAngle = (first.position - center).degrees()
-                                var turned = 0f
-                                val cancelRadius = minOf(size.width, size.height) / 2f * CancelRadiusRatio
-                                var cancelArmed = false
-                                scrubStartAngle = lastAngle
-                                discGesture = true
-                                onScrubStart()
-                                drag(first.id) { change ->
-                                    val armed = (change.position - center).getDistance() > cancelRadius
-                                    if (armed != cancelArmed) {
-                                        cancelArmed = armed
-                                        onScrubCancelArmed(armed)
-                                    }
-                                    val a = (change.position - center).degrees()
-                                    var delta = a - lastAngle
-                                    if (delta > 180f) delta -= 360f
-                                    if (delta < -180f) delta += 360f
-                                    lastAngle = a
-                                    turned += delta
-                                    scrubTurn = turned
-                                    val target = startPosition + (turned / 360f * dur).toLong()
-                                    onScrub(target.coerceIn(0L, dur))
-                                    change.consume()
-                                }
-                                if (cancelArmed) {
-                                    onScrubCancel()
-                                    scope.launch {
-                                        if (reducedMotion) {
-                                            scrubTurn = 0f
-                                        } else {
-                                            Animatable(scrubTurn).animateTo(0f, cancelReturnSpec) {
-                                                scrubTurn = value
-                                            }
-                                        }
-                                        discGesture = false
-                                    }
-                                } else {
-                                    onScrubEnd()
-                                    scope.launch {
-                                        discAngle = (discAngle + scrubTurn) % 360f
-                                        scrubTurn = 0f
-                                        discGesture = false
-                                    }
-                                }
-                            }
-                        },
-                ) {
-                    // 盘体、同心纹路、轴孔。保持 100% CircleShape 真黑胶唱片。
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer { rotationZ = discAngle + scrubTurn }
-                            .drawBehind {
-                                val r = size.minDimension / 2f
-                                val c = Offset(size.width / 2f, size.height / 2f)
-                                drawCircle(FixedColors.VinylBody, radius = r, center = c)
-                                val inner = r * DiscLabelFraction
-                                repeat(DiscGrooveCount) { i ->
-                                    val t = (i + 1f) / (DiscGrooveCount + 1f)
-                                    drawCircle(
-                                        color = FixedColors.VinylGroove,
-                                        radius = inner + (r - inner) * t,
-                                        center = c,
-                                        style = Stroke(width = DiscGrooveWidthPx),
-                                    )
-                                }
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        BiliAsyncImage(
-                            url = item.coverUrl,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .fillMaxSize(DiscLabelFraction)
-                                .clip(CircleShape),
-                        )
-                        // 轴孔压在标签纸中央,是这张唱片"是个实物"的最后一笔。
-                        Box(
-                            modifier = Modifier
-                                .size(discSize * DiscHoleFraction)
-                                .clip(CircleShape)
-                                .background(FixedColors.VinylHole),
-                        )
-                    }
-                    // 仅在手指搓盘拖拽时绘制因果扇形弧线与取消环。
-                    if (discGesture) {
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val r = size.minDimension / 2f
-                            val c = Offset(size.width / 2f, size.height / 2f)
-                            val strokeW = 3.dp.toPx()
-                            val arcInset = strokeW / 2f
-                            drawArc(
-                                color = if (isCancelArmed) cancelArcColor else scrubArcColor,
-                                startAngle = scrubStartAngle,
-                                sweepAngle = scrubTurn.coerceIn(-359.9f, 359.9f),
-                                useCenter = false,
-                                topLeft = Offset(arcInset, arcInset),
-                                size = Size(size.width - strokeW, size.height - strokeW),
-                                style = Stroke(width = strokeW, cap = StrokeCap.Round),
-                            )
-                            if (isCancelArmed) {
-                                drawCircle(
-                                    color = cancelArcColor.copy(alpha = 0.28f),
-                                    radius = r * CancelRadiusRatio,
-                                    center = c,
-                                    style = Stroke(width = 1.5.dp.toPx()),
-                                )
-                            }
-                        }
-                    }
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible = isCancelArmed,
-                        enter = fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()) +
-                            scaleIn(
-                                initialScale = CancelPillEnterScale,
-                                animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
-                            ),
-                        exit = fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()) +
-                            scaleOut(
-                                targetScale = CancelPillEnterScale,
-                                animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
-                            ),
-                        modifier = Modifier.align(Alignment.Center),
-                    ) {
-                        CancelPill()
-                    }
+                if (coverStyle == ListenCoverStyle.StaticCover) {
+                    StaticCoverArt(
+                        coverUrl = item.coverUrl,
+                        maxWidth = artBoxWidthDp,
+                        maxHeight = artBoxHeightDp,
+                    )
+                } else {
+                    val discSize = minOf(artBoxWidthDp, artBoxHeightDp) * DiscSizeFraction
+                    VinylDiscArt(
+                        coverUrl = item.coverUrl,
+                        discSize = discSize,
+                        isPlaying = state.isPlaying,
+                        speed = speed,
+                        progress = progress,
+                        onScrubStart = onScrubStart,
+                        onScrub = onScrub,
+                        onScrubEnd = onScrubEnd,
+                        onScrubCancelArmed = onScrubCancelArmed,
+                        onScrubCancel = onScrubCancel,
+                    )
                 }
             }
             // 听视频整屏只有一条内容,曲目名抬至 headlineSmallEmphasized 建立主视觉锚点。
@@ -1449,8 +1302,296 @@ private fun DiscView(
 
 
 /**
- * 底部悬浮传输工具栏([HorizontalFloatingToolbar])承载对称五格动作组([ButtonGroup]):
- * `[倍速] [上一条] [▶] [下一条] [定时]`，各按钮按压时触发物理 `animateWidth` 膨胀让位。
+ * 静态封面模式：16:10 圆角封面图，零旋转循环与持续重绘，适合低功耗聆听。
+ */
+@Composable
+private fun StaticCoverArt(
+    coverUrl: String,
+    maxWidth: Dp,
+    maxHeight: Dp,
+) {
+    if (maxWidth <= 0.dp || maxHeight <= 0.dp) return
+    val ratio = 16f / 10f
+    val boundedWidth = maxWidth * 0.92f
+    val boundedHeight = maxHeight * 0.86f
+    val coverWidth = minOf(boundedWidth, boundedHeight * ratio)
+    val coverHeight = coverWidth / ratio
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.size(width = coverWidth, height = coverHeight),
+    ) {
+        BiliAsyncImage(
+            url = coverUrl,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun VinylDiscArt(
+    coverUrl: String,
+    discSize: Dp,
+    isPlaying: Boolean,
+    speed: Float,
+    progress: ListenProgressState,
+    onScrubStart: () -> Unit,
+    onScrub: (Long) -> Unit,
+    onScrubEnd: () -> Unit,
+    onScrubCancelArmed: (Boolean) -> Unit,
+    onScrubCancel: () -> Unit,
+) {
+    val reducedMotion = rememberReducedMotion()
+    val windowVisible = LocalWindowVisible.current
+    val haloColor = MaterialTheme.colorScheme.primary.copy(alpha = DiscHaloAlpha)
+    val scrubArcColor = MaterialTheme.colorScheme.primary
+    val cancelArcColor = MaterialTheme.colorScheme.error
+
+    var discAngle by remember { mutableFloatStateOf(0f) }
+    var discOmega by remember { mutableFloatStateOf(0f) }
+    var scrubTurn by remember { mutableFloatStateOf(0f) }
+    var scrubStartAngle by remember { mutableFloatStateOf(0f) }
+    val scope = rememberCoroutineScope()
+    var discGesture by remember { mutableStateOf(false) }
+    val isScrubbing by remember(progress) { derivedStateOf { progress.isScrubbing } }
+    val isCancelArmed by remember(progress) { derivedStateOf { progress.scrubCancelArmed } }
+
+    val barScrub = remember { BarScrub() }
+    LaunchedEffect(progress) {
+        snapshotFlow {
+            Triple(progress.isScrubbing, progress.displayPositionMillis, progress.durationMillis)
+        }.collect { (scrub, pos, dur) ->
+            if (scrub && !discGesture) {
+                if (!barScrub.active) {
+                    barScrub.active = true
+                    barScrub.baseAngle = discAngle
+                }
+                if (dur > 0L) {
+                    val turn = (pos - barScrub.restPosition).toFloat() / dur * 360f
+                    discAngle = barScrub.baseAngle + turn
+                }
+            } else if (!scrub) {
+                barScrub.active = false
+                barScrub.restPosition = pos
+            }
+        }
+    }
+    // 真实唱机转动惯性：播放启动平稳加速、暂停阻尼滑停至静止，reducedMotion 或窗口不可见时暂停并保留当前角度。
+    LaunchedEffect(isPlaying, speed, isScrubbing, reducedMotion, windowVisible) {
+        if (reducedMotion || isScrubbing || !windowVisible) {
+            discOmega = 0f
+            return@LaunchedEffect
+        }
+        val targetOmega = if (isPlaying) {
+            360f / (DiscRotationPeriodMillis / 1000f) * speed.coerceAtLeast(0.1f)
+        } else {
+            0f
+        }
+        if (targetOmega == 0f && kotlin.math.abs(discOmega) < 0.05f) {
+            discOmega = 0f
+            return@LaunchedEffect
+        }
+        var lastNanos = 0L
+        while (true) {
+            val frameNanos = withFrameNanos { it }
+            if (lastNanos == 0L) {
+                lastNanos = frameNanos
+                delay(DiscFrameDelayMillis)
+                continue
+            }
+            val elapsedNanos = frameNanos - lastNanos
+            if (elapsedNanos < DiscMinFrameIntervalNanos) {
+                delay(DiscFrameDelayMillis)
+                continue
+            }
+            val dt = (elapsedNanos / 1_000_000_000f).coerceIn(0f, 0.1f)
+            lastNanos = frameNanos
+            val rate = if (targetOmega > discOmega) 7.5f else 4.0f
+            val alpha = 1f - exp(-rate * dt)
+            discOmega += (targetOmega - discOmega) * alpha
+            discAngle = (discAngle + discOmega * dt) % 360f
+            if (targetOmega == 0f && kotlin.math.abs(discOmega) < 0.05f) {
+                discOmega = 0f
+                break
+            }
+            delay(DiscFrameDelayMillis)
+        }
+    }
+
+    val cancelReturnSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
+    if (discSize > 0.dp) Box(
+        modifier = Modifier
+            .size(discSize)
+            // 静态盘体托底微光（无呼吸动画）。
+            .drawBehind {
+                val r = size.minDimension / 2f
+                val c = Offset(size.width / 2f, size.height / 2f)
+                val haloRadius = r * DiscHaloRadiusRatio
+                if (haloRadius > 0f) {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                haloColor,
+                                haloColor.copy(alpha = DiscHaloAlpha * 0.36f),
+                                Color.Transparent,
+                            ),
+                            center = c,
+                            radius = haloRadius,
+                        ),
+                        radius = haloRadius,
+                        center = c,
+                    )
+                }
+            }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val dur = progress.durationMillis
+                    if (dur <= 0L) return@awaitEachGesture
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    if ((down.position - center).getDistance() > minOf(size.width, size.height) / 2f) {
+                        return@awaitEachGesture
+                    }
+                    val first = awaitTouchSlopOrCancellation(down.id) { change, _ ->
+                        change.consume()
+                    } ?: return@awaitEachGesture
+                    val startPosition = progress.displayPositionMillis
+                    var lastAngle = (first.position - center).degrees()
+                    var turned = 0f
+                    val cancelRadius = minOf(size.width, size.height) / 2f * CancelRadiusRatio
+                    var cancelArmed = false
+                    scrubStartAngle = lastAngle
+                    discGesture = true
+                    onScrubStart()
+                    drag(first.id) { change ->
+                        val armed = (change.position - center).getDistance() > cancelRadius
+                        if (armed != cancelArmed) {
+                            cancelArmed = armed
+                            onScrubCancelArmed(armed)
+                        }
+                        val a = (change.position - center).degrees()
+                        var delta = a - lastAngle
+                        if (delta > 180f) delta -= 360f
+                        if (delta < -180f) delta += 360f
+                        lastAngle = a
+                        turned += delta
+                        scrubTurn = turned
+                        val target = startPosition + (turned / 360f * dur).toLong()
+                        onScrub(target.coerceIn(0L, dur))
+                        change.consume()
+                    }
+                    if (cancelArmed) {
+                        onScrubCancel()
+                        scope.launch {
+                            if (reducedMotion) {
+                                scrubTurn = 0f
+                            } else {
+                                Animatable(scrubTurn).animateTo(0f, cancelReturnSpec) {
+                                    scrubTurn = value
+                                }
+                            }
+                            discGesture = false
+                        }
+                    } else {
+                        onScrubEnd()
+                        scope.launch {
+                            discAngle = (discAngle + scrubTurn) % 360f
+                            scrubTurn = 0f
+                            discGesture = false
+                        }
+                    }
+                }
+            },
+    ) {
+        // 盘体、同心纹路、轴孔。保持 100% CircleShape 真黑胶唱片。
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { rotationZ = discAngle + scrubTurn }
+                .drawBehind {
+                    val r = size.minDimension / 2f
+                    val c = Offset(size.width / 2f, size.height / 2f)
+                    drawCircle(FixedColors.VinylBody, radius = r, center = c)
+                    val inner = r * DiscLabelFraction
+                    repeat(DiscGrooveCount) { i ->
+                        val t = (i + 1f) / (DiscGrooveCount + 1f)
+                        drawCircle(
+                            color = FixedColors.VinylGroove,
+                            radius = inner + (r - inner) * t,
+                            center = c,
+                            style = Stroke(width = DiscGrooveWidthPx),
+                        )
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            BiliAsyncImage(
+                url = coverUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize(DiscLabelFraction)
+                    .clip(CircleShape),
+            )
+            // 轴孔压在标签纸中央,是这张唱片"是个实物"的最后一笔。
+            Box(
+                modifier = Modifier
+                    .size(discSize * DiscHoleFraction)
+                    .clip(CircleShape)
+                    .background(FixedColors.VinylHole),
+            )
+        }
+        // 仅在手指搓盘拖拽时绘制因果扇形弧线与取消环。
+        if (discGesture) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val r = size.minDimension / 2f
+                val c = Offset(size.width / 2f, size.height / 2f)
+                val strokeW = 3.dp.toPx()
+                val arcInset = strokeW / 2f
+                drawArc(
+                    color = if (isCancelArmed) cancelArcColor else scrubArcColor,
+                    startAngle = scrubStartAngle,
+                    sweepAngle = scrubTurn.coerceIn(-359.9f, 359.9f),
+                    useCenter = false,
+                    topLeft = Offset(arcInset, arcInset),
+                    size = Size(size.width - strokeW, size.height - strokeW),
+                    style = Stroke(width = strokeW, cap = StrokeCap.Round),
+                )
+                if (isCancelArmed) {
+                    drawCircle(
+                        color = cancelArcColor.copy(alpha = 0.28f),
+                        radius = r * CancelRadiusRatio,
+                        center = c,
+                        style = Stroke(width = 1.5.dp.toPx()),
+                    )
+                }
+            }
+        }
+        androidx.compose.animation.AnimatedVisibility(
+            visible = isCancelArmed,
+            enter = fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()) +
+                scaleIn(
+                    initialScale = CancelPillEnterScale,
+                    animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+                ),
+            exit = fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()) +
+                scaleOut(
+                    targetScale = CancelPillEnterScale,
+                    animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+                ),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            CancelPill()
+        }
+    }
+}
+
+/**
+ * 底部悬浮传输工具栏([HorizontalFloatingToolbar])承载对称动作组([ButtonGroup]):
+ * `[倍速] [左侧键] [▶] [右侧键] [定时]`，各按钮按压时触发物理 `animateWidth` 膨胀让位。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -1462,9 +1603,14 @@ private fun PlaybackControls(
     hasNext: Boolean,
     sleepTimer: SleepTimerState,
     progress: ListenProgressState,
+    sideAction: ListenSideAction,
+    seekButtonSeconds: Int,
+    visibleChips: List<ListenQuickChip>,
     onPlayPause: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    onSeekBackward: () -> Unit,
+    onSeekForward: () -> Unit,
     onSpeedChange: (Float) -> Unit,
     onOpenSleepTimer: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1477,6 +1623,12 @@ private fun PlaybackControls(
     val prevLabel = stringResource(Res.string.player_previous)
     val playLabel = stringResource(if (isPlaying) Res.string.player_pause else Res.string.player_play)
     val nextLabel = stringResource(Res.string.player_next)
+    val rewindLabel = stringResource(Res.string.player_seek_backward_seconds, seekButtonSeconds)
+    val forwardLabel = stringResource(Res.string.player_seek_forward_seconds, seekButtonSeconds)
+
+    val showSpeed = ListenQuickChip.Speed in visibleChips
+    val showSleep = ListenQuickChip.SleepTimer in visibleChips
+    val showQuality = ListenQuickChip.Quality in visibleChips
 
     val toolbarColors = FloatingToolbarDefaults.standardFloatingToolbarColors(
         toolbarContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -1517,64 +1669,96 @@ private fun PlaybackControls(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                customItem(
-                    buttonGroupContent = {
-                        val speedText = formatSpeed(speed)
-                        BilbyTooltip(text = speedLabel, anchorAbove = true) {
-                            ToggleButton(
-                                checked = speedSheetOpen || speed != 1f,
-                                onCheckedChange = { speedSheetOpen = true },
-                                interactionSource = speedInteraction,
-                                colors = pillToggleColors,
-                                contentPadding = PaddingValues(horizontal = Spacing.Cozy),
-                                modifier = Modifier
-                                    .height(ListenControlHeight)
-                                    .widthIn(min = ListenSidePillMinWidth)
-                                    .animateWidth(speedInteraction)
-                                    .pointerHoverIcon(PointerIcon.Hand)
-                                    .semantics { contentDescription = "$speedLabel $speedText" },
-                            ) {
-                                Icon(
-                                    Icons.Filled.Speed,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(ChipIconSize),
-                                )
-                                Spacer(modifier = Modifier.width(Spacing.Hair))
-                                Text(
-                                    text = speedText,
-                                    style = MaterialTheme.typography.labelLarge.tabular,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                )
+                if (showSpeed) {
+                    customItem(
+                        buttonGroupContent = {
+                            val speedText = formatSpeed(speed)
+                            BilbyTooltip(text = speedLabel, anchorAbove = true) {
+                                ToggleButton(
+                                    checked = speedSheetOpen || speed != 1f,
+                                    onCheckedChange = { speedSheetOpen = true },
+                                    interactionSource = speedInteraction,
+                                    colors = pillToggleColors,
+                                    contentPadding = PaddingValues(horizontal = Spacing.Cozy),
+                                    modifier = Modifier
+                                        .height(ListenControlHeight)
+                                        .widthIn(min = ListenSidePillMinWidth)
+                                        .animateWidth(speedInteraction)
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                        .semantics { contentDescription = "$speedLabel $speedText" },
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Speed,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(ChipIconSize),
+                                    )
+                                    Spacer(modifier = Modifier.width(Spacing.Hair))
+                                    Text(
+                                        text = speedText,
+                                        style = MaterialTheme.typography.labelLarge.tabular,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                    )
+                                }
                             }
-                        }
-                    },
-                    menuContent = {},
-                )
-                customItem(
-                    buttonGroupContent = {
-                        BilbyTooltip(text = prevLabel, shortcut = "[", anchorAbove = true) {
-                            FilledTonalIconButton(
-                                onClick = onPrevious,
-                                enabled = hasPrevious,
-                                interactionSource = prevInteraction,
-                                shapes = IconButtonDefaults.shapes(),
-                                colors = pillIconColors,
-                                modifier = Modifier
-                                    .size(ListenControlHeight)
-                                    .animateWidth(prevInteraction)
-                                    .then(if (hasPrevious) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.SkipPrevious,
-                                    contentDescription = prevLabel,
-                                    modifier = Modifier.size(SkipIconSize),
-                                )
-                            }
-                        }
-                    },
-                    menuContent = {},
-                )
+                        },
+                        menuContent = {},
+                    )
+                }
+                when (sideAction) {
+                    ListenSideAction.Episode -> {
+                        customItem(
+                            buttonGroupContent = {
+                                BilbyTooltip(text = prevLabel, shortcut = "[", anchorAbove = true) {
+                                    FilledTonalIconButton(
+                                        onClick = onPrevious,
+                                        enabled = hasPrevious,
+                                        interactionSource = prevInteraction,
+                                        shapes = IconButtonDefaults.shapes(),
+                                        colors = pillIconColors,
+                                        modifier = Modifier
+                                            .size(ListenControlHeight)
+                                            .animateWidth(prevInteraction)
+                                            .then(if (hasPrevious) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.SkipPrevious,
+                                            contentDescription = prevLabel,
+                                            modifier = Modifier.size(SkipIconSize),
+                                        )
+                                    }
+                                }
+                            },
+                            menuContent = {},
+                        )
+                    }
+                    ListenSideAction.SeekDelta -> {
+                        customItem(
+                            buttonGroupContent = {
+                                BilbyTooltip(text = rewindLabel, anchorAbove = true) {
+                                    FilledTonalIconButton(
+                                        onClick = onSeekBackward,
+                                        interactionSource = prevInteraction,
+                                        shapes = IconButtonDefaults.shapes(),
+                                        colors = pillIconColors,
+                                        modifier = Modifier
+                                            .size(ListenControlHeight)
+                                            .animateWidth(prevInteraction)
+                                            .pointerHoverIcon(PointerIcon.Hand),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.FastRewind,
+                                            contentDescription = rewindLabel,
+                                            modifier = Modifier.size(SkipIconSize),
+                                        )
+                                    }
+                                }
+                            },
+                            menuContent = {},
+                        )
+                    }
+                    ListenSideAction.None -> Unit
+                }
                 customItem(
                     buttonGroupContent = {
                         BilbyTooltip(text = playLabel, shortcut = "Space", anchorAbove = true) {
@@ -1589,47 +1773,79 @@ private fun PlaybackControls(
                     },
                     menuContent = {},
                 )
-                customItem(
-                    buttonGroupContent = {
-                        BilbyTooltip(text = nextLabel, shortcut = "]", anchorAbove = true) {
-                            FilledTonalIconButton(
-                                onClick = onNext,
-                                enabled = hasNext,
-                                interactionSource = nextInteraction,
-                                shapes = IconButtonDefaults.shapes(),
-                                colors = pillIconColors,
-                                modifier = Modifier
-                                    .size(ListenControlHeight)
-                                    .animateWidth(nextInteraction)
-                                    .then(if (hasNext) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.SkipNext,
-                                    contentDescription = nextLabel,
-                                    modifier = Modifier.size(SkipIconSize),
-                                )
-                            }
-                        }
-                    },
-                    menuContent = {},
-                )
-                customItem(
-                    buttonGroupContent = {
-                        BoundSleepTimerButton(
-                            sleepTimer = sleepTimer,
-                            progress = progress,
-                            speed = speed,
-                            colors = pillToggleColors,
-                            interactionSource = sleepInteraction,
-                            onClick = onOpenSleepTimer,
-                            modifier = Modifier
-                                .height(ListenControlHeight)
-                                .widthIn(min = ListenSidePillMinWidth)
-                                .animateWidth(sleepInteraction),
+                when (sideAction) {
+                    ListenSideAction.Episode -> {
+                        customItem(
+                            buttonGroupContent = {
+                                BilbyTooltip(text = nextLabel, shortcut = "]", anchorAbove = true) {
+                                    FilledTonalIconButton(
+                                        onClick = onNext,
+                                        enabled = hasNext,
+                                        interactionSource = nextInteraction,
+                                        shapes = IconButtonDefaults.shapes(),
+                                        colors = pillIconColors,
+                                        modifier = Modifier
+                                            .size(ListenControlHeight)
+                                            .animateWidth(nextInteraction)
+                                            .then(if (hasNext) Modifier.pointerHoverIcon(PointerIcon.Hand) else Modifier),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.SkipNext,
+                                            contentDescription = nextLabel,
+                                            modifier = Modifier.size(SkipIconSize),
+                                        )
+                                    }
+                                }
+                            },
+                            menuContent = {},
                         )
-                    },
-                    menuContent = {},
-                )
+                    }
+                    ListenSideAction.SeekDelta -> {
+                        customItem(
+                            buttonGroupContent = {
+                                BilbyTooltip(text = forwardLabel, anchorAbove = true) {
+                                    FilledTonalIconButton(
+                                        onClick = onSeekForward,
+                                        interactionSource = nextInteraction,
+                                        shapes = IconButtonDefaults.shapes(),
+                                        colors = pillIconColors,
+                                        modifier = Modifier
+                                            .size(ListenControlHeight)
+                                            .animateWidth(nextInteraction)
+                                            .pointerHoverIcon(PointerIcon.Hand),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.FastForward,
+                                            contentDescription = forwardLabel,
+                                            modifier = Modifier.size(SkipIconSize),
+                                        )
+                                    }
+                                }
+                            },
+                            menuContent = {},
+                        )
+                    }
+                    ListenSideAction.None -> Unit
+                }
+                if (showSleep) {
+                    customItem(
+                        buttonGroupContent = {
+                            BoundSleepTimerButton(
+                                sleepTimer = sleepTimer,
+                                progress = progress,
+                                speed = speed,
+                                colors = pillToggleColors,
+                                interactionSource = sleepInteraction,
+                                onClick = onOpenSleepTimer,
+                                modifier = Modifier
+                                    .height(ListenControlHeight)
+                                    .widthIn(min = ListenSidePillMinWidth)
+                                    .animateWidth(sleepInteraction),
+                            )
+                        },
+                        menuContent = {},
+                    )
+                }
             }
         }
     }
@@ -1637,10 +1853,11 @@ private fun PlaybackControls(
     // 倍速面板和视频播放器那块是同一份内容:倍速与音质两段。听视频没有画面,清晰度不给;
     // 字幕在顶栏的歌词按钮上。
     if (speedSheetOpen) {
+        val showAudioInSheet = showQuality && audioOptions.size > 1
         PaneSheet(
             onDismissRequest = { speedSheetOpen = false },
             title = stringResource(
-                if (audioOptions.size > 1) Res.string.player_settings else Res.string.player_speed,
+                if (showAudioInSheet) Res.string.player_settings else Res.string.player_speed,
             ),
         ) {
             PlayerSettingsContent(
@@ -1655,7 +1872,7 @@ private fun PlaybackControls(
                 audioOptions = audioOptions,
                 currentAudio = currentAudio,
                 onAudioChange = onAudioChange,
-                only = if (audioOptions.size > 1) null else PlayerSettingsSection.Speed,
+                only = if (showAudioInSheet) null else PlayerSettingsSection.Speed,
             )
         }
     }
