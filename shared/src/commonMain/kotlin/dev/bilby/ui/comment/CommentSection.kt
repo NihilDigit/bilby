@@ -60,6 +60,8 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.carousel.HorizontalUncontainedCarousel
+import androidx.compose.material3.carousel.rememberCarouselState
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.pullToRefresh
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -74,6 +76,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalDensity
 import dev.bilby.ui.components.ContextMenuBox
 import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.LocalCopyNotice
@@ -86,7 +89,9 @@ import dev.bilby.ui.components.plainTextClip
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -98,6 +103,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
 import dev.bilby.resources.*
 import dev.bilby.data.CommentItem
@@ -116,6 +122,7 @@ import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SelectableTextDialog
 import dev.bilby.ui.components.rememberLoadingVisible
+import dev.bilby.ui.components.verticalWheelScrollsRow
 import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Dimens
@@ -1051,13 +1058,10 @@ private val SubReplyBodyStyle
 private val GridSpacing = 4.dp
 
 /**
- * 评论配图。张数决定列数,照 PiliPlus 的
- * `common/widgets/image_grid/image_grid_builder.dart`:1 张单独放大,2 与 4 张走两列,
- * 其余走三列;格子是正方形,超出的部分裁掉,**点开才看全**。
- *
- * 单张那格用 4:3 而不是按原图比例,是因为接口层的 `ReplyPictureDto` 只解析了 `img_src`,
- * 没有 `img_width`/`img_height` —— 拿不到原始比例就没法像 PiliPlus 那样按比例定尺寸。
+ * 评论配图：1 张单独放大（4:3），2–3 张按单行方格展示，4 张及以上升级为固定高度
+ * `HorizontalUncontainedCarousel`，避免在窄评论栏内撑出过高九宫格；点按均打开看图器对应下标。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PictureGrid(urls: List<String>, onClick: (Int) -> Unit, modifier: Modifier = Modifier) {
     val pictureLabel = stringResource(Res.string.comment_picture)
@@ -1074,31 +1078,57 @@ private fun PictureGrid(urls: List<String>, onClick: (Int) -> Unit, modifier: Mo
         return
     }
 
-    val columns = if (urls.size == 2 || urls.size == 4) 2 else 3
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(GridSpacing)) {
-        // 带上原始下标再分行。用 indexOf 反查会在同一条评论重复配同一张图时全部指回第一张,
-        // 点第三张打开的是第一张。
-        urls.withIndex().chunked(columns).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(GridSpacing), modifier = Modifier.fillMaxWidth()) {
-                row.forEach { (index, url) ->
-                    BiliAsyncImage(
-                        url = url,
-                        contentDescription = "$pictureLabel ${index + 1}/${urls.size}",
-                        modifier = Modifier
-                            .weight(1f)
-                            .aspectRatio(1f)
-                            .clip(MaterialTheme.shapes.small)
-                            .clickable(role = Role.Button) { onClick(index) },
-                    )
-                }
-                // 最后一行不满时补空位,否则两张图会被拉宽到占满整行。
-                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
-            }
+    if (urls.size >= 4) {
+        val density = LocalDensity.current
+        var containerWidth by remember { mutableStateOf(0.dp) }
+        val resolvedWidth = if (containerWidth > 0.dp) containerWidth else CommentCarouselFallbackWidth
+        val itemWidth = min(CommentCarouselImageWidth, resolvedWidth * 0.65f)
+        val carouselState = rememberCarouselState { urls.size }
+        HorizontalUncontainedCarousel(
+            state = carouselState,
+            itemWidth = itemWidth,
+            itemSpacing = Spacing.Tight,
+            modifier = modifier
+                .fillMaxWidth()
+                .onSizeChanged { containerWidth = with(density) { it.width.toDp() } }
+                .height(CommentCarouselImageHeight)
+                .verticalWheelScrollsRow(carouselState),
+        ) { index ->
+            BiliAsyncImage(
+                url = urls[index],
+                contentDescription = "$pictureLabel ${index + 1}/${urls.size}",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .maskClip(MaterialTheme.shapes.medium)
+                    .clickable(role = Role.Button) { onClick(index) },
+            )
+        }
+        return
+    }
+
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(GridSpacing),
+    ) {
+        urls.forEachIndexed { index, url ->
+            BiliAsyncImage(
+                url = url,
+                contentDescription = "$pictureLabel ${index + 1}/${urls.size}",
+                modifier = Modifier
+                    .weight(1f)
+                    .aspectRatio(1f)
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(role = Role.Button) { onClick(index) },
+            )
         }
     }
 }
 
 private const val SinglePictureWidthFraction = 0.7f
+private val CommentCarouselImageWidth = 148.dp
+private val CommentCarouselImageHeight = 148.dp
+private val CommentCarouselFallbackWidth = 320.dp
 
 /**
  * 头部右侧的点赞与删除操作。主楼、楼中楼、面板里的回复共用。

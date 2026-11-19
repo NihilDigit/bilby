@@ -43,12 +43,11 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.carousel.CarouselDefaults
 import androidx.compose.material3.carousel.CarouselItemScope
 import androidx.compose.material3.carousel.HorizontalMultiBrowseCarousel
 import androidx.compose.material3.carousel.HorizontalUncontainedCarousel
@@ -114,7 +113,6 @@ import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.SkeletonLine
 import dev.bilby.ui.components.SkeletonPulse
 import dev.bilby.ui.components.VideoCommonMenuItems
-import dev.bilby.ui.components.VideoCover
 import dev.bilby.ui.components.VideoRowUi
 import dev.bilby.ui.components.menuItemShape
 import dev.bilby.ui.components.plainTextClip
@@ -1189,6 +1187,10 @@ private fun <T> ProfileCarousel(
             preferredItemWidth = preferredWidth,
             modifier = carouselModifier,
             itemSpacing = Spacing.Tight,
+            flingBehavior = CarouselDefaults.multiBrowseFlingBehavior(
+                state = carouselState,
+                snapAnimationSpec = MaterialTheme.motionScheme.defaultSpatialSpec(),
+            ),
             contentPadding = padding,
         ) { index ->
             items.getOrNull(index)?.let { itemContent(it) }
@@ -1217,7 +1219,6 @@ private fun CarouselItemScope.CarouselVideoCard(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .maskClip(cardShape)
                 .background(colorScheme.surfaceContainerHigh)
                 .combinedClickable(
                     enabled = enabled,
@@ -1227,16 +1228,12 @@ private fun CarouselItemScope.CarouselVideoCard(
                 )
                 .alpha(if (enabled) 1f else DisabledShelfAlpha),
         ) {
-            ProvideTextStyle(LocalTextStyle.current.tabular) {
-                VideoCover(
-                    url = item.coverUrl,
-                    durationText = "",
-                    progressFraction = item.progressFraction,
-                    cornerRadius = 0.dp,
-                    typeBadge = "",
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+            BiliAsyncImage(
+                url = item.coverUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
             if (item.typeBadge.isNotEmpty()) {
                 MediaBadge(
                     text = item.typeBadge,
@@ -1293,14 +1290,33 @@ private fun CarouselItemScope.CarouselVideoCard(
                     }
                 }
             }
+            item.progressFraction?.takeIf { it > 0f }?.let { fraction ->
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .height(CarouselProgressBarHeight)
+                        .background(FixedColors.ScrimOnMedia),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                            .fillMaxHeight()
+                            .background(colorScheme.primary),
+                    )
+                }
+            }
         }
     }
 
+    val maskedModifier = modifier
+        .fillMaxSize()
+        .maskClip(cardShape)
     if (enabled && bvid.isNotEmpty()) {
         ContextMenuBox(
             onClick = null,
             menuLabel = stringResource(Res.string.menu_item_actions),
-            modifier = modifier.fillMaxSize(),
+            modifier = maskedModifier,
             menu = { close ->
                 VideoCommonMenuItems(
                     bvid = bvid,
@@ -1315,12 +1331,13 @@ private fun CarouselItemScope.CarouselVideoCard(
             cardContent(openMenu)
         }
     } else {
-        Box(modifier = modifier.fillMaxSize()) {
+        Box(modifier = maskedModifier) {
             cardContent(null)
         }
     }
 }
 
+private val CarouselProgressBarHeight = 3.dp
 private const val DisabledShelfAlpha = 0.38f
 
 @Composable
@@ -1437,7 +1454,9 @@ private fun CarouselItemScope.CarouselFavFolderCard(
     ContextMenuBox(
         onClick = null,
         menuLabel = stringResource(Res.string.menu_item_actions),
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .maskClip(cardShape),
         menu = { close ->
             DropdownMenuItem(
                 onClick = {
@@ -1456,7 +1475,6 @@ private fun CarouselItemScope.CarouselFavFolderCard(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .maskClip(cardShape)
                 .background(colorScheme.surfaceContainerHigh)
                 .combinedClickable(
                     role = Role.Button,

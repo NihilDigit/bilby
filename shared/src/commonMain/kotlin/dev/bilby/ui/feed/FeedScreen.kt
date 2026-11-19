@@ -1,9 +1,11 @@
 package dev.bilby.ui.feed
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -14,7 +16,6 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,9 +29,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope
 import androidx.compose.foundation.lazy.grid.LazyGridScope
-import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -65,10 +64,15 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.carousel.CarouselDefaults
+import androidx.compose.material3.carousel.CarouselItemScope
+import androidx.compose.material3.carousel.HorizontalMultiBrowseCarousel
+import androidx.compose.material3.carousel.HorizontalUncontainedCarousel
+import androidx.compose.material3.carousel.rememberCarouselState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -82,11 +86,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
@@ -107,15 +113,16 @@ import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.CaptionDragHeight
 import dev.bilby.ui.LocalWindowCaption
 import dev.bilby.ui.components.Avatar
+import dev.bilby.ui.components.BiliAsyncImage
 import dev.bilby.ui.components.BilbyTooltip
 import dev.bilby.ui.components.ContextMenuBox
-import dev.bilby.ui.components.CoverAspectRatio
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.FirstScreenState
 import dev.bilby.ui.components.ListFooter
 import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.LoadingSpinner
 import dev.bilby.ui.components.LocalPointerSource
+import dev.bilby.ui.components.MediaBadge
 import dev.bilby.ui.components.MetaSeparator
 import dev.bilby.ui.components.PrefetchNearEnd
 import dev.bilby.ui.components.RefreshBox
@@ -138,6 +145,7 @@ import dev.bilby.ui.rememberVideoGridColumnCount
 import dev.bilby.ui.theme.BilbyTheme
 import dev.bilby.ui.theme.Breakpoints
 import dev.bilby.ui.theme.Dimens
+import dev.bilby.ui.theme.FixedColors
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.interactiveCard
 import dev.bilby.ui.theme.rememberReducedMotion
@@ -403,7 +411,7 @@ private fun FeedList(
                 targetIndex = cursor
                 break
             }
-            cursor += node.emittedGridItemCount(node.anchorId in nextExpanded)
+            cursor += 1
         }
         if (targetIndex == null && markerIndex != null) {
             cursor += 1
@@ -412,7 +420,7 @@ private fun FeedList(
                     targetIndex = cursor
                     break
                 }
-                cursor += node.emittedGridItemCount(node.anchorId in nextExpanded)
+                cursor += 1
             }
         }
         val leadAlreadyVisible = listState.layoutInfo.visibleItemsInfo.any { it.key == burstId }
@@ -443,20 +451,17 @@ private fun FeedList(
         // 突然跳一下。
         onLocated()
         if (markerIndex == null) return@LaunchedEffect
-        val targetOffset = beforeNodes.sumOf { it.emittedGridItemCount(it.anchorId in expandedBurstIds) }
-        listState.scrollToItem(baseOffset + targetOffset)
+        listState.scrollToItem(baseOffset + beforeNodes.size)
     }
 
-    // 顶部可见条目上报给 ViewModel 去抖落盘。直接用网格 item key 反查对应的真实条目 id,
-    // 兼容连发收起卡/行与普通条目。
+    // 顶部可见条目上报给 ViewModel 去抖落盘。直接用网格 item key 反查对应的真实条目 id。
     val keyToAnchorId = remember(beforeNodes, fromNodes) {
-        buildMap<Any, String>(state.items.size * 2) {
+        buildMap<Any, String>(state.items.size) {
             fun indexNodes(nodes: List<FeedDisplayNode>) {
                 for (node in nodes) {
                     when (node) {
                         is FeedDisplayNode.Single -> put(node.entry.id, node.entry.id)
                         is FeedDisplayNode.Burst -> {
-                            put(burstCollapseKey(node.lead.id), node.lead.id)
                             for (entry in node.all) put(entry.id, entry.id)
                         }
                     }
@@ -580,7 +585,6 @@ private fun FeedList(
                         }
                         feedDisplayNodes(
                             nodes = beforeNodes,
-                            listState = listState,
                             expandedBurstIds = expandedBurstIds,
                             multiColumn = multiColumn,
                             wide = wide,
@@ -598,7 +602,6 @@ private fun FeedList(
                         }
                         feedDisplayNodes(
                             nodes = fromNodes,
-                            listState = listState,
                             expandedBurstIds = expandedBurstIds,
                             multiColumn = multiColumn,
                             wide = wide,
@@ -1432,8 +1435,6 @@ private fun UpSlot(
     }
 }
 
-private fun burstCollapseKey(leadId: String): String = "burst-collapse:$leadId"
-
 private val BurstIdSetSaver = listSaver<Set<String>, String>(
     save = { it.toList() },
     restore = { it.toSet() },
@@ -1441,7 +1442,6 @@ private val BurstIdSetSaver = listSaver<Set<String>, String>(
 
 private fun LazyGridScope.feedDisplayNodes(
     nodes: List<FeedDisplayNode>,
-    listState: LazyGridState,
     expandedBurstIds: Set<String>,
     multiColumn: Boolean,
     wide: Boolean,
@@ -1483,78 +1483,22 @@ private fun LazyGridScope.feedDisplayNodes(
                         )
                     }
                 } else {
-                    gridItemsIndexed(
-                        items = node.all,
-                        key = { _, entry -> entry.id },
-                        contentType = { _, _ -> "feed-entry" },
-                    ) { index, entry ->
-                        if (multiColumn) {
-                            FeedEntryItem(
-                                item = entry,
-                                onItemClick = onItemClick,
-                                onUpClick = onUpClick,
-                                onExcludeUp = onExcludeUp,
-                                onAddToView = onAddToView,
-                                multiColumn = true,
-                                wide = wide,
-                                modifier = Modifier.animateItem(),
-                            )
-                        } else {
-                            // 单列展开态以分段圆角连成一组，自然汇入尾部的 BurstCollapseRow。
-                            val shapes = MaterialTheme.shapes
-                            val segmentShape = if (index == 0) {
-                                RoundedCornerShape(
-                                    topStart = shapes.large.topStart,
-                                    topEnd = shapes.large.topEnd,
-                                    bottomStart = shapes.extraSmall.bottomStart,
-                                    bottomEnd = shapes.extraSmall.bottomEnd,
-                                )
-                            } else {
-                                shapes.extraSmall
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .animateItem()
-                                    .fillMaxWidth()
-                                    .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair / 2)
-                                    .clip(segmentShape)
-                                    .background(MaterialTheme.colorScheme.surfaceContainerLow),
-                            ) {
-                                FeedEntryItem(
-                                    item = entry,
-                                    onItemClick = onItemClick,
-                                    onUpClick = onUpClick,
-                                    onExcludeUp = onExcludeUp,
-                                    onAddToView = onAddToView,
-                                    multiColumn = false,
-                                    wide = wide,
-                                )
-                            }
-                        }
-                    }
                     item(
-                        key = burstCollapseKey(node.lead.id),
-                        contentType = if (multiColumn) "burst-collapse-card" else "burst-collapse-row",
+                        key = node.lead.id,
+                        span = FullLine,
+                        contentType = "burst-expanded-carousel",
                     ) {
-                        if (multiColumn) {
-                            BurstCollapseCard(
-                                upName = node.lead.upName,
-                                totalCount = node.totalCount,
-                                listState = listState,
-                                selfKey = burstCollapseKey(node.lead.id),
-                                leadKey = node.lead.id,
-                                lastKey = node.all.last().id,
-                                onCollapse = { onCollapseBurst(node.anchorId) },
-                                modifier = Modifier.animateItem(),
-                            )
-                        } else {
-                            BurstCollapseRow(
-                                upName = node.lead.upName,
-                                totalCount = node.totalCount,
-                                onCollapse = { onCollapseBurst(node.anchorId) },
-                                modifier = Modifier.animateItem(),
-                            )
-                        }
+                        BurstExpandedCarousel(
+                            node = node,
+                            multiColumn = multiColumn,
+                            wide = wide,
+                            onCollapse = { onCollapseBurst(node.anchorId) },
+                            onItemClick = onItemClick,
+                            onUpClick = onUpClick,
+                            onExcludeUp = onExcludeUp,
+                            onAddToView = onAddToView,
+                            modifier = Modifier.animateItem(),
+                        )
                     }
                 }
             }
@@ -1726,165 +1670,243 @@ private fun BurstStackedItem(
     }
 }
 
-/** 多列网格连发组展开后跟在最后一条之后的收起卡片，占 1 格网格单元且与同行视频卡片等高，箭头动态指向连发区。 */
+/**
+ * 连发组展开态：横跨整行以 M3E `HorizontalMultiBrowseCarousel`（减弱动效时回退等宽
+ * `HorizontalUncontainedCarousel`）横向浏览同一 UP 主的连续投稿，保留顶部作者信息、收起入口
+ * 以及每张卡片的正常点按与右键/长按操作菜单。
+ */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun BurstCollapseCard(
-    upName: String,
-    totalCount: Int,
-    listState: LazyGridState,
-    selfKey: String,
-    leadKey: String,
-    lastKey: String,
+private fun BurstExpandedCarousel(
+    node: FeedDisplayNode.Burst,
+    multiColumn: Boolean,
+    wide: Boolean,
     onCollapse: () -> Unit,
+    onItemClick: (FeedEntry) -> Unit,
+    onUpClick: (Long) -> Unit,
+    onExcludeUp: (Long, String) -> Unit,
+    onAddToView: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
-    val targetAngle by remember(listState, selfKey, leadKey, lastKey) {
-        derivedStateOf {
-            val visible = listState.layoutInfo.visibleItemsInfo
-            val self = visible.firstOrNull { it.key == selfKey } ?: return@derivedStateOf 0f
-            val prev = visible.firstOrNull { it.key == lastKey }
-            val lead = visible.firstOrNull { it.key == leadKey }
-            val selfCenterX = self.offset.x + self.size.width / 2f
-            val selfCenterY = self.offset.y + self.size.height / 2f
-            val rowToleranceY = self.size.height * 0.45f
-            val colToleranceX = self.size.width * 0.45f
-            when {
-                prev != null -> {
-                    val dx = (prev.offset.x + prev.size.width / 2f) - selfCenterX
-                    val dy = (prev.offset.y + prev.size.height / 2f) - selfCenterY
-                    val leadDy = lead?.let { (it.offset.y + it.size.height / 2f) - selfCenterY } ?: dy
-                    when {
-                        dx < -colToleranceX && kotlin.math.abs(dy) <= rowToleranceY ->
-                            if (lead != null && leadDy < -rowToleranceY) -45f else -90f
-                        dx < -colToleranceX && dy < -rowToleranceY -> -45f
-                        dx > colToleranceX && dy < -rowToleranceY -> 45f
-                        else -> 0f
-                    }
+    val carouselState = rememberCarouselState { node.all.size }
+    val reducedMotion = rememberReducedMotion()
+    val useWideMetrics = wide || multiColumn
+    val preferredWidth = if (useWideMetrics) BurstCarouselPreferredWidthWide else BurstCarouselPreferredWidthCompact
+    val cardHeight = if (useWideMetrics) BurstCarouselHeightWide else BurstCarouselHeightCompact
+    val outerHorizontalPadding = if (multiColumn) GridCardHorizontalPadding else Spacing.Tight
+    val outerVerticalPadding = if (multiColumn) GridCardVerticalPadding else Spacing.Hair
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = outerHorizontalPadding, vertical = outerVerticalPadding)
+            .clip(MaterialTheme.shapes.large)
+            .background(colors.surfaceContainerLow)
+            .padding(bottom = Spacing.Cozy),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = Spacing.Cozy, end = Spacing.Tight, top = Spacing.Hair, bottom = Spacing.Hair),
+        ) {
+            val upMid = node.lead.upMid
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(MaterialTheme.shapes.small)
+                    .then(
+                        if (upMid != 0L) {
+                            Modifier.clickable(role = Role.Button) { onUpClick(upMid) }
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .padding(horizontal = Spacing.Hair, vertical = Spacing.Hair),
+            ) {
+                Avatar(url = node.lead.upFaceUrl, size = BurstHeaderAvatarSize)
+                Text(
+                    text = stringResource(Res.string.feed_burst_header, node.lead.upName, node.totalCount),
+                    style = MaterialTheme.typography.titleSmallEmphasized.tabular,
+                    color = colors.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            TextButton(onClick = onCollapse) {
+                Icon(
+                    imageVector = Icons.Outlined.KeyboardArrowUp,
+                    contentDescription = null,
+                    modifier = Modifier.size(Dimens.IconInline),
+                )
+                Spacer(Modifier.width(Spacing.Hair))
+                Text(text = stringResource(Res.string.feed_burst_collapse))
+            }
+        }
+
+        val carouselModifier = Modifier
+            .fillMaxWidth()
+            .height(cardHeight)
+            .verticalWheelScrollsRow(carouselState)
+        val contentPadding = PaddingValues(horizontal = Spacing.Cozy)
+        if (reducedMotion) {
+            HorizontalUncontainedCarousel(
+                state = carouselState,
+                itemWidth = preferredWidth,
+                modifier = carouselModifier,
+                itemSpacing = Spacing.Tight,
+                contentPadding = contentPadding,
+            ) { index ->
+                node.all.getOrNull(index)?.let { entry ->
+                    BurstCarouselCard(
+                        entry = entry,
+                        onClick = { onItemClick(entry) },
+                        onUpClick = onUpClick,
+                        onExcludeUp = onExcludeUp,
+                        onAddToView = onAddToView,
+                    )
                 }
-                lead != null -> {
-                    val dx = (lead.offset.x + lead.size.width / 2f) - selfCenterX
-                    val dy = (lead.offset.y + lead.size.height / 2f) - selfCenterY
-                    when {
-                        dx < -colToleranceX && dy < -rowToleranceY -> -45f
-                        dx > colToleranceX && dy < -rowToleranceY -> 45f
-                        else -> 0f
-                    }
+            }
+        } else {
+            HorizontalMultiBrowseCarousel(
+                state = carouselState,
+                preferredItemWidth = preferredWidth,
+                modifier = carouselModifier,
+                itemSpacing = Spacing.Tight,
+                flingBehavior = CarouselDefaults.multiBrowseFlingBehavior(
+                    state = carouselState,
+                    snapAnimationSpec = MaterialTheme.motionScheme.defaultSpatialSpec(),
+                ),
+                contentPadding = contentPadding,
+            ) { index ->
+                node.all.getOrNull(index)?.let { entry ->
+                    BurstCarouselCard(
+                        entry = entry,
+                        onClick = { onItemClick(entry) },
+                        onUpClick = onUpClick,
+                        onExcludeUp = onExcludeUp,
+                        onAddToView = onAddToView,
+                    )
                 }
-                else -> 0f
             }
         }
     }
-    val arrowRotation by animateFloatAsState(
-        targetValue = targetAngle,
-        animationSpec = MaterialTheme.motionScheme.defaultSpatialSpec(),
-        label = "burst-collapse-arrow",
-    )
-
-    val density = LocalDensity.current
-    val titleLineHeightDp = with(density) { MaterialTheme.typography.bodyLargeEmphasized.lineHeight.toDp() }
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = GridCardHorizontalPadding, vertical = GridCardVerticalPadding),
-    ) {
-        // 轻量尺寸骨架镜像 VideoGridCard(16:10 封面 + 两行强调标题 + 20dp 作者行 + 8dp 内边距)，
-        // 避免构造不可见 Text("\n") 做冗余文本测量。
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(Spacing.Tight),
-        ) {
-            Box(modifier = Modifier.fillMaxWidth().aspectRatio(CoverAspectRatio))
-            Spacer(modifier = Modifier.height(Spacing.Tight + titleLineHeightDp * 2 + Spacing.Hair + GridAuthorLineHeight))
-        }
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Spacing.Hair, Alignment.CenterVertically),
-            modifier = Modifier
-                .matchParentSize()
-                .interactiveCard(
-                    shape = MaterialTheme.shapes.large,
-                    baseColor = colors.surfaceContainerHigh,
-                    hoverColor = colors.surfaceContainerHighest,
-                )
-                .clickable(role = Role.Button, onClick = onCollapse)
-                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.KeyboardArrowUp,
-                contentDescription = null,
-                tint = colors.primary,
-                modifier = Modifier
-                    .size(Dimens.IconAction)
-                    .graphicsLayer { rotationZ = arrowRotation },
-            )
-            Text(
-                text = stringResource(Res.string.feed_burst_collapse_card_title),
-                style = MaterialTheme.typography.titleSmallEmphasized,
-                color = colors.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = stringResource(Res.string.feed_burst_collapse_card_subtitle, upName, totalCount),
-                style = MaterialTheme.typography.bodySmall.tabular,
-                color = colors.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
 }
 
-/** 单列列表连发组展开后跟在最后一条之后的收起条，以底部大圆角分段形状承接上方展开条目。 */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalFoundationApi::class)
 @Composable
-private fun BurstCollapseRow(
-    upName: String,
-    totalCount: Int,
-    onCollapse: () -> Unit,
+private fun CarouselItemScope.BurstCarouselCard(
+    entry: FeedEntry,
+    onClick: () -> Unit,
+    onUpClick: (Long) -> Unit,
+    onExcludeUp: (Long, String) -> Unit,
+    onAddToView: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val shapes = MaterialTheme.shapes
-    val colors = MaterialTheme.colorScheme
-    val collapseShape = RoundedCornerShape(
-        topStart = shapes.extraSmall.topStart,
-        topEnd = shapes.extraSmall.topEnd,
-        bottomStart = shapes.large.bottomStart,
-        bottomEnd = shapes.large.bottomEnd,
-    )
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.CenterHorizontally),
+    val colorScheme = MaterialTheme.colorScheme
+    val rowUi = rememberFeedEntryRowUi(entry, showArticleNote = false)
+    val cardShape = MaterialTheme.shapes.largeIncreased
+
+    ContextMenuBox(
+        onClick = null,
+        menuLabel = stringResource(Res.string.feed_item_actions),
         modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.Tight, vertical = Spacing.Hair / 2)
-            .interactiveCard(
-                shape = collapseShape,
-                baseColor = colors.surfaceContainerHigh,
-                hoverColor = colors.surfaceContainerHighest,
+            .fillMaxSize()
+            .maskClip(cardShape),
+        menu = { close ->
+            FeedEntryMenuItems(entry, close, onUpClick, onExcludeUp, onAddToView)
+        },
+    ) { openMenu ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(colorScheme.surfaceContainerHigh)
+                .combinedClickable(
+                    role = Role.Button,
+                    onClick = onClick,
+                    onLongClick = openMenu,
+                ),
+        ) {
+            BiliAsyncImage(
+                url = rowUi.coverUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
             )
-            .clickable(role = Role.Button, onClick = onCollapse)
-            .heightIn(min = Dimens.MinTouchTarget)
-            .padding(horizontal = Spacing.Cozy),
-    ) {
-        Icon(
-            imageVector = Icons.Outlined.KeyboardArrowUp,
-            contentDescription = null,
-            tint = colors.primary,
-            modifier = Modifier.size(Dimens.IconInline),
-        )
-        Text(
-            text = stringResource(Res.string.feed_burst_collapse_row, upName, totalCount),
-            style = MaterialTheme.typography.labelLargeEmphasized.tabular,
-            color = colors.primary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+            if (rowUi.typeBadge.isNotEmpty()) {
+                MediaBadge(
+                    text = rowUi.typeBadge,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(Spacing.Tight),
+                )
+            }
+            if (rowUi.durationText.isNotEmpty()) {
+                MediaBadge(
+                    text = rowUi.durationText,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(Spacing.Tight),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        val ratio = carouselItemDrawInfo.size / carouselItemDrawInfo.maxSize.coerceAtLeast(1f)
+                        alpha = ((ratio - 0.52f) / 0.48f).coerceIn(0f, 1f)
+                    }
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            0.38f to FixedColors.ScrimOnMedia.copy(alpha = 0.68f),
+                            1f to FixedColors.ScrimOnMedia,
+                        ),
+                    )
+                    .padding(
+                        start = Spacing.Cozy,
+                        end = Spacing.Cozy,
+                        top = Spacing.Comfortable,
+                        bottom = Spacing.Tight,
+                    ),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = rowUi.title,
+                        style = MaterialTheme.typography.bodyMediumEmphasized,
+                        color = FixedColors.OnMedia,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    rowUi.dateText?.takeIf { it.isNotEmpty() }?.let { dateText ->
+                        Text(
+                            text = dateText,
+                            style = MaterialTheme.typography.labelSmall.tabular,
+                            color = FixedColors.OnMedia.copy(alpha = 0.86f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.graphicsLayer {
+                                val ratio = carouselItemDrawInfo.size / carouselItemDrawInfo.maxSize.coerceAtLeast(1f)
+                                alpha = ((ratio - 0.68f) / 0.32f).coerceIn(0f, 1f)
+                            },
+                        )
+                    }
+                }
+            }
+        }
     }
 }
+
+private val BurstHeaderAvatarSize = 24.dp
+private val BurstCarouselPreferredWidthCompact = 196.dp
+private val BurstCarouselPreferredWidthWide = 220.dp
+private val BurstCarouselHeightCompact = 122.dp
+private val BurstCarouselHeightWide = 138.dp
 
 /** 网格里横跨整行的那几格:标题行、分隔线、页脚。 */
 private val FullLine: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
@@ -1928,6 +1950,3 @@ private val DeckFanMidYShift = 1.dp
 private val DeckFanBackShift = 4.dp
 private const val DeckFanAngle = 1.2f
 private val DefaultUpsActionsWidth = 210.dp
-
-/** 多列网格连发收起卡对齐 VideoGridCard 作者行的高度占位(与 VideoRow.GridAvatarSize 一致)。 */
-private val GridAuthorLineHeight = 20.dp

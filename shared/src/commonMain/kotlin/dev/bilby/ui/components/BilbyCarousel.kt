@@ -4,7 +4,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.carousel.CarouselDefaults
 import androidx.compose.material3.carousel.HorizontalMultiBrowseCarousel
 import androidx.compose.material3.carousel.HorizontalUncontainedCarousel
 import androidx.compose.material3.carousel.rememberCarouselState
@@ -23,7 +25,7 @@ import dev.bilby.ui.theme.rememberReducedMotion
  *
  * 静止时 100% 稳定无自转/呼吸动画，所有形变均由用户滑动或滚轮输入因果驱动。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun BilbyMultiBrowseCarousel(
     itemCount: Int,
@@ -56,6 +58,10 @@ fun BilbyMultiBrowseCarousel(
             preferredItemWidth = preferredItemWidth,
             modifier = wheelModifier,
             itemSpacing = itemSpacing,
+            flingBehavior = CarouselDefaults.multiBrowseFlingBehavior(
+                state = state,
+                snapAnimationSpec = MaterialTheme.motionScheme.defaultSpatialSpec(),
+            ),
             contentPadding = contentPadding,
         ) { index ->
             Box(modifier = Modifier.maskClip(itemShape)) {

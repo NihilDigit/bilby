@@ -2,7 +2,6 @@ package dev.bilby.ui.video
 
 import dev.bilby.ui.components.ListScrollbar
 import dev.bilby.ui.components.LoadingSpinner
-import dev.bilby.ui.components.touchOnlyPaging
 import dev.bilby.ui.components.trackEditableFocus
 import dev.bilby.ui.components.verticalWheelScrollsRow
 import androidx.compose.animation.core.Animatable
@@ -532,7 +531,11 @@ fun VideoTabs(
         }
         // weight 而不是 fillMaxSize:在 Column 里 fillMaxSize 会让 pager 从 tab 栏下面再要
         // 一整屏的高度,底部那一截被推出可视区。
-        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth().touchOnlyPaging()) { page ->
+        HorizontalPager(
+            state = pagerState,
+            userScrollEnabled = LocalPointerSource.current.isTouchLike,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        ) { page ->
             when (page) {
                 VideoTabIntro -> IntroTab(
                     detail = detail,

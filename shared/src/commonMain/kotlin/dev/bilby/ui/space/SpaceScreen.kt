@@ -187,7 +187,6 @@ import dev.bilby.ui.components.panelCard
 import dev.bilby.ui.components.plainTextClip
 import dev.bilby.ui.components.rememberCollapsingHeaderState
 import dev.bilby.ui.components.skeleton
-import dev.bilby.ui.components.touchOnlyPaging
 import dev.bilby.ui.dynamic.DynamicAction
 import dev.bilby.ui.dynamic.DynamicCardView
 import dev.bilby.ui.errorTextRes
@@ -1015,7 +1014,8 @@ fun SpaceScreen(
                 profileGate {
                     HorizontalPager(
                         state = pagerState,
-                        modifier = Modifier.fillMaxSize().nestedScroll(headerScroll.connection).touchOnlyPaging(),
+                        userScrollEnabled = LocalPointerSource.current.isTouchLike,
+                        modifier = Modifier.fillMaxSize().nestedScroll(headerScroll.connection),
                     ) { page ->
                         when (tabs.getOrNull(page)) {
                             SpaceTab.Archives -> ArchivesTab(

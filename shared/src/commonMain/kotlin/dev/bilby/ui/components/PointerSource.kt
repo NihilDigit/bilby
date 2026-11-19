@@ -42,9 +42,9 @@ val LocalPointerSource = staticCompositionLocalOf { PointerSource() }
  * 标签页的分页器只让手指横划翻页。鼠标按住画面一拖就换一页,是桌面上最常见的误操作:
  * 本想选中文字、拖动进度,或者只是按下时手抖了一下。用鼠标换页有顶上的标签。
  *
- * 挂在分页器自己的 modifier 上:它是分页器滚动的上层,分页器每一步拖动先问它
- * ([onPreScroll]),鼠标来源的横向量在这里全部吃掉,分页器就不动。原始指针位移不碰,
- * 页面里的滑块、进度条照样能用鼠标拖。
+ * 注意：`onPreScroll` 会先于子节点消费横向滚动，导致页面内部的可横滑 Carousel / LazyRow
+ * 无法接收鼠标拖拽。内含横向滚动子组件的分页器应优先在 `HorizontalPager` 上直接设置
+ * `userScrollEnabled = LocalPointerSource.current.isTouchLike`。
  */
 @Composable
 fun Modifier.touchOnlyPaging(): Modifier {

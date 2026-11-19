@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
@@ -49,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
@@ -1262,7 +1264,7 @@ private fun DynamicImageGrid(images: List<ArticleImage>) {
                 )
             }
 
-            // 4 张及以上配图升级为 M3E HorizontalUncontainedCarousel，支持桌面端滚轮横滑并保留各图比例。
+            // 4 张及以上配图升级为 M3E HorizontalUncontainedCarousel，固定高度避免拖拽时因横竖图切换引发布局抖动。
             images.size >= 4 -> {
                 val carouselState = rememberCarouselState { images.size }
                 val itemWidth = min(CarouselImageItemWidth, resolvedWidth * 0.65f)
@@ -1272,20 +1274,16 @@ private fun DynamicImageGrid(images: List<ArticleImage>) {
                     itemSpacing = Spacing.Tight,
                     modifier = Modifier
                         .fillMaxWidth()
+                        .height(CarouselImageHeight)
                         .verticalWheelScrollsRow(carouselState),
                 ) { index ->
                     val image = images[index]
-                    val ratio = when {
-                        image.isLongImage -> 3f / 4f
-                        image.width <= 0 || image.height <= 0 -> 1f
-                        else -> (image.width.toFloat() / image.height).coerceIn(0.65f, 1.6f)
-                    }
                     BiliAsyncImage(
                         url = image.url,
                         contentDescription = "$pictureLabel ${index + 1}/${images.size}",
+                        contentScale = ContentScale.Crop,
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(ratio)
+                            .fillMaxSize()
                             .maskClip(MaterialTheme.shapes.medium)
                             .clickable(role = Role.Button) { viewerIndex = index },
                     )
@@ -1319,6 +1317,7 @@ private fun DynamicImageGrid(images: List<ArticleImage>) {
 }
 
 private val CarouselImageItemWidth = 168.dp
+private val CarouselImageHeight = 168.dp
 
 /**
  * 多图方格一格的边长上限。手机上两列时一格约 162dp,取 160 让窄屏几乎不受影响;
